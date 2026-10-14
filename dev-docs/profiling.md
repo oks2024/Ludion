@@ -27,6 +27,9 @@ layer measures is `frame-streaming`; the determinism guarantees the profiler mus
   `profile_cluster` (the clustered-forward light binning, offline only), `profile_replay` (a game's
   committed `.lrp` timed tick by tick through a `DriveHook`, sim only) and `reduce_sim` (the shared
   median + `TimingTail` reduction both sim drivers call).
+- `crates/ludion-engine/src/load_observer.rs` — `LoadObserver`, the clock-free seam scene load and
+  the asset cache report through (`LoadPhase`, `LoadKind`); its one clock-reading implementor,
+  `LoadClock`, lives in `profile.rs` and fills `ProfileReport::load` (`measure_load`).
 - `crates/ludion-engine/src/perf_live.rs` — the **live** profiler: `LivePerf`, `FrameSample`,
   `PROFILE_WINDOW_FRAMES` (60), `LIVE_SEQUENTIAL_NAMES` (`extract`, `submit`), the crate's only
   live-path wall-clock site (`Span`).
@@ -95,6 +98,10 @@ There is no `readback_ms`: the pipelined `StreamReadback` ring left no blocking 
 bracket, and what submission costs shows up in the engine-side `submit` span. The editor's
 Performance view can subscribe to `frames` (its own preview) to populate this section; the
 encode/send it measures is that viewer's own delivery cost, not one the game pays when unwatched.
+
+**The `load` section** is offline only: `Engine::observe_load` (or `EngineBuilder::observe_load`) arms
+a `LoadClock` before the scene load, and a disarmed host reads no clock for loading. Its phases are
+exclusive self-times, and its decoded/reused/bytes counters are deterministic.
 
 The offline driver, live channel, `profile.capture`, tails, the `cluster` section and the Perfetto export are `ludion devdocs profiling-capture`.
 

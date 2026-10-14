@@ -17,10 +17,11 @@
 //! [`ScheduleObserver`] it attaches cannot mutate sim state, so a
 //! profiled run's [`WorldHash`](Engine::world_hash) is bit-identical to an unprofiled one (asserted
 //! by the `observer_does_not_change_world_hash` test below). The crate's clippy denylist bans
-//! [`std::time::Instant::now`] everywhere; the two functions here that call it scope an `allow` with
-//! that rationale, exactly as `live.rs` does for the tick clock.
+//! [`std::time::Instant::now`] everywhere; the functions here that call it — and [`LoadClock`], the
+//! one implementor of the clock-free [`LoadObserver`] — scope an `allow` with that rationale,
+//! exactly as `live.rs` does for the tick clock.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -30,11 +31,12 @@ use ludion_core::suggest;
 use ludion_ecs::ScheduleObserver;
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
-use ludion_protocol::perf::ProfileSamples;
+use ludion_protocol::perf::{AssetLoadCounters, LoadProfile, ProfileSamples};
 use ludion_sim::RunState;
 use serde::Deserialize;
 
 use crate::commands::collapse;
+use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
 use crate::replay::{
     DriveHook, PlainDrive, drive_actions_with, prepare_replay, require_monotonic_frames,
     resolve_window, total_frames,
@@ -108,6 +110,7 @@ pub fn profile_scene(
             .with_help("check the path (relative to the current directory) and permissions"),
         ]
     })?;
+    engine.observe_load();
     engine.load_inline_scene(&source)?;
 
     profile_engine(&mut engine, path.display().to_string(), frames, warmup)
@@ -152,6 +155,7 @@ pub fn profile_engine(
             .with_help("measure at least one frame (`--frames 1` or more)"),
         ]);
     }
+    let load = measure_load(engine)?;
     let (sim, samples) = profile_sim(engine, frames, warmup);
     let cluster = profile_cluster(engine, frames, warmup).map_err(|d| vec![d])?;
     let gpu = profile_gpu(engine, frames, warmup).map_err(|d| vec![d])?;
@@ -170,6 +174,7 @@ pub fn profile_engine(
         // `profile_sim` below fills them, so a `--perfetto` export needs no `--attach`.
         transport: None,
         cluster: Some(cluster),
+        load,
         samples: Some(samples),
     })
 }
@@ -180,6 +185,124 @@ pub fn profile_engine(
 /// `--profile`.
 pub fn warmup_for(frames: u64) -> u64 {
     (frames / 4).clamp(1, 30)
+}
+
+/// Closes the load measurement: one extract (the first decode of every sprite and mesh asset
+/// happens there), then the observer is detached and reduced to a [`LoadProfile`]. `None` when no
+/// observer was attached — an unobserved host reads no clock for loading.
+///
+/// The extract is a pure world read, so it is hash-safe; it also means the warmup that follows starts
+/// warm. This is the seam the renderer's first-frame upload timing extends.
+fn measure_load(engine: &mut Engine) -> Result<Option<LoadProfile>, Vec<Diagnostic>> {
+    if !engine.load_observed() {
+        return Ok(None);
+    }
+    let (width, height) = PROFILE_SIZE;
+    engine.extract_render_scene(width, height)?;
+    let Some(observer) = engine.take_load_observer() else {
+        return Ok(None);
+    };
+    let observer: Box<dyn std::any::Any> = observer;
+    Ok(observer
+        .downcast::<LoadClock>()
+        .ok()
+        .map(|clock| clock.finish()))
+}
+
+/// The wall-clock [`LoadObserver`]: attributes **exclusive** time to each phase (a nested phase's
+/// span is subtracted from its parent's) and counts decodes and reuse per asset kind.
+#[derive(Default)]
+pub(crate) struct LoadClock {
+    origin: Option<Instant>,
+    stack: Vec<(LoadPhase, Instant, Duration)>,
+    scene: Duration,
+    mesh: Duration,
+    texture: Duration,
+    other: Duration,
+    decoded: [u64; 8],
+    reused: [u64; 8],
+    bytes: [u64; 8],
+    seen: BTreeSet<(usize, String)>,
+}
+
+impl LoadClock {
+    fn index(kind: LoadKind) -> usize {
+        LoadKind::ALL
+            .iter()
+            .position(|k| *k == kind)
+            .expect("ALL lists every kind")
+    }
+
+    // Sanctioned wall-clock site (see the module docs).
+    #[allow(clippy::disallowed_methods)]
+    fn finish(self) -> LoadProfile {
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        LoadProfile {
+            scene_ms: ms(self.scene),
+            mesh_ms: ms(self.mesh),
+            texture_ms: ms(self.texture),
+            other_ms: ms(self.other),
+            gpu_upload_ms: None,
+            first_frame_ms: None,
+            voxelize_ms: None,
+            renderer_init_ms: None,
+            gi_bake_ms: None,
+            total_ms: self.origin.map_or(0.0, |origin| ms(origin.elapsed())),
+            assets: LoadKind::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, kind)| AssetLoadCounters {
+                    kind: kind.name().to_string(),
+                    decoded: self.decoded[i],
+                    reused: self.reused[i],
+                    bytes_read: self.bytes[i],
+                })
+                .collect(),
+        }
+    }
+}
+
+impl LoadObserver for LoadClock {
+    // Sanctioned wall-clock site (see the module docs).
+    #[allow(clippy::disallowed_methods)]
+    fn begin(&mut self, phase: LoadPhase) {
+        let now = Instant::now();
+        self.origin.get_or_insert(now);
+        self.stack.push((phase, now, Duration::ZERO));
+    }
+
+    // Sanctioned wall-clock site (see the module docs).
+    #[allow(clippy::disallowed_methods)]
+    fn end(&mut self, _phase: LoadPhase) {
+        let Some((phase, start, child)) = self.stack.pop() else {
+            return;
+        };
+        let elapsed = start.elapsed();
+        let total = match phase {
+            LoadPhase::Scene => &mut self.scene,
+            LoadPhase::Mesh => &mut self.mesh,
+            LoadPhase::Texture => &mut self.texture,
+            LoadPhase::Other => &mut self.other,
+        };
+        *total += elapsed.saturating_sub(child);
+        if let Some(parent) = self.stack.last_mut() {
+            parent.2 += elapsed;
+        }
+    }
+
+    fn decoded(&mut self, kind: LoadKind, key: &str, bytes: u64) {
+        let i = Self::index(kind);
+        self.decoded[i] += 1;
+        self.bytes[i] += bytes;
+        self.seen.insert((i, key.to_string()));
+    }
+
+    fn reused(&mut self, kind: LoadKind, key: &str) {
+        let i = Self::index(kind);
+        if self.seen.insert((i, key.to_string())) {
+            self.reused[i] += 1;
+        }
+    }
 }
 
 /// Accumulates one frame's per-system wall times through the clock-free observer seam.
@@ -540,6 +663,7 @@ pub(crate) fn profile_replay_engine(
         },
         transport: None,
         cluster: None,
+        load: None,
         samples: Some(samples),
     };
     Ok((report, engine))
@@ -1294,7 +1418,12 @@ mod tests {
         let plain_hash = plain.world_hash().unwrap();
 
         let mut observed = counter_engine();
+        observed.observe_load();
         observed.load_inline_scene(SCENE).unwrap();
+        let load = measure_load(&mut observed)
+            .unwrap()
+            .expect("an observed load reports");
+        assert!(load.scene_ms.is_finite() && load.scene_ms >= 0.0);
         let mut observer = TimingObserver::default();
         for _ in 0..50 {
             observer.frame.clear();
@@ -1309,6 +1438,125 @@ mod tests {
         // And the hook actually saw the system each tick.
         assert_eq!(observer.frame.len(), 1);
         assert_eq!(observer.frame[0].0, "bump");
+    }
+
+    /// A one-triangle mesh document binding `../textures/t.png` as its base-colour map.
+    const TEXTURED_MESH: &str = "format: 1
+kind: mesh
+positions:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+uvs:
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+base_color_texture:
+  path: ../textures/t.png
+indices:
+  - 0
+  - 1
+  - 2
+";
+
+    fn mesh_entity(asset: &str) -> String {
+        format!(
+            "  - components:
+      Mesh:
+        shape:
+          asset: {asset}
+"
+        )
+    }
+
+    fn counters<'a>(load: &'a LoadProfile, kind: &str) -> &'a AssetLoadCounters {
+        load.assets
+            .iter()
+            .find(|a| a.kind == kind)
+            .expect("every kind is listed")
+    }
+
+    #[test]
+    fn load_profile_counts_decodes_and_reuse() {
+        let dir = std::env::temp_dir().join(format!("ludion-load-profile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        let texture = ludion_assets::encode_png(1, 1, &[200, 20, 30, 255]).unwrap();
+        let sprite = ludion_assets::encode_png(2, 2, &[10; 16]).unwrap();
+        std::fs::write(dir.join("textures/t.png"), &texture).unwrap();
+        std::fs::write(dir.join("textures/s.png"), &sprite).unwrap();
+        std::fs::write(dir.join("meshes/a.mesh.yaml"), TEXTURED_MESH).unwrap();
+        std::fs::write(dir.join("meshes/b.mesh.yaml"), TEXTURED_MESH).unwrap();
+
+        let mut scene = String::from(
+            "format: 1
+entities:
+",
+        );
+        for _ in 0..3 {
+            scene.push_str(&mesh_entity("meshes/a.mesh.yaml"));
+        }
+        scene.push_str(&mesh_entity("meshes/b.mesh.yaml"));
+        scene.push_str(
+            "  - components:
+      Sprite:
+        texture: textures/s.png
+        size:
+          - 1.0
+          - 1.0
+",
+        );
+
+        let mut engine = Engine::with_project_root(&dir);
+        engine.observe_load();
+        engine.load_inline_scene(&scene).unwrap();
+        let load = measure_load(&mut engine).unwrap().expect("observed");
+
+        let names: Vec<&str> = load.assets.iter().map(|a| a.kind.as_str()).collect();
+        let expected: Vec<&str> = LoadKind::ALL.iter().map(|k| k.name()).collect();
+        assert_eq!(names, expected);
+        let doc_len = TEXTURED_MESH.len() as u64;
+        let mesh = counters(&load, "mesh");
+        assert_eq!(
+            (mesh.decoded, mesh.reused, mesh.bytes_read),
+            (2, 0, 2 * doc_len)
+        );
+        let tex = counters(&load, "texture");
+        assert_eq!(
+            (tex.decoded, tex.reused, tex.bytes_read),
+            (3, 0, 2 * texture.len() as u64 + sprite.len() as u64)
+        );
+        for kind in [
+            "voxel",
+            "voxel_grid",
+            "sculpt",
+            "assembly",
+            "character",
+            "atlas",
+        ] {
+            let c = counters(&load, kind);
+            assert_eq!((c.decoded, c.reused, c.bytes_read), (0, 0, 0), "{kind}");
+        }
+
+        // A second window over the same, still-warm cache decodes nothing.
+        engine.observe_load();
+        let again = measure_load(&mut engine).unwrap().expect("observed");
+        assert_eq!(counters(&again, "mesh").decoded, 0);
+        assert_eq!(counters(&again, "mesh").reused, 2);
+        assert_eq!(counters(&again, "texture").decoded, 0);
+        assert_eq!(counters(&again, "texture").reused, 1);
+        assert_eq!(again.total_ms, 0.0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1416,6 +1664,7 @@ mod tests {
             },
             transport: None,
             cluster: None,
+            load: None,
             samples: None,
         };
 
@@ -1823,6 +2072,7 @@ mod tests {
             },
             transport: None,
             cluster: None,
+            load: None,
             samples: None,
         }
     }

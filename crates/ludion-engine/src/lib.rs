@@ -57,6 +57,7 @@ pub mod fonts;
 pub mod hierarchy;
 mod instantiate;
 pub mod live;
+mod load_observer;
 pub mod manifest;
 mod mesh_asset;
 pub mod model_sheet;

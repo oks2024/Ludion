@@ -44,6 +44,7 @@ use ludion_renderer::{MeshData, TextureImage, WorldVoxelGrid};
 use crate::assembly_mesh::AssemblyData;
 use crate::character::CharacterData;
 use crate::extract::{AtlasAsset, load_texture};
+use crate::load_observer::{LoadKind, LoadObserver, LoadPhase, NoLoadObserver};
 use crate::voxel_mesh::VoxelStaticGrid;
 
 /// Which of the cache's maps an entry lives in — the tag a dependency edge carries so a reload
@@ -58,6 +59,29 @@ enum AssetKind {
     Assembly,
     Character,
     Atlas,
+}
+
+impl AssetKind {
+    fn load_kind(self) -> LoadKind {
+        match self {
+            AssetKind::Texture => LoadKind::Texture,
+            AssetKind::Mesh => LoadKind::Mesh,
+            AssetKind::Voxel => LoadKind::Voxel,
+            AssetKind::VoxelGrid => LoadKind::VoxelGrid,
+            AssetKind::Sculpt => LoadKind::Sculpt,
+            AssetKind::Assembly => LoadKind::Assembly,
+            AssetKind::Character => LoadKind::Character,
+            AssetKind::Atlas => LoadKind::Atlas,
+        }
+    }
+
+    fn load_phase(self) -> LoadPhase {
+        match self {
+            AssetKind::Texture => LoadPhase::Texture,
+            AssetKind::Mesh => LoadPhase::Mesh,
+            _ => LoadPhase::Other,
+        }
+    }
 }
 
 /// A CPU cache of decoded assets — texture [`TextureImage`]s, asset [`MeshData`], voxel-model
@@ -108,6 +132,9 @@ pub(crate) struct AssetCache {
     /// signature comparison runs every frame anyway, so a world that returns to the held baseline is
     /// honestly not stale.
     gi_stale: bool,
+    /// Load instrumentation a host attached. Host state, not content, so [`clear`](AssetCache::clear)
+    /// leaves it alone — the scene load that clears the cache is the very event it measures.
+    observer: Option<Box<dyn LoadObserver>>,
 }
 
 impl AssetCache {
@@ -126,7 +153,28 @@ impl AssetCache {
             voxelization: None,
             gi_hold: false,
             gi_stale: false,
+            observer: None,
         }
+    }
+
+    /// Attaches (or detaches) the load observer.
+    pub(crate) fn set_observer(&mut self, observer: Option<Box<dyn LoadObserver>>) {
+        self.observer = observer;
+    }
+
+    /// Detaches and returns the load observer.
+    pub(crate) fn take_observer(&mut self) -> Option<Box<dyn LoadObserver>> {
+        self.observer.take()
+    }
+
+    /// Whether a load observer is attached.
+    pub(crate) fn observed(&self) -> bool {
+        self.observer.is_some()
+    }
+
+    /// The attached observer, if any — the engine brackets its scene phase through it.
+    pub(crate) fn observer_mut(&mut self) -> Option<&mut dyn LoadObserver> {
+        self.observer.as_deref_mut()
     }
 
     /// Drops every entry — called on a `scene.load`, so a new scene's assets are never shadowed by a
@@ -223,6 +271,8 @@ impl AssetCache {
         if !self.images.contains_key(&key) {
             self.load_entry(project_root, AssetKind::Texture, rel)
                 .map_err(first_diagnostic)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::Texture.load_kind(), &key);
         }
         Ok(self.images.get(&key).expect("just inserted on a miss"))
     }
@@ -242,6 +292,8 @@ impl AssetCache {
         let key = normalize_key(rel);
         if !self.meshes.contains_key(&key) {
             self.load_entry(project_root, AssetKind::Mesh, rel)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::Mesh.load_kind(), &key);
         }
         Ok(self.meshes.get(&key).expect("just inserted on a miss"))
     }
@@ -263,6 +315,8 @@ impl AssetCache {
         let key = normalize_key(rel);
         if !self.voxels.contains_key(&key) {
             self.load_entry(project_root, AssetKind::Voxel, rel)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::Voxel.load_kind(), &key);
         }
         Ok(self.voxels.get(&key).expect("just inserted on a miss"))
     }
@@ -284,6 +338,8 @@ impl AssetCache {
         let key = normalize_key(rel);
         if !self.voxel_grids.contains_key(&key) {
             self.load_entry(project_root, AssetKind::VoxelGrid, rel)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::VoxelGrid.load_kind(), &key);
         }
         Ok(self.voxel_grids.get(&key).expect("just inserted on a miss"))
     }
@@ -303,6 +359,8 @@ impl AssetCache {
         let key = normalize_key(rel);
         if !self.sculpts.contains_key(&key) {
             self.load_entry(project_root, AssetKind::Sculpt, rel)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::Sculpt.load_kind(), &key);
         }
         Ok(self.sculpts.get(&key).expect("just inserted on a miss"))
     }
@@ -328,6 +386,8 @@ impl AssetCache {
         let key = normalize_key(rel);
         if !self.assemblies.contains_key(&key) {
             self.load_entry(project_root, AssetKind::Assembly, rel)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::Assembly.load_kind(), &key);
         }
         Ok(self.assemblies.get(&key).expect("just inserted on a miss"))
     }
@@ -347,6 +407,8 @@ impl AssetCache {
         let key = normalize_key(rel);
         if !self.characters.contains_key(&key) {
             self.load_entry(project_root, AssetKind::Character, rel)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::Character.load_kind(), &key);
         }
         Ok(self.characters.get(&key).expect("just inserted on a miss"))
     }
@@ -370,6 +432,8 @@ impl AssetCache {
         let key = normalize_key(rel);
         if !self.atlases.contains_key(&key) {
             self.load_entry(project_root, AssetKind::Atlas, rel)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::Atlas.load_kind(), &key);
         }
         Ok(self.atlases.get(&key).expect("just inserted on a miss"))
     }
@@ -383,6 +447,56 @@ impl AssetCache {
         rel: &str,
     ) -> Result<(), Vec<Diagnostic>> {
         let key = normalize_key(rel);
+        let phase = kind.load_phase();
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.begin(phase);
+        }
+        let decoded = self.decode_entry(project_root, kind, rel, &key);
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.end(phase);
+        }
+        let sources = decoded?;
+        self.report_decoded(project_root, kind, &key, &sources);
+        self.record_sources(kind, &key, &sources);
+        Ok(())
+    }
+
+    /// Tells the observer what a successful decode read: per source, the on-disk size. A mesh's
+    /// document is a mesh decode and each map after it a texture decode; every other kind is one
+    /// decode over all its files.
+    fn report_decoded(
+        &mut self,
+        project_root: &Path,
+        kind: AssetKind,
+        key: &str,
+        sources: &[String],
+    ) {
+        let Some(observer) = self.observer.as_deref_mut() else {
+            return;
+        };
+        let len = |src: &String| std::fs::metadata(project_root.join(src)).map_or(0, |m| m.len());
+        if kind == AssetKind::Mesh {
+            for (i, src) in sources.iter().enumerate() {
+                if i == 0 {
+                    observer.decoded(LoadKind::Mesh, key, len(src));
+                } else {
+                    observer.decoded(LoadKind::Texture, src, len(src));
+                }
+            }
+        } else {
+            observer.decoded(kind.load_kind(), key, sources.iter().map(len).sum());
+        }
+    }
+
+    /// Runs `kind`'s loader, inserts the result under `key`, and returns the files it read.
+    fn decode_entry(
+        &mut self,
+        project_root: &Path,
+        kind: AssetKind,
+        rel: &str,
+        key: &str,
+    ) -> Result<Vec<String>, Vec<Diagnostic>> {
+        let key = key.to_string();
         let sources = match kind {
             AssetKind::Texture => {
                 // Premultiplied on the miss, never on the hit: the convention is a property of the
@@ -392,7 +506,13 @@ impl AssetCache {
                 vec![key.clone()]
             }
             AssetKind::Mesh => {
-                let (mesh, sources) = crate::mesh_asset::load_with_sources(project_root, rel)?;
+                let mut unobserved = NoLoadObserver;
+                let observer: &mut dyn LoadObserver = match self.observer.as_deref_mut() {
+                    Some(observer) => observer,
+                    None => &mut unobserved,
+                };
+                let (mesh, sources) =
+                    crate::mesh_asset::load_with_sources(project_root, rel, observer)?;
                 self.meshes.insert(key.clone(), Arc::new(mesh));
                 sources
             }
@@ -428,8 +548,7 @@ impl AssetCache {
                 vec![key.clone(), color]
             }
         };
-        self.record_sources(kind, &key, &sources);
-        Ok(())
+        Ok(sources)
     }
 
     /// Removes the `kind` entry at `key` from its map.

@@ -21,6 +21,7 @@ use ludion_renderer::{MeshData, MeshTexture, MeshTextures, SkinJoint, TextureIma
 use ludion_scene::{MeshDocument, MeshSkin, TextureRef};
 
 use crate::asset_cache::{SourceFiles, fold_source_hashes};
+use crate::load_observer::{LoadObserver, LoadPhase, NoLoadObserver};
 
 /// The tangent frame `(+X, handedness +1)` a vertex wears when the document authors none, mirroring
 /// the renderer's own default.
@@ -43,20 +44,24 @@ const DEFAULT_BONES: [u32; 4] = [0, 0, 0, 0];
 /// All diagnostics carry a JSON Pointer into the *mesh document*; the caller ([`extract`](crate::extract))
 /// re-points them at the referencing `Mesh` component.
 pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> {
-    load_with_sources(root, rel).map(|(data, _)| data)
+    load_with_sources(root, rel, &mut NoLoadObserver).map(|(data, _)| data)
 }
 
 /// [`load`], additionally reporting **every file it read** — the mesh document first, then each
 /// distinct texture PNG, as `root`-relative paths. That list is the mesh's reload dependency set
 /// ([`crate::asset_cache`]), and the texture hashes are folded into [`MeshData::hash`] so an edited
 /// PNG re-keys the GPU mesh (and its material bind group) even when the document is untouched.
+///
+/// `observer` is told when each map's decode starts and ends, so a map's time is attributed to the
+/// texture phase rather than to the mesh.
 pub(crate) fn load_with_sources(
     root: &Path,
     rel: &str,
+    observer: &mut dyn LoadObserver,
 ) -> Result<(MeshData, Vec<String>), Vec<Diagnostic>> {
     let (doc, hash) = read_document(root, rel)?;
     let mut data = decode(&doc, hash);
-    let (textures, files) = load_textures(root, rel, &doc)?;
+    let (textures, files) = load_textures(root, rel, &doc, observer)?;
     data.textures = textures;
     let texture_hashes: Vec<u64> = files.iter().map(|(_, hash)| *hash).collect();
     data.hash = fold_source_hashes(hash, &texture_hashes);
@@ -116,6 +121,7 @@ fn load_textures(
     root: &Path,
     rel: &str,
     doc: &MeshDocument,
+    observer: &mut dyn LoadObserver,
 ) -> Result<(Option<MeshTextures>, SourceFiles), Vec<Diagnostic>> {
     let maps = &doc.textures;
     // The five slots in the document's canonical order, each paired with its own key.
@@ -145,7 +151,10 @@ fn load_textures(
         };
         if !images.contains_key(&reference.path) {
             let resolved_path = ludion_core::paths::sibling(rel, &reference.path);
-            let image = match ludion_assets::load_png(root, &resolved_path) {
+            observer.begin(LoadPhase::Texture);
+            let loaded = ludion_assets::load_png(root, &resolved_path);
+            observer.end(LoadPhase::Texture);
+            let image = match loaded {
                 Ok(image) => {
                     files.push((resolved_path, image.hash));
                     Some(Arc::new(TextureImage {

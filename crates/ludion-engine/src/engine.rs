@@ -68,6 +68,7 @@ use crate::builtin_registry;
 use crate::components::{AudioEmitter, Camera, Transform};
 use crate::dispatch::Dispatched;
 use crate::docs::{DocKind, DocValidator, PreparedDocs};
+use crate::load_observer::{LoadObserver, LoadPhase};
 use crate::perf_live::{LivePerf, ProfileWindowData, Span};
 use crate::player_profile::{ProfileKind, ProfileSaveEntry};
 use crate::quality::QualitySetting;
@@ -854,6 +855,36 @@ impl Engine {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_quality(self.quality.quality, self.quality.params);
         }
+    }
+
+    /// Starts measuring load: from the next scene load through the next extract, the engine records
+    /// per-phase wall time and per-kind decode counters for [`profile_engine`](crate::profile_engine)
+    /// to report as [`ProfileReport::load`](crate::ProfileReport::load).
+    ///
+    /// Pure observation: an attached observer never changes the world or its `WorldHash`. A host that
+    /// does not call it reads no clock for loading.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use ludion_engine::Engine;
+    ///
+    /// let mut engine = Engine::new();
+    /// engine.observe_load();
+    /// engine.load_inline_scene("format: 1\nentities: []\n").unwrap();
+    /// ```
+    pub fn observe_load(&mut self) {
+        self.asset_cache
+            .set_observer(Some(Box::new(crate::profile::LoadClock::default())));
+    }
+
+    /// Whether a load observer is attached.
+    pub(crate) fn load_observed(&self) -> bool {
+        self.asset_cache.observed()
+    }
+
+    /// Detaches the load observer, ending the measurement.
+    pub(crate) fn take_load_observer(&mut self) -> Option<Box<dyn LoadObserver>> {
+        self.asset_cache.take_observer()
     }
 
     /// This host's render quality setting (see [`set_quality`](Engine::set_quality)).
@@ -2694,6 +2725,19 @@ impl Engine {
     /// The engine stores `document` inline ([`SceneRef::Inline`]); the checked parse seeds
     /// `Engine.authored`.
     pub(crate) fn load_scene_document(&mut self, document: String) -> Result<u32, Vec<Diagnostic>> {
+        if let Some(observer) = self.asset_cache.observer_mut() {
+            observer.begin(LoadPhase::Scene);
+        }
+        let loaded = self.instantiate_and_commit(document);
+        if let Some(observer) = self.asset_cache.observer_mut() {
+            observer.end(LoadPhase::Scene);
+        }
+        loaded
+    }
+
+    /// The body of [`load_scene_document`](Engine::load_scene_document), bracketed by its caller so
+    /// the scene phase closes on every error return too.
+    fn instantiate_and_commit(&mut self, document: String) -> Result<u32, Vec<Diagnostic>> {
         let mut reads = self.load_reads();
         let Instantiated {
             source,

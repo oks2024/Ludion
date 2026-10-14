@@ -2845,6 +2845,12 @@ export interface ProfileReport {
   cluster?: ClusterProfile | null;
   gpu: GpuProfile;
   /**
+   * What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.
+   * Filled by the **offline** driver and absent for a live capture: a load is a one-off event the
+   * host has already run by the time a capture asks, and a disarmed host reads no clock for it.
+   */
+  load?: LoadProfile | null;
+  /**
    * Frames measured; every median below is over this many samples.
    */
   measured_frames: number;
@@ -2944,6 +2950,86 @@ export interface GpuProfile {
    * `null` (the shape is stable; the numbers are simply unavailable on that adapter).
    */
   timestamps_supported: boolean;
+  [k: string]: unknown;
+}
+/**
+ * What loading a scene cost — wall time per phase, and deterministic per-kind asset counters.
+ *
+ * The phases are **exclusive** self-times: a mesh's map decode counts in `texture_ms`, not
+ * `mesh_ms`, so the phases never overlap. `total_ms` runs from the first phase's start to the end
+ * of the measured load, and `total_ms` minus the sum of the phases is the unattributed share.
+ * The counters are not measurements: two loads of the same scene produce identical numbers, so a
+ * change in them is a change in what gets decoded rather than noise.
+ */
+export interface LoadProfile {
+  /**
+   * One entry per asset kind, always all of them, in a fixed order.
+   */
+  assets: AssetLoadCounters[];
+  /**
+   * Time to the first rendered frame; absent until the renderer reports it.
+   */
+  first_frame_ms?: number | null;
+  /**
+   * Time spent baking GI probes; absent until the renderer reports it.
+   */
+  gi_bake_ms?: number | null;
+  /**
+   * Time the renderer spent uploading the scene's assets to the GPU; absent until the renderer
+   * reports it.
+   */
+  gpu_upload_ms?: number | null;
+  /**
+   * Time spent decoding mesh documents (their maps count in `texture_ms`).
+   */
+  mesh_ms: number;
+  /**
+   * Time spent decoding every other asset kind.
+   */
+  other_ms: number;
+  /**
+   * Time spent creating the renderer's device and pipelines; absent until the renderer reports it.
+   */
+  renderer_init_ms?: number | null;
+  /**
+   * Time spent instantiating the scene document into a world, outside any asset decode.
+   */
+  scene_ms: number;
+  /**
+   * Time spent decoding textures: loose sprite textures and mesh maps alike.
+   */
+  texture_ms: number;
+  /**
+   * First phase start to end of the measured load.
+   */
+  total_ms: number;
+  /**
+   * Time spent voxelizing the scene for GI; absent until the renderer reports it.
+   */
+  voxelize_ms?: number | null;
+  [k: string]: unknown;
+}
+/**
+ * How many assets of one kind a load decoded or reused.
+ */
+export interface AssetLoadCounters {
+  /**
+   * On-disk size of the files those decodes read.
+   */
+  bytes_read: number;
+  /**
+   * Decode events: one per decode, so a map shared by two meshes counts twice.
+   */
+  decoded: number;
+  /**
+   * The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,
+   * `character`, `atlas`).
+   */
+  kind: string;
+  /**
+   * Distinct keys whose first lookup in the window was a cache hit.
+   */
+  reused: number;
   [k: string]: unknown;
 }
 /**

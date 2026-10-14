@@ -129,6 +129,11 @@ pub struct ProfileReport {
     /// offline driver owns its own loop and can time the build as its own span.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<ClusterProfile>,
+    /// What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.
+    /// Filled by the **offline** driver and absent for a live capture: a load is a one-off event the
+    /// host has already run by the time a capture asks, and a disarmed host reads no clock for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<LoadProfile>,
     /// The measured frames' raw per-frame columns, present when the request asked for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<ProfileSamples>,
@@ -229,6 +234,59 @@ pub struct ClusterProfile {
     /// loop runs at all. The all-cells mean is `total_refs / cells`, one division away, which is why
     /// this one is the occupied mean rather than a second spelling of a derivable number.
     pub mean_list_len: f64,
+}
+
+/// What loading a scene cost — wall time per phase, and deterministic per-kind asset counters.
+///
+/// The phases are **exclusive** self-times: a mesh's map decode counts in `texture_ms`, not
+/// `mesh_ms`, so the phases never overlap. `total_ms` runs from the first phase's start to the end
+/// of the measured load, and `total_ms` minus the sum of the phases is the unattributed share.
+/// The counters are not measurements: two loads of the same scene produce identical numbers, so a
+/// change in them is a change in what gets decoded rather than noise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LoadProfile {
+    /// Time spent instantiating the scene document into a world, outside any asset decode.
+    pub scene_ms: f64,
+    /// Time spent decoding mesh documents (their maps count in `texture_ms`).
+    pub mesh_ms: f64,
+    /// Time spent decoding textures: loose sprite textures and mesh maps alike.
+    pub texture_ms: f64,
+    /// Time spent decoding every other asset kind.
+    pub other_ms: f64,
+    /// Time the renderer spent uploading the scene's assets to the GPU; absent until the renderer
+    /// reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_upload_ms: Option<f64>,
+    /// Time to the first rendered frame; absent until the renderer reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_frame_ms: Option<f64>,
+    /// Time spent voxelizing the scene for GI; absent until the renderer reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voxelize_ms: Option<f64>,
+    /// Time spent creating the renderer's device and pipelines; absent until the renderer reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer_init_ms: Option<f64>,
+    /// Time spent baking GI probes; absent until the renderer reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gi_bake_ms: Option<f64>,
+    /// First phase start to end of the measured load.
+    pub total_ms: f64,
+    /// One entry per asset kind, always all of them, in a fixed order.
+    pub assets: Vec<AssetLoadCounters>,
+}
+
+/// How many assets of one kind a load decoded or reused.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AssetLoadCounters {
+    /// The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,
+    /// `character`, `atlas`).
+    pub kind: String,
+    /// Decode events: one per decode, so a map shared by two meshes counts twice.
+    pub decoded: u64,
+    /// Distinct keys whose first lookup in the window was a cache hit.
+    pub reused: u64,
+    /// On-disk size of the files those decodes read.
+    pub bytes_read: u64,
 }
 
 /// Sim-side timings — the schedule's per-system medians, the sequential per-tick costs, and the
@@ -477,6 +535,7 @@ impl ProfileWindowData {
             },
             transport: self.transport,
             cluster: None,
+            load: None,
             samples: include_samples.then_some(self.samples),
         }
     }
@@ -485,6 +544,44 @@ impl ProfileWindowData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_section_round_trips_and_is_optional() {
+        let mut report = window().into_report("scene".to_string(), false);
+        report.load = Some(LoadProfile {
+            scene_ms: 1.0,
+            mesh_ms: 2.0,
+            texture_ms: 3.0,
+            other_ms: 0.5,
+            gpu_upload_ms: None,
+            first_frame_ms: None,
+            voxelize_ms: None,
+            renderer_init_ms: None,
+            gi_bake_ms: None,
+            total_ms: 7.0,
+            assets: vec![AssetLoadCounters {
+                kind: "mesh".into(),
+                decoded: 2,
+                reused: 1,
+                bytes_read: 100,
+            }],
+        });
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json["load"]["gpu_upload_ms"].is_null());
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json).unwrap(),
+            report
+        );
+
+        // A report written before the section existed still parses.
+        report.load = None;
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json.get("load").is_none());
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json).unwrap(),
+            report
+        );
+    }
 
     fn window() -> ProfileWindowData {
         ProfileWindowData {

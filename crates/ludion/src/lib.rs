@@ -1272,7 +1272,7 @@ fn run_profile(
     check: Option<&Path>,
     quality: ludion_engine::QualitySetting,
 ) -> ExitCode {
-    let mut engine = match builder.load_scene_file(scene) {
+    let mut engine = match builder.observe_load().load_scene_file(scene) {
         Ok(engine) => engine,
         Err(diagnostic) => {
             eprintln!("{diagnostic}");
@@ -2039,6 +2039,7 @@ mod budget_quality_tests {
             },
             transport: None,
             cluster: None,
+            load: None,
             samples: None,
         }
     }

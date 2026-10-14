@@ -89,6 +89,7 @@ pub struct EngineBuilder {
     project_root: PathBuf,
     save_root: Option<PathBuf>,
     profile_persistence: bool,
+    observe_load: bool,
     category_gains: CategoryGains,
     plane: Plane,
     render_size: (u32, u32),
@@ -115,6 +116,7 @@ impl EngineBuilder {
             project_root: PathBuf::from("."),
             save_root: None,
             profile_persistence: false,
+            observe_load: false,
             category_gains: CategoryGains::default(),
             plane: Plane::default(),
             render_size: DEFAULT_RENDER_SIZE,
@@ -158,6 +160,26 @@ impl EngineBuilder {
     #[must_use]
     pub fn persist_profile(mut self) -> Self {
         self.profile_persistence = true;
+        self
+    }
+
+    /// Attaches a load observer to the built engine ([`Engine::observe_load`]), so the scene load a
+    /// following [`load_scene_file`](EngineBuilder::load_scene_file) runs is measured too. Only the
+    /// offline profile driver sets it.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use ludion_engine::Engine;
+    ///
+    /// let engine = Engine::builder()
+    ///     .observe_load()
+    ///     .load_scene_file(std::path::Path::new("scenes/main.yaml"))?;
+    /// # let _ = engine;
+    /// # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
+    /// ```
+    #[must_use]
+    pub fn observe_load(mut self) -> Self {
+        self.observe_load = true;
         self
     }
 
@@ -636,6 +658,9 @@ impl EngineBuilder {
         // build — an unloadable save is backed up and defaulted, reported via `profile_migration`.
         engine.install_profile();
         engine.boot_profile_pending = true;
+        if self.observe_load {
+            engine.observe_load();
+        }
         Ok(engine)
     }
 

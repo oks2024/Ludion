@@ -3613,6 +3613,40 @@
   },
   "response": {
     "$defs": {
+      "AssetLoadCounters": {
+        "description": "How many assets of one kind a load decoded or reused.",
+        "properties": {
+          "bytes_read": {
+            "description": "On-disk size of the files those decodes read.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "decoded": {
+            "description": "Decode events: one per decode, so a map shared by two meshes counts twice.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,\n`character`, `atlas`).",
+            "type": "string"
+          },
+          "reused": {
+            "description": "Distinct keys whose first lookup in the window was a cache hit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "decoded",
+          "reused",
+          "bytes_read"
+        ],
+        "type": "object"
+      },
       "ClusterProfile": {
         "description": "Clustered-forward light binning — the CPU build's cost, and the occupancy of the tables it built.\n\nThe occupancy fields are not measurements: they are the *shape* of the tables, reduced out of the\nbinning's own counting sort, so two runs of the same frame produce identical numbers and any\nchange in them is a change in the binning rather than noise. Only `build_median_ms` is a\nwall-clock median like the rest of the report.\n\nThey travel together because that pairing is the whole point: a `scene`-pass regression with the\noccupancy unmoved means per-fragment shading got more expensive, while the same regression *with*\nthe mean or max list length climbing means the binning got looser. One `ludion profile` run tells\nthem apart, which a GPU capture previously had to.",
         "properties": {
@@ -3810,6 +3844,92 @@
         ],
         "type": "object"
       },
+      "LoadProfile": {
+        "description": "What loading a scene cost — wall time per phase, and deterministic per-kind asset counters.\n\nThe phases are **exclusive** self-times: a mesh's map decode counts in `texture_ms`, not\n`mesh_ms`, so the phases never overlap. `total_ms` runs from the first phase's start to the end\nof the measured load, and `total_ms` minus the sum of the phases is the unattributed share.\nThe counters are not measurements: two loads of the same scene produce identical numbers, so a\nchange in them is a change in what gets decoded rather than noise.",
+        "properties": {
+          "assets": {
+            "description": "One entry per asset kind, always all of them, in a fixed order.",
+            "items": {
+              "$ref": "#/$defs/AssetLoadCounters"
+            },
+            "type": "array"
+          },
+          "first_frame_ms": {
+            "description": "Time to the first rendered frame; absent until the renderer reports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gi_bake_ms": {
+            "description": "Time spent baking GI probes; absent until the renderer reports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gpu_upload_ms": {
+            "description": "Time the renderer spent uploading the scene's assets to the GPU; absent until the renderer\nreports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mesh_ms": {
+            "description": "Time spent decoding mesh documents (their maps count in `texture_ms`).",
+            "format": "double",
+            "type": "number"
+          },
+          "other_ms": {
+            "description": "Time spent decoding every other asset kind.",
+            "format": "double",
+            "type": "number"
+          },
+          "renderer_init_ms": {
+            "description": "Time spent creating the renderer's device and pipelines; absent until the renderer reports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scene_ms": {
+            "description": "Time spent instantiating the scene document into a world, outside any asset decode.",
+            "format": "double",
+            "type": "number"
+          },
+          "texture_ms": {
+            "description": "Time spent decoding textures: loose sprite textures and mesh maps alike.",
+            "format": "double",
+            "type": "number"
+          },
+          "total_ms": {
+            "description": "First phase start to end of the measured load.",
+            "format": "double",
+            "type": "number"
+          },
+          "voxelize_ms": {
+            "description": "Time spent voxelizing the scene for GI; absent until the renderer reports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "scene_ms",
+          "mesh_ms",
+          "texture_ms",
+          "other_ms",
+          "total_ms",
+          "assets"
+        ],
+        "type": "object"
+      },
       "PassTiming": {
         "description": "One frame-graph pass's median GPU time across the measured frames.",
         "properties": {
@@ -3916,6 +4036,17 @@
           "gpu": {
             "$ref": "#/$defs/GpuProfile",
             "description": "GPU-side timings: per-pass medians from the render pipeline."
+          },
+          "load": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LoadProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.\nFilled by the **offline** driver and absent for a live capture: a load is a one-off event the\nhost has already run by the time a capture asks, and a disarmed host reads no clock for it."
           },
           "measured_frames": {
             "description": "Frames measured; every median below is over this many samples.",
@@ -5476,6 +5607,40 @@
   },
   "response_body": {
     "$defs": {
+      "AssetLoadCounters": {
+        "description": "How many assets of one kind a load decoded or reused.",
+        "properties": {
+          "bytes_read": {
+            "description": "On-disk size of the files those decodes read.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "decoded": {
+            "description": "Decode events: one per decode, so a map shared by two meshes counts twice.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,\n`character`, `atlas`).",
+            "type": "string"
+          },
+          "reused": {
+            "description": "Distinct keys whose first lookup in the window was a cache hit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "decoded",
+          "reused",
+          "bytes_read"
+        ],
+        "type": "object"
+      },
       "ClusterProfile": {
         "description": "Clustered-forward light binning — the CPU build's cost, and the occupancy of the tables it built.\n\nThe occupancy fields are not measurements: they are the *shape* of the tables, reduced out of the\nbinning's own counting sort, so two runs of the same frame produce identical numbers and any\nchange in them is a change in the binning rather than noise. Only `build_median_ms` is a\nwall-clock median like the rest of the report.\n\nThey travel together because that pairing is the whole point: a `scene`-pass regression with the\noccupancy unmoved means per-fragment shading got more expensive, while the same regression *with*\nthe mean or max list length climbing means the binning got looser. One `ludion profile` run tells\nthem apart, which a GPU capture previously had to.",
         "properties": {
@@ -5673,6 +5838,92 @@
         ],
         "type": "object"
       },
+      "LoadProfile": {
+        "description": "What loading a scene cost — wall time per phase, and deterministic per-kind asset counters.\n\nThe phases are **exclusive** self-times: a mesh's map decode counts in `texture_ms`, not\n`mesh_ms`, so the phases never overlap. `total_ms` runs from the first phase's start to the end\nof the measured load, and `total_ms` minus the sum of the phases is the unattributed share.\nThe counters are not measurements: two loads of the same scene produce identical numbers, so a\nchange in them is a change in what gets decoded rather than noise.",
+        "properties": {
+          "assets": {
+            "description": "One entry per asset kind, always all of them, in a fixed order.",
+            "items": {
+              "$ref": "#/$defs/AssetLoadCounters"
+            },
+            "type": "array"
+          },
+          "first_frame_ms": {
+            "description": "Time to the first rendered frame; absent until the renderer reports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gi_bake_ms": {
+            "description": "Time spent baking GI probes; absent until the renderer reports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gpu_upload_ms": {
+            "description": "Time the renderer spent uploading the scene's assets to the GPU; absent until the renderer\nreports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mesh_ms": {
+            "description": "Time spent decoding mesh documents (their maps count in `texture_ms`).",
+            "format": "double",
+            "type": "number"
+          },
+          "other_ms": {
+            "description": "Time spent decoding every other asset kind.",
+            "format": "double",
+            "type": "number"
+          },
+          "renderer_init_ms": {
+            "description": "Time spent creating the renderer's device and pipelines; absent until the renderer reports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scene_ms": {
+            "description": "Time spent instantiating the scene document into a world, outside any asset decode.",
+            "format": "double",
+            "type": "number"
+          },
+          "texture_ms": {
+            "description": "Time spent decoding textures: loose sprite textures and mesh maps alike.",
+            "format": "double",
+            "type": "number"
+          },
+          "total_ms": {
+            "description": "First phase start to end of the measured load.",
+            "format": "double",
+            "type": "number"
+          },
+          "voxelize_ms": {
+            "description": "Time spent voxelizing the scene for GI; absent until the renderer reports it.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "scene_ms",
+          "mesh_ms",
+          "texture_ms",
+          "other_ms",
+          "total_ms",
+          "assets"
+        ],
+        "type": "object"
+      },
       "PassTiming": {
         "description": "One frame-graph pass's median GPU time across the measured frames.",
         "properties": {
@@ -5779,6 +6030,17 @@
           "gpu": {
             "$ref": "#/$defs/GpuProfile",
             "description": "GPU-side timings: per-pass medians from the render pipeline."
+          },
+          "load": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LoadProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.\nFilled by the **offline** driver and absent for a live capture: a load is a one-off event the\nhost has already run by the time a capture asks, and a disarmed host reads no clock for it."
           },
           "measured_frames": {
             "description": "Frames measured; every median below is over this many samples.",

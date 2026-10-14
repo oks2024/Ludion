@@ -599,6 +599,7 @@ mod tests {
                 },
                 transport: None,
                 cluster: None,
+                load: None,
                 samples: None,
             }),
         };

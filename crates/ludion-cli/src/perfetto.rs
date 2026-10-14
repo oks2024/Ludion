@@ -276,6 +276,7 @@ mod tests {
             // The trace has no cluster lane: the cluster build is one CPU cost per frame with no
             // per-frame column to lay out, and a timeline is drawn from columns.
             cluster: None,
+            load: None,
             samples: Some(ProfileSamples {
                 frames: vec![10, 11],
                 system_names: vec!["bump".to_string()],
