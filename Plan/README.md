@@ -26,6 +26,7 @@ The reference game that drove many engine arcs is private; its design and plans 
 - [Projectile patterns](projectile-patterns.md) — W1–W4 mechanized (`kind: pattern`, `Volley`, `PatternPlayer`); exit rides a first real consumer.
 - [Rotation and camera representations](rotation-representation.md) — W1 shipped (rotation math in `ludion_core::math`); macOS half owed.
 - [Scalability](scalability.md) — W1–W3 landed (nine quality axes, render scale); W4 planned, macOS confirmation owed.
+- [Scene load speed](scene-load-speed.md) — planned (load-phase profiling, parallel asset prefetch, cache retained across loads); not started.
 - [Sector state persistence](sector-state-persistence.md) — W3–W4 complete (scene residue across sector transitions); W4 human gate owed.
 - [Skeletal animation](skeletal-animation.md) — W1–W3 mechanized (glTF skins, joint tree, GPU bone palette); W4 not started.
 - [Sprite engine](sprite-engine.md) — W1–W4 mechanized (sprite/atlas kinds, bake, `generate-atlas`); close rides the external consumer and human verdicts.
