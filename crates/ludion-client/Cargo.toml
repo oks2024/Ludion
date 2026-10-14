@@ -3,6 +3,7 @@ name = "ludion-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "A typed, synchronous WebSocket client for the Ludion game engine's wire protocol."
 keywords = ["ludion", "websocket", "client", "protocol"]

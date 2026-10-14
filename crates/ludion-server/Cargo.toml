@@ -3,6 +3,7 @@ name = "ludion-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "The WebSocket host that exposes a running Ludion engine's command queue to protocol clients."
 keywords = ["ludion", "websocket", "server", "game-engine"]

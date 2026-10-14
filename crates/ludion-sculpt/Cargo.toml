@@ -3,6 +3,7 @@ name = "ludion-sculpt"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Implicit-surface meshing of sculpt documents (primitive signed distance fields, polynomial smooth blends) for the Ludion game engine."
 keywords = ["ludion", "sculpt", "mesh", "sdf", "game-engine"]

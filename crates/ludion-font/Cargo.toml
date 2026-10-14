@@ -3,6 +3,7 @@ name = "ludion-font"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Font faces for the Ludion game engine: the glyph, advance and kerning model over a kind: font document, and the embedded 8x8 face."
 keywords = ["ludion", "font", "text", "game-engine"]

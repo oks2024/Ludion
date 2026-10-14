@@ -3,6 +3,7 @@ name = "ludion-window"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "A native windowed viewer for a running Ludion server, implemented as an ordinary peer protocol client."
 keywords = ["ludion", "window", "viewer", "wgpu"]

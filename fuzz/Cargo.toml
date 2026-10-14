@@ -8,6 +8,7 @@ version = "0.0.0"
 publish = false
 edition = "2024"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/oks2024/Ludion"
 
 [package.metadata]
 cargo-fuzz = true

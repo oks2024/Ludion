@@ -3,6 +3,7 @@ name = "ludion-spatial"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Deterministic 2D-on-the-ground-plane collision for the Ludion game engine: the Collider component, a per-frame spatial hash, and pinned-order overlap / raycast / k-nearest queries."
 keywords = ["ludion", "collision", "spatial", "determinism", "game-engine"]

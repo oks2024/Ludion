@@ -3,6 +3,7 @@ name = "ludion-ecs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "A small, deterministic, BTree-backed ECS (generational entities, typed queries, a component registry) for the Ludion game engine."
 keywords = ["ludion", "ecs", "game-engine", "gamedev"]

@@ -3,6 +3,7 @@ name = "ludion-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "A Model Context Protocol (MCP) stdio server that lets an LLM agent drive a running Ludion game engine over its wire protocol."
 keywords = ["ludion", "mcp", "llm", "agent"]

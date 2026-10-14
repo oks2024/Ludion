@@ -3,6 +3,7 @@ name = "ludion-gen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "ComfyUI generation client for the Ludion game engine: API-format workflow validation, recipe resolution, and the submit/follow/download run pipeline."
 keywords = ["ludion", "comfyui", "generation", "workflow", "game-engine"]

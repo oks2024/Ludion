@@ -3,6 +3,7 @@ name = "ludion-assets"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "GPU-free asset loading (file bytes, content hashes, decoded PNGs, and an opt-in debounced filesystem watch) for the Ludion game engine."
 keywords = ["ludion", "assets", "png", "game-engine"]

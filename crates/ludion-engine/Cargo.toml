@@ -3,6 +3,7 @@ name = "ludion-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "The Ludion engine core: the Engine, its exhaustive command dispatch (the protocol parity gate), and session recording/replay."
 keywords = ["ludion", "game-engine", "replay", "ecs"]

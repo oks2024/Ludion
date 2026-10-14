@@ -3,6 +3,7 @@ name = "ludion-physics"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Deterministic rigid-body dynamics for the Ludion game engine: a rapier3d world wrapped behind the Collider/Velocity author surface, the only crate in the workspace naming a rapier or nalgebra type."
 keywords = ["ludion", "physics", "rapier", "determinism", "game-engine"]

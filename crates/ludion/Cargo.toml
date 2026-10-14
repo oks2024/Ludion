@@ -3,6 +3,7 @@ name = "ludion"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "The Ludion game engine facade: the one crate a game depends on for scenes, deterministic sim, the wire protocol, and hosting."
 keywords = ["ludion", "game-engine", "gamedev", "ecs"]

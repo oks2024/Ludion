@@ -3,6 +3,7 @@ name = "ludion-import"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "A deterministic glTF-to-canonical-text compiler for the Ludion game engine's scene and mesh formats."
 keywords = ["ludion", "gltf", "import", "game-engine"]

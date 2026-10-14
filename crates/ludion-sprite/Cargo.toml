@@ -3,6 +3,7 @@ name = "ludion-sprite"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Sprite document baking (glyph grids + CPU effects), the deterministic atlas packer and PNG → sprite-document import for the Ludion game engine."
 keywords = ["ludion", "sprite", "atlas", "game-engine"]

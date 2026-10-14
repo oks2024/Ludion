@@ -3,6 +3,7 @@ name = "ludion-sim"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Fixed-timestep simulation driver, scripted input, and the world-hash determinism harness for the Ludion game engine."
 keywords = ["ludion", "simulation", "determinism", "game-engine"]

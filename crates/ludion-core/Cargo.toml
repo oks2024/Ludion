@@ -3,6 +3,7 @@ name = "ludion-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Deterministic foundation primitives (entity ids, sim time, seeded RNG, order-stable collections, diagnostics) for the Ludion game engine."
 keywords = ["ludion", "game-engine", "determinism", "ecs"]

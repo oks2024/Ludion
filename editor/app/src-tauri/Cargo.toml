@@ -15,7 +15,7 @@ authors = ["Alexandre Pestana"]
 # repo-wide decision recorded in the root `Cargo.toml`.
 license = "MIT OR Apache-2.0"
 # Filled in at publication — the public remote does not exist yet.
-repository = ""
+repository = "https://github.com/oks2024/Ludion"
 edition = "2024"
 rust-version = "1.94"
 

@@ -3,6 +3,7 @@ name = "ludion-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "The typed command/response/event wire protocol contract, schema export, and replay format for the Ludion game engine."
 keywords = ["ludion", "protocol", "game-engine", "schema"]

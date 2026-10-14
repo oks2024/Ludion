@@ -12,6 +12,7 @@ exclude = ["vendor/rapier3d", "vendor/parry3d", "games/vigil"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/oks2024/Ludion"
 rust-version = "1.94"
 
 # Shared dependency versions. Crates opt in with `dep.workspace = true`; the version and

@@ -3,6 +3,7 @@ name = "ludion-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "The `ludion` command-line tool: scaffold, validate, import, render, test, and serve Ludion game projects."
 keywords = ["ludion", "cli", "game-engine", "gamedev"]

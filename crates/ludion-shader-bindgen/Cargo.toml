@@ -3,6 +3,7 @@ name = "ludion-shader-bindgen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "WGSL reflection (naga-driven memory layouts + binding usage) for the Ludion game engine's shader bindgen. Engine-internal tooling."
 keywords = ["ludion", "wgsl", "naga", "reflection", "shader"]

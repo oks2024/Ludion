@@ -3,6 +3,7 @@ name = "ludion-renderer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "The HD-2D rendering pipeline (faceted meshes, lit sprites, bloom, ACES tonemap) for the Ludion game engine, built on wgpu."
 keywords = ["ludion", "wgpu", "hd-2d", "rendering"]

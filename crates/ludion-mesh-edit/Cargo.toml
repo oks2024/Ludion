@@ -3,6 +3,7 @@ name = "ludion-mesh-edit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Deriving an edited copy of a mesh's texture maps from a mesh-edit document (region algebra, UV rasterisation, paint ops, ray picking) for the Ludion game engine."
 keywords = ["ludion", "mesh", "texture", "emissive", "game-engine"]

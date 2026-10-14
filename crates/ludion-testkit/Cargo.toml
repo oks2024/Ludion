@@ -3,6 +3,7 @@ name = "ludion-testkit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "The golden-image test harness (SSIM compare, structured diff reports, bless flow, sim assertions) for the Ludion game engine."
 keywords = ["ludion", "testing", "golden-image", "ssim"]

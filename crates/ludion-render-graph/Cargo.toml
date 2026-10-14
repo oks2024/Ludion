@@ -3,6 +3,7 @@ name = "ludion-render-graph"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "A declarative wgpu frame graph (transient resources, dependency scheduling, JSON dump) for the Ludion game engine."
 keywords = ["ludion", "wgpu", "framegraph", "rendering"]

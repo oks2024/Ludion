@@ -3,6 +3,7 @@ name = "ludion-scene"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Strict-subset YAML scene files for Ludion: parse, validate against a component registry, and canonically re-emit."
 keywords = ["ludion", "yaml", "scene", "game-engine"]
