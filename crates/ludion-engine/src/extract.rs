@@ -57,10 +57,10 @@ use crate::voxel_mesh::VoxelStaticGrid;
 /// default are one value.
 const AMBIENT: [f32; 3] = ludion_renderer::DEFAULT_AMBIENT;
 
-/// How `extract` turns a scene asset path into decoded data — the one seam that both the direct
-/// disk loader ([`extract`]) and the cached loader ([`extract_through`]) implement, so textures and
-/// asset meshes share exactly one resolution path. A single `&mut dyn SceneAssets` (rather than two
-/// closures) keeps the cached path's one `&mut AssetCache` from being borrowed twice at once.
+/// How `extract` turns a scene asset path into decoded data — the seam `extract_inner` resolves
+/// assets through; `CachedAssets` is the loader, and `RefLoader` collects references. A single
+/// `&mut dyn SceneAssets` (rather than two closures) keeps the cache's one `&mut AssetCache` from
+/// being borrowed twice at once.
 pub(crate) trait SceneAssets {
     /// Resolves a sprite/tilemap texture path to a decoded, premultiplied [`TextureImage`],
     /// `Arc`-shared so a cached hit is a refcount bump, not a byte copy.
@@ -114,56 +114,6 @@ pub(crate) trait SceneAssets {
     fn observe_begin(&mut self, _phase: LoadPhase) {}
     /// The load phase last begun ends.
     fn observe_end(&mut self, _phase: LoadPhase) {}
-}
-
-/// The direct loader: each asset is read (and decoded) straight from disk, no cache — a one-shot
-/// render (CLI `render`, `ludion test`, the testkit) has no per-frame IO to amortize.
-struct DiskAssets<'a> {
-    root: &'a Path,
-}
-
-impl SceneAssets for DiskAssets<'_> {
-    fn texture(&mut self, rel: &str) -> Result<Arc<TextureImage>, Diagnostic> {
-        load_texture(self.root, rel)
-    }
-    fn atlas(&mut self, rel: &str) -> Result<Arc<AtlasAsset>, Vec<Diagnostic>> {
-        load_atlas(self.root, rel).map(Arc::new)
-    }
-    fn mesh(&mut self, rel: &str) -> Result<Arc<MeshData>, Vec<Diagnostic>> {
-        crate::mesh_asset::load(self.root, rel).map(Arc::new)
-    }
-    fn voxel(&mut self, rel: &str) -> Result<Arc<MeshData>, Vec<Diagnostic>> {
-        crate::voxel_mesh::load(self.root, rel).map(Arc::new)
-    }
-    fn voxel_grid(&mut self, rel: &str) -> Result<Arc<VoxelStaticGrid>, Vec<Diagnostic>> {
-        crate::voxel_mesh::load_grid(self.root, rel).map(Arc::new)
-    }
-    fn sculpt(&mut self, rel: &str) -> Result<Arc<MeshData>, Vec<Diagnostic>> {
-        crate::sculpt_mesh::load(self.root, rel).map(Arc::new)
-    }
-    fn assembly(&mut self, rel: &str) -> Result<Arc<AssemblyData>, Vec<Diagnostic>> {
-        crate::assembly_mesh::load(self.root, rel).map(Arc::new)
-    }
-    fn character(&mut self, rel: &str) -> Result<Arc<CharacterData>, Vec<Diagnostic>> {
-        crate::character::load(self.root, rel).map(Arc::new)
-    }
-    /// Always a miss: a one-shot render extracts once, so there is no second frame for a cached
-    /// voxelization to serve.
-    fn voxelization(&self, _signature: u64) -> Option<Option<Arc<WorldVoxelGrid>>> {
-        None
-    }
-    /// Always `None`: a loader that retains nothing has nothing to hold, which is what makes every
-    /// one-shot path (`ludion render`, goldens, replays) bake fresh whatever a host's lever says.
-    fn held_voxelization(&mut self) -> Option<Option<Arc<WorldVoxelGrid>>> {
-        None
-    }
-    fn set_voxelization(
-        &mut self,
-        _signature: u64,
-        grid: Option<Arc<WorldVoxelGrid>>,
-    ) -> Option<Arc<WorldVoxelGrid>> {
-        grid
-    }
 }
 
 /// The cached loader: each asset resolves **through** the [`AssetCache`] (miss = load + decode once,
@@ -502,6 +452,8 @@ fn frame_unknown(doc: &AtlasDocument, rel: &str, frame: &str, pointer: &str) -> 
 /// calls [`extract_at`] and passes both — keeping this three-argument shape means the callers with
 /// no opinion cannot accidentally express one.
 ///
+/// Each call decodes through its own fresh, prefetched [`AssetCache`] ([`extract_at`]).
+///
 /// # Errors
 /// - `L2101` if the world has more than one [`Camera`].
 /// - `L1101`/`L1102` if a referenced texture cannot be read or decoded (all such errors are
@@ -565,6 +517,10 @@ pub fn extract(
 /// log to report that to, so it does not (the content-root validators and a live host's
 /// `extract_through` do).
 ///
+/// Each call decodes through its own fresh [`AssetCache`], prefetched in parallel — the loader a live
+/// host uses. Nothing carries between calls, so a one-shot render always re-reads the files and
+/// re-voxelizes.
+///
 /// # Errors
 /// Exactly [`extract`]'s.
 pub fn extract_at(
@@ -574,16 +530,17 @@ pub fn extract_at(
     now: SimTime,
     particle_density: f32,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
-    let mut assets = DiskAssets { root: project_root };
-    extract_inner(
+    let mut cache = AssetCache::new();
+    cache.prefetch(project_root, &asset_refs(world, project_root));
+    extract_through(
         world,
         viewport,
         project_root,
-        &mut assets,
+        &mut cache,
         now,
         particle_density,
-        // The public, disk-side extract is every CLI, golden and offline path: a host's view override
-        // is not theirs to see, which is what keeps every committed image a function of the scene.
+        // The public extract is every CLI, golden and offline path: a host's view override is not
+        // theirs to see, which is what keeps every committed image a function of the scene.
         None,
         &mut Vec::new(),
     )
@@ -635,7 +592,7 @@ pub(crate) fn extract_through(
 }
 
 /// The shared body of [`extract`] and [`extract_through`], parameterized by how an asset path is
-/// turned into decoded data (straight from disk, or through the [`AssetCache`]). `degraded` takes
+/// turned into decoded data (through an [`AssetCache`], the host's or a fresh one). `degraded` takes
 /// the diagnostics of fallbacks that did not fail the extract, each with its latch key.
 #[allow(clippy::too_many_arguments)]
 fn extract_inner(
@@ -2117,10 +2074,10 @@ pub(crate) struct PlacedSprite<'w> {
     pub(crate) uv_scroll: [f32; 2],
 }
 
-/// [`place`], over the direct disk loader — what a caller with no [`AssetCache`] of its own wants
-/// (`render.bounds`). Mirrors the [`extract`]/[`extract_through`] split: one placement body, two
-/// ways of reaching an asset.
-pub(crate) fn place_from_disk<'w>(
+/// [`place`], over a fresh [`AssetCache`] of its own — what a caller with no host cache wants
+/// (`render.bounds`). Not prefetched: it only resolves atlas region sizes, so a prefetch would
+/// decode meshes it never reads.
+pub(crate) fn place_uncached<'w>(
     world: &'w World,
     ids: &[EntityId],
     camera: &RenderCamera,
@@ -2128,7 +2085,11 @@ pub(crate) fn place_from_disk<'w>(
     now: SimTime,
 ) -> Placed<'w> {
     let fonts = font_library(world, project_root);
-    let mut assets = DiskAssets { root: project_root };
+    let mut cache = AssetCache::new();
+    let mut assets = CachedAssets {
+        root: project_root,
+        cache: &mut cache,
+    };
     let mut atlases = AtlasCache::default();
     let mut poses = WorldAffines::new();
     place(
@@ -2973,8 +2934,8 @@ fn resolve_font(
 }
 
 /// Loads (or reuses) the texture at `rel` and returns its index, or records a diagnostic and
-/// returns `None`. `assets` is how a path becomes an `Arc`-shared [`TextureImage`] (from disk, or
-/// through the [`AssetCache`], which hands every extract the same allocation); `path_index` still
+/// returns `None`. `assets` is how a path becomes an `Arc`-shared [`TextureImage`] (through
+/// the [`AssetCache`], which hands every extract the same allocation); `path_index` still
 /// dedups within one extract so a texture shared by several sprites is one entry in the
 /// `RenderScene`.
 fn resolve_texture(
@@ -3773,7 +3734,10 @@ mod tests {
             &world,
             (320, 180),
             &root,
-            &mut DiskAssets { root: &root },
+            &mut CachedAssets {
+                root: &root,
+                cache: &mut AssetCache::new(),
+            },
             tick_zero(),
             ludion_renderer::QualityParams::FULL.particle_density,
             None,
@@ -5391,6 +5355,111 @@ mod tests {
             .expect("the fixture world extracts")
             .voxel
             .expect("a GiVolume builds a grid")
+        }
+
+        /// Every one-shot extract builds its own fresh cache, so nothing is shared between calls:
+        /// each one rasterizes, as the loader that retained nothing always did.
+        #[test]
+        fn a_one_shot_extract_always_rebakes() {
+            let world = world_with_a_cube(0.0, 0.5);
+            let before = rasterization_count();
+            for _ in 0..2 {
+                extract_at(
+                    &world,
+                    (320, 180),
+                    Path::new("."),
+                    tick_zero(),
+                    QualityParams::FULL.particle_density,
+                )
+                .expect("the fixture world extracts");
+            }
+            assert_eq!(rasterization_count() - before, 2);
+        }
+
+        /// A one-shot extract (fresh, prefetched cache) resolves the same assets as the live
+        /// cache's lazy path.
+        #[test]
+        fn a_one_shot_extract_matches_the_live_cache() {
+            let dir = std::env::temp_dir().join(format!(
+                "ludion-one-shot-{}-{}",
+                std::process::id(),
+                "matches"
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("meshes")).unwrap();
+            std::fs::create_dir_all(dir.join("textures")).unwrap();
+            let png = |red: u8| ludion_assets::encode_png(1, 1, &[red, 20, 30, 255]).unwrap();
+            std::fs::write(dir.join("textures/t.png"), png(10)).unwrap();
+            std::fs::write(dir.join("textures/s.png"), png(30)).unwrap();
+            let list = |values: &[f32]| {
+                values
+                    .iter()
+                    .map(|v| format!("  - {v:?}\n"))
+                    .collect::<String>()
+            };
+            std::fs::write(
+                dir.join("meshes/a.mesh.yaml"),
+                format!(
+                    "format: 1\nkind: mesh\npositions:\n{}uvs:\n{}base_color_texture:\n  path: \
+                     ../textures/t.png\nindices:\n  - 0\n  - 1\n  - 2\n",
+                    list(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                    list(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+                ),
+            )
+            .unwrap();
+
+            let mut world = World::new();
+            let mesh = world.spawn();
+            world
+                .insert(
+                    mesh,
+                    Mesh {
+                        shape: MeshSource::Asset("meshes/a.mesh.yaml".into()),
+                        ..Mesh::default()
+                    },
+                )
+                .unwrap();
+            let sprite = world.spawn();
+            world
+                .insert(
+                    sprite,
+                    Sprite {
+                        texture: Some("textures/s.png".into()),
+                        ..Sprite::default()
+                    },
+                )
+                .unwrap();
+
+            let density = QualityParams::FULL.particle_density;
+            let one_shot = extract_at(&world, (320, 180), &dir, tick_zero(), density).unwrap();
+            let live = extract_through(
+                &world,
+                (320, 180),
+                &dir,
+                &mut AssetCache::new(),
+                tick_zero(),
+                density,
+                None,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+
+            let hashes = |scene: &RenderScene| {
+                (
+                    scene.mesh_assets.iter().map(|m| m.hash).collect::<Vec<_>>(),
+                    scene.textures.iter().map(|t| t.hash).collect::<Vec<_>>(),
+                    scene.meshes.len(),
+                    scene.sprites.len(),
+                )
+            };
+            assert_eq!(hashes(&one_shot), hashes(&live));
+            assert_eq!(one_shot.mesh_assets.len(), 1);
+            assert_eq!(
+                one_shot.textures.len(),
+                1,
+                "the sprite; a mesh map rides its MeshData"
+            );
         }
 
         /// A second extract of an unchanged world rasterizes **nothing** and hands back the very

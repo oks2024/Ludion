@@ -62,7 +62,7 @@ the gate, against their `kind: font-source`.
 `maps.color` through `atlas_color_path` — the colour map is written relative to the *atlas document*,
 so the pair moves together. The decoded image is **not** run through `Image::premultiplied`: the bake
 already wrote premultiplied pixels, and premultiplying twice darkens every translucent texel again.
-Loose `texture:` PNGs *are* premultiplied at load, in `DiskAssets::texture`. That asymmetry is the
+Loose `texture:` PNGs *are* premultiplied at load, in `extract::load_texture`. That asymmetry is the
 one thing to remember at this seam.
 
 `AtlasCache` holds each resolution for one placement-and-extract pass, keyed by document path,
@@ -130,7 +130,7 @@ The texel is premultiplied, so the tint's alpha scales colour as well as coverag
 ## Gotchas
 - **Do not premultiply an atlas image at load.** It is already premultiplied; the second pass is
   invisible on opaque art and darkens everything translucent. The comment at `load_atlas` says so
-  because the symmetric-looking `DiskAssets::texture` line right above it *does* premultiply.
+  because the symmetric-looking `extract::load_texture` line right above it *does* premultiply.
 - **A batch splits on the texture index, not on `lit`.** Adding a per-instance property that needs a
   different pipeline would split batches instead, which is the cost the flag lane exists to avoid.
 - **The engine consumes `flipbooks` but not `filter`.** `filter` is carried on the atlas document —

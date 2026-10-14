@@ -8,8 +8,8 @@
 //! current camera.
 //!
 //! "Headless" means no GPU, not no disk: placement reads an atlas document when a `Sprite` names a
-//! region and authors no `size`, because that quad's size *is* its art's. It goes through the
-//! direct disk loader ([`place_from_disk`](crate::extract::place_from_disk)) — this is a query, not
+//! region and authors no `size`, because that quad's size *is* its art's. It goes through a
+//! fresh asset cache, never the host's ([`place_uncached`](crate::extract::place_uncached)) — this is a query, not
 //! a per-frame path — and an atlas that will not load costs the quad its derived size, never the
 //! answer: every other entity still reports.
 //!
@@ -40,7 +40,7 @@ use ludion_renderer::{MeshShape, TextRun};
 
 use crate::asset_cache::AssetCache;
 use crate::extract::{
-    PlacedMesh, PlacedMeshSource, PlacedSprite, build_camera, place_from_disk, single_camera,
+    PlacedMesh, PlacedMeshSource, PlacedSprite, build_camera, place_uncached, single_camera,
 };
 use crate::voxel_mesh::grid_box;
 
@@ -88,7 +88,7 @@ pub(crate) fn compute(
     // Placement at the clip's first instant, the tick-0 rule `extract` (the three-argument wrapper)
     // follows: a bound is a query with no sim time of its own, and reporting one against an invented
     // instant would be a different answer every time the same world was asked.
-    let placed = place_from_disk(
+    let placed = place_uncached(
         world,
         &ids,
         &camera,

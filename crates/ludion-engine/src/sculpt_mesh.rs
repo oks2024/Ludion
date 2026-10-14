@@ -33,6 +33,7 @@ pub use ludion_sculpt::SculptStats;
 ///
 /// All diagnostics carry a JSON Pointer into the *sculpt document*; the caller
 /// ([`extract`](crate::extract)) re-points them at the referencing `Mesh` component.
+#[cfg(test)]
 pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> {
     load_with_sources(root, rel).map(|(data, _)| data)
 }

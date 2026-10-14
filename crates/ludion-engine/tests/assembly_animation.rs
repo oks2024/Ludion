@@ -364,7 +364,7 @@ fn reloading_an_edited_clip_re_poses_a_live_run() {
         }))
         .expect("the clip reloads");
 
-    // `extract_at` reads from disk rather than through the engine's cache, so it sees the edit
+    // `extract_at` decodes through a fresh cache of its own, not the engine's, so it sees the edit
     // either way; the reload command is what the *live* stream needs, and this asserts it is
     // accepted and sim-invisible.
     let after = posed_at(&engine, 30);

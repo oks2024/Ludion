@@ -1,7 +1,7 @@
 # Scene load speed — measured, parallel, retained
 
-> **Status:** Wave 1 shipped 2026-10-14 (load section, render phases, `load_total_ms` + breach
-> calibration); Wave 2 next.
+> **Status:** Wave 2 shipped 2026-10-14 (parallel prefetch, one loader path, breach and plaza
+> budgets); Wave 3 next.
 
 ## Why
 
@@ -144,6 +144,22 @@ Three structural causes, all in `ludion-engine`:
 
 ## Status
 
+**Wave 2 shipped 2026-10-14.**
+
+- Parallel prefetch: `AssetCache::prefetch` decodes a world's referenced assets in parallel through
+  `ludion_core::par`, inserting in sorted key order (identical at 1/2/8 threads); a mesh map is its own
+  cache entry, so a shared map decodes once.
+- One loader path: `DiskAssets` is removed. `extract`/`extract_at` decode through a fresh prefetched
+  `AssetCache` per call (nothing carries between calls, so a one-shot render always re-reads and
+  re-voxelizes); `render.bounds` uses a fresh unprefetched cache.
+- Measured on the pinned 3090, three warm `--profile 30` runs: breach 2081.8, 1879.7, 1830.5 ms (median
+  1879.7, from 4369.7; mesh 318.5 + texture 204.5 = 523 ms), plaza 2487.3, 2396.4, 2393.9 ms (median
+  2396.4; mesh 382.4 + texture 299.0 = 681 ms). Ceilings `load_total_ms` 4000 (breach) and 5000 (plaza):
+  `games/vigil/budgets/pinned-rtx3090-district-{breach,plaza}.toml`.
+- **The <=250 ms mesh + texture decode exit is missed** (523 ms breach, 681 ms plaza). Per the user's
+  2026-10-14 decision the measured numbers are the new target and Wave 3 follows; its numbers trigger
+  `Plan/cooked-assets.md` regardless.
+
 **Wave 1 shipped 2026-10-14.**
 
 - `ProfileReport.load`: exclusive per-phase wall time and per-asset-kind decoded/reused/bytes counters,
@@ -155,7 +171,7 @@ Three structural causes, all in `ludion-engine`:
   on vigil's mesh district: `games/vigil/budgets/pinned-rtx3090-district-breach.toml`. Three warm
   `--profile 30` runs of `district-breach`: 4409.8, 4355.6 and 4369.7 ms (median 4369.7; scene 303, mesh
   1651, texture 1411, gpu upload 154, renderer init 798, first frame 36); ceiling 9000 ms. The M4 twin is
-  owed (`Plan/owed.md`). The plaza ceiling waits for subtask 05's re-calibration, once the plaza is committed.
+  owed (`Plan/owed.md`).
 - **Checkpoint:** CPU mesh and texture decode dominates the load; GPU upload plus GI bake is a small
   share. Wave 2 keeps its scope and gets no mip-encoder fix. Renderer device creation (about 0.8 s) is a
   fixed cost outside this plan.
