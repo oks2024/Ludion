@@ -218,8 +218,9 @@ Everything in the section above, for `desktop`.
   same bug `upload_mesh_texture`'s `srgb` flag already guards. Test both roles.
 - **Mip filter parity.** Cooked mips are computed on the CPU and the source path's on the GPU, so
   small differences are expected. That is why the axis exists. Do not try to make them bit-equal.
-- **Block-aligned sizes.** A map whose size is not a multiple of 4 is padded at cook time. ASTC 4×4
-  and BC7 both need whole blocks per mip; the last levels (2×2, 1×1) still use one block.
+- **Block-aligned sizes.** A level 0 that is not a multiple of 4 is *resampled* up to the next multiple
+  of 4 at cook time (padding would shrink the content inside UV 0..1); lower levels that are not whole
+  blocks (down to 2×2, 1×1) are padded, one block minimum.
 - **Store sharing.** One store serves every `[[import]]` table. GC must take the union of all
   tables' references, or one table's sync deletes another's cooked files.
 - **Shared checkout.** Encoding and GPU tests are heavy. Serialize lanes with other instances.

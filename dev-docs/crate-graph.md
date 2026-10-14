@@ -15,7 +15,8 @@ the strict/permissive clippy split that rides on this graph is in `determinism`.
 - `crates/ludion-core/` — ids, `Diagnostic` + `L####` code table, `SimTime`/`FrameIndex`/`TickRate`, `DeterministicRng`, `StableMap`/`StableSet`, libm math. Depends on nothing in-workspace.
 - `crates/ludion-ecs/` — custom ECS + component registry (name + JSON Schema + erased serde fns).
 - `crates/ludion-scene/` — strict-subset YAML parse/validate/canonical-emit + `instantiate`.
-- `crates/ludion-assets/` — CPU-only asset loading (PNG, WAV) + content hashes + the debounced filesystem watcher. GPU-free.
+- `crates/ludion-assets/` — CPU-only asset loading (PNG, WAV) + content hashes + the debounced filesystem watcher + the cooked-texture key and KTX2 reader (`cooked`). GPU-free.
+- `crates/ludion-cook/` — the texture cook's encoders (BC7, ASTC 4×4, CPU mips, KTX2 writer). Only `ludion-cli` links it; the engine never carries an encoder. Depends on core + assets.
 - `crates/ludion-sprite/` — offline sprite baking: `kind: sprite` grids + the seven CPU effects → pixels, the deterministic atlas packer, PNG → sprite-document import. Depends on core + scene + assets; GPU-free, does no IO.
 - `crates/ludion-font/` — font faces: `FontFace` (glyph, advance, kerning lookups over a `kind: font` document) and the embedded 8×8 face. Depends on core + scene; pure, no IO, ships PNG bytes without decoding.
 - `crates/ludion-sculpt/` — the sculpt mesher: exact signed distances for the six primitives and the polynomial smooth min/max that fold them. Depends on core + scene; GPU-free, does no IO.

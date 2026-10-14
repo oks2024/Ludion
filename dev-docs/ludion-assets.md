@@ -8,9 +8,10 @@ description: CPU-side asset IO (PNG decode) plus the opt-in debounced file watch
 ## Layout
 - `crates/ludion-assets/src/lib.rs` — the loader: `AssetBytes`, `Image`, `content_hash`, `load_bytes`, `load_png`, `decode_png`, `Image::premultiply`/`premultiplied`, plus unit tests.
 - `crates/ludion-assets/src/shelf.rs` — `shelf::place`, the one shelf-placement loop both atlas packers (sprite, font) call. `MAX_PNG_SIDE` (8192, `pub`) is the decode limit every PNG-writing packer checks its extent against.
+- `crates/ludion-assets/src/cooked.rs` — the runtime half of the texture cook: `cook_key`/`cooked_file_name`, the shared `CookTarget`/`ColorSpace`/`CookSettings`/`CompressedImage` types, `read_ktx2`. The encoders are `ludion-cook` (`ludion devdocs ludion-cook`).
 - `crates/ludion-assets/src/watch.rs` — `watch`/`WatchHandle`: `notify`'s OS watcher on a background thread, coalescing a burst of edits into one batch per quiet period (`L1103` when the root cannot be watched). Compiled only with the `watch` feature.
-- `crates/ludion-assets/Cargo.toml` — dependencies: `ludion-core` (diagnostics), `png`, `xxhash-rust`; behind the opt-in `watch` feature, `notify` + `crossbeam-channel`. No wgpu, no serde.
-- `crates/ludion-engine/src/extract.rs` — the main caller: `DiskAssets::texture` resolves a scene's sprite, tile and UI-rect textures with `ludion_assets::load_png(project_root, rel).map(Image::premultiplied)`. `crates/ludion-engine/src/asset_cache.rs` is the second, doing the same on a cache miss for the hosted per-frame path.
+- `crates/ludion-assets/Cargo.toml` — dependencies: `ludion-core` (diagnostics), `png`, `xxhash-rust`, `ktx2` (reader only); behind the opt-in `watch` feature, `notify` + `crossbeam-channel`. No wgpu, no serde.
+- `crates/ludion-engine/src/extract.rs` — the main caller: `extract::load_texture` (through a fresh `AssetCache`) resolves a scene's sprite, tile and UI-rect textures with `ludion_assets::load_png(project_root, rel).map(Image::premultiplied)`. `crates/ludion-engine/src/asset_cache.rs` is the second, doing the same on a cache miss for the hosted per-frame path.
 - `examples/gallery/assets/` — `brick.png`, `checker.png`: the textures the gallery scenes reference.
 
 ## Rules
@@ -22,6 +23,8 @@ description: CPU-side asset IO (PNG decode) plus the opt-in debounced file watch
 - Errors are `L####` diagnostics: `L1101` (`ASSET_FILE_IO`) for unreadable files, `L1102` (`ASSET_PNG_DECODE`) for bytes that are not a decodable PNG. Both carry the relative path and the resolved absolute path in the message.
 - **The watcher is opt-in (`watch` feature), off by default.** `notify` is a desktop OS-watcher dependency a device build must not carry, so only the two hot-reloading hosts enable it — `ludion-server` (`watch_assets` → `asset.reload`) and `ludion-cli` (`dev`). The engine, the renderer and every game depend on this crate with it off; `scripts/mobile-check.mjs` asserts the feature-less facade tree has no `notify`. Deciding *what* to reload stays the caller's; atlas packing is never a load-time job (`ludion generate-atlas` bakes offline, `ludion devdocs sprite-pipeline`).
 
+- **The runtime half of the cook lives here, the encoders never do.** The engine computes the key and reads KTX2 without linking an encoder. The key hashes the *source* hash plus `COOKER_VERSION` and every setting; changing the key record orphans every cooked store (the pinned-value test fails first). `read_ktx2` accepts exactly the format its target and colour space imply and rejects anything inconsistent; it hands `ktx2::Reader::new` only files whose format field and DFD region byte-equal what `dfd_region` generates, because ktx2 0.5 panics on a corrupt DFD (a texel dimension of 255 overflows) and `catch_unwind` would not help under `panic=abort`.
+
 ## How it works
 `load_bytes(root, relative)` reads the file with `std::fs::read` and pairs the bytes with `content_hash(&bytes)` in an `AssetBytes`. `load_png` builds on it: it hands the bytes to `decode_png(bytes, label)`, which drives the `png` crate with `Transformations::EXPAND | STRIP_16` — palette expands to RGB, sub-8-bit grayscale widens to 8-bit, 16-bit channels narrow to 8-bit. The remaining color types (Grayscale, GrayscaleAlpha, Rgb, Rgba) are folded into RGBA8 by the `expand` helper (gray replicated across RGB, missing alpha set to 255). The result is an `Image { width, height, rgba, hash }` where `hash` is the source-file hash from `load_bytes`.
 
@@ -31,6 +34,7 @@ Downstream, `ludion-engine::extract` loads each texture a scene references relat
 
 ## Verify
 ```
+cargo test -p ludion-assets     # (cooked: key pin, level maths; round trips are in ludion-cook)
 cargo test -p ludion-assets     # hash stability, RGBA round-trip, L1101/L1102 error paths
 cargo test -p ludion-assets --features watch   # + the watcher: a written file is reported, a missing root is L1103
 cargo run -p ludion-cli -- render --scene examples/gallery/sprites.yaml --out target/sprites.png

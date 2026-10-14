@@ -37,6 +37,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use xxhash_rust::xxh3::xxh3_64;
 
+pub mod cooked;
 pub mod import_sync;
 pub mod shelf;
 

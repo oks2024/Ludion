@@ -18,6 +18,7 @@ watch = ["dep:notify", "dep:crossbeam-channel"]
 
 [dependencies]
 crossbeam-channel = { workspace = true, optional = true }
+ktx2.workspace = true
 ludion-core = { path = "../ludion-core", version = "0.1.0" }
 notify = { workspace = true, optional = true }
 png.workspace = true

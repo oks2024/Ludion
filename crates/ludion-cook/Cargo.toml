@@ -1,0 +1,20 @@
+[package]
+name = "ludion-cook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The cook stage's encoders (BC7 and ASTC 4x4 texture compression, CPU mip chains, KTX2 writing) for the Ludion game engine."
+keywords = ["ludion", "texture", "ktx2", "bc7", "astc"]
+categories = ["game-engines", "graphics", "multimedia"]
+
+[dependencies]
+ctt-astcenc.workspace = true
+intel_tex_2.workspace = true
+ktx2.workspace = true
+ludion-assets = { path = "../ludion-assets", version = "0.1.0" }
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+
+[dev-dependencies]
+texture2ddecoder = "0.1"

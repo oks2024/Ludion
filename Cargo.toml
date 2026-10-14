@@ -161,6 +161,17 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 # keyframe without inflating the whole log. Only `ludion-protocol` uses it, and only through the safe
 # `encode_all` / `decode_all` slice APIs — no `unsafe` at the call sites.
 zstd = "0.13"
+# BC7 encoder for the cook stage (`Plan/cooked-assets.md` decision 9). Only `ludion-cook` uses it. Pinned
+# with `=` because the cooked bytes are a function of the encoder: a version move bumps
+# `COOKER_VERSION` (the pin test in `ludion-cook` enforces it).
+intel_tex_2 = "=0.5.0"
+# ASTC 4x4 encoder (the reference astcenc, vendored C++) for the cook stage. Only `ludion-cook` uses
+# it; pinned with `=` for the same reason as `intel_tex_2`. Default features: no rayon, a cook call
+# stays on its calling thread.
+ctt-astcenc = "=0.6.0"
+# KTX2 container: `ludion-assets` reads cooked maps, `ludion-cook` writes them (header, level index
+# and DFD helpers). Parser only, no transcoder.
+ktx2 = "0.5"
 # Font outline and kerning reading for the `bake` feature of `ludion-font` (`Plan/font-assets.md`
 # decision 17). Pinned with `=` because a bake must be byte-identical across machines and versions,
 # and both must share one `read-fonts` (0.43.x): skrifa 0.47 moves to 0.44 and would duplicate it.
