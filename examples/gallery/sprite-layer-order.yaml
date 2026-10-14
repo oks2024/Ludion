@@ -1,0 +1,120 @@
+# Feature: Sprite.layer — a pure sort key. Sprites draw in (layer, view depth back-to-front, scene
+# order); layer is the PRIMARY key, so a higher layer always draws in front regardless of scene
+# order or depth. No Z displacement — the quads share one plane (z = 0) and one view depth, so only
+# `layer` decides who is on top (`Plan/sprite-engine.md` decision 3).
+#
+# Three opaque tile squares overlap at the centre. They are authored back-to-front in SCENE order
+# (crate, then floor, then hazard) but their layers are 2, 0, 1 — so if scene order decided the
+# stack, hazard would sit on top; because `layer` decides it, the crate (layer 2) is fully in front,
+# the hazard (layer 1) next, and the floor (layer 0) is furthest back. A second, right-hand stack
+# reverses the layers over the same authoring order, so the two clusters read as mirror images — the
+# proof that the sort key, not the scene order, is what moved.
+#
+# Orthographic, no post and no Environment, so what lands on screen is the baked atlas and the draw
+# order, nothing else.
+format: 1
+name: "sprite-layer-order - Sprite: layer as the primary sort key"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 8.0
+  # Left cluster: crate is authored first but carries the highest layer, so it wins the stack.
+  - name: left-crate
+    components:
+      Transform:
+        translation:
+          - -2.35
+          - 0.35
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: tiles/crate
+        layer: 2
+  - name: left-floor
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 0.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: tiles/floor
+        layer: 0
+  - name: left-hazard
+    components:
+      Transform:
+        translation:
+          - -1.65
+          - -0.35
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: tiles/hazard
+        layer: 1
+  # Right cluster: the same authoring order, the layers reversed, so the floor now wins the stack.
+  - name: right-crate
+    components:
+      Transform:
+        translation:
+          - 1.65
+          - 0.35
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: tiles/crate
+        layer: 0
+  - name: right-floor
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 0.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: tiles/floor
+        layer: 2
+  - name: right-hazard
+    components:
+      Transform:
+        translation:
+          - 2.35
+          - -0.35
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: tiles/hazard
+        layer: 1

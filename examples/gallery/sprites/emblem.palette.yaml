@@ -1,0 +1,25 @@
+# A shared four-colour palette: a `kind: palette` document many sprites can reference with
+# `palette: { from: emblem.palette.yaml }` instead of copying these colours into each. Edit the
+# colours here once and every sprite that includes it re-bakes to match.
+format: 1
+kind: palette
+name: emblem
+palette:
+  "#":
+    color:
+      - 0.15
+      - 0.17
+      - 0.22
+      - 1.0
+  o:
+    color:
+      - 0.35
+      - 0.5
+      - 0.7
+      - 1.0
+  O:
+    color:
+      - 0.6
+      - 0.75
+      - 0.95
+      - 1.0

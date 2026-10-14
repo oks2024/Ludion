@@ -1,0 +1,8 @@
+# Ludion project manifest.
+#
+# The settled project manifest: this project's identity and its default scene. Nothing parses it yet
+# (this file is generated for future tooling — `ludion` commands take an explicit `--scene` today),
+# so it is informational for now. See LUDION-GUIDE.md.
+
+name = "sokoban"
+default_scene = "scenes/main.yaml"

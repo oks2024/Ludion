@@ -1,0 +1,421 @@
+# Not a single-feature demo: this is the milestone's composed preview scene (a Breakout-style
+# brick/paddle/ball layout, seen through an orthographic camera) used as a content-rich fixture for
+# determinism / record-replay stress testing (see TESTING.md section 2) and as its own golden. For
+# isolated single-component demos, see the other gallery scenes.
+format: 1
+name: "breakout-mock - composed preview scene (orthographic camera)"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 12.0
+  - name: backdrop
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - -1.0
+      Sprite:
+        size:
+          - 12.0
+          - 7.0
+        color:
+          - 0.1
+          - 0.12
+          - 0.18
+          - 1.0
+        lit: true
+  - name: brick-0-0
+    components:
+      Transform:
+        translation:
+          - -6.25
+          - 5.0
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 1.0
+          - 0.55
+          - 0.4
+          - 1.0
+        lit: true
+  - name: brick-0-1
+    components:
+      Transform:
+        translation:
+          - -3.75
+          - 5.0
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 1.0
+          - 0.55
+          - 0.4
+          - 1.0
+        lit: true
+  - name: brick-0-2
+    components:
+      Transform:
+        translation:
+          - -1.25
+          - 5.0
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 1.0
+          - 0.55
+          - 0.4
+          - 1.0
+        lit: true
+  - name: brick-0-3
+    components:
+      Transform:
+        translation:
+          - 1.25
+          - 5.0
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 1.0
+          - 0.55
+          - 0.4
+          - 1.0
+        lit: true
+  - name: brick-0-4
+    components:
+      Transform:
+        translation:
+          - 3.75
+          - 5.0
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 1.0
+          - 0.55
+          - 0.4
+          - 1.0
+        lit: true
+  - name: brick-0-5
+    components:
+      Transform:
+        translation:
+          - 6.25
+          - 5.0
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 1.0
+          - 0.55
+          - 0.4
+          - 1.0
+        lit: true
+  - name: brick-1-0
+    components:
+      Transform:
+        translation:
+          - -6.25
+          - 4.1
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.5
+          - 0.9
+          - 1.0
+          - 1.0
+        lit: true
+  - name: brick-1-1
+    components:
+      Transform:
+        translation:
+          - -3.75
+          - 4.1
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.5
+          - 0.9
+          - 1.0
+          - 1.0
+        lit: true
+  - name: brick-1-2
+    components:
+      Transform:
+        translation:
+          - -1.25
+          - 4.1
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.5
+          - 0.9
+          - 1.0
+          - 1.0
+        lit: true
+  - name: brick-1-3
+    components:
+      Transform:
+        translation:
+          - 1.25
+          - 4.1
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.5
+          - 0.9
+          - 1.0
+          - 1.0
+        lit: true
+  - name: brick-1-4
+    components:
+      Transform:
+        translation:
+          - 3.75
+          - 4.1
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.5
+          - 0.9
+          - 1.0
+          - 1.0
+        lit: true
+  - name: brick-1-5
+    components:
+      Transform:
+        translation:
+          - 6.25
+          - 4.1
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.5
+          - 0.9
+          - 1.0
+          - 1.0
+        lit: true
+  - name: brick-2-0
+    components:
+      Transform:
+        translation:
+          - -6.25
+          - 3.2
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.7
+          - 1.0
+          - 0.6
+          - 1.0
+        lit: true
+  - name: brick-2-1
+    components:
+      Transform:
+        translation:
+          - -3.75
+          - 3.2
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.7
+          - 1.0
+          - 0.6
+          - 1.0
+        lit: true
+  - name: brick-2-2
+    components:
+      Transform:
+        translation:
+          - -1.25
+          - 3.2
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.7
+          - 1.0
+          - 0.6
+          - 1.0
+        lit: true
+  - name: brick-2-3
+    components:
+      Transform:
+        translation:
+          - 1.25
+          - 3.2
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.7
+          - 1.0
+          - 0.6
+          - 1.0
+        lit: true
+  - name: brick-2-4
+    components:
+      Transform:
+        translation:
+          - 3.75
+          - 3.2
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.7
+          - 1.0
+          - 0.6
+          - 1.0
+        lit: true
+  - name: brick-2-5
+    components:
+      Transform:
+        translation:
+          - 6.25
+          - 3.2
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.15
+          - 0.4
+        color:
+          - 0.7
+          - 1.0
+          - 0.6
+          - 1.0
+        lit: true
+  - name: paddle
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -5.0
+          - 0.0
+      Sprite:
+        size:
+          - 1.5
+          - 0.3
+        color:
+          - 0.6
+          - 0.9
+          - 1.0
+          - 1.0
+        lit: true
+  - name: ball
+    components:
+      Transform:
+        translation:
+          - 0.8
+          - -2.0
+          - 0.0
+      Sprite:
+        size:
+          - 0.25
+          - 0.25
+        color:
+          - 1.0
+          - 0.95
+          - 0.7
+          - 1.0
+        lit: true
+  - name: warm-light
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 1.0
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.7
+          - 0.4
+        intensity: 4.0
+        range: 16.0
+  - name: cool-light
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - -3.0
+          - 4.0
+      PointLight:
+        color:
+          - 0.5
+          - 0.7
+          - 1.0
+        intensity: 4.0
+        range: 16.0

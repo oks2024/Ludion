@@ -1,0 +1,29 @@
+--- a/src/query/ray/ray_heightfield.rs
++++ b/src/query/ray/ray_heightfield.rs
+@@ -149,6 +149,26 @@
+             }
+         };
+ 
++        // `cell_at_point` divides by the cell size, but `triangles_at` and the walk below put cell
++        // boundaries at `x_at`/`z_at`; on a grid line the two disagree by an ulp and the ray started
++        // in a cell whose triangles stop short of it (a ray with no x or z motion never walks on).
++        // Re-seat the start cell on `x_at`/`z_at`, clamped to the real cells.
++        let (last_i, last_j) = (self.nrows() - 1, self.ncols() - 1);
++        cell.0 = cell.0.min(last_i);
++        cell.1 = cell.1.min(last_j);
++        while cell.1 < last_j && clip_ray_a.x >= self.x_at(cell.1 + 1) {
++            cell.1 += 1;
++        }
++        while cell.1 > 0 && clip_ray_a.x < self.x_at(cell.1) {
++            cell.1 -= 1;
++        }
++        while cell.0 < last_i && clip_ray_a.z >= self.z_at(cell.0 + 1) {
++            cell.0 += 1;
++        }
++        while cell.0 > 0 && clip_ray_a.z < self.z_at(cell.0) {
++            cell.0 -= 1;
++        }
++
+         loop {
+             let tris = self.triangles_at(cell.0, cell.1);
+             let inter1 = tris

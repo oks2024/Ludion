@@ -1,0 +1,21 @@
+# scripts/size-gate.mjs allowlist — every publishable file over 1 MiB must be named here.
+#
+# One glob pattern per line (forward slashes; `*` within a segment, `**` across segments), each
+# with a short comment for why the file is large and belongs in the tree. `node
+# scripts/size-gate.mjs --list` prints every file currently over the line with its size, to check
+# this list against the tree; a pattern matching nothing over the line is itself a gate failure.
+
+examples/gallery/physics-stress.lrp     # committed replay of the 512-body stress pile; its keyframe carries the physics blob, size ceiling in crates/ludion-engine/tests/physics_stress.rs
+
+# Sweep evidence cited by a plan whose Status is still open; the entry and the image leave together
+# when that plan closes (the image stays in Lore history). New sweep images are downscaled instead.
+Plan/artifacts/particles-wave4-stress.png                 # Plan/particles-engine-and-editor.md, sittings owed
+Plan/artifacts/volumetric-medium-night-street-*.png       # Plan/volumetric-medium.md, exit sitting owed
+Plan/artifacts/comfy-generation-*.png                     # Plan/comfy-generation.md checkpoint sheets, sittings owed
+
+# The accepted generated idol mesh, frozen as a test fixture: 1024-square bakes for an HD-2D prop,
+# and a 5000-face decimate target whose vertex text is 4190 positions of canonical floats. Both
+# halves are the asset itself - there is nothing to shrink that is not the asset. Scoped to this
+# one asset; the next generated mesh earns its own pair of lines.
+crates/ludion-testkit/tests/fixtures/idol-generated/textures/*.png       # frozen copy of the accepted idol maps
+crates/ludion-testkit/tests/fixtures/idol-generated/meshes/*.mesh.yaml   # frozen copy of the accepted idol mesh

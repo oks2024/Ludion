@@ -1,0 +1,22 @@
+format: 1
+kind: map
+name: lint-blocked-marker
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "####"
+  - "#..#"
+  - "#..#"
+  - "####"
+markers:
+  - name: obstacle
+    kind: well
+    x: 3.0
+    z: 3.0
+  - name: buried
+    kind: torch
+    x: 3.0
+    z: 3.0

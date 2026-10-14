@@ -1,0 +1,67 @@
+# The gallery's two shmup bolts: `player` a long cyan capsule, `enemy` a short magenta pip.
+# Each frame keeps a one-texel transparent margin so the doc-level `blur` has room to bloom into —
+# the glow is that blur over an emissive core, never a halo painted glyph by glyph.
+format: 1
+kind: sprite
+name: bullet
+size:
+  - 4
+  - 8
+seed: 91
+palette:
+  o:
+    color:
+      - 0.015
+      - 0.42
+      - 1.0
+      - 1.0
+    emissive: 1.2
+  "*":
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    emissive: 3.0
+  y:
+    color:
+      - 1.0
+      - 0.015
+      - 0.18
+      - 1.0
+    emissive: 1.2
+  x:
+    color:
+      - 1.0
+      - 0.95
+      - 0.98
+      - 1.0
+    emissive: 3.0
+frames:
+  player:
+    rows:
+      - "...."
+      - ".oo."
+      - ".**."
+      - ".**."
+      - ".**."
+      - ".**."
+      - ".oo."
+      - "...."
+  enemy:
+    rows:
+      - "...."
+      - "...."
+      - ".yy."
+      - ".xx."
+      - ".xx."
+      - ".yy."
+      - "...."
+      - "...."
+effects:
+  - op: blur
+    radius: 1
+  - op: noise
+    frames:
+      - enemy
+    amount: 0.03

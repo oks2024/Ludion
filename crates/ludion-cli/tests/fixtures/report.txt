@@ -1,0 +1,25 @@
+map-check <MAP>
+
+probe: radius 0.5 (default), speed 6 u/s (default)
+grid 8x7 (56 cells), cell_size 2
+   0    5
+0  ########
+   #...M..#
+   #.####.#
+   #.#??#.#
+   #.####.#
+5  #..A...#
+   ########
+  legend: # blocked  . walkable  M marker  A anchor  ? unreachable
+
+blocked 37  walkable 19  unreachable 2
+entities 45 (fragments 2, grid 41, markers 2), colliders 37
+
+reachability: from first marker `town-well` — 2 unreachable walkable cells
+seal: sealed from first marker `town-well` — no walker-wide way reaches the map's edge (sound flood: radius 0.41, step 0.12)
+walkability delta: 1 cell blocked by an overhanging prop
+gate links: 0 checked, 0 dangling
+
+markers (2):
+  town-well    kind=well   world (7, 11)  cell (c3,r5)
+  north-torch  kind=torch  world (9,  3)  cell (c4,r1)

@@ -1,0 +1,23 @@
+format: 1
+entities:
+  - name: ok
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.0
+          - 1.0
+  - name: bad-wall
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.0
+          - 1.0
+      Collider:
+        shape:
+          aabb:
+            half_extents:
+              - -1.0
+              - 1.0
+        body: static

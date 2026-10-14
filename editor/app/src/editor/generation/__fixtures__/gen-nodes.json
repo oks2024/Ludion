@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "nodes": [
+    {
+      "class": "SaveImage",
+      "category": "image",
+      "required": {
+        "images": {
+          "type": "IMAGE"
+        },
+        "filename_prefix": {
+          "type": "STRING",
+          "default": "ComfyUI"
+        }
+      },
+      "optional": {
+        "quality": {
+          "type": "INT",
+          "default": 90
+        }
+      },
+      "outputs": []
+    }
+  ],
+  "diagnostics": []
+}

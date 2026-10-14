@@ -1,0 +1,112 @@
+# Feature: Fade - the render-only occlusion-fade component (Environment/IBL Wave 3). Each of the
+# three tall walls carries an authored `Fade`, driving a deterministic screen-door (Bayer) dither
+# *discard* on the opaque mesh pass (no blend, no depth-write change): left is a light stipple
+# (fade 0.75), the middle fades only its upper stories (fade 0.5 with `height_min` at mid-height, so
+# the ground floor stays solid), and the right is a heavy near-cutaway stipple (fade 0.15). The
+# discard is a pure function of pixel position and fade, so this pattern is bit-stable on the pinned
+# GPU. WHO fades is game policy (a camera->player raycast, G7); this golden pins the pattern the
+# `occlusion_fade` example animates. A wall with no `Fade` (or fade 1.0) is byte-identical to the
+# pre-fade mesh path.
+format: 1
+name: "occlusion-fade - Fade: Bayer screen-door dither (whole / top-fade / cutaway)"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.5
+          - 14.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 30.0
+          - 1.0
+          - 30.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.18
+          - 0.2
+          - 0.24
+          - 1.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 9.0
+          - 11.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 3.2
+        range: 60.0
+  - name: wall-dither
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 3.5
+          - 0.0
+        scale:
+          - 3.0
+          - 6.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.58
+          - 0.52
+          - 1.0
+      Fade:
+        fade: 0.75
+  - name: wall-top-fade
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.5
+          - 0.0
+        scale:
+          - 3.0
+          - 6.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.58
+          - 0.52
+          - 1.0
+      Fade:
+        fade: 0.5
+        height_min: 3.5
+  - name: wall-cutaway
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 3.5
+          - 0.0
+        scale:
+          - 3.0
+          - 6.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.58
+          - 0.52
+          - 1.0
+      Fade:
+        fade: 0.15

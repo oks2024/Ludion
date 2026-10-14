@@ -1,0 +1,74 @@
+# GI dynamic-injection budget - pinned Apple M4, 1920x1080, release.
+#
+# Regression tripwire, NOT a performance goal. Ceilings are roughly twice the measured median from
+# `ludion profile --scene … --frames 120` in `--release` on the pinned Apple M4, so a failure means a
+# real, reproducible slowdown - never machine noise. All values are milliseconds. Re-calibrate
+# deliberately (a re-bless event) if a cost becomes intended and permanent - `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/gi-inject-stress.yaml` -
+# GI wave 3's injection stress scene (`Plan/gi-wave3-dynamic-injection.md` §9.2): 300 `GiDynamic`-
+# marked point lights over a floor-and-walls arena, at the `MAX_PROJECTILES` cap - 250 spread across
+# the floor (D13's real-play regime) plus a 50-light burst clustered into one pocket (the adversarial
+# regime the `gi_bin.rs` ceiling exists for). A `GiVolume` with `bounce: 1.0` and no other light is
+# authored, so the `gi_inject` line below is the cap regime's own cost, not one mixed with a bake or
+# a bounce-off scene's baseline. Checked with:
+#
+#   ludion profile --scene examples/gallery/gi-inject-stress.yaml --frames 120 --check budgets/pinned-apple-m4-gi-inject-stress.toml
+#
+# It sits beside `budgets/pinned-apple-m4-lights-stress.toml` for the same reason that file sits
+# beside `budgets/pinned-apple-m4.toml`: every section of a budget is checked against every run, and
+# this scene's `gi_inject` pass has no cost at all on a scene that never schedules it - a shared file
+# would be a ceiling of zero widened to fit one scene's real number, gating nothing on either.
+# `ci/teamcity/README.md`'s `budgets-macos` configuration lists it as the fourth `profile --check`
+# step; a scene a CI configuration forgets to profile is a tripwire disarmed by omission.
+#
+# **METAL PER-PASS TIMESTAMPS OVERCOUNT — see the mac budget corpus.** The `scene` read below runs
+# ~5x the RTX 3090 twin's 0.2365; that is this tile GPU's per-pass attribution artifact on a
+# per-fragment light loop, not a frame time, and the number is a valid tripwire only against itself
+# (it reproduced within <0.2% over four runs). `gi_inject` is a compute pass and reads far closer to
+# the 3090 (0.1404 vs 0.0822, 1.7x).
+
+# The clustered-forward CPU build, gated for the same reason `lights-stress.yaml`'s budget gates it:
+# a `scene` regression with this line unmoved is per-fragment shading getting more expensive: a
+# regression *with* it is the binning getting looser. 300 lights over this scene's smaller world
+# bounds bin cheaper than `lights-stress.yaml`'s 500 over a wider plaza. A top-level key, checked
+# against every run the way `[passes]` entries are checked against theirs (`profile.rs`'s `Budget` is
+# one flat struct — `cluster_build_ms` is the scalar field, not a table entry, so it must sit before
+# the first `[section]` header below).
+#
+# Measured over four 120-frame release runs at 1920x1080: 0.0134 / 0.0123 / 0.0123 / 0.0122 ms,
+# median **0.0123** (300 lights, 194 occupied cells) — a fraction of the 3090 twin's 0.0411, as
+# expected for pure CPU arithmetic on the M4.
+cluster_build_ms = 0.03   # 0.0123 measured (median of four)
+
+# The one pass this file exists for: `gi_inject` replays each probe's cached bake hits against the
+# per-frame world-space bin of marked lights (`Plan/gi-wave3-dynamic-injection.md` §5.2) - a fixed
+# `probes × K` term plus a per-hit bin-list walk that is 0-2 lights in real play and up to the cap
+# under the deliberately adversarial burst patch this scene authors.
+#
+# Measured over four 120-frame release runs at 1920x1080: 0.1421 / 0.1402 / 0.1397 / 0.1406 ms,
+# median **0.1404** (1.7x the 3090 twin's 0.0822). Small in absolute terms next to the plan's own
+# district-scale projection (§5.5: order 0.5-2 ms at 460k probes) because this scene's lattice is a
+# single arena (~46×46×7 units, `cell_size 0.5`/`probe_spacing 1.0` → ~16k probes), not a district -
+# the cap regime's population is authored at full (300 lights, the adversarial burst included), but
+# the probe count that the fixed `probes × K` term scales with is not. That is a property of *this*
+# calibration scene, not of the pass; the district-scale `gi_inject` number lives in
+# `games/vigil/budgets/pinned-apple-m4.toml`, measured on a real district authoring `GiDynamic`.
+[passes]
+gi_inject = 0.28   # 0.1404 measured (median of four)
+
+# `scene` at this population, for the same "tell a fixed regression from a per-light one" reason
+# `lights-stress.yaml`'s budget carries it: 300 lights (marked, but every light still reaches
+# clustered forward per `Plan/gi-wave3-dynamic-injection.md` §3.2) shade through the ordinary
+# clustered-forward path in addition to feeding the injection bin, so a `scene` regression with
+# `gi_inject` unmoved is a clustered-forward or shading defect, not an injection one.
+#
+# Measured over four 120-frame release runs at 1920x1080: 1.2889 / 1.2867 / 1.2871 / 1.2883 ms,
+# median **1.2877** (see the header on Metal smearing).
+scene = 2.6   # 1.2877 measured (median of four)
+
+# Deliberately absent: `frame_total_ms`, `[systems]` (the CLI links no game systems - same reasoning
+# as `lights-stress.yaml`'s budget), `post_total_ms`/`[post_groups]` (no `PostProcess` authored, and
+# the post chain's cost is already gated by `budgets/pinned-apple-m4-post-full.toml` and
+# `budgets/pinned-apple-m4.toml` - a second ceiling on the same scene-independent cost is two files to
+# re-bless for one cause).

@@ -1,0 +1,12 @@
+format: 1
+kind: sprite
+name: wrong-kind-palette
+size:
+  - 1
+  - 1
+palette:
+  from: good.sprite.yaml
+frames:
+  idle:
+    rows:
+      - "A"

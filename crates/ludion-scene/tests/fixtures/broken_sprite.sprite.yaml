@@ -1,0 +1,35 @@
+format: 1
+kind: sprite
+name: broken
+size:
+  - 4
+  - 2
+palette:
+  "#":
+    color:
+      - 0.5
+      - 0.5
+      - 2.0
+      - 1.0
+frames:
+  idle:
+    pivot:
+      - 4.0
+      - 9.0
+    rows:
+      - "##Z#"
+      - "###"
+  bad/name:
+    rows:
+      - "####"
+      - "####"
+effects:
+  - op: blur
+    glyphs:
+      - Z
+    frames:
+      - fly
+    radius: 20
+  - op: dither
+    glyphs:
+      - "#"

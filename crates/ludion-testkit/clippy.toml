@@ -1,0 +1,11 @@
+# Permissive host-side denylist (engine-architecture.md §5), matching ludion-renderer /
+# ludion-render-graph.
+#
+# ludion-testkit is host-side tooling (the golden-image harness and CLI-facing sim-assertion
+# helpers): it is not on the deterministic sim path itself, so the strict sim denylist (no std
+# HashMap, no wall clock) does not apply here. Determinism still matters for this crate's actual
+# job — the SSIM/MAE comparison math must be a pure function of the two images' bytes — but that is
+# enforced by design and tests (see `ssim.rs`), not by a clippy denylist.
+#
+# This file is intentionally empty of `disallowed-types` / `disallowed-methods`; the crate still
+# builds under `cargo clippy -- -D warnings`.

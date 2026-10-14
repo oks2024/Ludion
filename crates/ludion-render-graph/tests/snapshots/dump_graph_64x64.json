@@ -1,0 +1,157 @@
+{
+  "passes": [
+    {
+      "name": "gradient",
+      "kind": "gradient",
+      "reads": [],
+      "writes": [
+        "scene"
+      ]
+    },
+    {
+      "name": "vignette",
+      "kind": "vignette",
+      "reads": [
+        "scene"
+      ],
+      "writes": [
+        "veiled"
+      ]
+    },
+    {
+      "name": "bleed",
+      "kind": "vignette",
+      "reads": [
+        "veiled"
+      ],
+      "writes": [
+        "bloom"
+      ]
+    },
+    {
+      "name": "present",
+      "kind": "vignette",
+      "reads": [
+        "bloom"
+      ],
+      "writes": [
+        "final"
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "name": "scene",
+      "kind": "transient",
+      "format": "rgba8unorm_srgb",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "veiled",
+      "kind": "transient",
+      "format": "rgba8unorm_srgb",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom",
+      "kind": "transient",
+      "format": "rgba8unorm_srgb",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "final",
+      "kind": "output",
+      "format": "rgba8unorm_srgb",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "copy_src"
+      ]
+    }
+  ],
+  "schedule": [
+    "gradient",
+    "vignette",
+    "bleed",
+    "present"
+  ],
+  "aliasing": {
+    "physical_texture_count": 3,
+    "physical_textures": [
+      {
+        "id": 0,
+        "format": "rgba8unorm_srgb",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "copy_src"
+        ],
+        "resources": [
+          "final"
+        ]
+      },
+      {
+        "id": 1,
+        "format": "rgba8unorm_srgb",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "scene",
+          "bloom"
+        ]
+      },
+      {
+        "id": 2,
+        "format": "rgba8unorm_srgb",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "veiled"
+        ]
+      }
+    ],
+    "assignment": [
+      {
+        "resource": "scene",
+        "physical": 1
+      },
+      {
+        "resource": "veiled",
+        "physical": 2
+      },
+      {
+        "resource": "bloom",
+        "physical": 1
+      },
+      {
+        "resource": "final",
+        "physical": 0
+      }
+    ]
+  }
+}

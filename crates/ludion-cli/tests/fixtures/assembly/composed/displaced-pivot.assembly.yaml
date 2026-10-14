@@ -1,0 +1,38 @@
+format: 1
+kind: assembly
+name: displaced-pivot fixture
+size:
+  - 3
+  - 11
+  - 1
+palette:
+  A:
+    color:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 1.0
+  B:
+    color:
+      - 0.0
+      - 1.0
+      - 0.0
+      - 1.0
+parts:
+  - name: trunk
+    file: parts/trunk.part.yaml
+    place:
+      - 0
+      - 0
+      - 0
+  - name: limb
+    file: parts/limb.part.yaml
+    parent: trunk
+    place:
+      - 2
+      - 5
+      - 0
+    pivot:
+      - 0.5
+      - 5.5
+      - 0.5

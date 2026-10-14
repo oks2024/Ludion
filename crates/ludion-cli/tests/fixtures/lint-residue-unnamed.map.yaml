@@ -1,0 +1,25 @@
+format: 1
+kind: map
+name: lint-residue-unnamed
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "######"
+  - "#....#"
+  - "#....#"
+  - "######"
+markers:
+  - kind: torch
+    x: 3.0
+    z: 3.0
+    components:
+      Residue: {}
+  - name: memory-anchor
+    kind: torch
+    x: 5.0
+    z: 3.0
+    components:
+      Residue: {}

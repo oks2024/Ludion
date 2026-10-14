@@ -1,0 +1,27 @@
+format: 1
+kind: map
+name: test-district
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+fragments:
+  - singletons.yaml
+rows:
+  - "########"
+  - "#......#"
+  - "#.####.#"
+  - "#.#..#.#"
+  - "#.####.#"
+  - "#......#"
+  - "########"
+markers:
+  - name: town-well
+    kind: well
+    x: 7.0
+    z: 11.0
+  - name: north-torch
+    kind: torch
+    x: 9.0
+    z: 3.0

@@ -1,0 +1,633 @@
+# Feature: SkinBone parts drive a skinned mesh's bones. The W1 mannequin
+# (`meshes/skin-mannequin.mesh.yaml`, 11 joints) is one skin entity plus 11 invisible rigid parts,
+# each linked to a joint by `SkinBone { skin, bone }`, joined by 10 `Joint`s. No part authors a
+# `Transform`: the spawn pose comes from the skin's `Transform` × the bone's rest pose
+# (`Plan/skeletal-animation.md` decision 5). The rig tumbles down a small staircase, exercising the
+# posed bone palette (`extract.rs::posed_palette`) under real physics. Anchors are the joint tree's
+# head-in-parent (`ludion check-scene <mesh> --bounds`); the elbow hinge axes are computed from the
+# mesh document's joint rest rotations, since the arms sit at 45° in the A-pose (decision 8).
+format: 1
+name: ragdoll-skinned - SkinBone parts drive a skinned mannequin over a staircase
+physics:
+  space: free
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.5
+          - 1.6
+          - 3.5
+        rotation:
+          - -12.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 3.5
+          - 2.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 5.0
+        range: 20.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 4.0
+          - 1.0
+          - 4.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.57
+          - 0.6
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 4.0
+              - 0.5
+              - 4.0
+        body: static
+  - name: step-low
+    components:
+      Transform:
+        translation:
+          - -1.0
+          - 0.075
+          - 0.0
+        scale:
+          - 0.6
+          - 0.075
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.6
+              - 0.075
+              - 0.6
+        body: static
+  - name: step-mid
+    components:
+      Transform:
+        translation:
+          - 0.3
+          - 0.15
+          - 0.0
+        scale:
+          - 0.6
+          - 0.15
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.6
+              - 0.15
+              - 0.6
+        body: static
+  - name: step-high
+    components:
+      Transform:
+        translation:
+          - 1.6
+          - 0.225
+          - 0.0
+        scale:
+          - 0.6
+          - 0.225
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.6
+              - 0.225
+              - 0.6
+        body: static
+  - name: skin
+    components:
+      Transform:
+        translation:
+          - 1.6
+          - 1.95
+          - 0.0
+        rotation:
+          - 15.0
+          - 20.0
+          - 10.0
+      Mesh:
+        shape:
+          asset: meshes/skin-mannequin.mesh.yaml
+        color:
+          - 0.6
+          - 0.45
+          - 0.35
+          - 1.0
+        roughness: 0.8
+  - name: pelvis
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: pelvis
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.015
+                    radius: 0.035
+                translation:
+                  - 0.0
+                  - 0.05
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.046875
+      Velocity:
+        angular:
+          - 0.9
+          - -1.1
+          - 0.6
+  - name: torso
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: torso
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.03
+                    radius: 0.09
+                translation:
+                  - 0.0
+                  - 0.12
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.09375
+      Velocity: {}
+      Joint:
+        a:
+          index: 7
+          generation: 0
+        b:
+          index: 8
+          generation: 0
+        kind:
+          ball:
+            limits:
+              - - -15.0
+                - 15.0
+              - - -20.0
+                - 20.0
+              - - -15.0
+                - 15.0
+        anchor:
+          - 0.0
+          - 0.1
+          - 0.0
+        collide: false
+  - name: head
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: head
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.04
+                    radius: 0.08
+                translation:
+                  - 0.0
+                  - 0.12
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.015625
+      Velocity: {}
+      Joint:
+        a:
+          index: 8
+          generation: 0
+        b:
+          index: 9
+          generation: 0
+        kind:
+          ball:
+            limits:
+              - - -20.0
+                - 20.0
+              - - -30.0
+                - 30.0
+              - - -20.0
+                - 20.0
+        anchor:
+          - 0.0
+          - 0.24
+          - 0.0
+        collide: false
+  - name: upper_arm_l
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: upper_arm_l
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.065
+                    radius: 0.035
+                translation:
+                  - 0.0
+                  - 0.1
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.03125
+      Velocity: {}
+      Joint:
+        a:
+          index: 8
+          generation: 0
+        b:
+          index: 10
+          generation: 0
+        kind:
+          ball:
+            limits:
+              - - -90.0
+                - 90.0
+              - - -45.0
+                - 45.0
+              - - -90.0
+                - 45.0
+        anchor:
+          - -0.15
+          - 0.2
+          - 0.0
+        collide: false
+  - name: upper_arm_r
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: upper_arm_r
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.065
+                    radius: 0.035
+                translation:
+                  - 0.0
+                  - 0.1
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.03125
+      Velocity: {}
+      Joint:
+        a:
+          index: 8
+          generation: 0
+        b:
+          index: 11
+          generation: 0
+        kind:
+          ball:
+            limits:
+              - - -90.0
+                - 90.0
+              - - -45.0
+                - 45.0
+              - - -90.0
+                - 45.0
+        anchor:
+          - 0.15
+          - 0.2
+          - 0.0
+        collide: false
+  - name: lower_arm_l
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: lower_arm_l
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.065
+                    radius: 0.03
+                translation:
+                  - 0.0
+                  - 0.095
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.03125
+      Velocity: {}
+      Joint:
+        a:
+          index: 10
+          generation: 0
+        b:
+          index: 12
+          generation: 0
+        kind:
+          hinge:
+            axis:
+              - -0.70710677
+              - 0.0
+              - -0.70710677
+            limits:
+              - -20.0
+              - 130.0
+        anchor:
+          - 0.0
+          - 0.2
+          - 0.0
+        collide: false
+  - name: lower_arm_r
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: lower_arm_r
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.065
+                    radius: 0.03
+                translation:
+                  - 0.0
+                  - 0.095
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.03125
+      Velocity: {}
+      Joint:
+        a:
+          index: 11
+          generation: 0
+        b:
+          index: 13
+          generation: 0
+        kind:
+          hinge:
+            axis:
+              - 0.70710677
+              - 0.0
+              - -0.70710677
+            limits:
+              - -20.0
+              - 130.0
+        anchor:
+          - 0.0
+          - 0.2
+          - 0.0
+        collide: false
+  - name: upper_leg_l
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: upper_leg_l
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.07
+                    radius: 0.05
+                translation:
+                  - 0.0
+                  - 0.12
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.03125
+      Velocity: {}
+      Joint:
+        a:
+          index: 7
+          generation: 0
+        b:
+          index: 14
+          generation: 0
+        kind:
+          ball:
+            limits:
+              - - -90.0
+                - 45.0
+              - - -30.0
+                - 30.0
+              - - -45.0
+                - 45.0
+        anchor:
+          - -0.08
+          - 0.0
+          - 0.0
+        collide: false
+  - name: upper_leg_r
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: upper_leg_r
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.07
+                    radius: 0.05
+                translation:
+                  - 0.0
+                  - 0.12
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.03125
+      Velocity: {}
+      Joint:
+        a:
+          index: 7
+          generation: 0
+        b:
+          index: 15
+          generation: 0
+        kind:
+          ball:
+            limits:
+              - - -90.0
+                - 45.0
+              - - -30.0
+                - 30.0
+              - - -45.0
+                - 45.0
+        anchor:
+          - 0.08
+          - 0.0
+          - 0.0
+        collide: false
+  - name: lower_leg_l
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: lower_leg_l
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.075
+                    radius: 0.045
+                translation:
+                  - 0.0
+                  - 0.12
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.03125
+      Velocity: {}
+      Joint:
+        a:
+          index: 14
+          generation: 0
+        b:
+          index: 16
+          generation: 0
+        kind:
+          hinge:
+            axis:
+              - 1.0
+              - 0.0
+              - 0.0
+            limits:
+              - -120.0
+              - 0.0
+        anchor:
+          - 0.0
+          - 0.24
+          - 0.0
+        collide: false
+  - name: lower_leg_r
+    components:
+      SkinBone:
+        skin:
+          index: 6
+          generation: 0
+        bone: lower_leg_r
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  capsule:
+                    half_height: 0.075
+                    radius: 0.045
+                translation:
+                  - 0.0
+                  - 0.12
+                  - 0.0
+        body:
+          rigid:
+            mass: 0.03125
+      Velocity: {}
+      Joint:
+        a:
+          index: 15
+          generation: 0
+        b:
+          index: 17
+          generation: 0
+        kind:
+          hinge:
+            axis:
+              - 1.0
+              - 0.0
+              - 0.0
+            limits:
+              - -120.0
+              - 0.0
+        anchor:
+          - 0.0
+          - 0.24
+          - 0.0
+        collide: false

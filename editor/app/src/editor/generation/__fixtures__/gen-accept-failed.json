@@ -1,0 +1,14 @@
+{
+  "ok": false,
+  "source": null,
+  "destination": null,
+  "sidecar": null,
+  "origin": null,
+  "diagnostics": [
+    {
+      "code": "L1172",
+      "message": "`art/idol.png` already exists",
+      "help": "accept never overwrites; choose another `--out`"
+    }
+  ]
+}

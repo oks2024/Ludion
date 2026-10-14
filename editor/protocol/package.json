@@ -1,0 +1,14 @@
+{
+  "name": "@ludion/protocol-types",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "description": "TypeScript types generated from the ludion-protocol JSON Schema snapshot, the editor's bundled pattern schema from the ludion-engine pattern snapshot, and the protocol schema hash (schemaHash.ts) the editor compares with the engine's. Never edit src/protocol.d.ts, patternSchema.ts or schemaHash.ts by hand; run `npm run generate`.",
+  "scripts": {
+    "generate": "node scripts/generate.js && node scripts/generate-pattern-schema.js && node scripts/generate-schema-hash.js"
+  },
+  "devDependencies": {
+    "hash-wasm": "4.12.0",
+    "json-schema-to-typescript": "15.0.4"
+  }
+}

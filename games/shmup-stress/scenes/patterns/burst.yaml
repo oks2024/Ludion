@@ -1,0 +1,36 @@
+format: 1
+kind: pattern
+# `patterns/steady.yaml` at twice the density — `count: 50` — and nothing else changed
+# (`ludion docs patterns`).
+#
+# The scene that plays it (`scenes/burst.yaml`) cancels the whole field every 60 frames, and
+# `life: 119` is deliberately longer than that window: no bullet ever expires on its own, so THE
+# CANCEL IS THE ONLY THING THAT DESPAWNS and the sawtooth census `50 * (N % 60)` is exact.
+name: shmup-stress-burst
+bullets:
+  pellet:
+    atlas: sprites/shmup.atlas.yaml
+    frame: bullets/b00
+    size:
+      - 0.3
+      - 0.3
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    blend: alpha
+    billboard: true
+    hit_radius: 0.15
+    life: 119
+timeline:
+  - at: 0
+    repeat: 30
+    every: 4
+    shape: ring
+    count: 50
+    bullet: pellet
+    speed: 1.6
+    angle_deg: 0.0
+    angle_step_deg: 12.0
+loop: 120

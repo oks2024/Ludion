@@ -1,0 +1,86 @@
+# Feature: Orthographic.pixel_snap — a pixel-perfect camera. Extract snaps the view height to an
+# integer on-screen texel scale and each sprite centre onto the atlas texel grid (reading the atlas
+# `pixels_per_unit`), so crisp source art lands on whole pixels instead of sampling across texel
+# boundaries and shimmering under motion (`Plan/sprite-engine.md` decision 7). Extract-only: the sim
+# never sees it and the world hash is unchanged.
+#
+# The four ships are placed at deliberately sub-texel x offsets (the atlas is 16 px/unit, so the
+# texel grid is 1/16 = 0.0625 u wide, and each ship sits a fraction of a texel off it). Under
+# `pixel_snap: true` every centre is rounded onto that grid, so the row reads crisp and evenly
+# aligned; the same scene with `pixel_snap: false` would let each ship sample half a texel across its
+# edge — the shimmer this option exists to kill (visible only in motion, which the human exit
+# criterion judges live, not in a still golden).
+#
+# Nearest sampling (the gallery atlas's `filter`, the pixel-art default) is what makes the snapped
+# alignment read as crisp texel edges; a bilinear atlas would soften them.
+format: 1
+name: "sprite-pixel-snap - Orthographic: pixel_snap onto the texel grid"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 6.0
+          pixel_snap: true
+  - name: ship-0
+    components:
+      Transform:
+        translation:
+          - -3.03
+          - 0.02
+          - 0.0
+        scale:
+          - 3.0
+          - 3.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+  - name: ship-1
+    components:
+      Transform:
+        translation:
+          - -1.01
+          - -0.04
+          - 0.0
+        scale:
+          - 3.0
+          - 3.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+  - name: ship-2
+    components:
+      Transform:
+        translation:
+          - 1.04
+          - 0.03
+          - 0.0
+        scale:
+          - 3.0
+          - 3.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+  - name: ship-3
+    components:
+      Transform:
+        translation:
+          - 3.02
+          - -0.05
+          - 0.0
+        scale:
+          - 3.0
+          - 3.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle

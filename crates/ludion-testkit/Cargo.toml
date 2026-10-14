@@ -1,0 +1,28 @@
+[package]
+name = "ludion-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The golden-image test harness (SSIM compare, structured diff reports, bless flow, sim assertions) for the Ludion game engine."
+keywords = ["ludion", "testing", "golden-image", "ssim"]
+categories = ["development-tools", "game-engines"]
+
+[dependencies]
+crossbeam-channel.workspace = true
+ludion-assets = { path = "../ludion-assets", version = "0.1.0" }
+ludion-audio = { path = "../ludion-audio", version = "0.1.0" }
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+ludion-engine = { path = "../ludion-engine", version = "0.1.0" }
+ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
+ludion-sim = { path = "../ludion-sim", version = "0.1.0" }
+png.workspace = true
+saphyr-parser.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+ludion = { path = "../ludion", version = "0.1.0" }
+schemars.workspace = true

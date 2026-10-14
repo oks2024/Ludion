@@ -1,0 +1,96 @@
+# Clustered-forward light budget — pinned RTX 3090, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. The ceiling below is roughly twice the median measured
+# by `ludion profile --scene … --frames 120` in `--release` on the pinned RTX 3090, so a failure
+# means a real, reproducible slowdown — never machine noise. All values are milliseconds.
+# Re-calibrate deliberately (a re-bless event) if a cost becomes intended and permanent —
+# `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/lights-stress.yaml` — the
+# clustered-forward arc's stress scene: 500 point lights (200 torch statics at ranges 8–15, 300
+# projectile-like movers at ranges 1.5–3.0) over 160 lit primitives and a ground plane, with no
+# `Environment`, `PostProcess` or sun, so what it measures is the light path and nothing else.
+# Checked with:
+#
+#   ludion profile --scene examples/gallery/lights-stress.yaml --frames 120 --check budgets/pinned-rtx3090-lights-stress.toml
+#
+# It is a third file beside `budgets/pinned-rtx3090.toml` (calibrated on `lights.yaml`, 3 lights) and
+# `budgets/pinned-rtx3090-post-full.toml` (the post roster) for the reason those two are separate
+# from each other: every section of a budget is checked against every run, and this scene's `scene`
+# pass medians 0.69 ms against `lights.yaml`'s 0.061 — 11x. Merging would leave the cheap scene gated
+# at eleven times its own cost, which is a tripwire in name only.
+#
+# **All three invocations must run.** A scene a CI configuration forgets to profile is a tripwire
+# disarmed by omission rather than by a stale key — no diagnostic catches that, only running the
+# scene does. `ci/teamcity/README.md`'s `budgets-windows` configuration runs all three.
+
+# Ceiling on the clustered-forward CPU build — the per-frame pass that decides which lights each
+# cell's list holds. A CPU cost, not a GPU one, and the only line in the whole budget corpus that
+# needs no adapter to measure: the binning is pure arithmetic over the extracted scene, so this gate
+# means the same thing on a headless box as on this one. (A live `--attach` capture carries no
+# cluster section — those frames built their tables inside a render a profiler must not stall — so
+# this line is skipped, never failed, there.)
+#
+# Measured over four 120-frame release runs at 1920x1080: 0.0973 / 0.1083 / 0.1068 / 0.0958 ms,
+# median **0.102** — against 0.0216 ms for the 3 lights of `examples/gallery/lights.yaml`, which is
+# the way to tell a *fixed* per-frame regression from a per-light one. The ceiling is 0.25, this
+# file's ~2x posture with a little extra for a statistic taken over individual builds rather than a
+# tight loop, and it lands under the number that actually matters:
+#
+#   `Plan/clustered-forward.md` decision 3 defers the GPU compute build behind a measured **0.3 ms**
+#   at this scene's population. 0.102 ms is 34% of it, so the CPU build keeps its ground and
+#   `ludion_core::par` stays unreached for. A ceiling of 0.25 therefore fires *before* the trigger
+#   does, which is deliberate: the honest response to a breach here is to re-measure and decide
+#   whether the arc has finally earned its compute build, not to widen the line.
+#
+# Two other readings of the same work, neither of them what this line gates, both worth keeping
+# straight. Wave 1 read **0.1693 ms** on a synthetic 500-light array; the in-context build is faster
+# because this scene's lights spread over a plaza the camera sees obliquely, so more of them share
+# few tiles than a synthetic cube of lights did. And
+# `cargo test --release -p ludion-engine --lib cluster_build_cost -- --ignored --nocapture` reads
+# **0.1256 ms** on this very scene — *higher* than the 0.102 above despite being the same build,
+# because it is a 200-iteration loop average while `build_median_ms` is the median of individually
+# timed builds. Compare like with like: the gate's number is the one `ludion profile --json` prints
+# under `cluster.build_median_ms`, beside the occupancy panel quoted below.
+cluster_build_ms = 0.25   # 0.102 measured (median of four)
+
+# The one pass this file exists for: every lit fragment walks its own cluster cell's list, so this
+# number is the whole clustered-forward thesis stated as a measurement — cost proportional to lights
+# *actually near each pixel*, not to the scene's light count.
+#
+# Measured over eight 120-frame release runs at 1920x1080: 0.7854 / 0.6851 / 0.6871 / 0.7875 /
+# 0.6907 / 0.7895 / 0.6943 / 0.7183, median 0.7045. The distribution is **bimodal**, not noisy — two
+# tight clusters ~0.1 ms apart with little between them, which is a GPU clock/boost state rather than
+# a variance in the work. The ceiling is set from the median but must clear the *upper* mode to be
+# non-flaky, which 1.4 does with 78% of margin over the worst run observed.
+#
+# What the number is made of, from the occupancy panel every `ludion profile` run of this scene now
+# reports under `cluster` (and which `cluster_build_cost_on_committed_scenes` in
+# `crates/ludion-engine/src/profile.rs` prints on demand):
+#
+#   500 lights -> 17,121 cell references | 794 of 2,304 cells occupied
+#   longest cell list 74 | mean list over occupied cells 21.56
+#
+# So a lit fragment iterates ~22 lights where it iterates any, and 66% of the grid is free frame.
+# **That is the ratio to watch.** A `scene` regression here with the panel unmoved means the
+# per-fragment shading got more expensive; a `scene` regression *with* the mean or the max climbing
+# means the binning got looser, and the plan's deferred tightening work (per-frame fitted shell
+# ladder, exact sphere-frustum refinement, tile depth culling) is what the trigger points at.
+[passes]
+scene = 1.4   # 0.7045 measured (median of eight; upper mode 0.7895)
+
+# Deliberately absent, and each for a reason rather than by omission:
+#
+# - `composite` and the `bloom` group. Both are pure functions of the output extent, not of the
+#   scene: measured 0.0338 and 0.0543 summed here against 0.0399 and 0.060 on `lights.yaml`, i.e. the
+#   same numbers. `budgets/pinned-rtx3090.toml` already gates them, and a second ceiling on one
+#   regression is two files to re-bless for one cause.
+# - `frame_total_ms`. A scene profiled through the CLI runs the built-in schedule (no game systems),
+#   so the sim frame total here is 0.0001 ms — loop overhead, identical on every gallery scene, and
+#   already gated on `lights.yaml`.
+# - `[systems]`. Same reason: the CLI links no game systems, so there are none to name.
+#
+# The two lines this file *does* carry are deliberately one CPU and one GPU: `cluster_build_ms` gates
+# the work that decides which lights a cell holds, `[passes] scene` gates the work of shading through
+# what that decided. A regression in either one is a different bug, and reading both against the
+# occupancy panel is what tells them apart without a GPU capture.

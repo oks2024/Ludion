@@ -1,0 +1,127 @@
+{
+  "golden": "examples/gallery\\goldens\\meshes.png",
+  "actual": "examples/gallery\\target\\testkit\\meshes.actual.png",
+  "golden_width": 960,
+  "golden_height": 540,
+  "actual_width": 960,
+  "actual_height": 540,
+  "threshold": 0.99,
+  "pass": false,
+  "ssim": 0.9352177800299032,
+  "mae": 1.8566835455246913,
+  "tile_grid": {
+    "cols": 8,
+    "rows": 8
+  },
+  "damaged_tiles": [
+    {
+      "row": 3,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.08113574665737992,
+      "region": "center"
+    },
+    {
+      "row": 4,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.0939653618606037,
+      "region": "center"
+    },
+    {
+      "row": 1,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.1495071214139511,
+      "region": "top-center"
+    },
+    {
+      "row": 3,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.35984682280635377,
+      "region": "center"
+    },
+    {
+      "row": 2,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.6283769092783253,
+      "region": "top-center"
+    },
+    {
+      "row": 3,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.6882144648357854,
+      "region": "middle-right"
+    },
+    {
+      "row": 2,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9548174416406227,
+      "region": "top-right"
+    },
+    {
+      "row": 2,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.974867068095478,
+      "region": "top-center"
+    }
+  ],
+  "worst_tile": {
+    "row": 3,
+    "col": 5,
+    "rect": {
+      "x": 600,
+      "y": 204,
+      "width": 120,
+      "height": 68
+    },
+    "ssim": 0.08113574665737992,
+    "region": "center"
+  },
+  "summary": "FAIL: ssim 0.9352 < threshold 0.9900; worst damage at center (tile r3c5, rect 600,204 120x68, ssim 0.0811)"
+}

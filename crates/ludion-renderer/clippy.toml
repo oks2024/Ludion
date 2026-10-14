@@ -1,0 +1,10 @@
+# Permissive renderer-side denylist (engine-architecture.md §5).
+#
+# ludion-renderer is the wgpu HD-2D pipeline: it is NOT on the deterministic sim path, so the strict
+# sim denylist (no std HashMap, no wall clock, libm-only transcendentals) does not apply. The renderer
+# builds view/projection matrices with glam's own trig, and may use std hash containers in GPU glue.
+# Cross-process determinism of the rendered PNG is a property of running the same code on the same
+# adapter on one machine, not of the sim-determinism rules.
+#
+# This file is intentionally empty of `disallowed-types` / `disallowed-methods`, matching
+# ludion-render-graph: the crate still builds under `cargo clippy -- -D warnings`.

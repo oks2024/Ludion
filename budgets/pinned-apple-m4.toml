@@ -1,0 +1,57 @@
+# Profile budget — pinned Apple M4 (Metal), 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each ceiling is roughly twice the median measured by
+# `ludion profile --scene … --frames 120` in `--release` on the pinned Apple M4, so a failure means
+# a real, reproducible slowdown — never machine noise. Checked with:
+#
+#   ludion profile --scene examples/gallery/lights.yaml --frames 120 --check budgets/pinned-apple-m4.toml
+#
+# GPU pass ceilings are calibrated against `examples/gallery/lights.yaml` (the heaviest gallery scene
+# pass — 3D meshes plus lights); the bloom/composite passes are full-screen and scene-independent. All
+# values are milliseconds. Re-calibrate deliberately (a re-bless event) if a cost becomes intended
+# and permanent — see `ludion explain L4005`.
+
+# Median wall time of one full sim frame. A scene profiled through the CLI runs the built-in schedule
+# (no game systems — the CLI cannot link a game's own systems), so this is loop-and-drain overhead:
+# sub-microsecond today. The generous ceiling still trips on a real regression in built-in per-tick
+# work.
+frame_total_ms = 0.5
+
+# Per-GPU-pass ceilings, in scheduled order. `scene` measured 0.300-0.307 ms over six 120-frame runs
+# (2026-07-27) and 0.299-0.303 on 2026-08-01, well inside the ceiling below — which is left where it
+# was rather than re-cut to 2x the new median. The whole machine reads lower than it did at the last calibration (`scene` was
+# 0.507); re-cutting every ceiling on a machine-wide swing is how a tripwire becomes flaky, and this
+# file's job is to catch a regression, not to track the box's thermal state.
+#
+# `bloom_threshold` no longer has a line here: it is a member of the `bloom` post group below, and
+# gating it twice would be two tripwires for one regression. That matches both Windows twins.
+[passes]
+scene           = 1.0
+# Metal's descriptor-level timestamps report composite as 0.0 ms — an Apple stage-boundary sampling
+# artifact (the final pass's end timestamp coincides with the encoder boundary), not a free pass. A
+# ceiling calibrated off a 0.0 median would be meaningless, so this is a small sane placeholder in the
+# range of the measurable full-screen passes above, comfortably above any plausible real composite cost.
+# Re-confirmed 2026-07-27 after the defaults flip put AgX plus the output dither in this pass: still
+# 0.0000 on all six runs, so the placeholder stands unchanged.
+composite       = 0.5
+
+# The bloom chain as one effect, summing whichever of its eleven passes the run measured — the unit
+# both Windows twins use. Measured 2026-07-27 over six 120-frame release runs at 1920x1080: 1.806 /
+# 1.869 / 1.922 / 1.959 / 2.161 / 2.163 ms summed, median 1.94. Ceiling ~2x. Re-confirmed 2026-08-01
+# after the volumetric medium waves: 2.175 / 1.994 / 2.007 — inside the same ~10% band, unmoved. This
+# scene authors no medium, so the `shafts` arithmetic those waves added never runs here.
+#
+# The spread here is ~10% run to run, not the ~1% the RTX 3090 sees, which is the second reason this
+# is a group and not eleven lines: the individual members swing far more than they differ.
+#
+# **These are instrument readings, not wall-clock frame time.** On this scene they happen to agree —
+# summed passes 2.24 ms against a measured 2.25 ms per rendered frame — but that agreement does not
+# survive a fuller chain (see `budgets/pinned-apple-m4-post-full.toml`), so read a breach here as
+# "this pass group got more expensive relative to itself", never as a millisecond count of the frame.
+[post_groups]
+bloom = 3.9   # 1.94 measured
+
+# Per-system ceilings would live here, keyed by system name. Empty because a scene profiled through
+# the CLI runs no game systems; a game's own budget (profiled in-process, once that path exists) would
+# populate this table.
+[systems]

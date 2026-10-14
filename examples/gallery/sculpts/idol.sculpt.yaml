@@ -1,0 +1,233 @@
+# idol — an implicit-surface sculpt model; add primitives to `parts:` to build the form.
+# See `ludion docs sculpt-format` for the document's keys and `ludion docs sculpt-authoring`
+# for the new -> check-scene -> render --model -> look loop.
+format: 1
+kind: sculpt
+name: idol
+resolution: 48
+triangles: 4000
+palette:
+  B:
+    color:
+      - 0.07
+      - 0.08
+      - 0.08
+      - 1.0
+    roughness: 0.9
+  D:
+    color:
+      - 0.05
+      - 0.09
+      - 0.07
+      - 1.0
+    roughness: 0.6
+  E:
+    color:
+      - 0.5
+      - 0.95
+      - 0.45
+      - 1.0
+    emissive: 6.75
+    roughness: 0.19
+  J:
+    color:
+      - 0.1
+      - 0.17
+      - 0.12
+      - 1.0
+    roughness: 0.55
+  K:
+    color:
+      - 0.04
+      - 0.05
+      - 0.05
+      - 1.0
+    roughness: 0.95
+  T:
+    color:
+      - 0.07
+      - 0.12
+      - 0.09
+      - 1.0
+    roughness: 0.5
+bones:
+  - name: root
+parts:
+  - name: plinth
+    shape: box
+    size:
+      - 0.9
+      - 0.3
+      - 0.9
+    at:
+      - 0.0
+      - 0.15
+      - 0.0
+    material: K
+    sharp: true
+  - name: panel
+    shape: box
+    size:
+      - 0.5
+      - 0.14
+      - 0.08
+    at:
+      - 0.0
+      - 0.15
+      - -0.45
+    op: subtract
+  - name: cap
+    shape: box
+    size:
+      - 0.72
+      - 0.08
+      - 0.72
+    at:
+      - 0.0
+      - 0.335
+      - 0.0
+    material: B
+    sharp: true
+  - name: haunch
+    shape: ellipsoid
+    radii:
+      - 0.13
+      - 0.11
+      - 0.19
+    at:
+      - 0.15
+      - 0.47
+      - -0.02
+    material: J
+    blend: 0.06
+    mirror: x
+  - name: torso
+    shape: ellipsoid
+    radii:
+      - 0.21
+      - 0.36
+      - 0.2
+    at:
+      - 0.0
+      - 0.76
+      - 0.02
+    material: J
+    blend: 0.08
+  - name: arm
+    shape: capsule
+    radius: 0.07
+    from:
+      - 0.26
+      - 0.95
+      - 0.04
+    to:
+      - 0.23
+      - 0.54
+      - -0.16
+    material: T
+    blend: 0.025
+    mirror: x
+  - name: wing
+    shape: ellipsoid
+    radii:
+      - 0.055
+      - 0.28
+      - 0.12
+    at:
+      - 0.2
+      - 1.02
+      - 0.18
+    rotation:
+      - 25.0
+      - 0.0
+      - -20.0
+    material: D
+    blend: 0.06
+    mirror: x
+  - name: head
+    shape: ellipsoid
+    radii:
+      - 0.21
+      - 0.19
+      - 0.19
+    at:
+      - 0.0
+      - 1.2
+      - -0.02
+    material: J
+    blend: 0.07
+  - name: cranium
+    shape: ellipsoid
+    radii:
+      - 0.19
+      - 0.24
+      - 0.22
+    at:
+      - 0.0
+      - 1.3
+      - 0.07
+    rotation:
+      - -25.0
+      - 0.0
+      - 0.0
+    material: J
+    blend: 0.08
+  - name: brow
+    shape: capsule
+    radius: 0.035
+    from:
+      - -0.13
+      - 1.26
+      - -0.17
+    to:
+      - 0.13
+      - 1.26
+      - -0.17
+    material: D
+    blend: 0.03
+  - name: socket
+    shape: sphere
+    radius: 0.07
+    at:
+      - 0.075
+      - 1.2
+      - -0.2
+    op: subtract
+    blend: 0.01
+    mirror: x
+  - name: strand-mid
+    shape: capsule
+    radius: 0.035
+    from:
+      - 0.0
+      - 1.11
+      - -0.17
+    to:
+      - 0.0
+      - 0.88
+      - -0.24
+    material: T
+    blend: 0.03
+  - name: strand
+    shape: capsule
+    radius: 0.035
+    from:
+      - 0.07
+      - 1.12
+      - -0.16
+    to:
+      - 0.1
+      - 0.92
+      - -0.22
+    material: T
+    blend: 0.03
+    mirror: x
+  - name: eye
+    shape: sphere
+    radius: 0.045
+    at:
+      - 0.075
+      - 1.2
+      - -0.175
+    material: E
+    mirror: x

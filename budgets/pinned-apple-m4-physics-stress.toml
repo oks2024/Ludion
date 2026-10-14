@@ -1,0 +1,53 @@
+# Physics budget — pinned Apple M4, 1920x1080, release.
+#
+# The Apple M4 twin of `budgets/pinned-rtx3090-physics-stress.toml`: measured on this box, never
+# derived from the RTX 3090 numbers. Like its twin, it is the body-count ceiling's gate: 512 rigid
+# bodies, pinned by `physics_stress.rs` (`dev-docs/physics-pin.md`).
+#
+# Regression tripwires, NOT performance goals. Each ceiling below is roughly twice the median
+# measured by `ludion profile --scene … --frames 300` in `--release` on the pinned Apple M4, so a
+# failure means a real, reproducible slowdown — never machine noise. All values are milliseconds.
+# Re-calibrate deliberately (a re-bless event) if a cost becomes intended and permanent —
+# `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/physics-stress.yaml`
+# — the physics arc's stress scene (`Plan/physics.md` W2). Checked with:
+#
+#   ludion profile --scene examples/gallery/physics-stress.yaml --frames 300 --check budgets/pinned-apple-m4-physics-stress.toml
+#
+# **`--frames 300`, not the corpus's usual 120** — the same reason as the twin: 300 frames cover
+# the fall, the landing and the dense interlocked pile. The CI step (`ci/teamcity/provision.mjs`)
+# uses the same `--frames 300`. Contact events are inside `physics_step`, as on the twin.
+#
+# Every ceiling here is a sim-thread CPU time, so the Metal per-pass timestamp smear the M4's
+# render budgets describe does not touch this file.
+#
+# MEASURED 2026-09-26 at Lore rev 916 over four 300-frame release runs (30 warmup) at 1920x1080 on
+# 8 sim threads:
+#
+#                    physics_write      physics_step       physics_mirror     frame_total
+#   run 1            0.04287            0.59294            0.03708            0.67298
+#   run 2            0.04306            0.59058            0.03773            0.67585
+#   run 3            0.04335            0.59756            0.03881            0.68098
+#   run 4            0.04369            0.60204            0.03854            0.69254
+#   median           0.04321            0.59525            0.03814            0.67842
+#
+# No system here falls under the ~0.01 ms floor (`dev-docs/budget-files.md` Rules), so every
+# ceiling below is the plain ~2x posture.
+
+# The frame total: the CLI driver links no game systems, so this is the physics triple plus loop
+# overhead — a tripwire on the whole tick, not a 60 fps deadline. Median 0.6784; ceiling ~2x.
+frame_total_ms = 1.36
+
+# The ECS→rapier push: writes each rigid entity's Velocity into the solver ahead of the step.
+# Median 0.0432; ceiling ~2x.
+[systems]
+physics_write  = 0.087
+# The solver step itself, including the post-step contact-graph diff. The dominant cost by an
+# order of magnitude. Median 0.5953; ceiling ~2x.
+physics_step   = 1.19
+# The rapier→ECS pull: poses and velocities mirrored back onto Transform/Velocity after the step.
+# Median 0.0381; ceiling ~2x.
+physics_mirror = 0.077
+
+# Deliberately absent, as on the twin: `[passes]`, `extract_ms` and `cluster_build_ms`.

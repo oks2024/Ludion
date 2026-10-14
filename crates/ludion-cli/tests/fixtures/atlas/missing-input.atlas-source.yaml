@@ -1,0 +1,6 @@
+format: 1
+kind: atlas-source
+name: missing
+pixels_per_unit: 8.0
+inputs:
+  - nowhere.sprite.yaml

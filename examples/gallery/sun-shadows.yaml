@@ -1,0 +1,163 @@
+# Feature: DirectionalLight — a "sun" casting one orthographic PCF shadow map, received by the mesh
+# path. A low, raking sun (from frame-left) throws long shadows rightward across a warm ground plane:
+# a tall pillar's shadow rakes over a shorter block set in its path; the voxel lantern, a rough and a
+# metallic sphere ground their own shadows, and the metallic sphere catches the sun's specular. A
+# single warm PointLight
+# coexists (unshadowed, by design) to prove both light types contribute. Shadow tunables are the
+# DirectionalLight defaults (shadow_bias 0.05 world units reads clean here). Plan/shadow-mapping.md Wave 4.
+format: 1
+name: "sun-shadows - DirectionalLight: raking sun, long PCF shadows + a point light"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 5.5
+          - 12.5
+        rotation:
+          - -20.0
+          - 4.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 42.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - 0.55
+          - -0.42
+          - -0.3
+        color:
+          - 1.0
+          - 0.96
+          - 0.84
+        intensity: 2.4
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 30.0
+          - 1.0
+          - 30.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.5
+          - 0.48
+          - 0.45
+          - 1.0
+        roughness: 0.85
+  - name: tall-pillar
+    components:
+      Transform:
+        translation:
+          - -0.4
+          - 2.5
+          - -0.3
+        scale:
+          - 1.1
+          - 5.0
+          - 1.1
+      Mesh:
+        shape: cube
+        color:
+          - 0.78
+          - 0.3
+          - 0.26
+          - 1.0
+        roughness: 0.7
+  - name: low-block
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 0.8
+          - -1.7
+        scale:
+          - 1.8
+          - 1.6
+          - 1.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.82
+          - 0.8
+          - 0.78
+          - 1.0
+        roughness: 0.6
+  - name: rough-sphere
+    components:
+      Transform:
+        translation:
+          - -5.6
+          - 1.1
+          - 0.0
+        scale:
+          - 2.2
+          - 2.2
+          - 2.2
+      Mesh:
+        shape: sphere
+        color:
+          - 0.35
+          - 0.55
+          - 0.72
+          - 1.0
+        roughness: 0.9
+        metallic: 0.0
+  - name: metallic-sphere
+    components:
+      Transform:
+        translation:
+          - 5.4
+          - 1.2
+          - 1.2
+        scale:
+          - 2.4
+          - 2.4
+          - 2.4
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.82
+          - 0.45
+          - 1.0
+        roughness: 0.22
+        metallic: 1.0
+  - name: lantern
+    components:
+      Transform:
+        translation:
+          - -2.7
+          - 0.0
+          - 1.6
+        scale:
+          - 0.34
+          - 0.34
+          - 0.34
+      Mesh:
+        shape:
+          voxel: voxels/lantern.voxel.yaml
+  - name: warm-point
+    components:
+      Transform:
+        translation:
+          - -2.7
+          - 1.7
+          - 2.4
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.3
+        intensity: 2.6
+        range: 6.5

@@ -1,0 +1,171 @@
+# Feature: Sprite.atlas/frame — a quad takes its pixels from one named region of a packed
+# `kind: atlas` document instead of a loose PNG (see sprites.yaml for `texture:`).
+# - top row: the ship's three frames, all from `sprites/gallery.atlas.yaml`. No `size:`, so each
+#   quad derives it from the region — 16x12 texels at the atlas's 16 px/unit is 1.0 x 0.75 u.
+# - middle row: the four burst frames, likewise derived (16x16 texels = 1.0 x 1.0 u).
+# - right: the two bolts author `size:`, overriding the derived 0.25 x 0.5 u — a deliberate stretch
+#   past the region's own aspect, which is what an explicit size is for.
+# - bottom pair: the same region drawn with `lit: false` (flat texel x tint) and `lit: true`
+#   (clustered-forward shading), so the flag reads against one point light.
+# - left: `Transform.scale` still multiplies the derived size.
+# The camera is Orthographic because a sprite stage is a plane seen square-on; no post-process and
+# no Environment, so what lands on screen is the baked atlas and one light, nothing else.
+format: 1
+name: "sprite-atlas - Sprite: atlas + frame"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 8.0
+  - name: ship-idle
+    components:
+      Transform:
+        translation:
+          - -1.8
+          - 2.7
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+  - name: ship-bank-left
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.7
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/bank-left
+  - name: ship-bank-right
+    components:
+      Transform:
+        translation:
+          - 1.8
+          - 2.7
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/bank-right
+  - name: explosion-f0
+    components:
+      Transform:
+        translation:
+          - -2.4
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f0
+  - name: explosion-f1
+    components:
+      Transform:
+        translation:
+          - -0.8
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f1
+  - name: explosion-f2
+    components:
+      Transform:
+        translation:
+          - 0.8
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f2
+  - name: explosion-f3
+    components:
+      Transform:
+        translation:
+          - 2.4
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f3
+  - name: bullet-player-stretched
+    components:
+      Transform:
+        translation:
+          - 4.7
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: bullet/player
+        size:
+          - 0.35
+          - 1.1
+  - name: bullet-enemy-stretched
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: bullet/enemy
+        size:
+          - 0.35
+          - 1.1
+  - name: ship-unlit
+    components:
+      Transform:
+        translation:
+          - -1.4
+          - -2.8
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+  - name: ship-lit
+    components:
+      Transform:
+        translation:
+          - 1.4
+          - -2.8
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        lit: true
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 1.4
+          - -2.6
+          - 1.4
+      PointLight:
+        color:
+          - 1.0
+          - 0.93
+          - 0.82
+        intensity: 6.0
+        range: 4.0
+  - name: ship-scaled
+    components:
+      Transform:
+        translation:
+          - -5.2
+          - 0.4
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle

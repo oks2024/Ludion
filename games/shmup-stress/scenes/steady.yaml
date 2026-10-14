@@ -1,0 +1,179 @@
+format: 1
+# The standing field as CLOSED-FORM VOLLEYS — the A side of the arc's A-versus-B
+# (`Plan/projectile-patterns.md` Wave 2). `scenes/steady-drawn.yaml` is the B side: the same census,
+# the same art, the same framing, built out of one entity per bullet instead. Everything that
+# differs between the two reports is the price of the entity-per-bullet shape.
+#
+# CLOSED-FORM CENSUS. Four `PatternPlayer`s at `started` 0/1/2/3 play `patterns/steady.yaml`, which
+# fires a ring of 25 every 4 frames — so at any frame exactly one of them fires and the spawn rate is
+# a flat **25 bullets per frame**, never a periodic spike. A bullet lives while
+# `0 <= age < life/60`, and the doc's `life: 119` makes that tick offsets 0..118 inclusive — 119 live
+# frames, the entity path's number exactly. The field, counted as LIVE BULLETS (`bullet_is_alive`
+# over every `Volley`, not entities — there are only 119 volley entities holding it), is
+#
+#     live(N) = 25 * min(N + 1, 119)     ->  STEADY STATE 2,975 live bullets
+#     FIRST FULL at the end of FRAME 118, and constant from there on.
+#
+# One volley entity stood up and one reaped every 4 frames per player, against the entity twin's 25
+# spawns and 25 despawns EVERY frame — the churn term the migration exists to price.
+#
+# `Arena.half_extent` culls nothing here: a volley is not integrated, so bounds are the entity path's
+# mechanism alone. At `speed: 1.6` a bullet travels 1.6 * (119/60) = 3.17 u in its lifetime from a
+# source 2.5 u out, so the field reaches 5.7 u — inside the camera's 6 u half-height, so all 2,975
+# bullets are ON SCREEN at 0.3 u of a 12 u view: 27 px at 1080p, a Cave-class bullet.
+#
+# Its sibling `burst.yaml` varies exactly one thing: the volley count and `Arena.cancel_every`.
+name: "shmup-stress - steady field as volleys (2,975 live bullets, 119 volley entities)"
+seed: 0
+entities:
+  # Head-on at the upright plane: an unrotated camera looks down its own -Z. `steady-drawn.yaml`'s
+  # framing to the unit, so the two scenes' extract lines compare.
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 60.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 12.0
+        far: 200.0
+  - name: arena
+    components:
+      Arena:
+        half_extent: 40.0
+        bullets_collide: false
+        cancel_every: 0
+        plane: upright
+        # Informative: the authored copy of the closed form above. Nothing reads it.
+        target_live: 2975
+  # The hit tally, on its own entity so it hashes and snapshots like any other sim state. Both
+  # shapes tally into it: `player_hit_test` scans entity bullets and runs `volley_hits` over every
+  # volley, which is the plan's "the sim evaluates the same function for hits".
+  - name: hits
+    components:
+      HitCount: {}
+  # The scrolling stage, identical to `steady-drawn.yaml`'s — one `Tilemap` on the same atlas the
+  # bullets sample, moved as a whole by `scroll_backdrop`. It is here so the two scenes' sprite
+  # batches differ in the bullets alone and in nothing else.
+  - name: backdrop
+    components:
+      Transform:
+        translation:
+          - -11.5
+          - 10.0
+          - 0.0
+      Backdrop:
+        speed: 2.0
+        period: 120
+        origin: 10.0
+      Tilemap:
+        cell_size: 1.0
+        layer: -1
+        legend:
+          ".":
+            atlas: sprites/shmup.atlas.yaml
+            frame: backdrop/t0
+          "#":
+            atlas: sprites/shmup.atlas.yaml
+            frame: backdrop/t1
+          "*":
+            atlas: sprites/shmup.atlas.yaml
+            frame: backdrop/t2
+          o:
+            atlas: sprites/shmup.atlas.yaml
+            frame: backdrop/t3
+        rows:
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+  # The player does not move — this arena measures the bullet field, not the player. It sits at the
+  # centre, where every source's ring converges, so the hit test always has work to do.
+  - name: player
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.6
+      Sprite:
+        size:
+          - 0.8
+          - 0.8
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        layer: 1
+      Player:
+        hitbox_radius: 0.2
+      Collider:
+        shape:
+          circle:
+            radius: 0.1
+        body: kinematic
+  # The four pattern sources, one per compass point at 2.5 u on the upright plane — the placement
+  # `steady-drawn.yaml`'s emitters hold. `started` staggers them one frame apart, which is what the
+  # entity twin spells `phase: 0/1/2/3`: each fires on every 4th frame it has been alive, so exactly
+  # one of the four fires on any given frame. A source with `started: 3` stands nothing up before
+  # frame 3, which is why the closed form counts from the first volley rather than from four.
+  - name: source-east
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 0.0
+          - 0.5
+      PatternPlayer:
+        pattern: patterns/steady.yaml
+        started: 0
+  - name: source-north
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - 0.5
+      PatternPlayer:
+        pattern: patterns/steady.yaml
+        started: 1
+  - name: source-west
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 0.0
+          - 0.5
+      PatternPlayer:
+        pattern: patterns/steady.yaml
+        started: 2
+  - name: source-south
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -2.5
+          - 0.5
+      PatternPlayer:
+        pattern: patterns/steady.yaml
+        started: 3

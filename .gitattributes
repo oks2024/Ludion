@@ -1,0 +1,23 @@
+# One canonical line ending everywhere. The engine's text formats (canonical YAML writer,
+# golden files, schema exports) are byte-compared in tests; CRLF/LF drift across the
+# Windows + macOS matrix would make byte-equality flap. LF is the canonical form.
+* text=auto eol=lf
+
+# Binary assets must never undergo EOL conversion — committed textures (and, later, golden
+# images) are byte-exact. `text=auto` already detects these by content; this is explicit.
+*.png binary
+# The Rust-encoder/TS-decoder frame-codec fixtures (crates/ludion-server/examples/gen_frame_fixtures.rs,
+# editor/app/src/protocol/__fixtures__/) are byte-compared in tests too — same reasoning.
+*.qoi binary
+*.lz4 binary
+*.rgba binary
+# Committed session recordings (LRP1, zstd-framed) — e.g. games/breakout/run.lrp.
+*.lrp binary
+# Committed PCM sound effects (decoded byte-exactly in tests) — e.g. hello-paddle's bounce.wav.
+*.wav binary
+# Committed font faces (bake inputs, read byte-exactly; examples/gallery/fonts/).
+*.ttf binary
+*.otf binary
+# Committed glTF buffers and binaries (games/vigil/art/town/kits/*/export/).
+*.bin binary
+*.glb binary

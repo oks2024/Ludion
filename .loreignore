@@ -1,0 +1,116 @@
+# Lore outbound filter. Lore is the single source of truth and holds EVERYTHING that is not
+# noise; git is the public mirror (decision 3 of the publication plan in the private `Plan-Private/`
+# folder), and the delta between `.gitignore` and this file IS the privacy boundary:
+#
+#   * a path listed in `.gitignore` but NOT here is private — tracked by Lore, never reaching
+#     the public git mirror (`.gitignore`'s "Private paths" block; nothing in this file may
+#     ever match one of those paths, or Lore would drop the only copy);
+#   * everything else (build artifacts, runtime state, OS cruft) is noise that neither VCS
+#     should hold, and MUST stay listed in both files — Lore reads only this root file, so a
+#     rule added to `.gitignore` or any nested `.gitignore` is mirrored here by hand.
+#
+# Syntax is gitignore-like (verified against lore-revision/src/filter.rs): `#` comments,
+# `!` negation, bare names match at any depth, leading `/` anchors at the root, trailing
+# `/` means directory-only, `**` supported, matching is case-insensitive. Lore always
+# excludes `.lore/` itself; the extra entry here is `.git/`.
+
+# The local git mirror. Lore is the source of truth; git only ever receives derived
+# commits — Lore must never sweep the git object store into a revision.
+.git/
+
+# Atomic-write temp files (`ludion_core::atomic::temp_sibling`, `scripts/atomic-write.mjs`): a kill
+# mid-write leaves `.{name}.{pid}.{n}.tmp` in a content dir, and a path-scoped commit would stage it.
+.*.[0-9]*.[0-9]*.tmp
+
+# Rust build artifacts — any depth: the workspace root, editor/app/src-tauri, fuzz/, and
+# per-project gallery scratch all have their own target dirs (no tracked path is named target).
+target/
+*.rs.bk
+*.pdb
+
+# libFuzzer's raw crash/timeout/oom dumps (kept reproducers are minimized and committed
+# under fuzz/findings/ instead — see fuzz/.gitignore).
+/fuzz/artifacts/
+
+# Editor frontend build output + Tauri mobile codegen (see editor/app/.gitignore).
+/editor/app/dist/
+/editor/app/dist-ssr/
+/editor/app/src-tauri/gen/
+*.local
+
+# editor/app's npm-toolchain log patterns (see editor/app/.gitignore) — not mirrored above since
+# they're scoped to that subtree, not repo-wide.
+/editor/app/logs
+/editor/app/*.log
+/editor/app/npm-debug.log*
+/editor/app/yarn-debug.log*
+/editor/app/yarn-error.log*
+/editor/app/pnpm-debug.log*
+/editor/app/lerna-debug.log*
+
+# Claude Code machine-local state (.claude/skills/ IS tracked — never blanket-ignore .claude/).
+# Mirrors .git/info/exclude.
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock
+/.claude/scheduled_tasks.json
+/.claude/routines/.state/
+/.claude/worktrees/
+/.claude/checkpoints/
+/.claude/mailbox/
+/.claude/agent-registry.json
+/.claude/agent-memory-local
+/.claude/first-run
+/.claude/assistant-daemon-state.json
+
+# `ludion test`'s per-project scratch output (diff artifacts for failing golden tests:
+# never committed, unlike the goldens themselves) — e.g. `examples/gallery/target/testkit`.
+**/target/testkit/
+
+# npm toolchain, isolated to `editor/` (engine-architecture.md §6) — installed packages are
+# never committed; `package-lock.json` is, so `npm ci` stays reproducible.
+node_modules/
+
+# `scripts/check.mjs` per-step logs — throwaway, recreated every run. Unanchored, at any depth: the
+# root one is the check script's, and a crate that runs its own verify (`crates/ludion-mcp/`) keeps a
+# build cache under the same name. An anchored rule missed the nested one, and a path-less
+# `commit.mjs` then swept 4961 build artifacts into the history.
+.build/
+
+# Hands-on testing guide for the human developer — declares itself a local, uncommitted note.
+/TESTING.md
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# E5 player-profile saves - host-written runtime state (ludion::run only), never committed.
+# The save dir sits under the game's PROJECT ROOT, which for games that root at their scene
+# directory (vigil) is `scenes/` - hence the second pattern.
+games/*/save/
+games/*/scenes/save/
+examples/*/save/
+
+# Editor->agent context bridge (editor-views arc): host-written runtime state, never committed.
+# `.ludion/` is the per-project editor scratch dir (the editor writes editor-context.json there).
+.ludion/
+
+# `ludion gen` run folders (mirrors .gitignore): candidate images and meshes downloaded from a
+# ComfyUI server, scratch in both VCSs (`Plan/comfy-generation.md` decision 13).
+/generation/runs/
+**/generation/runs/
+
+# The private ComfyUI kit's rotating server logs (`infra/comfyui/run.ps1` writes one per launch);
+# the smoke transcripts beside them are kept as records.
+infra/comfyui/logs/comfyui*.log
+# Agent scratch under the private notebook folder: noise in both VCSs.
+/.exarch/plan[s]/
+
+# Python bytecode Blender writes beside the town kit scripts.
+__pycache__/
+
+# Derived by `ludion sync` from games/vigil/art/town; noise, so ignored in both VCSs.
+/games/vigil/assets/town/

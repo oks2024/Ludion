@@ -1,0 +1,19 @@
+format: 1
+kind: atlas-source
+name: ship
+pixels_per_unit: 8.0
+inputs:
+  - ship.sprite.yaml
+  - spark.png
+flipbooks:
+  - name: ship/fly
+    frames:
+      - ship/idle
+      - ship/bank-left
+    fps: 8.0
+  - name: ship/dive
+    frames:
+      - ship/idle
+      - ship/bank-left
+    fps: 8.0
+    loop: false

@@ -1,0 +1,387 @@
+format: 1
+name: breakout
+seed: 0
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 9.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 11.0
+  - name: backboard
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - -0.5
+      Sprite:
+        size:
+          - 11.0
+          - 10.5
+        color:
+          - 0.4
+          - 0.42
+          - 0.5
+          - 1.0
+        lit: true
+  - name: fill-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 5.0
+      PointLight:
+        color:
+          - 0.35
+          - 0.45
+          - 1.0
+        intensity: 1.6
+        range: 25.0
+  - name: ball-glow
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -2.5
+          - 1.2
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.4
+        intensity: 1.2
+        range: 8.0
+      BallGlow: {}
+  - name: paddle
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -4.0
+          - 0.0
+      Sprite:
+        size:
+          - 2.0
+          - 0.4
+        color:
+          - 0.2
+          - 0.8
+          - 1.0
+          - 1.0
+        lit: true
+      Paddle: {}
+  - name: ball
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -2.5
+          - 0.0
+      Sprite:
+        size:
+          - 0.3
+          - 0.3
+        color:
+          - 1.0
+          - 0.95
+          - 0.8
+          - 1.0
+        lit: true
+      Ball:
+        velocity:
+          - 2.5
+          - 5.0
+  - name: brick-r0-c0
+    components:
+      Transform:
+        translation:
+          - -3.6
+          - 3.5
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.3
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r0-c1
+    components:
+      Transform:
+        translation:
+          - -1.8
+          - 3.5
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.3
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r0-c2
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.5
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.3
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r0-c3
+    components:
+      Transform:
+        translation:
+          - 1.8
+          - 3.5
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.3
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r0-c4
+    components:
+      Transform:
+        translation:
+          - 3.6
+          - 3.5
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.3
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r1-c0
+    components:
+      Transform:
+        translation:
+          - -3.6
+          - 2.8
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.6
+          - 0.2
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r1-c1
+    components:
+      Transform:
+        translation:
+          - -1.8
+          - 2.8
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.6
+          - 0.2
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r1-c2
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.8
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.6
+          - 0.2
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r1-c3
+    components:
+      Transform:
+        translation:
+          - 1.8
+          - 2.8
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.6
+          - 0.2
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r1-c4
+    components:
+      Transform:
+        translation:
+          - 3.6
+          - 2.8
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.6
+          - 0.2
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r2-c0
+    components:
+      Transform:
+        translation:
+          - -3.6
+          - 2.1
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.9
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r2-c1
+    components:
+      Transform:
+        translation:
+          - -1.8
+          - 2.1
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.9
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r2-c2
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.1
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.9
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r2-c3
+    components:
+      Transform:
+        translation:
+          - 1.8
+          - 2.1
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.9
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: brick-r2-c4
+    components:
+      Transform:
+        translation:
+          - 3.6
+          - 2.1
+          - 0.0
+      Sprite:
+        size:
+          - 1.6
+          - 0.6
+        color:
+          - 1.0
+          - 0.9
+          - 0.3
+          - 1.0
+        lit: true
+      Brick: {}
+  - name: pause-menu
+    components:
+      UiList:
+        anchor: center
+        title: BREAKOUT
+        items: []
+        size: 32.0
+        font: body
+        line_spacing: 8.0
+        padding: 24.0
+        background:
+          - 0.05
+          - 0.05
+          - 0.08
+          - 0.85
+        order: 10
+      PauseMenu: {}

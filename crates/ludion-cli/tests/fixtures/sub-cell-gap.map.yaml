@@ -1,0 +1,36 @@
+format: 1
+kind: map
+name: sub-cell-gap
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+bounds:
+  - 6
+  - 2
+markers:
+  - name: gate-west
+    kind: gate
+    x: 1.0
+    z: 1.0
+    components:
+      Gate:
+        to: target.yaml
+        anchor: from-here
+  - name: gate-east
+    kind: gate
+    x: 11.0
+    z: 3.0
+    components:
+      Gate:
+        to: target.yaml
+        anchor: from-here
+  - name: well-north
+    kind: well
+    x: 6.0
+    z: 0.3
+  - name: well-south
+    kind: well
+    x: 6.0
+    z: 3.7

@@ -1,0 +1,74 @@
+# Feature: Mesh with an authored mesh asset — `shape: { asset: "meshes/crystal.mesh.yaml" }`. The
+# crystal is a hand-authored `.mesh.yaml` (24 vertices, no normals → faceted normals computed at
+# load), lit by one off-axis point light so the flat per-face shading reads. The ground plane is a
+# built-in `Mesh` primitive for context. Proves agent-authored mesh assets render before any importer
+# exists (Plan/phase-8, Wave 2).
+format: 1
+name: "mesh-asset - Mesh: shape asset (authored crystal)"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 7.5
+        rotation:
+          - -18.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 14.0
+          - 1.0
+          - 14.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.5
+          - 0.55
+          - 0.6
+          - 1.0
+  - name: crystal
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.4
+          - 0.0
+        rotation:
+          - 0.0
+          - 25.0
+          - 0.0
+        scale:
+          - 1.4
+          - 1.4
+          - 1.4
+      Mesh:
+        shape:
+          asset: meshes/crystal.mesh.yaml
+        color:
+          - 0.45
+          - 0.75
+          - 0.9
+          - 1.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 4.5
+          - 3.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 6.0
+        range: 20.0

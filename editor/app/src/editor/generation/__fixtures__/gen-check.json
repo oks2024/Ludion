@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "recipe": "generation/recipes/idol.gen.yaml",
+  "workflow": "generation/workflows/txt2img.json",
+  "kind": "image",
+  "overrides": {
+    "Empty Latent": {
+      "height": 512,
+      "width": 512
+    },
+    "Positive Prompt": {
+      "text": "a small weathered stone idol"
+    }
+  },
+  "offline": "ok",
+  "live": "skipped",
+  "diagnostics": [
+    {
+      "code": "L1167",
+      "severity": "warning",
+      "message": "cannot reach a ComfyUI server at `http://127.0.0.1:9`",
+      "help": "start ComfyUI, or set `LUDION_COMFY_URL` or pass `--url`"
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+// Maps a browser keyboard event to an `input.inject` command payload.
+//
+// The engine's input model (ludion-sim's `InputEvent` / `Key`) is deliberately small and
+// layout-independent: `{"kind": "key_down" | "key_up", "key": "<name>"}` where the key name is the
+// abstract variant name (`"W"`, `"Left"`, `"Space"`, `"Digit1"`). The browser reports physical keys
+// via `KeyboardEvent.code` (`"KeyW"`, `"ArrowLeft"`, `"Space"`, `"Digit1"`), which is exactly the
+// layout-independent identity we want — so this maps `code`, never `key`. Unmapped keys return
+// `null` (the engine only knows the milestone-minimal set), and OS auto-repeat is suppressed so a
+// held key produces exactly one `key_down` edge, mirroring the engine's own no-repeat semantics.
+
+import type { InputInjectParams } from '@ludion/protocol';
+
+/** The sim key names the engine accepts (mirrors `ludion_sim::Key`'s serde form). */
+export type EngineKey =
+  | 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'I' | 'J' | 'K' | 'L' | 'M'
+  | 'N' | 'O' | 'P' | 'Q' | 'R' | 'S' | 'T' | 'U' | 'V' | 'W' | 'X' | 'Y' | 'Z'
+  | 'Digit0' | 'Digit1' | 'Digit2' | 'Digit3' | 'Digit4'
+  | 'Digit5' | 'Digit6' | 'Digit7' | 'Digit8' | 'Digit9'
+  | 'Up' | 'Down' | 'Left' | 'Right'
+  | 'Space' | 'Enter' | 'Escape';
+
+const ARROWS: Readonly<Record<string, EngineKey>> = {
+  ArrowUp: 'Up',
+  ArrowDown: 'Down',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+};
+
+const NAMED: Readonly<Record<string, EngineKey>> = {
+  Space: 'Space',
+  Enter: 'Enter',
+  Escape: 'Escape',
+};
+
+/**
+ * Translates a `KeyboardEvent.code` to the engine's abstract key name, or `null` if the engine has
+ * no such key. Handles the four families the milestone set covers: `KeyA`–`KeyZ`, `Digit0`–`Digit9`,
+ * the four arrows, and Space/Enter/Escape.
+ */
+export function codeToEngineKey(code: string): EngineKey | null {
+  if (/^Key[A-Z]$/.test(code)) {
+    return code.slice(3) as EngineKey;
+  }
+  if (/^Digit[0-9]$/.test(code)) {
+    return code as EngineKey;
+  }
+  return ARROWS[code] ?? NAMED[code] ?? null;
+}
+
+/** A keyboard edge to translate: which physical key, whether it is a press or a release, and
+ *  whether the browser flagged it as an OS auto-repeat. */
+export interface KeyEdge {
+  readonly code: string;
+  readonly type: 'keydown' | 'keyup';
+  readonly repeat: boolean;
+}
+
+/**
+ * Builds the `input.inject` params for a keyboard edge, or `null` when nothing should be sent:
+ * an unmapped key, or an auto-repeat `keydown` (the engine treats a re-asserted held key as no new
+ * edge, so forwarding repeats would be pure noise). The event carries no `frame`, so the engine
+ * applies it at the next tick boundary.
+ */
+export function keyEdgeToInject(edge: KeyEdge): InputInjectParams | null {
+  if (edge.type === 'keydown' && edge.repeat) {
+    return null;
+  }
+  const key = codeToEngineKey(edge.code);
+  if (key === null) {
+    return null;
+  }
+  const kind = edge.type === 'keydown' ? 'key_down' : 'key_up';
+  return { event: { kind, key } };
+}
+
+/**
+ * Whether a keyboard event originated inside a text-editing surface, where the browser's own editing
+ * (undo, caret motion) must win over the editor's window-level shortcuts (Ctrl+Z/Y, the W/E/R gizmo
+ * modes). Shared by every window-level key handler so the rule lives in exactly one place.
+ */
+export function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+}

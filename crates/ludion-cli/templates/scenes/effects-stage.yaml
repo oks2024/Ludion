@@ -1,0 +1,123 @@
+format: 1
+name: effects-stage
+# The effects stage — the editor's Effects view. One `subject` entity carrying a `ParticleEmitter`
+# over a dark floor, under one point light, seen by a fixed camera. Nothing here is ever saved: the
+# stage is a display surface the emitter tab writes with `component.set`, so the host may restart it
+# freely and a tuned emitter is carried into a scene file by hand, never by `scene.save` of this
+# file. Built-in components only — plain `ludion serve` hosts it, no game crate. The `subject` name
+# is load-bearing: it is how `query.entities` finds the emitter.
+#
+# The subject also carries a `PatternPlayer` naming no document (`pattern: ""` fires nothing), which
+# a pattern tab can point at an open `kind: pattern` file and re-stamp `started` on to restart. Its
+# aim point is the `target` entity — a small emissive marker moved from the tab's target fields,
+# which an `arc { center: aim }` volley reads at fire time.
+entities:
+  - name: floor
+    components:
+      Transform:
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.025
+          - 0.025
+          - 0.032
+          - 1.0
+  - name: subject
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.4
+          - 0.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.15
+          - 0.15
+          - 0.15
+        rate: 60.0
+        burst: 0
+        started: 0
+        duration: 0.0
+        life:
+          - 0.8
+          - 1.6
+        speed:
+          - 1.0
+          - 2.2
+        spread_deg: 25.0
+        gravity: -0.6
+        drag: 0.4
+        floor: 0.0
+        start_size: 0.14
+        end_size: 0.02
+        start_color:
+          - 3.0
+          - 1.4
+          - 0.5
+          - 1.0
+        end_color:
+          - 1.0
+          - 0.25
+          - 0.05
+          - 0.0
+        blend: additive
+        softness: 0.6
+        seed: 1
+      PatternPlayer:
+        pattern: ""
+        started: 0
+  - name: target
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.4
+          - 0.0
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape: sphere
+        color:
+          - 0.35
+          - 0.75
+          - 1.0
+          - 1.0
+        emissive: 2.0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 7.0
+        rotation:
+          - -8.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+        near: 0.05
+        far: 100.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 4.0
+          - 3.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.95
+          - 0.9
+        intensity: 1.5
+        range: 20.0

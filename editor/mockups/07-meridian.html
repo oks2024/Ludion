@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ludion — Level Designer</title>
+<style>
+  /* ============================================================
+     Direction 07 — "Meridian"
+     Layered monochrome (four near-black surfaces + 1px borders),
+     one quiet accent, keyboard-first. The command palette is the
+     product's center of gravity — shown open, as the signature.
+     ============================================================ */
+
+  :root{
+    --base:     #08090B;
+    --panel:    #0F1114;
+    --raised:   #16181D;
+    --overlay:  #1D2026;
+    --border:  #23262C;
+
+    --text:     #EDEEF2;
+    --text-2:   #9BA0AB;
+    --text-3:   #5C6270;
+
+    --accent:      #6E7BFF;
+    --accent-dim:  rgba(110,123,255,.14);
+    --accent-dim2: rgba(110,123,255,.24);
+
+    --ok:     #3FBF8A;
+    --warn:   #D9A344;
+    --danger: #E5604C;
+
+    --gizmo-x: #E06456;
+    --gizmo-y: #4FC98A;
+    --gizmo-z: #54A6E8;
+
+    --radius:    6px;
+    --radius-sm: 4px;
+
+    --font-ui:   "Segoe UI Variable Text","Segoe UI Variable","Segoe UI",system-ui,sans-serif;
+    --font-disp: "Segoe UI Variable Display","Segoe UI Variable","Segoe UI",system-ui,sans-serif;
+    --font-mono: "Cascadia Code","Consolas",ui-monospace,monospace;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    background: var(--base);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow:hidden;
+  }
+  button, input{ font-family: inherit; font-size: inherit; color: inherit; }
+  .num{ font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  ::selection{ background: var(--accent-dim2); color: var(--text); }
+  ::-webkit-scrollbar{ width:10px; height:10px; }
+  ::-webkit-scrollbar-track{ background: transparent; }
+  ::-webkit-scrollbar-thumb{ background: var(--overlay); border:2px solid transparent; background-clip:padding-box; border-radius:6px; }
+  ::-webkit-scrollbar-thumb:hover{ background: #262a32; background-clip:padding-box; }
+
+  :focus-visible{ outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+
+  button{ cursor:pointer; }
+  button.reset{ background:none; border:none; padding:0; }
+
+  @media (prefers-reduced-motion: reduce){
+    *{ animation:none !important; transition:none !important; }
+  }
+
+  /* ---------- keycap chip ---------- */
+  .kc{
+    display:inline-flex; align-items:center; justify-content:center;
+    height:18px; padding:0 5px;
+    font-family: var(--font-mono); font-size:11px; line-height:1;
+    color: var(--text-2);
+    background: var(--overlay);
+    border:1px solid var(--border);
+    border-radius: var(--radius-sm);
+    white-space:nowrap;
+  }
+
+  /* ---------- app shell ---------- */
+  .app{
+    width:100vw; height:100vh;
+    min-width:1280px; min-height:760px;
+    display:flex; flex-direction:column;
+    background: var(--base);
+    overflow:hidden;
+  }
+
+  /* ===== 1. title strip ===== */
+  .titlebar{
+    flex:0 0 38px;
+    display:flex; align-items:center;
+    padding:0 10px 0 14px;
+    background: var(--panel);
+    border-bottom:1px solid var(--border);
+    -webkit-app-region: drag;
+  }
+  .brand{ display:flex; align-items:center; gap:8px; font-weight:600; letter-spacing:0; }
+  .brand-mark{ width:12px; height:12px; background:var(--accent); border-radius:3px; transform:rotate(45deg); flex:0 0 auto; }
+  .brand-name{ font-family: var(--font-disp); font-weight:600; font-size:13px; }
+  .doc-path{ margin-left:10px; padding-left:10px; border-left:1px solid var(--border); color:var(--text-2); font-size:12.5px; }
+  .doc-path b{ color:var(--text); font-weight:600; }
+  .titlebar-spacer{ flex:1; }
+  .winctl{ display:flex; gap:2px; -webkit-app-region:no-drag; }
+  .winctl button{
+    width:34px; height:26px; display:flex; align-items:center; justify-content:center;
+    background:none; border:none; border-radius:var(--radius-sm); color:var(--text-2);
+  }
+  .winctl button:hover{ background:var(--overlay); color:var(--text); }
+  .winctl button.close:hover{ background:var(--danger); color:#fff; }
+  .winctl svg{ width:10px; height:10px; }
+
+  /* ===== 2. view switcher ===== */
+  .viewswitch{
+    flex:0 0 44px;
+    display:grid; grid-template-columns:1fr auto 1fr;
+    align-items:center;
+    background: var(--panel);
+    border-bottom:1px solid var(--border);
+    padding:0 14px;
+  }
+  .vs-tabs{ display:flex; align-items:center; gap:4px; }
+  .vs-tab{
+    display:flex; align-items:center; gap:7px;
+    height:30px; padding:0 10px 0 11px;
+    background:none; border:1px solid transparent; border-radius:var(--radius);
+    color:var(--text-2); font-weight:600;
+  }
+  .vs-tab .kc{ background:var(--panel); }
+  .vs-tab:hover:not(.disabled){ background:var(--overlay); color:var(--text); }
+  .vs-tab.active{
+    background: var(--raised); border-color:var(--border); color:var(--text);
+    box-shadow: inset 0 0 0 1px var(--accent-dim2);
+  }
+  .vs-tab.active .kc{ background:var(--overlay); }
+  .vs-tab.disabled{ color:var(--text-3); cursor:default; }
+  .vs-tab.disabled .kc{ opacity:.5; }
+  .vs-sub{ font-weight:400; font-size:11px; color:var(--text-3); }
+  .vs-dot{ width:6px; height:6px; border-radius:50%; background:var(--ok); flex:0 0 auto; }
+
+  .cmdk-entry{
+    display:flex; align-items:center; gap:8px;
+    width:360px; height:30px; padding:0 8px 0 12px;
+    background:var(--raised); border:1px solid var(--border); border-radius:var(--radius);
+    color:var(--text-3);
+  }
+  .cmdk-entry:hover{ border-color:#2c2f37; }
+  .cmdk-entry svg{ width:14px; height:14px; flex:0 0 auto; color:var(--text-3); }
+  .cmdk-placeholder{ flex:1; text-align:left; font-size:12.5px; color:var(--text-2); }
+  .cmdk-entry .kc{ margin-left:auto; }
+
+  /* ===== 3. session strip ===== */
+  .sessionbar{
+    flex:0 0 42px;
+    display:flex; align-items:center; gap:10px;
+    padding:0 14px;
+    background: var(--panel);
+    border-bottom:1px solid var(--border);
+  }
+  .segmented{ display:flex; background:var(--raised); border:1px solid var(--border); border-radius:var(--radius); padding:2px; gap:2px; }
+  .segmented button{ background:none; border:none; border-radius:calc(var(--radius) - 2px); padding:4px 12px; color:var(--text-2); font-weight:600; }
+  .segmented button.active{ background:var(--overlay); color:var(--text); box-shadow:inset 0 0 0 1px var(--border); }
+
+  .btn{
+    display:flex; align-items:center; gap:8px;
+    height:30px; padding:0 10px;
+    background:var(--raised); border:1px solid var(--border); border-radius:var(--radius);
+    color:var(--text);
+  }
+  .btn:hover{ background:var(--overlay); }
+  .btn .label{ font-weight:600; }
+  .btn-group{ display:flex; }
+  .btn-group .btn{ border-radius:0; border-right-width:0; }
+  .btn-group .btn:first-child{ border-radius:var(--radius) 0 0 var(--radius); }
+  .btn-group .btn:last-child{ border-radius:0 var(--radius) var(--radius) 0; border-right-width:1px; }
+  .dirty-dot{ width:7px; height:7px; border-radius:50%; background:var(--warn); flex:0 0 auto; }
+
+  .conn-chip{
+    margin-left:auto;
+    display:flex; align-items:center; gap:7px;
+    height:30px; padding:0 12px;
+    background:var(--raised); border:1px solid var(--border); border-radius:var(--radius);
+    color:var(--text-2); font-size:12px;
+  }
+  .conn-dot{ width:6px; height:6px; border-radius:50%; background:var(--ok); flex:0 0 auto; }
+  .conn-chip .num{ color:var(--text-2); }
+
+  /* ===== 4. main row ===== */
+  .main-row{ flex:1; min-height:0; display:flex; background:var(--base); }
+
+  .col{ display:flex; flex-direction:column; background:var(--panel); min-height:0; }
+  .col-left{ flex:0 0 280px; border-right:1px solid var(--border); overflow:hidden; }
+  .col-right{ flex:0 0 320px; border-left:1px solid var(--border); overflow-y:auto; }
+
+  .panel-head{
+    flex:0 0 auto; display:flex; align-items:center; justify-content:space-between;
+    height:34px; padding:0 12px;
+    font-weight:600; font-size:12.5px; color:var(--text);
+    border-bottom:1px solid var(--border);
+  }
+  .panel-head .count{ color:var(--text-2); font-weight:400; font-size:11.5px; }
+
+  /* hierarchy */
+  .hierarchy{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+  .tree-scroll{ flex:1; overflow-y:auto; padding:4px 0 6px; }
+  .tree-root{ padding:4px 12px; display:flex; align-items:center; gap:6px; color:var(--text); font-weight:600; }
+  .caret{ width:10px; color:var(--text-3); font-size:10px; }
+  .tree{ margin:0 0 0 16px; padding-left:11px; border-left:1px solid var(--border); list-style:none; }
+  .tree li{
+    display:flex; align-items:center; gap:7px;
+    height:20px; padding:0 10px 0 8px; margin-right:8px;
+    border-radius:var(--radius-sm);
+    color:var(--text-2); font-size:12.5px;
+    position:relative;
+  }
+  .tree li:hover{ background:var(--overlay); color:var(--text); }
+  .tree li .node-dot{ width:5px; height:5px; border-radius:50%; background:var(--text-3); flex:0 0 auto; }
+  .tree li .name{ flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tree li .meta{ color:var(--text-2); font-size:11px; font-family:var(--font-mono); }
+  .tree li.selected{
+    background:var(--accent-dim); color:var(--text); font-weight:600;
+  }
+  .tree li.selected .node-dot{ background:var(--accent); }
+  .tree li.selected::before{
+    content:""; position:absolute; left:-11px; top:2px; bottom:2px; width:2px; background:var(--accent); border-radius:2px;
+  }
+
+  /* kit library */
+  .kitlib{ flex:0 0 44px; overflow:hidden; border-top:1px solid var(--border); display:flex; flex-direction:column; }
+  .kit-grid{ flex:1; overflow-y:auto; display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:10px 12px; }
+  .kit-tile{
+    display:flex; flex-direction:column; align-items:center; gap:6px;
+    padding:10px 4px 8px; background:var(--raised); border:1px solid var(--border); border-radius:var(--radius);
+  }
+  .kit-tile:hover{ background:var(--overlay); border-color:#2c2f37; }
+  .kit-tile svg{ width:26px; height:26px; color:var(--text-2); }
+  .kit-tile span{ font-size:10.5px; color:var(--text-2); text-align:center; line-height:1.2; }
+
+  /* viewport */
+  .viewport{ flex:1; position:relative; min-width:0; background:
+    linear-gradient(180deg,#14121c 0%,#211c2c 20%,#3d2f42 38%,#75485a 55%,#a06a53 68%,#7b5240 82%,#3a2f2b 100%); }
+  .viewport-scene{ position:absolute; inset:0; }
+  .viewport-scene svg{ width:100%; height:100%; display:block; }
+  .vp-vignette{ position:absolute; inset:0; pointer-events:none;
+    background: radial-gradient(ellipse at 50% 55%, transparent 45%, rgba(4,4,6,.55) 100%); }
+
+  .vp-overlay{ position:absolute; display:flex; align-items:center; gap:8px; pointer-events:none;
+    font-size:12px; color:var(--text-2); background:rgba(8,9,11,.55); border:1px solid rgba(255,255,255,.06);
+    padding:5px 9px; border-radius:var(--radius-sm); backdrop-filter: blur(3px); }
+  .vp-tl{ top:12px; left:12px; }
+  .vp-tr{ top:12px; right:12px; }
+  .vp-bl{ bottom:12px; left:12px; }
+  .vp-overlay .num{ color:var(--text); }
+  .vp-overlay.ok .num{ color:var(--ok); }
+
+  /* command palette (scoped to viewport) */
+  .palette-scrim{
+    position:absolute; inset:0; z-index:20;
+    display:flex; justify-content:center; align-items:flex-start;
+    padding-top:34px;
+    background: rgba(6,7,9,.5);
+    backdrop-filter: blur(2px);
+    animation: fade-in .12s ease-out;
+  }
+  .palette-scrim.hidden{ display:none; }
+  @keyframes fade-in{ from{ opacity:0; } to{ opacity:1; } }
+  .palette{
+    width:92%; max-width:560px;
+    background: var(--raised);
+    border:1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 20px 48px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.03) inset;
+    overflow:hidden;
+  }
+  .palette-input{ display:flex; align-items:center; gap:10px; height:46px; padding:0 14px; border-bottom:1px solid var(--border); }
+  .palette-input svg{ width:15px; height:15px; color:var(--text-3); flex:0 0 auto; }
+  .palette-query{ flex:1; font-size:14px; color:var(--text); }
+  .palette-query .caret-blink{ display:inline-block; width:1px; height:15px; background:var(--text); vertical-align:-3px; margin-left:1px; animation:blink 1s step-end infinite; }
+  @keyframes blink{ 50%{ opacity:0; } }
+  .palette-results{ padding:6px; max-height:280px; overflow-y:auto; }
+  .palette-group-label{ padding:8px 8px 4px; font-size:11px; color:var(--text-2); font-weight:600; }
+  .palette-row{
+    display:flex; align-items:center; gap:10px;
+    padding:9px 10px; border-radius:var(--radius-sm);
+    color:var(--text-2);
+  }
+  .palette-row .verb{ color:var(--text); font-weight:600; font-family:var(--font-mono); font-size:12.5px; }
+  .palette-row .desc{ color:var(--text-2); font-size:12px; }
+  .palette-row .sep{ color:var(--text-3); }
+  .palette-row .flex{ flex:1; display:flex; align-items:baseline; gap:6px; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .palette-row.selected{ background:var(--accent-dim); box-shadow: inset 0 0 0 1px var(--accent-dim2); }
+  .palette-row.selected .verb{ color:var(--accent); }
+  .palette-row .kc{ flex:0 0 auto; }
+  .palette-foot{ display:flex; align-items:center; gap:14px; height:34px; padding:0 14px; border-top:1px solid var(--border); color:var(--text-2); font-size:11px; }
+  .palette-foot .kc{ margin-right:4px; }
+
+  /* ===== 5. terminal drawer ===== */
+  .terminal{ flex:0 0 280px; display:flex; flex-direction:column; background:var(--panel); border-top:1px solid var(--border); transition:flex-basis .12s ease; }
+  .terminal.collapsed{ flex-basis:38px; }
+  .terminal.collapsed .term-body,
+  .terminal.collapsed .term-inputrow{ display:none; }
+
+  .term-tabs{ flex:0 0 38px; display:flex; align-items:stretch; border-bottom:1px solid var(--border); }
+  .term-tab{
+    display:flex; align-items:center; gap:10px;
+    padding:0 12px; background:none; border:none; border-right:1px solid var(--border);
+    color:var(--text-2);
+  }
+  .term-tab.active{ background:var(--raised); color:var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .term-tab:hover:not(.active){ background:var(--overlay); }
+  .term-tab .tt-name{ font-weight:600; font-size:12.5px; }
+  .status-chip{ display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text-2); }
+  .status-chip .sdot{ width:6px; height:6px; border-radius:50%; }
+  .status-chip.working .sdot{ background:var(--ok); }
+  .status-chip.idle .sdot{ background:var(--text-3); }
+  .ctx-meter{ display:flex; align-items:center; gap:6px; }
+  .ctx-track{ width:46px; height:4px; background:var(--overlay); border-radius:2px; overflow:hidden; }
+  .ctx-fill{ height:100%; background:var(--accent); }
+  .ctx-meter .num{ font-size:10.5px; color:var(--text-2); }
+  .cache-cd{ font-size:10.5px; color:var(--text-2); }
+  .term-newtab{ width:34px; display:flex; align-items:center; justify-content:center; color:var(--text-3); background:none; border:none; border-right:1px solid var(--border); }
+  .term-newtab:hover{ background:var(--overlay); color:var(--text); }
+  .term-tabs-spacer{ flex:1; }
+  .term-collapse{ width:38px; display:flex; align-items:center; justify-content:center; background:none; border:none; color:var(--text-3); }
+  .term-collapse:hover{ background:var(--overlay); color:var(--text); }
+  .term-collapse svg{ transition:transform .12s ease; }
+  .terminal.collapsed .term-collapse svg{ transform:rotate(180deg); }
+
+  .term-body{ flex:1; overflow-y:auto; padding:12px 16px; font-family:var(--font-mono); font-size:12.5px; line-height:1.85; background:#0B0C0F; }
+  .term-body.hidden{ display:none; }
+  .term-line{ white-space:pre-wrap; word-break:break-word; }
+  .term-banner{ color:var(--text-2); margin-bottom:10px; }
+  .term-line.user{ color:var(--text); border-left:2px solid var(--accent); padding-left:10px; margin:4px 0 10px; }
+  .term-line.work{ color:var(--text-2); }
+  .term-line.work .glyph{ color:var(--text-3); }
+  .term-line.done{ color:var(--text); margin-top:2px; }
+  .term-line.done .glyph{ color:var(--ok); }
+  .term-line.idle-note{ color:var(--text-3); }
+
+  .term-inputrow{ flex:0 0 36px; display:flex; align-items:center; gap:8px; padding:0 16px; border-top:1px solid var(--border); font-family:var(--font-mono); font-size:12.5px; color:var(--text-2); }
+  .term-inputrow .prompt{ color:var(--text-3); }
+  .term-inputrow .caret-blink{ display:inline-block; width:7px; height:14px; background:var(--text-2); animation:blink 1s step-end infinite; }
+
+  /* ===== 6. status bar ===== */
+  .statusbar{
+    flex:0 0 28px; display:flex; align-items:center; gap:8px;
+    padding:0 14px; background:var(--panel); border-top:1px solid var(--border);
+    color:var(--text-2); font-size:11.5px;
+  }
+  .statusbar .sep{ color:var(--text-3); }
+  .statusbar .num{ color:var(--text-2); }
+
+  /* ===== inspector ===== */
+  .insp-body{ padding:12px; display:flex; flex-direction:column; gap:12px; }
+  .card{ background:var(--raised); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+  .card-title{ padding:8px 10px; font-weight:600; font-size:12px; border-bottom:1px solid var(--border); color:var(--text); }
+  .card-body{ padding:10px; display:flex; flex-direction:column; gap:8px; }
+  .field-row{ display:flex; flex-direction:column; gap:5px; }
+  .field-label{ font-size:11px; color:var(--text-2); }
+  .field-inline{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .field-inline .field-label{ flex:0 0 auto; }
+  .field-value{ color:var(--text); font-size:12.5px; }
+  .axis-group{ display:flex; gap:6px; }
+  .axis-input{ flex:1; display:flex; align-items:center; gap:5px; background:var(--overlay); border:1px solid var(--border); border-radius:var(--radius-sm); padding:0 7px; height:28px; }
+  .axis-input .axis-tag{ font-size:10px; color:var(--text-2); font-weight:600; }
+  .axis-input input{ width:100%; background:none; border:none; color:var(--text); text-align:right; }
+  .axis-input input:focus-visible{ outline:none; }
+  .hint{ display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-2); }
+  .hint .hi{ width:13px; height:13px; border-radius:50%; border:1px solid var(--text-3); display:flex; align-items:center; justify-content:center; font-size:9px; flex:0 0 auto; }
+  .kv{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .kv .k{ color:var(--text-2); font-size:11.5px; }
+  .kv .v{ color:var(--text); font-size:12.5px; }
+  .mono-path{ font-family:var(--font-mono); font-size:11.5px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 1. title strip -->
+  <div class="titlebar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <span class="brand-name">LUDION</span>
+    </div>
+    <div class="doc-path">vigil — <b>district-plaza.yaml</b></div>
+    <div class="titlebar-spacer"></div>
+    <div class="winctl">
+      <button title="Minimize"><svg viewBox="0 0 10 10"><rect x="0" y="4.5" width="10" height="1" fill="currentColor"/></svg></button>
+      <button title="Maximize"><svg viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor"/></svg></button>
+      <button class="close" title="Close"><svg viewBox="0 0 10 10"><path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" stroke-width="1"/></svg></button>
+    </div>
+  </div>
+
+  <!-- 2. view switcher + command palette entry -->
+  <div class="viewswitch">
+    <div class="vs-tabs">
+      <button class="vs-tab active">Level Designer<span class="kc">1</span></button>
+      <button class="vs-tab">Game Designer<span class="vs-dot" title="background instance working"></span><span class="kc">2</span></button>
+      <button class="vs-tab disabled" title="awaiting engine surface">Lighter<span class="kc">3</span></button>
+      <button class="vs-tab disabled" title="awaiting engine surface">Art Director<span class="kc">4</span></button>
+    </div>
+    <button class="cmdk-entry" id="cmdkEntry">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <span class="cmdk-placeholder">Search or run a command…</span>
+      <span class="kc">Ctrl+K</span>
+    </button>
+    <div></div>
+  </div>
+
+  <!-- 3. session strip -->
+  <div class="sessionbar">
+    <div class="segmented">
+      <button class="active">Edit</button>
+      <button>Play</button>
+    </div>
+    <button class="btn"><span class="dirty-dot" title="unsaved changes"></span><span class="label">Save</span><span class="kc">Ctrl+S</span></button>
+    <div class="btn-group">
+      <button class="btn" title="Undo"><span class="label">Undo</span><span class="kc">Ctrl+Z</span></button>
+      <button class="btn" title="Redo"><span class="label">Redo</span><span class="kc">Ctrl+Y</span></button>
+    </div>
+    <div class="conn-chip">
+      <span class="conn-dot"></span>
+      <span class="num">ws://127.0.0.1:9411</span><span class="sep">·</span>schema <span class="num">a3f2c91</span><span class="sep">·</span>connected
+    </div>
+  </div>
+
+  <!-- 4. main row -->
+  <div class="main-row">
+
+    <!-- left column -->
+    <div class="col col-left">
+      <div class="hierarchy">
+        <div class="panel-head">Hierarchy<span class="count"><span class="num">47</span> entities</span></div>
+        <div class="tree-scroll">
+          <div class="tree-root"><span class="caret">▾</span>district-plaza</div>
+          <ul class="tree">
+            <li><span class="node-dot"></span><span class="name">floor</span><span class="meta">24×24</span></li>
+            <li><span class="node-dot"></span><span class="name">fountain</span></li>
+            <li><span class="node-dot"></span><span class="name">house-a-01</span></li>
+            <li><span class="node-dot"></span><span class="name">house-a-02</span></li>
+            <li class="selected"><span class="node-dot"></span><span class="name">house-a-03</span></li>
+            <li><span class="node-dot"></span><span class="name">house-a-04</span></li>
+            <li><span class="node-dot"></span><span class="name">house-b-01</span></li>
+            <li><span class="node-dot"></span><span class="name">house-b-02</span></li>
+            <li><span class="node-dot"></span><span class="name">wall-north</span><span class="meta">run ×12</span></li>
+            <li><span class="node-dot"></span><span class="name">wall-east</span><span class="meta">run ×10</span></li>
+            <li><span class="node-dot"></span><span class="name">wall-west</span><span class="meta">run ×10</span></li>
+            <li><span class="node-dot"></span><span class="name">gate-to-market</span></li>
+            <li><span class="node-dot"></span><span class="name">player-spawn</span></li>
+            <li><span class="node-dot"></span><span class="name">quest-merchant</span></li>
+            <li><span class="node-dot"></span><span class="name">quest-shrine</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="kitlib">
+        <div class="panel-head">Kit library</div>
+        <div class="kit-grid">
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 21V11L12 5l8 6v10z"/><path d="M4 11h16"/></svg><span>house-a</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 21V9L12 4l7 5v12z"/></svg><span>house-b</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 4v16M18 4v16M6 8h12M6 16h12"/></svg><span>wall-straight</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 4v16M6 20h14M6 8h14M18 8v12"/></svg><span>wall-corner</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20V9a8 8 0 0 1 16 0v11M4 20h4M16 20h4"/></svg><span>gate</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="11" width="14" height="9"/><path d="M3 11h18M9 4l3-2 3 2M12 2v6"/></svg><span>well</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="18" rx="8" ry="3"/><ellipse cx="12" cy="12" rx="5" ry="2"/><path d="M12 12V6"/></svg><span>fountain</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 16h18M6 16V9h12v7M4 21h16"/></svg><span>market-stall</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l6 9h-4l4 6H8l4-6H8z"/><path d="M12 21v-3"/></svg><span>tree</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 4h6l-1 5h-4z"/><rect x="8" y="9" width="8" height="7"/><path d="M12 16v5"/></svg><span>lantern</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8l9-4 9 4-9 4z"/><path d="M3 8v9l9 4 9-4V8M12 12v9"/></svg><span>crate</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="9" width="18" height="6"/></svg><span>floor-slab</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- center viewport -->
+    <div class="viewport">
+      <div class="viewport-scene">
+        <svg viewBox="0 0 1000 640" preserveAspectRatio="xMidYMid slice">
+          <defs>
+            <linearGradient id="groundFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#3a342f"/>
+              <stop offset="1" stop-color="#5a4b3d"/>
+            </linearGradient>
+            <linearGradient id="gridFade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+              <stop offset="0.4" stop-color="#fff" stop-opacity="0.12"/>
+              <stop offset="1" stop-color="#fff" stop-opacity="0.5"/>
+            </linearGradient>
+            <mask id="gridMask"><rect x="0" y="0" width="1000" height="640" fill="url(#gridFade)"/></mask>
+            <pattern id="isoGrid" width="76" height="38" patternUnits="userSpaceOnUse">
+              <path d="M0 19 L38 0 L76 19 L38 38 Z" fill="none" stroke="#e8e4da" stroke-width="1"/>
+            </pattern>
+            <filter id="softBlur" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation="3"/>
+            </filter>
+            <symbol id="cube" viewBox="-40 -100 80 100">
+              <polygon class="c-right" points="0,0 30,-15 30,-75 0,-60" fill="var(--cr)"/>
+              <polygon class="c-left"  points="0,0 -30,-15 -30,-75 0,-60" fill="var(--cl)"/>
+              <polygon class="c-top"   points="0,-60 30,-75 0,-90 -30,-75" fill="var(--ct)"/>
+            </symbol>
+          </defs>
+
+          <!-- ground plane -->
+          <polygon points="500,180 880,400 500,620 120,400" fill="url(#groundFill)"/>
+          <g mask="url(#gridMask)"><polygon points="500,180 880,400 500,620 120,400" fill="url(#isoGrid)"/></g>
+
+          <!-- perimeter walls (north / east / west); south edge left open for the gate -->
+          <g style="--ct:#9a9793;--cr:#78756f;--cl:#5c5a56" opacity="0.95">
+            <ellipse cx="557" cy="213" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(557,213) scale(.55)"/>
+            <ellipse cx="622" cy="250" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(622,250) scale(.55)"/>
+            <ellipse cx="690" cy="290" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(690,290) scale(.55)"/>
+            <ellipse cx="758" cy="330" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(758,330) scale(.55)"/>
+            <ellipse cx="823" cy="367" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(823,367) scale(.55)"/>
+
+            <ellipse cx="443" cy="213" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(443,213) scale(.55)"/>
+            <ellipse cx="378" cy="250" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(378,250) scale(.55)"/>
+            <ellipse cx="310" cy="290" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(310,290) scale(.55)"/>
+            <ellipse cx="242" cy="330" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(242,330) scale(.55)"/>
+            <ellipse cx="177" cy="367" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(177,367) scale(.55)"/>
+
+            <ellipse cx="823" cy="433" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(823,433) scale(.55)"/>
+            <ellipse cx="758" cy="470" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(758,470) scale(.55)"/>
+            <ellipse cx="690" cy="510" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(690,510) scale(.55)"/>
+            <ellipse cx="622" cy="550" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(622,550) scale(.55)"/>
+            <ellipse cx="557" cy="587" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(557,587) scale(.55)"/>
+
+            <ellipse cx="166" cy="426" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(166,426) scale(.55)"/>
+            <ellipse cx="226" cy="462" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(226,462) scale(.55)"/>
+            <ellipse cx="394" cy="558" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(394,558) scale(.55)"/>
+            <ellipse cx="454" cy="594" rx="20" ry="8" fill="#000" opacity=".3" filter="url(#softBlur)"/><use href="#cube" transform="translate(454,594) scale(.55)"/>
+          </g>
+
+          <!-- gate-to-market: gap in the south wall -->
+          <g opacity=".85">
+            <rect x="286" y="486" width="8" height="34" fill="#6E7BFF" stroke="none" opacity=".7"/>
+            <rect x="330" y="500" width="8" height="34" fill="#6E7BFF" stroke="none" opacity=".7"/>
+            <line x1="290" y1="486" x2="334" y2="500" stroke="#6E7BFF" stroke-width="2" stroke-dasharray="3 4"/>
+          </g>
+
+          <!-- player-spawn -->
+          <g transform="translate(350,478)" opacity=".9">
+            <circle r="9" fill="none" stroke="#9BA0AB" stroke-width="1.4"/>
+            <circle r="2.4" fill="#9BA0AB"/>
+          </g>
+
+          <!-- quest markers -->
+          <g transform="translate(300,300)"><polygon points="0,-8 8,0 0,8 -8,0" fill="none" stroke="#D9A344" stroke-width="1.4"/></g>
+          <g transform="translate(615,505)"><polygon points="0,-8 8,0 0,8 -8,0" fill="none" stroke="#D9A344" stroke-width="1.4"/></g>
+
+          <!-- fountain -->
+          <g>
+            <ellipse cx="500" cy="404" rx="76" ry="30" fill="#000" opacity=".28" filter="url(#softBlur)"/>
+            <ellipse cx="500" cy="398" rx="70" ry="27" fill="#565f66" stroke="#23262c"/>
+            <ellipse cx="500" cy="392" rx="46" ry="17" fill="#3d454b"/>
+            <ellipse cx="500" cy="388" rx="26" ry="10" fill="#4a6e78" opacity=".8"/>
+            <g style="--ct:#9fabb3;--cr:#7c8890;--cl:#5f6a70"><use href="#cube" transform="translate(500,376) scale(.32)"/></g>
+          </g>
+
+          <!-- houses -->
+          <g style="--ct:#c9a876;--cr:#a9895d;--cl:#8a6e49">
+            <ellipse cx="300" cy="330" rx="34" ry="13" fill="#000" opacity=".32" filter="url(#softBlur)"/>
+            <use href="#cube" transform="translate(300,330) scale(1.0)"/>
+          </g>
+          <g style="--ct:#c7b08a;--cr:#a78f68;--cl:#86704f">
+            <ellipse cx="260" cy="410" rx="32" ry="12" fill="#000" opacity=".32" filter="url(#softBlur)"/>
+            <use href="#cube" transform="translate(260,410) scale(.95)"/>
+          </g>
+          <g style="--ct:#c7b08a;--cr:#a78f68;--cl:#86704f">
+            <ellipse cx="710" cy="410" rx="34" ry="13" fill="#000" opacity=".32" filter="url(#softBlur)"/>
+            <use href="#cube" transform="translate(710,410) scale(1.0)"/>
+          </g>
+          <g style="--ct:#c9a876;--cr:#a9895d;--cl:#8a6e49">
+            <ellipse cx="560" cy="470" rx="30" ry="11" fill="#000" opacity=".32" filter="url(#softBlur)"/>
+            <use href="#cube" transform="translate(560,470) scale(.9)"/>
+          </g>
+          <g style="--ct:#c7b08a;--cr:#a78f68;--cl:#86704f">
+            <ellipse cx="615" cy="545" rx="30" ry="11" fill="#000" opacity=".32" filter="url(#softBlur)"/>
+            <use href="#cube" transform="translate(615,545) scale(.9)"/>
+          </g>
+
+          <!-- house-a-03 : SELECTED -->
+          <ellipse cx="660" cy="325" rx="36" ry="14" fill="#000" opacity=".35" filter="url(#softBlur)"/>
+          <g transform="translate(660,325) scale(1.05)" stroke="#6E7BFF" stroke-width="1.4" paint-order="fill">
+            <polygon points="0,0 30,-15 30,-75 0,-60" fill="#c9a876"/>
+            <polygon points="0,0 -30,-15 -30,-75 0,-60" fill="#8a6e49"/>
+            <polygon points="0,-60 30,-75 0,-90 -30,-75" fill="#e2c193"/>
+          </g>
+          <polygon points="660,313 678,322 660,331 642,322" fill="none" stroke="#6E7BFF" stroke-width="1.5"/>
+
+          <!-- translate gizmo -->
+          <g transform="translate(660,325)">
+            <line x1="0" y1="0" x2="70" y2="-35" stroke="#E06456" stroke-width="2"/>
+            <polygon points="70,-35 58,-29 62,-43" fill="#E06456"/>
+            <text x="76" y="-38" fill="#E06456" font-family="Cascadia Code, Consolas, monospace" font-size="11">X</text>
+
+            <line x1="0" y1="0" x2="0" y2="-100" stroke="#4FC98A" stroke-width="2"/>
+            <polygon points="0,-100 -6,-87 6,-87" fill="#4FC98A"/>
+            <text x="6" y="-104" fill="#4FC98A" font-family="Cascadia Code, Consolas, monospace" font-size="11">Y</text>
+
+            <line x1="0" y1="0" x2="-70" y2="-35" stroke="#54A6E8" stroke-width="2"/>
+            <polygon points="-70,-35 -58,-29 -62,-43" fill="#54A6E8"/>
+            <text x="-88" y="-38" fill="#54A6E8" font-family="Cascadia Code, Consolas, monospace" font-size="11">Z</text>
+          </g>
+        </svg>
+      </div>
+      <div class="vp-vignette"></div>
+
+      <div class="vp-overlay vp-tl">district-plaza.yaml <span class="sep">·</span> edit</div>
+      <div class="vp-overlay vp-tr ok"><span class="num">0.97 ms</span><span class="sep">·</span><span class="num">60 fps</span></div>
+      <div class="vp-overlay vp-bl"><span class="num">cam 14.2, 9.0, −6.5</span><span class="sep">·</span><span class="num">yaw 38°</span></div>
+
+      <!-- command palette (signature element) -->
+      <div class="palette-scrim" id="paletteScrim">
+        <div class="palette">
+          <div class="palette-input">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <div class="palette-query">place<span class="caret-blink"></span></div>
+            <span class="kc">Esc</span>
+          </div>
+          <div class="palette-results">
+            <div class="palette-group-label">Commands</div>
+            <div class="palette-row selected">
+              <div class="flex"><span class="verb">entity.spawn</span><span class="sep">—</span><span class="desc">place a kit part</span></div>
+              <span class="kc">↵</span>
+            </div>
+            <div class="palette-row">
+              <div class="flex"><span class="verb">component.set</span><span class="sep">—</span><span class="desc">edit selected</span></div>
+              <span class="kc">↵</span>
+            </div>
+            <div class="palette-row">
+              <div class="flex"><span class="verb">scene.save</span><span class="sep">—</span><span class="desc">save district-plaza.yaml</span></div>
+              <span class="kc">↵</span>
+            </div>
+          </div>
+          <div class="palette-foot">
+            <span><span class="kc">↑</span><span class="kc">↓</span> navigate</span>
+            <span><span class="kc">↵</span> run</span>
+            <span><span class="kc">Esc</span> close</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- right column: inspector -->
+    <div class="col col-right">
+      <div class="panel-head">Inspector<span class="count">house-a-03</span></div>
+      <div class="insp-body">
+
+        <div class="card">
+          <div class="card-title">Transform</div>
+          <div class="card-body">
+            <div class="field-row">
+              <div class="field-label">Position</div>
+              <div class="axis-group">
+                <div class="axis-input"><span class="axis-tag">X</span><input class="num" value="6.0" /></div>
+                <div class="axis-input"><span class="axis-tag">Y</span><input class="num" value="0.0" /></div>
+                <div class="axis-input"><span class="axis-tag">Z</span><input class="num" value="−4.5" /></div>
+              </div>
+              <div class="hint"><span class="hi">i</span>floor top sits at Y=0</div>
+            </div>
+            <div class="field-row">
+              <div class="field-label">Rotation</div>
+              <div class="axis-group">
+                <div class="axis-input"><span class="axis-tag">X</span><input class="num" value="0°" /></div>
+                <div class="axis-input"><span class="axis-tag">Y</span><input class="num" value="90°" /></div>
+                <div class="axis-input"><span class="axis-tag">Z</span><input class="num" value="0°" /></div>
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field-label">Scale</div>
+              <div class="axis-group"><div class="axis-input"><input class="num" value="1" /></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Mesh</div>
+          <div class="card-body">
+            <div class="kv"><span class="k">Path</span><span class="v mono-path num">voxel/house-a.yaml</span></div>
+            <div class="kv"><span class="k">Size</span><span class="v num">8×9×7</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Collider</div>
+          <div class="card-body">
+            <div class="kv"><span class="k">Type</span><span class="v">static AABB</span></div>
+            <div class="kv"><span class="k">Half-extents</span><span class="v num">4.0 / 4.5 / 3.5</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Material</div>
+          <div class="card-body">
+            <div class="kv"><span class="k">Palette</span><span class="v">plaza-warm</span></div>
+            <div class="kv"><span class="k">Slot</span><span class="v num">3</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. terminal drawer -->
+  <div class="terminal" id="terminal">
+    <div class="term-tabs">
+      <button class="term-tab active" data-term="1">
+        <span class="tt-name">level-designer · 1</span>
+        <span class="status-chip working"><span class="sdot"></span>working</span>
+        <span class="ctx-meter"><span class="ctx-track"><span class="ctx-fill" style="width:34%"></span></span><span class="num">68k / 200k</span></span>
+        <span class="cache-cd">cache <span class="num">4:12</span></span>
+      </button>
+      <button class="term-tab" data-term="2">
+        <span class="tt-name">level-designer · 2</span>
+        <span class="status-chip idle"><span class="sdot"></span>idle</span>
+        <span class="ctx-meter"><span class="ctx-track"><span class="ctx-fill" style="width:6%"></span></span><span class="num">11k / 200k</span></span>
+        <span class="cache-cd">cache <span class="num">0:41</span></span>
+      </button>
+      <button class="term-newtab" title="New terminal">+</button>
+      <div class="term-tabs-spacer"></div>
+      <button class="term-collapse" id="termCollapse" title="Collapse drawer">
+        <svg viewBox="0 0 10 10" width="10" height="10"><path d="M1 3l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+      </button>
+    </div>
+
+    <div class="term-body" id="termBody1">
+      <div class="term-line term-banner">◆ persona: level-designer · ludion-mcp @ ws://127.0.0.1:9411 · cwd games/vigil</div>
+      <div class="term-line user">&gt; extend the south alley with six more houses along the west wall — keep the kite lane clear</div>
+      <div class="term-line work"><span class="glyph">✱</span> reading context file … selection house-a-03 · camera over south gate</div>
+      <div class="term-line work"><span class="glyph">→</span> entity.spawn house-b ×6 along wall-west … done</div>
+      <div class="term-line work"><span class="glyph">→</span> component.set transform … aligned, floor rule applied</div>
+      <div class="term-line done"><span class="glyph">✔</span> 6 houses placed · kite lane 3.5 m clear · scene dirty — save when ready</div>
+    </div>
+    <div class="term-body hidden" id="termBody2">
+      <div class="term-line term-banner">◆ persona: level-designer · ludion-mcp @ ws://127.0.0.1:9411 · cwd games/vigil</div>
+      <div class="term-line idle-note">session idle · last run finished 6 min ago</div>
+    </div>
+
+    <div class="term-inputrow"><span class="prompt">›</span><span class="caret-blink"></span></div>
+  </div>
+
+  <!-- 6. status bar -->
+  <div class="statusbar">
+    <span>edit mode</span><span class="sep">·</span>
+    <span>unsaved changes</span><span class="sep">·</span>
+    <span>frame <span class="num">0.97 ms</span></span><span class="sep">·</span>
+    <span class="num">60 fps</span><span class="sep">·</span>
+    <span><span class="num">47</span> entities</span><span class="sep">·</span>
+    <span>Y-up</span><span class="sep">·</span>
+    <span>grid <span class="num">1m</span></span>
+  </div>
+
+</div>
+
+<script>
+  // Command palette open/close — shown open by default (the signature frame).
+  var scrim = document.getElementById('paletteScrim');
+  var entry = document.getElementById('cmdkEntry');
+  function openPalette(){ scrim.classList.remove('hidden'); }
+  function closePalette(){ scrim.classList.add('hidden'); }
+  entry.addEventListener('click', openPalette);
+  scrim.addEventListener('click', function(e){ if(e.target === scrim) closePalette(); });
+  document.addEventListener('keydown', function(e){
+    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); openPalette(); }
+    if(e.key === 'Escape'){ closePalette(); }
+  });
+
+  // Terminal tab switching.
+  var tabs = document.querySelectorAll('.term-tab');
+  var bodies = { '1': document.getElementById('termBody1'), '2': document.getElementById('termBody2') };
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){
+      tabs.forEach(function(x){ x.classList.remove('active'); });
+      t.classList.add('active');
+      Object.keys(bodies).forEach(function(k){ bodies[k].classList.add('hidden'); });
+      bodies[t.dataset.term].classList.remove('hidden');
+    });
+  });
+
+  // Terminal drawer collapse.
+  document.getElementById('termCollapse').addEventListener('click', function(){
+    document.getElementById('terminal').classList.toggle('collapsed');
+  });
+</script>
+</body>
+</html>

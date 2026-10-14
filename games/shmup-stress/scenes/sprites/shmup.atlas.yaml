@@ -1,0 +1,403 @@
+format: 1
+kind: atlas
+generated_from: shmup.atlas-source.yaml
+pixels_per_unit: 40.0
+maps:
+  color: shmup.png
+regions:
+  backdrop/t0:
+    rect:
+      - 1
+      - 1
+      - 40
+      - 40
+    pivot:
+      - 20.0
+      - 20.0
+  backdrop/t1:
+    rect:
+      - 43
+      - 1
+      - 40
+      - 40
+    pivot:
+      - 20.0
+      - 20.0
+  backdrop/t2:
+    rect:
+      - 1
+      - 43
+      - 40
+      - 40
+    pivot:
+      - 20.0
+      - 20.0
+  backdrop/t3:
+    rect:
+      - 43
+      - 43
+      - 40
+      - 40
+    pivot:
+      - 20.0
+      - 20.0
+  bullets/b00:
+    rect:
+      - 85
+      - 43
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b01:
+    rect:
+      - 99
+      - 43
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b02:
+    rect:
+      - 1
+      - 85
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b03:
+    rect:
+      - 15
+      - 85
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b04:
+    rect:
+      - 29
+      - 85
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b05:
+    rect:
+      - 43
+      - 85
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b06:
+    rect:
+      - 57
+      - 85
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b07:
+    rect:
+      - 71
+      - 85
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b08:
+    rect:
+      - 85
+      - 85
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b09:
+    rect:
+      - 99
+      - 85
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b10:
+    rect:
+      - 1
+      - 99
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b11:
+    rect:
+      - 15
+      - 99
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b12:
+    rect:
+      - 29
+      - 99
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b13:
+    rect:
+      - 43
+      - 99
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b14:
+    rect:
+      - 57
+      - 99
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b15:
+    rect:
+      - 71
+      - 99
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b16:
+    rect:
+      - 85
+      - 99
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b17:
+    rect:
+      - 99
+      - 99
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b18:
+    rect:
+      - 1
+      - 113
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b19:
+    rect:
+      - 15
+      - 113
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b20:
+    rect:
+      - 29
+      - 113
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b21:
+    rect:
+      - 43
+      - 113
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b22:
+    rect:
+      - 57
+      - 113
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b23:
+    rect:
+      - 71
+      - 113
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b24:
+    rect:
+      - 85
+      - 113
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b25:
+    rect:
+      - 99
+      - 113
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b26:
+    rect:
+      - 1
+      - 127
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b27:
+    rect:
+      - 15
+      - 127
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b28:
+    rect:
+      - 29
+      - 127
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b29:
+    rect:
+      - 43
+      - 127
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b30:
+    rect:
+      - 57
+      - 127
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b31:
+    rect:
+      - 71
+      - 127
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b32:
+    rect:
+      - 85
+      - 127
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b33:
+    rect:
+      - 99
+      - 127
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b34:
+    rect:
+      - 1
+      - 141
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b35:
+    rect:
+      - 15
+      - 141
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b36:
+    rect:
+      - 29
+      - 141
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b37:
+    rect:
+      - 43
+      - 141
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b38:
+    rect:
+      - 57
+      - 141
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0
+  bullets/b39:
+    rect:
+      - 71
+      - 141
+      - 12
+      - 12
+    pivot:
+      - 6.0
+      - 6.0

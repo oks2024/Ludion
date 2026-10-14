@@ -1,0 +1,841 @@
+# Feature: Environment/IBL night sky - the material-park roughness x metallic sweep under a
+# procedural moonlit-gradient Environment. The sky is an authored gradient (zenith / horizon /
+# ground, no image asset); its GPU-prefiltered irradiance + specular light the meshes, so the
+# metals (bottom rows) reflect the sky instead of going black under flat ambient. A moon
+# DirectionalLight places the disc + a cool key with its shadow; warm point lights lift the
+# foreground; the emissive voxel beacon blooms - `bloom_strength` sits just above the shipped 0.1,
+# the same relationship it held (0.7) against the 0.6 the engine's former single-blur chain shipped.
+# Environment/IBL Wave 2 new-bless gate.
+format: 1
+name: "night-sky - Environment/IBL: moonlit gradient + roughness x metallic sweep + emissive beacon"
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.015
+          - 0.028
+          - 0.075
+        sky_horizon:
+          - 0.07
+          - 0.1
+          - 0.17
+        sky_ground:
+          - 0.008
+          - 0.01
+          - 0.018
+        sun_disc_size: 5.0
+        sun_disc_intensity: 8.0
+        ibl_intensity: 1.9
+      PostProcess:
+        bloom_threshold: 1.0
+        bloom_strength: 0.12
+  - name: moon
+    components:
+      Transform:
+        translation:
+          - -7.0
+          - 12.0
+          - 9.0
+      DirectionalLight:
+        direction:
+          - 0.36
+          - -0.28
+          - 0.89
+        color:
+          - 0.55
+          - 0.65
+          - 0.9
+        intensity: 1.4
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.38
+          - 16.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 34.0
+          - 1.0
+          - 34.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.1
+          - 0.12
+          - 0.16
+          - 1.0
+        roughness: 0.85
+  - name: s-r0-c0
+    components:
+      Transform:
+        translation:
+          - -4.875
+          - 11.25
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.0
+        metallic: 0.0
+  - name: s-r0-c1
+    components:
+      Transform:
+        translation:
+          - -2.925
+          - 11.25
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.2
+        metallic: 0.0
+  - name: s-r0-c2
+    components:
+      Transform:
+        translation:
+          - -0.975
+          - 11.25
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.4
+        metallic: 0.0
+  - name: s-r0-c3
+    components:
+      Transform:
+        translation:
+          - 0.975
+          - 11.25
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.6
+        metallic: 0.0
+  - name: s-r0-c4
+    components:
+      Transform:
+        translation:
+          - 2.925
+          - 11.25
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.8
+        metallic: 0.0
+  - name: s-r0-c5
+    components:
+      Transform:
+        translation:
+          - 4.875
+          - 11.25
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+  - name: s-r1-c0
+    components:
+      Transform:
+        translation:
+          - -4.875
+          - 9.3
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.0
+        metallic: 0.2
+  - name: s-r1-c1
+    components:
+      Transform:
+        translation:
+          - -2.925
+          - 9.3
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.2
+        metallic: 0.2
+  - name: s-r1-c2
+    components:
+      Transform:
+        translation:
+          - -0.975
+          - 9.3
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.4
+        metallic: 0.2
+  - name: s-r1-c3
+    components:
+      Transform:
+        translation:
+          - 0.975
+          - 9.3
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.6
+        metallic: 0.2
+  - name: s-r1-c4
+    components:
+      Transform:
+        translation:
+          - 2.925
+          - 9.3
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.8
+        metallic: 0.2
+  - name: s-r1-c5
+    components:
+      Transform:
+        translation:
+          - 4.875
+          - 9.3
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 1.0
+        metallic: 0.2
+  - name: s-r2-c0
+    components:
+      Transform:
+        translation:
+          - -4.875
+          - 7.35
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.0
+        metallic: 0.4
+  - name: s-r2-c1
+    components:
+      Transform:
+        translation:
+          - -2.925
+          - 7.35
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.2
+        metallic: 0.4
+  - name: s-r2-c2
+    components:
+      Transform:
+        translation:
+          - -0.975
+          - 7.35
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.4
+        metallic: 0.4
+  - name: s-r2-c3
+    components:
+      Transform:
+        translation:
+          - 0.975
+          - 7.35
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.6
+        metallic: 0.4
+  - name: s-r2-c4
+    components:
+      Transform:
+        translation:
+          - 2.925
+          - 7.35
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.8
+        metallic: 0.4
+  - name: s-r2-c5
+    components:
+      Transform:
+        translation:
+          - 4.875
+          - 7.35
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 1.0
+        metallic: 0.4
+  - name: s-r3-c0
+    components:
+      Transform:
+        translation:
+          - -4.875
+          - 5.4
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.0
+        metallic: 0.6
+  - name: s-r3-c1
+    components:
+      Transform:
+        translation:
+          - -2.925
+          - 5.4
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.2
+        metallic: 0.6
+  - name: s-r3-c2
+    components:
+      Transform:
+        translation:
+          - -0.975
+          - 5.4
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.4
+        metallic: 0.6
+  - name: s-r3-c3
+    components:
+      Transform:
+        translation:
+          - 0.975
+          - 5.4
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.6
+        metallic: 0.6
+  - name: s-r3-c4
+    components:
+      Transform:
+        translation:
+          - 2.925
+          - 5.4
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.8
+        metallic: 0.6
+  - name: s-r3-c5
+    components:
+      Transform:
+        translation:
+          - 4.875
+          - 5.4
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 1.0
+        metallic: 0.6
+  - name: s-r4-c0
+    components:
+      Transform:
+        translation:
+          - -4.875
+          - 3.45
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.0
+        metallic: 0.8
+  - name: s-r4-c1
+    components:
+      Transform:
+        translation:
+          - -2.925
+          - 3.45
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.2
+        metallic: 0.8
+  - name: s-r4-c2
+    components:
+      Transform:
+        translation:
+          - -0.975
+          - 3.45
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.4
+        metallic: 0.8
+  - name: s-r4-c3
+    components:
+      Transform:
+        translation:
+          - 0.975
+          - 3.45
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.6
+        metallic: 0.8
+  - name: s-r4-c4
+    components:
+      Transform:
+        translation:
+          - 2.925
+          - 3.45
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.8
+        metallic: 0.8
+  - name: s-r4-c5
+    components:
+      Transform:
+        translation:
+          - 4.875
+          - 3.45
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 1.0
+        metallic: 0.8
+  - name: s-r5-c0
+    components:
+      Transform:
+        translation:
+          - -4.875
+          - 1.5
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.0
+        metallic: 1.0
+  - name: s-r5-c1
+    components:
+      Transform:
+        translation:
+          - -2.925
+          - 1.5
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.2
+        metallic: 1.0
+  - name: s-r5-c2
+    components:
+      Transform:
+        translation:
+          - -0.975
+          - 1.5
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.4
+        metallic: 1.0
+  - name: s-r5-c3
+    components:
+      Transform:
+        translation:
+          - 0.975
+          - 1.5
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.6
+        metallic: 1.0
+  - name: s-r5-c4
+    components:
+      Transform:
+        translation:
+          - 2.925
+          - 1.5
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 0.8
+        metallic: 1.0
+  - name: s-r5-c5
+    components:
+      Transform:
+        translation:
+          - 4.875
+          - 1.5
+          - 0.0
+        scale:
+          - 1.05
+          - 1.05
+          - 1.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.8
+          - 0.42
+          - 1.0
+        roughness: 1.0
+        metallic: 1.0
+  - name: beacon
+    components:
+      Transform:
+        translation:
+          - 6.2
+          - 0.0
+          - 4.5
+        scale:
+          - 0.7
+          - 0.7
+          - 0.7
+      Mesh:
+        shape:
+          voxel: voxels/beacon.voxel.yaml
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 12.75
+          - 12.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.85
+          - 0.6
+        intensity: 1.1
+        range: 48.0
+  - name: fill-light
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 6.38
+          - 9.0
+      PointLight:
+        color:
+          - 0.45
+          - 0.6
+          - 1.0
+        intensity: 0.55
+        range: 48.0

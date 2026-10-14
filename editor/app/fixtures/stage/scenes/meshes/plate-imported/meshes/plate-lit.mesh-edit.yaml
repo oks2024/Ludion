@@ -1,0 +1,55 @@
+format: 1
+kind: mesh-edit
+name: plate-lit
+source: mesh-0.mesh.yaml
+out: plate-lit
+ops:
+  - op: paint
+    map: emissive
+    size: 64
+    color:
+      - 0.05
+      - 1.0
+      - 0.35
+    region:
+      sphere:
+        at:
+          - 0.25
+          - 0.0
+          - 0.25
+        radius: 0.15
+        feather: 0.1
+  - op: paint
+    map: emissive
+    color:
+      - 1.0
+      - 0.2
+      - 0.0
+    strength: 0.75
+    region:
+      capsule:
+        points:
+          - - 0.1
+            - 0.0
+            - 0.8
+          - - 0.9
+            - 0.0
+            - 0.8
+        radius: 0.06
+        feather: 0.04
+  - op: paint
+    map: emissive
+    color:
+      - 0.0
+      - 0.4
+      - 1.0
+    region:
+      box:
+        at:
+          - 0.75
+          - 0.0
+          - 0.35
+        size:
+          - 0.2
+          - 0.2
+          - 0.3

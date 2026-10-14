@@ -1,0 +1,69 @@
+# Feature: a skinned character plays a clip cycle chosen by game code. The mannequin
+# (`characters/mannequin.character.yaml`, four Blender-keyed clips) sits at the origin playing `idle`.
+# Bare, this scene shows the rest pose at tick 0; the game half is
+# `crates/ludion-testkit/tests/common/mod.rs`, which crossfades idle -> run -> jump -> run -> spin ->
+# run -> idle on the clips' own `end` events (`ludion docs character-animation`).
+format: 1
+name: "character-cycle - the mannequin cycles idle, run, jump and spin under game code"
+seed: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.7
+          - 3.4
+        rotation:
+          - -4.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 3.0
+          - 2.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 6.0
+        range: 20.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 4.0
+          - 1.0
+          - 4.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.57
+          - 0.6
+          - 1.0
+  - name: mannequin
+    components:
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+        color:
+          - 0.6
+          - 0.45
+          - 0.35
+          - 1.0
+        roughness: 0.8
+      Animation:
+        clip: idle

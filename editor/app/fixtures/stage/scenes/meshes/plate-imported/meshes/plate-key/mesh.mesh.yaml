@@ -1,0 +1,34 @@
+format: 1
+kind: mesh
+name: plate
+positions:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+uvs:
+  - 0.125
+  - 0.125
+  - 0.875
+  - 0.125
+  - 0.875
+  - 0.875
+  - 0.125
+  - 0.875
+base_color_texture:
+  path: "../textures/base.png"
+indices:
+  - 0
+  - 1
+  - 2
+  - 0
+  - 2
+  - 3

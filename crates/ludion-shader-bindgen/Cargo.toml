@@ -1,0 +1,18 @@
+[package]
+name = "ludion-shader-bindgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WGSL reflection (naga-driven memory layouts + binding usage) for the Ludion game engine's shader bindgen. Engine-internal tooling."
+keywords = ["ludion", "wgsl", "naga", "reflection", "shader"]
+categories = ["game-development", "rendering"]
+# Engine-internal dev tooling (Plan/shader-bindgen.md decision 1): never published; excluded from
+# the Phase 9 packaging gate. Run via `cargo run -p ludion-shader-bindgen`, not the `ludion` CLI.
+publish = false
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+# `wgsl-in` for the WGSL front-end; the validator and Layouter are always compiled. No output
+# backend feature — this crate reflects WGSL, it does not translate it.
+naga = { workspace = true, features = ["wgsl-in"] }

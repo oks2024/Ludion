@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ludion editor — drafting table</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --film:#E9ECF0;   /* app background — cool drafting film */
+    --sheet:#F7F9FB;  /* panels — pasted sheets */
+    --line:#C3CAD5;   /* rules / borders */
+    --ink:#29303D;    /* primary text */
+    --dim:#6A7386;    /* secondary text */
+    --draft:#2B5FD9;  /* drafting blue: selection, active tool, dimension lines */
+    --draft-lit:#5C86E6; /* lightened blue for dimension lines on the dark playfield */
+    --red:#C4372B;    /* strictly destructive / dirty */
+    --sheet-2:#EFF2F6; /* subtle inset fill */
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:'Archivo',system-ui,'Segoe UI',sans-serif;
+    background:var(--film);
+    color:var(--ink);
+    font-size:13px;
+    line-height:1.4;
+    height:100vh;
+    overflow:hidden;
+    cursor:default;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:'IBM Plex Mono',ui-monospace,'Cascadia Mono',monospace;font-variant-numeric:tabular-nums}
+
+  /* micro-labels: drawing annotations */
+  .micro{
+    font-size:10px;
+    line-height:1;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--dim);
+    font-weight:600;
+  }
+
+  /* ---- app frame ---- */
+  .app{
+    height:100vh;
+    padding:8px;
+    display:grid;
+    grid-template-rows:auto minmax(0,1fr);
+    gap:8px;
+  }
+
+  .sheet{
+    background:var(--sheet);
+    border:1px solid var(--line);
+    border-radius:2px;
+  }
+
+  /* ---- mini title block header ---- */
+  .tb-head{
+    display:flex;
+    align-items:stretch;
+    border-bottom:1px solid var(--line);
+    min-height:30px;
+  }
+  .tb-head .name{
+    display:flex;align-items:center;gap:8px;
+    padding:0 10px;
+    font-weight:600;
+    font-size:12px;
+    letter-spacing:.02em;
+    border-right:1px solid var(--line);
+    white-space:nowrap;
+  }
+  .tb-head .datum{
+    display:flex;align-items:center;
+    padding:0 10px;
+    color:var(--dim);
+    font-size:11px;
+    margin-left:auto;
+    gap:8px;
+  }
+
+  /* ================= TOP TITLE BLOCK ================= */
+  .titleblock{
+    display:flex;
+    align-items:stretch;
+    flex-wrap:wrap;
+    background:var(--sheet);
+    border:1px solid var(--line);
+    border-radius:2px;
+  }
+  .cell{
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    gap:5px;
+    padding:8px 12px;
+    border-right:1px solid var(--line);
+    min-height:52px;
+  }
+  .cell .val{font-size:12px;color:var(--ink);display:flex;align-items:center;gap:8px}
+
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:2px;overflow:hidden}
+  .seg button{
+    font:inherit;font-size:12px;font-weight:600;
+    border:0;background:var(--sheet);color:var(--dim);
+    padding:4px 11px;cursor:pointer;
+    border-right:1px solid var(--line);
+  }
+  .seg button:last-child{border-right:0}
+  .seg button[aria-pressed="true"]{background:var(--draft);color:#fff}
+
+  .btn{
+    font:inherit;font-size:12px;
+    background:var(--sheet);
+    border:1px solid var(--line);
+    border-radius:2px;
+    color:var(--ink);
+    padding:4px 10px;
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .btn:hover{background:var(--sheet-2)}
+  .btn.glyph{
+    font-family:'IBM Plex Mono',monospace;
+    padding:4px 9px;
+    line-height:1;
+  }
+  .btn.primary{border-color:var(--draft);color:var(--draft);font-weight:600}
+  .btn.primary:hover{background:#eaf0fd}
+  .btn.danger{border-color:var(--red);color:var(--red)}
+  .btn.danger:hover{background:#fbeceb}
+  .btn:disabled{color:#B4BAC5;cursor:default;background:var(--sheet)}
+  .btn:disabled:hover{background:var(--sheet)}
+
+  .in{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12px;
+    border:1px solid var(--line);
+    border-radius:2px;
+    background:#fff;
+    color:var(--ink);
+    padding:3px 6px;
+    border-radius:2px;
+  }
+  .in.w-step{width:34px;text-align:right}
+  .in.w-speed{width:52px;text-align:right}
+  .in.w-path{width:100%}
+
+  /* right formal title block */
+  .maintb{
+    margin-left:auto;
+    display:flex;
+    align-items:stretch;
+    border-left:1px solid var(--line);
+    min-width:360px;
+  }
+  .maintb .rows{display:flex;flex-direction:column;flex:1;min-width:0}
+  .maintb .r{
+    display:flex;align-items:center;gap:10px;
+    padding:6px 12px;
+    border-bottom:1px solid var(--line);
+  }
+  .maintb .r:last-child{border-bottom:0}
+  .maintb .r .k{width:52px;flex:none}
+  .maintb .r .v{flex:1;min-width:0;font-size:12px}
+  .maintb .path{
+    font-family:'IBM Plex Mono',monospace;font-size:12px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;
+  }
+  .rev{color:var(--red);font-weight:600;display:inline-flex;align-items:center;gap:6px}
+  .rev .sq{width:8px;height:8px;background:var(--red);display:inline-block}
+  .maintb .actions{
+    display:flex;flex-direction:column;justify-content:center;gap:6px;
+    padding:8px 12px;border-left:1px solid var(--line);
+  }
+
+  .refresh{
+    font-family:'IBM Plex Mono',monospace;
+    border:1px solid var(--line);background:#fff;border-radius:2px;
+    width:22px;height:22px;line-height:1;cursor:pointer;color:var(--dim);
+    display:inline-flex;align-items:center;justify-content:center;
+  }
+  .refresh:hover{color:var(--draft);border-color:var(--draft)}
+
+  /* ================= WORKSPACE ================= */
+  .workspace{
+    min-height:0;
+    display:grid;
+    grid-template-columns:288px minmax(560px,1fr) 316px;
+    grid-template-rows:minmax(0,1fr);
+    gap:8px;
+  }
+  .workspace .col{height:100%}
+  .col{display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0}
+
+  /* ---- hierarchy ---- */
+  .hierarchy{display:flex;flex-direction:column;min-height:0;flex:1}
+  .tree{overflow-y:auto;padding:4px 0;flex:1}
+  .row{
+    display:flex;align-items:center;gap:8px;
+    padding:3px 10px 3px 0;
+    font-size:12.5px;
+    cursor:pointer;
+    border-left:2px solid transparent;
+  }
+  .row:hover{background:var(--sheet-2)}
+  .row .nm{font-family:'IBM Plex Mono',monospace;font-size:12px}
+  .row .disc{width:12px;text-align:center;color:var(--dim);font-size:10px;flex:none}
+  .row.group>.nm{font-weight:600}
+  .row.sel{
+    background:#e9f0fd;
+    border-left-color:var(--draft);
+  }
+  .row.sel .nm{color:var(--draft);font-weight:600}
+  .indent-1{padding-left:22px}
+  .indent-2{padding-left:40px}
+  .flag{
+    margin-left:auto;
+    color:var(--dim);
+    font-size:10px;
+    letter-spacing:.08em;
+    display:inline-flex;align-items:center;gap:4px;
+    border:1px solid var(--line);border-radius:2px;padding:1px 5px;
+  }
+  .more{
+    padding:5px 10px 5px 40px;color:var(--dim);font-size:11px;font-style:normal;
+    font-family:'IBM Plex Mono',monospace;
+  }
+  .panel-foot{
+    border-top:1px solid var(--line);
+    padding:8px 10px;
+    display:flex;align-items:center;gap:8px;
+  }
+  select.in{font-family:'IBM Plex Mono',monospace;padding:3px 6px;background:#fff}
+
+  /* ---- palette ---- */
+  .pal-body{padding:10px}
+  .grid-btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+  .grid-btns.one{grid-template-columns:1fr 1fr}
+  .pal-sub{margin-top:14px}
+
+  /* ---- viewport ---- */
+  .viewport{display:flex;flex-direction:column;min-height:0;flex:1}
+  .vp-stage{
+    position:relative;
+    flex:1;min-height:0;
+    background:#0d1420;
+    margin:8px;
+    border:1px solid #2a3550;
+    border-radius:2px;
+    overflow:hidden;
+  }
+  .vp-stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .chip{
+    position:absolute;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    padding:3px 7px;
+    border:1px solid #33405f;
+    background:rgba(13,20,32,.82);
+    color:#c7d2e8;
+    border-radius:2px;
+    letter-spacing:.02em;
+  }
+  .chip.tl{top:8px;left:8px}
+  .chip.tr{top:8px;right:8px;color:#8fb0ff;border-color:#3a4d7a}
+  .chip.paused{top:8px;left:50%;transform:translateX(-50%);color:#ffd479;border-color:#5a4d2a;text-transform:uppercase;letter-spacing:.14em;font-size:10px}
+
+  /* ---- gizmo / tool tray ---- */
+  .tray-body{
+    padding:10px;
+    display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+  }
+  .tools{display:inline-flex;border:1px solid var(--line);border-radius:2px;overflow:hidden}
+  .tools button{
+    font:inherit;font-size:12px;font-weight:500;
+    border:0;border-right:1px solid var(--line);
+    background:var(--sheet);color:var(--dim);
+    padding:5px 14px;cursor:pointer;
+  }
+  .tools button:last-child{border-right:0}
+  .tools button[aria-pressed="true"]{background:var(--draft);color:#fff;font-weight:600}
+  .snap-grp{display:flex;align-items:flex-end;gap:20px}
+  .snap{display:flex;flex-direction:column;gap:5px;align-items:flex-start}
+  .hint{
+    margin-left:auto;color:var(--dim);font-size:11px;font-style:normal;
+  }
+  .hint .mono{color:var(--ink)}
+
+  /* ---- inspector ---- */
+  .inspector{display:flex;flex-direction:column;min-height:0;flex:1}
+  .insp-body{overflow-y:auto;flex:1}
+  .subject{
+    padding:9px 12px;border-bottom:1px solid var(--line);
+    display:flex;align-items:baseline;gap:10px;background:var(--sheet-2);
+  }
+  .subject .id{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim);margin-left:auto}
+  .comp{border-bottom:1px solid var(--line)}
+  .comp-h{
+    display:flex;align-items:center;gap:8px;
+    padding:7px 12px;
+    background:#fff;
+  }
+  .comp-h .ct{font-weight:600;font-size:12px}
+  .comp-h .cc{margin-left:auto;color:var(--dim);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+  .comp-body{padding:8px 12px 12px}
+  .field{margin-bottom:9px}
+  .field:last-child{margin-bottom:0}
+  .field>label{display:block;margin-bottom:5px}
+  .axes{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+  .axes.q{grid-template-columns:repeat(4,1fr)}
+  .ax{display:flex;flex-direction:column;gap:3px}
+  .ax .k{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding-left:2px}
+  .ax input{width:100%}
+  .fld-line{display:flex;align-items:center;gap:8px}
+  .swatch{width:16px;height:16px;border:1px solid var(--line);border-radius:2px;flex:none}
+  .tex{
+    font-family:'IBM Plex Mono',monospace;font-size:11.5px;
+    border:1px solid var(--line);background:#fff;border-radius:2px;
+    padding:4px 6px;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+
+  /* focus visibility */
+  a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{
+    outline:2px solid var(--draft);
+    outline-offset:1px;
+  }
+  ::selection{background:#cddcfb}
+
+  /* scrollbars */
+  .tree::-webkit-scrollbar,.insp-body::-webkit-scrollbar{width:10px}
+  .tree::-webkit-scrollbar-thumb,.insp-body::-webkit-scrollbar-thumb{background:var(--line);border:3px solid var(--sheet);border-radius:6px}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+  /* degrade to ~1200 */
+  @media (max-width:1360px){
+    .workspace{grid-template-columns:260px minmax(460px,1fr) 296px}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ===================== MAIN TITLE BLOCK ===================== -->
+  <header class="titleblock" role="banner">
+    <div class="cell">
+      <span class="micro">Connection</span>
+      <span class="val"><span class="mono">ws://127.0.0.1:9411</span></span>
+    </div>
+    <div class="cell">
+      <span class="micro">Engine</span>
+      <span class="val"><span class="mono">ludion 0.6.0</span></span>
+    </div>
+    <div class="cell">
+      <span class="micro">Mode — sim paused</span>
+      <span class="val">
+        <span class="seg" role="group" aria-label="Editor mode">
+          <button aria-pressed="true">Edit</button>
+          <button aria-pressed="false">Play</button>
+        </span>
+      </span>
+    </div>
+    <div class="cell">
+      <span class="micro">Run · <span class="mono" style="text-transform:none;letter-spacing:0">sim.resume</span></span>
+      <span class="val">
+        <button class="btn">Resume</button>
+        <button class="btn">Step</button>
+        <label class="micro" for="ticks" style="align-self:center">ticks</label>
+        <input id="ticks" class="in w-step mono" value="1" aria-label="Step ticks">
+        <label class="micro" for="speed" style="align-self:center">×</label>
+        <input id="speed" class="in w-speed mono" value="1.0" aria-label="Speed multiplier">
+      </span>
+    </div>
+    <div class="cell">
+      <span class="micro">WorldHash @ frame <span class="mono" style="letter-spacing:0">1284</span></span>
+      <span class="val">
+        <span class="mono">9f3a77c1e04b52d8</span>
+        <button class="refresh" title="sim.hash — refresh" aria-label="Refresh WorldHash">&#8635;</button>
+      </span>
+    </div>
+    <div class="cell">
+      <span class="micro">Stream</span>
+      <span class="val"><span class="mono">1080p · 60 fps · 4.2 ms</span></span>
+    </div>
+    <div class="cell">
+      <span class="micro">History</span>
+      <span class="val">
+        <button class="btn glyph" title="Undo" aria-label="Undo">&#8592;</button>
+        <button class="btn glyph" title="Redo (nothing to redo)" aria-label="Redo" disabled>&#8594;</button>
+      </span>
+    </div>
+
+    <!-- formal drawing title block -->
+    <div class="maintb">
+      <div class="rows">
+        <div class="r">
+          <span class="micro k">Sheet</span>
+          <input class="v in w-path mono" aria-label="Save path"
+                 value="games/breakout/scenes/main.scene.yaml"
+                 title="games/breakout/scenes/main.scene.yaml">
+        </div>
+        <div class="r">
+          <span class="micro k">Rev</span>
+          <span class="v"><span class="rev"><span class="sq"></span>unsaved</span></span>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" title="scene.save {path}">Save scene</button>
+        <button class="btn">Disconnect</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== WORKSPACE ===================== -->
+  <div class="workspace">
+
+    <!-- ---------- LEFT COLUMN ---------- -->
+    <div class="col">
+
+      <!-- hierarchy -->
+      <section class="sheet hierarchy" aria-label="Scene hierarchy">
+        <div class="tb-head">
+          <span class="name">Scene</span>
+          <span class="datum"><span class="micro">Entities</span><span class="mono">24</span></span>
+        </div>
+        <div class="tree" role="tree">
+          <div class="row" role="treeitem"><span class="disc">•</span><span class="nm">camera</span></div>
+          <div class="row" role="treeitem"><span class="disc">•</span><span class="nm">key_light</span><span class="flag" title="dangling parent — referenced parent is missing">&#9651; dangling</span></div>
+          <div class="row" role="treeitem"><span class="disc">•</span><span class="nm">fill_light</span></div>
+          <div class="row" role="treeitem"><span class="disc">•</span><span class="nm">ball</span></div>
+          <div class="row" role="treeitem"><span class="disc">•</span><span class="nm">paddle</span></div>
+
+          <div class="row group" role="treeitem" aria-expanded="true"><span class="disc">&#9662;</span><span class="nm">walls</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">wall_left</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">wall_right</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">wall_top</span></div>
+
+          <div class="row group" role="treeitem" aria-expanded="true"><span class="disc">&#9662;</span><span class="nm">bricks</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">brick_00</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">brick_01</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">brick_02</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">brick_03</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">brick_04</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">brick_05</span></div>
+          <div class="row indent-1" role="treeitem"><span class="nm">brick_06</span></div>
+          <div class="row indent-1 sel" role="treeitem" aria-selected="true"><span class="nm">brick_07</span></div>
+          <div class="more">+10 more</div>
+        </div>
+        <div class="panel-foot">
+          <label class="micro" for="reparent">Parent · <span class="mono" style="letter-spacing:0;text-transform:none">entity.reparent</span></label>
+          <select id="reparent" class="in" aria-label="Reparent selection">
+            <option selected>bricks</option>
+            <option>walls</option>
+            <option>(root)</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- palette -->
+      <section class="sheet" aria-label="Palette">
+        <div class="tb-head">
+          <span class="name">Create</span>
+          <span class="datum"><span class="micro">entity.spawn</span></span>
+        </div>
+        <div class="pal-body">
+          <span class="micro">Create entity</span>
+          <div class="grid-btns">
+            <button class="btn">Brick</button>
+            <button class="btn">Paddle</button>
+            <button class="btn">Ball</button>
+            <button class="btn">Point light</button>
+            <button class="btn">Sprite</button>
+            <button class="btn">Empty</button>
+          </div>
+          <div class="pal-sub">
+            <span class="micro">Selection · <span class="mono" style="text-transform:none;letter-spacing:0">brick_07</span></span>
+            <div class="grid-btns">
+              <button class="btn" title="entity.spawn — duplicate">Duplicate</button>
+              <button class="btn danger" title="entity.destroy">Destroy</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ---------- CENTER COLUMN ---------- -->
+    <div class="col">
+
+      <!-- viewport -->
+      <section class="sheet viewport" aria-label="Viewport">
+        <div class="tb-head">
+          <span class="name">Viewport</span>
+          <span class="datum"><span class="micro">HD-2D · edit</span><span class="mono">1080p · 60fps</span></span>
+        </div>
+        <div class="vp-stage">
+          <svg viewBox="0 0 720 460" preserveAspectRatio="xMidYMid meet" role="img"
+               aria-label="Breakout scene: three rows of glowing bricks, paddle and ball, brick_07 selected with a translate gizmo and a blue dimension line reading -2.25, 3.5.">
+            <defs>
+              <radialGradient id="washAmber" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#f0a83e" stop-opacity="0.42"/>
+                <stop offset="60%" stop-color="#f0a83e" stop-opacity="0.10"/>
+                <stop offset="100%" stop-color="#f0a83e" stop-opacity="0"/>
+              </radialGradient>
+              <radialGradient id="washTeal" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#3fc6b6" stop-opacity="0.40"/>
+                <stop offset="60%" stop-color="#3fc6b6" stop-opacity="0.10"/>
+                <stop offset="100%" stop-color="#3fc6b6" stop-opacity="0"/>
+              </radialGradient>
+              <radialGradient id="ballBloom" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#fff6d8" stop-opacity="0.95"/>
+                <stop offset="35%" stop-color="#ffe39a" stop-opacity="0.55"/>
+                <stop offset="100%" stop-color="#ffe39a" stop-opacity="0"/>
+              </radialGradient>
+              <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+                <feGaussianBlur stdDeviation="3.2" result="b"/>
+                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+              <marker id="arrOpen" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                <path d="M8,1 L1,4 L8,7" fill="none" stroke="#f04a3a" stroke-width="1.4"/>
+              </marker>
+              <marker id="arrGreen" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                <path d="M8,1 L1,4 L8,7" fill="none" stroke="#4bd06a" stroke-width="1.4"/>
+              </marker>
+              <marker id="dimArrow" markerWidth="12" markerHeight="10" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                <path d="M9,1 L1,4 L9,7 Z" fill="#5C86E6"/>
+              </marker>
+            </defs>
+
+            <!-- playfield -->
+            <rect x="0" y="0" width="720" height="460" fill="#0d1420"/>
+            <!-- floor grid, faint -->
+            <g stroke="#1a2438" stroke-width="1">
+              <line x1="0" y1="115" x2="720" y2="115"/><line x1="0" y1="230" x2="720" y2="230"/>
+              <line x1="0" y1="345" x2="720" y2="345"/>
+              <line x1="180" y1="0" x2="180" y2="460"/><line x1="360" y1="0" x2="360" y2="460"/>
+              <line x1="540" y1="0" x2="540" y2="460"/>
+            </g>
+            <!-- point-light washes -->
+            <rect x="-40" y="-40" width="440" height="380" fill="url(#washAmber)"/>
+            <rect x="360" y="-30" width="420" height="360" fill="url(#washTeal)"/>
+
+            <!-- bricks: 6 columns × 3 rows, centered (x = 108 + n·86, even 108 margins) -->
+            <g filter="url(#glow)">
+              <!-- row 1 -->
+              <rect x="108" y="64"  width="74" height="24" rx="2" fill="#e8a33d"/>
+              <rect x="194" y="64"  width="74" height="24" rx="2" fill="#3fb6a8"/>
+              <rect x="280" y="64"  width="74" height="24" rx="2" fill="#e8a33d"/>
+              <rect x="366" y="64"  width="74" height="24" rx="2" fill="#3fb6a8"/>
+              <rect x="452" y="64"  width="74" height="24" rx="2" fill="#e8a33d"/>
+              <rect x="538" y="64"  width="74" height="24" rx="2" fill="#3fb6a8"/>
+              <!-- row 2 (brick_07 is column 2, drawn separately below) -->
+              <rect x="108" y="100" width="74" height="24" rx="2" fill="#3fb6a8"/>
+              <rect x="280" y="100" width="74" height="24" rx="2" fill="#3fb6a8"/>
+              <rect x="366" y="100" width="74" height="24" rx="2" fill="#e8a33d"/>
+              <rect x="452" y="100" width="74" height="24" rx="2" fill="#3fb6a8"/>
+              <rect x="538" y="100" width="74" height="24" rx="2" fill="#e8a33d"/>
+              <!-- row 3 -->
+              <rect x="108" y="136" width="74" height="24" rx="2" fill="#e8a33d"/>
+              <rect x="194" y="136" width="74" height="24" rx="2" fill="#3fb6a8"/>
+              <rect x="280" y="136" width="74" height="24" rx="2" fill="#e8a33d"/>
+              <rect x="366" y="136" width="74" height="24" rx="2" fill="#3fb6a8"/>
+              <rect x="452" y="136" width="74" height="24" rx="2" fill="#e8a33d"/>
+              <rect x="538" y="136" width="74" height="24" rx="2" fill="#3fb6a8"/>
+            </g>
+
+            <!-- selected brick_07 (amber, with selection outline) -->
+            <rect x="194" y="100" width="74" height="24" rx="2" fill="#f0b455"/>
+            <rect x="190.5" y="96.5" width="81" height="31" rx="2" fill="none"
+                  stroke="#5C86E6" stroke-width="1.4" stroke-dasharray="5 3"/>
+
+            <!-- paddle -->
+            <rect x="300" y="410" width="120" height="16" rx="4" fill="#cfd8ea"/>
+            <rect x="300" y="410" width="120" height="6" rx="3" fill="#eef3ff" opacity="0.65"/>
+
+            <!-- ball with bloom -->
+            <circle cx="360" cy="356" r="26" fill="url(#ballBloom)"/>
+            <circle cx="360" cy="356" r="7" fill="#fff7e0"/>
+
+            <!-- ===== TRANSLATE GIZMO on brick_07 (center 231,112) ===== -->
+            <!-- Y (green, up) -->
+            <line x1="231" y1="112" x2="231" y2="60" stroke="#4bd06a" stroke-width="2" marker-end="url(#arrGreen)"/>
+            <!-- X (red, right) -->
+            <line x1="231" y1="112" x2="291" y2="112" stroke="#f04a3a" stroke-width="2" marker-end="url(#arrOpen)"/>
+            <!-- Z dot (blue) -->
+            <circle cx="231" cy="112" r="4.5" fill="#3f7bff" stroke="#0d1420" stroke-width="1"/>
+
+            <!-- ===== SIGNATURE: blue dimension line, brick_07 translation (-2.25, 3.5) ===== -->
+            <g stroke="#5C86E6" fill="#5C86E6" font-family="'IBM Plex Mono',monospace">
+              <!-- datum crosshair at (420,300) -->
+              <g stroke-width="1.2">
+                <line x1="411" y1="300" x2="429" y2="300"/>
+                <line x1="420" y1="291" x2="420" y2="309"/>
+              </g>
+              <circle cx="420" cy="300" r="2.2" stroke="none"/>
+              <text x="426" y="315" font-size="10" stroke="none" fill="#7ea0ea">datum 0,0</text>
+
+              <!-- X dimension: extension lines + horizontal dim line at y=232 -->
+              <g stroke-width="1" stroke-dasharray="0">
+                <line x1="231" y1="128" x2="231" y2="248"/>
+                <line x1="420" y1="300" x2="420" y2="248"/>
+              </g>
+              <line x1="231" y1="232" x2="420" y2="232" stroke-width="1.3"
+                    marker-start="url(#dimArrow)" marker-end="url(#dimArrow)"/>
+              <rect x="296" y="221" width="60" height="16" fill="#0d1420" stroke="none"/>
+              <text x="326" y="233" font-size="11" text-anchor="middle" stroke="none">-2.25</text>
+
+              <!-- Y dimension: vertical dim line at x=56, in the clear margin left of the field
+                   (extension line breaks where the neighbouring brick interrupts it) -->
+              <g stroke-width="1">
+                <line x1="190" y1="112" x2="184" y2="112"/>
+                <line x1="106" y1="112" x2="40" y2="112"/>
+                <line x1="420" y1="300" x2="40" y2="300"/>
+              </g>
+              <line x1="56" y1="112" x2="56" y2="300" stroke-width="1.3"
+                    marker-start="url(#dimArrow)" marker-end="url(#dimArrow)"/>
+              <rect x="41" y="198" width="30" height="16" fill="#0d1420" stroke="none"/>
+              <text x="56" y="210" font-size="11" text-anchor="middle" stroke="none">3.5</text>
+
+              <!-- leader + combined callout (leader threads the gap between brick columns) -->
+              <line x1="268" y1="124" x2="283" y2="175" stroke-width="1"/>
+              <rect x="283" y="166" width="152" height="18" fill="#0d1420" stroke="#3a4d7a" stroke-width="1"/>
+              <text x="291" y="179" font-size="11" stroke="none">brick_07 (-2.25, 3.5)</text>
+            </g>
+          </svg>
+
+          <span class="chip tl">frame 1284 · 60 fps · 4.2 ms</span>
+          <span class="chip paused">paused · edit</span>
+          <span class="chip tr">brick_07 · translate</span>
+        </div>
+      </section>
+
+      <!-- gizmo tool tray -->
+      <section class="sheet" aria-label="Gizmo tools">
+        <div class="tb-head">
+          <span class="name">Tools</span>
+          <span class="datum"><span class="micro">Active</span><span class="mono">translate</span></span>
+        </div>
+        <div class="tray-body">
+          <div class="tools" role="group" aria-label="Transform tool">
+            <button aria-pressed="true">Translate</button>
+            <button aria-pressed="false">Rotate</button>
+            <button aria-pressed="false">Scale</button>
+          </div>
+
+          <div class="snap-grp">
+            <!-- grid snap as a dimension annotation -->
+            <div class="snap">
+              <span class="micro">Grid snap</span>
+              <svg width="130" height="24" viewBox="0 0 130 24" role="img" aria-label="Grid snap 0.25 units">
+                <g stroke="var(--draft)" stroke-width="1.2">
+                  <line x1="4" y1="4" x2="4" y2="20"/>
+                  <line x1="126" y1="4" x2="126" y2="20"/>
+                  <line x1="4" y1="12" x2="46" y2="12"/>
+                  <line x1="84" y1="12" x2="126" y2="12"/>
+                  <path d="M12,8 L4,12 L12,16" fill="none"/>
+                  <path d="M118,8 L126,12 L118,16" fill="none"/>
+                </g>
+                <text x="65" y="16" text-anchor="middle" font-family="'IBM Plex Mono',monospace"
+                      font-size="12" fill="var(--ink)">0.25</text>
+              </svg>
+            </div>
+            <!-- angle snap as an arc glyph -->
+            <div class="snap">
+              <span class="micro">Angle snap</span>
+              <svg width="66" height="24" viewBox="0 0 66 24" role="img" aria-label="Angle snap 15 degrees">
+                <g stroke="var(--draft)" stroke-width="1.2" fill="none">
+                  <line x1="6" y1="20" x2="34" y2="20"/>
+                  <line x1="6" y1="20" x2="32" y2="8"/>
+                  <path d="M26,20 A20,20 0 0 0 22.5,12.6"/>
+                </g>
+                <text x="40" y="15" font-family="'IBM Plex Mono',monospace" font-size="12" fill="var(--ink)">15&#176;</text>
+              </svg>
+            </div>
+          </div>
+
+          <p class="hint">Drag an axis to move · <span class="mono">Esc</span> cancels</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- ---------- RIGHT COLUMN ---------- -->
+    <div class="col">
+      <section class="sheet inspector" aria-label="Inspector">
+        <div class="tb-head">
+          <span class="name">Inspector</span>
+          <span class="datum"><span class="micro">Subject</span><span class="mono">brick_07</span></span>
+        </div>
+        <div class="subject">
+          <span class="mono" style="font-weight:600">brick_07</span>
+          <span class="id">id 12 · gen 3</span>
+        </div>
+        <div class="insp-body">
+
+          <!-- Transform -->
+          <div class="comp">
+            <div class="comp-h"><span class="ct">Transform</span><span class="cc">component.set</span></div>
+            <div class="comp-body">
+              <div class="field">
+                <label class="micro">Translation</label>
+                <div class="axes">
+                  <div class="ax"><span class="k">x</span><input class="in mono" value="-2.25"></div>
+                  <div class="ax"><span class="k">y</span><input class="in mono" value="3.5"></div>
+                  <div class="ax"><span class="k">z</span><input class="in mono" value="0"></div>
+                </div>
+              </div>
+              <div class="field">
+                <label class="micro">Rotation (quat)</label>
+                <div class="axes q">
+                  <div class="ax"><span class="k">x</span><input class="in mono" value="0"></div>
+                  <div class="ax"><span class="k">y</span><input class="in mono" value="0"></div>
+                  <div class="ax"><span class="k">z</span><input class="in mono" value="0"></div>
+                  <div class="ax"><span class="k">w</span><input class="in mono" value="1"></div>
+                </div>
+              </div>
+              <div class="field">
+                <label class="micro">Scale</label>
+                <div class="axes">
+                  <div class="ax"><span class="k">x</span><input class="in mono" value="1.5"></div>
+                  <div class="ax"><span class="k">y</span><input class="in mono" value="0.6"></div>
+                  <div class="ax"><span class="k">z</span><input class="in mono" value="1"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sprite -->
+          <div class="comp">
+            <div class="comp-h"><span class="ct">Sprite</span><span class="cc">component.set</span></div>
+            <div class="comp-body">
+              <div class="field">
+                <label class="micro">Texture</label>
+                <div class="tex" title="textures/brick_amber.qoi">textures/brick_amber.qoi</div>
+              </div>
+              <div class="field">
+                <label class="micro">Tint (rgba)</label>
+                <div class="fld-line">
+                  <span class="swatch" style="background:rgba(255,184,79,1)" aria-hidden="true"></span>
+                  <span class="mono">[1.0, 0.72, 0.31, 1.0]</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Health -->
+          <div class="comp">
+            <div class="comp-h"><span class="ct">Health</span><span class="cc">component.set</span></div>
+            <div class="comp-body">
+              <div class="field" style="margin-bottom:0">
+                <label class="micro" for="hits">hits_remaining</label>
+                <input id="hits" class="in mono" value="2" style="width:64px">
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

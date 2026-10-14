@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ludion editor — design directions</title>
+<style>
+  :root {
+    --ink: #22211e;
+    --paper: #f0efec;
+    --muted: #6d6a63;
+    --line: #d5d2cb;
+  }
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font: 15px/1.55 "Segoe UI", system-ui, sans-serif;
+    padding: 48px clamp(24px, 6vw, 96px) 96px;
+    max-width: 1100px;
+    margin-inline: auto;
+  }
+  header { margin-bottom: 40px; }
+  h1 {
+    font-family: Bahnschrift, "Segoe UI", sans-serif;
+    font-weight: 600;
+    font-size: 28px;
+    letter-spacing: 0.01em;
+  }
+  h2 {
+    font-family: Bahnschrift, "Segoe UI", sans-serif;
+    font-weight: 600;
+    font-size: 16px;
+    margin: 44px 0 14px;
+  }
+  h2 span { color: var(--muted); font-weight: 400; }
+  header p { color: var(--muted); margin-top: 6px; max-width: 62ch; }
+  ol { list-style: none; padding: 0; display: grid; gap: 16px; }
+  li a {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 20px;
+    padding: 20px 22px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #fff;
+    color: inherit;
+    text-decoration: none;
+    align-items: center;
+  }
+  li a:hover, li a:focus-visible { border-color: var(--ink); outline: none; }
+  li a:focus-visible { box-shadow: 0 0 0 2px var(--ink); }
+  .swatches { display: flex; gap: 4px; }
+  .swatches span { width: 20px; height: 44px; border-radius: 2px; display: block; }
+  .name {
+    font-family: Bahnschrift, "Segoe UI", sans-serif;
+    font-weight: 600;
+    font-size: 17px;
+  }
+  .pitch { color: var(--muted); font-size: 14px; margin-top: 2px; }
+  .archive li a { opacity: 0.72; }
+  .archive li a:hover { opacity: 1; }
+  @media (max-width: 640px) {
+    li a { grid-template-columns: 1fr; gap: 10px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ludion editor — design directions</h1>
+  <p>The same product in every mock: the Level Designer view, a live vigil session, and the
+  terminal drawer hosting per-view Claude instances. Only the design language changes.</p>
+</header>
+
+<h2>Round 2 — modern product language</h2>
+<ol>
+  <li><a href="06-halo.html">
+    <span class="swatches"><span style="background:#0E1014"></span><span style="background:#161B22"></span><span style="background:#3D7EFF"></span><span style="background:#E8ECF2"></span><span style="background:#34C98E"></span></span>
+    <span><span class="name">06 · Halo</span>
+    <span class="pitch">Canvas-first: the rendered scene runs edge-to-edge and every panel floats above it as frosted glass — Rive/Spline energy, minimal chrome.</span></span>
+  </a></li>
+  <li><a href="07-meridian.html">
+    <span class="swatches"><span style="background:#08090B"></span><span style="background:#0F1114"></span><span style="background:#16181D"></span><span style="background:#6E7BFF"></span><span style="background:#EDEEF2"></span></span>
+    <span><span class="name">07 · Meridian</span>
+    <span class="pitch">Linear-grade layered monochrome, keyboard-first — shown with the command palette open: every capability is a command, made visible.</span></span>
+  </a></li>
+  <li><a href="08-ensemble.html">
+    <span class="swatches"><span style="background:#0C0E12"></span><span style="background:#13161B"></span><span style="background:#4FD1C5"></span><span style="background:#9F7AEA"></span><span style="background:#F6AD55"></span></span>
+    <span><span class="name">08 · Ensemble</span>
+    <span class="pitch">AI-native presence cockpit — Figma-multiplayer for human + Claude world-building: collaborator rail, agent work-regions in the viewport, live command ticker.</span></span>
+  </a></li>
+  <li><a href="09-prism.html">
+    <span class="swatches"><span style="background:#0A0C11"></span><span style="background:#121520"></span><span style="background:#2DD4BF"></span><span style="background:#8B5CF6"></span><span style="background:#EC4899"></span></span>
+    <span><span class="name">09 · Prism</span>
+    <span class="pitch">One living gradient thread — teal→violet→magenta — carries selection, meters, and the active view through an otherwise calm dark UI.</span></span>
+  </a></li>
+  <li><a href="10-slate.html">
+    <span class="swatches"><span style="background:#1B1D1E"></span><span style="background:#202324"></span><span style="background:#7CB8FF"></span><span style="background:#C8A97E"></span><span style="background:#E4E6E4"></span></span>
+    <span><span class="name">10 · Slate</span>
+    <span class="pitch">Zed-class dense speed tool — warm graphite, borderless separation, 4px grid, and a live frame-time sparkline in the status bar.</span></span>
+  </a></li>
+</ol>
+
+<h2>Round 1 — concept metaphors <span>(set aside)</span></h2>
+<ol class="archive">
+  <li><a href="01-pressure-vessel.html">
+    <span class="swatches"><span style="background:#0B1518"></span><span style="background:#17343A"></span><span style="background:#7FE8D9"></span><span style="background:#B08D4A"></span><span style="background:#C9D6D4"></span></span>
+    <span><span class="name">01 · Pressure Vessel</span>
+    <span class="pitch">The Cartesian diver as an instrument — glass plates, phosphor data, brass hardware, gauge dials.</span></span>
+  </a></li>
+  <li><a href="02-cyanotype.html">
+    <span class="swatches"><span style="background:#0C2440"></span><span style="background:#123055"></span><span style="background:#E8EEF6"></span><span style="background:#4C6E96"></span><span style="background:#F2D24B"></span></span>
+    <span><span class="name">02 · Cyanotype</span>
+    <span class="pitch">The whole app as a technical blueprint — Prussian blue, white ink, dimension lines, title block.</span></span>
+  </a></li>
+  <li><a href="03-guildhall.html">
+    <span class="swatches"><span style="background:#241B12"></span><span style="background:#171009"></span><span style="background:#E8A84C"></span><span style="background:#E4D6B8"></span><span style="background:#5FA084"></span></span>
+    <span><span class="name">03 · Guildhall</span>
+    <span class="pitch">The tool wears the game's world — lantern-lit workshop, timber, brass nameplates, XP-bar meters.</span></span>
+  </a></li>
+  <li><a href="04-plaintext.html">
+    <span class="swatches"><span style="background:#16130E"></span><span style="background:#6FB8A8"></span><span style="background:#A8C87C"></span><span style="background:#E0B061"></span><span style="background:#F2E8D5"></span></span>
+    <span><span class="name">04 · Plaintext</span>
+    <span class="pitch">Text-as-truth taken literally — the editor as one annotated document; the inspector is YAML.</span></span>
+  </a></li>
+  <li><a href="05-fascia.html">
+    <span class="swatches"><span style="background:#D8D5CE"></span><span style="background:#E6E4DE"></span><span style="background:#C6C2BA"></span><span style="background:#2B2A27"></span><span style="background:#E8641B"></span></span>
+    <span><span class="name">05 · Fascia</span>
+    <span class="pitch">Braun instrument fascia — light machined gray, switchgear, one signal orange, dark terminal bay.</span></span>
+  </a></li>
+</ol>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# Feature: breakout's font table (`kind: fonts`) — the pause menu draws with `body`.
+format: 1
+kind: fonts
+fonts:
+  body: fonts/inter.font.yaml

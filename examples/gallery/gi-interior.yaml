@@ -1,0 +1,270 @@
+# Feature: GI wave 1 — baked sky visibility, the calibration scene
+# (`Plan/gi-wave1-sky-visibility.md` §9). A sealed room — four walls, a roof, a floor — with one
+# open doorway, framed from a back corner so the golden shows exactly three things and nothing
+# else: the walls leak no sky, a wedge of sky light lands on the floor at the door, and the back
+# corner the camera stands in is dark. There is deliberately no `DirectionalLight`: the only
+# large-scale light is the bright sky, so the image IS the `GiVolume`'s product rather than a
+# shadow map's.
+#
+# The torch is emissive and, with `bounce: 1.0` (GI wave 2), lights the room: its own wall pools
+# warm and the floor beneath it picks up an orange cast. The mover carries a dim short-range
+# `PointLight` and is marked `GiDynamic` (GI wave 3'): its light is injected per frame instead of
+# baked — live at the default quality, absent at `low` — and its emissive sphere neither occludes
+# the probe rays nor deposits into the voxelization, so it no longer contributes to the static bake
+# at all. The back corner's faint blue tint is now the injected term, replaying the bake's own
+# cached hits through the mover's current position every frame; the corner stays uncontaminated by
+# anything else because leak control is inherited from that same cached hit set, not rebuilt for
+# the dynamic term. The mover is kept out of the doorway wedge so it cannot flatter the sky read.
+#
+# `cell_size`, `probe_spacing` and `normal_bias` were picked off contact sheets, not by taste — see
+# `Plan/artifacts/gi-wave1-sweeps.md` and the three `gi-wave1-*.png` sheets beside it.
+#
+# The only authored `PostProcess` field is a 0.002 `lift`. Bounce now lifts much of the interior on
+# its own, but a fully-occluded surface still receives exactly zero ambient: without `lift`, 4.0% of
+# the frame's channel samples still sit on the black rail (`clipped_low`, against the 2% ceiling in
+# `budgets/image-stats-windows.toml`) — still doing real work, not inert. At `lift: 0` this component
+# is byte-identical to authoring none, so the grade is the whole of what it does here.
+format: 1
+name: "gi-interior - GI wave 1: baked sky visibility in a sealed room with one doorway"
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.18
+          - 0.36
+          - 0.85
+        sky_horizon:
+          - 0.62
+          - 0.74
+          - 0.95
+        sky_ground:
+          - 0.22
+          - 0.2
+          - 0.17
+        ibl_intensity: 1.8
+      PostProcess:
+        lift:
+          - 0.002
+          - 0.002
+          - 0.002
+      GiVolume:
+        cell_size: 0.25
+        probe_spacing: 0.5
+        normal_bias: 0.25
+        sky_visibility: 1.0
+        bounce: 1.0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 2.9
+          - 3.5
+        rotation:
+          - -24.44
+          - 37.28
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 62.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.25
+          - 0.0
+        scale:
+          - 24.0
+          - 0.5
+          - 24.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.52
+          - 0.48
+          - 1.0
+        roughness: 0.9
+  - name: wall-north
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - 4.25
+        scale:
+          - 9.0
+          - 4.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.58
+          - 0.54
+          - 1.0
+        roughness: 0.9
+  - name: wall-west
+    components:
+      Transform:
+        translation:
+          - -4.25
+          - 2.0
+          - 0.0
+        scale:
+          - 0.5
+          - 4.0
+          - 8.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.58
+          - 0.54
+          - 1.0
+        roughness: 0.9
+  - name: wall-east
+    components:
+      Transform:
+        translation:
+          - 4.25
+          - 2.0
+          - 0.0
+        scale:
+          - 0.5
+          - 4.0
+          - 8.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.58
+          - 0.54
+          - 1.0
+        roughness: 0.9
+  - name: wall-south-left
+    components:
+      Transform:
+        translation:
+          - -3.25
+          - 2.0
+          - -4.25
+        scale:
+          - 2.5
+          - 4.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.58
+          - 0.54
+          - 1.0
+        roughness: 0.9
+  - name: wall-south-right
+    components:
+      Transform:
+        translation:
+          - 3.25
+          - 2.0
+          - -4.25
+        scale:
+          - 2.5
+          - 4.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.58
+          - 0.54
+          - 1.0
+        roughness: 0.9
+  - name: wall-south-lintel
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.6
+          - -4.25
+        scale:
+          - 4.0
+          - 0.8
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.58
+          - 0.54
+          - 1.0
+        roughness: 0.9
+  - name: roof
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.25
+          - 0.0
+        scale:
+          - 9.0
+          - 0.5
+          - 9.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.48
+          - 0.45
+          - 1.0
+        roughness: 0.9
+  - name: torch
+    components:
+      Transform:
+        translation:
+          - -3.7
+          - 1.9
+          - -1.0
+        scale:
+          - 0.3
+          - 0.9
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.62
+          - 0.28
+          - 1.0
+        emissive: 4.0
+  - name: mover
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 1.5
+          - -2.4
+        scale:
+          - 0.3
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: sphere
+        color:
+          - 0.7
+          - 0.82
+          - 1.0
+          - 1.0
+        roughness: 0.4
+        emissive: 1.2
+      PointLight:
+        color:
+          - 0.55
+          - 0.75
+          - 1.0
+        intensity: 0.35
+        range: 3.5
+      GiDynamic: {}

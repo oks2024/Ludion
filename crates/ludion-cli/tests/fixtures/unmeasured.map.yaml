@@ -1,0 +1,13 @@
+format: 1
+kind: map
+name: unmeasured
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+bounds:
+  - 4
+  - 2
+fragments:
+  - unmeasured-frag.yaml

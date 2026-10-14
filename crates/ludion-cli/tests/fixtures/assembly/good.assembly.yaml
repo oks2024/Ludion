@@ -1,0 +1,41 @@
+format: 1
+kind: assembly
+name: fixture
+size:
+  - 4
+  - 3
+  - 2
+palette:
+  A:
+    color:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 1.0
+  B:
+    color:
+      - 0.0
+      - 1.0
+      - 0.0
+      - 1.0
+parts:
+  - name: body
+    file: parts/body.part.yaml
+    place:
+      - 0
+      - 0
+      - 0
+  - name: arm
+    file: parts/arm.part.yaml
+    parent: body
+    place:
+      - 3
+      - 1
+      - 1
+    pivot:
+      - 1.0
+      - 0.5
+      - 0.0
+    mirror: x
+clips:
+  walk: anims/walk.anim.yaml

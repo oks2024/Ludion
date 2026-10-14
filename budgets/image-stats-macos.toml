@@ -1,0 +1,163 @@
+# Image-defect baseline — the macOS golden set, measured on the pinned Apple M4 (Metal) at Lore
+# rev 446, once the volumetric medium's waves 1-4 and the night moon retune had been blessed here.
+#
+# Checked with:
+#
+#   ludion image-stats examples/gallery/goldens/macos/*.png --check budgets/image-stats-macos.toml
+#
+# The macOS twin of `budgets/image-stats-windows.toml`, and it carries that file's rules verbatim
+# because they are properties of the metrics, not of a platform:
+#
+# - These are regression tripwires, and unlike a profile budget they are a **pure function of
+#   committed bytes** — they do not move at all until a golden is re-blessed. So each ceiling sits
+#   just above its measured value (measurement + 0.02, clamped at the metric's own 1.0), not at 2x a
+#   median. A breach means the image genuinely got worse, never machine noise.
+# - All four metrics run higher-is-worse and live in [0, 1]; see `ludion explain L4010` and the
+#   `ludion-testkit` topic for what each one counts. Every entry is a ceiling, and an omitted metric
+#   is simply not checked.
+# - **These are not targets.** A wave that improves an image re-records its entry downward. Relaxing
+#   a ceiling upward is a re-calibration event and needs the same justification a golden re-bless
+#   does.
+# - Like its twin, this file is an arc instrument rather than a CI gate: neither `check.mjs`,
+#   `ci.yml` nor `ci/teamcity/` invokes `image-stats --check` on either platform. It is run
+#   deliberately by a wave that touches the imaging.
+#
+# **Why a per-OS file at all, when the two GPUs render the same scenes:** because they do not render
+# them to the same bytes, and one metric is sharply sensitive to the difference. Measured across the
+# whole set, the M4 and the RTX 3090 agree to within 0.02 of banding on fifteen of nineteen images
+# and to within 0.003 of aliasing on all nineteen — the same tiny, uniform cross-GPU drift the
+# goldens themselves show. The exceptions are all banding, all on flat-background content, and they
+# have one cause: `banding_score` counts the constant-luma runs an 8-bit gradient quantizes into, and
+# on a near-flat field the output dither's sub-LSB stipple decides which cells round up. A drift of a
+# fraction of an LSB — invisible, and well inside the SSIM the goldens pass at — reshuffles that
+# decision wholesale. `text.png` is the extreme case: 0.0090 on the 3090, 0.2632 here, a 29x ratio on
+# two images a human cannot tell apart. It is the metric's designed sensitivity landing on content
+# with nothing to measure, not a macOS rendering defect, and it is precisely why these numbers are
+# keyed per-OS rather than shared.
+
+# Applies to every image. One image in the gallery crushes a channel to black at all — `post-full`,
+# at 0.0030, where the authored grade puts a floor of a few blue levels under the moon's shadow bands
+# and lets red and green run out from under it. The worst white-clip is `lantern-sheet`'s at 0.0015.
+# Both figures match the RTX 3090's exactly: clipping is a property of the authored grade, and the
+# cross-GPU drift is far too small to push a channel over a rail.
+clipped_low  = 0.0200
+clipped_high = 0.0200
+
+# Banding and aliasing are strongly scene-dependent — a flat-background text scene and a sky-gradient
+# scene have nothing to say to each other — so each image carries its own pair. The measured value is
+# in the comment; the ceiling is that plus 0.02, clamped at 1.0.
+
+[images."billboards.png"]
+banding_score = 0.2996   # 0.2796
+edge_aliasing = 1.0000   # 0.9932
+
+[images."breakout-mock.png"]
+banding_score = 0.3001   # 0.2801
+edge_aliasing = 0.9734   # 0.9534
+
+[images."colliders.png"]
+banding_score = 0.3144   # 0.2944 (was 0.2950)
+edge_aliasing = 0.9737   # 0.9537 (was 0.9689)
+
+[images."lantern-sheet.png"]
+banding_score = 0.3278   # 0.3078
+edge_aliasing = 1.0000   # 0.9988
+
+[images."lights.png"]
+banding_score = 0.2558   # 0.2358
+edge_aliasing = 0.9896   # 0.9696
+
+# Still the lowest aliasing in the set by a wide margin, exactly as on the RTX 3090: a scalar-material
+# PBR park is mostly smooth shaded curvature, which is the content this renderer already handles best.
+[images."material-park.png"]
+banding_score = 0.2450   # 0.2250
+edge_aliasing = 0.6825   # 0.6625
+
+[images."mesh-asset.png"]
+banding_score = 0.2964   # 0.2764
+edge_aliasing = 0.9939   # 0.9739
+
+[images."meshes.png"]
+banding_score = 0.3093   # 0.2893
+edge_aliasing = 0.9857   # 0.9657
+
+# The scene the output dither was aimed at, and the two platforms agree to 0.0007 on it — a real
+# gradient has enough structure that the dither's decision is not a coin flip, which is the contrast
+# with `text.png` in the header.
+[images."night-sky.png"]
+banding_score = 0.3074   # 0.2874
+edge_aliasing = 0.7738   # 0.7546
+
+# The volumetric medium's testbed, first blessed on this platform at rev 446. The lowest pair in the
+# set on both axes: a night street canyon is almost entirely soft moonlit gradient with few hard
+# edges, so there is little for either metric to find. `edge_aliasing` reads exactly 0.0000, the only
+# image in the set that does; the ceiling is the shared floor of 0.02 rather than 0.0.
+[images."night-street.png"]
+banding_score = 0.0384   # 0.0184
+edge_aliasing = 0.0200   # 0.0000
+
+[images."occlusion-fade.png"]
+banding_score = 0.2406   # 0.2206
+edge_aliasing = 1.0000   # 0.9998
+
+# The post-process arc's all-on scene, and the only one authoring the whole `PostProcess` roster
+# rather than inheriting the defaults — so its numbers are a statement about the roster composing
+# rather than about the engine's shipped imaging. Both entries sit far below the rest of the set for
+# reasons the Windows twin records at length and which are properties of the roster, not the GPU:
+# the authored `grain: 0.012` genuinely breaks the constant-luma runs banding counts, while the
+# aliasing figure is mostly the metric being fooled by the depth of field replacing real detail with
+# a gradient. Nothing here anti-aliases. Both agree with the RTX 3090 to within 0.002.
+[images."post-full.png"]
+banding_score = 0.0934   # 0.0734
+edge_aliasing = 0.2306   # 0.2106
+
+# One of the four flat-background images where the dither's stipple decides the metric: 0.3250 here
+# against 0.1830 on the 3090. See the header.
+[images."sprites.png"]
+banding_score = 0.3450   # 0.3250
+edge_aliasing = 1.0000   # 1.0000
+
+[images."sun-shadows.png"]
+banding_score = 0.3108   # 0.2908
+edge_aliasing = 0.9289   # 0.9089
+
+# The header's extreme case: 0.2632 here against 0.0090 on the RTX 3090. A flat background carries no
+# gradient to contour, so there is no real banding on either platform — what the metric is reading is
+# which way a sub-LSB dither stipple rounded, and the two GPUs disagree on that everywhere at once.
+# Aliasing stays fully saturated on both because glyph edges are bare steps, every one.
+[images."text.png"]
+banding_score = 0.2832   # 0.2632
+edge_aliasing = 1.0000   # 1.0000
+
+[images."tilemap.png"]
+banding_score = 0.3081   # 0.2881
+edge_aliasing = 1.0000   # 0.9959
+
+# The same scene at two resolutions - 960x540 and 1920x1080. Their closeness is the metrics'
+# resolution-stability holding on real content rather than on a fixture.
+[images."ui-hud.png"]
+banding_score = 0.3108   # 0.2908
+edge_aliasing = 1.0000   # 0.9984
+
+[images."ui-hud-1080.png"]
+banding_score = 0.2546   # 0.2346
+edge_aliasing = 1.0000   # 0.9998
+
+[images."voxel-model.png"]
+banding_score = 0.2760   # 0.2560
+edge_aliasing = 0.9776   # 0.9576
+
+# --- vigil's districts ---------------------------------------------------------------------------
+#
+# Recorded here but not checkable by this file, for the reason the Windows twin gives: a district
+# scene names vigil's own components, so it renders only through the game registry, which the CLI
+# cannot supply. The one figure available without a scratch harness is the committed 960x540
+# `district-plaza` golden, re-blessed here at rev 446 (moon retune + medium + `ssao_direct`):
+#
+#   district-plaza (macOS)    banding 0.0205  edge 0.7857  low 0.0008  high 0.0015
+#   district-plaza (Windows)  banding 0.0208  edge 0.7886  low 0.0008  high 0.0015
+#
+# The two platforms agree to 0.003 on every metric — a district is dense lit geometry with no large
+# flat field, so the dither-stipple sensitivity the header describes has nothing to act on. The
+# market and cathedral figures in the Windows twin are pre-flip and stale on both platforms; whoever
+# rebuilds that harness should measure all three on both.

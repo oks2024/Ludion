@@ -1,0 +1,101 @@
+---
+description: The kind: path document, PathSampler, and PathFollower moving platforms on gameplay time
+---
+
+# Paths and path followers
+
+**Scope:** a spline authored as text (`kind: path`), sampling it by arc length from game code, and
+the engine's `PathFollower` that rides an entity along it. Component defaults live in
+`ludion docs components-fx`; gameplay time is `ludion docs game-clock`.
+
+## The loop
+
+1. Write `paths/lift.path.yaml` under the content root (format below).
+2. `ludion check-scene paths/lift.path.yaml` — validates it, `L1213`/`L1214` with JSON Pointers.
+3. Put `PathFollower: { path: paths/lift.path.yaml, speed: 2.0 }` on an entity in the scene file.
+4. `ludion render --scene scenes/main.yaml --frames 120` renders the scene after 120 ticks; the bare
+   render host installs the follower system too, so the platform is where it has ridden to.
+
+## Format
+
+```yaml
+format: 1
+kind: path
+name: lift                   # optional
+interpolation: catmull_rom   # or linear (default catmull_rom)
+closed: false                # default false
+points:
+  - - 0.0
+    - 0.0
+    - 0.0
+  - - 4.0
+    - 0.5
+    - -6.0
+```
+
+Points are block-of-block (`- - x`, then the other two components aligned under it); a flow sequence
+`[0, 0, 0]` is refused. `catmull_rom` is centripetal, so an uneven point spacing never loops or
+cusps, and it passes through every point; an open path extends its ends by reflection. `linear` is
+straight segments. Canonical text always spells `interpolation` and `closed`.
+
+| Code | Raised for |
+|---|---|
+| `L1213` | empty/non-mapping root, envelope, wrong type, unknown key or `interpolation`, a point that is not three numbers |
+| `L1214` | fewer than 2 points (3 when `closed`), a non-finite or out-of-f32 component, coincident neighbours (the last and first too when closed) |
+| `L1269` | a `PathFollower` `speed` or `phase` that is not a finite `f32` (a follower's, not a path document's) |
+
+## Sampling from game code
+
+`PathSampler` (in the prelude, with `check_path` and `PathDocument`) is a pure function of a
+validated document — `+ − × ÷` and `sqrt` only, so it is bit-identical on every machine:
+
+```rust
+let doc = check_path(&std::fs::read_to_string("paths/lift.path.yaml")?)?;
+let sampler = PathSampler::new(&doc);
+let here = sampler.point_at(2.5);   // metres of arc length; open clamps to [0, length], closed wraps
+let facing = sampler.tangent_at(2.5); // unit direction of the table chord
+```
+
+Arc length comes from a 16-samples-per-segment table, so `length()` of a `catmull_rom` path is a
+close approximation (exact for `linear`) and `tangent_at` is piecewise constant.
+
+## `PathFollower`
+
+`path` (content-root-relative; `""` is inert), `speed` (metres per gameplay second, negative runs
+backwards, `1.0`), `mode` (`loop` | `ping_pong` | `once`, `loop`), `phase` (metres along the path,
+the authored start offset, rewritten every tick).
+
+The engine's `path_follow` system runs **before** every game system and writes
+`Transform.translation` (rotation and scale untouched) every tick, so a system that rides the
+platform reads *this* tick's pose. `phase` advances by `speed · game_dt` only when gameplay time
+advanced, so a `GameClock` hold freezes platforms. `loop` wraps (an open path jumps end → start),
+`ping_pong` runs `0 → L → 0` with `phase` counting to `2L`, `once` clamps to `[0, L]`.
+
+To drive the position yourself, set `speed: 0` and write `phase`; it poses on the next tick. The pose
+is in world space: points are scene coordinates.
+
+## Rules
+
+- `path_follow` is installed when a scene, snapshot or district is built and the world holds a
+  follower (authored or an inert `PathFollower: {}`). A game that never uses one sees no new system
+  in `engine.describe`, profile or perf output; when installed it lists first, at `order: 0`.
+- A path that cannot be read or fails validation raises `L1215` once per entity; the entity stays put.
+- A `speed` or `phase` that is not a finite `f32` (NaN, infinite, or past `f32` range) is `L1269` at `/speed` or `/phase`; built in Rust, the follower is held where it is and `L1269` is raised once per entity.
+- The path library is read at load, restore and district switch and never hashed or snapshotted.
+
+## Gotchas
+
+- **A follower spawned at runtime into a scene that held none never moves** — `L1216`, once per
+  entity. Author the follower in the scene file, or keep an inert `PathFollower: {}` on any entity so
+  the engine installs the system at load.
+- `asset.reload` does not re-read a path: an edited path takes effect at the next load, restore or
+  switch, which keeps a mid-session reload replay-safe.
+- A follower on a `rigid` body has its pose overwritten by the physics mirror every tick. Put it on a
+  `kinematic` body or none.
+- A block-style file only: a flow-style `points: [[0,0,0]]` fails `L1005`.
+
+## Next
+
+- `ludion docs game-clock` — gameplay time, holds, and `ctx.game_advanced()`.
+- `ludion docs components-fx` — the `PathFollower` row beside the other content components.
+- `ludion docs physics` — kinematic bodies and the mirror.

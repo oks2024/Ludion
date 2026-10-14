@@ -1,0 +1,287 @@
+//! Virtual resource descriptors — the wgpu-free half of the frame graph.
+//!
+//! A pass never names a `wgpu::Texture`; it names a [`ResourceId`], a plain integer handle into the
+//! graph's resource table. The *description* of a resource — its size, pixel format, and intended
+//! usage — is expressed with the small enums in this module ([`TextureFormat`], [`TextureUsage`],
+//! [`Extent2d`]), not with wgpu types. This is the acknowledged ash-migration seam
+//! (`engine-architecture.md` §2): the declarative interface stays free of the execution backend, so
+//! swapping wgpu for ash later would replace [`crate::execute`] wholesale and leave this module,
+//! the scheduler, and the aliaser untouched.
+//!
+//! The mapping *to* wgpu lives entirely in [`crate::execute`]; the `to_wgpu*` helpers here are the
+//! single crossing point and are deliberately trivial.
+
+use serde::Serialize;
+
+/// A handle to a virtual resource in a [`RenderGraph`](crate::RenderGraph).
+///
+/// Plain, `Copy`, comparable id — an index into the graph's resource table. Passes reference
+/// resources only through these handles, never through backend textures.
+///
+/// # Example
+/// ```
+/// use ludion_render_graph::{RenderGraph, TextureDesc};
+///
+/// let mut graph = RenderGraph::new();
+/// let a: ludion_render_graph::ResourceId = graph.transient("a", TextureDesc::color(64, 64));
+/// let b = graph.transient("b", TextureDesc::color(64, 64));
+/// assert_ne!(a, b);
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ResourceId(pub(crate) usize);
+
+impl ResourceId {
+    /// The raw table index behind this handle.
+    pub fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// Pixel dimensions of a render target's base slice (color, depth, or one z-slice of a volume). A
+/// 3D resource carries its slice count on [`TextureDesc::depth_slices`]; array textures are out of
+/// scope.
+///
+/// # Example
+/// ```
+/// use ludion_render_graph::Extent2d;
+/// let e = Extent2d { width: 1920, height: 1080 };
+/// assert_eq!(e.width * e.height, 2_073_600);
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+pub struct Extent2d {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+}
+
+/// The pixel format of a virtual texture.
+///
+/// Deliberately tiny — the milestone needs exactly one color format and this enum is the mapping
+/// point to `wgpu::TextureFormat`. New formats are added as passes demand them, one obvious variant
+/// each.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextureFormat {
+    /// 8-bit-per-channel RGBA in the sRGB color space — the final, read-back presentation format.
+    Rgba8UnormSrgb,
+    /// 16-bit float RGBA — the HDR working format for the scene and bloom passes, where colors
+    /// exceed 1.0 before tonemapping. Never read back directly (the tonemap pass resolves to
+    /// [`Rgba8UnormSrgb`](TextureFormat::Rgba8UnormSrgb)).
+    Rgba16Float,
+    /// 32-bit float depth — the scene pass's depth attachment, and (once a pass samples it) a shadow
+    /// map. A depth format is never a color attachment and never read back for presentation; it is
+    /// attached with [`TextureUsage::RenderAttachment`] and, when a later pass samples it,
+    /// [`TextureUsage::TextureBinding`].
+    Depth32Float,
+}
+
+impl TextureFormat {
+    /// The size in bytes of one texel in this format.
+    pub fn bytes_per_texel(self) -> u32 {
+        match self {
+            TextureFormat::Rgba8UnormSrgb => 4,
+            TextureFormat::Rgba16Float => 8,
+            TextureFormat::Depth32Float => 4,
+        }
+    }
+
+    /// The lower-case token used for this format in `dump-graph` JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TextureFormat::Rgba8UnormSrgb => "rgba8unorm_srgb",
+            TextureFormat::Rgba16Float => "rgba16float",
+            TextureFormat::Depth32Float => "depth32_float",
+        }
+    }
+
+    /// Maps to the concrete `wgpu` format. The single crossing point into the backend.
+    pub(crate) fn to_wgpu(self) -> wgpu::TextureFormat {
+        match self {
+            TextureFormat::Rgba8UnormSrgb => wgpu::TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
+            TextureFormat::Depth32Float => wgpu::TextureFormat::Depth32Float,
+        }
+    }
+}
+
+/// One intended use of a virtual texture. A resource declares a set of these; the executor unions
+/// the sets of resources that share a physical texture (see [`Aliasing`](crate::Aliasing)) into the physical
+/// texture's real `wgpu::TextureUsages`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextureUsage {
+    /// The texture is drawn into as a render-pass color attachment.
+    RenderAttachment,
+    /// The texture is sampled by a later pass's fragment shader.
+    TextureBinding,
+    /// The texture is bound as a writable storage texture by a compute pass
+    /// ([`PassKind::Compute`](crate::PassKind)).
+    StorageBinding,
+    /// The texture is the source of a copy (e.g. the final target, copied out for readback).
+    CopySrc,
+}
+
+impl TextureUsage {
+    /// The lower-case token used in `dump-graph` JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TextureUsage::RenderAttachment => "render_attachment",
+            TextureUsage::TextureBinding => "texture_binding",
+            TextureUsage::StorageBinding => "storage_binding",
+            TextureUsage::CopySrc => "copy_src",
+        }
+    }
+
+    fn to_wgpu(self) -> wgpu::TextureUsages {
+        match self {
+            TextureUsage::RenderAttachment => wgpu::TextureUsages::RENDER_ATTACHMENT,
+            TextureUsage::TextureBinding => wgpu::TextureUsages::TEXTURE_BINDING,
+            TextureUsage::StorageBinding => wgpu::TextureUsages::STORAGE_BINDING,
+            TextureUsage::CopySrc => wgpu::TextureUsages::COPY_SRC,
+        }
+    }
+}
+
+/// A virtual texture's full description: size, dimensionality, format, and the set of usages it
+/// participates in.
+///
+/// Two descriptions are *alias-compatible* ([`TextureDesc::alias_compatible`]) when their size,
+/// slice count, and format match; usage sets may differ and are unioned when the resources share a
+/// physical texture.
+///
+/// # Example
+/// ```
+/// use ludion_render_graph::{TextureDesc, TextureFormat, TextureUsage};
+///
+/// let target = TextureDesc::color(1920, 1080);
+/// assert_eq!(target.format, TextureFormat::Rgba8UnormSrgb);
+/// assert!(target.usages.contains(&TextureUsage::RenderAttachment));
+/// assert_eq!(target.depth_slices, None);
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TextureDesc {
+    /// The texture's pixel dimensions (of one z-slice, for a volume).
+    pub extent: Extent2d,
+    /// The z-slice count when this resource is a **3D** texture; `None` for an ordinary 2D one.
+    /// This `Option` *is* the dimensionality — there is no separate dimension enum, so a 2D and a 3D
+    /// resource can never be confused for one another (or aliased onto one physical texture).
+    pub depth_slices: Option<u32>,
+    /// The texture's pixel format.
+    pub format: TextureFormat,
+    /// The usages this virtual resource requires. Kept sorted and deduplicated by the constructors
+    /// so `dump-graph` output is stable.
+    pub usages: Vec<TextureUsage>,
+}
+
+impl TextureDesc {
+    /// A color render target that is also sampleable by a downstream pass — the default shape of an
+    /// intermediate (transient) texture in the graph.
+    pub fn color(width: u32, height: u32) -> Self {
+        TextureDesc {
+            extent: Extent2d { width, height },
+            depth_slices: None,
+            format: TextureFormat::Rgba8UnormSrgb,
+            usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
+        }
+    }
+
+    /// An HDR (16-bit float) color target that is also sampleable downstream — the working format of
+    /// the scene and bloom passes, where lit colors run past 1.0 before tonemapping.
+    pub fn hdr_color(width: u32, height: u32) -> Self {
+        TextureDesc {
+            extent: Extent2d { width, height },
+            depth_slices: None,
+            format: TextureFormat::Rgba16Float,
+            usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
+        }
+    }
+
+    /// An HDR (16-bit float) **3D** texture a compute pass writes as a storage texture and a later
+    /// pass samples — the shape of a probe-lattice volume. `depth` is the z-slice count; it is a real
+    /// dimension, not an array layer.
+    ///
+    /// It carries [`StorageBinding`](TextureUsage::StorageBinding) (the compute write) and
+    /// [`TextureBinding`](TextureUsage::TextureBinding) (the downstream read), and never
+    /// [`RenderAttachment`](TextureUsage::RenderAttachment): a volume cannot be a pass attachment.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_render_graph::{TextureDesc, TextureUsage};
+    ///
+    /// let volume = TextureDesc::hdr_storage_volume(16, 8, 16);
+    /// assert_eq!(volume.depth_slices, Some(16));
+    /// assert!(volume.usages.contains(&TextureUsage::StorageBinding));
+    /// ```
+    pub fn hdr_storage_volume(width: u32, height: u32, depth: u32) -> Self {
+        TextureDesc {
+            extent: Extent2d { width, height },
+            depth_slices: Some(depth),
+            format: TextureFormat::Rgba16Float,
+            usages: vec![TextureUsage::TextureBinding, TextureUsage::StorageBinding],
+        }
+    }
+
+    /// The final presentation target: a color render target that is copied out for readback (hence
+    /// [`TextureUsage::CopySrc`]) rather than sampled.
+    pub fn present_target(width: u32, height: u32) -> Self {
+        TextureDesc {
+            extent: Extent2d { width, height },
+            depth_slices: None,
+            format: TextureFormat::Rgba8UnormSrgb,
+            usages: vec![TextureUsage::RenderAttachment, TextureUsage::CopySrc],
+        }
+    }
+
+    /// A depth attachment ([`TextureFormat::Depth32Float`], [`TextureUsage::RenderAttachment`]) — the
+    /// scene pass's depth buffer. Not sampled: nothing reads it, so its usage set is attachment-only
+    /// and the recorder discards its store. A shadow map (a depth texture a *later* pass samples) is
+    /// [`sampled_depth`](TextureDesc::sampled_depth) instead.
+    pub fn depth(width: u32, height: u32) -> Self {
+        TextureDesc {
+            extent: Extent2d { width, height },
+            depth_slices: None,
+            format: TextureFormat::Depth32Float,
+            usages: vec![TextureUsage::RenderAttachment],
+        }
+    }
+
+    /// A *sampled* depth texture ([`TextureFormat::Depth32Float`], both
+    /// [`RenderAttachment`](TextureUsage::RenderAttachment) and
+    /// [`TextureBinding`](TextureUsage::TextureBinding)) — a shadow map: written depth-only by one
+    /// pass, then sampled (a comparison sampler) by a later pass. The store survives the frame
+    /// (unlike the discard-on-store [`depth`](TextureDesc::depth) attachment) because a downstream
+    /// pass reads it.
+    pub fn sampled_depth(width: u32, height: u32) -> Self {
+        TextureDesc {
+            extent: Extent2d { width, height },
+            depth_slices: None,
+            format: TextureFormat::Depth32Float,
+            usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
+        }
+    }
+
+    /// Whether two descriptions may share one physical texture: identical size, slice count, and
+    /// format. Usage sets need not match — they are unioned by the aliaser.
+    pub fn alias_compatible(&self, other: &TextureDesc) -> bool {
+        self.extent == other.extent
+            && self.depth_slices == other.depth_slices
+            && self.format == other.format
+    }
+
+    /// The union of two usage lists, sorted and deduplicated — the physical texture's usage when
+    /// two resources alias.
+    pub(crate) fn union_usages(a: &[TextureUsage], b: &[TextureUsage]) -> Vec<TextureUsage> {
+        let mut merged: Vec<TextureUsage> = a.iter().chain(b.iter()).copied().collect();
+        merged.sort_unstable();
+        merged.dedup();
+        merged
+    }
+
+    /// The wgpu usage bitset for a physical texture built from `usages`.
+    pub(crate) fn wgpu_usages(usages: &[TextureUsage]) -> wgpu::TextureUsages {
+        usages
+            .iter()
+            .fold(wgpu::TextureUsages::empty(), |acc, u| acc | u.to_wgpu())
+    }
+}

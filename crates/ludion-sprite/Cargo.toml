@@ -1,0 +1,14 @@
+[package]
+name = "ludion-sprite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Sprite document baking (glyph grids + CPU effects), the deterministic atlas packer and PNG → sprite-document import for the Ludion game engine."
+keywords = ["ludion", "sprite", "atlas", "game-engine"]
+categories = ["game-engines", "graphics", "encoding"]
+
+[dependencies]
+ludion-assets = { path = "../ludion-assets", version = "0.1.0" }
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-scene = { path = "../ludion-scene", version = "0.1.0" }

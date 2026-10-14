@@ -1,0 +1,9 @@
+format: 1
+kind: part
+size:
+  - 1
+  - 1
+  - 1
+slices:
+  -
+    - B

@@ -1,0 +1,19 @@
+format: 1
+kind: map
+name: void-ring
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "         "
+  - " ####### "
+  - " #...# # "
+  - " ####### "
+  - "         "
+markers:
+  - name: inside
+    kind: torch
+    x: 7.0
+    z: 5.0

@@ -1,0 +1,147 @@
+# cargo-nextest configuration — the workspace test runner used by `scripts/check.mjs`, CI
+# (`.github/workflows/ci.yml`) and TeamCity (`ci/teamcity/README.md`).
+#
+# nextest runs each test in its own process and schedules the whole workspace across every core
+# instead of one test binary at a time. That is the whole point — but a handful of tests are not
+# safely co-schedulable, and "flaky tests are P0 bugs" (CLAUDE.md, tiered determinism). The groups
+# below are the exhaustive list of those exceptions; everything not named here runs unbounded.
+#
+# nextest cannot run doctests. The test lane is therefore always TWO commands — `cargo nextest run
+# --workspace` AND `cargo test --workspace --doc` — in every place it is invoked. Dropping the
+# second one silently deletes a gate.
+#
+# An override matches at most once: the FIRST entry whose filterset matches a test wins. Order in
+# this file is therefore load-bearing — the narrow wall-clock entries come before the broad GPU one.
+#
+# Two profiles exist. `default` runs everything, GPU tests included, on boxes with a pinned real
+# GPU (the reference RTX 3090 / Apple M4). `no-gpu` excludes every test named `needs_gpu_*`; hosted CI
+# (`.github/workflows/ci.yml`, no real GPU on windows-latest / macos-latest) and the private GPU-less
+# TeamCity agents both run `--profile no-gpu` instead.
+#
+# The rule: a test that puts a wgpu device up — directly or through a subprocess that does — is named
+# `needs_gpu_*`. That one name is the `gpu` test-group's filter and the `no-gpu` exclusion. Two
+# mechanisms keep it honest: `LUDION_FORBID_GPU=1` (set on the hosted no-gpu lane) makes device
+# creation panic, so an unprefixed GPU test fails loudly there; and `scripts/lists-in-step.mjs` checks
+# the two filters below, that every `binary_id` named here exists, and that a test touching a device
+# carries the prefix.
+
+[profile.default]
+# Print a slow-test list in every run summary, so the cost of a test can never go invisible again
+# (the pre-nextest suite grew to ~5.6 min with nobody able to name the expensive tests).
+#
+# `terminate-after = 10` is a 10-minute ceiling, ~3x the longest default-lane test (211 s,
+# 2026-10-03): several tests here legitimately run for minutes (the replay suites, the
+# scaffold-rebuilding CLI tests), but a hung one (an unkillable shutdown) must fail, not hold the lane.
+slow-timeout = { period = "60s", terminate-after = 10 }
+final-status-level = "slow"
+
+[test-groups]
+# Every test that creates a wgpu device — directly (`Gpu::request` / `Renderer::new`) or through a
+# subprocess that does (`ludion render`, `ludion test`, `ludion serve`, a spawned game binary).
+# Unbounded concurrency here means N simultaneous devices, N pipeline sets and N font atlases: a
+# real VRAM and driver-contention risk on the pinned GPUs, and outright hostile to CI's fallback
+# software adapters (WARP / llvmpipe). Four is comfortably above the longest GPU test's serial cost
+# and far below anything a 24 GB card or an M4 notices.
+gpu = { max-threads = 4 }
+
+# Tests whose assertions are measured against the wall clock. A saturated box makes these lie, and
+# a timing test that lies is a P0 flake. Mutual exclusion is the cheap fix — the group is tiny.
+wall-clock = { max-threads = 1 }
+
+# Tests that spawn `cargo` themselves (a scaffold build, a `ludion dev` recompile). They contend on
+# cargo's exclusive build lock over the single `target/`, so concurrency buys nothing — and the
+# `ludion dev` test asserts a *deadline* on its rebuild, which a lock held by a concurrent scaffold
+# build would blow. Serialize them.
+cargo-build = { max-threads = 1 }
+
+# ── overrides ────────────────────────────────────────────────────────────────
+# The `#[ignore]`d identity replay is minutes per test and unmeasured on a loaded box: it gets the
+# step ceiling `scripts/check.mjs` already holds it to (60 min) instead of the 10-20 min default.
+# vigil's own campaigns (soak, probe) live in `games/vigil/.config/nextest.toml`.
+[[profile.default.overrides]]
+filter = 'binary_id(=breakout::thread_identity)'
+slow-timeout = { period = "60s", terminate-after = 60 }
+
+# The engine's ≥30 fps-at-1080p delivery floors over loopback (Phase 4 exit criterion 1) — every
+# codec twin of `run_fps_gate`, matched by name prefix so a new twin cannot escape (a hand-kept
+# exact-name filter once let two of them measure a saturated box; `scripts/lists-in-step.mjs` now
+# fails on that). Each measures a real frame rate against a real clock with ~2× margin — margin that
+# a 32-way-saturated machine eats. `num-test-threads` claims the entire run pool, so they run with
+# the box to themselves. Stronger than any `max-threads`, hence the explicit `@global`: overrides
+# resolve per SETTING, so without it the GPU entry below would still pull them into a 4-slot group
+# they can never fit in. `scripts/check.mjs` reads this filter, excludes it from its `test` step and
+# runs it as the `fps-gate` step after every other lane; the override still serializes them there, and
+# in a single-command run (TeamCity) it gives them the pool, `priority = 100` running them first.
+[[profile.default.overrides]]
+filter = 'binary_id(=ludion-server::phase4) & test(/^needs_gpu_frame_stream_delivers_at_least_30_fps_at_1080p/)'
+test-group = '@global'
+threads-required = "num-test-threads"
+priority = 100
+
+# The remaining wall-clock assertions:
+#   - `needs_gpu_max_fps_throttles_frame_delivery` counts frames in a ~1.1 s window and asserts a floor of 1.
+#   - `call_timeout` asserts a 300 ms client timeout fires inside 2 s.
+#   - `e6_bench` is a per-frame millisecond budget (E6). It is
+#     `#[ignore]`d, so it costs nothing here — this entry is what keeps it honest whenever it is
+#     run explicitly. (The E6 budget gate proper is the release-mode, pinned-GPU `budgets`
+#     TeamCity configuration, which is not a `cargo test` at all.)
+#   - `profile_attach`'s three `--attach` captures each hold a `capture_timeout` (30 s + window) on
+#     the `profile.capture` reply, and arming the profiler makes the served loop render every frame,
+#     so a saturated box blows the deadline (observed on the macOS agent). Serializing them here
+#     precedes the GPU entry below on purpose — the deadline is the stricter constraint.
+[[profile.default.overrides]]
+filter = """
+    (binary_id(=ludion-server::delivery) & test(=needs_gpu_max_fps_throttles_frame_delivery))
+  | binary_id(=ludion-client::call_timeout)
+  | binary_id(=ludion-cli::profile_attach)
+  | binary_id(=ludion-spatial::e6_bench)
+"""
+test-group = 'wall-clock'
+
+# `ludion-cli::new` runs `cargo test` over a freshly scaffolded project and `ludion-cli::dev` drives
+# the `ludion dev` hot-reload supervisor through several rebuilds; `ludion-cli::phase7` and
+# `ludion-mcp::integration` each `cargo build` a binary they then spawn. All four take cargo's build
+# lock. This entry precedes the GPU one on purpose: `new` and `phase7` also render, and the build
+# lock is the stricter constraint.
+[[profile.default.overrides]]
+filter = """
+    binary_id(=ludion-cli::dev)
+  | binary_id(=ludion-cli::new)
+  | binary_id(=ludion-cli::phase7)
+  | binary_id(=ludion-mcp::integration)
+"""
+test-group = 'cargo-build'
+
+# Everything that puts a wgpu device on the card: the tests named `needs_gpu_*`. The prefix is the rule
+# (see the header); the `no-gpu` profile's `default-filter` below is the same expression negated, so
+# the two cannot name different sets. A GPU test that also needs another group (`wall-clock`,
+# `cargo-build`) matches that entry first — an override matches at most once — and still carries the
+# prefix, so `no-gpu` still excludes it.
+[[profile.default.overrides]]
+filter = 'test(/(^|::)needs_gpu_/)'
+test-group = 'gpu'
+
+# ── no-gpu profile ───────────────────────────────────────────────────────────
+# Hosted CI (`.github/workflows/ci.yml`) and the private GPU-less TeamCity agents run this profile
+# instead of `default`. windows-latest / macos-latest have no real GPU: without this exclusion, the
+# render graph falls back to wgpu's software adapter (WARP / llvmpipe), which renders every golden
+# with different bytes and the SSIM compare against the pinned RTX 3090 / Apple M4 goldens hard-fails.
+# Excluding the `needs_gpu_*` tests instead of trying to make them pass under the fallback adapter is
+# the whole point — pinned-GPU goldens and budgets stay a private-hardware-only gate. Every other test,
+# including the CPU-only ones that share a binary with a GPU test, runs.
+[profile.no-gpu]
+# Hosted runners and GPU-less agents have a fraction of the cores: double the default ceiling.
+slow-timeout = { period = "60s", terminate-after = 20 }
+default-filter = 'not test(/(^|::)needs_gpu_/)'
+
+# ── scheduling: front-load the long pole ─────────────────────────────────────
+# nextest runs tests in a deterministic list order, which puts a minute-plus replay near the
+# END — so the whole run degenerates into a long single-threaded tail after everything else is done.
+# Starting the expensive tests first (longest-processing-time-first, the classic fix) lets the cheap
+# ones fill in around them. Purely a scheduling hint: it changes no outcome, only wall time.
+#
+# The list is maintained from the run summary — `final-status-level = "slow"` above names anything
+# over 60 s, and `cargo nextest run --workspace -- --nocapture` prints every test's duration.
+[[profile.default.overrides]]
+filter = 'binary_id(=ludion-testkit::gallery)'
+priority = 50

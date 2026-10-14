@@ -1,0 +1,13 @@
+format: 1
+kind: font-source
+name: inter
+file: Inter-Regular.ttf
+mode: sdf
+em_px: 56
+spread_px: 6
+charset:
+  ranges:
+    - ascii
+    - latin-1
+    - general-punctuation
+  chars: "×—…‘’“”"

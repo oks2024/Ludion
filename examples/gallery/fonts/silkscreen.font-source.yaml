@@ -1,0 +1,10 @@
+format: 1
+kind: font-source
+name: silkscreen
+file: Silkscreen-Regular.ttf
+mode: bitmap
+em_px: 8
+line_height: 1250
+charset:
+  ranges:
+    - ascii

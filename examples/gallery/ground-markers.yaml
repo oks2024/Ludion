@@ -1,0 +1,109 @@
+# Feature: GroundMarker — analytic, SDF-rendered ground telegraphs: a disc and a segment, each drawn
+# as a soft-edged shape lying flat in the entity's local XZ plane. A translucent HDR warning disc
+# marks an area-of-effect landing zone with an opaque pillar standing on it, showing draw order:
+# geometry occludes the marker where it stands (the marker pipeline is depth-tested but does not
+# write depth), while the marker's soft edge still reads past the pillar's footprint. A charge-line
+# segment at a non-axis-aligned yaw shows the capsule shape and how Transform rotation orients it.
+# Both shapes sit flush on the ground, lifted only by the fixed, non-authorable GROUND_MARKER_LIFT —
+# no scene-authored offset.
+format: 1
+name: "ground-markers - GroundMarker: disc + segment telegraphs, HDR color, occlusion by geometry"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 14.0
+        rotation:
+          - -18.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 8.0
+          - 10.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 3.2
+        range: 26.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 20.0
+          - 1.0
+          - 20.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.2
+          - 0.22
+          - 0.25
+          - 1.0
+  - name: warning-disc
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 0.0
+          - 1.0
+      GroundMarker:
+        shape:
+          type: disc
+          radius: 3.0
+        color:
+          - 1.6
+          - 0.2
+          - 0.1
+          - 0.55
+  - name: watchtower
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 1.25
+          - 1.0
+        scale:
+          - 1.4
+          - 2.5
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.52
+          - 0.5
+          - 1.0
+  - name: charge-line
+    components:
+      Transform:
+        translation:
+          - 3.5
+          - 0.0
+          - -1.0
+        rotation:
+          - 0.0
+          - 35.0
+          - 0.0
+      GroundMarker:
+        shape:
+          type: segment
+          length: 8.0
+          width: 2.0
+        color:
+          - 1.2
+          - 0.9
+          - 0.15
+          - 0.85

@@ -1,0 +1,7 @@
+format: 1
+entities:
+  - name: icon
+    components:
+      UiRect:
+        atlas: ship.atlas.yaml
+        frame: bolt/idel

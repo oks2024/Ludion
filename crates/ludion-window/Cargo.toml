@@ -1,0 +1,28 @@
+[package]
+name = "ludion-window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "A native windowed viewer for a running Ludion server, implemented as an ordinary peer protocol client."
+keywords = ["ludion", "window", "viewer", "wgpu"]
+categories = ["game-development", "rendering", "gui"]
+
+[dependencies]
+# Client-side only: this crate is a peer protocol client, never an engine-side dependency. It speaks
+# the wire protocol through `ludion-client` and shares the core diagnostic + protocol vocabulary. It
+# uses `ludion-render-graph`, a leaf GPU library, for the window blit and the adapter policy it
+# shares with the in-process presenter, and never touches the engine's device. It deliberately does
+# NOT depend on `ludion-engine`, `ludion-server`, `ludion-renderer`, or tokio.
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+ludion-client = { path = "../ludion-client", version = "0.1.0" }
+ludion-render-graph = { path = "../ludion-render-graph", version = "0.1.0" }
+winit.workspace = true
+wgpu.workspace = true
+qoi.workspace = true
+lz4_flex.workspace = true
+crossbeam-channel.workspace = true
+pollster.workspace = true
+serde_json.workspace = true
+gilrs.workspace = true

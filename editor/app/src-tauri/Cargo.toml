@@ -1,0 +1,55 @@
+# `src-tauri` is its own cargo workspace, deliberately not a member of the root workspace
+# (whose `members` are `crates/*` only, engine-architecture.md §2: "editor/ ... npm isolated
+# here"). An empty `[workspace]` table here stops cargo from walking up and pulling this crate
+# into the root workspace; it also gives this crate its own `target/` dir (ignored, see
+# `../.gitignore`) instead of sharing the engine's.
+[workspace]
+
+[package]
+name = "ludion-viewer"
+version = "0.1.0"
+description = "The Ludion editor's Tauri host (stage sessions, asset watcher, terminal, filesystem commands)"
+authors = ["Alexandre Pestana"]
+# Kept in step with the root workspace by hand — this crate is deliberately outside it, so
+# `field.workspace = true` is unavailable and nothing but this comment links the two. License is the
+# repo-wide decision recorded in the root `Cargo.toml`.
+license = "MIT OR Apache-2.0"
+# Filled in at publication — the public remote does not exist yet.
+repository = ""
+edition = "2024"
+rust-version = "1.94"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "ludion_viewer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+portable-pty = "0.9"
+base64 = "0.22"
+# The model stage's asset watcher (`src/stage.rs`, shared by the Voxel Artist and Models views):
+# `<content-root>/voxels/**` and `sculpts/**` → debounced `asset.reload`. Same crate and major
+# the engine already uses for `ludion dev`'s src watch and `ludion-assets`' watcher (root
+# `Cargo.toml` workspace deps), so the editor and the engine agree on one filesystem-watching
+# backend rather than introducing a second.
+notify = "8"
+# The host's blocking wire client (`src/wire.rs`): `asset.reload` to the stage session and
+# `engine.shutdown` on teardown. Same crate and major as `ludion-client`'s sync transport. A path
+# dependency on `ludion-client` itself was rejected — it would pull `ludion-protocol` (schemars,
+# zstd, the schema-hash machinery) into this separate cargo workspace for two commands of JSON.
+tungstenite = "0.24"
+# The project manifest reader (`src/project.rs`): parses `ludion.toml`'s `name`/`default_scene`,
+# lenient about unknown keys — unlike the engine's strict reader, `[ios]` and future sections must
+# pass, since the editor only ever displays the two fields it reads.
+toml = "1"
+# The project switcher's "Open folder…" native picker.
+tauri-plugin-dialog = "2"

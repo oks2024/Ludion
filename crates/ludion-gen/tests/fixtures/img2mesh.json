@@ -1,0 +1,36 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "example.png"
+    },
+    "_meta": {
+      "title": "Load Subject"
+    }
+  },
+  "12": {
+    "class_type": "SaveGLB",
+    "inputs": {
+      "mesh": [
+        "1",
+        0
+      ],
+      "filename_prefix": "3d/ComfyUI"
+    },
+    "_meta": {
+      "title": "Save Mesh"
+    }
+  },
+  "13": {
+    "class_type": "GetMeshInfo",
+    "inputs": {
+      "mesh": [
+        "1",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Mesh Info"
+    }
+  }
+}

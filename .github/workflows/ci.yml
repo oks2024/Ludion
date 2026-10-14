@@ -1,0 +1,480 @@
+name: CI
+
+# The full gate set, run on demand on Linux, Windows and macOS (the editor host skips Linux).
+# `push.yml` is the per-push subset (fmt, clippy, nextest `no-gpu` on one Linux runner); the
+# private CI runs everything on every revision, including the Lore-only game's lanes (its own Cargo
+# workspace: fmt, clippy, tests, the probe campaign and the hash soak).
+on:
+  workflow_dispatch:
+
+# Stated rather than inherited: `Swatinem/rust-cache` already sets this, but the private TeamCity
+# mirror has no such default and a stale incremental cache there turned into an unresolvable
+# `anon.*.llvm.*` link error. A CI runner recompiles a changed crate either way, so both halves of
+# the CI of record say so out loud.
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Ceilings sit well above a cold hosted build; they replace GitHub's 6-hour default.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The scripts need Node >= 21.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The publication privacy canary (decision 4 of the private publication plan, `Plan-Private/`): the tracked,
+      # not-ignored tree grepped against a private token list. That list lives in a git-ignored
+      # path, so on a public clone this step prints "skipped (public clone)" and passes — expected
+      # and honest; the red it can raise happens locally and on the private CI, where the list
+      # exists. Mirrors scripts/check.mjs `privacy`.
+      - name: privacy canary
+        run: node scripts/privacy-canary.mjs
+
+      # alsa-sys (cpal) needs pkg-config and libasound2-dev; libudev-sys (gilrs) needs libudev-dev.
+      # winit's X11 and Wayland libraries are dlopen'd, so they need no packages.
+      - name: Linux system packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev libudev-dev
+
+      # The physics resolved-feature gate (Plan/physics.md W1): `rapier3d`/`parry3d`'s resolved
+      # feature sets must match the pinned ones exactly and `rayon`/`rayon-core` must be
+      # unreachable from `ludion-physics`, over `cargo metadata --locked`. Needs the toolchain and
+      # the lockfile, so it runs after `Show toolchain` below rather than in this canary block —
+      # see its placement further down. Mirrors scripts/check.mjs `physics-features`.
+
+      # The large-file gate (decision 20 of the private publication plan): every publishable file
+      # over 1 MB must be named in the committed scripts/size-allowlist.txt. Unlike the canary above
+      # it needs no private file, so it is fully effective on a public clone. Mirrors
+      # scripts/check.mjs `size`.
+      - name: size gate
+        run: node scripts/size-gate.mjs
+
+      # CLAUDE.md is loaded into every agent session, so its size is a gated budget: over it, text
+      # moves to its owner (a plan's Status, Plan/owed.md, a skill or a docs topic). Mirrors
+      # scripts/check.mjs `claude-md`.
+      - name: CLAUDE.md budget
+        run: node scripts/claude-md-budget.mjs
+
+      # ludion-ecs is freeze-listed and milestone-minimal: its code lines (non-blank, non-comment,
+      # outside the test module) stay under the budget. Mirrors scripts/check.mjs `ecs-budget`.
+      - name: ECS budget
+        run: node scripts/ecs-budget.mjs
+
+      # The lists that must agree: nextest's `gpu` override and `no-gpu` filter (both the `needs_gpu_`
+      # name), the tests that put a device on the card, and `ludion.h` vs `ffi.rs`. Mirrors
+      # scripts/check.mjs `lists-in-step`.
+      - name: lists in step
+        run: node scripts/lists-in-step.mjs
+
+      # No hand-written `error:` / `warning:` print outside the two usage helpers: a runtime failure
+      # is a coded `Diagnostic` printed through `Display`. Mirrors scripts/check.mjs
+      # `diagnostic-prints`.
+      - name: diagnostic prints
+        run: node ci/scripts/diagnostic-prints.mjs
+
+      # No direct `fs::write` / `fs::copy` / `File::create` in the non-test code of ludion-cli, ludion,
+      # ludion-engine, ludion-testkit or ludion-render-graph: files go through `ludion_core::atomic`;
+      # the Node scripts in scripts/ and ci/scripts/ go through scripts/atomic-write.mjs.
+      # Mirrors scripts/check.mjs `atomic-writes`.
+      - name: atomic writes
+        run: node ci/scripts/atomic-writes.mjs
+
+      # No schedule talk (relative waves, later phases, milestone tags, forward wave refs) in source, docs or
+      # strings: a comment describes state, never schedule. Mirrors scripts/check.mjs
+      # `schedule-comments`.
+      - name: schedule comments
+        run: node ci/scripts/schedule-comments.mjs
+
+      # `rust-toolchain.toml` pins the channel and components; rustup picks it up automatically
+      # on the first cargo/rustup invocation below.
+      - name: Show toolchain
+        run: rustup show
+
+      # The physics resolved-feature gate itself (see the pointer comment above, beside the privacy
+      # canary): needs the toolchain for `cargo metadata`, needs no build cache since metadata does
+      # no compiling. Mirrors scripts/check.mjs `physics-features`.
+      - name: physics features
+        run: node scripts/physics-features.mjs
+
+      # Two cargo workspaces live in this repo: the engine (root `crates/*` + `games/*`) and the
+      # editor's Tauri host, which detaches itself with an empty `[workspace]`. Cache both, or the
+      # editor-host steps below rebuild their whole dependency tree every run.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            editor/app/src-tauri
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # The workspace's test binaries schedule across every core instead of running one at a time;
+      # `.config/nextest.toml` bounds the few that must not be co-scheduled (wgpu devices, wall-clock
+      # assertions, tests that spawn cargo). The install-action fetches a prebuilt binary, so this
+      # costs seconds, not a `cargo install`.
+      #
+      # `--profile no-gpu`: windows-latest / macos-latest have no real GPU, so any test that requests
+      # a wgpu device would fall back to a software adapter (WARP / llvmpipe) and render goldens with
+      # different bytes than the pinned RTX 3090 / Apple M4 — the SSIM compare would hard-fail for a
+      # reason that has nothing to do with the change under test. Pinned-GPU goldens and budgets run
+      # only on private hardware (`ci/teamcity/`); the `no-gpu` profile in `.config/nextest.toml`
+      # excludes the tests named `needs_gpu_*`, and LUDION_FORBID_GPU=1 makes device creation panic, so
+      # a GPU test that lacks the prefix fails loudly here instead of rendering on WARP.
+      #
+      # LUDION_REQUIRE_GPU is deliberately unset here (no adapter is expected). The pinned lanes
+      # (scripts/check.mjs, the private TeamCity agents) set it so a skip fails there.
+      - uses: taiki-e/install-action@nextest
+
+      # Compiles each project's `[[import]]` tables into their ignored derived trees before the
+      # tests read them. Mirrors scripts/check.mjs `import-sync`.
+      - name: derived imports sync
+        run: node scripts/import-sync.mjs
+
+      # `--no-fail-fast`: one failure would otherwise cancel every queued test, and a red run
+      # should name every failure at once. Mirrors scripts/check.mjs `test`.
+      - name: cargo nextest run
+        run: cargo nextest run --workspace --profile no-gpu --no-fail-fast
+        env:
+          LUDION_FORBID_GPU: '1'
+
+      # nextest cannot run doctests, so this is the other half of the test gate, not an extra one:
+      # without it the workspace's ~150 doctests would silently stop being checked.
+      - name: cargo test --doc
+        run: cargo test --workspace --doc --no-fail-fast
+
+      # `ludion::run`'s `--check-docs` mode (Phase 15 / E4 Wave 4), exercised through an existing
+      # game binary rather than a fixture invented for this smoke: hello-paddle registers no doc
+      # kind, so this walks the "a game that never opted in" path end to end.
+      - name: smoke test - ludion --check-docs
+        run: cargo run -p hello-paddle -- --check-docs --scene games/hello-paddle/scenes/paddle.yaml
+
+      # The mobile feature set (Plan/ios-target.md, decision 3c): the `ludion` facade with its default
+      # `wire` + `window` features off must lint clean (`-D warnings`, the shipped and the debug
+      # shape) and its dependency tree must carry none of the desktop-only crates (winit, gilrs,
+      # notify, tokio) — the one build shape the `--all-features` clippy above never compiles.
+      # vigil's lib, where present, is also checked for aarch64-apple-ios where that target is installed (the macOS
+      # job installs it; Windows skips). The facade's lib tests also run in both shapes. Mirrors
+      # scripts/check.mjs `mobile`.
+      - name: add the iOS target
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-ios
+
+      - name: mobile feature set
+        run: node scripts/mobile-check.mjs
+
+      # WGSL is the source of truth for the uniform-struct layouts (Plan/shader-bindgen.md): reflect
+      # the shaders and fail if the committed crates/ludion-renderer/src/shader_gen.rs is stale.
+      # `--check` never writes the file. The one copy of the gate is ci/scripts/shader-drift.mjs.
+      - name: shader-bindgen drift
+        run: node ci/scripts/shader-drift.mjs
+
+      # Map-authoring drift gate (Plan/map-authoring.md, commit-output lean (a)): every committed
+      # `*.map.yaml` must regenerate byte-identical at its default scene path
+      # (`ludion generate-map --check`), and every `.mjs` generator marked
+      # `// ludion: drift-generator` must pass its own `--check`; outputs are then paired both ways
+      # with the scenes' `generated_from:`. Discovery starts from sources (no manifest) and an
+      # empty enumeration fails. Mirrors scripts/check.mjs `map-drift`.
+      - name: map-authoring drift
+        run: node scripts/map-drift.mjs
+
+      # The voxel-generation drift gate, the same shape one format over (Plan/voxel-authoring-tools.md):
+      # every committed `*.voxel.yaml` bearing a top-level `generated_from:` key must be byte-identical
+      # to a fresh run of its generator script piped through `ludion voxel from-json --check`. Discovery
+      # is the field itself. Mirrors scripts/check.mjs `voxel-drift`.
+      - name: voxel-generation drift
+        run: node scripts/voxel-drift.mjs
+
+      # The sprite-atlas drift gate, the same shape another format over (Plan/sprite-engine.md
+      # Wave 1): every committed `*.atlas-source.yaml` / `*.font-source.yaml` is checked with
+      # `ludion generate-atlas --check` (document and PNG byte-compared), then paired both ways with
+      # the baked documents' `generated_from:`. Discovery starts from sources; an empty enumeration
+      # fails. Mirrors scripts/check.mjs `atlas-drift`.
+      - name: atlas drift
+        run: node scripts/atlas-drift.mjs
+
+      # The mesh-edit drift gate, the same shape one more format over
+      # (Plan/mesh-texture-editing.md Wave 1): every committed `*.mesh-edit.yaml` is checked with
+      # `ludion mesh apply --check` (the whole derived tree byte-compared), then its
+      # `mesh.mesh.yaml` is paired both ways with the `generated_from:` claims. Discovery starts
+      # from sources; an empty enumeration fails. Mirrors scripts/check.mjs `mesh-edit-drift`.
+      - name: mesh-edit drift
+        run: node scripts/mesh-edit-drift.mjs
+
+      # The voxel generator kit's own tests (scripts/voxel/grid.test.mjs): pure Node, no cargo
+      # build involved, so it costs nothing next to the gates above. Its `components()` fixture is
+      # pinned against the identical fixture in crates/ludion-scene/tests/voxel_edit.rs, so the two
+      # implementations of 6-connected component finding cannot silently diverge. Mirrors
+      # scripts/check.mjs `voxel-kit`.
+      - name: voxel generator kit tests
+        run: node --test scripts/voxel/grid.test.mjs
+
+      # The commit wrapper's own tests (scripts/commit.test.mjs): pure Node plus git, against
+      # scratch repositories and a fake `lore` — alternating machines stay linear on the remote,
+      # an offline mirror commit is carried, contributions are refused and round-trip through
+      # `--import`; the public-tree export's tests ride along. Mirrors scripts/check.mjs `commit-wrapper`.
+      - name: commit wrapper tests
+        run: node --test scripts/commit.test.mjs scripts/mirror-lib.test.mjs scripts/public-tree.test.mjs
+
+      # The physics pin ritual's helpers (scripts/physics-pin-ritual.test.mjs): the nextest failure-line
+      # parser and the leftover-version scan, pure Node. Mirrors scripts/check.mjs `pin-ritual`.
+      - name: physics pin ritual tests
+        run: node --test scripts/physics-pin-ritual.test.mjs
+
+      # The editor's Tauri host — the PTY host, the asset watcher, and the host's own wire client.
+      # It is a SEPARATE cargo workspace (empty `[workspace]` in its manifest), so every
+      # `--workspace` step above is blind to it; without these three it would be gated by nobody.
+      # It rides this job rather than a job of its own because it is a desktop artifact; it ships
+      # on Windows and macOS only, so the three steps skip Linux (its webkit2gtk/gtk stack is not
+      # installed). Mirrors scripts/check.mjs `tauri-fmt` / `tauri-clippy` / `tauri-test`.
+      - name: editor host - cargo fmt --check
+        if: runner.os != 'Linux'
+        run: cargo fmt --manifest-path editor/app/src-tauri/Cargo.toml --all -- --check
+
+      - name: editor host - cargo clippy
+        if: runner.os != 'Linux'
+        run: cargo clippy --manifest-path editor/app/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+      # No frontend build is needed first: these are dev-profile builds, and `generate_context!`
+      # only embeds `frontendDist` (the gitignored `editor/app/dist`) for a release bundle.
+      - name: editor host - cargo test
+        if: runner.os != 'Linux'
+        run: cargo test --manifest-path editor/app/src-tauri/Cargo.toml
+
+      # The fuzz targets, fmt + clippy: `fuzz/` is a detached workspace with its own lock and target
+      # dir, and run from the root `--manifest-path` keeps rustup on the stable pin, so no nightly or
+      # sanitizer runtime is needed. Running the fuzzers is not here (see the note at the end of this
+      # file). Mirrors scripts/check.mjs `fuzz-fmt` and `fuzz-clippy`.
+      - name: fuzz - cargo fmt --check
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+
+      - name: fuzz - cargo clippy
+        run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
+
+  packaging:
+    name: packaging (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Every publishable crate (games/* are `publish = false` and excluded) must be packageable
+      # for crates.io: version/description/keywords/categories resolve, inter-workspace
+      # dependencies carry a registry version alongside their path, and — full verify — each
+      # crate builds from its isolated tarball (`ludion-cli` vendors its embedded docs in-crate,
+      # drift-gated against `docs/`, so its tarball is self-contained).
+      #
+      # The purge + isolated CARGO_TARGET_DIR are load-bearing under rust-cache: cargo fingerprints
+      # registry-sourced deps as immutable — fair for crates.io, wrong for our re-staged unpublished
+      # crates, which change content at a constant 0.1.0 — so a restored cache would reuse a stale
+      # ludion rmeta as "Fresh" and the gate would verify old code (false greens included). Mirrors
+      # scripts/check.mjs `purgePackageVerifyCaches`.
+      - name: purge stale packaging caches
+        shell: bash
+        run: rm -rf target/package target/package-verify/package target/package-verify/*/.fingerprint/*ludion* target/package-verify/*/deps/*ludion* "$HOME/.cargo/registry/src"/*/ludion-*
+      - name: cargo package --workspace
+        run: cargo package --workspace --exclude breakout --exclude hello-paddle --exclude shmup-stress --exclude sokoban
+        env:
+          CARGO_TARGET_DIR: target/package-verify
+
+      # Warnings are errors: the Phase 9 freeze pass drove rustdoc warnings to zero, and docs.rs
+      # is a publication surface — a broken intra-doc link is a defect there, not a nicety.
+      - name: cargo doc --no-deps
+        run: cargo doc --workspace --no-deps --exclude breakout --exclude hello-paddle --exclude shmup-stress --exclude sokoban
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  thread-identity:
+    name: thread-identity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The 1/2/8-thread hash-identity gate (Plan/deterministic-job-system.md J0): the named replay
+      # corpus (games/breakout/run.lrp here; the Lore-only game's replays run in the private CI) must
+      # replay to bit-identical WorldHash sequences at 1, 2, and 8 threads. Every test in
+      # games/breakout's tests/thread_identity.rs is `#[ignore]`d (a full run.lrp replay driven three times, hashed
+      # every frame, is minutes), so `--run-ignored ignored-only` is what actually selects them. A
+      # separate job, not folded into `check`: `check` is the gate set every run pays for and this
+      # gate is minutes of replay on top.
+      #
+      # `--profile no-gpu`: not because `thread_identity` is in the `gpu` test-group (it isn't — it
+      # replays a committed corpus and hashes, no wgpu device involved) but for the same reason as
+      # every other hosted invocation below — windows-latest / macos-latest have no real GPU, and
+      # every hosted `cargo nextest run` in this file runs the same profile on principle.
+      - uses: taiki-e/install-action@nextest
+
+      - name: cargo nextest run (thread-identity gate)
+        run: cargo nextest run --profile no-gpu -E 'binary(thread_identity)' --run-ignored ignored-only
+
+  # Dependency licenses and RustSec advisories over the root workspace and the editor's Tauri host
+  # (decision 10 of the private publication plan, `Plan-Private/`); deny.toml holds the allowlist
+  # and the reasoned advisory ignores. Mirrors scripts/check.mjs `deny` (`--full`).
+  deny:
+    name: deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: cargo deny
+        run: cargo deny check advisories licenses
+
+      - name: cargo deny (editor host)
+        run: cargo deny --manifest-path editor/app/src-tauri/Cargo.toml --config deny.toml check advisories licenses
+
+  denylist-canary:
+    name: denylist-canary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Proves the determinism denylists actually fail a build, on scratch crates under
+      # target/denylist-canary/ (no tracked file is written). Two scratch crates, three probes, each asserting the banned
+      # path and the denylist's reason: HashMap and f32::sin under the strict tier (ludion-core's
+      # clippy.toml), std::thread::spawn under the sim tier (ludion-ecs's).
+      - name: Denylist canary
+        run: node ci/scripts/denylist-canary.mjs
+
+  schema-drift:
+    name: schema-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The layers in one script: the committed schema snapshot (and its `schema_hash`) must
+      # match the protocol code, and protocol.d.ts, patternSchema.ts and schemaHash.ts (the XXH3 of
+      # the snapshot) regenerated into a scratch directory must be byte-identical to the committed ones (the pattern snapshot's Rust half
+      # runs in the test matrix).
+      - name: Schema drift
+        run: node ci/scripts/schema-drift.mjs
+
+      # The gate scripts' own tests: the canary's probes, no other gate writes a tracked file, the
+      # check.mjs run lock.
+      - name: Gate script tests
+        run: node --test ci/scripts/gate-scripts.test.mjs
+
+      # Schema drift writes no tracked file; fails, never skips, without the protocol dependencies.
+      - name: Schema drift writes nothing
+        run: node --test ci/scripts/schema-drift.test.mjs
+
+  # The editor UI's own gates (oxlint / tsc / vitest), which `scripts/check.mjs` has always run and
+  # this file did not — the drift ran backwards, with the local script stronger than the canonical
+  # definition. The UI is a peer protocol client with no privileged engine access, so none of this
+  # needs a GPU, a pinned OS, or the Rust toolchain: one Linux runner is the honest cost.
+  editor-frontend:
+    name: editor-frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: editor/app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: editor/app/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      # Nothing is built first: the app consumes the committed `editor/protocol/src/protocol.d.ts`
+      # through a tsconfig path, and the schema-drift job above is what keeps that file honest.
+      - name: oxlint
+        run: npx oxlint
+
+      # `tsc -b` is the type gate the bundler does not provide: vite transpiles without checking.
+      - name: tsc -b
+        run: npx tsc -b
+
+      - name: vitest
+        run: npx vitest run
+
+# Not here on purpose: *running* the fuzzers (the lint is the `fuzz` steps in the `check` job).
+# Coverage-guided fuzzing is unbounded work, so it needs a scheduled trigger of its own, not this
+# on-demand file. It also needs the quarantined nightly pinned in fuzz/rust-toolchain.toml (outside
+# the workspace's stable pin), a `cargo install cargo-fuzz` with nothing to cache it, and an ASan
+# runtime that matches rustc's LLVM — which rules out `windows-latest`, the platform half this
+# file's matrix exists to cover. It lives in ci/scripts/fuzz.{sh,ps1}, scheduled by the private
+# TeamCity configs; see those scripts' headers and fuzz/README.md for the targets, the budget, and
+# what to do with a finding. Reviving it here means a second workflow file with its own
+# `on: schedule`, not a sixth job in this one.

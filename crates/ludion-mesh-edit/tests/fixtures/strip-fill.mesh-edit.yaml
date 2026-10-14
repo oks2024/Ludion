@@ -1,0 +1,21 @@
+format: 1
+kind: mesh-edit
+name: strip-fill
+source: strip.mesh.yaml
+ops:
+  - op: paint
+    map: emissive
+    size: 32
+    color:
+      - 0.05
+      - 1.0
+      - 0.35
+    region:
+      fill:
+        at:
+          - 0.3
+          - 0.0
+          - 0.5
+        tolerance: 0.1
+        max_radius: 1.2
+        feather: 0.4

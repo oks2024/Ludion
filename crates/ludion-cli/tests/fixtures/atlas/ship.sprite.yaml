@@ -1,0 +1,57 @@
+format: 1
+kind: sprite
+name: ship
+size:
+  - 8
+  - 6
+palette:
+  "#":
+    color:
+      - 0.8
+      - 0.8
+      - 0.9
+      - 1.0
+  o:
+    color:
+      - 1.0
+      - 0.4
+      - 0.1
+      - 1.0
+    emissive: 2.0
+frames:
+  idle:
+    pivot:
+      - 4.0
+      - 3.0
+    rows:
+      - "...##..."
+      - "..####.."
+      - ".######."
+      - "###..###"
+      - "..#..#.."
+      - "..o..o.."
+  bank-left:
+    rows:
+      - "..##...."
+      - ".####..."
+      - "######.."
+      - "##..###."
+      - ".#..#..."
+      - ".o..o..."
+effects:
+  - op: outline
+    color:
+      - 0.05
+      - 0.05
+      - 0.1
+      - 1.0
+    side: inside
+  - op: shadow
+    offset:
+      - 2
+      - 1
+    color:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.75

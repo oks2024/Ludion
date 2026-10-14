@@ -1,0 +1,67 @@
+# Sprite budget — pinned Apple M4, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. The two measured ceilings below are roughly twice the
+# median measured in `--release` on the pinned Apple M4, so a failure means a real, reproducible
+# slowdown — never machine noise. All values are milliseconds. Re-calibrate deliberately (a re-bless
+# event) if a cost becomes intended and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is
+# `games/shmup-stress/scenes/steady-drawn.yaml` — the sprite arc's stress scene
+# (`Plan/sprite-engine.md` Wave 4): 2,975 live bullets drawn from 40 distinct regions of one atlas,
+# 357 of them `blend: additive`, over a 480-cell `Tilemap` on the same atlas that a system scrolls,
+# 3,456 sprite quads in all, unlit, with no `Environment`, `PostProcess` or light — so what it
+# measures is the sprite path and nothing else. Its volley twin is `steady.yaml`
+# (`budgets/pinned-apple-m4-shmup-stress.toml`, whose header carries the side-by-side table).
+#
+# **Checked by the game binary, not by `ludion profile`.** The scene's field is built by
+# `shmup-stress`'s own systems, which the CLI driver does not link, so this is the in-process form
+# vigil's E6 gate uses (`ludion devdocs budget-files`), from the workspace root:
+#
+#   cargo run --release -p shmup-stress -- --scene games/shmup-stress/scenes/steady-drawn.yaml --profile 200 --profile-check budgets/pinned-apple-m4-sprite-stress.toml
+#
+# The Apple M4 twin of `budgets/pinned-rtx3090-sprite-stress.toml`: measured on this box, never
+# derived. An invented per-OS ceiling is a guess wearing a gate's clothes.
+#
+# MEASURED 2026-09-15 over four 200-frame release runs (30 warmup) at 1920x1080 on 8 sim threads:
+#   extract  0.7909 / 0.7861 / 0.7874 / 0.7801   median 0.7868  (the 3090 reads 1.932 — a faster
+#            sim thread here, the ratio to expect between the two boxes' CPUs)
+#   scene    0.3280 / 0.3291 / 0.3278 / 0.3279   median 0.328   (Metal smear, see below)
+#   frame    0.1240 / 0.1236 / 0.1197 / 0.1280   median 0.1238  (emit_bullets 0.042 + move_bullets
+#            0.048 + player_hit_test 0.028 — the arena's own systems, uncalibrated by design)
+#   world_hash 3.79 (recorded, not gated)
+#
+# The measured window's median is a full-field frame: 87 of the 200 measured frames are the census
+# ramp (`live(N) = 25 * min(N + 1, 119)`), and every one of them is cheaper than a full one, so the
+# median sits inside the steady state rather than on the ramp.
+#
+# **METAL PER-PASS TIMESTAMPS OVERCOUNT — the `scene` ceiling below is NOT a frame time.** On this
+# tile-based GPU every pass timestamp captures the whole overlapping window, so `scene` reads 0.328
+# for three batched draws the 3090 resolves at 0.057. Consistent run-to-run, so it still trips on a
+# real slowdown in this scene against itself; never compare it across boxes.
+
+# The exit line: a 60 fps frame. **A fixed target, not 2x a median** — the same posture as
+# vigil's E6 `frame_total_ms`. This is the sim schedule alone (0.1238 measured); `extract_ms` below
+# is the other half of the per-frame CPU cost and is gated separately.
+frame_total_ms = 16.6
+
+# The line this file exists for. Every sprite is placed, sorted and packed at extract on the sim
+# thread, and a textured one additionally resolves its atlas region by name for both the derived
+# quad extent and the UV rect — so a heavier extract steals tick time before any GPU cost shows.
+# Checked wherever a report carries an `extract` sequential entry (the offline driver and a live
+# `--attach` capture both do).
+#
+# Measured median 0.7868 over the four runs above; the ceiling is 1.6, the ~2x posture.
+extract_ms = 1.6
+
+# The sprite pass itself — sprites draw inside `scene`; there is no separate sprite pass to name.
+# 3,456 unlit premultiplied quads at 1080p, alpha and additive mixed, batched by `(layer, texture)`
+# into three draws. Measured 0.328 (the smeared Metal reading, see the header); the ceiling is 0.65.
+[passes]
+scene = 0.65
+
+# Deliberately absent: `composite` and the `bloom` group (pure functions of the output extent and
+# already gated on `lights.yaml`); `[systems]`, because this scene's sim systems are
+# `Plan/bullet-hell-stress.md`'s measurement and that plan holds them deliberately uncalibrated —
+# gating them here would quietly make this file the arena's budget as well as the sprite layer's, and
+# a budget means one calibration scene and one question; `cluster_build_ms`, because the scene
+# authors no light, so the panel reads zero and would gate nothing.

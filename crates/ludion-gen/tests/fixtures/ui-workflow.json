@@ -1,0 +1,60 @@
+{
+  "id": "4a8d0f16-0b3a-4d9a-8a53-3a3b0d8f2f11",
+  "revision": 0,
+  "last_node_id": 7,
+  "last_link_id": 9,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "CheckpointLoaderSimple",
+      "pos": [
+        26,
+        474
+      ],
+      "size": [
+        315,
+        98
+      ],
+      "widgets_values": [
+        "flux2-klein-4b.safetensors"
+      ]
+    },
+    {
+      "id": 7,
+      "type": "SaveImage",
+      "pos": [
+        1451,
+        189
+      ],
+      "size": [
+        210,
+        58
+      ],
+      "widgets_values": [
+        "ComfyUI"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      5,
+      0,
+      "MODEL"
+    ],
+    [
+      2,
+      1,
+      1,
+      2,
+      1,
+      "CLIP"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

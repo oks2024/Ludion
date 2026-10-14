@@ -1,0 +1,144 @@
+format: 1
+name: sokoban
+seed: 0
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 9.0
+  - name: level
+    components:
+      Transform:
+        translation:
+          - -3.5
+          - 3.0
+          - 0.0
+      Tilemap:
+        cell_size: 1.0
+        legend:
+          "#":
+            color:
+              - 0.3
+              - 0.26
+              - 0.38
+              - 1.0
+            lit: true
+          ".":
+            color:
+              - 0.11
+              - 0.11
+              - 0.15
+              - 1.0
+            lit: true
+          "x":
+            color:
+              - 0.16
+              - 0.45
+              - 0.24
+              - 1.0
+            lit: true
+        rows:
+          - "########"
+          - "#......#"
+          - "#..x...#"
+          - "#......#"
+          - "#.....x#"
+          - "#......#"
+          - "########"
+  - name: player
+    components:
+      Transform:
+        translation:
+          - -0.5
+          - -1.0
+          - 0.5
+      Sprite:
+        size:
+          - 0.8
+          - 0.8
+        color:
+          - 0.3
+          - 0.75
+          - 1.0
+          - 1.0
+        lit: true
+      GridPos:
+        col: 3
+        row: 4
+        start_col: 3
+        start_row: 4
+      Player: {}
+  - name: crate-a
+    components:
+      Transform:
+        translation:
+          - -0.5
+          - 0.0
+          - 0.5
+      Sprite:
+        size:
+          - 0.85
+          - 0.85
+        color:
+          - 0.78
+          - 0.55
+          - 0.25
+          - 1.0
+        lit: true
+      GridPos:
+        col: 3
+        row: 3
+        start_col: 3
+        start_row: 3
+      Pushable: {}
+  - name: crate-b
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - -1.0
+          - 0.5
+      Sprite:
+        size:
+          - 0.85
+          - 0.85
+        color:
+          - 0.78
+          - 0.55
+          - 0.25
+          - 1.0
+        lit: true
+      GridPos:
+        col: 5
+        row: 4
+        start_col: 5
+        start_row: 4
+      Pushable: {}
+  - name: light
+    components:
+      Transform:
+        translation:
+          - -1.0
+          - 1.0
+          - 5.0
+      PointLight:
+        intensity: 0.7
+        range: 25.0
+  - name: status
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 4.0
+          - 0.5
+      Text:
+        text: "Moves: 0"
+        size: 0.5
+      GameState: {}

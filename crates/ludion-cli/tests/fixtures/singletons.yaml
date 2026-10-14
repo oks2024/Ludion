@@ -1,0 +1,21 @@
+format: 1
+name: singletons
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 20.0
+          - 8.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: player
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.0
+          - 3.0

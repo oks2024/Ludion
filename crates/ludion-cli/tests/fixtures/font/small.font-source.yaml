@@ -1,0 +1,9 @@
+format: 1
+kind: font-source
+name: small
+file: Inter-Regular.ttf
+mode: sdf
+em_px: 32
+spread_px: 4
+charset:
+  chars: "AVI"

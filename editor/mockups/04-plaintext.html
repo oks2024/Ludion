@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ludion — Level Designer</title>
+<style>
+  /* ============================================================
+     Direction 04 — "Plaintext"
+     The editor IS one continuous annotated document: gutters,
+     fold carets, syntax color, chrome-as-comments.
+     ============================================================ */
+
+  :root{
+    --bg:      #16130E;  /* warm black — ground            */
+    --gutter:  #241F17;  /* gutters / panel separation      */
+    --key:     #6FB8A8;  /* yaml keys, panel titles         */
+    --string:  #A8C87C;  /* string values, ok states        */
+    --number:  #E0B061;  /* numeric values, meters          */
+    --comment: #7A7264;  /* secondary text, disabled, chrome*/
+    --paper:   #F2E8D5;  /* primary text, cursor, selection */
+    --error:   #CC5544;  /* dirty indicator, errors         */
+
+    --mono: "Cascadia Code", Consolas, "Segoe UI Variable", "Segoe UI", ui-monospace, monospace;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    background: var(--gutter);
+    font-family: var(--mono);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection{ background: var(--paper); color: var(--bg); }
+
+  ::-webkit-scrollbar{ width:10px; height:10px; }
+  ::-webkit-scrollbar-track{ background: var(--bg); }
+  ::-webkit-scrollbar-thumb{ background: var(--gutter); border:2px solid var(--bg); border-radius:6px; }
+  ::-webkit-scrollbar-thumb:hover{ background: #33291b; }
+
+  button, [tabindex]{ font-family: inherit; }
+  button{ background:none; border:none; color:inherit; cursor:pointer; padding:0; }
+
+  :focus-visible{
+    outline: 2px solid var(--paper);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* ---------- app window shell ---------- */
+  .window{
+    width:100vw; height:100vh;
+    min-width: 1280px;
+    display:flex; flex-direction:column;
+    background: var(--bg);
+    color: var(--paper);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow:hidden;
+  }
+
+  /* ---------- title strip ---------- */
+  .titlebar{
+    flex: 0 0 34px;
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 0 10px 0 14px;
+    background: var(--gutter);
+    border-bottom: 1px solid #000;
+    font-size: 12.5px;
+  }
+  .titlebar-id{ display:flex; align-items:baseline; gap:10px; white-space:nowrap; overflow:hidden; }
+  .titlebar-id .brand{ color: var(--key); font-weight:700; letter-spacing:.04em; }
+  .titlebar-id .brand::before{ content:"# "; color: var(--comment); font-weight:400; }
+  .titlebar-id .path{ color: var(--comment); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .win-controls{ display:flex; gap:2px; }
+  .win-controls button{
+    width:30px; height:24px;
+    display:flex; align-items:center; justify-content:center;
+    color: var(--comment);
+    font-size:12px;
+    border-radius:3px;
+  }
+  .win-controls button:hover{ background:#2e2718; color: var(--paper); }
+  .win-controls button.close:hover{ background: var(--error); color: var(--bg); }
+
+  /* ---------- chrome row: view switcher + session strip ---------- */
+  .chrome-row{
+    flex: 0 0 40px;
+    display:flex; align-items:stretch; justify-content:space-between;
+    background: var(--bg);
+    border-bottom: 1px solid var(--gutter);
+    padding: 0 10px;
+    gap: 16px;
+  }
+
+  .view-switcher{ display:flex; align-items:stretch; gap:2px; overflow:hidden; }
+  .vtab{
+    position:relative;
+    display:flex; align-items:center; gap:6px;
+    padding: 0 14px;
+    color: var(--comment);
+    font-size: 12.5px;
+    border-radius: 3px 3px 0 0;
+  }
+  .vtab .n{ color: var(--comment); }
+  .vtab:hover{ color: var(--paper); }
+  .vtab.active{
+    color: var(--paper);
+    background: var(--gutter);
+  }
+  .vtab.active::after{
+    content:"";
+    position:absolute; left:0; right:0; bottom:-1px; height:2px;
+    background: var(--key);
+  }
+  .vtab.disabled{ color:#4a453a; cursor:not-allowed; }
+  .vtab.disabled .sub{ font-size:10px; color:#4a453a; }
+  .vtab .dot{
+    width:6px; height:6px; border-radius:50%;
+    background: var(--number);
+    flex:0 0 auto;
+  }
+  .vtab .sub{ color: var(--comment); font-size:10.5px; }
+
+  .session-strip{ display:flex; align-items:center; gap:14px; }
+
+  .mode-toggle{
+    display:flex; border:1px solid var(--gutter); border-radius:4px; overflow:hidden;
+  }
+  .mode-toggle button{ padding:5px 12px; font-size:12px; color:var(--comment); }
+  .mode-toggle button.active{ background: var(--gutter); color: var(--string); }
+
+  .save-btn{
+    display:flex; align-items:center; gap:6px;
+    padding:5px 10px; border-radius:4px; font-size:12px; color: var(--paper);
+  }
+  .save-btn:hover{ background: var(--gutter); }
+  .save-btn .dirty-dot{ color: var(--error); font-size:14px; line-height:0; }
+
+  .undoredo{ display:flex; gap:2px; }
+  .undoredo button{ padding:5px 8px; border-radius:4px; color: var(--comment); font-size:13px; }
+  .undoredo button:hover{ background: var(--gutter); color: var(--paper); }
+
+  .conn-chip{
+    display:flex; align-items:center; gap:6px;
+    border:1px solid var(--gutter); border-radius:12px;
+    padding: 3px 10px;
+    font-size: 11px; color: var(--comment);
+    white-space:nowrap;
+  }
+  .conn-chip .live{ width:6px; height:6px; border-radius:50%; background: var(--string); flex:0 0 auto; }
+  .conn-chip b{ color: var(--string); font-weight:600; }
+
+  /* ---------- generic "document panel" chrome: gutter + comment title ---------- */
+  .panel{
+    display:flex; flex-direction:column;
+    background: var(--bg);
+    min-height:0;
+  }
+  .panel + .panel{ border-top: 1px solid var(--gutter); }
+  .panel-title{
+    flex:0 0 auto;
+    display:flex; align-items:baseline; gap:6px;
+    padding: 7px 10px 6px 10px;
+    font-size: 11.5px;
+    color: var(--comment);
+    background: var(--bg);
+    border-bottom: 1px solid var(--gutter);
+  }
+  .panel-title .hash{ color: var(--comment); }
+  .panel-title .k{ color: var(--key); }
+  .panel-body{ flex:1; min-height:0; overflow:auto; }
+
+  .doc{ display:flex; min-height:100%; }
+  .doc .gutter{
+    flex: 0 0 30px;
+    background: var(--gutter);
+    color: var(--comment);
+    text-align:right;
+    padding: 6px 6px 6px 0;
+    font-size: 11px;
+    user-select:none;
+  }
+  .doc .gutter div{ height:19px; line-height:19px; }
+  .doc .code{
+    flex:1; min-width:0;
+    padding: 6px 10px 6px 10px;
+    white-space:pre;
+    font-size: 12px;
+  }
+  .doc .code .line{ height:19px; line-height:19px; }
+
+  /* ---------- main row ---------- */
+  .main-row{ flex:1; min-height:0; display:flex; }
+
+  .col-left{
+    flex: 0 0 280px;
+    display:flex; flex-direction:column;
+    border-right: 1px solid var(--gutter);
+    min-width:0;
+  }
+  .col-left .hierarchy{ flex: 1.35; min-height:0; }
+  .col-left .kit{ flex: 1; min-height:0; }
+
+  .col-right{
+    flex: 0 0 320px;
+    border-left: 1px solid var(--gutter);
+    min-width:0;
+  }
+
+  /* ---------- hierarchy tree ---------- */
+  .fold{ color: var(--comment); display:inline-block; width:11px; }
+  .tree-row{ position:relative; }
+  .tree-row.selected{ background: #2a2416; }
+  .tree-row.selected::before{
+    content:""; position:absolute; left:0; top:0; bottom:0; width:2px; background: var(--key);
+  }
+  .tree-branch{ color: var(--comment); }
+  .tree-name{ color: var(--paper); }
+  .tree-meta{ color: var(--comment); }
+  .tree-row .selected-tag{ color: var(--key); }
+  .tree-row:hover:not(.selected){ background: #1c1811; cursor:default; }
+
+  /* ---------- kit library grid ---------- */
+  .kit-grid{
+    display:grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    padding: 10px;
+  }
+  .kit-tile{
+    display:flex; flex-direction:column; align-items:center; gap:6px;
+    padding: 8px 4px 6px;
+    border:1px solid var(--gutter);
+    border-radius: 4px;
+    color: var(--comment);
+  }
+  .kit-tile:hover{ border-color:#3a3222; color: var(--paper); background:#1b1710; }
+  .kit-thumb{ width:30px; height:30px; position:relative; }
+  .kit-tile .label{ font-size:10.5px; color:var(--string); }
+
+  .thumb-house{ width:22px; height:16px; background:var(--comment); margin:8px auto 0; position:relative; opacity:.85;}
+  .thumb-house::before{ content:""; position:absolute; top:-7px; left:-2px; right:-2px; height:8px; background:var(--comment); clip-path:polygon(0 100%,50% 0,100% 100%); }
+  .thumb-wall{ width:30px; height:8px; background:var(--comment); margin-top:11px; opacity:.85; }
+  .thumb-wall.corner{ width:18px; height:18px; border-left:8px solid var(--comment); border-bottom:8px solid var(--comment); opacity:.85; }
+  .thumb-gate{ width:22px; height:20px; border:3px solid var(--comment); border-bottom:none; border-radius:8px 8px 0 0; margin:6px auto 0; opacity:.9;}
+  .thumb-well{ width:20px; height:20px; border-radius:50%; border:3px solid var(--comment); margin:5px auto; opacity:.9;}
+  .thumb-fountain{ width:22px; height:22px; border-radius:50%; border:3px solid var(--comment); margin:4px auto; position:relative; opacity:.9;}
+  .thumb-fountain::after{ content:""; position:absolute; inset:6px; border-radius:50%; background:var(--comment); opacity:.6; }
+  .thumb-stall{ width:26px; height:14px; margin:8px auto 0; position:relative; }
+  .thumb-stall::before{ content:""; position:absolute; top:0; left:-3px; right:-3px; height:6px; background:var(--comment); clip-path:polygon(0 0,100% 0,88% 100%,12% 100%); opacity:.85;}
+  .thumb-stall::after{ content:""; position:absolute; bottom:0; left:6px; width:2px; height:10px; background:var(--comment); box-shadow: 14px 0 0 var(--comment); opacity:.85;}
+  .thumb-tree{ width:2px; height:10px; background:var(--comment); margin:14px auto 0; position:relative; opacity:.9;}
+  .thumb-tree::before{ content:""; position:absolute; top:-14px; left:50%; transform:translateX(-50%); border-left:8px solid transparent; border-right:8px solid transparent; border-bottom:14px solid var(--comment); }
+  .thumb-lantern{ width:8px; height:12px; background:var(--comment); margin:9px auto 0; clip-path:polygon(50% 0,100% 20%,100% 100%,0 100%,0 20%); opacity:.9;}
+  .thumb-crate{ width:20px; height:20px; border:2px solid var(--comment); margin:5px auto; opacity:.9;}
+  .thumb-crate::after{ content:""; position:absolute; inset:0; margin:auto; width:14px; height:1px; background:var(--comment); top:9px;}
+  .thumb-slab{ width:28px; height:6px; background:var(--comment); margin-top:12px; opacity:.85; border-radius:1px;}
+
+  /* ---------- viewport ---------- */
+  .viewport-wrap{
+    flex:1; min-width:0;
+    display:flex; flex-direction:column;
+    padding: 10px 14px;
+    min-height:0;
+  }
+  .fence-line{
+    font-size:11px; color: var(--comment); padding: 0 2px 6px;
+    display:flex; justify-content:space-between;
+  }
+  .fence-line .tag{ color:var(--comment); }
+  .fence-line .tag b{ color: var(--key); font-weight:600; }
+
+  .viewport{
+    position:relative;
+    flex:1; min-height:0;
+    border: 1px solid var(--gutter);
+    border-radius: 4px;
+    background:
+      radial-gradient(ellipse at 50% 55%, #1c1810 0%, var(--bg) 70%);
+    overflow:hidden;
+  }
+  .viewport::before{ /* 80-col style margin ruler, purely atmospheric */
+    content:"";
+    position:absolute; left:50%; top:0; bottom:0; width:1px;
+    background: repeating-linear-gradient(to bottom, var(--gutter) 0 4px, transparent 4px 9px);
+    opacity:.5;
+  }
+
+  .ground{ position:absolute; inset:0; width:100%; height:100%; }
+
+  .stage{ position:absolute; inset:0; }
+
+  .ov{
+    position:absolute; font-size:11px; color: var(--comment);
+    background: rgba(22,19,14,.72);
+    padding: 3px 7px; border-radius: 3px; border: 1px solid var(--gutter);
+    white-space:nowrap;
+  }
+  .ov-tl{ top:8px; left:8px; }
+  .ov-tr{ top:8px; right:8px; color: var(--number); }
+  .ov-tr b{ color: var(--string); font-weight:600; }
+  .ov-b{ bottom:8px; left:8px; }
+  .ov .k{ color: var(--key); }
+
+  .vol{ position:absolute; border-radius:2px; }
+  .vol .roof{
+    position:absolute; left:-2px; right:-2px; top:0; height:5px;
+    background: var(--comment); opacity:.55; border-radius:2px 2px 0 0;
+  }
+  .vol.house{ background: linear-gradient(#2c2618,#211c12); box-shadow: 0 5px 10px rgba(0,0,0,.5); }
+  .vol.wall{ background: #221d13; box-shadow: 0 3px 6px rgba(0,0,0,.45); }
+  .vol.wall.run::after{
+    content:""; position:absolute; inset:0;
+    background: repeating-linear-gradient(90deg, transparent 0 18px, rgba(0,0,0,.35) 18px 19px);
+  }
+
+  .vol.selected{
+    outline: 2px solid var(--paper);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 6px rgba(242,232,213,.08), 0 6px 14px rgba(0,0,0,.55);
+  }
+  .sel-tag{
+    position:absolute; top:-20px; left:50%; transform:translateX(-50%);
+    font-size:10.5px; color: var(--key); white-space:nowrap;
+    background: rgba(22,19,14,.85); padding:1px 5px; border-radius:2px;
+  }
+
+  .fountain{
+    position:absolute; border-radius:50%;
+    border: 2px solid var(--comment);
+    background: radial-gradient(circle at 40% 35%, #2c2618, var(--bg) 75%);
+  }
+  .fountain::after{
+    content:""; position:absolute; inset:30%; border-radius:50%;
+    background: var(--paper); opacity:.12;
+  }
+
+  .gate-mark{
+    position:absolute; border:2px solid var(--key); border-bottom:none;
+    border-radius: 10px 10px 0 0; opacity:.85;
+  }
+  .gate-label{
+    position:absolute; font-size:10px; color: var(--comment); white-space:nowrap;
+  }
+
+  .gizmo{ position:absolute; }
+  .gz-axis{ position:absolute; transform-origin: 0 0; }
+  .gz-axis.x{ height:2px; background: var(--error); }
+  .gz-axis.z{ height:2px; background: var(--key); }
+  .gz-axis.y{ width:2px; background: var(--string); }
+  .gz-head{ position:absolute; width:0; height:0; }
+  .gz-head.x{ border-top:4px solid transparent; border-bottom:4px solid transparent; border-left:7px solid var(--error); }
+  .gz-head.z{ border-top:4px solid transparent; border-bottom:4px solid transparent; border-left:7px solid var(--key); }
+  .gz-head.y{ border-left:4px solid transparent; border-right:4px solid transparent; border-bottom:7px solid var(--string); }
+
+  /* ---------- inspector (signature: the entity IS yaml) ---------- */
+  .field{
+    color: inherit;
+    border-bottom: 1px dashed rgba(242,232,213,.35);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  .field:hover{ background: rgba(242,232,213,.08); }
+  .field:focus-visible{ background: rgba(111,184,168,.16); border-bottom-color: var(--key); }
+  .fnum{ color: var(--number); }
+  .fstr{ color: var(--string); }
+  .fkey{ color: var(--key); }
+  .fhint{ color: var(--comment); font-style:normal; }
+  .brace{ color: var(--comment); }
+
+  /* ---------- terminal drawer ---------- */
+  .terminal-drawer{
+    flex: 0 0 280px;
+    display:flex; flex-direction:column;
+    border-top: 1px solid var(--gutter);
+    background: var(--bg);
+    min-height:0;
+  }
+  .terminal-drawer.collapsed{ flex-basis: 30px; }
+  .terminal-drawer.collapsed .term-body{ display:none; }
+
+  .term-tabbar{
+    flex:0 0 32px;
+    display:flex; align-items:stretch;
+    border-bottom: 1px solid var(--gutter);
+    padding: 0 6px;
+    gap: 4px;
+  }
+  .term-tab{
+    display:flex; align-items:center; gap:8px;
+    padding: 0 10px;
+    font-size: 11.5px;
+    color: var(--comment);
+    border-radius: 3px 3px 0 0;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .term-tabbar{ overflow-x:auto; overflow-y:hidden; }
+  .term-tab.active{ background: var(--gutter); color: var(--paper); }
+  .term-tab .name{ white-space:nowrap; }
+  .term-tab .chip{
+    font-size:9.5px; padding:1px 6px; border-radius:8px;
+    text-transform:lowercase; letter-spacing:.02em;
+  }
+  .term-tab.active .chip.working{ background: rgba(168,200,124,.18); color: var(--string); }
+  .term-tab .chip.idle{ background: rgba(122,114,100,.18); color: var(--comment); }
+  .term-tab .meter{ display:flex; align-items:center; gap:5px; }
+  .term-tab .meter-bar{ width:40px; height:4px; border-radius:2px; background:#3a3222; overflow:hidden; }
+  .term-tab .meter-fill{ height:100%; background: var(--number); }
+  .term-tab .meter-txt{ color: var(--comment); font-size:10px; }
+  .term-tab .cache{ color: var(--comment); font-size:10px; }
+  .term-new{
+    display:flex; align-items:center; justify-content:center;
+    width:28px; color: var(--comment); font-size:14px;
+  }
+  .term-new:hover{ color: var(--paper); }
+  .drawer-collapse{
+    margin-left:auto; align-self:center;
+    color: var(--comment); font-size:11px; padding: 0 10px;
+  }
+  .drawer-collapse:hover{ color: var(--paper); }
+
+  .term-body{ flex:1; min-height:0; display:flex; }
+  .term-transcript{
+    flex:1; min-width:0; overflow:auto;
+    padding: 10px 14px;
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .persona{ color: var(--comment); margin-bottom:8px; }
+  .persona .diamond{ color: var(--key); }
+  .term-user{ color: var(--paper); margin-bottom:6px; }
+  .term-user .prompt{ color: var(--key); }
+  .term-line{ color: var(--comment); }
+  .term-line .glyph{ color: var(--number); display:inline-block; width:1.3em; }
+  .term-line .glyph.ok{ color: var(--string); }
+  .term-line .path{ color: var(--string); }
+  .term-input{ display:flex; align-items:center; gap:8px; margin-top:10px; color:var(--comment); }
+  .term-input .prompt{ color: var(--key); }
+  .cursor{
+    display:inline-block; width:7px; height:14px;
+    background: var(--paper);
+    animation: blink 1s steps(1) infinite;
+    vertical-align: -2px;
+  }
+  @keyframes blink{ 0%,49%{ opacity:1; } 50%,100%{ opacity:0; } }
+  @media (prefers-reduced-motion: reduce){
+    .cursor{ animation: none; opacity:1; }
+  }
+
+  /* ---------- status bar ---------- */
+  .statusbar{
+    flex: 0 0 24px;
+    display:flex; align-items:center; gap:10px;
+    padding: 0 12px;
+    background: var(--gutter);
+    color: var(--comment);
+    font-size: 11px;
+    border-top: 1px solid #000;
+  }
+  .statusbar .hash{ color: var(--comment); }
+  .statusbar .num{ color: var(--number); }
+  .statusbar .sep{ color: #4a453a; }
+</style>
+</head>
+<body>
+
+<div class="window">
+
+  <!-- ================= title strip ================= -->
+  <header class="titlebar">
+    <div class="titlebar-id">
+      <span class="brand">LUDION</span>
+      <span class="path">vigil — district-plaza.yaml</span>
+    </div>
+    <div class="win-controls">
+      <button title="minimize">─</button>
+      <button title="maximize">▢</button>
+      <button class="close" title="close">✕</button>
+    </div>
+  </header>
+
+  <!-- ================= view switcher + session strip ================= -->
+  <div class="chrome-row">
+    <nav class="view-switcher">
+      <button class="vtab active">Level Designer</button>
+      <button class="vtab">Game Designer <span class="dot" title="background instance working"></span></button>
+      <button class="vtab disabled" title="awaiting engine surface">Lighter<span class="sub"> · awaiting engine surface</span></button>
+      <button class="vtab disabled" title="awaiting engine surface">Art Director<span class="sub"> · awaiting engine surface</span></button>
+    </nav>
+    <div class="session-strip">
+      <div class="mode-toggle">
+        <button class="active">edit</button>
+        <button>play</button>
+      </div>
+      <button class="save-btn" title="unsaved changes"><span class="dirty-dot">●</span>save</button>
+      <div class="undoredo">
+        <button title="undo">↺</button>
+        <button title="redo">↻</button>
+      </div>
+      <div class="conn-chip"><span class="live"></span>ws://127.0.0.1:9411 · schema a3f2c91 · <b>connected</b></div>
+    </div>
+  </div>
+
+  <!-- ================= main row ================= -->
+  <div class="main-row">
+
+    <!-- ---------- left column ---------- -->
+    <aside class="col-left">
+
+      <section class="panel hierarchy">
+        <div class="panel-title"><span class="hash">#</span> <span class="k">hierarchy</span> — district-plaza.yaml</div>
+        <div class="panel-body">
+          <div class="doc">
+            <div class="gutter">
+              <div>1</div><div>2</div><div>3</div><div>4</div><div>5</div>
+              <div>6</div><div>7</div><div>8</div><div>9</div><div>10</div>
+              <div>11</div><div>12</div><div>13</div><div>14</div><div>15</div>
+              <div>16</div><div>17</div>
+            </div>
+            <div class="code">
+              <div class="line"><span class="fold">▾</span><span class="tree-name">district-plaza:</span></div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>floor <span class="tree-meta">(24×24)</span></div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>fountain</div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>house-a-01</div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>house-a-02</div>
+              <div class="line tree-row selected"><span class="tree-branch">├ </span><span class="tree-name">house-a-03</span> <span class="selected-tag"># ← selected</span></div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>house-a-04</div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>house-b-01</div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>house-b-02</div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>wall-north <span class="tree-meta">(run ×12)</span></div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>wall-east <span class="tree-meta">(run ×10)</span></div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>wall-west <span class="tree-meta">(run ×10)</span></div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>gate-to-market</div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>player-spawn</div>
+              <div class="line tree-row"><span class="tree-branch">├ </span>quest-merchant</div>
+              <div class="line tree-row"><span class="tree-branch">└ </span>quest-shrine</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel kit">
+        <div class="panel-title"><span class="hash">#</span> <span class="k">kit</span> — parts library</div>
+        <div class="panel-body">
+          <div class="kit-grid">
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-house"></div></div><span class="label">house-a</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-house"></div></div><span class="label">house-b</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-wall"></div></div><span class="label">wall-straight</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-wall corner"></div></div><span class="label">wall-corner</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-gate"></div></div><span class="label">gate</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-well"></div></div><span class="label">well</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-fountain"></div></div><span class="label">fountain</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-stall"></div></div><span class="label">market-stall</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-tree"></div></div><span class="label">tree</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-lantern"></div></div><span class="label">lantern</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-crate"></div></div><span class="label">crate</span></div>
+            <div class="kit-tile" tabindex="0"><div class="kit-thumb"><div class="thumb-slab"></div></div><span class="label">floor-slab</span></div>
+          </div>
+        </div>
+      </section>
+
+    </aside>
+
+    <!-- ---------- center viewport ---------- -->
+    <section class="viewport-wrap">
+      <div class="fence-line">
+        <span class="tag">```<b>preview</b>: district-plaza.yaml</span>
+        <span class="tag">selection → house-a-03</span>
+      </div>
+      <div class="viewport">
+        <svg class="ground" preserveAspectRatio="none" viewBox="0 0 100 100">
+          <defs>
+            <pattern id="grid" width="6.25" height="6.25" patternUnits="userSpaceOnUse">
+              <path d="M 6.25 0 L 0 0 0 6.25" fill="none" stroke="#241F17" stroke-width="0.25"/>
+            </pattern>
+          </defs>
+          <rect x="8" y="6" width="84" height="88" fill="url(#grid)" />
+          <rect x="8" y="6" width="84" height="88" fill="none" stroke="#3a3222" stroke-width="0.4" />
+        </svg>
+
+        <div class="stage">
+          <!-- walls -->
+          <div class="vol wall run" style="left:9%; top:8%; width:70%; height:2.2%;" title="wall-north (run ×12)"></div>
+          <div class="vol wall run" style="left:88%; top:8%; width:2.2%; height:80%;" title="wall-east (run ×10)"></div>
+          <div class="vol wall run" style="left:9%; top:8%; width:2.2%; height:50%;" title="wall-west (run ×10)"></div>
+          <div class="vol wall run" style="left:9%; top:58%; width:2.2%; height:30%;" title="wall-west (run ×10)"></div>
+
+          <!-- south gate opening -->
+          <div class="gate-mark" style="left:40%; top:84%; width:14%; height:8%;"></div>
+          <div class="gate-label" style="left:39%; top:93%;">gate-to-market</div>
+
+          <!-- fountain -->
+          <div class="fountain" style="left:44%; top:45%; width:12%; height:12%;" title="fountain"></div>
+
+          <!-- houses -->
+          <div class="vol house" style="left:16%; top:16%; width:12%; height:14%;" title="house-a-01"><div class="roof"></div></div>
+          <div class="vol house" style="left:30%; top:14%; width:12%; height:14%;" title="house-a-02"><div class="roof"></div></div>
+
+          <div class="vol house selected" style="left:60%; top:16%; width:13%; height:15%;" title="house-a-03">
+            <div class="roof"></div>
+            <span class="sel-tag">house-a-03</span>
+            <div class="gizmo">
+              <div class="gz-axis x" style="left:50%; top:50%; width:34px;"></div>
+              <div class="gz-head x" style="left:calc(50% + 34px); top:calc(50% - 4px);"></div>
+              <div class="gz-axis z" style="left:50%; top:50%; width:26px; transform:rotate(-46deg);"></div>
+              <div class="gz-head z" style="left:calc(50% + 19px); top:calc(50% - 22px); transform:rotate(-46deg);"></div>
+              <div class="gz-axis y" style="left:50%; top:50%; height:34px; transform:translateY(-100%);"></div>
+              <div class="gz-head y" style="left:calc(50% - 4px); top:calc(50% - 44px);"></div>
+            </div>
+          </div>
+
+          <div class="vol house" style="left:75%; top:18%; width:12%; height:14%;" title="house-a-04"><div class="roof"></div></div>
+          <div class="vol house" style="left:16%; top:62%; width:13%; height:15%;" title="house-b-01"><div class="roof"></div></div>
+          <div class="vol house" style="left:16%; top:40%; width:13%; height:15%;" title="house-b-02"><div class="roof"></div></div>
+        </div>
+
+        <div class="ov ov-tl"><span class="k">district-plaza.yaml</span> · edit</div>
+        <div class="ov ov-tr">0.97 ms · <b>60 fps</b></div>
+        <div class="ov ov-b">cam <span class="k">14.2, 9.0, −6.5</span> · yaw 38°</div>
+      </div>
+      <div class="fence-line">
+        <span class="tag">```</span>
+        <span class="tag">Y-up · grid 1m</span>
+      </div>
+    </section>
+
+    <!-- ---------- right column: inspector ---------- -->
+    <aside class="col-right panel inspector">
+      <div class="panel-title"><span class="hash">#</span> <span class="k">inspector</span> — house-a-03</div>
+      <div class="panel-body">
+        <div class="doc">
+          <div class="gutter">
+            <div>1</div><div>2</div><div>3</div><div>4</div><div>5</div>
+            <div>6</div><div>7</div><div>8</div><div>9</div>
+          </div>
+          <div class="code">
+            <div class="line"><span class="fkey">house-a-03</span><span class="brace">:</span></div>
+            <div class="line">  <span class="fkey">transform</span><span class="brace">:</span></div>
+            <div class="line">    <span class="fkey">position</span><span class="brace">: [</span><span class="field fnum" tabindex="0">6.0</span><span class="brace">, </span><span class="field fnum" tabindex="0">0.0</span><span class="brace">, </span><span class="field fnum" tabindex="0">-4.5</span><span class="brace">]</span>   <span class="fhint"># floor top sits at Y=0</span></div>
+            <div class="line">    <span class="fkey">rotation</span><span class="brace">: [</span><span class="field fnum" tabindex="0">0</span><span class="brace">, </span><span class="field fnum" tabindex="0">90</span><span class="brace">, </span><span class="field fnum" tabindex="0">0</span><span class="brace">]</span></div>
+            <div class="line">    <span class="fkey">scale</span><span class="brace">: </span><span class="field fnum" tabindex="0">1</span></div>
+            <div class="line">  <span class="fkey">mesh</span><span class="brace">: { </span><span class="fkey">source</span><span class="brace">: </span><span class="field fstr" tabindex="0">voxel/house-a.yaml</span><span class="brace">, </span><span class="fkey">size</span><span class="brace">: [</span><span class="field fnum" tabindex="0">8</span><span class="brace">, </span><span class="field fnum" tabindex="0">9</span><span class="brace">, </span><span class="field fnum" tabindex="0">7</span><span class="brace">] }</span></div>
+            <div class="line">  <span class="fkey">collider</span><span class="brace">: { </span><span class="fkey">kind</span><span class="brace">: </span><span class="field fstr" tabindex="0">static-aabb</span><span class="brace">, </span><span class="fkey">half_extents</span><span class="brace">: [</span><span class="field fnum" tabindex="0">4.0</span><span class="brace">, </span><span class="field fnum" tabindex="0">4.5</span><span class="brace">, </span><span class="field fnum" tabindex="0">3.5</span><span class="brace">] }</span></div>
+            <div class="line">  <span class="fkey">material</span><span class="brace">: { </span><span class="fkey">palette</span><span class="brace">: </span><span class="field fstr" tabindex="0">plaza-warm</span><span class="brace">, </span><span class="fkey">slot</span><span class="brace">: </span><span class="field fnum" tabindex="0">3</span><span class="brace"> }</span></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- ================= terminal drawer ================= -->
+  <section class="terminal-drawer" id="drawer">
+    <div class="term-tabbar">
+      <button class="term-tab active">
+        <span class="name">level-designer · 1</span>
+        <span class="chip working">working</span>
+        <span class="meter" title="context used"><span class="meter-bar"><span class="meter-fill" style="width:34%"></span></span><span class="meter-txt">68k / 200k</span></span>
+        <span class="cache">cache 4:12</span>
+      </button>
+      <button class="term-tab">
+        <span class="name">level-designer · 2</span>
+        <span class="chip idle">idle</span>
+        <span class="meter" title="context used"><span class="meter-bar"><span class="meter-fill" style="width:9%"></span></span><span class="meter-txt">18k / 200k</span></span>
+        <span class="cache">cache 9:47</span>
+      </button>
+      <button class="term-new" title="new terminal">+</button>
+      <button class="drawer-collapse" id="drawer-toggle" title="collapse drawer">▾ collapse</button>
+    </div>
+    <div class="term-body">
+      <div class="term-transcript">
+        <div class="persona"><span class="diamond">◆</span> persona: level-designer · ludion-mcp @ ws://127.0.0.1:9411 · cwd games/vigil</div>
+        <div class="term-user"><span class="prompt">&gt;</span> extend the south alley with six more houses along the west wall — keep the kite lane clear</div>
+        <div class="term-line"><span class="glyph">✱</span> reading context file … selection <span class="path">house-a-03</span> · camera over south gate</div>
+        <div class="term-line"><span class="glyph">→</span> entity.spawn house-b ×6 along wall-west … done</div>
+        <div class="term-line"><span class="glyph">→</span> component.set transform … aligned, floor rule applied</div>
+        <div class="term-line"><span class="glyph ok">✔</span> 6 houses placed · kite lane 3.5 m clear · scene dirty — save when ready</div>
+        <div class="term-input"><span class="prompt">&gt;</span><span class="cursor"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= status bar ================= -->
+  <footer class="statusbar">
+    <span class="hash">#</span>
+    <span>edit mode</span><span class="sep">·</span>
+    <span>unsaved changes</span><span class="sep">·</span>
+    <span>frame <span class="num">0.97 ms</span></span><span class="sep">·</span>
+    <span><span class="num">60</span> fps</span><span class="sep">·</span>
+    <span><span class="num">47</span> entities</span><span class="sep">·</span>
+    <span>Y-up</span><span class="sep">·</span>
+    <span>grid 1m</span>
+  </footer>
+
+</div>
+
+<script>
+  document.getElementById('drawer-toggle').addEventListener('click', function(){
+    var d = document.getElementById('drawer');
+    d.classList.toggle('collapsed');
+    this.textContent = d.classList.contains('collapsed') ? '▸ expand' : '▾ collapse';
+  });
+
+  document.querySelectorAll('.fold').forEach(function(f){
+    f.style.cursor = 'pointer';
+    f.addEventListener('click', function(){
+      f.textContent = f.textContent === '▾' ? '▸' : '▾';
+    });
+  });
+</script>
+
+</body>
+</html>

@@ -1,0 +1,226 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "games/*"]
+# The patched rapier3d and parry3d are path dependencies under the workspace directory; without this
+# they would become members and every workspace gate (clippy, fmt, nextest) would run over them.
+# games/vigil is a detached workspace of its own (its own Cargo.lock), so this lock never names it.
+exclude = ["vendor/rapier3d", "vendor/parry3d", "games/vigil"]
+
+# Shared package metadata. Individual crates inherit these with `field.workspace = true`
+# so version/edition/license stay defined in exactly one place.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.94"
+
+# Shared dependency versions. Crates opt in with `dep.workspace = true`; the version and
+# default feature set are pinned here so every crate agrees on one build of each dependency.
+[workspace.dependencies]
+# Lock-free MPSC/one-shot channels for the live driver seam (engine-architecture.md §3): the
+# tokio side pushes `StampedCommand`s into the intake channel and the sim thread replies via a
+# capacity-1 reply channel whose send never blocks. Deliberately tokio-free so `ludion-engine`
+# stays free of any async runtime dependency — the server is what plugs tokio into these channels.
+crossbeam-channel = "0.5"
+# Async runtime confined to `ludion-server` (engine-architecture.md §3): the WS host runs on a
+# 2-worker multi-thread runtime; `net` for the TCP listener, `sync` for the shutdown watch, and
+# `rt-multi-thread` + `macros` + `time` for the accept loop and its `select!`s.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time"] }
+# Cross-platform Ctrl-C / console-control-event handling. Only `ludion-cli`'s `serve` subcommand
+# uses it, to block until interrupted and then shut the wire host down cleanly (so an armed
+# recording flushes instead of a killed process corrupting the `.lrp`).
+ctrlc = "3"
+# WebSocket transport. `ludion-server` uses the tokio-async binding (it re-exports `tungstenite`,
+# so the server needs no direct tungstenite dep); `ludion-client` uses the sync `tungstenite` for a
+# blocking SDK. Default features only — the `handshake` feature gives plain `ws://` connect with no
+# TLS backend pulled in (M1 is localhost only).
+tokio-tungstenite = "0.24"
+tungstenite = "0.24"
+# `StreamExt`/`SinkExt` for splitting a WS connection into a read stream and a write sink in the
+# server's per-connection task. Only `ludion-server` uses it.
+futures-util = "0.3"
+# QOI image codec for the frame-stream egress path (engine-architecture.md §6): the server encodes
+# each rendered RGBA frame once, per frame, and fans the shared payload out to `frames` subscribers.
+# Chosen over the alternatives (zune-qoi, rapid-qoi) as the reference-quality, most-used Rust QOI
+# crate with a tiny dependency-free footprint and a symmetric `encode_to_vec` / `decode_to_vec` API
+# (the tests decode with it too). `ludion-server` encodes with it; `ludion-window` decodes frame
+# payloads on the windowed-viewer receive path; `ludion-client` only depends on it as a dev-dep, to
+# decode QOI payloads in its own frame-delivery tests (runtime client code never decodes). QOI is the
+# wire default (`FrameFormat`'s `Default`); `LZ4_RGBA` is the second codec, chosen per subscription.
+qoi = "0.4"
+# LZ4 block codec for the second frame format (`FrameFormat::Lz4Rgba`), the cheap-at-both-ends
+# alternative to QOI on localhost: `ludion-server` compresses a subscriber-selected frame, and
+# `ludion-window` decompresses it on the windowed-viewer receive path (the fixture generator in
+# `ludion-server/examples` emits the cross-language pin the editor's TS decoder is tested against).
+# Chosen as the reference-quality pure-Rust LZ4 with a fully safe API — `safe-encode`/`safe-decode`
+# keep the hot loops out of `unsafe`, and `checked-decode` bounds-checks a malformed payload rather
+# than trusting it. `default-features = false` drops the `frame` format (and its twox-hash
+# dependency): only the raw *block* API is used, because the LFR1 header already carries width and
+# height, so any second length/checksum framing would be a contradictable source of truth.
+lz4_flex = { version = "0.14", default-features = false, features = [
+    "std",
+    "safe-encode",
+    "safe-decode",
+    "checked-decode",
+] }
+# Zero-copy, safe casting of plain-old-data structs to `&[u8]` for GPU vertex/instance/uniform
+# uploads. Only `ludion-renderer` uses it, and only through the safe `#[derive(Pod, Zeroable)]`
+# APIs — no `unsafe` at the call sites.
+# Base64 decoding for glTF `data:` URIs (buffers/images embedded in a `.gltf`). Only
+# `ludion-import` uses it — we resolve buffer/image sources by hand rather than enabling `gltf`'s
+# `import` feature, which drags in the whole `image` crate (JPEG decoder included) that decision 3
+# rules out (our `png` decodes; JPEG is L1202). Held to gltf's own 0.13 line so one base64 build is
+# shared. Only the safe slice API (`Engine::decode`) is used — no `unsafe`.
+base64 = "0.13"
+bytemuck = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+# `libm`: glam's own trig (Quat::from_rotation_*, slerp, Vec2::from_angle) otherwise calls the platform libm, which differs across OSes.
+glam = { version = "0.30", features = ["serde", "libm"] }
+libm = "0.2"
+# Cross-platform filesystem watching for hot-reload loops (`ludion dev`'s `src/` watch;
+# engine-architecture.md §3, §8). Only `ludion-assets` uses it — it wraps `notify` in a debounced,
+# coalescing watcher thread and stays GPU-free by boundary rule. Default features pull in the
+# per-OS backend (ReadDirectoryChangesW / FSEvents / inotify).
+notify = "8"
+# WGSL front-end + validator + layouter, used only by `ludion-shader-bindgen` to reflect shader
+# memory layouts and bindings. naga and wgpu release in lockstep from the same repo and are pinned
+# to the same major, so this adds no independent upgrade cadence — the `create_shader_module` path
+# runs this exact parser/layouter, so reflected offsets are the ones the GPU sees.
+naga = "30"
+# Headless GPU execution layer of the frame graph (engine-architecture.md §2). Held loosely:
+# wgpu is the execution layer, and the frame graph's declarative interface is the ash migration
+# seam. Default features (native backends, wgsl) are what the offscreen renderer needs.
+wgpu = "30"
+# Native windowing for the out-of-process windowed viewer (`ludion-window`, Phase 6 Wave 5). Held
+# to the 0.30 line because its `raw-window-handle` (0.6) is the one wgpu 30 speaks — a surface can
+# only be created from a window whose handle version matches the GPU backend's. Only `ludion-window`
+# uses it, and only on the main thread (winit's hard requirement). Default features pull in the
+# per-OS backend (Win32 / AppKit / X11+Wayland) the window needs.
+winit = "0.30"
+# Cross-platform gamepad polling (XInput/DInput on Windows, IOKit on macOS, evdev on Linux) for
+# out-of-sim gamepad capture (`ludion-window`, Phase 13 Wave 4). Only `ludion-window` uses it and
+# only off the sim thread: captured axis/button samples are translated by hand into `input.inject`
+# event `Value`s, the same wire path keys and mouse already use — the sim itself never touches an
+# OS gamepad API, so `gilrs`'s cross-OS/driver variance is a capture-UX concern, never a
+# determinism one (Plan/phase-13-input.md decisions 5-6).
+gilrs = "0.11"
+# Cross-platform audio output for the playback sink (`ludion-audio`, Phase 8 Wave 4). Chosen over
+# rodio, which stacks a mixer + symphonia decoder on top of cpal — our mixer is ~100 lines of
+# gain-and-sum over decoded PCM, and WAV is the only committed format, so cpal alone is the lean
+# fit. Only `ludion-audio` uses it, and it lives entirely off the sim thread (audio never gates
+# determinism). Default features pull in the per-OS backend (WASAPI / CoreAudio / ALSA).
+cpal = "0.15"
+# Pure-Rust Ogg Vorbis decoder for streamed music (`ludion-audio` only — the decoder lives in the
+# sink, so nothing sim-side gains it). Chosen over symphonia (MPL-2.0, a whole codec stack).
+lewton = "0.10"
+# Lean PNG IO for render readback — preferred over `image` to keep the dependency tree small.
+# The encoder writes no timestamp/ancillary chunks, so identical pixels produce identical bytes.
+png = "0.18"
+# Minimal `block_on` for driving wgpu's async adapter/device requests in the lockstep/CLI path.
+pollster = "0.4"
+proptest = "1"
+ryu = "1"
+saphyr-parser = "0.0.8"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+# Type-erased `serde::Serialize` (`&dyn erased_serde::Serialize`) — the one seam serde itself cannot
+# express, and the one the world hash needs: the component registry knows a component only behind an
+# erased fn pointer, while `WorldHash` must drive its *own* `Serializer` over that component to hash
+# it without materializing a `serde_json::Value` per component per frame. Used in exactly two places
+# — `ludion-ecs` borrows the component as `&dyn erased_serde::Serialize`, `ludion-sim` serializes it
+# into the canonical byte stream.
+erased-serde = "0.4"
+# `preserve_order` is load-bearing: it keeps JSON object keys in insertion order (struct
+# declaration order for serde/schemars output), which is what lets the canonical scene writer
+# emit component fields in *struct* order rather than alphabetical (engine-architecture.md §7).
+# Insertion order is deterministic, so this does not weaken the determinism rules. The world
+# hash is immune either way: its canonical encoding sorts object keys explicitly.
+# `float_roundtrip` is load-bearing too: without it a parse may land one ULP off, which moves
+# `WorldHash` for an `f64` in hashed state (`ClipAnchor.elapsed`) that crossed JSON text.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+# Synchronous HTTP client, used only by `ludion-gen` to drive an already-running ComfyUI server
+# (`Plan/comfy-generation.md` decision 19). Chosen because it is blocking: the generation verbs are
+# CLI batch producers, and the workspace must not acquire an async runtime outside `ludion-server`.
+# `default-features = false` drops rustls and gzip — a ComfyUI server is reached over plain `http://`
+# on a LAN or loopback address, so no TLS backend is compiled in (the `tungstenite` posture).
+ureq = { version = "3", default-features = false }
+# TOML parsing for the two host-side settings files. Budget files (per-system / per-pass /
+# frame-total millisecond ceilings) are parsed by `ludion-cli`'s `profile --check` and
+# `ludion-engine`'s `load_budget` (the in-process profile mode `ludion::run --profile-check` drives);
+# quality override files (a preset base plus per-effect toggles) by `ludion-engine`'s
+# `resolve_startup_quality`. Both are per-machine host settings, never content. The project manifest
+# (`ludion.toml`) is checked with lightweight string matching, not a full parse, so those two are the
+# only TOML deserialization targets.
+toml = "0.8"
+# Pure-Rust XXH3 — the world-hash function. `xxh3` is the only feature we use; the algorithm is
+# stable and portable, so the same world bytes hash identically on every platform.
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+# Replay-session framing (engine-architecture.md §6): a session's header, command/input deltas, and
+# keyframe snapshots are each stored as an independent zstd frame, so a reader can skip to the latest
+# keyframe without inflating the whole log. Only `ludion-protocol` uses it, and only through the safe
+# `encode_all` / `decode_all` slice APIs — no `unsafe` at the call sites.
+zstd = "0.13"
+# Font outline and kerning reading for the `bake` feature of `ludion-font` (`Plan/font-assets.md`
+# decision 17). Pinned with `=` because a bake must be byte-identical across machines and versions,
+# and both must share one `read-fonts` (0.43.x): skrifa 0.47 moves to 0.44 and would duplicate it.
+skrifa = { version = "=0.46.1", default-features = false, features = ["std"] }
+harfrust = { version = "=0.13.3", default-features = false, features = ["std"] }
+# Deterministic rigid-body dynamics (`Plan/physics.md`), pinned with `=` because a pin move is a
+# hash-moving event the pin-upgrade ritual gates, not an ordinary bump. `default-features = false`
+# plus `enhanced-determinism` excludes `parallel` (no rayon) and `simd-*` (no SIMD-width-dependent
+# arithmetic); `serde-serialize` is what the snapshot codec needs to capture solver state. Only
+# `ludion-physics` names a rapier or nalgebra type — the boundary rule the crate's `clippy.toml`
+# cannot itself enforce, which is why `scripts/physics-features.mjs` exists.
+# rapier3d and parry3d are vendored and patched (`vendor/<crate>/LUDION-PATCH.md`) and reach the build
+# as path dependencies (rapier here, parry through `vendor/rapier3d/Cargo.toml`), so a game that
+# depends on Ludion by path builds the patched crates too — a root `[patch.crates-io]` would not
+# reach it. `version` stays first for `scripts/physics-pin-ritual.mjs`. A temporary mechanism while
+# Ludion is unpublished: revisit before any crates.io publish (`dev-docs/physics-pin.md`).
+rapier3d = { version = "=0.35.3", path = "vendor/rapier3d", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism", "serde-serialize"] }
+# Binary codec for the physics snapshot blob (`Plan/physics.md` W1): about 4.7x smaller and 11x
+# faster than JSON text for rapier's serialized state, which a structured `serde_json::Value`
+# cannot hold at all (the narrow phase's 128-bit solver masks overflow it). Unpinned within the 1.x
+# line deliberately, but a major bump changes the encoded bytes and is therefore a snapshot-format
+# event, not a routine dependency update.
+bincode = "1"
+
+# Line tables only (file:line in backtraces and panics — what a failing test actually needs)
+# instead of full debug info: MSVC's linker dominates dev-build turnaround on Windows, and full
+# PDBs for the CLI's many integration-test binaries are the bulk of that cost. Runtime behavior
+# is unchanged, so goldens and determinism are unaffected. Set `debug = true` locally when
+# stepping through in a debugger.
+[profile.dev]
+debug = "line-tables-only"
+# The verify loop's cost is test *execution*, not compilation: games/vigil's committed replays
+# re-simulate a 180-second run, so an unoptimized sim is what the loop actually waits on. Measured
+# over those five binaries, opt-0 -> opt-1 cuts them 922 s -> 159 s (replay alone 389 -> 68) while
+# incremental rebuild cost is unchanged (touch a crate, rebuild vigil's test targets: 7.0 -> 5.7 s).
+# opt-2 buys only a further 11% (142 s) for a 30% slower cold workspace build, so 1 is the knee.
+opt-level = 1
+
+# Dependencies build fully optimized regardless of the workspace's own opt-level, so wgpu and the
+# rest of the render/streaming stack run at full speed under a debug workspace
+# (dev-docs/frame-streaming.md).
+[profile.dev.package."*"]
+opt-level = 3
+
+# The two overrides below both exist because of rustc's share-generics: in dev builds a generic
+# instantiation is emitted once, into the deepest already-compiled dependency that can host it —
+# NOT into the crate that owns the call site. The per-frame QOI encode (`qoi::encode_to_vec`, a
+# generic) is the case that bites: a *game* binary's instantiation lands in the `ludion` facade
+# (a game's one engine dep), while `ludion-server`'s own test binaries host it in their own
+# already-covered target. Covering only ludion-server left live games at ~19 fps while its tests
+# ran at ~60 — the facade override is what reaches game-executed code, and both are needed.
+# dev-docs/frame-streaming.md has the full story.
+[profile.dev.package.ludion]
+opt-level = 3
+
+# ludion-server stays opt-3 to cover the encode in its own test targets, and keeps checked
+# arithmetic off as transport hygiene for the per-pixel loop that touches ~8 MB every frame
+# (transport, not sim — no golden or determinism hash covers encoded frames). Side effect: with
+# debug-assertions off, this crate's own tests compile as `!debug_assertions`, so
+# `cargo test -p ludion-server` asserts the real >=30 fps criterion in both profiles.
+[profile.dev.package.ludion-server]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false

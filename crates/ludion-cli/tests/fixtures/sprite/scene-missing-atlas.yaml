@@ -1,0 +1,7 @@
+format: 1
+entities:
+  - name: bolt
+    components:
+      Sprite:
+        atlas: absent.atlas.yaml
+        frame: bolt/idle

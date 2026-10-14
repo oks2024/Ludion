@@ -1,0 +1,11 @@
+format: 1
+entities:
+  - name: lone
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.0
+          - 1.0
+  - name: ghost
+    prefab: prefabs/no-such.prefab.yaml

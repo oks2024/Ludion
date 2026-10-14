@@ -1,0 +1,9 @@
+# The fuzz crate is quarantined from the workspace's stable 1.94.0 pin (Plan/phase-9-hardening.md
+# decision 3): coverage-guided fuzzing needs a nightly for libFuzzer + the sanitizer runtime and
+# `-Z` build-std of the sanitizer'd std. Fuzz targets ship nothing, produce no goldens or hashes,
+# and run only in a scheduled bounded job, so the two toolchains never meet. Pinned to an exact
+# dated nightly for the same reproducibility reason the workspace pins stable.
+# The fuzz scripts (ci/scripts/fuzz.sh, fuzz.ps1) read `channel` from here — the only copy.
+[toolchain]
+channel = "nightly-2026-07-11"
+components = ["rust-src"]

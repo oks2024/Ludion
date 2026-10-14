@@ -1,0 +1,142 @@
+format: 1
+name: model-stage-night
+# The night model stage — same subject, same reference figure, same camera as `model-stage.yaml`,
+# under a night sky and torchlight instead of the neutral key + fill rig, so a palette value can be
+# judged where a night scene will actually show it. Nothing is ever edited here — it is a display
+# surface, like its neutral twin.
+#
+# THIS IS A STARTING NIGHT RIG, not a claim about any particular game's night sky: retune the
+# `Environment`, `DirectionalLight` and `PointLight` numbers below to match your own game's night
+# scenes. It is a hand-authored scene, not generated from anything, so it carries no lockstep
+# guarantee with whatever your game later calls its night.
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.02
+          - 0.055
+        sky_horizon:
+          - 0.05
+          - 0.08
+          - 0.14
+        sky_ground:
+          - 0.006
+          - 0.008
+          - 0.015
+        sun_disc_size: 3.0
+        sun_disc_intensity: 6.0
+        ibl_intensity: 0.9
+  - name: moon
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - -56.0
+      DirectionalLight:
+        direction:
+          - 0.32
+          - -0.45
+          - 0.83
+        color:
+          - 0.55
+          - 0.65
+          - 0.9
+        intensity: 0.8
+        shadow_extent: 96.0
+        shadow_near: 1.0
+        shadow_far: 200.0
+  # A cobbled ground rather than the neutral stage's gallery gray — a palette value reads against
+  # what it will sit on.
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 15.0
+          - 1.0
+          - 15.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.3
+          - 0.29
+          - 0.27
+          - 1.0
+  # THE SUBJECT — same entity, same name, same default as the neutral stage. A bare cube so the
+  # template references no asset.
+  - name: subject
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape: cube
+  # The scale reference — same primitive figure as the neutral stage's.
+  - name: adventurer
+    components:
+      Transform:
+        translation:
+          - 2.6
+          - 0.9
+          - 0.0
+        scale:
+          - 0.5
+          - 1.8
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.5
+          - 1.0
+  # Identical to the neutral stage's camera, so toggling rigs changes only the light.
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - -7.0
+        rotation:
+          - 0.0
+          - 180.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+        near: 0.05
+        far: 100.0
+  - name: moon-fill
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 45.0
+          - -56.0
+      PointLight:
+        color:
+          - 0.55
+          - 0.62
+          - 0.85
+        intensity: 1.2
+        range: 170.0
+  - name: torch-light
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 4.2
+          - -2.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.28
+        intensity: 2.0
+        range: 11.0

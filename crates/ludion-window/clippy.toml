@@ -1,0 +1,11 @@
+# Permissive client-side denylist (engine-architecture.md §5), exactly like ludion-client.
+#
+# ludion-window is a peer protocol client — a winit/wgpu window that subscribes to the `frames`
+# channel of an already-running server and sends `input.inject` back. It has no privileged access to
+# the engine and holds no sim state, so determinism is a property of the far side of the wire, never
+# of this crate. Presentation is inherently wall-clock work (event loop, surface timing), so the
+# strict sim denylist would be wrong here, not merely unnecessary.
+#
+# This file is intentionally empty of `disallowed-types` / `disallowed-methods`; the crate still
+# builds under `cargo clippy -- -D warnings`. Committed empty rather than absent so a later
+# sim-adjacent addition here reads as a decision to revisit, not an oversight.

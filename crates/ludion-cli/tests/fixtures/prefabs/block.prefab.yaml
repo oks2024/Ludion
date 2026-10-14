@@ -1,0 +1,18 @@
+format: 1
+kind: prefab
+name: block
+entities:
+  - name: root
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Collider:
+        shape:
+          aabb:
+            half_extents:
+              - 0.9
+              - 0.9
+        body: static

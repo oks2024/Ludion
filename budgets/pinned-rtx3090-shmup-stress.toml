@@ -1,0 +1,83 @@
+# Projectile-pattern budget — pinned RTX 3090, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each measured ceiling below is roughly twice the
+# median measured in `--release` on the pinned RTX 3090, so a failure means a real, reproducible
+# slowdown — never machine noise. All values are milliseconds. Re-calibrate deliberately (a re-bless
+# event) if a cost becomes intended and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `games/shmup-stress/scenes/steady.yaml`
+# — the projectile-pattern arc's stress scene (`Plan/projectile-patterns.md` Wave 2): the standing
+# 2,975-bullet field as **closed-form volleys** — four `PatternPlayer`s each firing a ring of 25
+# every 4 frames, 119 live `Volley` entities carrying the whole field, every bullet a pure function of
+# `(volley, sim time)` evaluated at extract and by the hit query, drawn from one atlas region over the
+# same 480-cell `Tilemap` backdrop as its entity twin. What it measures is the volley path and
+# nothing else: standing volleys up, reaping them, the overlap query, and the sprite extract.
+#
+# **Its A/B twin is `steady-drawn.yaml`** — the same census, plane, camera, backdrop and art as
+# entity-per-bullet (`Emitter`/`Bullet`), gated by `budgets/pinned-rtx3090-sprite-stress.toml`.
+# The two files are read side by side; neither is derived from the other.
+#
+# **Checked by the game binary, not by `ludion profile`.** The field is stood up by shmup-stress's
+# own schedule (`play_patterns`/`advance_volleys` are engine systems the game registers), which the
+# CLI driver does not link, so this is the in-process form, from the workspace root:
+#
+#   cargo run --release -p shmup-stress -- --scene games/shmup-stress/scenes/steady.yaml --profile 200 --profile-check budgets/pinned-rtx3090-shmup-stress.toml
+#
+# Its Apple M4 twin is `budgets/pinned-apple-m4-shmup-stress.toml`: measured on each box, never derived.
+#
+# MEASURED 2026-09-12 over four 200-frame release runs (30 warmup) at 1920x1080 on 8 sim threads,
+# beside the same four runs of `steady-drawn.yaml` (entities) and `burst.yaml` (volleys, the
+# whole-field cancel every 60 frames):
+#
+#                    steady (volleys)                     steady-drawn (entities)          burst (volleys + cancel)
+#   extract          0.4262 / 0.4208 / 0.4182 / 0.4250    1.9320 / 1.9295 / 1.9497 / 1.9322   0.1719 / 0.1688 / 0.1978 / 0.1699
+#                    median 0.4229                        median 1.9321                       median 0.1709
+#   world_hash       0.1782                               5.7944                              0.0565
+#   play_patterns    0.0028                               0.0346 (idle: walks 2,975 entities)  0.0020
+#   advance_volleys  0.0041                               0.0316 (idle: the same walk)         0.0013
+#   player_hit_test  0.1076 (volley_hits over 119 volleys)  0.0376 (a brute scan of 2,975)     0.0558
+#   frame (sim)      0.1185                               0.2513                              0.0626
+#   scene            0.0594                               0.0573                              0.0297
+#
+# So the same 2,975-bullet field costs 0.42 ms of extract as volleys against 1.93 as entities, and
+# 0.18 ms to hash against 5.79 — the plan's Why, measured: a tenth of the hash bytes and a fifth of
+# the extract walk, with the cancel a despawn of 60 entities (burst's `cancel_bullets` reads 0.0001).
+# The one line that went the other way is `player_hit_test`: the closed-form overlap query evaluates
+# every live bullet's position (0.108 ms for 2,975) where the entity scan reads a stored one (0.038).
+# That is the plan's "extract evaluates every live bullet" risk priced, and it is still well under the
+# `spatial_rebuild` an indexed field would pay (`steady-indexed.yaml`).
+#
+# `world_hash` and the `steady-drawn` idle-walk numbers are recorded, not gated: the hash is paid by
+# the offline profiler and replay recording only. The idle walk (0.03 ms on an entity-heavy world)
+# was replaced by a typed query (`query_ids`); those two numbers predate it.
+
+# The exit line: a 60 fps frame. **A fixed target, not 2x a median** — the sprite budget's posture and
+# vigil's E6 `frame_total_ms`. This is the sim schedule alone (0.1185 measured, most of it the hit
+# query); `extract_ms` is gated separately below, and the GPU frame adds ~0.1 ms on top.
+frame_total_ms = 16.6
+
+# The line this file exists for. Every live bullet is evaluated from its closed form at extract on
+# the sim thread — origin, angle, the segment walk — then placed and sorted with the sprites, so a
+# heavier evaluator steals tick time before any GPU cost shows. Median 0.4229 over the four runs
+# above; the ceiling is 0.85, the ~2x posture.
+extract_ms = 0.85
+
+# Bullets draw inside `scene` as sprites — one atlas region, 2,975 alpha quads plus the 480-cell
+# backdrop, three batched draws. Measured 0.0594 on every one of the four runs (the timestamp ring
+# quantizes to the same value at this cost); the ceiling is 0.12.
+[passes]
+scene = 0.12
+
+# The volley path's three sim lines. `play_patterns` (four players, one ring due each frame) and
+# `advance_volleys` (119 live volleys, one reap a frame) sit under 0.01 ms, so they take the flat
+# 0.05 floor vigil's E6 gate uses — 2x-of-near-zero still trips on scheduler jitter. The hit query is
+# real work (2,975 evaluations against one 0.125 u hitbox): measured 0.1076, ceiling ~2x.
+[systems]
+play_patterns    = 0.05
+advance_volleys  = 0.05
+player_hit_test  = 0.22
+
+# Deliberately absent: `composite` and the `bloom` group (pure functions of the output extent and
+# already gated on `lights.yaml`); the entity path's `emit_bullets`/`move_bullets` (idle here — they
+# are `steady-drawn`'s, and `Plan/bullet-hell-stress.md` holds them uncalibrated); `cluster_build_ms`
+# (no light is authored, the panel reads zero).

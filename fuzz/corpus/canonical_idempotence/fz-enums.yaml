@@ -1,0 +1,22 @@
+format: 1
+entities:
+  - name: mover
+    components:
+      FzAction:
+        Move:
+          dir: n
+          speed: 0.30000001192092896
+  - name: idle
+    components:
+      FzAction: Idle
+      FzNote: hello
+  - name: gain
+    components:
+      FzTagged:
+        amount: 0.30000001192092896
+        type: gain
+  - name: wide
+    components:
+      FzTagged:
+        type: wide
+        amount: 0.30000001192092896

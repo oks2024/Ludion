@@ -1,0 +1,31 @@
+[package]
+name = "ludion-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "A Model Context Protocol (MCP) stdio server that lets an LLM agent drive a running Ludion game engine over its wire protocol."
+keywords = ["ludion", "mcp", "llm", "agent"]
+categories = ["development-tools", "network-programming"]
+
+[[bin]]
+name = "ludion-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# The thin peer client this adapter drives (engine-architecture.md §2: `ludion-mcp → ludion-client`).
+# The MCP server is just a stdio-to-wire translator over `Client::call`.
+ludion-client = { path = "../ludion-client", version = "0.1.0" }
+# The protocol contract: `Command` (adjacently tagged, so a `{method, params}` value deserializes
+# straight into it — no per-command match), `ResponseBody`, and `schema::protocol_schema()` — the
+# runtime source the tool catalog is derived from, so tools can never drift from the wire surface.
+# `ludion-client` does not re-export these, so the dependency is direct and necessary.
+ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+# `Diagnostic` (rendered verbatim, L#### code and all, into `isError` tool results) and the L3009
+# `PROTOCOL_ENGINE_UNAVAILABLE` code the reconnect path keys on.
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+serde_json.workspace = true
+
+[dev-dependencies]
+# A stub `ludion serve` for the session's reconnect tests.
+tungstenite.workspace = true

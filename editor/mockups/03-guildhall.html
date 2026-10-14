@@ -1,0 +1,1099 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LUDION — vigil — district-plaza.yaml</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --timber:        #241B12;
+    --timber-soft:    #2E2216;
+    --timber-panel:  #33261A;
+    --timber-raise:  #3E2E1E;
+    --deep-shadow:   #171009;
+    --amber:         #E8A84C;
+    --amber-dim:     rgba(232,168,76,.32);
+    --amber-faint:   rgba(232,168,76,.14);
+    --parchment:     #E4D6B8;
+    --parchment-dim: #B9A886;
+    --parchment-mute:#9C8D71;
+    --verdigris:     #5FA084;
+    --verdigris-dim: rgba(95,160,132,.30);
+    --ember:         #C25441;
+    --ember-text:    #D96B54;
+    --ember-dim:     rgba(194,84,65,.30);
+    --copper:        #C98A3E;
+    --brass:         #A8823D;
+    --brass-hi:      #D9AE5E;
+    --border:        #4A3722;
+    --border-soft:   #3A2B1B;
+
+    --font-display: 'Sitka Heading', Cambria, Georgia, serif;
+    --font-body:    'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+    --font-mono:    'Cascadia Code', 'Cascadia Mono', Consolas, monospace;
+  }
+
+  *,*::before,*::after{ box-sizing:border-box; }
+  html,body{
+    height:100%; margin:0;
+    background:var(--deep-shadow);
+    color:var(--parchment);
+    font-family:var(--font-body);
+    font-size:13px;
+    -webkit-font-smoothing:antialiased;
+  }
+  ul{ list-style:none; margin:0; padding:0; }
+  button{ font-family:inherit; color:inherit; }
+  input{ font-family:inherit; color:inherit; }
+
+  ::-webkit-scrollbar{ width:10px; height:10px; }
+  ::-webkit-scrollbar-track{ background:var(--deep-shadow); }
+  ::-webkit-scrollbar-thumb{ background:var(--border); border-radius:5px; border:2px solid var(--deep-shadow); }
+  ::-webkit-scrollbar-thumb:hover{ background:var(--brass); }
+
+  :focus-visible{
+    outline:2px solid var(--amber);
+    outline-offset:1px;
+    border-radius:3px;
+  }
+
+  /* ===== app shell ===== */
+  .app{
+    height:100vh;
+    min-height:700px;
+    display:grid;
+    grid-template-rows: 34px 46px 1fr 300px 26px;
+    background:var(--timber);
+    border:1px solid #000;
+    overflow:hidden;
+  }
+
+  /* ===== title strip ===== */
+  .titlebar{
+    display:flex; align-items:center; gap:14px;
+    padding:0 10px 0 14px;
+    background:var(--deep-shadow);
+    border-bottom:1px solid var(--border-soft);
+    -webkit-app-region:drag;
+  }
+  .titlebar .brand{
+    font-family:var(--font-display);
+    font-weight:700;
+    font-size:14px;
+    letter-spacing:.14em;
+    color:var(--amber);
+  }
+  .titlebar .scene-path{
+    font-size:12px;
+    color:var(--parchment-dim);
+    padding-left:12px;
+    border-left:1px solid var(--border-soft);
+  }
+  .titlebar .spacer{ flex:1; }
+  .winctl{ display:flex; gap:6px; }
+  .winctl button{
+    width:22px; height:22px;
+    border-radius:5px;
+    border:1px solid var(--border-soft);
+    background:var(--timber-soft);
+    color:var(--parchment-mute);
+    display:flex; align-items:center; justify-content:center;
+    font-size:11px; line-height:1;
+    cursor:pointer;
+  }
+  .winctl button:hover{ background:var(--timber-raise); color:var(--amber); border-color:var(--brass); }
+  .winctl button.close:hover{ background:var(--ember); color:var(--parchment); border-color:var(--ember); }
+
+  /* ===== chrome row: view switcher + session strip ===== */
+  .chrome-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 12px;
+    background:var(--timber-soft);
+    border-bottom:2px solid var(--deep-shadow);
+    gap:16px;
+  }
+
+  .view-switcher{ display:flex; align-items:stretch; height:100%; gap:2px; }
+  .view-tab{
+    position:relative;
+    background:transparent;
+    border:none;
+    border-bottom:3px solid transparent;
+    color:var(--parchment-mute);
+    font-size:13px;
+    padding:0 16px;
+    cursor:pointer;
+    display:flex; align-items:center; gap:7px;
+  }
+  .view-tab:hover{ color:var(--parchment); }
+  .view-tab.active{
+    color:var(--amber);
+    border-bottom-color:var(--amber);
+    font-weight:600;
+  }
+  .view-tab.disabled{
+    color:var(--parchment-mute);
+    opacity:.45;
+    cursor:not-allowed;
+  }
+  .view-tab.disabled:hover{ color:var(--parchment-mute); }
+  .activity-dot{
+    width:6px; height:6px; border-radius:50%;
+    background:var(--amber);
+    box-shadow:0 0 5px 1px var(--amber-dim);
+    display:inline-block;
+    animation:pulse 1.8s ease-in-out infinite;
+  }
+
+  .session-strip{ display:flex; align-items:center; gap:10px; }
+
+  .mode-toggle{
+    display:flex;
+    background:var(--deep-shadow);
+    border:1px solid var(--border);
+    border-radius:6px;
+    padding:2px;
+  }
+  .mode-toggle button{
+    border:none; background:transparent;
+    color:var(--parchment-mute);
+    padding:4px 12px;
+    border-radius:4px;
+    font-size:12px;
+    cursor:pointer;
+  }
+  .mode-toggle button.active{
+    background:var(--amber);
+    color:var(--deep-shadow);
+    font-weight:600;
+  }
+
+  .save-btn{
+    display:flex; align-items:center; gap:7px;
+    background:var(--timber-panel);
+    border:1px solid var(--border);
+    border-radius:6px;
+    padding:5px 12px;
+    font-size:12px;
+    cursor:pointer;
+  }
+  .save-btn:hover{ border-color:var(--brass); }
+  .dirty-dot{
+    width:7px; height:7px; border-radius:50%;
+    background:var(--ember);
+    box-shadow:0 0 5px 1px var(--ember-dim);
+    display:inline-block;
+  }
+
+  .icon-btn{
+    width:28px; height:28px;
+    background:var(--timber-panel);
+    border:1px solid var(--border);
+    border-radius:6px;
+    cursor:pointer;
+    font-size:13px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .icon-btn:hover{ border-color:var(--brass); color:var(--amber); }
+
+  .conn-chip{
+    display:flex; align-items:center; gap:7px;
+    font-family:var(--font-mono);
+    font-size:11px;
+    color:var(--parchment-dim);
+    background:var(--deep-shadow);
+    border:1px solid var(--border-soft);
+    border-radius:6px;
+    padding:5px 10px;
+  }
+  .conn-dot{
+    width:7px; height:7px; border-radius:50%;
+    background:var(--verdigris);
+    box-shadow:0 0 5px 1px var(--verdigris-dim);
+    display:inline-block;
+    flex:none;
+  }
+
+  /* ===== main row ===== */
+  .main-row{
+    display:grid;
+    grid-template-columns: 280px 1fr 320px;
+    gap:10px;
+    padding:10px;
+    min-height:0;
+    background:var(--timber);
+  }
+
+  .col-left, .col-right{
+    display:flex; flex-direction:column;
+    gap:10px;
+    min-height:0;
+  }
+
+  .panel{
+    background:var(--timber-panel);
+    border:1px solid var(--border-soft);
+    border-radius:8px;
+    display:flex; flex-direction:column;
+    min-height:0;
+    overflow:hidden;
+  }
+  .panel-title{
+    font-family:var(--font-display);
+    font-weight:700;
+    font-size:13px;
+    letter-spacing:.05em;
+    color:var(--amber);
+    margin:0;
+    padding:9px 12px;
+    border-bottom:1px solid var(--border-soft);
+    background:var(--timber-raise);
+    display:flex; align-items:baseline; gap:10px;
+    flex:none;
+  }
+  .panel-title .entity-name{
+    font-family:var(--font-mono);
+    font-weight:400;
+    font-size:11px;
+    color:var(--verdigris);
+    letter-spacing:0;
+  }
+
+  /* ----- hierarchy ----- */
+  .hierarchy{ flex:1.15; }
+  .tree{ overflow-y:auto; padding:6px 4px 10px; }
+  .tree-root{
+    display:flex; align-items:center; gap:6px;
+    padding:5px 8px;
+    font-size:12.5px;
+    color:var(--parchment);
+    font-weight:600;
+  }
+  .caret{
+    color:var(--parchment-mute);
+    font-size:9px;
+    width:10px; display:inline-block; text-align:center;
+  }
+  .tree-children{ margin-left:9px; border-left:1px solid var(--border-soft); }
+  .tree-row{
+    display:flex; align-items:center; gap:7px;
+    padding:4px 8px 4px 14px;
+    font-size:12.5px;
+    color:var(--parchment-dim);
+    cursor:default;
+    border-radius:4px;
+    margin:0 4px;
+    position:relative;
+  }
+  .tree-row:hover{ background:var(--timber-raise); color:var(--parchment); }
+  .tree-row.selected{
+    background:var(--amber-faint);
+    color:var(--amber);
+    box-shadow:inset 2px 0 0 var(--amber);
+  }
+  .tree-row .swatch{
+    width:7px; height:7px; border-radius:2px; flex:none;
+  }
+  .sw-floor{ background:#6B5A42; }
+  .sw-fountain{ background:var(--verdigris); }
+  .sw-house{ background:var(--amber); }
+  .sw-wall{ background:#7A6A52; }
+  .sw-gate{ background:var(--verdigris); box-shadow:0 0 4px var(--verdigris-dim); }
+  .sw-spawn{ background:var(--copper); }
+  .sw-quest{ background:var(--ember); }
+
+  .tree-row .name{ flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tree-row .meta{
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    color:var(--parchment-mute);
+    flex:none;
+  }
+
+  /* ----- kit library ----- */
+  .kit-library{ flex:1; }
+  .kit-grid{
+    overflow-y:auto;
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    gap:6px;
+    padding:9px;
+  }
+  .kit-tile{
+    background:var(--timber-soft);
+    border:1px solid var(--border-soft);
+    border-radius:7px;
+    padding:8px 4px 7px;
+    display:flex; flex-direction:column; align-items:center; gap:5px;
+    cursor:pointer;
+  }
+  .kit-tile:hover{ border-color:var(--brass); background:var(--timber-raise); }
+  .kit-tile svg{ width:26px; height:26px; }
+  .kit-tile .tile-name{
+    font-size:10px;
+    color:var(--parchment-dim);
+    text-align:center;
+    line-height:1.2;
+  }
+
+  /* ===== viewport ===== */
+  .viewport{
+    position:relative;
+    background:var(--deep-shadow);
+    border:2px solid var(--border-soft);
+    border-radius:8px;
+    overflow:hidden;
+    min-width:0;
+  }
+  .viewport svg{ width:100%; height:100%; display:block; }
+
+  .vp-overlay{
+    position:absolute;
+    font-family:var(--font-mono);
+    font-size:11px;
+    color:var(--parchment-dim);
+    background:rgba(23,16,9,.72);
+    border:1px solid var(--border-soft);
+    border-radius:5px;
+    padding:4px 9px;
+    pointer-events:none;
+    letter-spacing:.02em;
+  }
+  .vp-top-left{ top:10px; left:10px; }
+  .vp-top-right{
+    top:10px; right:10px;
+    color:var(--verdigris);
+  }
+  .vp-bottom{
+    bottom:10px; left:50%; transform:translateX(-50%);
+  }
+
+  .vp-legend{
+    position:absolute; bottom:10px; right:10px;
+    display:flex; gap:10px;
+    font-family:var(--font-mono);
+    font-size:10px;
+    color:var(--parchment-mute);
+    background:rgba(23,16,9,.72);
+    border:1px solid var(--border-soft);
+    border-radius:5px;
+    padding:4px 9px;
+  }
+  .vp-legend b{ font-weight:600; }
+  .vp-legend .lx{ color:var(--ember-text); }
+  .vp-legend .ly{ color:var(--verdigris); }
+  .vp-legend .lz{ color:var(--copper); }
+
+  @keyframes flicker{
+    0%,100%{ opacity:.90; }
+    35%{ opacity:.98; }
+    50%{ opacity:.87; }
+    72%{ opacity:.96; }
+  }
+  .halo{ animation:flicker 6.4s ease-in-out infinite; transform-origin:center; }
+  @media (prefers-reduced-motion:reduce){
+    .halo{ animation:none; opacity:.94; }
+  }
+
+  /* ===== inspector ===== */
+  .inspector{ flex:1; overflow-y:auto; }
+  .insp-body{ padding:4px 12px 14px; }
+  .insp-section{ padding-top:12px; }
+  .insp-section:first-child{ padding-top:10px; }
+  .insp-section h3{
+    margin:0 0 8px;
+    font-family:var(--font-body);
+    font-size:11px;
+    font-weight:700;
+    text-transform:uppercase;
+    letter-spacing:.09em;
+    color:var(--brass-hi);
+    padding-bottom:5px;
+    border-bottom:1px solid var(--border-soft);
+  }
+  .field-row{
+    display:flex; align-items:center; gap:8px;
+    margin-bottom:6px;
+  }
+  .field-label{
+    width:74px; flex:none;
+    font-size:11.5px;
+    color:var(--parchment-mute);
+  }
+  .field-group{ display:flex; gap:5px; flex:1; }
+  .field-box{
+    flex:1; min-width:0;
+    display:flex; align-items:center; gap:5px;
+    background:var(--deep-shadow);
+    border:1px solid var(--border);
+    border-radius:5px;
+    padding:4px 7px;
+  }
+  .field-box .axis{
+    font-family:var(--font-mono);
+    font-size:10px;
+    font-weight:700;
+    flex:none;
+  }
+  .axis-x{ color:var(--ember-text); }
+  .axis-y{ color:var(--verdigris); }
+  .axis-z{ color:var(--copper); }
+  .field-box .val{
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--parchment);
+    width:100%;
+    text-align:right;
+  }
+  .field-box.wide .val{ text-align:left; }
+  .y-hint{
+    display:flex; align-items:center; gap:5px;
+    font-size:10.5px;
+    color:var(--parchment-mute);
+    font-style:italic;
+    margin:2px 0 8px 82px;
+  }
+  .y-hint .i{
+    width:12px; height:12px; border-radius:50%;
+    border:1px solid var(--parchment-mute);
+    display:inline-flex; align-items:center; justify-content:center;
+    font-size:8.5px; font-style:normal;
+    flex:none;
+  }
+  .field-single{
+    display:flex; align-items:center; gap:8px;
+    flex:1;
+    background:var(--deep-shadow);
+    border:1px solid var(--border);
+    border-radius:5px;
+    padding:5px 9px;
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--parchment);
+  }
+
+  /* ===== terminal drawer ===== */
+  .terminal-drawer{
+    background:var(--deep-shadow);
+    border-top:2px solid var(--border);
+    display:flex; flex-direction:column;
+    min-height:0;
+  }
+  .drawer-tabs{
+    display:flex; align-items:flex-end; gap:8px;
+    padding:8px 12px 0;
+    flex:none;
+  }
+
+  .nameplate{
+    position:relative;
+    background:linear-gradient(180deg,#5C4626,#48350F 55%,#3B2A0C);
+    border:1px solid #2A1C08;
+    border-radius:6px 6px 3px 3px;
+    padding:7px 14px 8px;
+    min-width:210px;
+    cursor:pointer;
+    box-shadow:0 2px 0 rgba(0,0,0,.35), inset 0 1px 0 rgba(255,225,170,.18);
+    opacity:.68;
+  }
+  .nameplate.active{
+    opacity:1;
+    background:linear-gradient(180deg,#6E5530,#573F14 55%,#43300E);
+    box-shadow:0 3px 0 rgba(0,0,0,.4), 0 0 0 1px var(--amber-dim), inset 0 1px 0 rgba(255,225,170,.25);
+    transform:translateY(-2px);
+  }
+  .rivet{
+    position:absolute;
+    width:5px; height:5px; border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #F2D9A6, #7A5A26 70%, #3A2A0F);
+    box-shadow:0 1px 1px rgba(0,0,0,.6);
+  }
+  .rivet.tl{ top:4px; left:4px; }
+  .rivet.tr{ top:4px; right:4px; }
+  .rivet.bl{ bottom:4px; left:4px; }
+  .rivet.br{ bottom:4px; right:4px; }
+
+  .nameplate .np-name{
+    font-family:var(--font-display);
+    font-size:12.5px;
+    font-weight:700;
+    color:#F2E3BE;
+    letter-spacing:.03em;
+    text-shadow:0 1px 0 rgba(255,240,205,.22), 0 -1px 1px rgba(0,0,0,.65);
+    display:flex; align-items:center; gap:7px;
+    margin-bottom:6px;
+  }
+  .status-chip{
+    font-family:var(--font-body);
+    font-size:9px;
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:.06em;
+    padding:1.5px 6px;
+    border-radius:8px;
+    display:inline-flex; align-items:center; gap:4px;
+  }
+  .status-chip.working{
+    background:rgba(232,168,76,.22);
+    color:var(--amber);
+    border:1px solid var(--amber-dim);
+  }
+  .status-chip.idle{
+    background:rgba(140,126,100,.15);
+    color:var(--parchment-mute);
+    border:1px solid var(--border);
+  }
+  .status-chip .dot{ width:5px; height:5px; border-radius:50%; background:currentColor; }
+  .status-chip.working .dot{ animation:pulse 1.6s ease-in-out infinite; }
+  @media (prefers-reduced-motion:reduce){ .status-chip .dot, .activity-dot{ animation:none; } }
+
+  .np-meters{ display:flex; align-items:center; gap:10px; }
+  .xp-meter{ display:flex; align-items:center; gap:6px; }
+  .xp-meter .segs{ display:flex; gap:1.5px; }
+  .xp-meter .seg{
+    width:4px; height:9px; border-radius:1px;
+    background:#241a0d;
+    box-shadow:inset 0 0 0 1px rgba(0,0,0,.4);
+  }
+  .xp-meter .seg.filled{
+    background:var(--amber);
+    box-shadow:0 0 3px var(--amber-dim);
+  }
+  .xp-meter .xp-label{
+    font-family:var(--font-mono);
+    font-size:9.5px;
+    color:#E9D9AE;
+  }
+  .cache-count{
+    display:flex; align-items:center; gap:4px;
+    font-family:var(--font-mono);
+    font-size:9.5px;
+    color:#E9D9AE;
+  }
+  .hourglass{ width:9px; height:12px; position:relative; flex:none; }
+  .hourglass .hg-top,.hourglass .hg-bot{
+    position:absolute; left:0; width:0; height:0;
+    border-left:4.5px solid transparent;
+    border-right:4.5px solid transparent;
+  }
+  .hourglass .hg-top{ top:0; border-top:6px solid #E9D9AE; }
+  .hourglass .hg-bot{ bottom:0; border-bottom:6px solid #E9D9AE; }
+
+  .drawer-tab-extra{ display:flex; align-items:center; gap:6px; margin-left:2px; padding-bottom:6px; }
+  .new-terminal, .drawer-collapse{
+    width:26px; height:26px;
+    border-radius:5px;
+    background:var(--timber-panel);
+    border:1px solid var(--border);
+    color:var(--parchment-mute);
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    font-size:14px;
+  }
+  .new-terminal:hover, .drawer-collapse:hover{ color:var(--amber); border-color:var(--brass); }
+  .drawer-collapse{ margin-left:auto; margin-right:8px; }
+
+  .drawer-body{
+    flex:1; min-height:0;
+    margin:8px 12px 10px;
+    background:var(--timber);
+    border:1px solid var(--border-soft);
+    border-radius:7px;
+    display:flex; flex-direction:column;
+    overflow:hidden;
+  }
+  .transcript{
+    flex:1; overflow-y:auto;
+    margin:0; padding:12px 16px;
+    font-family:var(--font-mono);
+    font-size:12.5px;
+    line-height:1.75;
+    white-space:pre-wrap;
+    word-break:break-word;
+  }
+  .ln-persona{ color:var(--verdigris); opacity:.9; }
+  .ln-user{ color:var(--parchment); }
+  .ln-user .prompt{ color:var(--amber); font-weight:700; }
+  .ln-work{ color:var(--parchment-dim); }
+  .ln-work .glyph{ color:var(--amber); }
+  .ln-done{ color:var(--parchment-dim); }
+  .ln-done .glyph{ color:var(--verdigris); }
+  .ln-done .dirty{ color:var(--ember-text); }
+
+  .transcript-input{
+    display:flex; align-items:center;
+    padding:8px 16px 12px;
+    border-top:1px solid var(--border-soft);
+    font-family:var(--font-mono);
+    font-size:12.5px;
+    flex:none;
+  }
+  .transcript-input .prompt{ color:var(--amber); font-weight:700; margin-right:8px; }
+  .cursor{
+    width:7px; height:15px;
+    background:var(--parchment);
+    display:inline-block;
+    animation:blink 1s step-start infinite;
+  }
+  @media (prefers-reduced-motion:reduce){ .cursor{ animation:none; opacity:.85; } }
+
+  @keyframes pulse{
+    0%,100%{ opacity:1; }
+    50%{ opacity:.45; }
+  }
+  @keyframes blink{
+    50%{ opacity:0; }
+  }
+
+  /* ===== status bar ===== */
+  .status-bar{
+    display:flex; align-items:center;
+    padding:0 14px;
+    background:var(--deep-shadow);
+    border-top:1px solid var(--border-soft);
+    font-family:var(--font-mono);
+    font-size:11px;
+    color:var(--parchment-mute);
+    gap:8px;
+  }
+  .status-bar .dirty{ color:var(--ember-text); }
+  .status-bar .sep{ color:var(--border); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="titlebar">
+    <span class="brand">LUDION</span>
+    <span class="scene-path">vigil — district-plaza.yaml</span>
+    <span class="spacer"></span>
+    <div class="winctl">
+      <button aria-label="Minimize">–</button>
+      <button aria-label="Maximize">□</button>
+      <button class="close" aria-label="Close">×</button>
+    </div>
+  </header>
+
+  <div class="chrome-row">
+    <nav class="view-switcher" aria-label="View switcher">
+      <button class="view-tab active">Level Designer</button>
+      <button class="view-tab">Game Designer <span class="activity-dot" title="Background instance working"></span></button>
+      <button class="view-tab disabled" title="Awaiting engine surface" aria-disabled="true">Lighter</button>
+      <button class="view-tab disabled" title="Awaiting engine surface" aria-disabled="true">Art Director</button>
+    </nav>
+    <div class="session-strip">
+      <div class="mode-toggle" role="group" aria-label="Edit or play mode">
+        <button class="active">Edit</button>
+        <button>Play</button>
+      </div>
+      <button class="save-btn"><span class="dirty-dot"></span>Save</button>
+      <button class="icon-btn" title="Undo">↺</button>
+      <button class="icon-btn" title="Redo">↻</button>
+      <div class="conn-chip"><span class="conn-dot"></span>ws://127.0.0.1:9411 · schema a3f2c91 · connected</div>
+    </div>
+  </div>
+
+  <div class="main-row">
+
+    <!-- LEFT COLUMN -->
+    <aside class="col-left">
+      <section class="panel hierarchy">
+        <h2 class="panel-title">Hierarchy</h2>
+        <div class="tree">
+          <div class="tree-root"><span class="caret">▾</span>district-plaza</div>
+          <ul class="tree-children">
+            <li class="tree-row"><span class="swatch sw-floor"></span><span class="name">floor</span><span class="meta">24×24</span></li>
+            <li class="tree-row"><span class="swatch sw-fountain"></span><span class="name">fountain</span></li>
+            <li class="tree-row"><span class="swatch sw-house"></span><span class="name">house-a-01</span></li>
+            <li class="tree-row"><span class="swatch sw-house"></span><span class="name">house-a-02</span></li>
+            <li class="tree-row selected"><span class="swatch sw-house"></span><span class="name">house-a-03</span></li>
+            <li class="tree-row"><span class="swatch sw-house"></span><span class="name">house-a-04</span></li>
+            <li class="tree-row"><span class="swatch sw-house"></span><span class="name">house-b-01</span></li>
+            <li class="tree-row"><span class="swatch sw-house"></span><span class="name">house-b-02</span></li>
+            <li class="tree-row"><span class="swatch sw-wall"></span><span class="name">wall-north</span><span class="meta">run ×12</span></li>
+            <li class="tree-row"><span class="swatch sw-wall"></span><span class="name">wall-east</span><span class="meta">run ×10</span></li>
+            <li class="tree-row"><span class="swatch sw-wall"></span><span class="name">wall-west</span><span class="meta">run ×10</span></li>
+            <li class="tree-row"><span class="swatch sw-gate"></span><span class="name">gate-to-market</span></li>
+            <li class="tree-row"><span class="swatch sw-spawn"></span><span class="name">player-spawn</span></li>
+            <li class="tree-row"><span class="swatch sw-quest"></span><span class="name">quest-merchant</span></li>
+            <li class="tree-row"><span class="swatch sw-quest"></span><span class="name">quest-shrine</span></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="panel kit-library">
+        <h2 class="panel-title">Kit library</h2>
+        <div class="kit-grid">
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><path d="M6 18 16 9 26 18"/><rect x="9" y="18" width="14" height="9"/></svg><span class="tile-name">house-a</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><path d="M7 17 16 10 25 17"/><rect x="10" y="17" width="12" height="10"/><rect x="14" y="21" width="4" height="6"/></svg><span class="tile-name">house-b</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><rect x="5" y="13" width="22" height="7"/><line x1="10" y1="13" x2="10" y2="20"/><line x1="16" y1="13" x2="16" y2="20"/><line x1="22" y1="13" x2="22" y2="20"/></svg><span class="tile-name">wall-straight</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><path d="M8 8 L8 24 L24 24"/><path d="M8 8 L14 8 L14 18 L24 18 L24 24" /></svg><span class="tile-name">wall-corner</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><path d="M8 25 V13 A8 8 0 0 1 24 13 V25"/></svg><span class="tile-name">gate</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><rect x="9" y="12" width="14" height="13" rx="1"/><line x1="9" y1="16" x2="23" y2="16"/><line x1="13" y1="12" x2="13" y2="25"/><line x1="19" y1="12" x2="19" y2="25"/></svg><span class="tile-name">well</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#5FA084" stroke-width="1.6"><circle cx="16" cy="17" r="9"/><circle cx="16" cy="17" r="4" fill="#5FA084" fill-opacity=".35"/></svg><span class="tile-name">fountain</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><path d="M6 15 16 9 26 15"/><rect x="8" y="15" width="16" height="9"/></svg><span class="tile-name">market-stall</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><circle cx="16" cy="12" r="7"/><line x1="16" y1="18" x2="16" y2="26"/></svg><span class="tile-name">tree</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#E8A84C" stroke-width="1.6"><path d="M16 6 L21 16 L16 26 L11 16 Z" fill="#E8A84C" fill-opacity=".3"/></svg><span class="tile-name">lantern</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><rect x="8" y="10" width="16" height="16"/><line x1="8" y1="10" x2="24" y2="26"/><line x1="24" y1="10" x2="8" y2="26"/></svg><span class="tile-name">crate</span></div>
+          <div class="kit-tile"><svg viewBox="0 0 32 32" fill="none" stroke="#C7B792" stroke-width="1.6"><rect x="7" y="7" width="18" height="18"/><line x1="7" y1="16" x2="25" y2="16"/><line x1="16" y1="7" x2="16" y2="25"/></svg><span class="tile-name">floor-slab</span></div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- VIEWPORT -->
+    <main class="viewport">
+      <div class="vp-overlay vp-top-left">district-plaza.yaml · edit</div>
+      <div class="vp-overlay vp-top-right">0.97 ms · 60 fps</div>
+      <div class="vp-overlay vp-bottom">cam 14.2, 9.0, −6.5 · yaw 38°</div>
+      <div class="vp-legend"><span class="lx">X</span><span class="ly">Y</span><span class="lz">Z</span></div>
+
+      <svg viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <linearGradient id="groundGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#3A2C1B"/>
+            <stop offset="100%" stop-color="#251C10"/>
+          </linearGradient>
+          <radialGradient id="waterGrad" cx="50%" cy="45%" r="60%">
+            <stop offset="0%" stop-color="#8FC7AE"/>
+            <stop offset="100%" stop-color="#3E6F5A"/>
+          </radialGradient>
+          <filter id="haloBlur" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="10"/>
+          </filter>
+        </defs>
+
+        <rect x="0" y="0" width="1000" height="620" fill="#171009"/>
+
+        <!-- ground plane -->
+        <polygon points="260,60 740,60 960,580 40,580" fill="url(#groundGrad)" stroke="#4A3722" stroke-width="1.5"/>
+        <g stroke="rgba(228,214,184,0.07)" stroke-width="1">
+          <line x1="227" y1="138" x2="773" y2="138"/>
+          <line x1="194" y1="216" x2="806" y2="216"/>
+          <line x1="161" y1="294" x2="839" y2="294"/>
+          <line x1="128" y1="372" x2="872" y2="372"/>
+          <line x1="95"  y1="450" x2="905" y2="450"/>
+          <line x1="62"  y1="528" x2="938" y2="528"/>
+          <line x1="308" y1="60" x2="132" y2="580"/>
+          <line x1="380" y1="60" x2="270" y2="580"/>
+          <line x1="452" y1="60" x2="408" y2="580"/>
+          <line x1="500" y1="60" x2="500" y2="580"/>
+          <line x1="548" y1="60" x2="592" y2="580"/>
+          <line x1="620" y1="60" x2="730" y2="580"/>
+          <line x1="692" y1="60" x2="868" y2="580"/>
+        </g>
+
+        <!-- kite lane hint (kept clear, center corridor) -->
+        <polygon points="452,60 548,60 592,580 408,580" fill="var(--amber)" fill-opacity="0.035"/>
+
+        <!-- wall-north -->
+        <g>
+          <polygon points="238,42 762,42 742,64 258,64" fill="#4A3826" stroke="#241B12" stroke-width="1"/>
+          <g fill="#5A4630">
+            <rect x="252" y="34" width="14" height="10"/><rect x="292" y="34" width="14" height="10"/>
+            <rect x="332" y="34" width="14" height="10"/><rect x="372" y="34" width="14" height="10"/>
+            <rect x="412" y="34" width="14" height="10"/><rect x="452" y="34" width="14" height="10"/>
+            <rect x="534" y="34" width="14" height="10"/><rect x="574" y="34" width="14" height="10"/>
+            <rect x="614" y="34" width="14" height="10"/><rect x="654" y="34" width="14" height="10"/>
+            <rect x="694" y="34" width="14" height="10"/><rect x="734" y="34" width="14" height="10"/>
+          </g>
+        </g>
+
+        <!-- wall-west -->
+        <g>
+          <polygon points="252,66 40,584 24,578 244,58" fill="#443422" stroke="#241B12" stroke-width="1"/>
+          <g fill="#5A4630" opacity=".8">
+            <circle cx="230" cy="120" r="3"/><circle cx="205" cy="185" r="3"/><circle cx="180" cy="250" r="3"/>
+            <circle cx="155" cy="315" r="3"/><circle cx="130" cy="380" r="3"/><circle cx="105" cy="445" r="3"/>
+            <circle cx="80"  cy="510" r="3"/><circle cx="55"  cy="560" r="3"/>
+          </g>
+        </g>
+
+        <!-- wall-east -->
+        <g>
+          <polygon points="748,66 960,584 976,578 756,58" fill="#443422" stroke="#241B12" stroke-width="1"/>
+          <g fill="#5A4630" opacity=".8">
+            <circle cx="770" cy="120" r="3"/><circle cx="795" cy="185" r="3"/><circle cx="820" cy="250" r="3"/>
+            <circle cx="845" cy="315" r="3"/><circle cx="870" cy="380" r="3"/><circle cx="895" cy="445" r="3"/>
+            <circle cx="920" cy="510" r="3"/><circle cx="945" cy="560" r="3"/>
+          </g>
+        </g>
+
+        <!-- fountain -->
+        <g>
+          <circle cx="500" cy="332" r="58" fill="#3A2C1B" stroke="#4A3722" stroke-width="2"/>
+          <circle cx="500" cy="332" r="40" fill="url(#waterGrad)" fill-opacity=".55"/>
+          <circle cx="500" cy="332" r="15" fill="#5FA084" fill-opacity=".5"/>
+          <circle cx="500" cy="332" r="4"  fill="#E8A84C"/>
+        </g>
+
+        <!-- houses (extruded blocks) -->
+        <!-- house-a-01 -->
+        <g>
+          <polygon points="120,150 190,150 212,136 142,136" fill="#57432B"/>
+          <polygon points="190,150 190,198 212,184 212,136" fill="#3E2E1D"/>
+          <rect x="120" y="150" width="70" height="48" fill="#2E2216"/>
+          <rect x="132" y="170" width="8" height="8" fill="#E8A84C" fill-opacity=".55"/>
+        </g>
+        <!-- house-a-02 -->
+        <g>
+          <polygon points="90,255 178,255 204,239 116,239" fill="#5C472C"/>
+          <polygon points="178,255 178,313 204,297 204,239" fill="#40301E"/>
+          <rect x="90" y="255" width="88" height="58" fill="#2E2216"/>
+          <rect x="104" y="278" width="9" height="9" fill="#E8A84C" fill-opacity=".55"/>
+          <rect x="150" y="278" width="9" height="9" fill="#E8A84C" fill-opacity=".4"/>
+        </g>
+        <!-- house-a-04 -->
+        <g>
+          <polygon points="820,150 890,150 868,136 798,136" fill="#57432B"/>
+          <polygon points="798,136 798,184 820,198 820,150" fill="#463521"/>
+          <rect x="820" y="150" width="70" height="48" fill="#2E2216"/>
+          <rect x="858" y="170" width="8" height="8" fill="#E8A84C" fill-opacity=".55"/>
+        </g>
+        <!-- house-b-01 -->
+        <g>
+          <polygon points="850,255 938,255 912,239 824,239" fill="#5C472C"/>
+          <polygon points="824,239 824,297 850,313 850,255" fill="#493822"/>
+          <rect x="850" y="255" width="88" height="58" fill="#2E2216"/>
+          <rect x="909" y="278" width="9" height="9" fill="#E8A84C" fill-opacity=".55"/>
+          <rect x="863" y="278" width="9" height="9" fill="#E8A84C" fill-opacity=".4"/>
+        </g>
+        <!-- house-b-02 -->
+        <g>
+          <polygon points="800,400 908,400 876,380 768,380" fill="#634C2E"/>
+          <polygon points="768,380 768,460 800,480 800,400" fill="#4A3822"/>
+          <rect x="800" y="400" width="108" height="80" fill="#302411"/>
+          <rect x="818" y="428" width="12" height="12" fill="#E8A84C" fill-opacity=".55"/>
+          <rect x="848" y="428" width="12" height="12" fill="#E8A84C" fill-opacity=".4"/>
+          <rect x="878" y="428" width="12" height="12" fill="#E8A84C" fill-opacity=".55"/>
+        </g>
+
+        <!-- house-a-03 : SELECTED -->
+        <ellipse class="halo" cx="196" cy="400" rx="110" ry="72" fill="var(--amber)" fill-opacity=".22" filter="url(#haloBlur)"/>
+        <g>
+          <polygon points="140,400 252,400 284,380 172,380" fill="#6E552F" stroke="#E8A84C" stroke-width="2"/>
+          <polygon points="172,380 172,460 140,480 140,400" fill="#4F3C22" stroke="#E8A84C" stroke-width="2"/>
+          <rect x="140" y="400" width="112" height="80" fill="#332510" stroke="#E8A84C" stroke-width="2.5"/>
+          <rect x="160" y="428" width="13" height="13" fill="#E8A84C" fill-opacity=".6"/>
+          <rect x="192" y="428" width="13" height="13" fill="#E8A84C" fill-opacity=".45"/>
+          <rect x="224" y="428" width="13" height="13" fill="#E8A84C" fill-opacity=".6"/>
+        </g>
+
+        <!-- translate gizmo, anchored at house-a-03 base -->
+        <g stroke-width="3" stroke-linecap="round">
+          <!-- X : ember -->
+          <line x1="140" y1="480" x2="205" y2="480" stroke="#D96B54"/>
+          <polygon points="205,480 195,474 195,486" fill="#D96B54"/>
+          <!-- Z : copper -->
+          <line x1="140" y1="480" x2="196" y2="447" stroke="#C98A3E"/>
+          <polygon points="196,447 184,449 190,459" fill="#C98A3E"/>
+          <!-- Y : verdigris -->
+          <line x1="140" y1="480" x2="140" y2="412" stroke="#5FA084"/>
+          <polygon points="140,412 134,424 146,424" fill="#5FA084"/>
+        </g>
+
+        <!-- gate-to-market : south wall opening -->
+        <g>
+          <rect x="420" y="576" width="72" height="16" fill="#241B12" stroke="#4A3722" stroke-width="1.5"/>
+          <rect x="336" y="580" width="80" height="12" fill="#443422" stroke="#241B12"/>
+          <rect x="500" y="580" width="80" height="12" fill="#443422" stroke="#241B12"/>
+          <rect x="432" y="560" width="48" height="34" fill="var(--amber)" fill-opacity=".3"/>
+          <rect x="432" y="560" width="48" height="34" fill="none" stroke="var(--amber)" stroke-width="1.5" stroke-opacity=".7"/>
+        </g>
+
+        <!-- player-spawn -->
+        <g transform="translate(500,486)">
+          <polygon points="0,-9 7,4 -7,4" fill="none" stroke="#C98A3E" stroke-width="2"/>
+          <circle r="2" fill="#C98A3E"/>
+        </g>
+
+        <!-- quest markers -->
+        <g transform="translate(300,340)">
+          <polygon points="0,-7 7,0 0,7 -7,0" fill="#5FA084" fill-opacity=".8"/>
+        </g>
+        <g transform="translate(700,340)">
+          <polygon points="0,-7 7,0 0,7 -7,0" fill="#E8A84C" fill-opacity=".8"/>
+        </g>
+      </svg>
+    </main>
+
+    <!-- RIGHT COLUMN -->
+    <aside class="col-right">
+      <section class="panel inspector">
+        <h2 class="panel-title">Inspector <span class="entity-name">house-a-03</span></h2>
+        <div class="insp-body">
+
+          <div class="insp-section">
+            <h3>Transform</h3>
+            <div class="field-row">
+              <span class="field-label">Position</span>
+              <div class="field-group">
+                <div class="field-box"><span class="axis axis-x">X</span><span class="val">6.0</span></div>
+                <div class="field-box"><span class="axis axis-y">Y</span><span class="val">0.0</span></div>
+                <div class="field-box"><span class="axis axis-z">Z</span><span class="val">−4.5</span></div>
+              </div>
+            </div>
+            <div class="y-hint"><span class="i">i</span>floor top sits at Y=0</div>
+            <div class="field-row">
+              <span class="field-label">Rotation</span>
+              <div class="field-group">
+                <div class="field-box"><span class="axis axis-x">X</span><span class="val">0°</span></div>
+                <div class="field-box"><span class="axis axis-y">Y</span><span class="val">90°</span></div>
+                <div class="field-box"><span class="axis axis-z">Z</span><span class="val">0°</span></div>
+              </div>
+            </div>
+            <div class="field-row">
+              <span class="field-label">Scale</span>
+              <div class="field-group">
+                <div class="field-box wide"><span class="val">1</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="insp-section">
+            <h3>Mesh</h3>
+            <div class="field-row">
+              <span class="field-label">Path</span>
+              <div class="field-single">voxel/house-a.yaml</div>
+            </div>
+            <div class="field-row">
+              <span class="field-label">Size</span>
+              <div class="field-single">8 × 9 × 7</div>
+            </div>
+          </div>
+
+          <div class="insp-section">
+            <h3>Collider</h3>
+            <div class="field-row">
+              <span class="field-label">Type</span>
+              <div class="field-single">static AABB</div>
+            </div>
+            <div class="field-row">
+              <span class="field-label">Half-extents</span>
+              <div class="field-group">
+                <div class="field-box"><span class="axis axis-x">X</span><span class="val">4.0</span></div>
+                <div class="field-box"><span class="axis axis-y">Y</span><span class="val">4.5</span></div>
+                <div class="field-box"><span class="axis axis-z">Z</span><span class="val">3.5</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="insp-section">
+            <h3>Material</h3>
+            <div class="field-row">
+              <span class="field-label">Palette</span>
+              <div class="field-single">plaza-warm</div>
+            </div>
+            <div class="field-row">
+              <span class="field-label">Slot</span>
+              <div class="field-single">3</div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <!-- TERMINAL DRAWER -->
+  <section class="terminal-drawer">
+    <div class="drawer-tabs">
+      <div class="nameplate active" tabindex="0">
+        <span class="rivet tl"></span><span class="rivet tr"></span><span class="rivet bl"></span><span class="rivet br"></span>
+        <div class="np-name">level-designer · 1 <span class="status-chip working"><span class="dot"></span>working</span></div>
+        <div class="np-meters">
+          <div class="xp-meter">
+            <div class="segs">
+              <span class="seg filled"></span><span class="seg filled"></span><span class="seg filled"></span><span class="seg filled"></span>
+              <span class="seg filled"></span><span class="seg filled"></span><span class="seg filled"></span><span class="seg"></span>
+              <span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span>
+              <span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span>
+            </div>
+            <span class="xp-label">68k / 200k</span>
+          </div>
+          <div class="cache-count"><span class="hourglass"><span class="hg-top"></span><span class="hg-bot"></span></span>cache 4:12</div>
+        </div>
+      </div>
+
+      <div class="nameplate" tabindex="0">
+        <span class="rivet tl"></span><span class="rivet tr"></span><span class="rivet bl"></span><span class="rivet br"></span>
+        <div class="np-name">level-designer · 2 <span class="status-chip idle"><span class="dot"></span>idle</span></div>
+        <div class="np-meters">
+          <div class="xp-meter">
+            <div class="segs">
+              <span class="seg filled"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span>
+              <span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span>
+              <span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span>
+              <span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span>
+            </div>
+            <span class="xp-label">12k / 200k</span>
+          </div>
+          <div class="cache-count"><span class="hourglass"><span class="hg-top"></span><span class="hg-bot"></span></span>cache 1:03</div>
+        </div>
+      </div>
+
+      <div class="drawer-tab-extra">
+        <button class="new-terminal" title="New terminal">+</button>
+      </div>
+      <button class="drawer-collapse" title="Collapse drawer">⌄</button>
+    </div>
+
+    <div class="drawer-body">
+      <pre class="transcript">◆ persona: level-designer · ludion-mcp @ ws://127.0.0.1:9411 · cwd games/vigil
+
+<span class="ln-user"><span class="prompt">&gt;</span> extend the south alley with six more houses along the west wall — keep the kite lane clear</span>
+
+<span class="ln-work"><span class="glyph">✱</span> reading context file … selection house-a-03 · camera over south gate</span>
+<span class="ln-work"><span class="glyph">→</span> entity.spawn house-b ×6 along wall-west … done</span>
+<span class="ln-work"><span class="glyph">→</span> component.set transform … aligned, floor rule applied</span>
+<span class="ln-done"><span class="glyph">✔</span> 6 houses placed · kite lane 3.5 m clear · <span class="dirty">scene dirty — save when ready</span></span></pre>
+      <div class="transcript-input"><span class="prompt">&gt;</span><span class="cursor"></span></div>
+    </div>
+  </section>
+
+  <footer class="status-bar">
+    <span>edit mode</span><span class="sep">·</span>
+    <span class="dirty">unsaved changes</span><span class="sep">·</span>
+    <span>frame 0.97 ms</span><span class="sep">·</span>
+    <span>60 fps</span><span class="sep">·</span>
+    <span>47 entities</span><span class="sep">·</span>
+    <span>Y-up</span><span class="sep">·</span>
+    <span>grid 1m</span>
+  </footer>
+
+</div>
+
+<script>
+  document.querySelectorAll('.view-tab:not(.disabled)').forEach(function(tab){
+    tab.addEventListener('click', function(){
+      document.querySelectorAll('.view-tab').forEach(function(t){ t.classList.remove('active'); });
+      tab.classList.add('active');
+    });
+  });
+
+  document.querySelectorAll('.mode-toggle button').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      document.querySelectorAll('.mode-toggle button').forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+    });
+  });
+
+  document.querySelectorAll('.nameplate').forEach(function(np){
+    np.addEventListener('click', function(){
+      document.querySelectorAll('.nameplate').forEach(function(n){ n.classList.remove('active'); });
+      np.classList.add('active');
+    });
+  });
+
+  var collapsed = false;
+  var drawer = document.querySelector('.terminal-drawer');
+  var collapseBtn = document.querySelector('.drawer-collapse');
+  if (collapseBtn) {
+    collapseBtn.addEventListener('click', function(){
+      collapsed = !collapsed;
+      drawer.querySelector('.drawer-body').style.display = collapsed ? 'none' : 'flex';
+      collapseBtn.textContent = collapsed ? '⌃' : '⌄';
+    });
+  }
+</script>
+</body>
+</html>

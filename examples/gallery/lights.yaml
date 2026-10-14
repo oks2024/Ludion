@@ -1,0 +1,138 @@
+# Feature: PointLight — dynamic point lights. Three identical grey primitives sit under a red,
+# green, and blue light so only each light's `color` / `intensity` / `range` changes what you see.
+format: 1
+name: "lights - PointLight: color, intensity, range"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - 9.5
+        rotation:
+          - -22.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 18.0
+          - 1.0
+          - 18.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.6
+          - 0.6
+          - 0.62
+          - 1.0
+  - name: cube-left
+    components:
+      Transform:
+        translation:
+          - -3.2
+          - 1.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 20.0
+          - 0.0
+        scale:
+          - 1.6
+          - 1.6
+          - 1.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.8
+          - 0.82
+          - 1.0
+  - name: sphere-mid
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.1
+          - 0.4
+        scale:
+          - 2.2
+          - 2.2
+          - 2.2
+      Mesh:
+        shape: sphere
+        color:
+          - 0.8
+          - 0.8
+          - 0.82
+          - 1.0
+  - name: cube-right
+    components:
+      Transform:
+        translation:
+          - 3.2
+          - 1.0
+          - 0.0
+        rotation:
+          - 0.0
+          - -20.0
+          - 0.0
+        scale:
+          - 1.6
+          - 1.6
+          - 1.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.8
+          - 0.82
+          - 1.0
+  - name: red-light
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 1.6
+          - 2.4
+      PointLight:
+        color:
+          - 1.0
+          - 0.2
+          - 0.15
+        intensity: 3.2
+        range: 7.5
+  - name: green-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.8
+          - 2.6
+      PointLight:
+        color:
+          - 0.2
+          - 1.0
+          - 0.3
+        intensity: 3.2
+        range: 7.5
+  - name: blue-light
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 1.6
+          - 2.4
+      PointLight:
+        color:
+          - 0.2
+          - 0.4
+          - 1.0
+        intensity: 3.2
+        range: 7.5

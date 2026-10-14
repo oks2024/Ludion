@@ -1,0 +1,14 @@
+format: 1
+kind: part
+name: rig-head
+size:
+  - 2
+  - 2
+  - 2
+slices:
+  -
+    - "HH"
+    - "HH"
+  -
+    - "HH"
+    - "HH"

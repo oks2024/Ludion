@@ -1,0 +1,44 @@
+format: 1
+kind: animation
+name: figure-wave
+duration: 0.8
+loop: true
+tracks:
+  arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.4
+        v:
+          - 0.0
+          - 0.0
+          - 25.0
+        ease: smooth
+      - t: 0.8
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.4
+        v:
+          - 0.0
+          - 0.0
+          - -25.0
+        ease: smooth
+      - t: 0.8
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth

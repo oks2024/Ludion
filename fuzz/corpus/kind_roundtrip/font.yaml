@@ -1,0 +1,606 @@
+format: 1
+kind: font
+image: default.png
+mode: bitmap
+units_per_em: 8
+ascender: 8
+descender: 0
+line_gap: 0
+atlas:
+  width: 376
+  height: 8
+  em_px: 8
+notdef:
+  advance: 8
+glyphs:
+  - char: " "
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 0
+      - 0
+      - 8
+      - 8
+  - char: "!"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 320
+      - 0
+      - 8
+      - 8
+  - char: "("
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 360
+      - 0
+      - 8
+      - 8
+  - char: ")"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 368
+      - 0
+      - 8
+      - 8
+  - char: "+"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 344
+      - 0
+      - 8
+      - 8
+  - char: ","
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 304
+      - 0
+      - 8
+      - 8
+  - char: "-"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 336
+      - 0
+      - 8
+      - 8
+  - char: "."
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 296
+      - 0
+      - 8
+      - 8
+  - char: /
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 352
+      - 0
+      - 8
+      - 8
+  - char: "0"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 216
+      - 0
+      - 8
+      - 8
+  - char: "1"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 224
+      - 0
+      - 8
+      - 8
+  - char: "2"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 232
+      - 0
+      - 8
+      - 8
+  - char: "3"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 240
+      - 0
+      - 8
+      - 8
+  - char: "4"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 248
+      - 0
+      - 8
+      - 8
+  - char: "5"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 256
+      - 0
+      - 8
+      - 8
+  - char: "6"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 264
+      - 0
+      - 8
+      - 8
+  - char: "7"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 272
+      - 0
+      - 8
+      - 8
+  - char: "8"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 280
+      - 0
+      - 8
+      - 8
+  - char: "9"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 288
+      - 0
+      - 8
+      - 8
+  - char: ":"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 312
+      - 0
+      - 8
+      - 8
+  - char: "?"
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 328
+      - 0
+      - 8
+      - 8
+  - char: A
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 8
+      - 0
+      - 8
+      - 8
+  - char: B
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 16
+      - 0
+      - 8
+      - 8
+  - char: C
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 24
+      - 0
+      - 8
+      - 8
+  - char: D
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 32
+      - 0
+      - 8
+      - 8
+  - char: E
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 40
+      - 0
+      - 8
+      - 8
+  - char: F
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 48
+      - 0
+      - 8
+      - 8
+  - char: G
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 56
+      - 0
+      - 8
+      - 8
+  - char: H
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 64
+      - 0
+      - 8
+      - 8
+  - char: I
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 72
+      - 0
+      - 8
+      - 8
+  - char: J
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 80
+      - 0
+      - 8
+      - 8
+  - char: K
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 88
+      - 0
+      - 8
+      - 8
+  - char: L
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 96
+      - 0
+      - 8
+      - 8
+  - char: M
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 104
+      - 0
+      - 8
+      - 8
+  - char: N
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 112
+      - 0
+      - 8
+      - 8
+  - char: O
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 120
+      - 0
+      - 8
+      - 8
+  - char: P
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 128
+      - 0
+      - 8
+      - 8
+  - char: Q
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 136
+      - 0
+      - 8
+      - 8
+  - char: R
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 144
+      - 0
+      - 8
+      - 8
+  - char: S
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 152
+      - 0
+      - 8
+      - 8
+  - char: T
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 160
+      - 0
+      - 8
+      - 8
+  - char: U
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 168
+      - 0
+      - 8
+      - 8
+  - char: V
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 176
+      - 0
+      - 8
+      - 8
+  - char: W
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 184
+      - 0
+      - 8
+      - 8
+  - char: X
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 192
+      - 0
+      - 8
+      - 8
+  - char: Y
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 200
+      - 0
+      - 8
+      - 8
+  - char: Z
+    advance: 8
+    bounds:
+      - 0
+      - 0
+      - 8
+      - 8
+    rect:
+      - 208
+      - 0
+      - 8
+      - 8
+aliases:
+  a: A
+  b: B
+  c: C
+  d: D
+  e: E
+  f: F
+  g: G
+  h: H
+  i: I
+  j: J
+  k: K
+  l: L
+  m: M
+  n: N
+  o: O
+  p: P
+  q: Q
+  r: R
+  s: S
+  t: T
+  u: U
+  v: V
+  w: W
+  x: X
+  y: Y
+  z: Z

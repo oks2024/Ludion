@@ -1,0 +1,10 @@
+format: 1
+kind: part
+name: cap
+size:
+  - 1
+  - 1
+  - 1
+slices:
+  -
+    - B

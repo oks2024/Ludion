@@ -1,0 +1,25 @@
+format: 1
+kind: voxel
+name: gem
+size:
+  - 2
+  - 2
+  - 1
+palette:
+  A:
+    color:
+      - 0.8
+      - 0.1
+      - 0.1
+      - 1.0
+  B:
+    color:
+      - 0.1
+      - 0.1
+      - 0.9
+      - 1.0
+slices:
+  -
+    - AB
+  -
+    - ".A"

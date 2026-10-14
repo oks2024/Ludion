@@ -1,0 +1,60 @@
+{
+  "format": 1,
+  "engine_version": "0.1.0",
+  "frame": 0,
+  "run_state": {
+    "state": "running"
+  },
+  "speed": 1.0,
+  "seed": 0,
+  "rng": {
+    "state": 1876011003808476466,
+    "increment": 1442695040888963407
+  },
+  "entities": [
+    {
+      "index": 0,
+      "generation": 0,
+      "components": {}
+    },
+    {
+      "index": 1,
+      "generation": 0,
+      "components": {}
+    },
+    {
+      "index": 2,
+      "generation": 0,
+      "components": {}
+    },
+    {
+      "index": 3,
+      "generation": 0,
+      "components": {}
+    },
+    {
+      "index": 4,
+      "generation": 0,
+      "components": {}
+    },
+    {
+      "index": 6,
+      "generation": 0,
+      "components": {}
+    }
+  ],
+  "allocator": {
+    "generations": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0
+    ],
+    "free": [
+      5
+    ]
+  }
+}

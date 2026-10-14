@@ -1,0 +1,78 @@
+[package]
+name = "ludion-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The `ludion` command-line tool: scaffold, validate, import, render, test, and serve Ludion game projects."
+keywords = ["ludion", "cli", "game-engine", "gamedev"]
+categories = ["command-line-utilities", "game-development"]
+
+[[bin]]
+name = "ludion"
+path = "src/main.rs"
+# The bin and the `ludion` facade lib share the crate name `ludion`, so `cargo doc` writes both to
+# the same `doc/ludion/` output and warns about the collision. The bin's rustdoc would only restate
+# the facade lib's docs anyway (it is the CLI entry point, not a documented API), so suppress it and
+# let the `ludion` crate own that doc path.
+doc = false
+
+[dependencies]
+clap.workspace = true
+crossbeam-channel.workspace = true
+# The facade owns the shared host lifecycle (`ludion::host_scene`, `serve`'s and `ludion::run`'s one
+# graceful teardown) and the shared profile report/budget-check wrappers. The facade is the crate
+# that already unites engine + server + window + audio behind a host, so the CLI's `serve`/`profile`
+# are two thin callers of it rather than a second copy. The edge is acyclic (the facade never depends
+# on the CLI).
+ludion = { path = "../ludion", version = "0.1.0" }
+# `ludion dev` watches `src/` and `scenes/` through `ludion-assets::watch`, behind that crate's
+# opt-in `watch` feature (enabled here and in `ludion-server`, nowhere else).
+ludion-assets = { path = "../ludion-assets", version = "0.1.0", features = ["watch"] }
+# `ludion dev` is a peer protocol client (like the CLI's other wire callers): it snapshots, shuts
+# down, and restores the game child over `ludion-client`, so every engine interaction is an ordinary
+# wire command (the parity pillar). Also a dev-dependency for the wire integration tests.
+ludion-client = { path = "../ludion-client", version = "0.1.0" }
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+ludion-engine = { path = "../ludion-engine", version = "0.1.0" }
+# `generate-atlas` bakes `kind: font-source` through the `bake` feature; nothing else enables it.
+ludion-font = { path = "../ludion-font", version = "0.1.0", features = ["bake"] }
+# `ludion gen`'s thin CLI over the ComfyUI generation client: recipe resolution, workflow validation
+# and the submit/follow/download run pipeline (`Plan/comfy-generation.md` Wave 1).
+ludion-gen = { path = "../ludion-gen", version = "0.1.0" }
+# `ludion import`'s glTF → canonical-text compiler (Phase 8 Wave 3). A leaf compiler over the text
+# formats (deps: core/scene/assets); the CLI supplies the built-in registry for canonical emit.
+ludion-import = { path = "../ludion-import", version = "0.1.0" }
+# `ludion mesh`'s two verbs: the ray cast `pick` reports a surface point with, and the derive
+# `apply` writes (or byte-compares) an edit document's tree of maps with. A leaf compiler over the
+# text formats (deps: core/scene/assets); this crate supplies the model-sheet camera it deliberately
+# does not know about.
+ludion-mesh-edit = { path = "../ludion-mesh-edit", version = "0.1.0" }
+ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
+ludion-server = { path = "../ludion-server", version = "0.1.0" }
+# `check-scene`'s `kind: sculpt` report (grid extent, triangles before/after decimation, the
+# `--bounds` authoring view) and `sculpt new`'s scaffold need the mesher itself, not just the
+# document type `ludion-scene` already carries.
+ludion-sculpt = { path = "../ludion-sculpt", version = "0.1.0" }
+ludion-sim = { path = "../ludion-sim", version = "0.1.0" }
+# `ludion map-check` probes the generated district's static colliders (occupancy grid, reachability)
+# through the same spatial index the game's nav census uses (`spatial::rebuild`/`overlaps`).
+ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
+# `ludion generate-atlas`'s bake/pack and `ludion import`'s PNG → `kind: sprite` path. A leaf
+# compiler over the text formats (deps: core/scene/assets), IO-free by design — this crate resolves
+# every path, reads every input and writes both committed files.
+ludion-sprite = { path = "../ludion-sprite", version = "0.1.0" }
+ludion-testkit = { path = "../ludion-testkit", version = "0.1.0" }
+# `serve --window`'s native viewer (Phase 6 Wave 5); see `ludion-window`'s own doc comment for the
+# peer-client rationale and the main-thread requirement `serve.rs` follows.
+ludion-window = { path = "../ludion-window", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+# `ludion profile --check` parses TOML budget files (per-system / per-pass / frame-total ceilings).
+toml.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+tungstenite.workspace = true

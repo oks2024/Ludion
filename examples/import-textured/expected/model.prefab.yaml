@@ -1,0 +1,89 @@
+format: 1
+kind: prefab
+name: fixture
+generated_from: "../scene.gltf"
+entities:
+  - name: tangent-cube
+    components:
+      Transform:
+        translation:
+          - -0.9
+          - 0.6
+          - 0.0
+        rotation:
+          - -0.0
+          - 30.000002
+          - -0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+      Mesh:
+        shape:
+          asset: meshes/tangent-cube.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 1.0
+        emissive: 1.0
+        flash: 0.0
+        flash_color:
+          - 1.0
+          - 1.0
+          - 1.0
+  - name: computed-cube
+    components:
+      Transform:
+        translation:
+          - 0.9
+          - 0.6
+          - 0.0
+        rotation:
+          - 0.0
+          - -30.000002
+          - 0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+      Mesh:
+        shape:
+          asset: meshes/computed-cube.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 1.0
+        emissive: 1.0
+        flash: 0.0
+        flash_color:
+          - 1.0
+          - 1.0
+          - 1.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 3.0
+          - 3.0
+        rotation:
+          - -0.0
+          - 0.0
+          - -0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+      PointLight:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+        intensity: 8.0
+        range: 20.0

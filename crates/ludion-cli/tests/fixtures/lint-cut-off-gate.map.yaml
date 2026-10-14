@@ -1,0 +1,26 @@
+format: 1
+kind: map
+name: lint-cut-off-gate
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "#####"
+  - "#.#.#"
+  - "#.#.#"
+  - "###.#"
+markers:
+  - name: inside
+    kind: torch
+    x: 3.0
+    z: 3.0
+  - name: far-gate
+    kind: gate
+    x: 7.0
+    z: 7.0
+    components:
+      Gate:
+        to: target.yaml
+        anchor: from-here

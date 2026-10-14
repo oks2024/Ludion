@@ -1,0 +1,819 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ludion editor — Bathyscaphe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --abyss:#0B1220;
+    --hull:#121B2E;
+    --bulkhead:#24334E;
+    --lamp:#E8A33D;
+    --text:#B9C5DA;
+    --bright:#EAF0F9;
+    --ok:#46C08D;
+    --warn:#E06A5A;
+
+    --sans:"Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono:"IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+    --dim:#7C8AA6;          /* muted body, still >=4.5:1 on hull */
+    --sink:#0D1524;         /* recessed input wells */
+    --radius:4px;
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden}
+  body{
+    background:var(--abyss);
+    color:var(--text);
+    font-family:var(--sans);
+    font-size:13px;
+    line-height:1.4;
+    -webkit-font-smoothing:antialiased;
+    cursor:default;
+  }
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:.01em}
+
+  button,input,select{font:inherit;color:inherit}
+  button{background:none;border:none}
+  :focus-visible{
+    outline:2px solid var(--lamp);
+    outline-offset:1px;
+    border-radius:2px;
+  }
+
+  /* ---------- app frame ---------- */
+  .app{
+    height:100vh;
+    display:grid;
+    grid-template-rows:auto 1fr;
+    overflow:hidden;
+  }
+
+  /* ---------- instrument rail (two fixed rows: instruments, then session controls) ---------- */
+  .topbar{
+    background:var(--hull);
+    border-bottom:1px solid var(--bulkhead);
+    min-width:0;
+  }
+  .rail{
+    display:flex;
+    align-items:stretch;
+    gap:16px;
+    padding:8px 14px;
+    min-width:0;
+  }
+  .controls{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    row-gap:6px;
+    flex-wrap:wrap;
+    padding:6px 14px 8px;
+    border-top:1px solid var(--bulkhead);
+    min-width:0;
+  }
+  .rail-group{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    min-width:0;
+  }
+  .rail-sep{width:1px;background:var(--bulkhead);align-self:stretch;margin:2px 0}
+
+  .identity{display:flex;flex-direction:column;gap:3px;min-width:0}
+  .identity-top{display:flex;align-items:center;gap:8px}
+  .brand{color:var(--bright);font-weight:600;letter-spacing:.02em}
+  .conn{display:inline-flex;align-items:center;gap:6px;color:var(--dim)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+  .scene-path{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
+
+  .tag{
+    font-family:var(--mono);
+    font-size:10px;
+    font-weight:600;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--abyss);
+    background:var(--lamp);
+    padding:2px 7px;
+    border-radius:3px;
+    white-space:nowrap;
+  }
+
+  /* segmented mode toggle */
+  .seg{display:inline-flex;border:1px solid var(--bulkhead);border-radius:var(--radius);overflow:hidden}
+  .seg button{
+    padding:5px 12px;
+    font-size:12px;
+    font-weight:500;
+    color:var(--dim);
+    cursor:pointer;
+  }
+  .seg button[aria-pressed="true"]{
+    color:var(--abyss);
+    background:var(--lamp);
+    font-weight:600;
+  }
+  .seg button + button{border-left:1px solid var(--bulkhead)}
+
+  .lbl{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+
+  .btn{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:5px 11px;
+    border:1px solid var(--bulkhead);
+    border-radius:var(--radius);
+    background:var(--hull);
+    color:var(--text);
+    font-size:12px;
+    cursor:pointer;
+  }
+  .btn:hover{border-color:var(--lamp);color:var(--bright)}
+  .btn:disabled{opacity:.4;cursor:default}
+  .btn:disabled:hover{border-color:var(--bulkhead);color:var(--text)}
+  .btn.primary{border-color:var(--lamp);color:var(--bright)}
+  .btn.icon{padding:5px 8px}
+
+  .field{display:inline-flex;align-items:center;gap:6px}
+  .well{
+    background:var(--sink);
+    border:1px solid var(--bulkhead);
+    border-radius:var(--radius);
+    padding:4px 8px;
+    color:var(--bright);
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+  }
+  input.well{outline:none}
+  input.well:focus-visible{outline:2px solid var(--lamp);outline-offset:1px}
+  .well.num{width:52px;text-align:right}
+  .well.path{width:220px;flex:0 1 auto;min-width:120px;overflow:hidden;text-overflow:ellipsis}
+
+  .dirty{display:inline-flex;align-items:center;gap:6px;color:var(--lamp);font-size:12px}
+  .dirty .pip{width:8px;height:8px;border-radius:50%;background:var(--lamp);flex:none}
+
+  /* ---------- gauge cluster (signature) ---------- */
+  .cluster{margin-left:auto;display:flex;gap:10px;align-items:stretch}
+  .gauge{
+    display:flex;flex-direction:column;
+    gap:6px;
+    padding:7px 12px 6px;
+    background:var(--sink);
+    border:1px solid var(--bulkhead);
+    border-radius:var(--radius);
+    min-width:0;
+  }
+  .gauge-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .gauge-name{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+  .gauge-body{display:flex;align-items:center;gap:10px}
+
+  /* odometer */
+  .odo{display:flex;gap:2px}
+  .odo span{
+    font-family:var(--mono);
+    font-weight:600;
+    font-size:18px;
+    line-height:1;
+    color:var(--bright);
+    background:var(--abyss);
+    border:1px solid var(--bulkhead);
+    border-radius:2px;
+    padding:3px 4px;
+    min-width:15px;
+    text-align:center;
+  }
+  .odo span.lead{color:var(--dim)}
+
+  .hash{
+    font-family:var(--mono);
+    font-weight:500;
+    font-size:15px;
+    letter-spacing:.02em;
+    color:var(--bright);
+  }
+  .identicon{display:block;flex:none}
+
+  .stream-val{font-family:var(--mono);color:var(--bright)}
+  .stream-fps{font-size:18px;font-weight:600;line-height:1}
+  .stream-sub{font-size:11px;color:var(--dim)}
+
+  /* gauge graduation ticks */
+  .grads{display:flex;gap:3px;height:5px;align-items:flex-end}
+  .grads i{width:2px;height:3px;background:var(--bulkhead);display:block}
+  .grads i.on{height:5px;background:var(--lamp)}
+
+  .refresh{color:var(--dim);cursor:pointer;padding:2px;line-height:0}
+  .refresh:hover{color:var(--lamp)}
+
+  /* ---------- body columns ---------- */
+  .body{
+    display:grid;
+    grid-template-columns:minmax(220px,280px) minmax(0,1fr) minmax(280px,340px);
+    min-height:0;
+    min-width:0;
+    overflow:hidden;
+  }
+  .col{display:flex;flex-direction:column;min-height:0;min-width:0}
+  .col.left{border-right:1px solid var(--bulkhead)}
+  .col.right{border-left:1px solid var(--bulkhead)}
+
+  .panel{display:flex;flex-direction:column;min-height:0;background:var(--hull)}
+  .panel + .panel{border-top:1px solid var(--bulkhead)}
+  .panel-head{
+    display:flex;align-items:center;justify-content:space-between;
+    gap:8px;
+    padding:9px 12px;
+    border-bottom:1px solid var(--bulkhead);
+    flex:none;
+  }
+  .panel-title{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--bright);font-weight:600}
+  .panel-meta{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .panel-scroll{overflow:auto;min-height:0}
+
+  /* ---------- hierarchy ---------- */
+  .hier{flex:1 1 auto}
+  .tree{padding:4px 0}
+  .row{
+    display:flex;align-items:center;gap:7px;
+    padding:3px 12px;
+    height:24px;
+    white-space:nowrap;
+    cursor:pointer;
+  }
+  .row:hover{background:var(--sink)}
+  .row .name{font-family:var(--mono);font-size:12px;color:var(--text)}
+  .row .twist{color:var(--dim);width:9px;flex:none;font-size:10px}
+  .row .glyph{color:var(--dim);flex:none;font-size:11px;width:12px;text-align:center}
+  .indent{padding-left:30px}
+  .indent2{padding-left:30px}
+  .row.group .name{color:var(--bright)}
+  .row.selected{
+    background:rgba(232,163,61,.14);
+    box-shadow:inset 2px 0 0 var(--lamp);
+  }
+  .row.selected .name{color:var(--lamp)}
+  .warnflag{color:var(--warn);font-size:11px;flex:none}
+  .muted{color:var(--dim)}
+  .more{padding:5px 12px 5px 42px;color:var(--dim);font-size:11px;font-family:var(--mono)}
+
+  .hier-foot{
+    display:flex;align-items:center;gap:8px;
+    padding:8px 12px;
+    border-top:1px solid var(--bulkhead);
+    flex:none;
+  }
+  select.well{padding-right:6px;cursor:pointer}
+
+  /* ---------- palette ---------- */
+  .pal{flex:none}
+  .pal-group{padding:10px 12px}
+  .pal-group + .pal-group{border-top:1px solid var(--bulkhead)}
+  .pal-lbl{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+  .pal-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .pal-grid .btn{justify-content:center}
+
+  /* ---------- center: gizmo toolbar + viewport ---------- */
+  .stage{display:flex;flex-direction:column;min-height:0;background:var(--abyss)}
+  .toolbar{
+    display:flex;align-items:center;gap:14px;
+    padding:8px 14px;
+    border-bottom:1px solid var(--bulkhead);
+    flex:none;
+    flex-wrap:wrap;
+  }
+  .toolset{display:inline-flex;border:1px solid var(--bulkhead);border-radius:var(--radius);overflow:hidden}
+  .toolset button{padding:5px 12px;font-size:12px;color:var(--dim);cursor:pointer}
+  .toolset button + button{border-left:1px solid var(--bulkhead)}
+  .toolset button[aria-pressed="true"]{background:var(--lamp);color:var(--abyss);font-weight:600}
+  .snap{display:inline-flex;align-items:center;gap:8px}
+  .hint{margin-left:auto;color:var(--dim);font-size:12px}
+  kbd{
+    font-family:var(--mono);font-size:11px;
+    border:1px solid var(--bulkhead);border-radius:3px;
+    padding:0 4px;color:var(--text);background:var(--sink);
+  }
+
+  .viewport{flex:1 1 auto;min-height:0;padding:16px;display:flex}
+  .porthole{
+    position:relative;
+    flex:1;
+    border:1px solid var(--bulkhead);
+    border-radius:var(--radius);
+    background:#060B15;
+    /* inset bezel: a slightly darker rim, not skeuomorphic */
+    box-shadow:inset 0 0 0 2px #05090F;
+    overflow:hidden;
+  }
+  .porthole svg{display:block;width:100%;height:100%}
+
+  .chips{
+    position:absolute;left:12px;bottom:12px;
+    display:flex;gap:8px;align-items:center;
+  }
+  .chip{
+    font-family:var(--mono);font-size:11px;
+    color:var(--text);
+    background:rgba(11,18,32,.82);
+    border:1px solid var(--bulkhead);
+    border-radius:3px;
+    padding:3px 8px;
+    backdrop-filter:blur(2px);
+  }
+  .chip.paused{color:var(--abyss);background:var(--lamp);border-color:var(--lamp);font-weight:600;letter-spacing:.06em}
+
+  /* ---------- inspector ---------- */
+  .insp-sub{
+    display:flex;align-items:baseline;gap:8px;
+    padding:9px 12px;
+    border-bottom:1px solid var(--bulkhead);
+    flex:none;
+  }
+  .insp-name{font-family:var(--mono);font-size:14px;color:var(--lamp);font-weight:600}
+  .insp-id{font-family:var(--mono);font-size:11px;color:var(--dim)}
+
+  .comp{border-bottom:1px solid var(--bulkhead)}
+  .comp-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:8px 12px;
+  }
+  .comp-name{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--bright);font-weight:600}
+  .comp-body{padding:2px 12px 12px}
+
+  .prop{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .prop-lbl{width:74px;flex:none;color:var(--dim);font-size:12px}
+  .axes{display:flex;gap:6px;flex:1;min-width:0}
+  .axis{display:flex;align-items:center;gap:4px;flex:1;min-width:0}
+  .axis .ax{font-family:var(--mono);font-size:10px;width:9px;text-align:center;flex:none}
+  .ax.x{color:var(--warn)}
+  .ax.y{color:var(--ok)}
+  .ax.z{color:#5B8DE0}
+  .ax.w{color:var(--dim)}
+  .prop .well{flex:1;min-width:0;width:auto;text-align:right;padding:3px 6px;font-size:12px}
+
+  .tex-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .tex-row .well{flex:1;min-width:0;font-size:11px}
+  .swatch{width:18px;height:18px;border-radius:3px;border:1px solid var(--bulkhead);flex:none}
+  .tint{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .tint .mono{font-size:12px;color:var(--bright)}
+
+  @media (max-width:1500px){
+    .well.path{width:160px}
+    .scene-path{max-width:200px}
+    .rail{gap:12px}
+    .cluster{gap:8px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+  }
+</style>
+
+<div class="app">
+
+  <!-- ===================== INSTRUMENT RAIL ===================== -->
+  <header class="topbar">
+
+    <!-- row 1: instruments — identity left, determinism cluster right -->
+    <div class="rail">
+
+    <div class="rail-group">
+      <div class="identity">
+        <div class="identity-top">
+          <span class="brand">Ludion</span>
+          <span class="mono" style="color:var(--dim)">0.6.0</span>
+          <span class="conn mono"><span class="dot"></span>ws://127.0.0.1:9411</span>
+          <span class="tag">Paused · Edit</span>
+        </div>
+        <div class="mono scene-path" title="games/breakout/scenes/main.scene.yaml">games/breakout/scenes/main.scene.yaml</div>
+      </div>
+    </div>
+
+    <!-- ============ SIGNATURE: determinism instrument cluster ============ -->
+    <div class="cluster" aria-label="Determinism instruments">
+
+      <div class="gauge">
+        <div class="gauge-head"><span class="gauge-name">Frame</span></div>
+        <div class="gauge-body">
+          <div class="odo" aria-label="frame 1284">
+            <span class="lead">0</span><span>1</span><span>2</span><span>8</span><span>4</span>
+          </div>
+        </div>
+        <div class="grads"><i></i><i class="on"></i><i></i><i></i><i class="on"></i><i></i><i></i><i class="on"></i></div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-head">
+          <span class="gauge-name">Worldhash</span>
+          <span class="refresh" role="button" tabindex="0" title="sim.hash — refresh" aria-label="Refresh world hash">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2">
+              <path d="M10 6a4 4 0 1 1-1.2-2.8"></path><path d="M10.4 1.6V4H8"></path>
+            </svg>
+          </span>
+        </div>
+        <div class="gauge-body">
+          <!-- 4x4 identicon derived from 9f3a77c1e04b52d8: nibble>=8 -> lit -->
+          <svg class="identicon" width="34" height="34" viewBox="0 0 34 34" aria-label="hash identicon">
+            <rect width="34" height="34" rx="2" fill="#060B15"/>
+            <g>
+              <!-- row 0: 9 f 3 a -->
+              <rect x="1"  y="1"  width="8" height="8" rx="1" fill="#E8A33D"/>
+              <rect x="9"  y="1"  width="8" height="8" rx="1" fill="#E8A33D"/>
+              <rect x="17" y="1"  width="8" height="8" rx="1" fill="#1B2942"/>
+              <rect x="25" y="1"  width="8" height="8" rx="1" fill="#E8A33D"/>
+              <!-- row 1: 7 7 c 1 -->
+              <rect x="1"  y="9"  width="8" height="8" rx="1" fill="#1B2942"/>
+              <rect x="9"  y="9"  width="8" height="8" rx="1" fill="#1B2942"/>
+              <rect x="17" y="9"  width="8" height="8" rx="1" fill="#E8A33D"/>
+              <rect x="25" y="9"  width="8" height="8" rx="1" fill="#1B2942"/>
+              <!-- row 2: e 0 4 b -->
+              <rect x="1"  y="17" width="8" height="8" rx="1" fill="#E8A33D"/>
+              <rect x="9"  y="17" width="8" height="8" rx="1" fill="#1B2942"/>
+              <rect x="17" y="17" width="8" height="8" rx="1" fill="#1B2942"/>
+              <rect x="25" y="17" width="8" height="8" rx="1" fill="#E8A33D"/>
+              <!-- row 3: 5 2 d 8 -->
+              <rect x="1"  y="25" width="8" height="8" rx="1" fill="#1B2942"/>
+              <rect x="9"  y="25" width="8" height="8" rx="1" fill="#1B2942"/>
+              <rect x="17" y="25" width="8" height="8" rx="1" fill="#E8A33D"/>
+              <rect x="25" y="25" width="8" height="8" rx="1" fill="#E8A33D"/>
+            </g>
+          </svg>
+          <div>
+            <div class="hash">9f3a77c1e04b52d8</div>
+            <div class="stream-sub mono">@ frame 1284</div>
+          </div>
+        </div>
+        <div class="grads"><i class="on"></i><i></i><i></i><i class="on"></i><i></i><i class="on"></i><i></i><i></i></div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-head"><span class="gauge-name">Stream</span></div>
+        <div class="gauge-body">
+          <div>
+            <span class="stream-val stream-fps">60</span>
+            <span class="stream-sub">fps</span>
+            <div class="stream-sub mono">1080p · 4.2 ms</div>
+          </div>
+        </div>
+        <div class="grads"><i></i><i></i><i class="on"></i><i></i><i class="on"></i><i></i><i class="on"></i><i></i></div>
+      </div>
+
+    </div>
+    </div>
+
+    <!-- row 2: session controls -->
+    <div class="controls">
+
+      <div class="rail-group">
+        <div class="seg" role="group" aria-label="Mode">
+          <button aria-pressed="true">Edit</button>
+          <button aria-pressed="false">Play</button>
+        </div>
+      </div>
+
+      <div class="rail-sep"></div>
+
+      <div class="rail-group">
+        <button class="btn" title="sim.resume">▸ Resume</button>
+        <div class="field">
+          <span class="lbl">Step</span>
+          <input class="well num" value="1" aria-label="Step ticks">
+          <button class="btn icon" title="sim.step {ticks: 1}">Step</button>
+        </div>
+        <div class="field">
+          <span class="lbl">Speed</span>
+          <input class="well num" value="1.0×" aria-label="Speed multiplier">
+        </div>
+      </div>
+
+      <div class="rail-sep"></div>
+
+      <div class="rail-group">
+        <input class="well path" value="games/breakout/scenes/main.scene.yaml" aria-label="Save path" title="games/breakout/scenes/main.scene.yaml">
+        <button class="btn primary" title="scene.save {path}">Save scene</button>
+        <span class="dirty" title="Unsaved changes"><span class="pip"></span>unsaved</span>
+      </div>
+
+      <div class="rail-sep"></div>
+
+      <div class="rail-group" style="margin-left:auto">
+        <button class="btn icon" title="Undo">↶ Undo</button>
+        <button class="btn icon" disabled title="Redo (nothing to redo)">↷ Redo</button>
+        <button class="btn icon" title="Disconnect">Disconnect</button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ===================== BODY ===================== -->
+  <div class="body">
+
+    <!-- ------------- LEFT COLUMN ------------- -->
+    <div class="col left">
+
+      <!-- hierarchy -->
+      <section class="panel hier">
+        <div class="panel-head">
+          <span class="panel-title">Scene</span>
+          <span class="panel-meta">24 entities</span>
+        </div>
+        <div class="panel-scroll">
+          <div class="tree">
+            <div class="row"><span class="twist"></span><span class="glyph">◇</span><span class="name">camera</span></div>
+            <div class="row"><span class="twist"></span><span class="glyph">☀</span><span class="name">key_light</span><span class="warnflag" title="dangling parent">⚑</span></div>
+            <div class="row"><span class="twist"></span><span class="glyph">☀</span><span class="name">fill_light</span></div>
+            <div class="row"><span class="twist"></span><span class="glyph">●</span><span class="name">ball</span></div>
+            <div class="row"><span class="twist"></span><span class="glyph">▬</span><span class="name">paddle</span></div>
+
+            <div class="row group"><span class="twist">▾</span><span class="glyph">▣</span><span class="name">walls</span></div>
+            <div class="row indent"><span class="glyph">▮</span><span class="name">wall_left</span></div>
+            <div class="row indent"><span class="glyph">▮</span><span class="name">wall_right</span></div>
+            <div class="row indent"><span class="glyph">▮</span><span class="name">wall_top</span></div>
+
+            <div class="row group"><span class="twist">▾</span><span class="glyph">▣</span><span class="name">bricks</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_00</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_01</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_02</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_03</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_04</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_05</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_06</span></div>
+            <div class="row indent selected" aria-selected="true"><span class="glyph">▪</span><span class="name">brick_07</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_08</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_09</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_10</span></div>
+            <div class="row indent"><span class="glyph">▪</span><span class="name">brick_11</span></div>
+            <div class="more">+ 6 more · brick_12 … brick_17</div>
+          </div>
+        </div>
+        <div class="hier-foot">
+          <span class="lbl">Parent</span>
+          <select class="well" aria-label="Reparent selection" title="entity.reparent">
+            <option>bricks</option>
+            <option>walls</option>
+            <option>(scene root)</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- palette -->
+      <section class="panel pal">
+        <div class="pal-group">
+          <div class="pal-lbl">Create</div>
+          <div class="pal-grid">
+            <button class="btn" title="entity.spawn — brick">Brick</button>
+            <button class="btn" title="entity.spawn — paddle">Paddle</button>
+            <button class="btn" title="entity.spawn — ball">Ball</button>
+            <button class="btn" title="entity.spawn — point light">Point light</button>
+            <button class="btn" title="entity.spawn — sprite">Sprite</button>
+            <button class="btn" title="entity.spawn — empty">Empty</button>
+          </div>
+        </div>
+        <div class="pal-group">
+          <div class="pal-lbl">Selection</div>
+          <div class="pal-grid">
+            <button class="btn" title="entity.spawn — duplicate brick_07">Duplicate</button>
+            <button class="btn" title="entity.destroy — brick_07">Destroy</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ------------- CENTER: STAGE ------------- -->
+    <div class="col">
+      <section class="stage">
+
+        <div class="toolbar">
+          <div class="toolset" role="group" aria-label="Gizmo mode">
+            <button aria-pressed="true">Translate</button>
+            <button aria-pressed="false">Rotate</button>
+            <button aria-pressed="false">Scale</button>
+          </div>
+          <div class="snap">
+            <span class="lbl">Snap grid</span>
+            <input class="well num" value="0.25" aria-label="Grid snap">
+          </div>
+          <div class="snap">
+            <span class="lbl">Angle</span>
+            <input class="well num" value="15°" aria-label="Angle snap">
+          </div>
+          <div class="hint">Drag an axis to move · <kbd>Esc</kbd> cancels</div>
+        </div>
+
+        <div class="viewport">
+          <div class="porthole">
+            <svg viewBox="0 0 800 500" preserveAspectRatio="xMidYMid slice" role="img"
+                 aria-label="Breakout playfield: three rows of glowing bricks, paddle and ball, brick_07 selected with a translate gizmo">
+              <defs>
+                <radialGradient id="wash-amber" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%"  stop-color="#E8A33D" stop-opacity="0.42"/>
+                  <stop offset="45%" stop-color="#E8A33D" stop-opacity="0.14"/>
+                  <stop offset="100%" stop-color="#E8A33D" stop-opacity="0"/>
+                </radialGradient>
+                <radialGradient id="wash-teal" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%"  stop-color="#46C08D" stop-opacity="0.38"/>
+                  <stop offset="45%" stop-color="#46C08D" stop-opacity="0.12"/>
+                  <stop offset="100%" stop-color="#46C08D" stop-opacity="0"/>
+                </radialGradient>
+                <radialGradient id="ball-bloom" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%"  stop-color="#EAF0F9" stop-opacity="0.95"/>
+                  <stop offset="30%" stop-color="#EAF0F9" stop-opacity="0.5"/>
+                  <stop offset="70%" stop-color="#E8A33D" stop-opacity="0.18"/>
+                  <stop offset="100%" stop-color="#E8A33D" stop-opacity="0"/>
+                </radialGradient>
+                <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+                  <feGaussianBlur stdDeviation="4"/>
+                </filter>
+                <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#0A1120"/>
+                  <stop offset="100%" stop-color="#060B15"/>
+                </linearGradient>
+              </defs>
+
+              <!-- playfield -->
+              <rect x="0" y="0" width="800" height="500" fill="url(#floor)"/>
+
+              <!-- point-light washes -->
+              <ellipse cx="180" cy="150" rx="300" ry="240" fill="url(#wash-amber)"/>
+              <ellipse cx="640" cy="360" rx="300" ry="250" fill="url(#wash-teal)"/>
+
+              <!-- faint play boundary -->
+              <rect x="40" y="34" width="720" height="452" rx="6" fill="none" stroke="#16233B" stroke-width="1"/>
+
+              <!-- ===== bricks: 3 rows x 6 cols (brick_00 .. brick_17) ===== -->
+              <!-- row 0 : y=70  amber -->
+              <g>
+                <rect x="77"  y="70" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55" stroke-width="1"/>
+                <rect x="77"  y="70" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="187" y="70" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="187" y="70" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="297" y="70" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="297" y="70" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="407" y="70" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="407" y="70" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="517" y="70" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="517" y="70" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="627" y="70" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="627" y="70" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+              </g>
+              <!-- row 1 : y=110  teal   (brick_07 is col 1 -> x=187) -->
+              <g>
+                <rect x="77"  y="110" width="96" height="26" rx="3" fill="#0F2E28" stroke="#46C08D" stroke-opacity="0.55"/>
+                <rect x="77"  y="110" width="96" height="26" rx="3" fill="#46C08D" fill-opacity="0.15"/>
+                <!-- brick_07 fill (selection drawn later, on top) -->
+                <rect x="187" y="110" width="96" height="26" rx="3" fill="#0F2E28" stroke="#46C08D" stroke-opacity="0.55"/>
+                <rect x="187" y="110" width="96" height="26" rx="3" fill="#46C08D" fill-opacity="0.22"/>
+                <rect x="297" y="110" width="96" height="26" rx="3" fill="#0F2E28" stroke="#46C08D" stroke-opacity="0.55"/>
+                <rect x="297" y="110" width="96" height="26" rx="3" fill="#46C08D" fill-opacity="0.15"/>
+                <rect x="407" y="110" width="96" height="26" rx="3" fill="#0F2E28" stroke="#46C08D" stroke-opacity="0.55"/>
+                <rect x="407" y="110" width="96" height="26" rx="3" fill="#46C08D" fill-opacity="0.15"/>
+                <rect x="517" y="110" width="96" height="26" rx="3" fill="#0F2E28" stroke="#46C08D" stroke-opacity="0.55"/>
+                <rect x="517" y="110" width="96" height="26" rx="3" fill="#46C08D" fill-opacity="0.15"/>
+                <rect x="627" y="110" width="96" height="26" rx="3" fill="#0F2E28" stroke="#46C08D" stroke-opacity="0.55"/>
+                <rect x="627" y="110" width="96" height="26" rx="3" fill="#46C08D" fill-opacity="0.15"/>
+              </g>
+              <!-- row 2 : y=150  amber -->
+              <g>
+                <rect x="77"  y="150" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="77"  y="150" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="187" y="150" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="187" y="150" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="297" y="150" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="297" y="150" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="407" y="150" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="407" y="150" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="517" y="150" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="517" y="150" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+                <rect x="627" y="150" width="96" height="26" rx="3" fill="#3A2A12" stroke="#E8A33D" stroke-opacity="0.55"/>
+                <rect x="627" y="150" width="96" height="26" rx="3" fill="#E8A33D" fill-opacity="0.16"/>
+              </g>
+
+              <!-- paddle -->
+              <g>
+                <rect x="330" y="440" width="140" height="16" rx="8" fill="#12233E" stroke="#4E6DA6" stroke-width="1"/>
+                <rect x="336" y="443" width="128" height="5" rx="2.5" fill="#7FA6E0" fill-opacity="0.55"/>
+              </g>
+
+              <!-- ball with bloom -->
+              <circle cx="452" cy="330" r="34" fill="url(#ball-bloom)"/>
+              <circle cx="452" cy="330" r="7"  fill="#EAF0F9"/>
+              <circle cx="452" cy="330" r="7"  fill="none" stroke="#E8A33D" stroke-opacity="0.6"/>
+
+              <!-- ===== selection + translate gizmo on brick_07 (center 235,123) ===== -->
+              <g>
+                <!-- selection outline -->
+                <rect x="184.5" y="107.5" width="101" height="31" rx="4" fill="none"
+                      stroke="#E8A33D" stroke-width="1.5"/>
+                <rect x="181" y="104" width="108" height="38" rx="5" fill="none"
+                      stroke="#E8A33D" stroke-opacity="0.35" stroke-dasharray="3 3"/>
+                <!-- corner handles -->
+                <rect x="182" y="105" width="4" height="4" fill="#E8A33D"/>
+                <rect x="284" y="105" width="4" height="4" fill="#E8A33D"/>
+                <rect x="182" y="137" width="4" height="4" fill="#E8A33D"/>
+                <rect x="284" y="137" width="4" height="4" fill="#E8A33D"/>
+
+                <!-- translate gizmo, origin at brick center (235,123) -->
+                <!-- X axis (red) -> right -->
+                <line x1="235" y1="123" x2="316" y2="123" stroke="#E06A5A" stroke-width="2.5"/>
+                <polygon points="316,123 306,118 306,128" fill="#E06A5A"/>
+                <text x="322" y="127" font-family="IBM Plex Mono, monospace" font-size="12" fill="#E06A5A">X</text>
+                <!-- Y axis (green) -> up -->
+                <line x1="235" y1="123" x2="235" y2="52" stroke="#46C08D" stroke-width="2.5"/>
+                <polygon points="235,52 230,62 240,62" fill="#46C08D"/>
+                <text x="240" y="52" font-family="IBM Plex Mono, monospace" font-size="12" fill="#46C08D">Y</text>
+                <!-- Z axis (blue dot, toward viewer) -->
+                <circle cx="235" cy="123" r="5.5" fill="#0A1120" stroke="#5B8DE0" stroke-width="2"/>
+                <circle cx="235" cy="123" r="1.6" fill="#5B8DE0"/>
+              </g>
+            </svg>
+
+            <div class="chips">
+              <span class="chip paused">Paused</span>
+              <span class="chip">frame 1284 · 60 fps · 4.2 ms</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ------------- RIGHT: INSPECTOR ------------- -->
+    <div class="col right">
+      <section class="panel" style="flex:1;min-height:0">
+        <div class="panel-head">
+          <span class="panel-title">Inspector</span>
+          <span class="panel-meta">3 components</span>
+        </div>
+
+        <div class="insp-sub">
+          <span class="insp-name">brick_07</span>
+          <span class="insp-id">id 12 · gen 3</span>
+        </div>
+
+        <div class="panel-scroll">
+
+          <!-- Transform -->
+          <div class="comp">
+            <div class="comp-head"><span class="comp-name">Transform</span></div>
+            <div class="comp-body">
+              <div class="prop">
+                <span class="prop-lbl">Translation</span>
+                <div class="axes">
+                  <span class="axis"><span class="ax x">X</span><input class="well" value="-2.25" aria-label="translation x"></span>
+                  <span class="axis"><span class="ax y">Y</span><input class="well" value="3.5" aria-label="translation y"></span>
+                  <span class="axis"><span class="ax z">Z</span><input class="well" value="0" aria-label="translation z"></span>
+                </div>
+              </div>
+              <div class="prop">
+                <span class="prop-lbl">Rotation</span>
+                <div class="axes">
+                  <span class="axis"><span class="ax x">X</span><input class="well" value="0" aria-label="rotation x"></span>
+                  <span class="axis"><span class="ax y">Y</span><input class="well" value="0" aria-label="rotation y"></span>
+                  <span class="axis"><span class="ax z">Z</span><input class="well" value="0" aria-label="rotation z"></span>
+                  <span class="axis"><span class="ax w">W</span><input class="well" value="1" aria-label="rotation w"></span>
+                </div>
+              </div>
+              <div class="prop">
+                <span class="prop-lbl">Scale</span>
+                <div class="axes">
+                  <span class="axis"><span class="ax x">X</span><input class="well" value="1.5" aria-label="scale x"></span>
+                  <span class="axis"><span class="ax y">Y</span><input class="well" value="0.6" aria-label="scale y"></span>
+                  <span class="axis"><span class="ax z">Z</span><input class="well" value="1" aria-label="scale z"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sprite -->
+          <div class="comp">
+            <div class="comp-head"><span class="comp-name">Sprite</span></div>
+            <div class="comp-body">
+              <div class="tex-row">
+                <span class="prop-lbl">Texture</span>
+                <input class="well" value="textures/brick_amber.qoi" aria-label="texture path" title="textures/brick_amber.qoi">
+              </div>
+              <div class="tint">
+                <span class="prop-lbl">Tint</span>
+                <span class="swatch" style="background:rgb(255,184,79)" title="rgba(1.0, 0.72, 0.31, 1.0)"></span>
+                <span class="mono">[1.0, 0.72, 0.31, 1.0]</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Health -->
+          <div class="comp">
+            <div class="comp-head"><span class="comp-name">Health</span></div>
+            <div class="comp-body">
+              <div class="prop">
+                <span class="prop-lbl">Hits remaining</span>
+                <input class="well" style="flex:none;width:60px" value="2" aria-label="hits remaining">
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+    </div>
+
+  </div>
+</div>

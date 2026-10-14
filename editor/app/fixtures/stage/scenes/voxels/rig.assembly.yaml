@@ -1,0 +1,182 @@
+format: 1
+kind: assembly
+name: rig
+# A small articulated humanoid, for the editor tests: ten rigid parts plus a hung lamp, and two
+# clips (`walk`, `wave`). 16 cells tall.
+#
+# Part names and tree: torso is the one root; head, upper-arm-l -> lower-arm-l,
+# upper-arm-r -> lower-arm-r, upper-leg-l -> lower-leg-l and upper-leg-r -> lower-leg-r hang off
+# it; `lantern` hangs off lower-arm-l and is named by no clip. The character's left is -X, so
+# every -l part sits at low x and its -r twin is the same file with `mirror: x`. Forward is -Z
+# (slice row z0) and up is +Y.
+#
+# Pivots are part-local, unmirrored float voxel coordinates; both sides of a mirrored pair quote
+# the same pivot; shoulders quote the inboard joint (x 2.0, the arm edge nearest the torso). Joint
+# heights, global:
+#   shoulder y14.0   hip y8.0   knee y4.0   neck y14.0   elbow y10.0   lantern hook y7.5
+size:
+  - 8
+  - 16
+  - 5
+palette:
+  B:
+    color:
+      - 0.25
+      - 0.35
+      - 0.55
+      - 1.0
+  F:
+    color:
+      - 1.0
+      - 0.72
+      - 0.3
+      - 1.0
+    emissive: 4.0
+  H:
+    color:
+      - 0.85
+      - 0.65
+      - 0.5
+      - 1.0
+  L:
+    color:
+      - 0.3
+      - 0.3
+      - 0.35
+      - 1.0
+  M:
+    color:
+      - 0.3
+      - 0.22
+      - 0.1
+      - 1.0
+    metallic: 1.0
+    roughness: 0.4
+parts:
+  - name: torso
+    file: parts/rig-torso.part.yaml
+    place:
+      - 2
+      - 8
+      - 3
+    pivot:
+      - 2.0
+      - 3.0
+      - 1.0
+  - name: head
+    file: parts/rig-head.part.yaml
+    parent: torso
+    place:
+      - 3
+      - 14
+      - 3
+    pivot:
+      - 1.0
+      - 0.0
+      - 1.0
+  - name: upper-arm-l
+    file: parts/rig-upper-arm.part.yaml
+    parent: torso
+    place:
+      - 0
+      - 10
+      - 3
+    pivot:
+      - 2.0
+      - 4.0
+      - 1.0
+  - name: lower-arm-l
+    file: parts/rig-lower-arm.part.yaml
+    parent: upper-arm-l
+    place:
+      - 0
+      - 6
+      - 3
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+  - name: lantern
+    file: parts/rig-lantern.part.yaml
+    parent: lower-arm-l
+    place:
+      - 0
+      - 3
+      - 0
+    pivot:
+      - 1.5
+      - 4.5
+      - 1.5
+  - name: upper-arm-r
+    file: parts/rig-upper-arm.part.yaml
+    parent: torso
+    place:
+      - 6
+      - 10
+      - 3
+    pivot:
+      - 2.0
+      - 4.0
+      - 1.0
+    mirror: x
+  - name: lower-arm-r
+    file: parts/rig-lower-arm.part.yaml
+    parent: upper-arm-r
+    place:
+      - 6
+      - 6
+      - 3
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+    mirror: x
+  - name: upper-leg-l
+    file: parts/rig-upper-leg.part.yaml
+    parent: torso
+    place:
+      - 2
+      - 4
+      - 3
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+  - name: lower-leg-l
+    file: parts/rig-lower-leg.part.yaml
+    parent: upper-leg-l
+    place:
+      - 2
+      - 0
+      - 3
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+  - name: upper-leg-r
+    file: parts/rig-upper-leg.part.yaml
+    parent: torso
+    place:
+      - 4
+      - 4
+      - 3
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+    mirror: x
+  - name: lower-leg-r
+    file: parts/rig-lower-leg.part.yaml
+    parent: upper-leg-r
+    place:
+      - 4
+      - 0
+      - 3
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+    mirror: x
+clips:
+  walk: anims/rig-walk.anim.yaml
+  wave: anims/rig-wave.anim.yaml

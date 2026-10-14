@@ -1,0 +1,9 @@
+# Fuzz build output (its own target dir, outside the workspace's /target).
+/target
+# libFuzzer's raw crash/timeout/oom dumps. Reproducers we keep are MINIMIZED and committed under
+# findings/<target>/ instead; the raw artifacts/ pile is throwaway.
+/artifacts
+
+# NOTE: corpus/<target>/ is deliberately NOT ignored — the small committed *seed* corpus is tracked.
+# A coverage-guided run on a CI agent will grow these dirs with discovered inputs; prune before
+# committing (keep the seeds) or add a corpus-pruning step to the scheduled job.

@@ -1,0 +1,61 @@
+# Feature: Tilemap — a grid of single-glyph cells expanded into the sprite batcher.
+# - `legend` maps each glyph to a tile appearance (reusing Sprite's color/texture fields):
+#   `#` is a textured brick wall, `o` a textured checker tile, `.` a flat blue floor.
+# - `rows` is the glyph grid, one glyph per cell, laid out +X per column and -Y per row from the
+#   entity's Transform.translation (the center of cell (0,0)). One entity, one component, one AABB.
+# A point light is present only because a tile is a lit sprite surface; it is not the feature.
+format: 1
+name: "tilemap - Tilemap: a glyph grid of textured and colored cells"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 6.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: grid
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 1.0
+          - 0.0
+      Tilemap:
+        cell_size: 1.0
+        legend:
+          "#":
+            texture: assets/brick.png
+            lit: true
+          ".":
+            color:
+              - 0.2
+              - 0.4
+              - 0.8
+              - 1.0
+            lit: true
+          o:
+            texture: assets/checker.png
+            lit: true
+        rows:
+          - "####"
+          - "#o.#"
+          - "####"
+  - name: fill-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 3.5
+      PointLight:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+        intensity: 3.0
+        range: 14.0

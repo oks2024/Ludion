@@ -1,0 +1,33 @@
+[package]
+name = "ludion-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The WebSocket host that exposes a running Ludion engine's command queue to protocol clients."
+keywords = ["ludion", "websocket", "server", "game-engine"]
+categories = ["network-programming", "game-engines"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-engine = { path = "../ludion-engine", version = "0.1.0" }
+# `Server::watch_assets` is `ludion-assets::watch` — the host's `asset.reload` on an edited file —
+# so this crate enables that crate's opt-in `watch` feature (with `ludion-cli`'s `dev`, the only
+# ones that do); a listener-less build carries no OS file watcher.
+ludion-assets = { path = "../ludion-assets", version = "0.1.0", features = ["watch"] }
+ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+crossbeam-channel.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+qoi.workspace = true
+lz4_flex.workspace = true
+
+[dev-dependencies]
+# Path-only, no `version`: see `ludion-client`'s dev-dependency comment for why a test-only
+# dependency must not carry a registry version before these crates are actually published.
+ludion-client = { path = "../ludion-client" }
+ludion-testkit = { path = "../ludion-testkit" }
+tungstenite.workspace = true
+png.workspace = true

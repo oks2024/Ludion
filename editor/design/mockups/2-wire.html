@@ -1,0 +1,1306 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ludion editor — Wire</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Inter:wght@450;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+  rel="stylesheet"
+/>
+<style>
+  :root {
+    --paper: #f4f6f8;
+    --card: #ffffff;
+    --ink: #1b2432;
+    --faded: #5c6678;
+    --wire: #2454e6;
+    --reply: #0e8a62;
+    --err: #c2443b;
+    --border: #d8dde6;
+
+    --amber: #e8a33d;
+    --teal: #3fc7b4;
+
+    --radius: 6px;
+    --shadow: 0 1px 2px rgba(27, 36, 50, 0.05), 0 1px 3px rgba(27, 36, 50, 0.04);
+
+    --ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", "Consolas",
+      monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+  }
+
+  body {
+    font-family: var(--ui);
+    font-weight: 450;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink);
+    background: var(--paper);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    cursor: default;
+  }
+
+  .mono {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  button,
+  input,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--wire);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  /* ---------- app frame ---------- */
+  .app {
+    height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    overflow: hidden;
+  }
+
+  /* ---------- session strip ---------- */
+  .session {
+    display: flex;
+    align-items: center;
+    gap: 6px 18px;
+    flex-wrap: wrap;
+    padding: 5px 16px;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+
+  .session .grp {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .session .sep {
+    width: 1px;
+    align-self: stretch;
+    background: var(--border);
+    margin: 2px 0;
+  }
+
+  .brand {
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--reply);
+    box-shadow: 0 0 0 3px rgba(14, 138, 98, 0.14);
+    flex: none;
+  }
+
+  .muted {
+    color: var(--faded);
+  }
+
+  .toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .toggle button {
+    border: 0;
+    background: transparent;
+    padding: 4px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--faded);
+  }
+
+  .toggle button[aria-pressed="true"] {
+    background: var(--wire);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .btn {
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--ink);
+  }
+
+  .btn:hover:not(:disabled) {
+    border-color: #bcc4d1;
+    background: #fbfcfd;
+  }
+
+  .btn.primary {
+    background: var(--wire);
+    border-color: var(--wire);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .btn.primary:hover {
+    background: #1c47cf;
+  }
+
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    line-height: 1;
+  }
+
+  .field {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  input.txt,
+  input.num {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 8px;
+    background: var(--card);
+  }
+
+  input.num {
+    width: 52px;
+    text-align: right;
+  }
+
+  input.path {
+    width: 240px;
+  }
+
+  .dirty {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--err);
+    font-weight: 500;
+  }
+
+  .dirty .pip {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--err);
+    flex: none;
+  }
+
+  .push {
+    margin-left: auto;
+  }
+
+  /* ---------- middle: three columns ---------- */
+  .body {
+    display: grid;
+    grid-template-columns: 288px minmax(0, 1fr) 320px;
+    gap: 10px;
+    padding: 10px;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .col {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .card > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .card h2 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+
+  .count {
+    font-size: 11px;
+    color: var(--faded);
+  }
+
+  .scroll {
+    overflow: auto;
+    min-height: 0;
+  }
+
+  /* ---------- hierarchy ---------- */
+  .tree {
+    padding: 3px 6px 4px;
+    font-size: 12.5px;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 1px 8px 1px 10px;
+    line-height: 1.3;
+    border-radius: 4px;
+    border-left: 3px solid transparent;
+    position: relative;
+  }
+
+  .row .tw {
+    color: var(--faded);
+    width: 10px;
+    font-size: 10px;
+    flex: none;
+  }
+
+  .row .name {
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .row.group > .name {
+    font-weight: 600;
+  }
+
+  .row.selected {
+    background: rgba(36, 84, 230, 0.08);
+    border-left-color: var(--wire);
+  }
+
+  .row.selected .name {
+    color: var(--wire);
+    font-weight: 600;
+  }
+
+  .indent-1 {
+    padding-left: 26px;
+  }
+
+  .flag {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--amber);
+    background: rgba(232, 163, 61, 0.14);
+    border: 1px solid rgba(232, 163, 61, 0.4);
+    border-radius: 4px;
+    padding: 0 5px;
+    cursor: help;
+  }
+
+  .glyph {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex: none;
+  }
+  .g-cam {
+    background: #8b93a3;
+  }
+  .g-light {
+    background: var(--amber);
+  }
+  .g-ball {
+    background: #cfd6e0;
+    border-radius: 50%;
+  }
+  .g-paddle {
+    background: var(--teal);
+  }
+  .g-wall {
+    background: #6b7686;
+  }
+  .g-brick {
+    background: var(--amber);
+  }
+  .g-brick.teal {
+    background: var(--teal);
+  }
+
+  .more {
+    padding: 2px 8px 2px 26px;
+    color: var(--wire);
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+
+  .card > footer {
+    border-top: 1px solid var(--border);
+    padding: 4px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--faded);
+  }
+
+  select.sel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 3px 6px;
+    background: var(--card);
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+
+  /* ---------- palette ---------- */
+  .palette {
+    flex: none;
+  }
+  .palette .section {
+    padding: 5px 12px 7px;
+  }
+  .palette .section + .section {
+    border-top: 1px solid var(--border);
+  }
+  .palette .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--faded);
+    margin-bottom: 5px;
+  }
+  .grid-btns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+  }
+  .grid-btns .btn {
+    text-align: left;
+    padding: 2px 9px;
+  }
+  .btn.danger {
+    color: var(--err);
+    border-color: rgba(194, 68, 59, 0.4);
+  }
+  .btn.danger:hover {
+    background: rgba(194, 68, 59, 0.06);
+  }
+
+  /* ---------- viewport ---------- */
+  .viewport-card {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .gizmobar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+
+  .seg {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .seg button {
+    border: 0;
+    background: transparent;
+    padding: 4px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--faded);
+  }
+  .seg button[aria-pressed="true"] {
+    background: rgba(36, 84, 230, 0.1);
+    color: var(--wire);
+    font-weight: 600;
+  }
+  .snap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--faded);
+  }
+  .snap .num {
+    width: 46px;
+  }
+  .hint {
+    margin-left: auto;
+    color: var(--faded);
+    font-size: 11.5px;
+  }
+
+  .stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    padding: 12px;
+    display: flex;
+  }
+  .stage svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    border-radius: 4px;
+  }
+
+  .overlay {
+    position: absolute;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .overlay.tl {
+    top: 20px;
+    left: 20px;
+  }
+  .overlay.tr {
+    top: 20px;
+    right: 20px;
+  }
+  .chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #e7edf6;
+    background: rgba(9, 14, 22, 0.62);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 5px;
+    padding: 3px 8px;
+    backdrop-filter: blur(2px);
+  }
+  .chip.paused {
+    color: #ffe0b0;
+    border-color: rgba(232, 163, 61, 0.5);
+  }
+  .chip.paused .pdot {
+    color: var(--amber);
+  }
+
+  /* ---------- inspector ---------- */
+  .subject {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .subject .id {
+    font-size: 11px;
+    color: var(--faded);
+  }
+  .component {
+    padding: 10px 12px;
+  }
+  .component + .component {
+    border-top: 1px solid var(--border);
+  }
+  .comp-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--faded);
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .prop {
+    display: grid;
+    grid-template-columns: 70px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .prop:last-child {
+    margin-bottom: 0;
+  }
+  .prop .k {
+    font-size: 11.5px;
+    color: var(--faded);
+  }
+  .axes {
+    display: flex;
+    flex-wrap: wrap; /* quaternion row breaks 2x2 instead of clipping w */
+    gap: 4px 6px;
+    min-width: 0;
+  }
+  .axis {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .axis .tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    width: 10px;
+    text-align: center;
+    color: var(--faded);
+  }
+  .axis .tag.x {
+    color: var(--err);
+  }
+  .axis .tag.y {
+    color: var(--reply);
+  }
+  .axis .tag.z {
+    color: var(--wire);
+  }
+  .axis input {
+    width: 44px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 4px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    text-align: right;
+  }
+  .val {
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .swatch {
+    width: 15px;
+    height: 15px;
+    border-radius: 3px;
+    border: 1px solid rgba(27, 36, 50, 0.2);
+    flex: none;
+  }
+  .tint {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  /* ---------- wire dock (signature) ---------- */
+  .dock {
+    /* sized to its content — header + exactly 5 rows, no dead band */
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex: none;
+  }
+  .dock-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .dock-head .title {
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.3px;
+  }
+  .dock-head .sub {
+    font-size: 11.5px;
+    color: var(--faded);
+  }
+  .lanekey {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--faded);
+  }
+  .lanekey .s {
+    color: var(--wire);
+    font-weight: 600;
+  }
+  .lanekey .r {
+    color: var(--reply);
+    font-weight: 600;
+  }
+  .cmdk {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    color: var(--faded);
+    background: #fafbfc;
+    cursor: text;
+    font-size: 12px;
+  }
+  .kbd {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--ink);
+  }
+
+  .feed {
+    padding: 2px 0 4px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .wrow {
+    display: grid;
+    grid-template-columns: 20px 150px minmax(0, 1fr) auto 62px;
+    align-items: center;
+    gap: 10px;
+    padding: 3px 16px;
+    border-bottom: 1px solid #eef1f5;
+    white-space: nowrap;
+  }
+  .wrow:last-child {
+    border-bottom: 0;
+  }
+  .wrow:hover {
+    background: #fafbfc;
+  }
+  .wrow .dir {
+    font-weight: 600;
+    text-align: center;
+  }
+  .wrow .dir.sent {
+    color: var(--wire);
+  }
+  .method {
+    color: var(--ink);
+    background: rgba(36, 84, 230, 0.08);
+    border: 1px solid rgba(36, 84, 230, 0.18);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-weight: 500;
+    font-size: 11.5px;
+    justify-self: start;
+  }
+  .params {
+    color: var(--faded);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .params b {
+    color: var(--ink);
+    font-weight: 500;
+  }
+  .reply {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--reply);
+    justify-self: end;
+  }
+  .reply .arr {
+    font-weight: 600;
+  }
+  .reply.pending {
+    color: var(--amber);
+  }
+  .reply.pending .arr {
+    color: var(--amber);
+  }
+  .reply .hash {
+    color: var(--ink);
+  }
+  .stamp {
+    color: var(--faded);
+    text-align: right;
+    font-size: 11px;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .reply.pending .arr {
+      animation: blink 1.1s steps(2, start) infinite;
+    }
+    @keyframes blink {
+      50% {
+        opacity: 0.35;
+      }
+    }
+  }
+
+  @media (max-width: 1360px) {
+    .body {
+      grid-template-columns: 260px minmax(0, 1fr) 296px;
+    }
+  }
+</style>
+
+<div class="app">
+  <!-- ===================== SESSION STRIP ===================== -->
+  <header class="session">
+    <div class="grp">
+      <span class="dot" title="connected"></span>
+      <span class="brand">Ludion</span>
+      <span class="mono muted">ws://127.0.0.1:9411</span>
+      <span class="muted mono">ludion 0.6.0</span>
+    </div>
+    <div class="sep"></div>
+    <div class="grp">
+      <span class="muted">Scene</span>
+      <span class="mono">games/breakout/scenes/main.scene.yaml</span>
+    </div>
+
+    <div class="sep"></div>
+    <div class="grp">
+      <span class="toggle" role="group" aria-label="mode">
+        <button aria-pressed="true">Edit</button>
+        <button aria-pressed="false">Play</button>
+      </span>
+      <button class="btn">Resume</button>
+      <span class="field">
+        <button class="btn">Step</button>
+        <label class="muted" for="ticks">ticks</label>
+        <input id="ticks" class="num mono" value="1" aria-label="step ticks" />
+      </span>
+      <span class="field">
+        <label class="muted" for="speed">speed</label>
+        <input id="speed" class="num mono" value="1.0" aria-label="sim speed" />
+        <span class="muted">×</span>
+      </span>
+    </div>
+
+    <div class="sep push"></div>
+    <div class="grp" title="deterministic world hash">
+      <span class="muted">WorldHash</span>
+      <span class="mono">9f3a77c1e04b52d8</span>
+      <span class="muted mono">@ 1284</span>
+      <button class="btn icon-btn" aria-label="refresh world hash">⟳</button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp mono muted" title="stream stats">1080p · 60 fps · 4.2 ms</div>
+
+    <div class="sep"></div>
+    <div class="grp">
+      <input
+        class="txt path mono"
+        value="games/breakout/scenes/main.scene.yaml"
+        aria-label="save path"
+      />
+      <button class="btn primary">Save scene</button>
+      <span class="dirty" title="scene has unsaved edits"
+        ><span class="pip"></span>unsaved changes</span
+      >
+    </div>
+    <div class="sep"></div>
+    <div class="grp">
+      <button class="btn" aria-label="undo">Undo</button>
+      <button class="btn" disabled aria-label="redo">Redo</button>
+      <button class="btn">Disconnect</button>
+    </div>
+  </header>
+
+  <!-- ===================== THREE COLUMNS ===================== -->
+  <main class="body">
+    <!-- ---------- LEFT: hierarchy + palette ---------- -->
+    <section class="col">
+      <div class="card" style="flex: 1">
+        <header>
+          <h2>Scene</h2>
+          <span class="count mono">24 entities</span>
+        </header>
+        <div class="scroll">
+          <div class="tree" role="tree" aria-label="scene hierarchy">
+            <div class="row" role="treeitem">
+              <span class="tw"></span><span class="glyph g-cam"></span
+              ><span class="name">camera</span>
+            </div>
+            <div class="row" role="treeitem">
+              <span class="tw"></span><span class="glyph g-light"></span
+              ><span class="name">key_light</span>
+              <span class="flag" title="dangling parent — parent entity not found"
+                >dangling parent</span
+              >
+            </div>
+            <div class="row" role="treeitem">
+              <span class="tw"></span><span class="glyph g-light"></span
+              ><span class="name">fill_light</span>
+            </div>
+            <div class="row" role="treeitem">
+              <span class="tw"></span><span class="glyph g-ball"></span
+              ><span class="name">ball</span>
+            </div>
+            <div class="row" role="treeitem">
+              <span class="tw"></span><span class="glyph g-paddle"></span
+              ><span class="name">paddle</span>
+            </div>
+
+            <div class="row group" role="treeitem" aria-expanded="true">
+              <span class="tw">▾</span><span class="glyph g-wall"></span
+              ><span class="name">walls</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-wall"></span><span class="name">wall_left</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-wall"></span
+              ><span class="name">wall_right</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-wall"></span><span class="name">wall_top</span>
+            </div>
+
+            <div class="row group" role="treeitem" aria-expanded="true">
+              <span class="tw">▾</span><span class="glyph g-brick"></span
+              ><span class="name">bricks</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-brick"></span><span class="name">brick_00</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-brick teal"></span
+              ><span class="name">brick_01</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-brick"></span><span class="name">brick_02</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-brick teal"></span
+              ><span class="name">brick_03</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-brick"></span><span class="name">brick_04</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-brick teal"></span
+              ><span class="name">brick_05</span>
+            </div>
+            <div class="row indent-1" role="treeitem">
+              <span class="glyph g-brick"></span><span class="name">brick_06</span>
+            </div>
+            <div
+              class="row indent-1 selected"
+              role="treeitem"
+              aria-selected="true"
+            >
+              <span class="glyph g-brick"></span
+              ><span class="name">brick_07</span>
+            </div>
+            <div class="more" role="button" tabindex="0">+10 more</div>
+          </div>
+        </div>
+        <footer>
+          <label for="parent" class="muted">Parent</label>
+          <select id="parent" class="sel" aria-label="reparent selection">
+            <option>bricks</option>
+            <option>walls</option>
+            <option>(root)</option>
+          </select>
+        </footer>
+      </div>
+
+      <div class="card palette">
+        <header><h2>Palette</h2></header>
+        <div class="section">
+          <div class="label">Create</div>
+          <div class="grid-btns">
+            <button class="btn">Brick</button>
+            <button class="btn">Paddle</button>
+            <button class="btn">Ball</button>
+            <button class="btn">Point light</button>
+            <button class="btn">Sprite</button>
+            <button class="btn">Empty</button>
+          </div>
+        </div>
+        <div class="section">
+          <div class="label">Selection</div>
+          <div class="grid-btns">
+            <button class="btn">Duplicate</button>
+            <button class="btn danger">Destroy</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- CENTER: viewport ---------- -->
+    <section class="col">
+      <div class="card viewport-card">
+        <div class="gizmobar">
+          <span class="seg" role="group" aria-label="gizmo tool">
+            <button aria-pressed="true">Translate</button>
+            <button aria-pressed="false">Rotate</button>
+            <button aria-pressed="false">Scale</button>
+          </span>
+          <span class="snap">
+            <label for="snapg">snap</label>
+            <span class="mono muted">grid</span>
+            <input id="snapg" class="num mono" value="0.25" aria-label="grid snap" />
+            <span class="mono muted">angle</span>
+            <input class="num mono" value="15°" aria-label="angle snap" />
+          </span>
+          <span class="hint">Drag an axis to move · Esc cancels</span>
+        </div>
+
+        <div class="stage">
+          <div class="overlay tl">
+            <span class="chip mono">frame 1284 · 60 fps · 4.2 ms</span>
+          </div>
+          <div class="overlay tr">
+            <span class="chip paused mono"
+              ><span class="pdot">❙❙</span> paused · edit</span
+            >
+          </div>
+
+          <!-- ===== HD-2D breakout scene ===== -->
+          <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice" role="img"
+            aria-label="Breakout playfield: three rows of glowing bricks, a paddle and a ball, with brick_07 selected and a translate gizmo.">
+            <defs>
+              <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#141d2b" />
+                <stop offset="1" stop-color="#0c121c" />
+              </linearGradient>
+              <radialGradient id="lightAmber" cx="0.5" cy="0.5" r="0.5">
+                <stop offset="0" stop-color="#ffb648" stop-opacity="0.55" />
+                <stop offset="0.5" stop-color="#e8892b" stop-opacity="0.22" />
+                <stop offset="1" stop-color="#e8892b" stop-opacity="0" />
+              </radialGradient>
+              <radialGradient id="lightTeal" cx="0.5" cy="0.5" r="0.5">
+                <stop offset="0" stop-color="#4fe6d0" stop-opacity="0.5" />
+                <stop offset="0.5" stop-color="#22a5a0" stop-opacity="0.2" />
+                <stop offset="1" stop-color="#22a5a0" stop-opacity="0" />
+              </radialGradient>
+              <radialGradient id="ballGlow" cx="0.5" cy="0.5" r="0.5">
+                <stop offset="0" stop-color="#ffffff" stop-opacity="0.95" />
+                <stop offset="0.35" stop-color="#dfe9ff" stop-opacity="0.5" />
+                <stop offset="1" stop-color="#8fb2ff" stop-opacity="0" />
+              </radialGradient>
+              <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+                <feGaussianBlur stdDeviation="7" />
+              </filter>
+              <filter id="brickGlow" x="-40%" y="-40%" width="180%" height="180%">
+                <feGaussianBlur stdDeviation="3.2" />
+              </filter>
+            </defs>
+
+            <!-- playfield -->
+            <rect x="0" y="0" width="640" height="360" fill="url(#field)" />
+            <!-- subtle floor grid -->
+            <g stroke="#223049" stroke-width="1" opacity="0.35">
+              <line x1="0" y1="300" x2="640" y2="300" />
+              <line x1="0" y1="330" x2="640" y2="330" />
+              <line x1="120" y1="290" x2="70" y2="360" />
+              <line x1="320" y1="290" x2="320" y2="360" />
+              <line x1="520" y1="290" x2="570" y2="360" />
+            </g>
+
+            <!-- point-light washes -->
+            <circle cx="150" cy="120" r="180" fill="url(#lightAmber)" />
+            <circle cx="500" cy="150" r="170" fill="url(#lightTeal)" />
+
+            <!-- walls -->
+            <rect x="10" y="10" width="10" height="300" rx="3" fill="#2a3752" />
+            <rect x="620" y="10" width="10" height="300" rx="3" fill="#2a3752" />
+            <rect x="10" y="10" width="620" height="10" rx="3" fill="#2a3752" />
+
+            <!-- brick field: 3 rows x 6 -->
+            <!-- glow layer -->
+            <g filter="url(#brickGlow)" opacity="0.85">
+              <!-- row 0 -->
+              <rect x="60" y="52" width="78" height="22" rx="4" fill="#e8a33d" />
+              <rect x="150" y="52" width="78" height="22" rx="4" fill="#3fc7b4" />
+              <rect x="240" y="52" width="78" height="22" rx="4" fill="#e8a33d" />
+              <rect x="330" y="52" width="78" height="22" rx="4" fill="#3fc7b4" />
+              <rect x="420" y="52" width="78" height="22" rx="4" fill="#e8a33d" />
+              <rect x="510" y="52" width="78" height="22" rx="4" fill="#3fc7b4" />
+              <!-- row 1 -->
+              <rect x="60" y="86" width="78" height="22" rx="4" fill="#3fc7b4" />
+              <rect x="150" y="86" width="78" height="22" rx="4" fill="#e8a33d" />
+              <rect x="240" y="86" width="78" height="22" rx="4" fill="#3fc7b4" />
+              <rect x="330" y="86" width="78" height="22" rx="4" fill="#e8a33d" />
+              <rect x="420" y="86" width="78" height="22" rx="4" fill="#3fc7b4" />
+              <rect x="510" y="86" width="78" height="22" rx="4" fill="#e8a33d" />
+              <!-- row 2 -->
+              <rect x="60" y="120" width="78" height="22" rx="4" fill="#e8a33d" />
+              <rect x="150" y="120" width="78" height="22" rx="4" fill="#3fc7b4" />
+              <rect x="240" y="120" width="78" height="22" rx="4" fill="#e8a33d" />
+              <rect x="330" y="120" width="78" height="22" rx="4" fill="#3fc7b4" />
+              <rect x="420" y="120" width="78" height="22" rx="4" fill="#e8a33d" />
+              <rect x="510" y="120" width="78" height="22" rx="4" fill="#3fc7b4" />
+            </g>
+            <!-- crisp brick faces -->
+            <g>
+              <!-- row 0 -->
+              <rect x="60" y="52" width="78" height="22" rx="4" fill="#f0b25a" />
+              <rect x="150" y="52" width="78" height="22" rx="4" fill="#5ad9c8" />
+              <rect x="240" y="52" width="78" height="22" rx="4" fill="#f0b25a" />
+              <rect x="330" y="52" width="78" height="22" rx="4" fill="#5ad9c8" />
+              <rect x="420" y="52" width="78" height="22" rx="4" fill="#f0b25a" />
+              <rect x="510" y="52" width="78" height="22" rx="4" fill="#5ad9c8" />
+              <!-- row 1: brick_06 at col0, brick_07 (selected, amber sprite) at col1 -->
+              <rect x="60" y="86" width="78" height="22" rx="4" fill="#5ad9c8" />
+              <rect x="150" y="86" width="78" height="22" rx="4" fill="#f0b25a" />
+              <rect x="240" y="86" width="78" height="22" rx="4" fill="#f0b25a" />
+              <rect x="330" y="86" width="78" height="22" rx="4" fill="#5ad9c8" />
+              <rect x="420" y="86" width="78" height="22" rx="4" fill="#f0b25a" />
+              <rect x="510" y="86" width="78" height="22" rx="4" fill="#5ad9c8" />
+              <!-- row 2 -->
+              <rect x="60" y="120" width="78" height="22" rx="4" fill="#f0b25a" />
+              <rect x="150" y="120" width="78" height="22" rx="4" fill="#5ad9c8" />
+              <rect x="240" y="120" width="78" height="22" rx="4" fill="#f0b25a" />
+              <rect x="330" y="120" width="78" height="22" rx="4" fill="#5ad9c8" />
+              <rect x="420" y="120" width="78" height="22" rx="4" fill="#f0b25a" />
+              <rect x="510" y="120" width="78" height="22" rx="4" fill="#5ad9c8" />
+              <!-- top highlight strokes -->
+              <g stroke="#ffffff" stroke-opacity="0.35" stroke-width="1">
+                <line x1="64" y1="54.5" x2="134" y2="54.5" />
+                <line x1="154" y1="88.5" x2="224" y2="88.5" />
+              </g>
+            </g>
+
+            <!-- selection: brick_07 (col1 of row1) x=150 y=86 -->
+            <g>
+              <rect
+                x="145.5"
+                y="81.5"
+                width="87"
+                height="31"
+                rx="6"
+                fill="none"
+                stroke="#2454e6"
+                stroke-width="2"
+                stroke-dasharray="5 4"
+              />
+              <!-- corner handles -->
+              <g fill="#2454e6">
+                <rect x="142" y="78" width="5" height="5" />
+                <rect x="231" y="78" width="5" height="5" />
+                <rect x="142" y="111" width="5" height="5" />
+                <rect x="231" y="111" width="5" height="5" />
+              </g>
+            </g>
+
+            <!-- translate gizmo at brick_07 center (189, 97) -->
+            <g stroke-width="2.5" fill="none">
+              <!-- X axis (red, right) -->
+              <line x1="189" y1="97" x2="243" y2="97" stroke="#e5554b" />
+              <polygon points="243,92 255,97 243,102" fill="#e5554b" stroke="none" />
+              <!-- Y axis (green, up) -->
+              <line x1="189" y1="97" x2="189" y2="47" stroke="#3fbf78" />
+              <polygon points="184,47 189,35 194,47" fill="#3fbf78" stroke="none" />
+              <!-- Z dot (blue, center) -->
+              <circle cx="189" cy="97" r="5" fill="#2454e6" stroke="#dfe8ff" stroke-width="1.5" />
+            </g>
+
+            <!-- ball with bloom -->
+            <circle cx="300" cy="250" r="26" fill="url(#ballGlow)" filter="url(#soft)" />
+            <circle cx="300" cy="250" r="8" fill="#ffffff" />
+            <circle cx="300" cy="250" r="8" fill="none" stroke="#bcd4ff" stroke-opacity="0.7" />
+
+            <!-- paddle -->
+            <g>
+              <rect x="252" y="316" width="120" height="14" rx="7" fill="#2ea89b" filter="url(#brickGlow)" opacity="0.7" />
+              <rect x="252" y="316" width="120" height="14" rx="7" fill="#43cbbb" />
+              <rect x="256" y="318" width="112" height="4" rx="2" fill="#ffffff" fill-opacity="0.4" />
+            </g>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- RIGHT: inspector ---------- -->
+    <section class="col">
+      <div class="card" style="flex: 1">
+        <header>
+          <div class="subject">
+            <h2>Inspector</h2>
+            <span class="mono" style="font-weight: 600">brick_07</span>
+          </div>
+          <span class="id mono">id 12 · gen 3</span>
+        </header>
+        <div class="scroll">
+          <div class="component">
+            <div class="comp-title"><span>Transform</span></div>
+            <div class="prop">
+              <span class="k">translation</span>
+              <span class="axes">
+                <span class="axis"
+                  ><span class="tag x">X</span
+                  ><input class="mono" value="-2.25" aria-label="translation x"
+                /></span>
+                <span class="axis"
+                  ><span class="tag y">Y</span
+                  ><input class="mono" value="3.5" aria-label="translation y"
+                /></span>
+                <span class="axis"
+                  ><span class="tag z">Z</span
+                  ><input class="mono" value="0" aria-label="translation z"
+                /></span>
+              </span>
+            </div>
+            <div class="prop">
+              <span class="k">rotation</span>
+              <span class="axes quad">
+                <span class="axis"
+                  ><span class="tag x">X</span
+                  ><input class="mono" value="0" aria-label="rotation x"
+                /></span>
+                <span class="axis"
+                  ><span class="tag y">Y</span
+                  ><input class="mono" value="0" aria-label="rotation y"
+                /></span>
+                <span class="axis"
+                  ><span class="tag z">Z</span
+                  ><input class="mono" value="0" aria-label="rotation z"
+                /></span>
+                <span class="axis"
+                  ><span class="tag">W</span
+                  ><input class="mono" value="1" aria-label="rotation w"
+                /></span>
+              </span>
+            </div>
+            <div class="prop">
+              <span class="k">scale</span>
+              <span class="axes">
+                <span class="axis"
+                  ><span class="tag x">X</span
+                  ><input class="mono" value="1.5" aria-label="scale x"
+                /></span>
+                <span class="axis"
+                  ><span class="tag y">Y</span
+                  ><input class="mono" value="0.6" aria-label="scale y"
+                /></span>
+                <span class="axis"
+                  ><span class="tag z">Z</span
+                  ><input class="mono" value="1" aria-label="scale z"
+                /></span>
+              </span>
+            </div>
+          </div>
+
+          <div class="component">
+            <div class="comp-title"><span>Sprite</span></div>
+            <div class="prop">
+              <span class="k">texture</span>
+              <span class="val">textures/brick_amber.qoi</span>
+            </div>
+            <div class="prop">
+              <span class="k">tint</span>
+              <span class="tint">
+                <span
+                  class="swatch"
+                  style="background: rgb(255, 184, 79)"
+                  aria-hidden="true"
+                ></span>
+                <span class="val">[1.0, 0.72, 0.31, 1.0]</span>
+              </span>
+            </div>
+          </div>
+
+          <div class="component">
+            <div class="comp-title"><span>Health</span></div>
+            <div class="prop">
+              <span class="k">hits_remaining</span>
+              <span class="axis"
+                ><input class="mono" value="2" aria-label="hits remaining"
+              /></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===================== WIRE DOCK (signature) ===================== -->
+  <footer class="dock" aria-label="protocol wire stream">
+    <div class="dock-head">
+      <span class="title">Wire</span>
+      <span class="sub">client ⇄ engine</span>
+      <span class="lanekey"
+        ><span><span class="s">→</span> sent</span
+        ><span><span class="r">←</span> reply</span></span
+      >
+      <span class="cmdk" role="button" tabindex="0">
+        <span class="kbd">Ctrl</span><span class="kbd">K</span>
+        <span>type a command…</span>
+      </span>
+    </div>
+
+    <div class="feed" role="log" aria-label="recent protocol commands">
+      <div class="wrow">
+        <span class="dir sent">→</span>
+        <span class="method">sim.pause</span>
+        <span class="params">{}</span>
+        <span class="reply"><span class="arr">←</span> ok · entering edit</span>
+        <span class="stamp">@1283</span>
+      </div>
+      <div class="wrow">
+        <span class="dir sent">→</span>
+        <span class="method">world.query</span>
+        <span class="params">{ <b>filter</b>: "*" }</span>
+        <span class="reply"><span class="arr">←</span> 24 entities</span>
+        <span class="stamp">@1284</span>
+      </div>
+      <div class="wrow">
+        <span class="dir sent">→</span>
+        <span class="method">component.set</span>
+        <span class="params"
+          >{ <b>entity</b>: "12·3", <b>path</b>: "transform.translation",
+          <b>value</b>: [-2.25, 3.5, 0] }</span
+        >
+        <span class="reply"><span class="arr">←</span> ok</span>
+        <span class="stamp">@1284</span>
+      </div>
+      <div class="wrow">
+        <span class="dir sent">→</span>
+        <span class="method">sim.hash</span>
+        <span class="params">{}</span>
+        <span class="reply"
+          ><span class="arr">←</span> <span class="hash">9f3a77c1e04b52d8</span></span
+        >
+        <span class="stamp">@1284</span>
+      </div>
+      <div class="wrow">
+        <span class="dir sent">→</span>
+        <span class="method">scene.save</span>
+        <span class="params"
+          >{ <b>path</b>: "games/breakout/scenes/main.scene.yaml" }</span
+        >
+        <span class="reply pending"
+          ><span class="arr">←</span> pending…</span
+        >
+        <span class="stamp">—</span>
+      </div>
+    </div>
+  </footer>
+</div>

@@ -1,0 +1,16 @@
+format: 1
+kind: generation
+name: idol-variation
+workflow: ../workflows/img2img.json
+seed: 11
+count: 4
+images:
+  subject: ../references/idol-reference.png
+inputs:
+  Denoise:
+    denoise: 0.55
+  Load Subject:
+    image:
+      image: subject
+  Positive Prompt:
+    text: "A small weathered stone idol of a crouching winged figure with one glowing green eye, two bat wings raised and spread clear of its back with a gap of background visible between each wing and the body, squatting on a low dark plinth with a flat square top. Single object, centered, the whole statue inside the frame with clear space around it, flat even grey backdrop with no ground plane and no horizon line, soft frontal lighting, no cast shadow, no text."

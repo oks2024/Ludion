@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "recipe": "generation/recipes/missing.gen.yaml",
+  "workflow": null,
+  "kind": null,
+  "overrides": null,
+  "offline": "error",
+  "live": "skipped",
+  "diagnostics": [
+    {
+      "code": "L1162",
+      "message": "cannot read the recipe `generation/recipes/missing.gen.yaml`",
+      "help": "check the path"
+    }
+  ]
+}

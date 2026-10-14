@@ -1,0 +1,46 @@
+# cargo-deny: dependency licenses and RustSec advisories, for the root workspace and the editor's
+# Tauri host (a separate cargo workspace):
+#
+#   cargo deny check advisories licenses
+#   cargo deny --manifest-path editor/app/src-tauri/Cargo.toml --config deny.toml check advisories licenses
+#
+# Run by `node scripts/check.mjs --full` and ci.yml's `deny` job, never the default lane. One-time
+# install per machine: `cargo install cargo-deny --locked`. `fuzz/` is outside the gate: its
+# `libfuzzer-sys` carries NCSA, which the allowlist does not.
+
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+    "BSL-1.0",
+]
+unused-allowed-license = "allow"
+
+[advisories]
+# One config serves both workspaces: an ignore for the other workspace's crate is unused here.
+unused-ignored-advisory = "allow"
+ignore = [
+    { id = "RUSTSEC-2025-0141", reason = "bincode 1.3.3 unmaintained: a direct dependency of ludion-physics, pinned for the physics snapshot bytes; replacing it moves the snapshot format" },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39.4: build-time only, via the wayland-scanner proc-macro (winit, Linux); parses the fixed Wayland protocol XML shipped in the crate, never runtime input; the fix needs quick-xml 0.41 upstream" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.39.4: build-time only, via the wayland-scanner proc-macro (winit, Linux); parses the fixed Wayland protocol XML shipped in the crate, never runtime input; the fix needs quick-xml 0.41 upstream" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained: reached via winit, sctk-adwaita and ab_glyph, Linux client-side window decorations only" },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained: Tauri host only, via gtk-rs 0.18 glib-macros (the Linux webview stack); a proc-macro" },
+    { id = "RUSTSEC-2025-0075", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
+    { id = "RUSTSEC-2025-0080", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
+    { id = "RUSTSEC-2025-0081", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
+    { id = "RUSTSEC-2025-0098", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
+    { id = "RUSTSEC-2025-0100", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
+]

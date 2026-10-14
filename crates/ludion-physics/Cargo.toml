@@ -1,0 +1,29 @@
+[package]
+name = "ludion-physics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Deterministic rigid-body dynamics for the Ludion game engine: a rapier3d world wrapped behind the Collider/Velocity author surface, the only crate in the workspace naming a rapier or nalgebra type."
+keywords = ["ludion", "physics", "rapier", "determinism", "game-engine"]
+categories = ["game-engines", "simulation"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
+rapier3d.workspace = true
+bincode.workspace = true
+serde.workspace = true
+# `BodyEntry.source` rides the bincode snapshot as JSON bytes, not as a raw derive: `RigidBody`'s
+# `sleep_after_ticks` is `skip_serializing_if`-annotated for the scene writer's minimal-diff YAML,
+# and bincode's positional (unnamed) struct encoding has no notion of a skipped field — serializing
+# `Collider` straight through it desyncs the byte count between `Some`/`None` and the next read.
+serde_json.workspace = true
+
+[dev-dependencies]
+# `Component` requires `JsonSchema`, so the test pose components and the doc examples derive it.
+schemars.workspace = true
+# The per-tick trace digest, the same XXH3 the world hash uses — portable and stable, so a trace
+# recorded on one pinned machine is comparable byte for byte on the other.
+xxhash-rust.workspace = true

@@ -1,0 +1,94 @@
+# Post-process profile budget — pinned RTX 3090, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each ceiling is roughly twice the measured value on
+# the pinned RTX 3090, so a failure means a real, reproducible slowdown — never machine noise. All
+# values are milliseconds. Re-calibrate deliberately (a re-bless event) if a cost becomes intended
+# and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/post-full.yaml`, the
+# post-process arc's all-on scene. Checked with:
+#
+#   ludion profile --scene examples/gallery/post-full.yaml --frames 120 --check budgets/pinned-rtx3090-post-full.toml
+#
+# It is a separate file from `budgets/pinned-rtx3090.toml` (calibrated on `lights.yaml`) because
+# every section of a budget is checked against every run, and the two scenes do not cost the same:
+# post-full's `scene` pass medians 0.103 ms against lights' 0.050. Merging them would mean widening
+# the shared ceilings to the more expensive scene, which would leave the cheaper one gated at ~3x
+# headroom — a tripwire in name only. Two files, two invocations, every ceiling honest.
+#
+# **Both invocations must run.** Every ceiling only gates the scene it was measured on, and a scene
+# a CI configuration forgets to profile is a tripwire disarmed by omission rather than by a stale
+# key — no diagnostic catches that, only running the scene does.
+
+# Ceiling on the whole post chain: the sum of every effect group's member passes measured in the
+# run. `post-full.yaml` now authors the whole `PostProcess` roster, so all four groups below have
+# live members and this line is their real sum — which is why it was always a separate line rather
+# than an alias for whichever group happened to be the only one scheduled.
+#
+# It sits **below** the sum of the four ceilings (0.88) on purpose. Each group's ceiling has to
+# absorb that group's own noise, and four independent 2x allowances added together would leave the
+# chain as a whole gated at nothing; a total calibrated at 2x the measured total is the tighter and
+# more honest tripwire, and a regression that pushed one group to its own limit while the others
+# stayed put would trip this line first.
+post_total_ms = 0.76   # 0.4045 measured
+
+# Per-effect ceilings: one number for a whole effect, summing whichever of its member passes the run
+# measured. `bloom` was written to span both implementations — the shared bright-pass, the deleted
+# gaussian chain's two blurs, and the pyramid's five downsamples plus five upsamples — which is why
+# deleting the legacy path cost it no re-calibration. Re-measured after that deletion and unmoved.
+#
+# **All four groups were re-measured together at 1920x1080 once the scene authored the roster**,
+# three 120-frame runs each, medians taken. Every one came in a little under the number it was
+# calibrated at — including `bloom`, which was measured live rather than dormant and had no reason
+# to move at all:
+#
+#   bloom  0.061  -> 0.0563     ssao   0.123  -> 0.1065
+#   dof    0.0932 -> 0.0809     shafts 0.161  -> 0.1403
+#
+# That is a uniform ~10% across four independently calibrated groups, `bloom` included, so it is the
+# box and not the effects — a driver revision or a thermal state, not a cost that changed. No ceiling
+# moves on it: every one still sits at roughly twice its measurement, which is what this file's
+# policy asks for, and re-cutting them on a machine-wide 10% would be chasing noise into the gate.
+#
+# `bloom` was calibrated at 1920x1080 over three 120-frame runs, whose summed medians were 0.0599 /
+# 0.0604 / 0.0614 ms. The per-member medians of the middle run:
+#
+#   bloom_threshold 0.0113   bloom_down_1 0.0092   bloom_up_0 0.0123
+#                            bloom_down_2 0.0051   bloom_up_1 0.0061
+#                            bloom_down_3 0.0031   bloom_up_2 0.0031
+#                            bloom_down_4 0.0031   bloom_up_3 0.0020
+#                            bloom_down_5 0.0031   bloom_up_4 0.0020
+#
+# Every one of those sits within a few multiples of the adapter's timestamp granularity (~0.001 ms),
+# so a per-pass ceiling would need more headroom than the value it guards to be noise-proof. Summed,
+# the eleven are stable to ~1% run-to-run — the second reason a group is the honest unit here, after
+# the fact that it survives a change of implementation.
+[post_groups]
+bloom = 0.12   # 0.0563 measured
+# The depth+normal prepass, the estimator and its blur: 0.0225 + 0.0645 + 0.0195 ms, identical to the
+# last digit across the second and third runs. The prepass has no group of its own — it exists for
+# this effect alone, so its cost belongs inside this effect's ceiling until a second consumer earns
+# it a line. This is the group that pays for geometry twice, so a jump here with the estimator
+# unchanged means the scene's draw count moved.
+ssao = 0.25    # 0.1065 measured
+# The march and the 4x4 box that cleans it up: 0.1300 + 0.0205 ms. The march dominates the pair by
+# 6:1 and is the only pass here whose cost is a shader constant (`SHAFT_STEPS`) rather than a
+# resolution — the ray's *length* follows the medium's extinction `fog_density`, but the number of
+# steps along it does not, so this group costs the same whatever the scene authors and a jump in it
+# means the step count moved.
+#
+# Re-measured (three 120-frame runs, medians) when the march took on the medium's height-varying
+# optical depth and per-step local density: 0.1403 -> 0.1505. The other three groups moved 2-5% on the
+# same runs with no code change behind them, so most of that is the box; the arithmetic itself is
+# worth a few percent, and the ceiling still sits at better than twice the measurement.
+shafts = 0.32  # 0.1505 measured
+# The circle-of-confusion prefilter and the disc gather: 0.0143 + 0.0666 ms. The gather is 4.7x the
+# prefilter, which is the whole reason the prefilter exists: it turns each of the gather's thirty-two
+# taps into one fetch instead of three. A jump in this group with the aperture unchanged means the
+# tap count moved (`DOF_TAPS`), because nothing else here scales with anything but the output extent.
+dof = 0.19     # 0.0809 measured
+
+# `[passes]` and `frame_total_ms` are deliberately absent: this file exists for the post chain, and
+# the scene/composite passes and the built-in sim schedule are already gated by
+# `budgets/pinned-rtx3090.toml` on lights.yaml. Duplicating them here would be a second tripwire for
+# one regression, calibrated on a second scene, with two files to re-bless.

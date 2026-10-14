@@ -1,0 +1,101 @@
+format: 1
+name: model-stage
+# The frozen stage the editor tests and live smoke host: one voxel subject on a gray plane under a
+# key + fill rig, with `adventurer` beside it as the scale reference (the editor looks it up by
+# name). Built-in components only. The subject stands at the model's own declared scale.
+entities:
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 15.0
+          - 1.0
+          - 15.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.5
+          - 0.55
+          - 0.6
+          - 1.0
+  # The subject: the primary model, standing on the ground at its declared scale.
+  - name: subject
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape:
+          voxel: voxels/brazier.voxel.yaml
+  # The scale reference: a mid-gray primitive figure standing 1.8 units tall, same z as the subject
+  # deliberately — a depth offset would make perspective shrink it and lie about relative size.
+  - name: adventurer
+    components:
+      Transform:
+        translation:
+          - 2.6
+          - 0.9
+          - 0.0
+        scale:
+          - 0.5
+          - 1.8
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.5
+          - 1.0
+  # Dead level, on -Z, 45 deg vertical FOV. The editor orbits it with `component.set`; these values
+  # are the committed home pose.
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - -7.0
+        rotation:
+          - 0.0
+          - 180.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+        near: 0.05
+        far: 100.0
+  # Key: neutral-warm, up and to the subject's +X, slightly behind the camera plane.
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 4.3
+          - 5.92
+          - -4.3
+      PointLight:
+        color:
+          - 1.0
+          - 0.97
+          - 0.9
+        intensity: 3.0
+        range: 26.89
+  # Fill: dimmer and cool, low on the opposite side. Point lights cast no shadows, so it sits below
+  # the ground plane to lift the undersides instead of being buried.
+  - name: fill-light
+    components:
+      Transform:
+        translation:
+          - -4.84
+          - -2.15
+          - -4.3
+      PointLight:
+        color:
+          - 0.7
+          - 0.78
+          - 0.95
+        intensity: 1.5
+        range: 26.89

@@ -1,0 +1,24 @@
+format: 1
+kind: voxel-ops
+ops:
+  # deliberately asymmetric mold flecks — paint only, silhouette untouched
+  - op: box
+    from: "3,11,11"
+    to: "3,11,11"
+    glyph: M
+    mode: paint
+  - op: box
+    from: "7,15,10"
+    to: "7,15,10"
+    glyph: M
+    mode: paint
+  - op: box
+    from: "13,15,14"
+    to: "13,15,14"
+    glyph: M
+    mode: paint
+  - op: box
+    from: "8,17,12"
+    to: "8,17,12"
+    glyph: M
+    mode: paint

@@ -1,0 +1,8 @@
+# Permissive host-side denylist (engine-architecture.md §5).
+#
+# ludion-gen drives an already-running ComfyUI server over HTTP and a WebSocket and writes scratch
+# run folders. Nothing it produces enters a `WorldHash`, and a run id is a wall-clock timestamp by
+# construction, so the strict sim denylist (no std HashMap, no `SystemTime::now`) does not apply.
+#
+# This file is intentionally empty of `disallowed-types` / `disallowed-methods`, matching the other
+# transport/host crates: the crate still builds under `cargo clippy -- -D warnings`.

@@ -1,0 +1,33 @@
+[package]
+name = "shmup-stress"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "shmup-stress"
+path = "src/main.rs"
+
+[lib]
+# A library alongside the binary so tests can drive the arena's components, systems, and registry
+# directly. The binary (src/main.rs) is a three-line `ludion::run` wrapper over `game()`.
+name = "shmup_stress"
+path = "src/lib.rs"
+
+[dependencies]
+# The one dependency a game needs: `use ludion::prelude::*` and `ludion::run`.
+ludion = { path = "../../crates/ludion" }
+# The component derives are the game's own dependencies — the facade does not re-export them.
+serde = { workspace = true }
+schemars = { workspace = true }
+# `ludion_core::math` for portable transcendentals (the emitter ring's sin/cos) and the sim-side
+# determinism this crate holds itself to.
+ludion-core = { path = "../../crates/ludion-core" }
+
+[dev-dependencies]
+# `drive_hashes` for the two-run determinism half of the census gate.
+ludion-engine = { path = "../../crates/ludion-engine" }
+# The headless driver harness with the game's registry seam.
+ludion-testkit = { path = "../../crates/ludion-testkit" }
+serde_json = { workspace = true }

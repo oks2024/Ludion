@@ -1,0 +1,39 @@
+[package]
+name = "hello-paddle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "hello-paddle"
+path = "src/main.rs"
+
+[lib]
+# A library alongside the binary so the tests can drive the game's components, systems, and registry
+# directly (the binary is a three-line `ludion::run` wrapper over `lib::game()`).
+name = "hello_paddle"
+path = "src/lib.rs"
+
+[dependencies]
+# The one dependency a game needs: `use ludion::prelude::*` and `ludion::run`.
+ludion = { path = "../../crates/ludion" }
+# The component derives are the game's own dependencies — the facade does not re-export them.
+serde = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+# The golden-image harness (with the game's registry seam) — a game's test-only dependency.
+ludion-testkit = { path = "../../crates/ludion-testkit" }
+# `drive_hashes` / `replay_hashes_with` for the recording round-trip test, and `WorldHash` compare.
+ludion-engine = { path = "../../crates/ludion-engine" }
+# Driving the engine over the wire in the smoke test.
+ludion-client = { path = "../../crates/ludion-client" }
+# `Command` and its param structs for driving the engine in the gameplay/record tests, and the
+# replay magic in the smoke assertions.
+ludion-protocol = { path = "../../crates/ludion-protocol" }
+# `Diagnostic` (the `L2003` no-GPU skip) and `FrameIndex`.
+ludion-core = { path = "../../crates/ludion-core" }
+# Decoding the committed bounce WAV in the audio event-stream test.
+ludion-assets = { path = "../../crates/ludion-assets" }
+serde_json = { workspace = true }

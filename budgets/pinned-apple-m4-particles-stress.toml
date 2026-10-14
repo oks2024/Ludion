@@ -1,0 +1,51 @@
+# Particle budget — pinned Apple M4, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each ceiling below is roughly twice the median
+# measured by `ludion profile --scene … --frames 120` in `--release` on the pinned Apple M4, so a
+# failure means a real, reproducible slowdown — never machine noise. All values are milliseconds.
+# Re-calibrate deliberately (a re-bless event) if a cost becomes intended and permanent —
+# `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/particles-stress.yaml`
+# — the particles arc's stress scene (`Plan/particles-engine-and-editor.md` decision 9): ~22,000
+# live particles over a score of endless emitters, alpha and additive mixed so the per-frame sort
+# and the overdraw are both exercised, with no `Environment`, `PostProcess` or sun, so what it
+# measures is the particle path and nothing else. Checked with:
+#
+#   ludion profile --scene examples/gallery/particles-stress.yaml --frames 120 --check budgets/pinned-apple-m4-particles-stress.toml
+#
+# The Apple M4 twin of `budgets/pinned-rtx3090-particles-stress.toml`: measured on this box, never
+# derived from the Windows file — the two are read side by side. `ci/teamcity/README.md`'s
+# `budgets-macos` configuration runs every file its platform has; a scene a configuration forgets
+# to profile is a tripwire disarmed by omission.
+#
+# **METAL PER-PASS TIMESTAMPS OVERCOUNT — the `scene` ceiling below is NOT a frame time.** On this
+# tile-based GPU every pass timestamp captures the whole overlapping window, so the individual reads
+# run high and cluster together (here every pass, the tiny bloom levels included, reads ~2.85–2.95
+# ms). This is the documented Apple attribution artifact recorded across the mac budget corpus. The
+# number is still a valid *tripwire*: it is inflated consistently run-to-run, so a real regression
+# in the particle pass still pushes it up proportionally. It gates a slowdown in this scene against
+# itself; it is not comparable to the RTX 3090 twin's absolute 0.96.
+
+# The particle evaluator runs at extract on the sim thread — every live particle is placed from its
+# closed form each frame, then the whole population is sorted — so a heavier evaluator steals tick
+# time before any GPU cost shows. Checked wherever a report carries an `extract` sequential entry
+# (this offline driver and a live `--attach` capture both do).
+#
+# Measured 2026-09-15 over four 120-frame release runs at 1920x1080 on 8 sim threads:
+# 1.1875 / 1.2058 / 1.2209 / 1.2343, median **1.213** — half the RTX 3090 box's 2.446 on the same
+# scene (a faster single sim thread, the ratio to expect between the two machines' CPUs). Decision
+# 9's `par` trigger is a reference-box line and fired there; this reading is recorded beside it, not
+# a second trigger. The ceiling is 2.5, the ~2x posture.
+extract_ms = 2.5   # 1.213 measured (median of four)
+
+# The particle pass itself: ~22,000 sorted, alpha-and-additive quads at 1080p — fill-bound on the
+# large soft alpha particles. Measured 2.9568 / 2.9396 / 2.9514 / 2.9525 over the four runs above,
+# median **2.952** — the smeared Metal reading (see the header); the ceiling is 6.0.
+[passes]
+scene = 6.0   # 2.952 measured (median of four; Metal per-pass smear, not a frame time)
+
+# Deliberately absent: `composite` and the `bloom` group (pure functions of the output extent and
+# already gated on `lights.yaml`), `frame_total_ms` (the CLI links no game systems — 0.0002 ms of
+# loop overhead) and `[systems]` (none to name). `cluster_build_ms` is not here either: the scene
+# authors no lights, so the panel reads zero and would gate nothing.

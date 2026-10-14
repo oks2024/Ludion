@@ -1,0 +1,24 @@
+[package]
+name = "ludion-font"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Font faces for the Ludion game engine: the glyph, advance and kerning model over a kind: font document, and the embedded 8x8 face."
+keywords = ["ludion", "font", "text", "game-engine"]
+categories = ["game-engines", "graphics", "text-processing"]
+
+[dependencies]
+ludion-assets = { path = "../ludion-assets", version = "0.1.0", optional = true }
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
+skrifa = { workspace = true, optional = true }
+harfrust = { workspace = true, optional = true }
+
+[dev-dependencies]
+ludion-assets = { path = "../ludion-assets", version = "0.1.0" }
+
+[features]
+# The bake half: outline and kerning reading from a .ttf/.otf, SDF and coverage rasterizing, atlas packing. Only `ludion-cli` enables it — the
+# engine and runtime never parse a font.
+bake = ["dep:skrifa", "dep:harfrust", "dep:ludion-assets"]

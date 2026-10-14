@@ -1,0 +1,12 @@
+# Permissive tooling-side denylist (engine-architecture.md §5).
+#
+# ludion-import is an offline compiler: glTF in, canonical text out. Nothing it produces runs in a
+# tick — the scenes and mesh docs it writes are read back by ludion-scene, which carries the strict
+# list. Its own determinism requirement (same document → byte-identical plan) is stronger than the
+# denylist expresses and is enforced by construction: everything walks glTF document order, name
+# dedup uses stable index suffixes, and no hashed-map iteration reaches the output. Byte-equality
+# tests are what hold that, not clippy.
+#
+# This file is intentionally empty of `disallowed-types` / `disallowed-methods`; the crate still
+# builds under `cargo clippy -- -D warnings`. Committed empty rather than absent so a later
+# sim-adjacent addition here reads as a decision to revisit, not an oversight.

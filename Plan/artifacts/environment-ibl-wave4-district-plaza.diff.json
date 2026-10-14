@@ -1,0 +1,67 @@
+{
+  "golden": "games/vigil/goldens/windows/district-plaza.png (pre-arc, no Environment)",
+  "actual": "games/vigil/goldens/windows/district-plaza.png (Environment/IBL night-sky re-bless)",
+  "golden_width": 960,
+  "golden_height": 540,
+  "actual_width": 960,
+  "actual_height": 540,
+  "threshold": 0.99,
+  "pass": true,
+  "ssim": 0.99760635304621,
+  "mae": 3.2025303819444444,
+  "tile_grid": {
+    "cols": 8,
+    "rows": 8
+  },
+  "damaged_tiles": [
+    {
+      "row": 0,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.972467587970963,
+      "region": "top-right"
+    },
+    {
+      "row": 1,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9898314396386472,
+      "region": "top-left"
+    },
+    {
+      "row": 1,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9898342735816448,
+      "region": "top-right"
+    }
+  ],
+  "worst_tile": {
+    "row": 0,
+    "col": 7,
+    "rect": {
+      "x": 840,
+      "y": 0,
+      "width": 120,
+      "height": 68
+    },
+    "ssim": 0.972467587970963,
+    "region": "top-right"
+  },
+  "summary": "PASS: ssim 0.9976 >= threshold 0.9900 (3 tiles below threshold)"
+}

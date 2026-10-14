@@ -1,0 +1,11 @@
+# Permissive host-side denylist (engine-architecture.md §5).
+#
+# ludion-audio is the playback sink: a cpal thread downstream of everything determinism-bearing. The
+# engine emits `AudioEvent`s down a one-directional channel and this crate mixes them into an output
+# device; playback never feeds back into a tick, so the wall-clock jitter of an audio device is
+# unobservable from the sim. The strict sim denylist (no std HashMap, no wall clock) therefore does
+# not apply — a device callback IS wall-clock work by nature.
+#
+# This file is intentionally empty of `disallowed-types` / `disallowed-methods`; the crate still
+# builds under `cargo clippy -- -D warnings`. Committed empty rather than absent so a later
+# sim-adjacent addition here reads as a decision to revisit, not an oversight.

@@ -1,0 +1,10 @@
+format: 1
+name: target-district
+entities:
+  - name: from-here
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0

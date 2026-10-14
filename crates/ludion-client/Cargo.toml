@@ -1,0 +1,30 @@
+[package]
+name = "ludion-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "A typed, synchronous WebSocket client for the Ludion game engine's wire protocol."
+keywords = ["ludion", "websocket", "client", "protocol"]
+categories = ["network-programming", "game-development"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+tungstenite.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# A real server to drive over the wire in tests (`crates/ludion-client/tests/`), mirroring the
+# pattern `ludion-server`'s own wire tests use in reverse. A dev-dependency cycle between the two
+# crates is fine — it never reaches the published/runtime dependency graph. Deliberately
+# path-only, no `version`: a dev-dependency is never resolved by downstream consumers, and giving
+# it a registry version would make `cargo package` try (and fail) to resolve it against the real
+# crates.io index before this workspace's crates are published there.
+ludion-server = { path = "../ludion-server" }
+# Only to build the `Engine`s the tests serve `Server::bind` — never a runtime dependency of this
+# crate (the boundary rule is about `[dependencies]`, not test scaffolding).
+ludion-engine = { path = "../ludion-engine" }
+# Decodes the QOI frame payloads the frame-delivery test receives, to assert on pixel dimensions.
+# Runtime code never decodes payloads (the settled screenshot precedent) — this is test-only.
+qoi.workspace = true

@@ -1,0 +1,76 @@
+# Feature: Sprite — a flat textured or flat-colored quad, placed by Transform.
+# - checker/brick sprites: `texture:` pulls in a PNG asset (assets/*.png).
+# - tinted sprite: no texture, so `color:` alone tints the default white quad.
+# A point light is present only because Sprite is a lit surface (see sprite.wgsl); it is not the
+# feature under demonstration. For `billboard: true` (always facing the camera), see billboards.yaml.
+format: 1
+name: "sprites - Sprite: texture and tint"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 6.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: checker-sprite
+    components:
+      Transform:
+        translation:
+          - -2.4
+          - 0.0
+          - 0.0
+      Sprite:
+        texture: assets/checker.png
+        size:
+          - 1.1
+          - 1.1
+        lit: true
+  - name: brick-sprite
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.2
+          - 0.6
+        lit: true
+  - name: tinted-sprite
+    components:
+      Transform:
+        translation:
+          - 2.4
+          - 0.0
+          - 0.0
+      Sprite:
+        size:
+          - 0.9
+          - 0.9
+        color:
+          - 1.0
+          - 0.4
+          - 0.7
+          - 1.0
+        lit: true
+  - name: fill-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 3.5
+      PointLight:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+        intensity: 3.0
+        range: 14.0

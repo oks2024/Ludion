@@ -1,0 +1,82 @@
+# Feature: Sprite.uv_repeat / Sprite.uv_scroll — one quad that tiles its atlas frame and slides the
+# tiling across itself, which is how an endless parallax band is a single entity instead of two
+# transforms chasing each other around a wrap point (`Plan/sprite-engine.md`, the external game's
+# scrolling-strip request).
+#
+# Top strip: the 8x8 `tiles/hazard` frame repeated four times across a wide quad
+# (`uv_repeat: [4, 1]`) and scrolled at a quarter of a frame width per second
+# (`uv_scroll: [0.25, 0]`). The golden renders at frame 30 — half a second in — so the tiling has
+# slid an eighth of a frame width and the strip is visibly out of phase with the control below.
+# Bottom strip: the same frame on the same quad with neither field set, so it stays on the shader's
+# clamping path and stretches one copy edge to edge. The two rows share one atlas, one batch, and
+# one pipeline; only the per-instance wrap flag differs.
+#
+# Scrolling is derived from sim time at extract, never accumulated in the world: the quads do not
+# move, and neither strip contributes anything to the world hash that a still sprite would not.
+format: 1
+name: "sprite-uv-scroll - Sprite: wrapping UV tiling and scroll"
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.02
+          - 0.03
+          - 0.05
+        sky_horizon:
+          - 0.04
+          - 0.05
+          - 0.08
+        sky_ground:
+          - 0.01
+          - 0.012
+          - 0.02
+        ambient:
+          - 0.03
+          - 0.03
+          - 0.04
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 6.0
+  # Tiled and scrolling: four copies of one 8x8 region across a wide quad.
+  - name: scrolling-strip
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.2
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: tiles/hazard
+        size:
+          - 8.0
+          - 1.6
+        uv_repeat:
+          - 4.0
+          - 1.0
+        uv_scroll:
+          - 0.25
+          - 0.0
+  # The control: same frame, same quad, no tiling and no scroll — one stretched copy.
+  - name: clamped-strip
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -1.2
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: tiles/hazard
+        size:
+          - 8.0
+          - 1.6

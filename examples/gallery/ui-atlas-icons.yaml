@@ -1,0 +1,167 @@
+# Feature: a screen-space `UiRect` drawing one region of a committed `kind: atlas` document
+# (`Plan/sprite-engine.md` Wave 3) — the HUD analog of a world `Sprite`'s atlas path. A HUD shows
+# lives as a row of small avatar icons and a mark as a jewel; every icon is a region of the sprites
+# gallery's own `sprites/gallery.atlas.yaml`, so no icon is exported as a loose PNG the atlas pipeline
+# does not own.
+#
+# - Three `ship/idle` life icons (top-left), each a `UiRect` with `atlas` + `frame` instead of
+#   `texture` — the atlas region supplies the pixels and the UV sub-rect, while the authored `size`
+#   sets the on-screen quad. All three share one atlas texture, so they batch into one draw.
+# - One `tiles/hazard` jewel/mark (top-right), a fourth atlas rect from the same document — still the
+#   one batch.
+# - A flat, translucent backdrop `UiRect` (no texture, the default whole-texture UV path) behind the
+#   life row, proving the atlas path and the plain-color path coexist byte-for-byte.
+# - A `UiText` caption, so the overlay carries text as well as atlas rects.
+#
+# The world underneath is a lit ground plane and a small emissive sphere (bloom-triggering), so the
+# overlay's "draws after tonemap, unaffected by bloom" claim is on screen, as in `ui-hud.yaml`.
+format: 1
+name: "ui-atlas-icons - UiRect drawing atlas regions: lives + a jewel from the committed atlas"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.2
+          - 6.5
+        rotation:
+          - -10.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.28
+          - 0.3
+          - 0.34
+          - 1.0
+        roughness: 0.85
+  - name: beacon
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.9
+          - -0.4
+        scale:
+          - 0.6
+          - 0.6
+          - 0.6
+      Mesh:
+        shape: sphere
+        color:
+          - 1.0
+          - 0.7
+          - 0.3
+          - 1.0
+        roughness: 0.2
+        emissive: 4.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 4.5
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 5.0
+        range: 20.0
+  - name: lives-backdrop
+    components:
+      UiRect:
+        anchor: top_left
+        offset:
+          - 16.0
+          - 16.0
+        size:
+          - 236.0
+          - 88.0
+        color:
+          - 0.05
+          - 0.07
+          - 0.1
+          - 0.55
+        order: 0
+  - name: life-1
+    components:
+      UiRect:
+        anchor: top_left
+        offset:
+          - 32.0
+          - 32.0
+        size:
+          - 56.0
+          - 56.0
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        order: 1
+  - name: life-2
+    components:
+      UiRect:
+        anchor: top_left
+        offset:
+          - 96.0
+          - 32.0
+        size:
+          - 56.0
+          - 56.0
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        order: 1
+  - name: life-3
+    components:
+      UiRect:
+        anchor: top_left
+        offset:
+          - 160.0
+          - 32.0
+        size:
+          - 56.0
+          - 56.0
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        order: 1
+  - name: jewel
+    components:
+      UiRect:
+        anchor: top_right
+        offset:
+          - -32.0
+          - 32.0
+        size:
+          - 64.0
+          - 64.0
+        atlas: sprites/gallery.atlas.yaml
+        frame: tiles/hazard
+        order: 1
+  - name: caption
+    components:
+      UiText:
+        anchor: bottom_center
+        offset:
+          - 0.0
+          - -24.0
+        text: "LIVES 3   MARK 1"
+        size: 28.0
+        color:
+          - 0.92
+          - 0.9
+          - 0.8
+          - 1.0
+        order: 1

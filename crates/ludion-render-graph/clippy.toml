@@ -1,0 +1,10 @@
+# Permissive renderer-side denylist (engine-architecture.md §5).
+#
+# ludion-render-graph is NOT on the deterministic sim path: it is the wgpu execution layer plus a
+# CPU-only declarative graph. The strict sim denylist does not apply here — in particular the wall
+# clock is *allowed*, because per-pass GPU timings (`dump_timings`) are a wall-clock measurement by
+# nature. std hash containers are likewise permitted (the graph's own maps are ordered Vecs for
+# deterministic dump output, but no rule forbids `HashMap` in GPU glue).
+#
+# This file is intentionally empty of `disallowed-types` / `disallowed-methods`: the crate still
+# builds under `cargo clippy -- -D warnings`, it just isn't held to the sim determinism list.

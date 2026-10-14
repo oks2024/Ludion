@@ -1,0 +1,163 @@
+{
+  "golden": "wave 3 (fog_color hand-matched to sky_horizon; fog_sky unauthored)",
+  "actual": "wave 4 (fog_sky 1.0 - the haze is the sky along the view ray)",
+  "golden_width": 960,
+  "golden_height": 540,
+  "actual_width": 960,
+  "actual_height": 540,
+  "threshold": 0.99,
+  "pass": true,
+  "ssim": 0.9945652631891398,
+  "mae": 1.3631886574074075,
+  "tile_grid": {
+    "cols": 8,
+    "rows": 8
+  },
+  "damaged_tiles": [
+    {
+      "row": 3,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9480235846926193,
+      "region": "middle-right"
+    },
+    {
+      "row": 4,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9563227248345016,
+      "region": "middle-right"
+    },
+    {
+      "row": 3,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9659110715994654,
+      "region": "middle-right"
+    },
+    {
+      "row": 0,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9762050706638294,
+      "region": "top-center"
+    },
+    {
+      "row": 1,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9805514738443356,
+      "region": "top-center"
+    },
+    {
+      "row": 1,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9819229044987045,
+      "region": "top-center"
+    },
+    {
+      "row": 6,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.985193627542167,
+      "region": "bottom-right"
+    },
+    {
+      "row": 4,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.986298944804847,
+      "region": "middle-right"
+    },
+    {
+      "row": 5,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9888392911563885,
+      "region": "middle-right"
+    },
+    {
+      "row": 2,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9894376080122045,
+      "region": "top-right"
+    },
+    {
+      "row": 7,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9898103557758099,
+      "region": "bottom-right"
+    }
+  ],
+  "worst_tile": {
+    "row": 3,
+    "col": 7,
+    "rect": {
+      "x": 840,
+      "y": 204,
+      "width": 120,
+      "height": 68
+    },
+    "ssim": 0.9480235846926193,
+    "region": "middle-right"
+  },
+  "summary": "PASS: ssim 0.9946 >= threshold 0.9900 (11 tiles below threshold)"
+}

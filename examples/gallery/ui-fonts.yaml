@@ -1,0 +1,190 @@
+# Feature: fonts — baked TTF faces (Plan/font-assets.md Wave 3) drawn through `font:` on UiText,
+# UiList and world Text, over a minimal lit world like ui-hud.yaml.
+#
+# - `body` (Inter, SDF): a title, invoice rows using `×`/`—`/`…`, a wrapped paragraph with curly
+#   quotes and apostrophes, kerned pairs (AV To Wa Yo LT), a tofu line (`☃` is outside Inter's
+#   charset, so check-scene prints one L1256 coverage warning — expected), a proportional UiList,
+#   and a world-space Text.
+# - `pixel` (Silkscreen, bitmap): one line at size 30 — an integer multiple of its 10-unit source
+#   line height, so at 1080p every source pixel is exactly 3x3 screen pixels.
+format: 1
+name: "ui-fonts - baked faces on UiText, UiList and world Text"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 7.0
+        rotation:
+          - -12.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.3
+          - 0.32
+          - 0.36
+          - 1.0
+        roughness: 0.85
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 4.5
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 5.0
+        range: 20.0
+  - name: title
+    components:
+      UiText:
+        anchor: top_left
+        offset:
+          - 24.0
+          - 12.0
+        text: Damages Invoice
+        size: 72.0
+        color:
+          - 1.0
+          - 0.85
+          - 0.4
+          - 1.0
+        font: body
+        order: 0
+  - name: invoice
+    components:
+      UiText:
+        anchor: top_left
+        offset:
+          - 24.0
+          - 100.0
+        text: "1 × Broken window — 120\n3 × Dented lamp-post — 45\nTotal … 255"
+        size: 28.0
+        color:
+          - 0.95
+          - 0.93
+          - 0.85
+          - 1.0
+        font: body
+        order: 0
+  - name: paragraph
+    components:
+      UiText:
+        anchor: top_left
+        offset:
+          - 24.0
+          - 196.0
+        text: "The mayor’s office didn’t pay: “we never ordered a lamp-post,” she said, “and the window was already broken.”"
+        size: 28.0
+        wrap_width: 540.0
+        color:
+          - 0.75
+          - 0.85
+          - 1.0
+          - 1.0
+        font: body
+        order: 0
+  - name: kerning
+    components:
+      UiText:
+        anchor: top_left
+        offset:
+          - 24.0
+          - 330.0
+        text: AV To Wa Yo LT
+        size: 64.0
+        color:
+          - 0.95
+          - 0.93
+          - 0.85
+          - 1.0
+        font: body
+        order: 0
+  - name: tofu
+    components:
+      UiText:
+        anchor: top_left
+        offset:
+          - 24.0
+          - 410.0
+        text: "Snow ☃ man"
+        size: 28.0
+        color:
+          - 1.0
+          - 0.6
+          - 0.6
+          - 1.0
+        font: body
+        order: 0
+  - name: pixel-line
+    components:
+      UiText:
+        anchor: top_right
+        offset:
+          - -24.0
+          - 190.0
+        text: "SCORE 004250  LIVES 3"
+        size: 30.0
+        color:
+          - 0.6
+          - 1.0
+          - 0.7
+          - 1.0
+        font: pixel
+        order: 0
+  - name: repairs
+    components:
+      UiList:
+        anchor: top_right
+        offset:
+          - -24.0
+          - 24.0
+        title: Repairs
+        items:
+          - text: "Glazier — 120"
+          - text: "Lamp-post, wrought iron"
+          - text: "Wall (WAV) — 80"
+        selected: 1
+        size: 28.0
+        padding: 16.0
+        background:
+          - 0.05
+          - 0.05
+          - 0.08
+          - 0.85
+        font: body
+  - name: world-text
+    components:
+      Transform:
+        translation:
+          - -0.6
+          - 0.4
+          - 0.0
+      Text:
+        text: "World Text — Inter"
+        size: 0.5
+        font: body
+        color:
+          - 0.1
+          - 0.12
+          - 0.3
+          - 1.0

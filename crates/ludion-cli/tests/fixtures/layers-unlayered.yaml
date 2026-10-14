@@ -1,0 +1,12 @@
+format: 1
+seed: 1
+physics:
+  space: free
+entities:
+  - name: floor
+    components:
+      Collider:
+        shape:
+          sphere:
+            radius: 0.5
+        body: static

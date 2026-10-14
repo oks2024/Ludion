@@ -1,0 +1,21 @@
+[package]
+name = "ludion-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The typed command/response/event wire protocol contract, schema export, and replay format for the Ludion game engine."
+keywords = ["ludion", "protocol", "game-engine", "schema"]
+categories = ["game-engines", "network-programming", "encoding"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+xxhash-rust.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+# The schema snapshot test serializes the generated document; the round-trip tests compare against
+# hand-written JSON. Both only need serde_json, which is already a normal dependency.

@@ -1,0 +1,241 @@
+format: 1
+kind: animation
+name: rig-walk
+# A looping walk for the rig: thighs swing +-20 degrees on X (+X is forward, toward -Z) and
+# stay out of phase with the arms. Knees flex -X on the swing leg only; the torso bobs twice per
+# stride and twists against the head. Every key time is a whole 60 Hz tick (0.15 = 9, 0.3 = 18).
+duration: 0.6
+loop: true
+tracks:
+  head:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - -4.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 0.0
+          - 4.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 0.0
+          - -4.0
+          - 0.0
+        ease: smooth
+  lower-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 12.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 12.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  lower-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 12.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  lower-leg-l:
+    rotation:
+      - t: 0.0
+        v:
+          - -4.0
+          - 0.0
+          - 0.0
+      - t: 0.15
+        v:
+          - -2.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.3
+        v:
+          - -4.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.45
+        v:
+          - -32.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - -4.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  lower-leg-r:
+    rotation:
+      - t: 0.0
+        v:
+          - -30.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - -4.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - -30.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  torso:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 4.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 0.0
+          - -4.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 0.0
+          - 4.0
+          - 0.0
+        ease: smooth
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.15
+        v:
+          - 0.0
+          - 0.3
+          - 0.0
+        ease: smooth
+      - t: 0.3
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.45
+        v:
+          - 0.0
+          - 0.3
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - -20.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - -20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - -20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - -20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-r:
+    rotation:
+      - t: 0.0
+        v:
+          - -20.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - -20.0
+          - 0.0
+          - 0.0
+        ease: smooth

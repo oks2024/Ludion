@@ -1,0 +1,13 @@
+format: 1
+name: broken-smoke-test
+entities:
+  - name: typo
+    components:
+      Parnet:
+        index: 0
+        generation: 0
+  - name: bad field
+    components:
+      Parent:
+        index: -1
+        generation: 0

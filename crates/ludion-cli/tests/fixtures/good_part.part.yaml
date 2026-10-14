@@ -1,0 +1,12 @@
+format: 1
+kind: part
+name: torso
+size:
+  - 2
+  - 2
+  - 1
+slices:
+  -
+    - AB
+  -
+    - ".A"

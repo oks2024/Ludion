@@ -1,0 +1,158 @@
+# The gallery's cave tileset — five 8x8 frames the tilemap scene lays out on one atlas: `floor`,
+# `wall`, `wall-top`, `crate`, `hazard`. Every frame is edge-to-edge opaque so the grid has no gaps,
+# and the grain, the bevel and the crate's shading all come from `effects:` on flat glyph fields.
+format: 1
+kind: sprite
+name: tiles
+size:
+  - 8
+  - 8
+seed: 20260906
+palette:
+  g:
+    color:
+      - 0.042
+      - 0.038
+      - 0.055
+      - 1.0
+  r:
+    color:
+      - 0.125
+      - 0.116
+      - 0.140
+      - 1.0
+  d:
+    color:
+      - 0.072
+      - 0.066
+      - 0.084
+      - 1.0
+  m:
+    color:
+      - 0.215
+      - 0.202
+      - 0.222
+      - 1.0
+  w:
+    color:
+      - 0.230
+      - 0.120
+      - 0.045
+      - 1.0
+  b:
+    color:
+      - 0.095
+      - 0.048
+      - 0.018
+      - 1.0
+  h:
+    color:
+      - 0.90
+      - 0.62
+      - 0.06
+      - 1.0
+    emissive: 1.5
+  k:
+    color:
+      - 0.075
+      - 0.050
+      - 0.012
+      - 1.0
+frames:
+  floor:
+    rows:
+      - "gggggggg"
+      - "gggggggg"
+      - "gggggggg"
+      - "gggggggg"
+      - "gggggggg"
+      - "gggggggg"
+      - "gggggggg"
+      - "gggggggg"
+  wall:
+    rows:
+      - "rrrrrrrr"
+      - "rrdrrrrr"
+      - "rrrrrrdr"
+      - "rrrrrrrr"
+      - "rdrrrrrr"
+      - "rrrrrdrr"
+      - "rrrrrrrr"
+      - "rrdrrrrr"
+  wall-top:
+    rows:
+      - "mmmmmmmm"
+      - "mmmmmmmm"
+      - "mmmmmmmm"
+      - "rrrrrrrr"
+      - "rrdrrrrr"
+      - "rrrrrrrr"
+      - "rrrrrdrr"
+      - "rrrrrrrr"
+  crate:
+    rows:
+      - "bbbbbbbb"
+      - "bwwwwwwb"
+      - "bwwwwwwb"
+      - "bbbbbbbb"
+      - "bwwwwwwb"
+      - "bwwwwwwb"
+      - "bwwwwwwb"
+      - "bbbbbbbb"
+  hazard:
+    rows:
+      - "hhkkhhkk"
+      - "hkkhhkkh"
+      - "kkhhkkhh"
+      - "khhkkhhk"
+      - "hhkkhhkk"
+      - "hkkhhkkh"
+      - "kkhhkkhh"
+      - "khhkkhhk"
+effects:
+  - op: noise
+    frames:
+      - floor
+    amount: 0.010
+  - op: shade
+    frames:
+      - wall
+      - wall-top
+    light:
+      - -1.0
+      - -1.0
+    strength: 0.16
+  - op: gradient
+    glyphs:
+      - w
+      - b
+    frames:
+      - crate
+    from:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    to:
+      - 0.40
+      - 0.40
+      - 0.40
+      - 1.0
+    direction: vertical
+    blend: multiply
+  - op: outline
+    frames:
+      - crate
+    color:
+      - 0.030
+      - 0.016
+      - 0.006
+      - 1.0
+    side: inside
+  - op: dither
+    glyphs:
+      - h
+      - k
+    frames:
+      - hazard
+    density: 0.5

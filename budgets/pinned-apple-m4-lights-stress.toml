@@ -1,0 +1,72 @@
+# Clustered-forward light budget — pinned Apple M4, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. The ceiling below is roughly twice the median measured
+# by `ludion profile --scene … --frames 120` in `--release` on the pinned Apple M4, so a failure
+# means a real, reproducible slowdown — never machine noise. All values are milliseconds.
+# Re-calibrate deliberately (a re-bless event) if a cost becomes intended and permanent —
+# `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/lights-stress.yaml` — the
+# clustered-forward arc's stress scene: 500 point lights (200 torch statics at ranges 8–15, 300
+# projectile-like movers at ranges 1.5–3.0) over 160 lit primitives and a ground plane, with no
+# `Environment`, `PostProcess` or sun, so what it measures is the light path and nothing else.
+# Checked with:
+#
+#   ludion profile --scene examples/gallery/lights-stress.yaml --frames 120 --check budgets/pinned-apple-m4-lights-stress.toml
+#
+# It is a third file beside `budgets/pinned-apple-m4.toml` (calibrated on `lights.yaml`, 3 lights) and
+# `budgets/pinned-apple-m4-post-full.toml` (the post roster) for the reason those two are separate
+# from each other: every section of a budget is checked against every run, and this scene's `scene`
+# pass medians 3.81 ms against `lights.yaml`'s far cheaper read. Merging would leave the cheap scene
+# gated at many times its own cost, which is a tripwire in name only. `ci/teamcity/README.md`'s
+# `budgets-macos` configuration runs all three.
+#
+# **METAL PER-PASS TIMESTAMPS OVERCOUNT — the `scene` ceiling below is NOT a frame time.** On this
+# tile-based GPU every pass timestamp captures the whole overlapping window, so the individual reads
+# run high and cluster together (here every pass, including the tiny bloom levels, reads ~3.7 ms).
+# This is the documented Apple attribution artifact recorded across the mac budget corpus, not a
+# 260 ms frame. The number is still a valid *tripwire*: it is inflated consistently run-to-run
+# (3.8111 / 3.8103 / 3.8082 over three runs — tighter than the 3090's bimodal spread), so a real
+# regression in the per-fragment light loop still pushes it up proportionally. It gates a slowdown in
+# this scene against itself; it is not comparable to the RTX 3090 twin's absolute 0.70.
+
+# Ceiling on the clustered-forward CPU build — the per-frame pass that decides which lights each
+# cell's list holds. A CPU cost, not a GPU one, and the only line in the whole budget corpus that
+# needs no adapter to measure: the binning is pure arithmetic over the extracted scene, so this gate
+# means the same thing on a headless box as on this one. (A live `--attach` capture carries no
+# cluster section — those frames built their tables inside a render a profiler must not stall — so
+# this line is skipped, never failed, there.)
+#
+# Measured over three 120-frame release runs at 1920x1080: 0.0403 / 0.0413 / 0.0411 ms, median
+# **0.0411** — LOWER than the RTX 3090 twin's 0.102, as expected for pure CPU arithmetic on the M4.
+# The occupancy panel is scene-derived and identical to the Windows twin's (500 lights -> 17,121 cell
+# references | 794 of 2,304 cells occupied | longest cell list 74 | mean list over occupied cells
+# 21.56). The ceiling is ~2x the median with a little extra for a statistic taken over individual
+# builds rather than a tight loop.
+cluster_build_ms = 0.10   # 0.0411 measured (median of three)
+
+# The one pass this file exists for: every lit fragment walks its own cluster cell's list, so this
+# number is the whole clustered-forward thesis stated as a measurement — cost proportional to lights
+# *actually near each pixel*, not to the scene's light count. This is exactly where a tile-based
+# deferred GPU behaves unlike the 3090 (mean 21.56 lights per occupied cell), and it is also where
+# Metal's per-pass smearing bites hardest — see the header.
+#
+# Measured over three 120-frame release runs at 1920x1080: 3.8111 / 3.8103 / 3.8082, median
+# **3.8103**. The ceiling is 2x the median.
+[passes]
+scene = 7.6   # 3.8103 measured (median of three)
+
+# Deliberately absent, and each for a reason rather than by omission:
+#
+# - `composite` and the `bloom` group. Both are pure functions of the output extent, not of the
+#   scene: `budgets/pinned-apple-m4.toml` already gates them, and a second ceiling on one regression
+#   is two files to re-bless for one cause.
+# - `frame_total_ms`. A scene profiled through the CLI runs the built-in schedule (no game systems),
+#   so the sim frame total here is loop overhead, identical on every gallery scene, and already gated
+#   on `lights.yaml`.
+# - `[systems]`. Same reason: the CLI links no game systems, so there are none to name.
+#
+# The two lines this file *does* carry are deliberately one CPU and one GPU: `cluster_build_ms` gates
+# the work that decides which lights a cell holds, `[passes] scene` gates the work of shading through
+# what that decided. A regression in either one is a different bug, and reading both against the
+# occupancy panel is what tells them apart without a GPU capture.

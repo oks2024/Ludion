@@ -1,0 +1,137 @@
+format: 1
+# `steady-drawn.yaml` with ONE field flipped: `Arena.bullets_collide: true`, so every bullet is
+# spawned with a dynamic circle `Collider` (radius 0.15) and therefore enters the spatial index.
+#
+# It exists only as the other half of a pair (`Plan/bullet-hell-stress.md`): the difference between
+# this scene's `spatial_rebuild` line and `steady-drawn.yaml`'s — same emitters, same census, same
+# plane, same framing — is the price of holding ~3,000 bullets in the index. (It reads against the
+# entity baseline, not against `steady.yaml`: `steady.yaml` is volleys now, and a volley carries no
+# collider and never enters the index at all, which is the plan's decision 1 rather than a number to
+# measure.) The arc's hypothesis is that the price is not worth paying: bullets should NOT live in
+# the index, and player-vs-bullet should be the plain circle scan `player_hit_test` already is (it
+# never probes the index, in either scene).
+#
+# It draws flat tinted quads rather than atlas sprites, and stands behind no backdrop: only the
+# `spatial_rebuild` line is ever read off this scene, and neither of those touches it.
+#
+# CLOSED-FORM CENSUS — identical to `steady-drawn.yaml`, because the collider changes nothing about
+# who lives and dies:
+#
+#     live(N) = 25 * min(N + 1, 119)     ->  STEADY STATE 2,975 live bullets
+#     FIRST FULL at the end of FRAME 118, and constant from there on.
+name: "shmup-stress - steady field, bullets in the spatial index (2,975 live bullets)"
+seed: 0
+entities:
+  # Head-on at the upright plane, `steady-drawn.yaml`'s framing to the unit. The plane matters here
+  # beyond framing: the game runs its 2D queries in world XY (`Engine::builder().plane`), so a
+  # ground-plane field would collapse into one row of index cells and price nothing.
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 60.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 12.0
+        far: 200.0
+  - name: arena
+    components:
+      Arena:
+        half_extent: 40.0
+        bullets_collide: true
+        cancel_every: 0
+        plane: upright
+        # Informative: the authored copy of the closed form above. Nothing reads it.
+        target_live: 2975
+  # The hit tally, on its own entity so it hashes and snapshots like any other sim state.
+  - name: hits
+    components:
+      HitCount: {}
+  # The player does not move — this arena measures the bullet field, not the player. It sits at the
+  # centre, where every emitter's ring converges, so the hit test always has work to do.
+  - name: player
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.6
+      Sprite:
+        size:
+          - 0.8
+          - 0.8
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        layer: 1
+      Player:
+        hitbox_radius: 0.2
+      Collider:
+        shape:
+          circle:
+            radius: 0.1
+        body: kinematic
+  # The four emitters, one per compass point at 2.5 u on the upright plane, phase-staggered so their
+  # volleys interleave. `count`, `rate`, `phase`, `life`, `spin`, placement and speed are
+  # `steady-drawn.yaml`'s, unchanged — the collider is the one thing that differs.
+  - name: emitter-east
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 0.0
+          - 0.5
+      Emitter:
+        count: 25
+        rate: 4
+        speed: 1.6
+        life: 120
+        phase: 0
+        spin: 0.13
+  - name: emitter-north
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - 0.5
+      Emitter:
+        count: 25
+        rate: 4
+        speed: 1.6
+        life: 120
+        phase: 1
+        spin: 0.13
+  - name: emitter-west
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 0.0
+          - 0.5
+      Emitter:
+        count: 25
+        rate: 4
+        speed: 1.6
+        life: 120
+        phase: 2
+        spin: 0.13
+  - name: emitter-south
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -2.5
+          - 0.5
+      Emitter:
+        count: 25
+        rate: 4
+        speed: 1.6
+        life: 120
+        phase: 3
+        spin: 0.13

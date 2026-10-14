@@ -1,0 +1,37 @@
+---
+description: ludion-cli verb modules: one file per subcommand, what each wraps, and its non-obvious contracts
+---
+
+# ludion-cli verb modules
+
+**Scope:** the per-module map of `crates/ludion-cli/src/`: which crate each verb wraps and the contract that is not in `--help`. The hub (`ludion devdocs ludion-cli`) holds the subcommand pattern, recipe, rules and gotchas; the `dev` supervisor is `ludion devdocs ludion-cli-dev`.
+
+## Layout
+
+One module per verb, each a thin wrapper over the owning crate:
+
+- `crates/ludion-cli/src/check_scene.rs` — `check-scene`, plus `load_engine()` and `builtin_registry()`: the helpers every scene-consuming subcommand reuses; also the `--bounds` sculpt authoring view (the `--mirror-x`/`--slice`/`--column`/`--exposure` voxel views' sibling). `--placement` (opt-in lint, `placement.rs`) runs on the expanded scene after the other scene passes. `Reporter` (`check_scene.rs`) carries one run's diagnostics: every kind reports through it, so `--json` prints its summary object (`{path, kind, ok, …fields, diagnostics}`; `--bounds` adds its fields to that object) while the text stays byte-identical.
+- `crates/ludion-cli/src/placement.rs` — the `check-scene --placement` lint (`L1240`–`L1242`): groups by prefab instance/hierarchy root, vertical rules from mesh boxes, overlap from static colliders in a stripped probe world with the instance placements baked (its own `InstanceHooks`).
+- `crates/ludion-cli/src/clip_report.rs` — the `kind: animation` report of `check-scene` (`--json` alone): key counts, ranges, local seam, and a re-import of `generated_from` for the source error.
+- `crates/ludion-cli/src/sim_hash.rs` — `sim-hash`; it drives `Engine::execute`, which is what makes `--record` write exactly what a live or protocol run would.
+- `crates/ludion-cli/src/replay.rs` — `replay`, over `ludion_engine::replay_hashes`.
+- `crates/ludion-cli/src/render.rs` — `render`: a scene, a `--sweep` sheet, a lone model (`--model`, optionally lit by `--rig`; a `.sculpt.yaml` model additionally takes `--part`/`--isolate` to frame or isolate one part), a sprite document's contact sheet (`--sprite`, `--scale` the whole-number game scale) or a packed atlas's overview (`--atlas`, defaulting `--out` to `<stem>.atlas-sheet.png` where the other sheets take `<stem>.sheet.png`, since a sprite doc and its atlas share a stem) — or, with `--atlas --clip <name>`, one of that atlas's flipbooks as an instant/strip/onion skin (`<stem>.atlas-frame/-strip/-onion.png`) — one `ArgGroup` enforces exactly one target, and the two sprite modes request no GPU adapter at all. Every sheet harness lives in `ludion-engine`.
+- `crates/ludion-cli/src/dump_graph.rs` — `dump-graph`, pure CPU via `ludion_engine::dump_scene_graph_json`.
+- `crates/ludion-cli/src/test.rs` — `test`, driving `ludion-testkit`'s directory suite.
+- `crates/ludion-cli/src/serve.rs` — `serve`: `load_engine`, then `ludion_server::Server::bind`.
+- `crates/ludion-cli/src/profile.rs` — `profile`, offline (`--scene`) or against a running host (`--attach`); one `finish` facade serves `--json`/`--check`/`--perfetto`.
+- `crates/ludion-cli/src/perfetto.rs` — `chrome_trace`: a pure `ProfileReport` → Chrome trace-event serializer, twin of the editor's `perf/trace.ts`.
+- `crates/ludion-cli/src/image_stats.rs` — `image-stats`; it reuses `ludion-assets`' PNG decoder rather than adding a second one, so an undecodable file surfaces as `L1101`/`L1102`.
+- `crates/ludion-cli/src/generate_atlas.rs` — `generate-atlas`: bakes a `kind: atlas-source` into its committed `<name>.png` + `<name>.atlas.yaml` pair over `ludion_sprite::pack`, or a `kind: font-source` (TTF/OTF read beside it) into `<name>.png` + `<name>.font.yaml` over `ludion_font::bake::bake`; `--check`-compares both bytes for the `atlas-drift` gate. `render --font` composes a font's CPU specimen sheet (`<stem>.font-sheet.png`).
+- `crates/ludion-cli/src/generate_map.rs`, `crates/ludion-cli/src/map_check.rs` — the map verbs: build-time compilers over `ludion_scene::generate`, no engine process.
+- `crates/ludion-cli/src/import.rs` — the thin `import` wrapper; the glTF mapping is `ludion-import`'s.
+- `crates/ludion-cli/src/dev.rs` — the hot-reload supervisor (`ludion devdocs ludion-cli-dev`).
+- `crates/ludion-cli/src/new.rs` — `new <name>`, scaffolding from the embedded `crates/ludion-cli/templates/` (dumb `{{…}}` substitution) plus the guide, embedded from its single source of truth `docs/engine-guide.md` (frontmatter stripped) so it never drifts from what `ludion docs` serves.
+- `crates/ludion-cli/src/sync.rs` — `sync`: the `[[import]]` tables of `ludion.toml` into ignored derived trees, per-entry freshness (directory content + the running binary's hash) in `<to>/.ludion-sync.json`, which is also the ownership mark; imports run in parallel through `import::import_gltf`; `ensure_fresh` — the in-process entry `dev` and `export` call.
+- `crates/ludion-cli/src/export.rs` — `export` (the manifest is `ludion_engine::manifest`, shared with `sync` and the game hosts; export also copies it into the app's content). The iOS template is embedded from `crates/ludion-cli/templates/ios/` (`project.pbxproj.tpl`, `Info.plist`, the Objective-C host, `ludion.h`; a test holds `ludion.h` to `ludion::ffi`). The cheap refusals run before the build, in order: manifest (`L0023`), `--out`, toolchain probe (`L0022`); the staticlib comes from `cargo rustc --message-format=json-render-diagnostics`. Plain Rust shelling out — no `cfg(target_os)`.
+- `crates/ludion-cli/src/docs.rs` — both agent-doc verbs. One private `DocSet { verb, dir, embedded }` threads through lookup, so an empty embedded table *is* `devdocs`' checkout-only rule — no branch tests which verb is running. `L0008` outside a checkout, `L0009` unknown topic, `L0010` malformed frontmatter, `L0015` unmatched `--section`. Discovery walks up for `crates/ludion-core/Cargo.toml` **plus** `docs/` — engine-only, because `ludion new` writes a `CLAUDE.md` into every scaffolded project and a generic marker made downstream projects mis-detect as checkouts. Writing rules: the `ludion-docs` skill.
+- `crates/ludion-cli/src/voxel.rs` — the `voxel` family, the one module holding a nested `Subcommand`. It owns the **validate-then-atomic-write** writer (`ludion_core::atomic`) every birthing verb goes through, so a rejected op leaves the model byte-identical — which protects the editor watcher path, where a half-written file reloads as a blank.
+- `crates/ludion-cli/src/sculpt.rs` — the `sculpt` family (`new` only): the same validate-then-atomic-write writer as `voxel.rs`, over `ludion_scene::check_sculpt` instead of the voxel checker.
+- `crates/ludion-cli/src/gen_cmd.rs` — the `gen` family over `ludion-gen`. Named `gen_cmd` because `gen` is a keyword in edition 2024; the user-facing verb is still `ludion gen`. Every subcommand takes `--url` and `--json`, and `--json` prints exactly one object on stdout — the structured-output contract the editor host's subprocess use rests on.
+- `crates/ludion-cli/src/mesh.rs` — the `mesh` family (`pick`, `apply [--view] [--check]`), thin over `ludion-mesh-edit`: it supplies only the model-sheet camera (`ludion::math::model_camera`/`camera_ray`, and `world_to_pixel` for `apply --view`'s painted-box projection) that crate deliberately does not own, and does no region/raster/derive work itself.
+- `crates/ludion-cli/tests/` — one integration test per subcommand against the real built binary, plus `fixtures/`.

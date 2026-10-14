@@ -1,0 +1,5 @@
+[
+  { "frame": 0, "event": { "kind": "key_down", "key": "D" } },
+  { "frame": 30, "event": { "kind": "key_up", "key": "D" } },
+  { "frame": 45, "event": { "kind": "key_down", "key": "Space" } }
+]

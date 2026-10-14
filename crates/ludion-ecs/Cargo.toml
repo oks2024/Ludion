@@ -1,0 +1,25 @@
+[package]
+name = "ludion-ecs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "A small, deterministic, BTree-backed ECS (generational entities, typed queries, a component registry) for the Ludion game engine."
+keywords = ["ludion", "ecs", "game-engine", "gamedev"]
+categories = ["game-engines", "data-structures"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+# The registry's zero-copy erased read path (`ComponentInfo::serialize_erased`): a component can be
+# handed to a caller's own `serde::Serializer` without this crate — or the caller — naming its type.
+erased-serde.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The conformance suite defines its own components, which must derive the same
+# trait bundle a real game component would.
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true

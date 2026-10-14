@@ -1,0 +1,1216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ludion — vigil — district-plaza.yaml</title>
+<style>
+  :root{
+    --housing:#D8D5CE;
+    --panel:#E6E4DE;
+    --recess:#C6C2BA;
+    --recess-deep:#B9B5AC;
+    --graphite:#2B2A27;
+    --graphite-dim:rgba(43,42,39,0.64);
+    --graphite-faint:rgba(43,42,39,0.42);
+    --orange:#E8641B;
+    --orange-dim:rgba(232,100,27,0.35);
+    --green:#4A7A5A;
+    --edge:rgba(43,42,39,0.24);
+    --edge-soft:rgba(43,42,39,0.14);
+    --hi:rgba(255,255,255,0.65);
+    --lo:rgba(0,0,0,0.16);
+
+    --bay:#1C1B19;
+    --bay-panel:#242320;
+    --bay-well:#141312;
+    --bay-text:#E9E4D8;
+    --bay-text-dim:#8F897C;
+    --bay-green:#5C9B72;
+    --bay-edge:rgba(255,255,255,0.08);
+
+    --gizmo-x:#A55B3E;
+    --gizmo-y:#4A7A5A;
+    --gizmo-z:#5C6E7B;
+
+    --font-display:'Bahnschrift','Segoe UI Variable','Segoe UI',sans-serif;
+    --font-body:'Segoe UI Variable','Segoe UI',sans-serif;
+    --font-mono:'Cascadia Code','Consolas',monospace;
+
+    --r:3px;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{
+    height:100%;
+    margin:0;
+    background:#AFAA9F;
+    font-family:var(--font-body);
+    color:var(--graphite);
+  }
+
+  ::selection{ background:var(--orange); color:#fff; }
+
+  :focus-visible{
+    outline:2px solid var(--orange);
+    outline-offset:2px;
+  }
+
+  button{
+    font-family:inherit;
+    color:inherit;
+    -webkit-appearance:none;
+    appearance:none;
+    margin:0;
+    cursor:default;
+  }
+
+  /* ---------- machined surface mixins ---------- */
+  .raised{
+    background:var(--panel);
+    border:1px solid var(--edge);
+    box-shadow: inset 0 1px 0 var(--hi), inset 0 -1px 0 var(--lo);
+  }
+  .recessed{
+    background:var(--recess);
+    border:1px solid var(--edge);
+    box-shadow: inset 0 1px 0 var(--lo), inset 0 -1px 0 var(--hi);
+  }
+  .cap{
+    font-family:var(--font-display);
+    text-transform:uppercase;
+    letter-spacing:0.09em;
+    font-weight:600;
+  }
+
+  @keyframes lamp-pulse{
+    0%,100%{ opacity:1; }
+    50%{ opacity:0.35; }
+  }
+  @keyframes cursor-blink{
+    0%,49%{ opacity:1; }
+    50%,100%{ opacity:0; }
+  }
+  @media (prefers-reduced-motion: reduce){
+    .viewbtn .activity,
+    .status-chip.working .dot,
+    .term-cursor{ animation:none !important; opacity:1 !important; }
+  }
+
+  /* ================= app shell ================= */
+  .app{
+    width:100%;
+    height:100vh;
+    max-width:1920px;
+    margin:0 auto;
+    display:flex;
+    flex-direction:column;
+    background:var(--housing);
+    box-shadow:0 30px 70px rgba(0,0,0,0.35);
+    overflow:hidden;
+    min-width:1180px;
+  }
+
+  /* ---------- title strip ---------- */
+  .titlebar{
+    height:32px;
+    flex:0 0 auto;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:0 10px 0 14px;
+    background:var(--housing);
+    border-bottom:1px solid var(--edge-soft);
+  }
+  .titlebar .brand{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    min-width:0;
+  }
+  .titlebar .wordmark{
+    font-family:var(--font-display);
+    font-weight:700;
+    font-size:13px;
+    letter-spacing:0.16em;
+  }
+  .titlebar .docpath{
+    font-size:12px;
+    color:var(--graphite-dim);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .titlebar .winctl{
+    display:flex;
+    gap:6px;
+  }
+  .titlebar .winctl span{
+    width:12px;height:12px;
+    border-radius:2px;
+    border:1px solid var(--edge);
+    background:var(--panel);
+    display:inline-flex;
+    align-items:center;justify-content:center;
+    font-size:8px;
+    color:var(--graphite-faint);
+  }
+
+  /* ---------- view switcher ---------- */
+  .viewswitcher{
+    flex:0 0 auto;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:8px 14px;
+    background:var(--housing);
+    border-bottom:1px solid var(--edge-soft);
+  }
+  .viewswitcher .plate-label{
+    font-family:var(--font-display);
+    font-size:9px;
+    color:var(--graphite-faint);
+    letter-spacing:0.14em;
+    margin-right:2px;
+  }
+  .viewbtn{
+    position:relative;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:5px;
+    min-width:118px;
+    padding:7px 14px 8px;
+    border-radius:var(--r);
+    cursor:default;
+  }
+  .viewbtn .lamp{
+    width:6px;height:6px;
+    border-radius:50%;
+    background:var(--recess-deep);
+    border:1px solid rgba(0,0,0,0.18);
+  }
+  .viewbtn.active .lamp{
+    background:var(--orange);
+    box-shadow:0 0 5px 1px var(--orange-dim);
+  }
+  .viewbtn .label{
+    font-family:var(--font-display);
+    font-size:11px;
+  }
+  .viewbtn.disabled .label{ color:var(--graphite-faint); }
+  .viewbtn.disabled{ cursor:not-allowed; }
+  .viewbtn .sublabel{
+    font-family:var(--font-mono);
+    font-size:8px;
+    letter-spacing:0.02em;
+    text-transform:none;
+    color:var(--graphite-faint);
+    margin-top:-2px;
+  }
+  .viewbtn .activity{
+    position:absolute;
+    top:6px;
+    right:10px;
+    width:6px;height:6px;
+    border-radius:50%;
+    background:var(--green);
+    box-shadow:0 0 4px 1px rgba(74,122,90,0.6);
+    animation:lamp-pulse 2.4s ease-in-out infinite;
+  }
+
+  /* ---------- session strip ---------- */
+  .sessionstrip{
+    flex:0 0 auto;
+    display:flex;
+    align-items:center;
+    gap:16px;
+    padding:7px 14px;
+    background:var(--housing);
+    border-bottom:1px solid var(--edge);
+  }
+  .strip-group{
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .strip-divider{
+    width:1px;
+    align-self:stretch;
+    background:var(--edge);
+    margin:2px 0;
+  }
+
+  .rocker{
+    display:flex;
+    width:104px;
+    height:30px;
+    padding:2px;
+    gap:2px;
+    border-radius:var(--r);
+  }
+  .rocker .side{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    border-radius:2px;
+    gap:2px;
+    font-family:var(--font-display);
+    font-size:9px;
+    letter-spacing:0.06em;
+  }
+  .rocker .side .lamp{
+    width:4px;height:4px;border-radius:50%;
+    background:transparent;
+  }
+  .rocker .side.on{
+    color:var(--graphite);
+  }
+  .rocker .side.on .lamp{
+    background:var(--orange);
+    box-shadow:0 0 4px 1px var(--orange-dim);
+  }
+  .rocker .side.off{
+    color:var(--graphite-faint);
+  }
+
+  .btn-key{
+    width:28px;height:26px;
+    display:flex;align-items:center;justify-content:center;
+    border-radius:2px;
+    font-size:13px;
+    line-height:1;
+  }
+  .btn-save{
+    position:relative;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    height:26px;
+    padding:0 12px;
+    border-radius:2px;
+    font-family:var(--font-display);
+    font-size:11px;
+    letter-spacing:0.06em;
+  }
+  .btn-save .dirty-dot{
+    width:6px;height:6px;
+    border-radius:50%;
+    background:var(--orange);
+    box-shadow:0 0 4px 1px var(--orange-dim);
+  }
+
+  .conn-chip{
+    display:flex;
+    align-items:center;
+    gap:7px;
+    height:26px;
+    padding:0 10px;
+    border-radius:2px;
+    font-family:var(--font-mono);
+    font-size:11px;
+    color:var(--graphite-dim);
+    margin-left:auto;
+  }
+  .conn-chip .dot{
+    width:6px;height:6px;border-radius:50%;
+    background:var(--green);
+  }
+
+  /* ================= main row ================= */
+  .mainrow{
+    flex:1 1 auto;
+    display:flex;
+    min-height:0;
+    gap:8px;
+    padding:8px;
+  }
+
+  .col{
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    gap:8px;
+  }
+  .col-left{ flex:0 0 280px; }
+  .col-right{ flex:0 0 320px; }
+
+  .panel{
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    border-radius:var(--r);
+  }
+  .panel-head{
+    flex:0 0 auto;
+    padding:7px 10px;
+    font-size:10px;
+    letter-spacing:0.12em;
+    border-bottom:1px solid var(--edge-soft);
+    color:var(--graphite-dim);
+  }
+  .panel-body{
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    padding:6px 4px;
+  }
+
+  /* --- hierarchy --- */
+  .hierarchy-panel{ flex:0 0 258px; }
+  .tree-row{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    padding:2.5px 8px 2.5px 6px;
+    font-family:var(--font-mono);
+    font-size:12px;
+    white-space:pre;
+    border-radius:2px;
+    color:var(--graphite);
+  }
+  .tree-row .caret{
+    width:9px;
+    display:inline-block;
+    color:var(--graphite-faint);
+    font-size:9px;
+  }
+  .tree-row.selected{
+    background:var(--orange);
+    color:#fff;
+  }
+  .tree-row.selected .caret{ color:rgba(255,255,255,0.75); }
+  .tree-row .tag{
+    margin-left:auto;
+    font-size:9px;
+    color:var(--graphite-faint);
+  }
+  .tree-row.selected .tag{ color:rgba(255,255,255,0.75); }
+  .tree-row .sel-mark{
+    margin-left:4px;
+    font-size:10px;
+    color:#fff;
+  }
+
+  /* --- kit library --- */
+  .kit-panel{ flex:1 1 auto; }
+  .kit-grid{
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    gap:6px;
+    padding:2px;
+  }
+  .kit-tile{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:5px;
+    padding:8px 4px 6px;
+    border-radius:2px;
+  }
+  .kit-thumb{
+    width:34px;height:26px;
+    border-radius:1px;
+    background:var(--panel);
+    border:1px solid var(--edge);
+    position:relative;
+    box-shadow: inset 0 1px 0 var(--hi), inset 0 -1px 0 var(--lo);
+  }
+  .kit-thumb::after{
+    content:"";
+    position:absolute;
+    inset:5px 7px;
+    border:1px solid var(--graphite-faint);
+  }
+  .kit-name{
+    font-family:var(--font-display);
+    font-size:8.5px;
+    letter-spacing:0.04em;
+    text-align:center;
+    color:var(--graphite-dim);
+    line-height:1.15;
+  }
+
+  /* ================= viewport ================= */
+  .viewport-wrap{
+    flex:1 1 auto;
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    border-radius:var(--r);
+    background:var(--recess);
+    border:1px solid var(--edge);
+    box-shadow: inset 0 1px 0 var(--lo), inset 0 -1px 0 var(--hi);
+    padding:6px;
+  }
+  .viewport{
+    position:relative;
+    flex:1 1 auto;
+    border-radius:2px;
+    overflow:hidden;
+    background:
+      repeating-linear-gradient(0deg, rgba(43,42,39,0.07) 0 1px, transparent 1px 34px),
+      repeating-linear-gradient(90deg, rgba(43,42,39,0.07) 0 1px, transparent 1px 34px),
+      linear-gradient(155deg, #CFCBC1 0%, #C2BEB4 60%, #B9B5AB 100%);
+  }
+
+  .ov{
+    position:absolute;
+    display:flex;
+    align-items:center;
+    gap:6px;
+    padding:4px 8px;
+    background:rgba(230,228,222,0.82);
+    border:1px solid var(--edge);
+    border-radius:2px;
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    color:var(--graphite-dim);
+  }
+  .ov-tl{ top:8px; left:8px; }
+  .ov-tr{ top:8px; right:8px; }
+  .ov-b{ bottom:8px; left:50%; transform:translateX(-50%); }
+
+  /* plaza floor + props */
+  .plaza{
+    position:absolute;
+    left:12%; top:10%; right:12%; bottom:16%;
+    border:2px solid rgba(43,42,39,0.28);
+  }
+  .wall{
+    position:absolute;
+    background:repeating-linear-gradient(90deg, rgba(43,42,39,0.55) 0 8px, rgba(43,42,39,0.4) 8px 9px);
+  }
+  .wall-north{ top:-3px; left:0; right:0; height:6px; }
+  .wall-west{ top:0; bottom:0; left:-3px; width:6px; }
+  .wall-east{ top:0; bottom:0; right:-3px; width:6px; }
+  .gate-gap{
+    position:absolute;
+    bottom:-3px;
+    left:50%;
+    transform:translateX(-50%);
+    width:15%;
+    height:6px;
+    background:var(--recess);
+  }
+  .gate-label{
+    position:absolute;
+    bottom:-20px;
+    left:50%;
+    transform:translateX(-50%);
+    font-family:var(--font-mono);
+    font-size:8.5px;
+    letter-spacing:0.03em;
+    color:var(--graphite-dim);
+    white-space:nowrap;
+  }
+
+  .fountain{
+    position:absolute;
+    left:50%; top:50%;
+    width:64px;height:64px;
+    transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #DAD7CF, #B5B0A5 70%);
+    border:1px solid rgba(43,42,39,0.3);
+  }
+  .fountain::after{
+    content:"";
+    position:absolute;
+    inset:16px;
+    border-radius:50%;
+    border:1px solid rgba(43,42,39,0.28);
+  }
+
+  .house{
+    position:absolute;
+    width:58px;
+    height:42px;
+  }
+  .house .roof{
+    position:absolute;
+    left:6px; right:6px; top:0;
+    height:14px;
+    background:#B98F6E;
+    border:1px solid rgba(43,42,39,0.3);
+    clip-path:polygon(4% 100%, 50% 0%, 96% 100%);
+  }
+  .house .body{
+    position:absolute;
+    left:0; right:0; bottom:0;
+    top:11px;
+    background:#D3CFC5;
+    border:1px solid rgba(43,42,39,0.32);
+  }
+  .house .body::after{
+    content:"";
+    position:absolute; left:10px; bottom:0; width:9px; height:14px;
+    background:rgba(43,42,39,0.16);
+  }
+  .house .tag{
+    position:absolute;
+    bottom:-16px;
+    left:50%;
+    transform:translateX(-50%);
+    font-family:var(--font-mono);
+    font-size:8px;
+    color:var(--graphite-faint);
+    white-space:nowrap;
+  }
+
+  .house.selected .body,
+  .house.selected .roof{
+    outline:2px solid var(--orange);
+    outline-offset:2px;
+    box-shadow:0 0 0 1px rgba(232,100,27,0.25);
+  }
+  .house.selected .tag{ color:var(--orange); font-weight:600; }
+
+  /* gizmo — axes rotate; labels are siblings positioned in the unrotated
+     frame so the X/Y/Z glyphs stay upright */
+  .gizmo{ position:absolute; }
+  .gizmo .axis{
+    position:absolute;
+    top:0; left:0;
+    transform-origin:0 50%;
+  }
+  .gizmo .axis .shaft{
+    position:absolute;
+    height:2px;
+    top:-1px;
+  }
+  .gizmo .axis .head{
+    position:absolute;
+    width:0;height:0;
+  }
+  .gizmo .lbl{
+    position:absolute;
+    font-family:var(--font-mono);
+    font-size:8px;
+    font-weight:700;
+  }
+
+  .marker{
+    position:absolute;
+    width:9px;height:9px;
+    transform:translate(-50%,-50%) rotate(45deg);
+    border:1px solid rgba(43,42,39,0.45);
+    background:rgba(230,228,222,0.7);
+  }
+  .marker-tag{
+    position:absolute;
+    transform:translate(-50%, 6px);
+    font-family:var(--font-mono);
+    font-size:8px;
+    color:var(--graphite-dim);
+    white-space:nowrap;
+  }
+  .spawn-marker{
+    position:absolute;
+    width:8px;height:8px;
+    border-radius:50%;
+    border:2px solid var(--green);
+    transform:translate(-50%,-50%);
+  }
+
+  /* ================= inspector ================= */
+  .inspector-panel{ flex:1 1 auto; }
+  .insp-section{
+    padding:9px 10px 11px;
+    border-bottom:1px solid var(--edge-soft);
+  }
+  .insp-section:last-child{ border-bottom:none; }
+  .insp-title{
+    font-family:var(--font-display);
+    font-size:9.5px;
+    letter-spacing:0.12em;
+    color:var(--graphite-dim);
+    margin-bottom:7px;
+  }
+  .field-row{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    margin-bottom:6px;
+  }
+  .field-row:last-child{ margin-bottom:0; }
+  .field-key{
+    flex:0 0 70px;
+    font-family:var(--font-display);
+    font-size:10.5px;
+    color:var(--graphite-dim);
+  }
+  .field-vals{
+    flex:1 1 auto;
+    display:flex;
+    gap:5px;
+  }
+  .field-input{
+    flex:1;
+    min-width:0;
+    height:24px;
+    padding:0 7px;
+    font-family:var(--font-mono);
+    font-size:11px;
+    color:var(--graphite);
+    border-radius:2px;
+    display:flex;
+    align-items:center;
+  }
+  .field-input.wide{ flex:1 1 100%; }
+  .field-hint{
+    margin-top:6px;
+    padding:5px 7px;
+    font-size:9.5px;
+    color:var(--graphite-dim);
+    border-radius:2px;
+    background:var(--panel);
+    border:1px solid var(--edge-soft);
+    border-left:2px solid var(--orange);
+  }
+
+  /* ================= terminal drawer ================= */
+  .terminal-drawer{
+    flex:0 0 272px;
+    display:flex;
+    flex-direction:column;
+    margin:0 8px 8px;
+    background:var(--bay);
+    border-radius:var(--r);
+    border:1px solid rgba(0,0,0,0.4);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 0 var(--hi);
+    overflow:hidden;
+  }
+  .term-tabbar{
+    flex:0 0 auto;
+    display:flex;
+    align-items:stretch;
+    gap:4px;
+    padding:6px 8px 0;
+    background:var(--bay);
+    border-bottom:1px solid rgba(255,255,255,0.06);
+  }
+  .term-tab{
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+    padding:6px 12px 8px;
+    min-width:168px;
+    border-radius:3px 3px 0 0;
+    background:var(--bay-panel);
+    border:1px solid rgba(255,255,255,0.06);
+    border-bottom:none;
+    cursor:default;
+  }
+  .term-tab.active{
+    background:var(--bay-well);
+    border-color:rgba(255,255,255,0.1);
+  }
+  .term-tab .tab-top{
+    display:flex;
+    align-items:center;
+    gap:7px;
+  }
+  .term-tab .tab-name{
+    font-family:var(--font-mono);
+    font-size:11.5px;
+    color:var(--bay-text);
+  }
+  .term-tab .status-chip{
+    display:flex;
+    align-items:center;
+    gap:5px;
+    margin-left:auto;
+    font-family:var(--font-display);
+    text-transform:uppercase;
+    letter-spacing:0.08em;
+    font-size:8px;
+  }
+  .status-chip .dot{ width:5px;height:5px;border-radius:50%; }
+  .status-chip.working{ color:var(--orange); }
+  .status-chip.working .dot{
+    background:var(--orange);
+    box-shadow:0 0 4px 1px rgba(232,100,27,0.6);
+    animation:lamp-pulse 1.6s ease-in-out infinite;
+  }
+  .status-chip.idle{ color:var(--bay-green); }
+  .status-chip.idle .dot{ background:var(--bay-green); }
+
+  .tab-meta{
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  .ctx-meter{
+    display:flex;
+    align-items:center;
+    gap:5px;
+  }
+  .ctx-meter .gauge{
+    width:52px;height:4px;
+    background:rgba(255,255,255,0.08);
+    border-radius:2px;
+    overflow:hidden;
+  }
+  .ctx-meter .gauge > span{
+    display:block;
+    height:100%;
+    background:var(--green);
+  }
+  .ctx-meter .gauge.hot > span{ background:var(--orange); }
+  .ctx-meter .label{
+    font-family:var(--font-mono);
+    font-size:8.5px;
+    color:var(--bay-text-dim);
+  }
+  .cache-count{
+    font-family:var(--font-mono);
+    font-size:8.5px;
+    color:var(--bay-text-dim);
+  }
+
+  .term-newbtn{
+    align-self:flex-end;
+    margin-bottom:6px;
+    width:22px;height:22px;
+    border-radius:2px;
+    background:var(--bay-panel);
+    border:1px solid rgba(255,255,255,0.1);
+    color:var(--bay-text-dim);
+    display:flex;align-items:center;justify-content:center;
+    font-size:13px;
+    line-height:1;
+  }
+  .term-collapse{
+    align-self:flex-end;
+    margin:0 8px 6px auto;
+    width:22px;height:22px;
+    border-radius:2px;
+    background:var(--bay-panel);
+    border:1px solid rgba(255,255,255,0.1);
+    color:var(--bay-text-dim);
+    display:flex;align-items:center;justify-content:center;
+    font-size:10px;
+    line-height:1;
+  }
+  .terminal-drawer.collapsed{ flex-basis:auto; }
+  .terminal-drawer.collapsed .term-body{ display:none; }
+
+  .term-body{
+    flex:1 1 auto;
+    min-height:0;
+    background:var(--bay-well);
+    display:flex;
+    flex-direction:column;
+  }
+  .term-transcript{
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    padding:10px 14px;
+    font-family:var(--font-mono);
+    font-size:12px;
+    line-height:1.65;
+    color:var(--bay-text);
+  }
+  .term-transcript .persona{
+    color:var(--bay-green);
+    margin-bottom:6px;
+  }
+  .term-transcript .userline{
+    color:var(--bay-text);
+    margin-bottom:6px;
+  }
+  .term-transcript .userline .prompt{
+    color:var(--orange);
+    margin-right:6px;
+  }
+  .term-transcript .work{
+    color:var(--bay-text-dim);
+  }
+  .term-transcript .work .glyph{
+    color:var(--orange);
+    margin-right:6px;
+  }
+  .term-transcript .work.done .glyph{ color:var(--bay-green); }
+  .term-transcript .work.done{ color:var(--bay-text); }
+
+  .term-input{
+    flex:0 0 auto;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:8px 14px;
+    border-top:1px solid rgba(255,255,255,0.06);
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--bay-text);
+  }
+  .term-input .prompt{ color:var(--orange); }
+  .term-cursor{
+    width:7px;height:14px;
+    background:var(--bay-text);
+    animation:cursor-blink 1s step-end infinite;
+  }
+
+  /* ================= status bar ================= */
+  .statusbar{
+    flex:0 0 auto;
+    height:26px;
+    display:flex;
+    align-items:center;
+    padding:0 14px;
+    background:var(--panel);
+    border-top:1px solid var(--edge);
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    color:var(--graphite-dim);
+    letter-spacing:0.02em;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ title strip ============ -->
+  <div class="titlebar">
+    <div class="brand">
+      <span class="wordmark">LUDION</span>
+      <span class="docpath">vigil — district-plaza.yaml</span>
+    </div>
+    <div class="winctl">
+      <span>&#x2013;</span>
+      <span>&#x25A1;</span>
+      <span>&#x2715;</span>
+    </div>
+  </div>
+
+  <!-- ============ view switcher ============ -->
+  <div class="viewswitcher">
+    <span class="plate-label">VIEW</span>
+    <button class="viewbtn raised active">
+      <span class="lamp"></span>
+      <span class="label">Level Designer</span>
+    </button>
+    <button class="viewbtn raised" style="position:relative;">
+      <span class="activity"></span>
+      <span class="lamp"></span>
+      <span class="label">Game Designer</span>
+    </button>
+    <button class="viewbtn recessed disabled" title="Awaiting engine surface" disabled>
+      <span class="lamp"></span>
+      <span class="label">Lighter</span>
+      <span class="sublabel">awaiting engine surface</span>
+    </button>
+    <button class="viewbtn recessed disabled" title="Awaiting engine surface" disabled>
+      <span class="lamp"></span>
+      <span class="label">Art Director</span>
+      <span class="sublabel">awaiting engine surface</span>
+    </button>
+  </div>
+
+  <!-- ============ session strip ============ -->
+  <div class="sessionstrip">
+    <div class="strip-group">
+      <span class="plate-label">MODE</span>
+      <div class="rocker recessed">
+        <div class="side on"><span class="lamp"></span>EDIT</div>
+        <div class="side off"><span class="lamp"></span>PLAY</div>
+      </div>
+    </div>
+
+    <div class="strip-divider"></div>
+
+    <div class="strip-group">
+      <button class="btn-save raised">
+        <span class="dirty-dot"></span>SAVE
+      </button>
+      <button class="btn-key raised" title="Undo">&#x21BA;</button>
+      <button class="btn-key raised" title="Redo">&#x21BB;</button>
+    </div>
+
+    <div class="conn-chip recessed">
+      <span class="dot"></span>
+      ws://127.0.0.1:9411 · schema a3f2c91 · connected
+    </div>
+  </div>
+
+  <!-- ============ main row ============ -->
+  <div class="mainrow">
+
+    <div class="col col-left">
+      <div class="panel hierarchy-panel raised">
+        <div class="panel-head cap">Hierarchy</div>
+        <div class="panel-body">
+          <div class="tree-row"><span class="caret">&#9662;</span>district-plaza</div>
+          <div class="tree-row">&nbsp;&nbsp;├ floor<span class="tag">24×24</span></div>
+          <div class="tree-row">&nbsp;&nbsp;├ fountain</div>
+          <div class="tree-row">&nbsp;&nbsp;├ house-a-01</div>
+          <div class="tree-row">&nbsp;&nbsp;├ house-a-02</div>
+          <div class="tree-row selected">&nbsp;&nbsp;├ house-a-03<span class="sel-mark">&#9664;</span><span class="tag">selected</span></div>
+          <div class="tree-row">&nbsp;&nbsp;├ house-a-04</div>
+          <div class="tree-row">&nbsp;&nbsp;├ house-b-01</div>
+          <div class="tree-row">&nbsp;&nbsp;├ house-b-02</div>
+          <div class="tree-row">&nbsp;&nbsp;├ wall-north<span class="tag">run ×12</span></div>
+          <div class="tree-row">&nbsp;&nbsp;├ wall-east<span class="tag">run ×10</span></div>
+          <div class="tree-row">&nbsp;&nbsp;├ wall-west<span class="tag">run ×10</span></div>
+          <div class="tree-row">&nbsp;&nbsp;├ gate-to-market</div>
+          <div class="tree-row">&nbsp;&nbsp;├ player-spawn</div>
+          <div class="tree-row">&nbsp;&nbsp;├ quest-merchant</div>
+          <div class="tree-row">&nbsp;&nbsp;└ quest-shrine</div>
+        </div>
+      </div>
+
+      <div class="panel kit-panel raised">
+        <div class="panel-head cap">Kit library</div>
+        <div class="panel-body">
+          <div class="kit-grid">
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">house-a</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">house-b</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">wall-straight</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">wall-corner</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">gate</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">well</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">fountain</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">market-stall</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">tree</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">lantern</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">crate</div></div>
+            <div class="kit-tile"><div class="kit-thumb"></div><div class="kit-name">floor-slab</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ viewport ============ -->
+    <div class="viewport-wrap">
+      <div class="viewport">
+        <div class="ov ov-tl">district-plaza.yaml · edit</div>
+        <div class="ov ov-tr">0.97 ms · 60 fps</div>
+        <div class="ov ov-b">cam 14.2, 9.0, −6.5 · yaw 38°</div>
+
+        <div class="plaza">
+          <div class="wall wall-north"></div>
+          <div class="wall wall-west"></div>
+          <div class="wall wall-east"></div>
+          <div class="gate-gap"></div>
+          <div class="gate-label">gate-to-market</div>
+
+          <div class="fountain"></div>
+
+          <div class="house" style="left:8%; top:14%;">
+            <div class="roof"></div><div class="body"></div>
+            <div class="tag">house-a-01</div>
+          </div>
+          <div class="house" style="left:24%; top:8%;">
+            <div class="roof"></div><div class="body"></div>
+            <div class="tag">house-a-02</div>
+          </div>
+          <div class="house selected" style="left:8%; top:44%;">
+            <div class="roof"></div><div class="body"></div>
+            <div class="tag">house-a-03</div>
+            <div class="gizmo" style="left:29px; top:6px;">
+              <div class="axis" style="transform:rotate(0deg);">
+                <div class="shaft" style="width:46px; left:0; background:var(--gizmo-x);"></div>
+                <div class="head" style="left:44px; top:-4px; border-top:4px solid transparent; border-bottom:4px solid transparent; border-left:7px solid var(--gizmo-x);"></div>
+              </div>
+              <div class="axis" style="transform:rotate(-90deg);">
+                <div class="shaft" style="width:40px; left:0; background:var(--gizmo-y);"></div>
+                <div class="head" style="left:38px; top:-4px; border-top:4px solid transparent; border-bottom:4px solid transparent; border-left:7px solid var(--gizmo-y);"></div>
+              </div>
+              <div class="axis" style="transform:rotate(-45deg);">
+                <div class="shaft" style="width:34px; left:0; background:var(--gizmo-z);"></div>
+                <div class="head" style="left:32px; top:-4px; border-top:4px solid transparent; border-bottom:4px solid transparent; border-left:7px solid var(--gizmo-z);"></div>
+              </div>
+              <!-- labels are gizmo-level (unrotated) so glyphs stay upright -->
+              <div class="lbl" style="left:52px; top:-6px; color:var(--gizmo-x);">X</div>
+              <div class="lbl" style="left:-4px; top:-54px; color:var(--gizmo-y);">Y</div>
+              <div class="lbl" style="left:26px; top:-33px; color:var(--gizmo-z);">Z</div>
+            </div>
+          </div>
+          <div class="house" style="left:8%; top:74%;">
+            <div class="roof"></div><div class="body"></div>
+            <div class="tag">house-a-04</div>
+          </div>
+          <div class="house" style="left:72%; top:20%;">
+            <div class="roof"></div><div class="body"></div>
+            <div class="tag">house-b-01</div>
+          </div>
+          <div class="house" style="left:72%; top:56%;">
+            <div class="roof"></div><div class="body"></div>
+            <div class="tag">house-b-02</div>
+          </div>
+
+          <div class="spawn-marker" style="left:50%; top:74%;"></div>
+
+          <div class="marker" style="left:38%; top:30%;"></div>
+          <div class="marker-tag" style="left:38%; top:30%;">quest-merchant</div>
+
+          <div class="marker" style="left:63%; top:78%;"></div>
+          <div class="marker-tag" style="left:63%; top:78%;">quest-shrine</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ inspector ============ -->
+    <div class="col col-right">
+      <div class="panel inspector-panel raised">
+        <div class="panel-head cap">Inspector · house-a-03</div>
+        <div class="panel-body" style="overflow-y:auto;">
+
+          <div class="insp-section">
+            <div class="insp-title">Transform</div>
+            <div class="field-row">
+              <span class="field-key">position</span>
+              <div class="field-vals">
+                <span class="field-input recessed">6.0</span>
+                <span class="field-input recessed">0.0</span>
+                <span class="field-input recessed">−4.5</span>
+              </div>
+            </div>
+            <div class="field-row">
+              <span class="field-key">rotation</span>
+              <div class="field-vals">
+                <span class="field-input recessed">0°</span>
+                <span class="field-input recessed">90°</span>
+                <span class="field-input recessed">0°</span>
+              </div>
+            </div>
+            <div class="field-row">
+              <span class="field-key">scale</span>
+              <div class="field-vals">
+                <span class="field-input recessed wide">1</span>
+              </div>
+            </div>
+            <div class="field-hint">floor top sits at Y=0</div>
+          </div>
+
+          <div class="insp-section">
+            <div class="insp-title">Mesh</div>
+            <div class="field-row">
+              <span class="field-key">source</span>
+              <div class="field-vals"><span class="field-input recessed wide">voxel/house-a.yaml</span></div>
+            </div>
+            <div class="field-row">
+              <span class="field-key">size</span>
+              <div class="field-vals"><span class="field-input recessed wide">8 × 9 × 7</span></div>
+            </div>
+          </div>
+
+          <div class="insp-section">
+            <div class="insp-title">Collider</div>
+            <div class="field-row">
+              <span class="field-key">type</span>
+              <div class="field-vals"><span class="field-input recessed wide">static AABB</span></div>
+            </div>
+            <div class="field-row">
+              <span class="field-key">half-ext.</span>
+              <div class="field-vals">
+                <span class="field-input recessed">4.0</span>
+                <span class="field-input recessed">4.5</span>
+                <span class="field-input recessed">3.5</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="insp-section">
+            <div class="insp-title">Material</div>
+            <div class="field-row">
+              <span class="field-key">palette</span>
+              <div class="field-vals"><span class="field-input recessed wide">plaza-warm</span></div>
+            </div>
+            <div class="field-row">
+              <span class="field-key">slot</span>
+              <div class="field-vals"><span class="field-input recessed wide">3</span></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ terminal drawer ============ -->
+  <div class="terminal-drawer">
+    <div class="term-tabbar">
+      <div class="term-tab active">
+        <div class="tab-top">
+          <span class="tab-name">level-designer · 1</span>
+          <span class="status-chip working"><span class="dot"></span>working</span>
+        </div>
+        <div class="tab-meta">
+          <div class="ctx-meter">
+            <div class="gauge"><span style="width:34%;"></span></div>
+            <span class="label">68k / 200k</span>
+          </div>
+          <span class="cache-count">cache 4:12</span>
+        </div>
+      </div>
+      <div class="term-tab">
+        <div class="tab-top">
+          <span class="tab-name">level-designer · 2</span>
+          <span class="status-chip idle"><span class="dot"></span>idle</span>
+        </div>
+        <div class="tab-meta">
+          <div class="ctx-meter">
+            <div class="gauge"><span style="width:9%;"></span></div>
+            <span class="label">12k / 200k</span>
+          </div>
+          <span class="cache-count">cache 9:47</span>
+        </div>
+      </div>
+      <button class="term-newbtn" title="New terminal">+</button>
+      <button class="term-collapse" id="drawerToggle" title="Collapse drawer">&#9662;</button>
+    </div>
+
+    <div class="term-body">
+      <div class="term-transcript">
+        <div class="persona">&#9670; persona: level-designer · ludion-mcp @ ws://127.0.0.1:9411 · cwd games/vigil</div>
+        <div class="userline"><span class="prompt">&gt;</span>extend the south alley with six more houses along the west wall — keep the kite lane clear</div>
+        <div class="work"><span class="glyph">&#10021;</span>reading context file … selection house-a-03 · camera over south gate</div>
+        <div class="work"><span class="glyph">&#8594;</span>entity.spawn house-b ×6 along wall-west … done</div>
+        <div class="work"><span class="glyph">&#8594;</span>component.set transform … aligned, floor rule applied</div>
+        <div class="work done"><span class="glyph">&#10003;</span>6 houses placed · kite lane 3.5 m clear · scene dirty — save when ready</div>
+      </div>
+      <div class="term-input">
+        <span class="prompt">&gt;</span>
+        <span class="term-cursor"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ status bar ============ -->
+  <div class="statusbar">
+    edit mode · unsaved changes · frame 0.97 ms · 60 fps · 47 entities · Y-up · grid 1m
+  </div>
+
+</div>
+<script>
+(function(){
+  var drawer = document.querySelector('.terminal-drawer');
+  var toggle = document.getElementById('drawerToggle');
+  if(toggle){
+    toggle.addEventListener('click', function(){
+      var collapsed = drawer.classList.toggle('collapsed');
+      toggle.innerHTML = collapsed ? '&#9656;' : '&#9662;';
+      toggle.title = collapsed ? 'Expand drawer' : 'Collapse drawer';
+    });
+  }
+  document.querySelectorAll('.viewbtn:not(.disabled)').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      document.querySelectorAll('.viewbtn').forEach(function(b){ b.classList.remove('active'); });
+      btn.classList.add('active');
+    });
+  });
+  document.querySelectorAll('.rocker .side').forEach(function(side){
+    side.addEventListener('click', function(){
+      var sides = side.parentElement.querySelectorAll('.side');
+      sides.forEach(function(s){ s.classList.remove('on'); s.classList.add('off'); });
+      side.classList.remove('off'); side.classList.add('on');
+    });
+  });
+})();
+</script>
+</body>
+</html>

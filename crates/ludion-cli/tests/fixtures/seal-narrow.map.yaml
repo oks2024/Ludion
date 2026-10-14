@@ -1,0 +1,25 @@
+format: 1
+kind: map
+name: seal-narrow
+kit: seal-narrow.kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "######"
+  - " ....#"
+  - "######"
+markers:
+  - name: spawn
+    kind: torch
+    x: 7.0
+    z: 3.0
+  - name: plug-low
+    kind: plug-low
+    x: 3.0
+    z: 2.30625
+  - name: plug-high
+    kind: plug-high
+    x: 3.0
+    z: 3.75625

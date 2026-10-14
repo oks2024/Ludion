@@ -1,0 +1,118 @@
+# creature-head-blank — the rough head form fed to image-to-mesh generation
+# (`Plan/comfy-generation.md` Wave 3). Six primitives and no detail: cranium, muzzle, jaw, brow and a
+# tapered horn pair. It exists to state a silhouette, not a surface — the generator supplies the
+# surface, and `creature-generated.sculpt.yaml` blends the result onto the authored body.
+#
+# Authored at the origin facing `-Z` (the sheet's own `front`, `ludion docs sculpt-craft`), and
+# deliberately open: every feature has to clear its neighbours in *profile* as well as head-on, or
+# the four-view reconstruction folds it back into a solid of revolution
+# (`ludion docs generation-craft`, the multi-view section).
+format: 1
+kind: sculpt
+name: creature-head-blank
+resolution: 48
+triangles: 8000
+palette:
+  J:
+    color:
+      - 0.1
+      - 0.17
+      - 0.12
+      - 1.0
+    roughness: 0.55
+  K:
+    color:
+      - 0.04
+      - 0.05
+      - 0.05
+      - 1.0
+    roughness: 0.95
+  D:
+    color:
+      - 0.05
+      - 0.09
+      - 0.07
+      - 1.0
+    roughness: 0.6
+bones:
+  - name: root
+parts:
+  - name: cranium
+    shape: ellipsoid
+    radii:
+      - 0.16
+      - 0.15
+      - 0.18
+    at:
+      - 0.0
+      - 0.0
+      - 0.02
+    material: J
+    bone: root
+  - name: muzzle
+    shape: capsule
+    radius: 0.085
+    from:
+      - 0.0
+      - -0.03
+      - -0.1
+    to:
+      - 0.0
+      - -0.07
+      - -0.26
+    blend: 0.04
+    material: J
+    bone: root
+    deform:
+      taper:
+        axis: z
+        from: 1.0
+        to: 0.7
+  - name: jaw
+    shape: capsule
+    radius: 0.05
+    from:
+      - 0.0
+      - -0.11
+      - -0.08
+    to:
+      - 0.0
+      - -0.14
+      - -0.24
+    blend: 0.03
+    material: K
+    bone: root
+  - name: brow
+    shape: capsule
+    radius: 0.032
+    from:
+      - -0.12
+      - 0.1
+      - -0.13
+    to:
+      - 0.12
+      - 0.1
+      - -0.13
+    blend: 0.02
+    material: D
+    bone: root
+  - name: horn
+    shape: capsule
+    radius: 0.065
+    from:
+      - 0.09
+      - 0.1
+      - 0.04
+    to:
+      - 0.155
+      - 0.4
+      - 0.16
+    blend: 0.03
+    mirror: x
+    material: D
+    bone: root
+    deform:
+      taper:
+        axis: y
+        from: 1.0
+        to: 0.45

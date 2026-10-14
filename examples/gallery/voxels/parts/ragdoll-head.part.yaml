@@ -1,0 +1,13 @@
+format: 1
+kind: part
+size:
+  - 2
+  - 2
+  - 2
+slices:
+  -
+    - "HH"
+    - "HH"
+  -
+    - "HH"
+    - "HH"

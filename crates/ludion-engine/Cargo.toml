@@ -1,0 +1,43 @@
+[package]
+name = "ludion-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The Ludion engine core: the Engine, its exhaustive command dispatch (the protocol parity gate), and session recording/replay."
+keywords = ["ludion", "game-engine", "replay", "ecs"]
+categories = ["game-engines", "simulation"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
+ludion-assets = { path = "../ludion-assets", version = "0.1.0" }
+ludion-font = { path = "../ludion-font", version = "0.1.0" }
+ludion-sculpt = { path = "../ludion-sculpt", version = "0.1.0" }
+ludion-sim = { path = "../ludion-sim", version = "0.1.0" }
+ludion-sprite = { path = "../ludion-sprite", version = "0.1.0" }
+ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
+# Unconditional, never a cargo feature: three seams need it — the `PhysicsPose` impl on `Transform`,
+# the snapshot's `physics` field, and (with the joint commands) `dispatch.rs`'s exhaustive match,
+# which is the protocol parity gate. A command that exists only under a feature is an endpoint some
+# builds do not have (`Plan/physics.md` §Crate graph).
+ludion-physics = { path = "../ludion-physics", version = "0.1.0" }
+ludion-renderer = { path = "../ludion-renderer", version = "0.1.0" }
+ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+# The snapshot's physics blob: `base64` of the solver's bincode bytes, because `serde_json` writes a
+# `Vec<u8>` as an array of numbers.
+base64.workspace = true
+crossbeam-channel.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+# Only for the two types `Engine::attach_surface` takes from a window host — the instance and the
+# surface it created. Already linked through `ludion-renderer`, so naming it here adds nothing to
+# the build; no wgpu type ever reaches the world, a component, or an extract.
+wgpu.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+proptest.workspace = true

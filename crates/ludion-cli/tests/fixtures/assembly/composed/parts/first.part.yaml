@@ -1,0 +1,10 @@
+format: 1
+kind: part
+name: first
+size:
+  - 2
+  - 1
+  - 1
+slices:
+  -
+    - AA

@@ -1,0 +1,11 @@
+format: 1
+name: smoke-test
+seed: 7
+entities:
+  - name: root
+    components: {}
+  - name: child
+    components:
+      Parent:
+        index: 0
+        generation: 0

@@ -1,0 +1,657 @@
+# Plan: Culling, the visibility flag, and how far toward GPU-driven rendering
+
+> Status: **DESIGN — not settled, open for grilling.** Written 2026-09-30 as the input to a grill-me
+> session. Nothing here is decided until the user rules on "Questions for the grilling". Every
+> current-code fact below was read from the tree on 2026-09-30. Every measurement was taken the same
+> day on the pinned RTX 3090 box (the Vulkan backend: that is the adapter wgpu picks there), release
+> build, 1920×1080.
+>
+> **Source.** `Plan/engine-gap-map.md` "Recommended order" item 3, second bullet: frustum culling and
+> a visibility flag. `Plan/world-streaming.md` names these as W0 (measure) and W1 (culling in
+> extract), and says neither needs a trigger. The user's direction widens the question: explore a
+> GPU-driven pipeline in the spirit of Nanite, "maybe not that far", where culling and draw decisions
+> run on the GPU, not the CPU. This plan lays the whole ladder out, from a CPU frustum test up to
+> Nanite-style cluster LOD, and recommends where to stop.
+>
+> **Relationships:**
+> - `Plan/world-streaming.md`: this plan would **absorb its W1** (culling) and share its W0 (the
+>   composed-city measurement). Its W5 voxel LOD stays there; this plan only makes sure the culling
+>   design has a slot for per-instance LOD selection.
+> - `Plan/clustered-forward.md`: its decision 1 (one lighting architecture, forward, deferred
+>   rejected) rules out a visibility-buffer material pass, and that is what the Nanite rung needs.
+>   Its decisions 3 and 7 (a CPU build first, GPU only behind a measurement, and a degenerate build
+>   kept as the byte-identity oracle) are the pattern this plan copies.
+> - `Plan/shadow-mapping.md`: the shadow window is an explicit orthographic box (no auto-fit), which
+>   makes caster culling exact and cheap.
+> - `Plan/character-controller.md` W1 shipped world-space debug draw: host-enabled categories,
+>   `--debug-draw`. This plan uses it to make culling visible to an agent.
+> - The transform-hierarchy grilling (gap map item 3, first bullet) owns whether a hidden parent
+>   hides its children.
+> - `Plan/scalability.md`: a distance cutoff would be one more render-only quality axis.
+
+## The problem, measured
+
+### What the code does today
+
+- **Extract walks every entity every frame.** `extract_inner` (`crates/ludion-engine/src/extract.rs`)
+  collects every `EntityId`, runs `place` over all of them (world matrix, normal matrix, sprite
+  sizing, the GI `dynamic` flag), then resolves each placed mesh into one or more `MeshInstance`s.
+  Resolving means asset lookup, assembly part posing and skinned palette sampling. It does this
+  with no camera test of any kind. Sprites are sorted back to front, particles evaluated in closed
+  form, and text laid out, all regardless of visibility.
+- **The renderer rebuilds every instance buffer every frame.** `build_mesh_draws` and
+  `build_mesh_asset_draws` (`crates/ludion-renderer/src/render.rs`) bucket instances by primitive
+  shape or by `mesh_assets` index. Each bucket gets a **new** `VERTEX` buffer via `init_buffer`
+  every frame, and each bucket is one `draw`/`draw_indexed` with `0..count` instances. Sprites are
+  batched by `(layer, texture)` after a CPU sort.
+- **Three geometry passes draw the same full list.** `record_shadow` (when a sun is present),
+  `prepass` (when AO is on) and `record_scene` all loop over the same `mesh_draws` and
+  `mesh_asset_draws`. The shadow pass therefore draws every mesh in the world, including those
+  outside its own 2048² orthographic window.
+- **Bounds exist, but they are not conservative.** `render.bounds` (`crates/ludion-engine/src/bounds.rs`)
+  reuses `place` and reports a world AABB plus `on_screen` for each entity. For asset, voxel,
+  sculpt and assembly meshes it uses a **unit box** under the model matrix ("the honest best-effort
+  bound", chosen so the answer needs no asset load). A voxel prop bigger than one unit would be
+  wrongly culled against that box.
+- **The GPU surface is minimal.** `Gpu::request_from` (`crates/ludion-render-graph/src/execute.rs`)
+  asks for `TIMESTAMP_QUERY` only, with `engine_limits()` = WebGPU defaults plus two raises. The
+  frame graph has texture resources and a compute pass kind (used by `gi_inject`, which writes a
+  storage texture), but **no buffer resource kind**. The engine's only storage buffers are the
+  cluster tables, which are bound outside the graph.
+- **The ECS has no change detection, and the freeze list rejects adding it** (`engine-architecture.md`
+  §4). Any "upload only what changed" design has to find another way to know what changed.
+
+### Numbers
+
+| Scene | Renderables | `extract` median | GPU `scene` | GPU `shadow` | GPU `prepass` |
+|---|---|---|---|---|---|
+| vigil `district-market` (224×224 u ward, 103 authored meshes, 53 lights) | ~200 | 0.153 ms | 0.190 ms | 0.020 ms | 0.036 ms |
+| vigil `budget-horde` (1 046 meshes, 500 animated enemies, 342 lights) | ~1 100 | 0.889 ms | 1.032 ms | 0.088 ms | 0.170 ms |
+| synthetic, 10 000 cubes over 850×850 u (the W0 city footprint), vigil camera, sun | 10 000 | 5.82 ms | 0.281 ms | 0.131 ms | — |
+| synthetic, 10 000 mixed cube/sphere (spheres are 24×16, non-indexed) | 10 000 | 6.06 ms | 1.738 ms | 0.683 ms | — |
+| synthetic, 40 000 mixed | 40 000 | 22.46 ms | 7.133 ms | 2.720 ms | — |
+
+The vigil rows come from the game binary's own `--profile 60`; the synthetic rows from `ludion
+profile --frames 60` on throwaway scenes (not committed). `budget-horde`'s `scene` time is dominated
+by its 342 lights (clustered shading), not by geometry.
+
+**What the numbers say:**
+
+1. **At vigil's current scale, culling is not a perf emergency.** One district costs 0.15 ms of
+   extract and about 0.25 ms of geometry passes. The frame budget is 16.6 ms.
+2. **Most of what vigil draws is off-screen.** The follow camera sits 30 u out at a 58° pitch with a
+   50° vertical FOV (`games/vigil/src/tunables.rs`). Its ground footprint is a trapezoid about 36 u
+   deep and 42–77 u wide, roughly 2 150 u². A 224×224 u ward is 50 000 u², so about **4 %** of the
+   floor is in view. Wall height widens that a little. A frustum cull would drop on the order of
+   90 % of static instances from the scene pass and prepass. The shadow window's 80×80 u box would
+   drop a similar share from the shadow pass.
+3. **At world-streaming scale, extract is the wall, not the GPU.** Extract costs a flat ~0.6 µs per
+   renderable, whatever its shape. That is 6 ms at 10 k and 22 ms at 40 k, which blows the frame
+   budget alone. GPU cost depends on vertex count: 10 k cubes cost 0.41 ms across both geometry
+   passes, while the same count with half spheres costs 2.4 ms. **A frustum cull fixes the GPU
+   side completely at this scale.** With about 0.3 % of an 850 u world in view, both passes fall to
+   near-constant. **It does not fix extract,** because extract still walks and places every entity
+   before any test can run.
+4. **GPU culling pays only once the CPU stops touching invisible instances.** A CPU AABB-vs-frustum
+   test costs about 10–20 ns per instance, roughly 0.1–0.2 ms at 10 k. That is small next to the
+   6 ms extract walk. Moving the *test* to the GPU saves that 0.1–0.2 ms and nothing more, as long
+   as extract still rebuilds and uploads every instance every frame. The real prize is a
+   **persistent scene**: static instances uploaded once, never walked by extract again, and culled
+   where they live, on the GPU. That prize needs a notion of "static", which the ECS does not have.
+
+The out-of-scope costs are recorded so no one mistakes them for this plan's problem. `world_hash`
+measured 4.97 ms on `budget-horde` and 23.9 ms on the 10 k synthetic scene. It is sim-side, linear
+in entities, and `Plan/world-streaming.md` already lists it. Culling cannot touch it.
+
+## What wgpu 30 actually offers on the two pinned platforms
+
+These facts come from the pinned crates' own docs and backend code (`wgpu-types` 30.0.1
+`features.rs` and `instance.rs`, `wgpu-hal` 30.0.1 `metal/command.rs`), not from memory.
+
+| Capability | wgpu surface | RTX 3090 (Vulkan, today's backend; DX12 also available) | Apple M4 (Metal) |
+|---|---|---|---|
+| Compute shaders, storage buffers, `draw_indirect` / `draw_indexed_indirect` | core WebGPU | yes | yes |
+| `multi_draw_indexed_indirect` (fixed count) | core wgpu | native | **emulated**: `wgpu-hal`'s Metal backend loops `draw_count` separate indirect draws on the CPU |
+| `multi_draw_indexed_indirect_count` (GPU-written draw count) | `Features::MULTI_DRAW_INDIRECT_COUNT` | yes (Vulkan 1.2 / DX12) | **no**: the Metal functions are `//TODO` no-ops |
+| Non-zero `first_instance` in indirect args | `Features::INDIRECT_FIRST_INSTANCE` | yes ("Vulkan (mostly)") | yes (Mac1+) |
+| Subgroup ops | `Features::SUBGROUP` | yes | yes |
+| 64-bit atomic min/max (buffer) | `Features::SHADER_INT64_ATOMIC_MIN_MAX` | yes (`VK_KHR_shader_atomic_int64`) | yes (MSL 2.4+) |
+| 64-bit image atomics (visibility buffer) | `Features::TEXTURE_INT64_ATOMIC` | yes (`VK_EXT_shader_image_atomic_int64`) | yes (MSL 3.1+) |
+| Mesh / task shaders | `Features::EXPERIMENTAL_MESH_SHADER` | yes | yes, but **naga compiles mesh shaders only for Vulkan**; Metal and DX12 need passthrough shaders (MSL / HLSL) |
+| Indirect-call validation | `InstanceFlags::VALIDATION_INDIRECT_CALL` | **on by default even in release**: a validation compute dispatch clamps bad indirect args | same |
+
+Notes that shape the design:
+
+- **Metal is the binding constraint.** A GPU-written draw count does not exist there, and
+  multi-draw is a CPU loop. A design that issues one indirect draw per mesh bucket (tens of
+  buckets) and lets the GPU write only each bucket's `instance_count` works identically on both
+  boxes, with **no optional feature at all**. A design built on `multi_draw_*_count` (Bevy's
+  default) does not work on the M4. wgpu PR #9640 (open as of September 2026) lowers fixed-count
+  multi-draw to Metal indirect command buffers. It does not cover the count variants.
+- **Bevy's experience matches.** Bevy 0.16's release notes list Metal as "GPU transform ✅,
+  multi-draw & GPU cull ❌".
+- **iOS** (`Plan/ios-target.md`) is Metal too. The core-only design carries there for free.
+- **Mesh shaders stay deferred** (`CLAUDE.md` "Deferred"). The naga restriction adds a concrete
+  reason: on the M4 they would mean a second shader language beside WGSL, which breaks the bindgen
+  single-source rule (`dev-docs/renderer-shaders.md`).
+
+## The constraints every rung is scored against
+
+- **Introspectable frame graph.** Every GPU step must be a declared pass with declared resources and
+  edges visible in `--dump-graph`, with declarations free of wgpu types. A compute cull writing an
+  indirect buffer means **the graph must learn buffer resources**. `Plan/clustered-forward.md`
+  deliberately avoided that step.
+- **Bit-exact goldens on pinned GPUs.** Culling that drops only instances with no visible fragment
+  cannot move a pixel, **if it is conservative and preserves draw order**. Both conditions matter:
+  - A non-conservative bound makes geometry pop, a visible bug.
+  - Order matters for exact depth ties (coplanar faces under `LessEqual`) and for anything blended
+    (sprites, particles, markers).
+  - **An atomic-append compaction, the standard GPU-culling idiom, makes instance order depend on
+    thread scheduling.** A tie-breaking pixel would then flip between runs: a flaky golden, which
+    `CLAUDE.md` classes as a P0 bug. Any GPU compaction must be a **stable** scan. It must also not
+    use single-pass decoupled look-back, whose forward-progress assumption Apple GPUs do not
+    guarantee. A reduce-then-scan over two or three dispatches is portable and deterministic.
+- **No temporal accumulation.** Classic two-phase HZB occlusion draws last frame's visible set first
+  and tests everything else against that depth pyramid. Given conservative tests the final picture
+  is correct. But **draw order, and so tie-breaking, depends on the previous frame's camera**, and a
+  single-frame `ludion render` has no previous frame. Frame N's bytes would depend on frame N-1.
+  That is temporal state entering the image, and the tiered-determinism pillar forbids it in test
+  mode.
+- **Headless and offscreen.** Nothing may assume a swapchain or a present cadence. GPU-side cull
+  counters must reach reports through the existing readback ring, never a stall on the frame path.
+- **The sim/render split.** Culling is render-only: never hashed, saved or recorded, and never able
+  to change sim state. An *authored* hide flag is the opposite: it is sim state, hashed like any
+  component, and replays. The two must never be confused in the API.
+- **Agent verifiability.** An agent must be able to answer "what did the cull drop, and why",
+  headless, without a human looking: counters in the profile report, a debug-draw view, a
+  cull-from-another-camera mode, and a `render.bounds` that agrees with the cull.
+- **Profile budgets** (`dev-docs/budget-files.md`). A new CPU cost gets a ceiling that is skipped
+  when absent (the `cluster_build_ms` precedent). A new GPU pass joins `KNOWN_PASS_NAMES` and gets a
+  `[passes]` line. The first budget that names an instance count is world-streaming W5's
+  `city-stress`.
+- **One way per task.** A GPU cull that ships replaces the CPU mesh cull. It does not sit beside it
+  as a mode. The replaced path survives only as a test oracle, as clustered-forward's degenerate
+  build did.
+
+## The ladder
+
+Each rung lists what it buys at Ludion's content scale, what it costs, and how it fits the
+constraints. Content scale here means vigil's 3× city, voxel props and kit pieces, sprites and
+billboards, CPU particles, one sun shadow map, and HD-2D low-poly.
+
+### Rung 0 — the authored visibility flag (needed by every other rung)
+
+A way for game code and scenes to say "do not draw this", independent of culling.
+
+- **Option 0a: a `Visibility` component** `{ visible: bool = true, cast_shadows: bool = true }`.
+  Absent means visible and casting. It applies uniformly to `Mesh`, `Sprite`, `Text`, particle
+  emitters and ground markers on the same entity. It matches the `visible: bool` convention
+  `UiRect` and the UI components already use. `cast_shadows: false` gives decals-like props that do
+  not shadow. `visible: false, cast_shadows: true` gives a shadow-only proxy.
+- **Option 0b: a `Hidden` marker** (zero-size, presence means hidden). Smallest possible surface,
+  and insert/remove is the toggle. It cannot express shadow-only or no-shadow, which would need a
+  second marker later.
+- **Option 0c: a field on each renderable** (`Mesh.visible`, `Sprite.visible`, …). Duplicates one
+  concept across five components, violating Pillar 6.
+- **Option 0d: render layers / a camera mask.** Premature. Ludion has exactly one camera (`L2101`).
+
+**Semantics to state explicitly:**
+- The flag is **sim state**: hashed, saved, replayed, editable over the wire like any component.
+- Culling is **render state**: never hashed.
+- Extract honours the flag before any cull test, so a hidden entity costs no placement work beyond
+  the flag read.
+- Propagation to children waits on the transform-hierarchy grilling. Until then, `Parent` stays a
+  link and a hidden parent hides only itself.
+- `render.bounds` still reports a hidden entity, with a new `hidden` marker. Selection and picking
+  in the editor must still find it.
+- The GI voxelizer ignores the flag. A hidden wall still occludes sky light, and the bake signature
+  must not move when a prop is toggled. **This is a real choice** (question G4).
+
+### Rung 1 — CPU frustum culling in extract
+
+A conservative AABB-vs-frustum test per instance, against two volumes:
+
+- **The camera frustum** (six planes from `view_proj`).
+- **The shadow window** (the sun's explicit ortho box; a caster outside it cannot write the shadow
+  map).
+
+An instance is kept for the passes whose volume it touches, carried as a per-instance view mask
+(`CAMERA | SHADOW`). The prepass shares the camera mask. The shadow pass loops only over casters
+whose mask has `SHADOW` and whose `cast_shadows` is set. Lights are never culled by this test: the
+cluster build already bins them per view, and an off-screen light lights on-screen pixels.
+
+**Bounds sources.** These are the real work of the rung, since a wrong bound is a pop:
+
+| Renderable | Bound |
+|---|---|
+| Primitives | exact local box (as `bounds.rs` has it) |
+| Asset, voxel, sculpt meshes | the true local AABB of the `MeshData`, computed once at mesh load and cached beside it, replacing `bounds.rs`'s unit box. This fixes `render.bounds` too. |
+| Assemblies | per part: the part mesh's AABB under its already-posed part matrix. Exact and animation-safe, because extract poses parts before building instances. |
+| Skinned meshes | the posed joints are known in extract (the palette is CPU-built). Bound = union of posed joint origins inflated by a per-mesh radius, where the radius is the max bind-pose vertex distance from its dominant joint, computed at load. A safe fallback is to never cull skinned meshes (single digits per scene today). |
+| Sprites | exact: `center ± right ± up`. |
+| Particles | per-emitter AABB from its closed-form envelope (max lifetime × max speed + max size), culling whole emitters. Per-particle tests cost more than they save at 24 k particles. |
+| Ground markers | model-transformed disc/capsule box. |
+| Text, UI | never culled (screen-space or tiny). |
+| Debug lines | never culled. |
+
+- **Conservatism.** Plane tests use a small outward epsilon, so float disagreement at the frustum
+  edge can only keep an instance, never drop it.
+- **Order.** Order is preserved by construction, since the filter keeps survivors in ascending
+  extract order.
+- **Goldens.** Goldens stay **byte-identical by construction**, and that is the gate.
+- **`render.view`** (the editor's host camera): the cull uses **the camera the frame is rendered
+  from**. Otherwise a free camera would see holes.
+- **Where it lives.** A pure GPU-free function in `ludion-renderer`'s scene types (`cull::classify(
+  bounds, frusta) -> ViewMask`), called from extract. Extract is where the saving is: a culled
+  instance skips asset resolution, assembly posing, **skinned palette sampling** (the horde's
+  expensive part) and sprite texture resolution. The same function later becomes the GPU cull's
+  oracle.
+
+**What it buys:** the GPU side of every measured scene, fully. It also recovers part of extract:
+resolve and pose work for culled instances, though not the `place` walk. For vigil today it is
+small and positive: a 90 % cut of the scene pass and prepass instance count, and the shadow pass
+cut to its window.
+
+**Cost:** small, about a wave:
+- bounds caching on `MeshData`;
+- the skinned bound;
+- the `Visibility` component (schema hash moves once);
+- the view mask on `MeshInstance`;
+- per-pass loops in the renderer;
+- counters;
+- the debug category;
+- tests.
+
+No new GPU feature, no graph change, no golden churn.
+
+**Verification:**
+- **Byte identity.** Goldens byte-identical on both boxes.
+- **`culling` test.** Counts instances for a camera placed to exclude known entities (the
+  world-streaming W1 gate).
+- **Randomized oracle.** A randomized fixture renders N random instances under random cameras with
+  culling on and with the cull forced off, and byte-compares. The clustered-forward oracle pattern:
+  any conservatism hole shows as moved bytes.
+- **Profile report.** Gains a `culling` section: `instances`, `scene_drawn`, `shadow_drawn`,
+  `hidden`, `cull_ms`, gated as `cull_ms` with skip-when-absent.
+- **Debug draw.** A `cull` category draws kept bounds green and culled bounds red. It is appended
+  by extract into `RenderScene.debug_lines` when the host enables it, so `ludion render
+  --debug-draw cull` makes the decision a screenshot.
+- **Cull-from-game-camera.** With `render.view` in force, cull against the game camera while viewing
+  from the free camera. The agent sees exactly the culled set from outside, the classic "freeze
+  culling" debug view, and it is headless.
+
+### Rung 1.5 — a CPU spatial index over static instances (CPU-driven, persistent buffers)
+
+Rung 1 still walks every entity. At the composed-city scale that walk, not the test, is the cost
+(finding 3). The CPU answer:
+
+- Mark static renderables (question G6).
+- Place them once per scene or region load into a persistent per-region instance buffer, sorted
+  by `(bucket, cell)`.
+- Keep a coarse cell grid (say 32 u) over them.
+- Per frame, extract walks **only dynamic entities**. The renderer picks the visible cells'
+  instance ranges from the static buffer and draws each range as a sub-slice of the persistent
+  buffer, with CPU-known offsets and counts.
+
+- **Buys:** extract becomes O(dynamic + visible cells), which is the fix for finding 3.
+- **Costs:** a static notion and its enforcement, persistent buffers keyed by region (the natural
+  unit, since world-streaming W2 loads and unloads regions whole), and a more complex renderer loop.
+- **Draw count:** it grows with (visible cells × buckets), which could reach a few hundred draws.
+  That is fine on both backends.
+- **Determinism:** trivially deterministic, and no new GPU machinery.
+
+This rung is the **CPU-driven alternative to rung 2b**. They solve the same problem.
+
+### Rung 2 — GPU frustum culling with indirect draws
+
+Split in two, because the halves pay very differently.
+
+**2a — a GPU cull over the per-frame instance list.** Extract still produces every instance, and
+the renderer still uploads them. What changes:
+
+- A `cull` compute pass per view (camera, shadow) tests each instance's world AABB (uploaded
+  beside it) and writes a visibility bit.
+- A stable reduce-then-scan compacts survivors per bucket into an output buffer created with
+  `STORAGE | VERTEX` usage.
+- It writes each bucket's `instance_count` into an indirect-args buffer.
+- The geometry passes issue **one `draw_indexed_indirect` per bucket**. The CPU binds each bucket's
+  output slice at a CPU-known offset: bucket capacity is known on the CPU, only the count is
+  GPU-written.
+- This needs no `INDIRECT_FIRST_INSTANCE`, no `MULTI_DRAW_*`, and no feature beyond core WebGPU.
+
+**The mesh vertex path is unchanged.** The compaction copies the same `MeshInstanceRaw` bytes the
+pipeline already reads as per-instance vertex attributes. So `mesh.wgsl` and `shadow.wgsl` codegen
+do not move, and **the GPU cull can be proven byte-identical against rung 1's CPU cull on every
+golden, on both boxes**, the clustered-forward wave-2 proof shape.
+
+- **Buys:** almost nothing on its own at Ludion's scale (finding 4). It saves the CPU test and moves
+  the compaction off-CPU.
+- **Costs:**
+  - **a buffer resource kind in the frame graph**: declared size, usage (`storage`, `indirect`,
+    `vertex`), producer and consumer edges, visible in `--dump-graph`, graph snapshot moved
+    deliberately once;
+  - a compute pass with multiple buffer writes;
+  - a WGSL scan;
+  - bindgen learning read-write storage and atomic-free compaction buffers;
+  - GPU-side counters for the report, read back through the ring (one to two frames late, never
+    stalling) and reported as medians;
+  - indirect-call validation's own dispatch per frame, which has to be measured.
+- **Portable:** identical on Vulkan, DX12, Metal and iOS.
+
+**2b — the persistent GPU scene.** The payoff rung, the GPU twin of rung 1.5:
+
+- Static instances go into a persistent per-region GPU buffer at region or scene load, and are
+  freed on unload.
+- Dynamic instances keep the per-frame upload.
+- The cull pass runs over both. Extract never touches a static entity again.
+- **LOD selection** slots in naturally: the cull shader picks a bucket per instance from camera
+  distance, so each LOD level is its own bucket. world-streaming W5's voxel downsample chain rides
+  this.
+
+- **Buys:** the same as 1.5, plus culling cost that scales on the GPU, where 40 k tests are about
+  0.02 ms. It also scales further than 1.5's cell ranges without growing the draw count, and it is
+  the foundation for rung 3.
+- **Costs:** everything in 2a, plus the static notion (question G6), persistent buffer lifetime
+  tied to region load and unload, and static-edit invalidation. An editor gizmo moving a "static"
+  wall has to re-upload it; that goes through the one command queue as an explicit invalidation.
+
+### Rung 3 — HZB occlusion culling
+
+Build a hierarchical-Z depth pyramid, then test each instance's screen-space bound against the
+pyramid level that covers it in about four texels.
+
+- **3a — classic two-phase** (Haar & Aaltonen, SIGGRAPH 2015; Bevy's experimental implementation,
+  PR #17413). Draw last frame's visible set, build the HZB, test the rest, then draw the newly
+  visible. **Rejected for Ludion as a shipping mode:** the image depends on history (see
+  constraints), and `ludion render`'s single frame has none.
+- **3b — same-frame occluder pre-pass.** Draw a depth-only pass of designated occluders: large
+  static geometry, chosen by bound size or authored. Build the HZB from it, cull every instance
+  against it, then draw survivors in canonical order in one pass. It has no history and is
+  deterministic by construction. Its cost is one extra occluder depth pass. The existing AO
+  prepass cannot serve, because it draws everything. It is still conservative, so goldens stay
+  byte-identical.
+- **Buys:** little for vigil. A 58° top-down camera looks *down* into streets, and the occlusion
+  `Fade` system already dissolves the buildings that would occlude. It would matter for an
+  eye-level camera in dense interiors: the platformer, or a street-level city.
+- **Costs:**
+  - mip-chain storage writes in the graph (a new resource shape);
+  - a min-reduction compute chain;
+  - the occluder heuristic;
+  - screen-space bound projection in WGSL;
+  - one more pass on the budget.
+- **Status:** belongs behind a trigger.
+
+### Rung 4 — meshlet / cluster culling
+
+Split meshes offline into ~64–128-triangle clusters with bounding spheres and normal cones. Cull
+clusters (frustum, backface cone, HZB) in compute, and draw visible clusters with a vertex-pulling
+shader: a non-indexed draw where the vertex shader fetches cluster, index and vertex from storage.
+This is Bevy's meshlet hardware-raster path, and Wihlidal's GDC 2016 compute-pipeline talk.
+
+- **Buys:** per-cluster rejection inside large meshes. Ludion's meshes are small (voxel props, kit
+  pieces, low-poly glTF, sculpts). Instance-level culling already takes almost everything a
+  cluster cull would.
+- **Costs:**
+  - the mesh vertex path moves from 20 vertex attributes to storage fetch, so **every lit mesh
+    golden is re-blessed once** on both boxes;
+  - an offline clusterizer (meshoptimizer is C++; a pure-Rust port is an evaluation of its own);
+  - cluster data joins the derived-content drift gates;
+  - skinning moves into the fetch path.
+- **Status:** rejected now, with a falsifier: content that ships meshes above ~50 k triangles each,
+  measured as vertex-bound.
+
+### Rung 5 — Nanite-style cluster LOD
+
+A cluster DAG built by simplify-and-group, runtime selection of a cut where parent error exceeds a
+screen-space threshold and child error does not, software rasterization of small triangles with
+64-bit atomic min into a visibility buffer, and a material resolve pass. Sources: Karis, Stubbe
+and Wihlidal, "Nanite: A Deep Dive", SIGGRAPH 2021 Advances; Bevy 0.14+ "virtual geometry", whose
+`MeshletPlugin` requires 64-bit atomics among other native features.
+
+- **The hardware can do it:** 64-bit buffer and image atomics exist on both boxes (table above).
+- **It fails on four other counts:**
+  1. **The visibility buffer plus material resolve is deferred-class shading.** Clustered-forward
+     decision 1 rules out a second lighting architecture. Nanite's forward-compatible variant
+     rasterizes a visibility buffer and then shades it anyway.
+  2. **Mesh shaders are deferred,** and naga's are Vulkan-only. Nanite's hardware path wants them.
+  3. **The content is the opposite of what it serves.** Nanite exists for film-density micro-polygon
+     assets. Ludion's style is stylized low-poly and voxels, where the LOD that matters is a voxel
+     downsample (world-streaming W5).
+  4. **Its engineering is Ludion's largest renderer investment by an order of magnitude,**
+     competing with every item the gap map ranks above it.
+- **Status:** rejected, with a falsifier: the roadmap adopts dense scanned or sculpted assets as a
+  content style, and the forward/deferred decision is reopened on its own terms.
+
+## Recommendation
+
+**Build rungs 0 and 1 now. Build rung 2 (2a then 2b) as the GPU-driven arc, scheduled with or right
+after world-streaming W2, because regions are 2b's persistence unit. Hold rung 3b behind a
+trigger. Reject rungs 4 and 5 with recorded falsifiers.** Rung 1.5 is 2b's CPU twin and is not
+built if 2b is.
+
+**Why this order.**
+
+- **Rungs 0 and 1 first.** Every later rung needs the flag, the bounds, the view mask, the
+  counters, the debug views and the byte-identity oracle. Together they take the GPU side of every
+  measured scene. Costing about a wave with zero golden churn, they are the right first move
+  regardless of how far the ladder goes.
+- **Rung 2 as the exploration.** This is where the user's GPU-driven direction pays off honestly.
+  It has to be framed truthfully: 2a is mostly foundation (the graph's buffer resources, the
+  compute cull, the stable scan, indirect draws, GPU counters) and saves little by itself. 2b
+  delivers the win at world-streaming scale, extract no longer walking static geometry, which no
+  amount of culling achieves while extract walks everything. Choosing 2b over 1.5 is choosing the
+  GPU-driven foundation (it scales further, LOD and occlusion build on it) over the cheaper CPU
+  answer. The user's direction settles that choice, and its costs are stated above.
+- **The core-only design (one `draw_indexed_indirect` per bucket, GPU writes counts only)** is
+  chosen over `multi_draw_*_count`. It is the only shape that runs identically on the M4 and on
+  iOS. It keeps the vertex path, so the proof is byte identity rather than a re-bless.
+- **Rung 3b** waits for an eye-level camera slice with dense interiors, and a measurement.
+- **Rungs 4 and 5** are the "maybe not that far" line. The reasons are architectural (forward-only,
+  mesh-shader deferral, one shader language) and content-driven, not effort alone.
+
+## Proposed waves
+
+Each wave's gate is mechanical. "Both boxes" means the RTX 3090 now and the M4 through `Plan/owed.md`,
+as usual.
+
+### W0 — the measurement (shared with world-streaming W0)
+
+Compose vigil's fourteen districts at real offsets (world-streaming's throwaway script) and record in
+Status:
+- extract median;
+- instance count per pass;
+- the share of instances inside the camera frustum and inside the shadow window across a scripted
+  walk;
+- a per-phase breakdown of extract's ~0.6 µs per renderable (place, resolve, pose, sprite resolve,
+  allocation) from a temporary timing probe.
+
+**Gate:** numbers recorded. **Decision it feeds:** whether a constant-factor extract optimization
+comes before 1.5/2b (question G7), and the persistent-buffer sizes.
+
+### W1 — the flag, the bounds, the CPU cull (rungs 0 + 1)
+
+- `Visibility` (or the ruled variant), registered with schema and docs.
+- True local AABBs on `MeshData` at load; `render.bounds` switched to them, with a `hidden` flag.
+- Skinned, assembly, sprite and particle bounds as tabled.
+- The `cull::classify` function; the camera and shadow view mask; per-pass loops.
+- The `culling` profile section and the `cull_ms` budget line.
+- The `cull` debug category; the cull-from-game-camera debug mode.
+- A `culling` agent-docs topic.
+
+**Gates:**
+- every golden byte-identical on the 3090, M4 queued;
+- the randomized cull-on/cull-off byte oracle;
+- the `culling` count test;
+- the schema snapshot moved once (new component) with the new hash recorded;
+- `WorldHash` unchanged for scenes that do not author `Visibility`;
+- `budget-horde` and the district budgets green, with `cull_ms` calibrated into the vigil budget
+  file.
+
+### W2 — the graph learns buffers, the GPU cull lands (rung 2a)
+
+- `ludion-render-graph`: a buffer resource kind (size, usage set, lifetime), producer and consumer
+  edges scheduled like textures, a `--dump-graph` schema extension (snapshot updated deliberately),
+  still free of wgpu types.
+- Bindgen: read-write storage buffers.
+- `cull.wgsl` (camera and shadow views), the stable reduce-then-scan, per-bucket indirect args,
+  `draw_indexed_indirect` in scene, prepass and shadow.
+- GPU counters through the readback ring into the `culling` section.
+- `cull` joins `KNOWN_PASS_NAMES`.
+- The CPU mesh cull is deleted from the shipping path and kept as the test oracle. Sprites, particles
+  and markers keep their CPU cull: they are sorted or blended, and GPU compaction buys them nothing.
+
+**Gates:**
+- every golden byte-identical against W1 on the 3090, M4 queued;
+- a GPU-vs-CPU-oracle visibility-set comparison test over randomized fixtures, comparing bit masks
+  read back;
+- a repeat-render identity test (same scene rendered 20 times, identical bytes), which catches any
+  ordering nondeterminism;
+- the graph snapshot diff reviewed;
+- a `[passes] cull` line on both budget files, with indirect-validation cost measured and recorded.
+
+### W3 — the persistent static scene (rung 2b)
+
+- The static notion as ruled (question G6).
+- Per-region persistent instance buffers uploaded at scene or region load (whole scene until
+  world-streaming W2 exists).
+- Extract skips statics; the cull pass runs over static plus dynamic.
+- Explicit invalidation for wire edits to a static entity.
+- A debug validation mode: re-place statics and compare against the persistent copy, run in tests
+  and `--full`, never per frame in shipping.
+
+**Gates:**
+- goldens byte-identical;
+- the static-invalidation test (edit a static wall over the wire, the next frame shows it moved);
+- the composed-city scene's `extract_ms` below a ceiling set from W0's numbers;
+- the first **instance-count-naming budget** (world-streaming W5's `city-stress`, brought forward).
+
+### Later, on triggers
+
+- **Rung 3b** (same-frame occluder HZB). Trigger: a slice with an eye-level camera where the scene
+  pass measures dominated by hidden geometry.
+- **Distance cutoff** as a scalability axis, off at `full` so goldens never see it. It rides
+  `Plan/scalability.md` when a low preset needs it.
+- **Voxel LOD selection in the cull shader** rides world-streaming W5.
+
+## Risks
+
+- **Non-conservative bounds pop geometry.** This is the most likely real bug, and skinned meshes and
+  animated assemblies are the exposure. It is mitigated by the byte oracle (any hole moves bytes),
+  the skinned fallback (never cull) and the `cull` debug view. A pop found by a human is a missing
+  oracle case, fixed by adding the case.
+- **`render.bounds` answers move.** Swapping the unit box for true AABBs changes every asset
+  entity's reported bound. Clients that snapshot it (tests, the editor) move once, deliberately, in
+  W1.
+- **Ordering nondeterminism sneaking in.** One `atomicAdd` compaction added later "for speed" would
+  make goldens flaky. The repeat-render identity test is the tripwire, and the `culling` doc states
+  the rule.
+- **Metal emulation cost.** With one indirect draw per bucket this is tens of encoder calls, which
+  is negligible. If a later design wants per-instance draws, Metal pays a CPU loop per draw. That is
+  a reason to keep the bucket design, not a reason to switch.
+- **Indirect-call validation.** It is on by default and adds a dispatch. Turning it off voids
+  wgpu's bounds guarantee and on DX12 breaks `instance_index`. Keep it on and budget it.
+- **Graph scope creep.** Buffer resources are a real extension of the declarative interface. They
+  are held to what the cull needs: sized buffers, a usage set, edges. No sub-allocation and no
+  aliasing policy until a second consumer (the GI injection is a candidate) asks for it.
+- **The static notion vs the ECS freeze list.** A `Static` marker whose Transform is written by a
+  system silently desyncs the persistent copy. The validation mode catches it in tests. Whether to
+  also catch it at runtime is question G6.
+- **Counter latency.** GPU counters arrive one to two frames late through the ring. Reports take
+  medians, so this is harmless. A per-frame assertion on GPU counts must read back with a stall,
+  which is allowed only in lockstep and test mode.
+- **The macOS twin lags.** Every golden-identity claim is proven on the 3090 first. The M4 re-run
+  is an `owed.md` line per wave, as for every renderer arc.
+
+## Questions for the grilling
+
+Each carries the recommended answer; the user's rulings become the Decisions section.
+
+- **G1. How far up the ladder?** Recommended: rungs 0 and 1 now; rung 2 (2a, 2b) as the
+  GPU-driven arc; 3b on a trigger; 4 and 5 rejected with falsifiers. The main alternative is to stop
+  at rung 1 plus 1.5 (all CPU, no graph buffers). That is cheaper, but gives up the foundation the
+  user asked to explore.
+- **G2. When does rung 2 start?** Recommended: right after W1 for 2a (the foundation, its gate
+  being byte identity), and 2b with or after world-streaming W2 (regions are its persistence unit).
+  The alternative, 2a only when W0 shows extract over budget on the composed city, is the
+  measure-first stance clustered-forward took. The user's stated direction argues for building it.
+- **G3. The visibility flag's shape.** Recommended: `Visibility { visible, cast_shadows }`, absent
+  meaning visible and casting (0a). One component covers hide, no-shadow and shadow-only, and
+  matches the UI's `visible` convention. `Hidden` (0b) is smaller but needs a second marker the day
+  shadow-only is wanted.
+- **G4. Does a hidden entity still affect the GI bake and dynamic injection?** Recommended: yes for
+  the bake (a hidden wall is still a wall, and the bake signature must not flicker with a toggle),
+  and no for dynamic injection (a hidden `GiDynamic` body emits nothing). Alternative: hidden means
+  gone from lighting entirely, which moves the bake on every toggle.
+- **G5. Which camera culls under `render.view`?** Recommended: the camera the frame is rendered
+  from, plus a debug switch to cull from the game camera while viewing from the free camera.
+  Question: does that switch belong on `render.view` (a protocol field, schema hash moves), or only
+  in the `--debug-draw cull` render path? Recommended: a `render.view` field, so the editor gets
+  the freeze-culling view through the parity gate.
+- **G6. What makes an instance "static" for the persistent scene (rung 1.5 or 2b)?** Options:
+  1. An authored `Static` marker, emitted by `generate-map` for kit pieces, with its Transform
+     writes a documented rule checked by a test/`--full` validation mode.
+  2. Implicit: no `Velocity`, not `GiDynamic`, never written, inferred. The ECS freeze list rejects
+     the change detection this needs.
+  3. Everything a region's scene file spawns at load, until a system writes it, which also needs
+     change detection.
+
+  Recommended: option 1. It is explicit, text-visible and generator-emitted, with the validation
+  mode as the backstop. Open sub-question: is writing a `Static` entity's Transform a runtime
+  diagnostic (`L`-code, which costs a per-frame check) or test-only?
+- **G7. Optimize extract's constant factor first?** Extract costs ~0.6 µs per renderable, even for
+  a plain cube. There is likely a 2–3× constant-factor win (allocation, per-entity string-keyed
+  lookups) independent of any culling. Recommended: W0 measures the breakdown, and any obvious
+  constant-factor fix lands inside W1. It is not a separate arc, and it does not replace 1.5/2b,
+  because a 3× cut to a linear walk is still linear in the whole world.
+- **G8. Where does the cull live in W1: extract or the renderer's prologue?** Recommended: extract.
+  That is where the skipped work is (posing, skinning, resolution). It calls a pure function owned
+  by `ludion-renderer` so the W2 GPU shader has a single oracle. The renderer-prologue alternative
+  (the cluster-build precedent) keeps extract "what exists" pure, but saves nothing on the CPU.
+- **G9. Culling sprites, particles and markers.** Recommended: CPU-culled in W1 (exact quad and
+  emitter bounds), and never moved to the GPU. They are sorted or blended, a GPU compaction would
+  have to preserve a CPU sort, and their counts are bounded by the stress budgets already.
+- **G10. Is `Visibility` added to vigil in W1?** Recommended: no content change in W1. The
+  component ships, and vigil adopts it only where a game system wants hide or reveal: spawners, safe
+  zones, set dressing. A game that authors nothing is byte- and hash-identical.
+- **G11. Should `render.bounds` report the cull decision** (`culled_camera`, `culled_shadow`) as
+  well as `on_screen`? Recommended: yes, in W1. It is the headless, wire-level answer to "why is X
+  not drawn", and costs one schema-hash move shared with the `hidden` field.
+- **G12. Rung 3a (two-phase HZB with last-frame reuse): confirm rejected as a shipping mode?**
+  Recommended: rejected. It makes a frame's bytes depend on the previous frame's camera, which is
+  temporal state in the image, against the tiered-determinism pillar. If occlusion is ever
+  triggered, the same-frame occluder variant (3b) is the shape.
+
+## Sources
+
+- Karis, Stubbe, Wihlidal, "Nanite: A Deep Dive into Nanite Virtualized Geometry", SIGGRAPH 2021
+  Advances in Real-Time Rendering.
+- Haar, Aaltonen, "GPU-Driven Rendering Pipelines", SIGGRAPH 2015 Advances (two-phase occlusion,
+  cluster culling in Assassin's Creed Unity).
+- Wihlidal, "Optimizing the Graphics Pipeline with Compute", GDC 2016.
+- Bevy 0.16 release notes, "GPU-Driven Rendering" (https://bevy.org/news/bevy-0-16/): the
+  per-platform support table, Metal "multi-draw & GPU cull ❌".
+- Bevy PR #17413, experimental two-phase GPU occlusion culling
+  (https://github.com/bevyengine/bevy/pull/17413).
+- Bevy meshlet / virtual geometry (0.14+), `MeshletPlugin`'s required native features.
+- wgpu 30: `wgpu-types` `Features` docs (`MULTI_DRAW_INDIRECT_COUNT`, `INDIRECT_FIRST_INSTANCE`,
+  `SUBGROUP`, `SHADER_INT64_ATOMIC_MIN_MAX`, `TEXTURE_INT64_ATOMIC`, `EXPERIMENTAL_MESH_SHADER`),
+  `InstanceFlags::VALIDATION_INDIRECT_CALL`, and `wgpu-hal`'s Metal `draw_indexed_indirect` loop and
+  `draw_indexed_indirect_count` stub.
+- wgpu PR #9640, Metal indirect command buffers for fixed-count multi-draw (open)
+  (https://github.com/gfx-rs/wgpu/pull/9640).
+- Tellusim, "MultiDrawIndirect and Metal" (https://tellusim.com/metal-mdi/).
+
+## Decisions
+
+None yet. The grilling fills this section.
+
+## Status
+
+Design written 2026-09-30. Nothing built. Awaiting the grilling.
+
+**A real consumer exists (2026-10-02).** vigil's environment moves to Blender-authored mesh kits
+(a private plan). The first dressed set, a 40 × 42 m walled square, draws 605 mesh
+instances and 614k triangles with no culling: 1.67 ms GPU at 1080p on the 3090, so not a breach yet.
+Its static dressing is now presentation entities and its ground can be one `MeshGrid`, so the sim
+side is nearly free and the cost left is extract plus draws. A city of such maps, or a bigger one
+after the map-size sitting, is the workload this plan's rungs should be measured against.

@@ -1,0 +1,35 @@
+[package]
+name = "ludion-renderer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The HD-2D rendering pipeline (faceted meshes, lit sprites, bloom, ACES tonemap) for the Ludion game engine, built on wgpu."
+keywords = ["ludion", "wgpu", "hd-2d", "rendering"]
+categories = ["rendering", "game-engines"]
+
+[dependencies]
+bytemuck.workspace = true
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-render-graph = { path = "../ludion-render-graph", version = "0.1.0" }
+ludion-assets = { path = "../ludion-assets", version = "0.1.0" }
+# The embedded face's atlas PNG and the `GlyphQuad`s extract hands the renderer; pure, no wgpu type.
+ludion-font = { path = "../ludion-font", version = "0.1.0" }
+wgpu.workspace = true
+# The dev-only shader hot reload (Plan/shader-bindgen.md Wave 5) validates reloaded WGSL with naga —
+# the exact front-end + validator wgpu runs at `create_shader_module`, so a reject is the GPU's own
+# reason — before rebuilding the dependent pipeline, and `pollster` drains the wgpu error scope that
+# catches a binding-shape incompatibility (keep-last-good). naga/wgpu release in lockstep, so this
+# direct dep adds no upgrade cadence. Neither is on the shipping/test/golden render path.
+naga = { workspace = true, features = ["wgsl-in"] }
+pollster.workspace = true
+
+[dev-dependencies]
+# Test-only: the decision-16 snippet-composition drift guard byte-compares this crate's compile-time
+# snippet mapping (`ShaderId::snippets`) against the bindgen registry (`COMPOSITIONS`). Bindgen pulls
+# only naga (no wgpu), and this is a dev-dep — it never enters the shipping build, honoring "consumers
+# of shader_gen.rs carry no dependency on the generator" (only this drift test does, at test time).
+# Path-only (no `version`): `ludion-shader-bindgen` is `publish = false`, so a versioned dev-dep would
+# break `cargo package` (it resolves dev-deps against crates.io); cargo strips a version-less path
+# dev-dependency from the packaged manifest, so the packaging gate stays green.
+ludion-shader-bindgen = { path = "../ludion-shader-bindgen" }

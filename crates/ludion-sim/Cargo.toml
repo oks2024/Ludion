@@ -1,0 +1,31 @@
+[package]
+name = "ludion-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Fixed-timestep simulation driver, scripted input, and the world-hash determinism harness for the Ludion game engine."
+keywords = ["ludion", "simulation", "determinism", "game-engine"]
+categories = ["game-engines", "simulation"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+# Lets `WorldHash` drive its canonical encoder over a registry component directly, instead of
+# materializing (and dropping) a `serde_json::Value` tree per component per frame.
+erased-serde.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+xxhash-rust.workspace = true
+
+[dev-dependencies]
+# The determinism suite defines its own components, which must derive the same
+# trait bundle a real game component would.
+schemars.workspace = true
+# Phase 13 (E2 input) Wave 2's round-trip test proves the bit-exact f32 encoding
+# (crates/ludion-sim/src/input.rs's `f32_bits`/`f32x2_bits`) through the *real* replay path
+# (InputEvent -> Value -> ReplayWriter -> ReplayReader -> InputEvent). `ludion-protocol` must
+# never depend on `ludion-sim` (crate boundary rule: the protocol never names a concrete
+# component/event type), so the dev-only dependency runs the other direction instead.
+ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+proptest.workspace = true

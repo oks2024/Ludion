@@ -1,0 +1,17 @@
+format: 1
+seed: 1
+physics:
+  space: free
+  layers:
+    - name: dummy
+      ignores:
+        - dummy
+entities:
+  - name: torso
+    components:
+      Collider:
+        shape:
+          sphere:
+            radius: 0.5
+        body: static
+        layer: dummi

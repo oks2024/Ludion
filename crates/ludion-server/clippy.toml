@@ -1,0 +1,11 @@
+# Permissive transport-side denylist (engine-architecture.md §5).
+#
+# ludion-server is the WebSocket host — a transport, NOT on the deterministic sim path. The strict
+# sim denylist (no std HashMap, no wall clock) does not apply here: the wall clock is this crate's
+# job (the live scheduler paces ticks by it, confined to `ludion-engine`'s `run_live`, and the
+# accept loop times out on it), and tokio/tungstenite bring their own hash containers. Determinism
+# lives entirely on the other side of the command queue: the server only shuttles JSON in and out.
+#
+# This file is intentionally empty of `disallowed-types` / `disallowed-methods`, matching
+# ludion-renderer / ludion-render-graph / ludion-testkit: the crate still builds under
+# `cargo clippy -- -D warnings`, it just isn't held to the sim determinism list.

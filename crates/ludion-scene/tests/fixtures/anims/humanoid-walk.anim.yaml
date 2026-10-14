@@ -1,0 +1,263 @@
+format: 1
+kind: animation
+name: humanoid-walk
+# The shared humanoid walk: contralateral swing on the X axis (+X is forward, toward -Z),
+# one full stride per loop, with the two half-strides at t=0.0 and t=0.3 being each other's
+# mirror. Names only the parts of the documented humanoid convention, so it drives any
+# assembly using them; a model-specific part (a lantern, a tail) is left at rest and rides
+# its parent.
+#
+# Read it as: thighs +-22 out of phase, and knees flexing (-X, heel back) ON THE SWING
+# LEG ONLY — the left leg is planted from t=0.0 to t=0.3 and carries the body over a near
+# straight knee, then flexes to its -35 peak at t=0.45, mid-swing; the right leg is that
+# same curve half a stride out of phase. Arms oppose their own leg, elbows sit at a
+# constant slight flex (+X: an elbow folds the OPPOSITE way a knee does), and the torso takes two bobs (peaking at mid-stance, t=0.15 and
+# t=0.45) plus one small counter-twist per stride. The head counter-twists against the
+# torso so the gaze stays on the direction of travel.
+duration: 0.6
+loop: true
+tracks:
+  head:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - -4.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 0.0
+          - 4.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 0.0
+          - -4.0
+          - 0.0
+        ease: smooth
+  lower-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 14.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 22.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 14.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  lower-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 22.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 14.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 22.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  lower-leg-l:
+    rotation:
+      - t: 0.0
+        v:
+          - -5.0
+          - 0.0
+          - 0.0
+      - t: 0.15
+        v:
+          - -3.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.3
+        v:
+          - -22.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.45
+        v:
+          - -35.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - -5.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  lower-leg-r:
+    rotation:
+      - t: 0.0
+        v:
+          - -22.0
+          - 0.0
+          - 0.0
+      - t: 0.15
+        v:
+          - -35.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.3
+        v:
+          - -5.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.45
+        v:
+          - -3.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - -22.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  torso:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 5.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 0.0
+          - -5.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 0.0
+          - 5.0
+          - 0.0
+        ease: smooth
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.15
+        v:
+          - 0.0
+          - 0.3
+          - 0.0
+        ease: smooth
+      - t: 0.3
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.45
+        v:
+          - 0.0
+          - 0.3
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - -20.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - -20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - -20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 22.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - -22.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - 22.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-r:
+    rotation:
+      - t: 0.0
+        v:
+          - -22.0
+          - 0.0
+          - 0.0
+      - t: 0.3
+        v:
+          - 22.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.6
+        v:
+          - -22.0
+          - 0.0
+          - 0.0
+        ease: smooth

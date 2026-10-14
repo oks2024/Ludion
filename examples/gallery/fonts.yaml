@@ -1,0 +1,7 @@
+# Feature: the gallery's font table (`kind: fonts`) — names the two baked test faces the
+# `ui-fonts` scene draws with. No `default` entry: it would swap the face of every other scene.
+format: 1
+kind: fonts
+fonts:
+  body: fonts/inter.font.yaml
+  pixel: fonts/silkscreen.font.yaml

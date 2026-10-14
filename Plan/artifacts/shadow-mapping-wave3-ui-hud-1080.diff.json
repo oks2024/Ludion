@@ -1,0 +1,43 @@
+{
+  "golden": "examples/gallery/goldens/windows/ui-hud-1080.png",
+  "actual": "target/shadow-bless/ui-hud-1080.actual.png",
+  "golden_width": 1920,
+  "golden_height": 1080,
+  "actual_width": 1920,
+  "actual_height": 1080,
+  "threshold": 1.0,
+  "pass": false,
+  "ssim": 0.9999999972160318,
+  "mae": 1.2056327160493827e-7,
+  "tile_grid": {
+    "cols": 8,
+    "rows": 8
+  },
+  "damaged_tiles": [
+    {
+      "row": 6,
+      "col": 1,
+      "rect": {
+        "x": 240,
+        "y": 810,
+        "width": 240,
+        "height": 135
+      },
+      "ssim": 0.9999998218260355,
+      "region": "bottom-left"
+    }
+  ],
+  "worst_tile": {
+    "row": 6,
+    "col": 1,
+    "rect": {
+      "x": 240,
+      "y": 810,
+      "width": 240,
+      "height": 135
+    },
+    "ssim": 0.9999998218260355,
+    "region": "bottom-left"
+  },
+  "summary": "FAIL: ssim 1.0000 < threshold 1.0000; worst damage at bottom-left (tile r6c1, rect 240,810 240x135, ssim 1.0000)"
+}

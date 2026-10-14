@@ -1,0 +1,229 @@
+format: 1
+# THE ENTITY BASELINE, and the sprite layer's Wave 4 measurement (`Plan/sprite-engine.md`): 3,000
+# sprites across 40 regions of one atlas, a closed-form share of them additive, over a scrolling
+# tilemap, at 1080p — every one of them ITS OWN ENTITY (`Transform` + `Sprite` + `Bullet`), laid down
+# by four `Emitter`s and integrated by `move_bullets`.
+#
+# It is the B side of `steady.yaml`'s A (`Plan/projectile-patterns.md` Wave 2). The two hold the same
+# census, the same art, the same framing and the same plane; what differs is the SHAPE of a bullet —
+# one entity each here, one index of a closed-form `Volley` there — and every difference between the
+# two reports is what that shape costs. The other pair is `steady-indexed.yaml`: this scene with
+# `Arena.bullets_collide` flipped.
+#
+# CLOSED-FORM CENSUS — identical to `steady.yaml`, because a bullet's shape and its pixels change
+# nothing about who lives and dies:
+#
+#     live(N) = 25 * min(N + 1, 119)     ->  STEADY STATE 2,975 live bullets
+#     FIRST FULL at the end of FRAME 118, and constant from there on.
+#
+# THE REGION EACH BULLET SHOWS is its spawn ordinal (`volley * 25 + ring index`) modulo the 40 the
+# atlas carries, so the live field always holds all 40 — closed form, like everything else here.
+# THE ADDITIVE SHARE is `BulletArt.additive_every: 12` counted within a volley: ring indices 0, 12
+# and 24, so 3 of every 25, so
+#
+#     additive(N) = 3 * min(N + 1, 119)  ->  357 additive bullets at the steady state.
+#
+# THE FRAMING, which every scene in this crate shares and none of which enters the census:
+#
+# 1. `Arena.plane: upright` — the field lies on `(x, y)`, which is also the game's own `Plane::Xy`
+#    (`game()`), so headings, sprite quads and the spatial index all speak the same two axes. A
+#    `Tilemap`'s cells are always XY quads, so an upright arena is the only one a scrolling backdrop
+#    can stand behind; the sim does identical work on either plane (see `ArenaPlane`).
+# 2. The emitters sit 2.5 u out at `speed: 1.6`. A bullet travels 1.6 * (120/60) = 3.2 u in its life,
+#    so the field reaches 5.7 u — inside the camera's 6 u half-height, so all 2,975 bullets are ON
+#    SCREEN and each is 0.3 u of a 12 u view: 27 px at 1080p, a Cave-class bullet. NEITHER SPEED NOR
+#    PLACEMENT ENTERS THE CENSUS — only `count`, `rate`, `phase` and `life` do, and `half_extent: 40`
+#    is unreachable.
+# 3. The camera looks head-on down -Z at the upright plane.
+#
+# Nothing authors a `Sprite.size`: at the atlas's 40 texels to the unit a 12-texel bullet region
+# derives exactly the 0.3 u quad the flat archetype is spawned at, and a 40-texel backdrop tile fills
+# exactly one `cell_size: 1.0` cell. That is deliberate — deriving the extent from the region is the
+# path a real game takes, and it is a region lookup per sprite per frame at extract.
+#
+# No `Environment`, no `PostProcess`, no light: every quad is unlit, so what this scene measures is
+# the sprite path and nothing else.
+name: "shmup-stress - steady field drawn (2,975 atlas sprites, 357 additive, scrolling backdrop)"
+seed: 0
+entities:
+  # Head-on at the upright plane: an unrotated camera looks down its own -Z. The orthographic height
+  # spans 12 u, which is the whole 11.4 u field with margin — nothing is measured off-screen, and
+  # nothing is measured at a size no one would ship.
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 60.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 12.0
+        far: 200.0
+  - name: arena
+    components:
+      Arena:
+        half_extent: 40.0
+        bullets_collide: false
+        cancel_every: 0
+        plane: upright
+        # Informative: the authored copy of the closed form above. Nothing reads it.
+        target_live: 2975
+      # The draw-side singleton. Absent (`steady-indexed.yaml`), every bullet is a flat tinted quad;
+      # present, it is one of the atlas's 40 regions, and every 12th of a volley composites
+      # additively.
+      BulletArt:
+        atlas: sprites/shmup.atlas.yaml
+        frame_prefix: bullets/b
+        frames: 40
+        additive_every: 12
+  # The hit tally, on its own entity so it hashes and snapshots like any other sim state.
+  - name: hits
+    components:
+      HitCount: {}
+  # The scrolling stage: one `Tilemap` on the same atlas the bullets sample, moved as a whole by
+  # `scroll_backdrop` — the pre-`uv_scroll` answer to a scrolling background
+  # (`Plan/sprite-engine.md` decision 9). 24 x 20 cells of 1 u, of which ~24 x 13 are on screen at
+  # any moment; the grid repeats every 4 rows and the scroll wraps after 4 u
+  # (`period: 120` frames at `speed: 2.0` u/s), so the seam is invisible.
+  #
+  # `layer: -1` puts the whole grid behind every bullet as one sort key — a stage is one background
+  # plane, so it sorts as one. The Transform's Y is owned by `scroll_backdrop`; the authored value is
+  # `Backdrop.origin`, where the grid sits at a zero offset.
+  - name: backdrop
+    components:
+      Transform:
+        translation:
+          - -11.5
+          - 10.0
+          - 0.0
+      Backdrop:
+        speed: 2.0
+        period: 120
+        origin: 10.0
+      Tilemap:
+        cell_size: 1.0
+        layer: -1
+        legend:
+          ".":
+            atlas: sprites/shmup.atlas.yaml
+            frame: backdrop/t0
+          "#":
+            atlas: sprites/shmup.atlas.yaml
+            frame: backdrop/t1
+          "*":
+            atlas: sprites/shmup.atlas.yaml
+            frame: backdrop/t2
+          o:
+            atlas: sprites/shmup.atlas.yaml
+            frame: backdrop/t3
+        rows:
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+          - "#.o.#.o.#.o.#.o.#.o.#.o."
+          - "........................"
+          - "o.#.o.#.o.#.o.#.o.#.o.#."
+          - "....*.......*.......*..."
+  # The player does not move — this arena measures the bullet field, not the player. It sits at the
+  # centre, where every emitter's ring converges, so the hit test always has work to do. Unlit and one
+  # layer in front of the field, since a scene with no light has nothing to light it with.
+  - name: player
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.6
+      Sprite:
+        size:
+          - 0.8
+          - 0.8
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        layer: 1
+      Player:
+        hitbox_radius: 0.2
+      Collider:
+        shape:
+          circle:
+            radius: 0.1
+        body: kinematic
+  # The four emitters, one per compass point at 2.5 u on the upright plane, phase-staggered so their
+  # volleys interleave — the entity twins of `steady.yaml`'s four `PatternPlayer` sources, at the
+  # same placement, the same speed and the same one-frame stagger. `count`, `rate`, `phase` and
+  # `life` are what the census is made of; `spin` is the slow twist that turns four static rings into
+  # a curtain.
+  - name: emitter-east
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 0.0
+          - 0.5
+      Emitter:
+        count: 25
+        rate: 4
+        speed: 1.6
+        life: 120
+        phase: 0
+        spin: 0.13
+  - name: emitter-north
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - 0.5
+      Emitter:
+        count: 25
+        rate: 4
+        speed: 1.6
+        life: 120
+        phase: 1
+        spin: 0.13
+  - name: emitter-west
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 0.0
+          - 0.5
+      Emitter:
+        count: 25
+        rate: 4
+        speed: 1.6
+        life: 120
+        phase: 2
+        spin: 0.13
+  - name: emitter-south
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -2.5
+          - 0.5
+      Emitter:
+        count: 25
+        rate: 4
+        speed: 1.6
+        life: 120
+        phase: 3
+        spin: 0.13

@@ -1,0 +1,59 @@
+format: 1
+kind: assembly
+name: figure
+size:
+  - 8
+  - 8
+  - 2
+palette:
+  B:
+    color:
+      - 0.25
+      - 0.35
+      - 0.55
+      - 1.0
+  H:
+    color:
+      - 0.85
+      - 0.65
+      - 0.5
+      - 1.0
+parts:
+  - name: torso
+    file: parts/torso.part.yaml
+    place:
+      - 2
+      - 0
+      - 0
+  - name: head
+    file: parts/head.part.yaml
+    parent: torso
+    place:
+      - 3
+      - 6
+      - 0
+  - name: arm-l
+    file: parts/arm.part.yaml
+    parent: torso
+    place:
+      - 1
+      - 4
+      - 0
+    pivot:
+      - 0.5
+      - 4.0
+      - 0.5
+  - name: arm-r
+    file: parts/arm.part.yaml
+    parent: torso
+    place:
+      - 6
+      - 4
+      - 0
+    pivot:
+      - 0.5
+      - 4.0
+      - 0.5
+    mirror: x
+clips:
+  wave: anims/figure-wave.anim.yaml

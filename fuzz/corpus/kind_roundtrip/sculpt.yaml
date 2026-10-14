@@ -1,0 +1,41 @@
+format: 1
+kind: sculpt
+name: pebble
+resolution: 32
+triangles: 800
+palette:
+  M:
+    color:
+      - 0.45
+      - 0.42
+      - 0.4
+      - 1.0
+    roughness: 0.8
+  S:
+    color:
+      - 0.2
+      - 0.6
+      - 0.9
+      - 1.0
+bones:
+  - name: root
+parts:
+  - name: body
+    shape: mesh
+    path: pebble.mesh.yaml
+    size: 1.5
+    at:
+      - 0.0
+      - 0.6
+      - 0.0
+    blend: 0.08
+    material: M
+  - name: bead
+    shape: sphere
+    radius: 0.22
+    at:
+      - 0.45
+      - 0.75
+      - 0.0
+    blend: 0.08
+    material: S

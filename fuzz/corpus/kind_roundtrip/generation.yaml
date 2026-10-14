@@ -1,0 +1,12 @@
+format: 1
+kind: generation
+name: idol-check-fixture
+workflow: txt2img.json
+seed: 7
+count: 2
+inputs:
+  Empty Latent:
+    height: 512
+    width: 512
+  Positive Prompt:
+    text: "a small weathered stone idol"

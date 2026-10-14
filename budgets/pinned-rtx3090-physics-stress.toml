@@ -1,0 +1,63 @@
+# Physics budget — pinned RTX 3090, 1920x1080, release.
+#
+# This file is the body-count ceiling's gate: 512 rigid bodies, pinned by `physics_stress.rs`
+# (`dev-docs/physics-pin.md`).
+#
+# Regression tripwires, NOT performance goals. Each ceiling below is roughly twice the median
+# measured by `ludion profile --scene … --frames 300` in `--release` on the pinned RTX 3090, so a
+# failure means a real, reproducible slowdown — never machine noise. All values are milliseconds.
+# Re-calibrate deliberately (a re-bless event) if a cost becomes intended and permanent —
+# `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/physics-stress.yaml`
+# — the physics arc's stress scene (`Plan/physics.md` W2): 512 mixed box/sphere/capsule rigid
+# props falling into a static bin, dropped from height with off-grid jitter and a small angular
+# velocity so the pile stays chaotic and stays live through the 600-tick trace. Checked with:
+#
+#   ludion profile --scene examples/gallery/physics-stress.yaml --frames 300 --check budgets/pinned-rtx3090-physics-stress.toml
+#
+# **`--frames 300`, not the corpus's usual 120.** A pile's cost is time-varying: it falls, lands,
+# interlocks, then starts sleeping. 120 frames from load cover mostly the fall; 300 covers fall +
+# landing + the dense interlocked pile, matching the committed 600-tick trace's live span. The CI
+# step (`ci/teamcity/provision.mjs`) uses the same `--frames 300`.
+#
+# **Contact events are inside `physics_step`.** The wrapper diffs the post-step contact graph for
+# every touching pair, always on (`Plan/physics.md` W2/11) — the `physics_step` ceiling below pays
+# for that diff on every one of the pile's contacts, not just the integration.
+#
+# Its Apple M4 twin is `budgets/pinned-apple-m4-physics-stress.toml` — measured on each box, never
+# derived.
+#
+# MEASURED 2026-09-26 over four 300-frame release runs (30 warmup) at 1920x1080 on 8 sim threads,
+# after the mirror's edit-detection baseline became the component read-back (a resting pile now
+# sleeps instead of being re-posed every tick; the mirror pays the read-back):
+#
+#                    physics_write      physics_step       physics_mirror     frame_total
+#   run 1            0.08415            1.1256             0.0668             1.2782
+#   run 2            0.08775            1.1592             0.0683             1.3153
+#   run 3            0.08545            1.13755            0.0671             1.29405
+#   run 4            0.0848             1.11               0.0668             1.263
+#   median           0.0851             1.1316             0.0670             1.2861
+#
+# No system here falls under the ~0.01 ms floor (`dev-docs/budget-files.md` Rules), so every
+# ceiling below is the plain ~2x posture.
+
+# The frame total: the CLI driver links no game systems, so this is the physics triple plus loop
+# overhead — a tripwire on the whole tick, not a 60 fps deadline. Median 1.2861; ceiling ~2x.
+frame_total_ms = 2.60
+
+# The ECS→rapier push: writes each rigid entity's Velocity into the solver ahead of the step.
+# Median 0.0851 over the four runs above; ceiling ~2x.
+[systems]
+physics_write  = 0.17
+# The solver step itself, including the post-step contact-graph diff (see the note above). The
+# dominant cost by nearly an order of magnitude — 512 bodies in active contact every frame of the
+# measured window. Median 1.1316; ceiling ~2x.
+physics_step   = 2.30
+# The rapier→ECS pull: poses and velocities mirrored back onto Transform/Velocity after the step.
+# Median 0.0670; ceiling ~2x.
+physics_mirror = 0.14
+
+# Deliberately absent: `[passes]` and `extract_ms` (the render/extract cost of 512 meshes is not
+# what this file exists for — the physics triple is), and `cluster_build_ms` (the scene authors one
+# `PointLight`, which gates nothing at that population).

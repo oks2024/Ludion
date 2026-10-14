@@ -1,0 +1,25 @@
+[package]
+name = "ludion-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "GPU-free asset loading (file bytes, content hashes, decoded PNGs, and an opt-in debounced filesystem watch) for the Ludion game engine."
+keywords = ["ludion", "assets", "png", "game-engine"]
+categories = ["game-engines", "filesystem", "multimedia"]
+
+[features]
+# The debounced filesystem watcher (`watch`/`WatchHandle`) over `notify`'s OS watcher. Off by
+# default: only the two hot-reloading hosts enable it (`ludion-server` for `asset.reload`,
+# `ludion-cli` for `dev`), so a game built for a device without a desktop watcher never carries
+# `notify` — the engine, the renderer and every game depend on this crate with it off.
+watch = ["dep:notify", "dep:crossbeam-channel"]
+
+[dependencies]
+crossbeam-channel = { workspace = true, optional = true }
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+notify = { workspace = true, optional = true }
+png.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+xxhash-rust.workspace = true

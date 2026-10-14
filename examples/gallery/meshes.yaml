@@ -1,0 +1,93 @@
+# Feature: Mesh — low-poly procedural primitives (`shape: cube | plane | sphere`) with a flat
+# `color`. One key-light illuminates them; to vary the light itself instead, see lights.yaml.
+# For a Mesh whose `shape` is an authored asset document, see mesh-asset.yaml.
+format: 1
+name: "meshes - Mesh: cube, plane, sphere primitives"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.5
+          - 9.0
+        rotation:
+          - -20.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 14.0
+          - 1.0
+          - 14.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.5
+          - 0.55
+          - 0.6
+          - 1.0
+  - name: cube
+    components:
+      Transform:
+        translation:
+          - -2.6
+          - 1.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 25.0
+          - 0.0
+        scale:
+          - 1.6
+          - 1.6
+          - 1.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+  - name: sphere
+    components:
+      Transform:
+        translation:
+          - 2.6
+          - 1.1
+          - 0.0
+        scale:
+          - 2.2
+          - 2.2
+          - 2.2
+      Mesh:
+        shape: sphere
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 5.0
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 6.0
+        range: 22.0

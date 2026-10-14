@@ -1,0 +1,7 @@
+format: 1
+entities:
+  - name: bolt
+    components:
+      Sprite:
+        atlas: ship.atlas.yaml
+        frame: bolt/idel

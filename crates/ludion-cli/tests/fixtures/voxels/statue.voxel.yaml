@@ -1,0 +1,125 @@
+format: 1
+kind: voxel
+name: statue
+# A stone statue on a plinth — the 9x9x9 character-scale test model. Stone (S) body, darker
+# trim (D) on the plinth rim, emissive eyes (E) on the head's front face.
+# Front = row z=0 (meshes at world -Z, so -Z is the model's forward). Bottom-anchored at y=0.
+# Scale 0.24 (grid height 9 x 0.24 = 2.16 world units).
+size:
+  - 9
+  - 9
+  - 9
+scale: 0.24
+palette:
+  D:
+    color:
+      - 0.22
+      - 0.21
+      - 0.20
+      - 1.0
+    roughness: 0.95
+  E:
+    color:
+      - 0.75
+      - 0.95
+      - 0.30
+      - 1.0
+    emissive: 5.5
+  S:
+    color:
+      - 0.52
+      - 0.50
+      - 0.47
+      - 1.0
+    roughness: 0.9
+slices:
+  -
+    - "SSSSSSSSS"
+    - "SSSSSSSSS"
+    - "SSSSSSSSS"
+    - "SSSSSSSSS"
+    - "SSSSSSSSS"
+    - "SSSSSSSSS"
+    - "SSSSSSSSS"
+    - "SSSSSSSSS"
+    - "SSSSSSSSS"
+  -
+    - "DDDDDDDDD"
+    - "DSSSSSSSD"
+    - "DSSSSSSSD"
+    - "DSSSSSSSD"
+    - "DSSSSSSSD"
+    - "DSSSSSSSD"
+    - "DSSSSSSSD"
+    - "DSSSSSSSD"
+    - "DDDDDDDDD"
+  -
+    - "........."
+    - "........."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "........."
+    - "........."
+  -
+    - "........."
+    - "........."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "........."
+    - "........."
+  -
+    - "........."
+    - "........."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "........."
+    - "........."
+  -
+    - "........."
+    - "........."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "..SSSSS.."
+    - "........."
+    - "........."
+  -
+    - "........."
+    - "........."
+    - "........."
+    - "...SSS..."
+    - "...SSS..."
+    - "...SSS..."
+    - "........."
+    - "........."
+    - "........."
+  -
+    - "........."
+    - "........."
+    - "........."
+    - "...ESE..."
+    - "...SSS..."
+    - "...SSS..."
+    - "........."
+    - "........."
+    - "........."
+  -
+    - "........."
+    - "........."
+    - "........."
+    - "...SSS..."
+    - "...SSS..."
+    - "...SSS..."
+    - "........."
+    - "........."
+    - "........."

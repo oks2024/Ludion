@@ -1,0 +1,15 @@
+format: 1
+seed: 1
+entities:
+  - name: skin
+    components:
+      Mesh:
+        shape:
+          asset: skin-bone.mesh.yaml
+  - name: part
+    components:
+      SkinBone:
+        skin:
+          index: 0
+          generation: 0
+        bone: chil

@@ -1,0 +1,101 @@
+# Feature: `Animation` on a `Sprite` — naming one of the atlas's `flipbooks:` under `clip` picks
+# which region the quad shows at extract time, sampled from `(clip, sim time)`; see sprite-atlas.yaml
+# for the fixed-frame form. This scene is rendered with `ludion render --frames 23` (23 ticks of the
+# built-in schedule before extracting), which is also this stem's `frames` override in
+# goldens/manifest.json — an un-ticked extract would show every entity at its rest frame.
+# - left: the ship plays `ship/bank` (8 fps, looping) with no `started` override; 23 ticks in it
+#   reads `ship/bank-right`, not its authored `ship/idle`.
+# - right of it: the same ship with no `Animation` at all — the static reference, always its
+#   authored frame.
+# - bottom row: four explosions on the one-shot `explosion/burst` (12 fps, `loop: false`), their
+#   `started` staggered (0, 9, 15, 21 ticks) so at tick 23 the row shows four different points in the
+#   clip — f3 (already past the clip's end and holding it), f2, f1, f0 — left to right.
+# lit: false (the default) throughout — flat texel x tint, no light needed.
+format: 1
+name: "sprite-flipbook - Animation: atlas flipbook"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 8.0
+  - name: ship-banking
+    components:
+      Transform:
+        translation:
+          - -0.9
+          - 2.7
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+      Animation:
+        clip: ship/bank
+  - name: ship-static
+    components:
+      Transform:
+        translation:
+          - 0.9
+          - 2.7
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+  - name: explosion-0
+    components:
+      Transform:
+        translation:
+          - -2.4
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f0
+      Animation:
+        clip: explosion/burst
+        started: 0
+  - name: explosion-1
+    components:
+      Transform:
+        translation:
+          - -0.8
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f0
+      Animation:
+        clip: explosion/burst
+        started: 9
+  - name: explosion-2
+    components:
+      Transform:
+        translation:
+          - 0.8
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f0
+      Animation:
+        clip: explosion/burst
+        started: 15
+  - name: explosion-3
+    components:
+      Transform:
+        translation:
+          - 2.4
+          - 0.9
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f0
+      Animation:
+        clip: explosion/burst
+        started: 21

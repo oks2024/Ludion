@@ -1,0 +1,35 @@
+format: 1
+kind: part
+name: rig-lantern
+# The lamp, hung from the left hand on a hook that runs back into the forearm. The flame F is the rig's one emissive glyph
+# and the cage M its one metallic glyph. Hung off `lower-arm-l`: no clip names it, it rides its parent.
+size:
+  - 3
+  - 5
+  - 4
+slices:
+  -
+    - "MMM"
+    - "MMM"
+    - "MMM"
+    - "..."
+  -
+    - "MFM"
+    - "FFF"
+    - "MFM"
+    - "..."
+  -
+    - "MFM"
+    - "FFF"
+    - "MFM"
+    - "..."
+  -
+    - "MMM"
+    - "MMM"
+    - "MMM"
+    - "..."
+  -
+    - "..."
+    - ".M."
+    - ".M."
+    - ".M."

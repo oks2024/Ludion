@@ -1,0 +1,110 @@
+format: 1
+name: model-stage
+# The neutral model stage — the editor's Voxel Artist and Models views. One subject on a
+# gallery-gray plane under a key + fill rig, with the adventurer beside it for scale. Nothing is
+# ever edited here: it is a display surface, so `scene.load` between the two rigs can never destroy
+# work. Built-in components only — plain `ludion serve` hosts it, no game crate. The editor swaps
+# the model with `component.set` of `Mesh.shape` on `subject`, so that name is load-bearing (it is
+# how `query.entities` finds the entity); `adventurer` is the fixed scale reference beside it.
+#
+# THE SUBJECT'S BASELINE LEAKS INTO EVERY STAGED MODEL: the views capture its `Mesh` and `Transform`
+# once at dial and spread them under each model they stage, so this entity carries no `color`, no
+# `emissive` and no `scale` (default 1 — a staged model stands at its own document's declared
+# scale). Its `translation` is `[0, 0, 0]`: models stand on the ground at y = 0, so the placeholder
+# unit cube here sits half below the plane until a real model replaces it.
+entities:
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 15.0
+          - 1.0
+          - 15.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.5
+          - 0.55
+          - 0.6
+          - 1.0
+  # THE SUBJECT. A bare cube so the template references no asset; the editor overwrites both
+  # `Mesh` and `Transform` on selection.
+  - name: subject
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape: cube
+  # The scale reference: a mid-gray primitive figure standing 1.8 units tall, same z as the subject
+  # deliberately — a depth offset would make perspective shrink it and lie about relative size.
+  - name: adventurer
+    components:
+      Transform:
+        translation:
+          - 2.6
+          - 0.9
+          - 0.0
+        scale:
+          - 0.5
+          - 1.8
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.5
+          - 1.0
+  # Dead level, on -Z, 45 deg vertical FOV. The editor orbits it with `component.set`; these values
+  # are the committed home pose.
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - -7.0
+        rotation:
+          - 0.0
+          - 180.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+        near: 0.05
+        far: 100.0
+  # Key: neutral-warm, up and to the subject's +X, slightly behind the camera plane.
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 4.3
+          - 5.92
+          - -4.3
+      PointLight:
+        color:
+          - 1.0
+          - 0.97
+          - 0.9
+        intensity: 3.0
+        range: 26.89
+  # Fill: dimmer and cool, low on the opposite side. Point lights cast no shadows, so it sits below
+  # the ground plane to lift the undersides instead of being buried.
+  - name: fill-light
+    components:
+      Transform:
+        translation:
+          - -4.84
+          - -2.15
+          - -4.3
+      PointLight:
+        color:
+          - 0.7
+          - 0.78
+          - 0.95
+        intensity: 1.5
+        range: 26.89

@@ -1,0 +1,1 @@
+{"path":"tests/fixtures/good_voxel.voxel.yaml","kind":"voxel","ok":true,"name":"gem","size":[2,2,1],"filled":3,"components":1,"meshed":{"quads":14,"triangles":28,"vertices":56},"scale":null,"generated_from":null,"budget_exempt":false,"diagnostics":[]}

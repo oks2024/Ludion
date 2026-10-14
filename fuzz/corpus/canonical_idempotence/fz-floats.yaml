@@ -1,0 +1,17 @@
+format: 1
+entities:
+  - name: probe
+    components:
+      FzFloats:
+        single: 0.3
+        maybe: 0.9
+        triple:
+          - 1.0e-7
+          - -20.000004
+          - 5.2829826e13
+        by_name:
+          a: 0.1
+        wide: 0.1
+        label: x
+        inner:
+          v: 2.2

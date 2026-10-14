@@ -1,0 +1,25 @@
+format: 1
+kind: part
+size:
+  - 4
+  - 6
+  - 2
+slices:
+  -
+    - "BBBB"
+    - "BBBB"
+  -
+    - "BBBB"
+    - "BBBB"
+  -
+    - "BBBB"
+    - "BBBB"
+  -
+    - "BBBB"
+    - "BBBB"
+  -
+    - "BBBB"
+    - "BBBB"
+  -
+    - "BBBB"
+    - "BBBB"

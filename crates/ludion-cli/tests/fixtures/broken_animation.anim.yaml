@@ -1,0 +1,17 @@
+format: 1
+kind: animation
+duration: 1.0
+loop: false
+tracks:
+  torso:
+    translation:
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.2
+        v:
+          - 1.0
+          - 0.0
+          - 0.0

@@ -1,0 +1,103 @@
+{
+  "golden": "examples/gallery\\goldens\\lights.png",
+  "actual": "examples/gallery\\target\\testkit\\lights.actual.png",
+  "golden_width": 960,
+  "golden_height": 540,
+  "actual_width": 960,
+  "actual_height": 540,
+  "threshold": 0.99,
+  "pass": false,
+  "ssim": 0.9765251241446081,
+  "mae": 1.5325651041666666,
+  "tile_grid": {
+    "cols": 8,
+    "rows": 8
+  },
+  "damaged_tiles": [
+    {
+      "row": 4,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.33044006316046554,
+      "region": "center"
+    },
+    {
+      "row": 4,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.34436506720814786,
+      "region": "center"
+    },
+    {
+      "row": 2,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9387926869634117,
+      "region": "top-center"
+    },
+    {
+      "row": 2,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9407369560555172,
+      "region": "top-center"
+    },
+    {
+      "row": 3,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9756634467109193,
+      "region": "center"
+    },
+    {
+      "row": 3,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9804568159003522,
+      "region": "center"
+    }
+  ],
+  "worst_tile": {
+    "row": 4,
+    "col": 4,
+    "rect": {
+      "x": 480,
+      "y": 272,
+      "width": 120,
+      "height": 67
+    },
+    "ssim": 0.33044006316046554,
+    "region": "center"
+  },
+  "summary": "FAIL: ssim 0.9765 < threshold 0.9900; worst damage at center (tile r4c4, rect 480,272 120x67, ssim 0.3304)"
+}

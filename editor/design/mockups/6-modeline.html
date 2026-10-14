@@ -1,0 +1,987 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Ludion editor — Modeline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap"
+  rel="stylesheet"
+/>
+<style>
+  :root {
+    /* Direction 6 · Modeline — battleship monochrome, single industrial-orange accent */
+    --steel: #26282b; /* app background */
+    --plate: #2e3134; /* panels */
+    --seam: #3a3e43; /* borders / selected-row bed */
+    --text: #c5c8cc;
+    --bright: #edeef0;
+    --signal: #e8642c; /* single accent: mode block, active states, keycaps, gizmo-none */
+    --signal-txt: #ff9a6b; /* lightened accent, used only where orange text must clear 4.5:1 on dark */
+    --ok: #8bc34a; /* green: modeline connection dot only */
+    --dim: #878b90; /* de-emphasized labels */
+
+    --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", "Cascadia Mono", Menlo,
+      Consolas, monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+  }
+
+  body {
+    background: var(--steel);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.35;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    cursor: default;
+    overflow: hidden;
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- app shell ------------------------------------------------------- */
+  .app {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--seam); /* seam color shows through 1px gaps */
+    gap: 1px;
+  }
+
+  .workspace {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 288px 1fr 340px;
+    gap: 1px;
+    background: var(--seam);
+  }
+
+  @media (max-width: 1360px) {
+    .workspace {
+      grid-template-columns: 260px 1fr 312px;
+    }
+  }
+
+  /* ---- tile (numbered panel) ------------------------------------------ */
+  .col {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    min-height: 0;
+    background: var(--seam);
+  }
+
+  .tile {
+    background: var(--plate);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .tile.grow {
+    flex: 1 1 auto;
+  }
+
+  .tag {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 24px;
+    padding: 0 8px;
+    background: var(--steel);
+    border-bottom: 1px solid var(--seam);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--bright);
+    flex: 0 0 auto;
+    user-select: none;
+  }
+
+  .keycap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 15px;
+    padding: 0 3px;
+    background: var(--signal);
+    color: #1c1815;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+
+  .tag .meta {
+    margin-left: auto;
+    color: var(--dim);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    text-transform: none;
+  }
+
+  .body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  /* thin scrollbars */
+  .body::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  .body::-webkit-scrollbar-thumb {
+    background: var(--seam);
+  }
+  .body::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* ---- hierarchy ------------------------------------------------------- */
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 8px;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  .row .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .row.sel {
+    background: var(--seam);
+    color: var(--signal-txt);
+    font-weight: 500;
+  }
+  .row .twig {
+    color: var(--dim);
+  }
+  .row .grp {
+    color: var(--bright);
+  }
+  .indent-1 {
+    padding-left: 22px;
+  }
+  .indent-2 {
+    padding-left: 36px;
+  }
+  .caret {
+    color: var(--dim);
+    width: 8px;
+    display: inline-block;
+  }
+  .flag {
+    margin-left: auto;
+    color: var(--signal-txt);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+  }
+  .more {
+    padding: 4px 8px 4px 36px;
+    color: var(--dim);
+    font-size: 11px;
+  }
+
+  .panel-foot {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 8px;
+    border-top: 1px solid var(--seam);
+    background: var(--steel);
+    font-size: 11px;
+  }
+  .panel-foot label {
+    color: var(--dim);
+  }
+
+  /* borderless underlined input */
+  .uinput {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--seam);
+    color: var(--bright);
+    font: inherit;
+    font-size: 11px;
+    padding: 1px 2px;
+    min-width: 0;
+  }
+  .uinput:focus {
+    outline: none;
+    border-bottom-color: var(--signal);
+  }
+  .uinput.w-sm {
+    width: 52px;
+  }
+
+  /* flat keycap-style button */
+  .btn {
+    appearance: none;
+    background: var(--steel);
+    color: var(--text);
+    border: 1px solid var(--seam);
+    border-radius: 0;
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    padding: 3px 8px;
+    height: 22px;
+    cursor: pointer;
+    text-transform: uppercase;
+  }
+  .btn:hover {
+    color: var(--bright);
+    border-color: #4a4f55;
+  }
+  .btn.active {
+    color: var(--signal-txt);
+    border-color: var(--signal);
+  }
+  .btn.danger:hover {
+    color: var(--signal-txt);
+    border-color: var(--signal);
+  }
+  .btn[disabled] {
+    color: #5c6065;
+    cursor: default;
+    border-color: #33373b;
+  }
+
+  /* ---- palette / create ------------------------------------------------ */
+  .sub {
+    padding: 6px 8px 3px;
+    color: var(--dim);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .grid-btn {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--seam);
+    margin: 0 8px 8px;
+    border: 1px solid var(--seam);
+  }
+  .grid-btn .btn {
+    border: 0;
+    height: 26px;
+    text-transform: none;
+    background: var(--plate);
+    justify-self: stretch;
+    text-align: left;
+    padding-left: 8px;
+  }
+  .grid-btn.two .btn {
+    text-align: center;
+    padding-left: 0;
+  }
+
+  /* ---- viewport -------------------------------------------------------- */
+  .vp-tile .body {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .gizmobar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 26px;
+    padding: 0 8px;
+    background: var(--steel);
+    border-bottom: 1px solid var(--seam);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .gizmobar .seg {
+    display: flex;
+    gap: 1px;
+    background: var(--seam);
+    border: 1px solid var(--seam);
+  }
+  .gizmobar .seg .btn {
+    border: 0;
+    height: 18px;
+    padding: 0 8px;
+    background: var(--plate);
+  }
+  .gizmobar .snap {
+    color: var(--dim);
+  }
+  .gizmobar .snap b {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .gizmobar .hint {
+    margin-left: auto;
+    color: var(--dim);
+  }
+  .stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    background: #15171a; /* matches SVG playfield so letterboxing is invisible */
+  }
+  .stage svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .chips {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    gap: 1px;
+    background: rgba(20, 22, 25, 0.72);
+    border: 1px solid var(--seam);
+  }
+  .chips .chip {
+    padding: 2px 7px;
+    font-size: 11px;
+    color: var(--text);
+  }
+  .paused {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    background: rgba(20, 22, 25, 0.72);
+    border: 1px solid var(--signal);
+    color: var(--signal-txt);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* ---- inspector ------------------------------------------------------- */
+  .subject {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--seam);
+    background: var(--steel);
+  }
+  .subject .who {
+    color: var(--signal-txt);
+    font-weight: 500;
+  }
+  .subject .idg {
+    color: var(--dim);
+    font-size: 11px;
+  }
+  .comp {
+    border-bottom: 1px solid var(--seam);
+  }
+  .comp-h {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 8px;
+    color: var(--bright);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .comp-h .ck {
+    color: var(--dim);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .field {
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 10px 3px 8px;
+  }
+  .field > * {
+    min-width: 0;
+  }
+  .field > .lbl {
+    color: var(--dim);
+    font-size: 11px;
+  }
+  .axes {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  /* 4-component quaternion wraps 2x2 so w never crowds the tile edge */
+  .axes.quad {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 4px 12px;
+    justify-content: start;
+  }
+  .axis {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .axis .k {
+    font-size: 10px;
+    width: 8px;
+  }
+  .axis.x .k {
+    color: #e0605a;
+  }
+  .axis.y .k {
+    color: #8bc34a;
+  }
+  .axis.z .k {
+    color: #5b9bd8;
+  }
+  .axis .v {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--seam);
+    color: var(--bright);
+    font: inherit;
+    font-size: 11px;
+    width: 46px;
+    padding: 1px 2px;
+  }
+  .axis .v:focus {
+    outline: none;
+    border-bottom-color: var(--signal);
+  }
+  .swatch {
+    width: 13px;
+    height: 13px;
+    border: 1px solid var(--seam);
+    display: inline-block;
+    vertical-align: -2px;
+  }
+  .val {
+    color: var(--bright);
+  }
+  .path {
+    color: var(--text);
+  }
+
+  /* ---- diagnostic strip ------------------------------------------------ */
+  .diag {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 24px;
+    padding: 0 8px;
+    background: var(--plate);
+    border-top: 1px solid var(--signal);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .diag .code {
+    color: #1c1815;
+    background: var(--signal);
+    font-weight: 700;
+    padding: 1px 5px;
+  }
+  .diag .msg {
+    color: var(--bright);
+  }
+  .diag .help {
+    color: var(--dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .diag .x {
+    margin-left: auto;
+    color: var(--dim);
+    border: 1px solid var(--seam);
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .diag .x:hover {
+    color: var(--signal-txt);
+    border-color: var(--signal);
+  }
+
+  /* ---- key hint bar ---------------------------------------------------- */
+  .hints {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 22px;
+    padding: 0 8px;
+    background: var(--steel);
+    border-top: 1px solid var(--seam);
+    font-size: 11px;
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .hints .h {
+    display: inline-flex;
+    gap: 5px;
+    align-items: baseline;
+  }
+  .hints .h .k {
+    color: var(--signal-txt);
+    font-weight: 500;
+  }
+
+  /* ---- modeline (signature) ------------------------------------------- */
+  .modeline {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: stretch;
+    height: 26px;
+    background: var(--plate);
+    border-top: 1px solid var(--seam);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .modeline .mode {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 14px;
+    background: var(--signal);
+    color: #1c1815;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+  }
+  .modeline .seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px;
+    border-left: 1px solid var(--seam);
+    color: var(--text);
+  }
+  .modeline .seg .lab {
+    color: var(--dim);
+  }
+  .modeline .seg.scene {
+    color: var(--bright);
+  }
+  .modeline .seg.dirty {
+    color: var(--signal-txt);
+  }
+  .modeline .spacer {
+    flex: 1 1 auto;
+    border-left: 1px solid var(--seam);
+  }
+  .modeline .seg.conn {
+    color: var(--text);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 5px rgba(139, 195, 74, 0.7);
+    display: inline-block;
+  }
+
+  /* ---- accessibility --------------------------------------------------- */
+  :focus-visible {
+    outline: 2px solid var(--signal);
+    outline-offset: 1px;
+  }
+  a,
+  .row,
+  .keycap {
+    -webkit-tap-highlight-color: transparent;
+  }
+  [tabindex],
+  button,
+  input {
+    outline-offset: 1px;
+  }
+</style>
+
+<div class="app">
+  <!-- ============================ WORKSPACE ============================ -->
+  <div class="workspace">
+    <!-- LEFT COLUMN: [1] SCENE + [4] CREATE ------------------------------ -->
+    <div class="col">
+      <!-- [1] SCENE -->
+      <section class="tile grow" aria-label="Scene hierarchy">
+        <div class="tag">
+          <span class="keycap">1</span><span>Scene</span>
+          <span class="meta">24 entities</span>
+        </div>
+        <div class="body" tabindex="0" aria-label="Entity hierarchy, brick_07 selected">
+          <div class="row"><span class="caret">·</span><span class="name">camera</span></div>
+          <div class="row">
+            <span class="caret">·</span><span class="name">key_light</span>
+            <span class="flag" title="Dangling parent">⚠ dangling parent</span>
+          </div>
+          <div class="row"><span class="caret">·</span><span class="name">fill_light</span></div>
+          <div class="row"><span class="caret">·</span><span class="name">ball</span></div>
+          <div class="row"><span class="caret">·</span><span class="name">paddle</span></div>
+
+          <div class="row"><span class="caret">▾</span><span class="name grp">walls</span></div>
+          <div class="row indent-1"><span class="twig">wall_left</span></div>
+          <div class="row indent-1"><span class="twig">wall_right</span></div>
+          <div class="row indent-1"><span class="twig">wall_top</span></div>
+
+          <div class="row"><span class="caret">▾</span><span class="name grp">bricks</span></div>
+          <div class="row indent-1"><span class="twig">brick_00</span></div>
+          <div class="row indent-1"><span class="twig">brick_01</span></div>
+          <div class="row indent-1"><span class="twig">brick_02</span></div>
+          <div class="row indent-1"><span class="twig">brick_03</span></div>
+          <div class="row indent-1"><span class="twig">brick_04</span></div>
+          <div class="row indent-1"><span class="twig">brick_05</span></div>
+          <div class="row indent-1"><span class="twig">brick_06</span></div>
+          <div class="row sel indent-1" aria-current="true">
+            <span class="name">brick_07</span>
+          </div>
+          <div class="row indent-1"><span class="twig">brick_08</span></div>
+          <div class="row indent-1"><span class="twig">brick_09</span></div>
+          <div class="more">+8 more · brick_10 … brick_17</div>
+        </div>
+        <div class="panel-foot">
+          <label for="reparent">Parent</label>
+          <input id="reparent" class="uinput" value="bricks" aria-label="Reparent to" />
+          <button class="btn" style="margin-left:auto">entity.reparent</button>
+        </div>
+      </section>
+
+      <!-- [4] CREATE -->
+      <section class="tile" aria-label="Create palette">
+        <div class="tag"><span class="keycap">4</span><span>Create</span></div>
+        <div class="body">
+          <div class="sub">Spawn · entity.spawn</div>
+          <div class="grid-btn">
+            <button class="btn">Brick</button>
+            <button class="btn">Paddle</button>
+            <button class="btn">Ball</button>
+            <button class="btn">Point light</button>
+            <button class="btn">Sprite</button>
+            <button class="btn">Empty</button>
+          </div>
+          <div class="sub">Selection · brick_07</div>
+          <div class="grid-btn two">
+            <button class="btn">Duplicate</button>
+            <button class="btn danger">Destroy</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- CENTER COLUMN: [2] VIEWPORT -------------------------------------- -->
+    <div class="col">
+      <section class="tile grow vp-tile" aria-label="Viewport">
+        <div class="tag">
+          <span class="keycap">2</span><span>Viewport</span>
+          <span class="meta">1080p · edit · paused</span>
+        </div>
+        <div class="body">
+          <!-- gizmo toolbar -->
+          <div class="gizmobar">
+            <div class="seg" role="group" aria-label="Gizmo mode">
+              <button class="btn active">Translate</button>
+              <button class="btn">Rotate</button>
+              <button class="btn">Scale</button>
+            </div>
+            <span class="snap">snap grid <b>0.25</b></span>
+            <span class="snap">angle <b>15°</b></span>
+            <span class="hint">Drag an axis to move · Esc cancels</span>
+          </div>
+
+          <!-- stage -->
+          <div class="stage">
+            <!-- viewBox x=-3 centers the brick grid (x 70..764) with even 73-unit side
+                 margins; "meet" never crops, and the field art bleeds past the viewBox so
+                 any letterboxed area stays part of the scene -->
+            <svg viewBox="-3 0 840 560" preserveAspectRatio="xMidYMid meet"
+                 role="img" aria-label="HD-2D breakout scene: three rows of glowing bricks, paddle and ball, brick_07 selected with translate gizmo">
+              <defs>
+                <radialGradient id="washAmber" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stop-color="#f0a94a" stop-opacity="0.55" />
+                  <stop offset="45%" stop-color="#c8722a" stop-opacity="0.22" />
+                  <stop offset="100%" stop-color="#c8722a" stop-opacity="0" />
+                </radialGradient>
+                <radialGradient id="washTeal" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stop-color="#3fd0c4" stop-opacity="0.45" />
+                  <stop offset="50%" stop-color="#1f8f88" stop-opacity="0.18" />
+                  <stop offset="100%" stop-color="#1f8f88" stop-opacity="0" />
+                </radialGradient>
+                <linearGradient id="brAmber" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#ffcd7a" />
+                  <stop offset="100%" stop-color="#d9862c" />
+                </linearGradient>
+                <linearGradient id="brTeal" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#6ee6d8" />
+                  <stop offset="100%" stop-color="#2fa79b" />
+                </linearGradient>
+                <linearGradient id="paddleG" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#b9c6d6" />
+                  <stop offset="100%" stop-color="#7d8ea1" />
+                </linearGradient>
+                <radialGradient id="ballG" cx="38%" cy="34%" r="70%">
+                  <stop offset="0%" stop-color="#ffffff" />
+                  <stop offset="55%" stop-color="#ffe6b8" />
+                  <stop offset="100%" stop-color="#f0a94a" />
+                </radialGradient>
+                <radialGradient id="vignette" gradientUnits="userSpaceOnUse"
+                                cx="417" cy="235" r="640">
+                  <stop offset="0%" stop-color="#000000" stop-opacity="0" />
+                  <stop offset="100%" stop-color="#000000" stop-opacity="0.55" />
+                </radialGradient>
+                <filter id="bloom" x="-60%" y="-60%" width="220%" height="220%">
+                  <feGaussianBlur stdDeviation="7" result="b" />
+                  <feMerge>
+                    <feMergeNode in="b" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+                <filter id="brickGlow" x="-40%" y="-40%" width="180%" height="180%">
+                  <feGaussianBlur stdDeviation="3.2" result="g" />
+                  <feMerge>
+                    <feMergeNode in="g" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+
+              <!-- playfield (oversized: bleeds into any letterboxed area) -->
+              <rect x="-400" y="-400" width="1640" height="1360" fill="#15171a" />
+              <!-- point-light washes -->
+              <ellipse cx="628" cy="150" rx="330" ry="240" fill="url(#washAmber)" />
+              <ellipse cx="196" cy="392" rx="300" ry="240" fill="url(#washTeal)" />
+
+              <!-- faint floor grid -->
+              <g stroke="#22262b" stroke-width="1" opacity="0.6">
+                <line x1="-400" y1="470" x2="1240" y2="470" />
+                <line x1="-400" y1="512" x2="1240" y2="512" />
+                <line x1="140" y1="440" x2="90" y2="560" />
+                <line x1="420" y1="440" x2="420" y2="560" />
+                <line x1="700" y1="440" x2="750" y2="560" />
+              </g>
+
+              <!-- BRICKS: 3 rows x 6 cols, brick_00 .. brick_17 -->
+              <!-- row 0 y=92 -->
+              <g filter="url(#brickGlow)">
+                <!-- row 0 -->
+                <rect x="70"  y="92"  width="104" height="30" rx="2" fill="url(#brAmber)" />
+                <rect x="188" y="92"  width="104" height="30" rx="2" fill="url(#brTeal)" />
+                <rect x="306" y="92"  width="104" height="30" rx="2" fill="url(#brAmber)" />
+                <rect x="424" y="92"  width="104" height="30" rx="2" fill="url(#brTeal)" />
+                <rect x="542" y="92"  width="104" height="30" rx="2" fill="url(#brAmber)" />
+                <rect x="660" y="92"  width="104" height="30" rx="2" fill="url(#brTeal)" />
+                <!-- row 1 y=144  (brick_06..11; brick_07 at col1) -->
+                <rect x="70"  y="144" width="104" height="30" rx="2" fill="url(#brTeal)" />
+                <rect x="188" y="144" width="104" height="30" rx="2" fill="url(#brAmber)" />
+                <rect x="306" y="144" width="104" height="30" rx="2" fill="url(#brTeal)" />
+                <rect x="424" y="144" width="104" height="30" rx="2" fill="url(#brAmber)" />
+                <rect x="542" y="144" width="104" height="30" rx="2" fill="url(#brTeal)" />
+                <rect x="660" y="144" width="104" height="30" rx="2" fill="url(#brAmber)" />
+                <!-- row 2 y=196 -->
+                <rect x="70"  y="196" width="104" height="30" rx="2" fill="url(#brAmber)" />
+                <rect x="188" y="196" width="104" height="30" rx="2" fill="url(#brTeal)" />
+                <rect x="306" y="196" width="104" height="30" rx="2" fill="url(#brAmber)" />
+                <rect x="424" y="196" width="104" height="30" rx="2" fill="url(#brTeal)" />
+                <rect x="542" y="196" width="104" height="30" rx="2" fill="url(#brAmber)" />
+                <rect x="660" y="196" width="104" height="30" rx="2" fill="url(#brTeal)" />
+              </g>
+
+              <!-- ball with bloom -->
+              <g filter="url(#bloom)">
+                <circle cx="452" cy="404" r="11" fill="url(#ballG)" />
+              </g>
+              <!-- ball trail -->
+              <line x1="452" y1="404" x2="416" y2="452" stroke="#ffe6b8" stroke-width="2"
+                    opacity="0.22" />
+
+              <!-- paddle -->
+              <g filter="url(#brickGlow)">
+                <rect x="352" y="500" width="160" height="16" rx="4" fill="url(#paddleG)" />
+              </g>
+              <rect x="352" y="500" width="160" height="5" rx="3" fill="#d7e0ea" opacity="0.5" />
+
+              <!-- vignette on top of field, under gizmo (oversized like the playfield) -->
+              <rect x="-400" y="-400" width="1640" height="1360" fill="url(#vignette)"
+                    pointer-events="none" />
+
+              <!-- SELECTION on brick_07 (x=188,y=144,104x30 → center 240,159) -->
+              <g>
+                <rect x="184" y="140" width="112" height="38" fill="none"
+                      stroke="#e8642c" stroke-width="1.5" />
+                <!-- corner ticks -->
+                <g stroke="#e8642c" stroke-width="2">
+                  <path d="M184 148 L184 140 L192 140" fill="none" />
+                  <path d="M288 140 L296 140 L296 148" fill="none" />
+                  <path d="M184 170 L184 178 L192 178" fill="none" />
+                  <path d="M288 178 L296 178 L296 170" fill="none" />
+                </g>
+                <text x="184" y="134" fill="#ff9a6b" font-family="JetBrains Mono, monospace"
+                      font-size="12">brick_07</text>
+              </g>
+
+              <!-- TRANSLATE GIZMO at brick_07 center (240,159) — standard axis colours -->
+              <g stroke-linecap="round">
+                <!-- X axis (red) → right -->
+                <line x1="240" y1="159" x2="322" y2="159" stroke="#e0605a" stroke-width="2.5" />
+                <path d="M322 159 L312 154 L312 164 Z" fill="#e0605a" />
+                <text x="328" y="163" fill="#e0605a" font-family="JetBrains Mono, monospace"
+                      font-size="12">X</text>
+                <!-- Y axis (green) ↑ up -->
+                <line x1="240" y1="159" x2="240" y2="82" stroke="#8bc34a" stroke-width="2.5" />
+                <path d="M240 82 L235 92 L245 92 Z" fill="#8bc34a" />
+                <text x="234" y="76" fill="#8bc34a" font-family="JetBrains Mono, monospace"
+                      font-size="12">Y</text>
+                <!-- Z axis (blue) dot at origin -->
+                <circle cx="240" cy="159" r="4.5" fill="#5b9bd8" stroke="#0e1419"
+                        stroke-width="1" />
+              </g>
+            </svg>
+
+            <div class="paused">⏸ paused @ 1284</div>
+            <div class="chips" aria-label="Stream stats">
+              <span class="chip">frame 1284</span>
+              <span class="chip">60 fps</span>
+              <span class="chip">4.2 ms</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- RIGHT COLUMN: [3] INSPECTOR -------------------------------------- -->
+    <div class="col">
+      <section class="tile grow" aria-label="Inspector">
+        <div class="tag"><span class="keycap">3</span><span>Inspector</span></div>
+        <div class="body">
+          <div class="subject">
+            <span class="who">brick_07</span>
+            <span class="idg">id 12 · gen 3</span>
+          </div>
+
+          <!-- Transform -->
+          <div class="comp">
+            <div class="comp-h">Transform <span class="ck">component.set</span></div>
+            <div class="field">
+              <span class="lbl">translation</span>
+              <div class="axes">
+                <span class="axis x"><span class="k">X</span><input class="v" value="-2.25" aria-label="translation x" /></span>
+                <span class="axis y"><span class="k">Y</span><input class="v" value="3.5" aria-label="translation y" /></span>
+                <span class="axis z"><span class="k">Z</span><input class="v" value="0" aria-label="translation z" /></span>
+              </div>
+            </div>
+            <div class="field">
+              <span class="lbl">rotation</span>
+              <div class="axes quad">
+                <span class="axis x"><span class="k">X</span><input class="v" value="0" aria-label="rotation x" /></span>
+                <span class="axis y"><span class="k">Y</span><input class="v" value="0" aria-label="rotation y" /></span>
+                <span class="axis z"><span class="k">Z</span><input class="v" value="0" aria-label="rotation z" /></span>
+                <span class="axis"><span class="k" style="color:var(--dim)">W</span><input class="v" value="1" aria-label="rotation w" /></span>
+              </div>
+            </div>
+            <div class="field">
+              <span class="lbl">scale</span>
+              <div class="axes">
+                <span class="axis x"><span class="k">X</span><input class="v" value="1.5" aria-label="scale x" /></span>
+                <span class="axis y"><span class="k">Y</span><input class="v" value="0.6" aria-label="scale y" /></span>
+                <span class="axis z"><span class="k">Z</span><input class="v" value="1" aria-label="scale z" /></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sprite -->
+          <div class="comp">
+            <div class="comp-h">Sprite <span class="ck">component.set</span></div>
+            <div class="field">
+              <span class="lbl">texture</span>
+              <span class="path">textures/brick_amber.qoi</span>
+            </div>
+            <div class="field">
+              <span class="lbl">tint</span>
+              <span class="val">
+                <span class="swatch" style="background:rgba(255,184,79,1)"></span>
+                [1.0, 0.72, 0.31, 1.0]
+              </span>
+            </div>
+          </div>
+
+          <!-- Health -->
+          <div class="comp">
+            <div class="comp-h">Health <span class="ck">component.set</span></div>
+            <div class="field">
+              <span class="lbl">hits_remaining</span>
+              <span class="val num">2</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ===================== BOTTOM: diag · hints · modeline ============= -->
+
+  <!-- L1101 diagnostic strip (dismissible) -->
+  <div class="diag" role="status">
+    <span class="code">L1101</span>
+    <span class="msg">texture not found: textures/brick_amber.qoi</span>
+    <span class="help">— searched games/breakout/textures — check the path or run ludion check-scene</span>
+    <span class="x" role="button" tabindex="0" aria-label="Dismiss L1101">x</span>
+  </div>
+
+  <!-- key hint bar -->
+  <div class="hints" aria-label="Key hints">
+    <span class="h"><span class="k">g</span>translate</span>
+    <span class="h"><span class="k">r</span>rotate</span>
+    <span class="h"><span class="k">s</span>scale</span>
+    <span class="h"><span class="k">ctrl+z</span>undo</span>
+    <span class="h"><span class="k">ctrl+s</span>save</span>
+    <span class="h"><span class="k">space</span>resume</span>
+    <span class="h"><span class="k">.</span>step</span>
+  </div>
+
+  <!-- MODELINE — signature element -->
+  <div class="modeline" aria-label="Modeline status">
+    <span class="mode">EDIT</span>
+    <span class="seg scene">games/breakout/scenes/main.scene.yaml</span>
+    <span class="seg dirty">dirty +2</span>
+    <span class="seg"><span class="lab">frame</span>1284</span>
+    <span class="seg"><span class="lab">hash</span>9f3a77c1</span>
+    <span class="seg">60fps 4.2ms</span>
+    <span class="spacer"></span>
+    <span class="seg"><span class="lab">engine</span>ludion 0.6.0</span>
+    <span class="seg conn">ws://127.0.0.1:9411 <span class="dot" aria-label="connected"></span></span>
+  </div>
+</div>

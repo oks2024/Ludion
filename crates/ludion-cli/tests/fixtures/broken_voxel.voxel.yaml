@@ -1,0 +1,16 @@
+format: 1
+kind: voxel
+size:
+  - 2
+  - 2
+  - 1
+palette:
+  A:
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+slices:
+  -
+    - AZ

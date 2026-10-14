@@ -1,0 +1,4649 @@
+# gi-inject-stress - GI wave 3' (`Plan/gi-wave3-dynamic-injection.md`, the injection stress
+# scene section): the injection compute pass under the cap.
+#
+# 300 GiDynamic-marked point lights - the MAX_PROJECTILES cap (`games/vigil/src/tunables.rs`) as
+# a static layout, `lights-stress.yaml`'s "authoring question, not an engine constant" posture
+# applied to the dynamic-injection term instead of the clustered light path. Two populations,
+# deliberately unlike each other (D13's own split):
+#
+#   250 BOLT spread lights  - scattered across the whole floor at chest height (0.8-2.2), warm
+#                             tracer colors, range 2.3-3.4 - the regime D13 measured as real: not
+#                             clustered, single digits simultaneous in actual play, this scene's
+#                             worth of *positions* standing in for many separate frames' worth of
+#                             a handful of bolts each.
+#   50  BURST clustered lights - packed into a ~2x2x1.4 pocket at (x=-12.0, z=4.0), the
+#                             adversarial regime the plan names as the reason the bin has a
+#                             ceiling at all: several dozen lights landing in the same handful of
+#                             `gi_bin.rs` cells. Deliberately moderate per-light intensity
+#                             (~0.32-0.50, a cooler palette) so the summed indirect term reads as
+#                             a bright-but-bounded pool rather than a clipped white blob - the
+#                             "bounded, not blooming" legibility the plan asks the golden to show,
+#                             and what `ludion image-stats`' clipped_high ceiling checks
+#                             mechanically.
+#
+# Floor-and-walls only (no roof): a 46x46 arena bounded by four 6-unit walls, sized to give the
+# `GiVolume` a real 3D lattice (cell_size 0.5, probe_spacing 1.0) without a district-scale probe
+# count - this is a compute-pass stress test, not a bake-cost one (SS6's district bake budget is
+# W4's, not this scene's). Deliberately no `Environment`, `PostProcess` or `DirectionalLight` -
+# the `lights-stress.yaml` precedent: every absent feature is one fewer cost mixed into the
+# `gi_inject`/`scene` passes the budget file gates.
+format: 1
+name: "gi-inject-stress - GI wave 3': 300 GiDynamic lights at the MAX_PROJECTILES cap"
+entities:
+  - name: gi-volume
+    components:
+      GiVolume:
+        cell_size: 0.5
+        probe_spacing: 1.0
+        normal_bias: 0.3
+        bounce: 1.0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 26.0
+          - 34.0
+        rotation:
+          - -34.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 55.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.25
+          - 0.0
+        scale:
+          - 46.0
+          - 0.5
+          - 46.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.24
+          - 0.23
+          - 0.26
+          - 1.0
+        roughness: 0.9
+  - name: wall-north
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 23.0
+        scale:
+          - 46.0
+          - 6.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.38
+          - 0.43
+          - 1.0
+        roughness: 0.9
+  - name: wall-south
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - -23.0
+        scale:
+          - 46.0
+          - 6.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.38
+          - 0.43
+          - 1.0
+        roughness: 0.9
+  - name: wall-east
+    components:
+      Transform:
+        translation:
+          - 23.0
+          - 3.0
+          - 0.0
+        scale:
+          - 1.0
+          - 6.0
+          - 46.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.38
+          - 0.43
+          - 1.0
+        roughness: 0.9
+  - name: wall-west
+    components:
+      Transform:
+        translation:
+          - -23.0
+          - 3.0
+          - 0.0
+        scale:
+          - 1.0
+          - 6.0
+          - 46.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.38
+          - 0.43
+          - 1.0
+        roughness: 0.9
+  - name: bolt-0
+    components:
+      Transform:
+        translation:
+          - 20.67
+          - 1.71
+          - -2.24
+      PointLight:
+        color:
+          - 0.97
+          - 0.71
+          - 0.31
+        intensity: 1.14
+        range: 2.4
+      GiDynamic: {}
+  - name: bolt-1
+    components:
+      Transform:
+        translation:
+          - 19.41
+          - 1.63
+          - -18.3
+      PointLight:
+        color:
+          - 0.99
+          - 0.85
+          - 0.42
+        intensity: 1.21
+        range: 3.32
+      GiDynamic: {}
+  - name: bolt-2
+    components:
+      Transform:
+        translation:
+          - 8.68
+          - 1.75
+          - -0.05
+      PointLight:
+        color:
+          - 0.99
+          - 0.86
+          - 0.42
+        intensity: 1.13
+        range: 3.35
+      GiDynamic: {}
+  - name: bolt-3
+    components:
+      Transform:
+        translation:
+          - 7.72
+          - 1.7
+          - 5.64
+      PointLight:
+        color:
+          - 0.95
+          - 0.56
+          - 0.21
+        intensity: 1.29
+        range: 2.3
+      GiDynamic: {}
+  - name: bolt-4
+    components:
+      Transform:
+        translation:
+          - 5.6
+          - 1.47
+          - 10.28
+      PointLight:
+        color:
+          - 0.97
+          - 0.68
+          - 0.29
+        intensity: 1.29
+        range: 3.15
+      GiDynamic: {}
+  - name: bolt-5
+    components:
+      Transform:
+        translation:
+          - 13.66
+          - 1.89
+          - 17.08
+      PointLight:
+        color:
+          - 1.0
+          - 0.9
+          - 0.45
+        intensity: 0.99
+        range: 2.99
+      GiDynamic: {}
+  - name: bolt-6
+    components:
+      Transform:
+        translation:
+          - 6.36
+          - 1.13
+          - 14.15
+      PointLight:
+        color:
+          - 0.99
+          - 0.85
+          - 0.42
+        intensity: 1.16
+        range: 3.28
+      GiDynamic: {}
+  - name: bolt-7
+    components:
+      Transform:
+        translation:
+          - 11.91
+          - 2.19
+          - 5.47
+      PointLight:
+        color:
+          - 0.99
+          - 0.83
+          - 0.4
+        intensity: 0.89
+        range: 2.44
+      GiDynamic: {}
+  - name: bolt-8
+    components:
+      Transform:
+        translation:
+          - 2.36
+          - 1.28
+          - -20.18
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.27
+        intensity: 1.22
+        range: 3.26
+      GiDynamic: {}
+  - name: bolt-9
+    components:
+      Transform:
+        translation:
+          - -6.83
+          - 1.96
+          - -19.78
+      PointLight:
+        color:
+          - 0.95
+          - 0.58
+          - 0.22
+        intensity: 1.24
+        range: 3.02
+      GiDynamic: {}
+  - name: bolt-10
+    components:
+      Transform:
+        translation:
+          - -5.09
+          - 1.03
+          - 16.12
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.28
+        intensity: 1.01
+        range: 2.78
+      GiDynamic: {}
+  - name: bolt-11
+    components:
+      Transform:
+        translation:
+          - 1.7
+          - 2.15
+          - -20.94
+      PointLight:
+        color:
+          - 0.99
+          - 0.83
+          - 0.4
+        intensity: 0.93
+        range: 3.2
+      GiDynamic: {}
+  - name: bolt-12
+    components:
+      Transform:
+        translation:
+          - -14.24
+          - 1.64
+          - 1.31
+      PointLight:
+        color:
+          - 0.97
+          - 0.69
+          - 0.3
+        intensity: 1.22
+        range: 3.21
+      GiDynamic: {}
+  - name: bolt-13
+    components:
+      Transform:
+        translation:
+          - 12.57
+          - 1.39
+          - 5.46
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.29
+        intensity: 1.27
+        range: 2.51
+      GiDynamic: {}
+  - name: bolt-14
+    components:
+      Transform:
+        translation:
+          - 1.14
+          - 1.98
+          - -4.41
+      PointLight:
+        color:
+          - 0.99
+          - 0.8
+          - 0.38
+        intensity: 1.07
+        range: 2.77
+      GiDynamic: {}
+  - name: bolt-15
+    components:
+      Transform:
+        translation:
+          - -5.74
+          - 1.29
+          - -8.13
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 0.88
+        range: 3.39
+      GiDynamic: {}
+  - name: bolt-16
+    components:
+      Transform:
+        translation:
+          - 10.7
+          - 1.15
+          - -11.68
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 0.99
+        range: 3.4
+      GiDynamic: {}
+  - name: bolt-17
+    components:
+      Transform:
+        translation:
+          - -4.24
+          - 1.41
+          - 0.56
+      PointLight:
+        color:
+          - 1.0
+          - 0.88
+          - 0.44
+        intensity: 1.2
+        range: 2.74
+      GiDynamic: {}
+  - name: bolt-18
+    components:
+      Transform:
+        translation:
+          - 3.89
+          - 1.12
+          - -0.59
+      PointLight:
+        color:
+          - 0.98
+          - 0.73
+          - 0.33
+        intensity: 1.21
+        range: 2.65
+      GiDynamic: {}
+  - name: bolt-19
+    components:
+      Transform:
+        translation:
+          - -19.03
+          - 1.85
+          - -8.24
+      PointLight:
+        color:
+          - 1.0
+          - 0.89
+          - 0.44
+        intensity: 0.87
+        range: 3.02
+      GiDynamic: {}
+  - name: bolt-20
+    components:
+      Transform:
+        translation:
+          - -2.19
+          - 1.48
+          - -10.77
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 0.9
+        range: 2.37
+      GiDynamic: {}
+  - name: bolt-21
+    components:
+      Transform:
+        translation:
+          - -17.39
+          - 1.85
+          - -10.18
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.26
+        intensity: 1.1
+        range: 2.92
+      GiDynamic: {}
+  - name: bolt-22
+    components:
+      Transform:
+        translation:
+          - 13.65
+          - 1.18
+          - 9.04
+      PointLight:
+        color:
+          - 0.95
+          - 0.55
+          - 0.2
+        intensity: 1.1
+        range: 2.66
+      GiDynamic: {}
+  - name: bolt-23
+    components:
+      Transform:
+        translation:
+          - 12.45
+          - 1.17
+          - -13.96
+      PointLight:
+        color:
+          - 0.95
+          - 0.58
+          - 0.22
+        intensity: 1.08
+        range: 3.06
+      GiDynamic: {}
+  - name: bolt-24
+    components:
+      Transform:
+        translation:
+          - -17.47
+          - 1.98
+          - 11.55
+      PointLight:
+        color:
+          - 0.95
+          - 0.56
+          - 0.21
+        intensity: 1.15
+        range: 2.93
+      GiDynamic: {}
+  - name: bolt-25
+    components:
+      Transform:
+        translation:
+          - 20.33
+          - 1.51
+          - -18.47
+      PointLight:
+        color:
+          - 0.98
+          - 0.79
+          - 0.37
+        intensity: 1.19
+        range: 2.43
+      GiDynamic: {}
+  - name: bolt-26
+    components:
+      Transform:
+        translation:
+          - -11.06
+          - 1.06
+          - -5.07
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.31
+        intensity: 0.87
+        range: 2.31
+      GiDynamic: {}
+  - name: bolt-27
+    components:
+      Transform:
+        translation:
+          - -18.73
+          - 1.54
+          - 17.52
+      PointLight:
+        color:
+          - 0.95
+          - 0.55
+          - 0.2
+        intensity: 0.94
+        range: 3.18
+      GiDynamic: {}
+  - name: bolt-28
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 2.18
+          - -5.18
+      PointLight:
+        color:
+          - 0.97
+          - 0.72
+          - 0.32
+        intensity: 1.16
+        range: 2.98
+      GiDynamic: {}
+  - name: bolt-29
+    components:
+      Transform:
+        translation:
+          - -13.22
+          - 1.34
+          - 0.77
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.28
+        intensity: 1.24
+        range: 2.99
+      GiDynamic: {}
+  - name: bolt-30
+    components:
+      Transform:
+        translation:
+          - -5.28
+          - 1.37
+          - 11.76
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 1.19
+        range: 3.24
+      GiDynamic: {}
+  - name: bolt-31
+    components:
+      Transform:
+        translation:
+          - 3.06
+          - 1.74
+          - 12.37
+      PointLight:
+        color:
+          - 0.95
+          - 0.56
+          - 0.21
+        intensity: 1.16
+        range: 2.93
+      GiDynamic: {}
+  - name: bolt-32
+    components:
+      Transform:
+        translation:
+          - -3.16
+          - 0.82
+          - -2.41
+      PointLight:
+        color:
+          - 0.98
+          - 0.74
+          - 0.34
+        intensity: 0.93
+        range: 2.69
+      GiDynamic: {}
+  - name: bolt-33
+    components:
+      Transform:
+        translation:
+          - 11.71
+          - 0.97
+          - -16.86
+      PointLight:
+        color:
+          - 0.98
+          - 0.78
+          - 0.36
+        intensity: 0.89
+        range: 3.28
+      GiDynamic: {}
+  - name: bolt-34
+    components:
+      Transform:
+        translation:
+          - 13.78
+          - 1.63
+          - -16.06
+      PointLight:
+        color:
+          - 0.99
+          - 0.82
+          - 0.39
+        intensity: 1.02
+        range: 2.68
+      GiDynamic: {}
+  - name: bolt-35
+    components:
+      Transform:
+        translation:
+          - 3.61
+          - 1.43
+          - -14.16
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 1.08
+        range: 2.46
+      GiDynamic: {}
+  - name: bolt-36
+    components:
+      Transform:
+        translation:
+          - -19.85
+          - 1.78
+          - 16.49
+      PointLight:
+        color:
+          - 1.0
+          - 0.87
+          - 0.43
+        intensity: 0.98
+        range: 3.11
+      GiDynamic: {}
+  - name: bolt-37
+    components:
+      Transform:
+        translation:
+          - -17.41
+          - 1.58
+          - 5.12
+      PointLight:
+        color:
+          - 0.95
+          - 0.58
+          - 0.22
+        intensity: 1.22
+        range: 2.65
+      GiDynamic: {}
+  - name: bolt-38
+    components:
+      Transform:
+        translation:
+          - -3.06
+          - 1.48
+          - -1.88
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 1.23
+        range: 2.74
+      GiDynamic: {}
+  - name: bolt-39
+    components:
+      Transform:
+        translation:
+          - -17.85
+          - 2.11
+          - -4.8
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.27
+        intensity: 1.26
+        range: 2.53
+      GiDynamic: {}
+  - name: bolt-40
+    components:
+      Transform:
+        translation:
+          - 7.48
+          - 1.21
+          - -7.01
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.23
+        intensity: 1.18
+        range: 3.2
+      GiDynamic: {}
+  - name: bolt-41
+    components:
+      Transform:
+        translation:
+          - 20.27
+          - 1.15
+          - -11.41
+      PointLight:
+        color:
+          - 0.98
+          - 0.74
+          - 0.33
+        intensity: 1.34
+        range: 2.43
+      GiDynamic: {}
+  - name: bolt-42
+    components:
+      Transform:
+        translation:
+          - 5.99
+          - 1.94
+          - -6.73
+      PointLight:
+        color:
+          - 0.99
+          - 0.8
+          - 0.38
+        intensity: 0.86
+        range: 3.25
+      GiDynamic: {}
+  - name: bolt-43
+    components:
+      Transform:
+        translation:
+          - -8.31
+          - 1.79
+          - -13.15
+      PointLight:
+        color:
+          - 0.98
+          - 0.74
+          - 0.34
+        intensity: 1.28
+        range: 3.2
+      GiDynamic: {}
+  - name: bolt-44
+    components:
+      Transform:
+        translation:
+          - -16.77
+          - 2.19
+          - 9.42
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.31
+        intensity: 1.09
+        range: 3.36
+      GiDynamic: {}
+  - name: bolt-45
+    components:
+      Transform:
+        translation:
+          - 8.24
+          - 0.99
+          - -12.99
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.36
+        intensity: 1.26
+        range: 2.88
+      GiDynamic: {}
+  - name: bolt-46
+    components:
+      Transform:
+        translation:
+          - -8.05
+          - 1.07
+          - 13.01
+      PointLight:
+        color:
+          - 0.97
+          - 0.71
+          - 0.31
+        intensity: 1.35
+        range: 2.39
+      GiDynamic: {}
+  - name: bolt-47
+    components:
+      Transform:
+        translation:
+          - -18.24
+          - 0.84
+          - -15.82
+      PointLight:
+        color:
+          - 0.97
+          - 0.68
+          - 0.3
+        intensity: 1.25
+        range: 3.35
+      GiDynamic: {}
+  - name: bolt-48
+    components:
+      Transform:
+        translation:
+          - 4.38
+          - 2.13
+          - -19.42
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.36
+        intensity: 1.11
+        range: 2.49
+      GiDynamic: {}
+  - name: bolt-49
+    components:
+      Transform:
+        translation:
+          - 0.08
+          - 1.09
+          - -16.41
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.31
+        intensity: 1.34
+        range: 2.59
+      GiDynamic: {}
+  - name: bolt-50
+    components:
+      Transform:
+        translation:
+          - 6.36
+          - 1.99
+          - -19.43
+      PointLight:
+        color:
+          - 1.0
+          - 0.88
+          - 0.43
+        intensity: 1.25
+        range: 3.21
+      GiDynamic: {}
+  - name: bolt-51
+    components:
+      Transform:
+        translation:
+          - -12.39
+          - 1.64
+          - -4.86
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.23
+        intensity: 1.12
+        range: 2.85
+      GiDynamic: {}
+  - name: bolt-52
+    components:
+      Transform:
+        translation:
+          - 10.51
+          - 1.79
+          - 18.92
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.28
+        intensity: 0.99
+        range: 3.11
+      GiDynamic: {}
+  - name: bolt-53
+    components:
+      Transform:
+        translation:
+          - -5.51
+          - 1.29
+          - 17.23
+      PointLight:
+        color:
+          - 0.98
+          - 0.75
+          - 0.35
+        intensity: 1.12
+        range: 2.47
+      GiDynamic: {}
+  - name: bolt-54
+    components:
+      Transform:
+        translation:
+          - 20.69
+          - 2.19
+          - -11.22
+      PointLight:
+        color:
+          - 0.99
+          - 0.82
+          - 0.39
+        intensity: 0.97
+        range: 2.64
+      GiDynamic: {}
+  - name: bolt-55
+    components:
+      Transform:
+        translation:
+          - -5.14
+          - 1.77
+          - -5.26
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.23
+        intensity: 1.0
+        range: 2.61
+      GiDynamic: {}
+  - name: bolt-56
+    components:
+      Transform:
+        translation:
+          - 19.9
+          - 1.73
+          - -11.27
+      PointLight:
+        color:
+          - 0.95
+          - 0.56
+          - 0.21
+        intensity: 1.0
+        range: 3.39
+      GiDynamic: {}
+  - name: bolt-57
+    components:
+      Transform:
+        translation:
+          - -3.14
+          - 2.09
+          - 6.49
+      PointLight:
+        color:
+          - 0.99
+          - 0.8
+          - 0.38
+        intensity: 1.0
+        range: 2.69
+      GiDynamic: {}
+  - name: bolt-58
+    components:
+      Transform:
+        translation:
+          - -17.41
+          - 2.06
+          - 16.36
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 1.23
+        range: 3.39
+      GiDynamic: {}
+  - name: bolt-59
+    components:
+      Transform:
+        translation:
+          - -6.02
+          - 1.21
+          - 15.44
+      PointLight:
+        color:
+          - 0.98
+          - 0.79
+          - 0.37
+        intensity: 1.03
+        range: 3.31
+      GiDynamic: {}
+  - name: bolt-60
+    components:
+      Transform:
+        translation:
+          - 13.86
+          - 0.89
+          - 16.49
+      PointLight:
+        color:
+          - 0.98
+          - 0.75
+          - 0.34
+        intensity: 1.03
+        range: 2.45
+      GiDynamic: {}
+  - name: bolt-61
+    components:
+      Transform:
+        translation:
+          - -1.21
+          - 1.95
+          - 6.62
+      PointLight:
+        color:
+          - 0.98
+          - 0.78
+          - 0.36
+        intensity: 1.2
+        range: 2.94
+      GiDynamic: {}
+  - name: bolt-62
+    components:
+      Transform:
+        translation:
+          - -6.83
+          - 1.24
+          - -10.15
+      PointLight:
+        color:
+          - 0.98
+          - 0.73
+          - 0.33
+        intensity: 1.03
+        range: 3.13
+      GiDynamic: {}
+  - name: bolt-63
+    components:
+      Transform:
+        translation:
+          - -5.87
+          - 2.17
+          - -4.45
+      PointLight:
+        color:
+          - 0.99
+          - 0.81
+          - 0.39
+        intensity: 1.24
+        range: 3.02
+      GiDynamic: {}
+  - name: bolt-64
+    components:
+      Transform:
+        translation:
+          - -11.53
+          - 1.0
+          - -19.93
+      PointLight:
+        color:
+          - 1.0
+          - 0.88
+          - 0.44
+        intensity: 1.0
+        range: 2.92
+      GiDynamic: {}
+  - name: bolt-65
+    components:
+      Transform:
+        translation:
+          - 4.65
+          - 1.49
+          - -9.01
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 1.11
+        range: 3.32
+      GiDynamic: {}
+  - name: bolt-66
+    components:
+      Transform:
+        translation:
+          - -0.38
+          - 1.76
+          - -17.45
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.31
+        intensity: 0.97
+        range: 2.83
+      GiDynamic: {}
+  - name: bolt-67
+    components:
+      Transform:
+        translation:
+          - -8.15
+          - 1.87
+          - 20.42
+      PointLight:
+        color:
+          - 1.0
+          - 0.87
+          - 0.43
+        intensity: 0.86
+        range: 3.39
+      GiDynamic: {}
+  - name: bolt-68
+    components:
+      Transform:
+        translation:
+          - 13.52
+          - 1.09
+          - 13.67
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.36
+        intensity: 1.2
+        range: 2.89
+      GiDynamic: {}
+  - name: bolt-69
+    components:
+      Transform:
+        translation:
+          - -12.14
+          - 0.96
+          - 12.05
+      PointLight:
+        color:
+          - 0.95
+          - 0.56
+          - 0.21
+        intensity: 1.28
+        range: 2.44
+      GiDynamic: {}
+  - name: bolt-70
+    components:
+      Transform:
+        translation:
+          - -1.06
+          - 1.92
+          - -15.15
+      PointLight:
+        color:
+          - 0.98
+          - 0.78
+          - 0.36
+        intensity: 0.93
+        range: 2.36
+      GiDynamic: {}
+  - name: bolt-71
+    components:
+      Transform:
+        translation:
+          - -14.66
+          - 1.0
+          - -3.09
+      PointLight:
+        color:
+          - 0.99
+          - 0.82
+          - 0.39
+        intensity: 1.1
+        range: 2.8
+      GiDynamic: {}
+  - name: bolt-72
+    components:
+      Transform:
+        translation:
+          - 9.18
+          - 1.12
+          - -18.5
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.29
+        intensity: 1.29
+        range: 2.6
+      GiDynamic: {}
+  - name: bolt-73
+    components:
+      Transform:
+        translation:
+          - 16.81
+          - 1.0
+          - 12.69
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.3
+        intensity: 1.01
+        range: 2.65
+      GiDynamic: {}
+  - name: bolt-74
+    components:
+      Transform:
+        translation:
+          - 2.44
+          - 1.69
+          - -5.96
+      PointLight:
+        color:
+          - 0.99
+          - 0.8
+          - 0.38
+        intensity: 1.32
+        range: 2.74
+      GiDynamic: {}
+  - name: bolt-75
+    components:
+      Transform:
+        translation:
+          - 20.32
+          - 1.94
+          - 3.75
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.28
+        intensity: 1.21
+        range: 3.12
+      GiDynamic: {}
+  - name: bolt-76
+    components:
+      Transform:
+        translation:
+          - -12.78
+          - 0.95
+          - 15.31
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 1.16
+        range: 3.17
+      GiDynamic: {}
+  - name: bolt-77
+    components:
+      Transform:
+        translation:
+          - -14.14
+          - 1.81
+          - 14.8
+      PointLight:
+        color:
+          - 0.98
+          - 0.73
+          - 0.33
+        intensity: 1.24
+        range: 2.87
+      GiDynamic: {}
+  - name: bolt-78
+    components:
+      Transform:
+        translation:
+          - -15.35
+          - 1.66
+          - -20.8
+      PointLight:
+        color:
+          - 0.97
+          - 0.71
+          - 0.31
+        intensity: 1.29
+        range: 2.68
+      GiDynamic: {}
+  - name: bolt-79
+    components:
+      Transform:
+        translation:
+          - 19.21
+          - 1.79
+          - -11.03
+      PointLight:
+        color:
+          - 0.97
+          - 0.72
+          - 0.32
+        intensity: 0.96
+        range: 2.83
+      GiDynamic: {}
+  - name: bolt-80
+    components:
+      Transform:
+        translation:
+          - 3.91
+          - 1.05
+          - -7.49
+      PointLight:
+        color:
+          - 0.98
+          - 0.79
+          - 0.37
+        intensity: 0.9
+        range: 3.36
+      GiDynamic: {}
+  - name: bolt-81
+    components:
+      Transform:
+        translation:
+          - 15.47
+          - 1.06
+          - 3.35
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.3
+        intensity: 0.91
+        range: 2.91
+      GiDynamic: {}
+  - name: bolt-82
+    components:
+      Transform:
+        translation:
+          - -2.73
+          - 1.62
+          - 19.85
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 0.89
+        range: 2.58
+      GiDynamic: {}
+  - name: bolt-83
+    components:
+      Transform:
+        translation:
+          - 11.66
+          - 1.92
+          - 4.87
+      PointLight:
+        color:
+          - 0.98
+          - 0.74
+          - 0.34
+        intensity: 1.24
+        range: 2.54
+      GiDynamic: {}
+  - name: bolt-84
+    components:
+      Transform:
+        translation:
+          - 5.1
+          - 1.02
+          - -16.05
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.23
+        intensity: 1.24
+        range: 3.15
+      GiDynamic: {}
+  - name: bolt-85
+    components:
+      Transform:
+        translation:
+          - -18.28
+          - 2.02
+          - -19.17
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.23
+        intensity: 1.33
+        range: 2.42
+      GiDynamic: {}
+  - name: bolt-86
+    components:
+      Transform:
+        translation:
+          - -4.3
+          - 1.17
+          - 16.79
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 0.93
+        range: 2.4
+      GiDynamic: {}
+  - name: bolt-87
+    components:
+      Transform:
+        translation:
+          - -15.01
+          - 0.86
+          - 20.58
+      PointLight:
+        color:
+          - 0.97
+          - 0.68
+          - 0.29
+        intensity: 0.98
+        range: 3.1
+      GiDynamic: {}
+  - name: bolt-88
+    components:
+      Transform:
+        translation:
+          - 5.5
+          - 0.91
+          - 6.47
+      PointLight:
+        color:
+          - 0.95
+          - 0.56
+          - 0.2
+        intensity: 0.88
+        range: 3.28
+      GiDynamic: {}
+  - name: bolt-89
+    components:
+      Transform:
+        translation:
+          - -14.72
+          - 0.85
+          - -3.26
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.28
+        intensity: 1.12
+        range: 2.66
+      GiDynamic: {}
+  - name: bolt-90
+    components:
+      Transform:
+        translation:
+          - 5.52
+          - 1.87
+          - 1.29
+      PointLight:
+        color:
+          - 0.99
+          - 0.85
+          - 0.41
+        intensity: 0.97
+        range: 3.05
+      GiDynamic: {}
+  - name: bolt-91
+    components:
+      Transform:
+        translation:
+          - 5.1
+          - 2.03
+          - -18.93
+      PointLight:
+        color:
+          - 0.99
+          - 0.83
+          - 0.4
+        intensity: 1.32
+        range: 2.62
+      GiDynamic: {}
+  - name: bolt-92
+    components:
+      Transform:
+        translation:
+          - -12.29
+          - 1.74
+          - 17.42
+      PointLight:
+        color:
+          - 0.98
+          - 0.74
+          - 0.34
+        intensity: 0.93
+        range: 2.97
+      GiDynamic: {}
+  - name: bolt-93
+    components:
+      Transform:
+        translation:
+          - 10.89
+          - 1.89
+          - 18.38
+      PointLight:
+        color:
+          - 1.0
+          - 0.88
+          - 0.43
+        intensity: 0.98
+        range: 2.84
+      GiDynamic: {}
+  - name: bolt-94
+    components:
+      Transform:
+        translation:
+          - -15.11
+          - 1.88
+          - -7.16
+      PointLight:
+        color:
+          - 0.96
+          - 0.63
+          - 0.26
+        intensity: 1.17
+        range: 2.44
+      GiDynamic: {}
+  - name: bolt-95
+    components:
+      Transform:
+        translation:
+          - -3.67
+          - 1.25
+          - -16.48
+      PointLight:
+        color:
+          - 0.98
+          - 0.73
+          - 0.33
+        intensity: 0.96
+        range: 2.64
+      GiDynamic: {}
+  - name: bolt-96
+    components:
+      Transform:
+        translation:
+          - 8.71
+          - 2.2
+          - 18.82
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 1.24
+        range: 3.17
+      GiDynamic: {}
+  - name: bolt-97
+    components:
+      Transform:
+        translation:
+          - 3.12
+          - 1.34
+          - -14.88
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.29
+        intensity: 0.94
+        range: 2.4
+      GiDynamic: {}
+  - name: bolt-98
+    components:
+      Transform:
+        translation:
+          - 20.27
+          - 1.78
+          - 6.3
+      PointLight:
+        color:
+          - 0.98
+          - 0.74
+          - 0.33
+        intensity: 0.91
+        range: 2.75
+      GiDynamic: {}
+  - name: bolt-99
+    components:
+      Transform:
+        translation:
+          - -9.16
+          - 1.12
+          - 14.56
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.29
+        intensity: 1.35
+        range: 3.01
+      GiDynamic: {}
+  - name: bolt-100
+    components:
+      Transform:
+        translation:
+          - 18.21
+          - 1.95
+          - -18.97
+      PointLight:
+        color:
+          - 0.96
+          - 0.6
+          - 0.23
+        intensity: 1.21
+        range: 3.12
+      GiDynamic: {}
+  - name: bolt-101
+    components:
+      Transform:
+        translation:
+          - 17.56
+          - 2.01
+          - -13.76
+      PointLight:
+        color:
+          - 0.97
+          - 0.69
+          - 0.3
+        intensity: 0.88
+        range: 2.42
+      GiDynamic: {}
+  - name: bolt-102
+    components:
+      Transform:
+        translation:
+          - -10.64
+          - 1.09
+          - 17.41
+      PointLight:
+        color:
+          - 0.98
+          - 0.75
+          - 0.34
+        intensity: 0.9
+        range: 3.18
+      GiDynamic: {}
+  - name: bolt-103
+    components:
+      Transform:
+        translation:
+          - 17.13
+          - 2.02
+          - 1.8
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.31
+        intensity: 1.21
+        range: 3.3
+      GiDynamic: {}
+  - name: bolt-104
+    components:
+      Transform:
+        translation:
+          - 2.65
+          - 1.28
+          - -20.48
+      PointLight:
+        color:
+          - 0.97
+          - 0.71
+          - 0.32
+        intensity: 1.23
+        range: 2.48
+      GiDynamic: {}
+  - name: bolt-105
+    components:
+      Transform:
+        translation:
+          - 4.05
+          - 1.86
+          - -2.21
+      PointLight:
+        color:
+          - 0.99
+          - 0.82
+          - 0.39
+        intensity: 1.19
+        range: 2.54
+      GiDynamic: {}
+  - name: bolt-106
+    components:
+      Transform:
+        translation:
+          - 3.19
+          - 1.83
+          - -6.58
+      PointLight:
+        color:
+          - 0.97
+          - 0.69
+          - 0.3
+        intensity: 1.22
+        range: 2.56
+      GiDynamic: {}
+  - name: bolt-107
+    components:
+      Transform:
+        translation:
+          - -4.52
+          - 1.19
+          - 4.36
+      PointLight:
+        color:
+          - 0.96
+          - 0.63
+          - 0.26
+        intensity: 0.88
+        range: 3.22
+      GiDynamic: {}
+  - name: bolt-108
+    components:
+      Transform:
+        translation:
+          - 11.18
+          - 1.02
+          - -12.9
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 0.93
+        range: 2.34
+      GiDynamic: {}
+  - name: bolt-109
+    components:
+      Transform:
+        translation:
+          - 14.18
+          - 1.7
+          - 15.38
+      PointLight:
+        color:
+          - 0.98
+          - 0.73
+          - 0.33
+        intensity: 0.86
+        range: 2.32
+      GiDynamic: {}
+  - name: bolt-110
+    components:
+      Transform:
+        translation:
+          - 13.39
+          - 1.52
+          - -4.24
+      PointLight:
+        color:
+          - 0.99
+          - 0.86
+          - 0.42
+        intensity: 0.92
+        range: 2.97
+      GiDynamic: {}
+  - name: bolt-111
+    components:
+      Transform:
+        translation:
+          - 13.29
+          - 1.27
+          - 13.74
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.26
+        intensity: 1.34
+        range: 3.11
+      GiDynamic: {}
+  - name: bolt-112
+    components:
+      Transform:
+        translation:
+          - 6.01
+          - 2.16
+          - 1.85
+      PointLight:
+        color:
+          - 0.99
+          - 0.82
+          - 0.39
+        intensity: 1.29
+        range: 2.97
+      GiDynamic: {}
+  - name: bolt-113
+    components:
+      Transform:
+        translation:
+          - -10.66
+          - 1.19
+          - -2.3
+      PointLight:
+        color:
+          - 1.0
+          - 0.89
+          - 0.44
+        intensity: 1.21
+        range: 2.85
+      GiDynamic: {}
+  - name: bolt-114
+    components:
+      Transform:
+        translation:
+          - -3.48
+          - 1.34
+          - 4.86
+      PointLight:
+        color:
+          - 0.99
+          - 0.84
+          - 0.41
+        intensity: 0.95
+        range: 3.3
+      GiDynamic: {}
+  - name: bolt-115
+    components:
+      Transform:
+        translation:
+          - -14.35
+          - 0.91
+          - 12.71
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 0.89
+        range: 2.85
+      GiDynamic: {}
+  - name: bolt-116
+    components:
+      Transform:
+        translation:
+          - 15.3
+          - 1.08
+          - 8.82
+      PointLight:
+        color:
+          - 0.98
+          - 0.73
+          - 0.33
+        intensity: 0.88
+        range: 3.31
+      GiDynamic: {}
+  - name: bolt-117
+    components:
+      Transform:
+        translation:
+          - -1.4
+          - 2.03
+          - 8.57
+      PointLight:
+        color:
+          - 0.97
+          - 0.68
+          - 0.29
+        intensity: 1.09
+        range: 3.29
+      GiDynamic: {}
+  - name: bolt-118
+    components:
+      Transform:
+        translation:
+          - 20.41
+          - 2.07
+          - 3.1
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 1.22
+        range: 2.85
+      GiDynamic: {}
+  - name: bolt-119
+    components:
+      Transform:
+        translation:
+          - 0.49
+          - 1.43
+          - 11.15
+      PointLight:
+        color:
+          - 1.0
+          - 0.89
+          - 0.44
+        intensity: 1.21
+        range: 2.68
+      GiDynamic: {}
+  - name: bolt-120
+    components:
+      Transform:
+        translation:
+          - 10.62
+          - 1.73
+          - -16.65
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.31
+        intensity: 1.26
+        range: 2.67
+      GiDynamic: {}
+  - name: bolt-121
+    components:
+      Transform:
+        translation:
+          - -1.42
+          - 1.69
+          - -18.5
+      PointLight:
+        color:
+          - 0.98
+          - 0.74
+          - 0.34
+        intensity: 1.01
+        range: 2.58
+      GiDynamic: {}
+  - name: bolt-122
+    components:
+      Transform:
+        translation:
+          - -3.36
+          - 1.49
+          - 12.31
+      PointLight:
+        color:
+          - 0.95
+          - 0.58
+          - 0.22
+        intensity: 1.23
+        range: 2.83
+      GiDynamic: {}
+  - name: bolt-123
+    components:
+      Transform:
+        translation:
+          - -8.03
+          - 1.23
+          - -20.27
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.28
+        intensity: 1.09
+        range: 2.81
+      GiDynamic: {}
+  - name: bolt-124
+    components:
+      Transform:
+        translation:
+          - -6.4
+          - 1.53
+          - 18.04
+      PointLight:
+        color:
+          - 0.99
+          - 0.84
+          - 0.41
+        intensity: 1.12
+        range: 2.66
+      GiDynamic: {}
+  - name: bolt-125
+    components:
+      Transform:
+        translation:
+          - -13.52
+          - 1.43
+          - 6.0
+      PointLight:
+        color:
+          - 0.98
+          - 0.79
+          - 0.37
+        intensity: 1.3
+        range: 3.37
+      GiDynamic: {}
+  - name: bolt-126
+    components:
+      Transform:
+        translation:
+          - 17.69
+          - 1.59
+          - -16.21
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.27
+        intensity: 1.25
+        range: 2.64
+      GiDynamic: {}
+  - name: bolt-127
+    components:
+      Transform:
+        translation:
+          - 5.94
+          - 1.14
+          - -11.46
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.27
+        intensity: 1.32
+        range: 2.64
+      GiDynamic: {}
+  - name: bolt-128
+    components:
+      Transform:
+        translation:
+          - 1.71
+          - 1.93
+          - -12.11
+      PointLight:
+        color:
+          - 0.99
+          - 0.82
+          - 0.39
+        intensity: 1.24
+        range: 2.58
+      GiDynamic: {}
+  - name: bolt-129
+    components:
+      Transform:
+        translation:
+          - 16.91
+          - 1.83
+          - 20.89
+      PointLight:
+        color:
+          - 0.96
+          - 0.61
+          - 0.24
+        intensity: 1.05
+        range: 2.53
+      GiDynamic: {}
+  - name: bolt-130
+    components:
+      Transform:
+        translation:
+          - 7.74
+          - 0.95
+          - 16.81
+      PointLight:
+        color:
+          - 0.98
+          - 0.78
+          - 0.37
+        intensity: 1.19
+        range: 3.27
+      GiDynamic: {}
+  - name: bolt-131
+    components:
+      Transform:
+        translation:
+          - 19.41
+          - 1.9
+          - -9.91
+      PointLight:
+        color:
+          - 0.96
+          - 0.6
+          - 0.23
+        intensity: 1.03
+        range: 2.59
+      GiDynamic: {}
+  - name: bolt-132
+    components:
+      Transform:
+        translation:
+          - -11.13
+          - 1.78
+          - 2.58
+      PointLight:
+        color:
+          - 0.99
+          - 0.84
+          - 0.41
+        intensity: 1.34
+        range: 3.36
+      GiDynamic: {}
+  - name: bolt-133
+    components:
+      Transform:
+        translation:
+          - 12.19
+          - 1.21
+          - -4.14
+      PointLight:
+        color:
+          - 0.98
+          - 0.79
+          - 0.37
+        intensity: 1.21
+        range: 2.98
+      GiDynamic: {}
+  - name: bolt-134
+    components:
+      Transform:
+        translation:
+          - -0.2
+          - 1.67
+          - 19.96
+      PointLight:
+        color:
+          - 0.99
+          - 0.86
+          - 0.42
+        intensity: 1.21
+        range: 3.04
+      GiDynamic: {}
+  - name: bolt-135
+    components:
+      Transform:
+        translation:
+          - -8.24
+          - 1.69
+          - 12.9
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.23
+        intensity: 0.97
+        range: 2.54
+      GiDynamic: {}
+  - name: bolt-136
+    components:
+      Transform:
+        translation:
+          - 14.77
+          - 1.64
+          - -20.73
+      PointLight:
+        color:
+          - 0.97
+          - 0.69
+          - 0.3
+        intensity: 0.97
+        range: 3.4
+      GiDynamic: {}
+  - name: bolt-137
+    components:
+      Transform:
+        translation:
+          - -13.02
+          - 1.59
+          - 7.83
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 0.95
+        range: 3.08
+      GiDynamic: {}
+  - name: bolt-138
+    components:
+      Transform:
+        translation:
+          - 12.54
+          - 1.87
+          - 13.37
+      PointLight:
+        color:
+          - 0.96
+          - 0.6
+          - 0.24
+        intensity: 0.99
+        range: 3.28
+      GiDynamic: {}
+  - name: bolt-139
+    components:
+      Transform:
+        translation:
+          - -13.79
+          - 1.09
+          - 14.59
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.26
+        intensity: 1.02
+        range: 2.45
+      GiDynamic: {}
+  - name: bolt-140
+    components:
+      Transform:
+        translation:
+          - 8.62
+          - 0.82
+          - -1.28
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.26
+        intensity: 1.28
+        range: 2.75
+      GiDynamic: {}
+  - name: bolt-141
+    components:
+      Transform:
+        translation:
+          - 12.74
+          - 1.31
+          - -10.77
+      PointLight:
+        color:
+          - 0.96
+          - 0.61
+          - 0.24
+        intensity: 1.28
+        range: 3.33
+      GiDynamic: {}
+  - name: bolt-142
+    components:
+      Transform:
+        translation:
+          - 15.36
+          - 0.81
+          - 13.91
+      PointLight:
+        color:
+          - 0.97
+          - 0.72
+          - 0.32
+        intensity: 1.03
+        range: 2.92
+      GiDynamic: {}
+  - name: bolt-143
+    components:
+      Transform:
+        translation:
+          - -2.91
+          - 0.86
+          - -20.79
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 0.91
+        range: 3.33
+      GiDynamic: {}
+  - name: bolt-144
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 1.06
+          - 4.43
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.36
+        intensity: 0.87
+        range: 2.44
+      GiDynamic: {}
+  - name: bolt-145
+    components:
+      Transform:
+        translation:
+          - -3.02
+          - 1.23
+          - -3.44
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.28
+        intensity: 0.88
+        range: 3.06
+      GiDynamic: {}
+  - name: bolt-146
+    components:
+      Transform:
+        translation:
+          - 12.89
+          - 1.66
+          - -5.53
+      PointLight:
+        color:
+          - 0.99
+          - 0.8
+          - 0.38
+        intensity: 0.91
+        range: 2.89
+      GiDynamic: {}
+  - name: bolt-147
+    components:
+      Transform:
+        translation:
+          - -16.2
+          - 1.56
+          - 10.3
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.31
+        intensity: 0.85
+        range: 2.6
+      GiDynamic: {}
+  - name: bolt-148
+    components:
+      Transform:
+        translation:
+          - 6.26
+          - 1.2
+          - 14.52
+      PointLight:
+        color:
+          - 0.97
+          - 0.71
+          - 0.31
+        intensity: 0.98
+        range: 2.96
+      GiDynamic: {}
+  - name: bolt-149
+    components:
+      Transform:
+        translation:
+          - -3.1
+          - 1.27
+          - 20.47
+      PointLight:
+        color:
+          - 0.95
+          - 0.57
+          - 0.21
+        intensity: 1.02
+        range: 3.03
+      GiDynamic: {}
+  - name: bolt-150
+    components:
+      Transform:
+        translation:
+          - 7.91
+          - 2.13
+          - -6.79
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 0.92
+        range: 2.94
+      GiDynamic: {}
+  - name: bolt-151
+    components:
+      Transform:
+        translation:
+          - 18.55
+          - 1.96
+          - -14.69
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 1.28
+        range: 2.93
+      GiDynamic: {}
+  - name: bolt-152
+    components:
+      Transform:
+        translation:
+          - -8.48
+          - 1.37
+          - 12.39
+      PointLight:
+        color:
+          - 0.95
+          - 0.56
+          - 0.2
+        intensity: 1.35
+        range: 2.96
+      GiDynamic: {}
+  - name: bolt-153
+    components:
+      Transform:
+        translation:
+          - -1.05
+          - 1.68
+          - 4.04
+      PointLight:
+        color:
+          - 0.98
+          - 0.73
+          - 0.33
+        intensity: 1.34
+        range: 2.56
+      GiDynamic: {}
+  - name: bolt-154
+    components:
+      Transform:
+        translation:
+          - -17.14
+          - 1.42
+          - 3.91
+      PointLight:
+        color:
+          - 0.95
+          - 0.56
+          - 0.2
+        intensity: 1.22
+        range: 2.4
+      GiDynamic: {}
+  - name: bolt-155
+    components:
+      Transform:
+        translation:
+          - -6.47
+          - 1.1
+          - -2.88
+      PointLight:
+        color:
+          - 0.97
+          - 0.69
+          - 0.3
+        intensity: 1.19
+        range: 2.71
+      GiDynamic: {}
+  - name: bolt-156
+    components:
+      Transform:
+        translation:
+          - -17.65
+          - 1.25
+          - -4.08
+      PointLight:
+        color:
+          - 0.96
+          - 0.6
+          - 0.23
+        intensity: 1.19
+        range: 2.94
+      GiDynamic: {}
+  - name: bolt-157
+    components:
+      Transform:
+        translation:
+          - 6.55
+          - 1.84
+          - 16.09
+      PointLight:
+        color:
+          - 0.99
+          - 0.84
+          - 0.4
+        intensity: 1.15
+        range: 2.72
+      GiDynamic: {}
+  - name: bolt-158
+    components:
+      Transform:
+        translation:
+          - -8.56
+          - 1.4
+          - -5.82
+      PointLight:
+        color:
+          - 0.99
+          - 0.85
+          - 0.42
+        intensity: 0.9
+        range: 2.83
+      GiDynamic: {}
+  - name: bolt-159
+    components:
+      Transform:
+        translation:
+          - -19.7
+          - 2.07
+          - 17.06
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.3
+        intensity: 1.02
+        range: 2.93
+      GiDynamic: {}
+  - name: bolt-160
+    components:
+      Transform:
+        translation:
+          - -19.68
+          - 1.87
+          - 11.55
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.28
+        intensity: 1.11
+        range: 2.38
+      GiDynamic: {}
+  - name: bolt-161
+    components:
+      Transform:
+        translation:
+          - 6.18
+          - 1.89
+          - -15.1
+      PointLight:
+        color:
+          - 0.99
+          - 0.86
+          - 0.42
+        intensity: 0.98
+        range: 2.9
+      GiDynamic: {}
+  - name: bolt-162
+    components:
+      Transform:
+        translation:
+          - 16.69
+          - 1.46
+          - -6.97
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 1.18
+        range: 2.53
+      GiDynamic: {}
+  - name: bolt-163
+    components:
+      Transform:
+        translation:
+          - 17.05
+          - 0.82
+          - -14.55
+      PointLight:
+        color:
+          - 0.99
+          - 0.84
+          - 0.41
+        intensity: 1.0
+        range: 2.31
+      GiDynamic: {}
+  - name: bolt-164
+    components:
+      Transform:
+        translation:
+          - 3.57
+          - 1.5
+          - 12.47
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 0.86
+        range: 3.08
+      GiDynamic: {}
+  - name: bolt-165
+    components:
+      Transform:
+        translation:
+          - -6.38
+          - 1.25
+          - -12.45
+      PointLight:
+        color:
+          - 0.95
+          - 0.58
+          - 0.22
+        intensity: 1.19
+        range: 2.89
+      GiDynamic: {}
+  - name: bolt-166
+    components:
+      Transform:
+        translation:
+          - 3.3
+          - 2.01
+          - 6.72
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 1.31
+        range: 2.75
+      GiDynamic: {}
+  - name: bolt-167
+    components:
+      Transform:
+        translation:
+          - -4.42
+          - 0.97
+          - 0.65
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 1.15
+        range: 2.42
+      GiDynamic: {}
+  - name: bolt-168
+    components:
+      Transform:
+        translation:
+          - -8.08
+          - 1.15
+          - 18.0
+      PointLight:
+        color:
+          - 0.95
+          - 0.58
+          - 0.22
+        intensity: 1.02
+        range: 3.19
+      GiDynamic: {}
+  - name: bolt-169
+    components:
+      Transform:
+        translation:
+          - -3.29
+          - 1.22
+          - 17.48
+      PointLight:
+        color:
+          - 0.95
+          - 0.55
+          - 0.2
+        intensity: 1.18
+        range: 3.3
+      GiDynamic: {}
+  - name: bolt-170
+    components:
+      Transform:
+        translation:
+          - -6.64
+          - 1.64
+          - -4.45
+      PointLight:
+        color:
+          - 0.98
+          - 0.78
+          - 0.36
+        intensity: 0.97
+        range: 3.09
+      GiDynamic: {}
+  - name: bolt-171
+    components:
+      Transform:
+        translation:
+          - -2.7
+          - 1.23
+          - -0.76
+      PointLight:
+        color:
+          - 0.98
+          - 0.75
+          - 0.35
+        intensity: 1.19
+        range: 2.72
+      GiDynamic: {}
+  - name: bolt-172
+    components:
+      Transform:
+        translation:
+          - -5.09
+          - 1.65
+          - -19.33
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.36
+        intensity: 1.07
+        range: 2.85
+      GiDynamic: {}
+  - name: bolt-173
+    components:
+      Transform:
+        translation:
+          - -13.23
+          - 1.33
+          - 8.21
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.28
+        intensity: 1.07
+        range: 3.32
+      GiDynamic: {}
+  - name: bolt-174
+    components:
+      Transform:
+        translation:
+          - 10.07
+          - 1.43
+          - 9.48
+      PointLight:
+        color:
+          - 0.98
+          - 0.78
+          - 0.37
+        intensity: 1.06
+        range: 2.5
+      GiDynamic: {}
+  - name: bolt-175
+    components:
+      Transform:
+        translation:
+          - -8.92
+          - 1.84
+          - 0.64
+      PointLight:
+        color:
+          - 0.99
+          - 0.8
+          - 0.38
+        intensity: 1.03
+        range: 3.31
+      GiDynamic: {}
+  - name: bolt-176
+    components:
+      Transform:
+        translation:
+          - 12.18
+          - 1.72
+          - -1.68
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 1.31
+        range: 2.97
+      GiDynamic: {}
+  - name: bolt-177
+    components:
+      Transform:
+        translation:
+          - -8.66
+          - 1.0
+          - -0.63
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.36
+        intensity: 1.05
+        range: 2.67
+      GiDynamic: {}
+  - name: bolt-178
+    components:
+      Transform:
+        translation:
+          - 11.13
+          - 1.27
+          - 0.46
+      PointLight:
+        color:
+          - 1.0
+          - 0.87
+          - 0.43
+        intensity: 1.2
+        range: 2.93
+      GiDynamic: {}
+  - name: bolt-179
+    components:
+      Transform:
+        translation:
+          - 18.66
+          - 1.34
+          - 11.3
+      PointLight:
+        color:
+          - 1.0
+          - 0.88
+          - 0.44
+        intensity: 1.17
+        range: 2.61
+      GiDynamic: {}
+  - name: bolt-180
+    components:
+      Transform:
+        translation:
+          - 4.74
+          - 0.81
+          - -17.42
+      PointLight:
+        color:
+          - 0.98
+          - 0.78
+          - 0.37
+        intensity: 1.16
+        range: 2.98
+      GiDynamic: {}
+  - name: bolt-181
+    components:
+      Transform:
+        translation:
+          - -1.69
+          - 1.59
+          - 18.99
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 1.0
+        range: 2.58
+      GiDynamic: {}
+  - name: bolt-182
+    components:
+      Transform:
+        translation:
+          - 6.42
+          - 1.6
+          - -7.15
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.35
+        intensity: 1.11
+        range: 3.12
+      GiDynamic: {}
+  - name: bolt-183
+    components:
+      Transform:
+        translation:
+          - 1.52
+          - 1.98
+          - 4.09
+      PointLight:
+        color:
+          - 0.98
+          - 0.73
+          - 0.33
+        intensity: 0.89
+        range: 2.72
+      GiDynamic: {}
+  - name: bolt-184
+    components:
+      Transform:
+        translation:
+          - -8.99
+          - 1.99
+          - 14.52
+      PointLight:
+        color:
+          - 0.97
+          - 0.71
+          - 0.31
+        intensity: 1.13
+        range: 2.8
+      GiDynamic: {}
+  - name: bolt-185
+    components:
+      Transform:
+        translation:
+          - 8.35
+          - 1.06
+          - -2.11
+      PointLight:
+        color:
+          - 0.99
+          - 0.86
+          - 0.42
+        intensity: 1.02
+        range: 2.74
+      GiDynamic: {}
+  - name: bolt-186
+    components:
+      Transform:
+        translation:
+          - 11.94
+          - 1.19
+          - -11.23
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.23
+        intensity: 1.02
+        range: 3.34
+      GiDynamic: {}
+  - name: bolt-187
+    components:
+      Transform:
+        translation:
+          - 3.81
+          - 1.47
+          - -14.94
+      PointLight:
+        color:
+          - 0.97
+          - 0.69
+          - 0.3
+        intensity: 1.0
+        range: 3.02
+      GiDynamic: {}
+  - name: bolt-188
+    components:
+      Transform:
+        translation:
+          - 6.87
+          - 1.78
+          - 15.11
+      PointLight:
+        color:
+          - 0.98
+          - 0.75
+          - 0.34
+        intensity: 1.11
+        range: 2.92
+      GiDynamic: {}
+  - name: bolt-189
+    components:
+      Transform:
+        translation:
+          - -19.92
+          - 0.95
+          - -15.57
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.29
+        intensity: 1.3
+        range: 2.72
+      GiDynamic: {}
+  - name: bolt-190
+    components:
+      Transform:
+        translation:
+          - 9.14
+          - 1.55
+          - -15.64
+      PointLight:
+        color:
+          - 1.0
+          - 0.87
+          - 0.43
+        intensity: 1.11
+        range: 2.64
+      GiDynamic: {}
+  - name: bolt-191
+    components:
+      Transform:
+        translation:
+          - 16.23
+          - 2.12
+          - 8.55
+      PointLight:
+        color:
+          - 0.99
+          - 0.82
+          - 0.4
+        intensity: 1.09
+        range: 2.46
+      GiDynamic: {}
+  - name: bolt-192
+    components:
+      Transform:
+        translation:
+          - 7.15
+          - 1.47
+          - -8.84
+      PointLight:
+        color:
+          - 0.99
+          - 0.81
+          - 0.39
+        intensity: 0.99
+        range: 2.77
+      GiDynamic: {}
+  - name: bolt-193
+    components:
+      Transform:
+        translation:
+          - -19.06
+          - 1.8
+          - 19.69
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.31
+        intensity: 1.26
+        range: 2.43
+      GiDynamic: {}
+  - name: bolt-194
+    components:
+      Transform:
+        translation:
+          - -2.71
+          - 1.33
+          - 16.9
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.28
+        intensity: 0.92
+        range: 2.54
+      GiDynamic: {}
+  - name: bolt-195
+    components:
+      Transform:
+        translation:
+          - -7.81
+          - 0.89
+          - 1.98
+      PointLight:
+        color:
+          - 0.99
+          - 0.86
+          - 0.42
+        intensity: 1.14
+        range: 2.94
+      GiDynamic: {}
+  - name: bolt-196
+    components:
+      Transform:
+        translation:
+          - -4.64
+          - 1.58
+          - -1.48
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 1.3
+        range: 2.81
+      GiDynamic: {}
+  - name: bolt-197
+    components:
+      Transform:
+        translation:
+          - 14.16
+          - 2.1
+          - 6.71
+      PointLight:
+        color:
+          - 0.98
+          - 0.78
+          - 0.36
+        intensity: 1.2
+        range: 2.61
+      GiDynamic: {}
+  - name: bolt-198
+    components:
+      Transform:
+        translation:
+          - -6.01
+          - 1.24
+          - -17.21
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.36
+        intensity: 0.9
+        range: 3.17
+      GiDynamic: {}
+  - name: bolt-199
+    components:
+      Transform:
+        translation:
+          - -16.15
+          - 1.58
+          - 12.96
+      PointLight:
+        color:
+          - 0.95
+          - 0.55
+          - 0.2
+        intensity: 1.04
+        range: 2.92
+      GiDynamic: {}
+  - name: bolt-200
+    components:
+      Transform:
+        translation:
+          - 6.12
+          - 0.96
+          - 2.06
+      PointLight:
+        color:
+          - 0.98
+          - 0.79
+          - 0.37
+        intensity: 0.93
+        range: 2.89
+      GiDynamic: {}
+  - name: bolt-201
+    components:
+      Transform:
+        translation:
+          - -12.03
+          - 1.44
+          - 11.25
+      PointLight:
+        color:
+          - 1.0
+          - 0.87
+          - 0.43
+        intensity: 0.99
+        range: 2.77
+      GiDynamic: {}
+  - name: bolt-202
+    components:
+      Transform:
+        translation:
+          - -8.74
+          - 1.73
+          - 16.87
+      PointLight:
+        color:
+          - 0.97
+          - 0.71
+          - 0.31
+        intensity: 0.9
+        range: 2.34
+      GiDynamic: {}
+  - name: bolt-203
+    components:
+      Transform:
+        translation:
+          - 8.11
+          - 0.9
+          - 9.17
+      PointLight:
+        color:
+          - 0.95
+          - 0.58
+          - 0.22
+        intensity: 1.15
+        range: 2.6
+      GiDynamic: {}
+  - name: bolt-204
+    components:
+      Transform:
+        translation:
+          - -3.41
+          - 1.63
+          - 14.56
+      PointLight:
+        color:
+          - 0.98
+          - 0.79
+          - 0.37
+        intensity: 0.9
+        range: 3.14
+      GiDynamic: {}
+  - name: bolt-205
+    components:
+      Transform:
+        translation:
+          - -10.01
+          - 1.76
+          - -14.61
+      PointLight:
+        color:
+          - 1.0
+          - 0.9
+          - 0.45
+        intensity: 1.09
+        range: 2.3
+      GiDynamic: {}
+  - name: bolt-206
+    components:
+      Transform:
+        translation:
+          - 18.59
+          - 1.87
+          - -17.28
+      PointLight:
+        color:
+          - 0.96
+          - 0.6
+          - 0.23
+        intensity: 0.95
+        range: 3.0
+      GiDynamic: {}
+  - name: bolt-207
+    components:
+      Transform:
+        translation:
+          - -9.16
+          - 0.99
+          - -14.17
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 0.94
+        range: 2.66
+      GiDynamic: {}
+  - name: bolt-208
+    components:
+      Transform:
+        translation:
+          - -5.54
+          - 0.98
+          - -19.14
+      PointLight:
+        color:
+          - 0.99
+          - 0.82
+          - 0.39
+        intensity: 1.02
+        range: 2.54
+      GiDynamic: {}
+  - name: bolt-209
+    components:
+      Transform:
+        translation:
+          - 3.26
+          - 2.06
+          - -14.14
+      PointLight:
+        color:
+          - 0.99
+          - 0.83
+          - 0.4
+        intensity: 1.32
+        range: 2.83
+      GiDynamic: {}
+  - name: bolt-210
+    components:
+      Transform:
+        translation:
+          - -18.85
+          - 1.36
+          - -19.97
+      PointLight:
+        color:
+          - 1.0
+          - 0.88
+          - 0.44
+        intensity: 0.96
+        range: 2.87
+      GiDynamic: {}
+  - name: bolt-211
+    components:
+      Transform:
+        translation:
+          - -14.93
+          - 1.94
+          - 4.12
+      PointLight:
+        color:
+          - 1.0
+          - 0.89
+          - 0.44
+        intensity: 1.0
+        range: 2.69
+      GiDynamic: {}
+  - name: bolt-212
+    components:
+      Transform:
+        translation:
+          - 20.3
+          - 0.96
+          - 16.87
+      PointLight:
+        color:
+          - 1.0
+          - 0.89
+          - 0.44
+        intensity: 1.11
+        range: 2.4
+      GiDynamic: {}
+  - name: bolt-213
+    components:
+      Transform:
+        translation:
+          - 6.98
+          - 1.61
+          - -14.96
+      PointLight:
+        color:
+          - 0.99
+          - 0.81
+          - 0.39
+        intensity: 1.22
+        range: 2.81
+      GiDynamic: {}
+  - name: bolt-214
+    components:
+      Transform:
+        translation:
+          - 18.68
+          - 2.17
+          - -3.21
+      PointLight:
+        color:
+          - 0.99
+          - 0.84
+          - 0.41
+        intensity: 1.13
+        range: 2.77
+      GiDynamic: {}
+  - name: bolt-215
+    components:
+      Transform:
+        translation:
+          - 8.73
+          - 2.19
+          - -10.19
+      PointLight:
+        color:
+          - 0.99
+          - 0.81
+          - 0.39
+        intensity: 1.28
+        range: 2.48
+      GiDynamic: {}
+  - name: bolt-216
+    components:
+      Transform:
+        translation:
+          - 1.17
+          - 1.82
+          - 14.47
+      PointLight:
+        color:
+          - 0.99
+          - 0.81
+          - 0.39
+        intensity: 1.18
+        range: 2.65
+      GiDynamic: {}
+  - name: bolt-217
+    components:
+      Transform:
+        translation:
+          - 9.0
+          - 0.96
+          - 5.75
+      PointLight:
+        color:
+          - 0.96
+          - 0.63
+          - 0.25
+        intensity: 1.13
+        range: 2.66
+      GiDynamic: {}
+  - name: bolt-218
+    components:
+      Transform:
+        translation:
+          - 12.19
+          - 1.87
+          - -11.88
+      PointLight:
+        color:
+          - 0.96
+          - 0.61
+          - 0.24
+        intensity: 1.27
+        range: 2.59
+      GiDynamic: {}
+  - name: bolt-219
+    components:
+      Transform:
+        translation:
+          - -0.5
+          - 2.11
+          - -1.58
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.27
+        intensity: 1.16
+        range: 2.65
+      GiDynamic: {}
+  - name: bolt-220
+    components:
+      Transform:
+        translation:
+          - 3.68
+          - 2.05
+          - 9.83
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.28
+        intensity: 1.15
+        range: 2.67
+      GiDynamic: {}
+  - name: bolt-221
+    components:
+      Transform:
+        translation:
+          - 4.68
+          - 0.83
+          - 16.92
+      PointLight:
+        color:
+          - 0.96
+          - 0.6
+          - 0.24
+        intensity: 1.1
+        range: 2.86
+      GiDynamic: {}
+  - name: bolt-222
+    components:
+      Transform:
+        translation:
+          - 7.28
+          - 1.12
+          - -5.95
+      PointLight:
+        color:
+          - 0.98
+          - 0.76
+          - 0.35
+        intensity: 1.14
+        range: 2.58
+      GiDynamic: {}
+  - name: bolt-223
+    components:
+      Transform:
+        translation:
+          - 20.1
+          - 1.18
+          - -17.86
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 1.13
+        range: 2.64
+      GiDynamic: {}
+  - name: bolt-224
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 1.16
+          - -14.98
+      PointLight:
+        color:
+          - 0.99
+          - 0.82
+          - 0.39
+        intensity: 1.1
+        range: 2.49
+      GiDynamic: {}
+  - name: bolt-225
+    components:
+      Transform:
+        translation:
+          - 10.49
+          - 1.31
+          - -17.05
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 0.89
+        range: 2.8
+      GiDynamic: {}
+  - name: bolt-226
+    components:
+      Transform:
+        translation:
+          - -14.69
+          - 1.66
+          - 9.7
+      PointLight:
+        color:
+          - 0.95
+          - 0.58
+          - 0.22
+        intensity: 1.2
+        range: 2.53
+      GiDynamic: {}
+  - name: bolt-227
+    components:
+      Transform:
+        translation:
+          - 8.78
+          - 0.84
+          - 7.96
+      PointLight:
+        color:
+          - 0.97
+          - 0.68
+          - 0.29
+        intensity: 1.13
+        range: 3.12
+      GiDynamic: {}
+  - name: bolt-228
+    components:
+      Transform:
+        translation:
+          - -6.86
+          - 1.62
+          - -3.33
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.25
+        intensity: 1.34
+        range: 3.0
+      GiDynamic: {}
+  - name: bolt-229
+    components:
+      Transform:
+        translation:
+          - -16.13
+          - 1.91
+          - 4.25
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.29
+        intensity: 0.95
+        range: 2.76
+      GiDynamic: {}
+  - name: bolt-230
+    components:
+      Transform:
+        translation:
+          - -0.14
+          - 2.12
+          - 17.07
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.36
+        intensity: 1.01
+        range: 2.95
+      GiDynamic: {}
+  - name: bolt-231
+    components:
+      Transform:
+        translation:
+          - 10.65
+          - 2.02
+          - 6.59
+      PointLight:
+        color:
+          - 0.97
+          - 0.69
+          - 0.3
+        intensity: 0.94
+        range: 2.4
+      GiDynamic: {}
+  - name: bolt-232
+    components:
+      Transform:
+        translation:
+          - -9.23
+          - 2.09
+          - -2.58
+      PointLight:
+        color:
+          - 0.99
+          - 0.85
+          - 0.42
+        intensity: 0.9
+        range: 2.57
+      GiDynamic: {}
+  - name: bolt-233
+    components:
+      Transform:
+        translation:
+          - -0.74
+          - 0.82
+          - 8.21
+      PointLight:
+        color:
+          - 0.99
+          - 0.81
+          - 0.39
+        intensity: 1.27
+        range: 2.87
+      GiDynamic: {}
+  - name: bolt-234
+    components:
+      Transform:
+        translation:
+          - -13.18
+          - 1.35
+          - 7.64
+      PointLight:
+        color:
+          - 0.97
+          - 0.71
+          - 0.32
+        intensity: 1.34
+        range: 2.33
+      GiDynamic: {}
+  - name: bolt-235
+    components:
+      Transform:
+        translation:
+          - 12.9
+          - 1.98
+          - -6.49
+      PointLight:
+        color:
+          - 0.97
+          - 0.72
+          - 0.32
+        intensity: 0.96
+        range: 2.84
+      GiDynamic: {}
+  - name: bolt-236
+    components:
+      Transform:
+        translation:
+          - 14.77
+          - 1.54
+          - -3.03
+      PointLight:
+        color:
+          - 0.99
+          - 0.8
+          - 0.38
+        intensity: 0.9
+        range: 2.63
+      GiDynamic: {}
+  - name: bolt-237
+    components:
+      Transform:
+        translation:
+          - -17.94
+          - 2.0
+          - -5.56
+      PointLight:
+        color:
+          - 0.98
+          - 0.75
+          - 0.35
+        intensity: 0.94
+        range: 3.14
+      GiDynamic: {}
+  - name: bolt-238
+    components:
+      Transform:
+        translation:
+          - -0.77
+          - 1.42
+          - -13.85
+      PointLight:
+        color:
+          - 0.96
+          - 0.63
+          - 0.26
+        intensity: 0.93
+        range: 3.03
+      GiDynamic: {}
+  - name: bolt-239
+    components:
+      Transform:
+        translation:
+          - -3.81
+          - 2.09
+          - -0.06
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.28
+        intensity: 1.05
+        range: 2.69
+      GiDynamic: {}
+  - name: bolt-240
+    components:
+      Transform:
+        translation:
+          - 10.53
+          - 1.12
+          - 8.73
+      PointLight:
+        color:
+          - 0.98
+          - 0.77
+          - 0.36
+        intensity: 0.89
+        range: 3.18
+      GiDynamic: {}
+  - name: bolt-241
+    components:
+      Transform:
+        translation:
+          - 2.48
+          - 0.86
+          - 12.29
+      PointLight:
+        color:
+          - 0.99
+          - 0.85
+          - 0.42
+        intensity: 1.35
+        range: 3.16
+      GiDynamic: {}
+  - name: bolt-242
+    components:
+      Transform:
+        translation:
+          - -18.86
+          - 1.16
+          - -15.98
+      PointLight:
+        color:
+          - 0.98
+          - 0.74
+          - 0.34
+        intensity: 1.25
+        range: 2.93
+      GiDynamic: {}
+  - name: bolt-243
+    components:
+      Transform:
+        translation:
+          - -12.64
+          - 1.67
+          - 4.43
+      PointLight:
+        color:
+          - 1.0
+          - 0.87
+          - 0.43
+        intensity: 0.95
+        range: 2.41
+      GiDynamic: {}
+  - name: bolt-244
+    components:
+      Transform:
+        translation:
+          - -9.32
+          - 1.92
+          - -2.9
+      PointLight:
+        color:
+          - 1.0
+          - 0.87
+          - 0.43
+        intensity: 1.17
+        range: 2.33
+      GiDynamic: {}
+  - name: bolt-245
+    components:
+      Transform:
+        translation:
+          - 13.54
+          - 0.9
+          - 7.61
+      PointLight:
+        color:
+          - 0.96
+          - 0.61
+          - 0.24
+        intensity: 1.05
+        range: 3.18
+      GiDynamic: {}
+  - name: bolt-246
+    components:
+      Transform:
+        translation:
+          - 8.35
+          - 1.37
+          - 2.46
+      PointLight:
+        color:
+          - 0.97
+          - 0.7
+          - 0.3
+        intensity: 0.91
+        range: 2.77
+      GiDynamic: {}
+  - name: bolt-247
+    components:
+      Transform:
+        translation:
+          - 9.02
+          - 1.79
+          - 6.59
+      PointLight:
+        color:
+          - 0.99
+          - 0.85
+          - 0.42
+        intensity: 1.03
+        range: 3.21
+      GiDynamic: {}
+  - name: bolt-248
+    components:
+      Transform:
+        translation:
+          - -7.06
+          - 1.24
+          - -19.85
+      PointLight:
+        color:
+          - 0.96
+          - 0.63
+          - 0.26
+        intensity: 0.86
+        range: 2.77
+      GiDynamic: {}
+  - name: bolt-249
+    components:
+      Transform:
+        translation:
+          - -20.41
+          - 1.71
+          - -12.52
+      PointLight:
+        color:
+          - 1.0
+          - 0.9
+          - 0.45
+        intensity: 0.94
+        range: 2.44
+      GiDynamic: {}
+  - name: burst-0
+    components:
+      Transform:
+        translation:
+          - -12.36
+          - 1.36
+          - 3.38
+      PointLight:
+        color:
+          - 0.43
+          - 0.65
+          - 0.98
+        intensity: 0.43
+        range: 1.53
+      GiDynamic: {}
+  - name: burst-1
+    components:
+      Transform:
+        translation:
+          - -11.24
+          - 1.58
+          - 4.46
+      PointLight:
+        color:
+          - 0.35
+          - 0.55
+          - 0.95
+        intensity: 0.36
+        range: 1.66
+      GiDynamic: {}
+  - name: burst-2
+    components:
+      Transform:
+        translation:
+          - -11.27
+          - 1.95
+          - 4.29
+      PointLight:
+        color:
+          - 0.43
+          - 0.66
+          - 0.98
+        intensity: 0.4
+        range: 1.63
+      GiDynamic: {}
+  - name: burst-3
+    components:
+      Transform:
+        translation:
+          - -12.5
+          - 0.95
+          - 4.3
+      PointLight:
+        color:
+          - 0.47
+          - 0.71
+          - 0.99
+        intensity: 0.41
+        range: 1.75
+      GiDynamic: {}
+  - name: burst-4
+    components:
+      Transform:
+        translation:
+          - -11.61
+          - 1.76
+          - 4.91
+      PointLight:
+        color:
+          - 0.47
+          - 0.71
+          - 0.99
+        intensity: 0.46
+        range: 1.53
+      GiDynamic: {}
+  - name: burst-5
+    components:
+      Transform:
+        translation:
+          - -11.74
+          - 0.69
+          - 4.81
+      PointLight:
+        color:
+          - 0.45
+          - 0.68
+          - 0.98
+        intensity: 0.39
+        range: 1.78
+      GiDynamic: {}
+  - name: burst-6
+    components:
+      Transform:
+        translation:
+          - -12.18
+          - 1.84
+          - 3.75
+      PointLight:
+        color:
+          - 0.46
+          - 0.69
+          - 0.99
+        intensity: 0.48
+        range: 1.75
+      GiDynamic: {}
+  - name: burst-7
+    components:
+      Transform:
+        translation:
+          - -11.92
+          - 1.49
+          - 4.76
+      PointLight:
+        color:
+          - 0.37
+          - 0.57
+          - 0.96
+        intensity: 0.39
+        range: 1.53
+      GiDynamic: {}
+  - name: burst-8
+    components:
+      Transform:
+        translation:
+          - -12.35
+          - 1.16
+          - 3.26
+      PointLight:
+        color:
+          - 0.48
+          - 0.73
+          - 0.99
+        intensity: 0.36
+        range: 1.68
+      GiDynamic: {}
+  - name: burst-9
+    components:
+      Transform:
+        translation:
+          - -12.07
+          - 1.76
+          - 4.57
+      PointLight:
+        color:
+          - 0.44
+          - 0.67
+          - 0.98
+        intensity: 0.4
+        range: 1.63
+      GiDynamic: {}
+  - name: burst-10
+    components:
+      Transform:
+        translation:
+          - -11.28
+          - 0.98
+          - 3.21
+      PointLight:
+        color:
+          - 0.49
+          - 0.73
+          - 1.0
+        intensity: 0.39
+        range: 1.65
+      GiDynamic: {}
+  - name: burst-11
+    components:
+      Transform:
+        translation:
+          - -11.88
+          - 1.03
+          - 3.77
+      PointLight:
+        color:
+          - 0.46
+          - 0.69
+          - 0.99
+        intensity: 0.43
+        range: 1.32
+      GiDynamic: {}
+  - name: burst-12
+    components:
+      Transform:
+        translation:
+          - -11.87
+          - 1.61
+          - 4.45
+      PointLight:
+        color:
+          - 0.37
+          - 0.57
+          - 0.96
+        intensity: 0.45
+        range: 1.3
+      GiDynamic: {}
+  - name: burst-13
+    components:
+      Transform:
+        translation:
+          - -11.59
+          - 1.61
+          - 3.58
+      PointLight:
+        color:
+          - 0.44
+          - 0.67
+          - 0.98
+        intensity: 0.46
+        range: 1.5
+      GiDynamic: {}
+  - name: burst-14
+    components:
+      Transform:
+        translation:
+          - -11.54
+          - 0.87
+          - 3.06
+      PointLight:
+        color:
+          - 0.45
+          - 0.68
+          - 0.98
+        intensity: 0.33
+        range: 1.69
+      GiDynamic: {}
+  - name: burst-15
+    components:
+      Transform:
+        translation:
+          - -12.92
+          - 1.43
+          - 4.37
+      PointLight:
+        color:
+          - 0.4
+          - 0.62
+          - 0.97
+        intensity: 0.4
+        range: 1.46
+      GiDynamic: {}
+  - name: burst-16
+    components:
+      Transform:
+        translation:
+          - -12.54
+          - 1.15
+          - 4.7
+      PointLight:
+        color:
+          - 0.36
+          - 0.56
+          - 0.95
+        intensity: 0.34
+        range: 1.55
+      GiDynamic: {}
+  - name: burst-17
+    components:
+      Transform:
+        translation:
+          - -12.92
+          - 1.32
+          - 3.86
+      PointLight:
+        color:
+          - 0.44
+          - 0.67
+          - 0.98
+        intensity: 0.48
+        range: 1.4
+      GiDynamic: {}
+  - name: burst-18
+    components:
+      Transform:
+        translation:
+          - -12.29
+          - 1.49
+          - 4.7
+      PointLight:
+        color:
+          - 0.49
+          - 0.73
+          - 1.0
+        intensity: 0.38
+        range: 1.65
+      GiDynamic: {}
+  - name: burst-19
+    components:
+      Transform:
+        translation:
+          - -12.15
+          - 1.26
+          - 4.99
+      PointLight:
+        color:
+          - 0.4
+          - 0.61
+          - 0.97
+        intensity: 0.48
+        range: 1.72
+      GiDynamic: {}
+  - name: burst-20
+    components:
+      Transform:
+        translation:
+          - -12.82
+          - 1.74
+          - 4.9
+      PointLight:
+        color:
+          - 0.43
+          - 0.66
+          - 0.98
+        intensity: 0.47
+        range: 1.78
+      GiDynamic: {}
+  - name: burst-21
+    components:
+      Transform:
+        translation:
+          - -12.75
+          - 1.86
+          - 3.42
+      PointLight:
+        color:
+          - 0.43
+          - 0.66
+          - 0.98
+        intensity: 0.48
+        range: 1.37
+      GiDynamic: {}
+  - name: burst-22
+    components:
+      Transform:
+        translation:
+          - -12.92
+          - 1.92
+          - 4.31
+      PointLight:
+        color:
+          - 0.35
+          - 0.55
+          - 0.95
+        intensity: 0.34
+        range: 1.67
+      GiDynamic: {}
+  - name: burst-23
+    components:
+      Transform:
+        translation:
+          - -12.64
+          - 1.36
+          - 3.46
+      PointLight:
+        color:
+          - 0.36
+          - 0.56
+          - 0.95
+        intensity: 0.45
+        range: 1.76
+      GiDynamic: {}
+  - name: burst-24
+    components:
+      Transform:
+        translation:
+          - -11.59
+          - 1.89
+          - 4.92
+      PointLight:
+        color:
+          - 0.49
+          - 0.74
+          - 1.0
+        intensity: 0.39
+        range: 1.59
+      GiDynamic: {}
+  - name: burst-25
+    components:
+      Transform:
+        translation:
+          - -12.74
+          - 1.11
+          - 4.31
+      PointLight:
+        color:
+          - 0.36
+          - 0.56
+          - 0.95
+        intensity: 0.39
+        range: 1.79
+      GiDynamic: {}
+  - name: burst-26
+    components:
+      Transform:
+        translation:
+          - -11.8
+          - 0.78
+          - 3.84
+      PointLight:
+        color:
+          - 0.36
+          - 0.56
+          - 0.95
+        intensity: 0.48
+        range: 1.4
+      GiDynamic: {}
+  - name: burst-27
+    components:
+      Transform:
+        translation:
+          - -12.94
+          - 1.19
+          - 3.3
+      PointLight:
+        color:
+          - 0.38
+          - 0.59
+          - 0.96
+        intensity: 0.35
+        range: 1.55
+      GiDynamic: {}
+  - name: burst-28
+    components:
+      Transform:
+        translation:
+          - -11.81
+          - 0.62
+          - 3.38
+      PointLight:
+        color:
+          - 0.48
+          - 0.72
+          - 0.99
+        intensity: 0.46
+        range: 1.43
+      GiDynamic: {}
+  - name: burst-29
+    components:
+      Transform:
+        translation:
+          - -12.07
+          - 1.97
+          - 4.89
+      PointLight:
+        color:
+          - 0.45
+          - 0.68
+          - 0.98
+        intensity: 0.44
+        range: 1.7
+      GiDynamic: {}
+  - name: burst-30
+    components:
+      Transform:
+        translation:
+          - -11.64
+          - 1.93
+          - 4.93
+      PointLight:
+        color:
+          - 0.44
+          - 0.66
+          - 0.98
+        intensity: 0.4
+        range: 1.73
+      GiDynamic: {}
+  - name: burst-31
+    components:
+      Transform:
+        translation:
+          - -11.24
+          - 1.96
+          - 3.86
+      PointLight:
+        color:
+          - 0.35
+          - 0.55
+          - 0.95
+        intensity: 0.4
+        range: 1.35
+      GiDynamic: {}
+  - name: burst-32
+    components:
+      Transform:
+        translation:
+          - -11.14
+          - 1.88
+          - 4.09
+      PointLight:
+        color:
+          - 0.44
+          - 0.67
+          - 0.98
+        intensity: 0.4
+        range: 1.69
+      GiDynamic: {}
+  - name: burst-33
+    components:
+      Transform:
+        translation:
+          - -11.1
+          - 1.34
+          - 3.24
+      PointLight:
+        color:
+          - 0.43
+          - 0.66
+          - 0.98
+        intensity: 0.39
+        range: 1.61
+      GiDynamic: {}
+  - name: burst-34
+    components:
+      Transform:
+        translation:
+          - -12.8
+          - 1.65
+          - 3.08
+      PointLight:
+        color:
+          - 0.41
+          - 0.63
+          - 0.97
+        intensity: 0.5
+        range: 1.34
+      GiDynamic: {}
+  - name: burst-35
+    components:
+      Transform:
+        translation:
+          - -12.81
+          - 0.69
+          - 3.72
+      PointLight:
+        color:
+          - 0.43
+          - 0.66
+          - 0.98
+        intensity: 0.37
+        range: 1.64
+      GiDynamic: {}
+  - name: burst-36
+    components:
+      Transform:
+        translation:
+          - -12.95
+          - 1.7
+          - 4.75
+      PointLight:
+        color:
+          - 0.39
+          - 0.61
+          - 0.96
+        intensity: 0.34
+        range: 1.69
+      GiDynamic: {}
+  - name: burst-37
+    components:
+      Transform:
+        translation:
+          - -11.5
+          - 1.38
+          - 3.74
+      PointLight:
+        color:
+          - 0.5
+          - 0.75
+          - 1.0
+        intensity: 0.36
+        range: 1.55
+      GiDynamic: {}
+  - name: burst-38
+    components:
+      Transform:
+        translation:
+          - -11.33
+          - 1.76
+          - 3.81
+      PointLight:
+        color:
+          - 0.4
+          - 0.61
+          - 0.97
+        intensity: 0.41
+        range: 1.69
+      GiDynamic: {}
+  - name: burst-39
+    components:
+      Transform:
+        translation:
+          - -12.66
+          - 0.82
+          - 3.97
+      PointLight:
+        color:
+          - 0.44
+          - 0.66
+          - 0.98
+        intensity: 0.45
+        range: 1.3
+      GiDynamic: {}
+  - name: burst-40
+    components:
+      Transform:
+        translation:
+          - -11.43
+          - 1.2
+          - 4.01
+      PointLight:
+        color:
+          - 0.38
+          - 0.59
+          - 0.96
+        intensity: 0.32
+        range: 1.65
+      GiDynamic: {}
+  - name: burst-41
+    components:
+      Transform:
+        translation:
+          - -12.92
+          - 1.43
+          - 4.17
+      PointLight:
+        color:
+          - 0.49
+          - 0.74
+          - 1.0
+        intensity: 0.49
+        range: 1.45
+      GiDynamic: {}
+  - name: burst-42
+    components:
+      Transform:
+        translation:
+          - -12.06
+          - 1.95
+          - 4.37
+      PointLight:
+        color:
+          - 0.41
+          - 0.63
+          - 0.97
+        intensity: 0.38
+        range: 1.66
+      GiDynamic: {}
+  - name: burst-43
+    components:
+      Transform:
+        translation:
+          - -12.1
+          - 1.17
+          - 4.51
+      PointLight:
+        color:
+          - 0.43
+          - 0.66
+          - 0.98
+        intensity: 0.33
+        range: 1.33
+      GiDynamic: {}
+  - name: burst-44
+    components:
+      Transform:
+        translation:
+          - -12.41
+          - 1.54
+          - 3.41
+      PointLight:
+        color:
+          - 0.49
+          - 0.73
+          - 1.0
+        intensity: 0.42
+        range: 1.55
+      GiDynamic: {}
+  - name: burst-45
+    components:
+      Transform:
+        translation:
+          - -11.48
+          - 0.99
+          - 3.52
+      PointLight:
+        color:
+          - 0.43
+          - 0.66
+          - 0.98
+        intensity: 0.39
+        range: 1.71
+      GiDynamic: {}
+  - name: burst-46
+    components:
+      Transform:
+        translation:
+          - -12.92
+          - 1.82
+          - 3.81
+      PointLight:
+        color:
+          - 0.39
+          - 0.61
+          - 0.96
+        intensity: 0.44
+        range: 1.37
+      GiDynamic: {}
+  - name: burst-47
+    components:
+      Transform:
+        translation:
+          - -12.15
+          - 0.66
+          - 4.66
+      PointLight:
+        color:
+          - 0.39
+          - 0.6
+          - 0.96
+        intensity: 0.44
+        range: 1.61
+      GiDynamic: {}
+  - name: burst-48
+    components:
+      Transform:
+        translation:
+          - -11.59
+          - 0.89
+          - 3.01
+      PointLight:
+        color:
+          - 0.48
+          - 0.72
+          - 0.99
+        intensity: 0.42
+        range: 1.32
+      GiDynamic: {}
+  - name: burst-49
+    components:
+      Transform:
+        translation:
+          - -11.42
+          - 0.9
+          - 3.64
+      PointLight:
+        color:
+          - 0.47
+          - 0.71
+          - 0.99
+        intensity: 0.4
+        range: 1.58
+      GiDynamic: {}

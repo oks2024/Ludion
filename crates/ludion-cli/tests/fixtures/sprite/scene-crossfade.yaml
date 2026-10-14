@@ -1,0 +1,11 @@
+format: 1
+entities:
+  - name: bolt
+    components:
+      Sprite:
+        atlas: ship.atlas.yaml
+        frame: bolt/idle
+      Animation:
+        clip: run
+        from: walk
+        fade: 0.5

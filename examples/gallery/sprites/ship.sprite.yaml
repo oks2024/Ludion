@@ -1,0 +1,108 @@
+# The gallery's cave-shmup player ship: a swept-delta hull with a lit cockpit and two thrusters.
+# Three frames of one silhouette — `idle`, and the two banks leaned one texel column and narrowed.
+# The plating gradient, the bevel and the dark rim are `effects:`, never painted into the glyphs.
+format: 1
+kind: sprite
+name: ship
+size:
+  - 16
+  - 12
+seed: 4211
+palette:
+  "#":
+    color:
+      - 0.35
+      - 0.40
+      - 0.50
+      - 1.0
+  "=":
+    color:
+      - 0.075
+      - 0.095
+      - 0.145
+      - 1.0
+  o:
+    color:
+      - 0.30
+      - 0.85
+      - 1.0
+      - 1.0
+    emissive: 2.5
+  "*":
+    color:
+      - 1.0
+      - 0.45
+      - 0.10
+      - 1.0
+    emissive: 3.0
+frames:
+  idle:
+    rows:
+      - "................"
+      - ".......##......."
+      - "......####......"
+      - "......#oo#......"
+      - ".....##oo##....."
+      - "....=######=...."
+      - "...==######==..."
+      - "..===######===.."
+      - ".====######====."
+      - ".====#*##*#====."
+      - ".===..*..*..===."
+      - "................"
+  bank-left:
+    rows:
+      - "................"
+      - "......##........"
+      - ".....####......."
+      - ".....#oo#......."
+      - "....##oo##......"
+      - "....######......"
+      - "...=######=....."
+      - "..==######==...."
+      - ".===######===..."
+      - ".===#*##*#===..."
+      - ".==..*..*..==..."
+      - "................"
+  bank-right:
+    rows:
+      - "................"
+      - "........##......"
+      - ".......####....."
+      - ".......#oo#....."
+      - "......##oo##...."
+      - "......######...."
+      - ".....=######=..."
+      - "....==######==.."
+      - "...===######===."
+      - "...===#*##*#===."
+      - "...==..*..*..==."
+      - "................"
+effects:
+  - op: gradient
+    glyphs:
+      - "#"
+    from:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    to:
+      - 0.45
+      - 0.48
+      - 0.58
+      - 1.0
+    direction: vertical
+    blend: multiply
+  - op: shade
+    light:
+      - -1.0
+      - -1.0
+    strength: 0.35
+  - op: outline
+    color:
+      - 0.03
+      - 0.03
+      - 0.06
+      - 1.0
+    side: outside

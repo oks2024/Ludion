@@ -1,0 +1,10 @@
+format: 1
+kind: part
+name: second
+size:
+  - 1
+  - 1
+  - 1
+slices:
+  -
+    - B

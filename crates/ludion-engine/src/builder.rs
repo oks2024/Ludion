@@ -1,0 +1,1187 @@
+//! [`EngineBuilder`] — the one way to construct an [`Engine`] that hosts a game's own components and
+//! systems on top of the built-in core.
+//!
+//! A game needs everything the engine provides — scene load/validation through the registry,
+//! deterministic sim, `WorldHash`, recording/replay, the wire protocol — *and* its own components and
+//! systems. The builder is the single seam that adds the latter without forking the former:
+//!
+//! - **Components register on top of the built-ins.** [`components`](EngineBuilder::components) runs
+//!   a closure against a registry that already holds `Transform`, `Sprite`, … so a scene freely mixes
+//!   built-in visuals with game components. A collision (a name already taken, a type registered
+//!   twice) surfaces as the registry's own structured `L0005` [`Diagnostic`] from
+//!   [`build`](EngineBuilder::build) — construction fails loudly, it does not silently overwrite.
+//! - **Systems are plain `fn`s by convention** added in order with [`system`](EngineBuilder::system)
+//!   — state lives in the `World`, so a system needs no captured state (the method's generic bound
+//!   accepts a closure only so it can capture registration metadata, not as an invitation to carry
+//!   state in one). The engine stores the list and rebuilds a fresh
+//!   [`Schedule`](ludion_ecs::Schedule) from it on every world reset, so the schedule *survives*
+//!   `scene.load` and `engine.restore` (see `Engine::build_schedule`).
+//!
+//! Recording, replay, snapshot/restore, and `WorldHash` need no extra wiring — they are all
+//! registry-driven, so a custom component travels through them for free.
+//!
+//! # Example
+//! ```
+//! use ludion_engine::Engine;
+//! use serde::{Deserialize, Serialize};
+//! use schemars::JsonSchema;
+//!
+//! #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy)]
+//! struct Paddle { x: f32 }
+//!
+//! fn move_paddle(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+//!     for (paddle,) in world.query::<(&mut Paddle,)>() {
+//!         paddle.x += 4.0 * ctx.dt;
+//!     }
+//! }
+//!
+//! let mut engine = Engine::builder()
+//!     .components(|reg| reg.register::<Paddle>("Paddle"))
+//!     .system("move_paddle", move_paddle)
+//!     .build()
+//!     .unwrap();
+//! engine.load_inline_scene("format: 1\nentities: []\n").unwrap();
+//! ```
+
+use std::path::{Path, PathBuf};
+
+use ludion_core::audio::CategoryGains;
+use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
+use ludion_ecs::Registry;
+use ludion_protocol::Command;
+use ludion_protocol::command::SceneLoadParams;
+use ludion_spatial::Plane;
+use schemars::JsonSchema;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+use crate::builtin_registry;
+use crate::docs::{DocKind, DocValidator};
+use crate::engine::{Engine, SystemSpec};
+use crate::player_profile::ProfileKind;
+
+/// The `kind:` a game's projectile-pattern documents declare — the one engine kind registered as a
+/// doc store.
+pub(crate) const PATTERN_KIND: &str = "pattern";
+
+/// The default screenshot resolution a builder-made engine starts with (matches [`Engine::new`]).
+const DEFAULT_RENDER_SIZE: (u32, u32) = (1280, 720);
+
+/// One game-component registration: a closure run against the registry that already holds the
+/// built-ins. `FnOnce` because it runs exactly once, at [`build`](EngineBuilder::build) time; `Send`
+/// so a host can move the whole builder onto the thread that boots the engine.
+type Registration = Box<dyn FnOnce(&mut Registry) -> Result<(), Diagnostic> + Send>;
+
+/// One registered resource mover, from the departing world to the arriving one
+/// ([`EngineBuilder::carry_resource`]). Type-erased so the engine holds a list of them without naming
+/// any game type; run only by the scene-switch path, once per switch, before the driver is swapped.
+pub type ResourceCarrier =
+    Box<dyn Fn(&mut ludion_ecs::World, &mut ludion_ecs::World) + Send + Sync>;
+
+/// Builds an [`Engine`] that hosts a game's components and systems on top of the built-in core.
+///
+/// See the [module docs](crate::builder) for the design. Construct one with [`Engine::builder`],
+/// describe the game, and call [`build`](EngineBuilder::build) (or hand the builder to
+/// `ludion::run` / [`replay_hashes_with`](crate::replay_hashes_with), which build it for you).
+#[derive(Default)]
+pub struct EngineBuilder {
+    project_root: PathBuf,
+    save_root: Option<PathBuf>,
+    profile_persistence: bool,
+    category_gains: CategoryGains,
+    plane: Plane,
+    render_size: (u32, u32),
+    registrations: Vec<Registration>,
+    systems: Vec<SystemSpec>,
+    doc_kinds: Vec<DocKind>,
+    /// Whether any entry of `doc_kinds` came from the public [`doc_kind`](EngineBuilder::doc_kind) —
+    /// a *game* teaching the engine one of its own types. False while only engine-owned kinds are
+    /// registered (what [`patterns`](EngineBuilder::patterns) adds), which is what lets the built-in
+    /// engine skip a foreign `kind:` instead of refusing the boot.
+    game_doc_kinds: bool,
+    doc_validators: Vec<DocValidator>,
+    resource_carriers: Vec<ResourceCarrier>,
+    profile_kind: Option<ProfileKind>,
+    profile_path: Option<PathBuf>,
+    default_scene: Option<PathBuf>,
+}
+
+impl EngineBuilder {
+    /// Starts a builder with the defaults [`Engine::new`] uses: the current directory as project
+    /// root and a 1280×720 screenshot size, no game components or systems yet.
+    pub fn new() -> Self {
+        EngineBuilder {
+            project_root: PathBuf::from("."),
+            save_root: None,
+            profile_persistence: false,
+            category_gains: CategoryGains::default(),
+            plane: Plane::default(),
+            render_size: DEFAULT_RENDER_SIZE,
+            registrations: Vec::new(),
+            systems: Vec::new(),
+            doc_kinds: Vec::new(),
+            game_doc_kinds: false,
+            doc_validators: Vec::new(),
+            resource_carriers: Vec::new(),
+            profile_kind: None,
+            profile_path: None,
+            default_scene: None,
+        }
+    }
+
+    /// Sets the project root that `scene.load`'s relative path and every asset reference resolve
+    /// against. (Hosting entry points such as `ludion::run` override this to the scene file's own
+    /// directory; see [`load_scene_file`](EngineBuilder::load_scene_file).)
+    #[must_use]
+    pub fn project_root(mut self, project_root: impl Into<PathBuf>) -> Self {
+        self.project_root = project_root.into();
+        self
+    }
+
+    /// Sets the directory the player profile loads from and saves to. Default: the project root, so a
+    /// save sits beside its game's content. A shipped build points it at a writable directory outside a
+    /// read-only content root (`ludion::launch` sets it from `LaunchRoots::save`). `profile_path` stays
+    /// relative to it.
+    #[must_use]
+    pub fn save_root(mut self, save_root: impl Into<PathBuf>) -> Self {
+        self.save_root = Some(save_root.into());
+        self
+    }
+
+    /// Enables writing the profile to disk at the frame boundary (default off), and backing up an
+    /// unloadable save at build. The `set_audio_sender` host-side mold: only a live host
+    /// (`ludion::run`) sets it; a replay, `--check-docs`, `--profile`, or a test leaves it off, so the
+    /// [`profile_save_log`](Engine::profile_save_log) still fills but no disk write clobbers the
+    /// machine's real save and no boot renames it (decision 5). The write target is the resolved
+    /// `<save_root>/<profile_rel_path>` — the same path the boot profile load reads.
+    #[must_use]
+    pub fn persist_profile(mut self) -> Self {
+        self.profile_persistence = true;
+        self
+    }
+
+    /// Sets this game's audio mixdown: the master gain each [`AudioCategory`](crate::AudioCategory)
+    /// bus is multiplied by while the sink mixes. Default: the identity, so every voice plays at the
+    /// gain its system authored.
+    ///
+    /// The bus balance ("ambience sits under the effects") is a property of the game, authored once
+    /// here rather than per run — there is no flag and no runtime setter, and no host overrides it:
+    /// `ludion::run`, `ludion::launch` and `ludion serve` all read this value off the built engine.
+    /// It is mixdown, never simulation state: it reaches no `WorldHash`, no snapshot and no audio
+    /// log, so changing it cannot move a replay.
+    #[must_use]
+    pub fn category_gains(mut self, gains: CategoryGains) -> Self {
+        self.category_gains = gains;
+        self
+    }
+
+    /// Sets the plane this game's 2D queries live in — collision, and any engine feature that turns
+    /// a 2D angle into a world direction. Default: [`Plane::Xz`], the ground plane.
+    ///
+    /// Which two world axes the game plays on is a property of the game, authored once here rather
+    /// than per run — there is no flag and no runtime setter. A game whose sprites and tilemaps live
+    /// in world XY (the plane both draw on) chooses [`Plane::Xy`] so its colliders sit where its
+    /// content does instead of stacking at one depth. The value reaches the world as the [`Plane`]
+    /// resource, reinstalled at every world (re)build, and is excluded from the world hash and from
+    /// snapshots — but it *does* move a replay, because the queries built on it resolve differently.
+    #[must_use]
+    pub fn plane(mut self, plane: Plane) -> Self {
+        self.plane = plane;
+        self
+    }
+
+    /// Sets the default screenshot resolution (used when a `render.screenshot` omits dimensions).
+    #[must_use]
+    pub fn render_size(mut self, width: u32, height: u32) -> Self {
+        self.render_size = (width, height);
+        self
+    }
+
+    /// Registers game components. The closure receives a [`Registry`] that already carries the
+    /// built-in visual components, so registrations land *on top of* them.
+    ///
+    /// Call it once with several `register` calls, or several times — registrations apply in order at
+    /// [`build`](EngineBuilder::build) time, and any error (an `L0005` name/type collision) fails the
+    /// build.
+    #[must_use]
+    pub fn components(
+        mut self,
+        register: impl FnOnce(&mut Registry) -> Result<(), Diagnostic> + Send + 'static,
+    ) -> Self {
+        self.registrations.push(Box::new(register));
+        self
+    }
+
+    /// Appends a system to the schedule. Systems run once per tick in the order added — the same
+    /// determinism contract as [`Schedule::add_system`](ludion_ecs::Schedule::add_system).
+    ///
+    /// The generic `F` bound accepts a closure only as an implementation necessity: it is what lets
+    /// this method `#[track_caller]`-capture the call site ([`Location::caller`](std::panic::Location::caller))
+    /// and the function's definition path ([`type_name`](std::any::type_name)) into the
+    /// engine-internal `SystemSpec` that an editor Systems panel introspects. By
+    /// convention every game still passes a bare `fn` item — system state lives in the `World`, never
+    /// a captured closure — so `fn_path` reads as an honest module path (e.g.
+    /// `vigil::movement::move_player`) and per-tick cost is one indirect call, unchanged.
+    #[track_caller]
+    #[must_use]
+    pub fn system<F>(self, name: &'static str, run: F) -> Self
+    where
+        F: Fn(&mut ludion_ecs::World, &ludion_ecs::SystemCtx) + Send + Sync + 'static,
+    {
+        self.push_system(ludion_ecs::Phase::Sim, name, run)
+    }
+
+    /// Appends a presentation system: it runs every tick **after** the physics triple and every
+    /// [`system`](EngineBuilder::system), may spawn and despawn presentation entities
+    /// ([`World::spawn_presentation`](ludion_ecs::World::spawn_presentation)), and may write no sim
+    /// state. Registration order among presentation systems is run order. See
+    /// `Plan/presentation-state.md`.
+    #[track_caller]
+    #[must_use]
+    pub fn presentation_system<F>(self, name: &'static str, run: F) -> Self
+    where
+        F: Fn(&mut ludion_ecs::World, &ludion_ecs::SystemCtx) + Send + Sync + 'static,
+    {
+        self.push_system(ludion_ecs::Phase::Presentation, name, run)
+    }
+
+    #[track_caller]
+    fn push_system<F>(mut self, phase: ludion_ecs::Phase, name: &'static str, run: F) -> Self
+    where
+        F: Fn(&mut ludion_ecs::World, &ludion_ecs::SystemCtx) + Send + Sync + 'static,
+    {
+        self.systems.push(SystemSpec {
+            name,
+            phase,
+            run: std::sync::Arc::new(run),
+            fn_path: std::any::type_name::<F>(),
+            registered_at: std::panic::Location::caller(),
+            declared_queries: Vec::new(),
+        });
+        self
+    }
+
+    /// The registered system names, in the order they will run — the schedule as data, before an
+    /// [`Engine`] is built and without a project root to build one against.
+    ///
+    /// It exists so a game can *test* the ordering contracts its systems depend on ("the input latch
+    /// runs first", "the clock runs above every consumer of the value it settles") instead of
+    /// stating them in a comment: assert on `position()` of the names in this slice. Physics is not
+    /// game-registered — a loaded scene's `physics:` block is the only opt-in, and its triple always
+    /// runs after every game system — so this list is game systems only. Presentation systems run
+    /// after physics, so they come last: sim systems first, then presentation, each in registration
+    /// order.
+    #[must_use]
+    pub fn system_names(&self) -> Vec<&'static str> {
+        let phase = |p| self.systems.iter().filter(move |s| s.phase == p);
+        phase(ludion_ecs::Phase::Sim)
+            .chain(phase(ludion_ecs::Phase::Presentation))
+            .map(|spec| spec.name)
+            .collect()
+    }
+
+    /// Declares one component query the most-recently-registered system runs — the same tuple syntax
+    /// the system body uses. Chain it onto a [`system`](EngineBuilder::system) call, once per distinct
+    /// query a multi-query system runs:
+    ///
+    /// ```
+    /// use ludion_engine::Engine;
+    /// use serde::{Deserialize, Serialize};
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy)]
+    /// struct Loadout { rate: f32 }
+    /// #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy)]
+    /// struct Health { hp: f32 }
+    ///
+    /// fn fire(world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {
+    ///     for (_loadout,) in world.query::<(&Loadout,)>() {}
+    ///     for (_health,) in world.query::<(&mut Health,)>() {}
+    /// }
+    ///
+    /// let builder = Engine::builder()
+    ///     .components(|r| { r.register::<Loadout>("Loadout")?; r.register::<Health>("Health") })
+    ///     .system("fire", fire)
+    ///         .query::<(&Loadout,)>()
+    ///         .query::<(&mut Health,)>();
+    /// # let _ = builder;
+    /// ```
+    ///
+    /// Read/write access is captured from the tuple (`&T` = read, `&mut T` = write). The declared
+    /// types are resolved to registry component names at [`build`](EngineBuilder::build) and published
+    /// by `engine.describe`; a declared type that is not a registered component fails the build with
+    /// `L1125`. The query-drift verifier (`ludion_engine::check_query_drift_replay`) compares these
+    /// declarations against what a run actually iterated.
+    ///
+    /// # Panics
+    /// If called before any [`system`](EngineBuilder::system) — there is no system to attribute the
+    /// query to. Chain it directly onto the `.system(...)` it describes.
+    #[must_use]
+    pub fn query<'w, Q: ludion_ecs::Query<'w>>(mut self) -> Self {
+        let shape = Q::shape();
+        let spec = self.systems.last_mut().unwrap_or_else(|| {
+            panic!(
+                "EngineBuilder::query::<...>() was called before any system was registered; chain \
+                 it onto the .system(name, fn) it describes — e.g. \
+                 .system(\"fire\", fire).query::<(&Loadout, &Transform)>()"
+            )
+        });
+        spec.declared_queries.push(shape);
+        self
+    }
+
+    /// Registers a game data-doc `kind`: every `*.yaml` under the content root whose top-level
+    /// `kind:` matches loads, schema-validated, into a [`DocStore<T>`](crate::DocStore) resource at
+    /// each world build.
+    ///
+    /// `T` carries the same bound as a [`Component`](ludion_ecs::Component) — `Serialize +
+    /// DeserializeOwned + JsonSchema` — because a doc round-trips through canonical text and publishes
+    /// a schema for validation. Unlike a component, a doc kind adds **no** registry entry and no
+    /// world-hash surface: the store is a resource a game's systems read (`world.resource::<DocStore<T>>()`),
+    /// and its numbers reach the hash only through the components those systems derive from it.
+    ///
+    /// Register several kinds with repeated calls; a malformed doc fails the build (or `scene.load`)
+    /// with an `L1119`/`L1120` diagnostic, exactly as a bad scene does.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{DocStore, Engine};
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
+    /// struct Weapon {
+    ///     damage: f32,
+    /// }
+    ///
+    /// let builder = Engine::builder().doc_kind::<Weapon>("weapon");
+    /// # let _ = builder;
+    /// ```
+    #[must_use]
+    pub fn doc_kind<T>(mut self, kind: &str) -> Self
+    where
+        T: Serialize + DeserializeOwned + JsonSchema + 'static + Send + Sync,
+    {
+        self.game_doc_kinds = true;
+        self.doc_kind_engine_owned::<T>(kind)
+    }
+
+    /// Registers a kind the *engine* owns, without claiming the content root the way
+    /// [`doc_kind`](EngineBuilder::doc_kind) does.
+    ///
+    /// The difference is what an unregistered `kind:` means. A game that registers its own kinds is
+    /// the authority on its content root, so a `kind:` it does not know is a typo and fails the boot
+    /// (`L1119`). An engine carrying only engine-owned kinds — the built-in engine behind
+    /// `ludion serve` and `ludion sim-hash` — hosts anyone's scene and cannot know a game's kinds, so
+    /// a foreign `kind:` is skipped with an `L1155` warning instead.
+    fn doc_kind_engine_owned<T>(mut self, kind: &str) -> Self
+    where
+        T: Serialize + DeserializeOwned + JsonSchema + 'static + Send + Sync,
+    {
+        self.doc_kinds.push(DocKind::new::<T>(kind));
+        self
+    }
+
+    /// Registers a semantic validation pass over the loaded data-docs — the cross-reference rules a
+    /// JSON Schema cannot state, because a `district:` or an `enemy:` is a well-typed string and only
+    /// the game knows what it must name.
+    ///
+    /// The closure receives the world *after* every registered [`doc_kind`](EngineBuilder::doc_kind)'s
+    /// [`DocStore`](crate::DocStore) is installed, so a rule may read across kinds, and returns one
+    /// [`Diagnostic`] per broken reference. Register it more than once to split the rules by kind:
+    /// the passes run in registration order and their results concatenate into one report.
+    ///
+    /// The engine runs the passes at three moments: at build and at every `scene.load`/`restore`/
+    /// district switch (an `Error` refuses the load exactly as a malformed doc's `L1119` does; a
+    /// `Warning` prints and the start continues), after a live `asset.reload` of a doc (an `Error` the
+    /// edit newly causes refuses the reload and the old doc stays live; warnings and errors that were
+    /// already there print once through [`Diagnostics`](crate::Diagnostics)), and under a host's
+    /// `--check-docs`.
+    ///
+    /// Report a broken cross-reference under `L1144`
+    /// ([`DOC_REFERENCE_UNRESOLVED`](ludion_core::codes::code::DOC_REFERENCE_UNRESOLVED)) with the
+    /// game's own message; a rule that is not a cross-reference may carry any registered code. Set
+    /// [`with_path`](Diagnostic::with_path) to the document path of the field that failed —
+    /// `<kind>/<doc name>/<field>`, e.g. `quest/rescue-the-keeper/district` — which is also the key
+    /// the once-per-offender print latch uses.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::codes::code;
+    /// use ludion_core::diagnostics::Diagnostic;
+    /// use ludion_engine::{DocStore, Engine};
+    /// # use schemars::JsonSchema;
+    /// # use serde::{Deserialize, Serialize};
+    /// # #[derive(Serialize, Deserialize, JsonSchema, Clone)]
+    /// # struct Quest { district: String }
+    /// let builder = Engine::builder()
+    ///     .doc_kind::<Quest>("quest")
+    ///     .validate_docs(|world| {
+    ///         let Some(quests) = world.resource::<DocStore<Quest>>() else {
+    ///             return Vec::new();
+    ///         };
+    ///         quests
+    ///             .iter()
+    ///             .filter(|(_, quest)| quest.district != "plaza")
+    ///             .map(|(name, quest)| {
+    ///                 Diagnostic::new(
+    ///                     code::DOC_REFERENCE_UNRESOLVED,
+    ///                     format!("quest `{name}` names district `{}`, which does not exist", quest.district),
+    ///                 )
+    ///                 .with_path(format!("quest/{name}/district"))
+    ///             })
+    ///             .collect()
+    ///     });
+    /// # let _ = builder;
+    /// ```
+    #[must_use]
+    pub fn validate_docs(
+        mut self,
+        validate: impl Fn(&ludion_ecs::World) -> Vec<Diagnostic> + Send + Sync + 'static,
+    ) -> Self {
+        self.doc_validators.push(Box::new(validate));
+        self
+    }
+
+    /// Opts the game into projectile patterns: registers the engine-owned
+    /// [`PatternDoc`](crate::PatternDoc) under `kind: pattern` **and** its validator
+    /// ([`validate_pattern_docs`](crate::validate_pattern_docs)) in one call.
+    ///
+    /// One method rather than two, because the two halves are not independently useful: a game that
+    /// loads pattern documents without the validator gets an unknown bullet kind as a volley that
+    /// silently fires nothing at runtime instead of an `L1148` at check time. The engine also
+    /// resolves every bullet kind's `atlas`/`frame` against the content root (`L1151`/`L1152`).
+    ///
+    /// Registration is the whole of the opt-in — the two systems
+    /// ([`play_patterns`](crate::play_patterns), [`advance_volleys`](crate::advance_volleys)) are
+    /// `pub fn`s the game places in its own schedule order, and every hit, side, damage and cancel
+    /// rule is game code.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// let builder = Engine::builder().patterns();
+    /// # let _ = builder;
+    /// ```
+    #[must_use]
+    pub fn patterns(self) -> Self {
+        self.doc_kind_engine_owned::<crate::PatternDoc>(PATTERN_KIND)
+            .validate_docs(crate::validate_pattern_docs)
+    }
+
+    /// Moves the resource of type `T` from the departing world to the arriving one across a **scene
+    /// switch** (`ludion docs scene-transitions`), if the departing world holds one.
+    ///
+    /// A world rebuild wipes every resource, which is the right default: a resource is derived,
+    /// unhashed, un-snapshotted state, and anything the run *is* belongs on a carried entity. But a
+    /// host-side latch — which input device the player last touched, a cursor mode, a debug toggle —
+    /// is deliberately none of those: it describes the session, not the world, and putting it on an
+    /// entity would drag presentation state into the `WorldHash`. This is the seam for that case, and
+    /// only that case.
+    ///
+    /// **Only a switch carries.** A `scene.load` is a fresh session and an `engine.restore` continues
+    /// one from a snapshot that never held the resource in the first place, so neither runs the movers
+    /// — a carried resource is as absent after a load as it was before the game ever ran. So a carried
+    /// resource must be session state a restore may reset: a resource read before its writer in the
+    /// tick is cross-frame state, and belongs in a component (`ludion docs systems`).
+    ///
+    /// Registrations accumulate; one type registered twice moves once (the second mover finds
+    /// nothing). The value moves verbatim — no serialization, so `T` needs no derive beyond `Send +
+    /// Sync`.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// /// Which control scheme the HUD should name — session state, never world state.
+    /// #[derive(Clone, Copy, Default)]
+    /// struct LastDevice(u8);
+    ///
+    /// let builder = Engine::builder().carry_resource::<LastDevice>();
+    /// # let _ = builder;
+    /// ```
+    #[must_use]
+    pub fn carry_resource<T: Send + Sync + 'static>(mut self) -> Self {
+        self.resource_carriers.push(Box::new(|from, to| {
+            if let Some(resource) = from.remove_resource::<T>() {
+                to.insert_resource(resource);
+            }
+        }));
+        self
+    }
+
+    /// Registers the game's one player-profile type `P`: its persistent save state
+    /// ([`Profile<P>`](crate::Profile)), loaded from `save/profile.yaml` (or [`profile_path`](EngineBuilder::profile_path))
+    /// into a resource at every world build and mutated by the game's systems.
+    ///
+    /// `P` carries the component bound plus **`Default`** — because a profile *load-or-defaults*: a
+    /// first boot (no file) and an unloadable save both start from `P::default()`. Unlike a data-doc,
+    /// a profile loads **leniently** (`Plan/phase-16-profile.md`, decision 3): a field the type gained
+    /// fills from its default, a field it lost is dropped, and a save that cannot be honored at all is
+    /// backed up and defaulted — never a rejected boot, never a destroyed save. The changes surface via
+    /// [`Engine::profile_migration`](crate::Engine::profile_migration).
+    ///
+    /// A game registers at most one profile; the **last** call wins (like [`default_scene`](EngineBuilder::default_scene)).
+    /// Registering none leaves the engine profile-free — no `Profile` resource, no save IO.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{Engine, Profile};
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema, Default)]
+    /// struct Save {
+    ///     unlocked_crossbow: bool,
+    ///     runs: u32,
+    /// }
+    ///
+    /// let builder = Engine::builder().profile::<Save>();
+    /// # let _ = builder;
+    /// ```
+    #[must_use]
+    pub fn profile<P>(mut self) -> Self
+    where
+        P: Serialize + DeserializeOwned + JsonSchema + Default + 'static + Send + Sync,
+    {
+        self.profile_kind = Some(ProfileKind::new::<P>());
+        self
+    }
+
+    /// Overrides where the player profile loads from and saves to, relative to the save root (default:
+    /// the project root, default path `save/profile.yaml`). The path resolves root-relative like every
+    /// asset/doc reference — an absolute path is not the intended surface (the root-relative resolution
+    /// is what keeps a save beside its game's content). Only meaningful alongside [`profile`](EngineBuilder::profile).
+    #[must_use]
+    pub fn profile_path(mut self, rel: impl Into<PathBuf>) -> Self {
+        self.profile_path = Some(rel.into());
+        self
+    }
+
+    /// Records the scene `ludion::run` loads when its `--scene` argument is omitted. Purely a
+    /// hosting hint — the engine core never consults it; only `ludion::run` does.
+    #[must_use]
+    pub fn default_scene(mut self, path: impl Into<PathBuf>) -> Self {
+        self.default_scene = Some(path.into());
+        self
+    }
+
+    /// The default scene recorded by [`default_scene`](EngineBuilder::default_scene), if any — read
+    /// by `ludion::run` before it consumes the builder.
+    pub fn default_scene_hint(&self) -> Option<&Path> {
+        self.default_scene.as_deref()
+    }
+
+    /// Builds the engine at the configured project root.
+    ///
+    /// # Errors
+    /// Any registration [`Diagnostic`] (an `L0005` collision with a built-in or another game
+    /// component), or an `L4018` for a duplicate or reserved system name.
+    pub fn build(self) -> Result<Engine, Diagnostic> {
+        let root = self.project_root.clone();
+        self.build_at(root)
+    }
+
+    /// Builds the engine, overriding the project root with `project_root`. This is the seam replay
+    /// uses: the registry and systems come from the builder (the game), the root from the caller —
+    /// `ludion::run`'s replay modes pass the scene's directory, exactly as hosting resolves it.
+    ///
+    /// # Errors
+    /// Any registration [`Diagnostic`], or an `L4018` for a duplicate or reserved system name.
+    pub fn build_at(self, project_root: PathBuf) -> Result<Engine, Diagnostic> {
+        let mut registry = builtin_registry();
+        for register in self.registrations {
+            register(&mut registry)?;
+        }
+        // Resolve every declared query against the assembled registry before the engine exists: a
+        // declared component type that is not registered is a build error (`L1125`), naming the system,
+        // the query index, the Rust type, and the fix.
+        validate_declared_queries(&registry, &self.systems)?;
+        validate_system_names(&self.systems)?;
+        let profile_rel_path = self
+            .profile_path
+            .unwrap_or_else(crate::player_profile::default_profile_rel_path);
+        let mut engine = Engine::from_parts(
+            registry,
+            self.systems,
+            self.doc_kinds,
+            self.profile_kind,
+            profile_rel_path,
+            project_root,
+            self.render_size,
+        );
+        engine.save_root = self.save_root;
+        // Before `install_profile`: the boot load decides on it whether an unloadable save is renamed.
+        engine.profile_persistence = self.profile_persistence;
+        engine.category_gains = self.category_gains;
+        // Set before the mirror: `install_plane` copies the field onto the world, and every later
+        // world (re)build re-runs it.
+        engine.plane = self.plane;
+        engine.install_plane();
+        // Set before `install_docs`, which runs them: the passes are engine configuration derived
+        // from the game, re-run on every world the engine builds.
+        engine.doc_validators = self.doc_validators;
+        // Set before `install_docs` too: it decides whether a foreign `kind:` in the content root
+        // refuses the boot or is skipped with a warning.
+        engine.game_doc_kinds = self.game_doc_kinds;
+        engine.resource_carriers = self.resource_carriers;
+        // Populate the data-doc stores into the initial (pre-scene-load) world so a game driven
+        // before any `scene.load` still sees its docs; a malformed doc — or a broken cross-reference
+        // a registered validation pass reports as an error — fails the build here (the collapsed
+        // diagnostic carries every one as `related`).
+        engine.install_docs().map_err(crate::commands::collapse)?;
+        // Load the registered profile into the same initial world (or default it). Never fails the
+        // build — an unloadable save is backed up and defaulted, reported via `profile_migration`.
+        engine.install_profile();
+        engine.boot_profile_pending = true;
+        Ok(engine)
+    }
+
+    /// Roots the engine at `scene_path`'s own directory, builds it, and loads the scene — the shared
+    /// construction path `ludion serve`, `ludion sim-hash`, and `ludion::run` all start from, so a
+    /// scene fails identically wherever it is loaded.
+    ///
+    /// The path is resolved to an absolute one first (purely lexically — it does not touch the
+    /// filesystem), and the engine's project root becomes that file's parent directory. A scene's
+    /// relative asset references therefore resolve against the scene file, not the process's current
+    /// directory, and a `--record` session's scene reference is cwd-independent.
+    ///
+    /// A scene that cannot be read is reported *before* the engine is built, because the root the
+    /// content walk would sweep is inferred from the very path that turned out to be wrong — the
+    /// walk would report whatever it found in a directory nobody meant to name.
+    ///
+    /// # Errors
+    /// `L1015` if `scene_path` cannot be read, a registration [`Diagnostic`], or the collapsed
+    /// `scene.load` diagnostic (a scene with several errors chains each through the diagnostic's
+    /// `related` list).
+    pub fn load_scene_file(mut self, scene_path: &Path) -> Result<Engine, Diagnostic> {
+        let resolved = std::path::absolute(scene_path).unwrap_or_else(|_| scene_path.to_path_buf());
+        if let Err(error) = std::fs::metadata(&resolved) {
+            return Err(Diagnostic::new(
+                code::SCENE_IO,
+                format!("could not read scene `{}`: {error}", resolved.display()),
+            )
+            .with_help("check the path (relative to the current directory) and permissions"));
+        }
+        let project_root = resolved
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.project_root = project_root;
+        let mut engine = self.build()?;
+        engine.execute(Command::SceneLoad(SceneLoadParams {
+            // The project root is this file's directory, so the wire path is just its name.
+            path: resolved
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        }))?;
+        Ok(engine)
+    }
+}
+
+/// Verifies every declared query names registered components, resolving each element's `TypeId`
+/// against `registry`. Returns the first `L1125` (build errors are one-at-a-time here, like a
+/// registration collision) naming the system, the declared query's index, the offending Rust type,
+/// and the fix.
+fn validate_declared_queries(
+    registry: &Registry,
+    systems: &[SystemSpec],
+) -> Result<(), Diagnostic> {
+    for spec in systems {
+        for (index, query) in spec.declared_queries.iter().enumerate() {
+            for elem in query {
+                if registry.get_by_type_id(elem.type_id).is_none() {
+                    return Err(Diagnostic::new(
+                        code::QUERY_DECL_UNKNOWN_COMPONENT,
+                        format!(
+                            "system `{}`, declared query #{index}: component type `{}` is not \
+                             registered, so the query cannot be resolved to a component name",
+                            spec.name, elem.type_name,
+                        ),
+                    )
+                    .with_help(
+                        "register the component (EngineBuilder::components(|r| \
+                         r.register::<T>(\"Name\"))) or fix the .query::<...>() declaration to name a \
+                         registered component",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Verifies every system carries a name of its own: the recording, the query-drift check, the
+/// profiler and `L4007` all key by name, and a scene's `physics:` block installs systems under
+/// [`ludion_physics::WRITE`], [`STEP`](ludion_physics::STEP) and [`MIRROR`](ludion_physics::MIRROR),
+/// so a game system may not take those. Returns the first `L4018`, naming both registration sites
+/// of a duplicate.
+fn validate_system_names(systems: &[SystemSpec]) -> Result<(), Diagnostic> {
+    const RESERVED: [&str; 3] = [
+        ludion_physics::WRITE,
+        ludion_physics::STEP,
+        ludion_physics::MIRROR,
+    ];
+    for spec in systems {
+        if RESERVED.contains(&spec.name) {
+            return Err(Diagnostic::new(
+                code::SYSTEM_NAME_DUPLICATE,
+                format!(
+                    "the system name `{}` is reserved for the physics systems a scene's `physics:` \
+                     block installs, but a system registered at {} takes it",
+                    spec.name, spec.registered_at,
+                ),
+            )
+            .with_help("give the system a distinct name"));
+        }
+    }
+    for (index, spec) in systems.iter().enumerate() {
+        if let Some(first) = systems[..index]
+            .iter()
+            .find(|other| other.name == spec.name)
+        {
+            return Err(Diagnostic::new(
+                code::SYSTEM_NAME_DUPLICATE,
+                format!(
+                    "the system name `{}` is registered twice: at {} and at {}",
+                    spec.name, first.registered_at, spec.registered_at,
+                ),
+            )
+            .with_help(
+                "give every system a distinct name — recording, profiling and panic reports \
+                 key systems by it",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Engine;
+
+    /// A fresh, empty temp directory unique to this process + `name` (removed first, so a re-run
+    /// starts clean).
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-save-root-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn no_save_root_falls_back_to_the_project_root() {
+        let root = fresh_dir("default");
+        let engine = Engine::builder().project_root(&root).build().unwrap();
+        assert_eq!(engine.save_root(), root);
+    }
+
+    #[test]
+    fn an_explicit_save_root_overrides_the_project_root() {
+        let root = fresh_dir("project");
+        let save = fresh_dir("save");
+        let engine = Engine::builder()
+            .project_root(&root)
+            .save_root(&save)
+            .build()
+            .unwrap();
+        assert_eq!(engine.save_root(), save);
+        assert_eq!(engine.project_root(), root);
+    }
+
+    /// `system_names` is the schedule as data: registration order, every name, and nothing a
+    /// `query` declaration adds — so a game can assert its ordering contracts without a project root.
+    #[test]
+    fn system_names_are_the_registration_order() {
+        fn noop(_world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {}
+        let builder = Engine::builder()
+            .system("first", noop)
+            .system("second", noop)
+            .system("third", noop);
+        assert_eq!(builder.system_names(), vec!["first", "second", "third"]);
+        assert!(Engine::builder().system_names().is_empty());
+    }
+
+    #[test]
+    fn a_duplicate_system_name_fails_the_build_naming_both_sites() {
+        fn noop(_world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {}
+        let builder = Engine::builder();
+        let first = line!() + 1;
+        let builder = builder.system("tick", noop);
+        let builder = builder.system("tick", noop);
+        let error = builder
+            .build()
+            .err()
+            .expect("a duplicate name must fail the build");
+        assert_eq!(error.code, code::SYSTEM_NAME_DUPLICATE);
+        for line in [first, first + 1] {
+            assert!(
+                error.message.contains(&format!("builder.rs:{line}:")),
+                "both registration sites are named: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn a_reserved_physics_name_fails_the_build() {
+        fn noop(_world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {}
+        let error = Engine::builder()
+            .system(ludion_physics::STEP, noop)
+            .build()
+            .err()
+            .expect("a reserved name must fail the build");
+        assert_eq!(error.code, code::SYSTEM_NAME_DUPLICATE);
+        assert!(error.message.contains("reserved"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_presentation_system_runs_after_every_sim_system_and_physics() {
+        fn noop(_world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {}
+        let root = fresh_dir("presentation-order");
+        let engine = Engine::builder()
+            .project_root(&root)
+            .presentation_system("popups", noop)
+            .system("score", noop)
+            .build()
+            .unwrap();
+        let physics = ludion_scene::ScenePhysics {
+            space: ludion_scene::ScenePhysicsSpace::Free,
+            gravity: None,
+            solver_iterations: None,
+            stabilization_iterations: None,
+            sleep_after_ticks: None,
+            layers: Vec::new(),
+        };
+        let schedule = engine.build_schedule(Some(&physics), false);
+        let order: Vec<&str> = schedule.system_names().collect();
+        let at = |name: &str| order.iter().position(|n| *n == name).unwrap();
+        assert!(at("score") < at(ludion_physics::STEP), "{order:?}");
+        assert!(at(ludion_physics::STEP) < at("popups"), "{order:?}");
+        assert!(
+            schedule
+                .system_phases()
+                .any(|(n, p)| n == "popups" && p == ludion_ecs::Phase::Presentation),
+            "{order:?}"
+        );
+    }
+
+    #[test]
+    fn distinct_system_names_build() {
+        fn noop(_world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {}
+        let root = fresh_dir("distinct-names");
+        Engine::builder()
+            .project_root(&root)
+            .system("first", noop)
+            .system("second", noop)
+            .build()
+            .unwrap();
+    }
+
+    /// The mixdown a game authors reaches the built engine, where every host reads it; unauthored,
+    /// it is the identity, so a game that says nothing hears the gains its systems asked for.
+    #[test]
+    fn the_authored_mixdown_rides_the_built_engine() {
+        let root = fresh_dir("gains");
+        assert_eq!(
+            Engine::builder()
+                .project_root(&root)
+                .build()
+                .unwrap()
+                .category_gains(),
+            CategoryGains::default()
+        );
+
+        let gains = CategoryGains {
+            sfx: 1.0,
+            ambient: 0.6,
+            music: 0.8,
+        };
+        let engine = Engine::builder()
+            .project_root(&root)
+            .category_gains(gains)
+            .build()
+            .unwrap();
+        assert_eq!(engine.category_gains(), gains);
+    }
+
+    /// Several registered passes run in registration order and their results concatenate into one
+    /// report — the property that lets a game split its rules by doc kind.
+    #[test]
+    fn registered_validators_run_in_order_and_concatenate() {
+        let root = fresh_dir("validators-order");
+        let lint = |tag: &'static str| {
+            move |_world: &ludion_ecs::World| {
+                vec![
+                    Diagnostic::new(code::MESH_VERTEX_BUDGET_EXCEEDED, format!("{tag}-1")),
+                    Diagnostic::new(code::MESH_VERTEX_BUDGET_EXCEEDED, format!("{tag}-2")),
+                ]
+            }
+        };
+        let engine = Engine::builder()
+            .project_root(&root)
+            .validate_docs(lint("first"))
+            .validate_docs(lint("second"))
+            .build()
+            .unwrap();
+        let messages: Vec<&str> = engine
+            .doc_validation_warnings()
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(messages, ["first-1", "first-2", "second-1", "second-2"]);
+    }
+
+    /// An `Error` a pass reports refuses the build exactly as a malformed doc's `L1119` does, and
+    /// nothing is left standing in the warnings.
+    #[test]
+    fn a_validator_error_refuses_the_build() {
+        let root = fresh_dir("validators-error");
+        // `Engine` is not `Debug`, so `expect_err` cannot be used here.
+        let err = match Engine::builder()
+            .project_root(&root)
+            .validate_docs(|_world| {
+                vec![
+                    Diagnostic::new(
+                        code::DOC_REFERENCE_UNRESOLVED,
+                        "quest names a dead district",
+                    )
+                    .with_path("quest/rescue/district"),
+                ]
+            })
+            .build()
+        {
+            Ok(_) => panic!("the validator reported an error"),
+            Err(diagnostic) => diagnostic,
+        };
+        let rendered = err.to_string();
+        assert!(rendered.contains("L1144"), "{rendered}");
+        assert!(rendered.contains("quest/rescue/district"), "{rendered}");
+    }
+
+    /// A live doc reload re-runs the passes: an `Error` they newly report refuses the reload with the
+    /// old doc live and nothing logged, while a `Warning` still applies and prints once. The path is
+    /// the report key.
+    #[test]
+    fn a_doc_reload_a_validator_rejects_is_refused_and_a_warning_still_applies() {
+        use serde::Deserialize;
+
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
+        struct Weapon {
+            damage: f32,
+        }
+
+        let root = fresh_dir("validators-reload");
+        std::fs::create_dir_all(root.join("weapons")).unwrap();
+        let file = root.join("weapons/crossbow.yaml");
+        std::fs::write(
+            &file,
+            "format: 1
+kind: weapon
+damage: 12.0
+",
+        )
+        .unwrap();
+
+        // Clean at boot (damage is in range), broken only once the file is edited below.
+        let mut engine = Engine::builder()
+            .project_root(&root)
+            .doc_kind::<Weapon>("weapon")
+            .validate_docs(|world: &ludion_ecs::World| {
+                let Some(weapons) = world.resource::<crate::DocStore<Weapon>>() else {
+                    return Vec::new();
+                };
+                weapons
+                    .iter()
+                    .filter(|(_, weapon)| weapon.damage > 100.0)
+                    .map(|(name, _)| {
+                        Diagnostic::new(
+                            code::DOC_REFERENCE_UNRESOLVED,
+                            format!("weapon `{name}` is out of range"),
+                        )
+                        .with_path(format!("weapon/{name}/damage"))
+                        .with_help("lower the damage")
+                    })
+                    .collect()
+            })
+            .validate_docs(|world: &ludion_ecs::World| {
+                let Some(weapons) = world.resource::<crate::DocStore<Weapon>>() else {
+                    return Vec::new();
+                };
+                weapons
+                    .iter()
+                    .filter(|(_, weapon)| weapon.damage > 50.0)
+                    .map(|(name, _)| {
+                        Diagnostic::new(
+                            code::MESH_VERTEX_BUDGET_EXCEEDED,
+                            format!("weapon `{name}` is strong"),
+                        )
+                        .with_path(format!("weapon/{name}/damage"))
+                        .with_help("lower the damage")
+                    })
+                    .collect()
+            })
+            .build()
+            .unwrap();
+        assert!(engine.doc_validation_warnings().is_empty());
+        let stored = |engine: &Engine| {
+            let store = engine
+                .world()
+                .resource::<crate::DocStore<Weapon>>()
+                .unwrap();
+            (
+                store.get("weapons/crossbow.yaml").unwrap().damage,
+                store.generation(),
+            )
+        };
+        let logs = |engine: &mut Engine| -> Vec<ludion_protocol::event::LogEvent> {
+            engine.advance_live();
+            engine
+                .take_events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    ludion_protocol::event::Event::Log(log) if log.diagnostic.is_some() => {
+                        Some(log)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let (_, generation) = stored(&engine);
+
+        std::fs::write(
+            &file,
+            "format: 1
+kind: weapon
+damage: 999.0
+",
+        )
+        .unwrap();
+        let refused = engine
+            .reload_doc_from_disk("weapons/crossbow.yaml")
+            .expect_err("a reload that makes a validator report an error is refused");
+        let rendered = refused.to_string();
+        assert!(rendered.contains("L1144"), "{rendered}");
+        assert!(
+            rendered.contains("weapon/weapons/crossbow.yaml/damage"),
+            "{rendered}"
+        );
+        assert_eq!(stored(&engine), (12.0, generation), "the store moved");
+        assert!(logs(&mut engine).is_empty());
+
+        std::fs::write(
+            &file,
+            "format: 1
+kind: weapon
+damage: 60.0
+",
+        )
+        .unwrap();
+        let applied = engine
+            .reload_doc_from_disk("weapons/crossbow.yaml")
+            .expect("a warning does not refuse the reload");
+        assert!(applied.is_some());
+        assert_eq!(stored(&engine), (60.0, generation + 1));
+        let logs = logs(&mut engine);
+        assert_eq!(logs.len(), 1, "{logs:?}");
+        let diagnostic = logs[0].diagnostic.as_ref().unwrap();
+        assert_eq!(diagnostic.code, code::MESH_VERTEX_BUDGET_EXCEEDED);
+        assert!(diagnostic.message.contains("crossbow"), "{logs:?}");
+        assert_eq!(
+            diagnostic.path.as_deref(),
+            Some("weapon/weapons/crossbow.yaml/damage")
+        );
+        assert_eq!(diagnostic.help.as_deref(), Some("lower the damage"));
+        assert_eq!(logs[0].level, ludion_protocol::event::LogLevel::Warn);
+        assert!(
+            logs[0].message.contains("help: lower the damage"),
+            "{logs:?}"
+        );
+    }
+
+    /// A registered resource crosses a **scene switch** and is gone after a `scene.load` — the two
+    /// halves of `carry_resource`'s contract, on one engine so the second cannot pass by accident.
+    #[test]
+    fn a_registered_resource_crosses_a_switch_and_not_a_load() {
+        /// Session state a game would otherwise lose at every crossing.
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        struct LastDevice(u8);
+
+        /// Frame 0 latches the resource; frame 2 asks for the switch (nothing is carried — the
+        /// resource is the whole subject).
+        fn latch_then_switch(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+            match ctx.frame.as_u64() {
+                0 => {
+                    world.insert_resource(LastDevice(7));
+                }
+                2 => {
+                    if let Some(switch) = world.resource_mut::<crate::SceneSwitch>() {
+                        switch.request("next.yaml".to_string(), "anchor".to_string(), Vec::new());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        const EMPTY: &str = "format: 1\nentities: []\n";
+
+        let root = fresh_dir("carry-resource");
+        std::fs::write(
+            root.join("next.yaml"),
+            "format: 1\nentities:\n  - name: anchor\n    components:\n      Transform:\n        \
+             translation:\n          - 1.0\n          - 0.0\n          - 2.0\n",
+        )
+        .unwrap();
+        let mut engine = Engine::builder()
+            .project_root(&root)
+            .carry_resource::<LastDevice>()
+            .system("latch_then_switch", latch_then_switch)
+            .build()
+            .unwrap();
+        engine.load_inline_scene(EMPTY).unwrap();
+
+        engine.advance_live(); // frame 0 — latched
+        assert_eq!(
+            engine.world().resource::<LastDevice>(),
+            Some(&LastDevice(7))
+        );
+        engine.advance_live(); // frame 1
+        engine.advance_live(); // frame 2 — the switch is performed at the boundary
+        assert!(
+            engine.last_transition_error().is_none(),
+            "the switch is clean: {:?}",
+            engine.last_transition_error()
+        );
+        assert_eq!(
+            engine.world().resource::<LastDevice>(),
+            Some(&LastDevice(7)),
+            "a registered resource moves into the district the switch built"
+        );
+
+        engine.load_inline_scene(EMPTY).unwrap();
+        assert_eq!(
+            engine.world().resource::<LastDevice>(),
+            None,
+            "a scene.load is a fresh session, so it carries nothing"
+        );
+    }
+
+    #[test]
+    fn load_scene_file_overrides_project_root_but_not_save_root() {
+        let root = fresh_dir("scene");
+        let save = fresh_dir("scene-save");
+        let scene_path = root.join("main.yaml");
+        std::fs::write(&scene_path, "format: 1\nentities: []\n").unwrap();
+        let engine = Engine::builder()
+            .save_root(&save)
+            .load_scene_file(&scene_path)
+            .unwrap();
+        assert_eq!(engine.project_root(), root);
+        assert_eq!(engine.save_root(), save);
+    }
+}

@@ -1,0 +1,21 @@
+format: 1
+kind: map
+name: lint-own-collider
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "#######"
+  - "#.#...#"
+  - "#######"
+markers:
+  - name: anchor
+    kind: torch
+    x: 3.0
+    z: 3.0
+  - name: post-a
+    kind: post
+    x: 9.0
+    z: 3.0

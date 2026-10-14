@@ -1,0 +1,238 @@
+format: 1
+kind: animation
+name: player-attack
+# The lamplighter's strike: a one-shot right-hand swing driven from the hips.
+#   t 0.00  neutral
+#   t 0.10  WIND-UP  — torso twists away (+Y, to the character's right), right arm cocks
+#                      back (-50 X) with the elbow folded hard (+70, hand at the hip),
+#                      left arm comes across the body
+#   t 0.20  IMPACT   — torso whips through (-25 Y) and steps into it (-Z translation),
+#                      right arm drives forward and down (+55 X), elbow snaps open (+5)
+#   t 0.35  RECOVERY — the held pose: arm just past centre, torso nearly square again, so
+#                      a one-shot that is left playing rests somewhere a character can
+#                      plausibly stand.
+# The head counter-twists against the torso through the whole swing, so the hat brim stays
+# pointed at the target rather than sweeping past it. Elbow values are POSITIVE: an arm
+# hangs down, so +X folds the hand forward — the opposite sense to a knee.
+# Every keyframe time is a whole 60 Hz tick (0.10 = 6, 0.20 = 12, 0.35 = 21), so the pose
+# a `--time`/`--strip` sample lands on is the pose that was authored.
+duration: 0.35
+loop: false
+tracks:
+  head:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 0.0
+          - -10.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - 0.0
+          - 12.0
+          - 0.0
+      - t: 0.35
+        v:
+          - 0.0
+          - 3.0
+          - 0.0
+        ease: smooth
+  lower-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 14.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 10.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - 34.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.35
+        v:
+          - 20.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  lower-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 15.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 70.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - 5.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.35
+        v:
+          - 25.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  torso:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 0.0
+          - 20.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - 0.0
+          - -25.0
+          - 0.0
+      - t: 0.35
+        v:
+          - 0.0
+          - -6.0
+          - 0.0
+        ease: smooth
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 0.0
+          - 0.0
+          - 0.3
+        ease: smooth
+      - t: 0.2
+        v:
+          - 0.0
+          - 0.0
+          - -0.6
+      - t: 0.35
+        v:
+          - 0.0
+          - 0.0
+          - -0.2
+        ease: smooth
+  upper-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 16.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - -22.0
+          - 0.0
+          - 0.0
+      - t: 0.35
+        v:
+          - -6.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - -50.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - 55.0
+          - 0.0
+          - 0.0
+      - t: 0.35
+        v:
+          - 12.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 6.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - -6.0
+          - 0.0
+          - 0.0
+      - t: 0.35
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - -8.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - 6.0
+          - 0.0
+          - 0.0
+      - t: 0.35
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth

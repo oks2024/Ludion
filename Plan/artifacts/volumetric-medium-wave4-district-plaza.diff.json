@@ -1,0 +1,30 @@
+{
+  "golden": "wave 3 (no scene authors fog_sky; the magenta slab, phase g 0.7)",
+  "actual": "wave 4 (fog_sky 1.0 retires the slab; fog_anisotropy 0.0 restores the beams)",
+  "golden_width": 960,
+  "golden_height": 540,
+  "actual_width": 960,
+  "actual_height": 540,
+  "threshold": 0.99,
+  "pass": true,
+  "ssim": 0.9994980700874183,
+  "mae": 3.9809510030864197,
+  "tile_grid": {
+    "cols": 8,
+    "rows": 8
+  },
+  "damaged_tiles": [],
+  "worst_tile": {
+    "row": 3,
+    "col": 0,
+    "rect": {
+      "x": 0,
+      "y": 204,
+      "width": 120,
+      "height": 68
+    },
+    "ssim": 0.9984251210497688,
+    "region": "middle-left"
+  },
+  "summary": "PASS: ssim 0.9995 >= threshold 0.9900 (0 tiles below threshold)"
+}

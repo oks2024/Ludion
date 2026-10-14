@@ -1,0 +1,736 @@
+# Feature: PostProcess - the post-process arc's all-on scene, and the one each pass in the roster
+# gets enabled and budgeted on. It is staged once for the whole roster, so those waves author
+# `PostProcess` fields here rather than new geometry: emissive lamps, a voxel beacon and a moon disc
+# against a night gradient give bloom something to blow out; the moon hangs upper-left beyond the
+# colonnade and rakes toward the viewer, so every pillar reads as a hard silhouette laying a long
+# shadow into the foreground; a crate at 12 units through a skyline at 84 gives a real depth range;
+# kerbs, crates, plinth and voxels meet the ground and each other in creases rather than floating;
+# and the materials run matte dielectric to polished metal, saturated to neutral.
+#
+# Shadow coverage is authored, not inherited: a DirectionalLight's Transform.translation is the
+# frustum ANCHOR, not a position in the sky (the disc comes from `direction` alone). Every caster
+# lies within 45 units of the anchor (0, 0, -28), the ground center of the built area, so
+# extent 56 / near 1 / far 200 covers them whatever angle the light comes from, with margin and 18
+# shadow texels per world unit. The 220-unit ground plane runs well past that frustum on purpose: it
+# casts nothing, and nothing casts on it out there.
+#
+# `bloom_strength` sits just above the shipped 0.1: 0.12 was chosen off a `render --sweep` contact
+# sheet as the widest glow that keeps the moon a hard disc and the beacon's glass slit a rectangle;
+# past ~0.16 the halo starts washing out the upper-left sky, which is the gradient this scene exists
+# to measure banding on.
+# `bloom_threshold` stays at the shipped 1.0 because the scene's luminances are bimodal - emissive
+# sources sit at 4.5 and above, lit surfaces below 0.5 - so every value swept from 0.5 to 2.6
+# selected the same pixels.
+#
+# ---------------------------------------------------------------------------------------------
+# The rest of the roster. Every value below came off a `render --sweep` contact sheet or an
+# `image-stats` measurement at the golden's own 960x540, and the sentence after it is why. The scene
+# has to read as an image, not as a demo of any one knob, so the ceiling on every choice is "does
+# anything else in the frame stop being visible" - measured as the on/off luma shift each effect
+# costs the whole frame: shafts +1.2, haze +0.7, halation +2.8, vignette -2.1 of 255. Nothing here is
+# allowed to be an order of magnitude louder than its neighbours.
+# Fog and shafts are two terms of ONE medium, so "fog off" (`fog_density: 0`) removes both and is
+# worth +1.9 on its own; the +0.7 above is the haze measured with `shafts: 0`, which is the only way
+# to price the two terms separately.
+# Both halves of the medium are quieter than the +2.4 / +2.3 this file recorded when the merge
+# landed, and neither fall is a weaker effect: the haze's is `fog_sky` making it frame-mean-neutral
+# by construction (see FOG), the shafts' is the height medium reaching the march (see LIGHT SHAFTS).
+# The rule above is a ceiling, not a floor, so both stay where the shape argument put them.
+#
+# `exposure`, `tonemap` and `dither` are deliberately absent: those are the engine's shipped
+# defaults (1.3 / AgX / on) and this scene is content, so it inherits them rather than restating
+# them.
+#
+# THE GRADE. AgX ships muted and expects a grade on top; that is the whole reason these fields
+# exist, and un-graded this scene reads as overcast dusk rather than as night.
+# `contrast` is the one field left at its neutral 1.0, and that is a finding rather than an
+# omission: contrast pivots about 0.5 and almost every pixel here sits below that pivot, so it
+# cannot deepen the shadows without pushing them through zero - measured `clipped_low` (channel
+# samples crushed to black) 0.0030 at 1.0, 0.2066 at 1.04, 0.3538 at 1.08, 0.4776 at 1.12, against a
+# budget ceiling of 0.02. Those four are a re-measurement: the series first recorded here read
+# 0.0013 / 0.048 / 0.100 / 0.162, and the grade decomposition that split white balance from the CDL
+# is what moved it, not the medium: at `contrast: 1.04` the medium LOWERS the crush, to 0.2066 from
+# the 0.2478 the same frame reads with `fog_density: 0`, because in-scattered light lifts exactly
+# the deep-shadow samples the metric counts. (That direction is the metric-gaming hazard
+# `Plan/volumetric-medium.md`'s Risks section names, recorded here rather than banked.) Ten times
+# louder than the first series, same verdict, and a sharper one: 1.04 already crushes ten times the
+# budget ceiling.
+# A positive `lift` cannot rescue it either, because the contrast step runs
+# after the CDL: at 1.12 anything below 0.054 clips, and lifting the black point that far is a
+# visible fade. So the darkening job goes to `gamma` instead, whose power curve pins both ends and
+# therefore cannot crush.
+# `gamma` is the reciprocal power, so below 1 it darkens: 0.74 on red and green is what takes the
+# moonlit road off the near-white it sits at under AgX, and 0.82 on blue means the darkening itself
+# leans the midtones blue - the moonlight does the grading.
+# `gain` is the highlight slope: pulling blue down to 0.93 leaves the brightest large area in the
+# frame (the road) warm-neutral against a cool sky, which is the warm/cool split the lamps need to
+# read against.
+# `lift` is the shadow offset, positive and blue-only: it puts a floor of a few output levels of
+# blue under the moon's shadow bands, so the deepest part of the frame is night-blue rather than
+# black. Red and green stay at 0 because a negative offset there is what crushed at contrast 1.12.
+# `saturation` 1.15: swept 1.0/1.15/1.3/1.5 - AgX desaturates on the way out, 1.15 brings the teal
+# sphere, the red lacquer and the amber lamps back without the sky going the flat cyan 1.3 gives it.
+# `temperature` -0.08: swept -0.16/-0.08/0/+0.08. Negative cools the ambience so the warm lamps
+# separate from it; at -0.16 the road turns blue too and the separation is lost again.
+# `tint` -0.03: a touch of magenta, because -0.08 `temperature` alone drags the sky toward cyan.
+# Swept -0.08/0/+0.05/+0.1 - positive pushes green and the night reads teal; -0.08 turns the sky
+# lavender. -0.03 is the smallest move that keeps it blue.
+#
+# FOG - the medium's ambient in-scatter, and the depth cue the 12-to-84-unit staging exists for.
+# `fog_sky` 1.0: the haze IS the `Environment`'s sky along each view ray, not an authored slab. Fog
+# is skipped where nothing was drawn, so the sky keeps its authored gradient and the haze has a
+# horizon to meet; this is what makes the two agree by construction instead of by hand. The slab it
+# replaces WAS the hand-match - `fog_color` below is exactly `sky_horizon` - and the reason to retire
+# it is that a hand-match is only correct in one direction. The towers stand about 11 degrees above
+# the horizon, where the gradient has already eased a third of the way to the zenith, so the matched
+# slab is ~1.5x too bright there. Measured at the sweep's thick end (`--set fog_density=0.06`):
+# `fog_sky: 0` buries the skyline at luma 66.3 against a 60.2 sky - the towers come out BRIGHTER
+# than the sky behind them, an inverted seam that gets worse with every extra unit of density -
+# while 1.0 converges on it from below (53.1) as the medium thickens. At the shipped 0.014 the
+# medium is far too thin for that to show; what the blend buys here is the direction dependence, the
+# haze cooling toward the zenith and the towers sitting a little deeper into the sky.
+# It also makes the haze nearly free on this file's balance metric, which is worth stating plainly
+# because the number reads like a collapse: the haze costs the frame +0.7 of 255 at `fog_sky: 1.0`
+# against +2.4 at 0, and density does not buy it back (+0.70 / +0.76 / +0.74 / +0.61 at
+# `fog_density` 0.014 / 0.02 / 0.028 / 0.04). A sky-coupled haze replaces a surface with the sky it
+# is seen against, and that is close to the frame's own mean, so the effect is a chromatic
+# redistribution - mean red -0.9, blue +2.2 at 0.028 - rather than a luma lift. Frame-mean luma is
+# blind to this effect; the skyline measurement above is what gates it.
+# `fog_color` stays authored at `sky_horizon` and is deliberately INERT at `fog_sky: 1.0`: the blend
+# reaches the slab only below 1, and `mix(x, y, 1)` is exactly `y`, so the frame is byte-identical
+# with the field deleted. It is kept as the radiance the medium falls back to if the coupling is
+# dialled back or the `Environment` removed - and `sky_horizon` is still the best single slab for
+# that, being the one direction the blend agrees with it exactly.
+# `fog_density` 0.014 is the whole medium's extinction, so it also sets how far the shafts march
+# (3/0.014 = 214 units) and how much they are dimmed on the way back - see LIGHT SHAFTS below. It
+# was swept 0.004/0.01/0.02/0.04 at falloff 0. 0.02 already dissolves the towers and hazes the near
+# pillar; 0.01 was the sweep's pick, raised to 0.014 to pay back the third the height falloff takes
+# at the camera's own height of 5.
+# `fog_albedo` and `fog_anisotropy` are absent for the same reason `exposure` is: 1.0 (pure
+# scattering) and 0.7 (forward-biased) are the engine's defaults, and the sweep sheet
+# (`Plan/artifacts/volumetric-medium-wave4-albedo-anisotropy.png`, in Lore history rather than the
+# tree; regenerated by the command lines in `volumetric-medium-wave4-sweeps.md`) gave no reason to
+# leave them.
+# Both were measured rather than assumed. Albedo only ever darkens, and past the point of removing
+# the medium: the frame reads 64.37 / 62.90 / 61.31 / 59.60 at 1.0 / 0.75 / 0.5 / 0.25, and the
+# no-medium frame is 62.46 - below about 0.8 an absorbing medium is taking more light out than the
+# in-scatter puts back, which is the "dark smoke" the field exists for and is not this scene.
+# Anisotropy pays the other way here because the moon rakes TOWARD the viewer, so the forward lobe
+# points at the camera: the beams contribute +0.24 / +0.58 / +1.20 / +1.77 of 255 at g = 0 / 0.4 /
+# 0.7 / 0.9. 0.7 is where the lobe is worth having without the sun term becoming the frame.
+# `fog_start` 12.0 is the distance of the nearest object in the frame (crate-near-left), so nothing
+# in the foreground is hazed and the whole cue is about what lies behind it.
+# `fog_height` 0.0 puts the reference at street level, which makes `fog_density` mean "the density
+# where the camera is standing". `fog_height_falloff` 0.08 halves it every 8.7 units - the height of
+# the lamps - so the colonnade's feet sit in the mist and the towers' upper stories climb out of it.
+#
+# VIGNETTE. `vignette` 0.3 with `vignette_radius` 0.65: swept both. At the shipped radius of 0.5 the
+# ramp reaches the moon's halo and the near crate; 0.65 starts it outside the colonnade so the
+# darkening lands only on the empty sky corners and the foreground road. 0.5 strength is obvious
+# corner-closing; 0.3 at this radius is the frame quietly ending.
+#
+# AMBIENT OCCLUSION - the box-on-box creases.
+# `ssao` 1.0, and full strength is not loud here: AO reaches the ambient and IBL term only, this
+# scene's ambient is 0.014-0.024, and the grade compresses the low end further, so even at 1.0 the
+# estimator moves at most 9 of 255 levels on 8.5% of the frame. It is the quietest effect in the
+# roster; anything below 1.0 would not read at all.
+# `ssao_radius` 0.8 world units - the size of the creases this geometry actually makes (kerb 0.6
+# tall, plinth 0.5, crates 1.8 across). Swept 0.3/0.6/1.2/2.4: at 0.3 the estimator starts shading
+# the 220-unit ground plane at grazing angles, and past 1.2 the contact darkening pulls away from
+# the contact and becomes broad shading.
+# `ssao_bias` 0.02, the shipped value, kept because it is the knee: measured as the fraction of the
+# frame the estimator touches, 0.005 reaches 18.8% against 0.02's 15.4% - the extra is flat surface
+# occluding itself - and 0.05 drops to 10.9%, where real contacts start disappearing.
+#
+# LIGHT SHAFTS - the same medium's directional in-scatter, the share of the moon's light the fog
+# throws back along each eye ray. There is no reach of its own: the march runs to 3/`fog_density` =
+# 214 units and is extinguished by the same exp(-fog_density*t) the haze integrates, so the fog dims
+# its own beams and thickening it shortens and brightens them together.
+# `shafts` 0.02 is the intensity on top of that. The moon rakes toward the viewer, so every eye ray
+# is lit near the camera and the march has no dark half to draw beams against - which is why this is
+# the one effect in the roster whose ceiling is the frame mean rather than a local artefact. Swept
+# 0/0.01/0.02/0.03/0.05/0.1 at this scene's own 960x540, the on/off frame-mean lift runs
+# +0.6/+1.2/+1.8/+2.9/+5.3 of 255.
+# That series is HALF what it was when the merge landed (+1.2/+2.3/+3.3/+5.3/+9.5), and 0.02 is kept
+# anyway. What halved it is the height medium reaching the march: `fog_height_falloff` 0.08 about
+# `fog_height` 0 thins the air the moon is scattering in everywhere above street level, and the
+# march now weighs each step by that local density. The beams did not get worse - they got
+# height-shaped, which is what the falloff below is authored for.
+# 0.02 holds because the argument for it was never the frame mean. The reach carries past the
+# colonnade to the skyline, where nothing casts, so the tail of every ray is unshadowed fill; 0.02
+# rather than 0.03 is that fill kept quiet enough for the pillars' shadow bands to stay the darkest
+# thing in the foreground, and by 0.06 they are visibly washed. It now sits BELOW its neighbours
+# (halation +2.8, vignette -2.1) rather than inside their band, which the roster rule permits - it
+# is a ceiling, not a floor. Whether this scene wants the louder +2.9 of 0.03 is a taste call, and
+# the sheet at `Plan/artifacts/volumetric-medium-wave4-density-shafts.png` (in Lore history rather
+# than the tree) is what it goes to.
+#
+# DEPTH OF FIELD. `focus_distance` 32.0 is the beacon on its plinth: the frame's centre, the only
+# authored model in it, and 32.3 units from the camera along the view axis. `dof` 0.005 - swept
+# 0/0.004/0.009/0.018 - is 2.7 pixels of far-field circle of confusion at 540 lines: the near crates
+# and the skyline soften, the beacon stays sharp, and at 0.018 the gold sphere's specular breaks
+# into visible disc bokeh, which would make the frame a depth-of-field demo.
+#
+# FILM. `halation` 0.1 sits on `bloom_strength`'s own scale because it reuses the bloom chain's
+# blurred field: swept 0/0.06/0.12/0.25, it is the warm bleed on the lamps and on the gold sphere's
+# highlights, and at 0.25 it starts warming the moon's own halo - which the `bloom_strength` note
+# above exists to protect.
+# `chromatic_aberration` 0.0008 is 0.77 pixels of displacement at an edge midpoint on a 960-wide
+# frame, so red and blue separate by about 1.5 pixels on the high-contrast silhouettes near the
+# frame's edge. It is deliberately far below the 0.002 the component's own docs describe: measured,
+# even 0.0008 drops `edge_aliasing` from 0.370 to 0.223 while anti-aliasing nothing, which is the
+# metric-gaming hazard `Plan/post-process-pipeline.md`'s Risks section names. A larger value would
+# buy a better-looking number and a worse image.
+# `grain` 0.012 with `grain_size` 0.004. The size is a fraction of the frame's HEIGHT, so at this
+# golden's 540 lines the cell is 2.2 pixels - visible as stipple rather than as the sub-pixel dither
+# the shipped 0.002 would floor to here. 0.004 is also where the supersampling resolve stops eating
+# it: the wave-10 measurement puts the 1x-vs-2x amplitude gap at 3.7% there against 7.2% at 0.002.
+# The amplitude is the smaller call - 0.03 reads as sensor noise on the near crate - and it earns
+# its place: `banding_score` on this frame is 0.237 with the grain off and 0.072 with it on.
+format: 1
+name: "post-full - PostProcess: pyramid bloom over an emissive night colonnade"
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.012
+          - 0.022
+          - 0.06
+        sky_horizon:
+          - 0.055
+          - 0.08
+          - 0.14
+        sky_ground:
+          - 0.006
+          - 0.008
+          - 0.014
+        sun_disc_size: 2.5
+        sun_disc_intensity: 12.0
+        ambient:
+          - 0.014
+          - 0.017
+          - 0.024
+        ibl_intensity: 1.0
+      PostProcess:
+        bloom_threshold: 1.0
+        bloom_strength: 0.12
+        contrast: 1.0
+        saturation: 1.15
+        temperature: -0.08
+        tint: -0.03
+        lift:
+          - 0.0
+          - 0.0
+          - 0.006
+        gamma:
+          - 0.74
+          - 0.74
+          - 0.82
+        gain:
+          - 1.0
+          - 0.98
+          - 0.93
+        fog_density: 0.014
+        fog_color:
+          - 0.055
+          - 0.08
+          - 0.14
+        fog_start: 12.0
+        fog_height: 0.0
+        fog_height_falloff: 0.08
+        fog_sky: 1.0
+        vignette: 0.3
+        vignette_radius: 0.65
+        ssao: 1.0
+        ssao_radius: 0.8
+        ssao_bias: 0.02
+        shafts: 0.02
+        dof: 0.005
+        focus_distance: 32.0
+        chromatic_aberration: 0.0008
+        halation: 0.1
+        grain: 0.012
+        grain_size: 0.004
+  - name: moon
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - -28.0
+      DirectionalLight:
+        direction:
+          - 0.44
+          - -0.22
+          - 0.9
+        color:
+          - 0.6
+          - 0.7
+          - 0.95
+        intensity: 1.6
+        shadow_extent: 56.0
+        shadow_near: 1.0
+        shadow_far: 200.0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 5.0
+          - 22.0
+        rotation:
+          - -6.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 220.0
+          - 1.0
+          - 220.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.055
+          - 0.06
+          - 0.075
+          - 1.0
+        roughness: 0.95
+  - name: kerb-left
+    components:
+      Transform:
+        translation:
+          - -10.2
+          - 0.3
+          - -14.0
+        scale:
+          - 1.8
+          - 0.6
+          - 56.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.22
+          - 0.23
+          - 0.26
+          - 1.0
+        roughness: 0.85
+  - name: kerb-right
+    components:
+      Transform:
+        translation:
+          - 10.2
+          - 0.3
+          - -14.0
+        scale:
+          - 1.8
+          - 0.6
+          - 56.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.22
+          - 0.23
+          - 0.26
+          - 1.0
+        roughness: 0.85
+  - name: crate-near-left
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 0.9
+          - 9.0
+        scale:
+          - 1.8
+          - 1.8
+          - 1.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.52
+          - 0.46
+          - 1.0
+        roughness: 0.8
+  - name: crate-near-right
+    components:
+      Transform:
+        translation:
+          - 6.5
+          - 0.7
+          - 10.0
+        scale:
+          - 1.4
+          - 1.4
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.2
+          - 0.16
+          - 1.0
+        roughness: 0.55
+  - name: pillar-left-near
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 3.0
+          - -1.0
+        scale:
+          - 1.5
+          - 6.0
+          - 1.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.37
+          - 0.42
+          - 1.0
+        roughness: 0.7
+  - name: pillar-right-near
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 3.5
+          - -5.0
+        scale:
+          - 1.5
+          - 7.0
+          - 1.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.37
+          - 0.42
+          - 1.0
+        roughness: 0.7
+  - name: pillar-left-far
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 4.0
+          - -17.0
+        scale:
+          - 1.5
+          - 8.0
+          - 1.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.37
+          - 0.42
+          - 1.0
+        roughness: 0.7
+  - name: pillar-right-far
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 3.0
+          - -20.0
+        scale:
+          - 1.5
+          - 6.0
+          - 1.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.37
+          - 0.42
+          - 1.0
+        roughness: 0.7
+  - name: lamp-left-near
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 6.4
+          - -1.0
+        scale:
+          - 1.1
+          - 0.8
+          - 1.1
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.66
+          - 0.28
+          - 1.0
+        emissive: 7.0
+  - name: lamp-right-near
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 7.5
+          - -5.0
+        scale:
+          - 0.9
+          - 0.9
+          - 0.9
+      Mesh:
+        shape: sphere
+        color:
+          - 0.5
+          - 0.8
+          - 1.0
+          - 1.0
+        emissive: 6.0
+  - name: lamp-left-far
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 8.4
+          - -17.0
+        scale:
+          - 1.1
+          - 0.8
+          - 1.1
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.66
+          - 0.28
+          - 1.0
+        emissive: 6.0
+  - name: glow-warm
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 6.0
+          - -1.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.66
+          - 0.3
+        intensity: 3.5
+        range: 16.0
+  - name: glow-cool
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 7.0
+          - -5.0
+      PointLight:
+        color:
+          - 0.5
+          - 0.78
+          - 1.0
+        intensity: 3.0
+        range: 16.0
+  - name: glow-street
+    components:
+      Transform:
+        translation:
+          - 0.5
+          - 2.6
+          - 7.8
+      PointLight:
+        color:
+          - 1.0
+          - 0.7
+          - 0.34
+        intensity: 2.6
+        range: 11.0
+  - name: plinth
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.25
+          - -10.0
+        scale:
+          - 5.5
+          - 0.5
+          - 5.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.26
+          - 0.27
+          - 0.31
+          - 1.0
+        roughness: 0.8
+  - name: beacon
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - -10.0
+        scale:
+          - 0.8
+          - 0.8
+          - 0.8
+      Mesh:
+        shape:
+          voxel: voxels/beacon.voxel.yaml
+  - name: lantern
+    components:
+      Transform:
+        translation:
+          - -1.6
+          - 0.0
+          - 6.5
+        scale:
+          - 0.4
+          - 0.4
+          - 0.4
+      Mesh:
+        shape:
+          voxel: voxels/lantern.voxel.yaml
+  - name: gold-sphere
+    components:
+      Transform:
+        translation:
+          - 4.8
+          - 1.4
+          - -1.5
+        scale:
+          - 2.8
+          - 2.8
+          - 2.8
+      Mesh:
+        shape: sphere
+        color:
+          - 0.95
+          - 0.78
+          - 0.4
+          - 1.0
+        roughness: 0.14
+        metallic: 1.0
+  - name: matte-sphere
+    components:
+      Transform:
+        translation:
+          - -4.2
+          - 1.2
+          - -6.5
+        scale:
+          - 2.4
+          - 2.4
+          - 2.4
+      Mesh:
+        shape: sphere
+        color:
+          - 0.16
+          - 0.5
+          - 0.52
+          - 1.0
+        roughness: 0.94
+  - name: lacquer-block
+    components:
+      Transform:
+        translation:
+          - 2.8
+          - 1.0
+          - -17.0
+        scale:
+          - 2.2
+          - 2.0
+          - 2.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.09
+          - 0.12
+          - 1.0
+        roughness: 0.18
+  - name: tower-west
+    components:
+      Transform:
+        translation:
+          - -15.0
+          - 7.0
+          - -48.0
+        scale:
+          - 7.0
+          - 14.0
+          - 7.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.14
+          - 0.15
+          - 0.19
+          - 1.0
+        roughness: 0.85
+  - name: tower-north
+    components:
+      Transform:
+        translation:
+          - -3.5
+          - 11.0
+          - -62.0
+        scale:
+          - 8.0
+          - 22.0
+          - 8.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.12
+          - 0.13
+          - 0.17
+          - 1.0
+        roughness: 0.85
+  - name: tower-east
+    components:
+      Transform:
+        translation:
+          - 11.0
+          - 9.0
+          - -52.0
+        scale:
+          - 7.0
+          - 18.0
+          - 7.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.13
+          - 0.14
+          - 0.18
+          - 1.0
+        roughness: 0.85
+  - name: tower-far-east
+    components:
+      Transform:
+        translation:
+          - 22.0
+          - 5.5
+          - -44.0
+        scale:
+          - 8.0
+          - 11.0
+          - 8.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.16
+          - 0.2
+          - 1.0
+        roughness: 0.85

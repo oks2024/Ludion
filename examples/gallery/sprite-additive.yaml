@@ -1,0 +1,156 @@
+# Feature: Sprite.blend: additive — the output alpha is withheld so the premultiplied
+# `One, OneMinusSrcAlpha` blend becomes a plain add (`Plan/sprite-engine.md` decision 4). Additive is
+# a per-instance flag, never a batch split, and where two additive quads overlap their light sums and
+# blows past 1.0 — which is exactly what the bloom threshold in the PostProcess chain catches, so the
+# glow reads.
+#
+# Top row: three explosion frames drawn `blend: alpha` (the default) over the dark ground — ordinary
+# over-compositing, the tint's own alpha carrying coverage.
+# Bottom row: the same three frames drawn `blend: additive` with an HDR warm tint (channels above
+# 1.0), overlapping so the shared region sums to a bright core the bloom pyramid lifts into a halo.
+# The two rows are the same art and the same blend pipeline — only the flag bit differs.
+#
+# A dark Environment plus a bloom-only PostProcess is the whole reason the additive row glows and the
+# alpha row does not: there is nothing else in the frame to bloom.
+format: 1
+name: "sprite-additive - Sprite: additive blend under bloom"
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.015
+          - 0.03
+        sky_horizon:
+          - 0.02
+          - 0.025
+          - 0.05
+        sky_ground:
+          - 0.004
+          - 0.006
+          - 0.012
+        ambient:
+          - 0.02
+          - 0.02
+          - 0.03
+  - name: post
+    components:
+      PostProcess:
+        bloom_threshold: 1.0
+        bloom_strength: 0.5
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 8.0
+  # Top row: plain alpha compositing — no summing, no glow.
+  - name: alpha-a
+    components:
+      Transform:
+        translation:
+          - -1.4
+          - 2.0
+          - 0.0
+        scale:
+          - 1.6
+          - 1.6
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f1
+  - name: alpha-b
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - 0.0
+        scale:
+          - 1.6
+          - 1.6
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f2
+  - name: alpha-c
+    components:
+      Transform:
+        translation:
+          - 1.4
+          - 2.0
+          - 0.0
+        scale:
+          - 1.6
+          - 1.6
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f3
+  # Bottom row: additive with an HDR warm tint, overlapping so the cores sum past 1.0 and bloom.
+  - name: add-a
+    components:
+      Transform:
+        translation:
+          - -0.7
+          - -2.0
+          - 0.0
+        scale:
+          - 2.2
+          - 2.2
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f1
+        blend: additive
+        color:
+          - 2.4
+          - 1.4
+          - 0.5
+          - 1.0
+  - name: add-b
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -2.0
+          - 0.0
+        scale:
+          - 2.2
+          - 2.2
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f2
+        blend: additive
+        color:
+          - 2.4
+          - 1.4
+          - 0.5
+          - 1.0
+  - name: add-c
+    components:
+      Transform:
+        translation:
+          - 0.7
+          - -2.0
+          - 0.0
+        scale:
+          - 2.2
+          - 2.2
+          - 1.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: explosion/f3
+        blend: additive
+        color:
+          - 2.4
+          - 1.4
+          - 0.5
+          - 1.0

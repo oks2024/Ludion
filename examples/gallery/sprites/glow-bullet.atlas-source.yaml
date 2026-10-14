@@ -1,0 +1,11 @@
+# A standalone one-sprite atlas demonstrating the `glow` baked effect. `ludion generate-atlas` bakes
+# this into the committed `glow-bullet.png` + `glow-bullet.atlas.yaml` beside it — never edit those by
+# hand. Kept separate from `gallery.atlas-source.yaml` so regenerating the glow demo never moves the
+# gallery atlas and its GPU goldens.
+format: 1
+kind: atlas-source
+name: glow-bullet
+pixels_per_unit: 16.0
+filter: nearest
+inputs:
+  - glow-bullet.sprite.yaml

@@ -1,0 +1,751 @@
+{
+  "golden": "W1 (bounce field unauthored, defaults to 0.0 — the torch is inert)",
+  "actual": "W2 (bounce: 1.0 authored — the torch lights the room)",
+  "golden_width": 960,
+  "golden_height": 540,
+  "actual_width": 960,
+  "actual_height": 540,
+  "threshold": 0.99,
+  "pass": false,
+  "ssim": 0.7675468439638826,
+  "mae": 9.450552179783951,
+  "tile_grid": {
+    "cols": 8,
+    "rows": 8
+  },
+  "damaged_tiles": [
+    {
+      "row": 0,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.26212154488586004,
+      "region": "top-left"
+    },
+    {
+      "row": 3,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.27006563332867267,
+      "region": "middle-left"
+    },
+    {
+      "row": 4,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.35407478263952047,
+      "region": "middle-left"
+    },
+    {
+      "row": 7,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.38931331387004614,
+      "region": "bottom-center"
+    },
+    {
+      "row": 7,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.399666409740552,
+      "region": "bottom-right"
+    },
+    {
+      "row": 6,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.43037233088083704,
+      "region": "bottom-left"
+    },
+    {
+      "row": 4,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.4495992511213244,
+      "region": "middle-left"
+    },
+    {
+      "row": 5,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.4516025536875223,
+      "region": "middle-left"
+    },
+    {
+      "row": 6,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.5043320978298957,
+      "region": "bottom-left"
+    },
+    {
+      "row": 6,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.5344489747324482,
+      "region": "bottom-left"
+    },
+    {
+      "row": 5,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.5625443171262949,
+      "region": "middle-left"
+    },
+    {
+      "row": 6,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.6079369032546359,
+      "region": "bottom-right"
+    },
+    {
+      "row": 1,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.6124667972457466,
+      "region": "top-center"
+    },
+    {
+      "row": 7,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.6184955006460212,
+      "region": "bottom-left"
+    },
+    {
+      "row": 4,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.6321180496649087,
+      "region": "center"
+    },
+    {
+      "row": 7,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.6521594569059688,
+      "region": "bottom-left"
+    },
+    {
+      "row": 0,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.6615911980279631,
+      "region": "top-center"
+    },
+    {
+      "row": 7,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.6751271230182534,
+      "region": "bottom-right"
+    },
+    {
+      "row": 5,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.6770510373014124,
+      "region": "center"
+    },
+    {
+      "row": 1,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.6834832429645357,
+      "region": "top-left"
+    },
+    {
+      "row": 4,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.6998912252227504,
+      "region": "middle-left"
+    },
+    {
+      "row": 2,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.7251760767372506,
+      "region": "top-center"
+    },
+    {
+      "row": 3,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.7313565469860609,
+      "region": "middle-left"
+    },
+    {
+      "row": 0,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.7320153191533517,
+      "region": "top-left"
+    },
+    {
+      "row": 0,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.7612193750266443,
+      "region": "top-left"
+    },
+    {
+      "row": 1,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.7618220931076579,
+      "region": "top-left"
+    },
+    {
+      "row": 3,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.7675483942161085,
+      "region": "middle-right"
+    },
+    {
+      "row": 0,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.7707468419596698,
+      "region": "top-right"
+    },
+    {
+      "row": 4,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.7741991350246122,
+      "region": "center"
+    },
+    {
+      "row": 1,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.7791021757015602,
+      "region": "top-left"
+    },
+    {
+      "row": 6,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.7841908985275953,
+      "region": "bottom-right"
+    },
+    {
+      "row": 2,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.7982959768535483,
+      "region": "top-right"
+    },
+    {
+      "row": 3,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.8082847700501914,
+      "region": "middle-left"
+    },
+    {
+      "row": 4,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.8123576885431715,
+      "region": "middle-right"
+    },
+    {
+      "row": 2,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.8231859420209104,
+      "region": "top-left"
+    },
+    {
+      "row": 1,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.8255108578191752,
+      "region": "top-right"
+    },
+    {
+      "row": 6,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.8386282803334782,
+      "region": "bottom-center"
+    },
+    {
+      "row": 2,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.8451667086655889,
+      "region": "top-left"
+    },
+    {
+      "row": 3,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.8503436757613,
+      "region": "middle-right"
+    },
+    {
+      "row": 0,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.8596361650503751,
+      "region": "top-right"
+    },
+    {
+      "row": 0,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.8612246567484918,
+      "region": "top-center"
+    },
+    {
+      "row": 5,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.8628137414835512,
+      "region": "center"
+    },
+    {
+      "row": 7,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.8865807105519343,
+      "region": "bottom-center"
+    },
+    {
+      "row": 1,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9128013018894358,
+      "region": "top-right"
+    },
+    {
+      "row": 5,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9178533633415807,
+      "region": "middle-right"
+    },
+    {
+      "row": 3,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9299572993417015,
+      "region": "center"
+    },
+    {
+      "row": 4,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9511579494035962,
+      "region": "center"
+    },
+    {
+      "row": 4,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9520800554346639,
+      "region": "middle-right"
+    },
+    {
+      "row": 2,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9539640234055116,
+      "region": "top-right"
+    },
+    {
+      "row": 5,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9562363862973401,
+      "region": "center"
+    },
+    {
+      "row": 5,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9596306465581759,
+      "region": "middle-left"
+    },
+    {
+      "row": 5,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9625327089769711,
+      "region": "middle-right"
+    },
+    {
+      "row": 7,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9682724387045321,
+      "region": "bottom-left"
+    },
+    {
+      "row": 6,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9697574024983588,
+      "region": "bottom-center"
+    },
+    {
+      "row": 2,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9794830041837689,
+      "region": "top-left"
+    },
+    {
+      "row": 2,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9799123113603623,
+      "region": "top-center"
+    },
+    {
+      "row": 0,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9803909123852598,
+      "region": "top-center"
+    },
+    {
+      "row": 3,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9823065162538082,
+      "region": "center"
+    },
+    {
+      "row": 6,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9837996452515141,
+      "region": "bottom-center"
+    },
+    {
+      "row": 1,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9879900981760941,
+      "region": "top-center"
+    }
+  ],
+  "worst_tile": {
+    "row": 0,
+    "col": 2,
+    "rect": {
+      "x": 240,
+      "y": 0,
+      "width": 120,
+      "height": 68
+    },
+    "ssim": 0.26212154488586004,
+    "region": "top-left"
+  },
+  "summary": "FAIL: ssim 0.7675 < threshold 0.9900; worst damage at top-left (tile r0c2, rect 240,0 120x68, ssim 0.2621)"
+}

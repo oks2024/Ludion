@@ -1,0 +1,15 @@
+format: 1
+kind: part
+size:
+  - 1
+  - 4
+  - 1
+slices:
+  -
+    - "B"
+  -
+    - "B"
+  -
+    - "B"
+  -
+    - "B"

@@ -1,0 +1,24 @@
+format: 1
+kind: origin
+tool: comfyui
+comfy_version: "0.36.0"
+recipe: generation/recipes/idol-portrait.gen.yaml
+run_id: "20260918T065841Z-b9421ee1"
+date: "2026-09-18"
+seed: 307
+workflow: generation/workflows/txt2img.json
+workflow_hash: "130a326f089b3773"
+checkpoints:
+  - flux-2-klein-4b.safetensors
+  - qwen_3_4b.safetensors
+  - flux2-vae.safetensors
+prompt: "A small weathered stone idol of a crouching winged figure with one glowing green eye, two bat wings raised and spread clear of its back with a gap of background visible between each wing and the body, squatting on a low dark plinth with a flat square top. Single object, centered, the whole statue inside the frame with clear space around it, flat even grey backdrop with no ground plane and no horizon line, soft frontal lighting, no cast shadow, no text."
+inputs:
+  Empty Latent:
+    height: 1024
+    width: 1024
+  Positive Prompt:
+    text: "A small weathered stone idol of a crouching winged figure with one glowing green eye, two bat wings raised and spread clear of its back with a gap of background visible between each wing and the body, squatting on a low dark plinth with a flat square top. Single object, centered, the whole statue inside the frame with clear space around it, flat even grey backdrop with no ground plane and no horizon line, soft frontal lighting, no cast shadow, no text."
+  Scheduler:
+    height: 1024
+    width: 1024

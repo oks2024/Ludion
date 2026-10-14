@@ -1,0 +1,24 @@
+[package]
+name = "ludion-spatial"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Deterministic 2D-on-the-ground-plane collision for the Ludion game engine: the Collider component, a per-frame spatial hash, and pinned-order overlap / raycast / k-nearest queries."
+keywords = ["ludion", "collision", "spatial", "determinism", "game-engine"]
+categories = ["game-engines", "simulation"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Test-only edge for the Wave 4 WorldHash-trace test (`tests/slide.rs`): a driver system applies
+# `move_and_slide`'s resolved delta to a hashed position component, and two runs must produce
+# identical per-frame hash traces. Dev-dependencies sit outside the boundary graph (the recorded
+# `ludion-server → client, testkit` precedent); `ludion-sim` never depends on this crate, so no
+# cycle exists in either direction.
+ludion-sim = { path = "../ludion-sim", version = "0.1.0" }

@@ -1,0 +1,104 @@
+format: 1
+kind: sculpt
+name: idol
+resolution: 32
+triangles: 4000
+palette:
+  E:
+    color:
+      - 0.2
+      - 1.0
+      - 0.6
+      - 1.0
+    emissive: 4.0
+  S:
+    color:
+      - 0.35
+      - 0.33
+      - 0.3
+      - 1.0
+    roughness: 0.85
+bones:
+  - name: root
+  - name: head
+    parent: root
+parts:
+  - name: plinth
+    shape: box
+    size:
+      - 1.2
+      - 0.3
+      - 1.2
+    round: 0.02
+    at:
+      - 0.0
+      - 0.15
+      - 0.0
+    material: S
+    sharp: true
+  - name: body
+    shape: capsule
+    radius: 0.25
+    from:
+      - 0.0
+      - 0.3
+      - 0.0
+    to:
+      - 0.0
+      - 1.1
+      - 0.0
+    blend: 0.1
+    material: S
+  - name: head
+    shape: ellipsoid
+    radii:
+      - 0.22
+      - 0.18
+      - 0.2
+    at:
+      - 0.0
+      - 1.25
+      - 0.0
+    blend: 0.08
+    material: S
+    bone: head
+  - name: eye
+    shape: sphere
+    radius: 0.05
+    at:
+      - -0.09
+      - 1.28
+      - 0.16
+    blend: 0.02
+    mirror: x
+    material: E
+    bone: head
+  - name: mouth
+    shape: ellipsoid
+    radii:
+      - 0.1
+      - 0.03
+      - 0.08
+    at:
+      - 0.0
+      - 1.18
+      - 0.18
+    op: subtract
+    blend: 0.02
+    bone: head
+  - name: spine
+    shape: cone
+    radius: 0.04
+    height: 0.12
+    at:
+      - 0.0
+      - 0.5
+      - -0.24
+    blend: 0.03
+    repeat:
+      count: 5
+      step:
+        - 0.0
+        - 0.12
+        - 0.0
+    material: S

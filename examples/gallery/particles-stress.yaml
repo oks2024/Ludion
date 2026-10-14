@@ -1,0 +1,801 @@
+# particles-stress - the fill-rate stress scene: ~24,000 live particles across twenty endless
+# emitters, mixed alpha and additive so the per-frame depth sort and the `scene` pass overdraw are
+# both exercised (`Plan/particles-engine-and-editor.md` decision 9).
+#
+# Sized off a game's typical particle consumers rather than a round number: an ambient plume, a
+# drifting mote field and a hit burst are each a single endless or short-burst emitter at a few
+# dozen to a couple hundred live particles. This scene multiplies that population by an order of
+# magnitude and spreads it across three registers, so the workload has the mixed shape a busy
+# level would actually author rather than one emitter type maxed out alone.
+#
+# Three registers - seven smoke columns, seven ember fountains, six mote drifts, twenty emitters
+# total - each endless (`duration: 0`, no `started`) and therefore in steady state at frame 0: the
+# live count of an endless emitter is `rate x mean(life)` (`ludion docs particles`):
+#
+#   SMOKE  (alpha)     7 x rate 380 x life~2.8s ~= 1,064 live each ~= 7,448 total. The overdraw
+#          register, deliberately the largest discs (start_size 1.2 -> end_size 3.8, softness
+#          0.88): large soft alpha discs at 1080p are fill-bound, and this is where the `scene`
+#          pass ceiling shows it.
+#   EMBERS (additive)  7 x rate 830 x life~1.4s ~= 1,162 live each ~= 8,134 total. The cheap
+#          register: small HDR orange sparks (start_color channel above 1.0) thrown up by positive
+#          gravity, additive so a stack of them blows out and rides the bloom chain instead of
+#          costing raster fill.
+#   MOTES  (additive)  6 x rate 390 x life~3.6s ~= 1,404 live each ~= 8,424 total. Tiny green
+#          motes released across a disc and `floor`-clipped at the ground - the highest live count
+#          per emitter, carried by the smallest discs.
+#
+# 24,006 total (~24,000), no single emitter above ~1,500 live - well under
+# `PARTICLE_MAX_LIVE_PER_EMITTER` = 4,096. Registers are interleaved position-by-position across
+# the floor rather than grouped, so the depth sort actually alternates blend modes frame to frame
+# the way a real district's mixed effects would, instead of sorting one flat blend after another.
+#
+# Placement is deterministic (baked in here by hand, not generated), so this file IS the fixture -
+# editing a number by hand is a legitimate edit and no generator run is part of any gate.
+#
+# Deliberately carries NO `Environment`, `PostProcess` or `DirectionalLight`: the budgets
+# calibrated on it (`budgets/pinned-*-particles-stress.toml`, measured on the pinned boxes) exist
+# to gate the `scene` pass's particle draw and `extract_ms` alone, and every absent feature is one
+# fewer cost mixed into those ceilings - the same rule and the same reason as `lights-stress.yaml`.
+format: 1
+name: "particles-stress - ~24,000 live particles: the particle fill-rate workload"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 15.0
+          - 24.0
+        rotation:
+          - -40.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 55.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 16.0
+          - 6.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 3.0
+        range: 40.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 60.0
+          - 1.0
+          - 60.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.12
+          - 0.13
+          - 0.16
+          - 1.0
+  - name: smoke-0
+    components:
+      Transform:
+        translation:
+          - -16.0
+          - 0.2
+          - -12.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.45
+          - 0.45
+          - 0.45
+        rate: 380.0
+        life:
+          - 2.3
+          - 3.3
+        speed:
+          - 0.4
+          - 0.9
+        spread_deg: 14.0
+        gravity: -0.8
+        drag: 0.35
+        start_size: 1.2
+        end_size: 3.8
+        start_color:
+          - 0.55
+          - 0.56
+          - 0.6
+          - 0.3
+        end_color:
+          - 0.3
+          - 0.31
+          - 0.36
+          - 0.0
+        softness: 0.88
+        seed: 101
+  - name: smoke-1
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 0.2
+          - -12.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.45
+          - 0.45
+          - 0.45
+        rate: 380.0
+        life:
+          - 2.3
+          - 3.3
+        speed:
+          - 0.4
+          - 0.9
+        spread_deg: 14.0
+        gravity: -0.8
+        drag: 0.35
+        start_size: 1.2
+        end_size: 3.8
+        start_color:
+          - 0.55
+          - 0.56
+          - 0.6
+          - 0.3
+        end_color:
+          - 0.3
+          - 0.31
+          - 0.36
+          - 0.0
+        softness: 0.88
+        seed: 102
+  - name: smoke-2
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 0.2
+          - -4.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.45
+          - 0.45
+          - 0.45
+        rate: 380.0
+        life:
+          - 2.3
+          - 3.3
+        speed:
+          - 0.4
+          - 0.9
+        spread_deg: 14.0
+        gravity: -0.8
+        drag: 0.35
+        start_size: 1.2
+        end_size: 3.8
+        start_color:
+          - 0.55
+          - 0.56
+          - 0.6
+          - 0.3
+        end_color:
+          - 0.3
+          - 0.31
+          - 0.36
+          - 0.0
+        softness: 0.88
+        seed: 103
+  - name: smoke-3
+    components:
+      Transform:
+        translation:
+          - 16.0
+          - 0.2
+          - -4.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.45
+          - 0.45
+          - 0.45
+        rate: 380.0
+        life:
+          - 2.3
+          - 3.3
+        speed:
+          - 0.4
+          - 0.9
+        spread_deg: 14.0
+        gravity: -0.8
+        drag: 0.35
+        start_size: 1.2
+        end_size: 3.8
+        start_color:
+          - 0.55
+          - 0.56
+          - 0.6
+          - 0.3
+        end_color:
+          - 0.3
+          - 0.31
+          - 0.36
+          - 0.0
+        softness: 0.88
+        seed: 104
+  - name: smoke-4
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.2
+          - 4.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.45
+          - 0.45
+          - 0.45
+        rate: 380.0
+        life:
+          - 2.3
+          - 3.3
+        speed:
+          - 0.4
+          - 0.9
+        spread_deg: 14.0
+        gravity: -0.8
+        drag: 0.35
+        start_size: 1.2
+        end_size: 3.8
+        start_color:
+          - 0.55
+          - 0.56
+          - 0.6
+          - 0.3
+        end_color:
+          - 0.3
+          - 0.31
+          - 0.36
+          - 0.0
+        softness: 0.88
+        seed: 105
+  - name: smoke-5
+    components:
+      Transform:
+        translation:
+          - -16.0
+          - 0.2
+          - 12.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.45
+          - 0.45
+          - 0.45
+        rate: 380.0
+        life:
+          - 2.3
+          - 3.3
+        speed:
+          - 0.4
+          - 0.9
+        spread_deg: 14.0
+        gravity: -0.8
+        drag: 0.35
+        start_size: 1.2
+        end_size: 3.8
+        start_color:
+          - 0.55
+          - 0.56
+          - 0.6
+          - 0.3
+        end_color:
+          - 0.3
+          - 0.31
+          - 0.36
+          - 0.0
+        softness: 0.88
+        seed: 106
+  - name: smoke-6
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 0.2
+          - 12.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.45
+          - 0.45
+          - 0.45
+        rate: 380.0
+        life:
+          - 2.3
+          - 3.3
+        speed:
+          - 0.4
+          - 0.9
+        spread_deg: 14.0
+        gravity: -0.8
+        drag: 0.35
+        start_size: 1.2
+        end_size: 3.8
+        start_color:
+          - 0.55
+          - 0.56
+          - 0.6
+          - 0.3
+        end_color:
+          - 0.3
+          - 0.31
+          - 0.36
+          - 0.0
+        softness: 0.88
+        seed: 107
+  - name: ember-0
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 0.15
+          - -12.0
+      ParticleEmitter:
+        rate: 830.0
+        life:
+          - 1.0
+          - 1.8
+        speed:
+          - 3.2
+          - 5.5
+        spread_deg: 24.0
+        gravity: 5.0
+        start_size: 0.2
+        end_size: 0.05
+        start_color:
+          - 2.0
+          - 0.7
+          - 0.15
+          - 1.0
+        end_color:
+          - 1.2
+          - 0.18
+          - 0.03
+          - 0.0
+        blend: additive
+        softness: 0.3
+        seed: 201
+  - name: ember-1
+    components:
+      Transform:
+        translation:
+          - 16.0
+          - 0.15
+          - -12.0
+      ParticleEmitter:
+        rate: 830.0
+        life:
+          - 1.0
+          - 1.8
+        speed:
+          - 3.2
+          - 5.5
+        spread_deg: 24.0
+        gravity: 5.0
+        start_size: 0.2
+        end_size: 0.05
+        start_color:
+          - 2.0
+          - 0.7
+          - 0.15
+          - 1.0
+        end_color:
+          - 1.2
+          - 0.18
+          - 0.03
+          - 0.0
+        blend: additive
+        softness: 0.3
+        seed: 202
+  - name: ember-2
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.15
+          - -4.0
+      ParticleEmitter:
+        rate: 830.0
+        life:
+          - 1.0
+          - 1.8
+        speed:
+          - 3.2
+          - 5.5
+        spread_deg: 24.0
+        gravity: 5.0
+        start_size: 0.2
+        end_size: 0.05
+        start_color:
+          - 2.0
+          - 0.7
+          - 0.15
+          - 1.0
+        end_color:
+          - 1.2
+          - 0.18
+          - 0.03
+          - 0.0
+        blend: additive
+        softness: 0.3
+        seed: 203
+  - name: ember-3
+    components:
+      Transform:
+        translation:
+          - -16.0
+          - 0.15
+          - 4.0
+      ParticleEmitter:
+        rate: 830.0
+        life:
+          - 1.0
+          - 1.8
+        speed:
+          - 3.2
+          - 5.5
+        spread_deg: 24.0
+        gravity: 5.0
+        start_size: 0.2
+        end_size: 0.05
+        start_color:
+          - 2.0
+          - 0.7
+          - 0.15
+          - 1.0
+        end_color:
+          - 1.2
+          - 0.18
+          - 0.03
+          - 0.0
+        blend: additive
+        softness: 0.3
+        seed: 204
+  - name: ember-4
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 0.15
+          - 4.0
+      ParticleEmitter:
+        rate: 830.0
+        life:
+          - 1.0
+          - 1.8
+        speed:
+          - 3.2
+          - 5.5
+        spread_deg: 24.0
+        gravity: 5.0
+        start_size: 0.2
+        end_size: 0.05
+        start_color:
+          - 2.0
+          - 0.7
+          - 0.15
+          - 1.0
+        end_color:
+          - 1.2
+          - 0.18
+          - 0.03
+          - 0.0
+        blend: additive
+        softness: 0.3
+        seed: 205
+  - name: ember-5
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 0.15
+          - 12.0
+      ParticleEmitter:
+        rate: 830.0
+        life:
+          - 1.0
+          - 1.8
+        speed:
+          - 3.2
+          - 5.5
+        spread_deg: 24.0
+        gravity: 5.0
+        start_size: 0.2
+        end_size: 0.05
+        start_color:
+          - 2.0
+          - 0.7
+          - 0.15
+          - 1.0
+        end_color:
+          - 1.2
+          - 0.18
+          - 0.03
+          - 0.0
+        blend: additive
+        softness: 0.3
+        seed: 206
+  - name: ember-6
+    components:
+      Transform:
+        translation:
+          - 16.0
+          - 0.15
+          - 12.0
+      ParticleEmitter:
+        rate: 830.0
+        life:
+          - 1.0
+          - 1.8
+        speed:
+          - 3.2
+          - 5.5
+        spread_deg: 24.0
+        gravity: 5.0
+        start_size: 0.2
+        end_size: 0.05
+        start_color:
+          - 2.0
+          - 0.7
+          - 0.15
+          - 1.0
+        end_color:
+          - 1.2
+          - 0.18
+          - 0.03
+          - 0.0
+        blend: additive
+        softness: 0.3
+        seed: 207
+  - name: spore-0
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.6
+          - -12.0
+      ParticleEmitter:
+        shape: disc
+        extent:
+          - 2.4
+          - 0.0
+          - 0.0
+        rate: 390.0
+        life:
+          - 3.0
+          - 4.2
+        speed:
+          - 0.15
+          - 0.5
+        spread_deg: 85.0
+        gravity: 0.35
+        drag: 0.55
+        floor: 0.05
+        start_size: 0.12
+        end_size: 0.08
+        start_color:
+          - 0.4
+          - 1.1
+          - 0.5
+          - 0.7
+        end_color:
+          - 0.2
+          - 0.7
+          - 0.35
+          - 0.0
+        blend: additive
+        softness: 0.45
+        seed: 301
+  - name: spore-1
+    components:
+      Transform:
+        translation:
+          - -16.0
+          - 0.6
+          - -4.0
+      ParticleEmitter:
+        shape: disc
+        extent:
+          - 2.4
+          - 0.0
+          - 0.0
+        rate: 390.0
+        life:
+          - 3.0
+          - 4.2
+        speed:
+          - 0.15
+          - 0.5
+        spread_deg: 85.0
+        gravity: 0.35
+        drag: 0.55
+        floor: 0.05
+        start_size: 0.12
+        end_size: 0.08
+        start_color:
+          - 0.4
+          - 1.1
+          - 0.5
+          - 0.7
+        end_color:
+          - 0.2
+          - 0.7
+          - 0.35
+          - 0.0
+        blend: additive
+        softness: 0.45
+        seed: 302
+  - name: spore-2
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 0.6
+          - -4.0
+      ParticleEmitter:
+        shape: disc
+        extent:
+          - 2.4
+          - 0.0
+          - 0.0
+        rate: 390.0
+        life:
+          - 3.0
+          - 4.2
+        speed:
+          - 0.15
+          - 0.5
+        spread_deg: 85.0
+        gravity: 0.35
+        drag: 0.55
+        floor: 0.05
+        start_size: 0.12
+        end_size: 0.08
+        start_color:
+          - 0.4
+          - 1.1
+          - 0.5
+          - 0.7
+        end_color:
+          - 0.2
+          - 0.7
+          - 0.35
+          - 0.0
+        blend: additive
+        softness: 0.45
+        seed: 303
+  - name: spore-3
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 0.6
+          - 4.0
+      ParticleEmitter:
+        shape: disc
+        extent:
+          - 2.4
+          - 0.0
+          - 0.0
+        rate: 390.0
+        life:
+          - 3.0
+          - 4.2
+        speed:
+          - 0.15
+          - 0.5
+        spread_deg: 85.0
+        gravity: 0.35
+        drag: 0.55
+        floor: 0.05
+        start_size: 0.12
+        end_size: 0.08
+        start_color:
+          - 0.4
+          - 1.1
+          - 0.5
+          - 0.7
+        end_color:
+          - 0.2
+          - 0.7
+          - 0.35
+          - 0.0
+        blend: additive
+        softness: 0.45
+        seed: 304
+  - name: spore-4
+    components:
+      Transform:
+        translation:
+          - 16.0
+          - 0.6
+          - 4.0
+      ParticleEmitter:
+        shape: disc
+        extent:
+          - 2.4
+          - 0.0
+          - 0.0
+        rate: 390.0
+        life:
+          - 3.0
+          - 4.2
+        speed:
+          - 0.15
+          - 0.5
+        spread_deg: 85.0
+        gravity: 0.35
+        drag: 0.55
+        floor: 0.05
+        start_size: 0.12
+        end_size: 0.08
+        start_color:
+          - 0.4
+          - 1.1
+          - 0.5
+          - 0.7
+        end_color:
+          - 0.2
+          - 0.7
+          - 0.35
+          - 0.0
+        blend: additive
+        softness: 0.45
+        seed: 305
+  - name: spore-5
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.6
+          - 12.0
+      ParticleEmitter:
+        shape: disc
+        extent:
+          - 2.4
+          - 0.0
+          - 0.0
+        rate: 390.0
+        life:
+          - 3.0
+          - 4.2
+        speed:
+          - 0.15
+          - 0.5
+        spread_deg: 85.0
+        gravity: 0.35
+        drag: 0.55
+        floor: 0.05
+        start_size: 0.12
+        end_size: 0.08
+        start_color:
+          - 0.4
+          - 1.1
+          - 0.5
+          - 0.7
+        end_color:
+          - 0.2
+          - 0.7
+          - 0.35
+          - 0.0
+        blend: additive
+        softness: 0.45
+        seed: 306

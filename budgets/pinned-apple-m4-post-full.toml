@@ -1,0 +1,82 @@
+# Post-process profile budget — pinned Apple M4 (Metal), 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each ceiling is roughly twice the measured value on
+# the pinned Apple M4, so a failure means a real, reproducible slowdown — never machine noise. All
+# values are milliseconds. Re-calibrate deliberately (a re-bless event) if a cost becomes intended
+# and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/post-full.yaml`, the
+# post-process arc's all-on scene. Checked with:
+#
+#   ludion profile --scene examples/gallery/post-full.yaml --frames 120 --check budgets/pinned-apple-m4-post-full.toml
+#
+# It is a separate file from `budgets/pinned-apple-m4.toml` (calibrated on `lights.yaml`) for the
+# reason its RTX 3090 twin spells out: every section of a budget is checked against every run, and
+# the two scenes do not cost the same, so merging them would mean widening the shared ceilings to the
+# more expensive scene and leaving the cheaper one gated in name only. Both invocations must run —
+# a scene a CI configuration forgets to profile is a tripwire disarmed by omission, which no
+# diagnostic catches. `ci/teamcity/README.md`'s `budgets-macos` configuration runs both.
+#
+# **The numbers here are instrument readings, not wall-clock frame time — and on this scene the two
+# disagree by ~3.2x.** Metal's per-pass timestamps on a tile-based deferred GPU attribute concurrent
+# tile work to more than one pass, so the summed chain overcounts. Re-measured 2026-08-01: the passes
+# below sum to 15.85 ms, while the same 1920x1080 frame renders in 4.92 ms of wall clock (slope of
+# total runtime over 300 vs 600 measured frames, so process startup cancels out; 15.4 / 4.6 ms at the
+# 2026-07-27 calibration). On `lights.yaml` the same comparison agrees to within 0.5% — the overcount
+# grows with how much of the chain runs concurrently, which is exactly what this scene maximises.
+#
+# That does not weaken the gate: the readings are reproducible to ~0.1% run-to-run here, far tighter
+# than the ~10% the sparser `lights.yaml` chain swings. A ceiling at 2x a median stable to 0.1% is a
+# sharp tripwire for a relative regression. It is simply not a statement about frame time, so do not
+# read `post_total_ms` as "the post chain costs 15 ms on an M4" — it does not, and a 60 fps
+# conclusion drawn from these numbers would be wrong in the pessimistic direction.
+
+# Ceiling on the whole post chain: the sum of every effect group's member passes measured in the run.
+# `post-full.yaml` authors the whole `PostProcess` roster, so all four groups below have live members
+# and this line is their real sum. Re-measured 2026-08-01 after the volumetric medium's waves 1-4:
+# 15.917 / 15.846 / 15.797 ms over three 120-frame runs (15.435 / 15.415 / 15.403 at the 2026-07-27
+# calibration). No ceiling moved — see the `shafts` group for where the +2.8% went.
+#
+# It sits **below** the sum of the four ceilings (31.1) on purpose, matching the RTX 3090 twin's
+# rationale: each group's ceiling has to absorb that group's own noise, and four independent 2x
+# allowances added together would leave the chain as a whole gated at nothing. A regression that
+# pushed one group to its own limit while the others stayed put trips this line first.
+post_total_ms = 30.8   # 15.846 measured
+
+# Per-effect ceilings: one number for a whole effect, summing whichever of its member passes the run
+# measured. Every group was measured in the same three runs as the total above; the per-run spread
+# within each group is under 0.15%, so the medians below are quoted as-is rather than as a range.
+[post_groups]
+# The shared bright-pass plus the pyramid's five downsamples and five upsamples. Eleven passes, whose
+# individual medians here run 0.75-0.79 ms — unlike the RTX 3090, where they sit at a few multiples of
+# timestamp granularity, these are large and nearly uniform, which is itself a symptom of the
+# attribution smearing described in the header. The group is still the honest unit: it survives a
+# change of bloom implementation, and its sum is what moves when the chain does.
+bloom = 17.0   # 8.452 measured
+# The depth+normal prepass, the estimator and its blur: 0.064 + 0.395 + 0.449 ms. The prepass has no
+# group of its own — it exists for this effect alone — so its cost belongs inside this ceiling until a
+# second consumer earns it a line. This is the group that pays for geometry twice, so a jump here with
+# the estimator unchanged means the scene's draw count moved.
+ssao = 1.9     # 0.907 measured
+# The march and the 4x4 box that cleans it up: 1.463 + 1.519 ms. The march's step count is a shader
+# constant (`SHAFT_STEPS`), not a function of the scene, so this group costs the same whatever a scene
+# authors and a jump in it means the step count moved.
+#
+# +9.0% over the 2.737 measured on 2026-07-27, and the cause is known and intended: the volumetric
+# medium's wave 2 gave the march per-step `medium_optical_depth` + density-ratio arithmetic it did not
+# have before. The RTX 3090 twin moved +7.3% (0.1403 -> 0.1505 ms) on the same change, so the two
+# platforms agree on the shape of the cost. Fixed 32 steps whatever the medium, so this stays flat.
+shafts = 5.5   # 2.982 measured
+# The circle-of-confusion prefilter and the disc gather: 1.538 + 2.021 ms. Nothing here scales with
+# anything but the output extent, so a jump with the aperture unchanged means the tap count moved
+# (`DOF_TAPS`).
+#
+# +6.9% over 3.330 with nothing behind it — no dof code changed in the medium waves. This is the
+# attribution smearing the header describes working in the other direction: a heavier neighbour in a
+# concurrent chain inflates its neighbours' reads. Recorded rather than acted on.
+dof = 6.7      # 3.558 measured
+
+# `[passes]` and `frame_total_ms` are deliberately absent: this file exists for the post chain, and
+# the scene/composite passes and the built-in sim schedule are already gated by
+# `budgets/pinned-apple-m4.toml` on lights.yaml. Duplicating them here would be a second tripwire for
+# one regression, calibrated on a second scene, with two files to re-bless.

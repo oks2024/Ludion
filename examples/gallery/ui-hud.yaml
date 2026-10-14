@@ -1,0 +1,215 @@
+# Feature: Screen-space UI — UiRect and UiText (Phase 14 / E3), a HUD mock exercising the whole
+# Wave 1-3 surface over a minimal, visibly lit 3D world (so the overlay pass's "draws after tonemap,
+# unaffected by bloom" claim is actually on screen, not just asserted).
+#
+# - HP-bar cluster (bottom-left): a darker `frame` UiRect with a brighter `fill` UiRect on top of it
+#   — `fill.order (1) > frame.order (0)` is what keeps the fill drawn over the frame, not the other
+#   way around. `fill` is narrower than `frame` (a partially-drained bar), proving the two rects are
+#   independent draws, not one shape.
+# - Center panel: a translucent (`color` alpha 0.55) `UiRect` with a `Center`-anchored `UiText`
+#   title layered on top (`order` again) — proves alpha blending and that `Center` centers both a
+#   rect (by `offset`) and a measured text block (by its own extent) on the same canvas point.
+# - `UiText` at two more anchors: `TopRight` (a timer-style readout) and `BottomCenter` (a caption)
+#   — exercises anchor/pivot math away from the corners+center already covered above.
+# - One textured `UiRect` (top-left), reusing `assets/checker.png` from the sprites gallery scene —
+#   proves the UI rect path samples through the same hash-keyed texture cache as world sprites.
+#
+# The world underneath: a ground plane, a cube, and a small emissive sphere bright enough to bloom
+# (Phase 11 `emissive`) under a key light — the overlay's LDR blit-then-draw sits on top of that
+# HDR->bloom->tonemap chain unaffected, which is the point of the golden.
+format: 1
+name: "ui-hud - UiRect/UiText: HUD mock over a lit, bloom-triggering world"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 7.0
+        rotation:
+          - -12.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.3
+          - 0.32
+          - 0.36
+          - 1.0
+        roughness: 0.85
+  - name: block
+    components:
+      Transform:
+        translation:
+          - -1.4
+          - 0.6
+          - -0.6
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.4
+          - 0.7
+          - 1.0
+        roughness: 0.5
+  - name: beacon
+    components:
+      Transform:
+        translation:
+          - 1.6
+          - 0.9
+          - -0.4
+        scale:
+          - 0.6
+          - 0.6
+          - 0.6
+      Mesh:
+        shape: sphere
+        color:
+          - 1.0
+          - 0.7
+          - 0.3
+          - 1.0
+        roughness: 0.2
+        emissive: 4.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 4.5
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 5.0
+        range: 20.0
+  - name: hp-frame
+    components:
+      UiRect:
+        anchor: bottom_left
+        offset:
+          - 24.0
+          - -24.0
+        size:
+          - 220.0
+          - 40.0
+        color:
+          - 0.05
+          - 0.05
+          - 0.06
+          - 1.0
+        order: 0
+  - name: hp-fill
+    components:
+      UiRect:
+        anchor: bottom_left
+        offset:
+          - 30.0
+          - -30.0
+        size:
+          - 150.0
+          - 28.0
+        color:
+          - 0.85
+          - 0.2
+          - 0.25
+          - 1.0
+        order: 1
+  - name: center-panel
+    components:
+      UiRect:
+        anchor: center
+        offset:
+          - 0.0
+          - 0.0
+        size:
+          - 560.0
+          - 220.0
+        color:
+          - 0.05
+          - 0.07
+          - 0.1
+          - 0.55
+        order: 0
+  - name: center-title
+    components:
+      UiText:
+        anchor: center
+        offset:
+          - 0.0
+          - 0.0
+        text: GALLERY HUD
+        size: 48.0
+        color:
+          - 0.95
+          - 0.9
+          - 0.7
+          - 1.0
+        order: 1
+  - name: timer-text
+    components:
+      UiText:
+        anchor: top_right
+        offset:
+          - -24.0
+          - 24.0
+        text: "12:34"
+        size: 32.0
+        color:
+          - 0.7
+          - 0.9
+          - 1.0
+          - 1.0
+        order: 0
+  - name: caption-text
+    components:
+      UiText:
+        anchor: bottom_center
+        offset:
+          - 0.0
+          - -24.0
+        text: PRESS START
+        size: 24.0
+        color:
+          - 0.08
+          - 0.08
+          - 0.1
+          - 1.0
+        order: 0
+  - name: icon-rect
+    components:
+      UiRect:
+        anchor: top_left
+        offset:
+          - 24.0
+          - 24.0
+        size:
+          - 96.0
+          - 96.0
+        texture: assets/checker.png
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        order: 0

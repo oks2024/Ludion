@@ -1,0 +1,7 @@
+# Ludion project manifest.
+#
+# This project's identity and its default scene. Nothing parses it yet (`ludion` commands take an
+# explicit `--scene` today), so it is informational. See LUDION-GUIDE.md.
+
+name = "shmup-stress"
+default_scene = "scenes/steady.yaml"

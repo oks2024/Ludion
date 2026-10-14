@@ -1,0 +1,64 @@
+format: 1
+kind: map-kit
+name: test-kit
+tiles:
+  ".":
+    - name: floor
+      shape: cube
+      color:
+        - 0.4
+        - 0.4
+        - 0.4
+        - 1.0
+      y: -1.0
+      scale:
+        - 2.0
+        - 0.2
+        - 2.0
+      merge: true
+  "#":
+    - name: wall
+      shape: cube
+      y: 1.0
+      collider:
+        aabb:
+          - 1.0
+          - 1.0
+kinds:
+  well:
+    - name: well
+      shape: cube
+      y: 0.5
+      collider:
+        aabb:
+          - 0.9
+          - 0.9
+  post:
+    - name: post
+      shape: cube
+      y: 0.5
+      collider:
+        aabb:
+          - 0.3
+          - 0.3
+  torch:
+    - name: torch
+      shape: sphere
+      y: 1.0
+  gate:
+    - name: gate
+      shape: cube
+      color:
+        - 1.0
+        - 0.0
+        - 1.0
+        - 1.0
+      y: 0.5
+  slab:
+    - name: slab
+      shape: cube
+      y: 0.5
+      collider:
+        aabb:
+          - 0.1
+          - 4.0

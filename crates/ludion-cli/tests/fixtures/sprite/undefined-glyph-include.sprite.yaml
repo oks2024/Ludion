@@ -1,0 +1,12 @@
+format: 1
+kind: sprite
+name: undefined-glyph-include
+size:
+  - 2
+  - 1
+palette:
+  from: shared.palette.yaml
+frames:
+  idle:
+    rows:
+      - "AZ"

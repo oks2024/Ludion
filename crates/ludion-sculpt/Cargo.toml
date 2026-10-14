@@ -1,0 +1,16 @@
+[package]
+name = "ludion-sculpt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Implicit-surface meshing of sculpt documents (primitive signed distance fields, polynomial smooth blends) for the Ludion game engine."
+keywords = ["ludion", "sculpt", "mesh", "sdf", "game-engine"]
+categories = ["game-engines", "graphics"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
+
+[dev-dependencies]
+ludion-assets = { path = "../ludion-assets", version = "0.1.0" }

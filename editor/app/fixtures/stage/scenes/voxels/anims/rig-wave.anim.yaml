@@ -1,0 +1,109 @@
+format: 1
+kind: animation
+name: rig-wave
+# A one-shot raised-arm wave: the right arm lifts overhead and the forearm waggles, with a slight
+# torso twist. Key times are whole ticks (0.1 = 6, 0.2 = 12, 0.35 = 21), and the clip ends on a
+# relaxed pose.
+duration: 0.35
+loop: false
+tracks:
+  head:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 0.0
+          - -8.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - 0.0
+          - 8.0
+          - 0.0
+        ease: smooth
+      - t: 0.35
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - -150.0
+          - 0.0
+          - -20.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - -160.0
+          - 0.0
+          - 10.0
+        ease: smooth
+      - t: 0.35
+        v:
+          - -30.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  lower-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 10.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 40.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - 10.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.35
+        v:
+          - 15.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  torso:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.1
+        v:
+          - 0.0
+          - 6.0
+          - 0.0
+        ease: smooth
+      - t: 0.2
+        v:
+          - 0.0
+          - -6.0
+          - 0.0
+        ease: smooth
+      - t: 0.35
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth

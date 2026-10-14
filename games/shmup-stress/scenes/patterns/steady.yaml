@@ -1,0 +1,50 @@
+format: 1
+kind: pattern
+# The standing field's closed form, as a `kind: pattern` document (`ludion docs patterns`).
+#
+# One ring of 25 every 4 frames, forever: `repeat: 30` at `every: 4` fills the whole `loop: 120`
+# window, so a `PatternPlayer` playing this fires on every 4th frame it has been alive, with no seam
+# at the loop boundary — 30 repeats x `angle_step_deg: 12` is exactly one full turn, so repeat 30 of
+# one cycle points where repeat 0 of the next one does.
+#
+# `life: 119` is what makes the census a closed form. `bullet_is_alive` holds a bullet while
+# `0 <= age < life/60`, i.e. for tick offsets 0..118 inclusive — 119 live frames, the same 119 the
+# entity path's `life: 120` gives after `move_bullets` decrements on the spawn frame. Four players
+# staggered one frame apart therefore hold `25 * min(N + 1, 119)` live bullets, which is
+# `scenes/steady.yaml`'s header and `scenes/steady-drawn.yaml`'s alike.
+#
+# No `motion`: a bullet flies straight at its fire speed until `life`, exactly as the entity
+# `Bullet` does. `speed: 1.6` from a player 2.5 u out reaches 5.7 u in a lifetime, inside the
+# camera's 6 u half-height, so every bullet is on screen.
+name: shmup-stress-steady
+bullets:
+  # One kind, one region: which of the atlas's 40 bullet frames a volley shows is a per-VOLLEY
+  # lookup at extract, not a per-bullet one, so region variety would cost nothing and prove nothing
+  # here. `hit_radius` is the entity path's `BULLET_RADIUS`, so both shapes are hit-tested at the
+  # same reach.
+  pellet:
+    atlas: sprites/shmup.atlas.yaml
+    frame: bullets/b00
+    size:
+      - 0.3
+      - 0.3
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    blend: alpha
+    billboard: true
+    hit_radius: 0.15
+    life: 119
+timeline:
+  - at: 0
+    repeat: 30
+    every: 4
+    shape: ring
+    count: 25
+    bullet: pellet
+    speed: 1.6
+    angle_deg: 0.0
+    angle_step_deg: 12.0
+loop: 120

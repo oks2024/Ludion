@@ -1,0 +1,29 @@
+format: 1
+kind: map
+name: probe
+kit: probe-kit.yaml
+cell_size: 4.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "##############################################"
+  - ".............................................."
+  - "##############################################"
+markers:
+  - name: gate-west
+    kind: gate
+    x: 2.0
+    z: 6.0
+    components:
+      Gate:
+        to: target.yaml
+        anchor: from-here
+  - name: gate-east
+    kind: gate
+    x: 182.0
+    z: 6.0
+    components:
+      Gate:
+        to: target.yaml
+        anchor: from-here

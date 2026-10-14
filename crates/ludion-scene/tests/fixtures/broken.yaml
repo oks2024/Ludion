@@ -1,0 +1,31 @@
+format: 1
+name: deliberately broken
+entities:
+  - name: fine
+    components:
+      Transform:
+        x: 1.0
+        y: 2.0
+        z: 3.0
+  - name: component typo
+    components:
+      Trasform:
+        x: 1.0
+  - name: field typo
+    components:
+      Transform:
+        x: 1.0
+        y: 2.0
+        zz: 3.0
+  - name: wrong types
+    components:
+      Sprite:
+        texture: 7
+        layer: front
+        visible: 1
+      Health: -5
+  - name: bad variant
+    components:
+      Shape:
+        Blob:
+          radius: 1.0

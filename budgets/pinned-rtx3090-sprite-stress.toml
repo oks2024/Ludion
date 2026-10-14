@@ -1,0 +1,85 @@
+# Sprite budget — pinned RTX 3090, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. The two measured ceilings below are roughly twice the
+# median measured in `--release` on the pinned RTX 3090, so a failure means a real, reproducible
+# slowdown — never machine noise. All values are milliseconds. Re-calibrate deliberately (a re-bless
+# event) if a cost becomes intended and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is
+# `games/shmup-stress/scenes/steady-drawn.yaml` — the sprite arc's stress scene
+# (`Plan/sprite-engine.md` Wave 4): 2,975 live bullets drawn from 40 distinct regions of one atlas,
+# 357 of them `blend: additive`, over a 480-cell `Tilemap` on the same atlas that a system scrolls,
+# 3,456 sprite quads in all, unlit, with no `Environment`, `PostProcess` or light — so what it
+# measures is the sprite path and nothing else.
+#
+# **Checked by the game binary, not by `ludion profile`.** The scene's field is built by
+# `shmup-stress`'s own systems, which the CLI driver does not link, so this is the in-process form
+# vigil's E6 gate uses (`ludion devdocs budget-files`), from the workspace root:
+#
+#   cargo run --release -p shmup-stress -- --scene games/shmup-stress/scenes/steady-drawn.yaml --profile 200 --profile-check budgets/pinned-rtx3090-sprite-stress.toml
+#
+# Its Apple M4 twin is `budgets/pinned-apple-m4-sprite-stress.toml`: measured on each box, never
+# derived. An invented per-OS ceiling is a guess wearing a gate's clothes.
+#
+# MEASURED 2026-09-12 over four 200-frame release runs (30 warmup) at 1920x1080 on 8 sim threads,
+# beside the same four runs of `steady.yaml` — the identical field, identical census, flat untextured
+# quads — so every line below is a difference, not an absolute:
+#
+#            steady-drawn (3,456 quads)        steady (2,976 flat quads)
+#   extract  1.6725 / 1.6948 / 1.7524 / 1.6934  0.8516 / 0.8449 / 0.8524 / 0.8653
+#            median 1.694                       median 0.852
+#   scene    0.057344 (all four)                0.009216 (all four)
+#   frame    0.12785 / 0.12835 / 0.13070 / 0.12865   0.15670 / 0.14675 / 0.16025 / 0.15725
+#
+# So drawing the field for real costs +0.84 ms of extract and +0.048 ms of GPU. Per sprite that is
+# 0.49 us drawn against 0.29 us flat — the ~0.2 us being the region lookup by name and the UV rect a
+# textured quad needs and a flat one does not. Nothing else moved: the sim is the same arithmetic on
+# two coordinates either way.
+#
+# The measured window's median is a full-field frame: 87 of the 200 measured frames are the census
+# ramp (`live(N) = 25 * min(N + 1, 119)`), and every one of them is cheaper than a full one, so the
+# median sits inside the steady state rather than on the ramp.
+#
+# RE-MEASURED 2026-09-12, later the same day, after two changes landed: `Sprite.uv_repeat`/`uv_scroll`
+# (a wider `SpriteInstance` and a per-sprite scroll fold at extract) and the projectile-pattern
+# migration, which turned `steady.yaml` into this scene's **volley** twin (its own budget,
+# `budgets/pinned-rtx3090-shmup-stress.toml`; the flat-quad `steady` described above no longer
+# exists). Four 200-frame runs of this scene on the same box, 8 threads:
+#   extract  1.9320 / 1.9295 / 1.9497 / 1.9322   median 1.932   (+0.24 over the morning's 1.694)
+#   scene    0.0573 (all four)                   frame (sim) 0.2513 (play_patterns + advance_volleys
+#            now walk 2,975 entities idle at ~0.035 each — the engine's open item, not this file's)
+# The +0.24 ms of extract (~70 ns per sprite over 3,456) has the two changes as suspects and no
+# bisection yet; the 3.4 ceiling stands at 1.76x the new median. A ceiling only moves deliberately.
+
+# The exit line: a 60 fps frame. **A fixed target, not 2x a median** — the same posture as
+# vigil's E6 `frame_total_ms`, and the opposite of `budgets/pinned-rtx3090.toml`'s, which is a 2x
+# tripwire on loop overhead. This is the sim schedule alone (0.1285 measured); `extract_ms` below is
+# the other half of the per-frame CPU cost and is gated separately, and the GPU frame — `scene` plus
+# the bloom chain and `composite` — adds ~0.12 ms on top. All three together stand at ~1.9 ms, so
+# this line has an order of magnitude of headroom and exists to catch the day it does not.
+frame_total_ms = 16.6
+
+# The line this file exists for. Every sprite is placed, sorted and packed at extract on the sim
+# thread, and a textured one additionally resolves its atlas region by name for both the derived
+# quad extent and the UV rect — so a heavier extract steals tick time before any GPU cost shows.
+# Checked wherever a report carries an `extract` sequential entry (the offline driver and a live
+# `--attach` capture both do).
+#
+# Measured median 1.694 over the four runs above; the ceiling is 3.4, the ~2x posture.
+extract_ms = 3.4
+
+# The sprite pass itself — sprites draw inside `scene`; there is no separate sprite pass to name.
+# 3,456 unlit premultiplied quads at 1080p, alpha and additive mixed, batched by `(layer, texture)`
+# into three draws (the backdrop's `layer: -1`, the bullets' one atlas at `layer: 0`, the player's
+# untextured quad at `layer: 1`). The field covers roughly one screen of overdraw and the backdrop a
+# second, and on this card that is 0.057 ms. Measured 0.057344 on every one of the four runs (the
+# timestamp ring quantizes to the same value at this cost); the ceiling is 0.12.
+[passes]
+scene = 0.12
+
+# Deliberately absent: `composite` and the `bloom` group (pure functions of the output extent and
+# already gated on `lights.yaml`); `[systems]`, because this scene's five sim systems are
+# `Plan/bullet-hell-stress.md`'s measurement and that plan holds them deliberately uncalibrated —
+# gating them here would quietly make this file the arena's budget as well as the sprite layer's, and
+# a budget means one calibration scene and one question; `cluster_build_ms`, because the scene
+# authors no light, so the panel reads zero and would gate nothing.

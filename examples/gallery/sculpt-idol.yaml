@@ -1,0 +1,80 @@
+# Feature: Mesh with an authored sculpt model — `shape: { sculpt: "sculpts/idol.sculpt.yaml" }`. A
+# sculpt is a strict-YAML `sculpts/*.sculpt.yaml` list of named implicit primitives (smooth unions,
+# carving subtracts, mirror copies) meshed at load by surface nets and decimated to the document's
+# triangle budget (bottom-centered origin, world units at `Transform.scale: 1`). The stone idol faces
+# -Z like every model sheet's front, so it is turned 180 degrees to face this +Z camera; its glowing
+# eyes are the palette's one emissive entry. A warm key and a cool fill light it over a dark ground.
+format: 1
+name: "sculpt-idol - Mesh: shape sculpt (authored stone idol on a plinth)"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.2
+          - 3.2
+        rotation:
+          - -8.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 8.0
+          - 1.0
+          - 8.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.3
+          - 0.32
+          - 0.35
+          - 1.0
+  - name: idol
+    components:
+      Transform:
+        rotation:
+          - 0.0
+          - 180.0
+          - 0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+      Mesh:
+        shape:
+          sculpt: sculpts/idol.sculpt.yaml
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 1.2
+          - 2.2
+          - 2.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.45
+        intensity: 6.0
+        range: 10.0
+  - name: fill-light
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 3.0
+          - 2.5
+      PointLight:
+        color:
+          - 0.55
+          - 0.65
+          - 1.0
+        intensity: 3.0
+        range: 14.0

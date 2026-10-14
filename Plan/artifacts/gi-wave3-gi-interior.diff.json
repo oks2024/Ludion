@@ -1,0 +1,439 @@
+{
+  "golden": "W2 (mover's PointLight baked-static, its emissive sphere occluding/depositing into the voxelization)",
+  "actual": "W3′ (GiDynamic: {} authored — the mover's light is injected per frame instead, its sphere no longer voxelizes)",
+  "golden_width": 960,
+  "golden_height": 540,
+  "actual_width": 960,
+  "actual_height": 540,
+  "threshold": 0.99,
+  "pass": false,
+  "ssim": 0.9511243651626171,
+  "mae": 3.380893132716049,
+  "tile_grid": {
+    "cols": 8,
+    "rows": 8
+  },
+  "damaged_tiles": [
+    {
+      "row": 7,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.38747964546748576,
+      "region": "bottom-right"
+    },
+    {
+      "row": 6,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.6433762431124057,
+      "region": "bottom-right"
+    },
+    {
+      "row": 7,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.6897911697425313,
+      "region": "bottom-right"
+    },
+    {
+      "row": 6,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.7935176306053723,
+      "region": "bottom-right"
+    },
+    {
+      "row": 5,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.8537608961219301,
+      "region": "middle-left"
+    },
+    {
+      "row": 4,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.8653275342408518,
+      "region": "middle-left"
+    },
+    {
+      "row": 0,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.876684374597633,
+      "region": "top-right"
+    },
+    {
+      "row": 1,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.8835172344872722,
+      "region": "top-right"
+    },
+    {
+      "row": 5,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.8949890399666052,
+      "region": "center"
+    },
+    {
+      "row": 2,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.8957390228397644,
+      "region": "top-right"
+    },
+    {
+      "row": 0,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9072524329055144,
+      "region": "top-right"
+    },
+    {
+      "row": 4,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9113057036436192,
+      "region": "middle-right"
+    },
+    {
+      "row": 5,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9340478097382372,
+      "region": "middle-right"
+    },
+    {
+      "row": 0,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9359161314138273,
+      "region": "top-center"
+    },
+    {
+      "row": 3,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.952747718581546,
+      "region": "middle-right"
+    },
+    {
+      "row": 3,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 204,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9531087079210188,
+      "region": "middle-right"
+    },
+    {
+      "row": 1,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9556017158753569,
+      "region": "top-right"
+    },
+    {
+      "row": 5,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9582380462866971,
+      "region": "center"
+    },
+    {
+      "row": 2,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9592002001999689,
+      "region": "top-center"
+    },
+    {
+      "row": 7,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9612111210230828,
+      "region": "bottom-left"
+    },
+    {
+      "row": 4,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9645711254311053,
+      "region": "center"
+    },
+    {
+      "row": 1,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.966010948839887,
+      "region": "top-left"
+    },
+    {
+      "row": 4,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.969073072473211,
+      "region": "center"
+    },
+    {
+      "row": 4,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.97745538219493,
+      "region": "middle-right"
+    },
+    {
+      "row": 5,
+      "col": 7,
+      "rect": {
+        "x": 840,
+        "y": 339,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9787606314297287,
+      "region": "middle-right"
+    },
+    {
+      "row": 7,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9789463811622962,
+      "region": "bottom-center"
+    },
+    {
+      "row": 6,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9814852227028714,
+      "region": "bottom-center"
+    },
+    {
+      "row": 6,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 406,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9847734571632611,
+      "region": "bottom-center"
+    },
+    {
+      "row": 2,
+      "col": 6,
+      "rect": {
+        "x": 720,
+        "y": 136,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.986554785187932,
+      "region": "top-right"
+    },
+    {
+      "row": 1,
+      "col": 2,
+      "rect": {
+        "x": 240,
+        "y": 68,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.986954253269298,
+      "region": "top-left"
+    },
+    {
+      "row": 0,
+      "col": 3,
+      "rect": {
+        "x": 360,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9876017500550274,
+      "region": "top-center"
+    },
+    {
+      "row": 7,
+      "col": 4,
+      "rect": {
+        "x": 480,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.987672091120228,
+      "region": "bottom-center"
+    },
+    {
+      "row": 4,
+      "col": 0,
+      "rect": {
+        "x": 0,
+        "y": 272,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.9891082015090571,
+      "region": "middle-left"
+    },
+    {
+      "row": 0,
+      "col": 5,
+      "rect": {
+        "x": 600,
+        "y": 0,
+        "width": 120,
+        "height": 68
+      },
+      "ssim": 0.9892436962330311,
+      "region": "top-center"
+    }
+  ],
+  "worst_tile": {
+    "row": 7,
+    "col": 6,
+    "rect": {
+      "x": 720,
+      "y": 473,
+      "width": 120,
+      "height": 67
+    },
+    "ssim": 0.38747964546748576,
+    "region": "bottom-right"
+  },
+  "summary": "FAIL: ssim 0.9511 < threshold 0.9900; worst damage at bottom-right (tile r7c6, rect 720,473 120x67, ssim 0.3875)"
+}

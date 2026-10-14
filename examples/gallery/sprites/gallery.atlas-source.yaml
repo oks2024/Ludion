@@ -1,0 +1,29 @@
+# The gallery's one packed atlas: the ship, its two bolts, the four-frame burst and the cave
+# tileset, all at 16 texels to the world unit and point-sampled. `ludion generate-atlas` bakes this
+# into the committed `gallery.png` + `gallery.atlas.yaml` beside it — never edit those by hand.
+format: 1
+kind: atlas-source
+name: gallery
+pixels_per_unit: 16.0
+filter: nearest
+inputs:
+  - ship.sprite.yaml
+  - bullet.sprite.yaml
+  - explosion.sprite.yaml
+  - tiles.sprite.yaml
+flipbooks:
+  - name: ship/bank
+    frames:
+      - ship/idle
+      - ship/bank-left
+      - ship/idle
+      - ship/bank-right
+    fps: 8.0
+  - name: explosion/burst
+    frames:
+      - explosion/f0
+      - explosion/f1
+      - explosion/f2
+      - explosion/f3
+    fps: 12.0
+    loop: false

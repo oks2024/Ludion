@@ -1,0 +1,108 @@
+# Git ignore rules — git is the PUBLIC mirror of the Lore repo (decision 3 of the publication plan
+# in the private `Plan-Private/` folder), and the delta between this file and `.loreignore` IS the
+# privacy boundary:
+#
+#   * a path listed here but NOT in `.loreignore` is private — tracked by Lore, never reaching
+#     the public git mirror (the "Private paths" block below is that list);
+#   * everything else (build artifacts, runtime state, OS cruft) is noise that neither VCS
+#     should hold, and MUST stay listed in both files — Lore reads only the root `.loreignore`,
+#     so a rule added here or in any nested `.gitignore` is mirrored there by hand.
+#
+# `scripts/privacy-canary.mjs` scans the tracked-and-not-ignored set for private tokens, so a
+# path that belongs in the private block but is missing from it surfaces there, not on GitHub.
+
+# ── Private paths: Lore-tracked, git-ignored, never published ─────────────────────────────────
+# Infrastructure and machine facts (server addresses, CI provisioning, agent notebooks), the
+# machine-local Claude Code instructions, the private plans — which live in `Plan-Private/`,
+# one folder rather than named files, so this file itself names no private plan — and the private
+# reference game (Lore-only; the mirror keeps tracking it until the fresh root). Anchored at the
+# root and listed as exact paths, so a same-named directory deeper in the tree is not swept along.
+/.exarch/
+/infra/
+/ci/teamcity/
+/CLAUDE.local.md
+/Plan-Private/
+/games/vigil/
+
+# ── Noise: listed in BOTH ignore files ────────────────────────────────────────────────────────
+
+# Atomic-write temp files (`ludion_core::atomic::temp_sibling`, `scripts/atomic-write.mjs`): a kill
+# mid-write leaves `.{name}.{pid}.{n}.tmp` in a content dir, and a path-scoped commit would stage it.
+.*.[0-9]*.[0-9]*.tmp
+
+# Rust build artifacts
+/target
+**/*.rs.bk
+*.pdb
+
+# `ludion test`'s per-project scratch output (diff artifacts for failing golden tests: never
+# committed, unlike the goldens themselves). Matches the workspace `target/` convention even for
+# project directories with no Cargo.toml of their own (e.g. `examples/gallery/target/testkit`).
+**/target/testkit
+
+# npm toolchain, isolated to `editor/` (engine-architecture.md §6) — installed packages are never
+# committed; `package-lock.json` is, so `npm ci` stays reproducible.
+editor/**/node_modules/
+
+# `scripts/check.mjs` per-step logs — throwaway, recreated every run. Unanchored, at any depth: the
+# root one is the check script's, and a crate that runs its own verify (`crates/ludion-mcp/`) keeps a
+# build cache under the same name. An anchored rule missed the nested one, and a path-less
+# `commit.mjs` then swept 4961 build artifacts into the history.
+.build/
+
+# `ludion gen` run folders — candidate images and meshes downloaded from a ComfyUI server, one
+# folder per run (`Plan/comfy-generation.md` decision 13). Recipes and workflows beside them are
+# committed; the runs are scratch, noise in both VCSs. An accepted candidate is copied out by
+# `gen accept` and committed from its destination.
+/generation/runs/
+**/generation/runs/
+
+
+# Lore workspace state (source-control transition: Lore is the source of truth, git the
+# derived mirror; both live in this directory). Git must never sweep Lore's local store.
+/.lore/
+
+# Hands-on testing guide for the human developer — declares itself a local, uncommitted note.
+/TESTING.md
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# E5 player-profile saves - host-written runtime state (ludion::run only), never committed.
+# The save dir sits under the game's PROJECT ROOT, which for games that root at their scene
+# directory (vigil) is `scenes/` - hence the second pattern.
+games/*/save/
+games/*/scenes/save/
+examples/*/save/
+
+# Editor->agent context bridge (editor-views arc): host-written runtime state, never committed.
+# `.ludion/` is the per-project editor scratch dir (the editor writes editor-context.json there).
+.ludion/
+
+# Claude Code machine-local state (.claude/skills/ IS tracked — never blanket-ignore .claude/).
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock
+/.claude/scheduled_tasks.json
+/.claude/routines/.state/
+/.claude/worktrees/
+/.claude/checkpoints/
+/.claude/mailbox/
+/.claude/agent-registry.json
+/.claude/agent-memory-local
+/.claude/first-run
+/.claude/assistant-daemon-state.json
+
+# The private ComfyUI kit's rotating server logs (`infra/comfyui/run.ps1` writes one per launch);
+# the smoke transcripts beside them are kept as records.
+infra/comfyui/logs/comfyui*.log
+
+# Python bytecode Blender writes beside the town kit scripts.
+__pycache__/
+
+# Derived by `ludion sync` from games/vigil/art/town; noise, so ignored in both VCSs.
+/games/vigil/assets/town/

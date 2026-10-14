@@ -1,0 +1,43 @@
+{
+  "golden": "pre-merge golden (two densities: fog_density 0.014 + shafts_density 0.1, shafts 0.02)",
+  "actual": "one medium (sigma_t = fog_density 0.014, albedo/anisotropy at defaults, shafts 0.02)",
+  "golden_width": 960,
+  "golden_height": 540,
+  "actual_width": 960,
+  "actual_height": 540,
+  "threshold": 0.99,
+  "pass": true,
+  "ssim": 0.998375896299574,
+  "mae": 0.8695640432098766,
+  "tile_grid": {
+    "cols": 8,
+    "rows": 8
+  },
+  "damaged_tiles": [
+    {
+      "row": 7,
+      "col": 1,
+      "rect": {
+        "x": 120,
+        "y": 473,
+        "width": 120,
+        "height": 67
+      },
+      "ssim": 0.968727621963402,
+      "region": "bottom-left"
+    }
+  ],
+  "worst_tile": {
+    "row": 7,
+    "col": 1,
+    "rect": {
+      "x": 120,
+      "y": 473,
+      "width": 120,
+      "height": 67
+    },
+    "ssim": 0.968727621963402,
+    "region": "bottom-left"
+  },
+  "summary": "PASS: ssim 0.9984 >= threshold 0.9900 (1 tile below threshold)"
+}

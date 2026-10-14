@@ -1,0 +1,31 @@
+format: 1
+seed: 1
+physics:
+  space: free
+entities:
+  - name: platform
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+  - name: crate
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.5
+              - 0.5
+        body:
+          rigid: {}

@@ -1,0 +1,85 @@
+// Shared clustered-forward light bindings: the per-frame header uniform plus the three storage
+// buffers every lit shader (mesh, sprite) reads, all at @group(1). Composed ahead of both bodies so
+// the structs, the grid shape and the bindings live in exactly one place
+// (Plan/shader-bindgen.md decision 16, Plan/clustered-forward.md decision 5).
+//
+// THE SHAPE. `light_list` carries **every** light in the scene — there is no cap and no selection.
+// The screen is divided into a fixed CLUSTER_TILES_X x CLUSTER_TILES_Y grid of tiles x
+// CLUSTER_SLICES radial-distance shells; `cluster_table[cell]` is that cell's (offset, count) into
+// `cluster_lights`, whose entries index `light_list`. A fragment maps itself to one cell and
+// iterates only that cell's slice, so per-pixel cost tracks the lights actually near the pixel.
+//
+// THE IDENTITY ARGUMENT (load-bearing — Plan/clustered-forward.md "The design"). Two properties
+// together make the clustered loop *arithmetically identical* to a flat loop over every light:
+//   - Within a cell the indices ascend, and the global array is `ludion-engine`'s ascending-EntityId
+//     extract order, so a fragment sums its lights in exactly the order a flat loop would. Float
+//     addition order is preserved. Never re-associate the sum; never sort a cell's list by anything
+//     but the light index.
+//   - Both consumers' attenuation is `clamp(1 - dist/range, 0, 1)` squared — a hard zero at range —
+//     so a light the CPU build admits *conservatively* contributes exactly +0.0 and cannot move a
+//     pixel. A light the build *misses* is a visible hole; conservatism is mandatory, tightness is
+//     negotiable.
+//
+// THE LOOP BOUND IS NON-UNIFORM, which forbids implicit derivatives inside a light loop: no
+// `textureSample`, no `dpdx`/`dpdy`. Both consumers' loops are ALU-only today and must stay that way
+// (an effect that wants a per-light texture read moves the read out of the loop, or pays
+// `textureSampleLevel`).
+
+// The cluster grid's shape: fixed *counts*, never a fixed pixel size, so the grid is identical at
+// every `--scale` — a supersampled frame clusters exactly like its native twin. WGSL is the source
+// of truth: `ludion-shader-bindgen` reflects these into `shader_gen`, and the renderer's CPU-side
+// build sizes `cluster_table` from them.
+const CLUSTER_TILES_X: u32 = 16u;
+const CLUSTER_TILES_Y: u32 = 9u;
+const CLUSTER_SLICES: u32 = 16u;
+
+struct Light {
+    // xyz = world position, w = range.
+    position: vec4<f32>,
+    // rgb = color * intensity (premultiplied), w unused.
+    color: vec4<f32>,
+};
+
+// Everything that is one value for the whole frame; the unbounded data rides the storage buffers.
+struct LightHeader {
+    // rgb = the scene's flat ambient term, w unused.
+    ambient: vec4<f32>,
+    // xy = the reciprocal of the render extent in pixels (what turns a fragment's framebuffer
+    // position into tile space — the same convention `EnvParams.ao.yz` uses for the AO texture).
+    // zw = the radial shell ladder's (scale, bias), an exponential ladder over a fixed distance
+    // range: shell = log2(dist^2) * scale + bias. It is fed the **squared** camera distance with the
+    // halving of `log2` folded into `scale` CPU-side, which spares every lit fragment a square root;
+    // both terms are computed CPU-side.
+    grid: vec4<f32>,
+    // The sun, for the sprite shader only (the mesh shader reads its own `sun` uniform, which also
+    // carries the shadow map). xyz = normalized travel direction, w unused.
+    sun_direction: vec4<f32>,
+    // rgb = the sun's premultiplied colour, zero for a sunless frame, w unused.
+    sun_color: vec4<f32>,
+};
+
+@group(1) @binding(0) var<uniform> lights: LightHeader;
+// Every light in the scene, in extract order. Runtime-sized: content, not a compile-time constant,
+// decides how many there are.
+@group(1) @binding(1) var<storage, read> light_list: array<Light>;
+// One entry per cell, in (shell, tile_y, tile_x) row-major order: x = offset into `cluster_lights`,
+// y = how many entries belong to this cell.
+@group(1) @binding(2) var<storage, read> cluster_table: array<vec2<u32>>;
+// The concatenated per-cell index lists; each entry indexes `light_list`.
+@group(1) @binding(3) var<storage, read> cluster_lights: array<u32>;
+
+// This fragment's (offset, count) slice of `cluster_lights`: the tile from its framebuffer position,
+// the shell from its **squared** radial distance to the camera. Everything arrives as a parameter
+// rather than through the camera snippet's globals, so this snippet stays self-contained and either
+// consumer can compose it alone; taking the squared distance also lets both consumers hand over a
+// `dot` of a vector they already had instead of a square root. Both coordinates clamp on the float
+// side before the u32 conversion, so an edge fragment or a distance off either end of the ladder
+// lands in a real cell instead of reading out of bounds.
+fn cluster_slice(frag_pos: vec2<f32>, view_dist_sq: f32) -> vec2<u32> {
+    let tile_uv = clamp(frag_pos * lights.grid.xy, vec2<f32>(0.0), vec2<f32>(1.0));
+    let tx = min(u32(tile_uv.x * f32(CLUSTER_TILES_X)), CLUSTER_TILES_X - 1u);
+    let ty = min(u32(tile_uv.y * f32(CLUSTER_TILES_Y)), CLUSTER_TILES_Y - 1u);
+    let ladder = log2(max(view_dist_sq, 1e-12)) * lights.grid.z + lights.grid.w;
+    let shell = u32(clamp(ladder, 0.0, f32(CLUSTER_SLICES - 1u)));
+    return cluster_table[(shell * CLUSTER_TILES_Y + ty) * CLUSTER_TILES_X + tx];
+}

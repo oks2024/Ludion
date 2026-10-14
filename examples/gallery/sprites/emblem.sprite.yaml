@@ -1,0 +1,38 @@
+# An 8x8 emblem that references the shared `emblem.palette.yaml` instead of inlining a palette. The
+# `overrides:` block recolours the glyph `O` (a warmer highlight than the shared palette's) and adds a
+# glyph `*` the shared palette does not define — so the include both replaces and extends. The whole
+# palette resolves at bake time, and this sprite bakes to exactly what an inline copy of the resolved
+# palette would.
+format: 1
+kind: sprite
+name: emblem
+size:
+  - 8
+  - 8
+palette:
+  from: emblem.palette.yaml
+  overrides:
+    O:
+      color:
+        - 0.95
+        - 0.85
+        - 0.55
+        - 1.0
+    "*":
+      color:
+        - 1.0
+        - 1.0
+        - 0.9
+        - 1.0
+      emissive: 2.0
+frames:
+  crest:
+    rows:
+      - "..####.."
+      - ".#oooo#."
+      - "#ooOOoo#"
+      - "#oO**Oo#"
+      - "#oO**Oo#"
+      - "#ooOOoo#"
+      - ".#oooo#."
+      - "..####.."

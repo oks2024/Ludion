@@ -1,0 +1,141 @@
+format: 1
+kind: prefab
+name: fixture
+generated_from: "../scene.gltf"
+entities:
+  - name: pedestal
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        rotation:
+          - -0.0
+          - 0.0
+          - -0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+      Mesh:
+        shape:
+          asset: meshes/pedestal-mesh.mesh.yaml
+        color:
+          - 0.8
+          - 0.35
+          - 0.2
+          - 1.0
+        roughness: 0.7
+        metallic: 0.0
+        emissive: 0.0
+        flash: 0.0
+        flash_color:
+          - 1.0
+          - 1.0
+          - 1.0
+  - name: gem
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.6
+          - 0.0
+        rotation:
+          - -0.0
+          - 45.0
+          - -0.0
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape:
+          asset: meshes/gem-mesh.mesh.yaml
+        color:
+          - 0.3
+          - 0.55
+          - 0.9
+          - 1.0
+        roughness: 0.15
+        metallic: 0.6
+        emissive: 0.5
+        flash: 0.0
+        flash_color:
+          - 1.0
+          - 1.0
+          - 1.0
+      Parent:
+        index: 0
+        generation: 0
+  - name: satellite
+    components:
+      Transform:
+        translation:
+          - 1.4
+          - 0.0
+          - 0.0
+        rotation:
+          - -0.0
+          - 0.0
+          - -0.0
+        scale:
+          - 0.4
+          - 0.4
+          - 0.4
+      Mesh:
+        shape:
+          asset: meshes/pedestal-mesh.mesh.yaml
+        color:
+          - 0.8
+          - 0.35
+          - 0.2
+          - 1.0
+        roughness: 0.7
+        metallic: 0.0
+        emissive: 0.0
+        flash: 0.0
+        flash_color:
+          - 1.0
+          - 1.0
+          - 1.0
+      Parent:
+        index: 1
+        generation: 0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - 6.0
+        rotation:
+          - -20.000004
+          - 0.0
+          - 0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 4.5
+          - 3.5
+        rotation:
+          - -0.0
+          - 0.0
+          - -0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.95
+          - 0.85
+        intensity: 6.0
+        range: 20.0

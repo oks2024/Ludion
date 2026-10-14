@@ -1,0 +1,125 @@
+format: 1
+# The bullet-cancel worst case as CLOSED-FORM VOLLEYS (`Plan/bullet-hell-stress.md`,
+# `Plan/projectile-patterns.md` Wave 2): `Arena.cancel_every: 60` — every 60th frame the WHOLE live
+# field is despawned in one pass, and the sources rebuild it over the frames that follow.
+#
+# THIS IS WHERE THE VOLLEY SHAPE IS SUPPOSED TO PAY. Cancelling `steady-drawn.yaml`'s entity field
+# destroys 3,000 entities in one frame; cancelling this one despawns the 60 `Volley` entities that
+# hold the same 3,000 bullets. The two numbers side by side are the plan's mass-despawn claim.
+#
+# The sources play `patterns/burst.yaml`, which is `patterns/steady.yaml` at `count: 50` instead of
+# 25 — TWICE the density, because a 60-frame window has to build a whole 3,000-bullet field for the
+# cancel to have one to destroy. That is 50 bullets per frame (four players, one ring every 4 frames,
+# `started` 0/1/2/3, so exactly one fires each frame).
+#
+# CLOSED-FORM CENSUS. `life: 119` is deliberately longer than the cancel period, so no bullet ever
+# expires on its own: THE CANCEL IS THE ONLY THING THAT DESPAWNS. `cancel_bullets` runs after
+# `advance_volleys`, and frame 0 is exempt (an empty field is not worth cancelling), so the live
+# bullet count at the END of frame N — `bullet_is_alive` over every `Volley` — is a sawtooth:
+#
+#     live(N) = 50 * (N + 1)                  for N < 60      -> 3,000 at the end of FRAME 59
+#     live(N) = 0                             for N % 60 == 0 -> frames 60, 120, 180, ...
+#     live(N) = 50 * (N % 60)                 otherwise       -> peak 2,950 at frames 119, 179, ...
+#
+# THE MASS DESPAWN IS THE 3,000 THE PLAN ASKS FOR: `cancel_bullets` sees the field *before* the count
+# above is taken, i.e. 50 * 60 = 3,000 bullets — 60 volley entities — on every cancel frame. The
+# end-of-frame peak reads 2,950 rather than 3,000 for the same reason the cancel frames read 0: the
+# census is taken after the wipe.
+name: "shmup-stress - burst field as volleys (3,000 bullets cancelled whole every 60 frames)"
+seed: 0
+entities:
+  # `steady.yaml`'s framing to the unit, so the two scenes' reports compare line for line.
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 60.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 12.0
+        far: 200.0
+  - name: arena
+    components:
+      Arena:
+        half_extent: 40.0
+        bullets_collide: false
+        cancel_every: 60
+        plane: upright
+        # Informative: the authored copy of the closed form above — here the field size a cancel
+        # destroys, not a steady state. Nothing reads it.
+        target_live: 3000
+  # The hit tally, on its own entity so it hashes and snapshots like any other sim state.
+  - name: hits
+    components:
+      HitCount: {}
+  # The player does not move — this arena measures the bullet field, not the player. It sits at the
+  # centre, where every source's ring converges, so the hit test always has work to do.
+  - name: player
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.6
+      Sprite:
+        size:
+          - 0.8
+          - 0.8
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        layer: 1
+      Player:
+        hitbox_radius: 0.2
+      Collider:
+        shape:
+          circle:
+            radius: 0.1
+        body: kinematic
+  # The four pattern sources, `steady.yaml`'s placement and stagger unchanged — only the document
+  # they play differs, and it differs only in `count`.
+  - name: source-east
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 0.0
+          - 0.5
+      PatternPlayer:
+        pattern: patterns/burst.yaml
+        started: 0
+  - name: source-north
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - 0.5
+      PatternPlayer:
+        pattern: patterns/burst.yaml
+        started: 1
+  - name: source-west
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 0.0
+          - 0.5
+      PatternPlayer:
+        pattern: patterns/burst.yaml
+        started: 2
+  - name: source-south
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -2.5
+          - 0.5
+      PatternPlayer:
+        pattern: patterns/burst.yaml
+        started: 3

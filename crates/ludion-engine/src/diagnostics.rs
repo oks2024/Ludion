@@ -1,0 +1,599 @@
+//! The diagnostic channel game systems report through: the [`Diagnostics`] world resource and the
+//! [`report`] free function a system calls with nothing but its `&mut World`.
+//!
+//! A system that notices something wrong — a data-doc naming a model that is not there, a spawn
+//! point outside the map, a tunable read as zero — has one place to say so. It pushes a
+//! `(code, key, message)` — sugar for a whole [`Diagnostic`], which [`report_full`] takes directly
+//! when the fault has a path or help. The engine drains the queue at the frame boundary into an
+//! `Event::Log` on the `log` channel *and* the host's stderr, rendering each diagnostic's `Display`
+//! at its severity's level, so a client sees it and a headless or windowed run with no client still
+//! prints it.
+//!
+//! Two properties make it safe to call from inside a system that runs every tick:
+//!
+//! - **Once per `(code, key)` per session.** The resource latches every pair it has already
+//!   reported, so a system reporting the same fault sixty times a second prints one line. `key` is
+//!   the offender's identity — a doc name, a scene name, an entity's name and id — so the same code
+//!   still prints once for each distinct offender.
+//! - **Never hashed, never serialized.** The resource is engine-owned world state like
+//!   [`AudioQueue`](crate::AudioQueue): outside the component registry, so it reaches neither
+//!   `WorldHash` nor a snapshot, and reporting cannot move a replay.
+//!
+//! The latch is moved onto the world a district switch builds, so "once per session" survives walking
+//! through a gate. A `scene.load` or an `engine.restore` starts a fresh session with an empty latch,
+//! so a reload of a still-broken scene reports again.
+
+use ludion_core::codes::code;
+use ludion_core::collections::{StableMap, StableSet};
+use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
+use ludion_ecs::{Registry, World};
+
+/// The engine-owned queue a game system reports diagnostics into, drained at the frame boundary.
+///
+/// Reach it from a system as `world.resource_mut::<Diagnostics>()`, or call the module's
+/// [`report`] free function, which is the same thing in one line.
+///
+/// # Example
+/// ```
+/// use ludion_engine::diagnostics::{self, Diagnostics};
+/// use ludion_core::diagnostics::DiagnosticCode;
+/// use ludion_ecs::World;
+///
+/// const ASSET_FILE_IO: DiagnosticCode = DiagnosticCode::new("L1101");
+///
+/// let mut world = World::new();
+/// world.insert_resource(Diagnostics::default());
+/// diagnostics::report(
+///     &mut world,
+///     ASSET_FILE_IO,
+///     "spawner-a",
+///     "nest doc `spawner-a` names a model that is not in the content root",
+/// );
+/// ```
+#[derive(Default, Debug)]
+pub struct Diagnostics {
+    /// Reported this frame, in report order, waiting for the boundary drain.
+    pending: Vec<Diagnostic>,
+    /// Every `(code, key)` already reported this session — the once-per-offender latch.
+    /// Keyed by code so a probe by `&str` allocates nothing.
+    latched: StableMap<DiagnosticCode, StableSet<String>>,
+}
+
+impl Diagnostics {
+    /// Reports `message` under `code` for the offender named by `key`, unless that exact
+    /// `(code, key)` has already been reported this session — in which case this is a no-op.
+    ///
+    /// `key` is the per-instance identity, not the message: two nests with the same fault report
+    /// under the same code and different keys, and both print.
+    pub fn report(
+        &mut self,
+        code: DiagnosticCode,
+        key: impl Into<String>,
+        message: impl Into<String>,
+    ) {
+        // The latch is consulted before the message is materialized, so a per-tick reporter pays
+        // only for its key after the first time.
+        if !self.latch(code, key.into()) {
+            return;
+        }
+        self.pending.push(Diagnostic::new(code, message));
+    }
+
+    /// Reports a whole `diagnostic` (with its path, help and related) for the offender named by
+    /// `key`, latched on `(diagnostic.code, key)` exactly like [`report`](Self::report).
+    pub fn report_full(&mut self, key: impl Into<String>, diagnostic: Diagnostic) {
+        if !self.latch(diagnostic.code, key.into()) {
+            return;
+        }
+        self.pending.push(diagnostic);
+    }
+
+    /// Latches `(code, key)`; `false` when it already was.
+    fn latch(&mut self, code: DiagnosticCode, key: String) -> bool {
+        self.latched.entry(code).or_default().insert(key)
+    }
+
+    /// Whether `(code, key)` has already been reported this session. Allocation-free.
+    pub(crate) fn is_latched(&self, code: DiagnosticCode, key: &str) -> bool {
+        self.latched
+            .get(&code)
+            .is_some_and(|keys| keys.as_inner().contains(key))
+    }
+
+    /// Whether anything is waiting for the next boundary drain.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// Takes the pending queue, leaving the latch behind.
+    pub(crate) fn take(&mut self) -> Vec<Diagnostic> {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// The resource the next world receives when a district switch rebuilds one: the latch moved over,
+    /// the queue empty (the boundary drain has already emptied it, and a half-drained queue must never
+    /// cross a world rebuild). A load or restore starts from `Diagnostics::default()` instead.
+    pub(crate) fn carried(&mut self) -> Diagnostics {
+        Diagnostics {
+            pending: Vec::new(),
+            latched: std::mem::take(&mut self.latched),
+        }
+    }
+}
+
+/// Reports one diagnostic from a system that holds only `&mut World` — the one-line form of
+/// [`Diagnostics::report`]. A no-op on a world with no [`Diagnostics`] resource (an engine builds
+/// one into every world it owns; a bare `World` in a test may not have one).
+pub fn report(
+    world: &mut World,
+    code: DiagnosticCode,
+    key: impl Into<String>,
+    message: impl Into<String>,
+) {
+    if let Some(diagnostics) = world.resource_mut::<Diagnostics>() {
+        diagnostics.report(code, key, message);
+    }
+}
+
+/// Whether [`report`] under `(code, key)` would be a no-op, so a per-tick reporter can skip building
+/// its message.
+pub(crate) fn is_latched(world: &World, code: DiagnosticCode, key: &str) -> bool {
+    world
+        .resource::<Diagnostics>()
+        .is_none_or(|diagnostics| diagnostics.is_latched(code, key))
+}
+
+/// Reports a whole [`Diagnostic`] from a system that holds only `&mut World` — the one-line form of
+/// [`Diagnostics::report_full`]. The log line's level follows the diagnostic's severity.
+///
+/// # Example
+/// ```
+/// use ludion_engine::diagnostics::{self, Diagnostics};
+/// use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
+/// use ludion_ecs::World;
+///
+/// let mut world = World::new();
+/// world.insert_resource(Diagnostics::default());
+/// let diagnostic = Diagnostic::new(DiagnosticCode::new("L1101"), "tunable `damage` reads as zero")
+///     .with_path("weapon/crossbow/damage")
+///     .with_help("set a positive damage in weapons/crossbow.yaml");
+/// diagnostics::report_full(&mut world, "crossbow", diagnostic);
+/// ```
+pub fn report_full(world: &mut World, key: impl Into<String>, diagnostic: Diagnostic) {
+    if let Some(diagnostics) = world.resource_mut::<Diagnostics>() {
+        diagnostics.report_full(key, diagnostic);
+    }
+}
+
+/// Reports `L0027` for every component type that holds values but is missing from `registry`, once
+/// per type per session. The hash, snapshots, saves and the wire all walk the registry, so such
+/// values are invisible to them; only Rust code can create the storage, so a per-tick check sees it
+/// before any later hash or save.
+pub(crate) fn report_unregistered(world: &mut World, registry: &Registry) {
+    let mut names: Vec<&'static str> = world
+        .component_types()
+        .filter(|(id, _)| registry.get_by_type_id(*id).is_none())
+        .map(|(_, name)| name)
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    // Storages are keyed by `TypeId`, whose order differs between builds.
+    names.sort_unstable();
+    for name in names {
+        report(
+            world,
+            code::COMPONENT_NOT_REGISTERED,
+            name,
+            format!(
+                "component type `{name}` has values in the world but is not registered, so the \
+                 world hash, snapshots, saves and the wire cannot see it (register it with \
+                 `EngineBuilder::components`, or keep it as a resource if it is not per-entity \
+                 state)"
+            ),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Diagnostics, report, report_full};
+    use crate::{Engine, SceneSwitch};
+    use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
+    use ludion_core::ids::EntityId;
+    use ludion_ecs::{SystemCtx, World};
+    use ludion_protocol::command::EngineRestoreParams;
+    use ludion_protocol::event::{Event, LogEvent, LogLevel};
+    use ludion_protocol::{Command, ResponseBody};
+    use serde_json::Value;
+    use std::path::{Path, PathBuf};
+
+    const NAGGY: DiagnosticCode = DiagnosticCode::new("L1101");
+
+    const SCENE: &str = "\
+format: 1
+entities:
+  - name: player
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 2.0
+          - 3.0
+";
+
+    const NEXT: &str = "\
+format: 1
+entities:
+  - name: gate-from-start
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 0.0
+          - 0.0
+";
+
+    /// Reports the same `(code, key)` every single tick — the shape a per-frame content check has.
+    fn nag(world: &mut World, _ctx: &SystemCtx) {
+        report(world, NAGGY, "spawner-a", "the nest names no model");
+    }
+
+    /// Reports the same code for two different offenders, every tick.
+    fn nag_twice(world: &mut World, _ctx: &SystemCtx) {
+        report(world, NAGGY, "spawner-a", "the nest names no model");
+        report(world, NAGGY, "spawner-b","the nest names no model");
+    }
+
+    /// Requests a district switch on frame 2 (the `tests/transition.rs` gate mold), carrying nothing.
+    fn switch_on_frame_2(world: &mut World, ctx: &SystemCtx) {
+        if ctx.frame.as_u64() != 2 {
+            return;
+        }
+        if let Some(switch) = world.resource_mut::<SceneSwitch>() {
+            switch.request(
+                "next.yaml".to_string(),
+                "gate-from-start".to_string(),
+                Vec::<EntityId>::new(),
+            );
+        }
+    }
+
+    /// The diagnostic-carrying log records drained since the last call.
+    fn logged(engine: &mut Engine) -> Vec<LogEvent> {
+        engine
+            .take_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::Log(log) if log.diagnostic.is_some() => Some(log),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn code_of(log: &LogEvent) -> Option<&str> {
+        log.diagnostic.as_ref().map(|d| d.code.as_str())
+    }
+
+    /// Reports a whole diagnostic with a path and help, once.
+    fn report_whole(world: &mut World, _ctx: &SystemCtx) {
+        report_full(world, "crossbow", whole_diagnostic());
+    }
+
+    fn whole_diagnostic() -> Diagnostic {
+        Diagnostic::new(NAGGY, "tunable `damage` reads as zero")
+            .with_path("weapon/x/damage")
+            .with_help("set a positive damage")
+    }
+
+    /// A scratch directory removed when dropped, so a test run leaves nothing under the temp dir.
+    struct ScratchDir(PathBuf);
+
+    impl std::ops::Deref for ScratchDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn fresh_dir(name: &str) -> ScratchDir {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-diagnostics-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("next.yaml"), NEXT).unwrap();
+        ScratchDir(dir)
+    }
+
+    fn engine_with(system: fn(&mut World, &SystemCtx), root: &Path) -> Engine {
+        let mut engine = Engine::builder()
+            .system("nag", system)
+            .project_root(root)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        // The load itself queues events (a blanket loop stop); start the assertions from a clean slate.
+        engine.take_events();
+        engine
+    }
+
+    #[test]
+    fn a_per_frame_report_reaches_the_log_exactly_once() {
+        let dir = fresh_dir("once");
+        let mut engine = engine_with(nag, &dir);
+        engine.advance_live();
+        engine.advance_live();
+
+        let messages = logged(&mut engine);
+        assert_eq!(
+            messages.len(),
+            1,
+            "a system reporting every tick prints once per session: {messages:?}"
+        );
+        assert_eq!(code_of(&messages[0]), Some("L1101"));
+        assert!(
+            messages[0].message.contains("names no model"),
+            "the log line renders the diagnostic: {}",
+            messages[0].message
+        );
+        assert_eq!(
+            messages[0].level,
+            LogLevel::Error,
+            "L1101 is an error-severity code, so it logs at Error"
+        );
+    }
+
+    #[test]
+    fn a_full_diagnostic_reaches_the_log_whole() {
+        let dir = fresh_dir("whole");
+        let mut engine = engine_with(report_whole, &dir);
+        engine.advance_live();
+
+        let messages = logged(&mut engine);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        let expected = whole_diagnostic();
+        assert_eq!(messages[0].diagnostic, Some(expected.clone()));
+        assert_eq!(messages[0].message, expected.to_string());
+        assert_eq!(messages[0].level, LogLevel::Error);
+        assert!(messages[0].message.contains("weapon/x/damage"));
+        assert!(messages[0].message.contains("help: set a positive damage"));
+    }
+
+    #[test]
+    fn two_keys_under_one_code_both_report() {
+        let dir = fresh_dir("keys");
+        let mut engine = engine_with(nag_twice, &dir);
+        engine.advance_live();
+        engine.advance_live();
+
+        let messages = logged(&mut engine);
+        assert_eq!(
+            messages.len(),
+            2,
+            "the latch is per `(code, key)`, not per code: {messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_silent_run_reports_nothing() {
+        let dir = fresh_dir("silent");
+        let mut engine = engine_with(|_, _| {}, &dir);
+        engine.advance_live();
+        engine.advance_live();
+
+        assert!(
+            logged(&mut engine).is_empty(),
+            "nothing reported means nothing logged and nothing printed"
+        );
+    }
+
+    #[test]
+    fn the_latch_survives_a_district_switch() {
+        let dir = fresh_dir("switch");
+        let mut engine = Engine::builder()
+            .system("nag", nag)
+            .system("switch_on_frame_2", switch_on_frame_2)
+            .project_root(&*dir)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        engine.take_events();
+
+        engine.advance_live(); // frame 0 — reports
+        engine.advance_live(); // frame 1
+        assert_eq!(logged(&mut engine).len(), 1);
+
+        engine.advance_live(); // frame 2 — the switch is performed at the boundary
+        engine.advance_live(); // frame 3, in the new district
+        engine.advance_live(); // frame 4
+        assert!(
+            engine.last_transition_error().is_none(),
+            "the switch is clean: {:?}",
+            engine.last_transition_error()
+        );
+        assert!(
+            engine.world().resource::<Diagnostics>().is_some(),
+            "the rebuilt district carries the resource"
+        );
+        assert!(
+            logged(&mut engine).is_empty(),
+            "the latch moved onto the new world, so the same fault stays quiet across the gate"
+        );
+    }
+
+    #[test]
+    fn a_scene_switch_pushes_a_pathless_scene_changed() {
+        let dir = fresh_dir("switch-event");
+        let mut engine = Engine::builder()
+            .system("switch_on_frame_2", switch_on_frame_2)
+            .project_root(&*dir)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        engine.take_events();
+
+        for _ in 0..4 {
+            engine.advance_live();
+        }
+        let changed: Vec<_> = engine
+            .take_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::SceneChanged(data) => Some(data),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(changed.len(), 1, "one switch, one event: {changed:?}");
+        assert_eq!(changed[0].path, None);
+    }
+
+    #[test]
+    fn the_latch_resets_on_scene_load() {
+        let dir = fresh_dir("load");
+        let mut engine = engine_with(nag, &dir);
+        engine.advance_live();
+        assert_eq!(logged(&mut engine).len(), 1);
+
+        engine.load_inline_scene(SCENE).expect("the scene reloads");
+        engine.take_events();
+        engine.advance_live();
+        assert_eq!(
+            logged(&mut engine).len(),
+            1,
+            "a reload is a fresh session, so a still-broken scene reports again"
+        );
+    }
+
+    #[test]
+    fn the_latch_resets_on_restore() {
+        let dir = fresh_dir("restore");
+        let mut engine = engine_with(nag, &dir);
+        let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+            ResponseBody::Snapshot { snapshot } => snapshot,
+            other => panic!("expected a snapshot, got {other:?}"),
+        };
+        engine.advance_live();
+        assert_eq!(logged(&mut engine).len(), 1);
+
+        engine
+            .execute(Command::EngineRestore(EngineRestoreParams {
+                snapshot: Value::clone(&snapshot),
+            }))
+            .expect("the snapshot restores");
+        engine.take_events();
+        engine.advance_live();
+        assert_eq!(
+            logged(&mut engine).len(),
+            1,
+            "a restore is a fresh session, so a still-broken world reports again"
+        );
+    }
+
+    /// A component type no registry knows: only Rust code can put its values in the world.
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct DebugOnly(u32);
+
+    /// Spawns an entity carrying an unregistered component every tick.
+    fn stash_unregistered(world: &mut World, _ctx: &SystemCtx) {
+        let entity = world.spawn();
+        world.insert(entity, DebugOnly(7)).unwrap();
+    }
+
+    /// The same spawn without the unregistered component — the hash reference.
+    fn spawn_only(world: &mut World, _ctx: &SystemCtx) {
+        world.spawn();
+    }
+
+    #[test]
+    fn an_unregistered_component_with_values_warns_once_and_never_moves_the_hash() {
+        let dir = fresh_dir("unregistered");
+        let mut stashing = engine_with(stash_unregistered, &dir);
+        let mut reference = engine_with(spawn_only, &dir);
+        for _ in 0..3 {
+            stashing.advance_live();
+            reference.advance_live();
+        }
+
+        let messages = logged(&mut stashing);
+        assert_eq!(
+            messages.len(),
+            1,
+            "one warning per type across several ticks: {messages:?}"
+        );
+        assert_eq!(code_of(&messages[0]), Some("L0027"));
+        assert!(
+            messages[0].message.contains("DebugOnly"),
+            "the line names the Rust type: {}",
+            messages[0].message
+        );
+        assert!(
+            logged(&mut reference).is_empty(),
+            "a world with only registered components reports nothing"
+        );
+        assert_eq!(
+            stashing.world_hash().unwrap(),
+            reference.world_hash().unwrap(),
+            "the warning is a report, not a hash input: the unregistered values stay invisible"
+        );
+    }
+
+    /// Spawns an entity with a NaN `Transform`.
+    fn poison_transform(world: &mut World, _ctx: &SystemCtx) {
+        let entity = world.spawn();
+        let transform = crate::Transform {
+            translation: [f32::NAN, 0.0, 0.0],
+            ..Default::default()
+        };
+        world.insert(entity, transform).unwrap();
+    }
+
+    #[test]
+    fn a_non_finite_float_in_a_hash_warns_once_per_component_and_emits_at_once() {
+        let dir = fresh_dir("non-finite");
+        let mut poisoned = engine_with(poison_transform, &dir);
+        poisoned.advance_live();
+        poisoned.take_events();
+        let first = poisoned.world_hash().unwrap();
+        // Emitted by the hash itself, with no further frame boundary.
+        let messages = logged(&mut poisoned);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert_eq!(code_of(&messages[0]), Some("L4024"));
+        assert!(
+            messages[0].message.contains("`Transform`"),
+            "{}",
+            messages[0].message
+        );
+        assert_eq!(poisoned.world_hash().unwrap(), first);
+        assert!(
+            logged(&mut poisoned).is_empty(),
+            "the latch holds per component type"
+        );
+
+        let mut finite = engine_with(|_, _| {}, &dir);
+        finite.advance_live();
+        finite.world_hash().unwrap();
+        assert!(logged(&mut finite).is_empty());
+    }
+
+    #[test]
+    fn reporting_never_moves_the_world_hash() {
+        let dir = fresh_dir("hash");
+        let mut reporting = engine_with(nag, &dir);
+        let mut silent = engine_with(|_, _| {}, &dir);
+        for _ in 0..3 {
+            reporting.advance_live();
+            silent.advance_live();
+        }
+        assert_eq!(
+            reporting.world_hash().unwrap(),
+            silent.world_hash().unwrap(),
+            "the diagnostics resource is outside the registry, so it cannot reach a WorldHash"
+        );
+    }
+}

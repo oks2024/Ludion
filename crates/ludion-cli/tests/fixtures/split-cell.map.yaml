@@ -1,0 +1,23 @@
+format: 1
+kind: map
+name: split-cell
+kit: split-cell.kit.yaml
+cell_size: 8.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "..."
+markers:
+  - name: anchor-torch
+    kind: torch
+    x: 2.0
+    z: 4.0
+  - name: divider
+    kind: slab
+    x: 12.0
+    z: 4.0
+  - name: cut-off
+    kind: torch
+    x: 14.0
+    z: 4.0

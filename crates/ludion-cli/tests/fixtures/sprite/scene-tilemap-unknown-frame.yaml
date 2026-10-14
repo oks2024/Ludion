@@ -1,0 +1,12 @@
+format: 1
+entities:
+  - name: floor
+    components:
+      Tilemap:
+        cell_size: 1.0
+        legend:
+          b:
+            atlas: ship.atlas.yaml
+            frame: bolt/idel
+        rows:
+          - "bb"

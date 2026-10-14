@@ -1,0 +1,902 @@
+//! Runtime prefab instantiation: [`spawn_prefab`] spawns a `kind: prefab` document from a system.
+//!
+//! The [`PrefabLibrary`] resource reads each prefab from the content root on first use and validates
+//! it once with the spawn-time passes — the document's own checks, the singleton and hierarchy-body
+//! rules, collider layers against the running scene's `physics:` block, atlas references and skin
+//! bones. A prefab that fails is cached as its diagnostics, so a bad file is not re-read every spawn.
+//! Like the [`PathLibrary`](crate::path_follow), the library is engine configuration installed at
+//! every world rebuild, read afresh from committed content and never hashed; `asset.reload` refreshes
+//! a prefab it holds. A spawn is the one [`ludion_scene::instantiate_into`] path, so it is
+//! all-or-nothing and its ids come back in part order.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
+use ludion_core::ids::EntityId;
+use ludion_core::time::FrameIndex;
+use ludion_ecs::{Registry, World};
+use ludion_scene::{
+    ExpandedScene, InstanceHooks, InstanceTransform, InstantiateOptions, ScenePhysics,
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::components::Transform;
+use crate::hierarchy::level_trs;
+use crate::instantiate::EngineHooks;
+use crate::scene_check::{
+    prefab_singleton_diagnostics, scene_atlas_diagnostics, scene_hierarchy_body_diagnostics,
+    scene_layer_diagnostics,
+};
+use crate::skin_bone::{BonePose, apply_bone_poses, spawn_poses};
+
+/// Where a prefab part came from: written onto every named part by [`spawn_prefab`], hashed and
+/// snapshotted like any component.
+///
+/// `root` is the instance's first part — a prefab's parts are one group, and the group's identity is
+/// its first id — so it remaps like [`Joint`](ludion_spatial::Joint)'s `a`.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct PrefabInstance {
+    /// The prefab file, relative to the content root, normalized: forward slashes, no `.` segments.
+    pub source: String,
+    /// The part's name in the prefab, without the instance prefix.
+    pub part: String,
+    /// The instance's first part; the first part names itself.
+    #[schemars(with = "ludion_ecs::EntityRefSelfSchema")]
+    pub root: EntityId,
+}
+
+/// A prefab that passed every spawn-time pass: its parts and the resolved skin-bone poses.
+pub(crate) struct Ready {
+    pub(crate) expanded: ExpandedScene,
+    pub(crate) poses: Vec<BonePose>,
+}
+
+/// The prefabs [`spawn_prefab`] reads, loaded lazily from `root`. `physics` is the running scene's
+/// block, so a prefab's collider layers are checked against the layers the scene declares.
+#[derive(Clone)]
+pub(crate) struct PrefabLibrary {
+    root: PathBuf,
+    registry: Arc<Registry>,
+    physics: Option<ScenePhysics>,
+    /// Keyed by the path a spawn names; a failed load is cached as its diagnostics.
+    prefabs: BTreeMap<String, Result<Arc<Ready>, Vec<Diagnostic>>>,
+    /// The frame whose tick runs next, kept current by the engine: the stamp of a text read now.
+    pub(crate) frame: FrameIndex,
+    /// The last source read per key, kept to re-log when a recording is armed after the read.
+    texts: BTreeMap<String, String>,
+    /// Every source read from disk (or accepted by a reload) since the engine last drained it, as
+    /// `(stamp, key, source, reload)`, for the recording.
+    log: Vec<(FrameIndex, String, String, bool)>,
+    /// `Some` under replay: the recorded read texts, which stand in for the disk.
+    source: Option<Arc<PrefabTextSource>>,
+    /// The rebuild epoch of this library: the key into `source` under replay.
+    epoch: u32,
+    /// Per loaded key, every prefab its expansion resolved, transitively (failed loads included): the
+    /// entries a reload of one of them must re-validate.
+    deps: BTreeMap<String, BTreeSet<String>>,
+    /// The held texts as they stood between accepted reloads: every read goes into the last one, a
+    /// successful [`replace`](Self::replace) freezes it and starts the next. A parallel record to
+    /// `texts`, so save can diff an instance against the text it was expanded from.
+    snapshots: Vec<BTreeMap<String, String>>,
+    /// Instance root → the snapshot its text came from, for instances spawned or applied here.
+    bound: BTreeMap<EntityId, usize>,
+    /// Instance root → the placement it was spawned or loaded at, so an apply builds at that
+    /// placement instead of recovering it from the live poses. Not hashed or snapshotted: spawns and
+    /// loads replay, so it rebuilds the same. Unknown after a restore.
+    placements: BTreeMap<EntityId, InstanceTransform>,
+    /// The size of `bound` plus `placements` after the last prune: the next one is due when they
+    /// double it, so pruning stays amortized O(1) per spawn.
+    pruned_len: usize,
+}
+
+/// The prefab texts a scene load or district switch reads, before the world it builds exists: the
+/// one resolver `ludion_scene::expand` is given there. A key resolves to one text per load; the
+/// `(key, text)` pairs it read end up in [`reads`](LoadReads::reads) for the new library to seed.
+pub(crate) struct LoadReads {
+    root: PathBuf,
+    source: Option<Arc<PrefabTextSource>>,
+    epoch: u32,
+    /// Every `(key, text)` resolved so far, in first-read order.
+    pub(crate) reads: Vec<(String, String)>,
+}
+
+impl LoadReads {
+    /// A resolver over `root`, or over `source` in `epoch` under replay.
+    pub(crate) fn new(root: PathBuf, source: Option<Arc<PrefabTextSource>>, epoch: u32) -> Self {
+        LoadReads {
+            root,
+            source,
+            epoch,
+            reads: Vec::new(),
+        }
+    }
+
+    /// The text of the prefab `path`, as written in the document.
+    ///
+    /// # Errors
+    /// `L1230` for an absolute or unreadable path, or under replay one the recording does not hold.
+    pub(crate) fn resolve(&mut self, path: &str) -> Result<String, Diagnostic> {
+        let key = prefab_key(path).map_err(|mut found| found.swap_remove(0))?;
+        if let Some((_, held)) = self.reads.iter().find(|(read, _)| *read == key) {
+            return Ok(held.clone());
+        }
+        let text = fetch(&self.root, self.source.as_deref(), self.epoch, &key)?;
+        self.reads.push((key, text.clone()));
+        Ok(text)
+    }
+}
+
+/// The text of the prefab `key`: from the disk, or under replay the one `epoch` read.
+fn fetch(
+    root: &std::path::Path,
+    source: Option<&PrefabTextSource>,
+    epoch: u32,
+    key: &str,
+) -> Result<String, Diagnostic> {
+    match source {
+        Some(source) => source
+            .get(&(epoch, key.to_owned()))
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    code::PREFAB_UNRESOLVED,
+                    format!("prefab `{key}` is not recorded in this replay"),
+                )
+                .with_help("the recording holds the prefab texts its session read")
+            }),
+        None => read_prefab_text(root, key),
+    }
+}
+
+/// The prefab texts a recording's reads carry, as `(rebuild epoch, path)` → source. A live library
+/// reads a path at most once per epoch, so the first record wins.
+pub(crate) type PrefabTextSource = BTreeMap<(u32, String), String>;
+
+impl PrefabLibrary {
+    /// An empty library resolving paths against `root`, or against `source` under replay.
+    pub(crate) fn new(
+        root: PathBuf,
+        registry: Arc<Registry>,
+        physics: Option<ScenePhysics>,
+        frame: FrameIndex,
+        source: Option<Arc<PrefabTextSource>>,
+        epoch: u32,
+    ) -> Self {
+        PrefabLibrary {
+            root,
+            registry,
+            physics,
+            prefabs: BTreeMap::new(),
+            frame,
+            texts: BTreeMap::new(),
+            log: Vec::new(),
+            source,
+            epoch,
+            deps: BTreeMap::new(),
+            snapshots: vec![BTreeMap::new()],
+            bound: BTreeMap::new(),
+            placements: BTreeMap::new(),
+            pruned_len: 0,
+        }
+    }
+
+    /// Holds `text` for `key` in the texts and in the current snapshot.
+    fn hold(&mut self, key: &str, text: &str) {
+        self.texts.insert(key.to_owned(), text.to_owned());
+        self.snapshots
+            .last_mut()
+            .expect("a library always has a snapshot")
+            .insert(key.to_owned(), text.to_owned());
+    }
+
+    /// The snapshot the instance rooted at `root` was expanded from: the one it is bound to, else
+    /// the earliest holding `key` (a scene-loaded instance, whose texts the load seeded). `None` when
+    /// no snapshot holds `key`, as after a restore; the instance then resolves from disk.
+    pub(crate) fn expanded_from(&self, root: EntityId, key: &str) -> Option<usize> {
+        self.bound.get(&root).copied().or_else(|| {
+            self.snapshots
+                .iter()
+                .position(|held| held.contains_key(key))
+        })
+    }
+
+    /// The held texts of snapshot `index`.
+    pub(crate) fn snapshot(&self, index: usize) -> &BTreeMap<String, String> {
+        &self.snapshots[index]
+    }
+
+    /// Binds the instance rooted at `root` to the current snapshot.
+    pub(crate) fn bind(&mut self, root: EntityId) {
+        self.bound.insert(root, self.snapshots.len() - 1);
+    }
+
+    /// Records the placement the instance rooted at `root` was spawned or loaded at.
+    pub(crate) fn place(&mut self, root: EntityId, placement: InstanceTransform) {
+        self.placements.insert(root, placement);
+    }
+
+    /// Whether the instance records have doubled since the last prune (never below 64).
+    fn prune_due(&self) -> bool {
+        self.bound.len() + self.placements.len() >= self.pruned_len.max(32) * 2
+    }
+
+    /// The instance roots holding a record.
+    fn recorded_roots(&self) -> BTreeSet<EntityId> {
+        self.bound
+            .keys()
+            .chain(self.placements.keys())
+            .copied()
+            .collect()
+    }
+
+    /// Drops the records of every root `alive` rejects.
+    pub(crate) fn prune(&mut self, alive: impl Fn(EntityId) -> bool) {
+        self.bound.retain(|&root, _| alive(root));
+        self.placements.retain(|&root, _| alive(root));
+        self.pruned_len = self.bound.len() + self.placements.len();
+    }
+
+    /// The placement of the instance rooted at `root`, `None` when unknown (after a restore).
+    pub(crate) fn placement(&self, root: EntityId) -> Option<&InstanceTransform> {
+        self.placements.get(&root)
+    }
+
+    /// Holds the texts a scene load read and logs them at the library's frame, so the recording files
+    /// them in this world's epoch and a later spawn composes the text the load saw.
+    pub(crate) fn seed(&mut self, reads: Vec<(String, String)>) {
+        for (key, text) in reads {
+            self.hold(&key, &text);
+            self.log.push((self.frame, key, text, false));
+        }
+    }
+
+    /// Takes the texts read since the last drain.
+    pub(crate) fn take_log(&mut self) -> Vec<(FrameIndex, String, String, bool)> {
+        std::mem::take(&mut self.log)
+    }
+
+    /// Logs the held texts at frame zero, for a recording armed after the reads: a replay starts
+    /// from the header scene at frame 0, so it must resolve them from there. Each key logs the text
+    /// of the earliest snapshot holding it as a read, then every accepted reload that changed a
+    /// text, in order, so the replay's library ends on the live one and the header scene's load sees
+    /// the text it was built from. Reads not yet drained are superseded by it.
+    pub(crate) fn relog_all(&mut self) {
+        self.log.clear();
+        let mut read = BTreeSet::new();
+        for held in &self.snapshots {
+            for (key, source) in held {
+                if read.insert(key) {
+                    self.log
+                        .push((FrameIndex::ZERO, key.clone(), source.clone(), false));
+                }
+            }
+        }
+        for pair in self.snapshots.windows(2) {
+            for (key, source) in &pair[1] {
+                if pair[0].get(key).is_some_and(|before| before != source) {
+                    self.log
+                        .push((FrameIndex::ZERO, key.clone(), source.clone(), true));
+                }
+            }
+        }
+    }
+
+    /// The prefab `rel`, loading and validating it on first use. A text already held (seeded by a
+    /// scene load, or read as a nested prefab) is loaded as is: one text per key per epoch.
+    pub(crate) fn ready(&mut self, rel: &str) -> Result<Arc<Ready>, Vec<Diagnostic>> {
+        if !self.prefabs.contains_key(rel) {
+            let source = match self.texts.get(rel) {
+                Some(held) => Ok(held.clone()),
+                None => self.read(rel).inspect(|source| {
+                    self.hold(rel, source);
+                    self.log
+                        .push((self.frame, rel.to_owned(), source.clone(), false));
+                }),
+            };
+            let loaded = match source {
+                Ok(source) => {
+                    let mut nested = Vec::new();
+                    let mut deps = BTreeSet::new();
+                    let loaded = self.load(rel, &source, &mut nested, &mut deps);
+                    self.record_nested(nested);
+                    self.deps.insert(rel.to_owned(), deps);
+                    loaded
+                }
+                Err(diagnostics) => Err(diagnostics),
+            };
+            self.prefabs.insert(rel.to_owned(), loaded);
+        }
+        self.prefabs[rel].clone()
+    }
+
+    /// The content root prefab paths resolve against.
+    pub(crate) fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
+    /// The component registry prefabs are validated against.
+    pub(crate) fn registry(&self) -> &Arc<Registry> {
+        &self.registry
+    }
+
+    /// Runs every pass over `source` as the prefab `key` without caching or logging anything.
+    ///
+    /// # Errors
+    /// The diagnostics a load of `key` would give.
+    pub(crate) fn validate(&self, key: &str, source: &str) -> Result<(), Vec<Diagnostic>> {
+        self.load(key, source, &mut Vec::new(), &mut BTreeSet::new())
+            .map(drop)
+    }
+
+    /// The text of `rel`: from the disk, or under replay the one this epoch read.
+    fn read(&self, rel: &str) -> Result<String, Vec<Diagnostic>> {
+        fetch(&self.root, self.source.as_deref(), self.epoch, rel).map_err(|found| vec![found])
+    }
+
+    /// Logs the nested prefab texts a load read, like a top-level read.
+    fn record_nested(&mut self, nested: Vec<(String, String)>) {
+        for (key, text) in nested {
+            self.hold(&key, &text);
+            self.log.push((self.frame, key, text, false));
+        }
+    }
+
+    /// Whether `key` has been loaded (successfully or not) or its text is held — read as a nested
+    /// prefab, or by a scene load.
+    pub(crate) fn holds(&self, key: &str) -> bool {
+        self.prefabs.contains_key(key) || self.texts.contains_key(key)
+    }
+
+    /// Re-validates `source` as the prefab `key`, then every cached prefab that expanded `key`, from
+    /// its held text; nothing changes when `key` or a dependent that loaded before now fails. Live,
+    /// `source` is the reloaded file; under replay, the recorded reload text, so both run this same
+    /// code.
+    ///
+    /// # Errors
+    /// `key`'s own diagnostics, or a dependent's, prefixed ``reloading `key` breaks `dependent`: ``.
+    pub(crate) fn replace(&mut self, key: &str, source: &str) -> Result<(), Vec<Diagnostic>> {
+        let mut nested = Vec::new();
+        let mut deps = BTreeSet::new();
+        let loaded = self.load(key, source, &mut nested, &mut deps);
+        self.record_nested(nested);
+        let ready = loaded?;
+
+        let previous = self.texts.insert(key.to_owned(), source.to_owned());
+        let dependents: Vec<String> = self
+            .deps
+            .iter()
+            .filter(|(dependent, resolved)| dependent.as_str() != key && resolved.contains(key))
+            .map(|(dependent, _)| dependent.clone())
+            .collect();
+        let mut reloaded = Vec::new();
+        for dependent in dependents {
+            let Some(text) = self.texts.get(&dependent).cloned() else {
+                continue;
+            };
+            let mut nested = Vec::new();
+            let mut resolved = BTreeSet::new();
+            let loaded = self.load(&dependent, &text, &mut nested, &mut resolved);
+            self.record_nested(nested);
+            if let Err(broken) = &loaded
+                && matches!(self.prefabs.get(&dependent), Some(Ok(_)))
+            {
+                let mut broken = broken.clone();
+                match previous {
+                    Some(old) => self.texts.insert(key.to_owned(), old),
+                    None => self.texts.remove(key),
+                };
+                for diagnostic in &mut broken {
+                    diagnostic.message = format!(
+                        "reloading `{key}` breaks `{dependent}`: {}",
+                        diagnostic.message
+                    );
+                }
+                return Err(broken);
+            }
+            reloaded.push((dependent, loaded, resolved));
+        }
+
+        for (dependent, loaded, resolved) in reloaded {
+            self.prefabs.insert(dependent.clone(), loaded);
+            self.deps.insert(dependent, resolved);
+        }
+        self.prefabs.insert(key.to_owned(), Ok(ready));
+        self.deps.insert(key.to_owned(), deps);
+        let frozen = self.snapshots.last().expect("a snapshot").clone();
+        self.snapshots.push(frozen);
+        self.snapshots
+            .last_mut()
+            .expect("a snapshot")
+            .insert(key.to_owned(), source.to_owned());
+        self.log
+            .push((self.frame, key.to_owned(), source.to_owned(), true));
+        Ok(())
+    }
+
+    /// Runs every pass over `source`, collecting every diagnostic of the later passes; each names
+    /// `path` in its message and keeps its `/entities/{i}/…` pointer into the prefab.
+    ///
+    /// Nested instances expand first, so the passes run on the flat body; the `(key, text)` of each
+    /// nested prefab read is pushed to `nested` for the caller to log, and every key the expansion
+    /// resolved (held or read) to `deps`.
+    fn load(
+        &self,
+        path: &str,
+        source: &str,
+        nested: &mut Vec<(String, String)>,
+        deps: &mut BTreeSet<String>,
+    ) -> Result<Arc<Ready>, Vec<Diagnostic>> {
+        let name_the_file = |diagnostics: Vec<Diagnostic>| -> Vec<Diagnostic> {
+            diagnostics
+                .into_iter()
+                .map(|mut diagnostic| {
+                    diagnostic.message = format!("in `{path}`: {}", diagnostic.message);
+                    diagnostic
+                })
+                .collect()
+        };
+        let expanded = self.expand_text(path, source, nested, deps)?;
+        let mut body = expanded.scene.clone();
+        let mut diagnostics = prefab_singleton_diagnostics(&body);
+        diagnostics.extend(ludion_scene::mixed_root_diagnostic(&body.entities));
+        diagnostics.extend(scene_hierarchy_body_diagnostics(&body));
+        body.physics = self.physics.clone();
+        diagnostics.extend(scene_layer_diagnostics(&body));
+        diagnostics.extend(scene_atlas_diagnostics(&self.root, &body));
+        let poses = match spawn_poses(&self.root, &body) {
+            Ok(poses) => poses,
+            Err(errors) => {
+                diagnostics.extend(errors);
+                Vec::new()
+            }
+        };
+        // A lint in the body is reported by check-scene on the expanded scene; it must not refuse a spawn.
+        diagnostics.retain(|d| d.severity.is_error());
+        if !diagnostics.is_empty() {
+            let located = diagnostics.into_iter().map(|d| expanded.locate(d));
+            return Err(name_the_file(located.collect()));
+        }
+        Ok(Arc::new(Ready { expanded, poses }))
+    }
+
+    /// Parses `source` as the prefab `path` and expands its nested instances: the first half of
+    /// [`Self::load`], with the same `nested` and `deps` bookkeeping and file-named diagnostics.
+    fn expand_text(
+        &self,
+        path: &str,
+        source: &str,
+        nested: &mut Vec<(String, String)>,
+        deps: &mut BTreeSet<String>,
+    ) -> Result<ExpandedScene, Vec<Diagnostic>> {
+        let name_the_file = |diagnostics: Vec<Diagnostic>| -> Vec<Diagnostic> {
+            diagnostics
+                .into_iter()
+                .map(|mut diagnostic| {
+                    diagnostic.message = format!("in `{path}`: {}", diagnostic.message);
+                    diagnostic
+                })
+                .collect()
+        };
+        let doc = ludion_scene::check_prefab(source, &self.registry).map_err(name_the_file)?;
+        doc.expand(&self.registry, &mut |nested_path| {
+            let key = prefab_key(nested_path).map_err(|mut found| found.swap_remove(0))?;
+            deps.insert(key.clone());
+            // One text per key per epoch: a held text wins over a fresh read, so a replay
+            // (which resolves the first record) sees what the live run composed.
+            if let Some(held) = self.texts.get(&key) {
+                return Ok(held.clone());
+            }
+            let text = self.read(&key).map_err(|mut found| found.swap_remove(0))?;
+            nested.push((key, text.clone()));
+            Ok(text)
+        })
+        .map_err(name_the_file)
+    }
+
+    /// The root part paths of the prefab `key`, in part order: what [`Self::ready`] would yield,
+    /// without caching or logging anything. Empty when the prefab cannot be read or expanded.
+    pub(crate) fn root_parts_of(&self, key: &str) -> Vec<String> {
+        match self.prefabs.get(key) {
+            Some(Ok(ready)) => root_parts(&ready.expanded),
+            Some(Err(_)) => Vec::new(),
+            None => {
+                let Ok(text) = self
+                    .texts
+                    .get(key)
+                    .cloned()
+                    .map_or_else(|| self.read(key), Ok)
+                else {
+                    return Vec::new();
+                };
+                self.expand_text(key, &text, &mut Vec::new(), &mut BTreeSet::new())
+                    .map_or_else(|_| Vec::new(), |expanded| root_parts(&expanded))
+            }
+        }
+    }
+}
+
+/// The part paths whose `Transform` and `Parent` are the instance's placement: the named parts of
+/// the flattened prefab with no `Parent` component. `prefab.revert` leaves them alone, and
+/// `prefab.overrides` reports them, so both read the rule here.
+pub(crate) fn root_parts(expanded: &ExpandedScene) -> Vec<String> {
+    expanded
+        .scene
+        .entities
+        .iter()
+        .filter(|entity| entity.components.iter().all(|(name, _)| name != "Parent"))
+        .filter_map(|entity| entity.name.clone())
+        .collect()
+}
+
+/// Names parts like a scene load does and writes each named part's [`PrefabInstance`].
+pub(crate) struct PrefabHooks<'a> {
+    pub(crate) source: &'a str,
+}
+
+impl InstanceHooks for PrefabHooks<'_> {
+    fn name(&self, world: &mut World, entity: EntityId, name: &str) {
+        EngineHooks.name(world, entity, name);
+    }
+
+    fn place(&self, world: &mut World, root: EntityId, placement: &ludion_core::math::Trs) {
+        EngineHooks.place(world, root, placement);
+    }
+
+    fn provenance(&self, world: &mut World, entity: EntityId, part: &str, root: EntityId) {
+        world
+            .insert(
+                entity,
+                PrefabInstance {
+                    source: self.source.to_owned(),
+                    part: part.to_owned(),
+                    root,
+                },
+            )
+            .expect("the entity was just instantiated and is alive");
+    }
+}
+
+/// The canonical key of a prefab path: forward slashes, no empty or `.` segments, so every spelling
+/// of one file shares a cache entry, a recorded text and an `asset.reload` key. `..` stays verbatim —
+/// the wire refuses it before this, and game code is trusted.
+pub(crate) fn prefab_key(path: &str) -> Result<String, Vec<Diagnostic>> {
+    if std::path::Path::new(path).is_absolute() || path.starts_with(['/', '\\']) {
+        return Err(vec![
+            Diagnostic::new(
+                code::PREFAB_UNRESOLVED,
+                format!("cannot spawn prefab `{path}`: the path is absolute"),
+            )
+            .with_help(
+                "name the prefab relative to the content root, e.g. `prefabs/crate.prefab.yaml`",
+            ),
+        ]);
+    }
+    Ok(ludion_scene::normalize_prefab_path(path))
+}
+
+/// The text of the prefab `key` (a [`prefab_key`]) on disk under `root`.
+pub(crate) fn read_prefab_text(root: &std::path::Path, key: &str) -> Result<String, Diagnostic> {
+    std::fs::read_to_string(root.join(key)).map_err(|error| {
+        Diagnostic::new(
+            code::PREFAB_UNRESOLVED,
+            format!("cannot read prefab `{key}`: {error}"),
+        )
+        .with_help("the path is relative to the content root")
+    })
+}
+
+/// Spawns the prefab at `path` (relative to the content root) into `world` and returns its part ids
+/// in the prefab's part order.
+///
+/// `placement` is baked onto every root of the group — a part with no `Parent` — as
+/// `placement ∘ local`; `None` leaves the poses as authored. `name` prefixes every part's
+/// [`Name`](crate::Name) as `name/part`; without it the parts carry their bare names. Each part
+/// gets a [`PrefabInstance`], and entity references between parts point at this copy's ids. Call it
+/// from a sim system; a presentation part spawned from a sim system is refused with `L0028`, and a
+/// presentation system cannot spawn a prefab at all, since the prefab library is a sim resource.
+///
+/// The prefab is read and validated once per path per world: later spawns reuse the result, and
+/// `asset.reload` refreshes it. Live instances never change when the file does.
+///
+/// # Errors
+/// `L1230` if `path` is absolute, the file cannot be read or `world` has no prefab library (it was
+/// not built by an engine); the prefab's own diagnostics (`L1226`–`L1229`, `L1221`/`L1222`, `L1186`/`L1187`,
+/// `L1151`/`L1152`/`L1209`, `L1194`–`L1197`, component errors) when it is invalid; `L0028` when the
+/// spawn crosses the phase boundary. Nothing is spawned on any error.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, spawn_prefab};
+///
+/// let root = std::env::temp_dir().join(format!("ludion-spawn-prefab-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&root).unwrap();
+/// std::fs::write(
+///     root.join("crate.prefab.yaml"),
+///     "format: 1\nkind: prefab\nname: crate\nentities:\n  - name: lid\n    components: {}\n",
+/// )
+/// .unwrap();
+///
+/// let mut engine = Engine::builder().project_root(&root).build().unwrap();
+/// let ids = spawn_prefab(engine.world_mut(), "crate.prefab.yaml", None, Some("crate-1")).unwrap();
+/// assert_eq!(ids.len(), 1);
+/// # std::fs::remove_dir_all(&root).ok();
+/// ```
+pub fn spawn_prefab(
+    world: &mut World,
+    path: &str,
+    placement: Option<Transform>,
+    name: Option<&str>,
+) -> Result<Vec<EntityId>, Vec<Diagnostic>> {
+    let key = prefab_key(path)?;
+    let Some(library) = world.resource_mut::<PrefabLibrary>() else {
+        return Err(vec![
+            Diagnostic::new(
+                code::PREFAB_UNRESOLVED,
+                format!("cannot spawn prefab `{path}`: this world has no prefab library"),
+            )
+            .with_help("spawn prefabs from a system of an engine-built game"),
+        ]);
+    };
+    let ready = library.ready(&key)?;
+    let registry = Arc::clone(&library.registry);
+    let ids = ludion_scene::instantiate_expanded(
+        world,
+        &ready.expanded,
+        &registry,
+        &InstantiateOptions {
+            placement: placement.as_ref().map(level_trs),
+            name_prefix: name,
+            hooks: &PrefabHooks { source: &key },
+        },
+    )?;
+    apply_bone_poses(world, &ids, &ready.poses);
+    if world
+        .resource::<PrefabLibrary>()
+        .is_some_and(PrefabLibrary::prune_due)
+    {
+        let live: BTreeSet<EntityId> = world
+            .resource::<PrefabLibrary>()
+            .map(PrefabLibrary::recorded_roots)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|&root| world.is_alive(root))
+            .collect();
+        if let Some(library) = world.resource_mut::<PrefabLibrary>() {
+            library.prune(|root| live.contains(&root));
+        }
+    }
+    if let (Some(&first), Some(library)) = (ids.first(), world.resource_mut::<PrefabLibrary>()) {
+        library.bind(first);
+        library.place(
+            first,
+            placement
+                .as_ref()
+                .map_or_else(InstanceTransform::default, |at| InstanceTransform {
+                    translation: at.translation.map(f64::from),
+                    rotation: at.rotation.map(f64::from),
+                    scale: at.scale.map(f64::from),
+                }),
+        );
+    }
+    Ok(ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::builtin_registry;
+
+    fn root(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-prefab-unit-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a temp content root");
+        dir
+    }
+
+    fn world(root: &std::path::Path) -> World {
+        let mut world = World::new();
+        world.insert_resource(PrefabLibrary::new(
+            root.to_path_buf(),
+            Arc::new(builtin_registry()),
+            None,
+            FrameIndex::ZERO,
+            None,
+            0,
+        ));
+        world
+    }
+
+    fn prefab(parts: &str) -> String {
+        format!("format: 1\nkind: prefab\nname: unit\nentities:\n{parts}")
+    }
+
+    /// Spawns `parts` and asserts the refusal carries `expected` with nothing spawned.
+    fn refused(tag: &str, parts: &str, expected: ludion_core::diagnostics::DiagnosticCode) {
+        let root = root(tag);
+        std::fs::write(root.join("p.prefab.yaml"), prefab(parts)).unwrap();
+        let mut world = world(&root);
+        world.spawn();
+        let before = (
+            world.entity_count(),
+            world.allocator_state(),
+            world.presentation_allocator_state(),
+        );
+        let errors = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap_err();
+        assert!(
+            errors.iter().any(|d| d.code == expected),
+            "{expected}: {errors:?}"
+        );
+        assert!(errors[0].message.starts_with("in `p.prefab.yaml`: "));
+        assert_eq!(
+            (
+                world.entity_count(),
+                world.allocator_state(),
+                world.presentation_allocator_state()
+            ),
+            before
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn instance_records_stay_bounded_and_a_live_instance_keeps_its_placement() {
+        let root = root("prune");
+        std::fs::write(
+            root.join("p.prefab.yaml"),
+            prefab("  - name: a\n    components: {}\n"),
+        )
+        .unwrap();
+        let mut world = world(&root);
+        let keeper = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap()[0];
+        for _ in 0..1000 {
+            let ids = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap();
+            world.despawn(ids[0]).unwrap();
+        }
+        let library = world.resource::<PrefabLibrary>().unwrap();
+        assert!(library.bound.len() < 200, "{}", library.bound.len());
+        assert!(library.placements.len() < 200);
+        assert!(library.placement(keeper).is_some());
+        assert!(library.bound.contains_key(&keeper));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_singleton_part_is_refused_and_spawns_nothing() {
+        refused(
+            "singleton",
+            "  - name: eye\n    components:\n      Camera: {}\n",
+            code::PREFAB_SINGLETON,
+        );
+    }
+
+    #[test]
+    fn a_rigid_child_is_refused_and_spawns_nothing() {
+        refused(
+            "rigid",
+            "  - name: base\n    components: {}\n  - name: ball\n    components:\n      Parent:\n        index: 0\n        generation: 0\n      Collider:\n        shape:\n          box:\n            half_extents:
+              - 0.5
+              - 0.5
+              - 0.5\n        body:\n          rigid: {}\n",
+            code::HIERARCHY_RIGID_BODY,
+        );
+    }
+
+    #[test]
+    fn an_undeclared_layer_is_refused_and_spawns_nothing() {
+        refused(
+            "layer",
+            "  - name: wall\n    components:\n      Collider:\n        shape:\n          box:\n            half_extents:
+              - 0.5
+              - 0.5
+              - 0.5\n        body: static\n        layer: ghost\n",
+            code::COLLIDER_LAYER_UNKNOWN,
+        );
+    }
+
+    #[test]
+    fn a_failing_prefab_is_cached() {
+        let root = root("cached");
+        let file = root.join("p.prefab.yaml");
+        std::fs::write(
+            &file,
+            prefab("  - name: eye\n    components:\n      Camera: {}\n"),
+        )
+        .unwrap();
+        let mut world = world(&root);
+        let first = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap_err();
+        std::fs::remove_file(&file).unwrap();
+        let second = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap_err();
+        assert_eq!(first, second);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_dotted_or_backslashed_path_names_the_canonical_source() {
+        let root = root("canonical");
+        std::fs::write(
+            root.join("p.prefab.yaml"),
+            prefab("  - name: a\n    components: {}\n"),
+        )
+        .unwrap();
+        let mut world = world(&root);
+        for path in ["./p.prefab.yaml", ".\\p.prefab.yaml", "p.prefab.yaml"] {
+            let ids = spawn_prefab(&mut world, path, None, None).unwrap();
+            let instance = world.get::<PrefabInstance>(ids[0]).unwrap().unwrap();
+            assert_eq!(instance.source, "p.prefab.yaml", "{path}");
+        }
+        let library = world.resource::<PrefabLibrary>().unwrap();
+        assert_eq!(
+            library.prefabs.len(),
+            1,
+            "one cache entry for every spelling"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_absolute_path_is_refused_and_spawns_nothing() {
+        let root = root("absolute");
+        std::fs::write(
+            root.join("p.prefab.yaml"),
+            prefab("  - name: a\n    components: {}\n"),
+        )
+        .unwrap();
+        let mut world = world(&root);
+        let absolute = root.join("p.prefab.yaml");
+        let errors = spawn_prefab(&mut world, absolute.to_str().unwrap(), None, None).unwrap_err();
+        assert_eq!(errors[0].code, code::PREFAB_UNRESOLVED);
+        assert_eq!(world.entity_count(), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn snapshots_bind_spawns_and_find_seeded_keys() {
+        let root = root("snapshots");
+        let file = root.join("p.prefab.yaml");
+        std::fs::write(&file, prefab("  - name: a\n    components: {}\n")).unwrap();
+        let mut world = world(&root);
+        let first = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap()[0];
+        let library = world.resource_mut::<PrefabLibrary>().unwrap();
+        let edited = prefab("  - name: a\n    components: {}\n  - name: b\n    components: {}\n");
+        library.replace("p.prefab.yaml", &edited).unwrap();
+        let second = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap()[0];
+        let library = world.resource_mut::<PrefabLibrary>().unwrap();
+        assert_eq!(library.expanded_from(first, "p.prefab.yaml"), Some(0));
+        assert_eq!(library.expanded_from(second, "p.prefab.yaml"), Some(1));
+        assert!(
+            library.snapshot(0)["p.prefab.yaml"].len() < library.snapshot(1)["p.prefab.yaml"].len()
+        );
+
+        library.seed(vec![("seeded.prefab.yaml".to_owned(), "x".to_owned())]);
+        let stranger = EntityId::new(99, 0);
+        assert_eq!(
+            library.expanded_from(stranger, "seeded.prefab.yaml"),
+            Some(1)
+        );
+        assert_eq!(library.expanded_from(stranger, "nope.prefab.yaml"), None);
+
+        let count = library.snapshots.len();
+        let broken = prefab("  - name: eye\n    components:\n      Camera: {}\n");
+        assert!(library.replace("p.prefab.yaml", &broken).is_err());
+        assert_eq!(library.snapshots.len(), count);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_missing_file_and_a_missing_library_are_l1230() {
+        let root = root("missing");
+        let mut with_library = world(&root);
+        let errors = spawn_prefab(&mut with_library, "nope.prefab.yaml", None, None).unwrap_err();
+        assert_eq!(errors[0].code, code::PREFAB_UNRESOLVED);
+        assert!(errors[0].message.contains("nope.prefab.yaml"));
+
+        let errors = spawn_prefab(&mut World::new(), "nope.prefab.yaml", None, None).unwrap_err();
+        assert_eq!(errors[0].code, code::PREFAB_UNRESOLVED);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

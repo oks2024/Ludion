@@ -1,0 +1,74 @@
+# Feature: MeshGrid — a grid of mesh cells in the entity's local XZ plane, one entity for the whole
+# ground. The legend maps a glyph to a `Mesh` (here the 1 x 1 `grid-tile` with a raised bar along
+# half of its far edge); `orient` turns each cell by a quarter-turn (0-3) or mirrors then turns it
+# (4-7), so the bar lands in all eight places across the 6 x 4 grid. A space is an empty cell: the
+# hole in row 1. The first row is the far (-Z) row. Declared `presentation: true`, the colliderless
+# ground costs the sim nothing.
+format: 1
+name: "mesh-grid - MeshGrid: a glyph grid of oriented mesh cells"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.5
+          - 3.6
+        rotation:
+          - -62.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: sun
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.45
+          - -0.75
+          - -0.5
+        color:
+          - 1.0
+          - 0.96
+          - 0.86
+        intensity: 2.6
+  - name: ground
+    presentation: true
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 0.0
+          - -1.8
+      MeshGrid:
+        cell_size: 1.2
+        legend:
+          a:
+            shape:
+              asset: meshes/grid-tile.mesh.yaml
+            color:
+              - 0.85
+              - 0.62
+              - 0.35
+              - 1.0
+          b:
+            shape:
+              asset: meshes/grid-tile.mesh.yaml
+            color:
+              - 0.38
+              - 0.55
+              - 0.8
+              - 1.0
+        rows:
+          - ababab
+          - ba aba
+          - ababab
+          - bababa
+        orient:
+          - "012345"
+          - "67 012"
+          - "345670"
+          - "123456"

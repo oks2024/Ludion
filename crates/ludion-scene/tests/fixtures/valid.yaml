@@ -1,0 +1,26 @@
+format: 1
+name: gallery
+seed: 7
+entities:
+  - name: player
+    components:
+      Transform:
+        x: 1.5
+        y: -2.0
+        z: 0.0
+      Sprite:
+        texture: player.png
+        layer: 3
+        visible: true
+      Health: 100
+  - name: backdrop
+    components:
+      Palette:
+        colors:
+          - crimson
+          - "#00ff00"
+        emissive: 0.25
+      Shape:
+        Circle:
+          radius: 4.5
+  - components: {}

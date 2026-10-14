@@ -1,0 +1,88 @@
+[package]
+name = "ludion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The Ludion game engine facade: the one crate a game depends on for scenes, deterministic sim, the wire protocol, and hosting."
+keywords = ["ludion", "game-engine", "gamedev", "ecs"]
+categories = ["game-engines", "game-development"]
+
+[features]
+default = ["wire", "window"]
+# The WebSocket host a viewer or agent attaches to: `ludion::run`, `host_scene`, and the listener
+# `launch` binds. On by default; a shipped build turns it off and hosts through `launch` alone —
+# no listener, no `ludion-server` (so no tokio) in the tree, and no argv shell (so no clap).
+wire = ["dep:ludion-server", "dep:clap", "dep:ludion-assets"]
+# The game's own window `run --window` opens beside the listener: winit for the event loop and
+# `ludion-window` for the device-event builders and the gilrs poll thread it shares with the
+# viewer. On by default; a build
+# for a device with no desktop window turns it off, and then `--window` is refused before anything
+# binds (`L0018`). Implies `wire`: the window hosts the listener alongside itself.
+window = ["wire", "dep:ludion-window", "dep:winit"]
+
+[dependencies]
+# The command core: `Engine`, `EngineBuilder`, the built-in components, and the recording/replay
+# layer a game builds on. The facade re-exports its public surface through `ludion::prelude`.
+ludion-engine = { path = "../ludion-engine", version = "0.1.0" }
+# The WebSocket host `ludion::run` binds. The facade may depend on both engine and server (the
+# engine still never depends on the server — architecture §2); it is the one crate that unites them
+# behind a game's ~10-line `main`. Optional, behind the default-on `wire` feature: a packaged build
+# hosts through `ludion::launch` with no listener at all, and then the server is not in its tree.
+ludion-server = { path = "../ludion-server", version = "0.1.0", optional = true }
+# The asset watcher's handle, named by the host so either shell can hold the watch open for the
+# server's life. `watch` is the same opt-in feature `ludion-server` enables; asking for it here
+# states the dependency instead of relying on that unification. Optional behind `wire`, so the
+# feature-less tree still carries no `notify`.
+ludion-assets = { path = "../ludion-assets", version = "0.1.0", features = [
+    "watch",
+], optional = true }
+# Prelude re-exports: `Diagnostic`, `EntityId`, and the deterministic time types.
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+# Prelude re-exports: `Registry`, `Schedule`, `World`, `SystemCtx`, `Parent`, the `Component` marker.
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+# Prelude re-exports: `InputState`, `Key`, `InputEvent`.
+ludion-sim = { path = "../ludion-sim", version = "0.1.0" }
+# Prelude re-exports: `Collider` (+ `Shape`, `Body`), the `spatial` query/slide module, and the
+# `GroundPosition` seam (Phase 12). The engine already registers `Collider` as a builtin; the facade
+# re-exports the authoring types and the functions a game schedules and calls.
+ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
+# Prelude re-export: `PhysicsWorld`, the solver resource a game reads body counts and sleep state
+# off. Registration is a scene's `physics:` block, so the facade names the crate only for this type;
+# the engine already depends on it unconditionally.
+ludion-physics = { path = "../ludion-physics", version = "0.1.0" }
+# Prelude re-exports: the `Command` surface and its param structs, for driving an engine in tests.
+ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+# `ludion::run`'s fixed argument set (`--scene`/`--addr`/`--record`/`--paused`/`--window`), mirroring
+# `ludion serve`. Optional behind `wire`: `run` is the argv shell, and it is compiled out with it.
+clap = { workspace = true, optional = true }
+# `ludion::run` blocks until Ctrl-C, then shuts the host down cleanly so an armed recording flushes.
+ctrlc.workspace = true
+# The stop and intake channels every host tail waits on (`host_headless`'s liveness channel,
+# `--window`'s stop channel and its device-event queue).
+crossbeam-channel.workspace = true
+# `--window`'s device-event builders (keyboard/mouse/gamepad → `input.inject` event values) and its
+# gilrs poll thread, shared with the out-of-process viewer so both windows record the same events.
+# Optional behind the default `window` feature.
+ludion-window = { path = "../ludion-window", version = "0.1.0", optional = true }
+# `--window`'s event loop, on the process's main thread (see `present.rs`). Optional behind `window`.
+winit = { workspace = true, optional = true }
+# The surface a host hands the embedding core (`embed::Surface`) and the one raw-handle constructor
+# the C ABI uses for a UIKit view; the engine builds its renderer on the device that surface chose.
+# Always in the tree already through `ludion-engine`.
+wgpu = { workspace = true }
+# The playback sink (Phase 8 Wave 4). The facade wires the engine's audio-event sender to this sink;
+# the engine itself never depends on it (audio stays a downstream leaf — architecture §2).
+ludion-audio = { path = "../ludion-audio", version = "0.1.0" }
+# `--profile` serializes the engine's `ProfileReport` to stdout JSON, exactly as `ludion profile` does.
+serde_json.workspace = true
+# `--check-docs`'s human-readable summary line peeks each content-root `*.yaml`'s top-level `kind:`
+# (`ludion_scene::peek_kind`) to count game data-docs; the real validation happens as a side effect
+# of building the engine (`EngineBuilder::build_at`'s `install_docs` step) and needs no extra wiring.
+ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
+
+# The touch layout document (`ludion::touch`): serde reads it, schemars gives `check_doc` its schema.
+# The crate-level "how to build a game" doctest also defines a component with these derives — a
+# game's own dependencies, since the facade does not re-export the macros.
+serde = { workspace = true }
+schemars = { workspace = true }

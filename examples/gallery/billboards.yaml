@@ -1,0 +1,95 @@
+# Feature: Sprite billboarding — `billboard: true` keeps a flat quad always facing the camera,
+# unlike a plain Sprite (see sprites.yaml) which stays fixed in world space. The ground plane and
+# angled camera exist only to give the eye 3D context to notice the facing behavior.
+format: 1
+name: "billboards - Sprite: billboard: true"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 3.0
+          - 7.0
+        rotation:
+          - -18.0
+          - 30.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 16.0
+          - 1.0
+          - 16.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.4
+          - 0.45
+          - 0.5
+          - 1.0
+  - name: billboard-far
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 1.2
+          - -2.5
+      Sprite:
+        texture: assets/checker.png
+        size:
+          - 1.0
+          - 1.0
+        billboard: true
+        lit: true
+  - name: billboard-mid
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.2
+          - 0.0
+      Sprite:
+        texture: assets/brick.png
+        size:
+          - 1.0
+          - 1.0
+        billboard: true
+        lit: true
+  - name: billboard-near
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 1.2
+          - 2.5
+      Sprite:
+        size:
+          - 0.8
+          - 0.8
+        color:
+          - 0.6
+          - 1.0
+          - 0.8
+          - 1.0
+        billboard: true
+        lit: true
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 5.0
+          - 5.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.95
+          - 0.85
+        intensity: 5.0
+        range: 24.0

@@ -1,0 +1,9937 @@
+# lights-stress - the clustered-forward stress scene: 500 point lights over lit geometry.
+#
+# Built to the PRODUCTION workload class rather than to a number that looks impressive
+# (`Plan/clustered-forward.md` wave 2, the spatial arc's e6 lesson: grow the bench to the real
+# shape before claiming the win). Two populations, both sized off vigil:
+#
+#   200 TORCH statics  - ranges 8-15, warm, at head height beside the buildings. This is what a
+#                        torch-lit district authors: overlapping pools that light the ground and
+#                        two building faces each.
+#   300 PROJECTILE movers - ranges 1.5-3.0, small and bright, at chest height across the plaza.
+#                        A horde frame's tracer light: individually tiny, collectively the
+#                        population the 16-light cap could never express and the nearest-16
+#                        selection would have popped through.
+#
+# 500 lights is 31x the deleted cap, and the point is that the number is now an authoring
+# question rather than an engine constant.
+#
+# Placement is deterministic (a seeded generator, values baked in here), so this file IS the
+# fixture - re-running any generator is not part of any gate, and editing a number by hand is a
+# legitimate edit.
+#
+# Deliberately carries NO `Environment`, `PostProcess` or `DirectionalLight`: the budget
+# calibrated on it (`budgets/pinned-rtx3090-lights-stress.toml`) exists to gate the *clustered
+# light path*, and every absent feature is one fewer cost mixed into the `scene` pass. It renders
+# through the engine's shipped defaults, exactly as `examples/gallery/lights.yaml` does.
+format: 1
+name: "lights-stress - 500 point lights: the clustered-forward workload"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 30.0
+          - 46.0
+        rotation:
+          - -30.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 110.0
+          - 1.0
+          - 110.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.22
+          - 0.21
+          - 0.25
+          - 1.0
+  - name: block-0-0
+    components:
+      Transform:
+        translation:
+          - -39.43
+          - 1.99
+          - -40.7
+        scale:
+          - 3.53
+          - 3.99
+          - 4.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.34
+          - 0.37
+          - 1.0
+  - name: block-1-0
+    components:
+      Transform:
+        translation:
+          - -31.36
+          - 4.18
+          - -39.72
+        scale:
+          - 4.73
+          - 8.37
+          - 3.77
+      Mesh:
+        shape: cube
+        color:
+          - 0.33
+          - 0.32
+          - 0.34
+          - 1.0
+  - name: block-2-0
+    components:
+      Transform:
+        translation:
+          - -21.33
+          - 2.03
+          - -40.3
+        scale:
+          - 3.42
+          - 4.06
+          - 3.83
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.38
+          - 0.41
+          - 1.0
+  - name: block-3-0
+    components:
+      Transform:
+        translation:
+          - -13.79
+          - 3.54
+          - -41.17
+        scale:
+          - 4.37
+          - 7.08
+          - 4.81
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.34
+          - 0.36
+          - 1.0
+  - name: block-4-0
+    components:
+      Transform:
+        translation:
+          - -5.64
+          - 3.27
+          - -41.11
+        scale:
+          - 4.59
+          - 6.55
+          - 4.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.37
+          - 0.36
+          - 0.38
+          - 1.0
+  - name: block-5-0
+    components:
+      Transform:
+        translation:
+          - 4.66
+          - 3.59
+          - -40.95
+        scale:
+          - 5.13
+          - 7.19
+          - 5.16
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.29
+          - 0.32
+          - 1.0
+  - name: block-6-0
+    components:
+      Transform:
+        translation:
+          - 12.42
+          - 3.84
+          - -40.16
+        scale:
+          - 4.74
+          - 7.68
+          - 4.26
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.37
+          - 0.41
+          - 1.0
+  - name: block-7-0
+    components:
+      Transform:
+        translation:
+          - 22.79
+          - 4.02
+          - -40.54
+        scale:
+          - 3.76
+          - 8.04
+          - 4.35
+      Mesh:
+        shape: cube
+        color:
+          - 0.42
+          - 0.4
+          - 0.43
+          - 1.0
+  - name: block-8-0
+    components:
+      Transform:
+        translation:
+          - 31.53
+          - 4.0
+          - -40.51
+        scale:
+          - 4.22
+          - 7.99
+          - 4.22
+      Mesh:
+        shape: cube
+        color:
+          - 0.33
+          - 0.32
+          - 0.34
+          - 1.0
+  - name: block-9-0
+    components:
+      Transform:
+        translation:
+          - 39.44
+          - 3.57
+          - -41.02
+        scale:
+          - 4.24
+          - 7.14
+          - 5.14
+      Mesh:
+        shape: cube
+        color:
+          - 0.43
+          - 0.41
+          - 0.44
+          - 1.0
+  - name: block-0-1
+    components:
+      Transform:
+        translation:
+          - -40.61
+          - 2.09
+          - -31.54
+        scale:
+          - 3.55
+          - 4.19
+          - 3.99
+      Mesh:
+        shape: cube
+        color:
+          - 0.43
+          - 0.41
+          - 0.44
+          - 1.0
+  - name: block-1-1
+    components:
+      Transform:
+        translation:
+          - -32.34
+          - 2.74
+          - -31.75
+        scale:
+          - 5.07
+          - 5.48
+          - 4.91
+      Mesh:
+        shape: cube
+        color:
+          - 0.42
+          - 0.41
+          - 0.44
+          - 1.0
+  - name: block-2-1
+    components:
+      Transform:
+        translation:
+          - -22.18
+          - 3.85
+          - -32.46
+        scale:
+          - 4.09
+          - 7.69
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.44
+          - 0.42
+          - 0.45
+          - 1.0
+  - name: block-3-1
+    components:
+      Transform:
+        translation:
+          - -13.11
+          - 3.75
+          - -30.89
+        scale:
+          - 4.34
+          - 7.51
+          - 5.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.32
+          - 0.31
+          - 0.34
+          - 1.0
+  - name: block-4-1
+    components:
+      Transform:
+        translation:
+          - -4.23
+          - 3.11
+          - -32.49
+        scale:
+          - 5.07
+          - 6.22
+          - 3.95
+      Mesh:
+        shape: cube
+        color:
+          - 0.43
+          - 0.41
+          - 0.45
+          - 1.0
+  - name: block-5-1
+    components:
+      Transform:
+        translation:
+          - 5.16
+          - 2.91
+          - -31.7
+        scale:
+          - 4.8
+          - 5.82
+          - 4.34
+      Mesh:
+        shape: cube
+        color:
+          - 0.36
+          - 0.34
+          - 0.37
+          - 1.0
+  - name: block-6-1
+    components:
+      Transform:
+        translation:
+          - 13.97
+          - 2.61
+          - -31.06
+        scale:
+          - 3.59
+          - 5.22
+          - 3.63
+      Mesh:
+        shape: cube
+        color:
+          - 0.32
+          - 0.3
+          - 0.33
+          - 1.0
+  - name: block-7-1
+    components:
+      Transform:
+        translation:
+          - 22.05
+          - 3.28
+          - -31.92
+        scale:
+          - 4.08
+          - 6.55
+          - 3.92
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.33
+          - 0.36
+          - 1.0
+  - name: block-8-1
+    components:
+      Transform:
+        translation:
+          - 30.44
+          - 2.42
+          - -31.21
+        scale:
+          - 3.86
+          - 4.84
+          - 4.94
+      Mesh:
+        shape: cube
+        color:
+          - 0.42
+          - 0.4
+          - 0.44
+          - 1.0
+  - name: block-9-1
+    components:
+      Transform:
+        translation:
+          - 40.15
+          - 3.27
+          - -31.17
+        scale:
+          - 4.9
+          - 6.54
+          - 4.78
+      Mesh:
+        shape: cube
+        color:
+          - 0.43
+          - 0.41
+          - 0.44
+          - 1.0
+  - name: block-0-2
+    components:
+      Transform:
+        translation:
+          - -40.84
+          - 4.3
+          - -22.1
+        scale:
+          - 3.85
+          - 8.59
+          - 3.43
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-1-2
+    components:
+      Transform:
+        translation:
+          - -32.19
+          - 2.02
+          - -23.36
+        scale:
+          - 4.12
+          - 4.03
+          - 4.31
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.38
+          - 0.41
+          - 1.0
+  - name: block-2-2
+    components:
+      Transform:
+        translation:
+          - -21.84
+          - 2.19
+          - -21.39
+        scale:
+          - 4.43
+          - 4.38
+          - 5.11
+      Mesh:
+        shape: cube
+        color:
+          - 0.34
+          - 0.33
+          - 0.35
+          - 1.0
+  - name: block-3-2
+    components:
+      Transform:
+        translation:
+          - -12.4
+          - 2.34
+          - -22.07
+        scale:
+          - 4.92
+          - 4.69
+          - 4.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.37
+          - 0.35
+          - 0.38
+          - 1.0
+  - name: block-4-2
+    components:
+      Transform:
+        translation:
+          - -4.69
+          - 2.29
+          - -23.54
+        scale:
+          - 3.63
+          - 4.57
+          - 3.63
+      Mesh:
+        shape: cube
+        color:
+          - 0.33
+          - 0.32
+          - 0.34
+          - 1.0
+  - name: block-5-2
+    components:
+      Transform:
+        translation:
+          - 5.12
+          - 1.53
+          - -21.76
+        scale:
+          - 4.61
+          - 3.06
+          - 3.84
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-6-2
+    components:
+      Transform:
+        translation:
+          - 13.88
+          - 3.14
+          - -22.42
+        scale:
+          - 3.99
+          - 6.27
+          - 3.43
+      Mesh:
+        shape: cube
+        color:
+          - 0.33
+          - 0.32
+          - 0.35
+          - 1.0
+  - name: block-7-2
+    components:
+      Transform:
+        translation:
+          - 22.79
+          - 3.18
+          - -22.34
+        scale:
+          - 3.4
+          - 6.36
+          - 5.06
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.33
+          - 0.36
+          - 1.0
+  - name: block-8-2
+    components:
+      Transform:
+        translation:
+          - 32.55
+          - 2.04
+          - -21.57
+        scale:
+          - 4.97
+          - 4.07
+          - 3.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.32
+          - 0.31
+          - 0.34
+          - 1.0
+  - name: block-9-2
+    components:
+      Transform:
+        translation:
+          - 40.09
+          - 1.65
+          - -22.26
+        scale:
+          - 3.53
+          - 3.3
+          - 3.85
+      Mesh:
+        shape: cube
+        color:
+          - 0.42
+          - 0.4
+          - 0.44
+          - 1.0
+  - name: block-0-3
+    components:
+      Transform:
+        translation:
+          - -39.35
+          - 1.53
+          - -13.57
+        scale:
+          - 3.81
+          - 3.06
+          - 4.23
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.39
+          - 0.42
+          - 1.0
+  - name: block-1-3
+    components:
+      Transform:
+        translation:
+          - -30.42
+          - 2.75
+          - -13.86
+        scale:
+          - 5.18
+          - 5.5
+          - 4.14
+      Mesh:
+        shape: cube
+        color:
+          - 0.37
+          - 0.36
+          - 0.39
+          - 1.0
+  - name: block-2-3
+    components:
+      Transform:
+        translation:
+          - -22.83
+          - 3.44
+          - -13.84
+        scale:
+          - 4.22
+          - 6.89
+          - 4.54
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.39
+          - 0.42
+          - 1.0
+  - name: block-3-3
+    components:
+      Transform:
+        translation:
+          - -12.88
+          - 2.94
+          - -12.79
+        scale:
+          - 3.92
+          - 5.88
+          - 4.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.36
+          - 0.39
+          - 1.0
+  - name: block-4-3
+    components:
+      Transform:
+        translation:
+          - -4.48
+          - 1.87
+          - -14.49
+        scale:
+          - 5.08
+          - 3.74
+          - 4.46
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-5-3
+    components:
+      Transform:
+        translation:
+          - 5.64
+          - 2.63
+          - -12.41
+        scale:
+          - 3.43
+          - 5.26
+          - 3.63
+      Mesh:
+        shape: cube
+        color:
+          - 0.42
+          - 0.4
+          - 0.43
+          - 1.0
+  - name: block-6-3
+    components:
+      Transform:
+        translation:
+          - 14.68
+          - 4.11
+          - -13.84
+        scale:
+          - 4.33
+          - 8.22
+          - 4.27
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.43
+          - 0.47
+          - 1.0
+  - name: block-7-3
+    components:
+      Transform:
+        translation:
+          - 22.68
+          - 3.99
+          - -12.41
+        scale:
+          - 3.62
+          - 7.99
+          - 3.71
+      Mesh:
+        shape: cube
+        color:
+          - 0.31
+          - 0.3
+          - 0.32
+          - 1.0
+  - name: block-8-3
+    components:
+      Transform:
+        translation:
+          - 31.79
+          - 2.8
+          - -14.11
+        scale:
+          - 3.53
+          - 5.6
+          - 3.42
+      Mesh:
+        shape: cube
+        color:
+          - 0.32
+          - 0.31
+          - 0.33
+          - 1.0
+  - name: block-9-3
+    components:
+      Transform:
+        translation:
+          - 39.59
+          - 2.92
+          - -13.69
+        scale:
+          - 3.57
+          - 5.84
+          - 4.56
+      Mesh:
+        shape: cube
+        color:
+          - 0.34
+          - 0.33
+          - 0.36
+          - 1.0
+  - name: block-0-4
+    components:
+      Transform:
+        translation:
+          - -41.49
+          - 3.98
+          - -5.13
+        scale:
+          - 5.12
+          - 7.96
+          - 3.97
+      Mesh:
+        shape: cube
+        color:
+          - 0.32
+          - 0.3
+          - 0.33
+          - 1.0
+  - name: block-1-4
+    components:
+      Transform:
+        translation:
+          - -30.68
+          - 2.11
+          - -5.1
+        scale:
+          - 4.73
+          - 4.23
+          - 4.53
+      Mesh:
+        shape: cube
+        color:
+          - 0.36
+          - 0.35
+          - 0.38
+          - 1.0
+  - name: block-2-4
+    components:
+      Transform:
+        translation:
+          - -21.44
+          - 2.29
+          - -4.76
+        scale:
+          - 4.27
+          - 4.58
+          - 3.64
+      Mesh:
+        shape: cube
+        color:
+          - 0.44
+          - 0.42
+          - 0.46
+          - 1.0
+  - name: block-3-4
+    components:
+      Transform:
+        translation:
+          - -12.39
+          - 3.11
+          - -5.4
+        scale:
+          - 3.54
+          - 6.21
+          - 3.52
+      Mesh:
+        shape: cube
+        color:
+          - 0.42
+          - 0.4
+          - 0.44
+          - 1.0
+  - name: block-4-4
+    components:
+      Transform:
+        translation:
+          - -3.62
+          - 1.5
+          - -3.68
+        scale:
+          - 5.04
+          - 3.0
+          - 4.47
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-5-4
+    components:
+      Transform:
+        translation:
+          - 3.74
+          - 4.2
+          - -4.23
+        scale:
+          - 3.49
+          - 8.41
+          - 3.92
+      Mesh:
+        shape: cube
+        color:
+          - 0.42
+          - 0.4
+          - 0.44
+          - 1.0
+  - name: block-6-4
+    components:
+      Transform:
+        translation:
+          - 12.89
+          - 2.83
+          - -4.17
+        scale:
+          - 4.74
+          - 5.67
+          - 4.33
+      Mesh:
+        shape: cube
+        color:
+          - 0.41
+          - 0.39
+          - 0.43
+          - 1.0
+  - name: block-7-4
+    components:
+      Transform:
+        translation:
+          - 23.24
+          - 3.53
+          - -4.07
+        scale:
+          - 3.55
+          - 7.06
+          - 4.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.36
+          - 0.35
+          - 0.38
+          - 1.0
+  - name: block-8-4
+    components:
+      Transform:
+        translation:
+          - 30.6
+          - 2.92
+          - -5.4
+        scale:
+          - 5.04
+          - 5.83
+          - 4.68
+      Mesh:
+        shape: cube
+        color:
+          - 0.31
+          - 0.3
+          - 0.33
+          - 1.0
+  - name: block-9-4
+    components:
+      Transform:
+        translation:
+          - 40.88
+          - 3.27
+          - -3.58
+        scale:
+          - 3.84
+          - 6.54
+          - 5.17
+      Mesh:
+        shape: cube
+        color:
+          - 0.31
+          - 0.3
+          - 0.32
+          - 1.0
+  - name: block-0-5
+    components:
+      Transform:
+        translation:
+          - -40.07
+          - 4.19
+          - 3.61
+        scale:
+          - 5.2
+          - 8.38
+          - 4.33
+      Mesh:
+        shape: cube
+        color:
+          - 0.44
+          - 0.42
+          - 0.45
+          - 1.0
+  - name: block-1-5
+    components:
+      Transform:
+        translation:
+          - -31.29
+          - 1.54
+          - 5.62
+        scale:
+          - 3.91
+          - 3.08
+          - 4.23
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-2-5
+    components:
+      Transform:
+        translation:
+          - -22.55
+          - 1.61
+          - 3.5
+        scale:
+          - 4.24
+          - 3.22
+          - 4.67
+      Mesh:
+        shape: cube
+        color:
+          - 0.31
+          - 0.3
+          - 0.32
+          - 1.0
+  - name: block-3-5
+    components:
+      Transform:
+        translation:
+          - -13.78
+          - 3.74
+          - 4.54
+        scale:
+          - 4.38
+          - 7.47
+          - 3.99
+      Mesh:
+        shape: cube
+        color:
+          - 0.36
+          - 0.35
+          - 0.38
+          - 1.0
+  - name: block-4-5
+    components:
+      Transform:
+        translation:
+          - -5.16
+          - 2.39
+          - 5.38
+        scale:
+          - 4.42
+          - 4.78
+          - 5.17
+      Mesh:
+        shape: cube
+        color:
+          - 0.41
+          - 0.4
+          - 0.43
+          - 1.0
+  - name: block-5-5
+    components:
+      Transform:
+        translation:
+          - 5.1
+          - 3.68
+          - 4.53
+        scale:
+          - 4.66
+          - 7.35
+          - 5.03
+      Mesh:
+        shape: cube
+        color:
+          - 0.44
+          - 0.42
+          - 0.46
+          - 1.0
+  - name: block-6-5
+    components:
+      Transform:
+        translation:
+          - 13.47
+          - 3.54
+          - 4.61
+        scale:
+          - 4.13
+          - 7.08
+          - 4.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.43
+          - 0.42
+          - 0.45
+          - 1.0
+  - name: block-7-5
+    components:
+      Transform:
+        translation:
+          - 22.07
+          - 3.97
+          - 3.77
+        scale:
+          - 5.12
+          - 7.93
+          - 3.86
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.37
+          - 0.41
+          - 1.0
+  - name: block-8-5
+    components:
+      Transform:
+        translation:
+          - 30.75
+          - 3.21
+          - 3.76
+        scale:
+          - 4.3
+          - 6.43
+          - 4.68
+      Mesh:
+        shape: cube
+        color:
+          - 0.33
+          - 0.32
+          - 0.35
+          - 1.0
+  - name: block-9-5
+    components:
+      Transform:
+        translation:
+          - 40.19
+          - 2.27
+          - 4.32
+        scale:
+          - 4.78
+          - 4.54
+          - 4.36
+      Mesh:
+        shape: cube
+        color:
+          - 0.33
+          - 0.32
+          - 0.34
+          - 1.0
+  - name: block-0-6
+    components:
+      Transform:
+        translation:
+          - -41.63
+          - 1.72
+          - 14.45
+        scale:
+          - 5.14
+          - 3.43
+          - 4.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.43
+          - 0.47
+          - 1.0
+  - name: block-1-6
+    components:
+      Transform:
+        translation:
+          - -32.47
+          - 4.49
+          - 14.44
+        scale:
+          - 5.04
+          - 8.97
+          - 4.23
+      Mesh:
+        shape: cube
+        color:
+          - 0.46
+          - 0.44
+          - 0.48
+          - 1.0
+  - name: block-2-6
+    components:
+      Transform:
+        translation:
+          - -22.74
+          - 2.41
+          - 14.59
+        scale:
+          - 4.9
+          - 4.81
+          - 3.73
+      Mesh:
+        shape: cube
+        color:
+          - 0.44
+          - 0.42
+          - 0.46
+          - 1.0
+  - name: block-3-6
+    components:
+      Transform:
+        translation:
+          - -13.18
+          - 1.75
+          - 13.53
+        scale:
+          - 5.07
+          - 3.5
+          - 4.99
+      Mesh:
+        shape: cube
+        color:
+          - 0.33
+          - 0.31
+          - 0.34
+          - 1.0
+  - name: block-4-6
+    components:
+      Transform:
+        translation:
+          - -5.29
+          - 2.67
+          - 14.09
+        scale:
+          - 3.66
+          - 5.34
+          - 3.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-5-6
+    components:
+      Transform:
+        translation:
+          - 4.54
+          - 4.47
+          - 13.35
+        scale:
+          - 4.07
+          - 8.94
+          - 4.56
+      Mesh:
+        shape: cube
+        color:
+          - 0.34
+          - 0.32
+          - 0.35
+          - 1.0
+  - name: block-6-6
+    components:
+      Transform:
+        translation:
+          - 13.39
+          - 3.45
+          - 12.83
+        scale:
+          - 5.12
+          - 6.91
+          - 3.96
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.36
+          - 0.4
+          - 1.0
+  - name: block-7-6
+    components:
+      Transform:
+        translation:
+          - 22.71
+          - 3.56
+          - 12.81
+        scale:
+          - 4.6
+          - 7.12
+          - 4.95
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.38
+          - 0.42
+          - 1.0
+  - name: block-8-6
+    components:
+      Transform:
+        translation:
+          - 30.65
+          - 1.95
+          - 13.81
+        scale:
+          - 4.4
+          - 3.9
+          - 4.01
+      Mesh:
+        shape: cube
+        color:
+          - 0.31
+          - 0.3
+          - 0.33
+          - 1.0
+  - name: block-9-6
+    components:
+      Transform:
+        translation:
+          - 40.77
+          - 1.99
+          - 12.54
+        scale:
+          - 4.99
+          - 3.98
+          - 4.72
+      Mesh:
+        shape: cube
+        color:
+          - 0.41
+          - 0.39
+          - 0.42
+          - 1.0
+  - name: block-0-7
+    components:
+      Transform:
+        translation:
+          - -40.94
+          - 2.78
+          - 23.33
+        scale:
+          - 3.74
+          - 5.55
+          - 5.16
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-1-7
+    components:
+      Transform:
+        translation:
+          - -32.62
+          - 1.64
+          - 22.31
+        scale:
+          - 3.69
+          - 3.28
+          - 3.64
+      Mesh:
+        shape: cube
+        color:
+          - 0.41
+          - 0.39
+          - 0.43
+          - 1.0
+  - name: block-2-7
+    components:
+      Transform:
+        translation:
+          - -22.25
+          - 2.29
+          - 22.34
+        scale:
+          - 3.98
+          - 4.58
+          - 3.48
+      Mesh:
+        shape: cube
+        color:
+          - 0.43
+          - 0.41
+          - 0.45
+          - 1.0
+  - name: block-3-7
+    components:
+      Transform:
+        translation:
+          - -13.78
+          - 4.49
+          - 21.52
+        scale:
+          - 3.7
+          - 8.98
+          - 4.13
+      Mesh:
+        shape: cube
+        color:
+          - 0.31
+          - 0.3
+          - 0.33
+          - 1.0
+  - name: block-4-7
+    components:
+      Transform:
+        translation:
+          - -3.64
+          - 2.62
+          - 23.28
+        scale:
+          - 3.63
+          - 5.24
+          - 4.15
+      Mesh:
+        shape: cube
+        color:
+          - 0.43
+          - 0.41
+          - 0.45
+          - 1.0
+  - name: block-5-7
+    components:
+      Transform:
+        translation:
+          - 3.7
+          - 3.24
+          - 23.43
+        scale:
+          - 4.89
+          - 6.47
+          - 3.79
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.38
+          - 0.41
+          - 1.0
+  - name: block-6-7
+    components:
+      Transform:
+        translation:
+          - 14.63
+          - 2.38
+          - 22.68
+        scale:
+          - 4.32
+          - 4.76
+          - 4.77
+      Mesh:
+        shape: cube
+        color:
+          - 0.37
+          - 0.35
+          - 0.38
+          - 1.0
+  - name: block-7-7
+    components:
+      Transform:
+        translation:
+          - 22.44
+          - 4.19
+          - 21.8
+        scale:
+          - 3.73
+          - 8.37
+          - 3.49
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.34
+          - 0.37
+          - 1.0
+  - name: block-8-7
+    components:
+      Transform:
+        translation:
+          - 32.66
+          - 2.06
+          - 21.62
+        scale:
+          - 4.37
+          - 4.11
+          - 4.03
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.34
+          - 0.37
+          - 1.0
+  - name: block-9-7
+    components:
+      Transform:
+        translation:
+          - 40.56
+          - 4.22
+          - 21.94
+        scale:
+          - 4.32
+          - 8.44
+          - 4.57
+      Mesh:
+        shape: cube
+        color:
+          - 0.44
+          - 0.42
+          - 0.46
+          - 1.0
+  - name: block-0-8
+    components:
+      Transform:
+        translation:
+          - -40.62
+          - 1.54
+          - 30.84
+        scale:
+          - 4.19
+          - 3.08
+          - 5.1
+      Mesh:
+        shape: cube
+        color:
+          - 0.31
+          - 0.3
+          - 0.32
+          - 1.0
+  - name: block-1-8
+    components:
+      Transform:
+        translation:
+          - -30.75
+          - 4.07
+          - 30.91
+        scale:
+          - 5.06
+          - 8.14
+          - 3.76
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-2-8
+    components:
+      Transform:
+        translation:
+          - -22.22
+          - 2.67
+          - 31.34
+        scale:
+          - 5.09
+          - 5.33
+          - 4.63
+      Mesh:
+        shape: cube
+        color:
+          - 0.34
+          - 0.32
+          - 0.35
+          - 1.0
+  - name: block-3-8
+    components:
+      Transform:
+        translation:
+          - -13.06
+          - 1.74
+          - 31.86
+        scale:
+          - 3.44
+          - 3.49
+          - 5.02
+      Mesh:
+        shape: cube
+        color:
+          - 0.34
+          - 0.33
+          - 0.36
+          - 1.0
+  - name: block-4-8
+    components:
+      Transform:
+        translation:
+          - -3.38
+          - 4.06
+          - 30.56
+        scale:
+          - 5.19
+          - 8.13
+          - 4.05
+      Mesh:
+        shape: cube
+        color:
+          - 0.34
+          - 0.32
+          - 0.35
+          - 1.0
+  - name: block-5-8
+    components:
+      Transform:
+        translation:
+          - 4.93
+          - 2.33
+          - 32.59
+        scale:
+          - 3.57
+          - 4.67
+          - 4.42
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.37
+          - 0.41
+          - 1.0
+  - name: block-6-8
+    components:
+      Transform:
+        translation:
+          - 14.43
+          - 1.97
+          - 31.7
+        scale:
+          - 3.51
+          - 3.95
+          - 3.71
+      Mesh:
+        shape: cube
+        color:
+          - 0.37
+          - 0.35
+          - 0.38
+          - 1.0
+  - name: block-7-8
+    components:
+      Transform:
+        translation:
+          - 21.51
+          - 4.16
+          - 32.57
+        scale:
+          - 4.52
+          - 8.32
+          - 4.84
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-8-8
+    components:
+      Transform:
+        translation:
+          - 30.55
+          - 4.41
+          - 32.37
+        scale:
+          - 3.96
+          - 8.81
+          - 4.83
+      Mesh:
+        shape: cube
+        color:
+          - 0.31
+          - 0.29
+          - 0.32
+          - 1.0
+  - name: block-9-8
+    components:
+      Transform:
+        translation:
+          - 41.12
+          - 4.13
+          - 32.11
+        scale:
+          - 3.74
+          - 8.27
+          - 5.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.37
+          - 0.36
+          - 0.39
+          - 1.0
+  - name: block-0-9
+    components:
+      Transform:
+        translation:
+          - -40.37
+          - 3.4
+          - 39.68
+        scale:
+          - 4.98
+          - 6.79
+          - 4.77
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.38
+          - 0.41
+          - 1.0
+  - name: block-1-9
+    components:
+      Transform:
+        translation:
+          - -31.77
+          - 2.87
+          - 39.82
+        scale:
+          - 4.12
+          - 5.73
+          - 4.48
+      Mesh:
+        shape: cube
+        color:
+          - 0.44
+          - 0.43
+          - 0.46
+          - 1.0
+  - name: block-2-9
+    components:
+      Transform:
+        translation:
+          - -21.63
+          - 2.73
+          - 40.69
+        scale:
+          - 5.17
+          - 5.46
+          - 5.07
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.34
+          - 0.36
+          - 1.0
+  - name: block-3-9
+    components:
+      Transform:
+        translation:
+          - -12.61
+          - 2.98
+          - 40.48
+        scale:
+          - 3.8
+          - 5.95
+          - 3.87
+      Mesh:
+        shape: cube
+        color:
+          - 0.46
+          - 0.44
+          - 0.48
+          - 1.0
+  - name: block-4-9
+    components:
+      Transform:
+        translation:
+          - -5.36
+          - 2.87
+          - 41.54
+        scale:
+          - 4.84
+          - 5.74
+          - 4.46
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-5-9
+    components:
+      Transform:
+        translation:
+          - 4.12
+          - 3.79
+          - 40.11
+        scale:
+          - 5.09
+          - 7.59
+          - 3.93
+      Mesh:
+        shape: cube
+        color:
+          - 0.43
+          - 0.41
+          - 0.44
+          - 1.0
+  - name: block-6-9
+    components:
+      Transform:
+        translation:
+          - 14.49
+          - 1.83
+          - 40.03
+        scale:
+          - 3.9
+          - 3.66
+          - 3.52
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.37
+          - 0.4
+          - 1.0
+  - name: block-7-9
+    components:
+      Transform:
+        translation:
+          - 23.14
+          - 1.94
+          - 41.06
+        scale:
+          - 3.72
+          - 3.89
+          - 3.51
+      Mesh:
+        shape: cube
+        color:
+          - 0.31
+          - 0.29
+          - 0.32
+          - 1.0
+  - name: block-8-9
+    components:
+      Transform:
+        translation:
+          - 30.58
+          - 4.4
+          - 39.76
+        scale:
+          - 5.08
+          - 8.8
+          - 4.34
+      Mesh:
+        shape: cube
+        color:
+          - 0.41
+          - 0.39
+          - 0.42
+          - 1.0
+  - name: block-9-9
+    components:
+      Transform:
+        translation:
+          - 39.41
+          - 4.09
+          - 39.95
+        scale:
+          - 4.67
+          - 8.19
+          - 3.46
+      Mesh:
+        shape: cube
+        color:
+          - 0.36
+          - 0.35
+          - 0.38
+          - 1.0
+  - name: prop-0
+    components:
+      Transform:
+        translation:
+          - 3.32
+          - 0.96
+          - -1.89
+        scale:
+          - 1.92
+          - 1.92
+          - 1.92
+      Mesh:
+        shape: sphere
+        color:
+          - 0.45
+          - 0.4
+          - 0.36
+          - 1.0
+  - name: prop-1
+    components:
+      Transform:
+        translation:
+          - -34.25
+          - 1.02
+          - 16.67
+        scale:
+          - 2.04
+          - 2.04
+          - 2.04
+      Mesh:
+        shape: cube
+        color:
+          - 0.36
+          - 0.32
+          - 0.29
+          - 1.0
+  - name: prop-2
+    components:
+      Transform:
+        translation:
+          - -36.38
+          - 0.78
+          - 4.61
+        scale:
+          - 1.57
+          - 1.57
+          - 1.57
+      Mesh:
+        shape: sphere
+        color:
+          - 0.37
+          - 0.33
+          - 0.29
+          - 1.0
+  - name: prop-3
+    components:
+      Transform:
+        translation:
+          - -43.31
+          - 0.6
+          - -35.56
+        scale:
+          - 1.21
+          - 1.21
+          - 1.21
+      Mesh:
+        shape: cube
+        color:
+          - 0.36
+          - 0.32
+          - 0.29
+          - 1.0
+  - name: prop-4
+    components:
+      Transform:
+        translation:
+          - -12.91
+          - 0.84
+          - -20.16
+        scale:
+          - 1.69
+          - 1.69
+          - 1.69
+      Mesh:
+        shape: sphere
+        color:
+          - 0.49
+          - 0.44
+          - 0.39
+          - 1.0
+  - name: prop-5
+    components:
+      Transform:
+        translation:
+          - 15.36
+          - 0.66
+          - -39.35
+        scale:
+          - 1.32
+          - 1.32
+          - 1.32
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.41
+          - 0.36
+          - 1.0
+  - name: prop-6
+    components:
+      Transform:
+        translation:
+          - -14.49
+          - 0.81
+          - -8.27
+        scale:
+          - 1.61
+          - 1.61
+          - 1.61
+      Mesh:
+        shape: sphere
+        color:
+          - 0.46
+          - 0.41
+          - 0.37
+          - 1.0
+  - name: prop-7
+    components:
+      Transform:
+        translation:
+          - 11.33
+          - 0.82
+          - 30.75
+        scale:
+          - 1.63
+          - 1.63
+          - 1.63
+      Mesh:
+        shape: cube
+        color:
+          - 0.34
+          - 0.31
+          - 0.28
+          - 1.0
+  - name: prop-8
+    components:
+      Transform:
+        translation:
+          - -17.49
+          - 0.77
+          - 43.35
+        scale:
+          - 1.55
+          - 1.55
+          - 1.55
+      Mesh:
+        shape: sphere
+        color:
+          - 0.49
+          - 0.44
+          - 0.39
+          - 1.0
+  - name: prop-9
+    components:
+      Transform:
+        translation:
+          - 35.1
+          - 1.0
+          - 10.71
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.41
+          - 0.36
+          - 1.0
+  - name: prop-10
+    components:
+      Transform:
+        translation:
+          - 11.98
+          - 0.87
+          - -27.57
+        scale:
+          - 1.75
+          - 1.75
+          - 1.75
+      Mesh:
+        shape: sphere
+        color:
+          - 0.44
+          - 0.4
+          - 0.35
+          - 1.0
+  - name: prop-11
+    components:
+      Transform:
+        translation:
+          - -15.66
+          - 0.67
+          - 26.29
+        scale:
+          - 1.34
+          - 1.34
+          - 1.34
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.45
+          - 0.4
+          - 1.0
+  - name: prop-12
+    components:
+      Transform:
+        translation:
+          - 30.56
+          - 0.53
+          - -31.14
+        scale:
+          - 1.06
+          - 1.06
+          - 1.06
+      Mesh:
+        shape: sphere
+        color:
+          - 0.38
+          - 0.34
+          - 0.3
+          - 1.0
+  - name: prop-13
+    components:
+      Transform:
+        translation:
+          - -25.3
+          - 0.93
+          - -0.11
+        scale:
+          - 1.87
+          - 1.87
+          - 1.87
+      Mesh:
+        shape: cube
+        color:
+          - 0.46
+          - 0.42
+          - 0.37
+          - 1.0
+  - name: prop-14
+    components:
+      Transform:
+        translation:
+          - 35.44
+          - 0.65
+          - 27.08
+        scale:
+          - 1.29
+          - 1.29
+          - 1.29
+      Mesh:
+        shape: sphere
+        color:
+          - 0.5
+          - 0.45
+          - 0.4
+          - 1.0
+  - name: prop-15
+    components:
+      Transform:
+        translation:
+          - 29.33
+          - 0.77
+          - -17.71
+        scale:
+          - 1.55
+          - 1.55
+          - 1.55
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.35
+          - 0.31
+          - 1.0
+  - name: prop-16
+    components:
+      Transform:
+        translation:
+          - -20.05
+          - 1.0
+          - -22.67
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.38
+          - 0.34
+          - 0.31
+          - 1.0
+  - name: prop-17
+    components:
+      Transform:
+        translation:
+          - 25.25
+          - 0.77
+          - -21.85
+        scale:
+          - 1.55
+          - 1.55
+          - 1.55
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.36
+          - 0.32
+          - 1.0
+  - name: prop-18
+    components:
+      Transform:
+        translation:
+          - -12.77
+          - 0.54
+          - 20.05
+        scale:
+          - 1.09
+          - 1.09
+          - 1.09
+      Mesh:
+        shape: sphere
+        color:
+          - 0.44
+          - 0.4
+          - 0.35
+          - 1.0
+  - name: prop-19
+    components:
+      Transform:
+        translation:
+          - 43.73
+          - 0.85
+          - 37.1
+        scale:
+          - 1.69
+          - 1.69
+          - 1.69
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.32
+          - 0.28
+          - 1.0
+  - name: prop-20
+    components:
+      Transform:
+        translation:
+          - 27.03
+          - 1.03
+          - 15.44
+        scale:
+          - 2.05
+          - 2.05
+          - 2.05
+      Mesh:
+        shape: sphere
+        color:
+          - 0.38
+          - 0.34
+          - 0.31
+          - 1.0
+  - name: prop-21
+    components:
+      Transform:
+        translation:
+          - -32.68
+          - 0.85
+          - 25.16
+        scale:
+          - 1.7
+          - 1.7
+          - 1.7
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.31
+          - 0.28
+          - 1.0
+  - name: prop-22
+    components:
+      Transform:
+        translation:
+          - 15.13
+          - 0.88
+          - -14.43
+        scale:
+          - 1.77
+          - 1.77
+          - 1.77
+      Mesh:
+        shape: sphere
+        color:
+          - 0.51
+          - 0.46
+          - 0.41
+          - 1.0
+  - name: prop-23
+    components:
+      Transform:
+        translation:
+          - 25.67
+          - 0.72
+          - -7.77
+        scale:
+          - 1.43
+          - 1.43
+          - 1.43
+      Mesh:
+        shape: cube
+        color:
+          - 0.47
+          - 0.42
+          - 0.38
+          - 1.0
+  - name: prop-24
+    components:
+      Transform:
+        translation:
+          - 6.51
+          - 0.61
+          - -41.14
+        scale:
+          - 1.23
+          - 1.23
+          - 1.23
+      Mesh:
+        shape: sphere
+        color:
+          - 0.5
+          - 0.45
+          - 0.4
+          - 1.0
+  - name: prop-25
+    components:
+      Transform:
+        translation:
+          - -19.87
+          - 0.97
+          - 10.45
+        scale:
+          - 1.94
+          - 1.94
+          - 1.94
+      Mesh:
+        shape: cube
+        color:
+          - 0.41
+          - 0.37
+          - 0.33
+          - 1.0
+  - name: prop-26
+    components:
+      Transform:
+        translation:
+          - -19.46
+          - 0.95
+          - -13.26
+        scale:
+          - 1.9
+          - 1.9
+          - 1.9
+      Mesh:
+        shape: sphere
+        color:
+          - 0.38
+          - 0.34
+          - 0.3
+          - 1.0
+  - name: prop-27
+    components:
+      Transform:
+        translation:
+          - 0.14
+          - 1.05
+          - -31.1
+        scale:
+          - 2.09
+          - 2.09
+          - 2.09
+      Mesh:
+        shape: cube
+        color:
+          - 0.39
+          - 0.35
+          - 0.31
+          - 1.0
+  - name: prop-28
+    components:
+      Transform:
+        translation:
+          - 38.48
+          - 0.87
+          - 38.28
+        scale:
+          - 1.74
+          - 1.74
+          - 1.74
+      Mesh:
+        shape: sphere
+        color:
+          - 0.44
+          - 0.4
+          - 0.35
+          - 1.0
+  - name: prop-29
+    components:
+      Transform:
+        translation:
+          - -31.4
+          - 1.09
+          - 33.69
+        scale:
+          - 2.18
+          - 2.18
+          - 2.18
+      Mesh:
+        shape: cube
+        color:
+          - 0.47
+          - 0.42
+          - 0.37
+          - 1.0
+  - name: prop-30
+    components:
+      Transform:
+        translation:
+          - -33.33
+          - 1.1
+          - -41.23
+        scale:
+          - 2.2
+          - 2.2
+          - 2.2
+      Mesh:
+        shape: sphere
+        color:
+          - 0.45
+          - 0.41
+          - 0.36
+          - 1.0
+  - name: prop-31
+    components:
+      Transform:
+        translation:
+          - -9.82
+          - 0.9
+          - 25.39
+        scale:
+          - 1.8
+          - 1.8
+          - 1.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.44
+          - 0.39
+          - 0.35
+          - 1.0
+  - name: prop-32
+    components:
+      Transform:
+        translation:
+          - 3.71
+          - 0.72
+          - -3.81
+        scale:
+          - 1.44
+          - 1.44
+          - 1.44
+      Mesh:
+        shape: sphere
+        color:
+          - 0.49
+          - 0.44
+          - 0.39
+          - 1.0
+  - name: prop-33
+    components:
+      Transform:
+        translation:
+          - -7.87
+          - 0.62
+          - -14.16
+        scale:
+          - 1.23
+          - 1.23
+          - 1.23
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.41
+          - 0.36
+          - 1.0
+  - name: prop-34
+    components:
+      Transform:
+        translation:
+          - 39.33
+          - 1.09
+          - -5.42
+        scale:
+          - 2.19
+          - 2.19
+          - 2.19
+      Mesh:
+        shape: sphere
+        color:
+          - 0.35
+          - 0.32
+          - 0.28
+          - 1.0
+  - name: prop-35
+    components:
+      Transform:
+        translation:
+          - 18.39
+          - 0.59
+          - -40.53
+        scale:
+          - 1.19
+          - 1.19
+          - 1.19
+      Mesh:
+        shape: cube
+        color:
+          - 0.48
+          - 0.43
+          - 0.38
+          - 1.0
+  - name: prop-36
+    components:
+      Transform:
+        translation:
+          - 41.84
+          - 0.89
+          - -31.3
+        scale:
+          - 1.78
+          - 1.78
+          - 1.78
+      Mesh:
+        shape: sphere
+        color:
+          - 0.44
+          - 0.4
+          - 0.35
+          - 1.0
+  - name: prop-37
+    components:
+      Transform:
+        translation:
+          - 32.13
+          - 1.08
+          - 19.29
+        scale:
+          - 2.17
+          - 2.17
+          - 2.17
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.36
+          - 0.32
+          - 1.0
+  - name: prop-38
+    components:
+      Transform:
+        translation:
+          - -5.69
+          - 0.79
+          - 35.95
+        scale:
+          - 1.58
+          - 1.58
+          - 1.58
+      Mesh:
+        shape: sphere
+        color:
+          - 0.45
+          - 0.4
+          - 0.36
+          - 1.0
+  - name: prop-39
+    components:
+      Transform:
+        translation:
+          - 12.36
+          - 1.06
+          - -43.15
+        scale:
+          - 2.12
+          - 2.12
+          - 2.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.37
+          - 0.33
+          - 0.29
+          - 1.0
+  - name: prop-40
+    components:
+      Transform:
+        translation:
+          - -16.62
+          - 0.65
+          - 12.37
+        scale:
+          - 1.29
+          - 1.29
+          - 1.29
+      Mesh:
+        shape: sphere
+        color:
+          - 0.37
+          - 0.34
+          - 0.3
+          - 1.0
+  - name: prop-41
+    components:
+      Transform:
+        translation:
+          - -32.13
+          - 0.55
+          - -4.65
+        scale:
+          - 1.11
+          - 1.11
+          - 1.11
+      Mesh:
+        shape: cube
+        color:
+          - 0.49
+          - 0.44
+          - 0.39
+          - 1.0
+  - name: prop-42
+    components:
+      Transform:
+        translation:
+          - 42.56
+          - 1.09
+          - 2.37
+        scale:
+          - 2.18
+          - 2.18
+          - 2.18
+      Mesh:
+        shape: sphere
+        color:
+          - 0.39
+          - 0.35
+          - 0.31
+          - 1.0
+  - name: prop-43
+    components:
+      Transform:
+        translation:
+          - -7.83
+          - 0.95
+          - -12.24
+        scale:
+          - 1.91
+          - 1.91
+          - 1.91
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.35
+          - 0.31
+          - 1.0
+  - name: prop-44
+    components:
+      Transform:
+        translation:
+          - 32.58
+          - 0.56
+          - -29.92
+        scale:
+          - 1.13
+          - 1.13
+          - 1.13
+      Mesh:
+        shape: sphere
+        color:
+          - 0.38
+          - 0.34
+          - 0.3
+          - 1.0
+  - name: prop-45
+    components:
+      Transform:
+        translation:
+          - -8.58
+          - 0.64
+          - 9.41
+        scale:
+          - 1.27
+          - 1.27
+          - 1.27
+      Mesh:
+        shape: cube
+        color:
+          - 0.49
+          - 0.44
+          - 0.39
+          - 1.0
+  - name: prop-46
+    components:
+      Transform:
+        translation:
+          - 38.42
+          - 1.07
+          - 6.92
+        scale:
+          - 2.14
+          - 2.14
+          - 2.14
+      Mesh:
+        shape: sphere
+        color:
+          - 0.42
+          - 0.38
+          - 0.34
+          - 1.0
+  - name: prop-47
+    components:
+      Transform:
+        translation:
+          - -43.45
+          - 0.99
+          - -35.74
+        scale:
+          - 1.97
+          - 1.97
+          - 1.97
+      Mesh:
+        shape: cube
+        color:
+          - 0.44
+          - 0.4
+          - 0.35
+          - 1.0
+  - name: prop-48
+    components:
+      Transform:
+        translation:
+          - 30.67
+          - 0.69
+          - 2.65
+        scale:
+          - 1.38
+          - 1.38
+          - 1.38
+      Mesh:
+        shape: sphere
+        color:
+          - 0.35
+          - 0.32
+          - 0.28
+          - 1.0
+  - name: prop-49
+    components:
+      Transform:
+        translation:
+          - 11.58
+          - 0.85
+          - 23.04
+        scale:
+          - 1.7
+          - 1.7
+          - 1.7
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.31
+          - 0.28
+          - 1.0
+  - name: prop-50
+    components:
+      Transform:
+        translation:
+          - 40.79
+          - 0.65
+          - 25.31
+        scale:
+          - 1.3
+          - 1.3
+          - 1.3
+      Mesh:
+        shape: sphere
+        color:
+          - 0.51
+          - 0.46
+          - 0.41
+          - 1.0
+  - name: prop-51
+    components:
+      Transform:
+        translation:
+          - -7.4
+          - 1.09
+          - -7.62
+        scale:
+          - 2.17
+          - 2.17
+          - 2.17
+      Mesh:
+        shape: cube
+        color:
+          - 0.36
+          - 0.33
+          - 0.29
+          - 1.0
+  - name: prop-52
+    components:
+      Transform:
+        translation:
+          - 7.78
+          - 0.63
+          - 37.53
+        scale:
+          - 1.25
+          - 1.25
+          - 1.25
+      Mesh:
+        shape: sphere
+        color:
+          - 0.42
+          - 0.38
+          - 0.34
+          - 1.0
+  - name: prop-53
+    components:
+      Transform:
+        translation:
+          - 14.15
+          - 0.68
+          - -2.81
+        scale:
+          - 1.35
+          - 1.35
+          - 1.35
+      Mesh:
+        shape: cube
+        color:
+          - 0.47
+          - 0.42
+          - 0.38
+          - 1.0
+  - name: prop-54
+    components:
+      Transform:
+        translation:
+          - -13.61
+          - 0.61
+          - 34.75
+        scale:
+          - 1.23
+          - 1.23
+          - 1.23
+      Mesh:
+        shape: sphere
+        color:
+          - 0.44
+          - 0.4
+          - 0.36
+          - 1.0
+  - name: prop-55
+    components:
+      Transform:
+        translation:
+          - 41.19
+          - 0.78
+          - 5.17
+        scale:
+          - 1.55
+          - 1.55
+          - 1.55
+      Mesh:
+        shape: cube
+        color:
+          - 0.47
+          - 0.42
+          - 0.38
+          - 1.0
+  - name: prop-56
+    components:
+      Transform:
+        translation:
+          - -32.36
+          - 0.74
+          - 13.48
+        scale:
+          - 1.48
+          - 1.48
+          - 1.48
+      Mesh:
+        shape: sphere
+        color:
+          - 0.36
+          - 0.32
+          - 0.29
+          - 1.0
+  - name: prop-57
+    components:
+      Transform:
+        translation:
+          - 43.87
+          - 0.88
+          - -1.72
+        scale:
+          - 1.75
+          - 1.75
+          - 1.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.36
+          - 0.33
+          - 0.29
+          - 1.0
+  - name: prop-58
+    components:
+      Transform:
+        translation:
+          - -29.09
+          - 0.64
+          - 7.55
+        scale:
+          - 1.29
+          - 1.29
+          - 1.29
+      Mesh:
+        shape: sphere
+        color:
+          - 0.5
+          - 0.45
+          - 0.4
+          - 1.0
+  - name: prop-59
+    components:
+      Transform:
+        translation:
+          - -19.55
+          - 1.01
+          - -34.71
+        scale:
+          - 2.02
+          - 2.02
+          - 2.02
+      Mesh:
+        shape: cube
+        color:
+          - 0.51
+          - 0.46
+          - 0.41
+          - 1.0
+  - name: torch-0
+    components:
+      Transform:
+        translation:
+          - -36.43
+          - 3.29
+          - -37.21
+      PointLight:
+        color:
+          - 0.98
+          - 0.55
+          - 0.27
+        intensity: 0.95
+        range: 14.49
+  - name: torch-1
+    components:
+      Transform:
+        translation:
+          - -28.29
+          - 2.72
+          - -42.59
+      PointLight:
+        color:
+          - 0.99
+          - 0.53
+          - 0.32
+        intensity: 1.01
+        range: 14.22
+  - name: torch-2
+    components:
+      Transform:
+        translation:
+          - -18.85
+          - 3.18
+          - -37.17
+      PointLight:
+        color:
+          - 0.97
+          - 0.53
+          - 0.28
+        intensity: 0.7
+        range: 13.4
+  - name: torch-3
+    components:
+      Transform:
+        translation:
+          - -10.67
+          - 2.45
+          - -44.5
+      PointLight:
+        color:
+          - 0.99
+          - 0.63
+          - 0.21
+        intensity: 0.89
+        range: 9.66
+  - name: torch-4
+    components:
+      Transform:
+        translation:
+          - -2.62
+          - 2.55
+          - -38.06
+      PointLight:
+        color:
+          - 0.97
+          - 0.68
+          - 0.32
+        intensity: 0.91
+        range: 13.12
+  - name: torch-5
+    components:
+      Transform:
+        translation:
+          - 8.61
+          - 3.5
+          - -44.76
+      PointLight:
+        color:
+          - 0.97
+          - 0.68
+          - 0.26
+        intensity: 0.92
+        range: 10.78
+  - name: torch-6
+    components:
+      Transform:
+        translation:
+          - 16.1
+          - 4.5
+          - -36.73
+      PointLight:
+        color:
+          - 0.96
+          - 0.68
+          - 0.3
+        intensity: 1.0
+        range: 13.84
+  - name: torch-7
+    components:
+      Transform:
+        translation:
+          - 25.56
+          - 2.81
+          - -44.08
+      PointLight:
+        color:
+          - 0.98
+          - 0.56
+          - 0.26
+        intensity: 0.93
+        range: 13.9
+  - name: torch-8
+    components:
+      Transform:
+        translation:
+          - 35.18
+          - 4.39
+          - -36.98
+      PointLight:
+        color:
+          - 0.97
+          - 0.65
+          - 0.24
+        intensity: 0.83
+        range: 9.62
+  - name: torch-9
+    components:
+      Transform:
+        translation:
+          - 42.97
+          - 3.05
+          - -44.87
+      PointLight:
+        color:
+          - 0.97
+          - 0.58
+          - 0.31
+        intensity: 0.87
+        range: 9.93
+  - name: torch-10
+    components:
+      Transform:
+        translation:
+          - -37.87
+          - 2.98
+          - -28.01
+      PointLight:
+        color:
+          - 0.96
+          - 0.63
+          - 0.32
+        intensity: 1.01
+        range: 11.86
+  - name: torch-11
+    components:
+      Transform:
+        translation:
+          - -28.28
+          - 4.2
+          - -34.87
+      PointLight:
+        color:
+          - 0.96
+          - 0.55
+          - 0.3
+        intensity: 0.6
+        range: 11.47
+  - name: torch-12
+    components:
+      Transform:
+        translation:
+          - -18.61
+          - 4.57
+          - -28.96
+      PointLight:
+        color:
+          - 0.99
+          - 0.57
+          - 0.27
+        intensity: 0.57
+        range: 13.49
+  - name: torch-13
+    components:
+      Transform:
+        translation:
+          - -9.43
+          - 3.15
+          - -34.83
+      PointLight:
+        color:
+          - 1.0
+          - 0.53
+          - 0.25
+        intensity: 0.94
+        range: 9.09
+  - name: torch-14
+    components:
+      Transform:
+        translation:
+          - -0.4
+          - 3.08
+          - -29.72
+      PointLight:
+        color:
+          - 0.98
+          - 0.59
+          - 0.29
+        intensity: 0.97
+        range: 9.66
+  - name: torch-15
+    components:
+      Transform:
+        translation:
+          - 8.57
+          - 3.52
+          - -34.99
+      PointLight:
+        color:
+          - 1.0
+          - 0.55
+          - 0.29
+        intensity: 0.83
+        range: 11.0
+  - name: torch-16
+    components:
+      Transform:
+        translation:
+          - 17.16
+          - 4.33
+          - -28.12
+      PointLight:
+        color:
+          - 0.96
+          - 0.53
+          - 0.2
+        intensity: 0.72
+        range: 14.9
+  - name: torch-17
+    components:
+      Transform:
+        translation:
+          - 25.27
+          - 2.85
+          - -35.04
+      PointLight:
+        color:
+          - 0.95
+          - 0.6
+          - 0.3
+        intensity: 1.02
+        range: 10.26
+  - name: torch-18
+    components:
+      Transform:
+        translation:
+          - 33.33
+          - 2.47
+          - -27.4
+      PointLight:
+        color:
+          - 0.97
+          - 0.55
+          - 0.27
+        intensity: 0.74
+        range: 13.13
+  - name: torch-19
+    components:
+      Transform:
+        translation:
+          - 43.46
+          - 4.4
+          - -34.75
+      PointLight:
+        color:
+          - 0.95
+          - 0.53
+          - 0.22
+        intensity: 0.92
+        range: 9.39
+  - name: torch-20
+    components:
+      Transform:
+        translation:
+          - -38.25
+          - 3.35
+          - -19.66
+      PointLight:
+        color:
+          - 0.97
+          - 0.62
+          - 0.24
+        intensity: 0.71
+        range: 8.33
+  - name: torch-21
+    components:
+      Transform:
+        translation:
+          - -29.24
+          - 3.45
+          - -26.54
+      PointLight:
+        color:
+          - 0.97
+          - 0.6
+          - 0.25
+        intensity: 0.72
+        range: 10.27
+  - name: torch-22
+    components:
+      Transform:
+        translation:
+          - -18.25
+          - 3.97
+          - -17.86
+      PointLight:
+        color:
+          - 0.97
+          - 0.68
+          - 0.23
+        intensity: 0.82
+        range: 8.73
+  - name: torch-23
+    components:
+      Transform:
+        translation:
+          - -9.31
+          - 2.63
+          - -24.95
+      PointLight:
+        color:
+          - 0.98
+          - 0.67
+          - 0.34
+        intensity: 1.0
+        range: 12.0
+  - name: torch-24
+    components:
+      Transform:
+        translation:
+          - -1.87
+          - 4.53
+          - -20.69
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.25
+        intensity: 0.93
+        range: 10.18
+  - name: torch-25
+    components:
+      Transform:
+        translation:
+          - 8.32
+          - 2.79
+          - -25.18
+      PointLight:
+        color:
+          - 0.99
+          - 0.53
+          - 0.24
+        intensity: 1.01
+        range: 11.1
+  - name: torch-26
+    components:
+      Transform:
+        translation:
+          - 16.72
+          - 2.81
+          - -20.1
+      PointLight:
+        color:
+          - 0.97
+          - 0.62
+          - 0.29
+        intensity: 0.74
+        range: 10.66
+  - name: torch-27
+    components:
+      Transform:
+        translation:
+          - 25.39
+          - 4.57
+          - -25.61
+      PointLight:
+        color:
+          - 0.95
+          - 0.6
+          - 0.24
+        intensity: 0.66
+        range: 14.63
+  - name: torch-28
+    components:
+      Transform:
+        translation:
+          - 36.32
+          - 2.86
+          - -18.64
+      PointLight:
+        color:
+          - 0.98
+          - 0.54
+          - 0.2
+        intensity: 0.8
+        range: 9.31
+  - name: torch-29
+    components:
+      Transform:
+        translation:
+          - 42.85
+          - 4.58
+          - -25.23
+      PointLight:
+        color:
+          - 0.99
+          - 0.56
+          - 0.23
+        intensity: 0.81
+        range: 12.71
+  - name: torch-30
+    components:
+      Transform:
+        translation:
+          - -36.47
+          - 3.0
+          - -10.62
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.29
+        intensity: 0.98
+        range: 14.38
+  - name: torch-31
+    components:
+      Transform:
+        translation:
+          - -27.22
+          - 2.67
+          - -16.6
+      PointLight:
+        color:
+          - 0.99
+          - 0.54
+          - 0.24
+        intensity: 1.01
+        range: 12.29
+  - name: torch-32
+    components:
+      Transform:
+        translation:
+          - -19.28
+          - 4.22
+          - -10.16
+      PointLight:
+        color:
+          - 0.99
+          - 0.59
+          - 0.31
+        intensity: 0.95
+        range: 12.72
+  - name: torch-33
+    components:
+      Transform:
+        translation:
+          - -10.14
+          - 3.3
+          - -15.68
+      PointLight:
+        color:
+          - 0.99
+          - 0.58
+          - 0.28
+        intensity: 0.74
+        range: 14.21
+  - name: torch-34
+    components:
+      Transform:
+        translation:
+          - -0.65
+          - 4.45
+          - -10.73
+      PointLight:
+        color:
+          - 0.98
+          - 0.58
+          - 0.22
+        intensity: 0.89
+        range: 13.6
+  - name: torch-35
+    components:
+      Transform:
+        translation:
+          - 8.24
+          - 4.06
+          - -15.76
+      PointLight:
+        color:
+          - 1.0
+          - 0.65
+          - 0.31
+        intensity: 0.58
+        range: 13.38
+  - name: torch-36
+    components:
+      Transform:
+        translation:
+          - 17.63
+          - 4.4
+          - -10.22
+      PointLight:
+        color:
+          - 0.98
+          - 0.55
+          - 0.28
+        intensity: 0.75
+        range: 11.44
+  - name: torch-37
+    components:
+      Transform:
+        translation:
+          - 25.18
+          - 4.06
+          - -15.77
+      PointLight:
+        color:
+          - 0.98
+          - 0.6
+          - 0.27
+        intensity: 0.82
+        range: 13.5
+  - name: torch-38
+    components:
+      Transform:
+        translation:
+          - 34.35
+          - 3.6
+          - -11.24
+      PointLight:
+        color:
+          - 0.95
+          - 0.57
+          - 0.25
+        intensity: 0.97
+        range: 8.63
+  - name: torch-39
+    components:
+      Transform:
+        translation:
+          - 42.07
+          - 3.3
+          - -17.03
+      PointLight:
+        color:
+          - 0.97
+          - 0.6
+          - 0.29
+        intensity: 0.9
+        range: 13.92
+  - name: torch-40
+    components:
+      Transform:
+        translation:
+          - -37.35
+          - 2.41
+          - -1.62
+      PointLight:
+        color:
+          - 1.0
+          - 0.66
+          - 0.21
+        intensity: 0.89
+        range: 12.46
+  - name: torch-41
+    components:
+      Transform:
+        translation:
+          - -27.45
+          - 3.38
+          - -8.94
+      PointLight:
+        color:
+          - 0.96
+          - 0.56
+          - 0.31
+        intensity: 0.57
+        range: 12.7
+  - name: torch-42
+    components:
+      Transform:
+        translation:
+          - -18.6
+          - 4.6
+          - -1.95
+      PointLight:
+        color:
+          - 0.96
+          - 0.67
+          - 0.24
+        intensity: 0.98
+        range: 10.8
+  - name: torch-43
+    components:
+      Transform:
+        translation:
+          - -9.64
+          - 4.17
+          - -8.27
+      PointLight:
+        color:
+          - 0.99
+          - 0.55
+          - 0.27
+        intensity: 0.61
+        range: 11.12
+  - name: torch-44
+    components:
+      Transform:
+        translation:
+          - -0.06
+          - 3.0
+          - -0.51
+      PointLight:
+        color:
+          - 0.99
+          - 0.67
+          - 0.21
+        intensity: 0.77
+        range: 9.03
+  - name: torch-45
+    components:
+      Transform:
+        translation:
+          - 6.81
+          - 4.18
+          - -6.9
+      PointLight:
+        color:
+          - 0.96
+          - 0.55
+          - 0.3
+        intensity: 0.81
+        range: 9.61
+  - name: torch-46
+    components:
+      Transform:
+        translation:
+          - 16.35
+          - 3.43
+          - -0.66
+      PointLight:
+        color:
+          - 1.0
+          - 0.64
+          - 0.34
+        intensity: 0.74
+        range: 14.19
+  - name: torch-47
+    components:
+      Transform:
+        translation:
+          - 26.11
+          - 4.15
+          - -7.52
+      PointLight:
+        color:
+          - 1.0
+          - 0.55
+          - 0.22
+        intensity: 0.64
+        range: 8.39
+  - name: torch-48
+    components:
+      Transform:
+        translation:
+          - 34.58
+          - 3.07
+          - -2.1
+      PointLight:
+        color:
+          - 1.0
+          - 0.64
+          - 0.2
+        intensity: 0.67
+        range: 13.17
+  - name: torch-49
+    components:
+      Transform:
+        translation:
+          - 44.01
+          - 3.01
+          - -7.54
+      PointLight:
+        color:
+          - 0.99
+          - 0.53
+          - 0.21
+        intensity: 1.02
+        range: 9.59
+  - name: torch-50
+    components:
+      Transform:
+        translation:
+          - -36.05
+          - 3.94
+          - 6.86
+      PointLight:
+        color:
+          - 0.99
+          - 0.56
+          - 0.34
+        intensity: 0.83
+        range: 14.74
+  - name: torch-51
+    components:
+      Transform:
+        translation:
+          - -27.97
+          - 4.02
+          - 2.23
+      PointLight:
+        color:
+          - 0.98
+          - 0.6
+          - 0.33
+        intensity: 0.97
+        range: 11.63
+  - name: torch-52
+    components:
+      Transform:
+        translation:
+          - -19.64
+          - 4.08
+          - 6.83
+      PointLight:
+        color:
+          - 0.98
+          - 0.6
+          - 0.25
+        intensity: 0.76
+        range: 13.27
+  - name: torch-53
+    components:
+      Transform:
+        translation:
+          - -10.43
+          - 3.54
+          - 1.0
+      PointLight:
+        color:
+          - 0.98
+          - 0.62
+          - 0.29
+        intensity: 0.94
+        range: 10.19
+  - name: torch-54
+    components:
+      Transform:
+        translation:
+          - -1.83
+          - 3.76
+          - 9.21
+      PointLight:
+        color:
+          - 0.97
+          - 0.61
+          - 0.22
+        intensity: 0.65
+        range: 13.43
+  - name: torch-55
+    components:
+      Transform:
+        translation:
+          - 8.18
+          - 3.46
+          - 0.99
+      PointLight:
+        color:
+          - 1.0
+          - 0.52
+          - 0.22
+        intensity: 1.02
+        range: 11.21
+  - name: torch-56
+    components:
+      Transform:
+        translation:
+          - 17.11
+          - 4.49
+          - 8.32
+      PointLight:
+        color:
+          - 0.98
+          - 0.54
+          - 0.21
+        intensity: 0.63
+        range: 9.18
+  - name: torch-57
+    components:
+      Transform:
+        translation:
+          - 26.0
+          - 3.41
+          - 0.66
+      PointLight:
+        color:
+          - 1.0
+          - 0.59
+          - 0.2
+        intensity: 1.04
+        range: 12.89
+  - name: torch-58
+    components:
+      Transform:
+        translation:
+          - 34.23
+          - 4.01
+          - 7.63
+      PointLight:
+        color:
+          - 0.98
+          - 0.68
+          - 0.29
+        intensity: 0.86
+        range: 11.54
+  - name: torch-59
+    components:
+      Transform:
+        translation:
+          - 43.19
+          - 3.54
+          - 1.48
+      PointLight:
+        color:
+          - 0.95
+          - 0.59
+          - 0.3
+        intensity: 0.75
+        range: 14.52
+  - name: torch-60
+    components:
+      Transform:
+        translation:
+          - -37.88
+          - 3.21
+          - 17.2
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.31
+        intensity: 0.85
+        range: 11.11
+  - name: torch-61
+    components:
+      Transform:
+        translation:
+          - -28.77
+          - 2.87
+          - 11.54
+      PointLight:
+        color:
+          - 0.99
+          - 0.58
+          - 0.21
+        intensity: 0.65
+        range: 12.97
+  - name: torch-62
+    components:
+      Transform:
+        translation:
+          - -18.95
+          - 3.52
+          - 17.15
+      PointLight:
+        color:
+          - 0.99
+          - 0.57
+          - 0.22
+        intensity: 0.73
+        range: 12.64
+  - name: torch-63
+    components:
+      Transform:
+        translation:
+          - -9.71
+          - 3.88
+          - 9.85
+      PointLight:
+        color:
+          - 0.98
+          - 0.56
+          - 0.21
+        intensity: 0.98
+        range: 8.72
+  - name: torch-64
+    components:
+      Transform:
+        translation:
+          - -2.33
+          - 3.7
+          - 16.73
+      PointLight:
+        color:
+          - 0.97
+          - 0.62
+          - 0.26
+        intensity: 0.7
+        range: 9.0
+  - name: torch-65
+    components:
+      Transform:
+        translation:
+          - 7.88
+          - 3.88
+          - 10.13
+      PointLight:
+        color:
+          - 0.99
+          - 0.63
+          - 0.28
+        intensity: 0.93
+        range: 13.55
+  - name: torch-66
+    components:
+      Transform:
+        translation:
+          - 17.25
+          - 2.88
+          - 16.34
+      PointLight:
+        color:
+          - 0.98
+          - 0.67
+          - 0.3
+        intensity: 0.78
+        range: 9.69
+  - name: torch-67
+    components:
+      Transform:
+        translation:
+          - 26.38
+          - 3.09
+          - 9.65
+      PointLight:
+        color:
+          - 0.97
+          - 0.54
+          - 0.22
+        intensity: 0.68
+        range: 11.9
+  - name: torch-68
+    components:
+      Transform:
+        translation:
+          - 33.99
+          - 2.82
+          - 16.75
+      PointLight:
+        color:
+          - 0.98
+          - 0.53
+          - 0.31
+        intensity: 0.87
+        range: 9.1
+  - name: torch-69
+    components:
+      Transform:
+        translation:
+          - 44.64
+          - 4.19
+          - 9.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.55
+          - 0.22
+        intensity: 0.96
+        range: 13.0
+  - name: torch-70
+    components:
+      Transform:
+        translation:
+          - -38.22
+          - 3.52
+          - 26.83
+      PointLight:
+        color:
+          - 0.97
+          - 0.63
+          - 0.28
+        intensity: 1.04
+        range: 9.31
+  - name: torch-71
+    components:
+      Transform:
+        translation:
+          - -29.77
+          - 2.59
+          - 19.22
+      PointLight:
+        color:
+          - 0.98
+          - 0.67
+          - 0.25
+        intensity: 0.69
+        range: 10.18
+  - name: torch-72
+    components:
+      Transform:
+        translation:
+          - -18.91
+          - 4.54
+          - 24.74
+      PointLight:
+        color:
+          - 1.0
+          - 0.61
+          - 0.23
+        intensity: 0.7
+        range: 13.72
+  - name: torch-73
+    components:
+      Transform:
+        translation:
+          - -11.12
+          - 3.14
+          - 18.65
+      PointLight:
+        color:
+          - 0.99
+          - 0.54
+          - 0.31
+        intensity: 0.74
+        range: 8.43
+  - name: torch-74
+    components:
+      Transform:
+        translation:
+          - -0.41
+          - 3.05
+          - 26.02
+      PointLight:
+        color:
+          - 0.99
+          - 0.57
+          - 0.31
+        intensity: 0.88
+        range: 10.6
+  - name: torch-75
+    components:
+      Transform:
+        translation:
+          - 7.55
+          - 3.15
+          - 20.07
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.31
+        intensity: 0.81
+        range: 14.35
+  - name: torch-76
+    components:
+      Transform:
+        translation:
+          - 18.22
+          - 3.35
+          - 26.56
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.29
+        intensity: 1.01
+        range: 8.13
+  - name: torch-77
+    components:
+      Transform:
+        translation:
+          - 24.94
+          - 2.59
+          - 19.39
+      PointLight:
+        color:
+          - 0.98
+          - 0.59
+          - 0.25
+        intensity: 1.01
+        range: 11.67
+  - name: torch-78
+    components:
+      Transform:
+        translation:
+          - 35.88
+          - 3.17
+          - 24.75
+      PointLight:
+        color:
+          - 0.99
+          - 0.65
+          - 0.21
+        intensity: 0.65
+        range: 13.81
+  - name: torch-79
+    components:
+      Transform:
+        translation:
+          - 44.21
+          - 3.28
+          - 18.98
+      PointLight:
+        color:
+          - 0.97
+          - 0.57
+          - 0.21
+        intensity: 0.92
+        range: 8.77
+  - name: torch-80
+    components:
+      Transform:
+        translation:
+          - -36.95
+          - 3.8
+          - 34.04
+      PointLight:
+        color:
+          - 0.97
+          - 0.55
+          - 0.33
+        intensity: 1.01
+        range: 12.31
+  - name: torch-81
+    components:
+      Transform:
+        translation:
+          - -26.75
+          - 3.99
+          - 28.35
+      PointLight:
+        color:
+          - 0.98
+          - 0.59
+          - 0.23
+        intensity: 0.88
+        range: 14.63
+  - name: torch-82
+    components:
+      Transform:
+        translation:
+          - -18.27
+          - 4.26
+          - 34.34
+      PointLight:
+        color:
+          - 0.96
+          - 0.52
+          - 0.29
+        intensity: 0.94
+        range: 12.74
+  - name: torch-83
+    components:
+      Transform:
+        translation:
+          - -10.43
+          - 3.52
+          - 28.51
+      PointLight:
+        color:
+          - 0.96
+          - 0.61
+          - 0.21
+        intensity: 0.84
+        range: 12.35
+  - name: torch-84
+    components:
+      Transform:
+        translation:
+          - -0.1
+          - 4.07
+          - 33.73
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.26
+        intensity: 0.89
+        range: 10.17
+  - name: torch-85
+    components:
+      Transform:
+        translation:
+          - 7.36
+          - 3.65
+          - 29.31
+      PointLight:
+        color:
+          - 0.99
+          - 0.55
+          - 0.23
+        intensity: 0.63
+        range: 10.2
+  - name: torch-86
+    components:
+      Transform:
+        translation:
+          - 17.34
+          - 2.76
+          - 34.29
+      PointLight:
+        color:
+          - 0.98
+          - 0.64
+          - 0.28
+        intensity: 0.71
+        range: 8.6
+  - name: torch-87
+    components:
+      Transform:
+        translation:
+          - 25.37
+          - 3.15
+          - 29.32
+      PointLight:
+        color:
+          - 0.97
+          - 0.67
+          - 0.29
+        intensity: 0.72
+        range: 8.46
+  - name: torch-88
+    components:
+      Transform:
+        translation:
+          - 33.47
+          - 3.44
+          - 35.45
+      PointLight:
+        color:
+          - 0.99
+          - 0.65
+          - 0.25
+        intensity: 0.7
+        range: 8.5
+  - name: torch-89
+    components:
+      Transform:
+        translation:
+          - 43.73
+          - 2.94
+          - 27.99
+      PointLight:
+        color:
+          - 0.97
+          - 0.54
+          - 0.21
+        intensity: 0.69
+        range: 14.41
+  - name: torch-90
+    components:
+      Transform:
+        translation:
+          - -36.66
+          - 4.06
+          - 42.96
+      PointLight:
+        color:
+          - 1.0
+          - 0.57
+          - 0.22
+        intensity: 0.91
+        range: 10.38
+  - name: torch-91
+    components:
+      Transform:
+        translation:
+          - -28.66
+          - 4.35
+          - 36.62
+      PointLight:
+        color:
+          - 0.97
+          - 0.68
+          - 0.31
+        intensity: 0.87
+        range: 11.82
+  - name: torch-92
+    components:
+      Transform:
+        translation:
+          - -18.1
+          - 3.7
+          - 44.58
+      PointLight:
+        color:
+          - 0.97
+          - 0.54
+          - 0.33
+        intensity: 0.62
+        range: 10.96
+  - name: torch-93
+    components:
+      Transform:
+        translation:
+          - -10.04
+          - 2.69
+          - 37.14
+      PointLight:
+        color:
+          - 0.98
+          - 0.6
+          - 0.3
+        intensity: 1.02
+        range: 14.64
+  - name: torch-94
+    components:
+      Transform:
+        translation:
+          - -1.57
+          - 4.56
+          - 44.54
+      PointLight:
+        color:
+          - 1.0
+          - 0.68
+          - 0.23
+        intensity: 0.59
+        range: 8.36
+  - name: torch-95
+    components:
+      Transform:
+        translation:
+          - 7.78
+          - 3.03
+          - 36.82
+      PointLight:
+        color:
+          - 0.96
+          - 0.58
+          - 0.26
+        intensity: 0.67
+        range: 9.67
+  - name: torch-96
+    components:
+      Transform:
+        translation:
+          - 17.33
+          - 4.17
+          - 42.5
+      PointLight:
+        color:
+          - 0.96
+          - 0.63
+          - 0.33
+        intensity: 0.64
+        range: 8.54
+  - name: torch-97
+    components:
+      Transform:
+        translation:
+          - 25.6
+          - 2.59
+          - 38.67
+      PointLight:
+        color:
+          - 0.99
+          - 0.68
+          - 0.28
+        intensity: 1.05
+        range: 10.72
+  - name: torch-98
+    components:
+      Transform:
+        translation:
+          - 34.47
+          - 2.78
+          - 43.5
+      PointLight:
+        color:
+          - 0.98
+          - 0.61
+          - 0.34
+        intensity: 1.01
+        range: 14.51
+  - name: torch-99
+    components:
+      Transform:
+        translation:
+          - 42.37
+          - 3.22
+          - 37.42
+      PointLight:
+        color:
+          - 0.99
+          - 0.67
+          - 0.32
+        intensity: 0.76
+        range: 13.76
+  - name: torch-100
+    components:
+      Transform:
+        translation:
+          - -42.66
+          - 3.76
+          - -36.94
+      PointLight:
+        color:
+          - 0.95
+          - 0.57
+          - 0.28
+        intensity: 0.83
+        range: 11.02
+  - name: torch-101
+    components:
+      Transform:
+        translation:
+          - -34.97
+          - 3.28
+          - -42.52
+      PointLight:
+        color:
+          - 0.98
+          - 0.66
+          - 0.32
+        intensity: 1.04
+        range: 14.58
+  - name: torch-102
+    components:
+      Transform:
+        translation:
+          - -24.1
+          - 4.41
+          - -37.22
+      PointLight:
+        color:
+          - 0.98
+          - 0.55
+          - 0.27
+        intensity: 0.76
+        range: 8.77
+  - name: torch-103
+    components:
+      Transform:
+        translation:
+          - -17.43
+          - 4.43
+          - -44.84
+      PointLight:
+        color:
+          - 0.96
+          - 0.56
+          - 0.22
+        intensity: 0.56
+        range: 10.44
+  - name: torch-104
+    components:
+      Transform:
+        translation:
+          - -9.07
+          - 4.16
+          - -38.36
+      PointLight:
+        color:
+          - 0.95
+          - 0.65
+          - 0.28
+        intensity: 0.71
+        range: 10.46
+  - name: torch-105
+    components:
+      Transform:
+        translation:
+          - 0.66
+          - 3.88
+          - -44.47
+      PointLight:
+        color:
+          - 0.98
+          - 0.6
+          - 0.22
+        intensity: 0.94
+        range: 14.65
+  - name: torch-106
+    components:
+      Transform:
+        translation:
+          - 9.03
+          - 4.14
+          - -37.05
+      PointLight:
+        color:
+          - 0.97
+          - 0.56
+          - 0.29
+        intensity: 0.86
+        range: 11.52
+  - name: torch-107
+    components:
+      Transform:
+        translation:
+          - 19.33
+          - 2.62
+          - -43.43
+      PointLight:
+        color:
+          - 0.96
+          - 0.57
+          - 0.24
+        intensity: 0.9
+        range: 10.34
+  - name: torch-108
+    components:
+      Transform:
+        translation:
+          - 27.94
+          - 3.08
+          - -36.99
+      PointLight:
+        color:
+          - 1.0
+          - 0.61
+          - 0.24
+        intensity: 0.58
+        range: 12.14
+  - name: torch-109
+    components:
+      Transform:
+        translation:
+          - 36.38
+          - 3.64
+          - -44.7
+      PointLight:
+        color:
+          - 0.99
+          - 0.64
+          - 0.21
+        intensity: 0.92
+        range: 9.91
+  - name: torch-110
+    components:
+      Transform:
+        translation:
+          - -43.68
+          - 3.71
+          - -28.77
+      PointLight:
+        color:
+          - 0.99
+          - 0.66
+          - 0.29
+        intensity: 0.75
+        range: 10.74
+  - name: torch-111
+    components:
+      Transform:
+        translation:
+          - -35.79
+          - 3.24
+          - -35.51
+      PointLight:
+        color:
+          - 0.98
+          - 0.57
+          - 0.21
+        intensity: 1.0
+        range: 11.61
+  - name: torch-112
+    components:
+      Transform:
+        translation:
+          - -25.67
+          - 3.73
+          - -29.13
+      PointLight:
+        color:
+          - 0.97
+          - 0.56
+          - 0.32
+        intensity: 0.94
+        range: 12.02
+  - name: torch-113
+    components:
+      Transform:
+        translation:
+          - -16.68
+          - 4.12
+          - -34.18
+      PointLight:
+        color:
+          - 0.96
+          - 0.64
+          - 0.21
+        intensity: 0.96
+        range: 9.02
+  - name: torch-114
+    components:
+      Transform:
+        translation:
+          - -7.85
+          - 2.93
+          - -28.97
+      PointLight:
+        color:
+          - 0.99
+          - 0.53
+          - 0.3
+        intensity: 0.83
+        range: 10.12
+  - name: torch-115
+    components:
+      Transform:
+        translation:
+          - 1.32
+          - 2.72
+          - -34.6
+      PointLight:
+        color:
+          - 0.96
+          - 0.63
+          - 0.2
+        intensity: 0.87
+        range: 8.59
+  - name: torch-116
+    components:
+      Transform:
+        translation:
+          - 11.12
+          - 3.09
+          - -27.71
+      PointLight:
+        color:
+          - 1.0
+          - 0.66
+          - 0.33
+        intensity: 0.76
+        range: 13.55
+  - name: torch-117
+    components:
+      Transform:
+        translation:
+          - 18.42
+          - 4.36
+          - -35.33
+      PointLight:
+        color:
+          - 0.98
+          - 0.53
+          - 0.32
+        intensity: 0.58
+        range: 8.19
+  - name: torch-118
+    components:
+      Transform:
+        translation:
+          - 27.71
+          - 3.1
+          - -28.1
+      PointLight:
+        color:
+          - 0.98
+          - 0.67
+          - 0.21
+        intensity: 0.81
+        range: 14.99
+  - name: torch-119
+    components:
+      Transform:
+        translation:
+          - 36.76
+          - 4.17
+          - -34.94
+      PointLight:
+        color:
+          - 0.98
+          - 0.62
+          - 0.26
+        intensity: 0.88
+        range: 14.74
+  - name: torch-120
+    components:
+      Transform:
+        translation:
+          - -44.15
+          - 2.78
+          - -19.4
+      PointLight:
+        color:
+          - 0.99
+          - 0.66
+          - 0.2
+        intensity: 0.83
+        range: 13.61
+  - name: torch-121
+    components:
+      Transform:
+        translation:
+          - -35.68
+          - 4.53
+          - -26.17
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.2
+        intensity: 0.64
+        range: 10.44
+  - name: torch-122
+    components:
+      Transform:
+        translation:
+          - -24.89
+          - 2.59
+          - -17.31
+      PointLight:
+        color:
+          - 0.99
+          - 0.57
+          - 0.22
+        intensity: 1.03
+        range: 10.6
+  - name: torch-123
+    components:
+      Transform:
+        translation:
+          - -15.96
+          - 3.85
+          - -25.33
+      PointLight:
+        color:
+          - 0.96
+          - 0.67
+          - 0.24
+        intensity: 0.74
+        range: 10.28
+  - name: torch-124
+    components:
+      Transform:
+        translation:
+          - -7.54
+          - 2.77
+          - -20.71
+      PointLight:
+        color:
+          - 0.98
+          - 0.63
+          - 0.24
+        intensity: 0.66
+        range: 12.91
+  - name: torch-125
+    components:
+      Transform:
+        translation:
+          - 1.32
+          - 3.13
+          - -25.09
+      PointLight:
+        color:
+          - 0.98
+          - 0.58
+          - 0.33
+        intensity: 0.71
+        range: 14.2
+  - name: torch-126
+    components:
+      Transform:
+        translation:
+          - 10.75
+          - 3.26
+          - -19.73
+      PointLight:
+        color:
+          - 0.98
+          - 0.65
+          - 0.27
+        intensity: 1.02
+        range: 11.65
+  - name: torch-127
+    components:
+      Transform:
+        translation:
+          - 19.97
+          - 4.45
+          - -25.79
+      PointLight:
+        color:
+          - 0.99
+          - 0.67
+          - 0.22
+        intensity: 0.58
+        range: 12.0
+  - name: torch-128
+    components:
+      Transform:
+        translation:
+          - 28.53
+          - 2.56
+          - -18.44
+      PointLight:
+        color:
+          - 0.98
+          - 0.66
+          - 0.28
+        intensity: 0.84
+        range: 12.67
+  - name: torch-129
+    components:
+      Transform:
+        translation:
+          - 37.49
+          - 2.82
+          - -25.35
+      PointLight:
+        color:
+          - 0.95
+          - 0.59
+          - 0.26
+        intensity: 0.82
+        range: 13.28
+  - name: torch-130
+    components:
+      Transform:
+        translation:
+          - -42.75
+          - 3.82
+          - -10.76
+      PointLight:
+        color:
+          - 0.99
+          - 0.62
+          - 0.28
+        intensity: 1.03
+        range: 11.72
+  - name: torch-131
+    components:
+      Transform:
+        translation:
+          - -34.26
+          - 3.03
+          - -17.52
+      PointLight:
+        color:
+          - 0.98
+          - 0.61
+          - 0.25
+        intensity: 0.64
+        range: 13.87
+  - name: torch-132
+    components:
+      Transform:
+        translation:
+          - -26.29
+          - 3.25
+          - -10.44
+      PointLight:
+        color:
+          - 0.96
+          - 0.57
+          - 0.23
+        intensity: 0.57
+        range: 10.85
+  - name: torch-133
+    components:
+      Transform:
+        translation:
+          - -15.45
+          - 4.06
+          - -16.26
+      PointLight:
+        color:
+          - 0.99
+          - 0.58
+          - 0.3
+        intensity: 0.83
+        range: 14.03
+  - name: torch-134
+    components:
+      Transform:
+        translation:
+          - -8.26
+          - 4.28
+          - -10.72
+      PointLight:
+        color:
+          - 0.96
+          - 0.56
+          - 0.22
+        intensity: 0.79
+        range: 12.66
+  - name: torch-135
+    components:
+      Transform:
+        translation:
+          - 3.01
+          - 2.45
+          - -15.09
+      PointLight:
+        color:
+          - 0.97
+          - 0.59
+          - 0.23
+        intensity: 1.04
+        range: 10.57
+  - name: torch-136
+    components:
+      Transform:
+        translation:
+          - 11.45
+          - 2.85
+          - -10.23
+      PointLight:
+        color:
+          - 0.97
+          - 0.59
+          - 0.3
+        intensity: 0.57
+        range: 8.63
+  - name: torch-137
+    components:
+      Transform:
+        translation:
+          - 19.52
+          - 3.92
+          - -15.83
+      PointLight:
+        color:
+          - 0.98
+          - 0.68
+          - 0.28
+        intensity: 0.82
+        range: 14.07
+  - name: torch-138
+    components:
+      Transform:
+        translation:
+          - 28.97
+          - 4.49
+          - -10.96
+      PointLight:
+        color:
+          - 0.99
+          - 0.61
+          - 0.23
+        intensity: 0.88
+        range: 11.7
+  - name: torch-139
+    components:
+      Transform:
+        translation:
+          - 36.33
+          - 3.56
+          - -16.6
+      PointLight:
+        color:
+          - 1.0
+          - 0.61
+          - 0.23
+        intensity: 0.93
+        range: 10.19
+  - name: torch-140
+    components:
+      Transform:
+        translation:
+          - -45.62
+          - 4.22
+          - -1.85
+      PointLight:
+        color:
+          - 0.96
+          - 0.66
+          - 0.32
+        intensity: 0.9
+        range: 10.14
+  - name: torch-141
+    components:
+      Transform:
+        translation:
+          - -34.11
+          - 3.41
+          - -8.48
+      PointLight:
+        color:
+          - 0.98
+          - 0.63
+          - 0.33
+        intensity: 0.94
+        range: 12.93
+  - name: torch-142
+    components:
+      Transform:
+        translation:
+          - -24.27
+          - 3.17
+          - -2.17
+      PointLight:
+        color:
+          - 0.99
+          - 0.52
+          - 0.29
+        intensity: 0.6
+        range: 12.41
+  - name: torch-143
+    components:
+      Transform:
+        translation:
+          - -15.07
+          - 2.85
+          - -8.77
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.3
+        intensity: 0.55
+        range: 11.44
+  - name: torch-144
+    components:
+      Transform:
+        translation:
+          - -7.25
+          - 4.13
+          - -0.66
+      PointLight:
+        color:
+          - 0.95
+          - 0.58
+          - 0.24
+        intensity: 0.72
+        range: 8.18
+  - name: torch-145
+    components:
+      Transform:
+        translation:
+          - 0.41
+          - 3.43
+          - -7.52
+      PointLight:
+        color:
+          - 1.0
+          - 0.6
+          - 0.28
+        intensity: 0.63
+        range: 14.89
+  - name: torch-146
+    components:
+      Transform:
+        translation:
+          - 9.52
+          - 3.9
+          - -0.53
+      PointLight:
+        color:
+          - 0.98
+          - 0.54
+          - 0.33
+        intensity: 0.71
+        range: 9.23
+  - name: torch-147
+    components:
+      Transform:
+        translation:
+          - 19.92
+          - 2.71
+          - -7.79
+      PointLight:
+        color:
+          - 0.99
+          - 0.54
+          - 0.29
+        intensity: 0.93
+        range: 14.47
+  - name: torch-148
+    components:
+      Transform:
+        translation:
+          - 26.8
+          - 3.27
+          - -2.09
+      PointLight:
+        color:
+          - 0.99
+          - 0.54
+          - 0.24
+        intensity: 0.84
+        range: 13.41
+  - name: torch-149
+    components:
+      Transform:
+        translation:
+          - 37.72
+          - 3.87
+          - -7.61
+      PointLight:
+        color:
+          - 0.99
+          - 0.66
+          - 0.24
+        intensity: 0.55
+        range: 13.88
+  - name: torch-150
+    components:
+      Transform:
+        translation:
+          - -43.62
+          - 4.07
+          - 7.3
+      PointLight:
+        color:
+          - 1.0
+          - 0.56
+          - 0.32
+        intensity: 0.66
+        range: 9.11
+  - name: torch-151
+    components:
+      Transform:
+        translation:
+          - -33.89
+          - 3.98
+          - 1.97
+      PointLight:
+        color:
+          - 0.98
+          - 0.59
+          - 0.24
+        intensity: 0.94
+        range: 12.2
+  - name: torch-152
+    components:
+      Transform:
+        translation:
+          - -25.7
+          - 4.08
+          - 6.64
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.25
+        intensity: 1.05
+        range: 11.86
+  - name: torch-153
+    components:
+      Transform:
+        translation:
+          - -17.21
+          - 2.41
+          - 1.81
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.29
+        intensity: 0.65
+        range: 11.82
+  - name: torch-154
+    components:
+      Transform:
+        translation:
+          - -8.75
+          - 3.53
+          - 8.85
+      PointLight:
+        color:
+          - 0.99
+          - 0.61
+          - 0.33
+        intensity: 0.76
+        range: 12.3
+  - name: torch-155
+    components:
+      Transform:
+        translation:
+          - 1.61
+          - 4.02
+          - 0.83
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.34
+        intensity: 1.04
+        range: 11.59
+  - name: torch-156
+    components:
+      Transform:
+        translation:
+          - 10.43
+          - 3.66
+          - 8.31
+      PointLight:
+        color:
+          - 0.96
+          - 0.54
+          - 0.26
+        intensity: 0.82
+        range: 12.67
+  - name: torch-157
+    components:
+      Transform:
+        translation:
+          - 18.31
+          - 4.38
+          - 0.33
+      PointLight:
+        color:
+          - 0.96
+          - 0.56
+          - 0.24
+        intensity: 0.7
+        range: 11.85
+  - name: torch-158
+    components:
+      Transform:
+        translation:
+          - 27.83
+          - 3.89
+          - 7.53
+      PointLight:
+        color:
+          - 0.99
+          - 0.56
+          - 0.28
+        intensity: 0.85
+        range: 8.31
+  - name: torch-159
+    components:
+      Transform:
+        translation:
+          - 36.39
+          - 3.3
+          - 1.39
+      PointLight:
+        color:
+          - 0.96
+          - 0.57
+          - 0.29
+        intensity: 0.66
+        range: 12.93
+  - name: torch-160
+    components:
+      Transform:
+        translation:
+          - -45.55
+          - 2.76
+          - 17.54
+      PointLight:
+        color:
+          - 0.95
+          - 0.56
+          - 0.34
+        intensity: 0.73
+        range: 9.18
+  - name: torch-161
+    components:
+      Transform:
+        translation:
+          - -35.63
+          - 4.03
+          - 11.13
+      PointLight:
+        color:
+          - 0.97
+          - 0.63
+          - 0.2
+        intensity: 0.91
+        range: 12.21
+  - name: torch-162
+    components:
+      Transform:
+        translation:
+          - -26.37
+          - 2.89
+          - 17.09
+      PointLight:
+        color:
+          - 0.97
+          - 0.63
+          - 0.33
+        intensity: 1.02
+        range: 11.12
+  - name: torch-163
+    components:
+      Transform:
+        translation:
+          - -16.57
+          - 3.53
+          - 9.99
+      PointLight:
+        color:
+          - 0.97
+          - 0.66
+          - 0.28
+        intensity: 1.02
+        range: 13.24
+  - name: torch-164
+    components:
+      Transform:
+        translation:
+          - -8.14
+          - 3.39
+          - 16.73
+      PointLight:
+        color:
+          - 1.0
+          - 0.66
+          - 0.29
+        intensity: 0.93
+        range: 14.87
+  - name: torch-165
+    components:
+      Transform:
+        translation:
+          - 1.13
+          - 3.32
+          - 10.39
+      PointLight:
+        color:
+          - 0.97
+          - 0.55
+          - 0.24
+        intensity: 0.73
+        range: 9.28
+  - name: torch-166
+    components:
+      Transform:
+        translation:
+          - 9.69
+          - 4.04
+          - 15.46
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.34
+        intensity: 0.93
+        range: 8.32
+  - name: torch-167
+    components:
+      Transform:
+        translation:
+          - 19.08
+          - 4.04
+          - 9.05
+      PointLight:
+        color:
+          - 0.97
+          - 0.62
+          - 0.29
+        intensity: 0.81
+        range: 12.47
+  - name: torch-168
+    components:
+      Transform:
+        translation:
+          - 27.0
+          - 2.77
+          - 17.2
+      PointLight:
+        color:
+          - 0.98
+          - 0.56
+          - 0.3
+        intensity: 0.87
+        range: 10.13
+  - name: torch-169
+    components:
+      Transform:
+        translation:
+          - 37.63
+          - 3.98
+          - 9.27
+      PointLight:
+        color:
+          - 1.0
+          - 0.53
+          - 0.25
+        intensity: 0.62
+        range: 12.63
+  - name: torch-170
+    components:
+      Transform:
+        translation:
+          - -43.68
+          - 4.2
+          - 26.66
+      PointLight:
+        color:
+          - 0.99
+          - 0.65
+          - 0.34
+        intensity: 0.76
+        range: 11.11
+  - name: torch-171
+    components:
+      Transform:
+        translation:
+          - -35.4
+          - 3.5
+          - 19.6
+      PointLight:
+        color:
+          - 0.98
+          - 0.65
+          - 0.24
+        intensity: 0.59
+        range: 13.55
+  - name: torch-172
+    components:
+      Transform:
+        translation:
+          - -25.48
+          - 3.17
+          - 25.23
+      PointLight:
+        color:
+          - 0.97
+          - 0.58
+          - 0.33
+        intensity: 0.78
+        range: 9.13
+  - name: torch-173
+    components:
+      Transform:
+        translation:
+          - -17.14
+          - 4.23
+          - 18.15
+      PointLight:
+        color:
+          - 0.96
+          - 0.63
+          - 0.23
+        intensity: 1.01
+        range: 9.02
+  - name: torch-174
+    components:
+      Transform:
+        translation:
+          - -6.59
+          - 4.0
+          - 26.4
+      PointLight:
+        color:
+          - 0.98
+          - 0.66
+          - 0.29
+        intensity: 0.69
+        range: 8.54
+  - name: torch-175
+    components:
+      Transform:
+        translation:
+          - 0.3
+          - 3.04
+          - 20.37
+      PointLight:
+        color:
+          - 0.99
+          - 0.62
+          - 0.27
+        intensity: 0.6
+        range: 9.05
+  - name: torch-176
+    components:
+      Transform:
+        translation:
+          - 11.34
+          - 4.2
+          - 26.43
+      PointLight:
+        color:
+          - 0.99
+          - 0.6
+          - 0.29
+        intensity: 0.95
+        range: 12.16
+  - name: torch-177
+    components:
+      Transform:
+        translation:
+          - 19.14
+          - 2.54
+          - 19.43
+      PointLight:
+        color:
+          - 0.96
+          - 0.52
+          - 0.2
+        intensity: 0.87
+        range: 11.16
+  - name: torch-178
+    components:
+      Transform:
+        translation:
+          - 29.29
+          - 4.32
+          - 24.61
+      PointLight:
+        color:
+          - 0.95
+          - 0.68
+          - 0.29
+        intensity: 0.84
+        range: 10.19
+  - name: torch-179
+    components:
+      Transform:
+        translation:
+          - 36.86
+          - 2.41
+          - 18.41
+      PointLight:
+        color:
+          - 0.99
+          - 0.64
+          - 0.28
+        intensity: 0.74
+        range: 8.61
+  - name: torch-180
+    components:
+      Transform:
+        translation:
+          - -43.8
+          - 2.98
+          - 34.7
+      PointLight:
+        color:
+          - 0.96
+          - 0.59
+          - 0.25
+        intensity: 0.65
+        range: 11.29
+  - name: torch-181
+    components:
+      Transform:
+        translation:
+          - -34.83
+          - 2.47
+          - 27.62
+      PointLight:
+        color:
+          - 0.97
+          - 0.64
+          - 0.24
+        intensity: 1.02
+        range: 9.01
+  - name: torch-182
+    components:
+      Transform:
+        translation:
+          - -25.61
+          - 3.2
+          - 34.31
+      PointLight:
+        color:
+          - 0.96
+          - 0.53
+          - 0.21
+        intensity: 0.74
+        range: 8.79
+  - name: torch-183
+    components:
+      Transform:
+        translation:
+          - -15.4
+          - 2.88
+          - 28.69
+      PointLight:
+        color:
+          - 0.99
+          - 0.56
+          - 0.33
+        intensity: 0.94
+        range: 11.01
+  - name: torch-184
+    components:
+      Transform:
+        translation:
+          - -6.73
+          - 3.97
+          - 33.99
+      PointLight:
+        color:
+          - 0.97
+          - 0.56
+          - 0.28
+        intensity: 0.74
+        range: 12.66
+  - name: torch-185
+    components:
+      Transform:
+        translation:
+          - 2.21
+          - 3.78
+          - 29.52
+      PointLight:
+        color:
+          - 0.95
+          - 0.63
+          - 0.21
+        intensity: 0.74
+        range: 8.13
+  - name: torch-186
+    components:
+      Transform:
+        translation:
+          - 11.71
+          - 2.99
+          - 34.49
+      PointLight:
+        color:
+          - 0.97
+          - 0.6
+          - 0.21
+        intensity: 0.83
+        range: 8.82
+  - name: torch-187
+    components:
+      Transform:
+        translation:
+          - 17.95
+          - 3.96
+          - 29.27
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.25
+        intensity: 0.94
+        range: 12.25
+  - name: torch-188
+    components:
+      Transform:
+        translation:
+          - 27.68
+          - 3.42
+          - 35.7
+      PointLight:
+        color:
+          - 0.99
+          - 0.65
+          - 0.23
+        intensity: 0.86
+        range: 12.98
+  - name: torch-189
+    components:
+      Transform:
+        translation:
+          - 37.89
+          - 4.45
+          - 28.87
+      PointLight:
+        color:
+          - 0.96
+          - 0.54
+          - 0.25
+        intensity: 0.92
+        range: 10.33
+  - name: torch-190
+    components:
+      Transform:
+        translation:
+          - -44.24
+          - 4.0
+          - 43.54
+      PointLight:
+        color:
+          - 0.99
+          - 0.67
+          - 0.27
+        intensity: 1.04
+        range: 13.8
+  - name: torch-191
+    components:
+      Transform:
+        translation:
+          - -35.37
+          - 2.61
+          - 36.47
+      PointLight:
+        color:
+          - 0.97
+          - 0.64
+          - 0.22
+        intensity: 1.05
+        range: 9.52
+  - name: torch-192
+    components:
+      Transform:
+        translation:
+          - -25.6
+          - 3.17
+          - 44.23
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.3
+        intensity: 0.7
+        range: 13.83
+  - name: torch-193
+    components:
+      Transform:
+        translation:
+          - -16.04
+          - 3.51
+          - 37.05
+      PointLight:
+        color:
+          - 0.97
+          - 0.54
+          - 0.29
+        intensity: 1.01
+        range: 14.57
+  - name: torch-194
+    components:
+      Transform:
+        translation:
+          - -8.5
+          - 3.39
+          - 44.98
+      PointLight:
+        color:
+          - 0.99
+          - 0.6
+          - 0.31
+        intensity: 0.57
+        range: 9.01
+  - name: torch-195
+    components:
+      Transform:
+        translation:
+          - 0.66
+          - 2.91
+          - 37.15
+      PointLight:
+        color:
+          - 0.95
+          - 0.63
+          - 0.32
+        intensity: 0.88
+        range: 12.16
+  - name: torch-196
+    components:
+      Transform:
+        translation:
+          - 11.9
+          - 4.3
+          - 42.63
+      PointLight:
+        color:
+          - 0.96
+          - 0.62
+          - 0.26
+        intensity: 1.0
+        range: 8.47
+  - name: torch-197
+    components:
+      Transform:
+        translation:
+          - 20.09
+          - 2.75
+          - 37.82
+      PointLight:
+        color:
+          - 0.97
+          - 0.59
+          - 0.21
+        intensity: 0.75
+        range: 10.41
+  - name: torch-198
+    components:
+      Transform:
+        translation:
+          - 27.02
+          - 2.87
+          - 43.44
+      PointLight:
+        color:
+          - 0.97
+          - 0.58
+          - 0.26
+        intensity: 0.93
+        range: 8.83
+  - name: torch-199
+    components:
+      Transform:
+        translation:
+          - 35.71
+          - 3.49
+          - 36.83
+      PointLight:
+        color:
+          - 0.96
+          - 0.65
+          - 0.3
+        intensity: 0.95
+        range: 13.05
+  - name: tracer-0
+    components:
+      Transform:
+        translation:
+          - 0.98
+          - 1.7
+          - -34.08
+      PointLight:
+        color:
+          - 1.0
+          - 0.77
+          - 0.43
+        intensity: 0.84
+        range: 1.86
+  - name: tracer-1
+    components:
+      Transform:
+        translation:
+          - -20.09
+          - 1.97
+          - -0.94
+      PointLight:
+        color:
+          - 0.49
+          - 0.94
+          - 0.99
+        intensity: 0.74
+        range: 2.5
+  - name: tracer-2
+    components:
+      Transform:
+        translation:
+          - -15.37
+          - 1.73
+          - 9.86
+      PointLight:
+        color:
+          - 0.48
+          - 0.85
+          - 1.0
+        intensity: 0.51
+        range: 2.69
+  - name: tracer-3
+    components:
+      Transform:
+        translation:
+          - 2.34
+          - 1.75
+          - -14.87
+      PointLight:
+        color:
+          - 1.0
+          - 0.74
+          - 0.35
+        intensity: 0.49
+        range: 1.58
+  - name: tracer-4
+    components:
+      Transform:
+        translation:
+          - 40.93
+          - 1.98
+          - 38.03
+      PointLight:
+        color:
+          - 0.45
+          - 0.81
+          - 0.99
+        intensity: 0.58
+        range: 1.93
+  - name: tracer-5
+    components:
+      Transform:
+        translation:
+          - 28.71
+          - 1.38
+          - -22.34
+      PointLight:
+        color:
+          - 0.41
+          - 0.86
+          - 0.99
+        intensity: 0.52
+        range: 2.82
+  - name: tracer-6
+    components:
+      Transform:
+        translation:
+          - 40.75
+          - 1.45
+          - 33.65
+      PointLight:
+        color:
+          - 1.0
+          - 0.74
+          - 0.35
+        intensity: 0.61
+        range: 1.93
+  - name: tracer-7
+    components:
+      Transform:
+        translation:
+          - 40.69
+          - 1.01
+          - 39.77
+      PointLight:
+        color:
+          - 0.48
+          - 0.91
+          - 0.98
+        intensity: 0.5
+        range: 2.44
+  - name: tracer-8
+    components:
+      Transform:
+        translation:
+          - 45.44
+          - 1.03
+          - 17.41
+      PointLight:
+        color:
+          - 0.45
+          - 0.88
+          - 1.0
+        intensity: 0.45
+        range: 2.11
+  - name: tracer-9
+    components:
+      Transform:
+        translation:
+          - -39.93
+          - 1.5
+          - 14.46
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.36
+        intensity: 0.71
+        range: 1.55
+  - name: tracer-10
+    components:
+      Transform:
+        translation:
+          - -14.48
+          - 2.2
+          - 1.15
+      PointLight:
+        color:
+          - 0.36
+          - 0.81
+          - 0.98
+        intensity: 0.66
+        range: 1.8
+  - name: tracer-11
+    components:
+      Transform:
+        translation:
+          - 20.87
+          - 1.52
+          - 20.52
+      PointLight:
+        color:
+          - 0.46
+          - 0.82
+          - 0.99
+        intensity: 0.55
+        range: 2.46
+  - name: tracer-12
+    components:
+      Transform:
+        translation:
+          - -22.9
+          - 1.75
+          - 10.58
+      PointLight:
+        color:
+          - 1.0
+          - 0.76
+          - 0.34
+        intensity: 0.69
+        range: 2.84
+  - name: tracer-13
+    components:
+      Transform:
+        translation:
+          - 43.72
+          - 1.87
+          - -7.16
+      PointLight:
+        color:
+          - 0.45
+          - 0.94
+          - 0.99
+        intensity: 0.81
+        range: 1.65
+  - name: tracer-14
+    components:
+      Transform:
+        translation:
+          - 27.16
+          - 1.7
+          - -31.42
+      PointLight:
+        color:
+          - 0.37
+          - 0.88
+          - 1.0
+        intensity: 0.54
+        range: 1.86
+  - name: tracer-15
+    components:
+      Transform:
+        translation:
+          - -36.54
+          - 1.91
+          - 37.07
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.42
+        intensity: 0.75
+        range: 2.54
+  - name: tracer-16
+    components:
+      Transform:
+        translation:
+          - -43.2
+          - 1.53
+          - 34.04
+      PointLight:
+        color:
+          - 0.47
+          - 0.89
+          - 0.99
+        intensity: 0.73
+        range: 2.89
+  - name: tracer-17
+    components:
+      Transform:
+        translation:
+          - 37.11
+          - 2.16
+          - -29.83
+      PointLight:
+        color:
+          - 0.39
+          - 0.83
+          - 0.99
+        intensity: 0.65
+        range: 2.56
+  - name: tracer-18
+    components:
+      Transform:
+        translation:
+          - 14.95
+          - 1.39
+          - 19.69
+      PointLight:
+        color:
+          - 1.0
+          - 0.77
+          - 0.41
+        intensity: 0.5
+        range: 2.31
+  - name: tracer-19
+    components:
+      Transform:
+        translation:
+          - 4.29
+          - 1.06
+          - -32.8
+      PointLight:
+        color:
+          - 0.45
+          - 0.9
+          - 0.99
+        intensity: 0.58
+        range: 1.86
+  - name: tracer-20
+    components:
+      Transform:
+        translation:
+          - -24.31
+          - 1.31
+          - 3.65
+      PointLight:
+        color:
+          - 0.4
+          - 0.9
+          - 0.98
+        intensity: 0.53
+        range: 2.13
+  - name: tracer-21
+    components:
+      Transform:
+        translation:
+          - -31.44
+          - 0.8
+          - 41.99
+      PointLight:
+        color:
+          - 1.0
+          - 0.77
+          - 0.42
+        intensity: 0.75
+        range: 1.71
+  - name: tracer-22
+    components:
+      Transform:
+        translation:
+          - 26.34
+          - 1.75
+          - -0.7
+      PointLight:
+        color:
+          - 0.43
+          - 0.85
+          - 0.99
+        intensity: 0.72
+        range: 2.32
+  - name: tracer-23
+    components:
+      Transform:
+        translation:
+          - 8.95
+          - 1.3
+          - -27.98
+      PointLight:
+        color:
+          - 0.36
+          - 0.88
+          - 0.99
+        intensity: 0.7
+        range: 2.82
+  - name: tracer-24
+    components:
+      Transform:
+        translation:
+          - 16.71
+          - 1.39
+          - -22.16
+      PointLight:
+        color:
+          - 1.0
+          - 0.84
+          - 0.42
+        intensity: 0.52
+        range: 2.89
+  - name: tracer-25
+    components:
+      Transform:
+        translation:
+          - 39.37
+          - 1.12
+          - 32.24
+      PointLight:
+        color:
+          - 0.45
+          - 0.91
+          - 0.99
+        intensity: 0.8
+        range: 1.62
+  - name: tracer-26
+    components:
+      Transform:
+        translation:
+          - -32.22
+          - 1.16
+          - 9.81
+      PointLight:
+        color:
+          - 0.4
+          - 0.95
+          - 0.99
+        intensity: 0.67
+        range: 2.49
+  - name: tracer-27
+    components:
+      Transform:
+        translation:
+          - 33.92
+          - 1.4
+          - -9.65
+      PointLight:
+        color:
+          - 1.0
+          - 0.76
+          - 0.33
+        intensity: 0.5
+        range: 2.79
+  - name: tracer-28
+    components:
+      Transform:
+        translation:
+          - 19.63
+          - 1.32
+          - -6.86
+      PointLight:
+        color:
+          - 0.45
+          - 0.86
+          - 1.0
+        intensity: 0.45
+        range: 2.1
+  - name: tracer-29
+    components:
+      Transform:
+        translation:
+          - 0.73
+          - 1.36
+          - -41.41
+      PointLight:
+        color:
+          - 0.38
+          - 0.87
+          - 1.0
+        intensity: 0.51
+        range: 1.53
+  - name: tracer-30
+    components:
+      Transform:
+        translation:
+          - -42.21
+          - 1.56
+          - -20.4
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.36
+        intensity: 0.47
+        range: 2.0
+  - name: tracer-31
+    components:
+      Transform:
+        translation:
+          - -25.25
+          - 1.53
+          - -33.89
+      PointLight:
+        color:
+          - 0.4
+          - 0.9
+          - 0.98
+        intensity: 0.55
+        range: 2.43
+  - name: tracer-32
+    components:
+      Transform:
+        translation:
+          - -10.4
+          - 1.04
+          - -13.16
+      PointLight:
+        color:
+          - 0.4
+          - 0.87
+          - 0.98
+        intensity: 0.74
+        range: 2.6
+  - name: tracer-33
+    components:
+      Transform:
+        translation:
+          - -41.34
+          - 2.13
+          - 21.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.81
+          - 0.43
+        intensity: 0.46
+        range: 1.6
+  - name: tracer-34
+    components:
+      Transform:
+        translation:
+          - -23.23
+          - 2.12
+          - -3.54
+      PointLight:
+        color:
+          - 0.36
+          - 0.95
+          - 0.98
+        intensity: 0.67
+        range: 1.93
+  - name: tracer-35
+    components:
+      Transform:
+        translation:
+          - -4.32
+          - 1.01
+          - 3.41
+      PointLight:
+        color:
+          - 0.36
+          - 0.84
+          - 1.0
+        intensity: 0.58
+        range: 1.6
+  - name: tracer-36
+    components:
+      Transform:
+        translation:
+          - -20.38
+          - 0.84
+          - 19.97
+      PointLight:
+        color:
+          - 1.0
+          - 0.83
+          - 0.42
+        intensity: 0.55
+        range: 2.1
+  - name: tracer-37
+    components:
+      Transform:
+        translation:
+          - -23.81
+          - 1.98
+          - -27.92
+      PointLight:
+        color:
+          - 0.36
+          - 0.88
+          - 0.99
+        intensity: 0.47
+        range: 1.62
+  - name: tracer-38
+    components:
+      Transform:
+        translation:
+          - 10.31
+          - 1.38
+          - 5.29
+      PointLight:
+        color:
+          - 0.47
+          - 0.92
+          - 0.99
+        intensity: 0.63
+        range: 1.84
+  - name: tracer-39
+    components:
+      Transform:
+        translation:
+          - 35.86
+          - 2.09
+          - 34.41
+      PointLight:
+        color:
+          - 1.0
+          - 0.78
+          - 0.4
+        intensity: 0.56
+        range: 1.64
+  - name: tracer-40
+    components:
+      Transform:
+        translation:
+          - 12.27
+          - 1.71
+          - 22.93
+      PointLight:
+        color:
+          - 0.45
+          - 0.95
+          - 0.99
+        intensity: 0.78
+        range: 2.29
+  - name: tracer-41
+    components:
+      Transform:
+        translation:
+          - -15.96
+          - 1.46
+          - -16.95
+      PointLight:
+        color:
+          - 0.44
+          - 0.82
+          - 0.98
+        intensity: 0.53
+        range: 2.23
+  - name: tracer-42
+    components:
+      Transform:
+        translation:
+          - -22.38
+          - 1.3
+          - 0.46
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.31
+        intensity: 0.81
+        range: 2.15
+  - name: tracer-43
+    components:
+      Transform:
+        translation:
+          - 28.14
+          - 1.23
+          - -45.68
+      PointLight:
+        color:
+          - 0.48
+          - 0.83
+          - 0.99
+        intensity: 0.53
+        range: 2.74
+  - name: tracer-44
+    components:
+      Transform:
+        translation:
+          - 37.22
+          - 1.32
+          - 15.8
+      PointLight:
+        color:
+          - 0.48
+          - 0.91
+          - 0.99
+        intensity: 0.45
+        range: 2.05
+  - name: tracer-45
+    components:
+      Transform:
+        translation:
+          - 17.42
+          - 1.25
+          - 28.53
+      PointLight:
+        color:
+          - 1.0
+          - 0.82
+          - 0.31
+        intensity: 0.56
+        range: 1.86
+  - name: tracer-46
+    components:
+      Transform:
+        translation:
+          - -22.5
+          - 0.91
+          - 28.36
+      PointLight:
+        color:
+          - 0.49
+          - 0.85
+          - 0.99
+        intensity: 0.71
+        range: 2.58
+  - name: tracer-47
+    components:
+      Transform:
+        translation:
+          - -5.68
+          - 1.16
+          - 18.03
+      PointLight:
+        color:
+          - 0.39
+          - 0.86
+          - 0.99
+        intensity: 0.59
+        range: 2.59
+  - name: tracer-48
+    components:
+      Transform:
+        translation:
+          - -30.58
+          - 2.06
+          - 34.09
+      PointLight:
+        color:
+          - 1.0
+          - 0.79
+          - 0.35
+        intensity: 0.51
+        range: 2.29
+  - name: tracer-49
+    components:
+      Transform:
+        translation:
+          - 15.04
+          - 1.01
+          - -41.87
+      PointLight:
+        color:
+          - 0.37
+          - 0.9
+          - 0.99
+        intensity: 0.73
+        range: 2.72
+  - name: tracer-50
+    components:
+      Transform:
+        translation:
+          - 23.09
+          - 1.9
+          - -29.93
+      PointLight:
+        color:
+          - 0.35
+          - 0.9
+          - 0.99
+        intensity: 0.75
+        range: 2.02
+  - name: tracer-51
+    components:
+      Transform:
+        translation:
+          - -21.33
+          - 1.8
+          - -26.22
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.32
+        intensity: 0.68
+        range: 2.68
+  - name: tracer-52
+    components:
+      Transform:
+        translation:
+          - -8.74
+          - 1.0
+          - -6.24
+      PointLight:
+        color:
+          - 0.39
+          - 0.84
+          - 0.99
+        intensity: 0.7
+        range: 2.02
+  - name: tracer-53
+    components:
+      Transform:
+        translation:
+          - -43.27
+          - 1.9
+          - 31.42
+      PointLight:
+        color:
+          - 0.48
+          - 0.86
+          - 1.0
+        intensity: 0.77
+        range: 2.09
+  - name: tracer-54
+    components:
+      Transform:
+        translation:
+          - 11.99
+          - 1.5
+          - -43.27
+      PointLight:
+        color:
+          - 1.0
+          - 0.85
+          - 0.39
+        intensity: 0.78
+        range: 2.0
+  - name: tracer-55
+    components:
+      Transform:
+        translation:
+          - -22.54
+          - 1.12
+          - -35.86
+      PointLight:
+        color:
+          - 0.4
+          - 0.84
+          - 1.0
+        intensity: 0.63
+        range: 2.15
+  - name: tracer-56
+    components:
+      Transform:
+        translation:
+          - -12.6
+          - 2.18
+          - -13.54
+      PointLight:
+        color:
+          - 0.48
+          - 0.81
+          - 0.99
+        intensity: 0.73
+        range: 1.73
+  - name: tracer-57
+    components:
+      Transform:
+        translation:
+          - -27.32
+          - 0.85
+          - 25.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.86
+          - 0.43
+        intensity: 0.67
+        range: 1.82
+  - name: tracer-58
+    components:
+      Transform:
+        translation:
+          - -5.79
+          - 1.55
+          - 22.61
+      PointLight:
+        color:
+          - 0.36
+          - 0.84
+          - 0.98
+        intensity: 0.46
+        range: 1.94
+  - name: tracer-59
+    components:
+      Transform:
+        translation:
+          - 27.17
+          - 0.85
+          - -0.55
+      PointLight:
+        color:
+          - 0.45
+          - 0.85
+          - 1.0
+        intensity: 0.51
+        range: 2.04
+  - name: tracer-60
+    components:
+      Transform:
+        translation:
+          - -25.22
+          - 1.7
+          - 28.47
+      PointLight:
+        color:
+          - 1.0
+          - 0.72
+          - 0.3
+        intensity: 0.64
+        range: 2.94
+  - name: tracer-61
+    components:
+      Transform:
+        translation:
+          - -26.33
+          - 1.35
+          - -32.43
+      PointLight:
+        color:
+          - 0.39
+          - 0.91
+          - 0.98
+        intensity: 0.8
+        range: 2.54
+  - name: tracer-62
+    components:
+      Transform:
+        translation:
+          - 5.05
+          - 1.6
+          - -25.98
+      PointLight:
+        color:
+          - 0.44
+          - 0.81
+          - 0.99
+        intensity: 0.72
+        range: 1.73
+  - name: tracer-63
+    components:
+      Transform:
+        translation:
+          - -26.16
+          - 0.99
+          - -41.3
+      PointLight:
+        color:
+          - 1.0
+          - 0.84
+          - 0.39
+        intensity: 0.59
+        range: 1.59
+  - name: tracer-64
+    components:
+      Transform:
+        translation:
+          - 28.92
+          - 1.96
+          - -16.97
+      PointLight:
+        color:
+          - 0.45
+          - 0.91
+          - 1.0
+        intensity: 0.77
+        range: 2.42
+  - name: tracer-65
+    components:
+      Transform:
+        translation:
+          - 17.91
+          - 2.15
+          - -30.1
+      PointLight:
+        color:
+          - 0.39
+          - 0.94
+          - 1.0
+        intensity: 0.63
+        range: 2.52
+  - name: tracer-66
+    components:
+      Transform:
+        translation:
+          - -38.62
+          - 1.14
+          - 3.53
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.44
+        intensity: 0.69
+        range: 2.4
+  - name: tracer-67
+    components:
+      Transform:
+        translation:
+          - -4.78
+          - 1.22
+          - 16.42
+      PointLight:
+        color:
+          - 0.41
+          - 0.81
+          - 0.98
+        intensity: 0.52
+        range: 2.29
+  - name: tracer-68
+    components:
+      Transform:
+        translation:
+          - 21.17
+          - 2.14
+          - 17.63
+      PointLight:
+        color:
+          - 0.36
+          - 0.87
+          - 0.99
+        intensity: 0.7
+        range: 2.86
+  - name: tracer-69
+    components:
+      Transform:
+        translation:
+          - -5.35
+          - 1.94
+          - 11.29
+      PointLight:
+        color:
+          - 1.0
+          - 0.81
+          - 0.31
+        intensity: 0.46
+        range: 2.3
+  - name: tracer-70
+    components:
+      Transform:
+        translation:
+          - 34.88
+          - 1.95
+          - -6.52
+      PointLight:
+        color:
+          - 0.44
+          - 0.94
+          - 0.99
+        intensity: 0.49
+        range: 2.3
+  - name: tracer-71
+    components:
+      Transform:
+        translation:
+          - -29.75
+          - 1.86
+          - 5.21
+      PointLight:
+        color:
+          - 0.41
+          - 0.84
+          - 1.0
+        intensity: 0.59
+        range: 2.15
+  - name: tracer-72
+    components:
+      Transform:
+        translation:
+          - -27.88
+          - 1.36
+          - 5.05
+      PointLight:
+        color:
+          - 1.0
+          - 0.85
+          - 0.32
+        intensity: 0.59
+        range: 2.51
+  - name: tracer-73
+    components:
+      Transform:
+        translation:
+          - 32.8
+          - 2.07
+          - 7.9
+      PointLight:
+        color:
+          - 0.45
+          - 0.83
+          - 0.98
+        intensity: 0.46
+        range: 2.45
+  - name: tracer-74
+    components:
+      Transform:
+        translation:
+          - -23.99
+          - 1.53
+          - -13.87
+      PointLight:
+        color:
+          - 0.41
+          - 0.94
+          - 0.98
+        intensity: 0.52
+        range: 1.51
+  - name: tracer-75
+    components:
+      Transform:
+        translation:
+          - -25.15
+          - 1.38
+          - 11.07
+      PointLight:
+        color:
+          - 1.0
+          - 0.79
+          - 0.35
+        intensity: 0.54
+        range: 2.68
+  - name: tracer-76
+    components:
+      Transform:
+        translation:
+          - -7.88
+          - 1.04
+          - 41.39
+      PointLight:
+        color:
+          - 0.49
+          - 0.81
+          - 1.0
+        intensity: 0.84
+        range: 2.81
+  - name: tracer-77
+    components:
+      Transform:
+        translation:
+          - -7.24
+          - 1.34
+          - 0.43
+      PointLight:
+        color:
+          - 0.39
+          - 0.83
+          - 0.99
+        intensity: 0.65
+        range: 2.3
+  - name: tracer-78
+    components:
+      Transform:
+        translation:
+          - -14.27
+          - 1.82
+          - -44.88
+      PointLight:
+        color:
+          - 1.0
+          - 0.84
+          - 0.35
+        intensity: 0.66
+        range: 2.86
+  - name: tracer-79
+    components:
+      Transform:
+        translation:
+          - -29.26
+          - 0.98
+          - 24.79
+      PointLight:
+        color:
+          - 0.35
+          - 0.8
+          - 1.0
+        intensity: 0.84
+        range: 2.49
+  - name: tracer-80
+    components:
+      Transform:
+        translation:
+          - -35.44
+          - 1.5
+          - -45.88
+      PointLight:
+        color:
+          - 0.49
+          - 0.92
+          - 0.99
+        intensity: 0.78
+        range: 1.68
+  - name: tracer-81
+    components:
+      Transform:
+        translation:
+          - -29.86
+          - 2.04
+          - 7.07
+      PointLight:
+        color:
+          - 1.0
+          - 0.77
+          - 0.43
+        intensity: 0.61
+        range: 2.33
+  - name: tracer-82
+    components:
+      Transform:
+        translation:
+          - -21.6
+          - 1.33
+          - -38.49
+      PointLight:
+        color:
+          - 0.37
+          - 0.91
+          - 0.98
+        intensity: 0.6
+        range: 1.6
+  - name: tracer-83
+    components:
+      Transform:
+        translation:
+          - 33.92
+          - 1.51
+          - 32.88
+      PointLight:
+        color:
+          - 0.48
+          - 0.87
+          - 0.98
+        intensity: 0.47
+        range: 1.62
+  - name: tracer-84
+    components:
+      Transform:
+        translation:
+          - -41.37
+          - 2.12
+          - 19.48
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.41
+        intensity: 0.79
+        range: 2.79
+  - name: tracer-85
+    components:
+      Transform:
+        translation:
+          - 6.62
+          - 2.13
+          - -33.13
+      PointLight:
+        color:
+          - 0.45
+          - 0.91
+          - 0.99
+        intensity: 0.77
+        range: 2.4
+  - name: tracer-86
+    components:
+      Transform:
+        translation:
+          - 14.16
+          - 1.5
+          - 20.51
+      PointLight:
+        color:
+          - 0.39
+          - 0.85
+          - 0.98
+        intensity: 0.64
+        range: 2.1
+  - name: tracer-87
+    components:
+      Transform:
+        translation:
+          - 18.51
+          - 1.86
+          - 19.03
+      PointLight:
+        color:
+          - 1.0
+          - 0.81
+          - 0.32
+        intensity: 0.83
+        range: 2.02
+  - name: tracer-88
+    components:
+      Transform:
+        translation:
+          - -4.78
+          - 1.85
+          - 1.01
+      PointLight:
+        color:
+          - 0.46
+          - 0.84
+          - 0.99
+        intensity: 0.57
+        range: 2.18
+  - name: tracer-89
+    components:
+      Transform:
+        translation:
+          - -16.65
+          - 1.74
+          - 42.92
+      PointLight:
+        color:
+          - 0.4
+          - 0.92
+          - 0.98
+        intensity: 0.72
+        range: 1.63
+  - name: tracer-90
+    components:
+      Transform:
+        translation:
+          - -8.24
+          - 1.0
+          - -4.57
+      PointLight:
+        color:
+          - 1.0
+          - 0.76
+          - 0.37
+        intensity: 0.65
+        range: 2.27
+  - name: tracer-91
+    components:
+      Transform:
+        translation:
+          - -18.46
+          - 1.93
+          - 9.49
+      PointLight:
+        color:
+          - 0.44
+          - 0.83
+          - 1.0
+        intensity: 0.55
+        range: 2.55
+  - name: tracer-92
+    components:
+      Transform:
+        translation:
+          - -2.89
+          - 1.86
+          - 26.96
+      PointLight:
+        color:
+          - 0.48
+          - 0.82
+          - 1.0
+        intensity: 0.74
+        range: 2.18
+  - name: tracer-93
+    components:
+      Transform:
+        translation:
+          - 40.86
+          - 2.0
+          - 26.11
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.42
+        intensity: 0.74
+        range: 2.13
+  - name: tracer-94
+    components:
+      Transform:
+        translation:
+          - 9.54
+          - 1.79
+          - 35.45
+      PointLight:
+        color:
+          - 0.38
+          - 0.83
+          - 0.98
+        intensity: 0.53
+        range: 2.68
+  - name: tracer-95
+    components:
+      Transform:
+        translation:
+          - 37.03
+          - 1.86
+          - -4.29
+      PointLight:
+        color:
+          - 0.47
+          - 0.89
+          - 1.0
+        intensity: 0.46
+        range: 1.51
+  - name: tracer-96
+    components:
+      Transform:
+        translation:
+          - 18.39
+          - 1.42
+          - 13.96
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.38
+        intensity: 0.74
+        range: 1.84
+  - name: tracer-97
+    components:
+      Transform:
+        translation:
+          - -26.43
+          - 1.59
+          - 33.1
+      PointLight:
+        color:
+          - 0.45
+          - 0.85
+          - 1.0
+        intensity: 0.51
+        range: 1.97
+  - name: tracer-98
+    components:
+      Transform:
+        translation:
+          - -2.4
+          - 1.4
+          - -19.56
+      PointLight:
+        color:
+          - 0.44
+          - 0.92
+          - 0.99
+        intensity: 0.8
+        range: 1.52
+  - name: tracer-99
+    components:
+      Transform:
+        translation:
+          - -15.79
+          - 1.56
+          - -14.74
+      PointLight:
+        color:
+          - 1.0
+          - 0.76
+          - 0.43
+        intensity: 0.47
+        range: 2.13
+  - name: tracer-100
+    components:
+      Transform:
+        translation:
+          - 30.22
+          - 1.03
+          - 45.02
+      PointLight:
+        color:
+          - 0.46
+          - 0.89
+          - 0.98
+        intensity: 0.83
+        range: 2.45
+  - name: tracer-101
+    components:
+      Transform:
+        translation:
+          - 11.16
+          - 1.5
+          - -9.71
+      PointLight:
+        color:
+          - 0.47
+          - 0.82
+          - 1.0
+        intensity: 0.66
+        range: 2.6
+  - name: tracer-102
+    components:
+      Transform:
+        translation:
+          - 5.05
+          - 1.67
+          - 37.22
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.41
+        intensity: 0.72
+        range: 2.55
+  - name: tracer-103
+    components:
+      Transform:
+        translation:
+          - -34.56
+          - 2.11
+          - 23.96
+      PointLight:
+        color:
+          - 0.44
+          - 0.95
+          - 0.99
+        intensity: 0.59
+        range: 1.71
+  - name: tracer-104
+    components:
+      Transform:
+        translation:
+          - 11.67
+          - 1.02
+          - -40.72
+      PointLight:
+        color:
+          - 0.47
+          - 0.83
+          - 0.98
+        intensity: 0.52
+        range: 2.71
+  - name: tracer-105
+    components:
+      Transform:
+        translation:
+          - -17.8
+          - 2.1
+          - -1.45
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.31
+        intensity: 0.7
+        range: 2.73
+  - name: tracer-106
+    components:
+      Transform:
+        translation:
+          - -7.81
+          - 1.78
+          - 43.32
+      PointLight:
+        color:
+          - 0.39
+          - 0.84
+          - 1.0
+        intensity: 0.49
+        range: 1.59
+  - name: tracer-107
+    components:
+      Transform:
+        translation:
+          - -7.77
+          - 2.07
+          - -41.44
+      PointLight:
+        color:
+          - 0.38
+          - 0.86
+          - 0.99
+        intensity: 0.5
+        range: 2.82
+  - name: tracer-108
+    components:
+      Transform:
+        translation:
+          - 8.36
+          - 0.83
+          - -42.42
+      PointLight:
+        color:
+          - 1.0
+          - 0.81
+          - 0.36
+        intensity: 0.85
+        range: 2.53
+  - name: tracer-109
+    components:
+      Transform:
+        translation:
+          - 14.38
+          - 1.55
+          - -37.45
+      PointLight:
+        color:
+          - 0.38
+          - 0.84
+          - 0.99
+        intensity: 0.46
+        range: 2.43
+  - name: tracer-110
+    components:
+      Transform:
+        translation:
+          - -29.35
+          - 1.19
+          - -38.87
+      PointLight:
+        color:
+          - 0.49
+          - 0.9
+          - 0.99
+        intensity: 0.81
+        range: 2.17
+  - name: tracer-111
+    components:
+      Transform:
+        translation:
+          - 32.14
+          - 1.23
+          - 31.28
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.43
+        intensity: 0.56
+        range: 1.91
+  - name: tracer-112
+    components:
+      Transform:
+        translation:
+          - 25.18
+          - 0.96
+          - 0.81
+      PointLight:
+        color:
+          - 0.35
+          - 0.9
+          - 1.0
+        intensity: 0.74
+        range: 2.27
+  - name: tracer-113
+    components:
+      Transform:
+        translation:
+          - -19.36
+          - 1.64
+          - 37.21
+      PointLight:
+        color:
+          - 0.49
+          - 0.9
+          - 0.99
+        intensity: 0.7
+        range: 2.49
+  - name: tracer-114
+    components:
+      Transform:
+        translation:
+          - -3.44
+          - 1.14
+          - 10.42
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.38
+        intensity: 0.45
+        range: 2.03
+  - name: tracer-115
+    components:
+      Transform:
+        translation:
+          - 27.91
+          - 0.84
+          - 23.23
+      PointLight:
+        color:
+          - 0.43
+          - 0.93
+          - 1.0
+        intensity: 0.57
+        range: 2.1
+  - name: tracer-116
+    components:
+      Transform:
+        translation:
+          - -13.67
+          - 1.04
+          - -32.27
+      PointLight:
+        color:
+          - 0.45
+          - 0.83
+          - 0.99
+        intensity: 0.76
+        range: 2.15
+  - name: tracer-117
+    components:
+      Transform:
+        translation:
+          - 29.4
+          - 0.98
+          - -14.25
+      PointLight:
+        color:
+          - 1.0
+          - 0.78
+          - 0.42
+        intensity: 0.59
+        range: 2.51
+  - name: tracer-118
+    components:
+      Transform:
+        translation:
+          - 4.84
+          - 1.74
+          - 33.22
+      PointLight:
+        color:
+          - 0.41
+          - 0.91
+          - 1.0
+        intensity: 0.59
+        range: 2.79
+  - name: tracer-119
+    components:
+      Transform:
+        translation:
+          - 9.16
+          - 0.97
+          - 29.27
+      PointLight:
+        color:
+          - 0.37
+          - 0.9
+          - 0.99
+        intensity: 0.68
+        range: 2.03
+  - name: tracer-120
+    components:
+      Transform:
+        translation:
+          - -23.52
+          - 1.78
+          - -42.9
+      PointLight:
+        color:
+          - 1.0
+          - 0.84
+          - 0.34
+        intensity: 0.75
+        range: 2.17
+  - name: tracer-121
+    components:
+      Transform:
+        translation:
+          - -10.99
+          - 1.26
+          - 45.7
+      PointLight:
+        color:
+          - 0.4
+          - 0.84
+          - 0.98
+        intensity: 0.51
+        range: 2.0
+  - name: tracer-122
+    components:
+      Transform:
+        translation:
+          - 23.78
+          - 1.44
+          - -34.37
+      PointLight:
+        color:
+          - 0.38
+          - 0.92
+          - 0.98
+        intensity: 0.75
+        range: 1.73
+  - name: tracer-123
+    components:
+      Transform:
+        translation:
+          - 1.65
+          - 1.69
+          - -11.17
+      PointLight:
+        color:
+          - 1.0
+          - 0.81
+          - 0.34
+        intensity: 0.73
+        range: 1.65
+  - name: tracer-124
+    components:
+      Transform:
+        translation:
+          - -22.02
+          - 1.51
+          - 13.15
+      PointLight:
+        color:
+          - 0.39
+          - 0.94
+          - 0.99
+        intensity: 0.62
+        range: 2.48
+  - name: tracer-125
+    components:
+      Transform:
+        translation:
+          - 32.99
+          - 1.66
+          - -22.48
+      PointLight:
+        color:
+          - 0.38
+          - 0.83
+          - 0.99
+        intensity: 0.64
+        range: 2.58
+  - name: tracer-126
+    components:
+      Transform:
+        translation:
+          - 0.23
+          - 0.81
+          - -29.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.81
+          - 0.39
+        intensity: 0.65
+        range: 1.75
+  - name: tracer-127
+    components:
+      Transform:
+        translation:
+          - -28.72
+          - 1.88
+          - -43.86
+      PointLight:
+        color:
+          - 0.42
+          - 0.91
+          - 0.99
+        intensity: 0.8
+        range: 2.84
+  - name: tracer-128
+    components:
+      Transform:
+        translation:
+          - 45.11
+          - 1.71
+          - -24.49
+      PointLight:
+        color:
+          - 0.49
+          - 0.89
+          - 0.99
+        intensity: 0.62
+        range: 1.87
+  - name: tracer-129
+    components:
+      Transform:
+        translation:
+          - 35.26
+          - 0.91
+          - -18.26
+      PointLight:
+        color:
+          - 1.0
+          - 0.84
+          - 0.37
+        intensity: 0.48
+        range: 2.42
+  - name: tracer-130
+    components:
+      Transform:
+        translation:
+          - -6.17
+          - 1.61
+          - 10.63
+      PointLight:
+        color:
+          - 0.45
+          - 0.8
+          - 0.99
+        intensity: 0.79
+        range: 1.71
+  - name: tracer-131
+    components:
+      Transform:
+        translation:
+          - -38.82
+          - 1.94
+          - -32.94
+      PointLight:
+        color:
+          - 0.45
+          - 0.93
+          - 1.0
+        intensity: 0.62
+        range: 2.75
+  - name: tracer-132
+    components:
+      Transform:
+        translation:
+          - -25.99
+          - 1.26
+          - 39.02
+      PointLight:
+        color:
+          - 1.0
+          - 0.83
+          - 0.33
+        intensity: 0.8
+        range: 1.53
+  - name: tracer-133
+    components:
+      Transform:
+        translation:
+          - 25.39
+          - 2.0
+          - -20.16
+      PointLight:
+        color:
+          - 0.48
+          - 0.85
+          - 0.99
+        intensity: 0.52
+        range: 2.53
+  - name: tracer-134
+    components:
+      Transform:
+        translation:
+          - 25.94
+          - 2.12
+          - -33.98
+      PointLight:
+        color:
+          - 0.49
+          - 0.9
+          - 0.99
+        intensity: 0.65
+        range: 2.73
+  - name: tracer-135
+    components:
+      Transform:
+        translation:
+          - -3.38
+          - 1.19
+          - 23.18
+      PointLight:
+        color:
+          - 1.0
+          - 0.82
+          - 0.36
+        intensity: 0.5
+        range: 2.96
+  - name: tracer-136
+    components:
+      Transform:
+        translation:
+          - -6.25
+          - 2.0
+          - 16.44
+      PointLight:
+        color:
+          - 0.47
+          - 0.93
+          - 0.98
+        intensity: 0.82
+        range: 2.87
+  - name: tracer-137
+    components:
+      Transform:
+        translation:
+          - -36.68
+          - 2.17
+          - -11.02
+      PointLight:
+        color:
+          - 0.41
+          - 0.92
+          - 0.99
+        intensity: 0.7
+        range: 2.82
+  - name: tracer-138
+    components:
+      Transform:
+        translation:
+          - 6.93
+          - 1.13
+          - 34.85
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.41
+        intensity: 0.45
+        range: 1.52
+  - name: tracer-139
+    components:
+      Transform:
+        translation:
+          - -40.77
+          - 0.83
+          - 36.11
+      PointLight:
+        color:
+          - 0.36
+          - 0.86
+          - 1.0
+        intensity: 0.63
+        range: 2.56
+  - name: tracer-140
+    components:
+      Transform:
+        translation:
+          - -45.03
+          - 0.99
+          - 6.58
+      PointLight:
+        color:
+          - 0.42
+          - 0.9
+          - 0.98
+        intensity: 0.64
+        range: 2.58
+  - name: tracer-141
+    components:
+      Transform:
+        translation:
+          - 39.91
+          - 2.1
+          - -41.67
+      PointLight:
+        color:
+          - 1.0
+          - 0.72
+          - 0.33
+        intensity: 0.77
+        range: 2.75
+  - name: tracer-142
+    components:
+      Transform:
+        translation:
+          - -32.7
+          - 1.22
+          - 27.2
+      PointLight:
+        color:
+          - 0.49
+          - 0.9
+          - 0.99
+        intensity: 0.74
+        range: 2.86
+  - name: tracer-143
+    components:
+      Transform:
+        translation:
+          - -25.77
+          - 2.19
+          - 26.15
+      PointLight:
+        color:
+          - 0.42
+          - 0.92
+          - 0.98
+        intensity: 0.77
+        range: 2.05
+  - name: tracer-144
+    components:
+      Transform:
+        translation:
+          - 41.89
+          - 2.03
+          - 31.09
+      PointLight:
+        color:
+          - 1.0
+          - 0.79
+          - 0.4
+        intensity: 0.53
+        range: 1.53
+  - name: tracer-145
+    components:
+      Transform:
+        translation:
+          - 8.92
+          - 1.77
+          - -36.12
+      PointLight:
+        color:
+          - 0.38
+          - 0.86
+          - 0.99
+        intensity: 0.65
+        range: 2.33
+  - name: tracer-146
+    components:
+      Transform:
+        translation:
+          - 5.63
+          - 1.37
+          - 39.03
+      PointLight:
+        color:
+          - 0.42
+          - 0.86
+          - 1.0
+        intensity: 0.47
+        range: 2.67
+  - name: tracer-147
+    components:
+      Transform:
+        translation:
+          - -21.7
+          - 1.81
+          - 16.02
+      PointLight:
+        color:
+          - 1.0
+          - 0.85
+          - 0.32
+        intensity: 0.57
+        range: 1.89
+  - name: tracer-148
+    components:
+      Transform:
+        translation:
+          - -27.94
+          - 1.96
+          - 7.22
+      PointLight:
+        color:
+          - 0.37
+          - 0.84
+          - 0.99
+        intensity: 0.54
+        range: 2.29
+  - name: tracer-149
+    components:
+      Transform:
+        translation:
+          - 15.51
+          - 1.79
+          - -40.07
+      PointLight:
+        color:
+          - 0.49
+          - 0.91
+          - 0.99
+        intensity: 0.85
+        range: 2.14
+  - name: tracer-150
+    components:
+      Transform:
+        translation:
+          - 6.81
+          - 1.11
+          - 33.99
+      PointLight:
+        color:
+          - 1.0
+          - 0.76
+          - 0.38
+        intensity: 0.54
+        range: 2.19
+  - name: tracer-151
+    components:
+      Transform:
+        translation:
+          - -13.78
+          - 1.09
+          - 8.4
+      PointLight:
+        color:
+          - 0.43
+          - 0.9
+          - 1.0
+        intensity: 0.62
+        range: 2.45
+  - name: tracer-152
+    components:
+      Transform:
+        translation:
+          - 3.96
+          - 0.94
+          - -5.03
+      PointLight:
+        color:
+          - 0.4
+          - 0.82
+          - 1.0
+        intensity: 0.6
+        range: 2.73
+  - name: tracer-153
+    components:
+      Transform:
+        translation:
+          - -4.72
+          - 1.01
+          - -13.29
+      PointLight:
+        color:
+          - 1.0
+          - 0.74
+          - 0.31
+        intensity: 0.71
+        range: 2.57
+  - name: tracer-154
+    components:
+      Transform:
+        translation:
+          - 13.41
+          - 1.19
+          - 3.69
+      PointLight:
+        color:
+          - 0.4
+          - 0.83
+          - 0.99
+        intensity: 0.53
+        range: 2.47
+  - name: tracer-155
+    components:
+      Transform:
+        translation:
+          - 34.5
+          - 1.83
+          - -41.94
+      PointLight:
+        color:
+          - 0.39
+          - 0.9
+          - 0.99
+        intensity: 0.51
+        range: 2.6
+  - name: tracer-156
+    components:
+      Transform:
+        translation:
+          - 37.75
+          - 2.16
+          - 20.46
+      PointLight:
+        color:
+          - 1.0
+          - 0.84
+          - 0.42
+        intensity: 0.81
+        range: 2.16
+  - name: tracer-157
+    components:
+      Transform:
+        translation:
+          - 41.18
+          - 0.88
+          - -40.09
+      PointLight:
+        color:
+          - 0.45
+          - 0.85
+          - 0.99
+        intensity: 0.58
+        range: 1.93
+  - name: tracer-158
+    components:
+      Transform:
+        translation:
+          - 18.69
+          - 1.7
+          - 32.54
+      PointLight:
+        color:
+          - 0.4
+          - 0.93
+          - 0.98
+        intensity: 0.54
+        range: 2.88
+  - name: tracer-159
+    components:
+      Transform:
+        translation:
+          - 23.03
+          - 1.09
+          - -28.04
+      PointLight:
+        color:
+          - 1.0
+          - 0.86
+          - 0.3
+        intensity: 0.71
+        range: 1.64
+  - name: tracer-160
+    components:
+      Transform:
+        translation:
+          - 44.77
+          - 0.94
+          - 14.23
+      PointLight:
+        color:
+          - 0.43
+          - 0.93
+          - 0.99
+        intensity: 0.55
+        range: 2.02
+  - name: tracer-161
+    components:
+      Transform:
+        translation:
+          - -41.46
+          - 2.17
+          - -7.94
+      PointLight:
+        color:
+          - 0.42
+          - 0.93
+          - 1.0
+        intensity: 0.56
+        range: 1.71
+  - name: tracer-162
+    components:
+      Transform:
+        translation:
+          - -4.58
+          - 1.91
+          - -2.65
+      PointLight:
+        color:
+          - 1.0
+          - 0.83
+          - 0.33
+        intensity: 0.52
+        range: 2.31
+  - name: tracer-163
+    components:
+      Transform:
+        translation:
+          - 25.51
+          - 1.83
+          - 11.21
+      PointLight:
+        color:
+          - 0.41
+          - 0.94
+          - 0.99
+        intensity: 0.84
+        range: 1.75
+  - name: tracer-164
+    components:
+      Transform:
+        translation:
+          - -35.05
+          - 1.96
+          - -28.42
+      PointLight:
+        color:
+          - 0.43
+          - 0.92
+          - 0.98
+        intensity: 0.46
+        range: 2.34
+  - name: tracer-165
+    components:
+      Transform:
+        translation:
+          - -41.97
+          - 1.57
+          - 20.88
+      PointLight:
+        color:
+          - 1.0
+          - 0.86
+          - 0.35
+        intensity: 0.47
+        range: 1.69
+  - name: tracer-166
+    components:
+      Transform:
+        translation:
+          - 17.78
+          - 1.85
+          - 23.34
+      PointLight:
+        color:
+          - 0.48
+          - 0.87
+          - 0.99
+        intensity: 0.64
+        range: 1.54
+  - name: tracer-167
+    components:
+      Transform:
+        translation:
+          - -23.45
+          - 2.18
+          - 24.45
+      PointLight:
+        color:
+          - 0.39
+          - 0.94
+          - 1.0
+        intensity: 0.52
+        range: 1.83
+  - name: tracer-168
+    components:
+      Transform:
+        translation:
+          - -41.72
+          - 0.84
+          - -20.81
+      PointLight:
+        color:
+          - 1.0
+          - 0.85
+          - 0.33
+        intensity: 0.66
+        range: 2.69
+  - name: tracer-169
+    components:
+      Transform:
+        translation:
+          - 14.95
+          - 2.11
+          - -16.01
+      PointLight:
+        color:
+          - 0.38
+          - 0.82
+          - 0.98
+        intensity: 0.77
+        range: 2.67
+  - name: tracer-170
+    components:
+      Transform:
+        translation:
+          - -6.5
+          - 1.54
+          - 44.31
+      PointLight:
+        color:
+          - 0.45
+          - 0.94
+          - 0.99
+        intensity: 0.67
+        range: 2.03
+  - name: tracer-171
+    components:
+      Transform:
+        translation:
+          - 34.68
+          - 1.46
+          - -12.17
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.4
+        intensity: 0.57
+        range: 1.78
+  - name: tracer-172
+    components:
+      Transform:
+        translation:
+          - -30.85
+          - 1.49
+          - 32.65
+      PointLight:
+        color:
+          - 0.47
+          - 0.93
+          - 0.99
+        intensity: 0.52
+        range: 2.64
+  - name: tracer-173
+    components:
+      Transform:
+        translation:
+          - 45.85
+          - 1.63
+          - 5.76
+      PointLight:
+        color:
+          - 0.44
+          - 0.83
+          - 0.99
+        intensity: 0.75
+        range: 1.73
+  - name: tracer-174
+    components:
+      Transform:
+        translation:
+          - 28.96
+          - 2.19
+          - -2.77
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.36
+        intensity: 0.6
+        range: 1.84
+  - name: tracer-175
+    components:
+      Transform:
+        translation:
+          - -44.03
+          - 1.81
+          - -2.41
+      PointLight:
+        color:
+          - 0.35
+          - 0.86
+          - 0.98
+        intensity: 0.7
+        range: 1.63
+  - name: tracer-176
+    components:
+      Transform:
+        translation:
+          - 27.52
+          - 1.81
+          - 21.9
+      PointLight:
+        color:
+          - 0.48
+          - 0.83
+          - 0.98
+        intensity: 0.71
+        range: 1.63
+  - name: tracer-177
+    components:
+      Transform:
+        translation:
+          - -19.65
+          - 1.48
+          - -23.85
+      PointLight:
+        color:
+          - 1.0
+          - 0.81
+          - 0.43
+        intensity: 0.8
+        range: 2.7
+  - name: tracer-178
+    components:
+      Transform:
+        translation:
+          - -3.19
+          - 1.58
+          - -19.19
+      PointLight:
+        color:
+          - 0.37
+          - 0.91
+          - 0.99
+        intensity: 0.7
+        range: 2.14
+  - name: tracer-179
+    components:
+      Transform:
+        translation:
+          - -26.32
+          - 1.2
+          - 7.96
+      PointLight:
+        color:
+          - 0.46
+          - 0.86
+          - 1.0
+        intensity: 0.73
+        range: 2.18
+  - name: tracer-180
+    components:
+      Transform:
+        translation:
+          - 42.68
+          - 1.91
+          - -22.21
+      PointLight:
+        color:
+          - 1.0
+          - 0.82
+          - 0.41
+        intensity: 0.69
+        range: 2.77
+  - name: tracer-181
+    components:
+      Transform:
+        translation:
+          - -14.35
+          - 2.11
+          - 1.7
+      PointLight:
+        color:
+          - 0.49
+          - 0.83
+          - 0.99
+        intensity: 0.67
+        range: 2.93
+  - name: tracer-182
+    components:
+      Transform:
+        translation:
+          - 22.69
+          - 1.19
+          - 14.89
+      PointLight:
+        color:
+          - 0.48
+          - 0.88
+          - 0.98
+        intensity: 0.78
+        range: 2.82
+  - name: tracer-183
+    components:
+      Transform:
+        translation:
+          - 37.68
+          - 1.47
+          - -28.48
+      PointLight:
+        color:
+          - 1.0
+          - 0.76
+          - 0.4
+        intensity: 0.78
+        range: 1.8
+  - name: tracer-184
+    components:
+      Transform:
+        translation:
+          - -18.27
+          - 2.2
+          - -2.39
+      PointLight:
+        color:
+          - 0.41
+          - 0.9
+          - 0.99
+        intensity: 0.81
+        range: 2.13
+  - name: tracer-185
+    components:
+      Transform:
+        translation:
+          - -1.11
+          - 1.92
+          - -43.22
+      PointLight:
+        color:
+          - 0.38
+          - 0.84
+          - 0.99
+        intensity: 0.67
+        range: 2.14
+  - name: tracer-186
+    components:
+      Transform:
+        translation:
+          - 33.64
+          - 2.02
+          - 18.15
+      PointLight:
+        color:
+          - 1.0
+          - 0.77
+          - 0.35
+        intensity: 0.69
+        range: 1.71
+  - name: tracer-187
+    components:
+      Transform:
+        translation:
+          - 25.01
+          - 2.07
+          - -41.23
+      PointLight:
+        color:
+          - 0.46
+          - 0.93
+          - 0.99
+        intensity: 0.81
+        range: 2.01
+  - name: tracer-188
+    components:
+      Transform:
+        translation:
+          - 18.63
+          - 1.27
+          - 28.56
+      PointLight:
+        color:
+          - 0.43
+          - 0.92
+          - 0.99
+        intensity: 0.45
+        range: 2.08
+  - name: tracer-189
+    components:
+      Transform:
+        translation:
+          - -8.44
+          - 0.83
+          - -45.43
+      PointLight:
+        color:
+          - 1.0
+          - 0.76
+          - 0.36
+        intensity: 0.72
+        range: 1.58
+  - name: tracer-190
+    components:
+      Transform:
+        translation:
+          - 0.16
+          - 2.01
+          - -22.99
+      PointLight:
+        color:
+          - 0.42
+          - 0.82
+          - 0.99
+        intensity: 0.63
+        range: 2.15
+  - name: tracer-191
+    components:
+      Transform:
+        translation:
+          - 33.57
+          - 0.96
+          - -24.98
+      PointLight:
+        color:
+          - 0.38
+          - 0.83
+          - 1.0
+        intensity: 0.46
+        range: 2.95
+  - name: tracer-192
+    components:
+      Transform:
+        translation:
+          - 8.5
+          - 1.59
+          - -39.34
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.4
+        intensity: 0.69
+        range: 1.94
+  - name: tracer-193
+    components:
+      Transform:
+        translation:
+          - 25.29
+          - 1.01
+          - -34.4
+      PointLight:
+        color:
+          - 0.44
+          - 0.85
+          - 0.99
+        intensity: 0.54
+        range: 2.36
+  - name: tracer-194
+    components:
+      Transform:
+        translation:
+          - 29.54
+          - 1.0
+          - -31.36
+      PointLight:
+        color:
+          - 0.42
+          - 0.89
+          - 0.99
+        intensity: 0.46
+        range: 1.73
+  - name: tracer-195
+    components:
+      Transform:
+        translation:
+          - 28.45
+          - 1.11
+          - -20.23
+      PointLight:
+        color:
+          - 1.0
+          - 0.85
+          - 0.32
+        intensity: 0.72
+        range: 1.66
+  - name: tracer-196
+    components:
+      Transform:
+        translation:
+          - 41.56
+          - 2.05
+          - 36.12
+      PointLight:
+        color:
+          - 0.41
+          - 0.91
+          - 0.99
+        intensity: 0.76
+        range: 2.68
+  - name: tracer-197
+    components:
+      Transform:
+        translation:
+          - -22.72
+          - 1.32
+          - -35.5
+      PointLight:
+        color:
+          - 0.48
+          - 0.82
+          - 0.99
+        intensity: 0.76
+        range: 2.18
+  - name: tracer-198
+    components:
+      Transform:
+        translation:
+          - 40.96
+          - 1.01
+          - -15.63
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.43
+        intensity: 0.51
+        range: 2.6
+  - name: tracer-199
+    components:
+      Transform:
+        translation:
+          - -5.5
+          - 1.06
+          - 27.14
+      PointLight:
+        color:
+          - 0.38
+          - 0.89
+          - 0.99
+        intensity: 0.64
+        range: 1.57
+  - name: tracer-200
+    components:
+      Transform:
+        translation:
+          - -2.03
+          - 0.92
+          - 38.95
+      PointLight:
+        color:
+          - 0.41
+          - 0.91
+          - 0.99
+        intensity: 0.6
+        range: 2.41
+  - name: tracer-201
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 2.07
+          - -37.17
+      PointLight:
+        color:
+          - 1.0
+          - 0.74
+          - 0.3
+        intensity: 0.59
+        range: 2.38
+  - name: tracer-202
+    components:
+      Transform:
+        translation:
+          - 36.58
+          - 1.11
+          - -37.83
+      PointLight:
+        color:
+          - 0.39
+          - 0.87
+          - 0.99
+        intensity: 0.77
+        range: 2.37
+  - name: tracer-203
+    components:
+      Transform:
+        translation:
+          - 40.1
+          - 1.99
+          - -27.88
+      PointLight:
+        color:
+          - 0.41
+          - 0.93
+          - 0.99
+        intensity: 0.62
+        range: 2.77
+  - name: tracer-204
+    components:
+      Transform:
+        translation:
+          - -2.35
+          - 1.29
+          - 35.55
+      PointLight:
+        color:
+          - 1.0
+          - 0.83
+          - 0.39
+        intensity: 0.47
+        range: 2.13
+  - name: tracer-205
+    components:
+      Transform:
+        translation:
+          - 33.99
+          - 1.42
+          - -41.19
+      PointLight:
+        color:
+          - 0.49
+          - 0.82
+          - 0.99
+        intensity: 0.8
+        range: 2.9
+  - name: tracer-206
+    components:
+      Transform:
+        translation:
+          - 1.6
+          - 1.75
+          - 12.78
+      PointLight:
+        color:
+          - 0.36
+          - 0.86
+          - 0.99
+        intensity: 0.75
+        range: 2.45
+  - name: tracer-207
+    components:
+      Transform:
+        translation:
+          - -20.18
+          - 1.13
+          - -1.26
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.42
+        intensity: 0.79
+        range: 2.66
+  - name: tracer-208
+    components:
+      Transform:
+        translation:
+          - -25.01
+          - 1.42
+          - 34.02
+      PointLight:
+        color:
+          - 0.35
+          - 0.82
+          - 1.0
+        intensity: 0.49
+        range: 1.69
+  - name: tracer-209
+    components:
+      Transform:
+        translation:
+          - -8.16
+          - 1.95
+          - -15.22
+      PointLight:
+        color:
+          - 0.43
+          - 0.86
+          - 0.98
+        intensity: 0.73
+        range: 1.99
+  - name: tracer-210
+    components:
+      Transform:
+        translation:
+          - -16.02
+          - 1.71
+          - -29.72
+      PointLight:
+        color:
+          - 1.0
+          - 0.78
+          - 0.33
+        intensity: 0.84
+        range: 2.4
+  - name: tracer-211
+    components:
+      Transform:
+        translation:
+          - 13.55
+          - 1.45
+          - 33.41
+      PointLight:
+        color:
+          - 0.39
+          - 0.94
+          - 0.98
+        intensity: 0.55
+        range: 2.03
+  - name: tracer-212
+    components:
+      Transform:
+        translation:
+          - 31.7
+          - 1.74
+          - 37.43
+      PointLight:
+        color:
+          - 0.45
+          - 0.94
+          - 1.0
+        intensity: 0.7
+        range: 1.51
+  - name: tracer-213
+    components:
+      Transform:
+        translation:
+          - -45.07
+          - 1.88
+          - -37.49
+      PointLight:
+        color:
+          - 1.0
+          - 0.84
+          - 0.39
+        intensity: 0.79
+        range: 1.8
+  - name: tracer-214
+    components:
+      Transform:
+        translation:
+          - -11.75
+          - 1.55
+          - 22.41
+      PointLight:
+        color:
+          - 0.41
+          - 0.86
+          - 0.99
+        intensity: 0.53
+        range: 2.3
+  - name: tracer-215
+    components:
+      Transform:
+        translation:
+          - 6.66
+          - 2.01
+          - -14.04
+      PointLight:
+        color:
+          - 0.36
+          - 0.94
+          - 1.0
+        intensity: 0.7
+        range: 2.37
+  - name: tracer-216
+    components:
+      Transform:
+        translation:
+          - -36.33
+          - 0.99
+          - -15.15
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.33
+        intensity: 0.81
+        range: 2.24
+  - name: tracer-217
+    components:
+      Transform:
+        translation:
+          - -17.06
+          - 1.73
+          - -13.51
+      PointLight:
+        color:
+          - 0.49
+          - 0.88
+          - 0.99
+        intensity: 0.61
+        range: 1.95
+  - name: tracer-218
+    components:
+      Transform:
+        translation:
+          - -19.53
+          - 2.04
+          - -39.71
+      PointLight:
+        color:
+          - 0.49
+          - 0.86
+          - 0.99
+        intensity: 0.63
+        range: 1.9
+  - name: tracer-219
+    components:
+      Transform:
+        translation:
+          - -3.41
+          - 1.12
+          - -31.12
+      PointLight:
+        color:
+          - 1.0
+          - 0.86
+          - 0.34
+        intensity: 0.48
+        range: 2.92
+  - name: tracer-220
+    components:
+      Transform:
+        translation:
+          - -9.54
+          - 1.59
+          - 2.75
+      PointLight:
+        color:
+          - 0.35
+          - 0.92
+          - 0.99
+        intensity: 0.56
+        range: 2.6
+  - name: tracer-221
+    components:
+      Transform:
+        translation:
+          - -44.8
+          - 0.87
+          - 21.4
+      PointLight:
+        color:
+          - 0.39
+          - 0.92
+          - 1.0
+        intensity: 0.65
+        range: 2.48
+  - name: tracer-222
+    components:
+      Transform:
+        translation:
+          - -20.6
+          - 1.46
+          - 2.27
+      PointLight:
+        color:
+          - 1.0
+          - 0.72
+          - 0.4
+        intensity: 0.69
+        range: 2.1
+  - name: tracer-223
+    components:
+      Transform:
+        translation:
+          - 23.3
+          - 1.27
+          - 42.94
+      PointLight:
+        color:
+          - 0.37
+          - 0.93
+          - 1.0
+        intensity: 0.54
+        range: 2.75
+  - name: tracer-224
+    components:
+      Transform:
+        translation:
+          - 33.77
+          - 1.75
+          - 32.7
+      PointLight:
+        color:
+          - 0.46
+          - 0.9
+          - 0.99
+        intensity: 0.67
+        range: 2.48
+  - name: tracer-225
+    components:
+      Transform:
+        translation:
+          - -12.36
+          - 1.21
+          - 40.19
+      PointLight:
+        color:
+          - 1.0
+          - 0.78
+          - 0.39
+        intensity: 0.77
+        range: 2.5
+  - name: tracer-226
+    components:
+      Transform:
+        translation:
+          - 13.68
+          - 0.84
+          - 20.24
+      PointLight:
+        color:
+          - 0.48
+          - 0.94
+          - 0.99
+        intensity: 0.57
+        range: 2.06
+  - name: tracer-227
+    components:
+      Transform:
+        translation:
+          - 21.85
+          - 2.1
+          - 3.53
+      PointLight:
+        color:
+          - 0.45
+          - 0.9
+          - 0.99
+        intensity: 0.65
+        range: 2.23
+  - name: tracer-228
+    components:
+      Transform:
+        translation:
+          - 21.24
+          - 1.36
+          - 40.38
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.33
+        intensity: 0.8
+        range: 2.14
+  - name: tracer-229
+    components:
+      Transform:
+        translation:
+          - 8.86
+          - 1.92
+          - -22.78
+      PointLight:
+        color:
+          - 0.46
+          - 0.94
+          - 1.0
+        intensity: 0.78
+        range: 1.86
+  - name: tracer-230
+    components:
+      Transform:
+        translation:
+          - 41.04
+          - 1.69
+          - -13.57
+      PointLight:
+        color:
+          - 0.43
+          - 0.81
+          - 0.99
+        intensity: 0.85
+        range: 1.8
+  - name: tracer-231
+    components:
+      Transform:
+        translation:
+          - 32.23
+          - 1.85
+          - -45.52
+      PointLight:
+        color:
+          - 1.0
+          - 0.83
+          - 0.32
+        intensity: 0.77
+        range: 2.23
+  - name: tracer-232
+    components:
+      Transform:
+        translation:
+          - -16.11
+          - 1.91
+          - 12.38
+      PointLight:
+        color:
+          - 0.44
+          - 0.83
+          - 0.99
+        intensity: 0.84
+        range: 2.42
+  - name: tracer-233
+    components:
+      Transform:
+        translation:
+          - 22.4
+          - 1.75
+          - 25.18
+      PointLight:
+        color:
+          - 0.46
+          - 0.8
+          - 0.98
+        intensity: 0.77
+        range: 2.83
+  - name: tracer-234
+    components:
+      Transform:
+        translation:
+          - 13.92
+          - 1.04
+          - -0.29
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.36
+        intensity: 0.81
+        range: 2.54
+  - name: tracer-235
+    components:
+      Transform:
+        translation:
+          - -1.98
+          - 2.05
+          - -15.85
+      PointLight:
+        color:
+          - 0.47
+          - 0.91
+          - 0.98
+        intensity: 0.63
+        range: 2.28
+  - name: tracer-236
+    components:
+      Transform:
+        translation:
+          - -39.18
+          - 1.06
+          - -34.71
+      PointLight:
+        color:
+          - 0.38
+          - 0.82
+          - 0.99
+        intensity: 0.79
+        range: 2.07
+  - name: tracer-237
+    components:
+      Transform:
+        translation:
+          - 8.46
+          - 2.17
+          - -23.98
+      PointLight:
+        color:
+          - 1.0
+          - 0.78
+          - 0.33
+        intensity: 0.49
+        range: 2.39
+  - name: tracer-238
+    components:
+      Transform:
+        translation:
+          - 41.15
+          - 0.82
+          - 33.3
+      PointLight:
+        color:
+          - 0.43
+          - 0.81
+          - 0.98
+        intensity: 0.45
+        range: 2.8
+  - name: tracer-239
+    components:
+      Transform:
+        translation:
+          - -24.47
+          - 1.91
+          - 42.83
+      PointLight:
+        color:
+          - 0.37
+          - 0.82
+          - 0.98
+        intensity: 0.6
+        range: 1.54
+  - name: tracer-240
+    components:
+      Transform:
+        translation:
+          - 31.34
+          - 1.47
+          - -32.62
+      PointLight:
+        color:
+          - 1.0
+          - 0.79
+          - 0.43
+        intensity: 0.82
+        range: 2.54
+  - name: tracer-241
+    components:
+      Transform:
+        translation:
+          - -10.04
+          - 2.14
+          - 38.17
+      PointLight:
+        color:
+          - 0.46
+          - 0.88
+          - 0.99
+        intensity: 0.8
+        range: 2.54
+  - name: tracer-242
+    components:
+      Transform:
+        translation:
+          - -41.85
+          - 0.82
+          - -43.62
+      PointLight:
+        color:
+          - 0.45
+          - 0.87
+          - 0.99
+        intensity: 0.83
+        range: 2.24
+  - name: tracer-243
+    components:
+      Transform:
+        translation:
+          - -28.47
+          - 1.33
+          - -34.71
+      PointLight:
+        color:
+          - 1.0
+          - 0.82
+          - 0.33
+        intensity: 0.6
+        range: 2.8
+  - name: tracer-244
+    components:
+      Transform:
+        translation:
+          - 31.02
+          - 0.95
+          - -41.6
+      PointLight:
+        color:
+          - 0.46
+          - 0.82
+          - 0.99
+        intensity: 0.73
+        range: 2.65
+  - name: tracer-245
+    components:
+      Transform:
+        translation:
+          - -15.4
+          - 1.24
+          - 0.44
+      PointLight:
+        color:
+          - 0.42
+          - 0.93
+          - 0.99
+        intensity: 0.81
+        range: 1.79
+  - name: tracer-246
+    components:
+      Transform:
+        translation:
+          - -28.28
+          - 2.11
+          - -25.97
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.32
+        intensity: 0.52
+        range: 2.3
+  - name: tracer-247
+    components:
+      Transform:
+        translation:
+          - -43.84
+          - 1.6
+          - -3.96
+      PointLight:
+        color:
+          - 0.36
+          - 0.9
+          - 0.99
+        intensity: 0.53
+        range: 2.61
+  - name: tracer-248
+    components:
+      Transform:
+        translation:
+          - 27.93
+          - 1.81
+          - 17.19
+      PointLight:
+        color:
+          - 0.42
+          - 0.81
+          - 0.99
+        intensity: 0.48
+        range: 2.77
+  - name: tracer-249
+    components:
+      Transform:
+        translation:
+          - -37.38
+          - 1.61
+          - -10.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.85
+          - 0.36
+        intensity: 0.63
+        range: 1.87
+  - name: tracer-250
+    components:
+      Transform:
+        translation:
+          - 41.52
+          - 1.15
+          - -1.25
+      PointLight:
+        color:
+          - 0.45
+          - 0.93
+          - 0.99
+        intensity: 0.71
+        range: 1.92
+  - name: tracer-251
+    components:
+      Transform:
+        translation:
+          - -38.9
+          - 2.14
+          - 12.69
+      PointLight:
+        color:
+          - 0.42
+          - 0.84
+          - 1.0
+        intensity: 0.59
+        range: 2.98
+  - name: tracer-252
+    components:
+      Transform:
+        translation:
+          - -7.62
+          - 1.1
+          - 3.74
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.3
+        intensity: 0.53
+        range: 2.44
+  - name: tracer-253
+    components:
+      Transform:
+        translation:
+          - -15.48
+          - 1.91
+          - 25.44
+      PointLight:
+        color:
+          - 0.43
+          - 0.81
+          - 0.99
+        intensity: 0.53
+        range: 2.48
+  - name: tracer-254
+    components:
+      Transform:
+        translation:
+          - -39.19
+          - 1.31
+          - -4.13
+      PointLight:
+        color:
+          - 0.43
+          - 0.83
+          - 0.98
+        intensity: 0.66
+        range: 1.69
+  - name: tracer-255
+    components:
+      Transform:
+        translation:
+          - -28.61
+          - 1.32
+          - -29.27
+      PointLight:
+        color:
+          - 1.0
+          - 0.78
+          - 0.41
+        intensity: 0.52
+        range: 2.04
+  - name: tracer-256
+    components:
+      Transform:
+        translation:
+          - 1.74
+          - 1.79
+          - -38.93
+      PointLight:
+        color:
+          - 0.42
+          - 0.83
+          - 1.0
+        intensity: 0.75
+        range: 1.93
+  - name: tracer-257
+    components:
+      Transform:
+        translation:
+          - -20.43
+          - 1.73
+          - 34.77
+      PointLight:
+        color:
+          - 0.47
+          - 0.92
+          - 0.99
+        intensity: 0.67
+        range: 1.53
+  - name: tracer-258
+    components:
+      Transform:
+        translation:
+          - 21.34
+          - 2.13
+          - -14.4
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.43
+        intensity: 0.81
+        range: 2.0
+  - name: tracer-259
+    components:
+      Transform:
+        translation:
+          - -44.0
+          - 0.94
+          - 33.65
+      PointLight:
+        color:
+          - 0.4
+          - 0.8
+          - 1.0
+        intensity: 0.8
+        range: 1.71
+  - name: tracer-260
+    components:
+      Transform:
+        translation:
+          - -42.15
+          - 1.99
+          - 12.38
+      PointLight:
+        color:
+          - 0.47
+          - 0.9
+          - 1.0
+        intensity: 0.5
+        range: 1.53
+  - name: tracer-261
+    components:
+      Transform:
+        translation:
+          - 38.7
+          - 1.07
+          - -31.37
+      PointLight:
+        color:
+          - 1.0
+          - 0.73
+          - 0.37
+        intensity: 0.68
+        range: 2.86
+  - name: tracer-262
+    components:
+      Transform:
+        translation:
+          - -8.75
+          - 1.44
+          - -11.59
+      PointLight:
+        color:
+          - 0.47
+          - 0.85
+          - 1.0
+        intensity: 0.67
+        range: 1.94
+  - name: tracer-263
+    components:
+      Transform:
+        translation:
+          - 16.42
+          - 1.32
+          - -28.05
+      PointLight:
+        color:
+          - 0.39
+          - 0.88
+          - 1.0
+        intensity: 0.58
+        range: 1.68
+  - name: tracer-264
+    components:
+      Transform:
+        translation:
+          - -25.66
+          - 2.03
+          - -34.19
+      PointLight:
+        color:
+          - 1.0
+          - 0.81
+          - 0.31
+        intensity: 0.75
+        range: 1.9
+  - name: tracer-265
+    components:
+      Transform:
+        translation:
+          - 3.91
+          - 1.04
+          - -41.93
+      PointLight:
+        color:
+          - 0.46
+          - 0.89
+          - 0.99
+        intensity: 0.55
+        range: 2.11
+  - name: tracer-266
+    components:
+      Transform:
+        translation:
+          - 7.36
+          - 0.94
+          - -24.66
+      PointLight:
+        color:
+          - 0.38
+          - 0.93
+          - 0.98
+        intensity: 0.77
+        range: 2.62
+  - name: tracer-267
+    components:
+      Transform:
+        translation:
+          - 18.73
+          - 2.09
+          - 14.47
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.4
+        intensity: 0.71
+        range: 2.55
+  - name: tracer-268
+    components:
+      Transform:
+        translation:
+          - -36.8
+          - 1.34
+          - -31.42
+      PointLight:
+        color:
+          - 0.43
+          - 0.92
+          - 1.0
+        intensity: 0.8
+        range: 1.57
+  - name: tracer-269
+    components:
+      Transform:
+        translation:
+          - 19.05
+          - 1.3
+          - 23.81
+      PointLight:
+        color:
+          - 0.35
+          - 0.94
+          - 0.99
+        intensity: 0.46
+        range: 2.95
+  - name: tracer-270
+    components:
+      Transform:
+        translation:
+          - -16.36
+          - 2.01
+          - 22.79
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.32
+        intensity: 0.81
+        range: 2.66
+  - name: tracer-271
+    components:
+      Transform:
+        translation:
+          - 6.76
+          - 1.61
+          - 17.55
+      PointLight:
+        color:
+          - 0.37
+          - 0.89
+          - 1.0
+        intensity: 0.56
+        range: 1.98
+  - name: tracer-272
+    components:
+      Transform:
+        translation:
+          - 27.25
+          - 1.74
+          - 27.65
+      PointLight:
+        color:
+          - 0.41
+          - 0.88
+          - 0.99
+        intensity: 0.48
+        range: 2.88
+  - name: tracer-273
+    components:
+      Transform:
+        translation:
+          - -35.01
+          - 1.88
+          - 0.13
+      PointLight:
+        color:
+          - 1.0
+          - 0.78
+          - 0.42
+        intensity: 0.71
+        range: 2.27
+  - name: tracer-274
+    components:
+      Transform:
+        translation:
+          - -25.65
+          - 1.53
+          - 23.16
+      PointLight:
+        color:
+          - 0.49
+          - 0.92
+          - 0.98
+        intensity: 0.57
+        range: 2.33
+  - name: tracer-275
+    components:
+      Transform:
+        translation:
+          - 12.31
+          - 1.81
+          - 0.86
+      PointLight:
+        color:
+          - 0.47
+          - 0.92
+          - 0.99
+        intensity: 0.69
+        range: 2.87
+  - name: tracer-276
+    components:
+      Transform:
+        translation:
+          - -12.92
+          - 1.97
+          - -16.73
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.38
+        intensity: 0.81
+        range: 2.7
+  - name: tracer-277
+    components:
+      Transform:
+        translation:
+          - 19.84
+          - 1.86
+          - -14.47
+      PointLight:
+        color:
+          - 0.39
+          - 0.86
+          - 1.0
+        intensity: 0.58
+        range: 1.57
+  - name: tracer-278
+    components:
+      Transform:
+        translation:
+          - 19.21
+          - 0.86
+          - 6.11
+      PointLight:
+        color:
+          - 0.37
+          - 0.88
+          - 0.99
+        intensity: 0.47
+        range: 2.49
+  - name: tracer-279
+    components:
+      Transform:
+        translation:
+          - 29.6
+          - 2.13
+          - -20.63
+      PointLight:
+        color:
+          - 1.0
+          - 0.76
+          - 0.39
+        intensity: 0.79
+        range: 2.77
+  - name: tracer-280
+    components:
+      Transform:
+        translation:
+          - -15.7
+          - 1.55
+          - -31.97
+      PointLight:
+        color:
+          - 0.46
+          - 0.92
+          - 0.99
+        intensity: 0.63
+        range: 1.82
+  - name: tracer-281
+    components:
+      Transform:
+        translation:
+          - 31.41
+          - 1.6
+          - 26.86
+      PointLight:
+        color:
+          - 0.43
+          - 0.84
+          - 0.99
+        intensity: 0.53
+        range: 2.04
+  - name: tracer-282
+    components:
+      Transform:
+        translation:
+          - -37.14
+          - 1.87
+          - 30.34
+      PointLight:
+        color:
+          - 1.0
+          - 0.76
+          - 0.42
+        intensity: 0.82
+        range: 2.72
+  - name: tracer-283
+    components:
+      Transform:
+        translation:
+          - 37.08
+          - 1.39
+          - 43.2
+      PointLight:
+        color:
+          - 0.41
+          - 0.9
+          - 1.0
+        intensity: 0.6
+        range: 2.5
+  - name: tracer-284
+    components:
+      Transform:
+        translation:
+          - 21.11
+          - 1.47
+          - 37.06
+      PointLight:
+        color:
+          - 0.39
+          - 0.94
+          - 1.0
+        intensity: 0.53
+        range: 1.65
+  - name: tracer-285
+    components:
+      Transform:
+        translation:
+          - 19.45
+          - 1.58
+          - -20.31
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.39
+        intensity: 0.56
+        range: 1.53
+  - name: tracer-286
+    components:
+      Transform:
+        translation:
+          - 24.55
+          - 1.0
+          - 18.64
+      PointLight:
+        color:
+          - 0.37
+          - 0.85
+          - 0.99
+        intensity: 0.46
+        range: 2.43
+  - name: tracer-287
+    components:
+      Transform:
+        translation:
+          - -37.43
+          - 1.59
+          - -44.43
+      PointLight:
+        color:
+          - 0.35
+          - 0.85
+          - 0.99
+        intensity: 0.62
+        range: 1.51
+  - name: tracer-288
+    components:
+      Transform:
+        translation:
+          - 25.22
+          - 1.22
+          - 4.49
+      PointLight:
+        color:
+          - 1.0
+          - 0.83
+          - 0.36
+        intensity: 0.49
+        range: 2.8
+  - name: tracer-289
+    components:
+      Transform:
+        translation:
+          - 35.6
+          - 2.12
+          - -22.17
+      PointLight:
+        color:
+          - 0.47
+          - 0.85
+          - 0.99
+        intensity: 0.51
+        range: 1.63
+  - name: tracer-290
+    components:
+      Transform:
+        translation:
+          - 27.51
+          - 1.85
+          - 23.44
+      PointLight:
+        color:
+          - 0.43
+          - 0.89
+          - 1.0
+        intensity: 0.73
+        range: 2.35
+  - name: tracer-291
+    components:
+      Transform:
+        translation:
+          - -8.44
+          - 1.45
+          - -19.45
+      PointLight:
+        color:
+          - 1.0
+          - 0.82
+          - 0.38
+        intensity: 0.77
+        range: 2.71
+  - name: tracer-292
+    components:
+      Transform:
+        translation:
+          - 35.39
+          - 1.54
+          - -3.83
+      PointLight:
+        color:
+          - 0.36
+          - 0.9
+          - 1.0
+        intensity: 0.75
+        range: 1.85
+  - name: tracer-293
+    components:
+      Transform:
+        translation:
+          - -40.49
+          - 1.2
+          - -44.84
+      PointLight:
+        color:
+          - 0.42
+          - 0.94
+          - 0.98
+        intensity: 0.78
+        range: 2.16
+  - name: tracer-294
+    components:
+      Transform:
+        translation:
+          - 14.75
+          - 1.95
+          - -20.73
+      PointLight:
+        color:
+          - 1.0
+          - 0.78
+          - 0.31
+        intensity: 0.65
+        range: 1.65
+  - name: tracer-295
+    components:
+      Transform:
+        translation:
+          - -37.66
+          - 1.74
+          - 34.03
+      PointLight:
+        color:
+          - 0.45
+          - 0.88
+          - 0.99
+        intensity: 0.8
+        range: 2.5
+  - name: tracer-296
+    components:
+      Transform:
+        translation:
+          - -26.15
+          - 1.91
+          - 5.4
+      PointLight:
+        color:
+          - 0.47
+          - 0.92
+          - 1.0
+        intensity: 0.82
+        range: 1.95
+  - name: tracer-297
+    components:
+      Transform:
+        translation:
+          - 6.45
+          - 1.14
+          - -32.45
+      PointLight:
+        color:
+          - 1.0
+          - 0.75
+          - 0.37
+        intensity: 0.62
+        range: 2.46
+  - name: tracer-298
+    components:
+      Transform:
+        translation:
+          - -20.61
+          - 0.98
+          - -2.99
+      PointLight:
+        color:
+          - 0.39
+          - 0.87
+          - 0.99
+        intensity: 0.63
+        range: 2.99
+  - name: tracer-299
+    components:
+      Transform:
+        translation:
+          - -34.35
+          - 1.81
+          - 44.6
+      PointLight:
+        color:
+          - 0.43
+          - 0.93
+          - 0.99
+        intensity: 0.53
+        range: 1.78

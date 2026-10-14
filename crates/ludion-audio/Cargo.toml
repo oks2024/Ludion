@@ -1,0 +1,24 @@
+[package]
+name = "ludion-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "A cpal-based audio playback sink that turns a Ludion game engine's audio events into sound."
+keywords = ["ludion", "audio", "cpal", "game-engine"]
+categories = ["multimedia", "game-engines"]
+
+[dependencies]
+# The shared `AudioEvent` type (sound path + gain) the engine emits and this sink receives, and the
+# `L5001` diagnostic code. `ludion-audio` depends on core, not on `ludion-engine` — the engine never
+# gains a playback dependency, and this crate stays a lean leaf a host wires the two together with.
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+# WAV decode → PCM (`load_wav`). CPU-only, GPU-free — the same content layer the renderer reads
+# textures through.
+ludion-assets = { path = "../ludion-assets", version = "0.1.0" }
+# The one-directional channel the engine hands its `AudioEvent`s down (same flavor the engine uses).
+crossbeam-channel.workspace = true
+# The output device + stream.
+cpal.workspace = true
+# Ogg Vorbis decode for streamed music.
+lewton.workspace = true

@@ -1,0 +1,1133 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ludion editor — canon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;500;600&family=Source+Sans+3:ital,wght@0,400;0,500;0,600;1,400&display=swap"
+  rel="stylesheet"
+/>
+<style>
+  :root {
+    --room: #1c1a17;
+    --desk: #252220;
+    --raise: #2e2a26;
+    --border: #3a362f;
+    --text: #d8d3c8;
+    --bright: #f2eee4;
+    --muted: #ab9f8e;
+    --copper: #c77b4a;
+    --copper-dim: rgba(199, 123, 74, 0.16);
+    --added: #7fb069;
+    --removed: #d9695f;
+    --err: #d9695f;
+    --live: #6aa06a; /* connection status light — not a diff color */
+    --radius: 6px;
+    --sans: "Source Sans 3", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    --mono: "Source Code Pro", ui-monospace, "Cascadia Code", "Consolas", monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+  }
+
+  body {
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+    background: var(--room);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .app {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ---------- shared control primitives ---------- */
+  .mono {
+    font-family: var(--mono);
+    font-feature-settings: "tnum" 1;
+  }
+
+  button {
+    font: inherit;
+    color: var(--text);
+    background: var(--raise);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 5px 11px;
+    cursor: pointer;
+    line-height: 1.3;
+    white-space: nowrap;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+  button:hover:not(:disabled) {
+    background: #38332d;
+    border-color: #4a453c;
+    color: var(--bright);
+  }
+  button:disabled {
+    opacity: 0.42;
+    cursor: default;
+  }
+
+  input {
+    font: inherit;
+    font-family: var(--mono);
+    color: var(--bright);
+    background: #191714;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 7px;
+  }
+
+  select {
+    font: inherit;
+    color: var(--text);
+    background: #191714;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 7px;
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--copper);
+    outline-offset: 2px;
+    border-radius: var(--radius);
+  }
+
+  .btn-primary {
+    background: var(--copper);
+    border-color: var(--copper);
+    color: #1b120a;
+    font-weight: 600;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: #d68a58;
+    border-color: #d68a58;
+    color: #1b120a;
+  }
+
+  .label {
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+
+  .panel-title {
+    font-weight: 600;
+    color: var(--bright);
+    font-size: 12px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  /* ================= session strip ================= */
+  .session {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 16px;
+    height: 46px;
+    flex: none;
+    overflow: hidden;
+    background: linear-gradient(180deg, #221f1c, var(--desk));
+    border-bottom: 1px solid var(--border);
+  }
+  .session .group {
+    min-width: 0;
+  }
+  .session .group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .session .divider {
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+  }
+  .brand {
+    font-weight: 600;
+    color: var(--bright);
+    letter-spacing: 0.02em;
+  }
+  .brand .dot {
+    color: var(--copper);
+  }
+  .conn-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--live);
+    box-shadow: 0 0 6px rgba(106, 160, 106, 0.7);
+    display: inline-block;
+  }
+
+  /* mode toggle */
+  .mode {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: #191714;
+  }
+  .mode button {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: 5px 14px;
+    color: var(--muted);
+  }
+  .mode button.active {
+    background: var(--copper);
+    color: #1b120a;
+    font-weight: 600;
+  }
+  .mode button:not(.active):hover {
+    background: var(--raise);
+    color: var(--text);
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .readout {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+  }
+  .readout .val {
+    color: var(--bright);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .icon-btn {
+    padding: 5px 9px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .dirty {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--copper);
+    font-weight: 600;
+  }
+  .dirty::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--copper);
+    box-shadow: 0 0 7px rgba(199, 123, 74, 0.7);
+  }
+
+  /* ================= main body ================= */
+  .body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  .col-left {
+    width: 274px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    background: var(--desk);
+    min-height: 0;
+  }
+  .col-center {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: var(--room);
+  }
+  .col-right {
+    width: 322px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--border);
+    background: var(--desk);
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 11px 14px 9px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  /* ---------- hierarchy ---------- */
+  .hierarchy {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-bottom: 1px solid var(--border);
+  }
+  .tree {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 6px 10px;
+  }
+  .node {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 8px;
+    border-radius: var(--radius);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .node:hover {
+    background: var(--raise);
+  }
+  .node .twisty {
+    width: 10px;
+    color: var(--muted);
+    flex: none;
+    text-align: center;
+  }
+  .node .glyph {
+    width: 13px;
+    flex: none;
+    text-align: center;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .node.depth1 {
+    padding-left: 22px;
+  }
+  .node.depth2 {
+    padding-left: 38px;
+  }
+  .node.group > .name {
+    color: var(--bright);
+  }
+  .node.selected {
+    background: var(--copper-dim);
+    color: var(--bright);
+    box-shadow: inset 2px 0 0 var(--copper);
+  }
+  .node .warn {
+    color: var(--err);
+    margin-left: auto;
+    font-size: 11px;
+    cursor: help;
+  }
+  .node .badge-more {
+    color: var(--muted);
+    font-style: italic;
+    font-family: var(--sans);
+  }
+  .hier-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    border-top: 1px solid var(--border);
+    flex: none;
+  }
+  .hier-footer select {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  /* ---------- palette ---------- */
+  .palette {
+    flex: none;
+    padding: 12px 14px 16px;
+  }
+  .palette .grp-label {
+    margin: 6px 0 8px;
+  }
+  .btn-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+  .btn-grid button {
+    text-align: left;
+  }
+  .btn-grid.sel {
+    margin-top: 14px;
+  }
+  .btn-danger:hover:not(:disabled) {
+    border-color: var(--err);
+    color: var(--err);
+    background: var(--raise);
+  }
+
+  /* ================= gizmo toolbar ================= */
+  .gizmobar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+    background: var(--desk);
+  }
+  .seg {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .seg button {
+    border: 0;
+    border-radius: 0;
+    padding: 4px 12px;
+    background: #191714;
+    color: var(--muted);
+  }
+  .seg button + button {
+    border-left: 1px solid var(--border);
+  }
+  .seg button.active {
+    background: var(--copper);
+    color: #1b120a;
+    font-weight: 600;
+  }
+  .snap {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .snap input {
+    width: 52px;
+  }
+  .hint {
+    color: var(--muted);
+    font-size: 12px;
+    font-style: italic;
+    margin-left: auto;
+  }
+
+  /* ================= viewport ================= */
+  .viewport-wrap {
+    flex: 1.35;
+    min-height: 0;
+    position: relative;
+    padding: 12px;
+    display: flex;
+  }
+  .viewport {
+    flex: 1;
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: #0c0b0f;
+  }
+  .viewport svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .vp-chips {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    display: flex;
+    gap: 7px;
+    pointer-events: none;
+  }
+  .chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    background: rgba(18, 16, 13, 0.72);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2px 8px;
+    backdrop-filter: blur(2px);
+  }
+  .chip.paused {
+    color: var(--copper);
+    border-color: rgba(199, 123, 74, 0.5);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .chip.paused::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 1px;
+    background: var(--copper);
+  }
+
+  /* ================= canon pane (signature) ================= */
+  .canon {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin: 0 12px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: #201d1a;
+    overflow: hidden;
+  }
+  .canon-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #262320, #201d1a);
+    flex: none;
+  }
+  .canon-title {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+  }
+  .canon-title .file {
+    font-family: var(--mono);
+    color: var(--bright);
+    font-size: 12px;
+  }
+  .canon-title .sub {
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .diff-badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2px 8px;
+    background: #191714;
+  }
+  .diff-badge .add {
+    color: var(--added);
+  }
+  .diff-badge .rem {
+    color: var(--removed);
+  }
+  .canon-head .actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .code {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+    padding: 8px 0 12px;
+  }
+  .code-row {
+    display: grid;
+    grid-template-columns: 40px 20px 1fr;
+    align-items: baseline;
+  }
+  .ln {
+    text-align: right;
+    padding-right: 10px;
+    color: #6f6659;
+    user-select: none;
+    font-size: 11px;
+  }
+  .gutter {
+    text-align: center;
+    user-select: none;
+    font-weight: 600;
+  }
+  .src {
+    white-space: pre;
+    color: var(--text);
+    padding-right: 14px;
+  }
+  .code-row.added {
+    background: rgba(127, 176, 105, 0.1);
+  }
+  .code-row.added .gutter {
+    color: var(--added);
+  }
+  .code-row.added .src {
+    color: #d7ecc9;
+  }
+  .code-row.removed {
+    background: rgba(217, 105, 95, 0.1);
+  }
+  .code-row.removed .gutter {
+    color: var(--removed);
+  }
+  .code-row.removed .src {
+    color: #ecc9c6;
+  }
+  .code-row.removed .ln {
+    color: #6f5a56;
+  }
+  /* yaml token tints (kept subtle, warm) */
+  .k {
+    color: #cdbfa6;
+  }
+  .n {
+    color: #d9a679;
+  }
+  .s {
+    color: #a9bf8e;
+  }
+
+  /* ================= inspector ================= */
+  .insp-subject {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+  .insp-subject .name {
+    font-family: var(--mono);
+    color: var(--bright);
+    font-size: 14px;
+  }
+  .insp-subject .ids {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .component {
+    border-bottom: 1px solid var(--border);
+    padding: 12px 14px 14px;
+  }
+  .comp-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .comp-head .cname {
+    font-weight: 600;
+    color: var(--bright);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .comp-head .twisty {
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .field {
+    display: grid;
+    grid-template-columns: 78px 1fr;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+  }
+  .field .flabel {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .vec {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: 6px;
+  }
+  .vec input {
+    width: 100%;
+    text-align: right;
+    font-size: 12px;
+    padding: 3px 6px;
+  }
+  .vec.quad {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  /* changed field: copper left-edge tick linking to the diff below */
+  .field.changed {
+    position: relative;
+    padding-left: 12px;
+    margin-left: -14px;
+    background: var(--copper-dim);
+    border-radius: var(--radius);
+  }
+  .field.changed::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 4px;
+    bottom: 4px;
+    width: 3px;
+    border-radius: 3px;
+    background: var(--copper);
+  }
+  .field.changed input.hot {
+    border-color: var(--copper);
+    color: var(--bright);
+  }
+  .field.changed .flabel {
+    color: var(--copper);
+  }
+  .swatch {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .swatch .chipc {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    flex: none;
+    box-shadow: 0 0 8px rgba(232, 175, 92, 0.35);
+  }
+  .swatch .path {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    word-break: break-all;
+  }
+  .single input {
+    width: 88px;
+    text-align: right;
+  }
+
+  /* scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #3a362f;
+    border-radius: 6px;
+    border: 2px solid var(--desk);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #4a453c;
+  }
+
+  /* stream stats also live on the viewport chip; drop the strip copy when tight */
+  @media (max-width: 1420px) {
+    .opt-stream {
+      display: none;
+    }
+  }
+  @media (max-width: 1320px) {
+    .col-left {
+      width: 240px;
+    }
+    .col-right {
+      width: 286px;
+    }
+    .session {
+      gap: 11px;
+    }
+    .dirty-word {
+      display: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+    }
+  }
+</style>
+
+<div class="app">
+  <!-- ================= session strip ================= -->
+  <header class="session">
+    <div class="group">
+      <span class="brand">ludion<span class="dot">.</span></span>
+      <span class="conn-dot" title="connected" aria-hidden="true"></span>
+      <span class="mono" style="color: var(--text)">ws://127.0.0.1:9411</span>
+      <span class="mono" style="color: var(--bright)">ludion 0.6.0</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="group" role="group" aria-label="Mode">
+      <div class="mode">
+        <button class="active" aria-pressed="true" title="sim.pause — edit pauses the sim">Edit</button>
+        <button aria-pressed="false" title="sim.resume — play">Play</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="group" role="group" aria-label="Run controls">
+      <button class="icon-btn" title="sim.resume">▶ Resume</button>
+      <button class="icon-btn" title="sim.step {ticks: 1}">⏭ Step</button>
+      <label class="label" for="ticks">ticks</label>
+      <input id="ticks" value="1" style="width: 38px; text-align: center" />
+      <label class="label" for="speed">speed</label>
+      <input id="speed" value="1.0×" style="width: 50px; text-align: center" />
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="group">
+      <div class="readout">
+        <span class="label">worldhash · frame 1284</span>
+        <span class="val">9f3a77c1e04b52d8</span>
+      </div>
+      <button class="icon-btn" title="sim.hash — refresh" aria-label="Refresh world hash">⟳</button>
+    </div>
+
+    <div class="divider opt-stream"></div>
+
+    <div class="readout opt-stream">
+      <span class="label">stream</span>
+      <span class="val">1080p · 60 fps · 4.2 ms</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="group">
+      <span class="dirty" title="scene has unsaved changes"><span class="dirty-word">unsaved changes</span></span>
+      <button class="icon-btn" title="Undo" aria-label="Undo">↶</button>
+      <button class="icon-btn" disabled title="Nothing to redo" aria-label="Redo">↷</button>
+      <button title="Disconnect from engine">Disconnect</button>
+    </div>
+  </header>
+
+  <!-- ================= main body ================= -->
+  <div class="body">
+    <!-- ---------- left column ---------- -->
+    <aside class="col-left">
+      <section class="hierarchy">
+        <div class="panel-head">
+          <span class="panel-title">Scene</span>
+          <span class="label mono">24 entities</span>
+        </div>
+        <div class="tree" role="tree" aria-label="Scene hierarchy">
+          <div class="node" role="treeitem"><span class="twisty"></span><span class="glyph">◈</span><span class="name">camera</span></div>
+          <div class="node" role="treeitem"><span class="twisty"></span><span class="glyph">☀</span><span class="name">key_light</span><span class="warn" title="dangling parent — run ludion check-scene">⚠</span></div>
+          <div class="node" role="treeitem"><span class="twisty"></span><span class="glyph">☀</span><span class="name">fill_light</span></div>
+          <div class="node" role="treeitem"><span class="twisty"></span><span class="glyph">●</span><span class="name">ball</span></div>
+          <div class="node" role="treeitem"><span class="twisty"></span><span class="glyph">▬</span><span class="name">paddle</span></div>
+
+          <div class="node group" role="treeitem" aria-expanded="true"><span class="twisty">▾</span><span class="glyph">▤</span><span class="name">walls</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▮</span><span class="name">wall_left</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▮</span><span class="name">wall_right</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▭</span><span class="name">wall_top</span></div>
+
+          <div class="node group" role="treeitem" aria-expanded="true"><span class="twisty">▾</span><span class="glyph">▤</span><span class="name">bricks</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_00</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_01</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_02</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_03</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_04</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_05</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_06</span></div>
+          <div class="node depth1 selected" role="treeitem" aria-selected="true"><span class="glyph">▪</span><span class="name">brick_07</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_08</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_09</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_10</span></div>
+          <div class="node depth1" role="treeitem"><span class="glyph">▪</span><span class="name">brick_11</span></div>
+          <div class="node depth1" role="treeitem"><span class="badge-more">+ 6 more bricks</span></div>
+        </div>
+        <div class="hier-footer">
+          <label class="label" for="parent">Parent</label>
+          <select id="parent" aria-label="Reparent selection (entity.reparent)">
+            <option>bricks</option>
+            <option>walls</option>
+            <option>(root)</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="palette">
+        <div class="panel-title label grp-label" style="text-transform: uppercase">Create</div>
+        <div class="btn-grid">
+          <button title="entity.spawn — brick">Brick</button>
+          <button title="entity.spawn — paddle">Paddle</button>
+          <button title="entity.spawn — ball">Ball</button>
+          <button title="entity.spawn — point light">Point light</button>
+          <button title="entity.spawn — sprite">Sprite</button>
+          <button title="entity.spawn — empty">Empty</button>
+        </div>
+        <div class="panel-title label grp-label" style="text-transform: uppercase; margin-top: 16px">Selection</div>
+        <div class="btn-grid sel">
+          <button title="entity.spawn — duplicate brick_07">Duplicate</button>
+          <button class="btn-danger" title="entity.destroy — brick_07">Destroy</button>
+        </div>
+      </section>
+    </aside>
+
+    <!-- ---------- center column ---------- -->
+    <main class="col-center">
+      <div class="gizmobar" role="toolbar" aria-label="Gizmo and snap">
+        <div class="seg" role="group" aria-label="Gizmo tool">
+          <button class="active" aria-pressed="true">Translate</button>
+          <button aria-pressed="false">Rotate</button>
+          <button aria-pressed="false">Scale</button>
+        </div>
+        <span class="snap"><span class="label">snap grid</span><input value="0.25" aria-label="Grid snap" /></span>
+        <span class="snap"><span class="label">angle</span><input value="15°" aria-label="Angle snap" /></span>
+        <span class="hint">Drag an axis to move · Esc cancels</span>
+      </div>
+
+      <!-- viewport -->
+      <div class="viewport-wrap">
+        <div class="viewport">
+          <svg viewBox="0 0 900 520" preserveAspectRatio="xMidYMid meet" role="img"
+               aria-label="Breakout playfield, paused. brick_07 selected with a translate gizmo.">
+            <defs>
+              <radialGradient id="wash-amber" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#f0b45c" stop-opacity="0.55" />
+                <stop offset="45%" stop-color="#c77b4a" stop-opacity="0.22" />
+                <stop offset="100%" stop-color="#c77b4a" stop-opacity="0" />
+              </radialGradient>
+              <radialGradient id="wash-teal" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#4fd0c4" stop-opacity="0.42" />
+                <stop offset="50%" stop-color="#2f8f8a" stop-opacity="0.18" />
+                <stop offset="100%" stop-color="#2f8f8a" stop-opacity="0" />
+              </radialGradient>
+              <radialGradient id="ball-bloom" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#fff4dd" stop-opacity="0.95" />
+                <stop offset="30%" stop-color="#ffd9a0" stop-opacity="0.6" />
+                <stop offset="100%" stop-color="#ffd9a0" stop-opacity="0" />
+              </radialGradient>
+              <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#131118" />
+                <stop offset="100%" stop-color="#0a090d" />
+              </linearGradient>
+              <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+                <feGaussianBlur stdDeviation="6" result="b" />
+                <feMerge>
+                  <feMergeNode in="b" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <filter id="soft" x="-80%" y="-80%" width="260%" height="260%">
+                <feGaussianBlur stdDeviation="14" />
+              </filter>
+            </defs>
+
+            <!-- playfield -->
+            <rect x="0" y="0" width="900" height="520" fill="url(#floor)" />
+            <!-- faint grid -->
+            <g stroke="#20202b" stroke-width="1" opacity="0.5">
+              <line x1="0" y1="130" x2="900" y2="130" />
+              <line x1="0" y1="260" x2="900" y2="260" />
+              <line x1="0" y1="390" x2="900" y2="390" />
+              <line x1="225" y1="0" x2="225" y2="520" />
+              <line x1="450" y1="0" x2="450" y2="520" />
+              <line x1="675" y1="0" x2="675" y2="520" />
+            </g>
+
+            <!-- point-light washes -->
+            <ellipse cx="250" cy="150" rx="340" ry="300" fill="url(#wash-amber)" />
+            <ellipse cx="690" cy="330" rx="320" ry="300" fill="url(#wash-teal)" />
+
+            <!-- side walls -->
+            <rect x="14" y="50" width="10" height="440" rx="3" fill="#2a2833" />
+            <rect x="876" y="50" width="10" height="440" rx="3" fill="#2a2833" />
+            <rect x="14" y="44" width="872" height="10" rx="3" fill="#2a2833" />
+
+            <!-- bricks: 3 rows x 6 -->
+            <g filter="url(#glow)">
+              <!-- row 0 -->
+              <g>
+                <rect x="120" y="88"  width="110" height="30" rx="5" fill="#e59a3f" opacity="0.92" />
+                <rect x="244" y="88"  width="110" height="30" rx="5" fill="#3ea89e" opacity="0.9" />
+                <rect x="368" y="88"  width="110" height="30" rx="5" fill="#e59a3f" opacity="0.92" />
+                <rect x="492" y="88"  width="110" height="30" rx="5" fill="#3ea89e" opacity="0.9" />
+                <rect x="616" y="88"  width="110" height="30" rx="5" fill="#e59a3f" opacity="0.92" />
+                <rect x="740" y="88"  width="40"  height="30" rx="5" fill="#3ea89e" opacity="0.9" />
+              </g>
+              <!-- row 1 (brick_06 .. brick_11) -->
+              <g>
+                <rect x="120" y="140" width="110" height="30" rx="5" fill="#3ea89e" opacity="0.9" />
+                <!-- brick_07 selected -->
+                <rect x="244" y="140" width="110" height="30" rx="5" fill="#f0b45c" opacity="1" />
+                <rect x="368" y="140" width="110" height="30" rx="5" fill="#3ea89e" opacity="0.9" />
+                <rect x="492" y="140" width="110" height="30" rx="5" fill="#e59a3f" opacity="0.92" />
+                <rect x="616" y="140" width="110" height="30" rx="5" fill="#3ea89e" opacity="0.9" />
+                <rect x="740" y="140" width="40"  height="30" rx="5" fill="#e59a3f" opacity="0.92" />
+              </g>
+              <!-- row 2 -->
+              <g>
+                <rect x="120" y="192" width="110" height="30" rx="5" fill="#e59a3f" opacity="0.92" />
+                <rect x="244" y="192" width="110" height="30" rx="5" fill="#3ea89e" opacity="0.9" />
+                <rect x="368" y="192" width="110" height="30" rx="5" fill="#e59a3f" opacity="0.92" />
+                <rect x="492" y="192" width="110" height="30" rx="5" fill="#3ea89e" opacity="0.9" />
+                <rect x="616" y="192" width="110" height="30" rx="5" fill="#e59a3f" opacity="0.92" />
+                <rect x="740" y="192" width="40"  height="30" rx="5" fill="#3ea89e" opacity="0.9" />
+              </g>
+            </g>
+
+            <!-- ball with bloom -->
+            <circle cx="470" cy="368" r="34" fill="url(#ball-bloom)" filter="url(#soft)" />
+            <circle cx="470" cy="368" r="9" fill="#fff6e6" />
+
+            <!-- paddle -->
+            <g filter="url(#glow)">
+              <rect x="392" y="452" width="150" height="16" rx="8" fill="#c77b4a" />
+              <rect x="392" y="452" width="150" height="6" rx="3" fill="#e6a877" opacity="0.8" />
+            </g>
+
+            <!-- selection outline + translate gizmo on brick_07 (center 299,155) -->
+            <rect x="239" y="135" width="120" height="40" rx="6" fill="none"
+                  stroke="#c77b4a" stroke-width="2" />
+            <rect x="239" y="135" width="120" height="40" rx="6" fill="none"
+                  stroke="#f0b45c" stroke-width="1" stroke-dasharray="3 4" opacity="0.7" />
+            <!-- corner handles -->
+            <g fill="#c77b4a">
+              <rect x="235" y="131" width="7" height="7" rx="1.5" />
+              <rect x="356" y="131" width="7" height="7" rx="1.5" />
+              <rect x="235" y="172" width="7" height="7" rx="1.5" />
+              <rect x="356" y="172" width="7" height="7" rx="1.5" />
+            </g>
+
+            <!-- gizmo axes at origin 299,155 -->
+            <g stroke-width="3" fill="none" stroke-linecap="round">
+              <!-- X axis (red) -->
+              <line x1="299" y1="155" x2="379" y2="155" stroke="#e5655c" />
+              <!-- Y axis (green, up) -->
+              <line x1="299" y1="155" x2="299" y2="75" stroke="#6fbf5a" />
+            </g>
+            <polygon points="379,155 368,150 368,160" fill="#e5655c" />
+            <polygon points="299,75 294,86 304,86" fill="#6fbf5a" />
+            <text x="386" y="159" fill="#e5655c" font-family="Source Code Pro, monospace" font-size="13" font-weight="600">X</text>
+            <text x="290" y="68" fill="#6fbf5a" font-family="Source Code Pro, monospace" font-size="13" font-weight="600">Y</text>
+            <!-- Z dot (blue, toward camera) -->
+            <circle cx="299" cy="155" r="5.5" fill="#4c9fe8" stroke="#0c0b0f" stroke-width="1.5" />
+          </svg>
+
+          <div class="vp-chips">
+            <span class="chip mono">frame 1284 · 60 fps · 4.2 ms</span>
+            <span class="chip paused mono">paused · edit</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ canon pane — signature ============ -->
+      <section class="canon" aria-label="Canonical YAML of brick_07">
+        <div class="canon-head">
+          <div class="canon-title">
+            <span class="file mono">games/breakout/scenes/main.scene.yaml</span>
+            <span class="sub">brick_07 · canonical — pending write</span>
+          </div>
+          <div class="actions">
+            <span class="diff-badge mono"><span class="add">+1</span> <span class="rem">−1</span> lines</span>
+            <button class="btn-primary" title="scene.save {path: games/breakout/scenes/main.scene.yaml}">Save scene</button>
+          </div>
+        </div>
+        <div class="code" role="document" aria-label="Diff of brick_07">
+          <div class="code-row"><span class="ln">1</span><span class="gutter"></span><span class="src"><span class="k">- id:</span> <span class="n">12</span></span></div>
+          <div class="code-row"><span class="ln">2</span><span class="gutter"></span><span class="src">  <span class="k">name:</span> brick_07</span></div>
+          <div class="code-row"><span class="ln">3</span><span class="gutter"></span><span class="src">  <span class="k">Transform:</span></span></div>
+          <div class="code-row removed"><span class="ln"></span><span class="gutter">−</span><span class="src">    <span class="k">translation:</span> [<span class="n">-2.0</span>, <span class="n">3.5</span>, <span class="n">0.0</span>]</span></div>
+          <div class="code-row added"><span class="ln">4</span><span class="gutter">+</span><span class="src">    <span class="k">translation:</span> [<span class="n">-2.25</span>, <span class="n">3.5</span>, <span class="n">0.0</span>]</span></div>
+          <div class="code-row"><span class="ln">5</span><span class="gutter"></span><span class="src">    <span class="k">rotation:</span> [<span class="n">0.0</span>, <span class="n">0.0</span>, <span class="n">0.0</span>, <span class="n">1.0</span>]</span></div>
+          <div class="code-row"><span class="ln">6</span><span class="gutter"></span><span class="src">    <span class="k">scale:</span> [<span class="n">1.5</span>, <span class="n">0.6</span>, <span class="n">1.0</span>]</span></div>
+          <div class="code-row"><span class="ln">7</span><span class="gutter"></span><span class="src">  <span class="k">Sprite:</span></span></div>
+          <div class="code-row"><span class="ln">8</span><span class="gutter"></span><span class="src">    <span class="k">texture:</span> <span class="s">textures/brick_amber.qoi</span></span></div>
+          <div class="code-row"><span class="ln">9</span><span class="gutter"></span><span class="src">    <span class="k">tint:</span> [<span class="n">1.0</span>, <span class="n">0.72</span>, <span class="n">0.31</span>, <span class="n">1.0</span>]</span></div>
+          <div class="code-row"><span class="ln">10</span><span class="gutter"></span><span class="src">  <span class="k">Health:</span></span></div>
+          <div class="code-row"><span class="ln">11</span><span class="gutter"></span><span class="src">    <span class="k">hits_remaining:</span> <span class="n">2</span></span></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ---------- right column: inspector ---------- -->
+    <aside class="col-right">
+      <div class="panel-head">
+        <span class="panel-title">Inspector</span>
+      </div>
+      <div class="insp-subject">
+        <div class="name">brick_07</div>
+        <div class="ids">id 12 · gen 3</div>
+      </div>
+
+      <!-- Transform -->
+      <div class="component">
+        <div class="comp-head"><span class="twisty">▾</span><span class="cname">Transform</span></div>
+        <div class="field changed">
+          <span class="flabel">translation</span>
+          <div class="vec">
+            <input class="hot" value="-2.25" aria-label="translation x" />
+            <input value="3.5" aria-label="translation y" />
+            <input value="0" aria-label="translation z" />
+          </div>
+        </div>
+        <div class="field">
+          <span class="flabel">rotation</span>
+          <div class="vec quad">
+            <input value="0" aria-label="rotation x" />
+            <input value="0" aria-label="rotation y" />
+            <input value="0" aria-label="rotation z" />
+            <input value="1" aria-label="rotation w" />
+          </div>
+        </div>
+        <div class="field">
+          <span class="flabel">scale</span>
+          <div class="vec">
+            <input value="1.5" aria-label="scale x" />
+            <input value="0.6" aria-label="scale y" />
+            <input value="1" aria-label="scale z" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Sprite -->
+      <div class="component">
+        <div class="comp-head"><span class="twisty">▾</span><span class="cname">Sprite</span></div>
+        <div class="field">
+          <span class="flabel">texture</span>
+          <span class="swatch"><span class="path">textures/brick_amber.qoi</span></span>
+        </div>
+        <div class="field">
+          <span class="flabel">tint</span>
+          <span class="swatch">
+            <span class="chipc" style="background: rgb(255, 184, 79)"></span>
+            <span class="path">[1.0, 0.72, 0.31, 1.0]</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Health -->
+      <div class="component">
+        <div class="comp-head"><span class="twisty">▾</span><span class="cname">Health</span></div>
+        <div class="field single">
+          <span class="flabel">hits_remaining</span>
+          <input value="2" aria-label="hits remaining" />
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>

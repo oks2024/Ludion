@@ -1,0 +1,90 @@
+--- a/src/dynamics/solver/joint_constraint/joint_constraint_helper.rs
++++ b/src/dynamics/solver/joint_constraint/joint_constraint_helper.rs
+@@ -527,7 +527,21 @@
+         #[cfg(feature = "dim2")]
+         let ang_jac = N::AngVector::one();
+         #[cfg(feature = "dim3")]
+-        let ang_jac = self.basis.column(_limited_axis).into();
++        let ang_jac = {
++            // Ludion patch: the exact rate of the measured angle, see LUDION-PATCH.md.
++            let imag = self.ang_err.imag();
++            let w = self.ang_err.real();
++            let (i, j, k) = (
++                _limited_axis,
++                (_limited_axis + 1) % 3,
++                (_limited_axis + 2) % 3,
++            );
++            let (x, y, z) = (imag[i], imag[j], imag[k]);
++            let denom = (w * w + x * x).simd_max(N::splat(1.0e-4));
++            let cj = (w * z + x * y) / denom;
++            let ck = (x * z - w * y) / denom;
++            (self.basis.column(i) + self.basis.column(j) * cj + self.basis.column(k) * ck).into()
++        };
+         let rhs_wo_bias = N::zero();
+         // Like the contact solver, cap the bias so a deep limit violation recovers over a
+         // few steps instead of catapulting the bodies (the erp gain is ~1/dt and the wrapped
+@@ -575,7 +589,16 @@
+         #[cfg(feature = "dim2")]
+         let ang_jac = N::AngVector::one();
+         #[cfg(feature = "dim3")]
+-        let ang_jac = self.basis.column(_motor_axis).into();
++        let ang_jac = {
++            // Ludion patch: the exact rate of the measured angle, see LUDION-PATCH.md.
++            let imag = self.ang_err.imag();
++            let w = self.ang_err.real();
++            let (i, j, k) = (_motor_axis, (_motor_axis + 1) % 3, (_motor_axis + 2) % 3);
++            let (x, y, z) = (imag[i], imag[j], imag[k]);
++            let inv = N::one() / (N::one() - x * x).simd_max(N::splat(1.0e-4)).simd_sqrt();
++            ((self.basis.column(i) * w + self.basis.column(j) * z - self.basis.column(k) * y) * inv)
++                .into()
++        };
+ 
+         let mut rhs_wo_bias = N::zero();
+         if motor_params.erp_inv_dt != N::zero() {
+--- a/src/geometry/collider.rs
++++ b/src/geometry/collider.rs
+@@ -214,7 +214,10 @@
+     /// Controls how much this surface resists sliding. Higher values = more grip.
+     /// Works with other collider's friction via the combine rule.
+     pub fn set_friction(&mut self, coefficient: Real) {
+-        self.material.friction = coefficient
++        if self.material.friction != coefficient {
++            self.changes.insert(ColliderChanges::MATERIAL);
++            self.material.friction = coefficient;
++        }
+     }
+ 
+     /// The combine rule used by this collider to combine its friction
+@@ -246,7 +249,10 @@
+     /// Controls how much velocity is preserved after impact. Higher values = more bounce.
+     /// Works with other collider's restitution via the combine rule.
+     pub fn set_restitution(&mut self, coefficient: Real) {
+-        self.material.restitution = coefficient
++        if self.material.restitution != coefficient {
++            self.changes.insert(ColliderChanges::MATERIAL);
++            self.material.restitution = coefficient;
++        }
+     }
+ 
+     /// The combine rule used by this collider to combine its restitution
+--- a/src/geometry/collider_components.rs
++++ b/src/geometry/collider_components.rs
+@@ -31,6 +31,8 @@
+         const PARENT_EFFECTIVE_DOMINANCE = 1 << 7; // NF update.
+         /// Flag indicating that whether or not the collider is enabled was changed.
+         const ENABLED_OR_DISABLED = 1 << 8; // BF & NF updates.
++        /// Flag indicating that the friction or restitution of the collider was modified.
++        const MATERIAL = 1 << 9; // => NF update. Not recycle-safe: a recycled pair keeps its old material.
+     }
+ }
+ 
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -408,6 +408,7 @@
+ 
+ [dependencies.parry3d]
+ version = "0.30.2"
++path = "../parry3d"
+ features = ["required-features"]
+ default-features = false
+ 

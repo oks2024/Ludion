@@ -1,0 +1,6 @@
+format: 1
+name: other-smoke-test
+seed: 7
+entities:
+  - name: solo
+    components: {}

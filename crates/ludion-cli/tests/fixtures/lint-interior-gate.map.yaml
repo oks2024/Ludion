@@ -1,0 +1,29 @@
+format: 1
+kind: map
+name: lint-interior-gate
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "         "
+  - "         "
+  - "  ##.##  "
+  - "  #...#  "
+  - "  #####  "
+  - "         "
+  - "         "
+markers:
+  - name: inside
+    kind: torch
+    x: 9.0
+    z: 7.0
+  - name: door-gate
+    kind: gate
+    x: 9.0
+    z: 5.0
+    components:
+      Gate:
+        to: target.yaml
+        anchor: from-here

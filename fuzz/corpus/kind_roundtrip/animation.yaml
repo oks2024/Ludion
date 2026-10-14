@@ -1,0 +1,17 @@
+format: 1
+kind: animation
+duration: 1.0
+loop: true
+tracks:
+  arm:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 20.0
+          - 0.0
+          - 0.0

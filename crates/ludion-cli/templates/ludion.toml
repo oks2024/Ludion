@@ -1,0 +1,13 @@
+# Ludion project manifest.
+#
+# The settled project manifest: this project's identity and its default scene. `ludion export` reads
+# it (the default scene's directory is the exported content; `[ios]` names the app). See
+# LUDION-GUIDE.md.
+
+name = "{{name}}"
+default_scene = "scenes/main.yaml"
+
+[ios]
+# Pick your own reverse-DNS id before the first device export, and keep it: a free Apple team
+# registers only a few app IDs a week.
+bundle_id = "com.example.{{name_bundle}}"

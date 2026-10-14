@@ -1,0 +1,27 @@
+format: 1
+name: fixture
+seed: 0
+entities:
+  - name: fixture
+    prefab: model.prefab.yaml
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.2
+          - 4.5
+        rotation:
+          - -20.000004
+          - 0.0
+          - 0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.836624
+        near: 0.1
+        far: 100.0

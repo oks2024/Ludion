@@ -1,0 +1,349 @@
+# creature-generated — the authored quadruped body of `creature.sculpt.yaml` wearing a *bought* head:
+# the `shape: mesh` part `head` reads a mesh generated from four `render --model` views of
+# `creature-head-blank.sculpt.yaml` (`Plan/comfy-generation.md` Wave 3, the multi-view round trip).
+# Every other part is the authored creature's, unchanged, so the two documents are an A/B on one
+# body: `creature.sculpt.yaml` carries the authored skull cluster, this one carries the generated
+# shell blended onto the same neck.
+format: 1
+kind: sculpt
+name: creature-generated
+resolution: 48
+triangles: 8000
+palette:
+  D:
+    color:
+      - 0.05
+      - 0.09
+      - 0.07
+      - 1.0
+    roughness: 0.6
+  E:
+    color:
+      - 0.5
+      - 0.95
+      - 0.45
+      - 1.0
+    emissive: 3.2
+    roughness: 0.19
+  J:
+    color:
+      - 0.1
+      - 0.17
+      - 0.12
+      - 1.0
+    roughness: 0.55
+  K:
+    color:
+      - 0.04
+      - 0.05
+      - 0.05
+      - 1.0
+    roughness: 0.95
+bones:
+  - name: root
+  - name: spine
+    parent: root
+    head:
+      - 0.0
+      - 0.93
+      - 0.3
+    tail:
+      - 0.0
+      - 0.96
+      - -0.26
+  - name: neck
+    parent: spine
+    head:
+      - 0.0
+      - 1.05
+      - -0.52
+    tail:
+      - 0.0
+      - 1.17
+      - -0.72
+  - name: head
+    parent: neck
+    head:
+      - 0.0
+      - 1.17
+      - -0.72
+    tail:
+      - 0.0
+      - 1.12
+      - -1.0
+  - name: foreleg_upper
+    parent: spine
+    head:
+      - 0.2
+      - 0.9
+      - -0.3
+    tail:
+      - 0.22
+      - 0.5
+      - -0.26
+  - name: foreleg_lower
+    parent: foreleg_upper
+    head:
+      - 0.22
+      - 0.5
+      - -0.26
+    tail:
+      - 0.22
+      - 0.1
+      - -0.32
+  - name: hindleg_upper
+    parent: spine
+    head:
+      - 0.21
+      - 0.92
+      - 0.32
+    tail:
+      - 0.24
+      - 0.52
+      - 0.42
+  - name: hindleg_lower
+    parent: hindleg_upper
+    head:
+      - 0.24
+      - 0.52
+      - 0.42
+    tail:
+      - 0.22
+      - 0.1
+      - 0.26
+  - name: tail
+    parent: spine
+    head:
+      - 0.0
+      - 0.99
+      - 0.56
+    tail:
+      - 0.0
+      - 0.9
+      - 1.1
+parts:
+  - name: torso
+    shape: capsule
+    radius: 0.21
+    from:
+      - 0.0
+      - 0.96
+      - -0.26
+    to:
+      - 0.0
+      - 0.93
+      - 0.28
+    material: J
+    bone: spine
+    noise:
+      amplitude: 0.032
+      scale: 0.12
+      seed: 7
+  - name: chest
+    shape: ellipsoid
+    radii:
+      - 0.28
+      - 0.26
+      - 0.23
+    at:
+      - 0.0
+      - 0.99
+      - -0.36
+    blend: 0.1
+    material: J
+    bone: spine
+    noise:
+      amplitude: 0.032
+      scale: 0.12
+      seed: 7
+  - name: haunch
+    shape: ellipsoid
+    radii:
+      - 0.24
+      - 0.26
+      - 0.24
+    at:
+      - 0.0
+      - 0.94
+      - 0.34
+    blend: 0.12
+    material: J
+    bone: spine
+    noise:
+      amplitude: 0.032
+      scale: 0.12
+      seed: 7
+  - name: ridge
+    shape: ellipsoid
+    radii:
+      - 0.035
+      - 0.1
+      - 0.06
+    at:
+      - 0.0
+      - 1.22
+      - -0.26
+    blend: 0.05
+    repeat:
+      count: 6
+      step:
+        - 0.0
+        - -0.02
+        - 0.12
+    material: D
+    bone: spine
+  - name: belly
+    shape: capsule
+    radius: 0.14
+    from:
+      - 0.0
+      - 0.84
+      - 0.06
+    to:
+      - 0.0
+      - 0.79
+      - 0.3
+    blend: 0.08
+    material: K
+    bone: spine
+    deform:
+      taper:
+        axis: z
+        from: 1.0
+        to: 0.7
+  - name: neck
+    shape: capsule
+    radius: 0.115
+    from:
+      - 0.0
+      - 1.05
+      - -0.52
+    to:
+      - 0.0
+      - 1.17
+      - -0.72
+    blend: 0.07
+    material: J
+    bone: neck
+    noise:
+      amplitude: 0.032
+      scale: 0.12
+      seed: 7
+  - name: head
+    shape: mesh
+    path: ../meshes/creature-head-generated/meshes/mesh-0.mesh.yaml
+    size: 0.72
+    at:
+      - 0.0
+      - 1.25
+      - -0.86
+    blend: 0.07
+    material: J
+    bone: head
+  - name: foreleg_upper
+    shape: capsule
+    radius: 0.075
+    from:
+      - 0.2
+      - 0.9
+      - -0.3
+    to:
+      - 0.22
+      - 0.5
+      - -0.26
+    blend: 0.025
+    mirror: x
+    material: J
+    bone: foreleg_upper
+  - name: foreleg_lower
+    shape: capsule
+    radius: 0.06
+    from:
+      - 0.22
+      - 0.5
+      - -0.26
+    to:
+      - 0.22
+      - 0.1
+      - -0.32
+    blend: 0.02
+    mirror: x
+    material: K
+    bone: foreleg_lower
+  - name: forepaw
+    shape: ellipsoid
+    radii:
+      - 0.08
+      - 0.055
+      - 0.11
+    at:
+      - 0.22
+      - 0.055
+      - -0.36
+    blend: 0.02
+    mirror: x
+    material: K
+    bone: foreleg_lower
+  - name: hindleg_upper
+    shape: capsule
+    radius: 0.09
+    from:
+      - 0.21
+      - 0.92
+      - 0.32
+    to:
+      - 0.24
+      - 0.52
+      - 0.42
+    blend: 0.03
+    mirror: x
+    material: J
+    bone: hindleg_upper
+  - name: hindleg_lower
+    shape: capsule
+    radius: 0.065
+    from:
+      - 0.24
+      - 0.52
+      - 0.42
+    to:
+      - 0.22
+      - 0.1
+      - 0.26
+    blend: 0.02
+    mirror: x
+    material: K
+    bone: hindleg_lower
+  - name: hindpaw
+    shape: ellipsoid
+    radii:
+      - 0.08
+      - 0.055
+      - 0.11
+    at:
+      - 0.22
+      - 0.055
+      - 0.22
+    blend: 0.02
+    mirror: x
+    material: K
+    bone: hindleg_lower
+  - name: tail
+    shape: capsule
+    radius: 0.1
+    from:
+      - 0.0
+      - 0.99
+      - 0.56
+    to:
+      - 0.0
+      - 0.9
+      - 1.1
+    blend: 0.05
+    material: J
+    bone: tail
+    deform:
+      taper:
+        axis: z
+        from: 1.0
+        to: 0.5

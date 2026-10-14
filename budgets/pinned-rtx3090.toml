@@ -1,0 +1,65 @@
+# Profile budget — pinned RTX 3090, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each ceiling is roughly twice the median measured by
+# `ludion profile --scene … --frames 120` in `--release` on the pinned RTX 3090, so a failure means
+# a real, reproducible slowdown — never machine noise. All values are milliseconds. Re-calibrate
+# deliberately (a re-bless event) if a cost becomes intended and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/lights.yaml` — the
+# heaviest gallery scene pass (3D meshes plus lights). It carries no `PostProcess`, so it renders
+# through the engine's shipped defaults. Checked with:
+#
+#   ludion profile --scene examples/gallery/lights.yaml --frames 120 --check budgets/pinned-rtx3090.toml
+#
+# The pairing is not decorative: every section of a budget is checked against every run, so a ceiling
+# only means something on the scene it was measured on. `examples/gallery/post-full.yaml` renders the
+# same passes at roughly twice the cost (its `scene` median is 0.103 ms against this file's 0.06
+# ceiling), which is why the post-process arc's ceilings live in a sibling file calibrated on that
+# scene — `budgets/pinned-rtx3090-post-full.toml` — rather than widening these to cover both and
+# leaving neither scene honestly gated. `ci/teamcity/README.md`'s `budgets` configuration runs both.
+
+# Median wall time of one full sim frame. A scene profiled through the CLI runs the built-in schedule
+# (no game systems — the CLI cannot link a game's own systems), so this is loop-and-drain overhead:
+# sub-microsecond today. The generous ceiling still trips on a real regression in built-in per-tick
+# work.
+frame_total_ms = 0.5
+
+# Per-GPU-pass ceilings, in scheduled order. The bloom chain is deliberately NOT here: it is eleven
+# passes now, and their medians run 0.0020-0.0123 ms — a few multiples of this adapter's ~0.001 ms
+# timestamp granularity, so a per-pass ceiling with enough headroom to be noise-proof would sit above
+# the value it guards. Summed, the eleven are stable to ~1% run to run, which is why they are
+# budgeted as one `[post_groups] bloom` line below instead.
+#
+# Measured over three 120-frame release runs at 1920x1080: scene 0.0614 all three,
+# composite 0.0399 all three. `composite` costs more than it did before the defaults flip because
+# the shipped operator is now AgX (a log encoding, a 6th-order sigmoid and two 3x3 gamut matrices
+# against the ACES fit's one rational) with the output dither on top; that is the shipped imaging
+# chain, not a regression, so the ceiling moves with it.
+#
+# `scene` moved 0.051 -> 0.0614 when clustered forward landed (`Plan/clustered-forward.md` wave 1):
+# every lit fragment now pays a fixed indirection — header fetch, `log2` shell mapping, cluster-table
+# fetch — which on this 3-light scene is ~20% of a pass whose loop is only 3 iterations. That is the
+# price of deleting the 16-light cap, named in the plan's Risks and paid here honestly; the ceiling
+# moved with it (0.06 -> 0.075), keeping the deliberate 1.2x headroom rather than this file's stated
+# ~2x — a standing posture since wave 2. One modest regression fires it.
+[passes]
+scene           = 0.075
+composite       = 0.08
+
+# Ceiling on the bloom chain as one effect, summing whichever of its eleven passes the run measured
+# (see the `[passes]` note above for why this is a group rather than eleven lines). Measured 0.0594 /
+# 0.0594 / 0.0604 ms summed over three 120-frame release runs at 1920x1080.
+#
+# There is deliberately no `post_total_ms` line. That key sums every group's members, and bloom is
+# the only group this scene schedules — `ssao`, `shafts` and `dof` are off, and a group with no
+# measured member skips by design — so a post total here would be a second spelling of the number
+# below. `post_total_ms` earns its place in `budgets/pinned-rtx3090-post-full.toml`, where the roster
+# is what the scene exists to turn on. (`[post_groups]` does not require it: both are independent
+# optional keys — `ludion explain L4005`, `ludion explain L4006`.)
+[post_groups]
+bloom = 0.12   # 0.060 measured
+
+# Per-system ceilings would live here, keyed by system name. Empty because a scene profiled through
+# the CLI runs no game systems; a game's own budget (profiled in-process, once that path exists) would
+# populate this table.
+[systems]

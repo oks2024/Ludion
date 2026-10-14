@@ -1,0 +1,73 @@
+# Feature: Tilemap legend on an atlas — a legend entry names `atlas` + `frame` exactly as a Sprite
+# does, so a whole stage is one packed image and one draw (see tilemap.yaml for the loose-PNG form).
+# - `cell_size: 0.5` is the tileset's own density: 8 texels at the atlas's 16 px/unit, so a cell
+#   covers exactly one region with no stretch and the room tiles seamlessly.
+# - the glyph grid is a 24x14 cave room: `^`/`#` the wall cap and its face, `.` the floor,
+#   `c` crates, `x` hazard plating.
+# - the ship stands in it from the same atlas, one Sprite in front of the grid.
+# Orthographic, no post-process, no Environment and no light: every tile is unlit, so the frame is
+# the baked tileset and nothing else — the seams, if any, are the bake's.
+format: 1
+name: "sprite-tilemap-atlas - Tilemap: legend on an atlas"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 8.5
+  - name: cave-room
+    components:
+      Transform:
+        translation:
+          - -5.75
+          - 3.25
+          - 0.0
+      Tilemap:
+        cell_size: 0.5
+        legend:
+          ".":
+            atlas: sprites/gallery.atlas.yaml
+            frame: tiles/floor
+          "#":
+            atlas: sprites/gallery.atlas.yaml
+            frame: tiles/wall
+          "^":
+            atlas: sprites/gallery.atlas.yaml
+            frame: tiles/wall-top
+          c:
+            atlas: sprites/gallery.atlas.yaml
+            frame: tiles/crate
+          x:
+            atlas: sprites/gallery.atlas.yaml
+            frame: tiles/hazard
+        rows:
+          - "^^^^^^^^^^^^^^^^^^^^^^^^"
+          - "########################"
+          - "#......................#"
+          - "#...cc......^^^^.......#"
+          - "#...cc......####.......#"
+          - "#...................c..#"
+          - "#.....xx............c..#"
+          - "#.....xx...............#"
+          - "#.........^^^..........#"
+          - "#.........###.....xxx..#"
+          - "#.................xxx..#"
+          - "#....c.................#"
+          - "########################"
+          - "^^^^^^^^^^^^^^^^^^^^^^^^"
+  - name: ship
+    components:
+      Transform:
+        translation:
+          - -1.0
+          - -0.5
+          - 0.5
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle

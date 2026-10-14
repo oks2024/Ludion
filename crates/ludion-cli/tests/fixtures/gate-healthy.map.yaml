@@ -1,0 +1,20 @@
+format: 1
+kind: map
+name: gate-healthy
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "...."
+  - "...."
+markers:
+  - name: gate-to-target
+    kind: gate
+    x: 1.0
+    z: 1.0
+    components:
+      Gate:
+        to: target.yaml
+        anchor: from-here

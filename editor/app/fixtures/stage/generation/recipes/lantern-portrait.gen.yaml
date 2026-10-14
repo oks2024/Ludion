@@ -1,0 +1,15 @@
+format: 1
+kind: generation
+name: lantern-portrait
+workflow: ../workflows/txt2img.json
+seed: 300
+count: 8
+inputs:
+  Empty Latent:
+    height: 1024
+    width: 1024
+  Positive Prompt:
+    text: "A studio product shot of a small brass oil lantern: a round glass chimney with a single warm flame inside, a pressed brass cage of thin vertical bars around the glass, a flat circular base with a short fuel reservoir, a ventilated domed cap and a folding wire carrying handle raised clear above it with a gap of background visible between the handle and the cap. Single object, centered, the whole lantern inside the frame with clear space around it, flat even grey backdrop with no ground plane and no horizon line, soft frontal lighting, no cast shadow, no text."
+  Scheduler:
+    height: 1024
+    width: 1024

@@ -1,0 +1,35 @@
+format: 1
+kind: map
+name: gate-approach
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "#####"
+  - "#.###"
+  - "#####"
+  - "#...#"
+  - "#####"
+markers:
+  - name: anchor
+    kind: torch
+    x: 5.0
+    z: 7.0
+  - name: gate-a
+    kind: gate
+    x: 3.0
+    z: 5.0
+    components:
+      Gate:
+        to: target.yaml
+        anchor: from-here
+  - name: gate-b
+    kind: gate
+    x: 7.0
+    z: 7.0
+    components:
+      Gate:
+        to: target.yaml
+        anchor: from-here

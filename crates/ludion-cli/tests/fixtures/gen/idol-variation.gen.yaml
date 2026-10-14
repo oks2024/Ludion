@@ -1,0 +1,14 @@
+format: 1
+kind: generation
+name: idol-variation-fixture
+workflow: img2img.json
+seed: 3
+count: 1
+images:
+  subject: subject.png
+inputs:
+  Load Subject:
+    image:
+      image: subject
+  Positive Prompt:
+    text: "a weathered stone idol, variation"

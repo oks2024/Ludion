@@ -1,0 +1,118 @@
+# Standalone package, deliberately OUTSIDE the workspace (Plan/phase-9-hardening.md decision 3).
+# The workspace members are `crates/*` and `games/*`, so this root `fuzz/` dir is already excluded;
+# the empty `[workspace]` table below makes that explicit and detaches this crate into its own
+# workspace so it resolves its own nightly toolchain and never perturbs the stable pin.
+[package]
+name = "ludion-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Detach from the parent workspace: this is its own single-member workspace.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# Path deps into the workspace crates whose parsers are the attack surface. These pull the real
+# crate source into the fuzz build (compiled under the nightly + sanitizer), so the targets exercise
+# exactly the shipped code, not a copy.
+ludion-scene = { path = "../crates/ludion-scene" }
+ludion-protocol = { path = "../crates/ludion-protocol" }
+ludion-ecs = { path = "../crates/ludion-ecs" }
+ludion-core = { path = "../crates/ludion-core" }
+ludion-assets = { path = "../crates/ludion-assets" }
+ludion-engine = { path = "../crates/ludion-engine" }
+ludion-import = { path = "../crates/ludion-import" }
+ludion-font = { path = "../crates/ludion-font", features = ["bake"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+
+[[bin]]
+name = "scene_parse"
+path = "fuzz_targets/scene_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protocol_envelope"
+path = "fuzz_targets/protocol_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frame_header"
+path = "fuzz_targets/frame_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "replay_reader"
+path = "fuzz_targets/replay_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "canonical_idempotence"
+path = "fuzz_targets/canonical_idempotence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kind_roundtrip"
+path = "fuzz_targets/kind_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "png_decode"
+path = "fuzz_targets/png_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wav_decode"
+path = "fuzz_targets/wav_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "restore_snapshot"
+path = "fuzz_targets/restore_snapshot.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gltf_import"
+path = "fuzz_targets/gltf_import.rs"
+test = false
+doc = false
+bench = false
+
+# libFuzzer targets want debug assertions + overflow checks on (catch more), but some optimization
+# so the fuzzer runs at a useful execs/sec. This mirrors what `cargo fuzz init` generates.
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true
+
+[[bin]]
+name = "font_bake"
+path = "fuzz_targets/font_bake.rs"
+test = false
+doc = false
+bench = false

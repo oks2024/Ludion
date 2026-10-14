@@ -1,0 +1,45 @@
+format: 1
+name: hello-paddle
+seed: 0
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 6.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 60.0
+  - name: paddle
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -2.0
+          - 0.0
+        scale:
+          - 2.0
+          - 0.5
+          - 1.0
+      Sprite:
+        color:
+          - 0.2
+          - 0.8
+          - 1.0
+          - 1.0
+        lit: true
+      Paddle:
+        x: 0.0
+  - name: light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - 3.0
+      PointLight:
+        intensity: 2.0
+        range: 20.0

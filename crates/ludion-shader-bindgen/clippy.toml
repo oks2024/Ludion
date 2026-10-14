@@ -1,0 +1,11 @@
+# Permissive tooling-side denylist (engine-architecture.md §5).
+#
+# ludion-shader-bindgen is engine-internal dev tooling (`publish = false`): it reflects WGSL with
+# naga and emits the renderer's committed `shader_gen.rs`. It ships no runtime code and is not on
+# the deterministic sim path, so the strict sim denylist (no std HashMap, no wall clock) does not
+# apply. Its own stable-output requirement — the emitted file must be byte-identical run to run, or
+# the shader-drift gate goes flaky — is enforced by ordered traversal and the `--check` gate itself.
+#
+# This file is intentionally empty of `disallowed-types` / `disallowed-methods`; the crate still
+# builds under `cargo clippy -- -D warnings`. Committed empty rather than absent so a later
+# sim-adjacent addition here reads as a decision to revisit, not an oversight.

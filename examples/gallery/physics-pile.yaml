@@ -1,0 +1,2572 @@
+# Feature: rigid-body physics (`ludion-physics`, Plan/physics.md) — a chaotic pile the gallery
+# renders at rest.
+#
+# The gallery's render harness ticks the built-in registry only (`check -> instantiate -> tick(0)
+# -> extract -> render`), which now includes this scene's own `physics:` block — but `tick(0)` runs
+# no tick, so this golden still shows the authored lattice exactly as written, not a simulated
+# topple. The simulated trace lives beside this file (`physics-pile.trace.txt`), produced by
+# `ludion-engine`'s `physics_gallery` test, which loads this scene under a bare `Engine::builder()`
+# (the `physics: space: free` block below is the only opt-in there is) and steps it for real.
+#
+# A static box floor plus 64 rigid box bodies in a 4x4x4 lattice, each nudged off-grid and tilted by
+# an offset derived from its own index, with a small distinct initial angular velocity. Every offset
+# is a dyadic rational (denominator a power of two), so translations, rotations and angular
+# velocities are exact in binary and the scene text carries no floating-point authoring artifact.
+# The off-grid jitter — and the initial interpenetration it causes between some neighbors — is what
+# keeps the simulated pile from settling into a symmetric, quickly-sleeping stack.
+format: 1
+name: "physics-pile - Collider/Velocity: a rigid-body pile, authored at rest"
+physics:
+  space: free
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 5.0
+          - 11.0
+        rotation:
+          - -25.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 7.0
+          - 6.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 6.0
+        range: 24.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.57
+          - 0.6
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 6.0
+              - 0.5
+              - 6.0
+        body: static
+  - name: crate00
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 0.375
+          - -1.3125
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - -0.25
+          - -0.1875
+  - name: crate01
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 0.375
+          - -1.28125
+        rotation:
+          - 4.0
+          - 8.0
+          - 2.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - -0.125
+          - -0.125
+  - name: crate02
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 0.375
+          - -1.25
+        rotation:
+          - 8.0
+          - 16.0
+          - 4.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.0
+          - -0.0625
+  - name: crate03
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 0.375
+          - -1.21875
+        rotation:
+          - 12.0
+          - 24.0
+          - 6.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.125
+          - 0.0
+  - name: crate04
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 1.25
+          - -1.1875
+        rotation:
+          - 16.0
+          - 32.0
+          - 8.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.25
+          - 0.0625
+  - name: crate05
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 1.25
+          - -1.15625
+        rotation:
+          - 20.0
+          - 40.0
+          - 10.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - -0.25
+          - 0.125
+  - name: crate06
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 1.25
+          - -1.125
+        rotation:
+          - 24.0
+          - 48.0
+          - 12.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - -0.125
+          - 0.1875
+  - name: crate07
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 1.25
+          - -1.09375
+        rotation:
+          - 28.0
+          - 56.0
+          - 14.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.0
+          - -0.1875
+  - name: crate08
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 2.125
+          - -1.3125
+        rotation:
+          - 32.0
+          - 64.0
+          - 16.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.125
+          - -0.125
+  - name: crate09
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 2.125
+          - -1.28125
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.25
+          - -0.0625
+  - name: crate10
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 2.125
+          - -1.25
+        rotation:
+          - 4.0
+          - 8.0
+          - 2.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - -0.25
+          - 0.0
+  - name: crate11
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 2.125
+          - -1.21875
+        rotation:
+          - 8.0
+          - 16.0
+          - 4.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - -0.125
+          - 0.0625
+  - name: crate12
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 3.0
+          - -1.1875
+        rotation:
+          - 12.0
+          - 24.0
+          - 6.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.0
+          - 0.125
+  - name: crate13
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 3.0
+          - -1.15625
+        rotation:
+          - 16.0
+          - 32.0
+          - 8.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.125
+          - 0.1875
+  - name: crate14
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 3.0
+          - -1.125
+        rotation:
+          - 20.0
+          - 40.0
+          - 10.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.25
+          - -0.1875
+  - name: crate15
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 3.0
+          - -1.09375
+        rotation:
+          - 24.0
+          - 48.0
+          - 12.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - -0.25
+          - -0.125
+  - name: crate16
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 0.375
+          - -0.4375
+        rotation:
+          - 28.0
+          - 56.0
+          - 14.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - -0.125
+          - -0.0625
+  - name: crate17
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 0.375
+          - -0.40625
+        rotation:
+          - 32.0
+          - 64.0
+          - 16.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.0
+          - 0.0
+  - name: crate18
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 0.375
+          - -0.375
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.125
+          - 0.0625
+  - name: crate19
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 0.375
+          - -0.34375
+        rotation:
+          - 4.0
+          - 8.0
+          - 2.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.25
+          - 0.125
+  - name: crate20
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 1.25
+          - -0.3125
+        rotation:
+          - 8.0
+          - 16.0
+          - 4.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - -0.25
+          - 0.1875
+  - name: crate21
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 1.25
+          - -0.28125
+        rotation:
+          - 12.0
+          - 24.0
+          - 6.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - -0.125
+          - -0.1875
+  - name: crate22
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 1.25
+          - -0.25
+        rotation:
+          - 16.0
+          - 32.0
+          - 8.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.0
+          - -0.125
+  - name: crate23
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 1.25
+          - -0.21875
+        rotation:
+          - 20.0
+          - 40.0
+          - 10.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.125
+          - -0.0625
+  - name: crate24
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 2.125
+          - -0.4375
+        rotation:
+          - 24.0
+          - 48.0
+          - 12.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.25
+          - 0.0
+  - name: crate25
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 2.125
+          - -0.40625
+        rotation:
+          - 28.0
+          - 56.0
+          - 14.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - -0.25
+          - 0.0625
+  - name: crate26
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 2.125
+          - -0.375
+        rotation:
+          - 32.0
+          - 64.0
+          - 16.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - -0.125
+          - 0.125
+  - name: crate27
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 2.125
+          - -0.34375
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.0
+          - 0.1875
+  - name: crate28
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 3.0
+          - -0.3125
+        rotation:
+          - 4.0
+          - 8.0
+          - 2.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.125
+          - -0.1875
+  - name: crate29
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 3.0
+          - -0.28125
+        rotation:
+          - 8.0
+          - 16.0
+          - 4.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.25
+          - -0.125
+  - name: crate30
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 3.0
+          - -0.25
+        rotation:
+          - 12.0
+          - 24.0
+          - 6.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - -0.25
+          - -0.0625
+  - name: crate31
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 3.0
+          - -0.21875
+        rotation:
+          - 16.0
+          - 32.0
+          - 8.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - -0.125
+          - 0.0
+  - name: crate32
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 0.375
+          - 0.4375
+        rotation:
+          - 20.0
+          - 40.0
+          - 10.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.0
+          - 0.0625
+  - name: crate33
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 0.375
+          - 0.46875
+        rotation:
+          - 24.0
+          - 48.0
+          - 12.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.125
+          - 0.125
+  - name: crate34
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 0.375
+          - 0.5
+        rotation:
+          - 28.0
+          - 56.0
+          - 14.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.25
+          - 0.1875
+  - name: crate35
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 0.375
+          - 0.53125
+        rotation:
+          - 32.0
+          - 64.0
+          - 16.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - -0.25
+          - -0.1875
+  - name: crate36
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 1.25
+          - 0.5625
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - -0.125
+          - -0.125
+  - name: crate37
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 1.25
+          - 0.59375
+        rotation:
+          - 4.0
+          - 8.0
+          - 2.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.0
+          - -0.0625
+  - name: crate38
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 1.25
+          - 0.625
+        rotation:
+          - 8.0
+          - 16.0
+          - 4.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.125
+          - 0.0
+  - name: crate39
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 1.25
+          - 0.65625
+        rotation:
+          - 12.0
+          - 24.0
+          - 6.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.25
+          - 0.0625
+  - name: crate40
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 2.125
+          - 0.4375
+        rotation:
+          - 16.0
+          - 32.0
+          - 8.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - -0.25
+          - 0.125
+  - name: crate41
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 2.125
+          - 0.46875
+        rotation:
+          - 20.0
+          - 40.0
+          - 10.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - -0.125
+          - 0.1875
+  - name: crate42
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 2.125
+          - 0.5
+        rotation:
+          - 24.0
+          - 48.0
+          - 12.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.0
+          - -0.1875
+  - name: crate43
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 2.125
+          - 0.53125
+        rotation:
+          - 28.0
+          - 56.0
+          - 14.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.125
+          - -0.125
+  - name: crate44
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 3.0
+          - 0.5625
+        rotation:
+          - 32.0
+          - 64.0
+          - 16.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.25
+          - -0.0625
+  - name: crate45
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 3.0
+          - 0.59375
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - -0.25
+          - 0.0
+  - name: crate46
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 3.0
+          - 0.625
+        rotation:
+          - 4.0
+          - 8.0
+          - 2.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - -0.125
+          - 0.0625
+  - name: crate47
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 3.0
+          - 0.65625
+        rotation:
+          - 8.0
+          - 16.0
+          - 4.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.0
+          - 0.125
+  - name: crate48
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 0.375
+          - 1.3125
+        rotation:
+          - 12.0
+          - 24.0
+          - 6.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.125
+          - 0.1875
+  - name: crate49
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 0.375
+          - 1.34375
+        rotation:
+          - 16.0
+          - 32.0
+          - 8.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.25
+          - -0.1875
+  - name: crate50
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 0.375
+          - 1.375
+        rotation:
+          - 20.0
+          - 40.0
+          - 10.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - -0.25
+          - -0.125
+  - name: crate51
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 0.375
+          - 1.40625
+        rotation:
+          - 24.0
+          - 48.0
+          - 12.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - -0.125
+          - -0.0625
+  - name: crate52
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 1.25
+          - 1.4375
+        rotation:
+          - 28.0
+          - 56.0
+          - 14.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.0
+          - 0.0
+  - name: crate53
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 1.25
+          - 1.46875
+        rotation:
+          - 32.0
+          - 64.0
+          - 16.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.125
+          - 0.0625
+  - name: crate54
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 1.25
+          - 1.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.25
+          - 0.125
+  - name: crate55
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 1.25
+          - 1.53125
+        rotation:
+          - 4.0
+          - 8.0
+          - 2.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - -0.25
+          - 0.1875
+  - name: crate56
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 2.125
+          - 1.3125
+        rotation:
+          - 8.0
+          - 16.0
+          - 4.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - -0.125
+          - -0.1875
+  - name: crate57
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 2.125
+          - 1.34375
+        rotation:
+          - 12.0
+          - 24.0
+          - 6.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.0
+          - -0.125
+  - name: crate58
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 2.125
+          - 1.375
+        rotation:
+          - 16.0
+          - 32.0
+          - 8.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - 0.125
+          - -0.0625
+  - name: crate59
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 2.125
+          - 1.40625
+        rotation:
+          - 20.0
+          - 40.0
+          - 10.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.25
+          - 0.0
+  - name: crate60
+    components:
+      Transform:
+        translation:
+          - -1.3125
+          - 3.0
+          - 1.4375
+        rotation:
+          - 24.0
+          - 48.0
+          - 12.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.35
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - -0.25
+          - 0.0625
+  - name: crate61
+    components:
+      Transform:
+        translation:
+          - -0.375
+          - 3.0
+          - 1.46875
+        rotation:
+          - 28.0
+          - 56.0
+          - 14.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.75
+          - 0.45
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.0
+          - -0.125
+          - 0.125
+  - name: crate62
+    components:
+      Transform:
+        translation:
+          - 0.5625
+          - 3.0
+          - 1.5
+        rotation:
+          - 32.0
+          - 64.0
+          - 16.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.5
+          - 0.85
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - 0.25
+          - 0.0
+          - 0.1875
+  - name: crate63
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 3.0
+          - 1.53125
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.75
+          - 0.75
+          - 0.75
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.75
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.375
+              - 0.375
+              - 0.375
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+      Velocity:
+        angular:
+          - -0.25
+          - 0.125
+          - -0.1875

@@ -1,0 +1,61 @@
+# Feature: Text — bitmap text drawn as quads (`text`, `size`, `color`). Unlit, so no PointLight
+# is needed to see it.
+format: 1
+name: "text - Text: bitmap glyph quads"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 6.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: title
+    components:
+      Transform:
+        translation:
+          - -3.4
+          - 2.0
+          - 0.0
+      Text:
+        text: LUDION
+        size: 1.1
+        color:
+          - 1.0
+          - 0.85
+          - 0.4
+          - 1.0
+  - name: subtitle
+    components:
+      Transform:
+        translation:
+          - -3.4
+          - 0.4
+          - 0.0
+      Text:
+        text: HD-2D ENGINE
+        size: 0.55
+        color:
+          - 0.6
+          - 0.85
+          - 1.0
+          - 1.0
+  - name: body
+    components:
+      Transform:
+        translation:
+          - -3.4
+          - -0.8
+          - 0.0
+      Text:
+        text: "BITMAP TEXT 0-9\nDRAWN AS QUADS."
+        size: 0.4
+        color:
+          - 0.9
+          - 0.9
+          - 0.9
+          - 1.0

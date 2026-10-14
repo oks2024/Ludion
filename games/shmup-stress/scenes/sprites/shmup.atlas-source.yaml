@@ -1,0 +1,18 @@
+# The stress arena's one packed atlas: forty bullet frames and four backdrop tiles, at 40 texels to
+# the world unit and point-sampled. `ludion generate-atlas` bakes this into the committed `shmup.png`
+# + `shmup.atlas.yaml` beside it — never edit those by hand.
+#
+# 40 px/unit is chosen by the arena, not by the art: a 12-texel bullet frame derives exactly the
+# 0.3 u quad `spawn_bullet` has always made, and a 40-texel tile fills exactly the backdrop's
+# `cell_size: 1.0` cell. Nothing in `steady-drawn.yaml` authors a `Sprite.size`.
+#
+# No `flipbooks:` — a bullet's region is chosen by its spawn ordinal, not by elapsed time, so there
+# is no clip to carry (`Plan/sprite-engine.md` Wave 2 is exercised by the gallery, not here).
+format: 1
+kind: atlas-source
+name: shmup
+pixels_per_unit: 40.0
+filter: nearest
+inputs:
+  - bullets.sprite.yaml
+  - backdrop.sprite.yaml

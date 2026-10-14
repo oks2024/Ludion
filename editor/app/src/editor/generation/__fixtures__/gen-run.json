@@ -1,0 +1,73 @@
+{
+  "ok": true,
+  "run_id": "20261008T120000Z-1a2b3c4d",
+  "recipe": "generation/recipes/idol.gen.yaml",
+  "recipe_hash": "0000000012345678",
+  "workflow": "generation/workflows/txt2img.json",
+  "workflow_hash": "00000000deadbeef",
+  "graph_hash": "1a2b3c4d5e6f7080",
+  "seed_base": 7,
+  "count": 2,
+  "kind": "image",
+  "comfy_version": "0.3.60",
+  "checkpoints": [
+    "flux2-klein-4b.safetensors"
+  ],
+  "images": [
+    {
+      "name": "subject",
+      "path": "generation/references/subject.png",
+      "hash": "0123456789abcdef",
+      "bound_to": [
+        {
+          "node": "20",
+          "input": "image"
+        }
+      ]
+    }
+  ],
+  "prompt": "a small weathered stone idol",
+  "inputs": {
+    "Load Subject": {
+      "image": {
+        "image": "subject"
+      }
+    },
+    "Positive Prompt": {
+      "text": "a small weathered stone idol"
+    }
+  },
+  "prompt_ids": [
+    "job-0",
+    "job-1"
+  ],
+  "seeds": [
+    7,
+    8
+  ],
+  "outputs": [
+    {
+      "index": 0,
+      "seed": 7,
+      "file": "0000.png",
+      "node": "7",
+      "batch_index": 0,
+      "prompt_id": "job-0"
+    },
+    {
+      "index": 1,
+      "seed": 8,
+      "file": "0001.png",
+      "node": "7",
+      "batch_index": 0,
+      "prompt_id": "job-1"
+    }
+  ],
+  "failed": [],
+  "started": "2026-10-08T12:00:00Z",
+  "finished": "2026-10-08T12:00:03Z",
+  "duration_ms": 3000,
+  "status": "ok",
+  "dir": "generation/runs/idol/20261008T120000Z-1a2b3c4d",
+  "diagnostics": []
+}

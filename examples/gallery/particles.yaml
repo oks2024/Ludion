@@ -1,0 +1,163 @@
+# Feature: ParticleEmitter — visual effects described by numbers rather than by entities. Three
+# endless emitters, each in steady state at frame 0 (duration: 0 admits negative indices, so an
+# ambient plume is full with no warm-up), show the three registers the one analytic-disc pipeline
+# covers. A smoke column lifts on negative gravity under drag, growing and fading grey through alpha
+# blending at maximum softness. An ember fountain throws HDR orange sparks up a wide cone and lets
+# positive gravity arc them back down, additive so a stack of them blows out and rides the bloom
+# chain. A spore drift releases tiny green motes across a disc and clips them at the ground with
+# `floor`, which keeps debris off the floor without shortening its life. No sun, no Environment and
+# no UI: particles draw inside the `scene` pass, so this scene schedules the unchanged minimal graph.
+format: 1
+name: "particles - ParticleEmitter: alpha smoke, additive embers, floor-clipped spores"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.6
+          - 10.5
+        rotation:
+          - -7.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 8.0
+          - 9.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 3.0
+        range: 26.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 20.0
+          - 1.0
+          - 20.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.12
+          - 0.13
+          - 0.16
+          - 1.0
+  - name: smoke-column
+    components:
+      Transform:
+        translation:
+          - -4.4
+          - 0.2
+          - 0.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.35
+          - 0.35
+          - 0.35
+        rate: 18.0
+        life:
+          - 2.0
+          - 2.8
+        speed:
+          - 0.5
+          - 1.0
+        spread_deg: 14.0
+        gravity: -0.9
+        drag: 0.35
+        start_size: 0.5
+        end_size: 1.9
+        start_color:
+          - 0.55
+          - 0.56
+          - 0.6
+          - 0.26
+        end_color:
+          - 0.3
+          - 0.31
+          - 0.36
+          - 0.0
+        softness: 0.85
+        seed: 11
+  - name: ember-fountain
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.15
+          - 0.0
+      ParticleEmitter:
+        rate: 58.0
+        life:
+          - 1.1
+          - 1.9
+        speed:
+          - 3.6
+          - 5.6
+        spread_deg: 26.0
+        gravity: 5.0
+        start_size: 0.22
+        end_size: 0.05
+        start_color:
+          - 2.0
+          - 0.7
+          - 0.15
+          - 1.0
+        end_color:
+          - 1.2
+          - 0.18
+          - 0.03
+          - 0.0
+        blend: additive
+        softness: 0.3
+        seed: 23
+  - name: spore-drift
+    components:
+      Transform:
+        translation:
+          - 4.4
+          - 0.6
+          - 0.0
+      ParticleEmitter:
+        shape: disc
+        extent:
+          - 2.6
+          - 0.0
+          - 0.0
+        rate: 34.0
+        life:
+          - 3.0
+          - 4.2
+        speed:
+          - 0.15
+          - 0.5
+        spread_deg: 90.0
+        gravity: 0.35
+        drag: 0.6
+        floor: 0.05
+        start_size: 0.11
+        end_size: 0.08
+        start_color:
+          - 0.4
+          - 1.1
+          - 0.5
+          - 0.7
+        end_color:
+          - 0.2
+          - 0.7
+          - 0.35
+          - 0.0
+        blend: additive
+        softness: 0.45
+        seed: 37

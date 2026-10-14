@@ -1,0 +1,40 @@
+# An 8x8 energy bolt: a bright diamond core wrapped in a soft halo the `glow` op grows into the
+# transparent margin. `blur`'s integer `radius: 1` would dissolve a core this small into a featureless
+# smudge; `glow` leaves the opaque core crisp and adds a fractional-radius ring outside it, its colour
+# derived from the core so the cyan bolt glows cyan.
+format: 1
+kind: sprite
+name: glow-bullet
+size:
+  - 8
+  - 8
+palette:
+  O:
+    color:
+      - 0.7
+      - 0.95
+      - 1.0
+      - 1.0
+    emissive: 3.0
+  o:
+    color:
+      - 0.1
+      - 0.6
+      - 1.0
+      - 1.0
+    emissive: 1.5
+frames:
+  bolt:
+    rows:
+      - "........"
+      - "...oo..."
+      - "..oOOo.."
+      - ".oOOOOo."
+      - ".oOOOOo."
+      - "..oOOo.."
+      - "...oo..."
+      - "........"
+effects:
+  - op: glow
+    radius_px: 2.5
+    strength: 0.9

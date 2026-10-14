@@ -1,0 +1,18 @@
+format: 1
+kind: map
+name: prefab-occupancy
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+bounds:
+  - 6
+  - 4
+fragments:
+  - prefab-occupancy-frag.yaml
+markers:
+  - name: spot
+    kind: torch
+    x: 1.0
+    z: 7.0

@@ -1,0 +1,148 @@
+# Feature: UiText.wrap_width and UiList.max_visible (Plan/ui-widgets.md Wave 2) over the same
+# minimal, visibly lit world convention as ui-hud.yaml, so the overlay still draws over real
+# tonemapped content rather than a blank canvas.
+#
+# - Left half: one UiText paragraph with wrap_width set to 14 glyph columns at size 24
+#   (wrap_width 336.0 = 14 * 24.0). It authors one word longer than 14 characters
+#   ("MAGNETOHYDRODYNAMICS") so the greedy fill hard-breaks it mid-word ("MAGNETOHYDRODY" /
+#   "NAMICS"), and one authored `\n` paragraph break, wrapping to 5 lines total — proves both the
+#   greedy word-wrap and the hard-break-on-overlong-word rule on screen.
+# - Right half: one UiList, 12 items, max_visible: 5, selected: 7. ui_list_window centres the
+#   window on selected and clamps it: start = (7 - 5/2).min(12-5) = 5, so the drawn window is
+#   items[5..10] — SALVE, BANDAGE, RELIC (120 XP) [selected], KEY, TALISMAN. "BANDAGE" (index 6) is
+#   enabled: false *inside* the window (the dimmed line); "LANTERN" (index 2) is enabled: false
+#   *outside* the window (proves the window, not just enabled, controls what is drawn); the longest
+#   item, "ANCIENT RELIC CACHE" (index 10), sits outside the window too, proving the panel's width
+#   is measured over every item, visible or not, not just the drawn five. `background` alpha 0.85
+#   and `padding` 16.0 make the panel visibly wider than its five drawn lines.
+format: 1
+name: "ui-wrap-window - UiText.wrap_width + UiList.max_visible: a wrapped paragraph and a scrolled list"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 7.0
+        rotation:
+          - -12.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.3
+          - 0.32
+          - 0.36
+          - 1.0
+        roughness: 0.85
+  - name: block
+    components:
+      Transform:
+        translation:
+          - -1.4
+          - 0.6
+          - -0.6
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.4
+          - 0.7
+          - 1.0
+        roughness: 0.5
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 4.5
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 5.0
+        range: 20.0
+  - name: wrap-paragraph
+    components:
+      UiText:
+        anchor: top_left
+        offset:
+          - 60.0
+          - 300.0
+        text: "THE WATCHMAN FOUND THE MAGNETOHYDRODYNAMICS CORE\nSUPPLIES LOW"
+        size: 24.0
+        wrap_width: 336.0
+        color:
+          - 0.9
+          - 0.92
+          - 0.95
+          - 1.0
+        order: 0
+  - name: supply-list
+    components:
+      UiList:
+        anchor: center_right
+        offset:
+          - -60.0
+          - 0.0
+        title: INVENTORY
+        items:
+          - text: MAP
+          - text: COMPASS
+          - text: LANTERN
+            enabled: false
+          - text: ROPE
+          - text: WHETSTONE
+          - text: SALVE
+          - text: BANDAGE
+            enabled: false
+          - text: "RELIC (120 XP)"
+          - text: KEY
+          - text: TALISMAN
+          - text: ANCIENT RELIC CACHE
+          - text: LEAVE
+        selected: 7
+        max_visible: 5
+        size: 24.0
+        line_spacing: 4.0
+        padding: 16.0
+        color:
+          - 0.9
+          - 0.9
+          - 0.85
+          - 1.0
+        selected_color:
+          - 1.0
+          - 0.85
+          - 0.2
+          - 1.0
+        disabled_color:
+          - 0.4
+          - 0.4
+          - 0.4
+          - 1.0
+        background:
+          - 0.05
+          - 0.05
+          - 0.08
+          - 0.85
+        order: 0

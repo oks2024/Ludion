@@ -1,0 +1,6 @@
+# Deliberately empty: the *permissive* client-side denylist, exactly like `ludion-client`.
+#
+# `ludion-mcp` is a peer client that translates MCP stdio traffic onto `Client::call`; it is NOT on
+# the deterministic sim path (that lives in the engine on the far side of the wire). So it does not
+# get the strict sim-side `disallowed-types` / `disallowed-methods` list (std `HashMap`/`HashSet`,
+# `Instant::now`, …) that core/ecs/scene/sim carry. Don't copy the strict list here.

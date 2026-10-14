@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "dir": null,
+  "diagnostics": [
+    {
+      "code": "L1167",
+      "message": "cannot reach a ComfyUI server at `http://127.0.0.1:9`",
+      "help": "start ComfyUI, or set `LUDION_COMFY_URL` or pass `--url`"
+    }
+  ]
+}

@@ -1,0 +1,273 @@
+//! The ragdoll switch, end to end: a two-part figure (`torso` + `arm`, jointed by a `hinge`) plays a
+//! `wave` clip for 30 ticks, then `switch_to_ragdoll` promotes it into two rigid bodies joined by a
+//! `Joint`, and the figure falls under the scene's `physics: {space: free}` gravity for another 120
+//! ticks — the part heights printed along the way.
+//!
+//! The switch is ordinary game code: a real game calls `switch_to_ragdoll` from a system, at
+//! `ctx.game_time` (`SystemCtx::game_time`) — a death blow, a stagger, a rope grab. This headless
+//! example drives the engine directly (no window, no GPU) and stands in for that system with the
+//! engine's own frame clock.
+//!
+//! The fixture project is written to a temp directory so the example is self-contained; in a real
+//! game these four files live in the project tree.
+//!
+//! Run it headless (no window, no GPU, deterministic):
+//!
+//! ```text
+//! cargo run -p ludion-engine --example ragdoll_switch
+//! ```
+
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use ludion_core::ids::EntityId;
+use ludion_core::time::{SimTime, TickRate};
+use ludion_engine::{Engine, Transform, load_assembly, switch_to_ragdoll};
+
+// --- The content (copyable) ----------------------------------------------------------------------
+
+/// The model of record: a torso and one hinged arm, exactly the shape `Plan/physics.md` W3's
+/// ragdoll-authoring plan describes — parts, a `joints:` binding, a clip.
+const ASSEMBLY: &str = "\
+format: 1
+kind: assembly
+name: puppet
+size:
+  - 4
+  - 3
+  - 1
+palette:
+  S:
+    color:
+      - 0.30
+      - 0.22
+      - 0.18
+      - 1.0
+parts:
+  - name: torso
+    file: parts/torso.part.yaml
+    place:
+      - 0
+      - 0
+      - 0
+  - name: arm
+    file: parts/arm.part.yaml
+    parent: torso
+    place:
+      - 2
+      - 2
+      - 0
+    pivot:
+      - 0.5
+      - 0.5
+      - 0.5
+joints:
+  arm:
+    kind: hinge
+    axis:
+      - 0.0
+      - 0.0
+      - 1.0
+    limits:
+      - -60.0
+      - 60.0
+clips:
+  wave: anims/wave.anim.yaml
+";
+
+/// A 2x2x1 torso.
+const TORSO: &str = "\
+format: 1
+kind: part
+size:
+  - 2
+  - 2
+  - 1
+slices:
+  -
+    - \"SS\"
+  -
+    - \"SS\"
+";
+
+/// A single-cell arm.
+const ARM: &str = "\
+format: 1
+kind: part
+size:
+  - 1
+  - 1
+  - 1
+slices:
+  -
+    - \"S\"
+";
+
+/// The arm swings −45° → +45° about +Z and back over one looping second.
+const WAVE_CLIP: &str = "\
+format: 1
+kind: animation
+name: wave
+duration: 1.0
+loop: true
+tracks:
+  arm:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - -45.0
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 45.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - -45.0
+        ease: smooth
+";
+
+/// A `physics: {space: free}` scene: a static floor well out of the way (this example is about the
+/// switch and the fall's first couple of seconds, not a landing) and the puppet, starting mid-clip.
+const SCENE: &str = "\
+format: 1
+seed: 1
+physics:
+  space: free
+entities:
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -1000.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 50.0
+              - 0.5
+              - 50.0
+        body: static
+  - name: puppet
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 5.0
+          - 0.0
+      Mesh:
+        shape:
+          assembly: models/puppet.assembly.yaml
+      Animation:
+        clip: wave
+        started: 0
+        speed: 1.0
+";
+
+// --- Headless demo `main` ------------------------------------------------------------------------
+
+fn main() -> ExitCode {
+    let root = match fixture_project() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("could not write the fixture project: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut engine = Engine::with_project_root(&root);
+    if let Err(diagnostics) = engine.load_inline_scene(SCENE) {
+        for diagnostic in diagnostics {
+            eprintln!("{diagnostic}");
+        }
+        return ExitCode::FAILURE;
+    }
+
+    // Let the clip play for 30 ticks — an ordinary "wind up, then die" beat — before the switch.
+    for _ in 0..30 {
+        engine.advance_live();
+    }
+
+    let data = match load_assembly(engine.project_root(), "models/puppet.assembly.yaml") {
+        Ok(data) => data,
+        Err(diagnostics) => {
+            for diagnostic in diagnostics {
+                eprintln!("{diagnostic}");
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // `floor` is document position 0, `puppet` is 1 — a freshly loaded scene assigns entity ids by
+    // document order at generation 0.
+    let puppet = EntityId::new(1, 0);
+    let now = SimTime::from_ticks(engine.frame().0, TickRate::DEFAULT);
+    let spawned = match switch_to_ragdoll(engine.world_mut(), puppet, &data, now) {
+        Ok(spawned) => spawned,
+        Err(diagnostic) => {
+            eprintln!("{diagnostic}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        "switched at tick {}: {} rigid parts ({})",
+        engine.frame().0,
+        spawned.len(),
+        data.parts
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    println!("ticks after switch   torso.y   arm.y");
+    let switch_tick = engine.frame().0;
+    for elapsed in [0, 30, 60, 90, 120] {
+        while engine.frame().0 < switch_tick + elapsed {
+            engine.advance_live();
+        }
+        let torso = engine
+            .world()
+            .get::<Transform>(spawned[0])
+            .unwrap()
+            .unwrap();
+        let arm = engine
+            .world()
+            .get::<Transform>(spawned[1])
+            .unwrap()
+            .unwrap();
+        println!(
+            "{elapsed:>19}   {:>7.3}   {:>7.3}",
+            torso.translation[1], arm.translation[1]
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+    ExitCode::SUCCESS
+}
+
+/// Writes the four content files into a fresh temp directory and returns its path.
+fn fixture_project() -> std::io::Result<PathBuf> {
+    let root = std::env::temp_dir().join(format!("ludion-ragdoll-switch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    write(&root, "models/puppet.assembly.yaml", ASSEMBLY)?;
+    write(&root, "models/parts/torso.part.yaml", TORSO)?;
+    write(&root, "models/parts/arm.part.yaml", ARM)?;
+    write(&root, "models/anims/wave.anim.yaml", WAVE_CLIP)?;
+    Ok(root)
+}
+
+fn write(root: &Path, rel: &str, contents: &str) -> std::io::Result<()> {
+    let path = root.join(rel);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, contents)
+}

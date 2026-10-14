@@ -1,0 +1,68 @@
+{
+  "ok": true,
+  "dir": "generation/runs/idol/20261008T120000Z-1a2b3c4d",
+  "report": {
+    "run_id": "20261008T120000Z-1a2b3c4d",
+    "recipe": "generation/recipes/idol.gen.yaml",
+    "recipe_hash": "0000000012345678",
+    "workflow": "generation/workflows/txt2img.json",
+    "workflow_hash": "00000000deadbeef",
+    "graph_hash": "1a2b3c4d5e6f7080",
+    "seed_base": 7,
+    "count": 2,
+    "kind": "image",
+    "comfy_version": "0.3.60",
+    "checkpoints": [
+      "flux2-klein-4b.safetensors"
+    ],
+    "images": [],
+    "prompt": "a small weathered stone idol",
+    "inputs": {
+      "Positive Prompt": {
+        "text": "a small weathered stone idol"
+      }
+    },
+    "prompt_ids": [
+      "job-0",
+      "job-1"
+    ],
+    "seeds": [
+      7,
+      8
+    ],
+    "outputs": [],
+    "failed": [],
+    "started": "2026-10-08T12:00:00Z",
+    "finished": "",
+    "duration_ms": 0,
+    "status": "submitted",
+    "dir": "generation/runs/idol/20261008T120000Z-1a2b3c4d"
+  },
+  "ready": false,
+  "pending": [
+    "job-1"
+  ],
+  "failed": [
+    {
+      "job": 0,
+      "prompt_id": "job-0",
+      "reason": "error",
+      "node": "7",
+      "class": "SaveImage",
+      "message": "CUDA out of memory"
+    }
+  ],
+  "queue": {
+    "queue_running": [
+      [
+        1,
+        "job-1",
+        {},
+        {},
+        []
+      ]
+    ],
+    "queue_pending": []
+  },
+  "diagnostics": []
+}

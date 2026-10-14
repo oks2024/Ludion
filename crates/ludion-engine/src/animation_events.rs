@@ -1,0 +1,584 @@
+//! Animation events: the per-tick `(entity, clip, event)` crossings a game's logic reacts to
+//! (`Plan/animation-clips.md` decisions 11, 14 and 15).
+//!
+//! A clip's authored events (an assembly clip's own, a character's effective events with its speed
+//! overlay) are named instants inside the clip. [`animation_events`] is a sim system a game
+//! registers in its own schedule, after whatever writes `Animation` and before whatever reads the
+//! result, the [`play_patterns`](crate::play_patterns) precedent. Each tick it rewrites the
+//! [`AnimationEvents`] resource with everything the clock crossed. A scene whose game never
+//! registers it is untouched.
+//!
+//! **The crossing rule.** Clip time is the unwrapped `T(n)` the renderer evaluates
+//! (`clip_elapsed`, so a [`set_speed`](crate::set_speed) anchor counts) times the binding speed,
+//! read at gameplay time. A walk fires what lies in `(T_prev, T(n)]`, and an event at `t = 0` is in
+//! the first window, which is closed at zero. A `started` in the future fires nothing, and speed `0`
+//! fires nothing after the start. A one-shot fires each event once, then an implicit `end` event
+//! when `T` reaches its duration (after any authored event at that instant); a loop fires each
+//! event once per cycle, several times in one tick when a tick spans cycles, and has no `end`. A
+//! tick walks at most [`MAX_CYCLES_PER_WALK`] (64) loop cycles, the latest, so an absurd speed or
+//! anchor never panics or stalls. `end` is a reserved name (`L1198` on an authored one).
+//!
+//! **Where a walk starts.** `T_prev` is, in order: the clip time the last walk reached
+//! (`AnimationWalk`, when it ran last tick for the same `(entity, clip, started)`), so a speed
+//! change before or after a walk, a raw write to `speed` included, can neither skip nor repeat (a
+//! lowered speed fires nothing until clip time passes the point already walked); or, for a clip
+//! started this tick or stamped after last tick's walk, nothing (window `[0, T(n)]`); or `T(n−1)`
+//! from the clock, for a clip already running when first seen (a load, a switch, a restore from an
+//! older snapshot). So a clip a later-registered system starts (the react-on-`end` pattern) fires
+//! its `t = 0` event one tick late, with its first tick of clip time, and an earlier-registered one
+//! on the start tick; never lost, never twice. The record rides a snapshot.
+//!
+//! **Crossfade.** Only the incoming `clip` emits. The outgoing `from` side never does, its `end`
+//! included: [`crossfade`](crate::crossfade) has already handed the choice to the new clip, so a
+//! fading-out run's footsteps would double the incoming clip's and a stale `end` would release a
+//! choice the game has already made.
+//!
+//! **Held frames.** A frame the game held crosses nothing: the resource is cleared and the walk
+//! skipped, so an event is never delivered twice for one gameplay frame.
+//!
+//! **Order.** Entities in ascending id order, then crossing time, then authored order, then `end`.
+//! The walk is sequential, so the log is thread-count invariant by construction.
+//!
+//! **Where timing comes from.** No sim-side resource holds assembly or character data (the asset
+//! cache is render-only), so [`AnimationLibrary`] loads each model once, lazily, through the same
+//! validated loaders extraction uses and keeps only the clip timing. Like a
+//! [`DocStore`](crate::DocStore) it is engine configuration derived from committed content, never
+//! hashed, and rebuilt from disk at every load, restore and switch. **`asset.reload` does not
+//! invalidate it**: a retimed clip reaches events at the next load, restore or switch, which keeps
+//! a mid-session reload replay-safe. A model that fails to load still emits nothing, but raises
+//! `L1210` once per entity naming the model; `check-scene` and scene load already report a broken
+//! document.
+//!
+//! A runtime `L1209` rides the same walk: a `Sprite` drawn from an atlas whose `Animation` carries a
+//! `fade` hard-cuts, so the fade would silently do nothing.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
+use ludion_core::ids::EntityId;
+use ludion_core::time::{FrameIndex, SimTime};
+use ludion_ecs::{SystemCtx, World};
+use ludion_scene::AnimationEvent;
+use serde::{Deserialize, Serialize};
+
+use crate::components::{Animation, Mesh, MeshSource, Sprite};
+use crate::extract::clock_elapsed;
+
+/// The reserved name of the implicit event a one-shot clip fires when it finishes.
+const END: &str = "end";
+
+/// The most loop cycles one walk visits, the latest ones: a tick that spans more (an absurd speed
+/// or anchor) neither stalls nor overflows the cycle arithmetic.
+const MAX_CYCLES_PER_WALK: i64 = 64;
+
+/// One clip's timing as [`animation_events`] reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ClipTiming {
+    /// The clip length in seconds.
+    pub duration: f64,
+    /// Whether the clip loops.
+    pub looped: bool,
+    /// The binding's playback speed multiplier (`1.0` for an assembly clip).
+    pub speed: f64,
+    /// The clip's effective events, time-ascending.
+    pub events: Vec<AnimationEvent>,
+}
+
+/// The per-model clip timings [`animation_events`] reads, loaded lazily from `root`. Engine
+/// configuration installed at every world rebuild, never hashed; see the module docs.
+pub(crate) struct AnimationLibrary {
+    root: PathBuf,
+    /// Keyed by the `Mesh.shape` path; `Err` holds the loader's diagnostics for a model that failed
+    /// to load.
+    models: BTreeMap<String, Result<BTreeMap<String, ClipTiming>, Vec<Diagnostic>>>,
+}
+
+impl AnimationLibrary {
+    /// An empty library resolving model paths against `root`.
+    pub(crate) fn new(root: PathBuf) -> Self {
+        AnimationLibrary {
+            root,
+            models: BTreeMap::new(),
+        }
+    }
+
+    /// The clip timings of the assembly or character `shape` names, loading it on first use.
+    /// `Ok(None)` for any other shape, `Err` with the loader's diagnostics for a model that
+    /// failed to load.
+    fn timings(
+        &mut self,
+        shape: &MeshSource,
+    ) -> Result<Option<&BTreeMap<String, ClipTiming>>, &[Diagnostic]> {
+        let (MeshSource::Assembly(rel) | MeshSource::Character(rel)) = shape else {
+            return Ok(None);
+        };
+        if !self.models.contains_key(rel) {
+            let loaded = match shape {
+                MeshSource::Assembly(_) => {
+                    crate::assembly_mesh::load(&self.root, rel).map(|data| {
+                        data.clips
+                            .iter()
+                            .map(|binding| {
+                                (
+                                    binding.name.clone(),
+                                    ClipTiming {
+                                        duration: binding.clip.duration,
+                                        looped: binding.clip.looped,
+                                        speed: 1.0,
+                                        events: binding.clip.events.clone(),
+                                    },
+                                )
+                            })
+                            .collect()
+                    })
+                }
+                _ => crate::character::load(&self.root, rel).map(|data| {
+                    data.clips
+                        .iter()
+                        .map(|binding| {
+                            (
+                                binding.name.clone(),
+                                ClipTiming {
+                                    duration: binding.clip.duration,
+                                    looped: binding.clip.looped,
+                                    speed: binding.speed,
+                                    events: binding.events.clone(),
+                                },
+                            )
+                        })
+                        .collect()
+                }),
+            };
+            self.models.insert(rel.clone(), loaded);
+        }
+        match self.models.get(rel) {
+            Some(Ok(timings)) => Ok(Some(timings)),
+            Some(Err(error)) => Err(error),
+            None => Ok(None),
+        }
+    }
+}
+
+/// Where the last [`animation_events`] walk stopped, per playing clip, so the next walk resumes
+/// exactly there (module docs, "Where a walk starts"). A world resource, never hashed; it rides a
+/// snapshot so a restore resumes the same walk.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AnimationWalk {
+    /// The gameplay tick the walk ran at.
+    pub tick: u64,
+    /// The clips walked, in ascending entity order.
+    pub clips: Vec<WalkedClip>,
+}
+
+/// One clip [`AnimationWalk`] reached: `t` is the binding-scaled clip time the walk ended at.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct WalkedClip {
+    pub entity: EntityId,
+    pub clip: String,
+    pub started: FrameIndex,
+    pub t: f64,
+}
+
+/// One fired event: `name` crossed on `clip`, the clip `entity` is playing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClipEvent {
+    /// The entity playing the clip.
+    pub entity: EntityId,
+    /// The clip's short name, as in `Animation.clip`.
+    pub clip: String,
+    /// The event's authored name, or `end` for a one-shot's implicit end.
+    pub name: String,
+}
+
+/// Every [`ClipEvent`] the last [`animation_events`] run fired, in deterministic order (see the
+/// module docs). Rewritten on every run: a consumer reads it in the same tick, after that system.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AnimationEvents {
+    fired: Vec<ClipEvent>,
+}
+
+impl AnimationEvents {
+    /// The events fired this tick, in firing order.
+    pub fn iter(&self) -> impl Iterator<Item = &ClipEvent> {
+        self.fired.iter()
+    }
+
+    /// Whether `name` fired on `entity`'s `clip` this tick.
+    pub fn fired(&self, entity: EntityId, clip: &str, name: &str) -> bool {
+        self.fired
+            .iter()
+            .any(|event| event.entity == entity && event.clip == clip && event.name == name)
+    }
+}
+
+/// Rewrites the [`AnimationEvents`] resource with every event the gameplay clock crossed this tick
+/// on an entity playing a clip of its `Mesh.shape` assembly or character (the crossing rule,
+/// crossfade and held-frame behavior are in the module docs), and raises `L1209` for a sprite
+/// crossfade, and `L1210` for a model that failed to load.
+///
+/// A game registers it in its own schedule, after the systems that write `Animation` and before the
+/// ones that read the events, and declares its reads:
+///
+/// ```
+/// use ludion_engine::{Animation, AnimationEvents, Engine, Mesh, Sprite, animation_events};
+/// use ludion_protocol::{Command, command};
+///
+/// let mut engine = Engine::builder()
+///     .system("animation_events", animation_events)
+///     .query::<(&Animation, &Mesh)>()
+///     .query::<(&Animation, &Sprite)>()
+///     .build()
+///     .unwrap();
+/// engine
+///     .execute(Command::SimStep(command::SimStepParams { ticks: 1, hash: false }))
+///     .unwrap();
+/// // A consumer registered after the system reads what fired this tick.
+/// let events = engine.world().resource::<AnimationEvents>().unwrap();
+/// assert_eq!(events.iter().count(), 0);
+/// ```
+///
+/// Reading a specific entity's event is `events.fired(entity, "attack", "end")`.
+pub fn animation_events(world: &mut World, ctx: &SystemCtx) {
+    let mut fired = Vec::new();
+    if ctx.game_advanced() {
+        walk(world, ctx, &mut fired);
+    }
+    match world.resource_mut::<AnimationEvents>() {
+        Some(events) => events.fired = fired,
+        None => {
+            world.insert_resource(AnimationEvents { fired });
+        }
+    }
+}
+
+fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
+    let sprite_fades: Vec<EntityId> = world
+        .query_ids::<(&Animation, &Sprite)>()
+        .filter(|(_, (animation, sprite))| sprite.atlas.is_some() && animation.fade > 0.0)
+        .map(|(id, _)| id)
+        .collect();
+    for id in sprite_fades {
+        crate::diagnostics::report(
+            world,
+            code::ANIMATION_SPRITE_CROSSFADE,
+            format!("{id}/Animation/fade"),
+            format!(
+                "a sprite flipbook cannot crossfade: `Animation.fade` on {id} is ignored and the \
+                 sprite hard-cuts to its `clip`"
+            ),
+        );
+    }
+
+    // Both resources come out of the world for the walk, so the query can iterate the world
+    // directly: no per-tick copy of the record, the shapes or the clip names.
+    let Some(mut library) = world.remove_resource::<AnimationLibrary>() else {
+        return;
+    };
+    let mut record = world.remove_resource::<AnimationWalk>();
+
+    let now = ctx.game_time;
+    let ticks = now.ticks();
+    let mut failures = Vec::new();
+    let mut walked = Vec::new();
+    for (id, (animation, mesh)) in world.query_ids::<(&Animation, &Mesh)>() {
+        let shape = &mesh.shape;
+        let clip = &animation.clip;
+        if clip.is_empty() || !matches!(shape, MeshSource::Assembly(_) | MeshSource::Character(_)) {
+            continue;
+        }
+        let timing = match library.timings(shape) {
+            Ok(timings) => timings.and_then(|timings| timings.get(clip)),
+            Err(error) => {
+                if let MeshSource::Assembly(rel) | MeshSource::Character(rel) = shape {
+                    failures.push((id, clip.clone(), rel.clone(), error.to_vec()));
+                }
+                None
+            }
+        };
+        let Some(timing) = timing else {
+            continue;
+        };
+        let started = animation.started.as_u64();
+        if ticks < started {
+            continue;
+        }
+        let frame = FrameIndex::new(started);
+        let (speed, anchor) = (animation.speed, animation.anchor);
+        let at = |time: SimTime| clock_elapsed(time, frame, speed, anchor.as_ref()) * timing.speed;
+        let t_now = at(now);
+        let old = record.as_mut().and_then(|record| {
+            let index = record.clips.binary_search_by_key(&id, |c| c.entity).ok()?;
+            Some((record.tick, &mut record.clips[index]))
+        });
+        let resumed = old
+            .as_ref()
+            .filter(|(tick, last)| tick + 1 == ticks && last.clip == *clip && last.started == frame)
+            .map(|(_, last)| last.t);
+        let prev = match resumed {
+            Some(t) => Some(t),
+            // Started this tick, or stamped after last tick's walk: nothing has been walked yet.
+            None if started + 1 >= ticks => None,
+            // Already running when first seen (a load, a switch, a restore from an older snapshot).
+            None => Some(at(SimTime::from_ticks(ticks - 1, now.rate()))),
+        };
+        // A raw `speed` write that lowers the speed pulls clip time back below the point already
+        // walked; keeping the furthest point fires nothing until the clock passes it again.
+        let reached = resumed.map_or(t_now, |p| t_now.max(p));
+        let walked_clip = match old {
+            Some((_, last)) if last.clip == *clip => std::mem::take(&mut last.clip),
+            _ => clip.clone(),
+        };
+        walked.push(WalkedClip {
+            entity: id,
+            clip: walked_clip,
+            started: frame,
+            t: reached,
+        });
+        let mut names = Vec::new();
+        crossings(timing, prev, t_now, &mut names);
+        fired.extend(names.into_iter().map(|name| ClipEvent {
+            entity: id,
+            clip: clip.clone(),
+            name: name.to_string(),
+        }));
+    }
+    world.insert_resource(library);
+    world.insert_resource(AnimationWalk {
+        tick: ticks,
+        clips: walked,
+    });
+    for (id, clip, rel, causes) in failures {
+        let diagnostic = Diagnostic::new(
+            code::ANIMATION_MODEL_UNLOADED,
+            format!(
+                "{id} plays `{clip}` but its model `{rel}` failed to load, so it fires no \
+                 animation events (`end` included)"
+            ),
+        );
+        let diagnostic = causes
+            .into_iter()
+            .fold(diagnostic, Diagnostic::with_related);
+        crate::diagnostics::report_full(world, format!("{id}/Mesh/shape"), diagnostic);
+    }
+}
+
+/// The names of the events `timing` fires as clip time moves from `prev` to `now`, in firing order
+/// (`end` last). `prev` is the clip time already walked: `Some(p)` is the window `(p, now]`, `None`
+/// is a clip that has not been walked yet, `[0, now]` closed at zero so a `t = 0` event fires. A
+/// loop visits at most [`MAX_CYCLES_PER_WALK`] cycles, the latest.
+fn crossings<'a>(timing: &'a ClipTiming, prev: Option<f64>, now: f64, out: &mut Vec<&'a str>) {
+    let duration = timing.duration;
+    if !(duration > 0.0
+        && duration.is_finite()
+        && prev.is_none_or(f64::is_finite)
+        && now.is_finite())
+    {
+        return;
+    }
+    let in_window = |t: f64| match prev {
+        None => t >= 0.0 && t <= now,
+        Some(prev) => t > prev && t <= now,
+    };
+    if prev.is_some_and(|prev| now <= prev) {
+        return;
+    }
+    if timing.looped {
+        // `floor` and `fl(k·d) <= now` can disagree by a cycle, so the range is widened and the
+        // window test decides; windows tile exactly, so a wider range cannot fire twice.
+        let lower = prev.unwrap_or(0.0);
+        let first = ((lower / duration).floor() as i64).saturating_sub(1).max(0);
+        let last = ((now / duration).floor() as i64).saturating_add(1);
+        let first = first.max(last.saturating_sub(MAX_CYCLES_PER_WALK));
+        for cycle in first..=last {
+            let offset = cycle as f64 * duration;
+            for event in &timing.events {
+                if in_window(event.t + offset) {
+                    out.push(&event.name);
+                }
+            }
+        }
+    } else {
+        for event in &timing.events {
+            if in_window(event.t) {
+                out.push(&event.name);
+            }
+        }
+        if in_window(duration) {
+            out.push(END);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ludion_core::time::{FrameIndex, SimTime, TickRate};
+
+    use super::*;
+
+    fn timing(duration: f64, looped: bool, events: &[(f64, &str)]) -> ClipTiming {
+        ClipTiming {
+            duration,
+            looped,
+            speed: 1.0,
+            events: events
+                .iter()
+                .map(|(t, name)| AnimationEvent {
+                    t: *t,
+                    name: (*name).to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The names fired on `tick` of a clip started at frame 0, at `speed`, at 60 Hz.
+    fn on_tick(timing: &ClipTiming, tick: u64, speed: f32) -> Vec<&str> {
+        let at = |ticks| {
+            clock_elapsed(
+                SimTime::from_ticks(ticks, TickRate::DEFAULT),
+                FrameIndex::ZERO,
+                speed,
+                None,
+            ) * timing.speed
+        };
+        let mut out = Vec::new();
+        let prev = (tick > 0).then(|| at(tick - 1));
+        crossings(timing, prev, at(tick), &mut out);
+        out
+    }
+
+    #[test]
+    fn an_event_at_zero_fires_on_the_start_tick_only() {
+        let clip = timing(1.0, true, &[(0.0, "go")]);
+        assert_eq!(on_tick(&clip, 0, 1.0), ["go"]);
+        assert!((1..30).all(|tick| on_tick(&clip, tick, 1.0).is_empty()));
+    }
+
+    #[test]
+    fn a_one_shot_fires_end_once_after_the_authored_events() {
+        let clip = timing(0.5, false, &[(0.25, "hit"), (0.5, "late")]);
+        let fired: Vec<Vec<&str>> = (0..90).map(|tick| on_tick(&clip, tick, 1.0)).collect();
+        assert_eq!(fired[15], ["hit"]);
+        assert_eq!(fired[30], ["late", "end"]);
+        let total: usize = fired.iter().map(Vec::len).sum();
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn a_loop_fires_each_event_once_per_cycle_and_no_end() {
+        let clip = timing(0.5, true, &[(0.25, "step")]);
+        let fired: usize = (0..120).map(|tick| on_tick(&clip, tick, 1.0).len()).sum();
+        assert_eq!(fired, 4);
+        assert!((0..120).all(|tick| !on_tick(&clip, tick, 1.0).contains(&"end")));
+    }
+
+    #[test]
+    fn a_tick_spanning_two_cycles_fires_both() {
+        let clip = timing(0.1, true, &[(0.05, "step")]);
+        // Speed 20 at 60 Hz: one tick is 1/3 s, more than three 0.1 s cycles.
+        let fired = on_tick(&clip, 1, 20.0);
+        assert_eq!(fired, ["step", "step", "step"]);
+    }
+
+    #[test]
+    fn speed_zero_fires_nothing_after_the_start() {
+        let clip = timing(1.0, false, &[(0.0, "go"), (0.5, "mid")]);
+        assert_eq!(on_tick(&clip, 0, 0.0), ["go"]);
+        assert!((1..120).all(|tick| on_tick(&clip, tick, 0.0).is_empty()));
+    }
+
+    #[test]
+    fn a_035_second_one_shot_ends_on_tick_21_at_60_hz() {
+        let clip = timing(0.35, false, &[]);
+        assert!(on_tick(&clip, 20, 1.0).is_empty());
+        assert_eq!(on_tick(&clip, 21, 1.0), ["end"]);
+        assert!((22..90).all(|tick| on_tick(&clip, tick, 1.0).is_empty()));
+    }
+
+    /// A loop's `t: 0` event fires once per cycle at the tick an exact integer oracle names, for
+    /// every duration in 5 ms steps and four speeds: float rounding at a wrap never drops a cycle or
+    /// fires one twice.
+    #[test]
+    fn a_loops_zero_event_fires_once_per_cycle_for_every_rounding() {
+        let mut failures = Vec::new();
+        for m in 10u64..=400 {
+            for a in 1u64..=4 {
+                let clip = timing(m as f64 / 200.0, true, &[(0.0, "go")]);
+                let speed = a as f32 / 2.0;
+                let ticks = 3000u64;
+                let per_tick: Vec<usize> = (0..ticks)
+                    .map(|tick| on_tick(&clip, tick, speed).len())
+                    .collect();
+                let fires: Vec<u64> = (0..ticks).filter(|&t| per_tick[t as usize] > 0).collect();
+                let total: usize = per_tick.iter().sum();
+                // Cycle `k` is first reached at the smallest `n` with `5·a·n >= 3·k·m`; on an exact
+                // tie the float may land a tick late.
+                let oracle = |k: u64| {
+                    let n = (3 * k * m).div_ceil(5 * a);
+                    (n, 5 * a * n == 3 * k * m && k > 0)
+                };
+                let last_cycle = (5 * a * (ticks - 1)) / (3 * m);
+
+                let (mut sure, mut maybe) = (0, 0);
+                let mut misplaced = None;
+                for (next, k) in (0..=last_cycle).enumerate() {
+                    let (n, tie) = oracle(k);
+                    maybe += 1;
+                    if n + 1 < ticks {
+                        sure += 1;
+                    }
+                    let ok = fires
+                        .get(next)
+                        .is_some_and(|&f| f == n || (tie && f == n + 1));
+                    if !ok && n + 1 < ticks {
+                        misplaced = Some((k, n, fires.get(next).copied()));
+                        break;
+                    }
+                }
+                let doubled = per_tick.iter().any(|&count| count > 1);
+                if misplaced.is_some() || doubled || !(sure..=maybe).contains(&total) {
+                    failures.push((m, a, misplaced, doubled, total, sure));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} cases misfired (m, a, misplaced (cycle, oracle tick, got), doubled, total, sure): {:?}",
+            failures.len(),
+            &failures[..failures.len().min(5)]
+        );
+    }
+
+    /// Rust-built values skip validation, so a huge speed or anchor reaches `crossings`: it must
+    /// neither overflow the cycle arithmetic nor walk billions of cycles.
+    #[test]
+    fn a_pathological_speed_or_anchor_neither_panics_nor_stalls() {
+        let clip = timing(0.5, true, &[(0.1, "a"), (0.3, "b")]);
+        let bound = (MAX_CYCLES_PER_WALK as usize + 1) * 2;
+        for (prev, now) in [
+            (Some(-1e30), 1e30),
+            (Some(0.0), f64::MAX),
+            (Some(1e300), 1.5e300),
+            (Some(-1e30), -1e29),
+        ] {
+            let mut out = Vec::new();
+            crossings(&clip, prev, now, &mut out);
+            assert!(out.len() <= bound, "{prev:?} -> {now}: {}", out.len());
+        }
+        for speed in [1e21, f32::MAX, 1e9] {
+            for tick in 0..4 {
+                let fired = on_tick(&clip, tick, speed);
+                assert!(fired.len() <= bound, "speed {speed}, tick {tick}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_degenerate_duration_fires_nothing() {
+        for duration in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let clip = timing(duration, false, &[(0.0, "go")]);
+            assert!(on_tick(&clip, 0, 1.0).is_empty());
+        }
+    }
+}

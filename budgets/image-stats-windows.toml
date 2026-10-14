@@ -1,0 +1,196 @@
+# Image-defect baseline — the Windows golden set, re-measured after the post-process arc's defaults
+# flip (wave 11: pyramid bloom, AgX, exposure 1.3, output dither on).
+#
+# Checked with:
+#
+#   ludion image-stats examples/gallery/goldens/windows/*.png --check budgets/image-stats-windows.toml
+#
+# These are regression tripwires in the same spirit as `pinned-rtx3090.toml`, with one difference
+# that matters: a profile budget's ceiling is calibrated at roughly twice its median because timings
+# are noisy, while these numbers are a **pure function of committed bytes** and do not move at all
+# until a golden is re-blessed. So each ceiling sits just above its measured value — a breach means
+# the image genuinely got worse, never machine noise.
+#
+# All four metrics run higher-is-worse and live in [0, 1]; see `ludion explain L4010` and the
+# `ludion-testkit` topic for what each one counts. Every entry here is a ceiling, and an omitted
+# metric is simply not checked.
+#
+# **These are not targets.** A wave that improves an image re-records its entry downward. Relaxing a
+# ceiling upward is a re-calibration event and needs the same justification a golden re-bless does.
+#
+# **What the flip did to these numbers**, which is the whole reason they are re-recorded here:
+# banding collapsed on every scene — the worst in the set went 0.8979 to 0.2867, and the set's mean
+# went 0.7189 to 0.2374 — because the output dither is now on by default. Aliasing rose slightly on
+# most scenes (mean 0.9299 to 0.9500): AgX is steeper than the ACES fit through the midtones, so a
+# luma step across an edge lands further apart in the output, and `edge_aliasing` measures exactly
+# that hardness. Nothing here anti-aliases; that is supersampling's job (`render --scale`), which is
+# a client quality setting rather than a default.
+#
+# Per-OS, like the goldens they measure. The macOS twin is `budgets/image-stats-macos.toml`, measured
+# on the pinned Apple M4 at Lore rev 446. The two sets agree to within 0.02 of banding on fifteen of
+# nineteen images and to within 0.003 of aliasing on all nineteen; the exceptions are all
+# flat-background content, where the output dither's sub-LSB stipple — not any visible difference —
+# decides the banding score. `text.png` is the extreme: 0.0090 here, 0.2632 there. That sensitivity is
+# why these are keyed per-OS and not shared; the macOS file's header records it.
+
+# One image in the gallery crushes a channel to black at all — `post-full`, at 0.0030, where the
+# authored grade puts a floor of a few blue levels under the moon's shadow bands and lets red and
+# green run out from under it. The worst white-clip is lantern-sheet's at 0.0015 — the exposure went
+# to 1.3 at the flip and did not put any scene near its ceiling. Both apply to every image; a scene
+# that starts railing channels is worth knowing about wherever it happens.
+clipped_low  = 0.0200
+clipped_high = 0.0200
+
+# Banding and aliasing are strongly scene-dependent — a flat-background text scene and a sky-gradient
+# scene have nothing to say to each other — so each image carries its own pair. The measured value
+# and the pre-flip one are in the comment; the ceiling is the measurement plus 0.02, clamped at the
+# metric's own 1.0 ceiling.
+
+[images."billboards.png"]
+banding_score = 0.2880   # 0.2679 (was 0.7398)
+edge_aliasing = 1.0000   # 0.9934 (was 0.9469)
+
+[images."breakout-mock.png"]
+banding_score = 0.2571   # 0.2370 (was 0.6994)
+edge_aliasing = 0.9736   # 0.9535 (was 0.9574)
+
+[images."colliders.png"]
+banding_score = 0.3138   # 0.2938 (was 0.8532)
+edge_aliasing = 0.9892   # 0.9691 (was 0.9593)
+
+[images."gi-inject-stress.png"]
+banding_score = 0.1984   # 0.1784 measured 2026-09-07 (first entry; the golden is byte-identical since 2026-08-08)
+edge_aliasing = 0.0200   # 0.0000 — a probe-lattice interior with no hard edge in frame
+
+[images."gi-interior.png"]
+banding_score = 0.2141   # 0.1941 measured 2026-09-07 (0.2039 on 2026-08-07; the golden moved post-W3′/W4)
+edge_aliasing = 0.8995   # 0.8795 (0.8791 on 2026-08-07)
+
+[images."lantern-sheet.png"]
+banding_score = 0.2892   # 0.2692 (was 0.8144)
+edge_aliasing = 1.0000   # 0.9984 (was 0.9963)
+
+[images."lights.png"]
+banding_score = 0.2534   # 0.2333 (was 0.5439)
+edge_aliasing = 0.9894   # 0.9694 (was 0.9013)
+
+# The 500-light clustered-forward stress scene: no post chain and no sun, so the dither does the
+# banding work alone and the number sits below the lit gallery mean.
+[images."lights-stress.png"]
+banding_score = 0.1566   # 0.1366 measured 2026-09-07 (first entry)
+edge_aliasing = 1.0000   # 0.9826
+
+# Still the lowest aliasing in the set by a wide margin: a scalar-material PBR park is mostly smooth
+# shaded curvature, which is the content this renderer already handles best.
+[images."material-park.png"]
+banding_score = 0.2243   # 0.2043 (was 0.3050)
+edge_aliasing = 0.6804   # 0.6603 (was 0.6528)
+
+[images."mesh-asset.png"]
+banding_score = 0.2884   # 0.2684 (was 0.7782)
+edge_aliasing = 0.9940   # 0.9740 (was 0.9133)
+
+[images."meshes.png"]
+banding_score = 0.3023   # 0.2823 (was 0.7984)
+edge_aliasing = 0.9861   # 0.9660 (was 0.9468)
+
+# Was the highest-banding image in the repo at 0.8979 and the reason the output dither is on the
+# roster. Turning the dither on by default is what took it to 0.2867 - the single biggest defect
+# reduction of the arc, on the scene it was aimed at.
+[images."night-sky.png"]
+banding_score = 0.3067   # 0.2867 (was 0.8979)
+edge_aliasing = 0.7746   # 0.7546 (was 0.8344)
+
+[images."occlusion-fade.png"]
+banding_score = 0.2078   # 0.1877 (was 0.5104)
+edge_aliasing = 1.0000   # 0.9998 (was 0.9997)
+
+# The post-process arc's all-on scene, and the only one that authors the whole `PostProcess` roster
+# rather than inheriting the defaults — so it is the one image in this file whose numbers are a
+# statement about the roster composing rather than about the engine's shipped imaging.
+#
+# Both entries fell a long way when the roster landed, and the two falls are not the same kind of
+# thing.
+#
+# **Banding 0.2097 -> 0.0725 is the effect doing its job.** The scene authors `grain: 0.012`, and
+# breaking the constant-luma runs an 8-bit gradient quantizes into is precisely what grain is in the
+# roster for; measured on this frame it is 0.2366 with the grain off and 0.0725 with it on. The
+# defect is genuinely smaller.
+#
+# **Aliasing 0.9000 -> 0.2144 is mostly the metric being fooled, and the split is measured.** With
+# the defocus off the same frame reads 0.5660, so the depth of field accounts for 0.34 of the fall:
+# that is real detail replaced by a gradient — `Plan/post-process-pipeline.md` wave 9 refused to gate
+# on this metric for exactly that reason. The remaining 0.15 is the chromatic aberration (0.3695 with
+# it off), which displaces red and blue by under a pixel and anti-aliases nothing whatsoever. That is
+# the metric gaming the plan's Risks section names, and it is recorded here rather than tuned away:
+# the aberration is authored at 0.0008, a quarter of what the component's own docs call a normal
+# value, precisely so it stays a lens rather than becoming a cheap way to buy this number.
+#
+# Nothing here anti-aliases. The scene remains the host for the supersampling gate
+# (`ludion-testkit/tests/supersampling.rs`), which switches the defocus, the aberration and the grain
+# off at both ends so that it measures the resolve and not them.
+# Merging the fog and the shafts into one medium moved this golden and so re-measured both entries,
+# by too little to re-cut a ceiling: banding 0.0725 -> 0.0730, aliasing 0.2144 -> 0.2120. The beams
+# now march to 3/`fog_density` = 214 units instead of stopping at 30, at a tenth the in-scatter per
+# step, which trades a near-camera wash for a longer, fainter one — a redistribution, not a defect.
+# Authoring `fog_sky: 1.0` on the scene moved it again by as little: banding 0.0730 -> 0.0725,
+# aliasing 0.2120 -> 0.2093. The one entry that moved by a visible fraction is the shared
+# `clipped_low`, 0.0018 -> 0.0030 — a sky-coupled haze is darker than the hand-matched horizon slab
+# it replaced everywhere except at the horizon itself, so a few more shadow samples reach zero. It
+# is still under a sixth of the shared ceiling.
+[images."post-full.png"]
+banding_score = 0.0925   # 0.0725 (was 0.0730 pre-fog_sky, 0.0725 pre-merge, 0.2097 pre-roster, 0.5740 pre-flip)
+edge_aliasing = 0.2344   # 0.2093 (was 0.2120 pre-fog_sky, 0.2144 pre-merge, 0.9000 pre-roster, 0.9171 pre-flip)
+
+[images."sprites.png"]
+banding_score = 0.2030   # 0.1830 (was 0.9608)
+edge_aliasing = 1.0000   # 1.0000 (was 0.9811)
+
+[images."sun-shadows.png"]
+banding_score = 0.2981   # 0.2780 (was 0.8912)
+edge_aliasing = 0.9291   # 0.9091 (was 0.8856)
+
+# The one image the dither made measurably *worse*, and by 0.009: a flat background carries no
+# gradient to contour, so its banding was exactly 0 and any sub-LSB stipple can only add. That is the
+# dither doing its job on content that did not need it, not a defect - and it is still the lowest
+# banding in the set. Aliasing stays fully saturated because glyph edges are bare steps, every one.
+[images."text.png"]
+banding_score = 0.0291   # 0.0090 (was 0.0000)
+edge_aliasing = 1.0000   # 1.0000 (was 1.0000)
+
+[images."tilemap.png"]
+banding_score = 0.2298   # 0.2098 (was 0.8879)
+edge_aliasing = 1.0000   # 0.9959 (was 0.9265)
+
+# The same scene at two resolutions - 960x540 and 1920x1080. Their closeness is the metrics'
+# resolution-stability holding on real content rather than on a fixture.
+[images."ui-hud.png"]
+banding_score = 0.2951   # 0.2751 (was 0.7317)
+edge_aliasing = 1.0000   # 0.9985 (was 0.9957)
+
+[images."ui-hud-1080.png"]
+banding_score = 0.2407   # 0.2206 (was 0.7840)
+edge_aliasing = 1.0000   # 0.9998 (was 0.9982)
+
+[images."voxel-model.png"]
+banding_score = 0.2765   # 0.2565 (was 0.7494)
+edge_aliasing = 0.9783   # 0.9583 (was 0.8174)
+
+# --- vigil's three districts, 1920x1080 ---------------------------------------------------------
+#
+# Recorded here but not checkable by this file: a district scene names vigil's own components, so it
+# renders only through the game registry (`ludion_engine::render_scene_with_registry`), which the CLI
+# cannot supply. Only `district-plaza` has a committed golden, and that one is 960x540 rather than
+# the 1920x1080 these were measured at.
+#
+# **These three are pre-flip figures and are stale.** They were measured live before the defaults
+# flip, through a scratch harness this repo does not carry:
+#
+#   district-plaza      banding 0.6691  edge 0.9765  low 0.0000  high 0.0028
+#   district-market     banding 0.6870  edge 0.9893  low 0.0000  high 0.0020
+#   district-cathedral  banding 0.6781  edge 0.9731  low 0.0000  high 0.0020
+#
+# The one figure available without rebuilding that harness is the re-blessed plaza golden at 960x540:
+# banding 0.2387, edge 0.9477, low 0.0000, high 0.0011 — the same collapse in banding the gallery
+# shows. The wave that gives vigil its own `PostProcess` should re-measure all three at 1920x1080 and
+# replace this block.

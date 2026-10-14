@@ -1,0 +1,15 @@
+format: 1
+kind: map
+name: bad-marker-kind
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - ".."
+  - ".."
+markers:
+  - kind: wel
+    x: 1.0
+    z: 1.0
