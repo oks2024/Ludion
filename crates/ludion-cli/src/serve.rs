@@ -74,6 +74,8 @@ pub fn run(
         engine.set_render_scale(scale);
     }
     engine.set_quality(quality);
+    // Served scenes are live content too: read cooked maps where `ludion sync` wrote them, else the PNG.
+    engine.set_textures(ludion_engine::TextureSource::Cooked);
     // The extent is the third of them, and the one that moves bytes rather than GPU work: it sizes
     // every streamed frame's readback, encode and socket write, which `--scale` deliberately does
     // not (it renders at `render_size × scale` and resamples back). Set only when a host named one,

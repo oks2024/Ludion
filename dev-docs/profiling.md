@@ -36,7 +36,7 @@ layer measures is `frame-streaming`; the determinism guarantees the profiler mus
   it; an unobserved frame submits exactly what it always did. The first cached extract after a
   world rebuild prefetches the world's assets in parallel (`AssetCache::prefetch`), and a map
   shared by several meshes is one `texture` decode. A rebuild keeps the cached assets the new world
-  names (re-hashing their files first, `AssetCache::retain_referenced`); `reused` counts them. The one-shot `extract`/`extract_at` paths use
+  names (re-hashing their files first, `AssetCache::retain_referenced`); `reused` counts them, and `ludion_engine::gpu_uploads` shows what the load re-uploaded to the GPU (cache misses only). The one-shot `extract`/`extract_at` paths use
   the same prefetched cache, with no observer attached.
 - `crates/ludion-engine/src/perf_live.rs` — the **live** profiler: `LivePerf`, `FrameSample`,
   `PROFILE_WINDOW_FRAMES` (60), `LIVE_SEQUENTIAL_NAMES` (`extract`, `submit`), the crate's only
@@ -109,7 +109,8 @@ encode/send it measures is that viewer's own delivery cost, not one the game pay
 
 **The `load` section** is offline only: `Engine::observe_load` (or `EngineBuilder::observe_load`) arms
 a `LoadClock` before the scene load, and a disarmed host reads no clock for loading. Its phases are
-exclusive self-times, and its decoded/reused/bytes counters are deterministic.
+exclusive self-times, and its decoded/cooked/reused/bytes counters are deterministic. `cooked` counts
+KTX2 reads from the cooked store (texture only) apart from `decoded`; `bytes_read` covers both.
 
 The offline driver, live channel, `profile.capture`, tails, the `cluster` section and the Perfetto export are `ludion devdocs profiling-capture`.
 

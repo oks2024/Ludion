@@ -142,6 +142,21 @@ ssao_samples = 4
 - **A budget check requires `full`.** `profile --check` refuses a non-full capture: ceilings are
   calibrated against everything the scene authors.
 
+## Textures: source or cooked
+
+`--textures <source|cooked>` picks where imported mesh maps come from: `source` decodes the PNGs,
+`cooked` reads the BC7/ASTC copies `ludion sync` wrote under `.ludion/cooked/`. A map with no cooked
+copy loads from its PNG, with one `L1271` warning per load. Pixels only — never the sim or its hash.
+
+| Host | Textures |
+|---|---|
+| game window, `--addr`, `ludion dev`, `ludion serve` | `cooked` |
+| exported and `launch` builds | `cooked`, always |
+| `--profile` | `source`, unless `--textures cooked` |
+| `--render-out`, `--replay-*`, `--check-*`, `ludion render`, `ludion test`, goldens | `source` |
+
+The verification modes refuse the flag, so a golden never depends on the store.
+
 ## Gotchas
 
 - **A misspelled preset reports as a missing file.** `--quality medum` is read as a path; the `L0016`

@@ -3622,8 +3622,15 @@
             "minimum": 0,
             "type": "integer"
           },
+          "cooked": {
+            "default": 0,
+            "description": "Cooked-store reads (KTX2), counted apart from `decoded`; only `texture` is ever non-zero.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "decoded": {
-            "description": "Decode events: one per decode, so a map shared by two meshes counts twice.",
+            "description": "Decode events: one per decoded file, so a map shared by two meshes decodes once.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -5616,8 +5623,15 @@
             "minimum": 0,
             "type": "integer"
           },
+          "cooked": {
+            "default": 0,
+            "description": "Cooked-store reads (KTX2), counted apart from `decoded`; only `texture` is ever non-zero.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "decoded": {
-            "description": "Decode events: one per decode, so a map shared by two meshes counts twice.",
+            "description": "Decode events: one per decoded file, so a map shared by two meshes decodes once.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"

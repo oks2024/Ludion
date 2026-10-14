@@ -3018,7 +3018,11 @@ export interface AssetLoadCounters {
    */
   bytes_read: number;
   /**
-   * Decode events: one per decode, so a map shared by two meshes counts twice.
+   * Cooked-store reads (KTX2), counted apart from `decoded`; only `texture` is ever non-zero.
+   */
+  cooked?: number;
+  /**
+   * Decode events: one per decoded file, so a map shared by two meshes decodes once.
    */
   decoded: number;
   /**

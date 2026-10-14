@@ -239,6 +239,7 @@ pub(crate) struct LoadClock {
     gpu_upload: Option<Duration>,
     gi_bake: Option<Duration>,
     decoded: [u64; 8],
+    cooked: [u64; 8],
     reused: [u64; 8],
     bytes: [u64; 8],
     seen: BTreeSet<(usize, String)>,
@@ -286,6 +287,7 @@ impl LoadClock {
                 .map(|(i, kind)| AssetLoadCounters {
                     kind: kind.name().to_string(),
                     decoded: self.decoded[i],
+                    cooked: self.cooked[i],
                     reused: self.reused[i],
                     bytes_read: self.bytes[i],
                 })
@@ -348,6 +350,7 @@ impl LoadObserver for LoadClock {
 
     fn cooked(&mut self, kind: LoadKind, key: &str, bytes: u64) {
         let i = Self::index(kind);
+        self.cooked[i] += 1;
         self.bytes[i] += bytes;
         self.seen.insert((i, key.to_string()));
     }
@@ -1635,6 +1638,26 @@ entities:
         assert_eq!(counters(&again, "texture").reused, 1);
         assert!(again.first_frame_ms.is_some());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A cooked read counts apart from a decode, and a report written before the field existed
+    /// reads back with zero.
+    #[test]
+    fn load_profile_counts_cooked_reads_apart() {
+        let mut clock = LoadClock::default();
+        clock.decoded(LoadKind::Texture, "a.png", 10);
+        clock.cooked(LoadKind::Texture, "b.ktx2", 20);
+        clock.cooked(LoadKind::Texture, "c.ktx2", 30);
+        let load = clock.finish();
+        let tex = counters(&load, "texture");
+        assert_eq!((tex.decoded, tex.cooked, tex.bytes_read), (1, 2, 60));
+        assert_eq!(counters(&load, "mesh").cooked, 0);
+
+        let mut json = serde_json::to_value(tex).unwrap();
+        assert_eq!(json["cooked"], 2);
+        json.as_object_mut().unwrap().remove("cooked");
+        let old: AssetLoadCounters = serde_json::from_value(json).unwrap();
+        assert_eq!(old.cooked, 0);
     }
 
     /// The prefetch drops its failures: the extract that follows reports them exactly as it does on a

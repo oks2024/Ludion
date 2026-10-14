@@ -281,8 +281,11 @@ pub struct AssetLoadCounters {
     /// The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,
     /// `character`, `atlas`).
     pub kind: String,
-    /// Decode events: one per decode, so a map shared by two meshes counts twice.
+    /// Decode events: one per decoded file, so a map shared by two meshes decodes once.
     pub decoded: u64,
+    /// Cooked-store reads (KTX2), counted apart from `decoded`; only `texture` is ever non-zero.
+    #[serde(default)]
+    pub cooked: u64,
     /// Distinct keys whose first lookup in the window was a cache hit.
     pub reused: u64,
     /// On-disk size of the files those decodes read.
@@ -562,6 +565,7 @@ mod tests {
             assets: vec![AssetLoadCounters {
                 kind: "mesh".into(),
                 decoded: 2,
+                cooked: 0,
                 reused: 1,
                 bytes_read: 100,
             }],

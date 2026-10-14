@@ -78,6 +78,9 @@ pub struct StartOptions {
     pub threads: Option<usize>,
     /// The render quality (`PRESET|FILE`), in place of `LUDION_QUALITY`.
     pub quality: Option<String>,
+    /// Where imported mesh maps are read from; a host that names none gets
+    /// [`Cooked`](ludion_engine::TextureSource::Cooked), which falls back to the PNG per map.
+    pub textures: Option<ludion_engine::TextureSource>,
     /// The quality a packaged build ships with, used when neither `quality` nor `LUDION_QUALITY`
     /// chooses one — so whoever launches the build can still override it.
     pub packaged_quality: Option<String>,
@@ -104,6 +107,14 @@ pub struct StartOptions {
     /// selects modes only — the host's shape stays the fields above. Honored for a game source only.
     #[cfg(feature = "wire")]
     pub argv: Option<Vec<String>>,
+}
+
+impl StartOptions {
+    /// The mesh-map source a hosted engine runs with: the named one, else `Cooked`.
+    fn live_textures(&self) -> ludion_engine::TextureSource {
+        self.textures
+            .unwrap_or(ludion_engine::TextureSource::Cooked)
+    }
 }
 
 /// The render extent a host's safe area asks for: 720 high at the safe area's aspect, never narrower
@@ -709,6 +720,7 @@ fn run_boot(boot: Boot) -> bool {
                 &scene,
                 options.restore.as_deref(),
                 quality,
+                options.live_textures(),
                 render_size,
             ) else {
                 return false;
@@ -1024,6 +1036,34 @@ mod tests {
             paused: true,
             ..StartOptions::default()
         }
+    }
+
+    /// A host that names no texture source boots cooked; one that names `source` keeps it.
+    #[test]
+    fn a_hosted_engine_defaults_to_cooked_textures() {
+        use ludion_engine::TextureSource;
+
+        assert_eq!(
+            StartOptions::default().live_textures(),
+            TextureSource::Cooked
+        );
+        let source = StartOptions {
+            textures: Some(TextureSource::Source),
+            ..StartOptions::default()
+        };
+        assert_eq!(source.live_textures(), TextureSource::Source);
+
+        let content = content_root("textures-default");
+        let engine = crate::prepare_game_engine(
+            builder(),
+            &content.join("scenes/main.yaml"),
+            None,
+            QualitySetting::full(),
+            StartOptions::default().live_textures(),
+            None,
+        )
+        .unwrap_or_else(|_| panic!("the engine boots"));
+        assert_eq!(engine.textures(), TextureSource::Cooked);
     }
 
     fn step_hash(embedded: &Embedded, ticks: u32) -> WireHash {

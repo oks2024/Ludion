@@ -119,7 +119,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_engine::EngineBuilder;
+use ludion_engine::{EngineBuilder, TextureSource};
 
 /// `ludion::run`'s fixed argument set, mirroring `ludion serve` so a game's own binary and the CLI
 /// host a scene the same way.
@@ -297,6 +297,16 @@ pub(crate) struct RunArgs {
     /// that is neither a preset nor a usable file is `L0016` and refuses to start.
     #[arg(long, value_name = "PRESET|FILE")]
     quality: Option<String>,
+    /// Mesh-map source: `cooked` loads BC7/ASTC maps `ludion sync` wrote, falling back per map to the
+    /// PNG with an L1271 warning; `source` decodes the PNGs. Live hosting defaults to `cooked`,
+    /// `--profile` to `source`. Verification modes always render `source`.
+    #[arg(
+        long,
+        value_name = "source|cooked",
+        value_parser = ["source", "cooked"],
+        conflicts_with_all = ["check_scene", "render_out", "check_docs", "replay_frames", "replay_verify", "profile_replay"]
+    )]
+    textures: Option<String>,
     /// Render extent for this machine, as `WIDTHxHEIGHT` in whole pixels (`960x540`) — the size the
     /// hosted engine streams and screenshots at. Overrides `LUDION_RENDER_SIZE`; without either, the
     /// engine's default extent stands. Every stage of the frame path costs in proportion to the pixel
@@ -453,6 +463,7 @@ pub fn run(builder: EngineBuilder) -> ExitCode {
         scene: Some(scene),
         threads: args.threads,
         quality: args.quality,
+        textures: args.textures.as_deref().and_then(TextureSource::from_name),
         render_size: args.render_size,
         dev_shaders: args.dev_shaders,
         print_schema_hash: false,
@@ -626,6 +637,10 @@ pub(crate) fn run_short_circuit(
             frames,
             args.profile_check.as_deref(),
             quality,
+            args.textures
+                .as_deref()
+                .and_then(TextureSource::from_name)
+                .unwrap_or_default(),
         ));
     }
 
@@ -717,6 +732,7 @@ pub(crate) fn prepare_game_engine(
     scene: &Path,
     restore: Option<&Path>,
     quality: ludion_engine::QualitySetting,
+    textures: TextureSource,
     render_size: Option<(u32, u32)>,
 ) -> Result<ludion_engine::Engine, ExitCode> {
     // Player-profile persistence is on for this live host run — the one place a `profile.save()`
@@ -745,6 +761,8 @@ pub(crate) fn prepare_game_engine(
     // A host switch, applied before the engine moves onto the sim thread: an attached client sees
     // this machine's quality through `engine.describe` and can never negotiate it.
     engine.set_quality(quality);
+    // Likewise a host switch, pixels only: where imported mesh maps are read from.
+    engine.set_textures(textures);
     // The render extent rides beside it, and unlike quality it moves the bytes a stream delivers
     // rather than the GPU work behind them. Set only when a host named one, so an absent flag leaves
     // the engine's own default.
@@ -1305,8 +1323,11 @@ fn load_summary(load: &ludion_protocol::perf::LoadProfile) -> String {
     let decoded: Vec<String> = load
         .assets
         .iter()
-        .filter(|counters| counters.decoded > 0)
-        .map(|counters| format!("{} {}", counters.decoded, counters.kind))
+        .filter(|counters| counters.decoded > 0 || counters.cooked > 0)
+        .map(|counters| match counters.cooked {
+            0 => format!("{} {}", counters.decoded, counters.kind),
+            cooked => format!("{} {} ({cooked} cooked)", counters.decoded, counters.kind),
+        })
         .collect();
     if !decoded.is_empty() {
         line.push_str(&format!("; decoded {}", decoded.join(", ")));
@@ -1326,6 +1347,7 @@ fn run_profile(
     frames: u64,
     check: Option<&Path>,
     quality: ludion_engine::QualitySetting,
+    textures: TextureSource,
 ) -> ExitCode {
     let mut engine = match builder.observe_load().load_scene_file(scene) {
         Ok(engine) => engine,
@@ -1335,6 +1357,7 @@ fn run_profile(
         }
     };
     engine.set_quality(quality);
+    engine.set_textures(textures);
 
     let warmup = ludion_engine::warmup_for(frames);
     let report = match ludion_engine::profile_engine(
@@ -2056,6 +2079,36 @@ mod host_diagnostic_tests {
             assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
         }
     }
+
+    #[test]
+    fn textures_parses_a_source_and_refuses_the_rest() {
+        let parsed = RunArgs::try_parse_from(["game", "--textures", "cooked"]).unwrap();
+        assert_eq!(parsed.textures.as_deref(), Some("cooked"));
+        assert!(
+            RunArgs::try_parse_from(["game", "--profile", "5", "--textures", "cooked"]).is_ok()
+        );
+        assert!(RunArgs::try_parse_from(["game", "--textures", "bogus"]).is_err());
+        for other in [
+            ["--render-out", "y"],
+            ["--replay-verify", "y"],
+            ["--replay-frames", "y"],
+            ["--check-scene", ""],
+        ] {
+            let mut args = vec![
+                "game",
+                "--scene",
+                "s.yaml",
+                "--textures",
+                "cooked",
+                other[0],
+            ];
+            if !other[1].is_empty() {
+                args.push(other[1]);
+            }
+            assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
+        }
+        assert!(RunArgs::try_parse_from(["game", "--check-docs", "--textures", "cooked"]).is_err());
+    }
 }
 
 #[cfg(all(test, feature = "wire"))]
@@ -2505,6 +2558,7 @@ entities:
         let counters = |kind: &str, decoded| AssetLoadCounters {
             kind: kind.to_string(),
             decoded,
+            cooked: 0,
             reused: 0,
             bytes_read: 0,
         };
@@ -2530,6 +2584,14 @@ entities:
             "load 5712 ms: scene 410, mesh 830, texture 1050, other 12, voxelize 300, \
              renderer init 250, gpu upload 1800, gi bake 600, first frame 400, \
              unattributed 60 (1%); decoded 235 texture, 79 mesh"
+        );
+
+        load.assets[0].decoded = 12;
+        load.assets[0].cooked = 223;
+        assert!(
+            load_summary(&load).ends_with("; decoded 12 texture (223 cooked), 79 mesh"),
+            "{}",
+            load_summary(&load)
         );
 
         load.gpu_upload_ms = None;
