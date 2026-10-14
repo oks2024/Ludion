@@ -5618,9 +5618,9 @@ mod tests {
         }
 
         /// A *first* build is never held — an empty cache has nothing to serve, and an unvoxelized
-        /// scene would be a worse answer than a stale one. `scene.load` clears the cache
-        /// ([`AssetCache::clear`]) without clearing the host's lever, which is exactly what makes a
-        /// new scene under a hold cost one build and then hold from there.
+        /// scene would be a worse answer than a stale one. A scene load resets the voxelization
+        /// ([`AssetCache::reset_voxelization`]) without touching the host's lever, which is exactly what
+        /// makes a new scene under a hold cost one build and then hold from there.
         #[test]
         fn a_first_build_under_a_hold_still_builds() {
             let mut cache = AssetCache::new();
@@ -5636,7 +5636,7 @@ mod tests {
             assert!(!cache.gi_stale());
 
             // A new scene: the retained grid goes, the lever stays, so the next world builds once.
-            cache.clear();
+            cache.reset_voxelization();
             voxelize_through(&world_with_a_cube(9.0, 0.5), &mut cache);
             assert_eq!(
                 rasterization_count() - before,

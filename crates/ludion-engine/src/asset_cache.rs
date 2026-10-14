@@ -34,6 +34,11 @@
 //! A mesh's texture maps are entries of their own, shared by every mesh that names the file, so one PNG
 //! is one decode however many meshes bind it.
 //!
+//! At each rebuild's first cached extract the cache keeps only what the new world names
+//! ([`AssetCache::retain_referenced`]), re-hashes the files the kept entries were built from and drops
+//! what changed, then prefetches. A scene load therefore never clears the cache: what two worlds
+//! share is decoded once.
+//!
 //! After a world rebuild the engine's first cached extract calls [`AssetCache::prefetch`] with the
 //! assets the world names: it decodes them on the worker pool and inserts the results serially in
 //! sorted key order, so the cache is the same at any thread count and the extract that follows only
@@ -123,52 +128,75 @@ enum Decoded {
 }
 
 /// Runs `kind`'s loader for `rel` with no access to the cache, returning the value and the files it
-/// read. Pure, so a prefetch can run it on any thread. Never called for [`AssetKind::Mesh`].
+/// read with their content hashes. Pure, so a prefetch can run it on any thread. Never called for
+/// [`AssetKind::Mesh`].
 fn decode(
     project_root: &Path,
     kind: AssetKind,
     rel: &str,
     key: &str,
-) -> Result<(Decoded, Vec<String>), Vec<Diagnostic>> {
+) -> Result<(Decoded, SourceFiles), Vec<Diagnostic>> {
     let own = || vec![key.to_string()];
     Ok(match kind {
         AssetKind::Texture => {
             // Premultiplied on the miss, never on the hit: the convention is a property of the
             // decoded bytes, and every frame after this one reads them straight back out.
             let image = load_texture(project_root, rel).map_err(|d| vec![d])?;
-            (Decoded::Texture(image), own())
+            let hash = image.hash;
+            (Decoded::Texture(image), vec![(key.to_string(), hash)])
         }
         AssetKind::MeshMap => {
             let image = crate::mesh_asset::decode_map(project_root, rel).map_err(|d| vec![d])?;
-            (Decoded::MeshMap(image), own())
+            let hash = image.hash;
+            (Decoded::MeshMap(image), vec![(key.to_string(), hash)])
         }
         AssetKind::Mesh => unreachable!("a mesh is assembled against the cache's maps"),
         AssetKind::Voxel => {
             let mesh = crate::voxel_mesh::load(project_root, rel)?;
-            (Decoded::Voxel(mesh), own())
+            (Decoded::Voxel(mesh), hash_sources(project_root, own()))
         }
         AssetKind::VoxelGrid => {
             let grid = crate::voxel_mesh::load_grid(project_root, rel)?;
-            (Decoded::VoxelGrid(grid), own())
+            (Decoded::VoxelGrid(grid), hash_sources(project_root, own()))
         }
         AssetKind::Sculpt => {
             let (mesh, sources) = crate::sculpt_mesh::load_with_sources(project_root, rel)?;
-            (Decoded::Sculpt(mesh), sources)
+            (Decoded::Sculpt(mesh), hash_sources(project_root, sources))
         }
         AssetKind::Assembly => {
             let (data, sources) = crate::assembly_mesh::load_with_sources(project_root, rel)?;
-            (Decoded::Assembly(data), sources)
+            (Decoded::Assembly(data), hash_sources(project_root, sources))
         }
         AssetKind::Character => {
             let (data, sources) = crate::character::load_with_sources(project_root, rel)?;
-            (Decoded::Character(data), sources)
+            (
+                Decoded::Character(data),
+                hash_sources(project_root, sources),
+            )
         }
         AssetKind::Atlas => {
             let asset = crate::extract::load_atlas(project_root, rel)?;
             let color = ludion_core::paths::sibling(rel, &asset.doc.color_map);
-            (Decoded::Atlas(asset), vec![key.to_string(), color])
+            let sources = vec![key.to_string(), color];
+            (Decoded::Atlas(asset), hash_sources(project_root, sources))
         }
     })
+}
+
+/// Pairs each of `paths` with the content hash of its file now. A file that cannot be read hashes as
+/// `0`, which can only force a later re-decode.
+///
+/// A file edited between the decode's read and this one is recorded under the new hash with the old
+/// bytes decoded — accepted: the window is microseconds, and the live host's watcher sends
+/// `asset.reload` for the edit anyway.
+fn hash_sources(project_root: &Path, paths: Vec<String>) -> SourceFiles {
+    paths
+        .into_iter()
+        .map(|path| {
+            let hash = ludion_assets::load_bytes(project_root, &path).map_or(0, |bytes| bytes.hash);
+            (path, hash)
+        })
+        .collect()
 }
 
 /// A CPU cache of decoded assets — texture [`TextureImage`]s, asset [`MeshData`], voxel-model
@@ -176,8 +204,8 @@ fn decode(
 /// [`AssemblyData`], and [`AtlasAsset`]s — keyed by slash-normalized project-root-relative path.
 ///
 /// One map per asset kind (a path names exactly one kind, though a voxel path names both a mesh and a
-/// grid), all under the one cache so `asset.reload` and `scene.load` invalidate textures, meshes,
-/// voxel models, assemblies, and atlases uniformly. Every kind records which files it was read from
+/// grid), all under the one cache so `asset.reload` and a rebuild's revalidation invalidate textures,
+/// meshes, voxel models, assemblies, and atlases uniformly. Every kind records which files it was read from
 /// in the one [`dependents`](AssetCache::dependents) map, so a reload of any input re-reads every
 /// entry built from it. Asset meshes and voxel models are held
 /// separately because their reload path re-runs a different loader (`.mesh.yaml` faceting vs
@@ -208,12 +236,16 @@ pub(crate) struct AssetCache {
     /// to such a file reloadable: the watcher reports the file that changed, and only the cache knows
     /// which entries were read out of it.
     dependents: BTreeMap<String, Vec<(AssetKind, String)>>,
+    /// The content hash of each source file in [`dependents`](AssetCache::dependents) as of the
+    /// decode that last read it: what [`retain_referenced`](AssetCache::retain_referenced) compares
+    /// the file on disk against to find the entries that went stale between two worlds.
+    source_hashes: BTreeMap<String, u64>,
     voxelization: Option<(u64, Option<Arc<WorldVoxelGrid>>)>,
     /// Whether a host is holding the voxelized baseline: a signature miss then serves the retained
     /// entry **without rewriting its key**, so the held grid stays the baseline however far the world
     /// moves from it. Host/session state a host sets per frame
     /// ([`Engine::set_gi_rebake`](crate::Engine::set_gi_rebake)) — never world content, so it is not
-    /// cleared by [`clear`](AssetCache::clear). Every world rebuild forces one unheld frame, so the
+    /// cleared by [`reset_voxelization`](AssetCache::reset_voxelization). Every world rebuild forces one unheld frame, so the
     /// new world's first build replaces the retained entry and becomes the held baseline.
     gi_hold: bool,
     /// Whether the last hold-aware read served the retained grid for a signature it was not built
@@ -221,8 +253,9 @@ pub(crate) struct AssetCache {
     /// signature comparison runs every frame anyway, so a world that returns to the held baseline is
     /// honestly not stale.
     gi_stale: bool,
-    /// Load instrumentation a host attached. Host state, not content, so [`clear`](AssetCache::clear)
-    /// leaves it alone — the scene load that clears the cache is the very event it measures.
+    /// Load instrumentation a host attached. Host state, not content, so
+    /// [`reset_voxelization`](AssetCache::reset_voxelization) leaves it alone — the scene load is the
+    /// very event it measures.
     observer: Option<Box<dyn LoadObserver>>,
 }
 
@@ -240,6 +273,7 @@ impl AssetCache {
             characters: BTreeMap::new(),
             atlases: BTreeMap::new(),
             dependents: BTreeMap::new(),
+            source_hashes: BTreeMap::new(),
             voxelization: None,
             gi_hold: false,
             gi_stale: false,
@@ -267,23 +301,12 @@ impl AssetCache {
         self.observer.as_deref_mut()
     }
 
-    /// Drops every entry — called on a `scene.load`, so a new scene's assets are never shadowed by a
-    /// previous scene's stale bytes.
+    /// Forgets the voxelization — a loaded scene never reuses the previous world's.
     ///
     /// [`gi_hold`](AssetCache::gi_hold) deliberately survives: it is the *host's* lever, not the
     /// scene's. The unheld frame every rebuild forces is what makes the new world build once and then
     /// hold from there.
-    pub(crate) fn clear(&mut self) {
-        self.images.clear();
-        self.mesh_maps.clear();
-        self.meshes.clear();
-        self.voxels.clear();
-        self.voxel_grids.clear();
-        self.sculpts.clear();
-        self.assemblies.clear();
-        self.characters.clear();
-        self.atlases.clear();
-        self.dependents.clear();
+    pub(crate) fn reset_voxelization(&mut self) {
         self.voxelization = None;
         self.gi_stale = false;
     }
@@ -560,12 +583,14 @@ impl AssetCache {
         project_root: &Path,
         kind: AssetKind,
         key: &str,
-        sources: &[String],
+        sources: &SourceFiles,
     ) {
         let Some(observer) = self.observer.as_deref_mut() else {
             return;
         };
-        let len = |src: &String| std::fs::metadata(project_root.join(src)).map_or(0, |m| m.len());
+        let len = |src: &(String, u64)| {
+            std::fs::metadata(project_root.join(&src.0)).map_or(0, |m| m.len())
+        };
         if kind == AssetKind::Mesh {
             // The maps report themselves: each is its own entry, shared by every mesh naming it.
             if let Some(document) = sources.first() {
@@ -603,7 +628,7 @@ impl AssetCache {
         kind: AssetKind,
         rel: &str,
         key: &str,
-    ) -> Result<Vec<String>, Vec<Diagnostic>> {
+    ) -> Result<SourceFiles, Vec<Diagnostic>> {
         if kind == AssetKind::Mesh {
             let (doc, hash) = crate::mesh_asset::read_document(project_root, rel)?;
             let (mesh, sources) = crate::mesh_asset::assemble(rel, &doc, hash, &mut |path| {
@@ -663,9 +688,11 @@ impl AssetCache {
     }
 
     /// Records the `kind` entry `key` as depending on each of `sources` (its own document included).
-    fn record_sources(&mut self, kind: AssetKind, key: &str, sources: &[String]) {
-        for source in sources {
-            let dependents = self.dependents.entry(normalize_key(source)).or_default();
+    fn record_sources(&mut self, kind: AssetKind, key: &str, sources: &SourceFiles) {
+        for (source, hash) in sources {
+            let source = normalize_key(source);
+            self.source_hashes.insert(source.clone(), *hash);
+            let dependents = self.dependents.entry(source).or_default();
             if !dependents.iter().any(|(k, held)| *k == kind && held == key) {
                 dependents.push((kind, key.to_string()));
             }
@@ -683,6 +710,113 @@ impl AssetCache {
             .retain(|_, dependents| !dependents.is_empty());
     }
 
+    /// Forgets the recorded hash of every file no entry depends on any more.
+    fn prune_source_hashes(&mut self) {
+        let dependents = &self.dependents;
+        self.source_hashes
+            .retain(|file, _| dependents.contains_key(file));
+    }
+
+    /// Removes every entry built from the file `file`, with its edges, and returns them — the drop
+    /// half of [`reload`](AssetCache::reload).
+    fn drop_dependents(&mut self, file: &str) -> Vec<(AssetKind, String)> {
+        let dependents = self.dependents.get(file).cloned().unwrap_or_default();
+        for (kind, entry) in &dependents {
+            self.remove_entry(*kind, entry);
+            self.drop_sources(*kind, entry);
+        }
+        self.prune_source_hashes();
+        dependents
+    }
+
+    /// Drops every dependency edge whose entry the cache no longer holds, and the hashes of files
+    /// nothing depends on any more.
+    fn retain_edges(&mut self) {
+        let mut dependents = std::mem::take(&mut self.dependents);
+        for entries in dependents.values_mut() {
+            entries.retain(|(kind, entry)| self.holds(*kind, entry));
+        }
+        dependents.retain(|_, entries| !entries.is_empty());
+        self.dependents = dependents;
+        self.prune_source_hashes();
+    }
+
+    /// Makes the cache the working set of the world `refs` describes: evicts every entry the world
+    /// does not name (so a chain of scene switches never accumulates), then re-hashes the files the
+    /// survivors were built from and drops every entry built from one that changed or vanished — the
+    /// drop half of [`reload`](AssetCache::reload). The next [`prefetch`](AssetCache::prefetch) then
+    /// decodes only what is missing, so a scene that shares assets with the last one pays for none of
+    /// them. Nothing is re-read here: a dropped entry is decoded again by the prefetch or the extract
+    /// that follows.
+    pub(crate) fn retain_referenced(&mut self, project_root: &Path, refs: &AssetRefs) {
+        let mut meshes = refs.meshes.clone();
+        for key in &refs.characters {
+            if let Some(character) = self.characters.get(key) {
+                meshes.insert(normalize_key(&character.mesh));
+            }
+        }
+        self.images.retain(|key, _| refs.textures.contains(key));
+        self.atlases.retain(|key, _| refs.atlases.contains(key));
+        self.voxels.retain(|key, _| refs.voxels.contains(key));
+        self.voxel_grids.retain(|key, _| refs.voxels.contains(key));
+        self.sculpts.retain(|key, _| refs.sculpts.contains(key));
+        self.assemblies
+            .retain(|key, _| refs.assemblies.contains(key));
+        self.characters
+            .retain(|key, _| refs.characters.contains(key));
+        self.meshes.retain(|key, _| meshes.contains(key));
+        self.retain_edges();
+
+        // A map no kept mesh binds is an orphan.
+        let dependents = &self.dependents;
+        self.mesh_maps.retain(|key, _| {
+            dependents
+                .get(key)
+                .is_some_and(|entries| entries.iter().any(|(kind, _)| *kind == AssetKind::Mesh))
+        });
+        self.retain_edges();
+
+        self.begin(LoadPhase::Other);
+        let changed: Vec<String> = {
+            let files: Vec<(&String, u64)> = self
+                .source_hashes
+                .iter()
+                .map(|(file, hash)| (file, *hash))
+                .collect();
+            let moved = ludion_core::par::par_map_chunks(&files, 16, |_, chunk| {
+                chunk
+                    .iter()
+                    .map(|(file, hash)| {
+                        !matches!(
+                            ludion_assets::load_bytes(project_root, file),
+                            Ok(bytes) if bytes.hash == *hash
+                        )
+                    })
+                    .collect::<Vec<bool>>()
+            });
+            files
+                .iter()
+                .zip(moved.into_iter().flatten())
+                .filter(|(_, moved)| *moved)
+                .map(|((file, _), _)| (*file).clone())
+                .collect()
+        };
+        self.end(LoadPhase::Other);
+        for file in changed {
+            if self.dependents.contains_key(&file) {
+                self.drop_dependents(&file);
+            }
+        }
+        self.prune_source_hashes();
+    }
+
+    /// Tells the observer the walked `kind` entry `key` was already held.
+    fn report_reused(&mut self, kind: AssetKind, key: &str) {
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(kind.load_kind(), key);
+        }
+    }
+
     /// Decodes every asset in `refs` that the cache does not hold yet, in parallel, ahead of the
     /// extract that would otherwise decode them one by one on its miss path.
     ///
@@ -691,7 +825,8 @@ impl AssetCache {
     /// depend on the thread count: the non-mesh kinds, every mesh document, every map those
     /// documents bind plus the loose textures, and last each mesh assembled against its maps. A
     /// failure is dropped here — the extract that follows hits the same miss and reports it with its
-    /// usual diagnostic. Voxel grids and the volley, particle, UI and font atlases stay lazy.
+    /// usual diagnostic. Every walked entry the cache already holds (and the maps of a held mesh) is
+    /// reported as reused. Voxel grids and the volley, particle, UI and font atlases stay lazy.
     ///
     /// Never call the observer from a worker: each stage is bracketed from this thread.
     pub(crate) fn prefetch(&mut self, project_root: &Path, refs: &AssetRefs) {
@@ -705,11 +840,13 @@ impl AssetCache {
             (AssetKind::Character, &refs.characters),
         ];
         for (kind, keys) in others {
-            jobs.extend(
-                keys.iter()
-                    .filter(|key| !self.holds(kind, key))
-                    .map(|key| (kind, key.as_str())),
-            );
+            for key in keys {
+                if self.holds(kind, key) {
+                    self.report_reused(kind, key);
+                } else {
+                    jobs.push((kind, key.as_str()));
+                }
+            }
         }
         self.decode_batch(project_root, LoadPhase::Other, &jobs);
 
@@ -720,10 +857,27 @@ impl AssetCache {
                 mesh_keys.insert(normalize_key(&character.mesh));
             }
         }
-        let todo: Vec<&String> = mesh_keys
+        let (held, todo): (Vec<&String>, Vec<&String>) = mesh_keys
             .iter()
-            .filter(|key| !self.meshes.contains_key(*key))
+            .partition(|key| self.meshes.contains_key(*key));
+        for key in &held {
+            self.report_reused(AssetKind::Mesh, key);
+        }
+        let held: BTreeSet<&String> = held.into_iter().collect();
+        let held_maps: Vec<String> = self
+            .dependents
+            .iter()
+            .filter(|(file, entries)| {
+                self.mesh_maps.contains_key(*file)
+                    && entries
+                        .iter()
+                        .any(|(kind, entry)| *kind == AssetKind::Mesh && held.contains(entry))
+            })
+            .map(|(file, _)| file.clone())
             .collect();
+        for map in &held_maps {
+            self.report_reused(AssetKind::MeshMap, map);
+        }
         self.begin(LoadPhase::Mesh);
         let read = ludion_core::par::par_map_chunks(&todo, 1, |_, chunk| {
             crate::mesh_asset::read_document(project_root, chunk[0])
@@ -740,7 +894,9 @@ impl AssetCache {
         for (key, doc, _) in &docs {
             for path in crate::mesh_asset::map_paths(key, doc) {
                 let path = normalize_key(&path);
-                if !self.mesh_maps.contains_key(&path) {
+                if self.mesh_maps.contains_key(&path) {
+                    self.report_reused(AssetKind::MeshMap, &path);
+                } else {
                     maps.insert(path);
                 }
             }
@@ -749,12 +905,13 @@ impl AssetCache {
             .iter()
             .map(|key| (AssetKind::MeshMap, key.as_str()))
             .collect();
-        jobs.extend(
-            refs.textures
-                .iter()
-                .filter(|key| !self.images.contains_key(*key))
-                .map(|key| (AssetKind::Texture, key.as_str())),
-        );
+        for key in &refs.textures {
+            if self.images.contains_key(key) {
+                self.report_reused(AssetKind::Texture, key);
+            } else {
+                jobs.push((AssetKind::Texture, key.as_str()));
+            }
+        }
         self.decode_batch(project_root, LoadPhase::Texture, &jobs);
 
         // Stage 4: assemble serially, so a map that failed above fails its meshes the same way.
@@ -859,13 +1016,9 @@ impl AssetCache {
     /// failure is returned and each failed entry is left dropped, so a later successful reload (or
     /// the next `extract`) reinstates it.
     pub(crate) fn reload(&mut self, project_root: &Path, key: &str) -> Result<u64, Diagnostic> {
-        let dependents = self.dependents.get(key).cloned().unwrap_or_default();
         // Drop every entry before any re-read: one failing early must not leave a later dependent
         // (a character built on a mesh that just changed) holding the stale copy.
-        for (kind, entry) in &dependents {
-            self.remove_entry(*kind, entry);
-            self.drop_sources(*kind, entry);
-        }
+        let dependents = self.drop_dependents(key);
         let mut first_error = None;
         for (kind, entry) in &dependents {
             // A mesh re-read above may already have brought a shared map back.
@@ -2033,12 +2186,13 @@ parts:
             })
             .collect();
         format!(
-            "{:?}\n{:?}\n{:?}\n{:?}\n{atlases:?}\n{assemblies:?}\n{:?}",
+            "{:?}\n{:?}\n{:?}\n{:?}\n{atlases:?}\n{assemblies:?}\n{:?}\n{:?}",
             images(&cache.images),
             images(&cache.mesh_maps),
             meshes(&cache.meshes),
             meshes(&cache.voxels),
             cache.dependents,
+            cache.source_hashes,
         )
     }
 
@@ -2085,6 +2239,34 @@ parts:
         }
         assert!(one.contains("textures/s.png"));
         assert!(one.contains_mesh_map("textures/u.png"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Evicting down to one mesh drops the other meshes, the maps only they bound, and every edge and
+    /// recorded hash that pointed at them.
+    #[test]
+    fn retain_referenced_drops_orphan_maps_and_prunes_edges() {
+        let (dir, refs) = prefetch_fixture("retain");
+        let mut cache = AssetCache::new();
+        cache.prefetch(&dir, &refs);
+        assert!(cache.contains_mesh_map("textures/u.png"));
+
+        let keep = AssetRefs {
+            meshes: ["meshes/a.mesh.yaml".to_string()].into_iter().collect(),
+            ..AssetRefs::default()
+        };
+        cache.retain_referenced(&dir, &keep);
+
+        assert!(cache.contains_mesh("meshes/a.mesh.yaml"));
+        assert!(cache.contains_mesh_map("textures/t.png"));
+        assert_eq!(cache.resolve_key(&dir, "textures/u.png"), None);
+        assert_eq!(cache.resolve_key(&dir, "meshes/c.mesh.yaml"), None);
+        assert!(!cache.contains("textures/s.png"));
+        assert!(!cache.contains_voxel("voxels/v.voxel.yaml"));
+        assert!(!cache.contains_atlas("a.atlas.yaml"));
+        let edges: Vec<_> = cache.dependents.keys().collect();
+        let hashes: Vec<_> = cache.source_hashes.keys().collect();
+        assert_eq!(edges, hashes);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

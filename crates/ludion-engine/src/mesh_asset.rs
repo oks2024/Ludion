@@ -52,22 +52,22 @@ pub(crate) type MapResolver<'a> = dyn FnMut(&str) -> Result<Arc<TextureImage>, D
 
 /// Builds a document's [`MeshData`] — [`decode`], its texture maps bound through `resolve`, and the
 /// map hashes folded into [`MeshData::hash`] so an edited PNG re-keys the GPU mesh (and its material
-/// bind group) even when the document is untouched — and **every file it read**: the mesh document
-/// first, then each distinct texture PNG, as `root`-relative paths. That list is the mesh's reload
-/// dependency set ([`crate::asset_cache`]).
+/// bind group) even when the document is untouched — and **every file it read** with its content
+/// hash: the mesh document first, then each distinct texture PNG, as `root`-relative paths. That list
+/// is the mesh's reload dependency set ([`crate::asset_cache`]).
 pub(crate) fn assemble(
     rel: &str,
     doc: &MeshDocument,
     doc_hash: u64,
     resolve: &mut MapResolver<'_>,
-) -> Result<(MeshData, Vec<String>), Vec<Diagnostic>> {
+) -> Result<(MeshData, SourceFiles), Vec<Diagnostic>> {
     let mut data = decode(doc, doc_hash);
     let (textures, files) = bind_textures(rel, doc, resolve)?;
     data.textures = textures;
     let texture_hashes: Vec<u64> = files.iter().map(|(_, hash)| *hash).collect();
     data.hash = fold_source_hashes(doc_hash, &texture_hashes);
-    let sources = std::iter::once(rel.to_string())
-        .chain(files.into_iter().map(|(path, _)| path))
+    let sources = std::iter::once((rel.to_string(), doc_hash))
+        .chain(files)
         .collect();
     Ok((data, sources))
 }

@@ -1431,6 +1431,7 @@ fn budget_invalid(path: &Path, detail: String) -> Diagnostic {
 mod tests {
     use super::*;
     use ludion_core::par;
+    use ludion_renderer::RenderScene;
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
 
@@ -1715,6 +1716,205 @@ entities:
 
         assert_eq!(counters(&load, "mesh").decoded, 2);
         assert_eq!(counters(&load, "texture").decoded, 2);
+    }
+
+    /// A scratch project for the retain tests: meshes `a`, `s` (shared) and `b`, each binding its own
+    /// base-colour map, `a` and `s` also binding `shared.png` as their emissive map, plus one loose
+    /// sprite PNG per scene.
+    fn retain_project(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ludion-retain-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        let png = |red: u8| ludion_assets::encode_png(1, 1, &[red, 20, 30, 255]).unwrap();
+        for (name, red) in [
+            ("a", 10),
+            ("s", 20),
+            ("b", 30),
+            ("shared", 40),
+            ("sp_a", 50),
+            ("sp_b", 60),
+        ] {
+            std::fs::write(dir.join(format!("textures/{name}.png")), png(red)).unwrap();
+        }
+        for (name, shared) in [("a", true), ("s", true), ("b", false)] {
+            let mut doc = TEXTURED_MESH.replace("t.png", &format!("{name}.png"));
+            if shared {
+                doc.push_str("emissive_texture:\n  path: ../textures/shared.png\n");
+            }
+            std::fs::write(dir.join(format!("meshes/{name}.mesh.yaml")), doc).unwrap();
+        }
+        dir
+    }
+
+    /// A scene naming `meshes` (by stem) and one loose sprite.
+    fn retain_scene(meshes: &[&str], sprite: &str) -> String {
+        let mut scene = String::from("format: 1\nentities:\n");
+        for mesh in meshes {
+            scene.push_str(&mesh_entity(&format!("meshes/{mesh}.mesh.yaml")));
+        }
+        scene.push_str(&format!(
+            "  - components:
+      Sprite:
+        texture: textures/{sprite}.png
+        size:
+          - 1.0
+          - 1.0
+"
+        ));
+        scene
+    }
+
+    /// Loads `scene` and runs its first extract.
+    fn load_and_extract(engine: &mut Engine, scene: &str) -> RenderScene {
+        engine.load_inline_scene(scene).unwrap();
+        engine.extract_render_scene(320, 180).unwrap()
+    }
+
+    #[test]
+    fn a_second_scene_reuses_what_it_shares() {
+        let dir = retain_project("shares");
+        let mut engine = Engine::with_project_root(&dir);
+        load_and_extract(&mut engine, &retain_scene(&["a", "s"], "sp_a"));
+
+        engine.observe_load();
+        load_and_extract(&mut engine, &retain_scene(&["b", "s"], "sp_b"));
+        let load = finish_load(&mut engine).expect("observed");
+
+        let mesh = counters(&load, "mesh");
+        assert_eq!((mesh.decoded, mesh.reused), (1, 1), "b decoded, s reused");
+        let texture = counters(&load, "texture");
+        assert_eq!(texture.decoded, 2, "b.png and sp_b.png are B's own");
+        assert!(texture.reused >= 1, "the shared map is held");
+        let cache = engine.asset_cache();
+        assert!(!cache.contains_mesh("meshes/a.mesh.yaml"));
+        assert!(!cache.contains_mesh_map("textures/a.png"));
+        assert!(!cache.contains("textures/sp_a.png"));
+        assert!(cache.contains_mesh_map("textures/shared.png"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_edited_shared_map_decodes_again_and_nothing_else() {
+        let dir = retain_project("edited");
+        let mut engine = Engine::with_project_root(&dir);
+        let scene = retain_scene(&["a", "s"], "sp_a");
+        let before = load_and_extract(&mut engine, &scene);
+
+        let edited = ludion_assets::encode_png(1, 1, &[99, 20, 30, 255]).unwrap();
+        std::fs::write(dir.join("textures/shared.png"), &edited).unwrap();
+        engine.observe_load();
+        let after = load_and_extract(&mut engine, &scene);
+        let load = finish_load(&mut engine).expect("observed");
+
+        assert_eq!(counters(&load, "texture").decoded, 1, "only shared.png");
+        assert!(
+            counters(&load, "texture").reused >= 3,
+            "the sprite and both own maps"
+        );
+        assert_eq!(counters(&load, "mesh").decoded, 2, "a and s name it");
+        assert_eq!(counters(&load, "mesh").reused, 0);
+        let hashes = |scene: &RenderScene| -> Vec<u64> {
+            scene.mesh_assets.iter().map(|mesh| mesh.hash).collect()
+        };
+        assert_eq!(hashes(&before).len(), 2);
+        assert!(
+            hashes(&before)
+                .iter()
+                .zip(hashes(&after))
+                .all(|(old, new)| *old != new),
+            "both meshes carry the edited map's hash"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_b_a_decodes_only_what_b_evicted() {
+        let dir = retain_project("aba");
+        let mut engine = Engine::with_project_root(&dir);
+        let a = retain_scene(&["a", "s"], "sp_a");
+        load_and_extract(&mut engine, &a);
+        load_and_extract(&mut engine, &retain_scene(&["b", "s"], "sp_b"));
+
+        engine.observe_load();
+        load_and_extract(&mut engine, &a);
+        let load = finish_load(&mut engine).expect("observed");
+
+        assert_eq!(counters(&load, "mesh").decoded, 1, "a only; s is held");
+        assert_eq!(counters(&load, "texture").decoded, 2, "a.png and sp_a.png");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_switch_chain_holds_only_the_current_world() {
+        let dir = retain_project("chain");
+        let scene = |mesh: &str, sprite: &str| {
+            let mut text = retain_scene(&[mesh], sprite);
+            text.push_str(
+                "  - name: anchor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+",
+            );
+            text
+        };
+        let scenes = [("a", "sp_a"), ("s", "sp_b"), ("b", "sp_a")];
+        let mut engine = Engine::with_project_root(&dir);
+        load_and_extract(&mut engine, &scene(scenes[0].0, scenes[0].1));
+        for (index, (mesh, sprite)) in scenes.iter().enumerate() {
+            if index > 0 {
+                let text = scene(mesh, sprite);
+                std::fs::write(dir.join(format!("district{index}.yaml")), &text).unwrap();
+                let switch = crate::transition::SwitchTo {
+                    scene_path: format!("district{index}.yaml"),
+                    spawn_anchor: "anchor".into(),
+                    carry: vec![],
+                };
+                crate::transition::perform(&mut engine, switch, &text).unwrap();
+                engine.extract_render_scene(320, 180).unwrap();
+            }
+            let cache = engine.asset_cache();
+            for other in ["a", "s", "b"] {
+                let held = other == *mesh;
+                let key = format!("meshes/{other}.mesh.yaml");
+                assert_eq!(cache.contains_mesh(&key), held, "scene {index}: {key}");
+                let own = format!("textures/{other}.png");
+                assert_eq!(cache.contains_mesh_map(&own), held, "scene {index}: {own}");
+            }
+            // `a` and `s` both bind `shared.png`; `b` does not.
+            assert_eq!(
+                cache.contains_mesh_map("textures/shared.png"),
+                *mesh != "b",
+                "scene {index}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The old clear's case: the same path holding new bytes at the next load is never served stale.
+    #[test]
+    fn same_path_new_bytes_is_never_served_stale() {
+        let dir = retain_project("stale");
+        let mut engine = Engine::with_project_root(&dir);
+        let scene = retain_scene(&[], "sp_a");
+        load_and_extract(&mut engine, &scene);
+
+        let new = ludion_assets::encode_png(1, 1, &[77, 20, 30, 255]).unwrap();
+        std::fs::write(dir.join("textures/sp_a.png"), &new).unwrap();
+        let extracted = load_and_extract(&mut engine, &scene);
+
+        let hash = ludion_assets::content_hash(&new);
+        assert!(
+            extracted
+                .textures
+                .iter()
+                .any(|texture| texture.hash == hash)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

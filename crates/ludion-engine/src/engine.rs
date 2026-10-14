@@ -3343,6 +3343,7 @@ impl Engine {
         let cache = &mut self.asset_cache;
         if std::mem::take(&mut self.prefetch_pending) {
             let refs = crate::extract::asset_refs(world, root);
+            cache.retain_referenced(root, &refs);
             cache.prefetch(root, &refs);
         }
         let mut degraded = Vec::new();
@@ -4804,10 +4805,10 @@ impl Engine {
                 profile_text: None, ..
             } => {}
         }
-        // A new scene brings new assets: drop the previous scene's decoded textures so a reload of a
-        // same-named-but-different asset can never be shadowed by stale bytes.
+        // The decoded assets stay: the first extract keeps what the new world names and re-hashes its
+        // files. Only the voxelization belongs to the old world.
         if matches!(kind, Rebuild::Load { .. }) {
-            self.asset_cache.clear();
+            self.asset_cache.reset_voxelization();
         }
         // A rebuilt world is never lit from the old world's voxelization or probe bake: the first
         // frame runs unheld, so both GI caches rebuild and become the new baseline.
