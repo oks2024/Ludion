@@ -35,7 +35,7 @@ use ludion_renderer::{
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
 use crate::assembly_mesh::AssemblyData;
-use crate::asset_cache::AssetCache;
+use crate::asset_cache::{AssetCache, AssetRefs};
 use crate::character::CharacterData;
 use crate::components::{
     Animation, Camera, ClipAnchor, DirectionalLight, Environment, GiDynamic, GiVolume,
@@ -2141,6 +2141,107 @@ pub(crate) fn place_from_disk<'w>(
         &mut poses,
         now,
     )
+}
+
+/// A loader that resolves nothing: [`asset_refs`] reads which assets a world names, never their
+/// bytes, and [`place`] falls back to the untextured sizing on every `Err`.
+struct RefLoader;
+
+impl RefLoader {
+    fn unresolved() -> Vec<Diagnostic> {
+        vec![Diagnostic::new(
+            code::ASSET_FILE_IO,
+            "asset resolution is not available while collecting references",
+        )]
+    }
+}
+
+impl SceneAssets for RefLoader {
+    fn texture(&mut self, _: &str) -> Result<Arc<TextureImage>, Diagnostic> {
+        Err(Self::unresolved().remove(0))
+    }
+    fn atlas(&mut self, _: &str) -> Result<Arc<AtlasAsset>, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
+    fn mesh(&mut self, _: &str) -> Result<Arc<MeshData>, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
+    fn voxel(&mut self, _: &str) -> Result<Arc<MeshData>, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
+    fn voxel_grid(&mut self, _: &str) -> Result<Arc<VoxelStaticGrid>, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
+    fn sculpt(&mut self, _: &str) -> Result<Arc<MeshData>, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
+    fn assembly(&mut self, _: &str) -> Result<Arc<AssemblyData>, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
+    fn character(&mut self, _: &str) -> Result<Arc<CharacterData>, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
+    fn voxelization(&self, _: u64) -> Option<Option<Arc<WorldVoxelGrid>>> {
+        None
+    }
+    fn held_voxelization(&mut self) -> Option<Option<Arc<WorldVoxelGrid>>> {
+        None
+    }
+    fn set_voxelization(
+        &mut self,
+        _: u64,
+        grid: Option<Arc<WorldVoxelGrid>>,
+    ) -> Option<Arc<WorldVoxelGrid>> {
+        grid
+    }
+}
+
+/// Every asset the world names, as normalized cache keys — the walk [`AssetCache::prefetch`] decodes
+/// ahead of the first extract. It places the whole world exactly as [`extract`] would (every entity,
+/// presentation ones included, a grid's or a tilemap's cells expanded), so a reference can never be
+/// extracted without having been collected. The camera is a placeholder: no source depends on it, and
+/// a world with several cameras must not fail the walk.
+pub(crate) fn asset_refs(world: &World, project_root: &Path) -> AssetRefs {
+    let ids: Vec<EntityId> = world
+        .entities()
+        .chain(world.presentation_entities())
+        .collect();
+    let camera = RenderCamera::default_framing((1280, 720));
+    let fonts = font_library(world, project_root);
+    let mut atlases = AtlasCache::default();
+    let mut poses = WorldAffines::new();
+    let placed = place(
+        world,
+        &ids,
+        &camera,
+        &fonts,
+        &mut RefLoader,
+        &mut atlases,
+        &mut poses,
+        SimTime::from_ticks(0, TickRate::DEFAULT),
+    );
+    let mut refs = AssetRefs::default();
+    for sprite in &placed.sprites {
+        match (sprite.atlas, sprite.texture) {
+            (Some(atlas), _) => refs.atlases.insert(ludion_core::paths::normalize(atlas)),
+            (None, Some(texture)) => refs.textures.insert(ludion_core::paths::normalize(texture)),
+            (None, None) => false,
+        };
+    }
+    for mesh in &placed.meshes {
+        let (set, path) = match mesh.source {
+            PlacedMeshSource::Primitive(_) => continue,
+            PlacedMeshSource::Asset(path) => (&mut refs.meshes, path),
+            PlacedMeshSource::Voxel(path) => (&mut refs.voxels, path),
+            PlacedMeshSource::Sculpt(path) => (&mut refs.sculpts, path),
+            PlacedMeshSource::Character(path) => (&mut refs.characters, path),
+            PlacedMeshSource::Assembly(path) | PlacedMeshSource::AssemblyPart(path, _) => {
+                (&mut refs.assemblies, path)
+            }
+        };
+        set.insert(ludion_core::paths::normalize(path));
+    }
+    refs
 }
 
 /// Walks `ids` (ascending entity-slot order — the order [`extract`] and the world hash use) once and

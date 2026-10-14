@@ -21,7 +21,6 @@ use ludion_renderer::{MeshData, MeshTexture, MeshTextures, SkinJoint, TextureIma
 use ludion_scene::{MeshDocument, MeshSkin, TextureRef};
 
 use crate::asset_cache::{SourceFiles, fold_source_hashes};
-use crate::load_observer::{LoadObserver, LoadPhase, NoLoadObserver};
 
 /// The tangent frame `(+X, handedness +1)` a vertex wears when the document authors none, mirroring
 /// the renderer's own default.
@@ -44,31 +43,68 @@ const DEFAULT_BONES: [u32; 4] = [0, 0, 0, 0];
 /// All diagnostics carry a JSON Pointer into the *mesh document*; the caller ([`extract`](crate::extract))
 /// re-points them at the referencing `Mesh` component.
 pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> {
-    load_with_sources(root, rel, &mut NoLoadObserver).map(|(data, _)| data)
+    let (doc, hash) = read_document(root, rel)?;
+    assemble(rel, &doc, hash, &mut |path| decode_map(root, path)).map(|(data, _)| data)
 }
 
-/// [`load`], additionally reporting **every file it read** — the mesh document first, then each
-/// distinct texture PNG, as `root`-relative paths. That list is the mesh's reload dependency set
-/// ([`crate::asset_cache`]), and the texture hashes are folded into [`MeshData::hash`] so an edited
-/// PNG re-keys the GPU mesh (and its material bind group) even when the document is untouched.
-///
-/// `observer` is told when each map's decode starts and ends, so a map's time is attributed to the
-/// texture phase rather than to the mesh.
-pub(crate) fn load_with_sources(
-    root: &Path,
+/// Resolves one mesh map, by its resolved project-relative path, to its decoded image.
+pub(crate) type MapResolver<'a> = dyn FnMut(&str) -> Result<Arc<TextureImage>, Diagnostic> + 'a;
+
+/// Builds a document's [`MeshData`] — [`decode`], its texture maps bound through `resolve`, and the
+/// map hashes folded into [`MeshData::hash`] so an edited PNG re-keys the GPU mesh (and its material
+/// bind group) even when the document is untouched — and **every file it read**: the mesh document
+/// first, then each distinct texture PNG, as `root`-relative paths. That list is the mesh's reload
+/// dependency set ([`crate::asset_cache`]).
+pub(crate) fn assemble(
     rel: &str,
-    observer: &mut dyn LoadObserver,
+    doc: &MeshDocument,
+    doc_hash: u64,
+    resolve: &mut MapResolver<'_>,
 ) -> Result<(MeshData, Vec<String>), Vec<Diagnostic>> {
-    let (doc, hash) = read_document(root, rel)?;
-    let mut data = decode(&doc, hash);
-    let (textures, files) = load_textures(root, rel, &doc, observer)?;
+    let mut data = decode(doc, doc_hash);
+    let (textures, files) = bind_textures(rel, doc, resolve)?;
     data.textures = textures;
     let texture_hashes: Vec<u64> = files.iter().map(|(_, hash)| *hash).collect();
-    data.hash = fold_source_hashes(hash, &texture_hashes);
+    data.hash = fold_source_hashes(doc_hash, &texture_hashes);
     let sources = std::iter::once(rel.to_string())
         .chain(files.into_iter().map(|(path, _)| path))
         .collect();
     Ok((data, sources))
+}
+
+/// Decodes the PNG at `root`/`resolved` as a mesh map.
+///
+/// Mesh maps are never premultiplied: the sprite path's premultiply is a blending convention, and a
+/// metallic-roughness or normal map has no alpha to weight by.
+///
+/// # Errors
+/// `L1101`/`L1102` if the file cannot be read or decoded.
+pub(crate) fn decode_map(root: &Path, resolved: &str) -> Result<Arc<TextureImage>, Diagnostic> {
+    let image = ludion_assets::load_png(root, resolved)?;
+    Ok(Arc::new(TextureImage {
+        width: image.width,
+        height: image.height,
+        rgba: image.rgba,
+        hash: image.hash,
+        // A mesh map is sampled trilinear whatever this says; linear is the honest value.
+        filter_linear: true,
+        premultiplied_on_load: false,
+    }))
+}
+
+/// The distinct resolved map paths `doc` (the mesh at `rel`) references, in slot order.
+pub(crate) fn map_paths(rel: &str, doc: &MeshDocument) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+    for (_, reference) in texture_slots(doc) {
+        let Some(reference) = reference else {
+            continue;
+        };
+        let resolved = ludion_core::paths::sibling(rel, &reference.path);
+        if !paths.contains(&resolved) {
+            paths.push(resolved);
+        }
+    }
+    paths
 }
 
 /// Reads and validates the mesh document at `root`/`rel`, returning it with its bytes' content hash.
@@ -99,33 +135,10 @@ pub(crate) fn with_mesh_source<T>(
     Ok((read(source)?, bytes.hash))
 }
 
-/// Reads the PNG behind every texture map `doc`, the mesh at `root`/`rel`, references, and binds them
-/// as the renderer's [`MeshTextures`]. `None` when the document references no map at all — the
-/// renderer's signal to take the untextured arithmetic exactly.
-///
-/// A reference's `path` resolves **relative to the mesh document's own directory** — the rule a
-/// sculpt part's `path` and an assembly's `file:` parts follow — through the same
-/// [`ludion_assets`] seam a scene's loose `texture:` PNG takes from its content root. Each distinct
-/// path decodes once however many slots name it, and the slots that name it share one `Arc`.
-///
-/// Mesh maps are never premultiplied: the sprite path's premultiply is a blending convention, and a
-/// metallic-roughness or normal map has no alpha to weight by.
-///
-/// Also returns the files it read — one `(resolved path, content hash)` per distinct authored path,
-/// in slot order — for the caller's dependency list and hash fold.
-///
-/// # Errors
-/// `L1101`/`L1102` for a map that cannot be read or decoded — **every** failing map, not just the
-/// first, each re-pointed at its own document key so the author sees the whole list in one pass.
-fn load_textures(
-    root: &Path,
-    rel: &str,
-    doc: &MeshDocument,
-    observer: &mut dyn LoadObserver,
-) -> Result<(Option<MeshTextures>, SourceFiles), Vec<Diagnostic>> {
+/// The five texture slots in the document's canonical order, each paired with its own JSON Pointer.
+fn texture_slots(doc: &MeshDocument) -> [(&'static str, Option<&TextureRef>); 5] {
     let maps = &doc.textures;
-    // The five slots in the document's canonical order, each paired with its own key.
-    let slots: [(&str, Option<&TextureRef>); 5] = [
+    [
         ("/base_color_texture", maps.base_color.as_ref()),
         (
             "/metallic_roughness_texture",
@@ -134,7 +147,31 @@ fn load_textures(
         ("/normal_texture", maps.normal.as_ref()),
         ("/occlusion_texture", maps.occlusion.as_ref()),
         ("/emissive_texture", maps.emissive.as_ref()),
-    ];
+    ]
+}
+
+/// Binds the PNG behind every texture map `doc`, the mesh at `rel`, references — each fetched through
+/// `resolve` — as the renderer's [`MeshTextures`]. `None` when the document references no map at all —
+/// the renderer's signal to take the untextured arithmetic exactly.
+///
+/// A reference's `path` resolves **relative to the mesh document's own directory** — the rule a
+/// sculpt part's `path` and an assembly's `file:` parts follow — through the same
+/// [`ludion_assets`] seam a scene's loose `texture:` PNG takes from its content root. Each distinct
+/// path is asked for once however many slots name it, and the slots that name it share one `Arc`.
+///
+/// Also returns the files it read — one `(resolved path, content hash)` per distinct authored path,
+/// in slot order — for the caller's dependency list and hash fold.
+///
+/// # Errors
+/// `L1101`/`L1102` for a map that cannot be read or decoded — **every** failing map, not just the
+/// first, each re-pointed at its own document key so the author sees the whole list in one pass.
+fn bind_textures(
+    rel: &str,
+    doc: &MeshDocument,
+    resolve: &mut MapResolver<'_>,
+) -> Result<(Option<MeshTextures>, SourceFiles), Vec<Diagnostic>> {
+    let maps = &doc.textures;
+    let slots = texture_slots(doc);
     if slots.iter().all(|(_, reference)| reference.is_none()) {
         return Ok((None, Vec::new()));
     }
@@ -151,21 +188,10 @@ fn load_textures(
         };
         if !images.contains_key(&reference.path) {
             let resolved_path = ludion_core::paths::sibling(rel, &reference.path);
-            observer.begin(LoadPhase::Texture);
-            let loaded = ludion_assets::load_png(root, &resolved_path);
-            observer.end(LoadPhase::Texture);
-            let image = match loaded {
+            let image = match resolve(&resolved_path) {
                 Ok(image) => {
                     files.push((resolved_path, image.hash));
-                    Some(Arc::new(TextureImage {
-                        width: image.width,
-                        height: image.height,
-                        rgba: image.rgba,
-                        hash: image.hash,
-                        // A mesh map is sampled trilinear whatever this says; linear is the honest value.
-                        filter_linear: true,
-                        premultiplied_on_load: false,
-                    }))
+                    Some(image)
                 }
                 Err(diagnostic) => {
                     errors.push(diagnostic.with_path(*key));

@@ -31,20 +31,29 @@
 //! rewrites both — invalidates the entry from either side. One `dependents` map records every such
 //! edge, whatever the kind.
 //!
+//! A mesh's texture maps are entries of their own, shared by every mesh that names the file, so one PNG
+//! is one decode however many meshes bind it.
+//!
+//! After a world rebuild the engine's first cached extract calls [`AssetCache::prefetch`] with the
+//! assets the world names: it decodes them on the worker pool and inserts the results serially in
+//! sorted key order, so the cache is the same at any thread count and the extract that follows only
+//! hits. A failed decode is left for that extract to report.
+//!
 //! Asset bytes live here and nowhere in the world, so a reload is invisible to the `WorldHash` and a
 //! recorded session — sim-invisible and replay-safe.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
 use ludion_core::diagnostics::Diagnostic;
 use ludion_renderer::{MeshData, TextureImage, WorldVoxelGrid};
+use ludion_scene::MeshDocument;
 
 use crate::assembly_mesh::AssemblyData;
 use crate::character::CharacterData;
 use crate::extract::{AtlasAsset, load_texture};
-use crate::load_observer::{LoadKind, LoadObserver, LoadPhase, NoLoadObserver};
+use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
 use crate::voxel_mesh::VoxelStaticGrid;
 
 /// Which of the cache's maps an entry lives in — the tag a dependency edge carries so a reload
@@ -52,6 +61,8 @@ use crate::voxel_mesh::VoxelStaticGrid;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AssetKind {
     Texture,
+    /// A texture map a mesh document binds: held once however many meshes name it.
+    MeshMap,
     Mesh,
     Voxel,
     VoxelGrid,
@@ -64,7 +75,7 @@ enum AssetKind {
 impl AssetKind {
     fn load_kind(self) -> LoadKind {
         match self {
-            AssetKind::Texture => LoadKind::Texture,
+            AssetKind::Texture | AssetKind::MeshMap => LoadKind::Texture,
             AssetKind::Mesh => LoadKind::Mesh,
             AssetKind::Voxel => LoadKind::Voxel,
             AssetKind::VoxelGrid => LoadKind::VoxelGrid,
@@ -77,11 +88,87 @@ impl AssetKind {
 
     fn load_phase(self) -> LoadPhase {
         match self {
-            AssetKind::Texture => LoadPhase::Texture,
+            AssetKind::Texture | AssetKind::MeshMap => LoadPhase::Texture,
             AssetKind::Mesh => LoadPhase::Mesh,
             _ => LoadPhase::Other,
         }
     }
+}
+
+/// The assets a world references, as normalized cache keys, one set per kind — what
+/// [`AssetCache::prefetch`] decodes ahead of the first extract. Sets, so a key named by a thousand
+/// entities is one decode and the walk order is the sort order.
+#[derive(Default)]
+pub(crate) struct AssetRefs {
+    pub(crate) textures: BTreeSet<String>,
+    pub(crate) atlases: BTreeSet<String>,
+    pub(crate) meshes: BTreeSet<String>,
+    pub(crate) voxels: BTreeSet<String>,
+    pub(crate) sculpts: BTreeSet<String>,
+    pub(crate) assemblies: BTreeSet<String>,
+    pub(crate) characters: BTreeSet<String>,
+}
+
+/// One decoded entry, ready to insert: what a worker thread hands back to the cache's owner. Every
+/// kind but a mesh, which needs its maps from the cache to be assembled.
+enum Decoded {
+    Texture(Arc<TextureImage>),
+    MeshMap(Arc<TextureImage>),
+    Voxel(MeshData),
+    VoxelGrid(VoxelStaticGrid),
+    Sculpt(MeshData),
+    Assembly(AssemblyData),
+    Character(CharacterData),
+    Atlas(AtlasAsset),
+}
+
+/// Runs `kind`'s loader for `rel` with no access to the cache, returning the value and the files it
+/// read. Pure, so a prefetch can run it on any thread. Never called for [`AssetKind::Mesh`].
+fn decode(
+    project_root: &Path,
+    kind: AssetKind,
+    rel: &str,
+    key: &str,
+) -> Result<(Decoded, Vec<String>), Vec<Diagnostic>> {
+    let own = || vec![key.to_string()];
+    Ok(match kind {
+        AssetKind::Texture => {
+            // Premultiplied on the miss, never on the hit: the convention is a property of the
+            // decoded bytes, and every frame after this one reads them straight back out.
+            let image = load_texture(project_root, rel).map_err(|d| vec![d])?;
+            (Decoded::Texture(image), own())
+        }
+        AssetKind::MeshMap => {
+            let image = crate::mesh_asset::decode_map(project_root, rel).map_err(|d| vec![d])?;
+            (Decoded::MeshMap(image), own())
+        }
+        AssetKind::Mesh => unreachable!("a mesh is assembled against the cache's maps"),
+        AssetKind::Voxel => {
+            let mesh = crate::voxel_mesh::load(project_root, rel)?;
+            (Decoded::Voxel(mesh), own())
+        }
+        AssetKind::VoxelGrid => {
+            let grid = crate::voxel_mesh::load_grid(project_root, rel)?;
+            (Decoded::VoxelGrid(grid), own())
+        }
+        AssetKind::Sculpt => {
+            let (mesh, sources) = crate::sculpt_mesh::load_with_sources(project_root, rel)?;
+            (Decoded::Sculpt(mesh), sources)
+        }
+        AssetKind::Assembly => {
+            let (data, sources) = crate::assembly_mesh::load_with_sources(project_root, rel)?;
+            (Decoded::Assembly(data), sources)
+        }
+        AssetKind::Character => {
+            let (data, sources) = crate::character::load_with_sources(project_root, rel)?;
+            (Decoded::Character(data), sources)
+        }
+        AssetKind::Atlas => {
+            let asset = crate::extract::load_atlas(project_root, rel)?;
+            let color = ludion_core::paths::sibling(rel, &asset.doc.color_map);
+            (Decoded::Atlas(asset), vec![key.to_string(), color])
+        }
+    })
 }
 
 /// A CPU cache of decoded assets — texture [`TextureImage`]s, asset [`MeshData`], voxel-model
@@ -105,6 +192,8 @@ impl AssetKind {
 /// megabytes for a large voxel model streamed every extract (`Plan/voxel-artist-scale.md`).
 pub(crate) struct AssetCache {
     images: BTreeMap<String, Arc<TextureImage>>,
+    /// The maps meshes bind, one entry per file whichever meshes name it.
+    mesh_maps: BTreeMap<String, Arc<TextureImage>>,
     meshes: BTreeMap<String, Arc<MeshData>>,
     voxels: BTreeMap<String, Arc<MeshData>>,
     voxel_grids: BTreeMap<String, Arc<VoxelStaticGrid>>,
@@ -142,6 +231,7 @@ impl AssetCache {
     pub(crate) fn new() -> Self {
         AssetCache {
             images: BTreeMap::new(),
+            mesh_maps: BTreeMap::new(),
             meshes: BTreeMap::new(),
             voxels: BTreeMap::new(),
             voxel_grids: BTreeMap::new(),
@@ -185,6 +275,7 @@ impl AssetCache {
     /// hold from there.
     pub(crate) fn clear(&mut self) {
         self.images.clear();
+        self.mesh_maps.clear();
         self.meshes.clear();
         self.voxels.clear();
         self.voxel_grids.clear();
@@ -476,16 +567,33 @@ impl AssetCache {
         };
         let len = |src: &String| std::fs::metadata(project_root.join(src)).map_or(0, |m| m.len());
         if kind == AssetKind::Mesh {
-            for (i, src) in sources.iter().enumerate() {
-                if i == 0 {
-                    observer.decoded(LoadKind::Mesh, key, len(src));
-                } else {
-                    observer.decoded(LoadKind::Texture, src, len(src));
-                }
+            // The maps report themselves: each is its own entry, shared by every mesh naming it.
+            if let Some(document) = sources.first() {
+                observer.decoded(LoadKind::Mesh, key, len(document));
             }
         } else {
             observer.decoded(kind.load_kind(), key, sources.iter().map(len).sum());
         }
+    }
+
+    /// Reads the map at the resolved path `resolved` **through** the cache: a hit is reported as
+    /// reused, a miss decodes it once as an entry of its own. Every mesh naming one file shares the
+    /// `Arc`, so the decode counter is unique files, not references.
+    fn mesh_map(
+        &mut self,
+        project_root: &Path,
+        resolved: &str,
+    ) -> Result<Arc<TextureImage>, Diagnostic> {
+        let key = normalize_key(resolved);
+        if !self.mesh_maps.contains_key(&key) {
+            self.load_entry(project_root, AssetKind::MeshMap, resolved)
+                .map_err(first_diagnostic)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(LoadKind::Texture, &key);
+        }
+        Ok(Arc::clone(
+            self.mesh_maps.get(&key).expect("just inserted on a miss"),
+        ))
     }
 
     /// Runs `kind`'s loader, inserts the result under `key`, and returns the files it read.
@@ -496,65 +604,54 @@ impl AssetCache {
         rel: &str,
         key: &str,
     ) -> Result<Vec<String>, Vec<Diagnostic>> {
-        let key = key.to_string();
-        let sources = match kind {
-            AssetKind::Texture => {
-                // Premultiplied on the miss, never on the hit: the convention is a property of the
-                // decoded bytes, and every frame after this one reads them straight back out.
-                let image = load_texture(project_root, rel).map_err(|d| vec![d])?;
-                self.images.insert(key.clone(), image);
-                vec![key.clone()]
-            }
-            AssetKind::Mesh => {
-                let mut unobserved = NoLoadObserver;
-                let observer: &mut dyn LoadObserver = match self.observer.as_deref_mut() {
-                    Some(observer) => observer,
-                    None => &mut unobserved,
-                };
-                let (mesh, sources) =
-                    crate::mesh_asset::load_with_sources(project_root, rel, observer)?;
-                self.meshes.insert(key.clone(), Arc::new(mesh));
-                sources
-            }
-            AssetKind::Voxel => {
-                let mesh = crate::voxel_mesh::load(project_root, rel)?;
-                self.voxels.insert(key.clone(), Arc::new(mesh));
-                vec![key.clone()]
-            }
-            AssetKind::VoxelGrid => {
-                let grid = crate::voxel_mesh::load_grid(project_root, rel)?;
-                self.voxel_grids.insert(key.clone(), Arc::new(grid));
-                vec![key.clone()]
-            }
-            AssetKind::Sculpt => {
-                let (mesh, sources) = crate::sculpt_mesh::load_with_sources(project_root, rel)?;
-                self.sculpts.insert(key.clone(), Arc::new(mesh));
-                sources
-            }
-            AssetKind::Assembly => {
-                let (data, sources) = crate::assembly_mesh::load_with_sources(project_root, rel)?;
-                self.assemblies.insert(key.clone(), Arc::new(data));
-                sources
-            }
-            AssetKind::Character => {
-                let (data, sources) = crate::character::load_with_sources(project_root, rel)?;
-                self.characters.insert(key.clone(), Arc::new(data));
-                sources
-            }
-            AssetKind::Atlas => {
-                let asset = crate::extract::load_atlas(project_root, rel)?;
-                let color = ludion_core::paths::sibling(rel, &asset.doc.color_map);
-                self.atlases.insert(key.clone(), Arc::new(asset));
-                vec![key.clone(), color]
-            }
-        };
+        if kind == AssetKind::Mesh {
+            let (doc, hash) = crate::mesh_asset::read_document(project_root, rel)?;
+            let (mesh, sources) = crate::mesh_asset::assemble(rel, &doc, hash, &mut |path| {
+                self.mesh_map(project_root, path)
+            })?;
+            self.meshes.insert(key.to_string(), Arc::new(mesh));
+            return Ok(sources);
+        }
+        let (decoded, sources) = decode(project_root, kind, rel, key)?;
+        self.insert(key, decoded);
         Ok(sources)
+    }
+
+    /// Inserts a decoded entry under `key`.
+    fn insert(&mut self, key: &str, decoded: Decoded) {
+        let key = key.to_string();
+        match decoded {
+            Decoded::Texture(image) => self.images.insert(key, image).is_some(),
+            Decoded::MeshMap(image) => self.mesh_maps.insert(key, image).is_some(),
+            Decoded::Voxel(mesh) => self.voxels.insert(key, Arc::new(mesh)).is_some(),
+            Decoded::VoxelGrid(grid) => self.voxel_grids.insert(key, Arc::new(grid)).is_some(),
+            Decoded::Sculpt(mesh) => self.sculpts.insert(key, Arc::new(mesh)).is_some(),
+            Decoded::Assembly(data) => self.assemblies.insert(key, Arc::new(data)).is_some(),
+            Decoded::Character(data) => self.characters.insert(key, Arc::new(data)).is_some(),
+            Decoded::Atlas(asset) => self.atlases.insert(key, Arc::new(asset)).is_some(),
+        };
+    }
+
+    /// Whether the `kind` entry at `key` is cached.
+    fn holds(&self, kind: AssetKind, key: &str) -> bool {
+        match kind {
+            AssetKind::Texture => self.images.contains_key(key),
+            AssetKind::MeshMap => self.mesh_maps.contains_key(key),
+            AssetKind::Mesh => self.meshes.contains_key(key),
+            AssetKind::Voxel => self.voxels.contains_key(key),
+            AssetKind::VoxelGrid => self.voxel_grids.contains_key(key),
+            AssetKind::Sculpt => self.sculpts.contains_key(key),
+            AssetKind::Assembly => self.assemblies.contains_key(key),
+            AssetKind::Character => self.characters.contains_key(key),
+            AssetKind::Atlas => self.atlases.contains_key(key),
+        }
     }
 
     /// Removes the `kind` entry at `key` from its map.
     fn remove_entry(&mut self, kind: AssetKind, key: &str) {
         match kind {
             AssetKind::Texture => self.images.remove(key).is_some(),
+            AssetKind::MeshMap => self.mesh_maps.remove(key).is_some(),
             AssetKind::Mesh => self.meshes.remove(key).is_some(),
             AssetKind::Voxel => self.voxels.remove(key).is_some(),
             AssetKind::VoxelGrid => self.voxel_grids.remove(key).is_some(),
@@ -584,6 +681,136 @@ impl AssetCache {
         }
         self.dependents
             .retain(|_, dependents| !dependents.is_empty());
+    }
+
+    /// Decodes every asset in `refs` that the cache does not hold yet, in parallel, ahead of the
+    /// extract that would otherwise decode them one by one on its miss path.
+    ///
+    /// Four stages, each decoding on worker threads and then inserting **serially in sorted key
+    /// order**, so the cache's contents, its dependency edges and the observer's event order never
+    /// depend on the thread count: the non-mesh kinds, every mesh document, every map those
+    /// documents bind plus the loose textures, and last each mesh assembled against its maps. A
+    /// failure is dropped here — the extract that follows hits the same miss and reports it with its
+    /// usual diagnostic. Voxel grids and the volley, particle, UI and font atlases stay lazy.
+    ///
+    /// Never call the observer from a worker: each stage is bracketed from this thread.
+    pub(crate) fn prefetch(&mut self, project_root: &Path, refs: &AssetRefs) {
+        // Stage 1: everything that is one file-set to one value.
+        let mut jobs: Vec<(AssetKind, &str)> = Vec::new();
+        let others: [(AssetKind, &BTreeSet<String>); 5] = [
+            (AssetKind::Atlas, &refs.atlases),
+            (AssetKind::Voxel, &refs.voxels),
+            (AssetKind::Sculpt, &refs.sculpts),
+            (AssetKind::Assembly, &refs.assemblies),
+            (AssetKind::Character, &refs.characters),
+        ];
+        for (kind, keys) in others {
+            jobs.extend(
+                keys.iter()
+                    .filter(|key| !self.holds(kind, key))
+                    .map(|key| (kind, key.as_str())),
+            );
+        }
+        self.decode_batch(project_root, LoadPhase::Other, &jobs);
+
+        // Stage 2: the mesh documents — the named ones and each character's skinned mesh.
+        let mut mesh_keys: BTreeSet<String> = refs.meshes.clone();
+        for key in &refs.characters {
+            if let Some(character) = self.characters.get(key) {
+                mesh_keys.insert(normalize_key(&character.mesh));
+            }
+        }
+        let todo: Vec<&String> = mesh_keys
+            .iter()
+            .filter(|key| !self.meshes.contains_key(*key))
+            .collect();
+        self.begin(LoadPhase::Mesh);
+        let read = ludion_core::par::par_map_chunks(&todo, 1, |_, chunk| {
+            crate::mesh_asset::read_document(project_root, chunk[0])
+        });
+        self.end(LoadPhase::Mesh);
+        let docs: Vec<(&String, MeshDocument, u64)> = todo
+            .into_iter()
+            .zip(read)
+            .filter_map(|(key, read)| read.ok().map(|(doc, hash)| (key, doc, hash)))
+            .collect();
+
+        // Stage 3: the maps those documents bind, then the loose textures.
+        let mut maps: BTreeSet<String> = BTreeSet::new();
+        for (key, doc, _) in &docs {
+            for path in crate::mesh_asset::map_paths(key, doc) {
+                let path = normalize_key(&path);
+                if !self.mesh_maps.contains_key(&path) {
+                    maps.insert(path);
+                }
+            }
+        }
+        let mut jobs: Vec<(AssetKind, &str)> = maps
+            .iter()
+            .map(|key| (AssetKind::MeshMap, key.as_str()))
+            .collect();
+        jobs.extend(
+            refs.textures
+                .iter()
+                .filter(|key| !self.images.contains_key(*key))
+                .map(|key| (AssetKind::Texture, key.as_str())),
+        );
+        self.decode_batch(project_root, LoadPhase::Texture, &jobs);
+
+        // Stage 4: assemble serially, so a map that failed above fails its meshes the same way.
+        self.begin(LoadPhase::Mesh);
+        for (key, doc, hash) in &docs {
+            let assembled = crate::mesh_asset::assemble(key, doc, *hash, &mut |path| {
+                self.mesh_maps
+                    .get(&normalize_key(path))
+                    .cloned()
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            ludion_core::codes::code::ASSET_FILE_IO,
+                            format!("mesh map `{path}` did not decode"),
+                        )
+                    })
+            });
+            if let Ok((mesh, sources)) = assembled {
+                self.meshes.insert((*key).clone(), Arc::new(mesh));
+                self.report_decoded(project_root, AssetKind::Mesh, key, &sources);
+                self.record_sources(AssetKind::Mesh, key, &sources);
+            }
+        }
+        self.end(LoadPhase::Mesh);
+    }
+
+    /// Decodes `jobs` on the worker pool inside one `phase` bracket, then inserts the successes in
+    /// job order and tells the observer about each.
+    fn decode_batch(&mut self, project_root: &Path, phase: LoadPhase, jobs: &[(AssetKind, &str)]) {
+        if jobs.is_empty() {
+            return;
+        }
+        self.begin(phase);
+        let decoded = ludion_core::par::par_map_chunks(jobs, 1, |_, chunk| {
+            let (kind, key) = chunk[0];
+            decode(project_root, kind, key, key)
+        });
+        self.end(phase);
+        for ((kind, key), result) in jobs.iter().zip(decoded) {
+            if let Ok((value, sources)) = result {
+                self.insert(key, value);
+                self.report_decoded(project_root, *kind, key, &sources);
+                self.record_sources(*kind, key, &sources);
+            }
+        }
+    }
+
+    fn begin(&mut self, phase: LoadPhase) {
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.begin(phase);
+        }
+    }
+
+    fn end(&mut self, phase: LoadPhase) {
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.end(phase);
+        }
     }
 
     /// Resolves an `asset.reload` path (relative *or* absolute) to the cache key it names, or `None` if
@@ -641,6 +868,10 @@ impl AssetCache {
         }
         let mut first_error = None;
         for (kind, entry) in &dependents {
+            // A mesh re-read above may already have brought a shared map back.
+            if self.holds(*kind, entry) {
+                continue;
+            }
             if let Err(diagnostics) = self.load_entry(project_root, *kind, entry) {
                 first_error.get_or_insert_with(|| first_diagnostic(diagnostics));
             }
@@ -655,6 +886,12 @@ impl AssetCache {
     #[cfg(test)]
     pub(crate) fn contains(&self, key: &str) -> bool {
         self.images.contains_key(&normalize_key(key))
+    }
+
+    /// Whether the cache holds a mesh map at `key` (in its normalized form). Test-only.
+    #[cfg(test)]
+    pub(crate) fn contains_mesh_map(&self, key: &str) -> bool {
+        self.mesh_maps.contains_key(&normalize_key(key))
     }
 
     /// Whether the cache holds a mesh at `key` (in its normalized form). Test-only.
@@ -1634,6 +1871,220 @@ parts:
         assert_eq!(cache.load(&dir, png_rel).unwrap().hash, reloaded);
         assert_ne!(cache.load_mesh(&dir, rel).unwrap().hash, mesh_first);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Records every decode the cache reports, shared with the test that attached it.
+    struct Decodes(std::sync::Arc<std::sync::Mutex<Vec<(LoadKind, String)>>>);
+
+    impl LoadObserver for Decodes {
+        fn begin(&mut self, _: LoadPhase) {}
+        fn end(&mut self, _: LoadPhase) {}
+        fn decoded(&mut self, kind: LoadKind, key: &str, _: u64) {
+            self.0.lock().unwrap().push((kind, key.to_string()));
+        }
+        fn reused(&mut self, _: LoadKind, _: &str) {}
+    }
+
+    /// Two meshes binding one PNG decode it once: the map is an entry of its own, not a per-mesh copy,
+    /// and a reload of the PNG re-keys both meshes while leaving the map cached.
+    #[test]
+    fn a_map_shared_by_two_meshes_decodes_once() {
+        let dir = std::env::temp_dir().join(format!("ludion-shared-map-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        for name in ["a", "b"] {
+            std::fs::write(
+                dir.join(format!("meshes/{name}.mesh.yaml")),
+                textured_mesh_doc("../textures/t.png"),
+            )
+            .unwrap();
+        }
+        std::fs::write(dir.join("textures/t.png"), png_bytes(10)).unwrap();
+
+        let log = Default::default();
+        let mut cache = AssetCache::new();
+        cache.set_observer(Some(Box::new(Decodes(Arc::clone(&log)))));
+        let a = cache.load_mesh(&dir, "meshes/a.mesh.yaml").unwrap().clone();
+        let b = cache.load_mesh(&dir, "meshes/b.mesh.yaml").unwrap().clone();
+        let textures = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(kind, _)| *kind == LoadKind::Texture)
+            .count();
+        assert_eq!(textures, 1, "one file is one decode");
+        assert!(cache.contains_mesh_map("textures/t.png"));
+        let (a_maps, b_maps) = (a.textures.as_ref().unwrap(), b.textures.as_ref().unwrap());
+        assert!(Arc::ptr_eq(
+            &a_maps.base_color.as_ref().unwrap().image,
+            &b_maps.base_color.as_ref().unwrap().image
+        ));
+
+        std::fs::write(dir.join("textures/t.png"), png_bytes(200)).unwrap();
+        cache.reload(&dir, "textures/t.png").unwrap();
+        assert!(cache.contains_mesh_map("textures/t.png"));
+        for (rel, before) in [("meshes/a.mesh.yaml", &a), ("meshes/b.mesh.yaml", &b)] {
+            assert_ne!(
+                cache.load_mesh(&dir, rel).unwrap().hash,
+                before.hash,
+                "{rel}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const ASSEMBLY: &str = "format: 1
+kind: assembly
+name: fixture
+size:
+  - 2
+  - 1
+  - 1
+palette:
+  A:
+    color:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 1.0
+parts:
+  - name: body
+    file: parts/body.part.yaml
+    place:
+      - 0
+      - 0
+      - 0
+";
+
+    const PART: &str =
+        "format: 1\nkind: part\nsize:\n  - 2\n  - 1\n  - 1\nslices:\n  -\n    - \"AA\"\n";
+
+    const ATLAS: &str = "format: 1\nkind: atlas\ngenerated_from: a.atlas-source.yaml\n\
+        pixels_per_unit: 8.0\nmaps:\n  color: a.png\nregions:\n  a/one:\n    rect:\n      - 0\n      \
+        - 0\n      - 1\n      - 1\n    pivot:\n      - 0.5\n      - 0.5\n";
+
+    const VOXEL: &str = "format: 1\nkind: voxel\nsize:\n  - 1\n  - 1\n  - 1\npalette:\n  A:\n    \
+        color:\n      - 1.0\n      - 0.5\n      - 0.2\n      - 1.0\nslices:\n  -\n    - \"A\"\n";
+
+    /// A project with three textured meshes (two sharing one map), a loose sprite PNG, an atlas, a
+    /// voxel and an assembly, plus the refs naming all of them.
+    fn prefetch_fixture(test: &str) -> (std::path::PathBuf, AssetRefs) {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-prefetch-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for sub in ["meshes", "textures", "voxels", "models/parts"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        let write = |rel: &str, bytes: &[u8]| std::fs::write(dir.join(rel), bytes).unwrap();
+        let mesh = |path: &str| textured_mesh_doc(path).into_bytes();
+        write("meshes/a.mesh.yaml", &mesh("../textures/t.png"));
+        write("meshes/b.mesh.yaml", &mesh("../textures/t.png"));
+        write("meshes/c.mesh.yaml", &mesh("../textures/u.png"));
+        write("textures/t.png", &png_bytes(10));
+        write("textures/u.png", &png_bytes(20));
+        write("textures/s.png", &png_bytes(30));
+        write("a.png", &png_bytes(40));
+        write("a.atlas.yaml", ATLAS.as_bytes());
+        write("voxels/v.voxel.yaml", VOXEL.as_bytes());
+        write("models/fixture.assembly.yaml", ASSEMBLY.as_bytes());
+        write("models/parts/body.part.yaml", PART.as_bytes());
+        let set = |keys: &[&str]| keys.iter().map(|key| key.to_string()).collect();
+        let refs = AssetRefs {
+            textures: set(&["textures/s.png"]),
+            atlases: set(&["a.atlas.yaml"]),
+            meshes: set(&[
+                "meshes/a.mesh.yaml",
+                "meshes/b.mesh.yaml",
+                "meshes/c.mesh.yaml",
+            ]),
+            voxels: set(&["voxels/v.voxel.yaml"]),
+            assemblies: set(&["models/fixture.assembly.yaml"]),
+            ..AssetRefs::default()
+        };
+        (dir, refs)
+    }
+
+    /// Everything a prefetch decides about a cache: every entry's key and content hash, and the
+    /// dependency edges in their recorded order.
+    fn fingerprint(cache: &AssetCache) -> String {
+        let images = |map: &BTreeMap<String, Arc<TextureImage>>| {
+            map.iter()
+                .map(|(key, image)| (key.clone(), image.hash))
+                .collect::<Vec<_>>()
+        };
+        let meshes = |map: &BTreeMap<String, Arc<MeshData>>| {
+            map.iter()
+                .map(|(key, mesh)| (key.clone(), mesh.hash))
+                .collect::<Vec<_>>()
+        };
+        let atlases: Vec<_> = cache
+            .atlases
+            .iter()
+            .map(|(key, atlas)| (key.clone(), atlas.texture.hash))
+            .collect();
+        let assemblies: Vec<_> = cache
+            .assemblies
+            .iter()
+            .map(|(key, data)| {
+                let parts: Vec<u64> = data.parts.iter().map(|part| part.mesh.hash).collect();
+                (key.clone(), parts)
+            })
+            .collect();
+        format!(
+            "{:?}\n{:?}\n{:?}\n{:?}\n{atlases:?}\n{assemblies:?}\n{:?}",
+            images(&cache.images),
+            images(&cache.mesh_maps),
+            meshes(&cache.meshes),
+            meshes(&cache.voxels),
+            cache.dependents,
+        )
+    }
+
+    /// The prefetch inserts in sorted key order whatever the worker count, so the cache — entries,
+    /// hashes and dependency edges — is the same at 1, 2 and 8 threads, and every entry equals the
+    /// lazy loader's.
+    #[test]
+    fn prefetch_is_thread_count_invariant() {
+        let (dir, refs) = prefetch_fixture("invariant");
+        let prefetched = |threads: usize| {
+            let mut cache = AssetCache::new();
+            ludion_core::par::with_threads(threads, || cache.prefetch(&dir, &refs));
+            cache
+        };
+        let one = prefetched(1);
+        assert_eq!(fingerprint(&one), fingerprint(&prefetched(2)));
+        assert_eq!(fingerprint(&one), fingerprint(&prefetched(8)));
+
+        let mut lazy = AssetCache::new();
+        for rel in &refs.meshes {
+            assert_eq!(
+                one.meshes[rel].hash,
+                lazy.load_mesh(&dir, rel).unwrap().hash,
+                "{rel}"
+            );
+        }
+        for rel in &refs.voxels {
+            assert_eq!(
+                one.voxels[rel].hash,
+                lazy.load_voxel(&dir, rel).unwrap().hash
+            );
+        }
+        for rel in &refs.atlases {
+            assert_eq!(
+                one.atlases[rel].texture.hash,
+                lazy.load_atlas(&dir, rel).unwrap().texture.hash
+            );
+        }
+        for rel in &refs.assemblies {
+            assert_eq!(
+                one.assemblies[rel].parts[0].mesh.hash,
+                lazy.load_assembly(&dir, rel).unwrap().parts[0].mesh.hash
+            );
+        }
+        assert!(one.contains("textures/s.png"));
+        assert!(one.contains_mesh_map("textures/u.png"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

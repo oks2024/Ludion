@@ -33,7 +33,9 @@ layer measures is `frame-streaming`; the determinism guarantees the profiler mus
   `FrameLoadObserver` adapts the renderer's own `FrameObserver` (`ludion-renderer/src/frame_observer.rs`:
   `FramePhase::{Upload, GiBake}`, passed to `Renderer::render_observed`) onto the load phases. An
   observed frame fences the device after each phase so GPU time lands in the phase that submitted
-  it; an unobserved frame submits exactly what it always did.
+  it; an unobserved frame submits exactly what it always did. The first cached extract after a
+  world rebuild prefetches the world's assets in parallel (`AssetCache::prefetch`), and a map
+  shared by several meshes is one `texture` decode.
 - `crates/ludion-engine/src/perf_live.rs` — the **live** profiler: `LivePerf`, `FrameSample`,
   `PROFILE_WINDOW_FRAMES` (60), `LIVE_SEQUENTIAL_NAMES` (`extract`, `submit`), the crate's only
   live-path wall-clock site (`Span`).

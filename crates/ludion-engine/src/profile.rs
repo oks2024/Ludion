@@ -1604,7 +1604,8 @@ entities:
         let tex = counters(&load, "texture");
         assert_eq!(
             (tex.decoded, tex.reused, tex.bytes_read),
-            (3, 0, 2 * texture.len() as u64 + sprite.len() as u64)
+            (2, 0, texture.len() as u64 + sprite.len() as u64),
+            "the map two meshes share is one decode"
         );
         for kind in [
             "voxel",
@@ -1627,6 +1628,93 @@ entities:
         assert_eq!(counters(&again, "texture").reused, 1);
         assert!(again.first_frame_ms.is_some());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The prefetch drops its failures: the extract that follows reports them exactly as it does on a
+    /// cold cache with no prefetch at all.
+    #[test]
+    fn prefetch_failures_surface_through_extract_unchanged() {
+        let dir = std::env::temp_dir().join(format!("ludion-prefetch-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        std::fs::write(dir.join("textures/t.png"), b"not a png").unwrap();
+        std::fs::write(dir.join("meshes/a.mesh.yaml"), TEXTURED_MESH).unwrap();
+        let scene = format!(
+            "format: 1
+entities:
+{}{}  - components:
+      Sprite:
+        texture: textures/missing.png
+        size:
+          - 1.0
+          - 1.0
+",
+            mesh_entity("meshes/missing.mesh.yaml"),
+            mesh_entity("meshes/a.mesh.yaml"),
+        );
+
+        let mut engine = Engine::with_project_root(&dir);
+        engine.load_inline_scene(&scene).unwrap();
+        let prefetched = engine.extract_render_scene(320, 180);
+        let cold = crate::extract::extract_through(
+            engine.world(),
+            (320, 180),
+            &dir,
+            &mut crate::asset_cache::AssetCache::new(),
+            ludion_core::time::SimTime::from_ticks(0, ludion_core::time::TickRate::DEFAULT),
+            ludion_renderer::QualityParams::FULL.particle_density,
+            None,
+            &mut Vec::new(),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (prefetched, cold) = (prefetched.err().unwrap(), cold.err().unwrap());
+        assert!(!cold.is_empty());
+        assert_eq!(format!("{prefetched:?}"), format!("{cold:?}"));
+    }
+
+    /// After a load's first extract every walked asset is cached, and each kind decoded exactly its
+    /// unique files: the map two meshes share counts once.
+    #[test]
+    fn first_extract_after_a_load_is_all_hits() {
+        let dir = std::env::temp_dir().join(format!("ludion-first-extract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        let png = ludion_assets::encode_png(1, 1, &[200, 20, 30, 255]).unwrap();
+        std::fs::write(dir.join("textures/t.png"), &png).unwrap();
+        std::fs::write(dir.join("textures/s.png"), &png).unwrap();
+        std::fs::write(dir.join("meshes/a.mesh.yaml"), TEXTURED_MESH).unwrap();
+        std::fs::write(dir.join("meshes/b.mesh.yaml"), TEXTURED_MESH).unwrap();
+        let scene = format!(
+            "format: 1
+entities:
+{}{}  - components:
+      Sprite:
+        texture: textures/s.png
+        size:
+          - 1.0
+          - 1.0
+",
+            mesh_entity("meshes/a.mesh.yaml"),
+            mesh_entity("meshes/b.mesh.yaml"),
+        );
+
+        let mut engine = Engine::with_project_root(&dir);
+        engine.observe_load();
+        engine.load_inline_scene(&scene).unwrap();
+        let load = measure_load(&mut engine).unwrap().expect("observed");
+        let cache = engine.asset_cache();
+        for mesh in ["meshes/a.mesh.yaml", "meshes/b.mesh.yaml"] {
+            assert!(cache.contains_mesh(mesh), "{mesh}");
+        }
+        assert!(cache.contains_mesh_map("textures/t.png"));
+        assert!(cache.contains("textures/s.png"));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(counters(&load, "mesh").decoded, 2);
+        assert_eq!(counters(&load, "texture").decoded, 2);
     }
 
     #[test]

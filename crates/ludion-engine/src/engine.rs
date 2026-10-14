@@ -290,6 +290,9 @@ pub struct Engine {
     /// an event and `Hold`/`Auto` is a state — a rebake at `Auto` is simply a no-op the next frame
     /// consumes.
     gi_rebake_force: bool,
+    /// Whether the world was rebuilt since the last cached extract, so the next one prefetches the
+    /// assets it references in parallel before walking them.
+    prefetch_pending: bool,
     /// The staleness the last completed frame reported: whether *either* GI cache served something
     /// built under inputs the frame no longer had. Recomputed per frame, never latched.
     gi_stale: bool,
@@ -662,6 +665,7 @@ impl Engine {
             quality: QualitySetting::default(),
             gi_rebake: GiRebakeMode::default(),
             gi_rebake_force: false,
+            prefetch_pending: false,
             gi_stale: false,
             renderer: None,
             shader_reload: false,
@@ -3337,6 +3341,10 @@ impl Engine {
         let world = self.driver.world();
         let root = &self.project_root;
         let cache = &mut self.asset_cache;
+        if std::mem::take(&mut self.prefetch_pending) {
+            let refs = crate::extract::asset_refs(world, root);
+            cache.prefetch(root, &refs);
+        }
         let mut degraded = Vec::new();
         let scene = crate::extract::extract_through(
             world,
@@ -4804,6 +4812,9 @@ impl Engine {
         // A rebuilt world is never lit from the old world's voxelization or probe bake: the first
         // frame runs unheld, so both GI caches rebuild and become the new baseline.
         self.gi_rebake_force = true;
+        // Prefetched at the first extract, not here: headless rebuilds (replay verification, sim
+        // hashing) never draw, and must not pay the decode bill.
+        self.prefetch_pending = true;
         self.arm_query_recording();
     }
 }

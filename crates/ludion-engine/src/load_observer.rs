@@ -109,13 +109,3 @@ pub(crate) trait LoadObserver: std::any::Any + Send {
     /// A lookup of `key` found it already cached.
     fn reused(&mut self, kind: LoadKind, key: &str);
 }
-
-/// The no-op observer for callers that observe nothing.
-pub(crate) struct NoLoadObserver;
-
-impl LoadObserver for NoLoadObserver {
-    fn begin(&mut self, _: LoadPhase) {}
-    fn end(&mut self, _: LoadPhase) {}
-    fn decoded(&mut self, _: LoadKind, _: &str, _: u64) {}
-    fn reused(&mut self, _: LoadKind, _: &str) {}
-}
