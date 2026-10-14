@@ -64,7 +64,7 @@ Engine gap map item: "PNG decoded to RGBA8 only; no BC/ASTC/KTX2 compression"; t
 
    Under `cooked`, a map with no cooked file falls back to the PNG path and reports one warning
    diagnostic per load (new `L####`, "texture not cooked — run `ludion sync`"), never an error.
-   **This default split is the one decision to confirm with the user before Wave 1.**
+   The default split was confirmed by the user on 2026-10-14.
 7. **Scope: mesh material maps only.** Sprites, atlases, fonts and UI textures stay PNG/RGBA8. They
    are pixel art or SDF, sampled nearest or read exactly, where block compression is a visible
    defect and the volumes are small.
