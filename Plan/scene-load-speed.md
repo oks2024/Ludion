@@ -134,21 +134,9 @@ Three structural causes, all in `ludion-engine`:
   `a_parent_spelled_mesh_map_and_a_loose_texture_share_one_key` test pins the key normalization.
 - Shared-checkout test lanes: GPU tests and `check.mjs` are serialized across instances.
 
-## Deferred — the per-platform cooked package
+## Deferred
 
-Two further wins are measured but belong to a different feature, **cooked, per-platform asset
-packages** (a cook step owned by `ludion sync` for the dev loop and `ludion export` for shipping):
-
-- **GPU-compressed textures** (BC7 on desktop, ASTC on iOS) with precomputed mips: no PNG decode, no
-  mip generation, about 4× less upload and VRAM. The plaza's maps are about 0.9 GB of VRAM as RGBA8
-  with mips, which the iOS target's A15 cannot afford. The format is per-GPU-family, which is what
-  makes this a packaging feature.
-- **Binary mesh sidecars**: raw little-endian f32/u32 blobs keyed by the `.mesh.yaml`'s content
-  hash, written beside the YAML into the derived (ignored) import tree. The format is
-  platform-neutral, but it is the same "cooked form of a text asset" mechanism. The YAML stays the
-  source of truth; the sidecar is a cache.
-
-Also deferred: streamed/async loading with placeholders, and a per-kit maximum texture size in the
-`[[import]]` table (a content knob, cheaper than either). **Trigger:** this plan's Wave 3 exit
-numbers. If decode is no longer the dominant share, the cook feature is planned from those numbers.
-Otherwise it is planned anyway, before the iOS device milestones.
+- GPU-compressed textures, precomputed mips, binary mesh files, a per-import maximum texture size,
+  and the `ludion sync` / `ludion export` cook stages: `Plan/cooked-assets.md`.
+- Streamed/async loading with placeholders: no plan; take it when a blocking load is measured as
+  too long even after both plans.

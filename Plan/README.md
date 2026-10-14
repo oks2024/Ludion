@@ -12,6 +12,7 @@ The reference game that drove many engine arcs is private; its design and plans 
 - [Animation clips](animation-clips.md) — W1–W3 mechanized (clip import, characters, playback, crossfade, events); editor sitting owed.
 - [Asset pipeline with Blender](asset-pipeline-blender.md) — phase 1 verdict: Blender for the environment, characters stay voxel; kits and loop shipped.
 - [Comfy generation](comfy-generation.md) — W1–W4 mechanized (`kind: generation`, `ludion gen`, the Generation view); checkpoint 2 and live smoke owed.
+- [Cooked assets](cooked-assets.md) — planned (BC7/ASTC mesh maps in KTX2, a `ludion sync` cook stage, iOS export, conditional binary meshes); starts after scene-load-speed W1.
 - [Editor art director](editor-art-director.md) — wave 1 shipped; the cost column (wave 2) and the sitting are open.
 - [Editor open project](editor-open-project.md) — W1–W4 mechanized (launch on a game, run it, switch scenes and projects); live smoke owed.
 - [Editor view camera](editor-stage-camera.md) — W1–W4 mechanized (`render.view`, orbit and fly in every view); live smoke owed.
