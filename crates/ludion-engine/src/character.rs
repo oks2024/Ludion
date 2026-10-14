@@ -19,7 +19,7 @@ use ludion_core::math::glam::Vec3;
 use ludion_scene::{AnimationDocument, AnimationEvent, CharacterDocument};
 
 use crate::assembly_mesh::read_clip;
-use crate::skin_bone::load_mesh_joints;
+use crate::asset_cache::SourceFiles;
 use ludion_core::paths::sibling;
 
 /// One resolved clip binding: the short name `Animation.clip` selects by, the parsed clip document,
@@ -77,16 +77,18 @@ pub fn load(root: &Path, rel: &str) -> Result<CharacterData, Vec<Diagnostic>> {
 }
 
 /// [`load`], additionally reporting **every file it read** — the character document first, then its
-/// mesh document, then each clip, as `root`-relative paths. That list is the character's reload
+/// mesh document, then each clip, as `root`-relative paths, each with the content hash of the bytes it
+/// decoded. That list is the character's reload
 /// dependency set (see [`crate::asset_cache`]). The mesh's own texture PNGs stay under the mesh
 /// entry's edges.
 pub(crate) fn load_with_sources(
     root: &Path,
     rel: &str,
-) -> Result<(CharacterData, Vec<String>), Vec<Diagnostic>> {
-    let doc = read_character(root, rel)?;
+) -> Result<(CharacterData, SourceFiles), Vec<Diagnostic>> {
+    let (doc, doc_hash) = read_character(root, rel)?;
     let mesh = sibling(rel, &doc.mesh);
-    let mesh_joints = load_mesh_joints(root, &mesh)?;
+    let (mesh_joints, mesh_hash) =
+        crate::mesh_asset::with_mesh_source(root, &mesh, ludion_scene::read_mesh_joints)?;
     let joints: Vec<&str> = match &mesh_joints {
         Some(joints) if !joints.is_empty() => {
             joints.iter().map(|joint| joint.name.as_str()).collect()
@@ -106,15 +108,15 @@ pub(crate) fn load_with_sources(
         }
     };
 
-    let mut sources = vec![rel.to_string(), mesh.clone()];
+    let mut sources = vec![(rel.to_string(), doc_hash), (mesh.clone(), mesh_hash)];
     let mut diagnostics = Vec::new();
     let mut clips = Vec::with_capacity(doc.clips.len());
     for binding in &doc.clips {
         let file = sibling(rel, &binding.clip);
         match read_clip(root, &file, &binding.name) {
-            Ok(clip) => {
+            Ok((clip, hash)) => {
                 clips.push(clip);
-                sources.push(file);
+                sources.push((file, hash));
             }
             Err(mut errors) => diagnostics.append(&mut errors),
         }
@@ -288,11 +290,12 @@ pub fn contact_heights(
 /// The character's mesh path alone, reading and parsing only the character document — what
 /// `SkinBone` needs to find a character's skin without loading its clips.
 pub(crate) fn mesh_path(root: &Path, rel: &str) -> Result<String, Vec<Diagnostic>> {
-    read_character(root, rel).map(|doc| sibling(rel, &doc.mesh))
+    read_character(root, rel).map(|(doc, _)| sibling(rel, &doc.mesh))
 }
 
-/// Reads and validates the character document at `root`/`rel`.
-fn read_character(root: &Path, rel: &str) -> Result<CharacterDocument, Vec<Diagnostic>> {
+/// Reads and validates the character document at `root`/`rel`, returning it with its bytes' content
+/// hash.
+fn read_character(root: &Path, rel: &str) -> Result<(CharacterDocument, u64), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
     let source = std::str::from_utf8(&bytes.bytes).map_err(|_| {
         vec![
@@ -303,5 +306,5 @@ fn read_character(root: &Path, rel: &str) -> Result<CharacterDocument, Vec<Diagn
             .with_help("a character document is a strict-YAML text file (`*.character.yaml`)"),
         ]
     })?;
-    ludion_scene::check_character(source)
+    Ok((ludion_scene::check_character(source)?, bytes.hash))
 }

@@ -39,13 +39,14 @@ pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> 
 }
 
 /// [`load`], additionally reporting **every file it read** — the sculpt document first, then each
-/// distinct `shape: voxel` / `shape: mesh` part document, as `root`-relative paths. That list is the
+/// distinct `shape: voxel` / `shape: mesh` part document, as `root`-relative paths, each with the
+/// content hash of the bytes it decoded. That list is the
 /// sculpt's reload dependency set ([`crate::asset_cache`]), and those files' hashes are folded into
 /// [`MeshData::hash`], so an edited part re-keys the GPU mesh even when the sculpt is untouched.
 pub(crate) fn load_with_sources(
     root: &Path,
     rel: &str,
-) -> Result<(MeshData, Vec<String>), Vec<Diagnostic>> {
+) -> Result<(MeshData, SourceFiles), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
     let source = std::str::from_utf8(&bytes.bytes).map_err(|_| {
         vec![
@@ -61,8 +62,8 @@ pub(crate) fn load_with_sources(
     let mesh = ludion_sculpt::mesh_with(&doc, &sources).map_err(|diagnostic| vec![diagnostic])?;
     let part_hashes: Vec<u64> = files.iter().map(|(_, hash)| *hash).collect();
     let hash = fold_source_hashes(bytes.hash, &part_hashes);
-    let read = std::iter::once(rel.to_string())
-        .chain(files.into_iter().map(|(path, _)| path))
+    let read = std::iter::once((rel.to_string(), bytes.hash))
+        .chain(files)
         .collect();
     Ok((mesh_data(mesh, hash), read))
 }

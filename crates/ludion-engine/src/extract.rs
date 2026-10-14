@@ -35,7 +35,7 @@ use ludion_renderer::{
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
 use crate::assembly_mesh::AssemblyData;
-use crate::asset_cache::{AssetCache, AssetRefs};
+use crate::asset_cache::{AssetCache, AssetRefs, SourceFiles};
 use crate::character::CharacterData;
 use crate::components::{
     Animation, Camera, ClipAnchor, DirectionalLight, Environment, GiDynamic, GiVolume,
@@ -326,6 +326,15 @@ pub(crate) fn load_texture(root: &Path, rel: &str) -> Result<Arc<TextureImage>, 
 /// `L1101` if either file cannot be read, `L1102` if the PNG cannot be decoded, `L1153` if the
 /// document does not parse or validate as a `kind: atlas`.
 pub(crate) fn load_atlas(root: &Path, rel: &str) -> Result<AtlasAsset, Vec<Diagnostic>> {
+    load_atlas_with_sources(root, rel).map(|(asset, _)| asset)
+}
+
+/// [`load_atlas`], additionally reporting the two files it read — the document, then the colour PNG —
+/// each with the content hash of the bytes it decoded.
+pub(crate) fn load_atlas_with_sources(
+    root: &Path,
+    rel: &str,
+) -> Result<(AtlasAsset, SourceFiles), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
     let source = std::str::from_utf8(&bytes.bytes).map_err(|_| {
         vec![
@@ -339,8 +348,8 @@ pub(crate) fn load_atlas(root: &Path, rel: &str) -> Result<AtlasAsset, Vec<Diagn
     let doc = ludion_scene::check_atlas(source)?;
     // NOT premultiplied: `ludion generate-atlas` bakes the packed image premultiplied, and
     // premultiplying already-premultiplied colour darkens every translucent texel a second time.
-    let image = ludion_assets::load_png(root, &ludion_core::paths::sibling(rel, &doc.color_map))
-        .map_err(|diagnostic| vec![diagnostic])?;
+    let color = ludion_core::paths::sibling(rel, &doc.color_map);
+    let image = ludion_assets::load_png(root, &color).map_err(|diagnostic| vec![diagnostic])?;
     let texture = Arc::new(TextureImage {
         width: image.width,
         height: image.height,
@@ -351,7 +360,8 @@ pub(crate) fn load_atlas(root: &Path, rel: &str) -> Result<AtlasAsset, Vec<Diagn
         filter_linear: doc.filter == AtlasFilter::Linear,
         premultiplied_on_load: false,
     });
-    Ok(AtlasAsset { doc, texture })
+    let sources = vec![(rel.to_string(), bytes.hash), (color, image.hash)];
+    Ok((AtlasAsset { doc, texture }, sources))
 }
 
 /// Resolves the `atlas` + `frame` pair a `Sprite` or one `Tilemap` legend entry carries, reporting

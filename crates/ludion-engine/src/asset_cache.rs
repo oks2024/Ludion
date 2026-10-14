@@ -38,15 +38,12 @@
 //! reason recorded for the load's one `L1271` — the PNG's decode. Switching the setting drops every
 //! map and the meshes built from them.
 //!
-//! At each rebuild's first cached extract the cache keeps only what the new world names
-//! ([`AssetCache::retain_referenced`]), re-hashes the files the kept entries were built from and drops
-//! what changed, then prefetches. A scene load therefore never clears the cache: what two worlds
-//! share is decoded once.
-//!
-//! After a world rebuild the engine's first cached extract calls [`AssetCache::prefetch`] with the
-//! assets the world names: it decodes them on the worker pool and inserts the results serially in
-//! sorted key order, so the cache is the same at any thread count and the extract that follows only
-//! hits. A failed decode is left for that extract to report.
+//! After a world rebuild the first cached extract (or `render.bounds`) keeps only what the new world
+//! names ([`AssetCache::retain_referenced`]), re-hashes the files the kept entries were built from and
+//! drops what changed; the extract then calls [`AssetCache::prefetch`], which decodes the misses on
+//! the worker pool and inserts the results serially in sorted key order, so the cache is the same at
+//! any thread count and the extract that follows only hits. A scene load therefore never clears the
+//! cache: what two worlds share is decoded once. A failed decode is left for that extract to report.
 //!
 //! Asset bytes live here and nowhere in the world, so a reload is invisible to the `WorldHash` and a
 //! recorded session — sim-invisible and replay-safe.
@@ -147,6 +144,9 @@ enum Decoded {
 /// Runs `kind`'s loader for `rel` with no access to the cache, returning the value and the files it
 /// read with their content hashes. Pure, so a prefetch can run it on any thread. Never called for
 /// [`AssetKind::Mesh`]. `cook` is the lookup a [`MapRole::Cooked`] map reads through.
+///
+/// The recorded hash is that of the bytes the loader decoded, so an edit racing the decode is caught
+/// by the next revalidation.
 fn decode(
     project_root: &Path,
     kind: AssetKind,
@@ -154,7 +154,6 @@ fn decode(
     key: &str,
     cook: Option<&CookLookup>,
 ) -> Result<(Decoded, SourceFiles), Vec<Diagnostic>> {
-    let own = || vec![key.to_string()];
     Ok(match kind {
         AssetKind::Texture => {
             // Premultiplied on the miss, never on the hit: the convention is a property of the
@@ -193,50 +192,31 @@ fn decode(
         AssetKind::Mesh => unreachable!("a mesh is assembled against the cache's maps"),
         AssetKind::Voxel => {
             let mesh = crate::voxel_mesh::load(project_root, rel)?;
-            (Decoded::Voxel(mesh), hash_sources(project_root, own()))
+            let hash = mesh.hash;
+            (Decoded::Voxel(mesh), vec![(key.to_string(), hash)])
         }
         AssetKind::VoxelGrid => {
             let grid = crate::voxel_mesh::load_grid(project_root, rel)?;
-            (Decoded::VoxelGrid(grid), hash_sources(project_root, own()))
+            let hash = grid.hash;
+            (Decoded::VoxelGrid(grid), vec![(key.to_string(), hash)])
         }
         AssetKind::Sculpt => {
             let (mesh, sources) = crate::sculpt_mesh::load_with_sources(project_root, rel)?;
-            (Decoded::Sculpt(mesh), hash_sources(project_root, sources))
+            (Decoded::Sculpt(mesh), sources)
         }
         AssetKind::Assembly => {
             let (data, sources) = crate::assembly_mesh::load_with_sources(project_root, rel)?;
-            (Decoded::Assembly(data), hash_sources(project_root, sources))
+            (Decoded::Assembly(data), sources)
         }
         AssetKind::Character => {
             let (data, sources) = crate::character::load_with_sources(project_root, rel)?;
-            (
-                Decoded::Character(data),
-                hash_sources(project_root, sources),
-            )
+            (Decoded::Character(data), sources)
         }
         AssetKind::Atlas => {
-            let asset = crate::extract::load_atlas(project_root, rel)?;
-            let color = ludion_core::paths::sibling(rel, &asset.doc.color_map);
-            let sources = vec![key.to_string(), color];
-            (Decoded::Atlas(asset), hash_sources(project_root, sources))
+            let (asset, sources) = crate::extract::load_atlas_with_sources(project_root, rel)?;
+            (Decoded::Atlas(asset), sources)
         }
     })
-}
-
-/// Pairs each of `paths` with the content hash of its file now. A file that cannot be read hashes as
-/// `0`, which can only force a later re-decode.
-///
-/// A file edited between the decode's read and this one is recorded under the new hash with the old
-/// bytes decoded — accepted: the window is microseconds, and the live host's watcher sends
-/// `asset.reload` for the edit anyway.
-fn hash_sources(project_root: &Path, paths: Vec<String>) -> SourceFiles {
-    paths
-        .into_iter()
-        .map(|path| {
-            let hash = ludion_assets::load_bytes(project_root, &path).map_or(0, |bytes| bytes.hash);
-            (path, hash)
-        })
-        .collect()
 }
 
 /// A CPU cache of decoded assets — texture [`TextureImage`]s, asset [`MeshData`], voxel-model
@@ -2770,6 +2750,296 @@ parts:
         assert!(!cache.contains("textures/s.png"));
         assert!(!cache.contains_voxel("voxels/v.voxel.yaml"));
         assert!(!cache.contains_atlas("a.atlas.yaml"));
+        let edges: Vec<_> = cache.dependents.keys().collect();
+        let hashes: Vec<_> = cache.source_hashes.keys().collect();
+        assert_eq!(edges, hashes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh scratch project root for the revalidation tests.
+    fn revalidation_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-revalidate-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_file(dir: &Path, rel: &str, text: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    const REVALIDATE_ATLAS: &str = "format: 1\nkind: atlas\ngenerated_from: a.atlas-source.yaml\npixels_per_unit: 8.0\nmaps:\n  color: a.png\nregions:\n  a/one:\n    rect:\n      - 0\n      - 0\n      - 1\n      - 1\n    pivot:\n      - 0.5\n      - 0.5\n";
+
+    fn write_atlas(dir: &Path, rgba: [u8; 4]) {
+        write_file(dir, "a.atlas.yaml", REVALIDATE_ATLAS);
+        write_png(&dir.join("a.png"), rgba);
+    }
+
+    /// The one-cell voxel document at `voxels/v.voxel.yaml`; `glyph` picks its content hash.
+    fn write_voxel(dir: &Path, glyph: &str) {
+        write_file(
+            dir,
+            "voxels/v.voxel.yaml",
+            &format!(
+                "format: 1\nkind: voxel\nsize:\n  - 1\n  - 1\n  - 1\npalette:\n  {glyph}:\n    color:\n      - 1.0\n      - 0.5\n      - 0.2\n      - 1.0\nslices:\n  -\n    - \"{glyph}\"\n"
+            ),
+        );
+    }
+
+    /// The sculpt at `sculpts/hull.sculpt.yaml` and its voxel part beside it.
+    fn write_sculpt(dir: &Path, glyph: &str) {
+        write_file(
+            dir,
+            "sculpts/hull.sculpt.yaml",
+            "format: 1\nkind: sculpt\nresolution: 16\ntriangles: 200\npalette:\n  S:\n    color:\n      - 0.5\n      - 0.5\n      - 0.5\n      - 1.0\nbones:\n  - name: root\nparts:\n  - name: hull\n    shape: voxel\n    path: hull.voxel.yaml\n    size: 0.5\n    material: S\n",
+        );
+        write_voxel_sculpt(dir, glyph);
+    }
+
+    /// The assembly `models/<name>.assembly.yaml` with its one part `models/parts/<name>.part.yaml`
+    /// (`row` picks the part's content), binding the clip `models/anims/walk.anim.yaml` when `clip`.
+    fn write_assembly(dir: &Path, name: &str, row: &str, clip: bool) {
+        let clips = if clip {
+            "clips:\n  walk: anims/walk.anim.yaml\n"
+        } else {
+            ""
+        };
+        write_file(
+            dir,
+            &format!("models/{name}.assembly.yaml"),
+            &format!(
+                "format: 1\nkind: assembly\nname: {name}\nsize:\n  - 2\n  - 1\n  - 1\npalette:\n  A:\n    color:\n      - 1.0\n      - 0.0\n      - 0.0\n      - 1.0\nparts:\n  - name: body\n    file: parts/{name}.part.yaml\n    place:\n      - 0\n      - 0\n      - 0\n{clips}"
+            ),
+        );
+        write_file(
+            dir,
+            &format!("models/parts/{name}.part.yaml"),
+            &format!(
+                "format: 1\nkind: part\nsize:\n  - 2\n  - 1\n  - 1\nslices:\n  -\n    - \"{row}\"\n"
+            ),
+        );
+    }
+
+    fn write_walk_clip(dir: &Path, degrees: f64) {
+        write_file(
+            dir,
+            "models/anims/walk.anim.yaml",
+            &format!(
+                "format: 1\nkind: animation\nname: walk\nduration: 1.0\nloop: true\ntracks:\n  body:\n    rotation:\n      - t: 0.0\n        v:\n          - 0.0\n          - 0.0\n          - 0.0\n      - t: 1.0\n        v:\n          - {degrees}\n          - 0.0\n          - 0.0\n"
+            ),
+        );
+    }
+
+    const CHARACTER: &str = "characters/hero.character.yaml";
+    const CHARACTER_CLIP: &str = "clips/idle.anim.yaml";
+
+    fn write_character(dir: &Path) {
+        let gallery = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+        for rel in ["meshes/skin-mannequin.mesh.yaml", CHARACTER_CLIP] {
+            write_file(
+                dir,
+                rel,
+                &std::fs::read_to_string(gallery.join(rel)).unwrap(),
+            );
+        }
+        write_file(
+            dir,
+            CHARACTER,
+            "format: 1\nkind: character\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  idle:\n    clip: ../clips/idle.anim.yaml\n",
+        );
+    }
+
+    fn named(key: &str) -> BTreeSet<String> {
+        BTreeSet::from([key.to_string()])
+    }
+
+    #[test]
+    fn revalidation_drops_an_assembly_whose_part_changed() {
+        let dir = revalidation_dir("assembly-part");
+        write_assembly(&dir, "fixture", "AA", false);
+        write_assembly(&dir, "other", "AA", false);
+        let (rel, other) = ("models/fixture.assembly.yaml", "models/other.assembly.yaml");
+        let refs = AssetRefs {
+            assemblies: BTreeSet::from([rel.to_string(), other.to_string()]),
+            ..AssetRefs::default()
+        };
+
+        let mut cache = AssetCache::new();
+        let first = cache.load_assembly(&dir, rel).unwrap().parts[0].mesh.hash;
+        cache.load_assembly(&dir, other).unwrap();
+        write_assembly(&dir, "fixture", "A.", false);
+        cache.retain_referenced(&dir, &refs);
+
+        assert!(!cache.contains_assembly(rel), "its part changed on disk");
+        assert!(
+            cache.contains_assembly(other),
+            "an untouched assembly stays"
+        );
+        assert_ne!(
+            cache.load_assembly(&dir, rel).unwrap().parts[0].mesh.hash,
+            first
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revalidation_drops_an_assembly_whose_clip_changed() {
+        let dir = revalidation_dir("assembly-clip");
+        write_assembly(&dir, "fixture", "AA", true);
+        write_walk_clip(&dir, 90.0);
+        let rel = "models/fixture.assembly.yaml";
+        let refs = AssetRefs {
+            assemblies: named(rel),
+            ..AssetRefs::default()
+        };
+
+        let mut cache = AssetCache::new();
+        let first = cache.load_assembly(&dir, rel).unwrap().clone();
+        assert_eq!(first.clip("walk").unwrap().tracks[0].rotation[1].v[0], 90.0);
+        write_walk_clip(&dir, 45.0);
+        cache.retain_referenced(&dir, &refs);
+
+        assert!(!cache.contains_assembly(rel), "its clip changed on disk");
+        let after = cache.load_assembly(&dir, rel).unwrap();
+        assert_eq!(after.clip("walk").unwrap().tracks[0].rotation[1].v[0], 45.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revalidation_drops_an_atlas_whose_png_changed() {
+        let dir = revalidation_dir("atlas");
+        write_atlas(&dir, [10, 20, 30, 255]);
+        let rel = "a.atlas.yaml";
+        let refs = AssetRefs {
+            atlases: named(rel),
+            ..AssetRefs::default()
+        };
+
+        let mut cache = AssetCache::new();
+        let first = cache.load_atlas(&dir, rel).unwrap().texture.hash;
+        assert!(cache.contains_atlas(rel));
+        write_png(&dir.join("a.png"), [200, 100, 50, 255]);
+        cache.retain_referenced(&dir, &refs);
+
+        assert!(!cache.contains_atlas(rel), "its colour PNG changed on disk");
+        assert_ne!(cache.load_atlas(&dir, rel).unwrap().texture.hash, first);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revalidation_drops_a_character_whose_clip_changed() {
+        let dir = revalidation_dir("character");
+        write_character(&dir);
+        let refs = AssetRefs {
+            characters: named(CHARACTER),
+            ..AssetRefs::default()
+        };
+
+        let mut cache = AssetCache::new();
+        let first = cache.load_character(&dir, CHARACTER).unwrap();
+        assert_eq!(first.clip("idle").unwrap().clip.duration, 2.0);
+        let edited = std::fs::read_to_string(dir.join(CHARACTER_CLIP))
+            .unwrap()
+            .replace("duration: 2.0", "duration: 3.0");
+        write_file(&dir, CHARACTER_CLIP, &edited);
+        cache.retain_referenced(&dir, &refs);
+
+        assert!(
+            !cache.contains_character(CHARACTER),
+            "its clip changed on disk"
+        );
+        let after = cache.load_character(&dir, CHARACTER).unwrap();
+        assert_eq!(after.clip("idle").unwrap().clip.duration, 3.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revalidation_drops_an_edited_voxel_and_its_grid() {
+        let dir = revalidation_dir("voxel");
+        write_voxel(&dir, "A");
+        let rel = "voxels/v.voxel.yaml";
+        let refs = AssetRefs {
+            voxels: named(rel),
+            ..AssetRefs::default()
+        };
+
+        let mut cache = AssetCache::new();
+        let mesh = cache.load_voxel(&dir, rel).unwrap().hash;
+        let grid = cache.load_voxel_grid(&dir, rel).unwrap().hash;
+        assert!(cache.contains_voxel(rel) && cache.contains_voxel_grid(rel));
+        write_voxel(&dir, "B");
+        cache.retain_referenced(&dir, &refs);
+
+        assert!(!cache.contains_voxel(rel));
+        assert!(!cache.contains_voxel_grid(rel));
+        assert_ne!(cache.load_voxel(&dir, rel).unwrap().hash, mesh);
+        assert_ne!(cache.load_voxel_grid(&dir, rel).unwrap().hash, grid);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revalidation_drops_a_sculpt_whose_part_changed() {
+        let dir = revalidation_dir("sculpt");
+        write_sculpt(&dir, "A");
+        let rel = "sculpts/hull.sculpt.yaml";
+        let refs = AssetRefs {
+            sculpts: named(rel),
+            ..AssetRefs::default()
+        };
+
+        let mut cache = AssetCache::new();
+        let first = cache.load_sculpt(&dir, rel).unwrap().hash;
+        write_voxel_sculpt(&dir, "B");
+        cache.retain_referenced(&dir, &refs);
+
+        assert!(
+            !cache.contains_sculpt(rel),
+            "its voxel part changed on disk"
+        );
+        assert_ne!(cache.load_sculpt(&dir, rel).unwrap().hash, first);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With nothing edited, revalidation keeps every kind, and the recorded file hashes are exactly the
+    /// files the dependency edges name.
+    #[test]
+    fn an_untouched_entry_survives_revalidation() {
+        let dir = revalidation_dir("untouched");
+        write_atlas(&dir, [10, 20, 30, 255]);
+        write_voxel(&dir, "A");
+        write_sculpt(&dir, "A");
+        write_assembly(&dir, "fixture", "AA", true);
+        write_walk_clip(&dir, 90.0);
+        write_character(&dir);
+        let refs = AssetRefs {
+            atlases: named("a.atlas.yaml"),
+            voxels: named("voxels/v.voxel.yaml"),
+            sculpts: named("sculpts/hull.sculpt.yaml"),
+            assemblies: named("models/fixture.assembly.yaml"),
+            characters: named(CHARACTER),
+            ..AssetRefs::default()
+        };
+
+        let mut cache = AssetCache::new();
+        cache.load_atlas(&dir, "a.atlas.yaml").unwrap();
+        cache.load_voxel(&dir, "voxels/v.voxel.yaml").unwrap();
+        cache.load_voxel_grid(&dir, "voxels/v.voxel.yaml").unwrap();
+        cache.load_sculpt(&dir, "sculpts/hull.sculpt.yaml").unwrap();
+        cache
+            .load_assembly(&dir, "models/fixture.assembly.yaml")
+            .unwrap();
+        cache.load_character(&dir, CHARACTER).unwrap();
+        cache.retain_referenced(&dir, &refs);
+
+        assert!(cache.contains_atlas("a.atlas.yaml"));
+        assert!(cache.contains_voxel("voxels/v.voxel.yaml"));
+        assert!(cache.contains_voxel_grid("voxels/v.voxel.yaml"));
+        assert!(cache.contains_sculpt("sculpts/hull.sculpt.yaml"));
+        assert!(cache.contains_assembly("models/fixture.assembly.yaml"));
+        assert!(cache.contains_character(CHARACTER));
         let edges: Vec<_> = cache.dependents.keys().collect();
         let hashes: Vec<_> = cache.source_hashes.keys().collect();
         assert_eq!(edges, hashes);

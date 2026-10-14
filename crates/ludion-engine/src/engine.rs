@@ -302,6 +302,9 @@ pub struct Engine {
     /// Whether the world was rebuilt since the last cached extract, so the next one prefetches the
     /// assets it references in parallel before walking them.
     prefetch_pending: bool,
+    /// Whether the world was rebuilt since the cache was last brought to it: the next cache reader
+    /// keeps what the world names and revalidates the kept entries' files.
+    revalidate_pending: bool,
     /// The staleness the last completed frame reported: whether *either* GI cache served something
     /// built under inputs the frame no longer had. Recomputed per frame, never latched.
     gi_stale: bool,
@@ -677,6 +680,7 @@ impl Engine {
             gi_rebake: GiRebakeMode::default(),
             gi_rebake_force: false,
             prefetch_pending: false,
+            revalidate_pending: false,
             gi_stale: false,
             renderer: None,
             shader_reload: false,
@@ -3363,6 +3367,27 @@ impl Engine {
         self.renderer_mut()?.reload_shader(path, source)
     }
 
+    /// Brings the asset cache to the world after a rebuild: keeps what the new world names and drops
+    /// whatever changed on disk ([`AssetCache::retain_referenced`]), then — when `prefetch` — decodes
+    /// the misses in parallel. Each step runs once per rebuild, at the first cache reader that asks
+    /// for it, so a headless query pays no decode bill. Returns whether it prefetched.
+    fn refresh_asset_cache(&mut self, prefetch: bool) -> bool {
+        let revalidate = std::mem::take(&mut self.revalidate_pending);
+        let prefetch = prefetch && std::mem::take(&mut self.prefetch_pending);
+        if !revalidate && !prefetch {
+            return false;
+        }
+        let refs = crate::extract::asset_refs(self.driver.world(), &self.project_root);
+        if revalidate {
+            self.asset_cache
+                .retain_referenced(&self.project_root, &refs);
+        }
+        if prefetch {
+            self.asset_cache.prefetch(&self.project_root, &refs);
+        }
+        prefetch
+    }
+
     /// Extracts the current world into a [`RenderScene`] at `width` × `height`, resolving sprite
     /// textures **through** the CPU [`AssetCache`] (miss = load + decode from disk once, hit = a map
     /// lookup) — so the live stream and screenshots no longer re-read every PNG per render. `&mut`
@@ -3392,6 +3417,7 @@ impl Engine {
         let hold = self.gi_hold();
         self.asset_cache.set_gi_hold(hold);
         self.resolve_cook();
+        let prefetched = self.refresh_asset_cache(true);
         // The sim clock the assembly clip evaluator poses against: read out by value first, so the
         // driver's immutable borrow below stays the only one. This machine's particle density comes
         // out with it, for the same borrow reason and from the same setting the renderer was built
@@ -3405,10 +3431,7 @@ impl Engine {
         let root = &self.project_root;
         let cache = &mut self.asset_cache;
         let mut degraded = Vec::new();
-        if std::mem::take(&mut self.prefetch_pending) {
-            let refs = crate::extract::asset_refs(world, root);
-            cache.retain_referenced(root, &refs);
-            cache.prefetch(root, &refs);
+        if prefetched {
             let misses = cache.cook_misses();
             if !misses.is_empty() {
                 let target = self.renderer.as_ref().and_then(Renderer::cook_target);
@@ -3444,11 +3467,13 @@ impl Engine {
     /// The `render.bounds` query, through the view override when `use_view` is set and one is in
     /// force. Sizes document-backed meshes through the CPU [`AssetCache`] (`&mut` because a miss
     /// inserts), with the same disjoint field borrows as
-    /// [`extract_render_scene_through`](Engine::extract_render_scene_through).
+    /// [`extract_render_scene_through`](Engine::extract_render_scene_through). After a rebuild it
+    /// keeps and revalidates the cached assets like the first extract, but decodes only what it sizes.
     pub(crate) fn render_bounds(
         &mut self,
         use_view: bool,
     ) -> Result<([u32; 2], Vec<EntityBounds>), Diagnostic> {
+        self.refresh_asset_cache(false);
         let size = self.render_size();
         let view = use_view.then_some(self.view_override.as_ref()).flatten();
         crate::bounds::compute(
@@ -4887,6 +4912,7 @@ impl Engine {
         // Prefetched at the first extract, not here: headless rebuilds (replay verification, sim
         // hashing) never draw, and must not pay the decode bill.
         self.prefetch_pending = true;
+        self.revalidate_pending = true;
         self.arm_query_recording();
     }
 }

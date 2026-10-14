@@ -63,7 +63,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_renderer::MeshData;
 use ludion_scene::{AnimationDocument, AssemblyDocument, AssemblyPartEntry, PartDocument};
 
-use crate::asset_cache::fold_source_hashes;
+use crate::asset_cache::{SourceFiles, fold_source_hashes};
 
 /// One meshed part of an assembly: its own geometry plus where that geometry rests and what it turns
 /// about. Everything is in voxel units (1 voxel = 1 unit).
@@ -162,14 +162,15 @@ pub fn load(root: &Path, rel: &str) -> Result<AssemblyData, Vec<Diagnostic>> {
 }
 
 /// [`load`], additionally reporting **every file it read** — the assembly document first, then each
-/// part, then each clip, as `root`-relative paths. That list is the assembly's reload dependency
+/// part, then each clip, as `root`-relative paths, each with the content hash of the bytes it
+/// decoded. That list is the assembly's reload dependency
 /// set: a watcher reports the file that changed, and only something holding this list can tell which
 /// assemblies were meshed out of it (see [`crate::asset_cache`]). Because a clip file is on the list,
 /// editing a clip re-reads the assembly exactly as editing a part does.
 pub(crate) fn load_with_sources(
     root: &Path,
     rel: &str,
-) -> Result<(AssemblyData, Vec<String>), Vec<Diagnostic>> {
+) -> Result<(AssemblyData, SourceFiles), Vec<Diagnostic>> {
     let (assembly, parts, hash, mut sources) = load_documents(root, rel)?;
     let clips = read_clips(root, rel, &assembly, &mut sources)?;
     Ok((mesh_assembly(&assembly, &parts, &clips, hash), sources))
@@ -188,16 +189,16 @@ fn read_clips(
     root: &Path,
     rel: &str,
     assembly: &AssemblyDocument,
-    sources: &mut Vec<String>,
+    sources: &mut Vec<(String, u64)>,
 ) -> Result<Vec<AnimationDocument>, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let mut clips = Vec::with_capacity(assembly.clips.len());
     for binding in &assembly.clips {
         let file = ludion_core::paths::sibling(rel, &binding.file);
         match read_clip(root, &file, &binding.name) {
-            Ok(clip) => {
+            Ok((clip, hash)) => {
                 clips.push(clip);
-                sources.push(file);
+                sources.push((file, hash));
             }
             Err(mut errors) => diagnostics.append(&mut errors),
         }
@@ -213,12 +214,12 @@ fn read_clips(
 ///
 /// Every diagnostic is prefixed with the binding's short name and path, for [`read_part`]'s reason:
 /// a clip document's own pointers (`/tracks/arm/rotation/1/t`) say *where in a file* but never
-/// *which file*, and an assembly names several.
+/// *which file*, and an assembly names several. Returns the document with its bytes' content hash.
 pub(crate) fn read_clip(
     root: &Path,
     rel: &str,
     name: &str,
-) -> Result<AnimationDocument, Vec<Diagnostic>> {
+) -> Result<(AnimationDocument, u64), Vec<Diagnostic>> {
     let label = format!("clip `{name}` (`{rel}`)");
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
     let source = std::str::from_utf8(&bytes.bytes).map_err(|_| {
@@ -230,21 +231,22 @@ pub(crate) fn read_clip(
             .with_help("a clip document is a strict-YAML text file (`*.anim.yaml`)"),
         ]
     })?;
-    ludion_scene::check_animation(source).map_err(|errors| {
+    let clip = ludion_scene::check_animation(source).map_err(|errors| {
         errors
             .into_iter()
             .map(|mut diagnostic| {
                 diagnostic.message = format!("{label}: {}", diagnostic.message);
                 diagnostic
             })
-            .collect()
-    })
+            .collect::<Vec<_>>()
+    })?;
+    Ok((clip, bytes.hash))
 }
 
 /// [`load_documents`]'s success value: the parsed assembly, its resolved parts (aligned by index with
-/// `assembly.parts`), the assembly's content hash, and the reload dependency list — aliased so the
-/// signature stays readable and `clippy::type_complexity` stays quiet.
-pub type LoadedAssemblyDocuments = (AssemblyDocument, Vec<PartDocument>, u64, Vec<String>);
+/// `assembly.parts`), the assembly's content hash, and the reload dependency list as `(path, content
+/// hash)` pairs — aliased so the signature stays readable and `clippy::type_complexity` stays quiet.
+pub type LoadedAssemblyDocuments = (AssemblyDocument, Vec<PartDocument>, u64, Vec<(String, u64)>);
 
 /// Reads and validates the assembly document at `root`/`rel` together with every part file it names,
 /// stopping short of meshing — the read/parse/cross-validate half of `load_with_sources`, split out
@@ -278,14 +280,14 @@ pub fn load_documents(root: &Path, rel: &str) -> Result<LoadedAssemblyDocuments,
     let mut parts = Vec::with_capacity(assembly.parts.len());
     let mut part_hashes = Vec::with_capacity(assembly.parts.len());
     let mut sources = Vec::with_capacity(assembly.parts.len() + 1);
-    sources.push(rel.to_string());
+    sources.push((rel.to_string(), bytes.hash));
     for entry in &assembly.parts {
         let file = ludion_core::paths::sibling(rel, &entry.file);
         match read_part(root, &file, entry) {
             Ok((part, hash)) => {
                 parts.push(part);
                 part_hashes.push(hash);
-                sources.push(file);
+                sources.push((file, hash));
             }
             Err(mut errors) => diagnostics.append(&mut errors),
         }
@@ -998,6 +1000,7 @@ tracks:
 
         let (_, sources) =
             load_with_sources(&root, "models/fixture.assembly.yaml").expect("the assembly loads");
+        let sources: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
         assert_eq!(
             sources,
             [

@@ -323,6 +323,35 @@ fn an_assembly_part_is_bounded_by_its_own_grid() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A 3-wide, 2-deep voxel document of `layers` layers.
+fn voxel_doc(layers: usize) -> String {
+    let layer = "  -\n    - \"AAA\"\n    - \"AAA\"\n";
+    format!(
+        "format: 1\nkind: voxel\nsize:\n  - 3\n  - {layers}\n  - 2\npalette:\n  A:\n    color:\n      - 1.0\n      - 0.5\n      - 0.2\n      - 1.0\nslices:\n{}",
+        layer.repeat(layers)
+    )
+}
+
+/// Loading the same scene again re-validates the cached assets before `render.bounds` reads them, even
+/// though no render ever runs: an edited voxel document is sized afresh, not served stale.
+#[test]
+fn a_reloaded_scene_bounds_an_edited_voxel_model_afresh() {
+    let path = "voxels/v.voxel.yaml";
+    let dir = scratch("reload", &[(path, &voxel_doc(5))]);
+    let scene = "format: 1\nentities:\n  - components:\n      Camera: {}\n  - components:\n      Mesh:\n        shape:\n          voxel: \"voxels/v.voxel.yaml\"\n";
+    let mut engine = Engine::with_project_root(&dir).with_render_size(256, 256);
+
+    engine.load_inline_scene(scene).expect("the scene loads");
+    let (_, entities) = bounds(&mut engine);
+    assert_eq!(entities[0].world_aabb.max[1], 5.0);
+
+    std::fs::write(dir.join(path), voxel_doc(3)).unwrap();
+    engine.load_inline_scene(scene).expect("the scene reloads");
+    let (_, entities) = bounds(&mut engine);
+    assert_eq!(entities[0].world_aabb.max[1], 3.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A voxel model is bounded by its grid: 3 × 5 × 2 → x ∈ ±1.5, y ∈ [0, 5], z ∈ ±1.
 #[test]
 fn a_voxel_model_is_bounded_by_its_grid() {
