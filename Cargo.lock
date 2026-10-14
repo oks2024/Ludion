@@ -1659,6 +1659,7 @@ dependencies = [
  "ludion-import",
  "ludion-mesh-edit",
  "ludion-protocol",
+ "ludion-renderer",
  "ludion-scene",
  "ludion-sculpt",
  "ludion-server",

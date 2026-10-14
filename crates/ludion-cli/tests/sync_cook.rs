@@ -587,3 +587,69 @@ fn a_map_that_cannot_be_cooked_fails_the_run_without_undoing_the_import() {
         "the import tree stays swapped in"
     );
 }
+
+/// What `ludion sync` writes is what the engine reads: after a sync, an engine on the cooked axis
+/// loads the synced meshes with every map from the store (no PNG decode, so no `L1271`).
+#[test]
+fn needs_gpu_a_synced_project_loads_cooked_with_no_fallback() {
+    use ludion_engine::{Engine, TextureSource, profile_engine};
+
+    match ludion_renderer::Renderer::new() {
+        Ok(renderer) if renderer.cook_target().is_some() => {}
+        Ok(_) => return eprintln!("SKIPPED: no BC7 or ASTC support"),
+        Err(diagnostic)
+            if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&diagnostic)) =>
+        {
+            return eprintln!("SKIPPED: no GPU adapter");
+        }
+        Err(diagnostic) => panic!("renderer init failed: {diagnostic:?}"),
+    }
+    let dir = unique_maps_project("sync-then-load", &["a"], 16);
+    assert_clean(&sync(&dir));
+
+    let derived = dir.join("assets/derived");
+    let mut meshes = Vec::new();
+    let mut stack = vec![derived.clone()];
+    while let Some(next) = stack.pop() {
+        for entry in std::fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.to_string_lossy().ends_with(".mesh.yaml") {
+                let rel = path.strip_prefix(&*dir).unwrap();
+                meshes.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    meshes.sort();
+    assert!(!meshes.is_empty(), "the sync derived no mesh");
+    let mut scene = String::from("format: 1\nentities:\n");
+    for mesh in &meshes {
+        scene +=
+            &format!("  - components:\n      Mesh:\n        shape:\n          asset: {mesh}\n");
+    }
+
+    let mut engine = Engine::builder()
+        .project_root(&*dir)
+        .build()
+        .expect("builds");
+    engine.set_textures(TextureSource::Cooked);
+    engine.observe_load();
+    engine.load_inline_scene(&scene).expect("the scene loads");
+    let report = profile_engine(&mut engine, "synced".into(), 1, 0).expect("profiles");
+    let texture = report
+        .load
+        .expect("observed")
+        .assets
+        .into_iter()
+        .find(|counters| counters.kind == "texture")
+        .expect("a texture row");
+    assert!(
+        texture.cooked > 0,
+        "no map was read from the store: {texture:?}"
+    );
+    assert_eq!(
+        texture.decoded, 0,
+        "a map fell back to its PNG: {texture:?}"
+    );
+}

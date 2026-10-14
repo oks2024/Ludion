@@ -229,6 +229,12 @@ fn export(target: IosTarget, out: &Path, project: &Path, options: &Options) -> R
             shipped.uncooked
         ));
     }
+    if shipped.unscanned > 0 {
+        line.push_str(&format!(
+            "; {} meshes could not be scanned, so their maps may be missing from the store",
+            shipped.unscanned
+        ));
+    }
     println!("{line}");
     println!(
         "exported `{}` for {} to {}",
@@ -536,6 +542,8 @@ struct Shipped {
     bytes: u64,
     /// Referenced maps with no store entry: they load their PNG on the device.
     uncooked: usize,
+    /// Meshes or maps the scan could not read: the referenced set may be incomplete.
+    unscanned: usize,
 }
 
 /// Copies the `ios` store entries the import trees reference into the bundle, beside the PNGs
@@ -563,7 +571,7 @@ fn ship_cooked(
         trees.push(tree);
     }
     let referenced = crate::cook::referenced_files(project, &trees, CookTarget::Ios);
-    shipped.uncooked = referenced.failed.len();
+    shipped.unscanned = referenced.failed.len();
     let store = crate::cook::store_dir(project, CookTarget::Ios);
     let dst_dir = content_root
         .join(".ludion/cooked")
@@ -918,7 +926,10 @@ mod tests {
         assert_eq!(std::fs::read_dir(&store).unwrap().count(), 2);
         let textures = root.join("out/content/assets/derived/kit/textures");
         assert!(textures.join("b.png").is_file() && textures.join("n.png").is_file());
-        assert_eq!((shipped.maps, shipped.uncooked), (2, 0));
+        assert_eq!(
+            (shipped.maps, shipped.uncooked, shipped.unscanned),
+            (2, 0, 0)
+        );
         assert_eq!(shipped.bytes, 12);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -931,7 +942,10 @@ mod tests {
         let store = root.join("out/content/.ludion/cooked/ios");
         assert!(!store.join(&b).exists());
         assert!(store.join(&n).is_file());
-        assert_eq!((shipped.maps, shipped.uncooked), (1, 1));
+        assert_eq!(
+            (shipped.maps, shipped.uncooked, shipped.unscanned),
+            (1, 1, 0)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

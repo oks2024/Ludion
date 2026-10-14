@@ -77,5 +77,7 @@ serde_json.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
+# The cooked-store test asks the renderer whether this GPU offers BC7 or ASTC before it asserts reads.
+ludion-renderer = { path = "../ludion-renderer", version = "0.1.0" }
 png.workspace = true
 tungstenite.workspace = true

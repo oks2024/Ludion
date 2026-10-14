@@ -14,7 +14,7 @@ The name: a *ludion* is a Cartesian diver — a sealed figure that responds inst
 
 **Active plans** — "mechanized" means every wave shipped and the gates are green; none is closed until its human gate in `Plan/owed.md` passes:
 - `Plan/scene-load-speed.md` — W1–W3 mechanized (`ProfileReport.load`, parallel prefetch, one loader path, retained cache); M4 budget twins owed.
-- `Plan/cooked-assets.md` — W0–W2 mechanized (`ludion-cook` BC7/ASTC KTX2, the `.ludion/cooked` store, sync cooks, the `textures` axis, iOS export ships the referenced ASTC store); W3's simulator run and W4's trigger (an M4 load report) owed.
+- `Plan/cooked-assets.md` — W0–W3 mechanized (`ludion-cook` BC7/ASTC KTX2, sync cooks, the `textures` axis, iOS export ships ASTC); M4 items owed.
 - `Plan/sprite-engine.md` — W1–W4 mechanized; close rides the external game's git-dependency switch and the human verdicts.
 - `Plan/projectile-patterns.md` — W1–W4 mechanized (`kind: pattern`, `Volley`, `PatternPlayer`, vigil's ranged fire as volleys); exit rides the shmup's first boss pattern and the sittings.
 - `Plan/particles-engine-and-editor.md` — W1–W4 shipped; sittings owed.

@@ -167,13 +167,18 @@ impl CookLookup {
     }
 
     /// The cap of the table that owns the map at the normalized `rel`; `None` when no table does,
-    /// which is a map sync never cooks.
+    /// which is a map sync never cooks. Sync cooks only `<to>/<stem>/…` (a non-dot stem directory
+    /// holding the map), so a file directly under `<to>/` is not covered.
     pub(crate) fn cap_for(&self, rel: &str) -> Option<Option<u32>> {
         self.tables
             .iter()
             .find(|(prefix, _)| {
                 rel.strip_prefix(prefix.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'))
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    .and_then(|rest| rest.split_once('/'))
+                    .is_some_and(|(stem, file)| {
+                        !stem.is_empty() && !stem.starts_with('.') && !file.is_empty()
+                    })
             })
             .map(|(_, cap)| *cap)
     }
@@ -283,6 +288,14 @@ mod tests {
         assert_eq!(lookup.cap_for("textures/x.png"), None);
         assert_eq!(lookup.cap_for("assets/kitchen/x.png"), None);
         assert_eq!(lookup.cap_for("assets/kit"), None);
+    }
+
+    #[test]
+    fn a_map_outside_a_stem_directory_is_not_covered() {
+        let lookup = lookup(0, &[("assets/kit", None)]);
+        assert_eq!(lookup.cap_for("assets/kit/x.png"), None);
+        assert_eq!(lookup.cap_for("assets/kit/.hidden/x.png"), None);
+        assert_eq!(lookup.cap_for("assets/kit/stem/x.png"), Some(None));
     }
 
     #[test]
