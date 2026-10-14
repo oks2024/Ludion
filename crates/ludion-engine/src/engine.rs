@@ -951,11 +951,14 @@ impl Engine {
             TextureSource::Source => None,
             TextureSource::Cooked => {
                 // Without a GPU there is no target; the render that follows reports `L2003`.
-                let target = match self.ensure_renderer() {
-                    Ok(()) => self.renderer.as_ref().and_then(Renderer::cook_target),
-                    Err(_) => None,
+                let supported = match self.ensure_renderer() {
+                    Ok(()) => self
+                        .renderer
+                        .as_ref()
+                        .map_or_else(Vec::new, Renderer::cook_targets),
+                    Err(_) => Vec::new(),
                 };
-                crate::cooked_maps::lookup_for(&self.project_root, target).map(Arc::new)
+                crate::cooked_maps::lookup_for(&self.project_root, &supported).map(Arc::new)
             }
         };
         self.asset_cache.set_cook(lookup);
@@ -3434,7 +3437,9 @@ impl Engine {
         if prefetched {
             let misses = cache.cook_misses();
             if !misses.is_empty() {
-                let target = self.renderer.as_ref().and_then(Renderer::cook_target);
+                let target = cache
+                    .cook()
+                    .and_then(crate::cooked_maps::CookLookup::target);
                 degraded.push((
                     "textures: cooked".to_string(),
                     crate::cooked_maps::not_cooked_warning(target, &misses),

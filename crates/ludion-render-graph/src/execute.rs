@@ -135,12 +135,13 @@ pub fn compressed_format_supported(features: wgpu::Features, format: CompressedF
     }
 }
 
-/// The cook target a device with `features` samples: `Desktop` (BC7) when BC is supported, else
-/// `Ios` (ASTC) when ASTC is. BC wins because an Apple-silicon Mac offers both and cooks desktop.
-fn cook_target_for(features: wgpu::Features) -> Option<CookTarget> {
+/// Every cook target a device with `features` samples, `Desktop` (BC7) before `Ios` (ASTC): BC
+/// leads because an Apple-silicon Mac offers both and cooks desktop.
+fn cook_targets_for(features: wgpu::Features) -> Vec<CookTarget> {
     [CookTarget::Desktop, CookTarget::Ios]
         .into_iter()
-        .find(|target| compressed_format_supported(features, target.format()))
+        .filter(|target| compressed_format_supported(features, target.format()))
+        .collect()
 }
 
 impl Gpu {
@@ -373,8 +374,9 @@ impl Gpu {
         compressed_format_supported(self.compression, format)
     }
 
-    /// The cook target this device samples: `Desktop` if BC7 is supported, else `Ios` if ASTC is,
-    /// else `None` (a map must then be sampled from its source).
+    /// The preferred cook target this device samples: the head of [`Gpu::cook_targets`], so
+    /// `Desktop` if BC7 is supported, else `Ios` if ASTC is, else `None` (a map must then be
+    /// sampled from its source).
     ///
     /// # Example (requires a GPU adapter)
     /// ```no_run
@@ -382,7 +384,19 @@ impl Gpu {
     /// let _target = gpu.cook_target();
     /// ```
     pub fn cook_target(&self) -> Option<CookTarget> {
-        cook_target_for(self.compression)
+        self.cook_targets().first().copied()
+    }
+
+    /// Every cook target this device samples, `Desktop` before `Ios`; empty when it supports
+    /// neither format.
+    ///
+    /// # Example (requires a GPU adapter)
+    /// ```no_run
+    /// let gpu = ludion_render_graph::Gpu::request().unwrap();
+    /// let _targets = gpu.cook_targets();
+    /// ```
+    pub fn cook_targets(&self) -> Vec<CookTarget> {
+        cook_targets_for(self.compression)
     }
 
     /// Renders `schedule` and returns the `output` resource read back as packed RGBA8.
@@ -1063,10 +1077,13 @@ mod tests {
     fn cook_target_prefers_bc_then_astc_then_none() {
         let bc = wgpu::Features::TEXTURE_COMPRESSION_BC;
         let astc = wgpu::Features::TEXTURE_COMPRESSION_ASTC;
-        assert_eq!(cook_target_for(bc | astc), Some(CookTarget::Desktop));
-        assert_eq!(cook_target_for(bc), Some(CookTarget::Desktop));
-        assert_eq!(cook_target_for(astc), Some(CookTarget::Ios));
-        assert_eq!(cook_target_for(wgpu::Features::empty()), None);
+        assert_eq!(
+            cook_targets_for(bc | astc),
+            [CookTarget::Desktop, CookTarget::Ios]
+        );
+        assert_eq!(cook_targets_for(bc), [CookTarget::Desktop]);
+        assert_eq!(cook_targets_for(astc), [CookTarget::Ios]);
+        assert!(cook_targets_for(wgpu::Features::empty()).is_empty());
     }
 
     /// The pinned limit set is the WebGPU floor plus its commented raises: the texture bound the

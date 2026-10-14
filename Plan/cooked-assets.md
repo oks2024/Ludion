@@ -82,7 +82,9 @@ Engine gap map item: "PNG decoded to RGBA8 only; no BC/ASTC/KTX2 compression"; t
 
    No shader change: normal maps stay three-channel BC7/ASTC, not BC5. The runtime requests the
    compression feature only when the adapter offers it, and picks the target by adapter features,
-   never by OS.
+   never by OS. *Amendment (2026-10-14):* the engine reads the first supported target, BC before
+   ASTC, whose store directory exists, else the first supported — Apple9 iOS GPUs and the
+   Apple-silicon simulator report BC, yet an exported bundle ships one target (`ios`).
 5. **The container is KTX2**, a standard container external tools can inspect. The full mip chain
    is precomputed at cook time with the same filter as `mipgen.rs`. The engine reads it through the
    pure-Rust `ktx2` parser (Apache-2.0). The writer is a small function in `ludion-cook`.

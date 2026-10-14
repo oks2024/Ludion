@@ -315,6 +315,11 @@ impl AssetCache {
         self.observer = observer;
     }
 
+    /// The cooked store mesh-map loading currently reads, `None` under source textures.
+    pub(crate) fn cook(&self) -> Option<&CookLookup> {
+        self.cook.as_deref()
+    }
+
     /// Points mesh-map loading at a cooked store (`Some`) or back at the PNGs (`None`). A change
     /// drops every mesh map through its dependents, which drops the meshes built from them, so the
     /// next prefetch or extract rebuilds them under the new setting; an equal setting is a no-op.
@@ -2314,7 +2319,8 @@ parts:
 
     fn lookup(dir: &Path, target: Option<CookTarget>) -> Option<Arc<CookLookup>> {
         Some(Arc::new(
-            crate::cooked_maps::lookup_for(dir, target).expect("the fixture has a manifest"),
+            crate::cooked_maps::lookup_for(dir, target.as_slice())
+                .expect("the fixture has a manifest"),
         ))
     }
 

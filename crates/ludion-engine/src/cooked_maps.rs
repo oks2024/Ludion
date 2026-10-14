@@ -95,7 +95,7 @@ impl CookMiss {
 }
 
 /// Where cooked maps live for one project and which maps they cover: resolved once per host setting
-/// from the manifest and the renderer's [`CookTarget`].
+/// from the manifest, the renderer's supported [`CookTarget`]s and which store exists.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct CookLookup {
     /// `None`: the GPU supports neither format, so every covered map misses as unsupported.
@@ -109,7 +109,11 @@ pub(crate) struct CookLookup {
 /// The lookup for the project whose content root is `project_root`, or `None` when no manifest
 /// governs it, the manifest does not load or it has no `[[import]]`: every map then uses its PNG
 /// silently, because sync cooks nothing for it.
-pub(crate) fn lookup_for(project_root: &Path, target: Option<CookTarget>) -> Option<CookLookup> {
+///
+/// `supported` is the device's targets in preference order. The pick is the first whose store
+/// directory exists, else the first supported: a bundle ships one target, and an Apple-silicon GPU
+/// that reports BC must still read the ASTC store it was shipped.
+pub(crate) fn lookup_for(project_root: &Path, supported: &[CookTarget]) -> Option<CookLookup> {
     let project = crate::manifest::find(project_root)?;
     let manifest = crate::manifest::load(&project).ok()?;
     if manifest.imports.is_empty() {
@@ -128,6 +132,7 @@ pub(crate) fn lookup_for(project_root: &Path, target: Option<CookTarget>) -> Opt
             (table_prefix(depth, &to), table.max_texture_size)
         })
         .collect();
+    let target = pick_target(&project, supported);
     let store = project
         .join(".ludion/cooked")
         .join(target.map_or("", CookTarget::name));
@@ -136,6 +141,15 @@ pub(crate) fn lookup_for(project_root: &Path, target: Option<CookTarget>) -> Opt
         store,
         tables,
     })
+}
+
+/// The first supported target whose store directory exists under `project`, else the first supported.
+fn pick_target(project: &Path, supported: &[CookTarget]) -> Option<CookTarget> {
+    supported
+        .iter()
+        .copied()
+        .find(|target| project.join(".ludion/cooked").join(target.name()).is_dir())
+        .or_else(|| supported.first().copied())
 }
 
 /// The prefix a map under the table `to` carries when the content root is `depth` directories below
@@ -147,6 +161,11 @@ fn table_prefix(depth: usize, to: &str) -> String {
 }
 
 impl CookLookup {
+    /// The target this lookup reads, `None` when the GPU supports neither format.
+    pub(crate) fn target(&self) -> Option<CookTarget> {
+        self.target
+    }
+
     /// The cap of the table that owns the map at the normalized `rel`; `None` when no table does,
     /// which is a map sync never cooks.
     pub(crate) fn cap_for(&self, rel: &str) -> Option<Option<u32>> {
@@ -275,8 +294,37 @@ mod tests {
         // An ancestor of the temp dir may carry a manifest on a developer box, so only assert the
         // negative when none does.
         if crate::manifest::find(&dir).is_none() {
-            assert!(lookup_for(&dir, Some(CookTarget::Desktop)).is_none());
+            assert!(lookup_for(&dir, &[CookTarget::Desktop]).is_none());
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_target_is_the_first_supported_one_that_has_a_store() {
+        let dir = std::env::temp_dir().join(format!("ludion-cook-pick-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("ludion.toml"),
+            "name = \"pick\"\ndefault_scene = \"scenes/main.yaml\"\n\n[[import]]\nfrom = \"art/*.gltf\"\nto = \"assets/kit\"\n",
+        )
+        .unwrap();
+        let both = [CookTarget::Desktop, CookTarget::Ios];
+        let target = |supported: &[CookTarget]| lookup_for(&dir, supported).unwrap().target();
+        let store = |name: &str| std::fs::create_dir_all(dir.join(".ludion/cooked").join(name));
+
+        assert_eq!(target(&both), Some(CookTarget::Desktop), "no store");
+        store("ios").unwrap();
+        assert_eq!(target(&both), Some(CookTarget::Ios), "a bundle's ios store");
+        store("desktop").unwrap();
+        assert_eq!(target(&both), Some(CookTarget::Desktop), "both stores");
+        std::fs::remove_dir_all(dir.join(".ludion/cooked/ios")).unwrap();
+        assert_eq!(
+            target(&[CookTarget::Ios]),
+            Some(CookTarget::Ios),
+            "no ios store"
+        );
+        assert_eq!(target(&[]), None, "no supported target");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

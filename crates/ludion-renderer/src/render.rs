@@ -742,6 +742,18 @@ impl Renderer {
         self.gpu.cook_target()
     }
 
+    /// Every cook target this device samples, `Desktop` before `Ios`; empty when it supports
+    /// neither. [`Renderer::cook_target`] is the head.
+    ///
+    /// # Example (requires a GPU adapter)
+    /// ```no_run
+    /// let renderer = ludion_renderer::Renderer::new().unwrap();
+    /// let _targets = renderer.cook_targets();
+    /// ```
+    pub fn cook_targets(&self) -> Vec<CookTarget> {
+        self.gpu.cook_targets()
+    }
+
     /// The underlying adapter's backend (e.g. `"Vulkan"`, `"Metal"`).
     pub fn adapter_backend(&self) -> &str {
         self.gpu.adapter_backend()
