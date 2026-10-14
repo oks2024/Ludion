@@ -3,6 +3,13 @@
 > **Status:** Waves 0–2 shipped 2026-10-14 (2b done: vigil synced, budgets cut at `cooked`); Waves 3–4
 > open. Instrument: `Plan/scene-load-speed.md`'s `load` report.
 >
+> **Wave 3 (Windows side, 2026-10-14).** `ludion export` cooks `ios` in its sync and ships the referenced
+> `ios` store entries under `content/.ludion/cooked/ios/`; the PNGs still ship, a map with no entry is
+> counted in the export's summary line and falls back on the device. Vigil's bundle content, dot-files
+> excluded and the Mac-built staticlib not counted: 402.7 MB without the cooked entries (scene dir,
+> manifest, `assets/town`), plus 507.5 MB for 495 shipped ASTC maps (`ludion sync --target ios`: 495
+> cooked, 0 failed). The ASTC set outweighs the PNGs it sits beside. The exit rides the M4 (`Plan/owed.md`).
+>
 > **Wave 1 exit (2026-10-14, reference box, RTX 3090).** The plaza (`scenes/district-plaza.yaml`),
 > `--profile 30`, one cold run discarded, medians of three warm runs, `source` → `cooked`
 > (store from `ludion sync --project games/vigil`: 495 maps reused, 0 cooked, 0 failed, 507 MB):

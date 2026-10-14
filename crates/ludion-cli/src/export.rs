@@ -202,11 +202,14 @@ fn export(target: IosTarget, out: &Path, project: &Path, options: &Options) -> R
     };
     let out = resolve_out(out, &project)?;
     toolchain(target)?;
-    crate::sync::ensure_fresh(&project, &crate::cook::CookRequest::default())
-        .map_err(Failure::Diagnostics)?;
+    let cook = crate::cook::CookRequest {
+        enabled: true,
+        extra_targets: vec![ludion_assets::cooked::CookTarget::Ios],
+    };
+    crate::sync::ensure_fresh(&project, &cook).map_err(Failure::Diagnostics)?;
 
     let archive = build_staticlib(&project, target, debug)?;
-    write_export(
+    let shipped = write_export(
         &out,
         &project,
         &manifest,
@@ -215,6 +218,18 @@ fn export(target: IosTarget, out: &Path, project: &Path, options: &Options) -> R
         options.replays,
     )?;
 
+    let mut line = format!(
+        "shipped {} cooked ios maps ({:.1} MB)",
+        shipped.maps,
+        shipped.bytes as f64 / 1e6
+    );
+    if shipped.uncooked > 0 {
+        line.push_str(&format!(
+            "; {} referenced maps not cooked load their PNG",
+            shipped.uncooked
+        ));
+    }
+    println!("{line}");
     println!(
         "exported `{}` for {} to {}",
         manifest.name,
@@ -428,7 +443,7 @@ fn write_export(
     substitutions: &Substitutions,
     archive: &Path,
     replays: &[PathBuf],
-) -> Result<(), Diagnostic> {
+) -> Result<Shipped, Diagnostic> {
     let scene_dir = manifest
         .default_scene
         .parent()
@@ -492,6 +507,7 @@ fn write_export(
         // with every other dot-file.
         copy_tree(&project.join(&import.to), &content_root.join(&import.to))?;
     }
+    let shipped = ship_cooked(project, manifest, &content_root)?;
     drop(locks);
     for replay in replays {
         let name = replay.file_name().expect("check_flags made it a file");
@@ -509,7 +525,63 @@ fn write_export(
             .map_err(|err| output_io(format!("could not copy `{}`: {err}", replay.display())))?;
     }
 
-    write_file(&out.join(MARKER), "")
+    write_file(&out.join(MARKER), "")?;
+    Ok(shipped)
+}
+
+/// What the bundle took from the `ios` cooked store.
+#[derive(Debug, Default)]
+struct Shipped {
+    maps: usize,
+    bytes: u64,
+    /// Referenced maps with no store entry: they load their PNG on the device.
+    uncooked: usize,
+}
+
+/// Copies the `ios` store entries the import trees reference into the bundle, beside the PNGs
+/// (the app's host finds the store from the bundled manifest). A missing entry is counted, not an
+/// error: that map falls back to its PNG.
+fn ship_cooked(
+    project: &Path,
+    manifest: &Manifest,
+    content_root: &Path,
+) -> Result<Shipped, Diagnostic> {
+    use ludion_assets::cooked::CookTarget;
+
+    let mut shipped = Shipped::default();
+    if manifest
+        .cook
+        .as_ref()
+        .is_some_and(|section| !section.textures)
+    {
+        return Ok(shipped);
+    }
+    let mut trees = Vec::new();
+    for import in &manifest.imports {
+        let tree = crate::cook::CookTree::whole(project.join(&import.to), import.max_texture_size)
+            .map_err(|err| output_io(format!("could not read `{}`: {err}", import.to.display())))?;
+        trees.push(tree);
+    }
+    let referenced = crate::cook::referenced_files(project, &trees, CookTarget::Ios);
+    shipped.uncooked = referenced.failed.len();
+    let store = crate::cook::store_dir(project, CookTarget::Ios);
+    let dst_dir = content_root
+        .join(".ludion/cooked")
+        .join(CookTarget::Ios.name());
+    for name in &referenced.files {
+        let src = store.join(name);
+        let Ok(meta) = std::fs::metadata(&src) else {
+            shipped.uncooked += 1;
+            continue;
+        };
+        let dst = dst_dir.join(name);
+        create_parent(&dst)?;
+        ludion_core::atomic::copy_atomic(&src, &dst)
+            .map_err(|err| output_io(format!("could not copy `{}`: {err}", src.display())))?;
+        shipped.maps += 1;
+        shipped.bytes += meta.len();
+    }
+    Ok(shipped)
 }
 
 /// What the template's `{{…}}` placeholders become.
@@ -755,6 +827,120 @@ mod tests {
             !out.join("content/assets/derived/.ludion-sync.json")
                 .exists()
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A project whose `kit` mesh names two maps, with an `ios` store holding both (and a stale
+    /// entry) and a `desktop` store entry. Returns the root, the project and the store file names.
+    fn cooked_project(tag: &str, cook_table: &str) -> (PathBuf, PathBuf, [String; 2]) {
+        use ludion_assets::cooked::{ColorSpace, CookSettings, CookTarget, cook_key};
+
+        let root = std::env::temp_dir().join(format!("ludion-export-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let kit = project.join("assets/derived/kit");
+        std::fs::create_dir_all(kit.join("textures")).unwrap();
+        std::fs::create_dir_all(project.join("scenes")).unwrap();
+        std::fs::write(project.join("scenes/main.yaml"), "entities: []\n").unwrap();
+        std::fs::write(
+            kit.join("model.mesh.yaml"),
+            "format: 1\nkind: mesh\nname: model\n\
+             positions:\n  - 0\n  - 0\n  - 0\n  - 1\n  - 0\n  - 0\n  - 0\n  - 1\n  - 0\n\
+             uvs:\n  - 0\n  - 0\n  - 1\n  - 0\n  - 0\n  - 1\n\
+             indices:\n  - 0\n  - 1\n  - 2\n\
+             base_color_texture:\n  path: \"textures/b.png\"\n\
+             normal_texture:\n  path: \"textures/n.png\"\n",
+        )
+        .unwrap();
+        let maps = [("b", ColorSpace::Srgb), ("n", ColorSpace::Linear)];
+        let mut names = Vec::new();
+        for (name, color_space) in maps {
+            let bytes = format!("png {name}").into_bytes();
+            std::fs::write(kit.join(format!("textures/{name}.png")), &bytes).unwrap();
+            let settings = CookSettings {
+                target: CookTarget::Ios,
+                color_space,
+                max_texture_size: None,
+            };
+            let file = ludion_assets::cooked::cooked_file_name(cook_key(
+                ludion_assets::content_hash(&bytes),
+                &settings,
+            ));
+            let ios = project.join(".ludion/cooked/ios");
+            std::fs::create_dir_all(&ios).unwrap();
+            std::fs::write(ios.join(&file), format!("ktx2 {name}")).unwrap();
+            names.push(file);
+        }
+        std::fs::write(project.join(".ludion/cooked/ios/stale.ktx2"), "stale").unwrap();
+        let desktop = project.join(".ludion/cooked/desktop");
+        std::fs::create_dir_all(&desktop).unwrap();
+        std::fs::write(desktop.join("0000000000000001.ktx2"), "bc7").unwrap();
+        std::fs::write(
+            project.join("ludion.toml"),
+            format!(
+                "name = \"probe\"\ndefault_scene = \"scenes/main.yaml\"\n\n[[import]]\nfrom = \"art/*/export/*.gltf\"\nto = \"assets/derived\"\n{cook_table}"
+            ),
+        )
+        .unwrap();
+        let [b, n] = <[String; 2]>::try_from(names).unwrap();
+        (root, project, [b, n])
+    }
+
+    fn export_cooked(root: &Path, project: &Path) -> Shipped {
+        let manifest = manifest::load(project).unwrap();
+        let archive = root.join("libgame.a");
+        std::fs::write(&archive, "archive").unwrap();
+        let substitutions = Substitutions {
+            name: "probe",
+            bundle_id: "dev.ludion.probe",
+            quality: "",
+        };
+        write_export(
+            &root.join("out"),
+            project,
+            &manifest,
+            &substitutions,
+            &archive,
+            &[],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_referenced_ios_maps_ship_beside_the_pngs() {
+        let (root, project, [b, n]) = cooked_project("cooked", "");
+        let shipped = export_cooked(&root, &project);
+        let store = root.join("out/content/.ludion/cooked/ios");
+        assert_eq!(std::fs::read(store.join(&b)).unwrap(), b"ktx2 b");
+        assert_eq!(std::fs::read(store.join(&n)).unwrap(), b"ktx2 n");
+        assert!(!store.join("stale.ktx2").exists());
+        assert!(!root.join("out/content/.ludion/cooked/desktop").exists());
+        assert_eq!(std::fs::read_dir(&store).unwrap().count(), 2);
+        let textures = root.join("out/content/assets/derived/kit/textures");
+        assert!(textures.join("b.png").is_file() && textures.join("n.png").is_file());
+        assert_eq!((shipped.maps, shipped.uncooked), (2, 0));
+        assert_eq!(shipped.bytes, 12);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_map_without_a_store_entry_is_counted_and_the_export_goes_on() {
+        let (root, project, [b, n]) = cooked_project("uncooked", "");
+        std::fs::remove_file(project.join(".ludion/cooked/ios").join(&b)).unwrap();
+        let shipped = export_cooked(&root, &project);
+        let store = root.join("out/content/.ludion/cooked/ios");
+        assert!(!store.join(&b).exists());
+        assert!(store.join(&n).is_file());
+        assert_eq!((shipped.maps, shipped.uncooked), (1, 1));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cook_textures_false_ships_no_store() {
+        let (root, project, _) = cooked_project("nocook", "\n[cook]\ntextures = false\n");
+        let shipped = export_cooked(&root, &project);
+        assert!(!root.join("out/content/.ludion").exists());
+        assert_eq!(shipped.maps, 0);
         let _ = std::fs::remove_dir_all(&root);
     }
 

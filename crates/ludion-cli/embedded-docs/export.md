@@ -72,6 +72,10 @@ and never inside the project):
   `[[import]]` tree (`ludion sync` runs first; the trees are copied under the sync lock, so a sync
   running beside the export finishes first, and the export says on stderr that it is waiting), so assets sit beside the scenes or under a tree's
   own path; a project's `src/`, `goldens/` and `target/` never enter the bundle.
+- **The bundle ships cooked maps.** The export cooks the `ios` target (ASTC,
+  KTX2) and copies the entries the import trees reference into `content/.ludion/cooked/ios/`, beside
+  the PNGs. The app runs `cooked`, so those maps upload compressed; a map with no entry falls back to
+  its PNG with `L1271`. `[cook] textures = false` ships none.
 - **The shipped quality is a default, not a lock.** `LUDION_QUALITY` in the Xcode scheme or a
   `devicectl … --environment-variables` launch still outranks `[ios] quality`, so a device test
   needs no re-export (`ludion docs quality`).

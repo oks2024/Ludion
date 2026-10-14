@@ -71,6 +71,28 @@ pub(crate) struct CookTree {
     pub max_texture_size: Option<u32>,
 }
 
+impl CookTree {
+    /// A tree whose stems are every non-dot subdirectory of `to`, sorted: what a sync left there.
+    pub(crate) fn whole(to: PathBuf, max_texture_size: Option<u32>) -> std::io::Result<CookTree> {
+        let mut stems = Vec::new();
+        if to.is_dir() {
+            for entry in to.read_dir()? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !name.starts_with('.') && entry.path().is_dir() {
+                    stems.push(name);
+                }
+            }
+        }
+        stems.sort();
+        Ok(CookTree {
+            to,
+            stems,
+            max_texture_size,
+        })
+    }
+}
+
 /// A mesh document to read.
 struct MeshFile {
     path: PathBuf,
@@ -146,12 +168,19 @@ fn failure(map: String, target: &'static str, diagnostic: Diagnostic) -> CookFai
     }
 }
 
-/// Cooks every map the trees' meshes reference for each target, then sweeps the store. `trees`
-/// and `targets` are in manifest order; the result does not depend on the thread count.
-pub(crate) fn cook_project(root: &Path, trees: &[CookTree], targets: &[CookTarget]) -> CookOutcome {
-    let mut outcome = CookOutcome::default();
-    // A run that could not read every mesh or PNG does not know what the store should hold.
+/// What the trees' meshes reference, hashed.
+struct Scan {
+    uses: BTreeSet<MapUse>,
+    hashes: BTreeMap<PathBuf, u64>,
+    /// `false` when a mesh or PNG could not be read, so the referenced set is not the whole truth.
+    complete: bool,
+    failed: Vec<CookFailure>,
+}
+
+/// Walks the trees' meshes and hashes every map they reference.
+fn scan(root: &Path, trees: &[CookTree]) -> Scan {
     let mut complete = true;
+    let mut failed: Vec<CookFailure> = Vec::new();
 
     let mut meshes: Vec<MeshFile> = Vec::new();
     for tree in trees {
@@ -162,7 +191,7 @@ pub(crate) fn cook_project(root: &Path, trees: &[CookTree], targets: &[CookTarge
                 && let Err(error) = collect_files(&stem_dir, &stem_dir, &mut files)
             {
                 complete = false;
-                outcome.failed.push(failure(
+                failed.push(failure(
                     display(root, &stem_dir),
                     "all",
                     io_failure("read", &stem_dir, &error),
@@ -190,7 +219,7 @@ pub(crate) fn cook_project(root: &Path, trees: &[CookTree], targets: &[CookTarge
             Ok(found) => uses.extend(found),
             Err((path, diagnostics)) => {
                 complete = false;
-                outcome.failed.push(CookFailure {
+                failed.push(CookFailure {
                     map: display(root, &path),
                     target: "all",
                     diagnostics,
@@ -208,15 +237,15 @@ pub(crate) fn cook_project(root: &Path, trees: &[CookTree], targets: &[CookTarge
     let hashed = ludion_core::par::par_map_chunks(&pngs, 1, |_, chunk| {
         std::fs::read(chunk[0]).map(|bytes| content_hash(&bytes))
     });
-    let mut hashes: BTreeMap<&Path, u64> = BTreeMap::new();
+    let mut hashes: BTreeMap<PathBuf, u64> = BTreeMap::new();
     for (png, result) in pngs.iter().zip(hashed) {
         match result {
             Ok(hash) => {
-                hashes.insert(png, hash);
+                hashes.insert(png.to_path_buf(), hash);
             }
             Err(error) => {
                 complete = false;
-                outcome.failed.push(failure(
+                failed.push(failure(
                     display(root, png),
                     "all",
                     io_failure("read", png, &error),
@@ -224,20 +253,70 @@ pub(crate) fn cook_project(root: &Path, trees: &[CookTree], targets: &[CookTarge
             }
         }
     }
+    Scan {
+        uses,
+        hashes,
+        complete,
+        failed,
+    }
+}
 
-    for &target in targets {
-        let store = root.join(STORE).join(target.name());
-        let mut units: BTreeMap<u64, Unit> = BTreeMap::new();
-        for map in &uses {
-            let Some(&hash) = hashes.get(map.png.as_path()) else {
-                continue;
-            };
-            let settings = settings(target, map);
-            units.entry(cook_key(hash, &settings)).or_insert(Unit {
+/// The store entries `target` needs, by key.
+fn units(scan: &Scan, target: CookTarget) -> BTreeMap<u64, Unit> {
+    let mut units: BTreeMap<u64, Unit> = BTreeMap::new();
+    for map in &scan.uses {
+        let Some(&hash) = scan.hashes.get(&map.png) else {
+            continue;
+        };
+        units
+            .entry(cook_key(hash, &settings(target, map)))
+            .or_insert(Unit {
                 map: map.clone(),
                 hash,
             });
-        }
+    }
+    units
+}
+
+/// The store entries the trees reference for one target.
+pub(crate) struct Referenced {
+    /// `cooked_file_name(key)` of every entry.
+    pub files: BTreeSet<String>,
+    pub failed: Vec<CookFailure>,
+}
+
+/// The file names `target`'s store holds for the trees' meshes.
+pub(crate) fn referenced_files(root: &Path, trees: &[CookTree], target: CookTarget) -> Referenced {
+    let scan = scan(root, trees);
+    let files = units(&scan, target)
+        .keys()
+        .map(|&key| cooked_file_name(key))
+        .collect();
+    Referenced {
+        files,
+        failed: scan.failed,
+    }
+}
+
+/// `target`'s store directory under the project root.
+pub(crate) fn store_dir(root: &Path, target: CookTarget) -> PathBuf {
+    root.join(STORE).join(target.name())
+}
+
+/// Cooks every map the trees' meshes reference for each target, then sweeps the store. `trees`
+/// and `targets` are in manifest order; the result does not depend on the thread count.
+pub(crate) fn cook_project(root: &Path, trees: &[CookTree], targets: &[CookTarget]) -> CookOutcome {
+    let mut scan = scan(root, trees);
+    let mut outcome = CookOutcome {
+        failed: std::mem::take(&mut scan.failed),
+        ..CookOutcome::default()
+    };
+    // A run that could not read every mesh or PNG does not know what the store should hold.
+    let complete = scan.complete;
+
+    for &target in targets {
+        let store = store_dir(root, target);
+        let units = units(&scan, target);
         let mut jobs: Vec<(u64, &Unit)> = Vec::new();
         for (&key, unit) in &units {
             if store.join(cooked_file_name(key)).is_file() {
@@ -408,6 +487,21 @@ mod tests {
         assert_eq!(resolved("../../x.png"), None);
         assert_eq!(resolved("../../../outside.png"), None);
         assert_eq!(resolved("/abs/x.png"), None);
+    }
+
+    #[test]
+    fn a_whole_tree_lists_its_sorted_non_dot_directories() {
+        let to = std::env::temp_dir().join(format!("ludion-cook-whole-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&to);
+        for dir in ["b", "a", ".ludion"] {
+            std::fs::create_dir_all(to.join(dir)).unwrap();
+        }
+        std::fs::write(to.join("file.txt"), b"x").unwrap();
+        let tree = CookTree::whole(to.clone(), Some(512)).unwrap();
+        assert_eq!(tree.stems, ["a", "b"]);
+        assert_eq!(tree.max_texture_size, Some(512));
+        std::fs::remove_dir_all(&to).unwrap();
+        assert!(CookTree::whole(to, None).unwrap().stems.is_empty());
     }
 
     #[test]
