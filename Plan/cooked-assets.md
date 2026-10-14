@@ -74,6 +74,8 @@ Engine gap map item: "PNG decoded to RGBA8 only; no BC/ASTC/KTX2 compression"; t
    `.ludion/cooked/mesh/<key>.bin`, a versioned little-endian serialization of the parsed
    `MeshDocument` (not `MeshData`, so `mesh_asset::decode` stays the one decode). A version or magic
    mismatch is a miss, never an error.
+9. **Encoders: `intel_tex_2` for BC7, `ctt-astcenc` for ASTC 4×4** (Wave 0 result). Presets
+   `opaque_basic` and `Medium`; the cooker version constant pins both.
 
 ## `ludion sync` changes
 
@@ -131,6 +133,35 @@ Alternative — Basis Universal UASTC (`basis-universal`, MIT/Apache, C++ via `c
 BC7/ASTC at load. Basis means one cooked file per map instead of one per target, but puts a C++
 transcoder into every game binary, iOS included, against decision 1. Choose it only if the
 per-target encoders fail the criteria.
+
+**Wave 0 result (2026-10-14, Windows x86_64, 5950X 32 threads, scratch crate outside the workspace).**
+Corpus: the plaza's 235 maps (81 sRGB colour/emissive, 154 linear metallic-roughness/normal; all
+opaque), each encoded with a full 2×2 box mip chain (sRGB averaged in linear light). SSIM is the
+`ludion-testkit` method (11×11 binomial window, Rec. 709 luma) on level 0 after decode, plus the
+worst of the R/G/B channels, decoded by `texture2ddecoder`, independent of both encoders.
+
+| Target | Crate | Licence | Preset | Encode 1T | 32T wall | Output |
+|---|---|---|---|---|---|---|
+| desktop BC7 | `intel_tex_2` 0.5.0 (checked-in ISPC kernels) | MIT/Apache-2.0 | `opaque_basic` | 267 s | 19.6 s | 231 MB |
+| ios ASTC 4×4 | `ctt-astcenc` 0.6.0 (astcenc via `cc`, run-time SSE2/SSE4.1/AVX2/NEON dispatch) | (MIT OR Apache-2.0 OR Zlib) AND Apache-2.0 | `Medium`, `LdrSrgb` for colour maps, `Ldr` for linear | 168 s | 9.7 s | 231 MB |
+
+- **Pixels.** 231 MB is exactly ¼ of the RGBA8 chain. BC7: sRGB luma SSIM mean 0.9988 (min 0.9973),
+  linear 0.9977 (min 0.9846). ASTC: 0.9990 (0.9970) and 0.9977 (0.9839). The worst per-channel SSIM
+  is a normal map in both (BC7 0.954, ASTC 0.947); the worst five are mostly the same maps for
+  both encoders. Presets on a 24-map sample (1T): BC7 `fast` takes 2.5× less time but drops linear
+  min-channel SSIM from 0.989 to 0.946; `slow` gains 0.001 for 4× the time. ASTC `fast` scores
+  0.982 against medium's 0.990; `thorough` 0.991 for 2× the time. Both choices sit on the knee.
+- **Determinism.** Both are byte-identical across two runs and across 1, 8 and 32 threads (each map
+  is encoded on one thread; parallelism is across maps). Cross-CPU byte identity is not measured
+  (ISPC and astcenc pick an ISA at run time). A store is written and read on the machine that
+  cooks it, so the key does not depend on it.
+- **Build.** Both build from clean on Windows with only the MSVC toolchain: no ISPC, no libclang,
+  no system tools. `intel_tex_2` ships `aarch64-apple-darwin` and `aarch64-apple-ios` BC7
+  libraries, so the darwin kernel exists. `ctt-astcenc`'s build script has a NEON variant for
+  aarch64. Neither was built on a Mac in this spike.
+- **Rejected.** `astcenc-rs` 0.2.0 needs libclang (bindgen) at build time, which fails "no system
+  tools". `intel_tex_2`'s own ASTC entry point is `unimplemented!()` in 0.5.0. Basis Universal was
+  not needed.
 
 ### Wave 1 — runtime: read and upload cooked textures
 
