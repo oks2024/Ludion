@@ -26,6 +26,8 @@ naga = { workspace = true, features = ["wgsl-in"] }
 pollster.workspace = true
 
 [dev-dependencies]
+# Test-only: builds cooked fixtures in memory (cook, write_ktx2, read_ktx2).
+ludion-cook = { path = "../ludion-cook", version = "0.1.0" }
 # Test-only: the decision-16 snippet-composition drift guard byte-compares this crate's compile-time
 # snippet mapping (`ShaderId::snippets`) against the bindgen registry (`COMPOSITIONS`). Bindgen pulls
 # only naga (no wgpu), and this is a dev-dep — it never enters the shipping build, honoring "consumers

@@ -65,7 +65,8 @@ re-blesses every mesh-bearing golden:
 - **Colour spaces**: `base_color_tex` and `emissive_tex` decode sRGB (authored colour);
   `metallic_roughness_tex`, `normal_tex` and `occlusion_tex` decode linear (measurements). The GPU
   texture format carries this (`Rgba8UnormSrgb` vs. `Rgba8Unorm`), and the upload cache keys on
-  `(content hash, sRGB)` so one PNG bound sRGB by one material and linear by another cannot alias.
+  `(content hash, sRGB, encoding)` so one PNG bound sRGB by one material and linear by another cannot alias.
+- **A cooked map carries its own mips** (BC7/ASTC, uploaded level by level, no mipgen).
 - **Mips are GPU-generated**, a blit chain (`mipgen.rs`) reusing `blit.wgsl`, trilinear filtering
   with anisotropy 16 on every material sampler (repeat/clamp/mirror, one sampler per wrap mode).
 

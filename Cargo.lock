@@ -1854,6 +1854,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "ludion-assets",
+ "ludion-cook",
  "ludion-core",
  "ludion-font",
  "ludion-render-graph",

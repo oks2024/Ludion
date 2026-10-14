@@ -17,6 +17,7 @@
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use ludion_assets::cooked::{CompressedFormat, CookTarget};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 
@@ -44,6 +45,8 @@ pub struct Gpu {
     adapter_name: String,
     adapter_backend: String,
     pub(crate) timestamps_supported: bool,
+    /// The BC/ASTC compression features the adapter offered and the device requested.
+    compression: wgpu::Features,
     faults: Arc<Mutex<GpuFaults>>,
 }
 
@@ -110,6 +113,35 @@ fn lock_faults(faults: &Mutex<GpuFaults>) -> MutexGuard<'_, GpuFaults> {
 
 /// The color format all graph textures use (must match the WGSL targets and the readback format).
 pub(crate) const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+/// The texture-compression features the device requests when the adapter offers them.
+const COMPRESSION_FEATURES: wgpu::Features =
+    wgpu::Features::TEXTURE_COMPRESSION_BC.union(wgpu::Features::TEXTURE_COMPRESSION_ASTC);
+
+/// Whether a device with `features` can sample `format`: BC7 needs `TEXTURE_COMPRESSION_BC`, ASTC
+/// 4×4 needs `TEXTURE_COMPRESSION_ASTC`.
+///
+/// # Example
+/// ```
+/// use ludion_assets::cooked::CompressedFormat;
+/// use ludion_render_graph::compressed_format_supported;
+/// assert!(compressed_format_supported(wgpu::Features::TEXTURE_COMPRESSION_BC, CompressedFormat::Bc7));
+/// assert!(!compressed_format_supported(wgpu::Features::empty(), CompressedFormat::Astc4x4));
+/// ```
+pub fn compressed_format_supported(features: wgpu::Features, format: CompressedFormat) -> bool {
+    match format {
+        CompressedFormat::Bc7 => features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
+        CompressedFormat::Astc4x4 => features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC),
+    }
+}
+
+/// The cook target a device with `features` samples: `Desktop` (BC7) when BC is supported, else
+/// `Ios` (ASTC) when ASTC is. BC wins because an Apple-silicon Mac offers both and cooks desktop.
+fn cook_target_for(features: wgpu::Features) -> Option<CookTarget> {
+    [CookTarget::Desktop, CookTarget::Ios]
+        .into_iter()
+        .find(|target| compressed_format_supported(features, target.format()))
+}
 
 impl Gpu {
     /// Requests a headless GPU context.
@@ -192,10 +224,11 @@ impl Gpu {
             via_fallback || info.device_type == wgpu::DeviceType::Cpu,
         );
         let timestamps_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let compression = adapter.features() & COMPRESSION_FEATURES;
         let required_features = if timestamps_supported {
-            wgpu::Features::TIMESTAMP_QUERY
+            wgpu::Features::TIMESTAMP_QUERY | compression
         } else {
-            wgpu::Features::empty()
+            compression
         };
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -255,6 +288,7 @@ impl Gpu {
             adapter_name: info.name,
             adapter_backend: format!("{:?}", info.backend),
             timestamps_supported,
+            compression,
             faults,
         })
     }
@@ -325,6 +359,30 @@ impl Gpu {
     /// The backend the adapter uses (e.g. `"Vulkan"`, `"Dx12"`, `"Metal"`).
     pub fn adapter_backend(&self) -> &str {
         &self.adapter_backend
+    }
+
+    /// Whether this device can sample `format` — decided by the adapter's features, never the OS.
+    ///
+    /// # Example (requires a GPU adapter)
+    /// ```no_run
+    /// use ludion_assets::cooked::CompressedFormat;
+    /// let gpu = ludion_render_graph::Gpu::request().unwrap();
+    /// let _bc7 = gpu.supports_compressed(CompressedFormat::Bc7);
+    /// ```
+    pub fn supports_compressed(&self, format: CompressedFormat) -> bool {
+        compressed_format_supported(self.compression, format)
+    }
+
+    /// The cook target this device samples: `Desktop` if BC7 is supported, else `Ios` if ASTC is,
+    /// else `None` (a map must then be sampled from its source).
+    ///
+    /// # Example (requires a GPU adapter)
+    /// ```no_run
+    /// let gpu = ludion_render_graph::Gpu::request().unwrap();
+    /// let _target = gpu.cook_target();
+    /// ```
+    pub fn cook_target(&self) -> Option<CookTarget> {
+        cook_target_for(self.compression)
     }
 
     /// Renders `schedule` and returns the `output` resource read back as packed RGBA8.
@@ -986,6 +1044,30 @@ fn build_pipelines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compressed_support_follows_the_matching_feature() {
+        let bc = wgpu::Features::TEXTURE_COMPRESSION_BC;
+        let astc = wgpu::Features::TEXTURE_COMPRESSION_ASTC;
+        assert!(compressed_format_supported(bc, CompressedFormat::Bc7));
+        assert!(!compressed_format_supported(bc, CompressedFormat::Astc4x4));
+        assert!(compressed_format_supported(astc, CompressedFormat::Astc4x4));
+        assert!(!compressed_format_supported(astc, CompressedFormat::Bc7));
+        assert!(!compressed_format_supported(
+            wgpu::Features::empty(),
+            CompressedFormat::Bc7
+        ));
+    }
+
+    #[test]
+    fn cook_target_prefers_bc_then_astc_then_none() {
+        let bc = wgpu::Features::TEXTURE_COMPRESSION_BC;
+        let astc = wgpu::Features::TEXTURE_COMPRESSION_ASTC;
+        assert_eq!(cook_target_for(bc | astc), Some(CookTarget::Desktop));
+        assert_eq!(cook_target_for(bc), Some(CookTarget::Desktop));
+        assert_eq!(cook_target_for(astc), Some(CookTarget::Ios));
+        assert_eq!(cook_target_for(wgpu::Features::empty()), None);
+    }
 
     /// The pinned limit set is the WebGPU floor plus its commented raises: the texture bound the
     /// renderer validates against is the floor's, and the raises are the ones the mesh pass needs.

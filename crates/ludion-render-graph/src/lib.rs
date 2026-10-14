@@ -69,7 +69,8 @@ pub mod timings;
 
 pub use blit::{Blit, SurfaceSetup};
 pub use execute::{
-    Gpu, MAX_TEXTURE_DIMENSION_2D, PassRecorder, RecordedPass, RenderedImage, engine_limits,
+    Gpu, MAX_TEXTURE_DIMENSION_2D, PassRecorder, RecordedPass, RenderedImage,
+    compressed_format_supported, engine_limits,
 };
 pub use graph::{PassDecl, PassKind, RenderGraph, ResourceDecl, ResourceKind};
 pub use pass_timing::PassTimingRing;

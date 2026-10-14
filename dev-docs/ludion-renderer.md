@@ -24,6 +24,7 @@ description: The render pipeline: passes, GPU resources, and deterministic PNG o
 - `crates/ludion-renderer/src/render.rs` — `Renderer`, the `SHADERS` registry, per-frame upload, and `FrameRecorder` (the `PassRecorder` impl). `from_gpu` builds one on a `Gpu` the caller already has (the surface-chosen context; `new()` is that over a headless `Gpu::request`), and `render_frame` is the general form of `render_streamed` — same frame, `FrameSinks` naming where its finished texture goes. Also owns the per-draw material `@group(4)` (five texture slots + sampler + `MeshMaterial` uniform) and its content-hash-keyed texture cache — `ludion devdocs renderer-shading` has the shading side.
 - `crates/ludion-renderer/src/ibl.rs` — the sky prefilter and its cache (`ludion devdocs renderer-ibl`).
 - `crates/ludion-renderer/src/mesh.rs` — procedural cube/plane/sphere geometry, non-indexed triangle lists.
+- `crates/ludion-renderer/src/compressed.rs` — the cooked-map (BC7/ASTC 4×4) wgpu format mapping and `CompressedUploadError` validation; the upload itself is in `render.rs`.
 - `crates/ludion-renderer/src/mipgen.rs` — GPU mip generation for uploaded textures, a blit chain reusing `blit.wgsl`.
 - `crates/ludion-renderer/src/shaders/` — one WGSL body per pipeline, plus `ibl.wgsl`'s three compute entry points, which is deliberately not a `SHADERS` row.
 - `crates/ludion-renderer/src/shaders/snippets/` — fragments composed ahead of a body (`ludion devdocs renderer-shaders`).

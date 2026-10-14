@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
+use ludion_assets::cooked::{CompressedFormat, CompressedImage, CookTarget};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{Mat3, Mat4, Vec3};
@@ -21,6 +22,7 @@ use ludion_render_graph::{
     StreamReadback, schedule,
 };
 
+use crate::compressed::{self, CompressedUploadError};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
@@ -209,6 +211,32 @@ struct GpuTexture {
     view: wgpu::TextureView,
 }
 
+/// How a mesh map's texels are stored on the GPU. Part of [`MeshTextureKey`] so a cooked map and the
+/// source map it was cooked from never alias one cache entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum MapEncoding {
+    Rgba8,
+    Bc7,
+    Astc4x4,
+}
+
+impl From<CompressedFormat> for MapEncoding {
+    fn from(format: CompressedFormat) -> Self {
+        match format {
+            CompressedFormat::Bc7 => MapEncoding::Bc7,
+            CompressedFormat::Astc4x4 => MapEncoding::Astc4x4,
+        }
+    }
+}
+
+/// The mesh texture cache key: the map's content hash, its sRGB role and how it is stored.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct MeshTextureKey {
+    hash: u64,
+    srgb: bool,
+    encoding: MapEncoding,
+}
+
 /// The procedural vertex buffer for one primitive shape.
 struct MeshBuffer {
     buffer: wgpu::Buffer,
@@ -299,7 +327,7 @@ pub struct Renderer {
     /// space in the key so one PNG bound as sRGB by one material and linear by another cannot alias
     /// (`Plan/textured-pbr.md` G6). Separate from the sprite cache because these textures differ in
     /// three ways: a full mip chain, a format that follows the map's role, and no premultiply.
-    mesh_texture_cache: RefCell<HashMap<(u64, bool), GpuTexture>>,
+    mesh_texture_cache: RefCell<HashMap<MeshTextureKey, GpuTexture>>,
     /// The blit chain that fills a freshly uploaded material map's mip levels (`mipgen.rs`).
     mipgen: MipGen,
     /// One sampler per glTF wrap mode, all trilinear at [`MATERIAL_ANISOTROPY`]; a material group takes
@@ -655,6 +683,30 @@ impl Renderer {
     /// The underlying adapter's human-readable name (for logs and skip messages).
     pub fn adapter_name(&self) -> &str {
         self.gpu.adapter_name()
+    }
+
+    /// Whether the device can sample `format` — by adapter feature, never by OS.
+    ///
+    /// # Example (requires a GPU adapter)
+    /// ```no_run
+    /// use ludion_assets::cooked::CompressedFormat;
+    /// let renderer = ludion_renderer::Renderer::new().unwrap();
+    /// let _bc7 = renderer.supports_compressed(CompressedFormat::Bc7);
+    /// ```
+    pub fn supports_compressed(&self, format: CompressedFormat) -> bool {
+        self.gpu.supports_compressed(format)
+    }
+
+    /// The cook target this device samples (`Desktop` BC7, else `Ios` ASTC), or `None` when it
+    /// supports neither.
+    ///
+    /// # Example (requires a GPU adapter)
+    /// ```no_run
+    /// let renderer = ludion_renderer::Renderer::new().unwrap();
+    /// let _target = renderer.cook_target();
+    /// ```
+    pub fn cook_target(&self) -> Option<CookTarget> {
+        self.gpu.cook_target()
     }
 
     /// The underlying adapter's backend (e.g. `"Vulkan"`, `"Metal"`).
@@ -1307,7 +1359,7 @@ impl Renderer {
     }
 
     /// Uploads every material map the scene's asset meshes reference through the
-    /// `(content hash, sRGB)` cache — [`Renderer::resolve_textures`]'s policy exactly: evict what this
+    /// `(content hash, sRGB, encoding)` cache — [`Renderer::resolve_textures`]'s policy exactly: evict what this
     /// frame does not reference, upload the rest on a miss. Fills the cache rather than returning
     /// anything: what reads it is [`Renderer::material_bind_group`], per *mesh*, not per scene index.
     ///
@@ -1315,12 +1367,12 @@ impl Renderer {
     /// normal case for a mesh map and minification without mips aliases.
     fn resolve_mesh_textures(&self, scene: &RenderScene) {
         let mut cache = self.mesh_texture_cache.borrow_mut();
-        let referenced: HashSet<(u64, bool)> = scene
+        let referenced: HashSet<MeshTextureKey> = scene
             .mesh_assets
             .iter()
             .filter_map(|m| m.textures.as_ref())
             .flat_map(material_maps)
-            .filter_map(|(map, srgb)| map.map(|map| (map.image.hash, srgb)))
+            .filter_map(|(map, srgb)| map.map(|map| mesh_texture_key(map, srgb)))
             .collect();
         cache.retain(|key, _| referenced.contains(key));
         for textures in scene.mesh_assets.iter().filter_map(|m| m.textures.as_ref()) {
@@ -1329,10 +1381,16 @@ impl Renderer {
                     continue;
                 };
                 cache
-                    .entry((map.image.hash, srgb))
-                    .or_insert_with(|| self.upload_mesh_texture(&map.image, srgb));
+                    .entry(mesh_texture_key(map, srgb))
+                    .or_insert_with(|| self.upload_mesh_map(map, srgb));
             }
         }
+    }
+
+    /// Uploads one scene map in the encoding [`mesh_texture_key`] names; the cooked variant of the
+    /// map's image adds its arm here.
+    fn upload_mesh_map(&self, map: &MeshTexture, srgb: bool) -> GpuTexture {
+        self.upload_mesh_texture(&map.image, srgb)
     }
 
     /// Uploads one material map and fills its mip chain. `srgb` is the map's role: authored colour
@@ -1388,7 +1446,7 @@ impl Renderer {
             let Some(map) = map else {
                 continue;
             };
-            let Some(uploaded) = cache.get(&(map.image.hash, srgb)) else {
+            let Some(uploaded) = cache.get(&mesh_texture_key(map, srgb)) else {
                 continue;
             };
             views[slot] = &uploaded.view;
@@ -3322,6 +3380,74 @@ fn upload_texture_in(
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     GpuTexture { texture, view }
+}
+
+/// The cache key of one scene map; the cooked variant of the map's image adds its arm here.
+fn mesh_texture_key(map: &MeshTexture, srgb: bool) -> MeshTextureKey {
+    MeshTextureKey {
+        hash: map.image.hash,
+        srgb,
+        encoding: MapEncoding::Rgba8,
+    }
+}
+
+/// Uploads a cooked map with every stored mip level (no mipgen) into a texture a material slot can
+/// bind, in the sRGB or linear variant the slot samples.
+///
+/// The device's support is checked first: handing wgpu a format the device never requested would be an
+/// uncaptured `L2010`, not a fallback. Each level is copied at its *physical* size — whole 4×4 blocks —
+/// so the 2×2 and 1×1 tail levels copy a full block.
+// The scene does not yet name a cooked map, so only the tests reach this.
+#[allow(dead_code)]
+fn upload_compressed_in(
+    gpu: &Gpu,
+    image: &CompressedImage,
+    slot_srgb: bool,
+) -> Result<GpuTexture, CompressedUploadError> {
+    if !gpu.supports_compressed(image.format) {
+        return Err(CompressedUploadError::Unsupported {
+            format: image.format,
+        });
+    }
+    compressed::validate(image, slot_srgb)?;
+    let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("ludion cooked texture"),
+        size: wgpu::Extent3d {
+            width: image.width,
+            height: image.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: image.level_count(),
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: compressed::wgpu_format(image.format, image.srgb),
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (level, bytes) in (0..).zip(&image.levels) {
+        let (bw, bh) = image.blocks(level);
+        gpu.queue().write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bw * compressed::BLOCK_BYTES),
+                rows_per_image: Some(bh),
+            },
+            wgpu::Extent3d {
+                width: bw * 4,
+                height: bh * 4,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    Ok(GpuTexture { texture, view })
 }
 
 /// How many taps a material sampler filters an oblique surface with. 16 is the ceiling wgpu exposes and
@@ -8310,6 +8436,227 @@ mod tests {
             authored_material: false,
             indices: vec![0, 1, 2, 0, 2, 3],
             hash,
+        }
+    }
+
+    /// A renderer, or `None` (after a skip line) when the box has no GPU adapter.
+    fn renderer_or_skip(test: &str) -> Option<Renderer> {
+        match Renderer::new() {
+            Ok(r) => Some(r),
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+                eprintln!("SKIPPED {test}: no GPU adapter");
+                None
+            }
+            Err(d) => panic!("renderer init failed: {d:?}"),
+        }
+    }
+
+    /// A 64×64 gradient map: red rises along U, green along V, blue is flat — every channel a
+    /// compressor must keep, none constant but one.
+    fn gradient_source(hash: u64) -> ludion_assets::Image {
+        let mut rgba = Vec::with_capacity(64 * 64 * 4);
+        for y in 0..64u32 {
+            for x in 0..64u32 {
+                rgba.extend_from_slice(&[(x * 4) as u8, (y * 4) as u8, 128, 255]);
+            }
+        }
+        ludion_assets::Image {
+            width: 64,
+            height: 64,
+            rgba,
+            hash,
+        }
+    }
+
+    /// Cooks `source` for `target`, round-tripped through the KTX2 writer and reader.
+    fn cooked_fixture(
+        source: &ludion_assets::Image,
+        target: CookTarget,
+        srgb: bool,
+    ) -> CompressedImage {
+        use ludion_assets::cooked::{ColorSpace, CookSettings, read_ktx2};
+        let color_space = if srgb {
+            ColorSpace::Srgb
+        } else {
+            ColorSpace::Linear
+        };
+        let settings = CookSettings {
+            target,
+            color_space,
+            max_texture_size: None,
+        };
+        let cooked = ludion_cook::cook(source, &settings).expect("cook");
+        read_ktx2(&ludion_cook::write_ktx2(&cooked), target, color_space).expect("read_ktx2")
+    }
+
+    /// A unit quad carrying `source` as its base-colour (sRGB) or occlusion (linear) map, or no map.
+    fn gradient_quad(source: Option<&ludion_assets::Image>, base_colour: bool) -> MeshData {
+        // The mesh cache keys on the quad's own hash, so each variant needs a distinct one.
+        let mut quad =
+            normal_mapped_quad(0x9A4D + u64::from(source.is_some()) * 2 + u64::from(base_colour));
+        quad.textures = source.map(|source| {
+            let map = crate::scene::MeshTexture {
+                image: Arc::new(crate::scene::TextureImage {
+                    width: source.width,
+                    height: source.height,
+                    rgba: source.rgba.clone(),
+                    hash: source.hash,
+                    filter_linear: true,
+                    premultiplied_on_load: false,
+                }),
+                wrap: crate::scene::TextureWrap::Clamp,
+            };
+            let mut textures = crate::scene::MeshTextures {
+                base_color: None,
+                metallic_roughness: None,
+                normal: None,
+                occlusion: None,
+                emissive: None,
+                normal_scale: 1.0,
+                occlusion_strength: 1.0,
+            };
+            if base_colour {
+                textures.base_color = Some(map);
+            } else {
+                textures.occlusion = Some(map);
+            }
+            textures
+        });
+        quad
+    }
+
+    /// The scene both cooked-map renders share: the quad filling the frame, ambient light only.
+    fn cooked_map_scene(quad: MeshData) -> RenderScene {
+        let mut scene = RenderScene::empty((64, 64));
+        let position = Vec3::new(0.0, 0.0, 2.2);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(position, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.0, 0.1, 100.0),
+            position,
+        };
+        scene.ambient = [0.8, 0.8, 0.8];
+        scene.mesh_assets.push(Arc::new(quad));
+        scene.meshes.push(MeshInstance {
+            shape: MeshShape::Asset(0),
+            model: Mat4::IDENTITY,
+            normal_matrix: Mat3::IDENTITY,
+            color: [1.0; 4],
+            material: [1.0, 0.0, 0.0],
+            use_vertex_material: false,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            bone_offset: 0,
+        });
+        scene
+    }
+
+    /// Mean absolute difference per RGB channel, on the 0–255 scale.
+    fn mean_abs_rgb(a: &RenderedImage, b: &RenderedImage) -> f64 {
+        let total: u64 = a
+            .rgba
+            .chunks_exact(4)
+            .zip(b.rgba.chunks_exact(4))
+            .map(|(p, q)| (0..3).map(|c| u64::from(p[c].abs_diff(q[c]))).sum::<u64>())
+            .sum();
+        total as f64 / (a.rgba.len() / 4 * 3) as f64
+    }
+
+    /// A cooked map seeded under its source map's key renders like the source in both slot colour
+    /// spaces, and unlike no map at all — so the bind path consumes the compressed texture unchanged
+    /// and the map is really sampled. Skips with no GPU or no compression support.
+    #[test]
+    fn needs_gpu_a_cooked_map_in_the_material_slot_renders_like_its_source() {
+        let Some(source_renderer) = renderer_or_skip("a_cooked_map_renders_like_its_source") else {
+            return;
+        };
+        let Some(target) = source_renderer.cook_target() else {
+            eprintln!("SKIPPED a_cooked_map_renders_like_its_source: no compression support");
+            return;
+        };
+        let cooked_renderer = Renderer::new().expect("second renderer");
+        let size = FrameSize::native(64, 64);
+        let source = gradient_source(0xC00C);
+        for (base_colour, srgb) in [(true, true), (false, false)] {
+            let scene = cooked_map_scene(gradient_quad(Some(&source), base_colour));
+            let from_source = source_renderer.render(&scene, size).expect("source render");
+            let untextured = cooked_map_scene(gradient_quad(None, base_colour));
+            let bare = source_renderer
+                .render(&untextured, size)
+                .expect("untextured render");
+
+            let cooked = cooked_fixture(&source, target, srgb);
+            let uploaded =
+                upload_compressed_in(&cooked_renderer.gpu, &cooked, srgb).expect("cooked upload");
+            let map = scene.mesh_assets[0]
+                .textures
+                .as_ref()
+                .and_then(|t| material_maps(t)[if base_colour { 0 } else { 3 }].0)
+                .expect("the quad's map");
+            cooked_renderer
+                .mesh_texture_cache
+                .borrow_mut()
+                .insert(mesh_texture_key(map, srgb), uploaded);
+            let from_cooked = cooked_renderer.render(&scene, size).expect("cooked render");
+
+            let close = mean_abs_rgb(&from_source, &from_cooked);
+            let far = mean_abs_rgb(&bare, &from_cooked);
+            eprintln!("cooked-vs-source srgb={srgb}: close={close:.3} far={far:.3}");
+            assert!(
+                close < 0.5,
+                "srgb={srgb}: cooked drifted from source by {close}"
+            );
+            assert!(far > 12.0, "srgb={srgb}: the map is not sampled ({far})");
+        }
+    }
+
+    /// A format the device never requested is a typed refusal before any wgpu call, so no fault is
+    /// raised. Skips with no GPU, or where the device supports every format (the M4).
+    #[test]
+    fn needs_gpu_an_unsupported_compressed_format_is_an_error_not_a_fault() {
+        let Some(renderer) = renderer_or_skip("an_unsupported_compressed_format") else {
+            return;
+        };
+        let Some(format) = [CompressedFormat::Bc7, CompressedFormat::Astc4x4]
+            .into_iter()
+            .find(|format| !renderer.supports_compressed(*format))
+        else {
+            eprintln!("SKIPPED an_unsupported_compressed_format: the device supports every format");
+            return;
+        };
+        let image = CompressedImage {
+            format,
+            srgb: true,
+            width: 4,
+            height: 4,
+            levels: vec![vec![0; 16]],
+        };
+        assert!(matches!(
+            upload_compressed_in(&renderer.gpu, &image, true),
+            Err(CompressedUploadError::Unsupported { format: f }) if f == format
+        ));
+        assert!(renderer.gpu.take_fault().is_none());
+    }
+
+    /// A 64×64 cook stores 7 levels down to 1×1; every one uploads (the 2×2 and 1×1 tail copies a whole
+    /// block) with no device fault. Skips with no GPU or no compression support.
+    #[test]
+    fn needs_gpu_every_cooked_mip_level_uploads() {
+        let Some(renderer) = renderer_or_skip("every_cooked_mip_level_uploads") else {
+            return;
+        };
+        let Some(target) = renderer.cook_target() else {
+            eprintln!("SKIPPED every_cooked_mip_level_uploads: no compression support");
+            return;
+        };
+        for srgb in [true, false] {
+            let cooked = cooked_fixture(&gradient_source(0xFEED), target, srgb);
+            assert_eq!(cooked.level_count(), 7);
+            let uploaded =
+                upload_compressed_in(&renderer.gpu, &cooked, srgb).expect("cooked upload");
+            assert_eq!(uploaded.texture.mip_level_count(), 7);
+            assert!(renderer.gpu.take_fault().is_none(), "srgb={srgb}");
         }
     }
 
