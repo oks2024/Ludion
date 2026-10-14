@@ -3491,23 +3491,85 @@ fn upload_compressed_in(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: compressed::wgpu_format(image.format, image.srgb),
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        // The readback test copies levels back out.
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | if cfg!(test) {
+                wgpu::TextureUsages::COPY_SRC
+            } else {
+                wgpu::TextureUsages::empty()
+            },
         view_formats: &[],
     });
-    for (level, bytes) in (0..).zip(&image.levels) {
+    copy_levels_staged(gpu, &texture, image);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    Ok(GpuTexture { texture, view })
+}
+
+/// Copies every level of `image` into `texture` through one staging buffer and one submit. A
+/// `Queue::write_texture` per level allocates its own staging buffer, which thousands of small mips
+/// per scene turn into the dominant upload cost.
+fn copy_levels_staged(gpu: &Gpu, texture: &wgpu::Texture, image: &CompressedImage) {
+    /// The D3D12 buffer-to-texture placement alignment; harmless on the other backends.
+    const PLACEMENT_ALIGNMENT: u64 = 512;
+    let align_up = |value: u64, to: u64| value.div_ceil(to) * to;
+
+    let mut layouts = Vec::with_capacity(image.levels.len());
+    let mut size = 0u64;
+    for level in 0..image.level_count() {
         let (bw, bh) = image.blocks(level);
-        gpu.queue().write_texture(
+        let row = align_up(
+            u64::from(bw * compressed::BLOCK_BYTES),
+            u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+        );
+        let offset = align_up(size, PLACEMENT_ALIGNMENT);
+        layouts.push((offset, row as u32));
+        size = offset + row * u64::from(bh);
+    }
+
+    let staging = gpu.device().create_buffer(&wgpu::BufferDescriptor {
+        label: Some("ludion cooked staging"),
+        size: align_up(size, wgpu::COPY_BUFFER_ALIGNMENT),
+        usage: wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: true,
+    });
+    {
+        let mut mapped = staging
+            .slice(..)
+            .get_mapped_range_mut()
+            .expect("mapped range");
+        for ((level, bytes), &(offset, row)) in (0..).zip(&image.levels).zip(&layouts) {
+            let (bw, _) = image.blocks(level);
+            let packed = (bw * compressed::BLOCK_BYTES) as usize;
+            for (y, src) in bytes.chunks_exact(packed).enumerate() {
+                let at = offset as usize + y * row as usize;
+                mapped.slice(at..at + packed).copy_from_slice(src);
+            }
+        }
+    }
+    staging.unmap();
+
+    let mut encoder = gpu
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ludion cooked upload"),
+        });
+    for ((level, _), &(offset, row)) in (0..).zip(&image.levels).zip(&layouts) {
+        let (bw, bh) = image.blocks(level);
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(bh),
+                },
+            },
             wgpu::TexelCopyTextureInfo {
-                texture: &texture,
+                texture,
                 mip_level: level,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
-            },
-            bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bw * compressed::BLOCK_BYTES),
-                rows_per_image: Some(bh),
             },
             wgpu::Extent3d {
                 width: bw * 4,
@@ -3516,8 +3578,7 @@ fn upload_compressed_in(
             },
         );
     }
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    Ok(GpuTexture { texture, view })
+    gpu.queue().submit(Some(encoder.finish()));
 }
 
 /// How many taps a material sampler filters an oblique surface with. 16 is the ceiling wgpu exposes and
@@ -8606,15 +8667,25 @@ mod tests {
     /// A 64×64 gradient map: red rises along U, green along V, blue is flat — every channel a
     /// compressor must keep, none constant but one.
     fn gradient_source(hash: u64) -> ludion_assets::Image {
-        let mut rgba = Vec::with_capacity(64 * 64 * 4);
-        for y in 0..64u32 {
-            for x in 0..64u32 {
-                rgba.extend_from_slice(&[(x * 4) as u8, (y * 4) as u8, 128, 255]);
+        sized_gradient_source(64, 64, 4, hash)
+    }
+
+    /// [`gradient_source`] at another size: red and green rise `step` per texel.
+    fn sized_gradient_source(
+        width: u32,
+        height: u32,
+        step: u32,
+        hash: u64,
+    ) -> ludion_assets::Image {
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                rgba.extend_from_slice(&[(x * step) as u8, (y * step) as u8, 128, 255]);
             }
         }
         ludion_assets::Image {
-            width: 64,
-            height: 64,
+            width,
+            height,
             rgba,
             hash,
         }
@@ -8844,6 +8915,88 @@ mod tests {
             assert_eq!(uploaded.texture.mip_level_count(), 7);
             assert!(renderer.gpu.take_fault().is_none(), "srgb={srgb}");
         }
+    }
+
+    /// Every level read back from the GPU equals the stored block rows, for a square map and a
+    /// 100×60 one whose rows need padding and whose tail levels are partial blocks.
+    #[test]
+    fn needs_gpu_cooked_levels_read_back_byte_exact() {
+        let Some(renderer) = renderer_or_skip("cooked_levels_read_back_byte_exact") else {
+            return;
+        };
+        let Some(target) = renderer.cook_target() else {
+            eprintln!("SKIPPED cooked_levels_read_back_byte_exact: no compression support");
+            return;
+        };
+        let gpu = &renderer.gpu;
+        let sources = [
+            gradient_source(0xFEED),
+            sized_gradient_source(100, 60, 2, 0xBEEF),
+        ];
+        for source in &sources {
+            let cooked = cooked_fixture(source, target, true);
+            let uploaded = upload_compressed_in(gpu, &cooked, true).expect("cooked upload");
+            for level in 0..cooked.level_count() {
+                let (bw, bh) = cooked.blocks(level);
+                let packed = bw * compressed::BLOCK_BYTES;
+                let row = packed.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+                    * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+                let buffer = gpu.device().create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("cooked readback"),
+                    size: u64::from(row * bh),
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                let mut encoder = gpu
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &uploaded.texture,
+                        mip_level: level,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(row),
+                            rows_per_image: Some(bh),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: bw * 4,
+                        height: bh * 4,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                gpu.queue().submit(Some(encoder.finish()));
+                let (tx, rx) = std::sync::mpsc::channel();
+                buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                    let _ = tx.send(r);
+                });
+                gpu.device()
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .expect("device poll succeeds");
+                rx.recv().expect("map completes").expect("map succeeds");
+                let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
+                for (y, expected) in cooked.levels[level as usize]
+                    .chunks_exact(packed as usize)
+                    .enumerate()
+                {
+                    let at = y * row as usize;
+                    assert_eq!(
+                        &mapped[at..at + packed as usize],
+                        expected,
+                        "{}x{} level {level} row {y}",
+                        cooked.width,
+                        cooked.height
+                    );
+                }
+            }
+        }
+        assert!(gpu.take_fault().is_none());
     }
 
     /// The asymmetric scene the mirroring test reflects: a rotated cube at +x and a rotated

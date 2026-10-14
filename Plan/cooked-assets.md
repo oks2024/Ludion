@@ -1,7 +1,7 @@
 # Cooked assets — GPU-compressed textures and binary meshes, per platform
 
-> **Status:** Waves 0–1 shipped 2026-10-14; Wave 2's `ludion sync` cook stage shipped, vigil's sync
-> and budget cut (2b) and Waves 3–4 open. Instrument: `Plan/scene-load-speed.md`'s `load` report.
+> **Status:** Waves 0–2 shipped 2026-10-14 (2b done: vigil synced, budgets cut at `cooked`); Waves 3–4
+> open. Instrument: `Plan/scene-load-speed.md`'s `load` report.
 >
 > **Wave 1 exit (2026-10-14, reference box, RTX 3090).** The plaza (`scenes/district-plaza.yaml`),
 > `--profile 30`, one cold run discarded, medians of three warm runs, `source` → `cooked`
@@ -20,6 +20,21 @@
 > side-by-side is identical by eye). `total_ms` barely moves: `gpu_upload_ms` rose 56 ms despite a
 > quarter of the bytes, cause unmeasured (likely per-level `write_texture` of 495 full chains), a
 > follow-up before 2b's budget cut.
+>
+> **Wave 2 exit (2026-10-14, reference box, RTX 3090).** `ludion sync --project games/vigil`: 24
+> imported, 0 cooked, 495 reused, 0 failed (`cook_failed` 0), store 507 MB. The Wave 1 `gpu_upload_ms`
+> rise was per-level `Queue::write_texture`: wgpu-core allocates one staging buffer per call, so a
+> map's ~7–11 mips cost that many allocations (thousands per district). `upload_compressed_in` now
+> stages a map's whole chain in one buffer and one submit; a readback test pins every level
+> byte-exact (square and 100×60). Plaza `cooked` `gpu_upload_ms` 294.9 → 151.4 (source 254.7 the
+> same session). Medians of three warm runs, `source` → `cooked`, plaza: `total_ms` 2670.1 → 2427.2,
+> `texture_ms` 310.2 → 148.1, `mesh_ms` 441.6 → 433.2; breach: `total_ms` 2035.8 → 1764.3,
+> `texture_ms` 199.6 → 74.9, `gpu_upload_ms` 163.7 → 88.1. Counters at `cooked`: texture decoded 0,
+> cooked 423 (plaza) / 284 (breach), so zero L1271 fallbacks; the live default is pinned by the
+> embed test `a_hosted_engine_defaults_to_cooked_textures`. VRAM unchanged at 0.2500 (same store).
+> Budgets re-calibrated at `--textures cooked`: plaza ceiling 5000 ms (median 2427.2), breach 4000 ms
+> (median 1764.3). Exit bullets: **zero fallback warnings — met**; **load time and VRAM recorded —
+> met**; **budgets re-calibrated — met** (the M4 twins ride `Plan/owed.md`).
 
 ## Why
 
