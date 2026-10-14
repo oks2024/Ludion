@@ -8,6 +8,8 @@
 //! devdoc's rule is that observation never mutates — an attached observer cannot change the world or
 //! its hash.
 
+use ludion_renderer::{FrameObserver, FramePhase};
+
 /// A bracketed span of load work. Phases nest (a mesh decode contains its maps' texture decodes);
 /// the observer attributes time to the innermost one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +22,39 @@ pub(crate) enum LoadPhase {
     Texture,
     /// Decoding any other asset kind.
     Other,
+    /// The first frame's own work: the extract walk, frame record, draw and readback wait.
+    FirstFrame,
+    /// Voxelizing the world for GI.
+    Voxelize,
+    /// Creating the renderer's device and pipelines.
+    RendererInit,
+    /// Uploading textures, mesh maps, mesh buffers and the environment to the GPU.
+    GpuUpload,
+    /// Uploading the voxel grid and baking the GI probes.
+    GiBake,
+}
+
+/// Adapts a [`LoadObserver`] to the renderer's [`FrameObserver`], mapping the renderer's phases onto
+/// the load phases.
+pub(crate) struct FrameLoadObserver<'a>(pub(crate) &'a mut dyn LoadObserver);
+
+impl FrameLoadObserver<'_> {
+    fn map(phase: FramePhase) -> LoadPhase {
+        match phase {
+            FramePhase::Upload => LoadPhase::GpuUpload,
+            FramePhase::GiBake => LoadPhase::GiBake,
+        }
+    }
+}
+
+impl FrameObserver for FrameLoadObserver<'_> {
+    fn begin(&mut self, phase: FramePhase) {
+        self.0.begin(Self::map(phase));
+    }
+
+    fn end(&mut self, phase: FramePhase) {
+        self.0.end(Self::map(phase));
+    }
 }
 
 /// The asset kinds the cache decodes, one counter row each.

@@ -43,6 +43,7 @@
 //! ```
 
 mod cluster;
+mod frame_observer;
 mod gi_bake;
 mod gi_bin;
 mod gi_inject;
@@ -59,6 +60,7 @@ mod voxel_bake;
 mod shader_gen;
 
 pub use cluster::{ClusterStats, cluster_stats};
+pub use frame_observer::{FrameObserver, FramePhase};
 pub use gi_bake::GiReadback;
 pub use graph::{FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json};
 pub use ludion_font::GlyphQuad;

@@ -25,6 +25,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::{Registry, World};
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
+use ludion_protocol::perf::LoadProfile;
 use ludion_renderer::{FrameSize, PostChain, QualityParams, RenderScene, RenderedImage, Renderer};
 use ludion_scene::{AppliedOverride, SceneOverride};
 
@@ -173,6 +174,9 @@ pub struct BuilderRenderOutcome {
     /// The debug-draw categories the game's systems drew on the last tick (see
     /// [`RenderOutcome::debug_drawn`]).
     pub debug_drawn: Vec<&'static str>,
+    /// What loading the scene and rendering its first frame cost: `Some` when the builder observes
+    /// load ([`EngineBuilder::observe_load`]), `None` otherwise.
+    pub load: Option<LoadProfile>,
 }
 
 /// Builds `builder`'s engine rooted at `path`'s directory, loads that scene, and runs `frames` ticks
@@ -240,6 +244,7 @@ pub fn render_scene_with_builder(
         height.unwrap_or(default_height),
     );
     let png = engine.render_png(size.0, size.1).map_err(|d| vec![d])?;
+    let load = crate::profile::finish_load(&mut engine);
     let renderer = engine.renderer().map_err(|d| vec![d])?;
     let adapter = format!(
         "{} ({})",
@@ -251,6 +256,7 @@ pub fn render_scene_with_builder(
         adapter,
         size,
         debug_drawn: engine.debug_draw_drawn(),
+        load,
     })
 }
 

@@ -1198,7 +1198,16 @@ fn run_render_out(
     quality: &ludion_engine::QualitySetting,
     debug: &ludion_engine::DebugCategories,
 ) -> ExitCode {
-    match render_scene_out(builder, scene, out, width, height, frames, quality, debug) {
+    match render_scene_out(
+        builder.observe_load(),
+        scene,
+        out,
+        width,
+        height,
+        frames,
+        quality,
+        debug,
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(diagnostics) => report_diagnostics(scene, &diagnostics),
     }
@@ -1256,7 +1265,52 @@ fn render_scene_out(
         outcome.adapter
     );
     let _ = std::io::stdout().flush();
+    if let Some(load) = &outcome.load {
+        eprintln!("{}", load_summary(load));
+    }
     Ok(())
+}
+
+/// One line on what loading cost: every phase that ran in whole milliseconds, the share of the total
+/// no phase accounts for, and what was decoded. Under `--frames N` the sim ticks between the scene
+/// load and the first frame are in no phase, so they count as unattributed.
+#[cfg(feature = "wire")]
+fn load_summary(load: &ludion_protocol::perf::LoadProfile) -> String {
+    let phases = [
+        ("scene", Some(load.scene_ms)),
+        ("mesh", Some(load.mesh_ms)),
+        ("texture", Some(load.texture_ms)),
+        ("other", Some(load.other_ms)),
+        ("voxelize", load.voxelize_ms),
+        ("renderer init", load.renderer_init_ms),
+        ("gpu upload", load.gpu_upload_ms),
+        ("gi bake", load.gi_bake_ms),
+        ("first frame", load.first_frame_ms),
+    ];
+    let attributed: f64 = phases.iter().filter_map(|(_, ms)| *ms).sum();
+    let unattributed = (load.total_ms - attributed).max(0.0);
+    let share = if load.total_ms > 0.0 {
+        unattributed / load.total_ms * 100.0
+    } else {
+        0.0
+    };
+    let mut line = format!("load {:.0} ms: ", load.total_ms);
+    for (name, ms) in phases {
+        if let Some(ms) = ms {
+            line.push_str(&format!("{name} {ms:.0}, "));
+        }
+    }
+    line.push_str(&format!("unattributed {unattributed:.0} ({share:.0}%)"));
+    let decoded: Vec<String> = load
+        .assets
+        .iter()
+        .filter(|counters| counters.decoded > 0)
+        .map(|counters| format!("{} {}", counters.decoded, counters.kind))
+        .collect();
+    if !decoded.is_empty() {
+        line.push_str(&format!("; decoded {}", decoded.join(", ")));
+    }
+    line
 }
 
 /// Runs the in-process profile: builds the game's engine (its components, systems, and default
@@ -2439,6 +2493,53 @@ entities:
         )
         .unwrap();
         assert_eq!(run_check_scene(game(), &scene), ExitCode::SUCCESS);
+    }
+
+    /// The `--render-out` load line names every phase that ran, omits absent ones, and ends with the
+    /// unattributed share and the non-zero decode counts.
+    #[test]
+    fn load_summary_names_phases_share_and_decodes() {
+        use ludion_protocol::perf::{AssetLoadCounters, LoadProfile};
+
+        let counters = |kind: &str, decoded| AssetLoadCounters {
+            kind: kind.to_string(),
+            decoded,
+            reused: 0,
+            bytes_read: 0,
+        };
+        let mut load = LoadProfile {
+            scene_ms: 410.4,
+            mesh_ms: 830.0,
+            texture_ms: 1050.0,
+            other_ms: 12.0,
+            gpu_upload_ms: Some(1800.0),
+            first_frame_ms: Some(400.0),
+            voxelize_ms: Some(300.0),
+            renderer_init_ms: Some(250.0),
+            gi_bake_ms: Some(600.0),
+            total_ms: 5712.0,
+            assets: vec![
+                counters("texture", 235),
+                counters("mesh", 79),
+                counters("voxel", 0),
+            ],
+        };
+        assert_eq!(
+            load_summary(&load),
+            "load 5712 ms: scene 410, mesh 830, texture 1050, other 12, voxelize 300, \
+             renderer init 250, gpu upload 1800, gi bake 600, first frame 400, \
+             unattributed 60 (1%); decoded 235 texture, 79 mesh"
+        );
+
+        load.gpu_upload_ms = None;
+        load.gi_bake_ms = None;
+        load.renderer_init_ms = None;
+        load.assets.clear();
+        assert_eq!(
+            load_summary(&load),
+            "load 5712 ms: scene 410, mesh 830, texture 1050, other 12, voxelize 300, \
+             first frame 400, unattributed 2710 (47%)"
+        );
     }
 
     /// `--render-out` writes a PNG at the requested extent. Skips gracefully on an adapterless

@@ -187,26 +187,37 @@ pub fn warmup_for(frames: u64) -> u64 {
     (frames / 4).clamp(1, 30)
 }
 
-/// Closes the load measurement: one extract (the first decode of every sprite and mesh asset
-/// happens there), then the observer is detached and reduced to a [`LoadProfile`]. `None` when no
-/// observer was attached — an unobserved host reads no clock for loading.
+/// Closes the load measurement: one rendered first frame (the first decode of every sprite and mesh
+/// asset happens in its extract; the renderer's creation, uploads and GI bake follow), then the
+/// observer is detached and reduced to a [`LoadProfile`]. `None` when no observer was attached — an
+/// unobserved host reads no clock for loading. A host with no GPU adapter (`L2003`) still gets its
+/// sim-side load: the render phases it never reached report absent.
 ///
-/// The extract is a pure world read, so it is hash-safe; it also means the warmup that follows starts
-/// warm. This is the seam the renderer's first-frame upload timing extends.
+/// The frame is a pure world read, so it is hash-safe; it also means the warmup that follows starts
+/// warm.
 fn measure_load(engine: &mut Engine) -> Result<Option<LoadProfile>, Vec<Diagnostic>> {
     if !engine.load_observed() {
         return Ok(None);
     }
     let (width, height) = PROFILE_SIZE;
-    engine.extract_render_scene(width, height)?;
-    let Some(observer) = engine.take_load_observer() else {
-        return Ok(None);
-    };
+    match engine.render_image(width, height, false) {
+        Ok(_) => {}
+        Err(diagnostics) if matches!(diagnostics.as_slice(), [only] if only.code == code::RENDER_NO_ADAPTER) =>
+            {}
+        Err(diagnostics) => return Err(diagnostics),
+    }
+    Ok(finish_load(engine))
+}
+
+/// Detaches the engine's load observer and reduces it to a [`LoadProfile`]; `None` when no
+/// [`LoadClock`] was attached.
+pub(crate) fn finish_load(engine: &mut Engine) -> Option<LoadProfile> {
+    let observer = engine.take_load_observer()?;
     let observer: Box<dyn std::any::Any> = observer;
-    Ok(observer
+    observer
         .downcast::<LoadClock>()
         .ok()
-        .map(|clock| clock.finish()))
+        .map(|clock| clock.finish())
 }
 
 /// The wall-clock [`LoadObserver`]: attributes **exclusive** time to each phase (a nested phase's
@@ -215,10 +226,18 @@ fn measure_load(engine: &mut Engine) -> Result<Option<LoadProfile>, Vec<Diagnost
 pub(crate) struct LoadClock {
     origin: Option<Instant>,
     stack: Vec<(LoadPhase, Instant, Duration)>,
+    last_end: Option<Instant>,
     scene: Duration,
     mesh: Duration,
     texture: Duration,
     other: Duration,
+    // The render phases are `Some` once they have begun, so a run that never reached one (no
+    // adapter, no `GiVolume`) reports it absent rather than zero.
+    first_frame: Option<Duration>,
+    voxelize: Option<Duration>,
+    renderer_init: Option<Duration>,
+    gpu_upload: Option<Duration>,
+    gi_bake: Option<Duration>,
     decoded: [u64; 8],
     reused: [u64; 8],
     bytes: [u64; 8],
@@ -233,8 +252,18 @@ impl LoadClock {
             .expect("ALL lists every kind")
     }
 
-    // Sanctioned wall-clock site (see the module docs).
-    #[allow(clippy::disallowed_methods)]
+    /// The accumulator of a render phase, or `None` for the four always-present ones.
+    fn optional_total(&mut self, phase: LoadPhase) -> Option<&mut Option<Duration>> {
+        match phase {
+            LoadPhase::FirstFrame => Some(&mut self.first_frame),
+            LoadPhase::Voxelize => Some(&mut self.voxelize),
+            LoadPhase::RendererInit => Some(&mut self.renderer_init),
+            LoadPhase::GpuUpload => Some(&mut self.gpu_upload),
+            LoadPhase::GiBake => Some(&mut self.gi_bake),
+            LoadPhase::Scene | LoadPhase::Mesh | LoadPhase::Texture | LoadPhase::Other => None,
+        }
+    }
+
     fn finish(self) -> LoadProfile {
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         LoadProfile {
@@ -242,12 +271,15 @@ impl LoadClock {
             mesh_ms: ms(self.mesh),
             texture_ms: ms(self.texture),
             other_ms: ms(self.other),
-            gpu_upload_ms: None,
-            first_frame_ms: None,
-            voxelize_ms: None,
-            renderer_init_ms: None,
-            gi_bake_ms: None,
-            total_ms: self.origin.map_or(0.0, |origin| ms(origin.elapsed())),
+            gpu_upload_ms: self.gpu_upload.map(ms),
+            first_frame_ms: self.first_frame.map(ms),
+            voxelize_ms: self.voxelize.map(ms),
+            renderer_init_ms: self.renderer_init.map(ms),
+            gi_bake_ms: self.gi_bake.map(ms),
+            total_ms: match (self.origin, self.last_end) {
+                (Some(origin), Some(end)) => ms(end.saturating_duration_since(origin)),
+                _ => 0.0,
+            },
             assets: LoadKind::ALL
                 .iter()
                 .enumerate()
@@ -268,6 +300,9 @@ impl LoadObserver for LoadClock {
     fn begin(&mut self, phase: LoadPhase) {
         let now = Instant::now();
         self.origin.get_or_insert(now);
+        if let Some(total) = self.optional_total(phase) {
+            total.get_or_insert(Duration::ZERO);
+        }
         self.stack.push((phase, now, Duration::ZERO));
     }
 
@@ -277,16 +312,23 @@ impl LoadObserver for LoadClock {
         let Some((phase, start, child)) = self.stack.pop() else {
             return;
         };
-        let elapsed = start.elapsed();
-        let total = match phase {
-            LoadPhase::Scene => &mut self.scene,
-            LoadPhase::Mesh => &mut self.mesh,
-            LoadPhase::Texture => &mut self.texture,
-            LoadPhase::Other => &mut self.other,
-        };
-        *total += elapsed.saturating_sub(child);
-        if let Some(parent) = self.stack.last_mut() {
-            parent.2 += elapsed;
+        let now = Instant::now();
+        let elapsed = now.duration_since(start);
+        let exclusive = elapsed.saturating_sub(child);
+        match phase {
+            LoadPhase::Scene => self.scene += exclusive,
+            LoadPhase::Mesh => self.mesh += exclusive,
+            LoadPhase::Texture => self.texture += exclusive,
+            LoadPhase::Other => self.other += exclusive,
+            _ => {
+                if let Some(total) = self.optional_total(phase) {
+                    *total = Some(total.unwrap_or_default() + exclusive);
+                }
+            }
+        }
+        match self.stack.last_mut() {
+            Some(parent) => parent.2 += elapsed,
+            None => self.last_end = Some(now),
         }
     }
 
@@ -1555,8 +1597,55 @@ entities:
         assert_eq!(counters(&again, "mesh").reused, 2);
         assert_eq!(counters(&again, "texture").decoded, 0);
         assert_eq!(counters(&again, "texture").reused, 1);
-        assert_eq!(again.total_ms, 0.0);
+        assert!(again.first_frame_ms.is_some());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn needs_gpu_observed_load_fills_render_phases() {
+        let dir = std::env::temp_dir().join(format!("ludion-load-phases-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        let texture = ludion_assets::encode_png(1, 1, &[200, 20, 30, 255]).unwrap();
+        std::fs::write(dir.join("textures/t.png"), &texture).unwrap();
+        std::fs::write(dir.join("meshes/a.mesh.yaml"), TEXTURED_MESH).unwrap();
+        let scene = format!(
+            "format: 1
+entities:
+{}",
+            mesh_entity("meshes/a.mesh.yaml")
+        );
+
+        let mut engine = Engine::with_project_root(&dir);
+        engine.observe_load();
+        engine.load_inline_scene(&scene).unwrap();
+        let load = measure_load(&mut engine).unwrap().expect("observed");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (Some(first_frame), Some(init), Some(upload)) = (
+            load.first_frame_ms,
+            load.renderer_init_ms,
+            load.gpu_upload_ms,
+        ) else {
+            eprintln!("skipping: no GPU adapter available (L2003)");
+            return;
+        };
+        assert!(first_frame >= 0.0 && init >= 0.0 && upload >= 0.0);
+        let phases = load.scene_ms
+            + load.mesh_ms
+            + load.texture_ms
+            + load.other_ms
+            + first_frame
+            + init
+            + upload
+            + load.voxelize_ms.unwrap_or(0.0)
+            + load.gi_bake_ms.unwrap_or(0.0);
+        assert!(
+            load.total_ms >= phases - 1e-6,
+            "total {} ms is less than its phases' {phases} ms",
+            load.total_ms
+        );
     }
 
     #[test]

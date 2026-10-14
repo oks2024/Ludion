@@ -21,6 +21,7 @@ use ludion_render_graph::{
     StreamReadback, schedule,
 };
 
+use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
 use crate::graph::{FrameSize, PostChain, build_frame_graph, pass};
@@ -726,7 +727,50 @@ impl Renderer {
             PostChain::for_scene(scene).masked(&self.quality, &self.quality_params),
         );
         let scheduled = schedule(&graph)?;
-        let recorder = self.prepare_frame(scene, size);
+        let recorder = self.prepare_frame(scene, size, None);
+        self.gpu.execute(&scheduled, output, &recorder)
+    }
+
+    /// [`render`](Renderer::render), reporting the frame's upload and GI bake phases to `observer`.
+    ///
+    /// The observed frame fences after each phase, so the GPU time of an upload or a bake is
+    /// attributed to it instead of to the readback wait; the pixels are identical to `render`'s.
+    ///
+    /// # Errors
+    /// As [`render`](Renderer::render).
+    ///
+    /// # Example
+    /// ```no_run
+    /// use ludion_renderer::{FrameObserver, FramePhase, FrameSize, RenderScene, Renderer};
+    ///
+    /// struct Count(u32);
+    /// impl FrameObserver for Count {
+    ///     fn begin(&mut self, _: FramePhase) {}
+    ///     fn end(&mut self, _: FramePhase) {
+    ///         self.0 += 1;
+    ///     }
+    /// }
+    ///
+    /// let renderer = Renderer::new()?;
+    /// let scene = RenderScene::empty((1280, 720));
+    /// let mut observer = Count(0);
+    /// let image = renderer.render_observed(&scene, FrameSize::native(1280, 720), &mut observer)?;
+    /// # let _ = image;
+    /// # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
+    /// ```
+    pub fn render_observed(
+        &self,
+        scene: &RenderScene,
+        size: FrameSize,
+        observer: &mut dyn FrameObserver,
+    ) -> Result<RenderedImage, Diagnostic> {
+        let size = size.validate()?;
+        let (graph, output) = build_frame_graph(
+            size,
+            PostChain::for_scene(scene).masked(&self.quality, &self.quality_params),
+        );
+        let scheduled = schedule(&graph)?;
+        let recorder = self.prepare_frame(scene, size, Some(observer));
         self.gpu.execute(&scheduled, output, &recorder)
     }
 
@@ -831,7 +875,7 @@ impl Renderer {
             PostChain::for_scene(scene).masked(&self.quality, &self.quality_params),
         );
         let scheduled = schedule(&graph)?;
-        let recorder = self.prepare_frame(scene, size);
+        let recorder = self.prepare_frame(scene, size, None);
         self.gpu
             .render_frame(&scheduled, output, &recorder, ring, stamp, timing, sinks)
     }
@@ -880,7 +924,7 @@ impl Renderer {
             PostChain::for_scene(scene).masked(&self.quality, &self.quality_params),
         );
         let scheduled = schedule(&graph)?;
-        let recorder = self.prepare_frame(scene, size);
+        let recorder = self.prepare_frame(scene, size, None);
         self.gpu
             .dump_timings_json(&scheduled, output, Some(&recorder))
     }
@@ -978,13 +1022,41 @@ impl Renderer {
         }
     }
 
+    /// Runs `work`, bracketed as `phase` for an observer. Observed, the device is fenced before the
+    /// phase ends so the GPU time of what `work` submitted is attributed to it; unobserved, `work`
+    /// runs as is.
+    fn observed_phase<T>(
+        &self,
+        observer: &mut Option<&mut dyn FrameObserver>,
+        phase: FramePhase,
+        work: impl FnOnce() -> T,
+    ) -> T {
+        let Some(observer) = observer.as_deref_mut() else {
+            return work();
+        };
+        observer.begin(phase);
+        let out = work();
+        // A lost device surfaces at execute, as it does unobserved.
+        let _ = self.gpu.device().poll(wgpu::PollType::wait_indefinitely());
+        observer.end(phase);
+        out
+    }
+
     /// Uploads every per-frame resource and returns the recorder that will draw it. `size` rides
     /// along because the resolve pass needs the render extent its source was drawn at, which a
     /// `RecordedPass` (which knows only its own target) cannot tell it.
     ///
     /// The per-frame uniform, instance and light buffers are allocated fresh each frame; they are not
     /// pooled until a profile shows the allocation cost.
-    fn prepare_frame(&self, scene: &RenderScene, size: FrameSize) -> FrameRecorder<'_> {
+    ///
+    /// An `observer` brackets the upload and GI bake work, fencing after each (see
+    /// [`FrameObserver`]); `None` leaves the frame exactly as it was.
+    fn prepare_frame(
+        &self,
+        scene: &RenderScene,
+        size: FrameSize,
+        mut observer: Option<&mut dyn FrameObserver>,
+    ) -> FrameRecorder<'_> {
         let device = self.gpu.device();
         // The one place "which conditional passes does this scene need" is answered, shared with the
         // graph the executor is about to build — masking included, so a recorder can never disagree
@@ -1054,59 +1126,69 @@ impl Renderer {
 
         // Resolve each unique texture the scene references through the content-hash cache: upload on a
         // miss, reuse the cached GPU texture on a hit (see [`Renderer::texture_cache`]).
-        let textures = self.resolve_textures(scene);
+        let (textures, mesh_assets, resolved_env, sky_bg) =
+            self.observed_phase(&mut observer, FramePhase::Upload, || {
+                let textures = self.resolve_textures(scene);
 
-        // The material maps those meshes bind, resolved (and mip-generated) before the meshes
-        // themselves, because a mesh's upload builds the group-4 bind group that reads them.
-        self.resolve_mesh_textures(scene);
+                // The material maps those meshes bind, resolved (and mip-generated) before the
+                // meshes themselves, because a mesh's upload builds the group-4 bind group that
+                // reads them.
+                self.resolve_mesh_textures(scene);
 
-        // Resolve each unique asset mesh through the content-hash cache (same policy as textures),
-        // then group instances by asset index for indexed instanced draws.
-        let mesh_assets = self.resolve_mesh_assets(scene);
+                // Resolve each unique asset mesh through the content-hash cache (same policy as
+                // textures), then group instances by asset index for indexed instanced draws.
+                let mesh_assets = self.resolve_mesh_assets(scene);
 
-        // IBL environment (mesh group 3): prefilter (cache-keyed) when a scene has an `Environment`,
-        // else the 1×1 fallback cubes + flag off. The group's bind group is built in `record_scene`,
-        // where the graph's AO transient is resolved. The sky bind group is built only when present.
-        let resolved_env = self.ibl.resolve(&self.gpu, scene.environment.as_ref());
-        let sky_bg = scene
-            .environment
-            .as_ref()
-            .map(|env| self.sky_bind_group(device, scene, env));
+                // IBL environment (mesh group 3): prefilter (cache-keyed) when a scene has an
+                // `Environment`, else the 1×1 fallback cubes + flag off. The group's bind group is
+                // built in `record_scene`, where the graph's AO transient is resolved. The sky bind
+                // group is built only when present.
+                let resolved_env = self.ibl.resolve(&self.gpu, scene.environment.as_ref());
+                let sky_bg = scene
+                    .environment
+                    .as_ref()
+                    .map(|env| self.sky_bind_group(device, scene, env));
+                (textures, mesh_assets, resolved_env, sky_bg)
+            });
 
         // The voxelizer's grid, uploaded to its content-hash-cached holder (`voxel_bake.rs`), then
         // the sky-visibility bake that traces it (`gi_bake.rs`). `scene.voxel` is `None` for every
         // scene that authors no `GiVolume` — neither runs, `resolved_gi` is the fallback volume with
         // its flag off, and the mesh pass takes the historical path.
-        let voxel = self.voxel_bake.resolve(&self.gpu, scene.voxel.as_deref());
-        // The static half of the light set, in extract order. The partition is the bake's contract
-        // (`gi_bake::static_lights`), so an *unmarked* light a system moves re-bakes exactly as an
-        // unmarked moved mesh re-voxelizes, while a marked one costs nothing. Built only for a scene
-        // that resolved a `GiData`, so a scene with no `GiVolume` pays neither the walk nor the
-        // allocation.
-        let bake_lights = match scene.gi {
-            Some(_) => static_lights(&scene.lights),
-            None => Vec::new(),
-        };
-        // The lattice this machine bakes: the scene's own at `full`, re-laid at a coarser probe
-        // spacing below it. Resolved once here, so the bake, the injection and the chain the graph
-        // was built from cannot disagree about how many probes exist.
-        let gi = scene
-            .gi
-            .as_ref()
-            .map(|gi| scaled_lattice(gi, self.quality_params.gi_probe_scale));
-        let bake_input = match (scene.voxel.as_deref(), gi.as_ref(), voxel.as_ref()) {
-            (Some(grid), Some(gi), Some(voxel)) => Some(BakeInput {
-                grid,
-                gi,
-                albedo: &voxel.albedo,
-                occupancy: &voxel.emissive_occupancy,
-                lights: &bake_lights,
-                sun: scene.sun.as_ref(),
-                rays: self.quality_params.gi_rays,
-            }),
-            _ => None,
-        };
-        let resolved_gi = self.gi_bake.resolve(&self.gpu, bake_input);
+        let (voxel, resolved_gi, gi) =
+            self.observed_phase(&mut observer, FramePhase::GiBake, || {
+                let voxel = self.voxel_bake.resolve(&self.gpu, scene.voxel.as_deref());
+                // The static half of the light set, in extract order. The partition is the bake's contract
+                // (`gi_bake::static_lights`), so an *unmarked* light a system moves re-bakes exactly as an
+                // unmarked moved mesh re-voxelizes, while a marked one costs nothing. Built only for a scene
+                // that resolved a `GiData`, so a scene with no `GiVolume` pays neither the walk nor the
+                // allocation.
+                let bake_lights = match scene.gi {
+                    Some(_) => static_lights(&scene.lights),
+                    None => Vec::new(),
+                };
+                // The lattice this machine bakes: the scene's own at `full`, re-laid at a coarser probe
+                // spacing below it. Resolved once here, so the bake, the injection and the chain the graph
+                // was built from cannot disagree about how many probes exist.
+                let gi = scene
+                    .gi
+                    .as_ref()
+                    .map(|gi| scaled_lattice(gi, self.quality_params.gi_probe_scale));
+                let bake_input = match (scene.voxel.as_deref(), gi.as_ref(), voxel.as_ref()) {
+                    (Some(grid), Some(gi), Some(voxel)) => Some(BakeInput {
+                        grid,
+                        gi,
+                        albedo: &voxel.albedo,
+                        occupancy: &voxel.emissive_occupancy,
+                        lights: &bake_lights,
+                        sun: scene.sun.as_ref(),
+                        rays: self.quality_params.gi_rays,
+                    }),
+                    _ => None,
+                };
+                let resolved_gi = self.gi_bake.resolve(&self.gpu, bake_input);
+                (voxel, resolved_gi, gi)
+            });
         // The dynamic half of the same bounce term. `chain.gi_inject` — already masked — is the one
         // predicate: uploading exactly when the graph declares the pass is what keeps the recorder
         // from ever being handed a volume it has nothing to write into. A `Some` chain entry implies

@@ -68,7 +68,7 @@ use crate::builtin_registry;
 use crate::components::{AudioEmitter, Camera, Transform};
 use crate::dispatch::Dispatched;
 use crate::docs::{DocKind, DocValidator, PreparedDocs};
-use crate::load_observer::{LoadObserver, LoadPhase};
+use crate::load_observer::{FrameLoadObserver, LoadObserver, LoadPhase};
 use crate::perf_live::{LivePerf, ProfileWindowData, Span};
 use crate::player_profile::{ProfileKind, ProfileSaveEntry};
 use crate::quality::QualitySetting;
@@ -2725,14 +2725,24 @@ impl Engine {
     /// The engine stores `document` inline ([`SceneRef::Inline`]); the checked parse seeds
     /// `Engine.authored`.
     pub(crate) fn load_scene_document(&mut self, document: String) -> Result<u32, Vec<Diagnostic>> {
-        if let Some(observer) = self.asset_cache.observer_mut() {
-            observer.begin(LoadPhase::Scene);
-        }
+        self.load_begin(LoadPhase::Scene);
         let loaded = self.instantiate_and_commit(document);
-        if let Some(observer) = self.asset_cache.observer_mut() {
-            observer.end(LoadPhase::Scene);
-        }
+        self.load_end(LoadPhase::Scene);
         loaded
+    }
+
+    /// Starts `phase` on the load observer, if one is attached.
+    fn load_begin(&mut self, phase: LoadPhase) {
+        if let Some(observer) = self.asset_cache.observer_mut() {
+            observer.begin(phase);
+        }
+    }
+
+    /// Ends `phase` on the load observer, if one is attached.
+    fn load_end(&mut self, phase: LoadPhase) {
+        if let Some(observer) = self.asset_cache.observer_mut() {
+            observer.end(phase);
+        }
     }
 
     /// The body of [`load_scene_document`](Engine::load_scene_document), bracketed by its caller so
@@ -3098,14 +3108,55 @@ impl Engine {
         height: u32,
         use_view: bool,
     ) -> Result<Vec<u8>, Diagnostic> {
-        let size = self.frame_size(width, height)?;
-        let scene = self
-            .extract_render_scene_through(width, height, use_view)
-            .map_err(crate::commands::collapse)?;
-        let renderer = self.renderer()?;
-        let image = renderer.render(&scene, size);
+        self.render_image(width, height, use_view)
+            .map_err(crate::commands::collapse)?
+            .encode_png()
+    }
+
+    /// Renders the current post-step world and returns the image unencoded — the body of
+    /// [`render_png_through`](Engine::render_png_through), and the one place the load observer's
+    /// first-frame phases are bracketed (the extract, the renderer's creation, its uploads and the
+    /// draw).
+    ///
+    /// # Errors
+    /// Extract's diagnostics as they come; any renderer diagnostic (`L2003` among them) alone.
+    pub(crate) fn render_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        use_view: bool,
+    ) -> Result<RenderedImage, Vec<Diagnostic>> {
+        let size = self.frame_size(width, height).map_err(|d| vec![d])?;
+        self.load_begin(LoadPhase::FirstFrame);
+        let image = self.render_image_inner(width, height, use_view, size);
+        self.load_end(LoadPhase::FirstFrame);
+        image
+    }
+
+    /// [`render_image`](Engine::render_image) past its `FirstFrame` bracket, which its caller closes
+    /// on every path.
+    fn render_image_inner(
+        &mut self,
+        width: u32,
+        height: u32,
+        use_view: bool,
+        size: FrameSize,
+    ) -> Result<RenderedImage, Vec<Diagnostic>> {
+        let scene = self.extract_render_scene_through(width, height, use_view)?;
+        self.ensure_renderer().map_err(|d| vec![d])?;
+        // Detached for the render and put back before anything can return, so an error path cannot
+        // leave the engine observer-less.
+        let mut observer = self.asset_cache.take_observer();
+        let renderer = self.renderer.as_ref().expect("just initialized");
+        let image = match observer.as_deref_mut() {
+            Some(observer) => {
+                renderer.render_observed(&scene, size, &mut FrameLoadObserver(observer))
+            }
+            None => renderer.render(&scene, size),
+        };
+        self.asset_cache.set_observer(observer);
         self.finish_gi_frame();
-        image?.encode_png()
+        image.map_err(|d| vec![d])
     }
 
     /// The lazily-initialized GPU renderer, requesting an adapter on first use.
@@ -3125,7 +3176,10 @@ impl Engine {
     /// `L2003`/`L2004` if no GPU adapter or device is available.
     fn ensure_renderer(&mut self) -> Result<(), Diagnostic> {
         if self.renderer.is_none() {
-            self.renderer = Some(self.new_renderer()?);
+            self.load_begin(LoadPhase::RendererInit);
+            let renderer = self.new_renderer();
+            self.load_end(LoadPhase::RendererInit);
+            self.renderer = Some(renderer?);
         }
         let hold = self.gi_hold();
         self.renderer

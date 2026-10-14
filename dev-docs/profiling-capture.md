@@ -21,12 +21,17 @@ otherwise needs a GPU capture (`ludion devdocs renderer-clustering`). Occupancy 
 themselves, never a sample, so two runs of one frame agree exactly.
 
 **The `load` section.** A report may also carry `LoadProfile`: wall ms for the scene's load, split into
-`scene`, `mesh`, `texture` and `other` phases plus a `total`, and per asset kind a decoded / reused /
+`scene`, `mesh`, `texture` and `other` phases, the render phases `voxelize`, `renderer_init`,
+`gpu_upload`, `gi_bake` and `first_frame`, plus a `total`, and per asset kind a decoded / reused /
 bytes-read counter row (all eight kinds, fixed order). Offline only, like `cluster`: the offline driver
-attaches a `LoadObserver` before the scene loads and closes the measurement with one extract. The
-phases are **exclusive** self-times (a mesh's map decode counts in `texture`, not `mesh`); `total`
-minus their sum is the unattributed share. The counters are deterministic. `gpu_upload_ms`,
-`first_frame_ms`, `voxelize_ms`, `renderer_init_ms` and `gi_bake_ms` are absent: nothing fills them yet.
+attaches a `LoadObserver` before the scene loads and closes the measurement with one rendered first
+frame. The phases are **exclusive** self-times (a mesh's map decode counts in `texture`, not `mesh`;
+`first_frame` is the frame's own remainder once the renderer's creation, uploads and bake are taken
+out); `total` runs to the last phase's end and `total` minus the phases' sum is the unattributed share.
+A render phase is absent when it never began (no adapter; `voxelize` and `gi_bake` need a `GiVolume`).
+Ticks a game's `--frames N` runs between the scene load and the first frame sit in no phase, so they
+count as unattributed. The counters are deterministic. A game's `--render-out` attaches the same
+observer and prints the load as one stderr line.
 
 **Offline: `ludion profile --scene <FILE> --frames N`.** Loads a scene, drives a warmup then N
 measured frames, medians them. It links no game code, so `sim.systems` holds only engine-registered

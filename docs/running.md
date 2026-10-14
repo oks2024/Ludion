@@ -74,7 +74,8 @@ within 5 s is reported as `L4022` and the host exits non-zero. Peers attach to t
   **`--width`/`--height`** (default: the builder's render size), after **`--frames <N>`** ticks of
   **your game's own schedule** — `N` game ticks, systems and all, so the frame can be
   an early wave or a boss phase rather than the scene at rest. `--quality` applies, and no adapter
-  means `L2003`. The CLI's `ludion render --frames` stays the built-in-only twin (its ticks run only the
+  means `L2003`. A one-line load summary (milliseconds per phase, then what was decoded) goes to
+  stderr on every run. The CLI's `ludion render --frames` stays the built-in-only twin (its ticks run only the
   engine-installed systems — path followers and the scene's `physics:` block — never your game's).
   Both require `--scene` and conflict with hosting and every other mode here — the two cheapest
   gates an agent has: *is my scene valid*, and *what does it look like*.

@@ -46,6 +46,7 @@ use crate::components::{
 use crate::docs::DocStore;
 use crate::fonts::FontLibrary;
 use crate::hierarchy::WorldAffines;
+use crate::load_observer::LoadPhase;
 use crate::particles::{self, CameraBasis};
 use crate::patterns::{self, BulletKind, PatternDoc, Volley};
 use crate::ui;
@@ -109,6 +110,10 @@ pub(crate) trait SceneAssets {
         signature: u64,
         grid: Option<Arc<WorldVoxelGrid>>,
     ) -> Option<Arc<WorldVoxelGrid>>;
+    /// A load phase starts. A loader with no observer ignores it.
+    fn observe_begin(&mut self, _phase: LoadPhase) {}
+    /// The load phase last begun ends.
+    fn observe_end(&mut self, _phase: LoadPhase) {}
 }
 
 /// The direct loader: each asset is read (and decoded) straight from disk, no cache — a one-shot
@@ -207,6 +212,16 @@ impl SceneAssets for CachedAssets<'_> {
         grid: Option<Arc<WorldVoxelGrid>>,
     ) -> Option<Arc<WorldVoxelGrid>> {
         self.cache.set_voxelization(signature, grid)
+    }
+    fn observe_begin(&mut self, phase: LoadPhase) {
+        if let Some(observer) = self.cache.observer_mut() {
+            observer.begin(phase);
+        }
+    }
+    fn observe_end(&mut self, phase: LoadPhase) {
+        if let Some(observer) = self.cache.observer_mut() {
+            observer.end(phase);
+        }
     }
 }
 
@@ -1226,8 +1241,10 @@ fn extract_inner(
     let (voxel, gi) = match extract_gi_volume(world, &ids) {
         None => (None, None),
         Some((index, volume)) => {
-            let voxel = crate::voxelizer::voxelize(&placed.meshes, volume.cell_size, assets)
-                .map_err(|diagnostics| gi_volume_errors(diagnostics, index))?;
+            assets.observe_begin(LoadPhase::Voxelize);
+            let voxel = crate::voxelizer::voxelize(&placed.meshes, volume.cell_size, assets);
+            assets.observe_end(LoadPhase::Voxelize);
+            let voxel = voxel.map_err(|diagnostics| gi_volume_errors(diagnostics, index))?;
             let gi = match voxel.as_deref() {
                 None => None,
                 Some(grid) => Some(gi_data(grid, &volume).map_err(|diagnostic| {
