@@ -1349,6 +1349,9 @@ pub mod code {
     /// number outside `f32` range). A validation error from text; a follower built in Rust is held
     /// where it is and reported once per entity by `ludion-engine`'s `path_follow`.
     pub const PATH_FOLLOWER_INVALID: DiagnosticCode = DiagnosticCode::new("L1269");
+    /// `L1270` — `ludion sync`'s cook stage could not encode a texture map into BC7 or ASTC; the
+    /// import tree is unaffected and the map stays usable from its source PNG.
+    pub const COOK_ENCODE_FAILED: DiagnosticCode = DiagnosticCode::new("L1270");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -6786,6 +6789,22 @@ its `phase` and `Transform` untouched, and reports once per entity.
 Fix: give `speed` a finite number of metres per second and `phase` a finite number of metres along
 the path.",
     },
+    CodeEntry {
+        code: code::COOK_ENCODE_FAILED,
+        severity: Severity::Error,
+        title: "a texture map could not be cooked",
+        explanation: "\
+`ludion sync`'s cook stage compresses every PNG map an imported `*.mesh.yaml` references into a
+block-compressed KTX2 file (BC7 for desktop, ASTC 4x4 for iOS) under `.ludion/cooked/<target>/`, and
+the encoder refused one: the image is empty or malformed, or the encoder rejected a mip level.
+
+The import tree is already written and the map keeps loading from its source PNG, so the project still
+runs; only the faster cooked copy is missing. A PNG that does not decode keeps the decoder's own
+diagnostic, and a store that cannot be written is `L1203`.
+
+Fix: re-export the PNG from its source (a truncated or zero-sized file is the usual cause), then run
+`ludion sync` again. If the PNG is sound, report the encoder error the diagnostic quotes.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9422,6 +9441,7 @@ mod tests {
         code::SCENE_SAVE_GENERATED,
         code::VOXEL_VIEW_OUT_OF_RANGE,
         code::PATH_FOLLOWER_INVALID,
+        code::COOK_ENCODE_FAILED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

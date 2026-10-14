@@ -41,6 +41,7 @@
 
 mod check_scene;
 mod clip_report;
+mod cook;
 mod dev;
 mod diagnostic;
 mod docs;
@@ -746,6 +747,15 @@ enum Command {
     /// object on every exit: `ok`, `imported`, `skipped`, `removed`, `failed` (each with its
     /// diagnostics) and `diagnostics` (everything printed, a refusal as `L1245`); exit 1 if the sync
     /// was refused or any entry failed.
+    ///
+    /// After the imports a cook stage compresses every PNG map the imported meshes reference into
+    /// KTX2 files under `<project>/.ludion/cooked/<target>/<key>.ktx2` (BC7 for `desktop`, ASTC 4x4
+    /// for `ios`; `[cook] targets` in `ludion.toml`, `--target` adds one, `[[import]]
+    /// max_texture_size` caps a table's maps). The store is keyed by content: a map already there
+    /// is reused, an entry no mesh references is deleted, and a source map that fails to cook is
+    /// reported (`L1270`) and exits 1 without undoing the import. `--no-cook` (or `[cook] textures =
+    /// false`) skips the stage and the sweep. `--json` adds `cooked`, `cook_reused`, `cook_failed`
+    /// (each `{map, target, diagnostics}`) and `store_bytes`.
     Sync {
         /// The game's project directory (the one holding `ludion.toml`).
         #[arg(long, default_value = ".")]
@@ -753,6 +763,12 @@ enum Command {
         /// Print one JSON object on stdout instead of the per-entry lines.
         #[arg(long)]
         json: bool,
+        /// Also cook for this target besides `[cook] targets`; repeatable.
+        #[arg(long = "target", value_parser = ["desktop", "ios"], action = clap::ArgAction::Append)]
+        targets: Vec<String>,
+        /// Skip the cook stage and leave the cooked store untouched.
+        #[arg(long)]
+        no_cook: bool,
     },
     /// Scaffold a new, standalone Ludion game project at `./<name>`: a starter component, system,
     /// scene, the determinism clippy denylist, tests that pass out of the box, and the engine guide.
@@ -1928,7 +1944,22 @@ fn main() -> std::process::ExitCode {
             quantize,
             name,
         } => import::run(&input, &out, allow_lossy, quantize, name),
-        Command::Sync { project, json } => sync::run(&project, json),
+        Command::Sync {
+            project,
+            json,
+            targets,
+            no_cook,
+        } => sync::run(
+            &project,
+            json,
+            &cook::CookRequest {
+                enabled: !no_cook,
+                extra_targets: targets
+                    .iter()
+                    .filter_map(|name| ludion_assets::cooked::CookTarget::from_name(name))
+                    .collect(),
+            },
+        ),
         Command::Profile {
             scene,
             attach,

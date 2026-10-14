@@ -47,6 +47,8 @@ attaches): `xcrun simctl io <udid> screenshot m.png` writes the portrait framebu
 | --- | --- |
 | `name` | The Xcode project and app name: letters, digits, `_`, `-`. |
 | `default_scene` | The hosted scene, a relative path with a directory and no `.` or `..` (`scenes/main.yaml`). |
+| `[[import]] max_texture_size` | Optional: cap on the side of every texture map the table cooks (halved until it fits; absent keeps the source size). |
+| `[cook] targets`, `textures`, `meshes` | Optional: `targets` is the GPU families `ludion sync` cooks maps for (`desktop` BC7, `ios` ASTC; default `["desktop"]`), `textures = false` skips the cook, `meshes = true` is refused (no binary mesh cook). |
 | `[audio] voices_per_sound`, `voices_total` | Optional voice caps (defaults 4 and 64; `ludion docs audio`). The manifest ships in the app's content, so the app honours them. |
 | `[ios] bundle_id` | The app's identifier, `A-Z a-z 0-9 . -` only (`_` is refused). |
 | `[ios] quality` | Optional: the render quality preset the app ships with (`low`, `medium`, `high`, `full`; absent is `full`). A preset name only — no override file. |

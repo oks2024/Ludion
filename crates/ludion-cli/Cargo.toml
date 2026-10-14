@@ -34,6 +34,8 @@ ludion-assets = { path = "../ludion-assets", version = "0.1.0", features = ["wat
 # down, and restores the game child over `ludion-client`, so every engine interaction is an ordinary
 # wire command (the parity pillar). Also a dev-dependency for the wire integration tests.
 ludion-client = { path = "../ludion-client", version = "0.1.0" }
+# The cook stage's encoders (BC7, ASTC); only the CLI links them, never the engine.
+ludion-cook = { path = "../ludion-cook", version = "0.1.0" }
 ludion-core = { path = "../ludion-core", version = "0.1.0" }
 ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
 ludion-engine = { path = "../ludion-engine", version = "0.1.0" }

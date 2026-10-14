@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::Quality;
+use ludion_assets::cooked::CookTarget;
 use ludion_core::audio::VoiceCaps;
 use ludion_core::codes::code::{AUDIO_VOICE_CAPS_INVALID, MANIFEST_INVALID};
 use ludion_core::diagnostics::Diagnostic;
@@ -27,6 +28,31 @@ pub struct Manifest {
     /// The `[audio]` table, read by [`Manifest::voice_caps`]; validated by `load`.
     #[serde(default)]
     pub audio: Option<toml::Table>,
+    /// The `[cook]` table: what `ludion sync` compresses the imported maps into.
+    pub cook: Option<CookSection>,
+}
+
+/// The `[cook]` table. Every key is optional.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CookSection {
+    /// The GPU families to cook for, `desktop` (BC7) and `ios` (ASTC); absent is `["desktop"]`.
+    #[serde(default = "default_cook_targets")]
+    pub targets: Vec<String>,
+    /// Cook the imported texture maps; `false` skips the stage like `ludion sync --no-cook`.
+    #[serde(default = "default_true")]
+    pub textures: bool,
+    /// Binary mesh cooking. Not implemented: `true` is refused.
+    #[serde(default)]
+    pub meshes: bool,
+}
+
+fn default_cook_targets() -> Vec<String> {
+    vec!["desktop".to_string()]
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// One `[[import]]` table: glTF sources and the derived tree they compile into.
@@ -38,6 +64,9 @@ pub struct ImportSection {
     pub from: String,
     /// The derived root, project-relative. Ignored by version control, never hand-edited.
     pub to: PathBuf,
+    /// Halve every cooked map of this table until neither side exceeds this many texels; absent
+    /// keeps the source size. Part of the cooked map's key.
+    pub max_texture_size: Option<u32>,
 }
 
 /// The `[ios]` table.
@@ -73,8 +102,9 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
         invalid(
             format!("`{}` is not a valid manifest: {err}", path.display()),
             "the keys are `name`, `default_scene`, the `[ios]` table's `bundle_id` and `quality`, and \
-             each `[[import]]` table's `from` and `to`, and the `[audio]` table's `voices_per_sound` \
-             and `voices_total`",
+             each `[[import]]` table's `from`, `to` and `max_texture_size`, the `[cook]` table's \
+             `targets`, `textures` and `meshes`, and the `[audio]` table's `voices_per_sound` and \
+             `voices_total`",
         )
     })?;
     let plain_name = !manifest.name.is_empty() && manifest.name.chars().all(is_plain_name_char);
@@ -120,8 +150,45 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
              relative paths inside the project, with no `.` or `..`, one `to` per table, no `to` inside another, and no `to` inside a `from` directory",
         )
     })?;
+    validate_cook(&manifest).map_err(|message| {
+        invalid(
+            message,
+            "`[cook]` is `targets = [\"desktop\", \"ios\"]` and `textures = true`; \
+             `[[import]] max_texture_size` is a positive texel count",
+        )
+    })?;
     manifest.voice_caps()?;
     Ok(manifest)
+}
+
+fn validate_cook(manifest: &Manifest) -> Result<(), String> {
+    for (index, table) in manifest.imports.iter().enumerate() {
+        if table.max_texture_size == Some(0) {
+            return Err(format!(
+                "`[[import]]` #{} `max_texture_size` = 0 would cook empty maps: drop the key to keep the source size",
+                index + 1
+            ));
+        }
+    }
+    let Some(cook) = &manifest.cook else {
+        return Ok(());
+    };
+    if let Some(bad) = cook
+        .targets
+        .iter()
+        .find(|name| CookTarget::from_name(name).is_none())
+    {
+        return Err(format!(
+            "`[cook] targets` names `{bad}`: the valid targets are `desktop` and `ios`"
+        ));
+    }
+    if cook.meshes {
+        return Err(
+            "`[cook] meshes = true`: binary mesh cooking does not exist; set `meshes = false` or drop the key"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// The nearest directory at or above `start` that holds a `ludion.toml`: the project root of a
@@ -229,6 +296,21 @@ fn validate_imports(imports: &[ImportSection]) -> Result<(), String> {
 }
 
 impl Manifest {
+    /// The targets `ludion sync` cooks for: `[cook] targets` in manifest order without repeats,
+    /// `desktop` alone when the table is absent. Names are valid once `load` has accepted them.
+    pub fn cook_targets(&self) -> Vec<CookTarget> {
+        let Some(cook) = &self.cook else {
+            return vec![CookTarget::Desktop];
+        };
+        let mut targets: Vec<CookTarget> = Vec::new();
+        for target in cook.targets.iter().filter_map(|n| CookTarget::from_name(n)) {
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+        targets
+    }
+
     /// The `[audio]` voice caps, the engine defaults where a key is absent.
     ///
     /// # Errors
@@ -379,6 +461,50 @@ mod tests {
     #[test]
     fn an_unknown_key_is_refused() {
         let err = parse("name = \"a\"\ndefault_scene = \"s/a.yaml\"\nbogus = 1\n").unwrap_err();
+        assert_eq!(err.code, MANIFEST_INVALID);
+    }
+
+    #[test]
+    fn the_cook_table_defaults_and_validates() {
+        let base = "name = \"a\"\ndefault_scene = \"s/a.yaml\"\n";
+        let none = parse(base).unwrap();
+        assert!(none.cook.is_none());
+        assert_eq!(none.cook_targets(), [CookTarget::Desktop]);
+        let empty = parse(&format!("{base}[cook]\n")).unwrap();
+        let cook = empty.cook.as_ref().unwrap();
+        assert!(cook.textures && !cook.meshes);
+        assert_eq!(empty.cook_targets(), [CookTarget::Desktop]);
+        let both = parse(&format!(
+            "{base}[cook]\ntargets = [\"ios\", \"desktop\", \"ios\"]\n"
+        ))
+        .unwrap();
+        assert_eq!(both.cook_targets(), [CookTarget::Ios, CookTarget::Desktop]);
+
+        let err = parse(&format!("{base}[cook]\nbogus = 1\n")).unwrap_err();
+        assert_eq!(err.code, MANIFEST_INVALID);
+        let err = parse(&format!("{base}[cook]\ntargets = [\"web\"]\n")).unwrap_err();
+        assert_eq!(err.code, MANIFEST_INVALID);
+        assert!(err.message.contains("web") && err.message.contains("ios"));
+        let err = parse(&format!("{base}[cook]\nmeshes = true\n")).unwrap_err();
+        assert_eq!(err.code, MANIFEST_INVALID);
+        assert!(err.message.contains("meshes"), "{}", err.message);
+        assert!(parse(&format!("{base}[cook]\nmeshes = false\ntextures = false\n")).is_ok());
+    }
+
+    #[test]
+    fn an_import_max_texture_size_loads_and_zero_is_refused() {
+        let table = |extra: &str| {
+            format!(
+                "name = \"a\"\ndefault_scene = \"s/a.yaml\"\n[[import]]\nfrom = \"k/*.gltf\"\nto = \"out\"\n{extra}"
+            )
+        };
+        assert_eq!(parse(&table("")).unwrap().imports[0].max_texture_size, None);
+        let capped = parse(&table("max_texture_size = 512\n")).unwrap();
+        assert_eq!(capped.imports[0].max_texture_size, Some(512));
+        let err = parse(&table("max_texture_size = 0\n")).unwrap_err();
+        assert_eq!(err.code, MANIFEST_INVALID);
+        assert!(err.message.contains("max_texture_size"), "{}", err.message);
+        let err = parse(&table("max_size = 4\n")).unwrap_err();
         assert_eq!(err.code, MANIFEST_INVALID);
     }
 

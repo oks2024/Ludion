@@ -42,6 +42,22 @@ impl CookTarget {
         }
     }
 
+    /// The target a store directory name or manifest entry names; the inverse of [`CookTarget::name`].
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_assets::cooked::CookTarget;
+    /// assert_eq!(CookTarget::from_name("ios"), Some(CookTarget::Ios));
+    /// assert_eq!(CookTarget::from_name("web"), None);
+    /// ```
+    pub fn from_name(name: &str) -> Option<CookTarget> {
+        match name {
+            "desktop" => Some(CookTarget::Desktop),
+            "ios" => Some(CookTarget::Ios),
+            _ => None,
+        }
+    }
+
     /// The block format this target ships.
     pub fn format(self) -> CompressedFormat {
         match self {

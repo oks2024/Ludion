@@ -1650,6 +1650,7 @@ dependencies = [
  "ludion",
  "ludion-assets",
  "ludion-client",
+ "ludion-cook",
  "ludion-core",
  "ludion-ecs",
  "ludion-engine",

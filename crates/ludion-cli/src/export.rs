@@ -202,7 +202,8 @@ fn export(target: IosTarget, out: &Path, project: &Path, options: &Options) -> R
     };
     let out = resolve_out(out, &project)?;
     toolchain(target)?;
-    crate::sync::ensure_fresh(&project).map_err(Failure::Diagnostics)?;
+    crate::sync::ensure_fresh(&project, &crate::cook::CookRequest::default())
+        .map_err(Failure::Diagnostics)?;
 
     let archive = build_staticlib(&project, target, debug)?;
     write_export(

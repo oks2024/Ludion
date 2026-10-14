@@ -38,6 +38,10 @@ never hand-edited; `scripts/check.mjs` and CI run the sync before the tests. A `
 sync did not write is refused (`L1245`), as is a symbolic link or junction under a source directory, or two stems that differ only in case. A
 `to` inside a `from` directory (the glob's part before its first `*`) is refused (`L0023`): the sync
 would rewrite files the next one hashes.
+After the import, `ludion sync` also cooks every PNG map the imported meshes reference into compressed
+KTX2 files in `.ludion/cooked/<target>/` (BC7 for `desktop`; `--target ios` or `[cook] targets` adds ASTC), keyed by content so only a changed map re-cooks and
+an unreferenced file is swept. `[[import]] max_texture_size` caps a kit's map size; `--no-cook` skips the stage. A map that cannot be cooked fails
+the sync (`L1270`) but never the import.
 A second sync of the same root waits for the first, saying so on stderr, and a sync killed midway recovers on the next run.
 
 ## The script skeleton

@@ -579,7 +579,7 @@ pub fn run(scene: Option<&Path>, addr: &str, window: bool) -> ExitCode {
     // for it to serve.
     status_building();
     let build_watch = Stopwatch::start();
-    match crate::sync::ensure_fresh(&project) {
+    match crate::sync::ensure_fresh(&project, &crate::cook::CookRequest::default()) {
         Ok(summary) => report_sync(&summary),
         Err(diagnostics) => {
             for diagnostic in &diagnostics {
@@ -1071,7 +1071,7 @@ fn reload(
     status_building();
 
     let build_watch = Stopwatch::start();
-    match crate::sync::ensure_fresh(project) {
+    match crate::sync::ensure_fresh(project, &crate::cook::CookRequest::default()) {
         Ok(summary) => report_sync(&summary),
         Err(diagnostics) => {
             for diagnostic in &diagnostics {
