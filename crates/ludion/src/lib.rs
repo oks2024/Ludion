@@ -168,9 +168,10 @@ pub(crate) struct RunArgs {
     profile: Option<u64>,
     /// With `--profile` or `--profile-replay`, also check the report against a TOML budget file (an
     /// optional `frame_total_ms` and `frame_total_max_ms`, a `[systems]` and a `[systems_max]` table
-    /// of per-system median and worst-frame ceilings, and a `[passes]` table, all in milliseconds).
-    /// Any over-budget line is an `L4005` and the process exits non-zero; an invalid budget file is
-    /// `L4004`. The `max` keys are skipped when the report carries no tail.
+    /// of per-system median and worst-frame ceilings, a `[passes]` table, and `load_total_ms`, all in
+    /// milliseconds). Any over-budget line is an `L4005` and the process exits non-zero; an invalid
+    /// budget file is `L4004`. The `max` keys are skipped when the report carries no tail;
+    /// `load_total_ms` is `L4025` when it carries no load section (`--profile-replay`).
     #[arg(long, value_name = "BUDGET", requires = "profile_mode")]
     profile_check: Option<PathBuf>,
     /// Instead of hosting, validate this game's registered data-doc kinds (`EngineBuilder::doc_kind`)

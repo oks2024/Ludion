@@ -992,6 +992,11 @@ pub struct Budget {
     /// entry exists at all.
     #[serde(default)]
     pub extract_ms: Option<f64>,
+    /// Ceiling on the report's `load.total_ms` — one run's wall time from the first load phase to the
+    /// end of the first frame, renderer creation included. A single sample, not a median. A report
+    /// with no `load` section (a live capture, `--profile-replay`, an unobserved host) is `L4025`.
+    #[serde(default)]
+    pub load_total_ms: Option<f64>,
     /// Ceiling on the worst single sim frame, in milliseconds — what a median hides. Checked
     /// against the frame total's [`TimingTail::max_ms`]; skipped (never failed) when the report
     /// carries no tail, which is every live capture.
@@ -1171,6 +1176,8 @@ fn measured_sum(report: &ProfileReport, members: &[&str]) -> Option<(f64, usize)
 /// not.
 /// `frame_total_max_ms` and `[systems_max]` check the worst frame ([`TimingTail::max_ms`]) under the
 /// same rules as their median twins, skipped when the report carries no tail.
+/// `load_total_ms` checks the report's single-run `load.total_ms`; unlike the lines above, a report
+/// with no `load` section is `L4025` rather than a skip, since a live capture would otherwise pass.
 /// `extract_ms` is a lookup by name (`"extract"`) into `sim.sequential` rather than a section
 /// presence check like `cluster_build_ms` — both the offline driver and a live capture carry that
 /// entry, so this line is checkable on either host and skipped only when a report carries no
@@ -1209,6 +1216,14 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
     ) && extract.median_ms > limit
     {
         over.push(exceeded("extract", "median", extract.median_ms, limit));
+    }
+
+    match (budget.load_total_ms, &report.load) {
+        (Some(limit), Some(load)) if load.total_ms > limit => {
+            over.push(exceeded("load total", "single run", load.total_ms, limit));
+        }
+        (Some(_), None) => over.push(load_unmeasured()),
+        _ => {}
     }
 
     // The worst-frame ceilings follow the same skip rule: a report without a tail (a live capture, or
@@ -1348,6 +1363,18 @@ fn gpu_unmeasured(report: &ProfileReport) -> Diagnostic {
     )
 }
 
+/// Builds the `L4025` for a budget that gates the load total against a report with no load section.
+fn load_unmeasured() -> Diagnostic {
+    Diagnostic::new(
+        code::BUDGET_LOAD_UNMEASURED,
+        "budget gates `load_total_ms` but the report has no load section: this run measured no load",
+    )
+    .with_help(
+        "measure with `ludion profile --scene …` or a game's `--profile` (both observe the load); \
+         live captures and `--profile-replay` never carry one",
+    )
+}
+
 /// Builds one `L4006` for a budget key matching no producible name, naming the nearest known name
 /// (registration order, or the fixed pass order) as the likely fix if one is close enough to plausibly
 /// be a typo or a stale rename.
@@ -1394,8 +1421,9 @@ fn budget_invalid(path: &Path, detail: String) -> Diagnostic {
     )
     .with_help(
         "a budget is TOML: optional `frame_total_ms`, `frame_total_max_ms`, `post_total_ms`, \
-         `cluster_build_ms` and `extract_ms` scalars, and `[systems]`, `[systems_max]`, `[passes]` \
-         and `[post_groups]` tables of millisecond ceilings — see `ludion explain L4004`",
+         `cluster_build_ms`, `extract_ms` and `load_total_ms` scalars, and `[systems]`, \
+         `[systems_max]`, `[passes]` and `[post_groups]` tables of millisecond ceilings — see \
+         `ludion explain L4004`",
     )
 }
 
@@ -2184,6 +2212,27 @@ entities:
         }
     }
 
+    /// A report carrying a load section with the given total and nothing else measured. Beside
+    /// [`sample_report`] (which has none) so the budget tests can exercise both halves of `L4025`.
+    fn loaded_report(total_ms: f64) -> ProfileReport {
+        ProfileReport {
+            load: Some(LoadProfile {
+                scene_ms: 0.0,
+                mesh_ms: 0.0,
+                texture_ms: 0.0,
+                other_ms: 0.0,
+                gpu_upload_ms: None,
+                first_frame_ms: None,
+                voxelize_ms: None,
+                renderer_init_ms: None,
+                gi_bake_ms: None,
+                total_ms,
+                assets: Vec::new(),
+            }),
+            ..sample_report()
+        }
+    }
+
     /// A report whose GPU section ran the *pyramid* bloom chain: the shared bright-pass plus the ten
     /// pyramid passes, each 0.01 ms, and no Gaussian blurs. Total bloom cost: 0.11 ms.
     fn pyramid_report() -> ProfileReport {
@@ -2287,6 +2336,62 @@ entities:
         assert!(check_budget(&no_adapter(sample_report()), &cpu_only).is_empty());
     }
 
+    #[test]
+    fn load_total_under_the_ceiling_passes() {
+        let budget = Budget {
+            load_total_ms: Some(5000.0),
+            ..Budget::default()
+        };
+        assert!(check_budget(&loaded_report(4999.0), &budget).is_empty());
+    }
+
+    #[test]
+    fn load_total_over_the_ceiling_is_l4005() {
+        let budget = Budget {
+            load_total_ms: Some(5000.0),
+            ..Budget::default()
+        };
+        let over = check_budget(&loaded_report(7123.4), &budget);
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert_eq!(over[0].code, code::BUDGET_EXCEEDED);
+        assert!(
+            over[0].message.contains("load total"),
+            "{}",
+            over[0].message
+        );
+        assert!(
+            over[0].message.contains("single run"),
+            "{}",
+            over[0].message
+        );
+    }
+
+    #[test]
+    fn load_line_against_a_report_with_no_load_is_l4025() {
+        let budget = Budget {
+            load_total_ms: Some(5000.0),
+            ..Budget::default()
+        };
+        let over = check_budget(&sample_report(), &budget);
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert_eq!(over[0].code, code::BUDGET_LOAD_UNMEASURED);
+    }
+
+    #[test]
+    fn budget_without_a_load_line_ignores_a_report_with_no_load() {
+        let budget = Budget {
+            frame_total_ms: Some(100.0),
+            ..Budget::default()
+        };
+        assert!(check_budget(&sample_report(), &budget).is_empty());
+    }
+
+    #[test]
+    fn load_total_ms_parses_from_toml() {
+        let budget: Budget = toml::from_str("load_total_ms = 5000.0\n").expect("parses");
+        assert_eq!(budget.load_total_ms, Some(5000.0));
+    }
+
     /// Every committed profile budget (`budgets/*.toml`, `games/*/budgets/*.toml`) parses under
     /// `deny_unknown_fields` and names only producible passes and groups, so a pass rename fails
     /// here on every push rather than on the next pinned-box run. The `image-stats-*` files are a
@@ -2315,7 +2420,7 @@ entities:
         for path in files {
             let budget = load_budget(&path).unwrap_or_else(|d| panic!("{}: {d}", path.display()));
             // Every producible name measured at zero: only an unknown key can produce a diagnostic.
-            let mut report = sample_report();
+            let mut report = loaded_report(0.0);
             report.gpu.passes = KNOWN_PASS_NAMES
                 .iter()
                 .map(|name| PassTiming {

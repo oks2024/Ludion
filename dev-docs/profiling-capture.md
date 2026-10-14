@@ -50,7 +50,8 @@ run through `Engine::step_ticks_observed` with the timing observer — hash-neut
 `replay_profile_is_hash_neutral` — and the first tick past `to` ends the drive. Sim only (`gpu`
 unavailable, no `cluster`); the per-frame series is the report's `samples`. Budgets gate the tails with
 `frame_total_max_ms` and `[systems_max]` (`L4005`, statistic `max`, frame named), skipped when the
-report has no tail.
+report has no tail. `load_total_ms` gates the one-sample `load.total_ms`, which only a fresh offline or
+game `--profile` run carries; a report without it is `L4025`, not a skip.
 
 **Live: the `profile` channel and `profile.capture`.** Subscribing to `Channel::Profile` arms the
 engine; every `PROFILE_WINDOW_FRAMES` (60) sim frames a window closes and is published as

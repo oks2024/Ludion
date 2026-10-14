@@ -66,6 +66,9 @@ description: Catalogue of budgets/ files: calibration scene, gated keys and meas
   --profile 120 --profile-check <file>`. No `--attach` needed — a game binary links its own systems,
   which is the whole reason `ludion::run`'s `--profile`/`--profile-check` pair exists alongside
   `ludion profile` (`ludion devdocs ludion-cli`).
+- `games/vigil/budgets/pinned-rtx3090-district-breach.toml` — vigil's scene-load tripwire (private, Lore-only):
+  one `load_total_ms` line over `scenes/district-breach.yaml`, checked by hand from `games/vigil/` with
+  `--profile 30 --profile-check <file>`; the M4 twin is owed (`Plan/owed.md`).
 - `games/vigil/budgets/stress-spatial-{rtx3090,apple-m4}-{1,2,8}t.json` (and the sibling
   `stress-baseline-*`/`stress-j1-*` files) — **not budget files.** No ceilings; each is a committed
   raw `ProfileReport` JSON dump (one per thread count) evidencing the deterministic-job-system's

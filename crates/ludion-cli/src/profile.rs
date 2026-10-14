@@ -18,9 +18,11 @@
 //! reduced-quality measurement against a budget calibrated on the full one.
 //!
 //! With `--check`, the report is compared against a TOML budget file: optional `frame_total_ms`,
-//! `post_total_ms`, `cluster_build_ms` and `extract_ms` scalars, and `[systems]`, `[passes]` and
-//! `[post_groups]` tables of millisecond ceilings. Only the offline path measures the cluster build,
-//! so a `cluster_build_ms` line is skipped rather than failed on an `--attach` capture; `extract_ms`
+//! `post_total_ms`, `cluster_build_ms`, `extract_ms` and `load_total_ms` scalars, and `[systems]`,
+//! `[passes]` and `[post_groups]` tables of millisecond ceilings. `load_total_ms` gates the report's
+//! single-run load total and is `L4025` on a report with no load section (an `--attach` capture).
+//! Only the offline path measures the cluster build, so a `cluster_build_ms` line is skipped rather
+//! than failed on an `--attach` capture; `extract_ms`
 //! has no such gap — both the offline driver and an attach capture carry an `extract` sequential
 //! entry, so it is checkable either way.
 //! Any over-budget line is an `L4005` and the command exits non-zero; an unreadable or

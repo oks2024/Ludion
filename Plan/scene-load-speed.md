@@ -1,6 +1,7 @@
 # Scene load speed — measured, parallel, retained
 
-> **Status:** planned 2026-10-14, not started.
+> **Status:** Wave 1 shipped 2026-10-14 (load section, render phases, `load_total_ms` + breach
+> calibration); Wave 2 next.
 
 ## Why
 
@@ -140,3 +141,21 @@ Three structural causes, all in `ludion-engine`:
   and the `ludion sync` / `ludion export` cook stages: `Plan/cooked-assets.md`.
 - Streamed/async loading with placeholders: no plan; take it when a blocking load is measured as
   too long even after both plans.
+
+## Status
+
+**Wave 1 shipped 2026-10-14.**
+
+- `ProfileReport.load`: exclusive per-phase wall time and per-asset-kind decoded/reused/bytes counters,
+  filled by `ludion profile` and a game's `--profile` through a clock-free load observer on the asset cache.
+- Render phases: a clock-free frame observer in the renderer (fenced only when observed) reports the
+  first-frame upload and GI bake; the engine brackets voxelization, renderer creation and the first frame.
+  A game's `--render-out` prints a one-line load summary to stderr.
+- `load_total_ms` budget line (`L4005` on breach, `L4025` when the report has no load section), calibrated
+  on vigil's mesh district: `games/vigil/budgets/pinned-rtx3090-district-breach.toml`. Three warm
+  `--profile 30` runs of `district-breach`: 4409.8, 4355.6 and 4369.7 ms (median 4369.7; scene 303, mesh
+  1651, texture 1411, gpu upload 154, renderer init 798, first frame 36); ceiling 9000 ms. The M4 twin is
+  owed (`Plan/owed.md`). The plaza ceiling waits for subtask 05's re-calibration, once the plaza is committed.
+- **Checkpoint:** CPU mesh and texture decode dominates the load; GPU upload plus GI bake is a small
+  share. Wave 2 keeps its scope and gets no mip-encoder fix. Renderer device creation (about 0.8 s) is a
+  fixed cost outside this plan.

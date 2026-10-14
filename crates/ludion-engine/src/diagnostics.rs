@@ -242,7 +242,7 @@ entities:
     /// Reports the same code for two different offenders, every tick.
     fn nag_twice(world: &mut World, _ctx: &SystemCtx) {
         report(world, NAGGY, "spawner-a", "the nest names no model");
-        report(world, NAGGY, "spawner-b","the nest names no model");
+        report(world, NAGGY, "spawner-b", "the nest names no model");
     }
 
     /// Requests a district switch on frame 2 (the `tests/transition.rs` gate mold), carrying nothing.

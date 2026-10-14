@@ -95,6 +95,12 @@ The per-file catalogue (one entry per calibration scene and per-OS twin, with me
   not a quiet pass; a pass merely absent from a run that did measure stays quiet. A CPU-only budget
   carries none of those lines. `committed_budget_files_parse_and_name_producible_keys` loads every
   committed budget CPU-only, so a renamed pass fails per push.
+- **Load ceiling: `load_total_ms`.** It gates `ProfileReport.load.total_ms`, **one sample, not a
+  median**: calibrate from the median of three warm runs (cold run discarded) and set about 2x. The
+  total includes renderer creation (about 0.85 s on the RTX 3090 box, a fixed floor) and runs on a warm
+  OS file cache. A report with no `load` section (a live `--attach` capture, `--profile-replay`, an
+  unobserved host) is `L4025`, never a quiet pass. A no-adapter run's `load` lacks the render phases
+  and is not gated for it. Vigil's district file is checked by hand, like E6.
 
 ## Gotchas
 
@@ -125,6 +131,7 @@ ludion profile --scene examples/gallery/physics-stress.yaml --frames 300 --check
 ludion image-stats examples/gallery/goldens/windows/*.png --check budgets/image-stats-windows.toml
 cargo run --release -p vigil -- --scene scenes/budget-horde.yaml --profile 120 --profile-check budgets/pinned-apple-m4.toml   # from games/vigil/
 cargo run --release -p shmup-stress -- --scene games/shmup-stress/scenes/steady-drawn.yaml --profile 200 --profile-check budgets/pinned-rtx3090-sprite-stress.toml
+cargo run --release -p vigil -- --scene scenes/district-breach.yaml --profile 30 --profile-check budgets/pinned-rtx3090-district-breach.toml   # from games/vigil/
 ludion explain L4004   # L4005, L4006, L4009, L4010 read the same way
 ```
 

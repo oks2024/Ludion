@@ -37,9 +37,9 @@ within 5 s is reported as `L4022` and the host exits non-zero. Peers attach to t
   per-system sim time, per-pass GPU time, and the sim frame total), and exits. This is the in-process
   twin of `ludion profile` — the CLI links no game code, so only this path can time *your* systems by
   name. Add **`--profile-check <BUDGET.toml>`** to gate on a budget (an optional `frame_total_ms`, a
-  `[systems]` table, and a `[passes]` table of millisecond ceilings; `frame_total_max_ms` and a
-  `[systems_max]` table gate the worst frame instead of the median): any over-budget line is an
-  `L4005` and the process exits non-zero. Measure in `--release`; a debug build's numbers are not
+  `[systems]` table, and a `[passes]` table of millisecond ceilings, plus `load_total_ms` for the
+  scene-load wall time; `frame_total_max_ms` and a `[systems_max]` table gate the worst frame
+  instead of the median): any over-budget line is an `L4005` and the process exits non-zero. Measure in `--release`; a debug build's numbers are not
   comparable to a release-calibrated budget.
 - **`--replay-frames <FILE>`** does not host either: it drives a committed `.lrp` frame-by-frame
   through *your* engine builder and renders each stepped sim frame to a zero-padded PNG

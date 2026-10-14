@@ -1892,6 +1892,11 @@ pub mod code {
     /// `Engine::world_hash`, once per component type per session.
     pub const HASHED_NON_FINITE_FLOAT: DiagnosticCode = DiagnosticCode::new("L4024");
 
+    /// `L4025` — a budget file gates `load_total_ms` but the profile report has no load section: a
+    /// live capture, `--profile-replay`, or a host that observed no load. Raised by `ludion-engine`'s
+    /// budget check — a gate that measured nothing must not read as a pass.
+    pub const BUDGET_LOAD_UNMEASURED: DiagnosticCode = DiagnosticCode::new("L4025");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -8455,8 +8460,8 @@ Fix: correct the JSON at the reported position and match the record shape above.
 A profile budget file could not be read, or its contents are not valid budget TOML.
 
 `ludion profile --check <budget.toml>` compares the measured medians against a budget file:
-optional `frame_total_ms`, `frame_total_max_ms`, `post_total_ms`, `cluster_build_ms` and
-`extract_ms` scalars, a `[systems]` table of per-system ceilings, a `[systems_max]` table of
+optional `frame_total_ms`, `frame_total_max_ms`, `post_total_ms`, `cluster_build_ms`,
+`extract_ms` and `load_total_ms` scalars, a `[systems]` table of per-system ceilings, a `[systems_max]` table of
 per-system worst-frame ceilings, a `[passes]` table of per-GPU-pass ceilings, and a
 `[post_groups]` table of per-effect ceilings. Every value is a number of milliseconds.
 
@@ -8465,6 +8470,7 @@ per-system worst-frame ceilings, a `[passes]` table of per-GPU-pass ceilings, an
   post_total_ms    = 2.0
   cluster_build_ms = 0.3
   extract_ms       = 0.5
+  load_total_ms    = 5000.0
 
   [systems]
   move_paddle = 0.20
@@ -8488,7 +8494,8 @@ failed when the report carries no cluster section, which is every live (`--attac
 `extract_ms` is the other CPU line — the sim thread's per-frame extract cost, the one line that
 scales with visual population rather than draw cost — and unlike `cluster_build_ms` it is checked
 wherever the report carries an `extract` sequential timing, which is both the offline driver and a
-live capture.
+live capture. `load_total_ms` is checked against the report's `load` section (one run's total load
+wall time, not a median), and is `L4025` when the report has none.
 
 `frame_total_max_ms` and `[systems_max]` budget the *worst* frame rather than the median — the
 spike a median hides. They check a report's tail (`max_ms`), which a `--profile-replay` run and
@@ -8510,10 +8517,10 @@ the TOML at the reported position to match the shape above.",
 A measured timing exceeded the ceiling its budget file set for it.
 
 `ludion profile --check` raises one of these per over-budget line — a system, a GPU pass, a
-post-process effect group, the frame total, the post total, or the cluster build — naming the
-measured value and the ceiling it crossed, and exits non-zero. Budgets are release-profile, pinned-hardware regression
-tripwires with generous headroom (about twice the observed median); crossing one means the timing
-genuinely regressed, not that the machine was busy.
+post-process effect group, the frame total, the post total, the cluster build, or the load total —
+naming the measured value and the ceiling it crossed, and exits non-zero. Budgets are
+release-profile, pinned-hardware regression tripwires with generous headroom (about twice the
+observed median); crossing one means the timing genuinely regressed, not that the machine was busy.
 
 The message says which statistic the number is. A single line reports a `median` — or, for a
 `frame_total_max_ms` / `[systems_max]` ceiling, a `max` with the frame it occurred at; a group or a
@@ -9008,6 +9015,21 @@ with `hash`, `sim.hash`, a replay hash trace, `ludion sim-hash`).
 
 Fix: find the writer — `ludion replay` the session and bisect for the first frame whose hash moves
 — and guard the maths there.",
+    },
+    CodeEntry {
+        code: code::BUDGET_LOAD_UNMEASURED,
+        severity: Severity::Error,
+        title: "profile budget gates the load total but the report has no load section",
+        explanation: "\
+A budget file sets `load_total_ms`, but the profile report carries no `load` section: this run
+measured no scene load. A live `--attach` capture joins a world that is already loaded, a
+`--profile-replay` run replays recorded frames, and a host that installs no load observer records
+nothing. Nothing measured cannot be over budget, so without this error the check would exit 0 with
+the load line silently unchecked — a green gate that gated nothing.
+
+Fix: measure the load with `ludion profile --scene <scene>` or a game's `--profile`, both of which
+observe it, and check that report; or remove `load_total_ms` from a budget that is applied to live
+captures.",
     },
     // --- L5xxx: audio ---
     CodeEntry {
@@ -9508,6 +9530,7 @@ mod tests {
         code::PROFILE_SAMPLES_MISSING,
         code::SIM_THREAD_STUCK,
         code::HASHED_NON_FINITE_FLOAT,
+        code::BUDGET_LOAD_UNMEASURED,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,
