@@ -345,6 +345,12 @@ impl LoadObserver for LoadClock {
             self.reused[i] += 1;
         }
     }
+
+    fn cooked(&mut self, kind: LoadKind, key: &str, bytes: u64) {
+        let i = Self::index(kind);
+        self.bytes[i] += bytes;
+        self.seen.insert((i, key.to_string()));
+    }
 }
 
 /// Accumulates one frame's per-system wall times through the clock-free observer seam.

@@ -156,6 +156,35 @@ pub(crate) fn validate(
     Ok(())
 }
 
+/// Checks a cooked image is safe to upload for a slot that samples in `slot_srgb` (the device
+/// support check aside): the colour spaces agree, level 0 is block aligned and every level has its
+/// block count of bytes. The engine runs it when it loads a cooked map, so a bad file falls back to
+/// the source PNG and never reaches the GPU.
+///
+/// # Example
+/// ```
+/// use ludion_assets::cooked::{CompressedFormat, CompressedImage};
+/// use ludion_renderer::{CompressedUploadError, check_compressed};
+/// let image = CompressedImage {
+///     format: CompressedFormat::Bc7,
+///     srgb: true,
+///     width: 4,
+///     height: 4,
+///     levels: vec![vec![0; 16]],
+/// };
+/// assert_eq!(check_compressed(&image, true), Ok(()));
+/// assert!(matches!(
+///     check_compressed(&image, false),
+///     Err(CompressedUploadError::ColorSpaceMismatch { .. })
+/// ));
+/// ```
+pub fn check_compressed(
+    image: &CompressedImage,
+    slot_srgb: bool,
+) -> Result<(), CompressedUploadError> {
+    validate(image, slot_srgb)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

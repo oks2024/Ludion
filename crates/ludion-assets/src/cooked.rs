@@ -68,7 +68,7 @@ impl CookTarget {
 }
 
 /// How a map's bytes are interpreted: colour is sRGB-encoded, data maps are linear.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum ColorSpace {
     /// sRGB-encoded colour (albedo, emissive).
     Srgb,

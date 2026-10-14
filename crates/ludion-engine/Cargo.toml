@@ -40,5 +40,10 @@ toml.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]
+# Test-only: builds cooked store fixtures in memory (cook, write_ktx2).
+ludion-cook = { path = "../ludion-cook", version = "0.1.0" }
+# Test-only: `tests/cooked_textures.rs` compares a cooked render to its source render by SSIM. A
+# dev-dependency cycle through the engine, as `ludion-server`'s own testkit dev-dependency is.
+ludion-testkit = { path = "../ludion-testkit", version = "0.1.0" }
 png.workspace = true
 proptest.workspace = true

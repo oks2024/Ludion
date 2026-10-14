@@ -66,6 +66,7 @@ use crate::audio::{
 };
 use crate::builtin_registry;
 use crate::components::{AudioEmitter, Camera, Transform};
+use crate::cooked_maps::TextureSource;
 use crate::dispatch::Dispatched;
 use crate::docs::{DocKind, DocValidator, PreparedDocs};
 use crate::load_observer::{FrameLoadObserver, LoadObserver, LoadPhase};
@@ -279,6 +280,14 @@ pub struct Engine {
     /// invisible to `extract()` — two machines at different qualities run the same simulation and
     /// differ only in pixels.
     quality: QualitySetting,
+    /// Where imported mesh maps come from ([`set_textures`](Engine::set_textures)). Default
+    /// [`TextureSource::Source`]. A client setting exactly as [`quality`](Engine::quality) is: not
+    /// hashed, not snapshotted, not recorded and invisible to the simulation.
+    textures: TextureSource,
+    /// Whether the asset cache has been pointed at the cooked store (or away from it) for the
+    /// current [`textures`](Engine::textures) value. Cleared by `set_textures`, set by the first
+    /// extract after, which needs the renderer's cook target to resolve it.
+    cook_resolved: bool,
     /// This host's GI rebake lever ([`set_gi_rebake`](Engine::set_gi_rebake)). Default
     /// [`GiRebakeMode::Auto`] — today's behaviour, byte-identical. A client/session setting exactly
     /// as [`quality`](Engine::quality) is: not hashed, not snapshotted, not recorded, and invisible
@@ -663,6 +672,8 @@ impl Engine {
             debug_draw: crate::DebugCategories::None,
             render_scale_override: None,
             quality: QualitySetting::default(),
+            textures: TextureSource::default(),
+            cook_resolved: false,
             gi_rebake: GiRebakeMode::default(),
             gi_rebake_force: false,
             prefetch_pending: false,
@@ -894,6 +905,57 @@ impl Engine {
     /// This host's render quality setting (see [`set_quality`](Engine::set_quality)).
     pub fn quality(&self) -> &QualitySetting {
         &self.quality
+    }
+
+    /// Chooses where imported mesh maps come from: [`TextureSource::Source`] (the default) decodes
+    /// every PNG, [`TextureSource::Cooked`] reads each `[[import]]` map's BC7/ASTC copy from
+    /// `<project>/.ludion/cooked/` and falls back to the PNG, with one `L1271` warning per load,
+    /// where there is none.
+    ///
+    /// A host switch, not a protocol command, and render-only exactly as
+    /// [`set_quality`](Engine::set_quality) is: never sim state, never hashed, never snapshotted,
+    /// invisible to `extract()` and to a recorded session. The next extract applies it, dropping the
+    /// maps (and the meshes built from them) the other setting loaded.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{Engine, TextureSource};
+    ///
+    /// let mut engine = Engine::new();
+    /// assert_eq!(engine.textures(), TextureSource::Source);
+    /// engine.set_textures(TextureSource::Cooked);
+    /// assert_eq!(engine.textures(), TextureSource::Cooked);
+    /// ```
+    pub fn set_textures(&mut self, source: TextureSource) {
+        self.textures = source;
+        self.cook_resolved = false;
+    }
+
+    /// Where this host's imported mesh maps come from (see [`set_textures`](Engine::set_textures)).
+    pub fn textures(&self) -> TextureSource {
+        self.textures
+    }
+
+    /// Points the asset cache at the cooked store this host's [`textures`](Engine::textures) and
+    /// renderer imply, once per setting. Under `Cooked` this builds the renderer ahead of the walk,
+    /// because the cook target is the GPU's.
+    fn resolve_cook(&mut self) {
+        if self.cook_resolved {
+            return;
+        }
+        let lookup = match self.textures {
+            TextureSource::Source => None,
+            TextureSource::Cooked => {
+                // Without a GPU there is no target; the render that follows reports `L2003`.
+                let target = match self.ensure_renderer() {
+                    Ok(()) => self.renderer.as_ref().and_then(Renderer::cook_target),
+                    Err(_) => None,
+                };
+                crate::cooked_maps::lookup_for(&self.project_root, target).map(Arc::new)
+            }
+        };
+        self.asset_cache.set_cook(lookup);
+        self.cook_resolved = true;
     }
 
     /// Sets whether the GI caches follow the world ([`GiRebakeMode::Auto`], the default) or hold the
@@ -3329,6 +3391,7 @@ impl Engine {
         // (commands apply at frame boundaries).
         let hold = self.gi_hold();
         self.asset_cache.set_gi_hold(hold);
+        self.resolve_cook();
         // The sim clock the assembly clip evaluator poses against: read out by value first, so the
         // driver's immutable borrow below stays the only one. This machine's particle density comes
         // out with it, for the same borrow reason and from the same setting the renderer was built
@@ -3341,12 +3404,20 @@ impl Engine {
         let world = self.driver.world();
         let root = &self.project_root;
         let cache = &mut self.asset_cache;
+        let mut degraded = Vec::new();
         if std::mem::take(&mut self.prefetch_pending) {
             let refs = crate::extract::asset_refs(world, root);
             cache.retain_referenced(root, &refs);
             cache.prefetch(root, &refs);
+            let misses = cache.cook_misses();
+            if !misses.is_empty() {
+                let target = self.renderer.as_ref().and_then(Renderer::cook_target);
+                degraded.push((
+                    "textures: cooked".to_string(),
+                    crate::cooked_maps::not_cooked_warning(target, &misses),
+                ));
+            }
         }
-        let mut degraded = Vec::new();
         let scene = crate::extract::extract_through(
             world,
             (width, height),

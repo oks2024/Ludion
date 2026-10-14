@@ -1352,6 +1352,9 @@ pub mod code {
     /// `L1270` — `ludion sync`'s cook stage could not encode a texture map into BC7 or ASTC; the
     /// import tree is unaffected and the map stays usable from its source PNG.
     pub const COOK_ENCODE_FAILED: DiagnosticCode = DiagnosticCode::new("L1270");
+    /// `L1271` — a scene load under `textures: cooked` read some mesh maps from their PNG sources
+    /// because the cooked file was missing, corrupt or unusable on this GPU; one warning per load.
+    pub const TEXTURE_NOT_COOKED: DiagnosticCode = DiagnosticCode::new("L1271");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -6805,6 +6808,21 @@ diagnostic, and a store that cannot be written is `L1203`.
 Fix: re-export the PNG from its source (a truncated or zero-sized file is the usual cause), then run
 `ludion sync` again. If the PNG is sound, report the encoder error the diagnostic quotes.",
     },
+    CodeEntry {
+        code: code::TEXTURE_NOT_COOKED,
+        severity: Severity::Warning,
+        title: "mesh maps loaded from their PNG sources under `textures: cooked`",
+        explanation: "\
+Under `textures: cooked` the engine loads each imported mesh map from its block-compressed KTX2 file
+in `.ludion/cooked/<target>/`, and some maps could not be: the file is missing (the map was never
+synced, or its PNG changed since), the file is corrupt or does not match its slot, or this GPU offers
+neither BC7 nor ASTC. Those maps load from their PNG sources instead, so the scene renders the same
+but loads slower and uses more video memory. One warning names every such map, up to eight.
+
+Fix: run `ludion sync` to cook the missing maps. For a corrupt file, delete it from
+`.ludion/cooked/<target>/` first, because sync reuses any file present under a key. On a GPU without
+BC7 or ASTC there is nothing to fix; the PNG fallback is the intended path.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9442,6 +9460,7 @@ mod tests {
         code::VOXEL_VIEW_OUT_OF_RANGE,
         code::PATH_FOLLOWER_INVALID,
         code::COOK_ENCODE_FAILED,
+        code::TEXTURE_NOT_COOKED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -9685,6 +9704,7 @@ mod tests {
             code::HIERARCHY_KINEMATIC_SHEAR,
             code::PATTERN_AUTHORING_LINT,
             code::GENERATION_IDENTICAL_CANDIDATES,
+            code::TEXTURE_NOT_COOKED,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

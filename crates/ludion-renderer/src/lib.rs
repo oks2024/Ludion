@@ -61,7 +61,7 @@ mod voxel_bake;
 mod shader_gen;
 
 pub use cluster::{ClusterStats, cluster_stats};
-pub use compressed::CompressedUploadError;
+pub use compressed::{CompressedUploadError, check_compressed};
 pub use frame_observer::{FrameObserver, FramePhase};
 pub use gi_bake::GiReadback;
 pub use graph::{FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json};
@@ -69,11 +69,11 @@ pub use ludion_font::GlyphQuad;
 pub use quality::{Quality, QualityParams};
 pub use render::{Renderer, is_renderer_shader};
 pub use scene::{
-    DEFAULT_AMBIENT, DebugSegment, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
-    GroundMarkerInstance, GroundMarkerShape, MAX_GI_TEXTURE_AXIS, MeshData, MeshInstance,
-    MeshShape, MeshTexture, MeshTextures, ParticleInstance, PointLightData, PostData, RenderCamera,
-    RenderScene, SkinJoint, SpriteInstance, SunData, TextRun, TextureImage, TextureWrap,
-    TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
+    CookedMap, DEFAULT_AMBIENT, DebugSegment, EnvironmentData, FontDraw, GROUND_MARKER_LIFT,
+    GiData, GroundMarkerInstance, GroundMarkerShape, MAX_GI_TEXTURE_AXIS, MapImage, MeshData,
+    MeshInstance, MeshShape, MeshTexture, MeshTextures, ParticleInstance, PointLightData, PostData,
+    RenderCamera, RenderScene, SkinJoint, SpriteInstance, SunData, TextRun, TextureImage,
+    TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
 };
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`

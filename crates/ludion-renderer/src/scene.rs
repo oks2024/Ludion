@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use ludion_assets::cooked::CompressedImage;
 use ludion_core::math::glam::{Mat3, Mat4, Quat, Vec3};
 use ludion_font::GlyphQuad;
 
@@ -719,10 +720,48 @@ pub struct MeshTextures {
 /// [`TextureImage::filter_linear`] is ignored: a mesh map is always sampled trilinear.
 #[derive(Clone, PartialEq, Debug)]
 pub struct MeshTexture {
-    /// The decoded RGBA8 image.
-    pub image: Arc<TextureImage>,
+    /// The map's pixels: decoded RGBA8, or a cooked block-compressed image.
+    pub image: MapImage,
     /// The address mode both axes are sampled with.
     pub wrap: TextureWrap,
+}
+
+/// The pixels of one [`MeshTexture`]: the decoded source image, or a cooked BC7/ASTC image read from
+/// the content-addressed store. A cooked map arrives with its mip chain and is never mip-generated.
+#[derive(Clone, PartialEq, Debug)]
+pub enum MapImage {
+    /// The decoded RGBA8 source image.
+    Source(Arc<TextureImage>),
+    /// A cooked map.
+    Cooked(Arc<CookedMap>),
+}
+
+impl MapImage {
+    /// What identifies the pixels: the source file's content hash, or the cooked map's cook key.
+    /// Two maps with the same identity and role upload once.
+    ///
+    /// # Example
+    /// ```
+    /// use std::sync::Arc;
+    /// use ludion_renderer::{MapImage, TextureImage};
+    /// let image = TextureImage { width: 1, height: 1, rgba: vec![255; 4], hash: 9, filter_linear: false, premultiplied_on_load: false };
+    /// assert_eq!(MapImage::Source(Arc::new(image)).identity(), 9);
+    /// ```
+    pub fn identity(&self) -> u64 {
+        match self {
+            MapImage::Source(image) => image.hash,
+            MapImage::Cooked(cooked) => cooked.key,
+        }
+    }
+}
+
+/// A cooked mesh map: the block-compressed image and the cook key it was stored under.
+#[derive(Clone, PartialEq, Debug)]
+pub struct CookedMap {
+    /// The cook key (the store file's name): source hash, role, target and cap folded.
+    pub key: u64,
+    /// The decoded KTX2 file.
+    pub image: CompressedImage,
 }
 
 /// How a [`MeshTexture`]'s sampler addresses coordinates outside `[0, 1]` — glTF's wrap modes, the

@@ -108,4 +108,7 @@ pub(crate) trait LoadObserver: std::any::Any + Send {
     fn decoded(&mut self, kind: LoadKind, key: &str, bytes: u64);
     /// A lookup of `key` found it already cached.
     fn reused(&mut self, kind: LoadKind, key: &str);
+    /// One cooked map of `kind` for `key` was read from the store instead of decoded, reading
+    /// `bytes` bytes of block data.
+    fn cooked(&mut self, kind: LoadKind, key: &str, bytes: u64);
 }

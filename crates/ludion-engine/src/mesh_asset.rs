@@ -13,11 +13,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use ludion_assets::cooked::ColorSpace;
 use ludion_core::codes::code;
 use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{DMat4, DQuat, DVec3, Mat4, Quat, Vec3};
-use ludion_renderer::{MeshData, MeshTexture, MeshTextures, SkinJoint, TextureImage, TextureWrap};
+use ludion_renderer::{
+    MapImage, MeshData, MeshTexture, MeshTextures, SkinJoint, TextureImage, TextureWrap,
+};
 use ludion_scene::{MeshDocument, MeshSkin, TextureRef};
 
 use crate::asset_cache::{SourceFiles, fold_source_hashes};
@@ -44,17 +47,32 @@ const DEFAULT_BONES: [u32; 4] = [0, 0, 0, 0];
 /// re-points them at the referencing `Mesh` component.
 pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> {
     let (doc, hash) = read_document(root, rel)?;
-    assemble(rel, &doc, hash, &mut |path| decode_map(root, path)).map(|(data, _)| data)
+    // One decode per path whatever the roles asking for it.
+    let mut decoded: StableMap<String, Arc<TextureImage>> = StableMap::new();
+    assemble(rel, &doc, hash, &mut |path, _| {
+        let path = path.to_string();
+        if !decoded.contains_key(&path) {
+            decoded.insert(path.clone(), decode_map(root, &path)?);
+        }
+        let image = Arc::clone(decoded.get(&path).expect("just decoded"));
+        let source_hash = image.hash;
+        Ok((MapImage::Source(image), source_hash))
+    })
+    .map(|(data, _)| data)
 }
 
-/// Resolves one mesh map, by its resolved project-relative path, to its decoded image.
-pub(crate) type MapResolver<'a> = dyn FnMut(&str) -> Result<Arc<TextureImage>, Diagnostic> + 'a;
+/// Resolves one mesh map, by its resolved project-relative path and colour role, to its image and
+/// the content hash of the PNG file it came from (the image's own identity is the cook key for a
+/// cooked map).
+pub(crate) type MapResolver<'a> =
+    dyn FnMut(&str, ColorSpace) -> Result<(MapImage, u64), Diagnostic> + 'a;
 
 /// Builds a document's [`MeshData`] — [`decode`], its texture maps bound through `resolve`, and the
-/// map hashes folded into [`MeshData::hash`] so an edited PNG re-keys the GPU mesh (and its material
-/// bind group) even when the document is untouched — and **every file it read** with its content
-/// hash: the mesh document first, then each distinct texture PNG, as `root`-relative paths. That list
-/// is the mesh's reload dependency set ([`crate::asset_cache`]).
+/// map identities folded into [`MeshData::hash`] so an edited PNG, or a switch between a map and its
+/// cooked copy, re-keys the GPU mesh (and its material bind group) even when the document is
+/// untouched — and **every file it read** with its content hash: the mesh document first, then each
+/// distinct texture PNG, as `root`-relative paths. That list is the mesh's reload dependency set
+/// ([`crate::asset_cache`]).
 pub(crate) fn assemble(
     rel: &str,
     doc: &MeshDocument,
@@ -62,10 +80,9 @@ pub(crate) fn assemble(
     resolve: &mut MapResolver<'_>,
 ) -> Result<(MeshData, SourceFiles), Vec<Diagnostic>> {
     let mut data = decode(doc, doc_hash);
-    let (textures, files) = bind_textures(rel, doc, resolve)?;
+    let (textures, files, identities) = bind_textures(rel, doc, resolve)?;
     data.textures = textures;
-    let texture_hashes: Vec<u64> = files.iter().map(|(_, hash)| *hash).collect();
-    data.hash = fold_source_hashes(doc_hash, &texture_hashes);
+    data.hash = fold_source_hashes(doc_hash, &identities);
     let sources = std::iter::once((rel.to_string(), doc_hash))
         .chain(files)
         .collect();
@@ -80,26 +97,35 @@ pub(crate) fn assemble(
 /// # Errors
 /// `L1101`/`L1102` if the file cannot be read or decoded.
 pub(crate) fn decode_map(root: &Path, resolved: &str) -> Result<Arc<TextureImage>, Diagnostic> {
-    let image = ludion_assets::load_png(root, resolved)?;
+    map_from_bytes(&ludion_assets::load_bytes(root, resolved)?, resolved)
+}
+
+/// [`decode_map`] over PNG bytes already read; `label` names the file in a decode diagnostic.
+pub(crate) fn map_from_bytes(
+    bytes: &ludion_assets::AssetBytes,
+    label: &str,
+) -> Result<Arc<TextureImage>, Diagnostic> {
+    let (width, height, rgba) = ludion_assets::decode_png(&bytes.bytes, label)?;
     Ok(Arc::new(TextureImage {
-        width: image.width,
-        height: image.height,
-        rgba: image.rgba,
-        hash: image.hash,
+        width,
+        height,
+        rgba,
+        hash: bytes.hash,
         // A mesh map is sampled trilinear whatever this says; linear is the honest value.
         filter_linear: true,
         premultiplied_on_load: false,
     }))
 }
 
-/// The distinct resolved map paths `doc` (the mesh at `rel`) references, in slot order.
-pub(crate) fn map_paths(rel: &str, doc: &MeshDocument) -> Vec<String> {
-    let mut paths: Vec<String> = Vec::new();
-    for (_, reference) in texture_slots(doc) {
+/// The distinct `(resolved map path, colour role)` pairs `doc` (the mesh at `rel`) references, in
+/// slot order.
+pub(crate) fn map_paths(rel: &str, doc: &MeshDocument) -> Vec<(String, ColorSpace)> {
+    let mut paths: Vec<(String, ColorSpace)> = Vec::new();
+    for (_, reference, space) in texture_slots(doc) {
         let Some(reference) = reference else {
             continue;
         };
-        let resolved = ludion_core::paths::sibling(rel, &reference.path);
+        let resolved = (ludion_core::paths::sibling(rel, &reference.path), space);
         if !paths.contains(&resolved) {
             paths.push(resolved);
         }
@@ -135,18 +161,33 @@ pub(crate) fn with_mesh_source<T>(
     Ok((read(source)?, bytes.hash))
 }
 
-/// The five texture slots in the document's canonical order, each paired with its own JSON Pointer.
-fn texture_slots(doc: &MeshDocument) -> [(&'static str, Option<&TextureRef>); 5] {
+/// The five texture slots in the document's canonical order, each paired with its own JSON Pointer
+/// and its colour role: colour (base colour, emissive) is sRGB, a measurement linear — the split
+/// the renderer's `material_maps` samples with.
+fn texture_slots(doc: &MeshDocument) -> [(&'static str, Option<&TextureRef>, ColorSpace); 5] {
     let maps = &doc.textures;
     [
-        ("/base_color_texture", maps.base_color.as_ref()),
+        (
+            "/base_color_texture",
+            maps.base_color.as_ref(),
+            ColorSpace::Srgb,
+        ),
         (
             "/metallic_roughness_texture",
             maps.metallic_roughness.as_ref(),
+            ColorSpace::Linear,
         ),
-        ("/normal_texture", maps.normal.as_ref()),
-        ("/occlusion_texture", maps.occlusion.as_ref()),
-        ("/emissive_texture", maps.emissive.as_ref()),
+        ("/normal_texture", maps.normal.as_ref(), ColorSpace::Linear),
+        (
+            "/occlusion_texture",
+            maps.occlusion.as_ref(),
+            ColorSpace::Linear,
+        ),
+        (
+            "/emissive_texture",
+            maps.emissive.as_ref(),
+            ColorSpace::Srgb,
+        ),
     ]
 }
 
@@ -159,58 +200,79 @@ fn texture_slots(doc: &MeshDocument) -> [(&'static str, Option<&TextureRef>); 5]
 /// [`ludion_assets`] seam a scene's loose `texture:` PNG takes from its content root. Each distinct
 /// path is asked for once however many slots name it, and the slots that name it share one `Arc`.
 ///
-/// Also returns the files it read — one `(resolved path, content hash)` per distinct authored path,
-/// in slot order — for the caller's dependency list and hash fold.
+/// Also returns the files it read — one `(resolved path, PNG content hash)` per distinct authored
+/// path, in slot order — for the caller's dependency list, and the identity of each distinct
+/// `(path, image)` in slot order (the PNG hash for a source map, the cook key for a cooked one) for
+/// the hash fold.
 ///
 /// # Errors
 /// `L1101`/`L1102` for a map that cannot be read or decoded — **every** failing map, not just the
 /// first, each re-pointed at its own document key so the author sees the whole list in one pass.
+#[allow(clippy::type_complexity)]
 fn bind_textures(
     rel: &str,
     doc: &MeshDocument,
     resolve: &mut MapResolver<'_>,
-) -> Result<(Option<MeshTextures>, SourceFiles), Vec<Diagnostic>> {
+) -> Result<(Option<MeshTextures>, SourceFiles, Vec<u64>), Vec<Diagnostic>> {
     let maps = &doc.textures;
     let slots = texture_slots(doc);
-    if slots.iter().all(|(_, reference)| reference.is_none()) {
-        return Ok((None, Vec::new()));
+    if slots.iter().all(|(_, reference, _)| reference.is_none()) {
+        return Ok((None, Vec::new(), Vec::new()));
     }
 
-    // Keyed by the authored path: `None` records a path already reported as failing, so a second
-    // slot naming it neither re-reads it nor duplicates its diagnostic.
-    let mut images: StableMap<String, Option<Arc<TextureImage>>> = StableMap::new();
+    // Keyed by the authored path and role: `None` records a map already reported as failing, so a
+    // second slot naming it neither re-reads it nor duplicates its diagnostic.
+    let mut images: StableMap<(String, ColorSpace), Option<MapImage>> = StableMap::new();
     let mut errors = Vec::new();
-    let mut files = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    let mut files: SourceFiles = Vec::new();
+    let mut identities: Vec<(String, u64)> = Vec::new();
     let mut resolved: [Option<MeshTexture>; 5] = Default::default();
-    for (index, (key, reference)) in slots.iter().enumerate() {
+    for (index, (key, reference, space)) in slots.iter().enumerate() {
         let Some(reference) = reference else {
             continue;
         };
-        if !images.contains_key(&reference.path) {
+        let image_key = (reference.path.clone(), *space);
+        if !images.contains_key(&image_key) {
             let resolved_path = ludion_core::paths::sibling(rel, &reference.path);
-            let image = match resolve(&resolved_path) {
-                Ok(image) => {
-                    files.push((resolved_path, image.hash));
-                    Some(image)
-                }
-                Err(diagnostic) => {
-                    errors.push(diagnostic.with_path(*key));
-                    None
+            let image = if failed.contains(&resolved_path) {
+                None
+            } else {
+                match resolve(&resolved_path, *space) {
+                    Ok((image, source_hash)) => {
+                        if !files.iter().any(|(path, _)| *path == resolved_path) {
+                            files.push((resolved_path.clone(), source_hash));
+                        }
+                        let identity = (resolved_path, image.identity());
+                        if !identities.contains(&identity) {
+                            identities.push(identity);
+                        }
+                        Some(image)
+                    }
+                    Err(diagnostic) => {
+                        errors.push(diagnostic.with_path(*key));
+                        failed.push(resolved_path);
+                        None
+                    }
                 }
             };
-            images.insert(reference.path.clone(), image);
+            images.insert(image_key.clone(), image);
         }
         resolved[index] = images
-            .get(&reference.path)
+            .get(&image_key)
             .and_then(Option::as_ref)
             .map(|image| MeshTexture {
-                image: Arc::clone(image),
+                image: image.clone(),
                 wrap: wrap(reference.wrap),
             });
     }
     if !errors.is_empty() {
         return Err(errors);
     }
+    let identities = identities
+        .into_iter()
+        .map(|(_, identity)| identity)
+        .collect();
 
     let [base_color, metallic_roughness, normal, occlusion, emissive] = resolved;
     let textures = MeshTextures {
@@ -223,7 +285,7 @@ fn bind_textures(
         normal_scale: maps.normal.as_ref().map_or(1.0, |r| r.factor as f32),
         occlusion_strength: maps.occlusion.as_ref().map_or(1.0, |r| r.factor as f32),
     };
-    Ok((Some(textures), files))
+    Ok((Some(textures), files, identities))
 }
 
 /// Maps a document's sampler wrap mode to the renderer's — the same three glTF modes, 1:1.
@@ -586,6 +648,14 @@ mod tests {
 
     /// Lays out a project root the way a glTF import does — `meshes/x.mesh.yaml` beside a sibling
     /// `textures/` folder, which is why a reference reads `../textures/…` — and returns it.
+    /// The decoded image of a source map.
+    fn source_image(image: &MapImage) -> &Arc<TextureImage> {
+        match image {
+            MapImage::Source(image) => image,
+            MapImage::Cooked(_) => panic!("expected a source map"),
+        }
+    }
+
     fn project(test: &str, doc: &str, textures: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
         let dir =
             std::env::temp_dir().join(format!("ludion-mesh-maps-{}-{test}", std::process::id()));
@@ -619,9 +689,10 @@ mod tests {
             .base_color
             .as_ref()
             .expect("the base-color map is bound");
-        assert_eq!(base_color.image.hash, ludion_assets::content_hash(&base));
-        assert_eq!((base_color.image.width, base_color.image.height), (1, 1));
-        assert!(base_color.image.filter_linear);
+        let base_image = source_image(&base_color.image);
+        assert_eq!(base_image.hash, ludion_assets::content_hash(&base));
+        assert_eq!((base_image.width, base_image.height), (1, 1));
+        assert!(base_image.filter_linear);
         assert_eq!(base_color.wrap, TextureWrap::Repeat);
         let normal = textures.normal.as_ref().expect("the normal map is bound");
         assert_eq!(normal.wrap, TextureWrap::Clamp);
@@ -634,8 +705,8 @@ mod tests {
             .occlusion
             .as_ref()
             .expect("the occlusion map is bound");
-        assert!(Arc::ptr_eq(&base_color.image, &occlusion.image));
-        assert!(!Arc::ptr_eq(&base_color.image, &normal.image));
+        assert!(Arc::ptr_eq(base_image, source_image(&occlusion.image)));
+        assert!(!Arc::ptr_eq(base_image, source_image(&normal.image)));
         // The authored vertex data the maps are sampled against rides through.
         assert_eq!(data.uvs, vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
         assert_eq!(data.tangents[7], -1.0);

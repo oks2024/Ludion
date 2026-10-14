@@ -44,6 +44,7 @@ mod collapse;
 mod collider_mesh;
 mod commands;
 pub mod components;
+mod cooked_maps;
 mod debug_draw;
 pub mod diagnostics;
 mod dispatch;
@@ -118,6 +119,7 @@ pub use components::{
     Projection, Residue, SkinBone, Sprite, SpriteBlend, Text, TileAppearance, Tilemap, Transform,
     UiList, UiListItem, UiRect, UiText, builtin_registry, crossfade, set_speed,
 };
+pub use cooked_maps::TextureSource;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
 pub use diagnostics::{
     Diagnostics, report as report_diagnostic, report_full as report_full_diagnostic,

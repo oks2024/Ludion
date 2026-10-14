@@ -32,7 +32,11 @@
 //! edge, whatever the kind.
 //!
 //! A mesh's texture maps are entries of their own, shared by every mesh that names the file, so one PNG
-//! is one decode however many meshes bind it.
+//! is one decode however many meshes bind it. Under `textures: cooked` a map an `[[import]]` table
+//! produced is held per colour role instead (`MapRole`): its cooked file's bytes differ between
+//! sRGB and linear, so one path can hold two entries, each either the cooked image or — with its
+//! reason recorded for the load's one `L1271` — the PNG's decode. Switching the setting drops every
+//! map and the meshes built from them.
 //!
 //! At each rebuild's first cached extract the cache keeps only what the new world names
 //! ([`AssetCache::retain_referenced`]), re-hashes the files the kept entries were built from and drops
@@ -51,23 +55,35 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
+use ludion_assets::cooked::ColorSpace;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_renderer::{MeshData, TextureImage, WorldVoxelGrid};
+use ludion_renderer::{MapImage, MeshData, TextureImage, WorldVoxelGrid};
 use ludion_scene::MeshDocument;
 
 use crate::assembly_mesh::AssemblyData;
 use crate::character::CharacterData;
+use crate::cooked_maps::{CookLookup, CookMiss};
 use crate::extract::{AtlasAsset, load_texture};
 use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
 use crate::voxel_mesh::VoxelStaticGrid;
+
+/// Which pixels a mesh map's cache entry holds: the PNG's decode, or — under `textures: cooked`, for
+/// a map an `[[import]]` table produced — the cooked file read for one colour role (a cooked map's
+/// bytes differ by role, so one path can hold two entries).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum MapRole {
+    Source,
+    Cooked(ColorSpace),
+}
 
 /// Which of the cache's maps an entry lives in — the tag a dependency edge carries so a reload
 /// re-runs the right loader.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AssetKind {
     Texture,
-    /// A texture map a mesh document binds: held once however many meshes name it.
-    MeshMap,
+    /// A texture map a mesh document binds: held once however many meshes name it (per role under
+    /// cooked).
+    MeshMap(MapRole),
     Mesh,
     Voxel,
     VoxelGrid,
@@ -80,7 +96,7 @@ enum AssetKind {
 impl AssetKind {
     fn load_kind(self) -> LoadKind {
         match self {
-            AssetKind::Texture | AssetKind::MeshMap => LoadKind::Texture,
+            AssetKind::Texture | AssetKind::MeshMap(_) => LoadKind::Texture,
             AssetKind::Mesh => LoadKind::Mesh,
             AssetKind::Voxel => LoadKind::Voxel,
             AssetKind::VoxelGrid => LoadKind::VoxelGrid,
@@ -93,7 +109,7 @@ impl AssetKind {
 
     fn load_phase(self) -> LoadPhase {
         match self {
-            AssetKind::Texture | AssetKind::MeshMap => LoadPhase::Texture,
+            AssetKind::Texture | AssetKind::MeshMap(_) => LoadPhase::Texture,
             AssetKind::Mesh => LoadPhase::Mesh,
             _ => LoadPhase::Other,
         }
@@ -118,7 +134,8 @@ pub(crate) struct AssetRefs {
 /// kind but a mesh, which needs its maps from the cache to be assembled.
 enum Decoded {
     Texture(Arc<TextureImage>),
-    MeshMap(Arc<TextureImage>),
+    /// A mesh map under its role, with why a cooked role fell back to the PNG.
+    MeshMap(MapRole, MapImage, Option<CookMiss>),
     Voxel(MeshData),
     VoxelGrid(VoxelStaticGrid),
     Sculpt(MeshData),
@@ -129,12 +146,13 @@ enum Decoded {
 
 /// Runs `kind`'s loader for `rel` with no access to the cache, returning the value and the files it
 /// read with their content hashes. Pure, so a prefetch can run it on any thread. Never called for
-/// [`AssetKind::Mesh`].
+/// [`AssetKind::Mesh`]. `cook` is the lookup a [`MapRole::Cooked`] map reads through.
 fn decode(
     project_root: &Path,
     kind: AssetKind,
     rel: &str,
     key: &str,
+    cook: Option<&CookLookup>,
 ) -> Result<(Decoded, SourceFiles), Vec<Diagnostic>> {
     let own = || vec![key.to_string()];
     Ok(match kind {
@@ -145,10 +163,32 @@ fn decode(
             let hash = image.hash;
             (Decoded::Texture(image), vec![(key.to_string(), hash)])
         }
-        AssetKind::MeshMap => {
-            let image = crate::mesh_asset::decode_map(project_root, rel).map_err(|d| vec![d])?;
-            let hash = image.hash;
-            (Decoded::MeshMap(image), vec![(key.to_string(), hash)])
+        AssetKind::MeshMap(role) => {
+            // The PNG's bytes are read either way: a cooked map's key is their hash.
+            let bytes = ludion_assets::load_bytes(project_root, rel).map_err(|d| vec![d])?;
+            let hash = bytes.hash;
+            let cooked = match (role, cook) {
+                (MapRole::Cooked(space), Some(cook)) => {
+                    let cap = cook.cap_for(key).unwrap_or(None);
+                    Some(cook.read(&bytes, space, cap))
+                }
+                (MapRole::Cooked(_), None) => Some(Err(CookMiss::Unsupported)),
+                (MapRole::Source, _) => None,
+            };
+            let source = || {
+                crate::mesh_asset::map_from_bytes(&bytes, rel)
+                    .map(MapImage::Source)
+                    .map_err(|d| vec![d])
+            };
+            let (image, miss) = match cooked {
+                Some(Ok(cooked)) => (MapImage::Cooked(cooked), None),
+                Some(Err(miss)) => (source()?, Some(miss)),
+                None => (source()?, None),
+            };
+            (
+                Decoded::MeshMap(role, image, miss),
+                vec![(key.to_string(), hash)],
+            )
         }
         AssetKind::Mesh => unreachable!("a mesh is assembled against the cache's maps"),
         AssetKind::Voxel => {
@@ -220,8 +260,15 @@ fn hash_sources(project_root: &Path, paths: Vec<String>) -> SourceFiles {
 /// megabytes for a large voxel model streamed every extract (`Plan/voxel-artist-scale.md`).
 pub(crate) struct AssetCache {
     images: BTreeMap<String, Arc<TextureImage>>,
-    /// The maps meshes bind, one entry per file whichever meshes name it.
-    mesh_maps: BTreeMap<String, Arc<TextureImage>>,
+    /// The maps meshes bind, one entry per file (per role under cooked) whichever meshes name it.
+    mesh_maps: BTreeMap<(String, MapRole), MapImage>,
+    /// Why each cooked entry of [`mesh_maps`](AssetCache::mesh_maps) holds its PNG instead, in step
+    /// with it.
+    cook_misses: BTreeMap<(String, ColorSpace), CookMiss>,
+    /// Where cooked maps are read from, or `None` to decode every map from its PNG. Host state, like
+    /// [`observer`](AssetCache::observer): changing it drops every mesh map and the meshes built
+    /// from them ([`set_cook`](AssetCache::set_cook)).
+    cook: Option<Arc<CookLookup>>,
     meshes: BTreeMap<String, Arc<MeshData>>,
     voxels: BTreeMap<String, Arc<MeshData>>,
     voxel_grids: BTreeMap<String, Arc<VoxelStaticGrid>>,
@@ -265,6 +312,8 @@ impl AssetCache {
         AssetCache {
             images: BTreeMap::new(),
             mesh_maps: BTreeMap::new(),
+            cook_misses: BTreeMap::new(),
+            cook: None,
             meshes: BTreeMap::new(),
             voxels: BTreeMap::new(),
             voxel_grids: BTreeMap::new(),
@@ -284,6 +333,33 @@ impl AssetCache {
     /// Attaches (or detaches) the load observer.
     pub(crate) fn set_observer(&mut self, observer: Option<Box<dyn LoadObserver>>) {
         self.observer = observer;
+    }
+
+    /// Points mesh-map loading at a cooked store (`Some`) or back at the PNGs (`None`). A change
+    /// drops every mesh map through its dependents, which drops the meshes built from them, so the
+    /// next prefetch or extract rebuilds them under the new setting; an equal setting is a no-op.
+    pub(crate) fn set_cook(&mut self, cook: Option<Arc<CookLookup>>) {
+        if self.cook == cook {
+            return;
+        }
+        self.cook = cook;
+        let files: BTreeSet<String> = self
+            .mesh_maps
+            .keys()
+            .map(|(path, _)| path.clone())
+            .collect();
+        for file in files {
+            self.drop_dependents(&file);
+        }
+        self.prune_source_hashes();
+    }
+
+    /// The maps that loaded from their PNG although cooking was asked for, with why, in path order.
+    pub(crate) fn cook_misses(&self) -> Vec<(String, CookMiss)> {
+        self.cook_misses
+            .iter()
+            .map(|((path, _), miss)| (path.clone(), miss.clone()))
+            .collect()
     }
 
     /// Detaches and returns the load observer.
@@ -585,6 +661,21 @@ impl AssetCache {
         key: &str,
         sources: &SourceFiles,
     ) {
+        // A cooked map read its store file instead of decoding its PNG.
+        if let AssetKind::MeshMap(role) = kind
+            && let Some(MapImage::Cooked(cooked)) = self.mesh_maps.get(&(key.to_string(), role))
+        {
+            let bytes = cooked
+                .image
+                .levels
+                .iter()
+                .map(|level| level.len() as u64)
+                .sum();
+            if let Some(observer) = self.observer.as_deref_mut() {
+                observer.cooked(LoadKind::Texture, key, bytes);
+            }
+            return;
+        }
         let Some(observer) = self.observer.as_deref_mut() else {
             return;
         };
@@ -601,24 +692,42 @@ impl AssetCache {
         }
     }
 
-    /// Reads the map at the resolved path `resolved` **through** the cache: a hit is reported as
-    /// reused, a miss decodes it once as an entry of its own. Every mesh naming one file shares the
-    /// `Arc`, so the decode counter is unique files, not references.
+    /// The role the map at the normalized `key` is held under for the colour role `space`: cooked
+    /// when the lookup covers the path, else the PNG's.
+    fn role(&self, key: &str, space: ColorSpace) -> MapRole {
+        match &self.cook {
+            Some(cook) if cook.cap_for(key).is_some() => MapRole::Cooked(space),
+            _ => MapRole::Source,
+        }
+    }
+
+    /// The map held under `key` and `role`, with the content hash of its PNG.
+    fn held_map(&self, key: &str, role: MapRole) -> Option<(MapImage, u64)> {
+        let image = self.mesh_maps.get(&(key.to_string(), role))?;
+        Some((
+            image.clone(),
+            self.source_hashes.get(key).copied().unwrap_or(0),
+        ))
+    }
+
+    /// Reads the map at the resolved path `resolved` in the colour role `space` **through** the
+    /// cache: a hit is reported as reused, a miss decodes it once as an entry of its own. Every mesh
+    /// naming one file shares the `Arc`, so the decode counter is unique files, not references.
     fn mesh_map(
         &mut self,
         project_root: &Path,
         resolved: &str,
-    ) -> Result<Arc<TextureImage>, Diagnostic> {
+        space: ColorSpace,
+    ) -> Result<(MapImage, u64), Diagnostic> {
         let key = normalize_key(resolved);
-        if !self.mesh_maps.contains_key(&key) {
-            self.load_entry(project_root, AssetKind::MeshMap, resolved)
+        let role = self.role(&key, space);
+        if !self.mesh_maps.contains_key(&(key.clone(), role)) {
+            self.load_entry(project_root, AssetKind::MeshMap(role), resolved)
                 .map_err(first_diagnostic)?;
         } else if let Some(observer) = self.observer.as_deref_mut() {
             observer.reused(LoadKind::Texture, &key);
         }
-        Ok(Arc::clone(
-            self.mesh_maps.get(&key).expect("just inserted on a miss"),
-        ))
+        Ok(self.held_map(&key, role).expect("just inserted on a miss"))
     }
 
     /// Runs `kind`'s loader, inserts the result under `key`, and returns the files it read.
@@ -631,13 +740,15 @@ impl AssetCache {
     ) -> Result<SourceFiles, Vec<Diagnostic>> {
         if kind == AssetKind::Mesh {
             let (doc, hash) = crate::mesh_asset::read_document(project_root, rel)?;
-            let (mesh, sources) = crate::mesh_asset::assemble(rel, &doc, hash, &mut |path| {
-                self.mesh_map(project_root, path)
-            })?;
+            let (mesh, sources) =
+                crate::mesh_asset::assemble(rel, &doc, hash, &mut |path, space| {
+                    self.mesh_map(project_root, path, space)
+                })?;
             self.meshes.insert(key.to_string(), Arc::new(mesh));
             return Ok(sources);
         }
-        let (decoded, sources) = decode(project_root, kind, rel, key)?;
+        let cook = self.cook.clone();
+        let (decoded, sources) = decode(project_root, kind, rel, key, cook.as_deref())?;
         self.insert(key, decoded);
         Ok(sources)
     }
@@ -647,7 +758,15 @@ impl AssetCache {
         let key = key.to_string();
         match decoded {
             Decoded::Texture(image) => self.images.insert(key, image).is_some(),
-            Decoded::MeshMap(image) => self.mesh_maps.insert(key, image).is_some(),
+            Decoded::MeshMap(role, image, miss) => {
+                if let MapRole::Cooked(space) = role {
+                    match miss {
+                        Some(miss) => self.cook_misses.insert((key.clone(), space), miss),
+                        None => self.cook_misses.remove(&(key.clone(), space)),
+                    };
+                }
+                self.mesh_maps.insert((key, role), image).is_some()
+            }
             Decoded::Voxel(mesh) => self.voxels.insert(key, Arc::new(mesh)).is_some(),
             Decoded::VoxelGrid(grid) => self.voxel_grids.insert(key, Arc::new(grid)).is_some(),
             Decoded::Sculpt(mesh) => self.sculpts.insert(key, Arc::new(mesh)).is_some(),
@@ -661,7 +780,7 @@ impl AssetCache {
     fn holds(&self, kind: AssetKind, key: &str) -> bool {
         match kind {
             AssetKind::Texture => self.images.contains_key(key),
-            AssetKind::MeshMap => self.mesh_maps.contains_key(key),
+            AssetKind::MeshMap(role) => self.mesh_maps.contains_key(&(key.to_string(), role)),
             AssetKind::Mesh => self.meshes.contains_key(key),
             AssetKind::Voxel => self.voxels.contains_key(key),
             AssetKind::VoxelGrid => self.voxel_grids.contains_key(key),
@@ -676,7 +795,12 @@ impl AssetCache {
     fn remove_entry(&mut self, kind: AssetKind, key: &str) {
         match kind {
             AssetKind::Texture => self.images.remove(key).is_some(),
-            AssetKind::MeshMap => self.mesh_maps.remove(key).is_some(),
+            AssetKind::MeshMap(role) => {
+                if let MapRole::Cooked(space) = role {
+                    self.cook_misses.remove(&(key.to_string(), space));
+                }
+                self.mesh_maps.remove(&(key.to_string(), role)).is_some()
+            }
             AssetKind::Mesh => self.meshes.remove(key).is_some(),
             AssetKind::Voxel => self.voxels.remove(key).is_some(),
             AssetKind::VoxelGrid => self.voxel_grids.remove(key).is_some(),
@@ -769,11 +893,14 @@ impl AssetCache {
 
         // A map no kept mesh binds is an orphan.
         let dependents = &self.dependents;
-        self.mesh_maps.retain(|key, _| {
+        self.mesh_maps.retain(|(key, _), _| {
             dependents
                 .get(key)
                 .is_some_and(|entries| entries.iter().any(|(kind, _)| *kind == AssetKind::Mesh))
         });
+        let maps = &self.mesh_maps;
+        self.cook_misses
+            .retain(|(key, space), _| maps.contains_key(&(key.clone(), MapRole::Cooked(*space))));
         self.retain_edges();
 
         self.begin(LoadPhase::Other);
@@ -867,8 +994,10 @@ impl AssetCache {
         let held_maps: Vec<String> = self
             .dependents
             .iter()
-            .filter(|(file, entries)| {
-                self.mesh_maps.contains_key(*file)
+            .filter(|(_, entries)| {
+                entries
+                    .iter()
+                    .any(|(kind, _)| matches!(kind, AssetKind::MeshMap(_)))
                     && entries
                         .iter()
                         .any(|(kind, entry)| *kind == AssetKind::Mesh && held.contains(entry))
@@ -876,7 +1005,7 @@ impl AssetCache {
             .map(|(file, _)| file.clone())
             .collect();
         for map in &held_maps {
-            self.report_reused(AssetKind::MeshMap, map);
+            self.report_reused(AssetKind::MeshMap(MapRole::Source), map);
         }
         self.begin(LoadPhase::Mesh);
         let read = ludion_core::par::par_map_chunks(&todo, 1, |_, chunk| {
@@ -890,20 +1019,21 @@ impl AssetCache {
             .collect();
 
         // Stage 3: the maps those documents bind, then the loose textures.
-        let mut maps: BTreeSet<String> = BTreeSet::new();
+        let mut maps: BTreeSet<(String, MapRole)> = BTreeSet::new();
         for (key, doc, _) in &docs {
-            for path in crate::mesh_asset::map_paths(key, doc) {
+            for (path, space) in crate::mesh_asset::map_paths(key, doc) {
                 let path = normalize_key(&path);
-                if self.mesh_maps.contains_key(&path) {
-                    self.report_reused(AssetKind::MeshMap, &path);
+                let role = self.role(&path, space);
+                if self.mesh_maps.contains_key(&(path.clone(), role)) {
+                    self.report_reused(AssetKind::MeshMap(role), &path);
                 } else {
-                    maps.insert(path);
+                    maps.insert((path, role));
                 }
             }
         }
         let mut jobs: Vec<(AssetKind, &str)> = maps
             .iter()
-            .map(|key| (AssetKind::MeshMap, key.as_str()))
+            .map(|(key, role)| (AssetKind::MeshMap(*role), key.as_str()))
             .collect();
         for key in &refs.textures {
             if self.images.contains_key(key) {
@@ -917,10 +1047,9 @@ impl AssetCache {
         // Stage 4: assemble serially, so a map that failed above fails its meshes the same way.
         self.begin(LoadPhase::Mesh);
         for (key, doc, hash) in &docs {
-            let assembled = crate::mesh_asset::assemble(key, doc, *hash, &mut |path| {
-                self.mesh_maps
-                    .get(&normalize_key(path))
-                    .cloned()
+            let assembled = crate::mesh_asset::assemble(key, doc, *hash, &mut |path, space| {
+                let path_key = normalize_key(path);
+                self.held_map(&path_key, self.role(&path_key, space))
                     .ok_or_else(|| {
                         Diagnostic::new(
                             ludion_core::codes::code::ASSET_FILE_IO,
@@ -944,9 +1073,10 @@ impl AssetCache {
             return;
         }
         self.begin(phase);
+        let cook = self.cook.clone();
         let decoded = ludion_core::par::par_map_chunks(jobs, 1, |_, chunk| {
             let (kind, key) = chunk[0];
-            decode(project_root, kind, key, key)
+            decode(project_root, kind, key, key, cook.as_deref())
         });
         self.end(phase);
         for ((kind, key), result) in jobs.iter().zip(decoded) {
@@ -1044,7 +1174,17 @@ impl AssetCache {
     /// Whether the cache holds a mesh map at `key` (in its normalized form). Test-only.
     #[cfg(test)]
     pub(crate) fn contains_mesh_map(&self, key: &str) -> bool {
-        self.mesh_maps.contains_key(&normalize_key(key))
+        let key = normalize_key(key);
+        self.mesh_maps.keys().any(|(path, _)| *path == key)
+    }
+
+    /// The map held at `key` (in its normalized form) for the colour role `space`, as the cache
+    /// would hand it to a mesh. Test-only.
+    #[cfg(test)]
+    pub(crate) fn mesh_map_image(&self, key: &str, space: ColorSpace) -> Option<MapImage> {
+        let key = normalize_key(key);
+        self.held_map(&key, self.role(&key, space))
+            .map(|(image, _)| image)
     }
 
     /// Whether the cache holds a mesh at `key` (in its normalized form). Test-only.
@@ -1129,6 +1269,10 @@ pub(crate) fn fold_source_hashes(own: u64, sources: &[u64]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use ludion_assets::cooked::CookTarget;
+
     use super::*;
 
     /// Encodes a 1×1 RGBA PNG to disk for cache tests.
@@ -2027,8 +2171,12 @@ parts:
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Records every decode the cache reports, shared with the test that attached it.
-    struct Decodes(std::sync::Arc<std::sync::Mutex<Vec<(LoadKind, String)>>>);
+    /// Records every decode and every cooked read the cache reports, shared with the test that
+    /// attached it.
+    struct Decodes(
+        std::sync::Arc<std::sync::Mutex<Vec<(LoadKind, String)>>>,
+        std::sync::Arc<std::sync::Mutex<Vec<(LoadKind, String)>>>,
+    );
 
     impl LoadObserver for Decodes {
         fn begin(&mut self, _: LoadPhase) {}
@@ -2037,6 +2185,17 @@ parts:
             self.0.lock().unwrap().push((kind, key.to_string()));
         }
         fn reused(&mut self, _: LoadKind, _: &str) {}
+        fn cooked(&mut self, kind: LoadKind, key: &str, _: u64) {
+            self.1.lock().unwrap().push((kind, key.to_string()));
+        }
+    }
+
+    /// The decoded image of a source map.
+    fn source_image(image: &MapImage) -> &Arc<TextureImage> {
+        match image {
+            MapImage::Source(image) => image,
+            MapImage::Cooked(_) => panic!("expected a source map"),
+        }
     }
 
     /// Two meshes binding one PNG decode it once: the map is an entry of its own, not a per-mesh copy,
@@ -2058,7 +2217,10 @@ parts:
 
         let log = Default::default();
         let mut cache = AssetCache::new();
-        cache.set_observer(Some(Box::new(Decodes(Arc::clone(&log)))));
+        cache.set_observer(Some(Box::new(Decodes(
+            Arc::clone(&log),
+            Default::default(),
+        ))));
         let a = cache.load_mesh(&dir, "meshes/a.mesh.yaml").unwrap().clone();
         let b = cache.load_mesh(&dir, "meshes/b.mesh.yaml").unwrap().clone();
         let textures = log
@@ -2071,8 +2233,8 @@ parts:
         assert!(cache.contains_mesh_map("textures/t.png"));
         let (a_maps, b_maps) = (a.textures.as_ref().unwrap(), b.textures.as_ref().unwrap());
         assert!(Arc::ptr_eq(
-            &a_maps.base_color.as_ref().unwrap().image,
-            &b_maps.base_color.as_ref().unwrap().image
+            source_image(&a_maps.base_color.as_ref().unwrap().image),
+            source_image(&b_maps.base_color.as_ref().unwrap().image)
         ));
 
         std::fs::write(dir.join("textures/t.png"), png_bytes(200)).unwrap();
@@ -2085,6 +2247,345 @@ parts:
                 "{rel}"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- cooked mesh maps ---
+
+    const KIT_MESH: &str = "assets/kit/k/meshes/m.mesh.yaml";
+    const KIT_BASE: &str = "assets/kit/k/textures/b.png";
+    const KIT_NORMAL: &str = "assets/kit/k/textures/n.png";
+
+    /// An 8×8 RGBA PNG whose pixels `seed` distinguishes, so its content hash is its own.
+    fn png8(seed: u8) -> Vec<u8> {
+        let rgba: Vec<u8> = (0..64u8)
+            .flat_map(|i| [i.wrapping_mul(4).wrapping_add(seed), seed, 255 - i, 255])
+            .collect();
+        ludion_assets::encode_png(8, 8, &rgba).expect("an 8x8 RGBA PNG encodes")
+    }
+
+    /// A scratch project with one `[[import]]` table (`to = assets/kit`, an optional cap) and a mesh
+    /// binding a base-colour and a normal map under it.
+    fn cook_project(test: &str, cap: Option<u32>) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-cook-cache-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets/kit/k/meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("assets/kit/k/textures")).unwrap();
+        let cap = cap.map_or(String::new(), |cap| format!("max_texture_size = {cap}\n"));
+        std::fs::write(
+            dir.join("ludion.toml"),
+            format!(
+                "name = \"fixture\"\ndefault_scene = \"scenes/main.yaml\"\n\n[[import]]\nfrom = \"art/*.gltf\"\nto = \"assets/kit\"\n{cap}"
+            ),
+        )
+        .unwrap();
+        let doc = textured_mesh_doc("../textures/b.png").replace(
+            "indices:",
+            "normal_texture:\n  path: ../textures/n.png\nindices:",
+        );
+        let tangents: String = "  - 1.0\n  - 0.0\n  - 0.0\n  - 1.0\n".repeat(3);
+        let doc = doc.replace(
+            "base_color_texture:",
+            &format!("tangents:\n{tangents}base_color_texture:"),
+        );
+        std::fs::write(dir.join(KIT_MESH), doc).unwrap();
+        std::fs::write(dir.join(KIT_BASE), png8(10)).unwrap();
+        std::fs::write(dir.join(KIT_NORMAL), png8(90)).unwrap();
+        dir
+    }
+
+    /// Cooks the PNG at `png` for `target`, `space` and `cap` into the project's store under its key.
+    fn store_cooked(
+        dir: &Path,
+        png: &str,
+        target: CookTarget,
+        space: ColorSpace,
+        cap: Option<u32>,
+    ) -> PathBuf {
+        let source = ludion_assets::load_png(dir, png).unwrap();
+        let settings = ludion_assets::cooked::CookSettings {
+            target,
+            color_space: space,
+            max_texture_size: cap,
+        };
+        let cooked = ludion_cook::cook(&source, &settings).unwrap();
+        let store = dir.join(".ludion/cooked").join(target.name());
+        std::fs::create_dir_all(&store).unwrap();
+        let file = store.join(ludion_assets::cooked::cooked_file_name(
+            ludion_assets::cooked::cook_key(source.hash, &settings),
+        ));
+        std::fs::write(&file, ludion_cook::write_ktx2(&cooked)).unwrap();
+        file
+    }
+
+    fn store_both(dir: &Path, cap: Option<u32>) -> (PathBuf, PathBuf) {
+        (
+            store_cooked(dir, KIT_BASE, CookTarget::Desktop, ColorSpace::Srgb, cap),
+            store_cooked(
+                dir,
+                KIT_NORMAL,
+                CookTarget::Desktop,
+                ColorSpace::Linear,
+                cap,
+            ),
+        )
+    }
+
+    fn lookup(dir: &Path, target: Option<CookTarget>) -> Option<Arc<CookLookup>> {
+        Some(Arc::new(
+            crate::cooked_maps::lookup_for(dir, target).expect("the fixture has a manifest"),
+        ))
+    }
+
+    fn cooked_image(
+        cache: &AssetCache,
+        png: &str,
+        space: ColorSpace,
+    ) -> Arc<ludion_renderer::CookedMap> {
+        match cache.mesh_map_image(png, space).expect("the map is held") {
+            MapImage::Cooked(cooked) => cooked,
+            MapImage::Source(_) => panic!("{png} fell back to its PNG"),
+        }
+    }
+
+    /// A cooked map arrives as the cooked image in its own colour role — base colour sRGB, normal
+    /// linear — and the observer is told it was read, not decoded.
+    #[test]
+    fn a_cooked_map_is_read_in_its_role_and_reported_cooked() {
+        let dir = cook_project("hit", None);
+        store_both(&dir, None);
+        let (decoded, cooked) = (Arc::default(), Arc::default());
+        let mut cache = AssetCache::new();
+        cache.set_observer(Some(Box::new(Decodes(
+            Arc::clone(&decoded),
+            Arc::clone(&cooked),
+        ))));
+        cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        cache.load_mesh(&dir, KIT_MESH).unwrap();
+
+        assert!(cooked_image(&cache, KIT_BASE, ColorSpace::Srgb).image.srgb);
+        let normal = cooked_image(&cache, KIT_NORMAL, ColorSpace::Linear);
+        assert!(!normal.image.srgb, "a data map is cooked linear");
+        assert!(cache.cook_misses().is_empty());
+        assert_eq!(cooked.lock().unwrap().len(), 2);
+        assert!(
+            decoded
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(kind, _)| *kind != LoadKind::Texture),
+            "a cooked map is not a PNG decode"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A map with no store file loads from its PNG and is reported missing; the other still hits.
+    #[test]
+    fn a_missing_cooked_file_falls_back_to_the_png() {
+        let dir = cook_project("missing", None);
+        store_cooked(
+            &dir,
+            KIT_NORMAL,
+            CookTarget::Desktop,
+            ColorSpace::Linear,
+            None,
+        );
+        let mut cache = AssetCache::new();
+        cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        cache.load_mesh(&dir, KIT_MESH).unwrap();
+
+        assert!(matches!(
+            cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
+            Some(MapImage::Source(_))
+        ));
+        assert_eq!(
+            cache.cook_misses(),
+            vec![(KIT_BASE.to_string(), CookMiss::Missing(None))]
+        );
+        cooked_image(&cache, KIT_NORMAL, ColorSpace::Linear);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Bytes that are not a KTX2 file under a key fall back, with no panic.
+    #[test]
+    fn a_corrupt_cooked_file_falls_back_to_the_png() {
+        let dir = cook_project("corrupt", None);
+        let (base, _) = store_both(&dir, None);
+        std::fs::write(&base, b"not a ktx2 file at all").unwrap();
+        let mut cache = AssetCache::new();
+        cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        cache.load_mesh(&dir, KIT_MESH).unwrap();
+
+        assert!(matches!(
+            cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
+            Some(MapImage::Source(_))
+        ));
+        assert!(matches!(
+            cache.cook_misses().as_slice(),
+            [(path, CookMiss::Corrupt(_))] if path == KIT_BASE
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The table's `max_texture_size` is part of the key: a store cooked at the table's cap hits and
+    /// one cooked uncapped does not.
+    #[test]
+    fn the_import_tables_cap_is_part_of_the_cooked_key() {
+        let dir = cook_project("cap", Some(4));
+        store_both(&dir, None);
+        let mut uncapped = AssetCache::new();
+        uncapped.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        uncapped.load_mesh(&dir, KIT_MESH).unwrap();
+        assert_eq!(
+            uncapped.cook_misses().len(),
+            2,
+            "uncapped files do not answer a capped table"
+        );
+
+        store_both(&dir, Some(4));
+        let mut capped = AssetCache::new();
+        capped.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        capped.load_mesh(&dir, KIT_MESH).unwrap();
+        assert!(capped.cook_misses().is_empty());
+        assert_eq!(
+            cooked_image(&capped, KIT_BASE, ColorSpace::Srgb)
+                .image
+                .width,
+            4
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A GPU with neither format has no target: every covered map loads from its PNG, as unsupported.
+    #[test]
+    fn no_target_loads_every_covered_map_from_its_png() {
+        let dir = cook_project("no-target", None);
+        store_both(&dir, None);
+        let mut cache = AssetCache::new();
+        cache.set_cook(lookup(&dir, None));
+        cache.load_mesh(&dir, KIT_MESH).unwrap();
+
+        assert!(matches!(
+            cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
+            Some(MapImage::Source(_))
+        ));
+        let misses = cache.cook_misses();
+        assert_eq!(misses.len(), 2);
+        assert!(
+            misses
+                .iter()
+                .all(|(_, miss)| *miss == CookMiss::Unsupported)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A map outside every import tree is never looked up: it loads from its PNG with no miss.
+    #[test]
+    fn a_map_outside_the_import_trees_loads_silently_from_its_png() {
+        let dir = cook_project("outside", None);
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        std::fs::write(
+            dir.join("meshes/o.mesh.yaml"),
+            textured_mesh_doc("../textures/o.png"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("textures/o.png"), png8(50)).unwrap();
+        let mut cache = AssetCache::new();
+        cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        cache.load_mesh(&dir, "meshes/o.mesh.yaml").unwrap();
+
+        assert!(matches!(
+            cache.mesh_map_image("textures/o.png", ColorSpace::Srgb),
+            Some(MapImage::Source(_))
+        ));
+        assert!(cache.cook_misses().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A cooked mesh re-keys its GPU material group (its hash differs from the source mesh's), and
+    /// the source mesh's hash is exactly the fold of the document and PNG hashes.
+    #[test]
+    fn a_cooked_mesh_hash_differs_from_the_source_fold() {
+        let dir = cook_project("hash", None);
+        store_both(&dir, None);
+        let doc = std::fs::read(dir.join(KIT_MESH)).unwrap();
+        let pngs = [KIT_BASE, KIT_NORMAL]
+            .map(|png| ludion_assets::content_hash(&std::fs::read(dir.join(png)).unwrap()));
+        let expected = fold_source_hashes(ludion_assets::content_hash(&doc), &pngs);
+
+        let mut source = AssetCache::new();
+        let source_hash = source.load_mesh(&dir, KIT_MESH).unwrap().hash;
+        assert_eq!(source_hash, expected);
+
+        let mut cooked = AssetCache::new();
+        cooked.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        assert_ne!(cooked.load_mesh(&dir, KIT_MESH).unwrap().hash, source_hash);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A cooked prefetch fills the same cache at any thread count, hits and misses alike.
+    #[test]
+    fn a_cooked_prefetch_is_thread_count_invariant() {
+        let dir = cook_project("prefetch", None);
+        store_cooked(
+            &dir,
+            KIT_NORMAL,
+            CookTarget::Desktop,
+            ColorSpace::Linear,
+            None,
+        );
+        let refs = AssetRefs {
+            meshes: [KIT_MESH.to_string()].into(),
+            ..AssetRefs::default()
+        };
+        let prefetched = |threads: usize| {
+            let mut cache = AssetCache::new();
+            cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+            ludion_core::par::with_threads(threads, || cache.prefetch(&dir, &refs));
+            cache
+        };
+        let one = prefetched(1);
+        assert!(one.contains_mesh(KIT_MESH));
+        assert_eq!(one.cook_misses().len(), 1);
+        assert_eq!(fingerprint(&one), fingerprint(&prefetched(2)));
+        assert_eq!(fingerprint(&one), fingerprint(&prefetched(8)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Changing the cook setting drops the maps and the meshes built from them; an equal setting
+    /// keeps them.
+    #[test]
+    fn toggling_the_cook_setting_drops_and_rebuilds_the_maps() {
+        let dir = cook_project("toggle", None);
+        store_both(&dir, None);
+        let mut cache = AssetCache::new();
+        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        assert!(matches!(
+            cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
+            Some(MapImage::Source(_))
+        ));
+
+        cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        assert!(!cache.contains_mesh(KIT_MESH) && !cache.contains_mesh_map(KIT_BASE));
+        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        cooked_image(&cache, KIT_BASE, ColorSpace::Srgb);
+
+        cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        assert!(
+            cache.contains_mesh(KIT_MESH),
+            "an equal setting keeps the cache"
+        );
+
+        cache.set_cook(None);
+        assert!(!cache.contains_mesh(KIT_MESH));
+        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        assert!(matches!(
+            cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
+            Some(MapImage::Source(_))
+        ));
+        assert!(cache.cook_misses().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2172,6 +2673,11 @@ parts:
                 .map(|(key, mesh)| (key.clone(), mesh.hash))
                 .collect::<Vec<_>>()
         };
+        let mesh_maps: Vec<_> = cache
+            .mesh_maps
+            .iter()
+            .map(|((key, role), image)| (key.clone(), *role, image.identity()))
+            .collect();
         let atlases: Vec<_> = cache
             .atlases
             .iter()
@@ -2186,13 +2692,13 @@ parts:
             })
             .collect();
         format!(
-            "{:?}\n{:?}\n{:?}\n{:?}\n{atlases:?}\n{assemblies:?}\n{:?}\n{:?}",
+            "{:?}\n{mesh_maps:?}\n{:?}\n{:?}\n{atlases:?}\n{assemblies:?}\n{:?}\n{:?}\n{:?}",
             images(&cache.images),
-            images(&cache.mesh_maps),
             meshes(&cache.meshes),
             meshes(&cache.voxels),
             cache.dependents,
             cache.source_hashes,
+            cache.cook_misses(),
         )
     }
 
