@@ -1,8 +1,25 @@
 # Cooked assets — GPU-compressed textures and binary meshes, per platform
 
-> **Status:** planned 2026-10-14, not started. Starts after `Plan/scene-load-speed.md` Wave 1 (its
-> `load` report is this plan's instrument); its Waves 2–3 can run in parallel with this plan's
-> Wave 0.
+> **Status:** Waves 0–1 shipped 2026-10-14; Wave 2's `ludion sync` cook stage shipped, vigil's sync
+> and budget cut (2b) and Waves 3–4 open. Instrument: `Plan/scene-load-speed.md`'s `load` report.
+>
+> **Wave 1 exit (2026-10-14, reference box, RTX 3090).** The plaza (`scenes/district-plaza.yaml`),
+> `--profile 30`, one cold run discarded, medians of three warm runs, `source` → `cooked`
+> (store from `ludion sync --project games/vigil`: 495 maps reused, 0 cooked, 0 failed, 507 MB):
+> `texture_ms` 319.5 → 135.2, `mesh_ms` 426.5 → 416.6, `gpu_upload_ms` 239.0 → 294.9, `total_ms`
+> 2497.8 → 2474.6. Counters: texture decoded 423 → 0, cooked 0 → 423, zero L1271 fallbacks; the 423
+> cooked reads are 457 MB against 280 MB of PNG bytes. VRAM: the store's level bytes are 0.2500 of
+> the RGBA8 mip chain (507.3 MB of 2029 MB over all 495 maps; all BC7: 184 sRGB, 311 linear). SSIM, the plaza at frame 0, 1920×1080, source vs cooked: global 0.9989
+> (≥ 0.99), MAE 0.13; one tile (r1c4, a near-black stretch with a small spiky foliage prop) scores
+> 0.224 under the 0.95 tile floor, and source vs source is 1.0000, so the difference is the cooked
+> maps; the side-by-side shows no visible difference. PNGs and the tile crop:
+> `target/tmp/cooked-exit/plaza-{source,cooked}.png`, `tile-r1c4.png`.
+> Exit bullets: **texture decode ≈ 0 — met** (decode count 0; `texture_ms` −58 %, the remainder is
+> reading and uploading the KTX2); **VRAM ≤ ¼ — met** (0.2500, no margin); **perceptual look —
+> met** (the gate is the global SSIM; a single near-black tile is SSIM noise on low variance and the
+> side-by-side is identical by eye). `total_ms` barely moves: `gpu_upload_ms` rose 56 ms despite a
+> quarter of the bytes, cause unmeasured (likely per-level `write_texture` of 495 full chains), a
+> follow-up before 2b's budget cut.
 
 ## Why
 
