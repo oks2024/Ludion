@@ -13,7 +13,7 @@ The name: a *ludion* is a Cartesian diver — a sealed figure that responds inst
 **Game:** the private reference game (Lore-only) is the driving vertical slice; its design, plans and schedule of record live in the private tree (`CLAUDE.local.md` names them). Every engine arc it drove is mechanized-complete. The external shmup's request folder drives engine priority.
 
 **Active plans** — "mechanized" means every wave shipped and the gates are green; none is closed until its human gate in `Plan/owed.md` passes:
-- `Plan/scene-load-speed.md` — W1–W2 mechanized (`ProfileReport.load`, parallel prefetch, one loader path); W3 (retain across loads) next; M4 budget twins owed.
+- `Plan/scene-load-speed.md` — W1–W3 mechanized (`ProfileReport.load`, parallel prefetch, one loader path, retained cache); M4 budget twins owed.
 - `Plan/sprite-engine.md` — W1–W4 mechanized; close rides the external game's git-dependency switch and the human verdicts.
 - `Plan/projectile-patterns.md` — W1–W4 mechanized (`kind: pattern`, `Volley`, `PatternPlayer`, vigil's ranged fire as volleys); exit rides the shmup's first boss pattern and the sittings.
 - `Plan/particles-engine-and-editor.md` — W1–W4 shipped; sittings owed.

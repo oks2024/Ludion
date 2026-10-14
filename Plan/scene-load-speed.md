@@ -1,7 +1,7 @@
 # Scene load speed — measured, parallel, retained
 
-> **Status:** Wave 2 shipped 2026-10-14 (parallel prefetch, one loader path, breach and plaza
-> budgets); Wave 3 next.
+> **Status:** Wave 3 shipped 2026-10-14; plan mechanized (parallel prefetch, one loader path, breach
+> and plaza budgets, the asset cache retained across loads).
 
 ## Why
 
@@ -68,11 +68,12 @@ Three structural causes, all in `ludion-engine`:
    today's diagnostic with today's JSON Pointer (`L1101`/`L1102`/`L1110`/`L1111`, re-pointed at the
    `Mesh` component). No diagnostic text or pointer moves; existing error tests are the guard.
 7. **Retain across loads, revalidated by content hash.** `Rebuild::Load` stops clearing the cache.
-   After the new world's prefetch, each retained entry's recorded source files (`record_sources`)
-   are re-read and re-hashed (xxh3; the full plaza set reads + hashes in under 0.1 s). A changed
-   source drops the entry and its dependents, the existing reload path. Then **entries the new world
-   does not reference are evicted.** The CPU cache becomes "the current world's working set",
-   mirroring the renderer's retain-referenced policy. The same policy applies to `Switch` and
+   At the first cache reader after a rebuild (the first extract, or `render.bounds`), **entries the
+   new world does not reference are evicted**, then each retained entry's recorded source files
+   (`record_sources`) are re-read and re-hashed (xxh3; the full plaza set reads + hashes in under
+   0.1 s) and a changed source drops the entry and its dependents, the existing reload path. Only
+   then does the extract prefetch the misses. The CPU cache becomes "the current world's working
+   set", mirroring the renderer's retain-referenced policy. The same policy applies to `Switch` and
    `Restore`, which fixes the unbounded growth across sectors.
 8. **No async or streamed loading.** A load still blocks the frame boundary it happens on, as now;
    only its duration changes. Placeholder-while-streaming is a separate decision (see Deferred).
@@ -138,11 +139,29 @@ Three structural causes, all in `ludion-engine`:
 ## Deferred
 
 - GPU-compressed textures, precomputed mips, binary mesh files, a per-import maximum texture size,
-  and the `ludion sync` / `ludion export` cook stages: `Plan/cooked-assets.md`.
+  and the `ludion sync` / `ludion export` cook stages: `Plan/cooked-assets.md` (in progress).
 - Streamed/async loading with placeholders: no plan; take it when a blocking load is measured as
   too long even after both plans.
 
 ## Status
+
+**Wave 3 shipped 2026-10-14.**
+
+- Retain across loads: a load no longer clears the asset cache. At each rebuild's first extract the cache
+  evicts what the new world does not name, re-hashes the kept entries' source files in parallel and drops
+  whatever changed on disk, then prefetches only the misses; the load counters report kept entries as
+  `reused`.
+- GPU side: the renderer's three caches were already keyed on content hashes and survive a rebuild.
+  `Renderer::uploads()` / `ludion_engine::gpu_uploads` (`GpuUploads`: textures, mesh maps, mesh assets)
+  count cache-miss uploads; tests pin that a second scene uploads only its own assets, by load and by
+  `Switch`.
+- Exit, breach opened after the plaza in one engine (vigil `golden.rs`
+  `needs_gpu_breach_after_plaza_reuses_shared_kits`, release, 3090, three runs): load `total_ms` 597, 654,
+  681 (median 654) against 1843, 1443, 1422 (median 1443) for the breach alone; meshes 15 decoded + 80
+  reused (alone: 95 decoded); textures 35 decoded + 249 reused (alone: 284); GPU uploads 16 mesh assets and
+  35 mesh maps (alone: 107 and 284), exactly the breach meshes the plaza lacked.
+- Open follow-ups, unowned: lazy-only entries (volley, particle, UI, font atlases, voxel grids) are evicted
+  every rebuild; a character's mesh docs decode twice.
 
 **Wave 2 shipped 2026-10-14.**
 

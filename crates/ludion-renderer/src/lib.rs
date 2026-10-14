@@ -67,7 +67,7 @@ pub use gi_bake::GiReadback;
 pub use graph::{FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json};
 pub use ludion_font::GlyphQuad;
 pub use quality::{Quality, QualityParams};
-pub use render::{Renderer, is_renderer_shader};
+pub use render::{GpuUploads, Renderer, is_renderer_shader};
 pub use scene::{
     CookedMap, DEFAULT_AMBIENT, DebugSegment, EnvironmentData, FontDraw, GROUND_MARKER_LIFT,
     GiData, GroundMarkerInstance, GroundMarkerShape, MAX_GI_TEXTURE_AXIS, MapImage, MeshData,

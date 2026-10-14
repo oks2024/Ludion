@@ -167,8 +167,8 @@ pub use quality::{QUALITY_ENV, QualitySetting, resolve_render_scale, resolve_sta
 pub use query_drift::{QueryDriftReport, check_query_drift_replay, check_query_drift_with};
 pub use ragdoll::switch_to_ragdoll;
 pub use render::{
-    BuilderRenderOutcome, RenderOutcome, dump_scene_graph_json, engine_at_frame, render_scene,
-    render_scene_with_builder, render_scene_with_registry,
+    BuilderRenderOutcome, RenderOutcome, dump_scene_graph_json, engine_at_frame, gpu_uploads,
+    render_scene, render_scene_with_builder, render_scene_with_registry,
 };
 pub use render_extent::RenderExtent;
 pub use render_size::{
@@ -207,5 +207,5 @@ pub use voxel_sheet::{GiSheetOutcome, VoxelSheetOutcome, render_gi_sheet, render
 // along because [`Engine::attach_surface`] returns one: a windowed host must be able to name what
 // it holds.
 pub use ludion_renderer::{
-    FrameSize, PresentSize, Quality, QualityParams, RenderScale, dump_frame_graph_json,
+    FrameSize, GpuUploads, PresentSize, Quality, QualityParams, RenderScale, dump_frame_graph_json,
 };

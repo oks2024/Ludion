@@ -26,7 +26,9 @@ use ludion_ecs::{Registry, World};
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
 use ludion_protocol::perf::LoadProfile;
-use ludion_renderer::{FrameSize, PostChain, QualityParams, RenderScene, RenderedImage, Renderer};
+use ludion_renderer::{
+    FrameSize, GpuUploads, PostChain, QualityParams, RenderScene, RenderedImage, Renderer,
+};
 use ludion_scene::{AppliedOverride, SceneOverride};
 
 use crate::builder::EngineBuilder;
@@ -207,6 +209,28 @@ pub fn engine_at_frame(
         }))
         .map_err(|d| vec![d])?;
     Ok(engine)
+}
+
+/// The cumulative GPU uploads of `engine`'s renderer, creating it if it has none (`L2003`/`L2004`
+/// as [`Engine::render_png`]). A scene change re-uploads only what the new world's first frame names
+/// and the last frame did not, so the difference between two readings around a load shows it.
+///
+/// ```no_run
+/// # use ludion_core::diagnostics::Diagnostic;
+/// # use ludion_engine::{Engine, gpu_uploads};
+/// # fn demo(engine: &mut Engine) -> Result<(), Diagnostic> {
+/// engine.render_png(64, 64)?;
+/// let before = gpu_uploads(engine)?;
+/// // ... load another scene ...
+/// engine.render_png(64, 64)?;
+/// let new_meshes = gpu_uploads(engine)?.mesh_assets - before.mesh_assets;
+/// # let _ = new_meshes; Ok(()) }
+/// ```
+///
+/// # Errors
+/// `L2003`/`L2004` when no GPU adapter or device is available.
+pub fn gpu_uploads(engine: &mut Engine) -> Result<GpuUploads, Diagnostic> {
+    Ok(engine.renderer()?.uploads())
 }
 
 /// Renders the scene at `path` through `builder`'s own engine — the game's registry, its data docs
@@ -433,5 +457,171 @@ mod tests {
         .expect("the instance entry expands");
         assert_eq!(extracted.lights.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A one-triangle mesh document binding `../textures/t.png` as its base-colour map.
+    const TEXTURED_MESH: &str = "format: 1
+kind: mesh
+positions:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+uvs:
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+base_color_texture:
+  path: ../textures/t.png
+indices:
+  - 0
+  - 1
+  - 2
+";
+
+    /// A scratch project: meshes `a`, `s` (shared) and `b`, each binding its own base-colour map, `a`
+    /// and `s` also binding `shared.png` as their emissive map, plus one loose sprite PNG per scene.
+    fn reupload_project(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-reupload-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        let png = |red: u8| ludion_assets::encode_png(1, 1, &[red, 20, 30, 255]).unwrap();
+        for (name, red) in [
+            ("a", 10),
+            ("s", 20),
+            ("b", 30),
+            ("shared", 40),
+            ("sp_a", 50),
+            ("sp_b", 60),
+        ] {
+            std::fs::write(dir.join(format!("textures/{name}.png")), png(red)).unwrap();
+        }
+        for (name, shared) in [("a", true), ("s", true), ("b", false)] {
+            let mut doc = TEXTURED_MESH.replace("t.png", &format!("{name}.png"));
+            if shared {
+                doc.push_str("emissive_texture:\n  path: ../textures/shared.png\n");
+            }
+            std::fs::write(dir.join(format!("meshes/{name}.mesh.yaml")), doc).unwrap();
+        }
+        dir
+    }
+
+    /// A scene naming `meshes` (by stem), one loose sprite and a spawn anchor.
+    fn reupload_scene(meshes: &[&str], sprite: &str) -> String {
+        let mut scene = String::from("format: 1\nentities:\n");
+        for mesh in meshes {
+            scene.push_str(&format!(
+                "  - components:\n      Mesh:\n        shape:\n          asset: meshes/{mesh}.mesh.yaml\n"
+            ));
+        }
+        scene.push_str(&format!(
+            "  - components:
+      Sprite:
+        texture: textures/{sprite}.png
+        size:
+          - 1.0
+          - 1.0
+  - name: anchor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+"
+        ));
+        scene
+    }
+
+    /// What a render added to the engine's renderer since `before`; `None` with no GPU adapter.
+    fn render_delta(engine: &mut Engine, before: GpuUploads) -> Option<GpuUploads> {
+        match engine.render_png(64, 64) {
+            Ok(_) => {}
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+                eprintln!("SKIPPED reupload: no GPU adapter");
+                return None;
+            }
+            Err(d) => panic!("render failed: {d:?}"),
+        }
+        let now = gpu_uploads(engine).unwrap();
+        Some(GpuUploads {
+            textures: now.textures - before.textures,
+            mesh_maps: now.mesh_maps - before.mesh_maps,
+            mesh_assets: now.mesh_assets - before.mesh_assets,
+        })
+    }
+
+    /// The scenes' unique assets: one sprite (`sp_*`), one base-colour map and one mesh.
+    const OWN_ASSETS: GpuUploads = GpuUploads {
+        textures: 1,
+        mesh_maps: 1,
+        mesh_assets: 1,
+    };
+
+    #[test]
+    fn needs_gpu_a_second_scene_uploads_only_its_own_assets() {
+        let dir = reupload_project("load");
+        let mut engine = Engine::with_project_root(&dir);
+        let a = reupload_scene(&["a", "s"], "sp_a");
+        engine.load_inline_scene(&a).unwrap();
+        let Some(first) = render_delta(&mut engine, GpuUploads::default()) else {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        };
+
+        let mut before = first;
+        engine
+            .load_inline_scene(&reupload_scene(&["b", "s"], "sp_b"))
+            .unwrap();
+        let to_b = render_delta(&mut engine, before).unwrap();
+        before = gpu_uploads(&mut engine).unwrap();
+        engine.load_inline_scene(&a).unwrap();
+        let back_to_a = render_delta(&mut engine, before).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            to_b, OWN_ASSETS,
+            "sp_b, b.png and b; s and its maps are held"
+        );
+        assert_eq!(back_to_a, OWN_ASSETS, "sp_a, a.png and a; s is held");
+    }
+
+    #[test]
+    fn needs_gpu_a_switch_uploads_only_its_own_assets() {
+        let dir = reupload_project("switch");
+        let mut engine = Engine::with_project_root(&dir);
+        engine
+            .load_inline_scene(&reupload_scene(&["a", "s"], "sp_a"))
+            .unwrap();
+        let Some(first) = render_delta(&mut engine, GpuUploads::default()) else {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        };
+
+        let text = reupload_scene(&["b", "s"], "sp_b");
+        std::fs::write(dir.join("district.yaml"), &text).unwrap();
+        let switch = crate::transition::SwitchTo {
+            scene_path: "district.yaml".into(),
+            spawn_anchor: "anchor".into(),
+            carry: vec![],
+        };
+        crate::transition::perform(&mut engine, switch, &text).unwrap();
+        let to_b = render_delta(&mut engine, first).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            to_b, OWN_ASSETS,
+            "sp_b, b.png and b; s and its maps are held"
+        );
     }
 }

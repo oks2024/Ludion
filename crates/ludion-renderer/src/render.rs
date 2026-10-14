@@ -7,7 +7,7 @@
 //! back into [`FrameRecorder`], which records the actual draws. Determinism: the same scene on the
 //! same adapter produces byte-identical pixels, across processes.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
@@ -275,6 +275,19 @@ struct MaterialDefaults {
     black_srgb: GpuTexture,
 }
 
+/// Cumulative GPU uploads since a [`Renderer`] was created, one per cache miss: a loose texture,
+/// a mesh material map, a mesh asset. A cache hit — an entry the previous frame also referenced —
+/// never counts, so the difference between two readings is what a scene change had to upload.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GpuUploads {
+    /// Loose scene textures (sprites, atlas colour maps).
+    pub textures: u64,
+    /// Mesh material maps (base colour, normal, and so on).
+    pub mesh_maps: u64,
+    /// Asset meshes.
+    pub mesh_assets: u64,
+}
+
 /// The renderer: a reusable GPU context with all pipelines, mesh buffers, and the font atlas.
 pub struct Renderer {
     gpu: Gpu,
@@ -328,6 +341,8 @@ pub struct Renderer {
     /// (`Plan/textured-pbr.md` G6). Separate from the sprite cache because these textures differ in
     /// three ways: a full mip chain, a format that follows the map's role, and no premultiply.
     mesh_texture_cache: RefCell<HashMap<MeshTextureKey, GpuTexture>>,
+    /// Cumulative cache-miss uploads of the three caches above ([`Renderer::uploads`]).
+    uploads: Cell<GpuUploads>,
     /// The blit chain that fills a freshly uploaded material map's mip levels (`mipgen.rs`).
     mipgen: MipGen,
     /// One sampler per glTF wrap mode, all trilinear at [`MATERIAL_ANISOTROPY`]; a material group takes
@@ -394,6 +409,23 @@ impl Renderer {
     /// [`Gpu::request`](ludion_render_graph::Gpu::request)).
     pub fn new() -> Result<Renderer, Diagnostic> {
         Renderer::from_gpu(Gpu::request()?)
+    }
+
+    /// The cumulative [`GpuUploads`] of this renderer. Rendering the same scene twice adds
+    /// nothing the second time.
+    ///
+    /// ```no_run
+    /// # use ludion_renderer::{FrameSize, RenderScene, Renderer};
+    /// # fn demo(scene: &RenderScene) -> Result<(), ludion_core::diagnostics::Diagnostic> {
+    /// let renderer = Renderer::new()?;
+    /// renderer.render(scene, FrameSize::native(64, 64))?;
+    /// let first = renderer.uploads();
+    /// renderer.render(scene, FrameSize::native(64, 64))?;
+    /// assert_eq!(renderer.uploads(), first);
+    /// # Ok(()) }
+    /// ```
+    pub fn uploads(&self) -> GpuUploads {
+        self.uploads.get()
     }
 
     /// Builds every pipeline, mesh buffer, and the font atlas on a GPU the caller already has —
@@ -507,6 +539,7 @@ impl Renderer {
             texture_cache: RefCell::new(HashMap::new()),
             mesh_asset_cache: RefCell::new(HashMap::new()),
             mesh_texture_cache: RefCell::new(HashMap::new()),
+            uploads: Cell::new(GpuUploads::default()),
             mipgen,
             material_sampler_repeat,
             material_sampler_clamp,
@@ -1349,6 +1382,7 @@ impl Renderer {
                 cache
                     .entry(m.hash)
                     .or_insert_with(|| {
+                        self.count_upload(|u| u.mesh_assets += 1);
                         let material_bg =
                             self.material_bind_group(self.gpu.device(), m.textures.as_ref());
                         upload_mesh_asset(self.gpu.device(), m, material_bg)
@@ -1380,9 +1414,10 @@ impl Renderer {
                 let Some(map) = map else {
                     continue;
                 };
-                cache
-                    .entry(mesh_texture_key(map, srgb))
-                    .or_insert_with(|| self.upload_mesh_map(map, srgb));
+                cache.entry(mesh_texture_key(map, srgb)).or_insert_with(|| {
+                    self.count_upload(|u| u.mesh_maps += 1);
+                    self.upload_mesh_map(map, srgb)
+                });
             }
         }
     }
@@ -1513,10 +1548,20 @@ impl Renderer {
             .map(|t| {
                 cache
                     .entry((t.hash, t.premultiplied_on_load))
-                    .or_insert_with(|| upload_texture(&self.gpu, t.width, t.height, &t.rgba))
+                    .or_insert_with(|| {
+                        self.count_upload(|u| u.textures += 1);
+                        upload_texture(&self.gpu, t.width, t.height, &t.rgba)
+                    })
                     .clone()
             })
             .collect()
+    }
+
+    /// Bumps one [`GpuUploads`] field; called only from a cache-miss closure.
+    fn count_upload(&self, bump: impl FnOnce(&mut GpuUploads)) {
+        let mut uploads = self.uploads.get();
+        bump(&mut uploads);
+        self.uploads.set(uploads);
     }
 
     /// Groups mesh instances by shape into per-shape instance buffers.
@@ -6204,6 +6249,88 @@ mod tests {
             renderer.mesh_asset_cache.borrow().len(),
             1,
             "one unique content hash ⇒ exactly one GPU upload, however many instances reference it",
+        );
+    }
+
+    /// A frame uploads only what the previous frame did not already hold: the cumulative counters
+    /// move by exactly the cache misses, and a repeated frame moves them by nothing. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_frame_uploads_only_what_the_last_frame_lacked() {
+        let renderer = match Renderer::new() {
+            Ok(r) => r,
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+                eprintln!(
+                    "SKIPPED a_frame_uploads_only_what_the_last_frame_lacked: no GPU adapter"
+                );
+                return;
+            }
+            Err(d) => panic!("renderer init failed: {d:?}"),
+        };
+        let texture = |hash: u64| {
+            Arc::new(TextureImage {
+                width: 1,
+                height: 1,
+                rgba: vec![255, 255, 255, 255],
+                hash,
+                filter_linear: false,
+                premultiplied_on_load: false,
+            })
+        };
+        let mesh = |hash: u64| {
+            let mut mesh = triangle(hash);
+            if hash == 11 {
+                mesh.textures = Some(crate::scene::MeshTextures {
+                    base_color: Some(crate::scene::MeshTexture {
+                        image: MapImage::Source(texture(0x5EED)),
+                        wrap: crate::scene::TextureWrap::Clamp,
+                    }),
+                    metallic_roughness: None,
+                    normal: None,
+                    occlusion: None,
+                    emissive: None,
+                    normal_scale: 1.0,
+                    occlusion_strength: 1.0,
+                });
+            }
+            Arc::new(mesh)
+        };
+        let frame = |textures: [u64; 2], meshes: [u64; 2]| {
+            let mut scene = RenderScene::empty((64, 64));
+            scene.textures = textures.map(texture).to_vec();
+            scene.mesh_assets = meshes.map(mesh).to_vec();
+            scene
+        };
+        let mut last = renderer.uploads();
+        let mut delta = |scene: &RenderScene| {
+            renderer
+                .render(scene, FrameSize::native(64, 64))
+                .expect("render succeeds");
+            let now = renderer.uploads();
+            let moved = GpuUploads {
+                textures: now.textures - last.textures,
+                mesh_maps: now.mesh_maps - last.mesh_maps,
+                mesh_assets: now.mesh_assets - last.mesh_assets,
+            };
+            last = now;
+            moved
+        };
+        let a = frame([1, 2], [10, 11]);
+        let b = frame([2, 3], [11, 12]);
+        let expect = |textures, mesh_maps, mesh_assets| GpuUploads {
+            textures,
+            mesh_maps,
+            mesh_assets,
+        };
+        assert_eq!(delta(&a), expect(2, 1, 2), "first frame uploads everything");
+        assert_eq!(
+            delta(&b),
+            expect(1, 0, 1),
+            "only texture 3 and mesh 12 are new"
+        );
+        assert_eq!(
+            delta(&b),
+            expect(0, 0, 0),
+            "a repeated frame uploads nothing"
         );
     }
 
