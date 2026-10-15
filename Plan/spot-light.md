@@ -1,6 +1,6 @@
 # Plan: SpotLight — a cone of light on the clustered-forward path
 
-> Status: **design settled 2026-10-15; W1–W2 in progress.** Current-code facts read from the tree on
+> Status: **design settled 2026-10-15; W1–W2 mechanized; W3 next.** Current-code facts read from the tree on
 > 2026-10-15 (file:line pointers are of that date; re-grep before editing). Parent:
 > `Plan/clustered-forward.md` (its deferred `SpotLight` entry is this plan's trigger, now fired).
 
@@ -84,4 +84,9 @@ breach in a curtain wall.
 
 ## Status
 
-- 2026-10-15: plan written; W1 and W2 dispatched in parallel against the shared `SpotLightData`.
+- W1–W2 (2026-10-15): `SpotLight` + L1272, extract into `RenderScene.spot_lights`, the 48 B
+  `Light`, points-then-spots packing, the cone bounding sphere, the cone factor in `mesh.wgsl` and
+  `sprite.wgsl`. Every existing golden byte-identical on the RTX 3090; the M4 confirmation is owed.
+  Finding: branching around the accumulate moved the lit-sprite `tilemap` golden (the driver
+  contracts the arms differently), so the factor multiplies into the colour first and is an exact
+  1.0 for a point light (`dev-docs/renderer-clustering.md`).
