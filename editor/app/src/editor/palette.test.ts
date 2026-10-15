@@ -12,6 +12,7 @@ describe('palette archetypes', () => {
       'sprite',
       'mesh',
       'light',
+      'spot',
       'sun',
       'camera',
       'text',
@@ -40,6 +41,13 @@ describe('palette archetypes', () => {
     expect((sprite.components.Sprite as Record<string, unknown>).texture).toBeUndefined();
     const mesh = ARCHETYPES.find((a) => a.id === 'mesh')!;
     expect(mesh.components).not.toHaveProperty('Sprite');
+  });
+
+  it('ships the Spot light archetype with a valid cone (inner <= outer) and no GiDynamic marker', () => {
+    const spot = ARCHETYPES.find((a) => a.id === 'spot')!;
+    const light = spot.components.SpotLight as { inner_angle: number; outer_angle: number };
+    expect(light.inner_angle).toBeLessThanOrEqual(light.outer_angle);
+    expect(spot.components).not.toHaveProperty('GiDynamic');
   });
 
   it('ships the Text archetype with non-empty required text', () => {

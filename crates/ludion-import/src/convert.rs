@@ -76,6 +76,26 @@ pub(crate) fn point_light_value(color: [f32; 3], intensity: f32, range: f32) -> 
     json!({ "color": vec3(color), "intensity": f32_num(intensity), "range": f32_num(range) })
 }
 
+/// The `SpotLight` component value, every field emitted (the engine serializes them all).
+/// `direction` is world-space; the angles are half-angles in degrees.
+pub(crate) fn spot_light_value(
+    color: [f32; 3],
+    intensity: f32,
+    range: f32,
+    direction: [f32; 3],
+    inner_angle: f32,
+    outer_angle: f32,
+) -> Value {
+    json!({
+        "color": vec3(color),
+        "intensity": f32_num(intensity),
+        "range": f32_num(range),
+        "direction": vec3(direction),
+        "inner_angle": f32_num(inner_angle),
+        "outer_angle": f32_num(outer_angle),
+    })
+}
+
 /// The `Parent` component value: a reference by document position (`generation` is always 0 in a
 /// scene; see `L1017`).
 pub(crate) fn parent_value(index: usize) -> Value {

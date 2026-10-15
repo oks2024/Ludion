@@ -4602,7 +4602,7 @@ sheet, in two cases:
 
   - the rig scene could not be read (a wrong path, or a permissions problem);
   - the rig scene is valid but holds nothing to lift — none of its entities carries an
-    `Environment`, `PostProcess`, `DirectionalLight`, or `PointLight` component.
+    `Environment`, `PostProcess`, `DirectionalLight`, `PointLight`, or `SpotLight` component.
 
 Fix: point `--rig` at a scene that actually holds the lighting you want borrowed (e.g.
 `examples/gallery/night-street.yaml`). A rig scene that is not a VALID scene reports the scene

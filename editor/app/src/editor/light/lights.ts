@@ -31,6 +31,9 @@ export const DIRECTIONAL_LIGHT = 'DirectionalLight';
 /** The registry name of a placed light. */
 export const POINT_LIGHT = 'PointLight';
 
+/** The registry name of a placed cone light. It feeds no GI, so it takes no `GiDynamic` marker. */
+export const SPOT_LIGHT = 'SpotLight';
+
 /** The registry name of the field-less marker that moves a light out of the bake and into the
  *  per-frame injection. Authored `GiDynamic: {}`; presence is the whole value. */
 export const GI_DYNAMIC = 'GiDynamic';
@@ -38,15 +41,16 @@ export const GI_DYNAMIC = 'GiDynamic';
 /** The reserved name component every entity may carry. */
 const NAME = 'Name';
 
-/** The `include` list the lights query needs: the `Name` a row is labelled by, and the marker that
- *  decides which GI term the light lives in. The `filter` stays `[PointLight]` — an unmarked light
- *  must still match, so `GiDynamic` is asked for and never required. */
+/** The `include` list the lights queries need: the `Name` a row is labelled by, the marker that
+ *  decides which GI term the light lives in, and `SpotLight` to tell a cone from a point. The
+ *  `filter` is `[PointLight]` or `[SpotLight]` — an unmarked light must still match, so `GiDynamic`
+ *  is asked for and never required. */
 export function lightInclude(): readonly string[] {
-  return [NAME, GI_DYNAMIC];
+  return [NAME, GI_DYNAMIC, SPOT_LIGHT];
 }
 
-/** One light the query matched: its handle, the `Name` it carries if any, and whether it is marked
- *  `GiDynamic`. */
+/** One light the query matched: its handle, the `Name` it carries if any, whether it is marked
+ *  `GiDynamic`, and whether it is a cone. */
 export interface LightEntry {
   readonly entity: EntityId;
   /** `null` when the entity carries no `Name` — most spawned lights do not. */
@@ -54,6 +58,8 @@ export interface LightEntry {
   /** Whether the entity carries `GiDynamic`. The engine omits absent components from the reply's
    *  map, so a present key is the authoritative "is marked" test. */
   readonly dynamic: boolean;
+  /** Whether the entity carries a `SpotLight`, read by presence like `dynamic`. */
+  readonly spot: boolean;
 }
 
 /** Ascending `EntityId`: slot first, generation as the tiebreaker. */
@@ -62,22 +68,26 @@ function lower(a: EntityId, b: EntityId): boolean {
 }
 
 /**
- * Reads a filtered `query.entities` reply (requested with `include: ['Name']`, or with the light
- * component beside it) into entries, in ascending `EntityId` order.
+ * Reads filtered `query.entities` replies (requested with `include: ['Name']`, or with the light
+ * component beside it) into one list of entries, in ascending `EntityId` order. Several replies —
+ * the point-light and spot-light queries — merge into one list.
  *
  * The order is imposed here rather than trusted from the reply: it is what makes {@link pickSun}'s
  * answer the renderer's, and what keeps the list from reshuffling under the pointer if the engine's
  * walk ever changes. Malformed entries are skipped, matching the other wire readers.
  */
-export function parseLightEntries(body: ResponseBody): readonly LightEntry[] {
-  const entries = parseTargetCandidates(body).map((candidate) => {
-    const name = candidate.components[NAME];
-    return {
-      entity: candidate.entity,
-      name: typeof name === 'string' && name !== '' ? name : null,
-      dynamic: GI_DYNAMIC in candidate.components,
-    };
-  });
+export function parseLightEntries(...bodies: readonly ResponseBody[]): readonly LightEntry[] {
+  const entries = bodies.flatMap((body) =>
+    parseTargetCandidates(body).map((candidate) => {
+      const name = candidate.components[NAME];
+      return {
+        entity: candidate.entity,
+        name: typeof name === 'string' && name !== '' ? name : null,
+        dynamic: GI_DYNAMIC in candidate.components,
+        spot: SPOT_LIGHT in candidate.components,
+      };
+    }),
+  );
   return entries.sort((a, b) => (lower(a.entity, b.entity) ? -1 : lower(b.entity, a.entity) ? 1 : 0));
 }
 
@@ -97,7 +107,8 @@ export function lightLabel(entry: LightEntry): string {
  * Whether a light card carries the `GiDynamic` toggle.
  *
  * Only a `PointLight` can be injected: the sun is a `DirectionalLight`, which the bake folds into
- * the volume unconditionally, so marking it would change nothing the renderer reads. The rule is a
+ * the volume unconditionally, and a `SpotLight` feeds no GI at all, so marking either would change
+ * nothing the renderer reads. The rule is a
  * predicate rather than an `if` in the panel because the card must state {@link SUN_ALWAYS_BAKES}
  * where the control would have been — a control that is simply missing is indistinguishable from a
  * control that is broken.
@@ -105,6 +116,10 @@ export function lightLabel(entry: LightEntry): string {
 export function offersGiDynamicToggle(component: string): boolean {
   return component === POINT_LIGHT;
 }
+
+/** Why a spot light's card has no toggle. Shown, not implied. */
+export const SPOT_FEEDS_NO_GI =
+  'A SpotLight feeds no GI and casts no shadows, so there is no GiDynamic marker to set here.';
 
 /** Why the sun's card has no toggle. Shown, not implied. */
 export const SUN_ALWAYS_BAKES =

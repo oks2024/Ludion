@@ -285,13 +285,102 @@ fn a_slash_in_a_node_name_never_reaches_a_part_name() {
 }
 
 #[test]
-fn non_point_light_is_l1202() {
+fn directional_light_is_l1202() {
     let json = r#"{"asset":{"version":"2.0"},"extensionsUsed":["KHR_lights_punctual"],"extensions":{"KHR_lights_punctual":{"lights":[{"type":"directional"}]}},"nodes":[{"name":"sun","extensions":{"KHR_lights_punctual":{"light":0}}}]}"#;
     let messages = lossy_messages(json);
     assert!(
-        messages.iter().any(|m| m.contains("non-point light")),
+        messages.iter().any(|m| m.contains("directional light")),
         "{messages:?}"
     );
+}
+
+/// A glTF with one spot light (`spot` is the light's `spot` object body) on node 1, whose
+/// optional parent is node 0. `parent_rotation`/`rotation` are node quaternions, `[x,y,z,w]`.
+fn spot_gltf(spot: &str, parent_rotation: Option<&str>, rotation: Option<&str>) -> String {
+    let rot = |r: Option<&str>| r.map(|r| format!(r#","rotation":{r}"#)).unwrap_or_default();
+    let nodes = match parent_rotation {
+        Some(p) => format!(
+            r#"{{"name":"arm","children":[1]{}}},{{"name":"lamp"{},"extensions":{{"KHR_lights_punctual":{{"light":0}}}}}}"#,
+            rot(Some(p)),
+            rot(rotation)
+        ),
+        None => format!(
+            r#"{{"name":"lamp"{},"extensions":{{"KHR_lights_punctual":{{"light":0}}}}}}"#,
+            rot(rotation)
+        ),
+    };
+    format!(
+        r#"{{"asset":{{"version":"2.0"}},"extensionsUsed":["KHR_lights_punctual"],"extensions":{{"KHR_lights_punctual":{{"lights":[{{"type":"spot","color":[1,0.5,0.25],"intensity":3,"range":15,"spot":{spot}}}]}}}},"nodes":[{nodes}]}}"#
+    )
+}
+
+const Y_90: &str = "[0,0.7071067811865476,0,0.7071067811865476]";
+
+fn assert_direction(light: &serde_json::Value, expected: [f64; 3]) {
+    for (axis, want) in expected.iter().enumerate() {
+        let got = light["direction"][axis].as_f64().unwrap();
+        assert!((got - want).abs() < 1e-6, "axis {axis}: {got} vs {want}");
+    }
+}
+
+#[test]
+fn a_spot_light_maps_to_spot_light_with_degrees_and_a_world_direction() {
+    let json = spot_gltf(
+        r#"{"innerConeAngle":0.25,"outerConeAngle":0.5}"#,
+        None,
+        Some(Y_90),
+    );
+    let import = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports strict");
+    assert!(component(&import, 0, "PointLight").is_none());
+    let light = component(&import, 0, "SpotLight").unwrap();
+    assert_eq!(light["color"], serde_json::json!([1.0, 0.5, 0.25]));
+    assert_eq!(light["intensity"], 3.0);
+    assert_eq!(light["range"], 15.0);
+    let inner = light["inner_angle"].as_f64().unwrap();
+    let outer = light["outer_angle"].as_f64().unwrap();
+    assert!((inner - 0.25_f64.to_degrees()).abs() < 1e-4, "{inner}");
+    assert!((outer - 0.5_f64.to_degrees()).abs() < 1e-4, "{outer}");
+    // A +90 degree turn about Y takes local -Z to world -X.
+    assert_direction(light, [-1.0, 0.0, 0.0]);
+}
+
+#[test]
+fn a_parented_spot_light_direction_composes_the_whole_chain() {
+    let json = spot_gltf(r#"{"outerConeAngle":0.5}"#, Some(Y_90), Some(Y_90));
+    let import = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports strict");
+    let light = component(&import, 1, "SpotLight").unwrap();
+    // Two quarter turns about Y: local -Z becomes world +Z.
+    assert_direction(light, [0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn an_unrotated_spot_light_points_down_local_minus_z_with_gltf_default_cone() {
+    let json = spot_gltf("{}", None, None);
+    let import = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports strict");
+    let light = component(&import, 0, "SpotLight").unwrap();
+    assert_direction(light, [0.0, 0.0, -1.0]);
+    assert_eq!(light["inner_angle"], 0.0);
+    let outer = light["outer_angle"].as_f64().unwrap();
+    assert!(
+        (outer - 45.0).abs() < 1e-4,
+        "default pi/4 is 45 degrees: {outer}"
+    );
+}
+
+#[test]
+fn a_spot_cone_gltf_allows_but_the_engine_refuses_is_clamped_valid() {
+    // outer = pi/2 (90 degrees, exclusive in SpotLight) with a 1.0 rad inner.
+    let json = spot_gltf(
+        r#"{"innerConeAngle":1.0,"outerConeAngle":1.5707963267948966}"#,
+        None,
+        None,
+    );
+    let import = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports strict");
+    let light = component(&import, 0, "SpotLight").unwrap();
+    let inner = light["inner_angle"].as_f64().unwrap();
+    let outer = light["outer_angle"].as_f64().unwrap();
+    assert!(outer < 90.0 && outer > 89.0, "{outer}");
+    assert!(inner <= outer && inner >= 0.0, "{inner}");
 }
 
 #[test]

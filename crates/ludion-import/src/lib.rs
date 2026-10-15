@@ -81,6 +81,7 @@ use gltf::accessor::{DataType, Dimensions};
 use gltf::mesh::{Mode, Semantic};
 use gltf::texture::WrappingMode;
 use ludion_core::diagnostics::{Diagnostic, Severity};
+use ludion_core::math::glam::{DQuat, DVec3};
 use ludion_core::math::quat_to_euler_xyz_degrees;
 use ludion_scene::{
     AnimationDocument, MeshDocument, MeshSkin, MeshTextures, PrefabDocument, SceneEntity,
@@ -101,7 +102,7 @@ use accessors::check_accessor;
 pub use animation::{ClipReport, JointError, KeyCounts, SeamError, TrackReport};
 use convert::{
     flatten2, flatten3, flatten4, mesh_document, mesh_value, parent_value, point_light_value,
-    transform_value,
+    spot_light_value, transform_value,
 };
 use diagnostics::{
     camera_unsupported, extension_ignored, invalid_gltf, malformed, node_inside_joint_chain,
@@ -493,8 +494,10 @@ fn build_entities(
         }
 
         note_camera(node, state);
-        if let Some(light) = light_component(node, state).map_err(|d| vec![d])? {
-            components.push(("PointLight".into(), light));
+        if let Some((name, light)) =
+            light_component(node, &nodes, &parent_of, state).map_err(|d| vec![d])?
+        {
+            components.push((name.into(), light));
         }
 
         if let Some(parent) = parent_of[index] {
@@ -1152,32 +1155,88 @@ fn note_camera(node: &gltf::Node, state: &mut State) {
     }
 }
 
-/// The `PointLight` component for a node's `KHR_lights_punctual` point light (directional/spot →
-/// `L1202`, `None`).
-fn light_component(node: &gltf::Node, state: &mut State) -> Result<Option<Value>, Diagnostic> {
+/// The light component (name and value) for a node's `KHR_lights_punctual` point or spot light
+/// (directional → `L1202`, `None`).
+fn light_component(
+    node: &gltf::Node,
+    nodes: &[gltf::Node],
+    parent_of: &[Option<usize>],
+    state: &mut State,
+) -> Result<Option<(&'static str, Value)>, Diagnostic> {
     let Some(light) = node.light() else {
         return Ok(None);
     };
     let offender = named("node", node.index(), node.name());
-    match light.kind() {
-        gltf::khr_lights_punctual::Kind::Point => {
-            // glTF range is optional (infinite if absent); the engine needs a finite range, so an
-            // absent one falls back to `PointLight`'s default (10.0).
-            let range = light.range().unwrap_or(10.0);
-            let color = light.color();
-            require_finite(&color, "light color", &offender)?;
-            require_finite(
-                &[light.intensity(), range],
-                "light intensity or range",
-                &offender,
-            )?;
-            Ok(Some(point_light_value(color, light.intensity(), range)))
-        }
-        _ => {
-            state.lossy(unsupported("a non-point light", &offender));
-            Ok(None)
-        }
+    let kind = light.kind();
+    if matches!(kind, gltf::khr_lights_punctual::Kind::Directional) {
+        state.lossy(unsupported("a directional light", &offender));
+        return Ok(None);
     }
+    // glTF range is optional (infinite if absent); the engine needs a finite range, so an absent
+    // one falls back to the components' default (10.0).
+    let range = light.range().unwrap_or(10.0);
+    let color = light.color();
+    require_finite(&color, "light color", &offender)?;
+    require_finite(
+        &[light.intensity(), range],
+        "light intensity or range",
+        &offender,
+    )?;
+    let gltf::khr_lights_punctual::Kind::Spot {
+        inner_cone_angle,
+        outer_cone_angle,
+    } = kind
+    else {
+        return Ok(Some((
+            "PointLight",
+            point_light_value(color, light.intensity(), range),
+        )));
+    };
+    require_finite(
+        &[inner_cone_angle, outer_cone_angle],
+        "spot cone angle",
+        &offender,
+    )?;
+    // glTF allows an outer angle of exactly 90 degrees, which `SpotLight` refuses (`[0, 90)`);
+    // it and a wider inner angle are pulled to the nearest valid cone.
+    let outer = radians_to_degrees(outer_cone_angle).clamp(0.0, SPOT_MAX_ANGLE_DEG);
+    let inner = radians_to_degrees(inner_cone_angle).clamp(0.0, outer);
+    let direction = spot_world_direction(node, nodes, parent_of);
+    require_finite(&direction, "world rotation", &offender)?;
+    Ok(Some((
+        "SpotLight",
+        spot_light_value(color, light.intensity(), range, direction, inner, outer),
+    )))
+}
+
+/// The widest half-angle a `SpotLight` accepts, just under the exclusive 90.
+const SPOT_MAX_ANGLE_DEG: f32 = 89.9;
+
+fn radians_to_degrees(radians: f32) -> f32 {
+    (f64::from(radians) * 180.0 / std::f64::consts::PI) as f32
+}
+
+/// The world direction a node's glTF light shines: its world rotation applied to local -Z.
+/// `SpotLight.direction` is world-space and no parent turns it, so the whole ancestor chain is
+/// composed here (scale ignored; the direction is normalized at extract).
+fn spot_world_direction(
+    node: &gltf::Node,
+    nodes: &[gltf::Node],
+    parent_of: &[Option<usize>],
+) -> [f32; 3] {
+    let local = |n: &gltf::Node| {
+        let (_, r, _) = n.transform().decomposed();
+        DQuat::from_xyzw(r[0].into(), r[1].into(), r[2].into(), r[3].into()).normalize()
+    };
+    let mut world = local(node);
+    let mut current = node.index();
+    while let Some(parent) = parent_of[current] {
+        world = local(&nodes[parent]) * world;
+        current = parent;
+    }
+    let d = world * DVec3::NEG_Z;
+    // `+ 0.0` turns a -0.0 component into 0.0 so the text stays canonical.
+    [d.x as f32 + 0.0, d.y as f32 + 0.0, d.z as f32 + 0.0]
 }
 
 /// A stable label for a primitive: its mesh (named or indexed) and, when the mesh has several, the

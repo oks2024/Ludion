@@ -9,6 +9,8 @@ import {
   parseLightEntries,
   pickSun,
   POINT_LIGHT,
+  SPOT_FEEDS_NO_GI,
+  SPOT_LIGHT,
   SUN_ALWAYS_BAKES,
 } from './lights';
 
@@ -34,8 +36,18 @@ describe('parseLightEntries', () => {
       ]),
     );
     expect(entries).toEqual([
-      { entity: { index: 4, generation: 1 }, name: 'torch-north', dynamic: false },
-      { entity: { index: 9, generation: 2 }, name: null, dynamic: false },
+      { entity: { index: 4, generation: 1 }, name: 'torch-north', dynamic: false, spot: false },
+      { entity: { index: 9, generation: 2 }, name: null, dynamic: false, spot: false },
+    ]);
+  });
+
+  it('merges several replies into one id-ordered list and reads a spot by presence', () => {
+    const points = reply([{ index: 8, generation: 0, components: { Name: 'lamp' } }]);
+    const cones = reply([{ index: 2, generation: 0, components: { Name: 'beam', SpotLight: {} } }]);
+    const entries = parseLightEntries(points, cones);
+    expect(entries.map((entry) => [entry.entity.index, entry.spot])).toEqual([
+      [2, true],
+      [8, false],
     ]);
   });
 
@@ -67,7 +79,7 @@ describe('parseLightEntries', () => {
       kind: 'query_result',
       entities: [null, { entity: { index: 'x' } }, { entity: { index: 2, generation: 0 } }],
     } as unknown as ResponseBody);
-    expect(entries).toEqual([{ entity: { index: 2, generation: 0 }, name: null, dynamic: false }]);
+    expect(entries).toEqual([{ entity: { index: 2, generation: 0 }, name: null, dynamic: false, spot: false }]);
   });
 
   it('reads the GiDynamic marker by presence, since the component has no fields', () => {
@@ -89,10 +101,10 @@ describe('parseLightEntries', () => {
 });
 
 describe('lightInclude', () => {
-  it('asks for the name and the marker, and never filters on either', () => {
+  it('asks for the name, the marker and the spot component, and never filters on them', () => {
     // `GiDynamic` in the FILTER would drop every unmarked light out of the list — which is most of
     // them, and exactly the ones a human opens this tab to mark.
-    expect([...lightInclude()]).toEqual(['Name', GI_DYNAMIC]);
+    expect([...lightInclude()]).toEqual(['Name', GI_DYNAMIC, SPOT_LIGHT]);
   });
 });
 
@@ -100,6 +112,11 @@ describe('offersGiDynamicToggle', () => {
   it('offers the toggle on a placed light and never on the sun', () => {
     expect(offersGiDynamicToggle(POINT_LIGHT)).toBe(true);
     expect(offersGiDynamicToggle(DIRECTIONAL_LIGHT)).toBe(false);
+  });
+
+  it('never offers the toggle on a spot light, which feeds no GI', () => {
+    expect(offersGiDynamicToggle(SPOT_LIGHT)).toBe(false);
+    expect(SPOT_FEEDS_NO_GI).toMatch(/no GI/);
   });
 
   it('carries the reason that takes the toggle\'s place on the sun\'s card', () => {
@@ -126,7 +143,7 @@ describe('pickSun', () => {
 
 describe('lightLabel', () => {
   it('names a light by its Name, and says so when it has none', () => {
-    expect(lightLabel({ entity: { index: 1, generation: 0 }, name: 'hearth', dynamic: false })).toBe('hearth');
-    expect(lightLabel({ entity: { index: 1, generation: 0 }, name: null, dynamic: true })).toBe('unnamed');
+    expect(lightLabel({ entity: { index: 1, generation: 0 }, name: 'hearth', dynamic: false, spot: false })).toBe('hearth');
+    expect(lightLabel({ entity: { index: 1, generation: 0 }, name: null, dynamic: true, spot: false })).toBe('unnamed');
   });
 });

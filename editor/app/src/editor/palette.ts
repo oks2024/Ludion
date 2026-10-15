@@ -69,6 +69,17 @@ export const ARCHETYPES: readonly Archetype[] = [
     },
   },
   {
+    // A cone light aimed straight down from above the origin; direction and the half-angles are
+    // plain fields in the generic inspector (no aiming widget).
+    id: 'spot',
+    label: 'Spot light',
+    name: 'Spot light',
+    components: {
+      Transform: { translation: [0, 4, 0] },
+      SpotLight: { color: [1, 1, 1], intensity: 3, range: 12, direction: [0, -1, 0], inner_angle: 20, outer_angle: 30 },
+    },
+  },
+  {
     // The single directional "sun". Its `direction` is an explicit vector
     // (the default angled overhead sun); its `Transform.translation` anchors the shadow frustum
     // center. It lights the scene and drives the shadow map; the palette archetype lets a

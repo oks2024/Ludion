@@ -13,11 +13,11 @@
 //     never on a timer. The sun and the lights list are FILTERED queries, cheap, and ride their own
 //     equally low cadence: a scene change, or a `GiDynamic` toggle, which is the one gesture in this
 //     tab that changes what they answer.
-//   - `component.get` IS polled, at the inspector's ~3 Hz, up to four times a tick: the volume on
-//     the target, `DirectionalLight` on the sun, `PointLight` and `GiDynamic` on App's selection.
-//     Each answers `L3006` when the entity carries no such component, and for all four that is the
-//     NORMAL case (most scenes author no `GiVolume`; most selections are not lights; most lights are
-//     unmarked), so it reads as absent and never as a banner. `GiDynamic` is polled rather than read
+//   - `component.get` IS polled, at the inspector's ~3 Hz, up to five times a tick: the volume on
+//     the target, `DirectionalLight` on the sun, `PointLight`, `SpotLight` and `GiDynamic` on App's
+//     selection. Each answers `L3006` when the entity carries no such component, and for all five
+//     that is the NORMAL case (most scenes author no `GiVolume`; most selections are not lights; most
+//     lights are unmarked), so it reads as absent and never as a banner. `GiDynamic` is polled rather than read
 //     off the lights list because the toggle that shows it also WRITES it: an undo of a mark has to
 //     reach the control, and the list only re-queries when the scene does.
 //
@@ -91,6 +91,7 @@ import {
   parseLightEntries,
   pickSun,
   POINT_LIGHT,
+  SPOT_LIGHT,
   type LightEntry,
 } from '../editor/light/lights';
 
@@ -176,6 +177,7 @@ export function LighterView(props: LighterViewProps) {
   const [sunValue, setSunValue] = useState<Polled | null>(null);
   const [lights, setLights] = useState<readonly LightEntry[]>([]);
   const [pointLight, setPointLight] = useState<Polled | null>(null);
+  const [spotLight, setSpotLight] = useState<Polled | null>(null);
   const [dynamic, setDynamic] = useState<Polled | null>(null);
   const [holding, setHolding] = useState<GiHold | null>(null);
   const [error, setError] = useState<DiagnosticView | null>(null);
@@ -329,10 +331,14 @@ export function LighterView(props: LighterViewProps) {
           method: 'query.entities',
           params: { filter: [POINT_LIGHT], include: [...lightInclude()] },
         });
+        const cones = await client.call({
+          method: 'query.entities',
+          params: { filter: [SPOT_LIGHT], include: [...lightInclude()] },
+        });
         if (cancelled) {
           return;
         }
-        setLights(parseLightEntries(placed));
+        setLights(parseLightEntries(placed, cones));
       } catch (err) {
         if (!cancelled) {
           setError(toDiagnostic(err));
@@ -398,6 +404,7 @@ export function LighterView(props: LighterViewProps) {
     }
     if (selection !== null) {
       setPointLight(tag(selection, await getComponent(selection, POINT_LIGHT)));
+      setSpotLight(tag(selection, await getComponent(selection, SPOT_LIGHT)));
       setDynamic(tag(selection, await getComponent(selection, GI_DYNAMIC)));
     }
   }, [getComponent, target, sun, selection]);
@@ -593,6 +600,7 @@ export function LighterView(props: LighterViewProps) {
           selection={selection}
           onSelect={props.onSelect}
           pointLight={valueFor(pointLight, selection)}
+          spotLight={valueFor(spotLight, selection)}
           selectionDynamic={valueFor(dynamic, selection) !== null}
           onToggleDynamic={toggleDynamic}
           onReport={onReport}

@@ -65,6 +65,8 @@ import {
   lightLabel,
   offersGiDynamicToggle,
   POINT_LIGHT,
+  SPOT_LIGHT,
+  SPOT_FEEDS_NO_GI,
   SUN_ALWAYS_BAKES,
   type LightEntry,
 } from './lights';
@@ -101,6 +103,8 @@ export interface LighterPanelProps {
   readonly onSelect: (entity: EntityId) => void;
   /** The selection's live `PointLight`, or `null` when it carries none. */
   readonly pointLight: Record<string, unknown> | null;
+  /** The selection's live `SpotLight`, or `null` when it carries none. */
+  readonly spotLight: Record<string, unknown> | null;
   /** Whether the selection carries `GiDynamic` — polled beside its `PointLight`, so an undo of a
    *  mark is reflected here without the panel being told about it. */
   readonly selectionDynamic: boolean;
@@ -340,7 +344,7 @@ export function LighterPanel(props: LighterPanelProps) {
             <span className="count">{props.lights.length}</span>
           </div>
           {props.lights.length === 0 ? (
-            <p className="lt-hint">This scene places no point lights.</p>
+            <p className="lt-hint">This scene places no point or spot lights.</p>
           ) : (
             <div className="lt-lights">
               {props.lights.map((entry) => {
@@ -354,9 +358,15 @@ export function LighterPanel(props: LighterPanelProps) {
                     onClick={() => props.onSelect(entry.entity)}
                   >
                     <span className="lt-light-name">{lightLabel(entry)}</span>
-                    <span className={termChip(term)} title={GI_TERM_HINT[term]}>
-                      {term}
-                    </span>
+                    {entry.spot ? (
+                      <span className="lt-chip lt-chip-off" title={SPOT_FEEDS_NO_GI}>
+                        spot
+                      </span>
+                    ) : (
+                      <span className={termChip(term)} title={GI_TERM_HINT[term]}>
+                        {term}
+                      </span>
+                    )}
                     <span className="lt-light-id">{entityLabel(entry.entity)}</span>
                   </button>
                 );
@@ -392,6 +402,20 @@ export function LighterPanel(props: LighterPanelProps) {
                   volume.
                 </p>
               )}
+            </>
+          ) : props.selection !== null && props.spotLight !== null ? (
+            <>
+              <ComponentForm
+                key={`${entityKey(props.selection)}:${SPOT_LIGHT}`}
+                client={props.client}
+                entity={props.selection}
+                name={SPOT_LIGHT}
+                schema={schemas?.[SPOT_LIGHT]}
+                value={props.spotLight}
+                onReport={props.onReport}
+                onError={onError}
+              />
+              {!offersGiDynamicToggle(SPOT_LIGHT) && <p className="lt-foot">{SPOT_FEEDS_NO_GI}</p>}
             </>
           ) : (
             <p className="lt-hint">Select a light — click it in the viewport or the list above.</p>

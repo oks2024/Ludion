@@ -329,7 +329,7 @@ enum Command {
         views: Vec<CliModelView>,
         /// Light the contact sheet with an existing scene's rig instead of the synthesized bright
         /// neutral key + fill: every entity of `<SCENE>` carrying an `Environment`, `PostProcess`,
-        /// `DirectionalLight`, or `PointLight` is lifted whole into the sheet (a `ground` entity's
+        /// `DirectionalLight`, `PointLight`, or `SpotLight` is lifted whole into the sheet (a `ground` entity's
         /// `Mesh` color is borrowed too), so a palette can be judged under the rig the game will
         /// actually show it in — e.g. `--rig examples/gallery/night-street.yaml`. A rig carrying any
         /// light replaces the key + fill outright. Only valid with `--model`. The sheet subject is

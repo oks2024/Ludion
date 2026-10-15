@@ -1,12 +1,12 @@
 ---
-description: The DirectionalLight sun and its shadow frustum, plus placing point lights by the hundred
+description: The sun and its shadow frustum, point lights by the hundred, and SpotLight cones
 ---
 
 # Lighting
 
 **Scope:** The `DirectionalLight` sun and its shadow map, how many `PointLight`s a scene may place
-(any number) with what that costs, and calibrating one. The sky and image-based lighting are
-`ludion docs environment`; a `PointLight`'s field defaults live in `ludion docs components`; the
+(any number) with what that costs, calibrating one, and the `SpotLight` cone. The sky and
+image-based lighting are `ludion docs environment`; a `PointLight`'s field defaults live in `ludion docs components`; the
 surfaces being lit are `ludion docs materials`; imaging is `ludion docs post-processing`.
 
 ## Sun and shadows
@@ -87,8 +87,8 @@ rest (no error).
 **What does *not* cast or receive a shadow**, by settled scope: sprites, billboards, and text neither
 cast into the shadow map nor sample it (a lit sprite takes the sun's light unshadowed, two-sided, with
 no IBL, beside its ambient and point lights);
-`PointLight`s remain unshadowed — no cube-map/array-texture shadows, a recorded trigger revisited
-when the sun alone can't sell a scene. A mesh always casts and receives; there is no per-mesh opt-out.
+`PointLight`s and `SpotLight`s remain unshadowed — no cube-map/array-texture shadows, a recorded
+trigger revisited when the sun alone can't sell a scene. A mesh always casts and receives; there is no per-mesh opt-out.
 
 ## Point lights: place as many as the look needs
 
@@ -144,6 +144,20 @@ static torches at ranges 8–15 plus 300 projectile-like movers — medians a **
 with 17,121 refs over 794 of 2,304 cells and a longest list of 74, against **0.061 ms** for the
 three-light `examples/gallery/lights.yaml`. Eleven times the pass for 167× the lights. Your own
 hardware will differ; the ratio is the point.
+
+## Spot lights: a cone, and the pool it throws
+
+A `SpotLight` is a point light with an axis: `color`, `intensity`, `range` as a `PointLight`'s, plus
+`direction` (`[0, -1, 0]`), `inner_angle` (`20`) and `outer_angle` (`30`), positioned by its
+`Transform`, uncapped. Reference: `examples/gallery/spot-lights.yaml`.
+
+- **The angles are half-angles in degrees** in `[0, 90)`, inner `<=` outer: full strength inside the
+  inner cone, smooth to zero at the outer; equal angles give a hard edge. A bad cone is `L1272`.
+- **`direction` is world-space**, like the sun's — a parent's rotation does not turn it. Sweep a beam
+  by writing `direction` from a system (hashed state, like any component).
+- **Calibrate it as a point light** (the shading is the same, times the cone factor). A narrow cone
+  costs less than a point light of the same `range`; past 45° it bins like one.
+- **Limits:** no shadows, no global illumination, no visible shaft — the lit pool is the look.
 
 ## Gotchas
 

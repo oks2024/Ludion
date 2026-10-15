@@ -1,6 +1,7 @@
 # Plan: SpotLight — a cone of light on the clustered-forward path
 
-> Status: **design settled 2026-10-15; W1–W2 mechanized; W3 next.** Current-code facts read from the tree on
+> Status: **W1–W3 mechanized (2026-10-15); Exit owed** — the M4 twin and the look sitting
+> (`Plan/owed.md`). Current-code facts read from the tree on
 > 2026-10-15 (file:line pointers are of that date; re-grep before editing). Parent:
 > `Plan/clustered-forward.md` (its deferred `SpotLight` entry is this plan's trigger, now fired).
 
@@ -90,3 +91,8 @@ breach in a curtain wall.
   Finding: branching around the accumulate moved the lit-sprite `tilemap` golden (the driver
   contracts the arms differently), so the factor multiplies into the colour first and is an exact
   1.0 for a point light (`dev-docs/renderer-clustering.md`).
+- W3 (2026-10-15): `examples/gallery/spot-lights.yaml` + its Windows golden, `ludion docs lighting`
+  §Spot lights and the `components` row, the editor's `spot` palette archetype and Lighter listing
+  (`GiDynamic` stays PointLight-only), `model_sheet` rig lights, glTF `KHR_lights_punctual` spots →
+  `SpotLight` (world direction composed up the node chain; a 90° outer cone clamps to 89.9°).
+  Owed: the macOS golden and identity on the M4; the look sitting.

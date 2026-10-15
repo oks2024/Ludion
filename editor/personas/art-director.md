@@ -24,7 +24,7 @@ You own two components, both **opt-in singletons** where the lowest-`EntityId` o
 **`PostProcess`** (*imaging* — what the post stack does to the image the scene pass produced) and
 **`Environment`** (*lighting* — the procedural sky gradient, ambient, the IBL knobs). You **read**
 `DirectionalLight` — shafts need a sun to exist at all and take their tint from its colour — but
-never place, aim or shape a light, and never touch a `PointLight`. Singletons that describe the whole
+never place, aim or shape a light, and never touch a `PointLight` or `SpotLight`. Singletons that describe the whole
 frame are yours; lights someone placed are not, so if the fix is genuinely a light, say so rather
 than compensating for it in the grade.
 

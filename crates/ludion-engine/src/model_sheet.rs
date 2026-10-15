@@ -48,7 +48,8 @@
 //! A game whose content is consumed under a night sky needs the other read, so [`render_model_sheet`]
 //! optionally **lifts** the lighting and grade out of an existing scene: every entity carrying any of
 //! [`Environment`](crate::Environment), [`PostProcess`](crate::PostProcess),
-//! [`DirectionalLight`](crate::DirectionalLight), or [`PointLight`](crate::PointLight) is copied
+//! [`DirectionalLight`](crate::DirectionalLight), [`PointLight`](crate::PointLight), or
+//! [`SpotLight`](crate::SpotLight) is copied
 //! whole (its `Transform` included) into the sheet scene, re-emitted through the canonical writer so
 //! no second YAML emitter exists. A rig carrying any light replaces the synthesized key + fill
 //! outright — a mixed rig would read as neither. A rig entity named `ground` with a `Mesh` also
@@ -2870,11 +2871,12 @@ fn stage_io_error(root: &Path, error: std::io::Error) -> Vec<Diagnostic> {
 /// The component types `--rig` lifts out of a scene: an entity carrying any of them is copied whole
 /// into the sheet scene. None of the four carries an asset path, so a lifted entity needs no path
 /// re-rooting against the sheet's project root (the model document's own directory).
-const RIG_COMPONENTS: [&str; 4] = [
+const RIG_COMPONENTS: [&str; 5] = [
     "Environment",
     "PostProcess",
     "DirectionalLight",
     "PointLight",
+    "SpotLight",
 ];
 
 /// The lighting and grade lifted out of a `--rig` scene.
@@ -2931,7 +2933,7 @@ fn lift(scene: &ludion_scene::Scene, path: &Path) -> Result<RigLift, Vec<Diagnos
         if !RIG_COMPONENTS.iter().any(|name| carries(name)) {
             continue;
         }
-        has_light |= carries("DirectionalLight") || carries("PointLight");
+        has_light |= carries("DirectionalLight") || carries("PointLight") || carries("SpotLight");
         kept.push(entity.clone());
     }
 
@@ -2941,7 +2943,8 @@ fn lift(scene: &ludion_scene::Scene, path: &Path) -> Result<RigLift, Vec<Diagnos
                 code::MODEL_SHEET_INPUT,
                 format!(
                     "rig scene `{}` has no liftable entity: none of its entities carries an \
-                     `Environment`, `PostProcess`, `DirectionalLight`, or `PointLight` component",
+                     `Environment`, `PostProcess`, `DirectionalLight`, `PointLight`, or \
+                     `SpotLight` component",
                     path.display()
                 ),
             )
