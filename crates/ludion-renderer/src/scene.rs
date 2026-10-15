@@ -508,6 +508,25 @@ pub enum TonemapOperator {
     None,
 }
 
+/// A spot light: a [`PointLightData`]'s range falloff times a cone factor about `direction`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SpotLightData {
+    /// World-space apex.
+    pub position: Vec3,
+    /// Unit world-space axis the cone points along.
+    pub direction: Vec3,
+    /// Linear RGB color.
+    pub color: Vec3,
+    /// Scalar brightness multiplier.
+    pub intensity: f32,
+    /// Distance beyond which the light contributes nothing.
+    pub range: f32,
+    /// Cosine of the inner half-angle: full intensity inside it.
+    pub cos_inner: f32,
+    /// Cosine of the outer half-angle: exactly zero outside it.
+    pub cos_outer: f32,
+}
+
 /// A dynamic point light: position, color, intensity, and a hard range cutoff.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct PointLightData {
@@ -998,6 +1017,9 @@ pub struct RenderScene {
     /// `ludion-engine`'s ascending-`EntityId` extract order is the per-fragment float summation
     /// order, so this list is packed verbatim and never sorted.
     pub lights: Vec<PointLightData>,
+    /// Spot lights in ascending-`EntityId` extract order, packed after every point light
+    /// (`Plan/spot-light.md` decision 4). Not a GI input: `lights` alone feeds the bake and inject.
+    pub spot_lights: Vec<SpotLightData>,
     /// The single directional "sun" (lowest-`EntityId` `DirectionalLight`), or `None` for a sunless
     /// scene (a zeroed `Sun` uniform, byte-identical to the pre-sun pipeline).
     pub sun: Option<SunData>,
@@ -1053,6 +1075,7 @@ impl RenderScene {
             debug_lines: Vec::new(),
             particles: Vec::new(),
             lights: Vec::new(),
+            spot_lights: Vec::new(),
             sun: None,
             environment: None,
             post: None,

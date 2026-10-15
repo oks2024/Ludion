@@ -29,8 +29,8 @@ use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
     EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, MeshData,
     MeshInstance, MeshShape, ParticleInstance, PointLightData, PostData, QualityParams,
-    RenderCamera, RenderScene, SkinJoint, SpriteInstance, SunData, TextRun, TextureImage,
-    UiInstance, WorldVoxelGrid, aspect_ratio,
+    RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunData, TextRun,
+    TextureImage, UiInstance, WorldVoxelGrid, aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -40,8 +40,8 @@ use crate::character::CharacterData;
 use crate::components::{
     Animation, Camera, ClipAnchor, DirectionalLight, Environment, GiDynamic, GiVolume,
     GroundMarker, GroundMarkerShape, Mesh, MeshGrid, MeshSource, ParticleEmitter, PointLight,
-    PostProcess, Projection, SkinBone, Sprite, SpriteBlend, Text, Tilemap, TonemapOperator,
-    Transform, UiList, UiRect, UiText, pointer_token,
+    PostProcess, Projection, SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap,
+    TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
 };
 use crate::docs::DocStore;
 use crate::fonts::FontLibrary;
@@ -1242,6 +1242,7 @@ fn extract_inner(
             CameraBasis::from_view(camera.view),
         ),
         lights: extract_lights(placed.lights),
+        spot_lights: extract_spot_lights(placed.spot_lights),
         sun: extract_sun(world, &ids),
         environment,
         post: extract_post(world, &ids),
@@ -1390,6 +1391,12 @@ fn extract_post(world: &World, ids: &[EntityId]) -> Option<PostData> {
 /// churns every lit golden; it would also break the clustered loop's proof that it is arithmetically
 /// identical to a flat loop over the whole array.
 fn extract_lights(lights: Vec<(EntityId, PointLightData)>) -> Vec<PointLightData> {
+    lights.into_iter().map(|(_, light)| light).collect()
+}
+
+/// The spot lights in the same unsorted ascending-`EntityId` extract order as [`extract_lights`];
+/// the renderer packs them after every point light, so this order is their summation order.
+fn extract_spot_lights(lights: Vec<(EntityId, SpotLightData)>) -> Vec<SpotLightData> {
     lights.into_iter().map(|(_, light)| light).collect()
 }
 
@@ -1690,6 +1697,30 @@ fn point_light_data(light: &PointLight, position: Vec3, dynamic: bool) -> Option
     })
 }
 
+/// Builds [`SpotLightData`] from a `SpotLight` placed at `position`.
+///
+/// Like [`point_light_data`], an unusable range yields `None` and colour and intensity clamp to
+/// non-negative; a zero-length or non-finite direction has no axis, so it also yields `None`. The
+/// angles clamp into `[0, 89.9]` degrees with the inner never past the outer, so the cosines stay
+/// positive and ordered for a Rust-built value that skipped validation (`L1272`).
+fn spot_light_data(light: &SpotLight, position: Vec3) -> Option<SpotLightData> {
+    if !(light.range.is_finite() && light.range > 0.0) {
+        return None;
+    }
+    let direction = Vec3::from(light.direction).try_normalize()?;
+    let outer = light.outer_angle.clamp(0.0, 89.9);
+    let inner = light.inner_angle.clamp(0.0, 89.9).min(outer);
+    Some(SpotLightData {
+        position,
+        direction,
+        color: Vec3::from(light.color).max(Vec3::ZERO),
+        intensity: light.intensity.max(0.0),
+        range: light.range,
+        cos_inner: ludion_core::math::cos(inner.to_radians()),
+        cos_outer: ludion_core::math::cos(outer.to_radians()),
+    })
+}
+
 /// Builds [`SunData`] from a `DirectionalLight` and its Transform-anchored frustum center. Pure and
 /// deterministic (bit-exact CPU, unit-tested with pinned values). Mirrors [`build_camera`]'s glam
 /// calls — `look_to_rh` + `orthographic_rh`, the wgpu 0..1 depth convention — so the light-space
@@ -1772,6 +1803,8 @@ pub(crate) struct Placed<'w> {
     /// Point lights, each tagged with its entity — not a bounds target (no visible geometry). The
     /// `EntityId` is what fixes the collection order [`extract_lights`] then hands on verbatim.
     pub(crate) lights: Vec<(EntityId, PointLightData)>,
+    /// Spot lights, collected like `lights` and handed on in the same ascending-`EntityId` order.
+    pub(crate) spot_lights: Vec<(EntityId, SpotLightData)>,
 }
 
 /// One placed mesh: its entity, world transform, flat color, and unresolved geometry source. Like a
@@ -2248,6 +2281,7 @@ pub(crate) fn place<'w>(
         meshes: Vec::new(),
         texts: Vec::new(),
         lights: Vec::new(),
+        spot_lights: Vec::new(),
     };
 
     for (index, &id) in ids.iter().enumerate() {
@@ -2441,6 +2475,12 @@ pub(crate) fn place<'w>(
             && let Some(data) = point_light_data(light, translation, dynamic)
         {
             placed.lights.push((id, data));
+        }
+
+        if let Some(light) = get::<SpotLight>(world, id)
+            && let Some(data) = spot_light_data(light, translation)
+        {
+            placed.spot_lights.push((id, data));
         }
 
         if let Some(text) = get::<Text>(world, id) {
@@ -4897,6 +4937,140 @@ mod tests {
                 "{authored:?} must map across the boundary"
             );
         }
+    }
+
+    /// A spot light extracts normalized, with cosines of its half-angles; a Rust-built value that
+    /// skipped validation is dropped (no range, no axis) or clamped (angles, colour, intensity).
+    #[test]
+    fn spot_light_data_normalizes_and_clamps() {
+        let light = SpotLight {
+            direction: [0.0, -3.0, 0.0],
+            inner_angle: 60.0,
+            outer_angle: 90.0,
+            ..SpotLight::default()
+        };
+        let data = spot_light_data(&light, Vec3::new(1.0, 2.0, 3.0)).expect("a usable spot");
+        assert_eq!(data.position, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(data.direction, Vec3::NEG_Y);
+        assert!((data.cos_inner - 0.5).abs() < 1e-6, "{}", data.cos_inner);
+        assert!(
+            data.cos_outer > 0.0 && data.cos_outer < 0.002,
+            "a 90 degree outer clamps just short of a hemisphere: {}",
+            data.cos_outer
+        );
+
+        let swapped = SpotLight {
+            inner_angle: 40.0,
+            outer_angle: 10.0,
+            ..SpotLight::default()
+        };
+        let data = spot_light_data(&swapped, Vec3::ZERO).unwrap();
+        assert_eq!(data.cos_inner, data.cos_outer, "inner never passes outer");
+
+        let negative = SpotLight {
+            color: [-1.0, f32::NAN, 0.5],
+            intensity: -2.0,
+            ..SpotLight::default()
+        };
+        let data = spot_light_data(&negative, Vec3::ZERO).unwrap();
+        assert!(
+            (data.color * data.intensity)
+                .to_array()
+                .iter()
+                .all(|c| *c >= 0.0)
+        );
+
+        for direction in [[0.0; 3], [f32::NAN, 1.0, 0.0], [f32::INFINITY, 0.0, 0.0]] {
+            let light = SpotLight {
+                direction,
+                ..SpotLight::default()
+            };
+            assert!(
+                spot_light_data(&light, Vec3::ZERO).is_none(),
+                "{direction:?}"
+            );
+        }
+        for range in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let light = SpotLight {
+                range,
+                ..SpotLight::default()
+            };
+            assert!(
+                spot_light_data(&light, Vec3::ZERO).is_none(),
+                "range {range}"
+            );
+        }
+    }
+
+    /// Spots reach `RenderScene.spot_lights` in ascending-`EntityId` order, bad ones dropped, and
+    /// their presence leaves the point-light list exactly as it was without them.
+    #[test]
+    fn spots_extract_in_entity_order_and_leave_point_lights_alone() {
+        use ludion_core::math::glam::Vec3;
+        use ludion_ecs::World;
+        use std::path::Path;
+
+        fn at(world: &mut World, x: f32) -> EntityId {
+            let id = world.spawn();
+            world
+                .insert(
+                    id,
+                    Transform {
+                        translation: [x, 0.0, 0.0],
+                        ..Transform::default()
+                    },
+                )
+                .unwrap();
+            id
+        }
+
+        let mut world = World::new();
+        let first = at(&mut world, 5.0);
+        world
+            .insert(
+                first,
+                SpotLight {
+                    direction: [0.0, 0.0, -2.0],
+                    ..SpotLight::default()
+                },
+            )
+            .unwrap();
+        let point = at(&mut world, -1.0);
+        world.insert(point, PointLight::default()).unwrap();
+        let broken = at(&mut world, 0.0);
+        world
+            .insert(
+                broken,
+                SpotLight {
+                    direction: [0.0; 3],
+                    ..SpotLight::default()
+                },
+            )
+            .unwrap();
+        let last = at(&mut world, 7.0);
+        world.insert(last, SpotLight::default()).unwrap();
+
+        let with_spots = extract(&world, (320, 180), Path::new(".")).unwrap();
+        assert_eq!(
+            with_spots
+                .spot_lights
+                .iter()
+                .map(|s| s.position.x)
+                .collect::<Vec<_>>(),
+            [5.0, 7.0],
+            "ascending EntityId, the zero-direction spot dropped"
+        );
+        assert_eq!(with_spots.spot_lights[0].direction, Vec3::NEG_Z);
+
+        world.remove::<SpotLight>(first).unwrap();
+        world.remove::<SpotLight>(last).unwrap();
+        let without = extract(&world, (320, 180), Path::new(".")).unwrap();
+        assert!(without.spot_lights.is_empty());
+        assert_eq!(
+            with_spots.lights, without.lights,
+            "point lights unperturbed"
+        );
+        assert_eq!(with_spots.lights.len(), 1);
     }
 
     /// The order contract, replacing the two `select_lights` tests the cap removal deleted

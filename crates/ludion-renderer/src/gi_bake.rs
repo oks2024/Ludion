@@ -740,7 +740,8 @@ impl GiBake {
 }
 
 /// One [`PointLightData`] in `mesh.wgsl`'s premultiplied `Light` convention: `color * intensity` is
-/// the diffuse response at `ndl = 1`, and the range rides in `position.w`.
+/// the diffuse response at `ndl = 1`, the range rides in `position.w`, and `axis` is the point-light
+/// encoding (spots never reach GI).
 ///
 /// Shared with `gi_inject.rs`, which premultiplies the *dynamic* subset the same way: the two halves
 /// of one bounce term must agree on what a light is down to the bit, and a second copy of this
@@ -755,6 +756,7 @@ pub(crate) fn premultiplied(light: &PointLightData) -> Light {
             light.range,
         ],
         color: [c.x, c.y, c.z, 0.0],
+        axis: crate::cluster::POINT_LIGHT_AXIS,
     }
 }
 

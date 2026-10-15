@@ -392,10 +392,12 @@ const _: () = assert!(core::mem::offset_of!(GiInjectParams, rays) == 80);
 pub struct Light {
     pub position: [f32; 4],
     pub color: [f32; 4],
+    pub axis: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<Light>() == 32);
+const _: () = assert!(core::mem::size_of::<Light>() == 48);
 const _: () = assert!(core::mem::offset_of!(Light, position) == 0);
 const _: () = assert!(core::mem::offset_of!(Light, color) == 16);
+const _: () = assert!(core::mem::offset_of!(Light, axis) == 32);
 
 /// WGSL `struct LightHeader`.
 ///
@@ -1505,7 +1507,7 @@ pub fn create_lights_light_list_cluster_table_cluster_lights_bgl(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(32),
+                    min_binding_size: wgpu::BufferSize::new(48),
                 },
                 count: None,
             },

@@ -11,7 +11,7 @@
 //!   `profile.save()` to request persistence.
 //! - **Built-in visual components** — [`Transform`], [`Sprite`] (+ [`SpriteBlend`], its `alpha` /
 //!   `additive` compositing flag), [`Mesh`] (+ [`MeshSource`]), [`PointLight`],
-//!   [`DirectionalLight`] (the sun), [`Camera`] (+ [`Projection`]), [`Text`],
+//!   [`SpotLight`], [`DirectionalLight`] (the sun), [`Camera`] (+ [`Projection`]), [`Text`],
 //!   [`Tilemap`] (+ [`TileAppearance`]), [`MeshGrid`], [`GroundMarker`] (+ [`GroundMarkerShape`]) — the flat
 //!   ground-anchored telegraph a ranged or area attack draws under its target. A scene mixes these
 //!   with game components.
@@ -149,7 +149,7 @@ pub use ludion_engine::{
     ParticleEmitter, PathDocument, PathFollower, PathInterpolation, PathMode, PathSampler,
     PatternDoc, PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance,
     PrefabReverted, Profile, Projection, RampSpec, RenderExtent, Residue, ResidueStore,
-    SceneSwitch, Shutdown, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance, Tilemap,
+    SceneSwitch, Shutdown, SpotLight, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance, Tilemap,
     TimelineEntry, Transform, TurnSpec, UiList, UiListItem, UiRect, UiText, VOLLEY_MAX_BULLETS,
     VOLLEY_SALT, Volley, VolleyCenter, VolleyShape, WorldPose, advance_volleys, animation_events,
     builtin_registry, bullet_age, bullet_is_alive, bullet_position, check_path, crossfade,

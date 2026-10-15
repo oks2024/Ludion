@@ -16,7 +16,8 @@ re-blesses every mesh-bearing golden:
 - **F** — Schlick (`fresnel_schlick`), `F0 = mix(vec3(0.04), albedo, metallic)`.
 - **Diffuse** — `(1 − metallic) × albedo`, no `1/π` (the light-unit convention below).
 - **Light units** — a `PointLight`'s premultiplied color is the Lambert response at `ndl = 1` (no
-  `1/π` on the diffuse lobe, `atten²`-ranged); the specular lobe is scaled by `π` (`π·D·V·F`) so the
+  `1/π` on the diffuse lobe, `atten²`-ranged; a `SpotLight` is the same times its cone factor,
+  `ludion devdocs renderer-clustering`); the specular lobe is scaled by `π` (`π·D·V·F`) so the
   two lobes stay physically proportioned against that convention. Break the convention on one lobe
   and every lit scene changes brightness rather than gaining highlights.
 - **Ambient** — `ambient.rgb × albedo` when the scene carries no `Environment`. An `Environment`

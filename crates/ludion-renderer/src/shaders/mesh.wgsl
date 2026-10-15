@@ -1,6 +1,6 @@
 // Low-poly mesh pass: instanced, depth-tested, physically-based, into the HDR target.
 //
-// Cook-Torrance GGX/Smith/Schlick per point light + ambient. Light units keep the Lambert-era
+// Cook-Torrance GGX/Smith/Schlick per point or spot light + ambient. Light units keep the Lambert-era
 // convention: a light's premultiplied color is the diffuse response at ndl = 1 (no 1/PI on the
 // diffuse lobe), and the specular lobe is scaled by PI so the two lobes stay physically
 // proportioned — pre-BRDF scenes keep their brightness and gain highlights. Colors can exceed 1.0
@@ -497,7 +497,7 @@ fn shade(
         let ndh = max(dot(n, h), 0.0);
         let vdh = max(dot(v, h), 0.0);
         // Premultiplied convention: radiance IS the diffuse response at ndl = 1, ranged atten^2.
-        let radiance = light.color.rgb * ndl * atten * atten * direct_ao;
+        let radiance = light.color.rgb * spot_factor(light, l) * ndl * atten * atten * direct_ao;
         let d = distribution_ggx(ndh, alpha);
         let vis = visibility_smith(ndl, ndv, alpha);
         let f = fresnel_schlick(vdh, f0);

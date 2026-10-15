@@ -51,17 +51,25 @@ sphere's eight bounding-box corners, and an inclusive shell interval from `[d �
 (the triangle inequality). Both are widened outward (`TILE_PIXEL_MARGIN` one pixel, `SHELL_MARGIN`
 1%), and a light with any corner at or behind the camera takes the full-tile fallback.
 
+A spot is the same `Light` with a third `vec4`: `axis.xyz` its unit direction, `axis.w` its
+`cos_outer`, `color.w` its `cos_inner`; a point light writes `axis = (0, 0, 0, -2)`. `footprint_of`
+feeds the same shell and tile tests a spot's **cone bounding sphere** (`bounding_sphere`): for an
+outer half-angle θ ≤ 45° the sphere through the apex and the rim — centre `apex + axis·R/(2cosθ)`,
+radius `R/(2cosθ)`, widened 0.1% — and the range sphere at the apex for anything wider.
+
 ## Rules
 
 - **Conservatism is mandatory; tightness is negotiable.** Every light whose range sphere can reach a
   fragment in a cell must appear in that cell's list. A light admitted *spuriously* costs a loop
   iteration and contributes exactly `+0.0` — both consumers' attenuation is a hard zero at
-  `dist >= range` and `acc + 0.0` is bit-preserving — so over-inclusion cannot move a pixel; a light
+  `dist >= range`, a spot's cone factor (`spot_cone`) is a hard zero at or outside its outer cone,
+  and `acc + 0.0` is bit-preserving — so over-inclusion cannot move a pixel; a light
   *missed* is a visible hole. Every margin rounds outward, and a new or tightened test owes a
   written conservatism argument of the kind `tile_range`'s convex-hull one makes, not just a passing
   case.
 - **The order is load-bearing on both sides.** `scene.lights` arrives in ascending-`EntityId`
-  extract order and is packed verbatim; within a cell the indices ascend. Together those make the
+  extract order and is packed verbatim, then `scene.spot_lights` in theirs — a spot-free scene
+  packs exactly as a point-only one; within a cell the indices ascend. Together those make the
   clustered loop's float sum *exactly* a flat loop's — the identity argument. Never sort, filter or
   re-associate: it churns every lit golden and voids the proof.
 - **Binning is deliberately off the determinism-critical path.** Because the rendered result is
@@ -104,6 +112,12 @@ sphere's eight bounding-box corners, and an inclusive shell interval from `[d �
   `total_refs`/`max_list_len` *climbing* means the binning got looser, and the fix is a tighter
   footprint rather than a shader change. `total_refs` is the honest measure: it grows when
   conservatism loosens even if no single list gets longer.
+- **A point light's arithmetic must stay the point-only shader's.** Both loops multiply
+  `spot_factor` (an exact `1.0` for `axis.w < -1.5`) into the colour *first*, so every later
+  product, rounding and FMA contraction is unchanged. Branching around the whole statement instead
+  moved the `tilemap` golden on the RTX 3090 — the driver contracts the two arms differently.
+- **Spots never reach GI.** `RenderScene.lights` alone feeds the bake and injection; their `Light`
+  declarations carry the point encoding.
 - **An empty light array still uploads one element.** wgpu rejects a zero-sized binding and the
   generated `min_binding_size` is one element (naga sizes a runtime array as exactly one), so
   `build_lights` pushes a zeroed `Light` and a zero index. Every cell's count is 0, so the shader

@@ -1322,8 +1322,8 @@ pub mod code {
     /// outside `[0, 1]` (a particle's alpha: below 0 or non-finite). RGB is HDR (it may exceed 1)
     /// but a negative value subtracts radiance in the scene target, and alpha is a coverage weight
     /// that premultiplied `over` turns into a negative destination weight past 1. Raised by the
-    /// semantic validators of `PointLight`, `DirectionalLight`, `Sprite`, `Mesh`, `Text`,
-    /// `GroundMarker`, a `Tilemap` or `MeshGrid` legend entry and `ParticleEmitter`, and by a
+    /// semantic validators of `PointLight`, `SpotLight`, `DirectionalLight`, `Sprite`, `Mesh`,
+    /// `Text`, `GroundMarker`, a `Tilemap` or `MeshGrid` legend entry and `ParticleEmitter`, and by a
     /// pattern document's bullet kinds; the JSON Pointer names the element.
     pub const COLOR_COMPONENT_INVALID: DiagnosticCode = DiagnosticCode::new("L1263");
 
@@ -1355,6 +1355,10 @@ pub mod code {
     /// `L1271` — a scene load under `textures: cooked` read some mesh maps from their PNG sources
     /// because the cooked file was missing, corrupt or unusable on this GPU; one warning per load.
     pub const TEXTURE_NOT_COOKED: DiagnosticCode = DiagnosticCode::new("L1271");
+    /// `L1272` — a `SpotLight` cannot form a cone: its `direction` is zero-length or non-finite, an
+    /// angle is non-finite or outside `[0, 90)`, or `inner_angle` exceeds `outer_angle`. Raised by
+    /// `SpotLight`'s semantic validator.
+    pub const SPOT_LIGHT_INVALID_CONE: DiagnosticCode = DiagnosticCode::new("L1272");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -6692,11 +6696,11 @@ alpha above 1 into a negative weight on the destination, so brighten with the RG
 instead. A particle's alpha is the one exception: the particle shader clamps it to 1, so it must
 be finite and `>= 0`, and a value above 1 holds full opacity longer through the fade.
 
-Covered: `PointLight.color`, `DirectionalLight.color`, `Sprite.color` and `flash_color`,
-`Mesh.color` and `flash_color`, `Text.color`, `GroundMarker.color`, a `Tilemap` or `MeshGrid`
-legend entry's `color`, `ParticleEmitter.start_color` and `end_color`, and a pattern document's
-bullet-kind `color`. `Environment` and `PostProcess` colours keep `L1128` and `L1130`; a negative
-scalar intensity is the schema's `L1014`.
+Covered: `PointLight.color`, `SpotLight.color`, `DirectionalLight.color`, `Sprite.color` and
+`flash_color`, `Mesh.color` and `flash_color`, `Text.color`, `GroundMarker.color`, a `Tilemap` or
+`MeshGrid` legend entry's `color`, `ParticleEmitter.start_color` and `end_color`, and a pattern
+document's bullet-kind `color`. `Environment` and `PostProcess` colours keep `L1128` and `L1130`; a
+negative scalar intensity is the schema's `L1014`.
 
 The JSON Pointer names the offending element: `/color/0`, `/end_color/3`, `/legend/#/color/1`. Fix:
 give every RGB component 0 or more (HDR values above 1.0 are fine) and keep alpha within 0..=1
@@ -6822,6 +6826,22 @@ but loads slower and uses more video memory. One warning names every such map, u
 Fix: run `ludion sync` to cook the missing maps. For a corrupt file, delete it from
 `.ludion/cooked/<target>/` first, because sync reuses any file present under a key. On a GPU without
 BC7 or ASTC there is nothing to fix; the PNG fallback is the intended path.",
+    },
+    CodeEntry {
+        code: code::SPOT_LIGHT_INVALID_CONE,
+        severity: Severity::Error,
+        title: "spot light cone is invalid",
+        explanation: "\
+A `SpotLight` cannot form a cone of light. Three causes:
+
+- `direction` is zero-length or non-finite, so there is no axis to normalize (pointer `/direction`).
+- An angle is non-finite or outside `[0, 90)` (pointer `/inner_angle` or `/outer_angle`). Both are
+  half-angles in degrees from the axis; 90 would be a hemisphere, which a point light already is.
+- `inner_angle` is greater than `outer_angle` (pointer `/inner_angle`): the full-brightness core
+  cannot be wider than the edge of the cone. Equal angles are legal and give a hard edge.
+
+Fix: give `direction` a non-zero, finite `[x, y, z]` (e.g. `[0, -1, 0]`), keep both angles in
+`[0, 90)`, and make `inner_angle` at most `outer_angle` (defaults 20 and 30).",
     },
     // --- L2xxx: render ---
     CodeEntry {
@@ -9461,6 +9481,7 @@ mod tests {
         code::PATH_FOLLOWER_INVALID,
         code::COOK_ENCODE_FAILED,
         code::TEXTURE_NOT_COOKED,
+        code::SPOT_LIGHT_INVALID_CONE,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

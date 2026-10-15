@@ -12312,7 +12312,8 @@ mod tests {
     /// The camera set is chosen for the build's fallback paths, not for prettiness: lights sitting
     /// *behind* the camera and lights whose spheres *span the near plane* both break the projection's
     /// convex-hull precondition and must take the full-tile fallback. Populations run past the old
-    /// sixteen-light cap in both directions.
+    /// sixteen-light cap in both directions, point-only and with spots mixed in (whose cone factor
+    /// is the other exact zero a spurious admission must hit).
     #[test]
     fn needs_gpu_the_culled_build_renders_byte_identically_to_the_degenerate_oracle() {
         let Some(renderer) =
@@ -12425,7 +12426,15 @@ mod tests {
                 .render(&scene, size)
                 .unwrap_or_else(|d| panic!("{name}: light-free render: {d:?}"));
 
-            for population in [8usize, 64, 300] {
+            // Point-only populations, then the same sizes with spots mixed in.
+            for (population, spots) in [
+                (8usize, 0usize),
+                (64, 0),
+                (300, 0),
+                (8, 6),
+                (64, 40),
+                (300, 120),
+            ] {
                 scene.lights = (0..population)
                     .map(|_| {
                         let axis = |rng: &mut ludion_core::rng::DeterministicRng| {
@@ -12445,6 +12454,41 @@ mod tests {
                         }
                     })
                     .collect();
+                // Narrow, mid, wide (> 45°, the range-sphere fallback) and hard-edged cones,
+                // pointing anywhere from straight down to sideways.
+                scene.spot_lights = (0..spots)
+                    .map(|i| {
+                        let mut r = || rng.next_f32();
+                        let position = centre
+                            + Vec3::new(
+                                (r() - 0.5) * 2.0 * extent,
+                                (r() - 0.5) * 0.4 * extent + 2.0,
+                                (r() - 0.5) * 2.0 * extent,
+                            );
+                        let direction =
+                            Vec3::new(r() * 2.0 - 1.0, -0.2 - r() * 1.5, r() * 2.0 - 1.0)
+                                .normalize();
+                        let (inner, outer) = match i % 4 {
+                            0 => (2.0 + r() * 6.0, 10.0 + r() * 10.0),
+                            1 => (20.0, 30.0 + r() * 14.0),
+                            2 => (40.0, 50.0 + r() * 35.0),
+                            _ => {
+                                let edge = 10.0 + r() * 40.0;
+                                (edge, edge)
+                            }
+                        };
+                        crate::scene::SpotLightData {
+                            position,
+                            direction,
+                            color: Vec3::new(0.4 + r(), 0.4 + r(), 0.4 + r()),
+                            intensity: 0.4 + r() * 0.8,
+                            range: range_lo + r() * (range_hi - range_lo) * 1.5,
+                            cos_inner: f32::to_radians(inner).cos(),
+                            cos_outer: f32::to_radians(outer).cos(),
+                        }
+                    })
+                    .collect();
+                let population = format!("{population}+{spots} spots");
 
                 renderer.cluster_build.set(ClusterBuild::Culled);
                 let culled = renderer
@@ -12468,6 +12512,138 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- Spot lights (Plan/spot-light.md) ---------------------------------------------------
+
+    /// A spot of the fixtures' shared white shape.
+    fn spot_light(
+        position: Vec3,
+        direction: Vec3,
+        intensity: f32,
+        range: f32,
+        inner_deg: f32,
+        outer_deg: f32,
+    ) -> crate::scene::SpotLightData {
+        crate::scene::SpotLightData {
+            position,
+            direction: direction.normalize(),
+            color: Vec3::ONE,
+            intensity,
+            range,
+            cos_inner: inner_deg.to_radians().cos(),
+            cos_outer: outer_deg.to_radians().cos(),
+        }
+    }
+
+    /// A downward spot over a ground plane lights a pool under its axis, and a ground point within
+    /// its range but outside its outer cone renders **exactly** the spot-free value — the cone
+    /// factor is a hard 0.0 there. Run for a soft edge and a hard edge (`inner == outer`, the
+    /// no-divide path).
+    #[test]
+    fn needs_gpu_a_spot_lights_its_pool_and_nothing_outside_its_cone() {
+        let Some(renderer) =
+            skip_or_renderer("a_spot_lights_its_pool_and_nothing_outside_its_cone")
+        else {
+            return;
+        };
+        let (w, h) = (192u32, 108u32);
+        let size = FrameSize::native(w, h);
+
+        let mut scene = RenderScene::empty((w, h));
+        scene.ambient = [0.01, 0.01, 0.01];
+        let eye = Vec3::new(0.0, 40.0, 0.01);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::perspective_rh(
+                60.0_f32.to_radians(),
+                crate::scene::aspect_ratio((w, h)),
+                0.1,
+                1000.0,
+            ),
+            position: eye,
+        };
+        scene.meshes = vec![ground(60.0)];
+        let unlit = renderer.render(&scene, size).expect("spot-free render");
+
+        // Apex 10 up, outer 20°: the pool's rim is ~3.6 from the axis. (8, 0, 0) is 12.8 from the
+        // apex (inside range 20) at ~39° off the axis (outside the cone).
+        let pool = project(&scene.camera, Vec3::ZERO, w, h);
+        let outside = project(&scene.camera, Vec3::new(8.0, 0.0, 0.0), w, h);
+        for (name, inner) in [("soft", 15.0), ("hard", 20.0)] {
+            scene.spot_lights = vec![spot_light(
+                Vec3::new(0.0, 10.0, 0.0),
+                Vec3::NEG_Y,
+                3.0,
+                20.0,
+                inner,
+                20.0,
+            )];
+            let lit = renderer.render(&scene, size).expect("spot render");
+            assert!(
+                luma(&lit, pool.0, pool.1) > luma(&unlit, pool.0, pool.1) + 30,
+                "{name}: the spot must light the pool under its axis",
+            );
+            assert_eq!(
+                rgb_at(&lit, outside.0, outside.1),
+                rgb_at(&unlit, outside.0, outside.1),
+                "{name}: a fragment outside the outer cone must receive exactly +0.0",
+            );
+        }
+    }
+
+    /// Sprite parity: `shade_two_sided` applies the same cone. A lit billboard with a spot aimed at
+    /// its centre is brighter there, and its corner — outside the outer cone — is untouched.
+    #[test]
+    fn needs_gpu_a_lit_sprite_inside_a_spot_cone_is_lit() {
+        let Some(renderer) = skip_or_renderer("a_lit_sprite_inside_a_spot_cone_is_lit") else {
+            return;
+        };
+        let (w, h) = (96u32, 96u32);
+        let size = FrameSize::native(w, h);
+
+        let mut scene = RenderScene::empty((w, h));
+        scene.ambient = [0.02, 0.02, 0.02];
+        scene.camera = origin_camera(w, h);
+        scene.sprites = vec![crate::scene::SpriteInstance {
+            center: Vec3::new(0.0, 0.0, -4.0),
+            right: Vec3::new(3.0, 0.0, 0.0),
+            up: Vec3::new(0.0, 3.0, 0.0),
+            color: [1.0, 1.0, 1.0, 1.0],
+            texture: None,
+            uv: crate::scene::SpriteInstance::FULL_UV,
+            lit: true,
+            layer: 0,
+            additive: false,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            uv_repeat: crate::scene::SpriteInstance::NO_TILING,
+            uv_offset: [0.0; 2],
+        }];
+        let unlit = renderer.render(&scene, size).expect("spot-free sprite");
+
+        // Apex 2.5 in front of the quad, outer 25°: the corner sample is ~36° off the axis.
+        scene.spot_lights = vec![spot_light(
+            Vec3::new(0.0, 0.0, -1.5),
+            Vec3::NEG_Z,
+            2.0,
+            6.0,
+            15.0,
+            25.0,
+        )];
+        let lit = renderer.render(&scene, size).expect("spot-lit sprite");
+
+        let centre = project(&scene.camera, Vec3::new(0.0, 0.0, -4.0), w, h);
+        let corner = project(&scene.camera, Vec3::new(1.3, 1.3, -4.0), w, h);
+        assert!(
+            luma(&lit, centre.0, centre.1) > luma(&unlit, centre.0, centre.1) + 30,
+            "a sprite inside the cone must be lit",
+        );
+        assert_eq!(
+            rgb_at(&lit, corner.0, corner.1),
+            rgb_at(&unlit, corner.0, corner.1),
+            "the sprite's corner, outside the outer cone, must receive exactly +0.0",
+        );
     }
 
     /// Each pipeline's hand-written vertex attribute layout matches the WGSL-reflected `@location`

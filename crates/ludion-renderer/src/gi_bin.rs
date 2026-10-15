@@ -317,6 +317,7 @@ mod tests {
         Light {
             position: [position.x, position.y, position.z, range],
             color: [1.0, 1.0, 1.0, 0.0],
+            axis: crate::cluster::POINT_LIGHT_AXIS,
         }
     }
 

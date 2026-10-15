@@ -480,6 +480,135 @@ impl SemanticValidate for PointLight {
     }
 }
 
+/// A dynamic spot light: a point light confined to a cone. Its position comes from the entity's
+/// [`Transform`].
+///
+/// Like [`DirectionalLight`], the axis is an explicit world-space `direction` field (`[x, y, z]`,
+/// normalized at extract) rather than the entity's rotation, so a parent's rotation does not turn
+/// it. Both angles are half-angles in degrees from the axis: full brightness inside `inner_angle`,
+/// falling smoothly to zero at `outer_angle`.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct SpotLight {
+    /// Linear RGB color (default white).
+    #[serde(default = "white3")]
+    pub color: [f32; 3],
+    /// Brightness multiplier, validated `>= 0` (default `1.0`).
+    #[serde(default = "one")]
+    #[schemars(range(min = 0.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 4.0]))]
+    pub intensity: f32,
+    /// Distance at which the light falls to zero (default `10.0`), validated `> 0`.
+    #[serde(default = "ten")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub range: f32,
+    /// World-space direction the cone points, `[x, y, z]` (default `[0, -1, 0]`, straight down).
+    /// Need not be unit length; normalized at extract. A zero-length or non-finite direction is
+    /// rejected by the semantic validator (`L1272`).
+    #[serde(default = "spot_direction")]
+    pub direction: [f32; 3],
+    /// Half-angle in degrees of the full-brightness core (default `20.0`); at most `outer_angle`
+    /// and within `[0, 90)`, else `L1272` (the validator, not the schema, owns the bounds).
+    #[serde(default = "spot_inner_angle")]
+    #[schemars(extend("x-ui-range" = [0.0, 89.0]))]
+    pub inner_angle: f32,
+    /// Half-angle in degrees where the light reaches zero (default `30.0`); within `[0, 90)`
+    /// (`L1272`).
+    #[serde(default = "spot_outer_angle")]
+    #[schemars(extend("x-ui-range" = [0.0, 89.0]))]
+    pub outer_angle: f32,
+}
+
+impl Default for SpotLight {
+    fn default() -> Self {
+        SpotLight {
+            color: [1.0; 3],
+            intensity: 1.0,
+            range: 10.0,
+            direction: [0.0, -1.0, 0.0],
+            inner_angle: 20.0,
+            outer_angle: 30.0,
+        }
+    }
+}
+
+impl SemanticValidate for SpotLight {
+    /// `color` is an HDR colour (`L1263`); `intensity` and `range` ride their schemars bounds. A
+    /// zero-length or non-finite `direction`, an angle outside `[0, 90)` or non-finite, and an
+    /// `inner_angle` above `outer_angle` are `L1272`. An absent angle compares as its default, so
+    /// `inner_angle: 40` alone is caught. A wrong *shape* is the schema's job (`L1014`) and is
+    /// passed through here.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = value_color_diagnostics("SpotLight", value, "color");
+        if let Some(direction) = value.get("direction").and_then(Value::as_array) {
+            let components: Vec<f64> = direction.iter().filter_map(as_stored_f32).collect();
+            if components.len() == 3 {
+                let finite = components.iter().all(|c| c.is_finite());
+                let length_squared: f64 = components.iter().map(|c| c * c).sum();
+                if !finite || length_squared == 0.0 {
+                    out.push(spot_light_invalid_direction("/direction"));
+                }
+            }
+        }
+        let default = SpotLight::default();
+        let mut angles = [
+            ("inner_angle", f64::from(default.inner_angle)),
+            ("outer_angle", f64::from(default.outer_angle)),
+        ];
+        let mut angles_valid = true;
+        for (name, angle) in &mut angles {
+            if let Some(authored) = value.get(*name).and_then(as_stored_f32) {
+                *angle = authored;
+                if !authored.is_finite() || !(0.0..90.0).contains(&authored) {
+                    out.push(spot_light_invalid_angle(name, authored));
+                    angles_valid = false;
+                }
+            }
+        }
+        let [(_, inner), (_, outer)] = angles;
+        if angles_valid && inner > outer {
+            out.push(spot_light_inverted_cone(inner, outer));
+        }
+        out
+    }
+}
+
+/// `L1272` — a `SpotLight`'s direction is zero-length or non-finite.
+fn spot_light_invalid_direction(pointer: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::SPOT_LIGHT_INVALID_CONE,
+        "the `SpotLight` direction is zero-length or non-finite; it must be a non-zero, finite \
+         vector to normalize into the cone's axis",
+    )
+    .with_path(pointer.to_string())
+    .with_help("give the direction a non-zero, finite `[x, y, z]` (e.g. `[0, -1, 0]`)")
+}
+
+/// `L1272` — a `SpotLight` angle is non-finite or outside `[0, 90)`.
+fn spot_light_invalid_angle(name: &str, angle: f64) -> Diagnostic {
+    Diagnostic::new(
+        code::SPOT_LIGHT_INVALID_CONE,
+        format!(
+            "the `SpotLight` {name} {angle} is outside [0, 90) degrees; the angles are \
+             half-angles from the cone's axis, and 90 or more is no longer a cone"
+        ),
+    )
+    .with_path(format!("/{name}"))
+    .with_help("use a finite half-angle below 90 degrees (defaults 20 and 30)")
+}
+
+/// `L1272` — a `SpotLight`'s core is wider than its cone.
+fn spot_light_inverted_cone(inner: f64, outer: f64) -> Diagnostic {
+    Diagnostic::new(
+        code::SPOT_LIGHT_INVALID_CONE,
+        format!(
+            "the `SpotLight` inner_angle {inner} is greater than its outer_angle {outer}, so the \
+             full-brightness core would be wider than the cone"
+        ),
+    )
+    .with_path("/inner_angle")
+    .with_help("make `inner_angle` at most `outer_angle` (equal gives a hard edge)")
+}
+
 /// A directional "sun" light: one global light with a parallel direction, casting a single
 /// orthographic shadow map.
 ///
@@ -3700,6 +3829,15 @@ fn two_hundred() -> f32 {
 fn shadow_bias_default() -> f32 {
     0.05
 }
+fn spot_direction() -> [f32; 3] {
+    [0.0, -1.0, 0.0]
+}
+fn spot_inner_angle() -> f32 {
+    20.0
+}
+fn spot_outer_angle() -> f32 {
+    30.0
+}
 fn sun_direction() -> [f32; 3] {
     [-0.3, -1.0, -0.2]
 }
@@ -3960,6 +4098,11 @@ pub fn builtin_registry() -> Registry {
     // Registered last, per the append-only order above.
     registry
         .register_validated::<MeshGrid>("MeshGrid")
+        .expect("unique");
+    // `SpotLight` carries a semantic validator (HDR colour, cone shape `L1272`). Registered last,
+    // per the append-only order above.
+    registry
+        .register_validated::<SpotLight>("SpotLight")
         .expect("unique");
     registry
 }
@@ -4321,6 +4464,20 @@ mod tests {
 
         let shadow_bias = &sun_schema["properties"]["shadow_bias"];
         assert_eq!(shadow_bias["x-ui-range"], serde_json::json!([0.0, 0.5]));
+
+        let spot_schema = serde_json::to_value(schemars::schema_for!(SpotLight)).unwrap();
+        let spot_props = &spot_schema["properties"];
+        assert_eq!(
+            spot_props["intensity"]["x-ui-range"],
+            serde_json::json!([0.0, 4.0])
+        );
+        assert_eq!(spot_props["intensity"]["minimum"], serde_json::json!(0.0));
+        for angle in ["inner_angle", "outer_angle"] {
+            assert_eq!(
+                spot_props[angle]["x-ui-range"],
+                serde_json::json!([0.0, 89.0])
+            );
+        }
     }
 
     /// Every register field of `ParticleEmitter` travels — the Effects view's emitter tab is the
@@ -4416,12 +4573,13 @@ mod tests {
                 "PathFollower",
                 "PrefabInstance",
                 "MeshGrid",
+                "SpotLight",
             ]
         );
         assert_eq!(
             registry.len(),
-            33,
-            "appending MeshGrid grows the registry by exactly one"
+            34,
+            "appending SpotLight grows the registry by exactly one"
         );
     }
 
@@ -4914,6 +5072,77 @@ mod tests {
         );
     }
 
+    /// An empty `SpotLight: {}` is the default, and a non-default one round-trips through serde.
+    #[test]
+    fn spot_light_defaults_and_round_trips() {
+        let spot: SpotLight = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(spot, SpotLight::default());
+        assert_eq!(spot.direction, [0.0, -1.0, 0.0]);
+        assert_eq!((spot.inner_angle, spot.outer_angle), (20.0, 30.0));
+        let custom = SpotLight {
+            color: [1.0, 0.8, 0.5],
+            intensity: 3.0,
+            range: 25.0,
+            direction: [1.0, -0.5, 0.0],
+            inner_angle: 5.0,
+            outer_angle: 12.5,
+        };
+        let json = serde_json::to_value(custom).unwrap();
+        assert_eq!(serde_json::from_value::<SpotLight>(json).unwrap(), custom);
+    }
+
+    /// Each bad `SpotLight` cone shape is `L1272` at the offending field; `inner == outer` (a hard
+    /// edge), the boundary `0`, and an absent angle compared against its default are legal or caught.
+    #[test]
+    fn a_bad_spot_light_cone_is_l1272() {
+        let zero = "        direction:\n          - 0.0\n          - 0.0\n          - 0.0\n";
+        refused_with("SpotLight", zero, "L1272", "/direction");
+        refused_with(
+            "SpotLight",
+            "        inner_angle: 90.0\n        outer_angle: 90.0\n",
+            "L1272",
+            "/inner_angle",
+        );
+        refused_with(
+            "SpotLight",
+            "        outer_angle: 90.0\n",
+            "L1272",
+            "/outer_angle",
+        );
+        refused_with(
+            "SpotLight",
+            "        outer_angle: -1.0\n",
+            "L1272",
+            "/outer_angle",
+        );
+        refused_with(
+            "SpotLight",
+            "        inner_angle: -5.0\n",
+            "L1272",
+            "/inner_angle",
+        );
+        refused_with(
+            "SpotLight",
+            "        inner_angle: 40.0\n        outer_angle: 30.0\n",
+            "L1272",
+            "/inner_angle",
+        );
+        refused_with(
+            "SpotLight",
+            "        inner_angle: 40.0\n",
+            "L1272",
+            "/inner_angle",
+        );
+        for clean in [
+            "        inner_angle: 30.0\n        outer_angle: 30.0\n",
+            "        inner_angle: 0.0\n        outer_angle: 0.0\n",
+            "        inner_angle: 10.0\n        outer_angle: 89.5\n",
+            "        direction:\n          - 1.0\n          - 0.0\n          - 0.0\n",
+        ] {
+            assert!(refusals("SpotLight", clean).is_empty(), "{clean:?}");
+        }
+    }
+
     /// Checks one component authored as block-style YAML (`body` is indented eight spaces) and
     /// returns the `(code, path)` pairs it is refused with, paths relative to the component.
     fn refusals(component: &str, body: &str) -> Vec<(String, String)> {
@@ -4953,6 +5182,13 @@ mod tests {
             "/intensity",
         );
         refused_with("PointLight", "        range: 0.0\n", "L1014", "/range");
+        refused_with(
+            "SpotLight",
+            "        intensity: -2.0\n",
+            "L1014",
+            "/intensity",
+        );
+        refused_with("SpotLight", "        range: 0.0\n", "L1014", "/range");
         refused_with(
             "DirectionalLight",
             "        intensity: -1.0\n",
@@ -5011,6 +5247,7 @@ mod tests {
         let rgba = "          - 1.0\n          - 1.0\n          - -0.5\n          - 1.0\n";
         let cases: Vec<(&str, String, &str)> = vec![
             ("PointLight", format!("        color:\n{rgb}"), "/color/1"),
+            ("SpotLight", format!("        color:\n{rgb}"), "/color/1"),
             (
                 "DirectionalLight",
                 format!("        color:\n{rgb}"),
@@ -5122,6 +5359,7 @@ mod tests {
             );
         }
         clean::<PointLight>("PointLight");
+        clean::<SpotLight>("SpotLight");
         clean::<DirectionalLight>("DirectionalLight");
         clean::<Sprite>("Sprite");
         clean::<Mesh>("Mesh");

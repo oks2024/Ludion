@@ -77,7 +77,7 @@ fn all_repo_shaders_reflect_and_unify() {
     // The clustered light set is composed into both mesh and sprite; each struct must unify to one
     // entry. `Light` is reachable only through the `light_list` storage array — a runtime-sized
     // `array<Light>` — and must still be emitted so the CPU side has a POD to fill the buffer with.
-    for (name, size) in [("Light", 32), ("LightHeader", 64)] {
+    for (name, size) in [("Light", 48), ("LightHeader", 64)] {
         assert_eq!(
             reflection.structs.iter().filter(|s| s.name == name).count(),
             1,
@@ -108,7 +108,7 @@ fn all_repo_shaders_reflect_and_unify() {
     // `min_binding_size` is the element stride, not the buffer's length).
     for (name, min) in [
         ("lights", 64u32),
-        ("light_list", 32),
+        ("light_list", 48),
         ("cluster_table", 8),
         ("cluster_lights", 4),
     ] {

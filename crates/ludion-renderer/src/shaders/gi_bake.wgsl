@@ -68,11 +68,13 @@ struct GiBakeParams {
 };
 
 // `snippets/lights.wgsl`'s `Light`, restated here because this shader composes no snippets: xyz =
-// world position, w = range; rgb = color * intensity (premultiplied), w unused. Bindgen unifies it
-// with that snippet's `Light`, so the two layouts cannot drift.
+// world position, w = range; rgb = color * intensity (premultiplied), w = 0; axis = (0, 0, 0, -2),
+// the point-light encoding (spots never reach GI). Bindgen unifies it with that snippet's `Light`,
+// so the two layouts cannot drift.
 struct Light {
     position: vec4<f32>,
     color: vec4<f32>,
+    axis: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> bake_params: GiBakeParams;

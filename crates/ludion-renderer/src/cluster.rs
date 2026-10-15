@@ -24,6 +24,13 @@ use ludion_core::math::glam::{Mat4, Vec3};
 use crate::scene::{RenderCamera, RenderScene};
 use crate::shader_gen::{CLUSTER_SLICES, CLUSTER_TILES_X, CLUSTER_TILES_Y, Light, LightHeader};
 
+/// `Light.axis` for a point light: `w < -1.5` is the shaders' point-light marker, which skips the
+/// spot cone factor entirely.
+pub(crate) const POINT_LIGHT_AXIS: [f32; 4] = [0.0, 0.0, 0.0, -2.0];
+/// The relative widening of a spot's cone bounding sphere — slack for the GPU's rounded `l` and
+/// `dot(-l, axis)` putting a fragment a rounding error outside the exact cone yet still lit.
+const CONE_SPHERE_MARGIN: f32 = 1e-3;
+
 /// The cluster grid's cell count — the CPU side of the WGSL grid consts, so `cluster_table`'s length
 /// and the shader's cell index cannot disagree about the grid's shape.
 const CLUSTER_CELLS: usize = (CLUSTER_TILES_X * CLUSTER_TILES_Y * CLUSTER_SLICES) as usize;
@@ -130,31 +137,45 @@ pub(crate) enum ClusterBuild {
 ///
 /// **The order is load-bearing** (`Plan/clustered-forward.md` decision 2 / the identity argument).
 /// `scene.lights` arrives in ascending-`EntityId` extract order and is packed verbatim — never
-/// sorted, never filtered. A fragment sums its cell's lights in ascending index order, so that order
-/// *is* the float summation order of every lit pixel; reordering here churns every lit golden. The
-/// binning below preserves it by construction: lights iterate outer, their cells inner, so each
-/// cell's list is appended to in ascending light index and needs no sort.
+/// sorted, never filtered — followed by `scene.spot_lights` in their own extract order, so a scene
+/// without spots packs exactly as a point-only build did (`Plan/spot-light.md` decision 4). A
+/// fragment sums its cell's lights in ascending index order, so that order *is* the float summation
+/// order of every lit pixel; reordering here churns every lit golden. The binning below preserves it
+/// by construction: lights iterate outer, their cells inner, so each cell's list is appended to in
+/// ascending light index and needs no sort.
 pub(crate) fn build_lights(
     scene: &RenderScene,
     render_extent: (u32, u32),
     build: ClusterBuild,
 ) -> LightUpload {
-    let mut lights: Vec<Light> = scene
-        .lights
-        .iter()
-        .map(|light| {
-            let c = light.color * light.intensity;
-            Light {
-                position: [
-                    light.position.x,
-                    light.position.y,
-                    light.position.z,
-                    light.range,
-                ],
-                color: [c.x, c.y, c.z, 0.0],
-            }
-        })
-        .collect();
+    let points = scene.lights.iter().map(|light| {
+        let c = light.color * light.intensity;
+        Light {
+            position: [
+                light.position.x,
+                light.position.y,
+                light.position.z,
+                light.range,
+            ],
+            color: [c.x, c.y, c.z, 0.0],
+            axis: POINT_LIGHT_AXIS,
+        }
+    });
+    let spots = scene.spot_lights.iter().map(|spot| {
+        let c = spot.color * spot.intensity;
+        let a = spot.direction;
+        Light {
+            position: [
+                spot.position.x,
+                spot.position.y,
+                spot.position.z,
+                spot.range,
+            ],
+            color: [c.x, c.y, c.z, spot.cos_inner],
+            axis: [a.x, a.y, a.z, spot.cos_outer],
+        }
+    });
+    let mut lights: Vec<Light> = points.chain(spots).collect();
 
     let (scale, bias) = shell_ladder();
     let sun = scene.sun.as_ref();
@@ -341,7 +362,8 @@ fn degenerate(count: usize) -> (Vec<[u32; 2]>, Vec<u32>, ClusterStats) {
     )
 }
 
-/// The cells one light's range-sphere can reach.
+/// The cells one light's bounding sphere can reach: a point light's range sphere, or a spot's
+/// [`bounding_sphere`].
 fn footprint_of(
     light: &Light,
     cam_pos: Vec3,
@@ -349,10 +371,7 @@ fn footprint_of(
     render_extent: (u32, u32),
     ladder: (f32, f32),
 ) -> Footprint {
-    let center = Vec3::new(light.position[0], light.position[1], light.position[2]);
-    // Mirrors both consumers' `max(light.position.w, 1e-3)`: a light authored at range 0 still lights
-    // a hair of geometry GPU-side, so the CPU must bin it as if it did.
-    let range = light.position[3].max(1e-3);
+    let (center, range) = bounding_sphere(light);
 
     // The scalar-f32 discipline the deleted `dist2` documented: three multiply-adds written out, no
     // glam reducing op, no fused intrinsic — one value, computed the same way everywhere.
@@ -373,6 +392,27 @@ fn footprint_of(
         .unwrap_or(((0, CLUSTER_TILES_X - 1), (0, CLUSTER_TILES_Y - 1)));
 
     Footprint { tx, ty, shell }
+}
+
+/// The sphere every fragment a light can reach lies in, as `(centre, radius)`.
+///
+/// A point light's is its range sphere. A spot reaches only the cone ∩ range sphere (its cone factor
+/// is an exact 0.0 outside the outer cone): for an outer half-angle θ ≤ 45° that sector's minimal
+/// bounding sphere passes through the apex and the rim circle — centre `apex + axis·R/(2cosθ)`,
+/// radius `R/(2cosθ)` — widened by [`CONE_SPHERE_MARGIN`]; a wider (or malformed) cone takes the
+/// range sphere at the apex.
+fn bounding_sphere(light: &Light) -> (Vec3, f32) {
+    let apex = Vec3::new(light.position[0], light.position[1], light.position[2]);
+    // Mirrors both consumers' `max(light.position.w, 1e-3)`: a light authored at range 0 still lights
+    // a hair of geometry GPU-side, so the CPU must bin it as if it did.
+    let range = light.position[3].max(1e-3);
+    let cos_outer = light.axis[3];
+    let axis = Vec3::new(light.axis[0], light.axis[1], light.axis[2]);
+    if cos_outer < std::f32::consts::FRAC_1_SQRT_2 || !axis.is_finite() {
+        return (apex, range);
+    }
+    let radius = range / (2.0 * cos_outer);
+    (apex + axis * radius, radius * (1.0 + CONE_SPHERE_MARGIN))
 }
 
 /// Which shell a squared camera distance falls in — the CPU mirror of the snippet's ladder lookup,
@@ -450,7 +490,7 @@ fn tile_of(pixel: f32, inv_extent: f32, tiles: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{PointLightData, aspect_ratio};
+    use crate::scene::{PointLightData, SpotLightData, aspect_ratio};
     use ludion_core::rng::DeterministicRng;
 
     const EXTENT: (u32, u32) = (192, 108);
@@ -730,6 +770,192 @@ mod tests {
         assert!(
             checked > 2_000,
             "only {checked} in-frustum samples were checked — the fixture stopped covering the frame",
+        );
+    }
+
+    fn spot(
+        position: Vec3,
+        direction: Vec3,
+        range: f32,
+        inner_deg: f32,
+        outer_deg: f32,
+    ) -> SpotLightData {
+        SpotLightData {
+            position,
+            direction: direction.normalize(),
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range,
+            cos_inner: inner_deg.to_radians().cos(),
+            cos_outer: outer_deg.to_radians().cos(),
+        }
+    }
+
+    /// A unit vector within `max_angle` radians of `axis` (not uniform; coverage, not statistics).
+    fn direction_within(rng: &mut DeterministicRng, axis: Vec3, max_angle: f32) -> Vec3 {
+        let (u, v) = axis.any_orthonormal_pair();
+        let tilt = rng.next_f32() * max_angle;
+        let spin = rng.next_f32() * std::f32::consts::TAU;
+        (axis * tilt.cos() + (u * spin.cos() + v * spin.sin()) * tilt.sin()).normalize()
+    }
+
+    /// Points then spots, each in extract order; a point carries the `w = -2` marker, a spot its two
+    /// cosines and axis. A scene without spots packs exactly the point-only array.
+    #[test]
+    fn points_pack_first_then_spots_each_in_extract_order() {
+        let camera = camera_at(Vec3::new(0.0, 3.0, 12.0), Vec3::ZERO);
+        let mut scene = scene_with(camera, vec![light(Vec3::X, 2.0), light(Vec3::Y, 3.0)]);
+        let point_only = build_lights(&scene, EXTENT, ClusterBuild::Culled);
+        assert_eq!(point_only.lights.len(), 2);
+        for packed in &point_only.lights {
+            assert_eq!(packed.axis, POINT_LIGHT_AXIS);
+            assert_eq!(packed.color[3], 0.0);
+        }
+
+        scene.spot_lights = vec![
+            spot(Vec3::Z, Vec3::NEG_Y, 5.0, 10.0, 20.0),
+            spot(Vec3::NEG_Z, Vec3::X, 6.0, 30.0, 30.0),
+        ];
+        let mixed = build_lights(&scene, EXTENT, ClusterBuild::Culled);
+        assert_eq!(mixed.lights.len(), 4);
+        assert_eq!(
+            bytemuck::cast_slice::<Light, u8>(&mixed.lights[..2]),
+            bytemuck::cast_slice::<Light, u8>(&point_only.lights),
+            "the points must pack exactly as in a spot-free scene",
+        );
+        for (packed, spot) in mixed.lights[2..].iter().zip(&scene.spot_lights) {
+            assert_eq!(packed.position[..3], spot.position.to_array());
+            assert_eq!(packed.position[3], spot.range);
+            assert_eq!(packed.color[3], spot.cos_inner);
+            assert_eq!(packed.axis[..3], spot.direction.to_array());
+            assert_eq!(packed.axis[3], spot.cos_outer);
+        }
+    }
+
+    /// A narrow spot's cone sphere is far smaller than its range sphere, so it bins into fewer
+    /// cells than a point light of the same range at its apex.
+    #[test]
+    fn a_narrow_spot_bins_into_fewer_cells_than_its_range_sphere() {
+        let camera = camera_at(Vec3::new(0.0, 4.0, 18.0), Vec3::ZERO);
+        let apex = Vec3::new(0.0, 6.0, 0.0);
+        let mut scene = scene_with(camera, vec![light(apex, 8.0)]);
+        scene.spot_lights = vec![spot(apex, Vec3::NEG_Y, 8.0, 8.0, 12.0)];
+        let upload = build_lights(&scene, EXTENT, ClusterBuild::Culled);
+        let sphere = cells_of(&upload, 0).len();
+        let cone = cells_of(&upload, 1).len();
+        assert!(cone > 0, "the spot must be filed somewhere");
+        assert!(
+            cone < sphere,
+            "a 12-degree spot ({cone} cells) must bin tighter than its range sphere ({sphere})",
+        );
+    }
+
+    /// The never-misses gate for spots: narrow, just under the 45-degree switch, wide (the
+    /// range-sphere fallback), hard-edged, and with the apex behind the camera. Half the samples are
+    /// drawn inside some spot's cone, since a uniform sample would rarely land in a narrow one. A
+    /// spot reaches a sample within range and strictly inside its outer cone — where the shader's
+    /// factor is non-zero.
+    #[test]
+    fn the_binning_never_misses_a_spot_that_reaches_a_sample_point() {
+        let mut rng = DeterministicRng::new(0x5B07_C0DE);
+        let mut checked = 0usize;
+        let mut lit = 0usize;
+        for case in 0..12 {
+            let eye = Vec3::new(
+                (rng.next_f32() - 0.5) * 30.0,
+                (rng.next_f32() - 0.5) * 20.0,
+                (rng.next_f32() - 0.5) * 30.0,
+            );
+            let target = Vec3::new(rng.next_f32() * 4.0, 0.0, 0.0);
+            let camera = camera_at(eye, target);
+            let forward = (target - eye).normalize();
+            let spots: Vec<SpotLightData> = (0..48)
+                .map(|i| {
+                    let (inner, outer) = match i % 4 {
+                        0 => (rng.next_f32() * 5.0, 5.0 + rng.next_f32() * 15.0),
+                        1 => (30.0, 40.0 + rng.next_f32() * 5.0),
+                        2 => (40.0, 46.0 + rng.next_f32() * 43.0),
+                        _ => {
+                            let edge = 2.0 + rng.next_f32() * 60.0;
+                            (edge, edge)
+                        }
+                    };
+                    let range = 0.5 + rng.next_f32() * 14.0;
+                    let (apex, dir) = if i % 6 == 0 {
+                        let apex = eye - forward * (0.5 + rng.next_f32() * 4.0);
+                        (apex, direction_within(&mut rng, forward, 0.6))
+                    } else {
+                        let apex = Vec3::new(
+                            (rng.next_f32() - 0.5) * 60.0,
+                            (rng.next_f32() - 0.5) * 30.0,
+                            (rng.next_f32() - 0.5) * 60.0,
+                        );
+                        let dir = direction_within(&mut rng, Vec3::NEG_Y, std::f32::consts::PI);
+                        (apex, dir)
+                    };
+                    spot(apex, dir, range, inner, outer)
+                })
+                .collect();
+            let mut scene = scene_with(camera, vec![light(Vec3::ZERO, 3.0)]);
+            scene.spot_lights = spots.clone();
+            let upload = build_lights(&scene, EXTENT, ClusterBuild::Culled);
+            let view_proj = camera.projection * camera.view;
+
+            for n in 0..6000 {
+                let sample = if n % 2 == 0 {
+                    let s = &spots[(rng.next_f32() * spots.len() as f32) as usize % spots.len()];
+                    let dir = direction_within(&mut rng, s.direction, s.cos_outer.acos());
+                    s.position + dir * (rng.next_f32() * s.range)
+                } else {
+                    Vec3::new(
+                        (rng.next_f32() - 0.5) * 70.0,
+                        (rng.next_f32() - 0.5) * 40.0,
+                        (rng.next_f32() - 0.5) * 70.0,
+                    )
+                };
+                let clip = view_proj * sample.extend(1.0);
+                if clip.w <= 0.0
+                    || clip.x.abs() > clip.w
+                    || clip.y.abs() > clip.w
+                    || clip.z < 0.0
+                    || clip.z > clip.w
+                {
+                    continue;
+                }
+                let frag = (
+                    (clip.x / clip.w * 0.5 + 0.5) * EXTENT.0 as f32,
+                    (0.5 - clip.y / clip.w * 0.5) * EXTENT.1 as f32,
+                );
+                let cell = cell_read_by(
+                    frag,
+                    (camera.position - sample).length_squared(),
+                    &upload.header,
+                );
+                let [offset, count] = upload.table[cell];
+                let slice = &upload.indices[offset as usize..(offset + count) as usize];
+                // Index 0 is the point light; every later entry is a spot.
+                for (index, packed) in upload.lights.iter().enumerate().skip(1) {
+                    let apex =
+                        Vec3::new(packed.position[0], packed.position[1], packed.position[2]);
+                    let axis = Vec3::new(packed.axis[0], packed.axis[1], packed.axis[2]);
+                    let to_sample = sample - apex;
+                    let in_range = to_sample.length() < packed.position[3].max(1e-3);
+                    if in_range && to_sample.normalize().dot(axis) > packed.axis[3] {
+                        lit += 1;
+                        assert!(
+                            slice.contains(&(index as u32)),
+                            "case {case}: spot {index} reaches {sample:?} but is absent from \
+                             cell {cell} — a conservatism hole",
+                        );
+                    }
+                }
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 2_000 && lit > 2_000,
+            "only {checked} in-frustum samples and {lit} lit pairs — the fixture stopped covering \
+             the cones",
         );
     }
 

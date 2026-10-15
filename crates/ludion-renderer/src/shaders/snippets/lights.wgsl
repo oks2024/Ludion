@@ -36,8 +36,11 @@ const CLUSTER_SLICES: u32 = 16u;
 struct Light {
     // xyz = world position, w = range.
     position: vec4<f32>,
-    // rgb = color * intensity (premultiplied), w unused.
+    // rgb = color * intensity (premultiplied), w = a spot's cos(inner half-angle), 0 for a point.
     color: vec4<f32>,
+    // A spot: xyz = unit cone axis, w = cos(outer half-angle). A point light: (0, 0, 0, -2) — any
+    // `w < -1.5` marks a point, and shaders skip the cone factor for it entirely.
+    axis: vec4<f32>,
 };
 
 // Everything that is one value for the whole frame; the unbounded data rides the storage buffers.
@@ -82,4 +85,32 @@ fn cluster_slice(frag_pos: vec2<f32>, view_dist_sq: f32) -> vec2<u32> {
     let ladder = log2(max(view_dist_sq, 1e-12)) * lights.grid.z + lights.grid.w;
     let shell = u32(clamp(ladder, 0.0, f32(CLUSTER_SLICES - 1u)));
     return cluster_table[(shell * CLUSTER_TILES_Y + ty) * CLUSTER_TILES_X + tx];
+}
+
+// A spot's cone factor for the surface-to-light unit vector `l`: 1 inside the inner cone, a Hermite
+// ramp between, and an exact 0.0 at or outside the outer cone (which is what keeps a conservatively
+// over-filed spot a `+0.0`). Written out rather than `smoothstep` so a hard edge
+// (`cos_inner == cos_outer`) never divides by zero, and a NaN `l` yields 0.
+fn spot_cone(light: Light, l: vec3<f32>) -> f32 {
+    let cos_angle = dot(-l, light.axis.xyz);
+    let cos_outer = light.axis.w;
+    let cos_inner = light.color.w;
+    if (!(cos_angle > cos_outer)) {
+        return 0.0;
+    }
+    if (cos_angle >= cos_inner) {
+        return 1.0;
+    }
+    let t = (cos_angle - cos_outer) / (cos_inner - cos_outer);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// The factor both lit loops multiply into a light's colour **first**: an exact 1.0 for a point light
+// (`axis.w < -1.5`), so `color * 1.0` is bit-identical and every later product, rounding and
+// contraction is the point-only shader's; a spot's cone factor otherwise.
+fn spot_factor(light: Light, l: vec3<f32>) -> f32 {
+    if (light.axis.w < -1.5) {
+        return 1.0;
+    }
+    return spot_cone(light, l);
 }
