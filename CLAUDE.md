@@ -25,10 +25,11 @@ The name: a *ludion* is a Cartesian diver — a sealed figure that responds inst
 - `Plan/asset-pipeline-blender.md` — phase 1 verdict 2026-10-02: Blender for the environment, characters stay voxel; kits in `games/vigil/art/town`, the loop in a private playbook.
 - `Plan/skeletal-animation.md` — W1–W3 mechanized (glTF skins import, joint tree, GPU bone palette, SkinBone parts drive bones); the goblin glb rides its Blender brief; W4 not started.
 - `Plan/animation-clips.md` — W1–W3 mechanized (clip import, characters, playback, crossfade, events, editor clip preview); sitting owed. `Plan/character-controller.md` — design settled. Both for a platformer.
-- `Plan/comfy-generation.md` — W1–W4 mechanized (`kind: generation` recipes, `ludion-gen` over a running ComfyUI server, `ludion gen`, the editor's Generation view); checkpoint 2 owed; checkpoint 3 ruled the multi-view `shape: mesh` path out (Status).
+- `Plan/comfy-generation.md` — W1–W4 mechanized (`kind: generation` recipes, `ludion-gen` over a running ComfyUI server, `ludion gen`, the editor's Generation view); checkpoint 2 owed.
 - `Plan/mesh-texture-editing.md` — W1–W2 mechanized (`kind: mesh-edit` op lists, `ludion-mesh-edit`, `ludion mesh pick`/`apply`, the seeded fill, `key`, polyline capsule); checkpoint 2 passed, the fill kept; Wave 3 waits on the user's word.
 - `Plan/font-assets.md` — W1–W3 mechanized (`layout()`, TTF bake, `font` field, SDF); W4 breakout on Inter, external adoption.
 - `Plan/textured-pbr.md` — W1–W4 mechanized; the exit gate's human look owed.
+- `Plan/spot-light.md` — W1–W3 mechanized (`SpotLight`); M4 twin and look owed.
 - `Plan/editor-stage-camera.md` — W1–W4 mechanized (`render.view`, a free editor camera); the live smoke owed.
 - `Plan/transform-hierarchy-and-prefabs.md` — W0–W4 mechanized (`Parent`-local `Transform`, `kind: prefab` instances, `prefab.*`, the editor's outliner); live smoke and Exit owed.
 - `Plan/editor-voxel-assemblies.md` — W1–W4 mechanized (the Voxel Artist view stages `kind: assembly` models read-only; editor-only); live smoke owed.
