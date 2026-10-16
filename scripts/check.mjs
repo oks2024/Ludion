@@ -296,6 +296,7 @@ const fmtStep    = { name: 'fmt',    cmd: 'cargo', args: ['fmt', '--all', '--', 
 const voxelKitStep = { name: 'voxel-kit', cmd: 'node', args: ['--test', 'scripts/voxel/grid.test.mjs'], log: 'voxel-kit.log' };
 // Vigil's pure-Node tests (town kit, generators): skipped with the game.
 const vigilNodeStep = { name: 'vigil-node', cmd: 'node', args: ['--test', 'games/vigil/art/town/lib/kits.test.mjs', 'games/vigil/art/town/lib/labcheck.test.mjs', 'games/vigil/art/town/lib/shadowbox.test.mjs', 'games/vigil/art/town/lib/scene.test.mjs', 'games/vigil/scripts/generators.test.mjs', 'games/vigil/scripts/city-map.test.mjs'], log: 'vigil-node.log' };
+const vigilLabStep = { name: 'vigil-lab', cmd: 'node', args: ['games/vigil/art/town/lib/labcheck.mjs'], log: 'vigil-lab.log' };
 // The commit wrapper's own tests: pure Node plus git over scratch repositories and a fake `lore`.
 // Mirrors ci.yml's `commit wrapper tests`.
 const commitWrapperStep = { name: 'commit-wrapper', cmd: 'node', args: ['--test', 'scripts/commit.test.mjs', 'scripts/mirror-lib.test.mjs', 'scripts/public-tree.test.mjs'], log: 'commit-wrapper.log' };
@@ -743,7 +744,7 @@ function printHistory() {
 }
 
 // ── reporting ───────────────────────────────────────────────────────────────
-const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
+const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
 const GREEN = '\x1b[32m'; const RED = '\x1b[31m'; const DIM = '\x1b[2m'; const BOLD = '\x1b[1m'; const RST = '\x1b[0m';
 
 function line(r) {
@@ -834,7 +835,7 @@ async function main() {
   if (runRust) {
     // No build lock among these, so each gets a lane of its own.
     const vigilLane = (step) => (hasVigil ? single(step) : Promise.resolve([vigilAbsent(step.name)]));
-    lanes.push(single(fmtStep), vigilLane(vigilFmtStep), single(voxelKitStep), vigilLane(vigilNodeStep), single(commitWrapperStep), single(gateScriptsStep), single(pinRitualStep), single(physicsFeaturesStep));
+    lanes.push(single(fmtStep), vigilLane(vigilFmtStep), single(voxelKitStep), vigilLane(vigilNodeStep), vigilLane(vigilLabStep), single(commitWrapperStep), single(gateScriptsStep), single(pinRitualStep), single(physicsFeaturesStep));
     lanes.push(heavyLane());
     lanes.push(tauriLane());
     lanes.push(runChainAll([fuzzFmtStep, fuzzClippyStep])); // detached workspace, own target/ and lock
