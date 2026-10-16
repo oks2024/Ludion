@@ -100,6 +100,13 @@ fn root(tag: &str) -> PathBuf {
     dir
 }
 
+fn set_readonly(path: &Path, readonly: bool) {
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(readonly);
+    std::fs::set_permissions(path, permissions).unwrap();
+}
+
 fn loaded(root: &Path, scene: &str) -> Engine {
     let mut engine = Engine::builder().project_root(root).build().unwrap();
     engine.load_inline_scene(scene).expect("the scene loads");
@@ -1104,21 +1111,25 @@ entities: []
         engine.set_recording(sink.clone()).unwrap();
         set_pose(&mut engine, ids["pair-1/arm"], 6.0);
 
+        // The apply writes through a temp sibling and a rename. A read-only file refuses the rename
+        // on Windows but not on Unix, where only a read-only directory refuses it; locking both
+        // fails the write everywhere.
         let path = root.join(PAIR_FILE);
-        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-        permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions.clone()).unwrap();
+        set_readonly(&path, true);
+        set_readonly(&root, true);
         // A privileged user (root in a container) writes through the read-only bit, so the failure
-        // this test provokes cannot happen there.
-        if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+        // this test provokes cannot happen there. The probe rewrites the same bytes.
+        if ludion_core::atomic::write_atomic(&path, PAIR).is_ok() {
+            set_readonly(&root, false);
+            set_readonly(&path, false);
             eprintln!("SKIPPED: the read-only bit does not block writes for this user");
             return;
         }
-        let found = engine.apply_prefab(ids["pair-1/base"], None).unwrap_err();
+        let found = engine.apply_prefab(ids["pair-1/base"], None);
+        set_readonly(&root, false);
+        set_readonly(&path, false);
+        let found = found.unwrap_err();
         assert_eq!(found[0].code, code::PREFAB_APPLY, "{}", found[0].message);
-        #[allow(clippy::permissions_set_readonly_false)]
-        permissions.set_readonly(false);
-        std::fs::set_permissions(&path, permissions).unwrap();
         assert_eq!(file(&root, PAIR_FILE), PAIR);
 
         engine.stop_recording().unwrap();

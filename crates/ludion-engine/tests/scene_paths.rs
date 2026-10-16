@@ -11,10 +11,12 @@ const SCENE: &str = "format: 1\nseed: 7\nentities: []\n";
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// A fresh directory to use as a content root.
+/// A fresh, empty directory to use as a content root. Emptied first: nextest runs each test in its
+/// own process and Windows reuses PIDs, so an earlier run's directory may share the name.
 fn temp_root() -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("ludion-scene-paths-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
