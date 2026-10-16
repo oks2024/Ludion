@@ -295,7 +295,7 @@ const fmtStep    = { name: 'fmt',    cmd: 'cargo', args: ['fmt', '--all', '--', 
 // Named literally: a glob that matches nothing makes `node --test` pass with zero tests.
 const voxelKitStep = { name: 'voxel-kit', cmd: 'node', args: ['--test', 'scripts/voxel/grid.test.mjs'], log: 'voxel-kit.log' };
 // Vigil's pure-Node tests (town kit, generators): skipped with the game.
-const vigilNodeStep = { name: 'vigil-node', cmd: 'node', args: ['--test', 'games/vigil/art/town/lib/kits.test.mjs', 'games/vigil/art/town/lib/labcheck.test.mjs', 'games/vigil/art/town/lib/shadowbox.test.mjs', 'games/vigil/art/town/lib/stage.test.mjs', 'games/vigil/art/town/lib/scene.test.mjs', 'games/vigil/scripts/generators.test.mjs', 'games/vigil/scripts/city-map.test.mjs'], log: 'vigil-node.log' };
+const vigilNodeStep = { name: 'vigil-node', cmd: 'node', args: ['--test', 'games/vigil/art/town/lib/kits.test.mjs', 'games/vigil/art/town/lib/labcheck.test.mjs', 'games/vigil/art/town/lib/review.test.mjs', 'games/vigil/art/town/lib/shadowbox.test.mjs', 'games/vigil/art/town/lib/stage.test.mjs', 'games/vigil/art/town/lib/scene.test.mjs', 'games/vigil/scripts/generators.test.mjs', 'games/vigil/scripts/city-map.test.mjs'], log: 'vigil-node.log' };
 const vigilLabStep = { name: 'vigil-lab', cmd: 'node', args: ['games/vigil/art/town/lib/labcheck.mjs'], log: 'vigil-lab.log' };
 // The commit wrapper's own tests: pure Node plus git over scratch repositories and a fake `lore`.
 // Mirrors ci.yml's `commit wrapper tests`.
