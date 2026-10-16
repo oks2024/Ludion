@@ -417,6 +417,13 @@ impl<'a> Builder<'a> {
                 None => {
                     // `node` is this entry's key.
                     let NodeValue::Scalar(Value::String(key)) = node.value else {
+                        let help = match &node.value {
+                            NodeValue::Scalar(scalar) if !scalar.is_null() => format!(
+                                "quote the key to make it a string (`\"{scalar}\": ...`); an \
+                                 unquoted digit, `true` or `false` is read as a number or boolean"
+                            ),
+                            _ => "quote the key to make it a string".to_string(),
+                        };
                         return Err(Diagnostic::new(
                             code::SCENE_YAML_COMPLEX_KEY,
                             format!(
@@ -427,7 +434,7 @@ impl<'a> Builder<'a> {
                             ),
                         )
                         .with_path(base_pointer)
-                        .with_help("quote the key to make it a string"));
+                        .with_help(help));
                     };
                     if let Some(first_line) = seen.get(&key) {
                         return Err(Diagnostic::new(
@@ -675,6 +682,14 @@ mod tests {
             "message was: {}",
             d.message
         );
+        let help = d.help.as_deref().unwrap_or_default();
+        assert!(
+            help.contains("quote the key") && help.contains("\"1\": ..."),
+            "help was: {help}"
+        );
+        let d = parse_err("legend:\n  1:\n    shape: x\n");
+        assert_eq!(d.path.as_deref(), Some("/legend"));
+        assert!(d.help.as_deref().unwrap_or_default().contains("\"1\": ..."));
     }
 
     #[test]
