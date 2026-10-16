@@ -1058,3 +1058,34 @@ fn map_check_marker_in_a_split_cells_sealed_half_is_l1029_warning() {
         "only the cut-off marker is stranded: {l1029}"
     );
 }
+
+/// A `Gate` whose `to` is empty (a built-dark map's unbuilt target) is timed like any other gate and
+/// labelled inert; the live pair's row is the one `traverse.map.yaml` prints.
+#[test]
+fn map_check_traverse_times_inert_gates_and_labels_them() {
+    let map = fixtures().join("traverse-inert.map.yaml");
+    let output = run_ludion(&["map-check", map.to_str().unwrap(), "--traverse"]);
+    assert!(
+        output.status.success(),
+        "an inert gate is not an error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let out = String::from_utf8_lossy(&output.stdout);
+    let row = |pair: &str| out.lines().find(|l| l.contains(pair)).unwrap_or("");
+    assert!(
+        out.contains("traverse: speed 6 u/s, 3 gates, 3 pairs\n"),
+        "expected three gates and pairs, got:\n{out}"
+    );
+    let live = row("gate-east -> gate-west");
+    assert!(
+        live.ends_with("180 u  30.0 s  transition (~30 s)"),
+        "the live pair's row must be unchanged, got: {live}"
+    );
+    for pair in ["gate-east -> gate-mid", "gate-mid  -> gate-west"] {
+        let line = row(pair);
+        assert!(
+            line.contains(" s  ") && line.ends_with("[inert gate: empty `to`]"),
+            "the inert gate must be timed and labelled, got: {line}"
+        );
+    }
+}

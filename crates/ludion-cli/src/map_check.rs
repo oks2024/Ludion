@@ -1031,6 +1031,9 @@ struct GateNode {
     /// Index into `doc.markers`, for the diagnostic's JSON Pointer.
     index: usize,
     name: String,
+    /// A `Gate` with an empty `to` — authored on a built-dark map, inert at runtime. Timed like any
+    /// other gate and labelled in the table.
+    inert: bool,
     /// The lattice sample a player stands on to use this gate: the free sample nearest the gate in
     /// its own cell, else in the first neighbouring cell that has one. `None` when the gate is walled
     /// in on all four sides — that bug is `L1028`'s, and reporting it again as a missing path would
@@ -1074,10 +1077,11 @@ impl Traverse {
             .markers
             .iter()
             .enumerate()
-            .filter(|(_, m)| marker_gate_target(m).is_some())
+            .filter(|(_, m)| marker_gate_target(m).is_some() || marker_is_inert_gate(m))
             .map(|(index, m)| GateNode {
                 index,
                 name: m.derived_name(index),
+                inert: marker_gate_target(m).is_none(),
                 approach: grid.cell_of(m.x, m.z).and_then(|(row, col)| {
                     approach_sample(grid, lattice, reached, (row, col), [m.x, m.z])
                 }),
@@ -1497,6 +1501,16 @@ fn marker_gate_target(marker: &MapMarker) -> Option<&str> {
     (!to.is_empty()).then_some(to)
 }
 
+/// Whether the marker carries a `Gate` whose `to` is the empty string — an unbuilt target.
+fn marker_is_inert_gate(marker: &MapMarker) -> bool {
+    marker
+        .components
+        .iter()
+        .find(|(n, _)| n == "Gate")
+        .and_then(|(_, gate)| gate.get("to").and_then(Value::as_str))
+        .is_some_and(str::is_empty)
+}
+
 // --- `--at` query ------------------------------------------------------------------------------
 
 /// The resolved facts of an `--at x,z` query: the cell it falls in, its walkable/blocked verdict, and
@@ -1902,6 +1916,12 @@ fn render_traverse(out: &mut String, t: &Traverse) {
                 }
                 Route::Disconnected => (None, "no walkable path (L1031)".to_string()),
                 Route::Sealed => (None, "a gate has no walkable cell (L1028)".to_string()),
+            };
+            let (from, to) = (&t.gates[*i], &t.gates[*j]);
+            let verdict = if from.inert || to.inert {
+                format!("{verdict}  [inert gate: empty `to`]")
+            } else {
+                verdict
             };
             Row {
                 from: t.gates[*i].name.clone(),

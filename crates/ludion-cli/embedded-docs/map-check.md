@@ -86,6 +86,10 @@ The last column names the band the crossing lands in — **transition** ~30 s, *
 105 s): the band says which gabarit you are nearest, the seconds whether you are inside it. The
 number is a floor — shortest path, no combat — so felt time runs longer.
 
+A `Gate` whose `to` is empty (an unbuilt target on a built-dark map) is timed like any other gate;
+its rows end `[inert gate: empty `to`]`. Only the `Gate` component counts — a game's own gate type
+is not read.
+
 ## The kit's `probe:` block
 
 An optional **`probe:`** block on the `kind: map-kit` document names the walker `map-check` measures
