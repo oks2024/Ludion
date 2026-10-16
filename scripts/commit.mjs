@@ -230,7 +230,14 @@ for (const [dir, hint] of [
     process.exit(2);
   }
 }
-const hasOrigin = git(['remote']).stdout.split(/\r?\n/).includes(REMOTE);
+const remotes = git(['remote']).stdout.split(/\r?\n/).filter(Boolean);
+const hasOrigin = remotes.includes(REMOTE);
+// The mirror pushes only to `origin`; a remote under another name would keep every mirror commit
+// local without a word.
+if (!hasOrigin && remotes.length) {
+  console.error(`commit: WARNING: git has remote(s) ${remotes.join(', ')} but no '${REMOTE}' — the mirror only`);
+  console.error(`commit: pushes to '${REMOTE}', so this mirror commit stays local. Fix: git remote rename <name> ${REMOTE}`);
+}
 const PRIVATE = privatePaths(readOptional('.gitignore'), readOptional('.loreignore'));
 // symbolic-ref (not rev-parse) so a freshly `git init`ed mirror — an unborn branch with no commits
 // yet — passes the check and receives its first snapshot; a fresh checkout on a new machine
@@ -373,16 +380,29 @@ function parseLoreCommit(output) {
 }
 
 // ── the public remote ───────────────────────────────────────────────────────
-// Refreshes origin/main; false only when the remote is unreachable. An empty remote (no `main`
-// yet) is reachable and leaves no origin/main.
+// Refreshes origin/main; false only when the remote is unreachable, git's own words kept in
+// `remoteError` — git runs quiet, and "unreachable" alone hides an SSH key or host-key refusal.
+// An empty remote (no `main` yet) is reachable and leaves no origin/main.
+let remoteError = '';
 function fetchRemote() {
+  const failed = (r) => {
+    remoteError = r.output.trim() || `git exited with code ${r.code} and printed nothing`;
+    return false;
+  };
   const ls = git(['ls-remote', REMOTE, `refs/heads/${MIRROR_BRANCH}`]);
-  if (ls.code !== 0) return false;
+  if (ls.code !== 0) return failed(ls);
   if (!ls.stdout.trim()) {
     if (revParse(REMOTE_MAIN)) git(['update-ref', '-d', REMOTE_MAIN]);
     return true;
   }
-  return git(['fetch', '--quiet', '--no-tags', REMOTE, `+refs/heads/${MIRROR_BRANCH}:${REMOTE_MAIN}`]).code === 0;
+  const fetch = git(['fetch', '--quiet', '--no-tags', REMOTE, `+refs/heads/${MIRROR_BRANCH}:${REMOTE_MAIN}`]);
+  return fetch.code === 0 || failed(fetch);
+}
+
+function printRemoteError() {
+  if (!remoteError) return;
+  console.error('commit: git said:');
+  for (const line of remoteError.split(/\r?\n/)) console.error(`commit:   ${line}`);
 }
 
 // origin/main's tip, its newest mirror commit, and the contributions after it. Mirror commits form
@@ -647,6 +667,7 @@ function reportMirrorProblem({ problem, contributions }) {
     failed: 'the mirror push failed (see above).',
   }[problem];
   console.error(`\ncommit: Lore is committed, but the git mirror did NOT reach ${REMOTE}: ${reason}`);
+  if (problem === 'unreachable') printRemoteError();
   if (contributions) printContributions(contributions);
   if (problem === 'contributions') {
     console.error('commit: run `node scripts/commit.mjs --import` — its import marker carries the held commit.');
@@ -871,6 +892,7 @@ function importFlow() {
   lorePreflight([]);
   if (!fetchRemote()) {
     console.error(`commit: could not fetch ${REMOTE} — --import needs the remote; try again once it is reachable.`);
+    printRemoteError();
     process.exit(2);
   }
   const { tip, lastTrailer, contributions } = remoteState();

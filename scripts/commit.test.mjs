@@ -286,6 +286,16 @@ describe('commit.mjs', { concurrency: true }, () => {
     assert.equal(w.server().rev, 2);
   });
 
+  test('1b. a remote under another name is named, not silently ignored', (t) => {
+    const w = makeWorld(t, { remote: false });
+    const a = w.workspace('a', { init: 'main' });
+    a.git('remote', 'add', 'public', path.join(w.root, 'nowhere.git'));
+    a.write('a.txt', 'one\n');
+    const r = a.commit('add a', 'a.txt');
+    expectCode(r, 0);
+    assert.match(r.out, /remote\(s\) public but no 'origin'/);
+  });
+
   test('2. two workspaces alternating keep origin/main linear', (t) => {
     const w = makeWorld(t);
     const a = w.workspace('a');
@@ -314,6 +324,7 @@ describe('commit.mjs', { concurrency: true }, () => {
     const offline = b.commit('add c', 'c.txt');
     expectCode(offline, 1);
     assert.match(offline.out, /unreachable/);
+    assert.match(offline.out, /git said:\n(commit: {3}.+\n)*commit: {3}.*missing\.git/);
     assert.equal(w.server().log.at(-1).message, 'add c');
 
     a.write('d.txt', 'D\n');
