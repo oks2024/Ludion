@@ -26,8 +26,28 @@ deps='target/debug/deps'
 max="${LUDION_DEPS_GUARD_MAX:-30000}"
 report="${LUDION_DEPS_GUARD_REPORT:-12000}"
 
+# Pre-warm: the scaffold resolves its own dependency set (no lockfile), so its dep stack is a cold
+# build after a clean. Paying it here, in a throwaway scaffold sharing the workspace target dir, is
+# exactly the warm reuse crates/ludion-cli/tests/dev.rs budgets around.
+prewarm() {
+    warm='target/tmp/deps-guard'
+    target_abs="$(pwd)/target"
+    rm -rf "$warm"
+    mkdir -p "$warm"
+    if cargo build -p ludion-cli \
+        && (cd "$warm" && "$target_abs/debug/ludion" new warm_game) \
+        && (cd "$warm/warm_game" && CARGO_TARGET_DIR="$target_abs" cargo build); then
+        echo "deps guard: scaffold dependency set pre-warmed"
+    else
+        echo "deps guard: pre-warm failed — expect one slow ludion-cli::dev run"
+    fi
+}
+
+# Absent means a cold checkout or a dev profile the target guard (ci/scripts/target-guard.mjs) just
+# deleted: either way the next ludion-cli::dev run would start cold.
 if [ ! -d "$deps" ]; then
-    echo "deps guard: no $deps yet (cold checkout), nothing to do"
+    echo "deps guard: no $deps (cold checkout or a target-guard clean) — pre-warming"
+    prewarm
     exit 0
 fi
 
@@ -52,18 +72,5 @@ if ! cargo clean --profile dev; then
     exit 0
 fi
 
-# Pre-warm: the scaffold resolves its own dependency set (no lockfile), so its dep stack is a cold
-# build after a clean. Paying it here, in a throwaway scaffold sharing the workspace target dir, is
-# exactly the warm reuse crates/ludion-cli/tests/dev.rs budgets around.
-warm='target/tmp/deps-guard'
-target_abs="$(pwd)/target"
-rm -rf "$warm"
-mkdir -p "$warm"
-if cargo build -p ludion-cli \
-    && (cd "$warm" && "$target_abs/debug/ludion" new warm_game) \
-    && (cd "$warm/warm_game" && CARGO_TARGET_DIR="$target_abs" cargo build); then
-    echo "deps guard: scaffold dependency set pre-warmed"
-else
-    echo "deps guard: pre-warm failed — expect one slow ludion-cli::dev run"
-fi
+prewarm
 exit 0

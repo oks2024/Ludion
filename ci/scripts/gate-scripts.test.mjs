@@ -21,6 +21,7 @@ import { writeFileAtomic } from '../../scripts/atomic-write.mjs';
 import { findPrefixedPrints, scanFiles } from './diagnostic-prints.mjs';
 import { findScheduleText, scanFiles as scheduleFiles, unallowedHits, ALLOWLIST as SCHEDULE_ALLOWLIST } from './schedule-comments.mjs';
 import { countCodeLines } from '../../scripts/ecs-budget.mjs';
+import { measure as measureTargets, plan as planTargetClean } from './target-guard.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const fingerprint = (rel) => {
@@ -718,4 +719,32 @@ test('the ECS budget counts code lines before the test module only', () => {
   assert.equal(countCodeLines(text), 3);
   assert.equal(countCodeLines('x\n  #[cfg(test)]\ny\n'), 3);
   assert.equal(countCodeLines(''), 0);
+});
+
+test('the target guard deletes the largest trees until under both limits, and nothing when under', () => {
+  const trees = [
+    { path: 'target/debug', bytes: 60 },
+    { path: 'target/package-verify', bytes: 30 },
+    { path: 'fuzz/target', bytes: 20 },
+  ];
+  assert.deepEqual(planTargetClean(trees, 100, 120, 40), []);
+  assert.deepEqual(planTargetClean(trees, 100, 80, 40).map((t) => t.path), ['target/debug']);
+  // Under the size limit but short of free space: the free-space limit alone triggers a clean.
+  assert.deepEqual(planTargetClean(trees, 10, 200, 60).map((t) => t.path), ['target/debug']);
+  assert.deepEqual(planTargetClean(trees, 0, 1, 1000).length, 3);
+});
+
+test('the target guard measures target/ per entry and the other trees whole', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'target-guard-'));
+  try {
+    mkdirSync(path.join(root, 'target', 'debug', 'deps'), { recursive: true });
+    writeFileSync(path.join(root, 'target', 'debug', 'deps', 'a.rlib'), Buffer.alloc(300));
+    writeFileSync(path.join(root, 'target', 'CACHEDIR.TAG'), Buffer.alloc(5));
+    mkdirSync(path.join(root, 'fuzz', 'target', 'x'), { recursive: true });
+    writeFileSync(path.join(root, 'fuzz', 'target', 'x', 'b'), Buffer.alloc(70));
+    const byPath = Object.fromEntries(measureTargets(root).map((t) => [t.path, t.bytes]));
+    assert.deepEqual(byPath, { 'target/debug': 300, 'target/CACHEDIR.TAG': 5, 'fuzz/target': 70 });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
