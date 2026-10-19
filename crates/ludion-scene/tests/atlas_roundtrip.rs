@@ -96,8 +96,16 @@ fn filter() -> impl Strategy<Value = AtlasFilter> {
     prop_oneof![Just(AtlasFilter::Nearest), Just(AtlasFilter::Linear)]
 }
 
+/// A string from `pattern` whose every `/` segment is a name a file can have on Windows: the
+/// validators refuse a device name such as `con` or `aux.png`.
+fn portable(pattern: &'static str) -> impl Strategy<Value = String> {
+    pattern.prop_filter("a Windows device name", |s| {
+        !s.split('/').any(ludion_core::paths::is_reserved_device)
+    })
+}
+
 fn region_names() -> impl Strategy<Value = Vec<String>> {
-    proptest::collection::vec("[a-z]{1,4}/[a-z]{1,4}", 1..4).prop_map(|mut names| {
+    proptest::collection::vec(portable("[a-z]{1,4}/[a-z]{1,4}"), 1..4).prop_map(|mut names| {
         names.sort();
         names.dedup();
         names
@@ -111,8 +119,8 @@ fn atlas_doc() -> impl Strategy<Value = AtlasDocument> {
         region_names(),
         0.5f64..64.0,
         filter(),
-        "[a-z]{1,6}[.]atlas-source[.]yaml",
-        "[a-z]{1,6}[.]png",
+        portable("[a-z]{1,6}[.]atlas-source[.]yaml"),
+        portable("[a-z]{1,6}[.]png"),
         any::<bool>(),
     )
         .prop_flat_map(
@@ -170,11 +178,11 @@ fn atlas_doc() -> impl Strategy<Value = AtlasDocument> {
 /// this family deliberately does not resolve them (only the bake has read the inputs).
 fn atlas_source_doc() -> impl Strategy<Value = AtlasSourceDocument> {
     (
-        proptest::option::of("[a-z]{1,6}"),
+        proptest::option::of(portable("[a-z]{1,6}")),
         0.5f64..64.0,
         filter(),
-        proptest::collection::vec("[a-z]{1,5}/[a-z]{1,5}[.]png", 1..4),
-        proptest::collection::vec("[a-z]{1,5}/[a-z]{1,5}", 1..4),
+        proptest::collection::vec(portable("[a-z]{1,5}/[a-z]{1,5}[.]png"), 1..4),
+        proptest::collection::vec(portable("[a-z]{1,5}/[a-z]{1,5}"), 1..4),
         any::<bool>(),
     )
         .prop_map(|(name, pixels_per_unit, filter, inputs, frames, looped)| {

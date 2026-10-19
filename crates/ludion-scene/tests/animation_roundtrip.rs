@@ -687,6 +687,17 @@ fn a_rotation_segment_turning_a_half_circle_is_l1142_with_a_split_hint() {
 }
 
 #[test]
+fn a_rotation_turn_too_large_to_count_segments_for_is_l1142_not_a_panic() {
+    // Found by the `kind_roundtrip` fuzzer: the segment count saturates `u32`.
+    let diagnostics = validate_animation(&turn_clip([0.0; 3], [0.0, 1e300, 0.0], Ease::Linear));
+    assert!(has_code_at(
+        &diagnostics,
+        "L1142",
+        "/tracks/torso/rotation/1/v/1"
+    ));
+}
+
+#[test]
 fn a_step_rotation_segment_may_jump_any_angle() {
     assert!(validate_animation(&turn_clip([0.0; 3], [0.0, 360.0, 0.0], Ease::Step)).is_empty());
 }

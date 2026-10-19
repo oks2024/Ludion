@@ -1130,7 +1130,7 @@ fn validate_rotation_turns(
             }
             continue;
         };
-        let segments = (turn / 180.0).floor() as u32 + 1;
+        let segments = ((turn / 180.0).floor() as u32).saturating_add(1);
         diagnostics.push(
             Diagnostic::new(
                 code::ANIMATION_DATA_CONSISTENCY,

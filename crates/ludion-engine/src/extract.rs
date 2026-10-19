@@ -462,7 +462,7 @@ fn frame_unknown(doc: &AtlasDocument, rel: &str, frame: &str, pointer: &str) -> 
 /// calls [`extract_at`] and passes both — keeping this three-argument shape means the callers with
 /// no opinion cannot accidentally express one.
 ///
-/// Each call decodes through its own fresh, prefetched [`AssetCache`] ([`extract_at`]).
+/// Each call decodes through its own fresh, prefetched `AssetCache` ([`extract_at`]).
 ///
 /// # Errors
 /// - `L2101` if the world has more than one [`Camera`].
@@ -527,7 +527,7 @@ pub fn extract(
 /// log to report that to, so it does not (the content-root validators and a live host's
 /// `extract_through` do).
 ///
-/// Each call decodes through its own fresh [`AssetCache`], prefetched in parallel — the loader a live
+/// Each call decodes through its own fresh `AssetCache`, prefetched in parallel — the loader a live
 /// host uses. Nothing carries between calls, so a one-shot render always re-reads the files and
 /// re-voxelizes.
 ///

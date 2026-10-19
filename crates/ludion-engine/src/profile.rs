@@ -17,8 +17,8 @@
 //! [`ScheduleObserver`] it attaches cannot mutate sim state, so a
 //! profiled run's [`WorldHash`](Engine::world_hash) is bit-identical to an unprofiled one (asserted
 //! by the `observer_does_not_change_world_hash` test below). The crate's clippy denylist bans
-//! [`std::time::Instant::now`] everywhere; the functions here that call it — and [`LoadClock`], the
-//! one implementor of the clock-free [`LoadObserver`] — scope an `allow` with that rationale,
+//! [`std::time::Instant::now`] everywhere; the functions here that call it — and `LoadClock`, the
+//! one implementor of the clock-free `LoadObserver` — scope an `allow` with that rationale,
 //! exactly as `live.rs` does for the tick clock.
 
 use std::collections::{BTreeMap, BTreeSet};
