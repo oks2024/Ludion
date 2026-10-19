@@ -1,6 +1,6 @@
 # Plan: map layout view — a top-down walkability picture of any map
 
-> Status: **planned, not started (2026-10-16).** Waits on its trigger: the reference game first runs a
+> Status: **planned, not started (2026-10-16; lessons recorded 2026-10-18; still not started).** Waits on its trigger: the reference game first runs a
 > game-side layout script over several maps, and this plan is revised from what that teaches before any
 > wave is built (user, 2026-10-16). Nothing here is decided beyond the shape; the open questions are
 > listed for that revision.
@@ -24,6 +24,33 @@ human can judge at a glance before any art exists.
 - The editor shows a map only as the rendered stage; it has no top-down occupancy view.
 - The reference game draws its whole-city plan with a game-side script (HTML, SVG), which is the model
   for the per-map script this plan waits on.
+
+## Lessons from the reference game's layout script (2026-10-18)
+
+The game-side script has now drawn 21 layouts. What it taught:
+
+**Built game-side:**
+- A PNG beside each page's HTML. Every drafting agent had been screenshotting the HTML with a headless
+  browser to read its own drawing; a raster written by the script itself removed that step.
+- A `drop` (void) block kind: ground that blocks like a wall but draws black, for a wall-top's edge or a
+  cliff.
+- The dead-end warning prints the marker to paste (`{ name, at, dead_end_ok: true }` at the stub's tip),
+  and says the place must stand past the junction.
+- A one-gate map is judged gate to farthest reachable point, wherever the spawn stands.
+- The city plan's landmark and POI points are checked against the layout as warnings, and the seam-pairing
+  verdict is printed in the summary.
+
+**Wanted, next in the game script:** a cross-layer hatch check and named, banded routes. Only the longest
+crossing was judged, so a tier route, two routes between the same gates and the end of a one-gate map
+could not be banded.
+
+**Wanted, not built (shape vocabulary):** a court with doors (one court took about 60 rectangles), a
+repeat or grid shape (21 near-identical rectangles), a circle or ring, a `walk:` ribbon (a wall-top), an
+"everything else is water" ground and a bridge shape. Drawing walkable ground by its complement is the
+cost.
+
+**Takeaway for this plan:** authoring ground positively (walk shapes) beats subtracting blocks, and a
+raster picture an agent can read matters more than SVG polish.
 
 ## Shape (to be revised)
 
