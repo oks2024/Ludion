@@ -1500,9 +1500,7 @@ mod tests {
         let mut observed = counter_engine();
         observed.observe_load();
         observed.load_inline_scene(SCENE).unwrap();
-        let load = measure_load(&mut observed)
-            .unwrap()
-            .expect("an observed load reports");
+        let load = finish_load(&mut observed).expect("an observed load reports");
         assert!(load.scene_ms.is_finite() && load.scene_ms >= 0.0);
         let mut observer = TimingObserver::default();
         for _ in 0..50 {
@@ -1566,7 +1564,7 @@ indices:
     }
 
     #[test]
-    fn load_profile_counts_decodes_and_reuse() {
+    fn needs_gpu_load_profile_counts_decodes_and_reuse() {
         let dir = std::env::temp_dir().join(format!("ludion-load-profile-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("meshes")).unwrap();
@@ -1734,7 +1732,8 @@ entities:
         let mut engine = Engine::with_project_root(&dir);
         engine.observe_load();
         engine.load_inline_scene(&scene).unwrap();
-        let load = measure_load(&mut engine).unwrap().expect("observed");
+        engine.extract_render_scene(320, 180).unwrap();
+        let load = finish_load(&mut engine).expect("observed");
         let cache = engine.asset_cache();
         for mesh in ["meshes/a.mesh.yaml", "meshes/b.mesh.yaml"] {
             assert!(cache.contains_mesh(mesh), "{mesh}");

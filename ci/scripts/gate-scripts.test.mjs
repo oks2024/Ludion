@@ -702,10 +702,16 @@ test('the schedule gate flags each rule and passes the near misses', () => {
   }
 });
 
-test('the schedule gate skips mirrors and generated files, and an allowlist entry suppresses only its needle', () => {
+// The schedule gate walks `git ls-files`; the Lore-only CI checkouts have no git work tree.
+const IN_GIT_TREE = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: ROOT, encoding: 'utf8' }).stdout?.trim() === 'true';
+
+test('the schedule gate skips mirrors and generated files', { skip: !IN_GIT_TREE && 'no git work tree' }, () => {
   const files = scheduleFiles(ROOT);
   assert.ok(files.length > 100);
   assert.ok(!files.some((f) => f.includes('embedded-docs/') || f.endsWith('protocol.d.ts') || f.startsWith('Plan/')));
+});
+
+test('a schedule allowlist entry suppresses only its needle', () => {
   const file = 'crates/ludion-protocol/src/response.rs';
   assert.ok(SCHEDULE_ALLOWLIST.some((e) => e.file === file));
   assert.deepEqual(unallowedHits(file, '/// always `"png"` in M1.'), []);
