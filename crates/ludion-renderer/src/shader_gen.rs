@@ -473,13 +473,15 @@ pub struct Reflections {
     pub env: [f32; 4],
     pub gi_origin: [f32; 4],
     pub gi_scale: [f32; 4],
+    pub ssr: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<Reflections>() == 128);
+const _: () = assert!(core::mem::size_of::<Reflections>() == 144);
 const _: () = assert!(core::mem::offset_of!(Reflections, inv_view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(Reflections, cam_pos) == 64);
 const _: () = assert!(core::mem::offset_of!(Reflections, env) == 80);
 const _: () = assert!(core::mem::offset_of!(Reflections, gi_origin) == 96);
 const _: () = assert!(core::mem::offset_of!(Reflections, gi_scale) == 112);
+const _: () = assert!(core::mem::offset_of!(Reflections, ssr) == 128);
 
 /// WGSL `struct ResolveParams`.
 ///
@@ -1052,6 +1054,10 @@ pub const REFLECTIONS_BINDING: u32 = 7;
 /// `bake_bin_table` — `@group(0) @binding(8)`, in `gi_bake.wgsl`.
 pub const BAKE_BIN_TABLE_GROUP: u32 = 0;
 pub const BAKE_BIN_TABLE_BINDING: u32 = 8;
+
+/// `refl_ssr` — `@group(0) @binding(8)`, in `reflections.wgsl`.
+pub const REFL_SSR_GROUP: u32 = 0;
+pub const REFL_SSR_BINDING: u32 = 8;
 
 /// `bake_bin_indices` — `@group(0) @binding(9)`, in `gi_bake.wgsl`.
 pub const BAKE_BIN_INDICES_GROUP: u32 = 0;
@@ -1757,12 +1763,12 @@ pub fn create_rect_tex_rect_sampler_bgl(device: &wgpu::Device) -> wgpu::BindGrou
     })
 }
 
-/// Bind group layout `refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections` (@group 0), from `reflections.wgsl`.
-pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_bgl(
+/// Bind group layout `refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr` (@group 0), from `reflections.wgsl`.
+pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections"),
+        label: Some("refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: REFL_NORMAL_BINDING,
@@ -1836,7 +1842,17 @@ pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_r
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(128),
+                    min_binding_size: wgpu::BufferSize::new(144),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: REFL_SSR_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
                 count: None,
             },

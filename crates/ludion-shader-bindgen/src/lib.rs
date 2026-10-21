@@ -164,6 +164,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "lobe.wgsl",
             "specular_ibl.wgsl",
             "gi_probe.wgsl",
+            "ssr.wgsl",
         ],
     ),
     ("resolve.wgsl", &["fullscreen_vs.wgsl"]),

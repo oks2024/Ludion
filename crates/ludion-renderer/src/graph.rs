@@ -911,11 +911,16 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     if let Some(ssr) = &ssr {
         declare_ssr_passes(&mut graph, ssr, scene, scene_normal, scene_depth);
     }
-    // Reads in the shader's binding order; additive into `scene`, after the opaque pass.
+    // Reads in the shader's binding order; additive into `scene`, after the opaque pass. The trace
+    // is the fourth read when SSR is on, and the edge that orders it before this pass.
+    let mut reflections_reads = vec![scene_normal, scene_specular, scene_depth];
+    if let Some(ssr) = &ssr {
+        reflections_reads.push(ssr.trace);
+    }
     graph.add_external_pass(
         pass::REFLECTIONS,
         pass::REFLECTIONS,
-        vec![scene_normal, scene_specular, scene_depth],
+        reflections_reads,
         vec![scene],
     );
     graph.add_external_pass_with_depth(
@@ -1947,16 +1952,17 @@ mod tests {
             reads("ssr_trace"),
             ["hiz", "ssr_color", "scene_normal", "scene_depth"]
         );
-        // The trace feeds nothing yet: `reflections` still reads exactly its three surface targets.
+        // `reflections` reads its three surface targets and then the trace.
         assert_eq!(
             reads("reflections"),
-            ["scene_normal", "scene_specular", "scene_depth"]
+            ["scene_normal", "scene_specular", "scene_depth", "ssr_trace"]
         );
         let order = schedule(&graph).unwrap();
         let names = order.order_names();
         let pos = |n: &str| names.iter().position(|p| *p == n).unwrap();
         assert!(pos("hiz_reduce_9") < pos("ssr_trace"));
         assert!(pos("ssr_color_reduce_9") < pos("ssr_trace"));
+        assert!(pos("ssr_trace") < pos("reflections"));
         assert!(pos("ssr_trace") < pos("transparents"));
     }
 

@@ -3016,6 +3016,8 @@ impl FrameRecorder<'_> {
     /// specular and depth targets (the pass's declared read order, which is the shader's binding
     /// order), then the sky cube, BRDF LUT and probe volume. It adds the sky's indirect specular.
     fn record_reflections(&self, pass: &mut RecordedPass<'_>) {
+        // The trace is the fourth read, present only when the graph declared the SSR chain.
+        let ssr = pass.inputs.len() == 4;
         let mut env = self.resolved_env.params;
         env[3] = self.gi_strengths.sky_visibility;
         let uniform = shader_gen::Reflections {
@@ -3024,6 +3026,12 @@ impl FrameRecorder<'_> {
             env,
             gi_origin: self.resolved_gi.origin,
             gi_scale: self.resolved_gi.scale,
+            ssr: [
+                if ssr { 1.0 } else { 0.0 },
+                crate::ssr_trace::SsrLook::DEFAULT.intensity,
+                0.0,
+                0.0,
+            ],
         };
         let uniform_buf = init_buffer(
             pass.device,
@@ -3061,6 +3069,15 @@ impl FrameRecorder<'_> {
                 wgpu::BindGroupEntry {
                     binding: shader_gen::REFL_SAMP_BINDING,
                     resource: wgpu::BindingResource::Sampler(&self.r.linear_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_SSR_BINDING,
+                    resource: wgpu::BindingResource::TextureView(
+                        pass.inputs
+                            .get(3)
+                            .copied()
+                            .unwrap_or(&self.r.fallback_hdr.view),
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::REFLECTIONS_BINDING,
@@ -4467,6 +4484,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Lobe,
             Snippet::SpecularIbl,
             Snippet::GiProbe,
+            Snippet::Ssr,
         ],
         layouts: &[LayoutId::Reflections],
     },
@@ -4833,7 +4851,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Reflections,
-        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_bgl,
+        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_bgl,
     },
     LayoutDesc {
         id: LayoutId::HizSeed,
@@ -12011,12 +12029,14 @@ mod tests {
         target
     }
 
-    /// The SSR pyramids and trace are inert: a frame whose graph also builds them renders the same
-    /// pixels as the frame that does not, every new pass validates and records (no wgpu fault), at an odd
-    /// extent and under supersampling (the trace extent follows the output, not the render extent).
+    /// Above the roughness fade band the trace's confidence is 0, so a frame whose graph also builds the
+    /// SSR chain (and whose `reflections` reads the trace) renders the same pixels as the frame that
+    /// does not, every pass validates and records (no wgpu fault), at an odd extent and under
+    /// supersampling (the trace extent follows the output, not the render extent).
     #[test]
-    fn needs_gpu_ssr_pyramids_leave_the_frame_untouched() {
-        let Some(renderer) = skip_or_renderer("ssr_pyramids_leave_the_frame_untouched") else {
+    fn needs_gpu_ssr_above_the_fade_band_leaves_the_frame_untouched() {
+        let Some(renderer) = skip_or_renderer("ssr_above_the_fade_band_leaves_the_frame_untouched")
+        else {
             return;
         };
         for size in [
@@ -12043,7 +12063,7 @@ mod tests {
                 Vec3::new(2.0, 1.0, 2.0),
                 [0.8; 4],
             );
-            metal_box.material = [0.5, 1.0, 0.0];
+            metal_box.material = [0.8, 1.0, 0.0];
             scene.meshes = vec![metal_box];
 
             let plain = renderer.render(&scene, size).expect("plain render");
@@ -12060,9 +12080,78 @@ mod tests {
                 .expect("the ssr frame renders");
             assert!(
                 renderer.gpu.take_fault().is_none(),
-                "{w}x{h}: a pyramid pass faulted"
+                "{w}x{h}: an ssr pass faulted"
             );
-            assert_eq!(plain.rgba, with_ssr.rgba, "{w}x{h}: pyramids moved a pixel");
+            assert_eq!(
+                plain.rgba, with_ssr.rgba,
+                "{w}x{h}: the blend moved a pixel"
+            );
+        }
+    }
+
+    /// With SSR on, the mirror floor shows the cube: the floor just in front of its base is redder than
+    /// the sky-only frame, and floor whose ray leaves the screen is within 2/255 of it.
+    #[test]
+    fn needs_gpu_ssr_reflects_a_box_in_a_mirror_floor() {
+        let Some(renderer) = skip_or_renderer("ssr_reflects_a_box_in_a_mirror_floor") else {
+            return;
+        };
+        let size = FrameSize::native(96, 64);
+        let mut scene = RenderScene::empty(size.render);
+        scene.post = Some(exact_post());
+        scene.environment = Some(test_env());
+        let eye = Vec3::new(0.0, 4.5, 7.5);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::new(0.0, 0.5, 0.0), Vec3::Y),
+            projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.5, 0.1, 100.0),
+            position: eye,
+        };
+        let mut floor = ground(50.0);
+        floor.material = [0.02, 1.0, 0.0];
+        let mut red_box = cube(Vec3::new(0.0, 0.5, 0.0), Vec3::ONE, [1.0, 0.0, 0.0, 1.0]);
+        red_box.material = [0.5, 0.0, 1.0];
+        scene.meshes = vec![floor, red_box];
+
+        let off = renderer.render(&scene, size).expect("sky-only render");
+        let chain = PostChain {
+            ssr: true,
+            ..PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params)
+        };
+        let (graph, output) = build_frame_graph(size, chain);
+        let scheduled = schedule(&graph).expect("the ssr graph schedules");
+        let recorder = renderer.prepare_frame(&scene, size, None);
+        let on = renderer
+            .gpu
+            .execute(&scheduled, output, &recorder)
+            .expect("the ssr frame renders");
+        assert!(renderer.gpu.take_fault().is_none(), "the ssr frame faulted");
+
+        let (w, h) = size.output;
+        let pixel = |image: &RenderedImage, (x, y): (u32, u32)| -> [i32; 3] {
+            let at = ((y * w + x) * 4) as usize;
+            std::array::from_fn(|c| i32::from(image.rgba[at + c]))
+        };
+        for z in [0.8, 1.0] {
+            let at = project(&scene.camera, Vec3::new(0.0, 0.0, z), w, h);
+            let (off, on) = (pixel(&off, at), pixel(&on, at));
+            assert!(
+                on[0] - on[2] > off[0] - off[2] + 8,
+                "floor at z={z} {at:?} is not redder: off {off:?}, on {on:?}"
+            );
+        }
+        for world in [
+            Vec3::new(5.0, 0.0, 0.0),
+            Vec3::new(-5.0, 0.0, 0.0),
+            Vec3::new(4.0, 0.0, -2.0),
+        ] {
+            let at = project(&scene.camera, world, w, h);
+            let (off, on) = (pixel(&off, at), pixel(&on, at));
+            for c in 0..3 {
+                assert!(
+                    (off[c] - on[c]).abs() <= 2,
+                    "floor {world} {at:?} moved: off {off:?}, on {on:?}"
+                );
+            }
         }
     }
 
