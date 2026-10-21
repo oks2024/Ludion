@@ -25,6 +25,7 @@ The reference game that drove many engine arcs is private; its design and plans 
 - [Physics](physics.md) — W1–W4 mechanized (`ludion-physics` over pinned rapier3d); cross-arch verified, nothing owed.
 - [Physics collision layers](physics-collision-layers.md) — W1–W2 mechanized; W3 closed as not needed; nothing owed.
 - [Projectile patterns](projectile-patterns.md) — W1–W4 mechanized (`kind: pattern`, `Volley`, `PatternPlayer`); exit rides a first real consumer.
+- [Reflections](reflections.md) — design settled (cone-traced SSR over box and sphere probes, one blend pass); not started.
 - [Rotation and camera representations](rotation-representation.md) — W1 shipped (rotation math in `ludion_core::math`); macOS half owed.
 - [Scalability](scalability.md) — W1–W3 landed (nine quality axes, render scale); W4 planned, macOS confirmation owed.
 - [Scene load speed](scene-load-speed.md) — planned (load-phase profiling, parallel asset prefetch, cache retained across loads); not started.

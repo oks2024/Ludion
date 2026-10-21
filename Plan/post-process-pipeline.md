@@ -973,8 +973,10 @@ engine hard-codes. The engine ships neutral defaults and orthogonal operators.
   agent cannot author a 32³ LUT by hand.
 - **ID target / editor picking without a CPU raycast** — trigger: editor selection ergonomics or
   perf. Rides the MRT seam.
-- **Screen-space reflections** — trigger: content with wet or reflective surfaces; wants TAA
-  first.
+- **Screen-space reflections** — trigger: content with wet or reflective surfaces. **Answered by
+  `Plan/reflections.md`** (2026-10-19): the trigger fired. SSR ships cone-traced over a Hi-Z and a
+  pre-convolved colour pyramid, with no history, so it does not wait on TAA. Temporal SSR carries
+  that plan's own trigger.
 
 ## Risks
 

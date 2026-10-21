@@ -147,7 +147,7 @@ These are facts about this engine, not preferences. C1 and C3–C6 are hard: a p
 one is dead. **C2 is not of that kind** — it is scoped work, and it is listed here only because the
 first draft of this document mistook it for a boundary and reached one conclusion too many from it.
 
-**C1 — No temporal accumulation. Ever.** `docs/ludion-renderer.md`: *"No temporal accumulation —
+**C1 — No temporal accumulation.** *(Amended 2026-10-19: not "ever". Screen-space history stays rejected until a recorded trigger fires; `Plan/reflections.md` decision 12 holds the first one.)* `docs/ludion-renderer.md`: *"No temporal accumulation —
 test mode is the only mode. The same scene on the same adapter yields byte-identical pixels across
 processes."* The post-process arc rejected TAA on the deeper reason: reprojection makes the image a
 function of *camera history* rather than world state, and the agent's screenshot query would stop
