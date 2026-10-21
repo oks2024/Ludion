@@ -426,9 +426,9 @@ jobs:
         run: node ci/scripts/schema-drift.mjs
 
       # The gate scripts' own tests: the canary's probes, no other gate writes a tracked file, the
-      # check.mjs run lock.
+      # check.mjs run lock, its --scope path classifier.
       - name: Gate script tests
-        run: node --test ci/scripts/gate-scripts.test.mjs
+        run: node --test ci/scripts/gate-scripts.test.mjs scripts/check-scope.test.mjs
 
       # Schema drift writes no tracked file; fails, never skips, without the protocol dependencies.
       - name: Schema drift writes nothing
