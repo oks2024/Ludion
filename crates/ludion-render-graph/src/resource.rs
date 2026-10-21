@@ -116,6 +116,9 @@ pub struct Extent2d {
 /// range ~0.02–0.05 about five times the codes of linear 8-bit; alpha stays linear). Together with
 /// the scene's `Rgba16Float` that is 24 render-target bytes per sample, under the WebGPU floor's
 /// 32.
+///
+/// [`R32Float`](TextureFormat::R32Float) is a single-channel 32-bit float, **unfilterable**, used
+/// for depth pyramids: standard-Z depth in fp16 has 2^-11 spacing near 1, where the scene lives.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextureFormat {
@@ -125,6 +128,9 @@ pub enum TextureFormat {
     /// exceed 1.0 before tonemapping. Never read back directly (the tonemap pass resolves to
     /// [`Rgba8UnormSrgb`](TextureFormat::Rgba8UnormSrgb)).
     Rgba16Float,
+    /// 32-bit float, one channel — a depth pyramid's format. Renderable on the WebGPU floor but
+    /// unfilterable: read it with `textureLoad`.
+    R32Float,
     /// 32-bit float depth — the scene pass's depth attachment, and (once a pass samples it) a shadow
     /// map. A depth format is never a color attachment and never read back for presentation; it is
     /// attached with [`TextureUsage::RenderAttachment`] and, when a later pass samples it,
@@ -138,6 +144,7 @@ impl TextureFormat {
         match self {
             TextureFormat::Rgba8UnormSrgb => 4,
             TextureFormat::Rgba16Float => 8,
+            TextureFormat::R32Float => 4,
             TextureFormat::Depth32Float => 4,
         }
     }
@@ -147,6 +154,7 @@ impl TextureFormat {
         match self {
             TextureFormat::Rgba8UnormSrgb => "rgba8unorm_srgb",
             TextureFormat::Rgba16Float => "rgba16float",
+            TextureFormat::R32Float => "r32float",
             TextureFormat::Depth32Float => "depth32_float",
         }
     }
@@ -156,6 +164,7 @@ impl TextureFormat {
         match self {
             TextureFormat::Rgba8UnormSrgb => wgpu::TextureFormat::Rgba8UnormSrgb,
             TextureFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
+            TextureFormat::R32Float => wgpu::TextureFormat::R32Float,
             TextureFormat::Depth32Float => wgpu::TextureFormat::Depth32Float,
         }
     }
@@ -254,6 +263,25 @@ impl TextureDesc {
             depth_slices: None,
             mip_levels: 1,
             format: TextureFormat::Rgba16Float,
+            usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
+        }
+    }
+
+    /// A single-channel 32-bit float color target that is also sampleable downstream — a depth
+    /// pyramid's level (see [`TextureFormat::R32Float`]).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_render_graph::{TextureDesc, TextureFormat};
+    ///
+    /// assert_eq!(TextureDesc::r32_float(8, 8).format, TextureFormat::R32Float);
+    /// ```
+    pub fn r32_float(width: u32, height: u32) -> Self {
+        TextureDesc {
+            extent: Extent2d { width, height },
+            depth_slices: None,
+            mip_levels: 1,
+            format: TextureFormat::R32Float,
             usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
         }
     }

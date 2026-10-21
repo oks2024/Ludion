@@ -72,6 +72,8 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "gi_bake.wgsl",
     "gi_inject.wgsl",
     "ground_marker.wgsl",
+    "hiz_reduce.wgsl",
+    "hiz_seed.wgsl",
     "ibl.wgsl",
     "mesh.wgsl",
     "particle.wgsl",
@@ -83,12 +85,18 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "sky.wgsl",
     "sprite.wgsl",
     "ssao.wgsl",
+    "ssr_color.wgsl",
     "text.wgsl",
     "threshold.wgsl",
     "ui_rect.wgsl",
     "ui_text.wgsl",
     "upscale.wgsl",
 ];
+
+/// WGSL global names of `texture_2d<f32>` bindings that are **not** filterable (an `R32Float`
+/// source read with `textureLoad`). WGSL cannot express it, so reflection takes it from this list;
+/// binding names are workspace-unique, so a name is a safe key.
+pub const UNFILTERABLE_TEXTURES: &[&str] = &["hiz_src"];
 
 /// The render graph's reflected shaders (files under `crates/ludion-render-graph/src/shaders/`).
 pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl"];
@@ -143,6 +151,8 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("dof.wgsl", &["fullscreen_vs.wgsl"]),
     ("dof_coc.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("ground_marker.wgsl", &["camera.wgsl"]),
+    ("hiz_reduce.wgsl", &["fullscreen_vs.wgsl", "footprint.wgsl"]),
+    ("hiz_seed.wgsl", &["fullscreen_vs.wgsl", "footprint.wgsl"]),
     ("particle.wgsl", &["camera.wgsl"]),
     ("prepass.wgsl", &["camera.wgsl", "skin.wgsl", "bayer.wgsl"]),
     (
@@ -163,6 +173,10 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("shadow.wgsl", &["skin.wgsl"]),
     ("sky.wgsl", &["sky_gradient.wgsl"]),
     ("ssao.wgsl", &["fullscreen_vs.wgsl", "bayer.wgsl"]),
+    (
+        "ssr_color.wgsl",
+        &["fullscreen_vs.wgsl", "hdr.wgsl", "footprint.wgsl"],
+    ),
     ("threshold.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("upscale.wgsl", &["fullscreen_vs.wgsl"]),
 ];
@@ -279,6 +293,32 @@ mod tests {
             }
         );
         assert_eq!(s.size, 64);
+    }
+
+    #[test]
+    fn a_listed_texture_is_unfilterable() {
+        let r = reflect_one(
+            r#"
+            @group(0) @binding(0) var hiz_src: texture_2d<f32>;
+            @group(0) @binding(1) var other_src: texture_2d<f32>;
+            @fragment fn fs() -> @location(0) vec4<f32> {
+                return textureLoad(hiz_src, vec2<i32>(0), 0) + textureLoad(other_src, vec2<i32>(0), 0);
+            }
+            "#,
+        );
+        let sample = |name: &str| match &r.binding_named(name).unwrap().kind {
+            BindingKind::Texture { sample, .. } => *sample,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            sample("hiz_src"),
+            TextureSample::Float { filterable: false }
+        );
+        assert_eq!(
+            sample("other_src"),
+            TextureSample::Float { filterable: true }
+        );
+        assert!(emit(&r).contains("filterable: false"));
     }
 
     #[test]

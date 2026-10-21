@@ -268,9 +268,8 @@ pub enum StorageAccess {
     ReadWrite,
 }
 
-/// How a texture is sampled. `filterable` on `Float` is not expressible in WGSL, so it defaults to
-/// `true` (matches every current binding). There is no per-binding override — a real non-filterable
-/// binding is what would force one.
+/// How a texture is sampled. `filterable` on `Float` is not expressible in WGSL, so it is `true`
+/// unless the global's name is in [`UNFILTERABLE_TEXTURES`](crate::UNFILTERABLE_TEXTURES).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextureSample {
     Float { filterable: bool },

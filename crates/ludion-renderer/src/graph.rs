@@ -1,6 +1,6 @@
 //! The frame graph: a fifteen-pass pipeline (sixteen with UI, with a sun, or with a render scale
 //! off native, two more with light shafts, two more with depth of field, three more with ambient
-//! occlusion) declared through `ludion-render-graph`.
+//! occlusion, and two seed-plus-reduce chains with screen-space reflections) declared through `ludion-render-graph`.
 //!
 //! The structure depends only on the [`FrameSize`] and the [`PostChain`] (bloom is always on), so the
 //! graph is a pure function of `(size, chain)` and needs no GPU to build or dump. That is what makes
@@ -38,7 +38,7 @@
 //! [`FrameSize`] carries two extents — what the client asked for (`output`) and what the chain draws
 //! at (`render`, `output × scale`). The normative rule is that **only the scene pass's colour and
 //! depth targets, and `ldr`, are sized from the render extent; every other target is sized from the
-//! output extent.**
+//! output extent** — the SSR pyramids (`hiz`, `ssr_color`) among them, at output × 0.5.
 //!
 //! That is what makes a render scale a pure quality change. Expressing a filter's footprint in
 //! *target*-texel units (as `record_blur` and the pyramid do) only makes it screen-relative if the
@@ -97,6 +97,15 @@
 //! test and clear are untouched. An AO frame therefore rasterizes its geometry twice — which is
 //! exactly the geometry SSAO reads.
 //!
+//! [`PostChain::ssr`] adds the trace's two input pyramids between the opaque pass and `reflections`,
+//! at the trace extent (output × 0.5): `hiz` (`R32Float`, a per-cell min-Z of `scene_depth`) and
+//! `ssr_color` (`Rgba16Float`, the opaque `scene` pre-convolved per mip), each a seed pass plus one
+//! reduce pass per further mip. Nothing reads them yet.
+//!
+//! ```text
+//! scene ─► hiz_seed ─► hiz_reduce_1 ─► … ─► ssr_color_seed ─► ssr_color_reduce_1 ─► … ─► reflections
+//! ```
+//!
 //! The scene's three passes write `scene` and `scene_depth` between them, which the graph orders by
 //! one rule: **passes that write the same subresource run in declaration order**
 //! ([`schedule`](fn@schedule): a later writer follows an earlier one, and a reader follows the
@@ -149,6 +158,16 @@ pub mod pass {
     /// The reflections pass: a fullscreen additive draw over the opaque scene. It reads its normal,
     /// specular and depth targets and adds the sky's indirect specular into `scene`.
     pub const REFLECTIONS: &str = "reflections";
+    /// The Hi-Z seed: scene depth into `hiz` mip 0 as a per-cell minimum.
+    pub const HIZ_SEED: &str = "hiz_seed";
+    /// A Hi-Z reduce: one `hiz` mip's per-cell minimum over the mip above. Named `hiz_reduce_{k}`
+    /// for the mip it writes.
+    pub const HIZ_REDUCE: &str = "hiz_reduce";
+    /// The colour-pyramid seed: the opaque `scene` into `ssr_color` mip 0, before `reflections`.
+    pub const SSR_COLOR_SEED: &str = "ssr_color_seed";
+    /// A colour-pyramid reduce: a 4×4 tent over the mip above. Named `ssr_color_reduce_{k}` for the
+    /// mip it writes.
+    pub const SSR_COLOR_REDUCE: &str = "ssr_color_reduce";
     /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
     /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.
     pub const TRANSPARENTS: &str = "transparents";
@@ -513,6 +532,12 @@ pub struct PostChain {
     /// [`ui`](PostChain::ui), and additionally reads `scene_depth` so the lines can be dimmed where
     /// geometry hides them.
     pub debug_lines: bool,
+    /// The scene enables screen-space reflections: the [`pass::HIZ_SEED`] / [`pass::HIZ_REDUCE`]
+    /// and [`pass::SSR_COLOR_SEED`] / [`pass::SSR_COLOR_REDUCE`] pyramid passes are added between
+    /// `scene` and `reflections`, building the `hiz` and `ssr_color` transients at the trace extent.
+    /// False leaves the graph with neither the resources nor the passes, which is what makes an
+    /// SSR-free frame byte-identical by construction rather than by care.
+    pub ssr: bool,
 }
 
 impl PostChain {
@@ -549,6 +574,8 @@ impl PostChain {
             // of a conjunction.
             gi_inject: crate::gi_inject::scheduled_lattice(scene),
             debug_lines: !scene.debug_lines.is_empty(),
+            // No scene field enables screen-space reflections yet.
+            ssr: false,
         }
     }
 
@@ -800,6 +827,22 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     let gi_dynamic = chain.gi_inject.map(|[cx, cy, cz]| {
         graph.transient(pass::GI_INJECT, TextureDesc::hdr_storage_volume(cx, cy, cz))
     });
+    // The SSR input pyramids, at the trace extent (a post target: sized from the output). Declared
+    // only when SSR is on, after the other conditional chains and before `final`.
+    let ssr = chain.ssr.then(|| {
+        let extent = crate::ssr_pyramid::trace_extent(size);
+        let levels = crate::ssr_pyramid::levels(extent);
+        let (tw, th) = extent;
+        let hiz = graph.transient(
+            "hiz",
+            TextureDesc::r32_float(tw, th).with_mip_levels(levels),
+        );
+        let color = graph.transient(
+            "ssr_color",
+            TextureDesc::hdr_color(tw, th).with_mip_levels(levels),
+        );
+        (hiz, color, levels)
+    });
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
     let output = graph.output("final", TextureDesc::present_target(width, height));
@@ -867,6 +910,39 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         vec![scene, scene_normal, scene_specular],
         scene_depth,
     );
+    // The pyramids sit between `scene` and `reflections`: a read follows the latest writer declared
+    // before it, so the colour seed sees the opaque scene before `reflections` adds into it, and the
+    // Hi-Z seed runs before `transparents` attach the depth.
+    if let Some((hiz, color, levels)) = ssr {
+        graph.add_external_pass(
+            pass::HIZ_SEED,
+            pass::HIZ_SEED,
+            vec![scene_depth],
+            vec![hiz.mip(0)],
+        );
+        for k in 1..levels {
+            graph.add_external_pass(
+                format!("{}_{k}", pass::HIZ_REDUCE),
+                pass::HIZ_REDUCE,
+                vec![hiz.mip(k - 1)],
+                vec![hiz.mip(k)],
+            );
+        }
+        graph.add_external_pass(
+            pass::SSR_COLOR_SEED,
+            pass::SSR_COLOR_SEED,
+            vec![scene],
+            vec![color.mip(0)],
+        );
+        for k in 1..levels {
+            graph.add_external_pass(
+                format!("{}_{k}", pass::SSR_COLOR_REDUCE),
+                pass::SSR_COLOR_REDUCE,
+                vec![color.mip(k - 1)],
+                vec![color.mip(k)],
+            );
+        }
+    }
     // Reads in the shader's binding order; additive into `scene`, after the opaque pass.
     graph.add_external_pass(
         pass::REFLECTIONS,
@@ -1151,6 +1227,8 @@ mod tests {
                 gi_inject: (bits & 32 != 0).then_some([4, 4, 4]),
                 // Content like `ui`, so masking leaves it alone (`ui` already varies over the walk).
                 debug_lines: bits & 1 != 0,
+                // Passes through `masked` untouched, so any value holds the identity.
+                ssr: bits & 4 != 0,
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -1666,6 +1744,107 @@ mod tests {
         assert_eq!(reads("bloom_up_1"), ["bloom_up_2", "bloom_down_1"]);
         // Level 0's own "downsample result" is the shared bright pass.
         assert_eq!(reads("bloom_up_0"), ["bloom_up_1", "bloom_bright"]);
+    }
+
+    fn ssr_chain() -> PostChain {
+        PostChain {
+            ssr: true,
+            ..PostChain::default()
+        }
+    }
+
+    /// With `ssr` off the graph has neither pyramid; `for_scene` derives false (no scene field
+    /// enables it yet), so every real frame is the pre-SSR graph.
+    #[test]
+    fn ssr_off_declares_no_pyramids() {
+        assert!(!PostChain::for_scene(&RenderScene::empty((1920, 1080))).ssr);
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), PostChain::default());
+        assert!(!resource_names(&graph).contains(&"hiz"));
+        assert!(
+            pass_names(&graph)
+                .iter()
+                .all(|n| !n.starts_with("hiz") && !n.starts_with("ssr_color"))
+        );
+    }
+
+    #[test]
+    fn ssr_pyramids_are_full_chains_at_the_trace_extent() {
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), ssr_chain());
+        let find = |name: &str| graph.resources().iter().find(|r| r.name == name).unwrap();
+        let hiz = find("hiz");
+        assert_eq!(hiz.desc.format.as_str(), "r32float");
+        assert_eq!(
+            (
+                hiz.desc.extent.width,
+                hiz.desc.extent.height,
+                hiz.desc.mip_levels
+            ),
+            (960, 540, 10)
+        );
+        let color = find("ssr_color");
+        assert_eq!(color.desc.format.as_str(), "rgba16float");
+        assert_eq!(
+            (
+                color.desc.extent.width,
+                color.desc.extent.height,
+                color.desc.mip_levels
+            ),
+            (960, 540, 10)
+        );
+        // A supersampled frame's trace extent still follows the output.
+        let (ssaa, _) = build_frame_graph(
+            FrameSize::scaled(1920, 1080, RenderScale::new(2.0).unwrap()),
+            ssr_chain(),
+        );
+        let hiz = ssaa.resources().iter().find(|r| r.name == "hiz").unwrap();
+        assert_eq!((hiz.desc.extent.width, hiz.desc.extent.height), (960, 540));
+    }
+
+    #[test]
+    fn ssr_pyramids_schedule_between_scene_and_reflections() {
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), ssr_chain());
+        let order = schedule(&graph).unwrap();
+        let names = order.order_names();
+        let pos = |n: &str| names.iter().position(|p| *p == n).unwrap();
+        assert!(pos("scene") < pos("hiz_seed"));
+        assert!(pos("scene") < pos("ssr_color_seed"));
+        assert!(pos("hiz_seed") < pos("hiz_reduce_1"));
+        assert!(pos("hiz_reduce_9") < pos("reflections"));
+        assert!(pos("ssr_color_reduce_9") < pos("reflections"));
+        assert!(pos("reflections") < pos("transparents"));
+        let find = |name: &str| graph.passes().iter().find(|p| p.name == name).unwrap();
+        let label = |id: &ResourceId| {
+            let name = &graph.resources()[id.index()].name;
+            format!("{name}@mip{}", id.mip_level().unwrap())
+        };
+        let reduce = find("hiz_reduce_3");
+        assert_eq!(
+            reduce.reads().iter().map(label).collect::<Vec<_>>(),
+            ["hiz@mip2"]
+        );
+        assert_eq!(
+            reduce.color_targets().iter().map(label).collect::<Vec<_>>(),
+            ["hiz@mip3"]
+        );
+    }
+
+    /// A tiny or odd frame clamps the chain to its few levels and still schedules.
+    #[test]
+    fn ssr_pyramids_clamp_on_a_tiny_or_odd_frame() {
+        for (w, h, levels) in [(1, 1, 1), (3, 1, 2), (67, 45, 6)] {
+            let (graph, _) = build_frame_graph(FrameSize::native(w, h), ssr_chain());
+            let hiz = graph.resources().iter().find(|r| r.name == "hiz").unwrap();
+            assert_eq!(hiz.desc.mip_levels, levels, "{w}x{h}");
+            schedule(&graph).unwrap();
+        }
+    }
+
+    #[test]
+    fn ssr_pyramids_appear_in_the_graph_dump() {
+        let json = dump_frame_graph_json(FrameSize::native(1920, 1080), ssr_chain()).unwrap();
+        for needle in ["r32float", "hiz@mip3", "ssr_color_reduce_2"] {
+            assert!(json.contains(needle), "{needle} missing from the dump");
+        }
     }
 
     /// A degenerate resolution cannot produce a zero-extent level: every level clamps to at least

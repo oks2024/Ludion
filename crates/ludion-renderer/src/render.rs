@@ -2515,6 +2515,8 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::GI_INJECT => self.record_gi_inject(pass),
             pass::SCENE => self.record_scene(pass),
             pass::REFLECTIONS => self.record_reflections(pass),
+            pass::HIZ_SEED | pass::HIZ_REDUCE => self.record_hiz(pass),
+            pass::SSR_COLOR_SEED | pass::SSR_COLOR_REDUCE => self.record_ssr_color(pass),
             pass::TRANSPARENTS => self.record_transparents(pass),
             // The bright-pass threshold (`PostProcess.bloom_threshold`; default 1.0 reproduces the
             // old shader literal).
@@ -3349,6 +3351,34 @@ impl FrameRecorder<'_> {
         self.fullscreen_effect(pass, ShaderId::BloomDown, &[], bytemuck::bytes_of(&params));
     }
 
+    /// One Hi-Z pyramid mip: the per-cell minimum depth over the footprint in the source (scene
+    /// depth for the seed, the mip above for a reduce).
+    fn record_hiz(&self, pass: &mut RecordedPass<'_>) {
+        let target = pass.colors()[0].extent;
+        let params = shader_gen::HizParams {
+            target_extent: [target.width as f32, target.height as f32],
+            pad: [0.0; 2],
+        };
+        let id = if pass.kind == pass::HIZ_SEED {
+            ShaderId::HizSeed
+        } else {
+            ShaderId::HizReduce
+        };
+        self.fullscreen_effect(pass, id, &[], bytemuck::bytes_of(&params));
+    }
+
+    /// One colour-pyramid mip: the area box over the opaque scene for the seed, the tent over the
+    /// mip above for a reduce.
+    fn record_ssr_color(&self, pass: &mut RecordedPass<'_>) {
+        let target = pass.colors()[0].extent;
+        let params = shader_gen::SsrColorParams {
+            target_extent: [target.width as f32, target.height as f32],
+            reduce: u32::from(pass.kind == pass::SSR_COLOR_REDUCE),
+            pad: 0,
+        };
+        self.fullscreen_effect(pass, ShaderId::SsrColor, &[], bytemuck::bytes_of(&params));
+    }
+
     /// The supersampling resolve: the composited render-extent image box-filtered down to the output
     /// extent. The source extent comes from the frame's [`FrameSize`] rather than the pass (a
     /// `RecordedPass` knows only what it writes), and the ratio is computed here so the shader loops
@@ -4166,6 +4196,9 @@ enum ShaderId {
     UiText,
     DebugLine,
     Reflections,
+    HizSeed,
+    HizReduce,
+    SsrColor,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -4191,7 +4224,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 24;
+const SHADER_COUNT: usize = 27;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -4410,6 +4443,27 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         ],
         layouts: &[LayoutId::Reflections],
     },
+    ShaderDesc {
+        id: ShaderId::HizSeed,
+        file_name: "hiz_seed.wgsl",
+        body: include_str!("shaders/hiz_seed.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Footprint],
+        layouts: &[LayoutId::HizSeed],
+    },
+    ShaderDesc {
+        id: ShaderId::HizReduce,
+        file_name: "hiz_reduce.wgsl",
+        body: include_str!("shaders/hiz_reduce.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Footprint],
+        layouts: &[LayoutId::HizReduce],
+    },
+    ShaderDesc {
+        id: ShaderId::SsrColor,
+        file_name: "ssr_color.wgsl",
+        body: include_str!("shaders/ssr_color.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Hdr, Snippet::Footprint],
+        layouts: &[LayoutId::SsrColor],
+    },
 ];
 
 impl ShaderId {
@@ -4490,6 +4544,9 @@ enum Snippet {
     /// `sh_l1` and `sky_visibility_at`, the one read of the sky-visibility probe volume,
     /// binding-free (mesh, reflections).
     GiProbe,
+    /// The pyramid footprint rule — a child texel's source interval and the texels it touches,
+    /// binding-free (the Hi-Z and SSR colour pyramids).
+    Footprint,
     /// The glyph-atlas `@group(1)` bindings, the shared `VsOut` and the coverage `fs_main` (text,
     /// ui_text).
     Glyph,
@@ -4511,6 +4568,7 @@ impl Snippet {
             Snippet::Lobe => "lobe.wgsl",
             Snippet::SpecularIbl => "specular_ibl.wgsl",
             Snippet::GiProbe => "gi_probe.wgsl",
+            Snippet::Footprint => "footprint.wgsl",
             Snippet::Glyph => "glyph.wgsl",
         }
     }
@@ -4529,6 +4587,7 @@ impl Snippet {
             Snippet::Lobe => include_str!("shaders/snippets/lobe.wgsl"),
             Snippet::SpecularIbl => include_str!("shaders/snippets/specular_ibl.wgsl"),
             Snippet::GiProbe => include_str!("shaders/snippets/gi_probe.wgsl"),
+            Snippet::Footprint => include_str!("shaders/snippets/footprint.wgsl"),
             Snippet::Glyph => include_str!("shaders/snippets/glyph.wgsl"),
         }
     }
@@ -4548,6 +4607,7 @@ impl Snippet {
             Snippet::Lobe,
             Snippet::SpecularIbl,
             Snippet::GiProbe,
+            Snippet::Footprint,
             Snippet::Glyph,
         ]
         .into_iter()
@@ -4605,10 +4665,13 @@ enum LayoutId {
     Ui,
     DebugLine,
     Reflections,
+    HizSeed,
+    HizReduce,
+    SsrColor,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 26;
+const LAYOUT_COUNT: usize = 29;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -4726,6 +4789,18 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         id: LayoutId::Reflections,
         create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_bgl,
     },
+    LayoutDesc {
+        id: LayoutId::HizSeed,
+        create: shader_gen::create_hiz_depth_hiz_samp_hiz_params_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::HizReduce,
+        create: shader_gen::create_hiz_src_hiz_samp_hiz_params_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::SsrColor,
+        create: shader_gen::create_ssr_src_ssr_samp_ssr_color_params_bgl,
+    },
 ];
 
 /// Every bind group layout, built once and indexed by [`LayoutId`].
@@ -4823,6 +4898,19 @@ fn build_pipeline(
         ShaderId::UiText => build_ui_text_pipeline(device, label, src, &layout),
         ShaderId::DebugLine => build_debug_line_pipeline(device, label, src, &layout),
         ShaderId::Reflections => build_reflections_pipeline(device, label, src, &layout),
+        // The Hi-Z pyramid is single-channel 32-bit float: fp16 depth would have 2^-11 spacing
+        // near the far plane, where the whole scene lives.
+        ShaderId::HizSeed | ShaderId::HizReduce => build_fullscreen_pipeline(
+            device,
+            label,
+            src,
+            &layout,
+            wgpu::TextureFormat::R32Float,
+            None,
+        ),
+        ShaderId::SsrColor => {
+            build_fullscreen_pipeline(device, label, src, &layout, HDR_FORMAT, None)
+        }
     };
     ShaderPipelines {
         main,
@@ -5784,6 +5872,28 @@ mod tests {
             ],
             [0, 1, 2],
         );
+        // The SSR pyramids: one input texture each (the Hi-Z seed's is scene depth), a sampler they
+        // never call, then the uniform.
+        assert_eq!(
+            [
+                shader_gen::HIZ_DEPTH_BINDING,
+                shader_gen::HIZ_SAMP_BINDING,
+                shader_gen::HIZ_PARAMS_BINDING,
+            ],
+            [0, 1, 2],
+        );
+        assert_eq!(shader_gen::HIZ_SRC_BINDING, 0);
+        assert_eq!(
+            [
+                shader_gen::SSR_SRC_BINDING,
+                shader_gen::SSR_SAMP_BINDING,
+                shader_gen::SSR_COLOR_PARAMS_BINDING,
+            ],
+            [0, 1, 2],
+        );
+        assert_eq!(fullscreen_layout(ShaderId::HizSeed), LayoutId::HizSeed);
+        assert_eq!(fullscreen_layout(ShaderId::HizReduce), LayoutId::HizReduce);
+        assert_eq!(fullscreen_layout(ShaderId::SsrColor), LayoutId::SsrColor);
         // And each of those shaders binds exactly the one layout the helper fills.
         assert_eq!(fullscreen_layout(ShaderId::Resolve), LayoutId::Resolve);
         assert_eq!(fullscreen_layout(ShaderId::Upscale), LayoutId::Upscale);
@@ -11756,8 +11866,21 @@ mod tests {
         id: ShaderId,
         inputs: &[&wgpu::TextureView],
         uniform: &[u8],
-        (w, h): (u32, u32),
+        extent: (u32, u32),
     ) -> Vec<[f32; 4]> {
+        let target = run_effect_into(renderer, id, inputs, uniform, extent, HDR_FORMAT);
+        crate::gi_bake::read_probe_texture(&renderer.gpu, &target).expect("the target reads back")
+    }
+
+    /// [`run_effect`] into a `format` target, returned unread.
+    fn run_effect_into(
+        renderer: &Renderer,
+        id: ShaderId,
+        inputs: &[&wgpu::TextureView],
+        uniform: &[u8],
+        (w, h): (u32, u32),
+        format: wgpu::TextureFormat,
+    ) -> wgpu::Texture {
         let device = renderer.gpu.device();
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("run_effect target"),
@@ -11769,7 +11892,7 @@ mod tests {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: HDR_FORMAT,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -11821,7 +11944,246 @@ mod tests {
             pass.draw(0..3, 0..1);
         }
         renderer.gpu.queue().submit(Some(encoder.finish()));
-        crate::gi_bake::read_probe_texture(&renderer.gpu, &target).expect("the target reads back")
+        target
+    }
+
+    /// The SSR pyramids are inert: a frame whose graph also builds them renders the same pixels as
+    /// the frame that does not, every new pass validates and records (no wgpu fault), at an odd
+    /// extent and under supersampling (the trace extent follows the output, not the render extent).
+    #[test]
+    fn needs_gpu_ssr_pyramids_leave_the_frame_untouched() {
+        let Some(renderer) = skip_or_renderer("ssr_pyramids_leave_the_frame_untouched") else {
+            return;
+        };
+        for size in [
+            FrameSize::native(67, 45),
+            FrameSize::scaled(64, 48, crate::RenderScale::new(2.0).unwrap()),
+        ] {
+            let (w, h) = size.output;
+            let mut scene = RenderScene::empty(size.render);
+            scene.post = Some(exact_post());
+            scene.environment = Some(test_env());
+            let eye = Vec3::new(0.0, 1.0, 8.0);
+            scene.camera = crate::scene::RenderCamera {
+                view: Mat4::look_at_rh(eye, Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
+                projection: Mat4::perspective_rh(
+                    60.0_f32.to_radians(),
+                    w as f32 / h as f32,
+                    0.1,
+                    100.0,
+                ),
+                position: eye,
+            };
+            let mut metal_box = cube(
+                Vec3::new(0.0, -0.5, 0.0),
+                Vec3::new(2.0, 1.0, 2.0),
+                [0.8; 4],
+            );
+            metal_box.material = [0.5, 1.0, 0.0];
+            scene.meshes = vec![metal_box];
+
+            let plain = renderer.render(&scene, size).expect("plain render");
+            let chain = PostChain {
+                ssr: true,
+                ..PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params)
+            };
+            let (graph, output) = build_frame_graph(size, chain);
+            let scheduled = schedule(&graph).expect("the ssr graph schedules");
+            let recorder = renderer.prepare_frame(&scene, size, None);
+            let with_ssr = renderer
+                .gpu
+                .execute(&scheduled, output, &recorder)
+                .expect("the ssr frame renders");
+            assert!(
+                renderer.gpu.take_fault().is_none(),
+                "{w}x{h}: a pyramid pass faulted"
+            );
+            assert_eq!(plain.rgba, with_ssr.rgba, "{w}x{h}: pyramids moved a pixel");
+        }
+    }
+
+    /// One IEEE binary16 for a normal value (or zero) that is exactly representable.
+    fn f16_exact(v: f32) -> u16 {
+        if v == 0.0 {
+            return 0;
+        }
+        let bits = v.to_bits();
+        let sign = (bits >> 16) & 0x8000;
+        let exp = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+        let mant = (bits & 0x7f_ffff) >> 13;
+        assert!(
+            (1..31).contains(&exp) && bits & 0x1fff == 0,
+            "{v} is not f16-exact"
+        );
+        (sign | ((exp as u32) << 10) | mant) as u16
+    }
+
+    fn upload_2d(
+        renderer: &Renderer,
+        format: wgpu::TextureFormat,
+        (w, h): (u32, u32),
+        bytes: &[u8],
+        bytes_per_texel: u32,
+    ) -> wgpu::TextureView {
+        let size = wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        };
+        let texture = renderer
+            .gpu
+            .device()
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("pyramid oracle source"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+        renderer.gpu.queue().write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * bytes_per_texel),
+                rows_per_image: Some(h),
+            },
+            size,
+        );
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    /// Reads a one-channel `R32Float` target back, unpadding the 256-byte row alignment.
+    fn read_r32(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<f32> {
+        let size = texture.size();
+        let (w, h) = (size.width, size.height);
+        let row = (w * 4).div_ceil(256) * 256;
+        let device = renderer.gpu.device();
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("r32 readback"),
+            size: u64::from(row * h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(h),
+                },
+            },
+            size,
+        );
+        renderer.gpu.queue().submit(Some(encoder.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the device polls");
+        rx.recv().unwrap().expect("the buffer maps");
+        let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
+        let mut out = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let at = (y * row + x * 4) as usize;
+                out.push(f32::from_le_bytes(mapped[at..at + 4].try_into().unwrap()));
+            }
+        }
+        out
+    }
+
+    /// The real reduce pipelines, run over a 7×5 source into 3×2 (ratios 7/3 and 5/2, so the
+    /// footprints overlap and an odd edge is kept), match the CPU oracles that pin the same rules:
+    /// Hi-Z exactly, the colour seed and tent within half-float rounding.
+    #[test]
+    fn needs_gpu_ssr_pyramid_reduces_match_the_cpu_oracle() {
+        use crate::ssr_pyramid::tests::{color_reduce, color_seed, hiz_reduce};
+        let Some(renderer) = skip_or_renderer("ssr_pyramid_reduces_match_the_cpu_oracle") else {
+            return;
+        };
+        let (src, dst) = ((7u32, 5u32), (3u32, 2u32));
+        let texels = (src.0 * src.1) as usize;
+
+        // Hi-Z: distinct depths in (0, 1), a deterministic scramble so a misplaced tap shows.
+        let depth: Vec<f32> = (0..texels)
+            .map(|i| ((i * 17 + 5) % 37) as f32 / 40.0 + 0.01)
+            .collect();
+        let bytes: Vec<u8> = depth.iter().flat_map(|d| d.to_le_bytes()).collect();
+        let view = upload_2d(&renderer, wgpu::TextureFormat::R32Float, src, &bytes, 4);
+        let params = shader_gen::HizParams {
+            target_extent: [dst.0 as f32, dst.1 as f32],
+            pad: [0.0; 2],
+        };
+        let target = run_effect_into(
+            &renderer,
+            ShaderId::HizReduce,
+            &[&view],
+            bytemuck::bytes_of(&params),
+            dst,
+            wgpu::TextureFormat::R32Float,
+        );
+        assert_eq!(read_r32(&renderer, &target), hiz_reduce(&depth, src, dst));
+
+        // Colour: eighths, so every value is f16-exact and distinct per channel.
+        let color: Vec<[f32; 4]> = (0..texels)
+            .map(|i| {
+                let v = |c: usize| (i * 3 + c) as f32 / 8.0;
+                [v(0), v(1), v(2), 1.0]
+            })
+            .collect();
+        let bytes: Vec<u8> = color
+            .iter()
+            .flatten()
+            .flat_map(|&c| f16_exact(c).to_le_bytes())
+            .collect();
+        let view = upload_2d(&renderer, HDR_FORMAT, src, &bytes, 8);
+        for (reduce, want) in [
+            (0u32, color_seed(&color, src, dst)),
+            (1, color_reduce(&color, src, dst)),
+        ] {
+            let params = shader_gen::SsrColorParams {
+                target_extent: [dst.0 as f32, dst.1 as f32],
+                reduce,
+                pad: 0,
+            };
+            let got = run_effect(
+                &renderer,
+                ShaderId::SsrColor,
+                &[&view],
+                bytemuck::bytes_of(&params),
+                dst,
+            );
+            for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                for c in 0..4 {
+                    assert!(
+                        (g[c] - w[c]).abs() <= 1e-3 * w[c].abs().max(1.0),
+                        "reduce {reduce} texel {i} channel {c}: gpu {} vs oracle {}",
+                        g[c],
+                        w[c]
+                    );
+                }
+            }
+        }
     }
 
     /// **The bloom chain scrubs a non-finite texel at each stage.** Drives the threshold, the Karis

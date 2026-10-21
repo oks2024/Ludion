@@ -365,7 +365,7 @@ fn binding_kind(
                 class,
             } => BindingKind::Texture {
                 dim: texture_dim(unit, *dim, *arrayed)?,
-                sample: texture_sample(unit, *class)?,
+                sample: texture_sample(unit, gv.name.as_deref(), *class)?,
                 multisampled: matches!(
                     class,
                     naga::ImageClass::Sampled { multi: true, .. }
@@ -444,15 +444,18 @@ fn storage_access(access: naga::StorageAccess) -> StorageAccess {
 
 fn texture_sample(
     unit: &ShaderUnit,
+    name: Option<&str>,
     class: naga::ImageClass,
 ) -> Result<TextureSample, ReflectError> {
     Ok(match class {
-        // WGSL cannot express non-filterable float; default to filterable (every current binding),
-        // with a per-binding override deferred until a real case appears (plan risk note).
+        // WGSL cannot express non-filterable float: filterable unless the global is listed in
+        // `UNFILTERABLE_TEXTURES` (an `R32Float` binding).
         naga::ImageClass::Sampled {
             kind: naga::ScalarKind::Float,
             ..
-        } => TextureSample::Float { filterable: true },
+        } => TextureSample::Float {
+            filterable: !name.is_some_and(|n| crate::UNFILTERABLE_TEXTURES.contains(&n)),
+        },
         naga::ImageClass::Sampled {
             kind: naga::ScalarKind::Sint,
             ..

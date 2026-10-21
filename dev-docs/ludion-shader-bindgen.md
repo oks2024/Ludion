@@ -131,6 +131,7 @@ cargo test -p ludion-renderer                    # exercises the generated struc
   naga major bump too, and the upgrade PR regenerates + re-runs the drift gate in the same commit;
   a silent mismatch is exactly what `--check` exists to catch loudly instead.
 - **Sampler filterability and dynamic offsets are not derivable from WGSL text.** The emitter
-  defaults to filterable-float textures / filtering samplers (matches every binding in the repo
-  today); a real non-filterable case needs a per-binding override added to the generator's input,
-  not a preemptive one.
+  defaults to filterable-float textures / filtering samplers. A non-filterable float texture (an
+  `R32Float` source read with `textureLoad`) is listed by its WGSL global name in
+  `UNFILTERABLE_TEXTURES` (`lib.rs`, today `hiz_src`); binding names are workspace-unique, so the
+  name is the key. Add a name there, don't infer it.

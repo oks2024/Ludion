@@ -17,6 +17,13 @@ description: Indirect specular: the reflections blend site, surface targets, lob
 - `reflections` is the **one blend site**: it adds `sky_specular × ibl_intensity × occlusion` into `scene`. `mesh.wgsl` adds no indirect specular and never samples the specular cube. A scene without an `Environment` adds exactly zero, before any sample.
 - The resolution chain is the sky cube only. Every source added later joins this pass, so the sources blend in one place.
 
+### Pyramids
+With `PostChain::ssr` on, two mipped transients are built between `scene` and `reflections`, at output × `SSR_SCALE` (0.5; the output extent, never the render extent), as seed + one reduce per mip (`ssr_pyramid.rs`, `hiz_*.wgsl`, `ssr_color.wgsl`). `for_scene` derives `ssr: false`, so no real frame has them and the graph, dump and goldens are unchanged. Nothing reads them yet.
+- `hiz`: `R32Float` min-Z of `scene_depth`. Depth is standard-Z (far = 1.0) and a trace may skip a cell only when the ray is in front of the *closest* surface in it, so the cell holds the minimum. fp16 depth has 2^-11 spacing near 1, hence the 32-bit format.
+- `ssr_color`: `Rgba16Float` of the **opaque** `scene` (the seed runs before `reflections` adds into it), `hdr_safe` on each seed fetch.
+- **Footprint rule** (`snippets/footprint.wgsl`): child texel `i` covers source `[i·r, (i+1)·r)`, `r = source / target`, touching `floor(lo) ..= ceil(hi) - 1`, clamped. Conservative on odd sizes, where a floor-halving drops the last row or column. One rule serves the seeds and every Hi-Z reduce.
+- **Tent and blur**: mip 0 is the area box (the sharp mirror level); each further mip is a separable `[1,3,3,1]/8` tent (variance 0.75 parent-texel²), so stacked σ_m ≈ 0.5·2^m base pixels, and ±σ spans 2^m pixels — the cone diameter `lobe::pyramid_level` maps to level m. A CPU test pins it.
+
 ## Rules
 - **The lobe function is one function for every path.** `cone_half_angle(r) = 2·atan(r²)`: 0 for a mirror, exactly π/2 at r = 1. The cube lod solves the lobe's solid angle against K texels, K = 32π, so r = 1 fills the 8×8 face and the chain stops there. A one-texel match sent rough metal to 1×1 faces and made a cube-face artifact on the gallery night-sky tile. `mip_roughness` is the exact inverse of `cube_lod` above mip 0, so the prefilter and the lookup agree by construction; the `needs_gpu_` test in `lobe.rs` holds `lobe.wgsl` to the Rust. Change one twin, change both.
 - **Both ends clamp.** `cube_lod` clamps to `[0, max_lod]`, so a mirror reads mip 0 (below r ≈ 0.149 the lobe is under 1.2° on 0.45° texels) and r = 1 never leaves the 8×8 face; `pyramid_level` clamps the half-angle (`MAX_HALF_ANGLE`) to keep `tan` finite.
@@ -29,10 +36,15 @@ description: Indirect specular: the reflections blend site, surface targets, lob
 - `transparents` has no pass-timing budget of its own yet: sprite and particle stress budgets' `scene` lines cover the opaque meshes only.
 - No transparent meshes exist (`L1202` refuses the glTF feature), so only `reflections` calls `sky_specular`.
 
+- The culling HZB (`gpu-driven-culling.md` rung 3b) needs the *farthest* depth, built from its own occluder pre-pass. It reuses this machinery (the `R32Float` format, `footprint.wgsl`, the reduce shader with `max`), not this frame's `hiz`; no max channel exists.
+- `R32Float` is unfilterable: `hiz_src` is listed in `UNFILTERABLE_TEXTURES` (`ludion-shader-bindgen`), and the pyramid shaders read with `textureLoad`.
+
 ## Verify
 ```
 cargo test -p ludion-renderer lobe::
 cargo test -p ludion-renderer needs_gpu_reflections
+cargo test -p ludion-renderer ssr_pyramid::
+cargo test -p ludion-renderer needs_gpu_ssr_pyramid
 cargo test -p ludion-renderer needs_gpu_metal_reflects
 cargo test -p ludion-renderer needs_gpu_a_reflection_over_a_bright
 cargo run -p ludion-cli -- dump-graph --scene examples/gallery/night-sky.yaml   # scene → reflections → transparents
