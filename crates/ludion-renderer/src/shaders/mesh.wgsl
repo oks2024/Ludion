@@ -380,10 +380,8 @@ fn shade(
     let ndv = max(dot(n, v), 1e-4);
 
     // Ambient / environment term. Flag off ⇒ the exact historical flat ambient (`ambient * albedo`),
-    // so an env-less scene is byte-identical. Flag on ⇒ split-sum IBL: irradiance×diffuse for the
-    // diffuse lobe, the prefiltered specular cube × the BRDF LUT scale/bias for the specular lobe,
-    // both scaled by `ibl_intensity`. This is what brings metals alive (a mirror-metal reflects the
-    // sky instead of going black under ambient-only light).
+    // so an env-less scene is byte-identical. Flag on ⇒ the irradiance cube feeds the diffuse lobe,
+    // scaled by `ibl_intensity`; the sky's specular is added later by the `reflections` pass.
     var acc: vec3<f32>;
     if (env.params.x > 0.5) {
         let irradiance = textureSampleLevel(irradiance_tex, env_samp, n, 0.0).rgb;

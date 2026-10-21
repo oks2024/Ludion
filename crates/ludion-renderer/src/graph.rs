@@ -454,7 +454,7 @@ impl FrameSize {
 ///
 /// Plain `Copy` data, so [`build_frame_graph`] stays a pure function of its arguments: no GPU, no
 /// scene reference, a byte-stable dump. [`PostChain::default()`] is the minimal chain (no UI, no shadow map,
-/// none of the conditional effects) — the fixed thirteen-pass graph; derive the real one from a scene
+/// none of the conditional effects) — the fixed fifteen-pass graph; derive the real one from a scene
 /// with [`PostChain::for_scene`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PostChain {
@@ -653,7 +653,7 @@ struct BloomTargets {
 
 /// Builds the frame graph for `size` and returns it with the handle of the final output target.
 /// `chain` selects the conditional passes (see the module docs): the default chain at a native
-/// [`FrameSize`] is the exact thirteen-pass graph — the scene, the bloom pyramid's eleven and the
+/// [`FrameSize`] is the exact fifteen-pass graph — the scene, reflections, transparents, the bloom pyramid's eleven and the
 /// composite — while `ui` retargets `composite` to an LDR transient and appends an `overlay` pass,
 /// `shadow_map` prepends the depth-only `shadow` pass at its own extent, and a `size` whose two
 /// extents differ inserts one resampling pass — `resolve` or `upscale` — between composite and
@@ -1108,7 +1108,7 @@ mod tests {
         let size = FrameSize::native(1920, 1080);
         let (bare_graph, _) = build_frame_graph(size, bare);
         let (marked_graph, _) = build_frame_graph(size, marked);
-        // (a) the marker-free scene keeps the frozen thirteen-pass graph, verbatim …
+        // (a) the marker-free scene keeps the frozen fifteen-pass graph, verbatim …
         assert_eq!(
             pass_names(&bare_graph),
             [
@@ -1224,10 +1224,6 @@ mod tests {
         );
     }
 
-    /// The default graph's exact shape: the scene pass, the shared bright-pass, five downsamples,
-    /// five upsamples back down and the composite — the same resources in the same declaration
-    /// order, the same passes, and the same scheduled execution order. These lists ARE the
-    /// regression detector; if one changes, the shipped chain changed.
     /// The opaque pass writes the extra targets, `reflections` reads them, and the transparents
     /// draw over the same colour and depth — in that declaration order.
     #[test]
@@ -1276,6 +1272,10 @@ mod tests {
         );
     }
 
+    /// The default graph's exact shape: the opaque scene pass, `reflections`, `transparents`, the
+    /// shared bright-pass, five downsamples, five upsamples back down and the composite — the same
+    /// resources in the same declaration order, the same passes, and the same scheduled execution
+    /// order. These lists ARE the regression detector; if one changes, the shipped chain changed.
     #[test]
     fn default_graph_is_the_fixed_fifteen_pass_chain() {
         let (graph, output) =

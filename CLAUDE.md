@@ -21,19 +21,20 @@ The name: a *ludion* is a Cartesian diver — a sealed figure that responds inst
 - `Plan/physics.md` — W1–W4 mechanized (`ludion-physics` over pinned rapier3d); cross-arch verified on the M4 — nothing owed.
 - `Plan/physics-collision-layers.md` — W1–W2 mechanized (`physics.layers` collision groups); W3 closed as not needed; the M4 trace half verified — nothing owed.
 - `Plan/ios-target.md` — D1–D5, M1, M2 done (`ludion export`, vigil running in the iOS simulator); M3–M5 (device) wait on the user's word.
-- `Plan/mesh-modeling.md` — W1–W3 mechanized (`kind: sculpt`, the `ludion-sculpt` implicit-surface mesher, the editor's Models view); **paused** (resume on the user's word; nothing in vigil waits on it).
+- `Plan/mesh-modeling.md` — W1–W3 mechanized (`kind: sculpt`, `ludion-sculpt`); **paused** (resume on the user's word; nothing in vigil waits on it).
 - `Plan/asset-pipeline-blender.md` — phase 1 verdict 2026-10-02: Blender for the environment, characters stay voxel; kits in `games/vigil/art/town`, the loop in a private playbook.
 - `Plan/skeletal-animation.md` — W1–W3 mechanized (glTF skins import, joint tree, GPU bone palette, SkinBone parts drive bones); the goblin glb rides its Blender brief; W4 not started.
 - `Plan/animation-clips.md` — W1–W3 mechanized (clip import, characters, playback, crossfade, events, editor clip preview); sitting owed. `Plan/character-controller.md` — design settled. Both for a platformer.
-- `Plan/comfy-generation.md` — W1–W4 mechanized (`kind: generation` recipes, `ludion-gen` over a running ComfyUI server, `ludion gen`, the editor's Generation view); checkpoint 2 owed.
-- `Plan/mesh-texture-editing.md` — W1–W2 mechanized (`kind: mesh-edit` op lists, `ludion-mesh-edit`, `ludion mesh pick`/`apply`, the seeded fill, `key`, polyline capsule); checkpoint 2 passed, the fill kept; Wave 3 waits on the user's word.
+- `Plan/comfy-generation.md` — W1–W4 mechanized (`kind: generation` recipes, `ludion-gen`, `ludion gen`); checkpoint 2 owed.
+- `Plan/mesh-texture-editing.md` — W1–W2 mechanized (`kind: mesh-edit` op lists, `ludion-mesh-edit`, `ludion mesh pick`/`apply`); checkpoint 2 passed, the fill kept; Wave 3 waits on the user's word.
 - `Plan/font-assets.md` — W1–W3 mechanized (`layout()`, TTF bake, `font` field, SDF); W4 breakout on Inter, external adoption.
 - `Plan/textured-pbr.md` — W1–W4 mechanized; the exit gate's human look owed.
+- `Plan/reflections.md` — W1 mechanized (the `reflections` blend site, sky only); re-bless owed; W2 waits on the user's word.
 - `Plan/spot-light.md` — W1–W3 mechanized (`SpotLight`); look owed.
 - `Plan/editor-stage-camera.md` — W1–W4 mechanized (`render.view`, a free editor camera); the live smoke owed.
-- `Plan/transform-hierarchy-and-prefabs.md` — W0–W4 mechanized (`Parent`-local `Transform`, `kind: prefab` instances, `prefab.*`, the editor's outliner); live smoke and Exit owed.
+- `Plan/transform-hierarchy-and-prefabs.md` — W0–W4 mechanized (`Parent`-local `Transform`, `kind: prefab`, `prefab.*`); live smoke and Exit owed.
 - `Plan/editor-voxel-assemblies.md` — W1–W4 mechanized (the Voxel Artist view stages `kind: assembly` models read-only; editor-only); live smoke owed.
-- `Plan/editor-open-project.md` — W1–W4 mechanized (`scripts/editor.mjs <dir>`, the title-bar switcher, the editor-run game slot, the scene picker, template stage scenes); the live smoke owed.
+- `Plan/editor-open-project.md` — W1–W4 mechanized (`scripts/editor.mjs <dir>`, the title-bar switcher); the live smoke owed.
 - The open-source publication plan (private, in `Plan-Private/`) — W3–W5 owed; the remote on the user's word. crates.io publish is a separate, later decision.
 
 **Closing a wave or phase refreshes this section** — one line per active plan: what exists, what gates it. The narrative goes in the plan's Status; anything owed goes in `Plan/owed.md`, never here. `scripts/claude-md-budget.mjs` (in `check.mjs`) holds this file to its size budget: over it, move text to its owner — never cut a rule.

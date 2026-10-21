@@ -89,6 +89,7 @@ optional; an absent one keeps the base's, and an absent `preset` means `full`.
 | `params.shaft_steps` | int, `1..=32` | ray-march steps per light-shaft pixel |
 | `params.dof_taps` | int, `1..=32` | taps in the depth-of-field disc |
 | `params.shadow_map_size` | int, `1..=2048` | edge length of the square sun shadow map, in texels |
+| `params.ibl_specular_size` | power-of-two int, `16..=256` | edge length of the sky's specular reflection cube faces, in texels (`128` at `low`, `256` otherwise) |
 | `params.pcf` | odd int, `1..=3` | edge length of the shadow map's filter kernel, in taps (`1` is a single centre tap) |
 | `params.gi_rays` | int, `1..=64`, a multiple of `16` | rays the GI bake traces per irradiance probe |
 | `params.gi_probe_scale` | float, `1.0..=4.0` | multiplier on the scene's authored `GiVolume.probe_spacing` — **larger is cheaper** |
@@ -118,12 +119,13 @@ ssao_samples = 4
   path, malformed TOML, wrong-typed value and unknown key are all this code.
 - **Unknown keys and sections in an override file are refused**, so a file written for a newer build
   fails loudly rather than describe a quality that is not rendered. `[params]` accepts exactly the
-  eight keys above.
+  nine keys above.
 - **`full` is the ceiling.** Every `[params]` count is at most its `full` value and at least `1`;
   otherwise `L0016` naming the range. A quality only ever spends less than the scene authors.
   `render_scale` is bounded the same way (`1.0` is native; above it is the host's `--scale`).
   **`gi_probe_scale` reads the other way**: `1.0` is its *floor*, `4.0` its ceiling.
-- **Three axes carry a shape rule beyond range, each its own `L0016` message.** `pcf`'s kernel is
+- **Four axes carry a shape rule beyond range, each its own `L0016` message.** `ibl_specular_size` must be a power of two of at least `16`: the
+  cube's mip chain halves down to 8×8. `pcf`'s kernel is
   centred on the shaded texel, so an even edge is refused. `gi_rays` must be a multiple of `16`: the
   bake's hit cache holds sixteen slots and takes every `gi_rays / 16`'th ray, and a fractional stride
   crowds directions into one pole. `gi_probe_scale` must be finite and at least `1.0`, `render_scale`

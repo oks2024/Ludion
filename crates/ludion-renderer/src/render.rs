@@ -4300,7 +4300,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::DofCoc,
         file_name: "dof_coc.wgsl",
         body: include_str!("shaders/dof_coc.wgsl"),
-        snippets: &[Snippet::FullscreenVs],
+        snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
         layouts: &[LayoutId::DofCoc],
     },
     ShaderDesc {
@@ -4349,6 +4349,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Bayer,
             Snippet::Medium,
             Snippet::SkyGradient,
+            Snippet::Hdr,
         ],
         layouts: &[LayoutId::Composite],
     },
@@ -11671,6 +11672,77 @@ mod tests {
                 (i32::from(got) - want).abs() <= 2,
                 "channel {channel}: the centre pixel {px:?} should encode the radiance ceiling \
                  (~{want}); 255 means the half-float store overflowed to infinity"
+            );
+        }
+    }
+
+    /// **The reflections sum is clamped once.** The opaque pass stores up to the radiance ceiling
+    /// and `reflections` adds its own ceiling-bounded term with One+One, so the sum can pass
+    /// half-float's 65 504 and store infinity; every reader of `scene` sanitizes with `hdr_safe`,
+    /// which reads that infinity as the ceiling. Here the sun alone saturates the ground at the
+    /// ceiling and a 40 000 sky adds to it: an unsanitized read shows 255, or NaN-driven black.
+    #[test]
+    fn needs_gpu_a_reflection_over_a_bright_surface_reads_the_ceiling() {
+        let Some(mut renderer) =
+            skip_or_renderer("a_reflection_over_a_bright_surface_reads_the_ceiling")
+        else {
+            return;
+        };
+        let (w, h) = (33u32, 33u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = RenderScene::empty((w, h));
+        let position = Vec3::new(0.0, 4.0, 0.0);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(position, Vec3::ZERO, Vec3::Z),
+            projection: Mat4::perspective_rh(
+                1.0_f32.to_radians(),
+                crate::scene::aspect_ratio((w, h)),
+                0.1,
+                1000.0,
+            ),
+            position,
+        };
+        scene.ambient = [0.0; 3];
+        let mut mirror = ground(50.0);
+        mirror.color = [1.0; 4];
+        mirror.material = [0.0, 1.0, 0.0];
+        scene.meshes = vec![mirror];
+        scene.sun = Some(test_sun(Vec3::NEG_Y, Vec3::splat(4.0), 0.0));
+        scene.environment = Some(crate::scene::EnvironmentData {
+            sky_zenith: [40_000.0; 3],
+            sky_horizon: [40_000.0; 3],
+            sky_ground: [40_000.0; 3],
+            sun_disc_size: 0.0,
+            sun_disc_intensity: 0.0,
+            ambient: [0.0; 3],
+            ibl_intensity: 1.0,
+        });
+        let exposure = 1.0 / 131_072.0;
+        scene.post = Some(PostData {
+            exposure,
+            tonemap: TonemapOperator::None,
+            bloom_strength: 0.0,
+            dither: false,
+            ..PostData::default()
+        });
+        renderer.set_quality(
+            Quality {
+                shadows: false,
+                ..Quality::FULL
+            },
+            QualityParams::FULL,
+        );
+
+        let want = srgb8_round(60_000.0 * exposure);
+        let img = renderer
+            .render(&scene, size)
+            .expect("a reflecting mirror frame");
+        let px = rgb_at(&img, w / 2, h / 2);
+        for (channel, &got) in px.iter().enumerate() {
+            assert!(
+                (i32::from(got) - want).abs() <= 2,
+                "channel {channel}: the centre pixel {px:?} should encode the radiance ceiling \
+                 (~{want}); 255 or 0 means an infinity from the summed targets reached the composite"
             );
         }
     }

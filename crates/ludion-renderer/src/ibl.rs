@@ -35,7 +35,7 @@ pub(crate) struct ResolvedEnv {
     pub irradiance: wgpu::TextureView,
     pub specular: wgpu::TextureView,
     pub brdf: wgpu::TextureView,
-    /// `[flag, ibl_intensity, specular_max_lod, 0]` — the mesh `EnvParams.params` lane and, with lane 3 set, the `reflections` uniform's `env`.
+    /// `[flag, ibl_intensity, specular_max_lod, 0]` — lanes 0–1 feed `mesh.wgsl`'s `EnvParams.params`, lanes 0–2 the `reflections` uniform's `env`; the frame recorder fills lane 3 with the GI sky-visibility strength for both.
     pub params: [f32; 4],
 }
 

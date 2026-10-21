@@ -177,7 +177,7 @@ pub struct QualityParams {
     pub shadow_map_size: u32,
     /// Edge length of the sky IBL's specular cube faces, in texels — a power of two, at least 16 (two
     /// mips), with a mip chain below it that stops at 8×8. Structure like [`shadow_map_size`](QualityParams::shadow_map_size): the mesh
-    /// shader learns the lod range from `EnvParams`, not from the size.
+    /// shaders learn the lod range from the `reflections` uniform, not from the size.
     pub ibl_specular_size: u32,
     /// Edge length of the sun shadow map's PCF kernel, in taps (`Sun.pcf` in `mesh.wgsl`): `3` is
     /// the 3×3 the mesh pass averages, `1` a single centre tap. Odd, because the kernel is centred

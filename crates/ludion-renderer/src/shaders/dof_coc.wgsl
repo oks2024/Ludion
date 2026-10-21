@@ -121,7 +121,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // One bilinear tap, which at the native 2:1 ratio lands exactly between four source texels and so
     // *is* their box average — the bright pass's trick, for the same reason.
-    let color = textureSampleLevel(coc_scene, coc_samp, in.uv, 0.0).rgb;
+    let color = hdr_safe(textureSampleLevel(coc_scene, coc_samp, in.uv, 0.0).rgb);
     let world = coc_world_from_depth(nearest_uv, nearest);
     return vec4<f32>(color, dof_circle_of_confusion(length(world - coc_params.cam_pos)));
 }

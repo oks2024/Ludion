@@ -6,8 +6,8 @@ description: Image-based lighting: the sky prefilter, the lobe-matched specular 
 **Scope:** How an `Environment` becomes light on a mesh: the prefilter in `ibl.rs`/`ibl.wgsl`, diffuse sampling in `mesh.wgsl`, the cache, and the flag-off fallback. The BRDF this feeds is `ludion devdocs renderer-shading`.
 
 `RenderScene.environment` present drives `Ibl::resolve` (`ibl.rs`) to prefilter the sky into three
-resources `mesh.wgsl` samples through `@group(3)`
-(`irradiance_tex`/`specular_tex`/`brdf_lut`/`env_samp`/`env: EnvParams`); absent, 1×1 fallbacks are
+resources. `mesh.wgsl` samples only the irradiance cube through `@group(3)`
+(`irradiance_tex`/`env_samp`/`env: EnvParams`); the `reflections` pass binds `specular_tex` and `brdf_lut` (`ludion devdocs renderer-reflections`). Absent, 1×1 fallbacks are
 bound and `EnvParams.params.x` (the flag) is `0`. Pinned math, not to be casually retuned — a change
 here re-blesses every `Environment`-carrying golden.
 

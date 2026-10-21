@@ -15,7 +15,7 @@ resolution knob beside it is `RenderScale` in `ludion devdocs ludion-renderer`.
 
 ## Layout
 - `crates/ludion-renderer/src/quality.rs` — `Quality` (five booleans, `shadows` the newest) and
-  `QualityParams` (eight axes, all modulated), each with four preset consts, plus
+  `QualityParams` (nine axes, all modulated), each with four preset consts, plus
   `Quality::PRESET_NAMES` and the two `preset` lookups. Plain data: no serde, no I/O, no environment.
 - `crates/ludion-renderer/src/graph.rs` — `PostChain::masked`, the one site that applies a quality,
   `PostChain::shadow_map` (the extent, `None` when this frame draws none) and `PostChain::gi_inject`
@@ -72,9 +72,11 @@ The label travels alongside the toggles because several presets resolve to the s
 
 **Toggles and parameters are two values, resolved together and set together.** `Quality` answers
 which effects the graph schedules; `QualityParams` answers how hard each scheduled effect works, and
-reaches the graph for exactly the two axes that size a *resource* — `shadow_map_size` and
+reaches the graph for the axes that size a *resource* — `shadow_map_size` and
 `gi_probe_scale` — because a resource's extent *is* graph structure. `Renderer::set_quality` takes
 both in one call, so a renderer can never hold a machine's toggles beside another setting's counts.
+
+**`ibl_specular_size` sizes the sky specular cube** (256², 128² at `low`; a power of two, at least 16) at environment-bake time, not in the frame graph, so `masked` never sees it either. It is a `[params]` key but not in `describe` or the profile report's quality block. `mesh.wgsl` does not sample the cube; `reflections` does (`ludion devdocs renderer-reflections`).
 
 **`render_scale` is the one axis `masked` never sees.** It sizes the frame rather than a resource
 inside it, so it travels the `FrameSize` route: `Engine::frame_size` asks `resolve_render_scale` for

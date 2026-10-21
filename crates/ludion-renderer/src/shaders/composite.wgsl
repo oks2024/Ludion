@@ -576,9 +576,9 @@ fn apply_vignette(color: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
 // rather than wrapping the frame in from the far side.
 fn chromatic_scene(uv: vec2<f32>) -> vec3<f32> {
     let shift = (uv - vec2<f32>(0.5)) * 2.0 * composite.chromatic_aberration;
-    let red = textureSample(scene_tex, samp, uv - shift).r;
-    let green = textureSample(scene_tex, samp, uv).g;
-    let blue = textureSample(scene_tex, samp, uv + shift).b;
+    let red = hdr_safe(textureSample(scene_tex, samp, uv - shift).rgb).r;
+    let green = hdr_safe(textureSample(scene_tex, samp, uv).rgb).g;
+    let blue = hdr_safe(textureSample(scene_tex, samp, uv + shift).rgb).b;
     return vec3<f32>(red, green, blue);
 }
 
@@ -724,7 +724,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (composite.chromatic_aberration != 0.0) {
         scene = chromatic_scene(in.uv);
     } else {
-        scene = textureSample(scene_tex, samp, in.uv).rgb;
+        // Every reader of `scene` clamps: the opaque pass and `reflections` each store up to the
+        // ceiling, and their sum may not fit half-float.
+        scene = hdr_safe(textureSample(scene_tex, samp, in.uv).rgb);
     }
     let bloom = textureSample(bloom_tex, samp, in.uv).rgb;
     // Depth of field: the gather's defocus layer, composited **over** the sharp scene.

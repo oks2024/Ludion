@@ -22,6 +22,7 @@ description: Indirect specular: the reflections blend site, surface targets, lob
 - **Both ends clamp.** `cube_lod` clamps to `[0, max_lod]`, so a mirror reads mip 0 (below r ≈ 0.149 the lobe is under 1.2° on 0.45° texels) and r = 1 never leaves the 8×8 face; `pyramid_level` clamps the half-angle (`MAX_HALF_ANGLE`) to keep `tan` finite.
 - **Occlusion is split by source** (`Plan/reflections.md` decision 7). GI sky visibility darkens only the sky fill, through `sky_visibility_at` (`gi_probe.wgsl`, the one function that reads the probe volume); SSAO and the occlusion map apply to every source via `scene_specular.a`. Applying sky visibility to a source that already contains its own occlusion double-darkens it.
 - **The snippets are binding-free.** Textures and samplers arrive as parameters so any pipeline composes them. A snippet that declares a `@group` binding collides with the host's.
+- **The ceiling is enforced at the read.** The opaque pass and `reflections` each store up to `HDR_CEILING`, and their One+One sum may pass half-float's max. Every reader of `scene` (`threshold`, `dof_coc`, `composite`) runs `hdr_safe` on the fetch, which reads an infinity or NaN as the ceiling or 0 — the old clamp-the-sum-once result.
 - **Far depth is masked.** A depth ≥ 1.0 texel is the sky, which `transparents` draws; without the mask it picks up `prefiltered × ab.y` even at zero F0.
 
 ## Gotchas
@@ -31,6 +32,8 @@ description: Indirect specular: the reflections blend site, surface targets, lob
 ## Verify
 ```
 cargo test -p ludion-renderer lobe::
-cargo test -p ludion-renderer needs_gpu_reflections needs_gpu_metal_reflects
+cargo test -p ludion-renderer needs_gpu_reflections
+cargo test -p ludion-renderer needs_gpu_metal_reflects
+cargo test -p ludion-renderer needs_gpu_a_reflection_over_a_bright
 cargo run -p ludion-cli -- dump-graph --scene examples/gallery/night-sky.yaml   # scene → reflections → transparents
 ```
