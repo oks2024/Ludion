@@ -100,10 +100,11 @@
 //! [`PostChain::ssr`] adds the trace's two input pyramids between the opaque pass and `reflections`,
 //! at the trace extent (output × 0.5): `hiz` (`R32Float`, a per-cell min-Z of `scene_depth`) and
 //! `ssr_color` (`Rgba16Float`, the opaque `scene` pre-convolved per mip), each a seed pass plus one
-//! reduce pass per further mip. Nothing reads them yet.
+//! reduce pass per further mip. The `ssr_trace` pass then marches a ray per trace texel through them
+//! into `ssr_trace` (`Rgba16Float`: radiance and confidence); nothing reads it yet.
 //!
 //! ```text
-//! scene ─► hiz_seed ─► hiz_reduce_1 ─► … ─► ssr_color_seed ─► ssr_color_reduce_1 ─► … ─► reflections
+//! scene ─► hiz_seed ─► hiz_reduce_1 ─► … ─► ssr_color_seed ─► ssr_color_reduce_1 ─► … ─► ssr_trace ─► reflections
 //! ```
 //!
 //! The scene's three passes write `scene` and `scene_depth` between them, which the graph orders by
@@ -168,6 +169,9 @@ pub mod pass {
     /// A colour-pyramid reduce: a 4×4 tent over the mip above. Named `ssr_color_reduce_{k}` for the
     /// mip it writes.
     pub const SSR_COLOR_REDUCE: &str = "ssr_color_reduce";
+    /// The SSR trace: one mirror ray per trace texel marched through `hiz`, written to `ssr_trace` as
+    /// radiance and confidence. Reads both pyramids whole, the opaque normal and the depth.
+    pub const SSR_TRACE: &str = "ssr_trace";
     /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
     /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.
     pub const TRANSPARENTS: &str = "transparents";
@@ -830,18 +834,9 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // The SSR input pyramids, at the trace extent (a post target: sized from the output). Declared
     // only when SSR is on, after the other conditional chains and before `final`.
     let ssr = chain.ssr.then(|| {
-        let extent = crate::ssr_pyramid::trace_extent(size);
-        let levels = crate::ssr_pyramid::levels(extent);
-        let (tw, th) = extent;
-        let hiz = graph.transient(
-            "hiz",
-            TextureDesc::r32_float(tw, th).with_mip_levels(levels),
-        );
-        let color = graph.transient(
-            "ssr_color",
-            TextureDesc::hdr_color(tw, th).with_mip_levels(levels),
-        );
-        (hiz, color, levels)
+        declare_ssr_targets(&mut graph, size, |graph, (tw, th)| {
+            graph.transient("ssr_trace", TextureDesc::hdr_color(tw, th))
+        })
     });
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
@@ -913,35 +908,8 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // The pyramids sit between `scene` and `reflections`: a read follows the latest writer declared
     // before it, so the colour seed sees the opaque scene before `reflections` adds into it, and the
     // Hi-Z seed runs before `transparents` attach the depth.
-    if let Some((hiz, color, levels)) = ssr {
-        graph.add_external_pass(
-            pass::HIZ_SEED,
-            pass::HIZ_SEED,
-            vec![scene_depth],
-            vec![hiz.mip(0)],
-        );
-        for k in 1..levels {
-            graph.add_external_pass(
-                format!("{}_{k}", pass::HIZ_REDUCE),
-                pass::HIZ_REDUCE,
-                vec![hiz.mip(k - 1)],
-                vec![hiz.mip(k)],
-            );
-        }
-        graph.add_external_pass(
-            pass::SSR_COLOR_SEED,
-            pass::SSR_COLOR_SEED,
-            vec![scene],
-            vec![color.mip(0)],
-        );
-        for k in 1..levels {
-            graph.add_external_pass(
-                format!("{}_{k}", pass::SSR_COLOR_REDUCE),
-                pass::SSR_COLOR_REDUCE,
-                vec![color.mip(k - 1)],
-                vec![color.mip(k)],
-            );
-        }
+    if let Some(ssr) = &ssr {
+        declare_ssr_passes(&mut graph, ssr, scene, scene_normal, scene_depth);
     }
     // Reads in the shader's binding order; additive into `scene`, after the opaque pass.
     graph.add_external_pass(
@@ -1096,6 +1064,125 @@ pub fn dump_frame_graph_json(
     let (graph, _output) = build_frame_graph(size, chain);
     let scheduled = schedule(&graph)?;
     Ok(scheduled.dump_graph_json())
+}
+
+/// The SSR chain's transients: the two input pyramids and the trace's output.
+struct SsrTargets {
+    hiz: ResourceId,
+    color: ResourceId,
+    trace: ResourceId,
+    levels: u32,
+}
+
+/// Declares `hiz`, `ssr_color` and then the trace target at the trace extent; `trace` builds the last
+/// (the frame graph wants a transient, the test harness an output it can read back).
+fn declare_ssr_targets(
+    graph: &mut RenderGraph,
+    size: FrameSize,
+    trace: impl FnOnce(&mut RenderGraph, (u32, u32)) -> ResourceId,
+) -> SsrTargets {
+    let extent = crate::ssr_pyramid::trace_extent(size);
+    let levels = crate::ssr_pyramid::levels(extent);
+    let (tw, th) = extent;
+    let hiz = graph.transient(
+        "hiz",
+        TextureDesc::r32_float(tw, th).with_mip_levels(levels),
+    );
+    let color = graph.transient(
+        "ssr_color",
+        TextureDesc::hdr_color(tw, th).with_mip_levels(levels),
+    );
+    let trace = trace(graph, extent);
+    SsrTargets {
+        hiz,
+        color,
+        trace,
+        levels,
+    }
+}
+
+/// The pyramids' seed and reduce passes, then the trace. They sit between the opaque `scene` pass and
+/// `reflections`: a read follows the latest writer declared before it, so the colour seed sees the
+/// opaque scene before `reflections` adds into it, and the Hi-Z seed runs before `transparents`
+/// attach the depth. The trace reads each pyramid whole, which orders it after every reduce.
+fn declare_ssr_passes(
+    graph: &mut RenderGraph,
+    ssr: &SsrTargets,
+    scene: ResourceId,
+    scene_normal: ResourceId,
+    scene_depth: ResourceId,
+) {
+    let SsrTargets {
+        hiz,
+        color,
+        trace,
+        levels,
+    } = *ssr;
+    graph.add_external_pass(
+        pass::HIZ_SEED,
+        pass::HIZ_SEED,
+        vec![scene_depth],
+        vec![hiz.mip(0)],
+    );
+    for k in 1..levels {
+        graph.add_external_pass(
+            format!("{}_{k}", pass::HIZ_REDUCE),
+            pass::HIZ_REDUCE,
+            vec![hiz.mip(k - 1)],
+            vec![hiz.mip(k)],
+        );
+    }
+    graph.add_external_pass(
+        pass::SSR_COLOR_SEED,
+        pass::SSR_COLOR_SEED,
+        vec![scene],
+        vec![color.mip(0)],
+    );
+    for k in 1..levels {
+        graph.add_external_pass(
+            format!("{}_{k}", pass::SSR_COLOR_REDUCE),
+            pass::SSR_COLOR_REDUCE,
+            vec![color.mip(k - 1)],
+            vec![color.mip(k)],
+        );
+    }
+    graph.add_external_pass(
+        pass::SSR_TRACE,
+        pass::SSR_TRACE,
+        vec![hiz, color, scene_normal, scene_depth],
+        vec![trace],
+    );
+}
+
+/// The SSR trace and its inputs as a minimal graph whose `ssr_trace` is an **output** — it survives
+/// to readback, where a transient could be aliased away and has no `COPY_SRC`. The opaque targets are
+/// declared as `build_frame_graph` does, and the scene pass has no reads, as the recorder's has on a
+/// sunless, AO-free frame.
+#[cfg(test)]
+pub(crate) fn build_ssr_trace_graph(size: FrameSize) -> (RenderGraph, ResourceId) {
+    let (render_w, render_h) = size.render;
+    let mut graph = RenderGraph::new();
+    let scene = graph.transient("scene", TextureDesc::hdr_color(render_w, render_h));
+    let scene_depth = graph.transient(
+        "scene_depth",
+        TextureDesc::sampled_depth(render_w, render_h),
+    );
+    let scene_normal = graph.transient("scene_normal", TextureDesc::hdr_color(render_w, render_h));
+    let scene_specular = graph.transient("scene_specular", TextureDesc::color(render_w, render_h));
+    graph.add_external_pass_with_depth(
+        pass::SCENE,
+        pass::SCENE,
+        vec![],
+        vec![scene, scene_normal, scene_specular],
+        scene_depth,
+    );
+    let ssr = declare_ssr_targets(&mut graph, size, |graph, (tw, th)| {
+        let mut desc = TextureDesc::hdr_color(tw, th);
+        desc.usages.push(ludion_render_graph::TextureUsage::CopySrc);
+        graph.output("ssr_trace", desc)
+    });
+    declare_ssr_passes(&mut graph, &ssr, scene, scene_normal, scene_depth);
+    (graph, ssr.trace)
 }
 
 #[cfg(test)]
@@ -1826,6 +1913,58 @@ mod tests {
             reduce.color_targets().iter().map(label).collect::<Vec<_>>(),
             ["hiz@mip3"]
         );
+    }
+
+    #[test]
+    fn the_ssr_trace_reads_both_pyramids_and_runs_before_transparents() {
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), ssr_chain());
+        let trace = graph
+            .resources()
+            .iter()
+            .find(|r| r.name == "ssr_trace")
+            .unwrap();
+        assert_eq!(trace.desc.format.as_str(), "rgba16float");
+        assert_eq!(
+            (
+                trace.desc.extent.width,
+                trace.desc.extent.height,
+                trace.desc.mip_levels
+            ),
+            (960, 540, 1)
+        );
+        let reads = |name: &str| {
+            graph
+                .passes()
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap()
+                .reads()
+                .iter()
+                .map(|id| graph.resources()[id.index()].name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            reads("ssr_trace"),
+            ["hiz", "ssr_color", "scene_normal", "scene_depth"]
+        );
+        // The trace feeds nothing yet: `reflections` still reads exactly its three surface targets.
+        assert_eq!(
+            reads("reflections"),
+            ["scene_normal", "scene_specular", "scene_depth"]
+        );
+        let order = schedule(&graph).unwrap();
+        let names = order.order_names();
+        let pos = |n: &str| names.iter().position(|p| *p == n).unwrap();
+        assert!(pos("hiz_reduce_9") < pos("ssr_trace"));
+        assert!(pos("ssr_color_reduce_9") < pos("ssr_trace"));
+        assert!(pos("ssr_trace") < pos("transparents"));
+    }
+
+    #[test]
+    fn the_ssr_trace_harness_graph_schedules() {
+        let (graph, trace) = build_ssr_trace_graph(FrameSize::native(96, 64));
+        schedule(&graph).unwrap();
+        assert_eq!(graph.resources()[trace.index()].name, "ssr_trace");
     }
 
     /// A tiny or odd frame clamps the chain to its few levels and still schedules.

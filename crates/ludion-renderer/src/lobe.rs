@@ -19,8 +19,9 @@ const MIN_ALPHA: f32 = 1e-6;
 /// Keeps `tan` finite in [`pyramid_level`].
 const MAX_HALF_ANGLE: f32 = 1.55;
 
-/// Half-angle of the cone holding half of the GGX lobe at `roughness`, in radians.
-#[allow(dead_code)] // read by the SSR pass; no caller yet
+/// Half-angle of the cone holding half of the GGX lobe at `roughness`, in radians. The WGSL twin is
+/// `ssr_cone_half_angle`.
+#[cfg_attr(not(test), allow(dead_code))] // the CPU twin of lobe.wgsl; outside tests only the sync test reads it
 pub(crate) fn cone_half_angle(roughness: f32) -> f32 {
     let r = roughness.clamp(0.0, 1.0);
     2.0 * atan(r * r)
@@ -63,11 +64,85 @@ pub(crate) fn mip_roughness(mip: u32, max_lod: u32) -> f32 {
 
 /// The colour-pyramid level whose texels span the cone's diameter at the hit, for a cone of
 /// `half_angle` at `hit_distance`; `pixels_per_unit` is the focal length in pixels over the hit's
-/// view depth. Read by the SSR pass; no caller in this crate yet.
-#[allow(dead_code)]
+/// view depth. The WGSL twin is `ssr_pyramid_level` in `shaders/snippets/lobe.wgsl`.
+#[cfg_attr(not(test), allow(dead_code))] // the CPU twin of lobe.wgsl; outside tests only the sync test reads it
 pub(crate) fn pyramid_level(half_angle: f32, hit_distance: f32, pixels_per_unit: f32) -> f32 {
     let diameter = 2.0 * hit_distance * tan(half_angle.min(MAX_HALF_ANGLE)) * pixels_per_unit;
     log2(diameter.max(1.0))
+}
+
+/// Runs a one-thread-per-output compute kernel that reads `input` (`@binding(0)`, read-only
+/// `array<f32>`) and writes `out_len` floats (`@binding(1)`, read-write), for the twin tests.
+#[cfg(test)]
+pub(crate) fn run_f32_kernel(
+    gpu: &ludion_render_graph::Gpu,
+    source: &str,
+    input: &[f32],
+    out_len: usize,
+) -> Vec<f32> {
+    use wgpu::util::DeviceExt;
+    let device = gpu.device();
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("twin test"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("twin test"),
+        layout: None,
+        module: &module,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let bytes = (out_len * 4) as u64;
+    let inputs = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(input),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let storage = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: bytes,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: bytes,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: inputs.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: storage.as_entire_binding(),
+            },
+        ],
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = enc.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.dispatch_workgroups(out_len as u32, 1, 1);
+    }
+    enc.copy_buffer_to_buffer(&storage, 0, &readback, 0, bytes);
+    gpu.queue().submit(Some(enc.finish()));
+    readback
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("device poll succeeds");
+    let data = readback.slice(..).get_mapped_range().expect("range maps");
+    bytemuck::cast_slice(&data).to_vec()
 }
 
 #[cfg(test)]
@@ -238,6 +313,36 @@ mod tests {
                     "L = {max_lod}, r = {i}/64: gpu {g} vs {want}"
                 );
             }
+        }
+        // The cone half-angle and pyramid level over a (roughness, distance, ppu) grid.
+        let mut input = Vec::new();
+        for r in [0.0, 0.1, 0.3, 0.5, 0.8, 1.0] {
+            for dist in [0.0, 0.5, 4.0, 30.0] {
+                for ppu in [10.0, 100.0, 800.0] {
+                    input.extend([r, dist, ppu]);
+                }
+            }
+        }
+        let n = input.len() / 3;
+        let src = format!(
+            "{}\n@group(0) @binding(0) var<storage, read> inp: array<f32>;\n\
+             @group(0) @binding(1) var<storage, read_write> out: array<f32>;\n\
+             @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {{\n\
+             let i = id.x / 2u * 3u;\n\
+             let a = ssr_cone_half_angle(inp[i]);\n\
+             if (id.x % 2u == 0u) {{ out[id.x] = a; }} else {{ out[id.x] = ssr_pyramid_level(a, inp[i + 1u], inp[i + 2u]); }}\n}}\n",
+            include_str!("shaders/snippets/lobe.wgsl"),
+        );
+        let got = run_f32_kernel(&gpu, &src, &input, n * 2);
+        for (k, row) in input.chunks(3).enumerate() {
+            let a = cone_half_angle(row[0]);
+            let level = pyramid_level(a, row[1], row[2]);
+            assert!((got[2 * k] - a).abs() <= 1e-5, "angle {row:?}");
+            assert!(
+                (got[2 * k + 1] - level).abs() <= 1e-4,
+                "level {row:?}: gpu {} vs {level}",
+                got[2 * k + 1]
+            );
         }
     }
 }

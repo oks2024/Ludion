@@ -86,6 +86,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "sprite.wgsl",
     "ssao.wgsl",
     "ssr_color.wgsl",
+    "ssr_trace.wgsl",
     "text.wgsl",
     "threshold.wgsl",
     "ui_rect.wgsl",
@@ -96,7 +97,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
 /// WGSL global names of `texture_2d<f32>` bindings that are **not** filterable (an `R32Float`
 /// source read with `textureLoad`). WGSL cannot express it, so reflection takes it from this list;
 /// binding names are workspace-unique, so a name is a safe key.
-pub const UNFILTERABLE_TEXTURES: &[&str] = &["hiz_src"];
+pub const UNFILTERABLE_TEXTURES: &[&str] = &["hiz_src", "trace_hiz"];
 
 /// The render graph's reflected shaders (files under `crates/ludion-render-graph/src/shaders/`).
 pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl"];
@@ -176,6 +177,10 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     (
         "ssr_color.wgsl",
         &["fullscreen_vs.wgsl", "hdr.wgsl", "footprint.wgsl"],
+    ),
+    (
+        "ssr_trace.wgsl",
+        &["fullscreen_vs.wgsl", "hdr.wgsl", "lobe.wgsl", "ssr.wgsl"],
     ),
     ("threshold.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("upscale.wgsl", &["fullscreen_vs.wgsl"]),

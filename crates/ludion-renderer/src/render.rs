@@ -1369,6 +1369,7 @@ impl Renderer {
             view_proj,
             inv_view_proj: view_proj.inverse(),
             camera_position: scene.camera.position,
+            proj_y: scene.camera.projection.y_axis.y,
             mesh_draws,
             mesh_asset_draws,
             ground_marker_draw,
@@ -2484,6 +2485,9 @@ struct FrameRecorder<'a> {
     inv_view_proj: Mat4,
     /// The camera's world position — the other end of the ray the fog integrates along.
     camera_position: Vec3,
+    /// The camera projection's `[1][1]` (focal length over half the frame height), which the SSR trace
+    /// turns into pixels per world unit at a hit.
+    proj_y: f32,
     mesh_draws: Vec<MeshDraw>,
     mesh_asset_draws: Vec<MeshAssetDraw>,
     /// The scene's ground markers, or `None` when it authors none — in which case the scene pass
@@ -2517,6 +2521,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::REFLECTIONS => self.record_reflections(pass),
             pass::HIZ_SEED | pass::HIZ_REDUCE => self.record_hiz(pass),
             pass::SSR_COLOR_SEED | pass::SSR_COLOR_REDUCE => self.record_ssr_color(pass),
+            pass::SSR_TRACE => self.record_ssr_trace(pass),
             pass::TRANSPARENTS => self.record_transparents(pass),
             // The bright-pass threshold (`PostProcess.bloom_threshold`; default 1.0 reproduces the
             // old shader literal).
@@ -3379,6 +3384,27 @@ impl FrameRecorder<'_> {
         self.fullscreen_effect(pass, ShaderId::SsrColor, &[], bytemuck::bytes_of(&params));
     }
 
+    /// The SSR trace: one mirror ray per trace texel over `hiz`, `ssr_color`, the opaque normal and
+    /// depth, in the graph's declared-reads order.
+    fn record_ssr_trace(&self, pass: &mut RecordedPass<'_>) {
+        let look = crate::ssr_trace::SsrLook::DEFAULT;
+        let target = pass.colors()[0].extent;
+        let levels = crate::ssr_pyramid::levels((target.width, target.height));
+        let params = shader_gen::SsrTrace {
+            view_proj: self.view_proj.to_cols_array_2d(),
+            inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
+            cam_pos: self.camera_position.extend(1.0).to_array(),
+            proj_levels: [self.proj_y, levels as f32, 0.0, 0.0],
+            look: [
+                look.max_distance,
+                look.thickness,
+                look.fade[0],
+                look.fade[1],
+            ],
+        };
+        self.fullscreen_effect(pass, ShaderId::SsrTrace, &[], bytemuck::bytes_of(&params));
+    }
+
     /// The supersampling resolve: the composited render-extent image box-filtered down to the output
     /// extent. The source extent comes from the frame's [`FrameSize`] rather than the pass (a
     /// `RecordedPass` knows only what it writes), and the ratio is computed here so the shader loops
@@ -4199,6 +4225,7 @@ enum ShaderId {
     HizSeed,
     HizReduce,
     SsrColor,
+    SsrTrace,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -4224,7 +4251,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 27;
+const SHADER_COUNT: usize = 28;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -4464,6 +4491,18 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         snippets: &[Snippet::FullscreenVs, Snippet::Hdr, Snippet::Footprint],
         layouts: &[LayoutId::SsrColor],
     },
+    ShaderDesc {
+        id: ShaderId::SsrTrace,
+        file_name: "ssr_trace.wgsl",
+        body: include_str!("shaders/ssr_trace.wgsl"),
+        snippets: &[
+            Snippet::FullscreenVs,
+            Snippet::Hdr,
+            Snippet::Lobe,
+            Snippet::Ssr,
+        ],
+        layouts: &[LayoutId::SsrTrace],
+    },
 ];
 
 impl ShaderId {
@@ -4547,6 +4586,9 @@ enum Snippet {
     /// The pyramid footprint rule — a child texel's source interval and the texels it touches,
     /// binding-free (the Hi-Z and SSR colour pyramids).
     Footprint,
+    /// `ssr_confidence` and `ssr_source_pixel`, the SSR trace's shared pure functions, binding-free
+    /// (the trace; the twin of `ssr_trace.rs::confidence`).
+    Ssr,
     /// The glyph-atlas `@group(1)` bindings, the shared `VsOut` and the coverage `fs_main` (text,
     /// ui_text).
     Glyph,
@@ -4569,6 +4611,7 @@ impl Snippet {
             Snippet::SpecularIbl => "specular_ibl.wgsl",
             Snippet::GiProbe => "gi_probe.wgsl",
             Snippet::Footprint => "footprint.wgsl",
+            Snippet::Ssr => "ssr.wgsl",
             Snippet::Glyph => "glyph.wgsl",
         }
     }
@@ -4588,6 +4631,7 @@ impl Snippet {
             Snippet::SpecularIbl => include_str!("shaders/snippets/specular_ibl.wgsl"),
             Snippet::GiProbe => include_str!("shaders/snippets/gi_probe.wgsl"),
             Snippet::Footprint => include_str!("shaders/snippets/footprint.wgsl"),
+            Snippet::Ssr => include_str!("shaders/snippets/ssr.wgsl"),
             Snippet::Glyph => include_str!("shaders/snippets/glyph.wgsl"),
         }
     }
@@ -4608,6 +4652,7 @@ impl Snippet {
             Snippet::SpecularIbl,
             Snippet::GiProbe,
             Snippet::Footprint,
+            Snippet::Ssr,
             Snippet::Glyph,
         ]
         .into_iter()
@@ -4668,10 +4713,11 @@ enum LayoutId {
     HizSeed,
     HizReduce,
     SsrColor,
+    SsrTrace,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 29;
+const LAYOUT_COUNT: usize = 30;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -4801,6 +4847,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         id: LayoutId::SsrColor,
         create: shader_gen::create_ssr_src_ssr_samp_ssr_color_params_bgl,
     },
+    LayoutDesc {
+        id: LayoutId::SsrTrace,
+        create: shader_gen::create_trace_hiz_trace_color_trace_normal_trace_depth_trace_samp_trace_params_bgl,
+    },
 ];
 
 /// Every bind group layout, built once and indexed by [`LayoutId`].
@@ -4908,7 +4958,7 @@ fn build_pipeline(
             wgpu::TextureFormat::R32Float,
             None,
         ),
-        ShaderId::SsrColor => {
+        ShaderId::SsrColor | ShaderId::SsrTrace => {
             build_fullscreen_pipeline(device, label, src, &layout, HDR_FORMAT, None)
         }
     };
@@ -5894,6 +5944,20 @@ mod tests {
         assert_eq!(fullscreen_layout(ShaderId::HizSeed), LayoutId::HizSeed);
         assert_eq!(fullscreen_layout(ShaderId::HizReduce), LayoutId::HizReduce);
         assert_eq!(fullscreen_layout(ShaderId::SsrColor), LayoutId::SsrColor);
+        // The trace: four inputs (Hi-Z, colour pyramid, normal+roughness, depth), then sampler and
+        // uniform.
+        assert_eq!(
+            [
+                shader_gen::TRACE_HIZ_BINDING,
+                shader_gen::TRACE_COLOR_BINDING,
+                shader_gen::TRACE_NORMAL_BINDING,
+                shader_gen::TRACE_DEPTH_BINDING,
+                shader_gen::TRACE_SAMP_BINDING,
+                shader_gen::TRACE_PARAMS_BINDING,
+            ],
+            [0, 1, 2, 3, 4, 5],
+        );
+        assert_eq!(fullscreen_layout(ShaderId::SsrTrace), LayoutId::SsrTrace);
         // And each of those shaders binds exactly the one layout the helper fills.
         assert_eq!(fullscreen_layout(ShaderId::Resolve), LayoutId::Resolve);
         assert_eq!(fullscreen_layout(ShaderId::Upscale), LayoutId::Upscale);
@@ -11947,8 +12011,8 @@ mod tests {
         target
     }
 
-    /// The SSR pyramids are inert: a frame whose graph also builds them renders the same pixels as
-    /// the frame that does not, every new pass validates and records (no wgpu fault), at an odd
+    /// The SSR pyramids and trace are inert: a frame whose graph also builds them renders the same
+    /// pixels as the frame that does not, every new pass validates and records (no wgpu fault), at an odd
     /// extent and under supersampling (the trace extent follows the output, not the render extent).
     #[test]
     fn needs_gpu_ssr_pyramids_leave_the_frame_untouched() {
@@ -11999,6 +12063,80 @@ mod tests {
                 "{w}x{h}: a pyramid pass faulted"
             );
             assert_eq!(plain.rgba, with_ssr.rgba, "{w}x{h}: pyramids moved a pixel");
+        }
+    }
+
+    /// The SSR trace finds a box in a mirror floor: the floor just in front of the cube's base reflects
+    /// its red front face (confident, red-dominant), floor well to the side reflects only the sky above
+    /// the frame (confidence 0), and the sky itself is exactly zero. The trace is read back from a
+    /// harness graph that makes it an output.
+    #[test]
+    fn needs_gpu_ssr_trace_hits_a_box_in_a_mirror_floor() {
+        let Some(renderer) = skip_or_renderer("ssr_trace_hits_a_box_in_a_mirror_floor") else {
+            return;
+        };
+        let size = FrameSize::native(96, 64);
+        let mut scene = RenderScene::empty(size.render);
+        scene.post = Some(exact_post());
+        scene.environment = Some(test_env());
+        let eye = Vec3::new(0.0, 4.5, 7.5);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::new(0.0, 0.5, 0.0), Vec3::Y),
+            projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.5, 0.1, 100.0),
+            position: eye,
+        };
+        let mut floor = ground(50.0);
+        floor.material = [0.02, 1.0, 0.0];
+        let mut red_box = cube(Vec3::new(0.0, 0.5, 0.0), Vec3::ONE, [1.0, 0.0, 0.0, 1.0]);
+        red_box.material = [0.5, 0.0, 1.0];
+        scene.meshes = vec![floor, red_box];
+
+        let (graph, trace) = crate::graph::build_ssr_trace_graph(size);
+        let recorder = renderer.prepare_frame(&scene, size, None);
+        let image = renderer
+            .gpu
+            .execute(
+                &schedule(&graph).expect("the trace graph schedules"),
+                trace,
+                &recorder,
+            )
+            .expect("the trace renders");
+        assert!(renderer.gpu.take_fault().is_none(), "the trace faulted");
+        let (tw, th) = crate::ssr_pyramid::trace_extent(size);
+        assert_eq!((image.width, image.height), (tw, th));
+        let texel = |x: u32, y: u32| -> [f32; 4] {
+            std::array::from_fn(|c| {
+                let at = ((y * tw + x) * 8) as usize + c * 2;
+                crate::gi_bake::f16_to_f32(u16::from_le_bytes([image.rgba[at], image.rgba[at + 1]]))
+            })
+        };
+        for y in 0..th {
+            for x in 0..tw {
+                assert!(texel(x, y).iter().all(|v| v.is_finite()), "({x}, {y})");
+            }
+        }
+        let at = |world: Vec3| {
+            let (x, y) = project(&scene.camera, world, tw, th);
+            (x, y, texel(x, y))
+        };
+        for z in [0.8, 1.0] {
+            let (x, y, t) = at(Vec3::new(0.0, 0.0, z));
+            assert!(t[3] > 0.5, "floor at z={z} ({x}, {y}): confidence {}", t[3]);
+            assert!(
+                t[0] > 2.0 * t[1] && t[0] > 2.0 * t[2],
+                "floor at z={z} ({x}, {y}) is not red: {t:?}"
+            );
+        }
+        for world in [
+            Vec3::new(5.0, 0.0, 0.0),
+            Vec3::new(-5.0, 0.0, 0.0),
+            Vec3::new(4.0, 0.0, -2.0),
+        ] {
+            let (x, y, t) = at(world);
+            assert_eq!(t[3], 0.0, "floor {world} ({x}, {y}) should miss: {t:?}");
+        }
+        for (x, y) in [(0, 0), (tw - 1, 0)] {
+            assert_eq!(texel(x, y), [0.0; 4], "sky texel ({x}, {y})");
         }
     }
 

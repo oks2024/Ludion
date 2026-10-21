@@ -1025,7 +1025,7 @@ fn map_failure(detail: String) -> Diagnostic {
 /// so a reader gets world quantities rather than bit patterns. `f32::powi` (not
 /// `ludion_core::math::powf`): an integer power is exact repeated squaring, not a platform
 /// transcendental, so the determinism rule it exists for does not apply.
-fn f16_to_f32(bits: u16) -> f32 {
+pub(crate) fn f16_to_f32(bits: u16) -> f32 {
     let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exponent = ((bits >> 10) & 0x1f) as i32;
     let mantissa = (bits & 0x3ff) as f32;
