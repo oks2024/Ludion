@@ -88,6 +88,8 @@ fn needs_gpu_dump_timings_json_has_one_entry_per_pass() {
         names,
         [
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",

@@ -472,7 +472,7 @@ impl Gpu {
                         height: phys.extent.height,
                         depth_or_array_layers,
                     },
-                    mip_level_count: 1,
+                    mip_level_count: phys.mip_levels,
                     sample_count: 1,
                     dimension,
                     format: phys.format.to_wgpu(),
@@ -480,7 +480,26 @@ impl Gpu {
                     view_formats: &[],
                 });
                 let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                PhysicalGpuTexture { texture, view }
+                // An attachment or storage view covers exactly one mip, so a mipped texture also
+                // gets one single-level view per mip.
+                let mip_views = if phys.mip_levels > 1 {
+                    (0..phys.mip_levels)
+                        .map(|level| {
+                            texture.create_view(&wgpu::TextureViewDescriptor {
+                                base_mip_level: level,
+                                mip_level_count: Some(1),
+                                ..Default::default()
+                            })
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                PhysicalGpuTexture {
+                    texture,
+                    view,
+                    mip_views,
+                }
             })
             .collect()
     }
@@ -503,11 +522,12 @@ impl Gpu {
                     "pass `{label}` cannot run on the built-in proving executor; record it with \
                      Gpu::execute and a PassRecorder"
                 ),
-                PassKind::Gradient | PassKind::Vignette { .. } => pass
-                    .color_target()
+                PassKind::Gradient | PassKind::Vignette { .. } => *pass
+                    .color_targets()
+                    .first()
                     .expect("built-in proving passes always have a color target"),
             };
-            let target = &frame[schedule.aliasing.assignment[color.index()]].view;
+            let target = view_of(schedule, frame, color);
 
             let timestamp_writes = query_set.map(|set| wgpu::RenderPassTimestampWrites {
                 query_set: set,
@@ -603,7 +623,7 @@ impl Gpu {
     ///
     /// let mut graph = RenderGraph::new();
     /// let out = graph.output("final", TextureDesc::present_target(16, 16));
-    /// graph.add_external_pass("clear", "clear", vec![], out);
+    /// graph.add_external_pass("clear", "clear", vec![], vec![out]);
     /// let schedule = ludion_render_graph::schedule(&graph).unwrap();
     /// let gpu = Gpu::request().unwrap();
     /// let image = gpu.execute(&schedule, out, &Clear).unwrap();
@@ -649,34 +669,33 @@ impl Gpu {
     ) {
         for (position, &pass_idx) in schedule.order.iter().enumerate() {
             let pass = &schedule.passes[pass_idx];
-            // A color-only or scene pass carries a color target; a depth-only pass (the shadow map)
-            // carries none — its `color` is `None` and the recorder drives its own depth-only render
-            // pass from `depth`.
-            let color = pass.color_target().map(|c| {
-                let desc = &schedule.resources[c.index()].desc;
-                ColorTarget {
-                    view: &frame[schedule.aliasing.assignment[c.index()]].view,
-                    format: desc.format,
-                    extent: desc.extent,
-                }
-            });
-            let depth_view = pass
-                .depth_target()
-                .map(|d| &frame[schedule.aliasing.assignment[d.index()]].view);
-            let storage_view = pass
-                .storage_target()
-                .map(|s| &frame[schedule.aliasing.assignment[s.index()]].view);
+            // A depth-only pass (the shadow map) carries no color targets — the recorder drives its
+            // own depth-only render pass from `depth`.
+            let colors: Vec<ColorTarget> = pass
+                .color_targets()
+                .iter()
+                .map(|&c| {
+                    let desc = &schedule.resources[c.index()].desc;
+                    ColorTarget {
+                        view: view_of(schedule, frame, c),
+                        format: desc.format,
+                        extent: desc.mip_extent(c.mip_level().unwrap_or(0)),
+                    }
+                })
+                .collect();
+            let depth_view = pass.depth_target().map(|d| view_of(schedule, frame, d));
+            let storage_view = pass.storage_target().map(|s| view_of(schedule, frame, s));
             let inputs: Vec<&wgpu::TextureView> = pass
                 .reads
                 .iter()
-                .map(|r| &frame[schedule.aliasing.assignment[r.index()]].view)
+                .map(|&r| view_of(schedule, frame, r))
                 .collect();
 
             let mut recorded = RecordedPass {
                 label: &pass.name,
                 kind: pass.kind.as_str(),
                 compute: pass.kind.is_compute(),
-                color,
+                colors,
                 depth: depth_view,
                 storage: storage_view,
                 inputs: &inputs,
@@ -709,11 +728,28 @@ pub trait PassRecorder {
     fn record(&self, pass: &mut RecordedPass<'_>);
 }
 
-/// The resolved color attachment of a pass that has one: the view plus its format and pixel size.
-struct ColorTarget<'a> {
-    view: &'a wgpu::TextureView,
-    format: TextureFormat,
-    extent: crate::resource::Extent2d,
+/// The view a handle names: the single-level view for a mip handle, the whole-texture view otherwise.
+fn view_of<'f>(
+    schedule: &Schedule,
+    frame: &'f [PhysicalGpuTexture],
+    id: ResourceId,
+) -> &'f wgpu::TextureView {
+    let phys = &frame[schedule.aliasing.assignment[id.index()]];
+    match id.mip_level() {
+        Some(level) if !phys.mip_views.is_empty() => &phys.mip_views[level as usize],
+        _ => &phys.view,
+    }
+}
+
+/// One resolved color attachment: the view plus its format and pixel size (the named mip's, for a
+/// mip handle).
+pub struct ColorTarget<'a> {
+    /// The attachment view.
+    pub view: &'a wgpu::TextureView,
+    /// The attachment's pixel format.
+    pub format: TextureFormat,
+    /// The attachment's pixel dimensions.
+    pub extent: crate::resource::Extent2d,
 }
 
 /// One pass, resolved to concrete GPU views and ready to record into.
@@ -721,14 +757,13 @@ struct ColorTarget<'a> {
 /// Input and target textures have already been resolved through the transient-aliasing assignment,
 /// so the recorder never touches [`ResourceId`]s. It records into [`encoder`](RecordedPass::encoder)
 /// — usually by calling [`begin`](RecordedPass::begin) or [`begin_clear`](RecordedPass::begin_clear)
-/// to open a color render pass on [`target`](RecordedPass::target), or by opening its own render pass
-/// directly (e.g. to attach the graph-owned [`depth`](RecordedPass::depth) buffer alongside the
-/// color target).
+/// to open a render pass over every [`colors`](RecordedPass::colors) target, or by opening its own
+/// render pass directly (e.g. to attach the graph-owned [`depth`](RecordedPass::depth) buffer
+/// alongside the color targets).
 ///
-/// A **depth-only** pass (the shadow map) has no color attachment: [`target`](RecordedPass::target),
-/// [`target_format`](RecordedPass::target_format), and [`target_extent`](RecordedPass::target_extent)
-/// panic on such a pass ([`has_color`](RecordedPass::has_color) reports which shape it is), and the
-/// recorder opens its own depth-only render pass from [`depth`](RecordedPass::depth).
+/// A **depth-only** pass (the shadow map) has no color attachments ([`colors`](RecordedPass::colors)
+/// is empty; `begin`/`begin_clear` panic), and the recorder opens its own depth-only render pass
+/// from [`depth`](RecordedPass::depth).
 ///
 /// A **compute** pass ([`is_compute`](RecordedPass::is_compute)) has no attachments at all: it opens
 /// [`begin_compute`](RecordedPass::begin_compute), binds [`storage`](RecordedPass::storage) as its
@@ -753,10 +788,9 @@ pub struct RecordedPass<'a> {
     /// Whether this pass dispatches compute work. Read through
     /// [`is_compute`](RecordedPass::is_compute).
     compute: bool,
-    /// The resolved color attachment, or `None` for a depth-only pass. Read through the
-    /// [`target`](RecordedPass::target) / [`target_format`](RecordedPass::target_format) /
-    /// [`target_extent`](RecordedPass::target_extent) accessors.
-    color: Option<ColorTarget<'a>>,
+    /// The resolved color attachments, empty for a depth-only pass. Read through
+    /// [`colors`](RecordedPass::colors).
+    colors: Vec<ColorTarget<'a>>,
     /// The resolved depth attachment view, when the pass declared a depth resource (the scene pass's
     /// depth buffer, or a shadow pass's shadow map). The graph owns and aliases this texture; the
     /// recorder attaches it and picks its clear/store ops, just as it does the color target's.
@@ -778,47 +812,30 @@ pub struct RecordedPass<'a> {
 }
 
 impl<'a> RecordedPass<'a> {
-    /// Whether this pass has a color attachment (`false` for a depth-only pass, e.g. the shadow map,
-    /// and for every compute pass).
-    pub fn has_color(&self) -> bool {
-        self.color.is_some()
-    }
-
     /// Whether this pass dispatches compute work rather than drawing. A compute recorder opens
     /// [`begin_compute`](RecordedPass::begin_compute) and never touches the attachment accessors.
     pub fn is_compute(&self) -> bool {
         self.compute
     }
 
-    /// The resolved color target view this pass writes. Panics on a depth-only pass — guard with
-    /// [`has_color`](RecordedPass::has_color) or only reach it from a color-pass recorder.
-    pub fn target(&self) -> &'a wgpu::TextureView {
-        self.color_target().view
+    /// The resolved color attachments in declared order; empty for a depth-only or compute pass.
+    pub fn colors(&self) -> &[ColorTarget<'a>] {
+        &self.colors
     }
 
-    /// The color target's pixel format. Panics on a depth-only pass.
-    pub fn target_format(&self) -> TextureFormat {
-        self.color_target().format
-    }
-
-    /// The color target's pixel dimensions. Panics on a depth-only pass.
-    pub fn target_extent(&self) -> crate::resource::Extent2d {
-        self.color_target().extent
-    }
-
-    fn color_target(&self) -> &ColorTarget<'a> {
-        self.color
-            .as_ref()
-            .expect("this pass is depth-only and has no color target")
-    }
-
-    /// Opens a color render pass on [`target`](RecordedPass::target) that *loads* existing contents
-    /// (no clear). The caller sets pipelines and draws, then drops the returned pass.
+    /// Opens a render pass over every color target that *loads* existing contents (no clear). The
+    /// caller sets pipelines and draws, then drops the returned pass.
+    ///
+    /// # Panics
+    /// On a pass with no color targets.
     pub fn begin(&mut self) -> wgpu::RenderPass<'_> {
         self.color_pass(wgpu::LoadOp::Load)
     }
 
-    /// Opens a color render pass on [`target`](RecordedPass::target) that clears to `color` first.
+    /// Opens a render pass over every color target that clears each to `color` first.
+    ///
+    /// # Panics
+    /// On a pass with no color targets.
     pub fn begin_clear(&mut self, color: wgpu::Color) -> wgpu::RenderPass<'_> {
         self.color_pass(wgpu::LoadOp::Clear(color))
     }
@@ -870,18 +887,28 @@ impl<'a> RecordedPass<'a> {
 
     fn color_pass(&mut self, load: wgpu::LoadOp<wgpu::Color>) -> wgpu::RenderPass<'_> {
         let timestamp_writes = self.timestamp_writes();
-        let target = self.target();
+        assert!(
+            !self.colors.is_empty(),
+            "this pass is depth-only and has no color target"
+        );
+        let attachments: Vec<_> = self
+            .colors
+            .iter()
+            .map(|c| {
+                Some(wgpu::RenderPassColorAttachment {
+                    view: c.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })
+            })
+            .collect();
         self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(self.label),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
+            color_attachments: &attachments,
             depth_stencil_attachment: None,
             timestamp_writes,
             occlusion_query_set: None,
@@ -913,6 +940,8 @@ fn physical_usages(phys: &crate::schedule::PhysicalTexture) -> wgpu::TextureUsag
 pub(crate) struct PhysicalGpuTexture {
     pub(crate) texture: wgpu::Texture,
     pub(crate) view: wgpu::TextureView,
+    /// One single-level view per mip; empty when the texture is not mipped.
+    pub(crate) mip_views: Vec<wgpu::TextureView>,
 }
 
 /// A frame's physical textures, held across frames so the graph is not re-created on the GPU every

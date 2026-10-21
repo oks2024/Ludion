@@ -1,6 +1,6 @@
 //! Byte-level snapshot test for the `dump-graph` JSON — CPU only, no GPU.
 //!
-//! The minimal chain's graph is a fixed thirteen-pass pipeline whose structure depends only on the
+//! The minimal chain's graph is a fixed fifteen-pass pipeline whose structure depends only on the
 //! resolution, so its JSON dump is byte-stable and safe to pin. If the graph's passes, resources,
 //! scheduling, or aliasing change, this fails and the snapshot must be re-blessed deliberately.
 //!
@@ -72,6 +72,8 @@ fn a_ui_scene_dumps_the_overlay_pass() {
         scheduled_passes(&json),
         [
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",
@@ -141,6 +143,8 @@ fn a_sun_scene_dumps_the_shadow_pass() {
         [
             "shadow",
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",

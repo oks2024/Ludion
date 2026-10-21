@@ -1,4 +1,4 @@
-//! The frame graph: a thirteen-pass pipeline (fourteen with UI, with a sun, or with a render scale
+//! The frame graph: a fifteen-pass pipeline (sixteen with UI, with a sun, or with a render scale
 //! off native, two more with light shafts, two more with depth of field, three more with ambient
 //! occlusion) declared through `ludion-render-graph`.
 //!
@@ -7,7 +7,7 @@
 //! `ludion dump-graph` CPU-only and byte-stable.
 //!
 //! ```text
-//! scene (HDR) ──► bloom_threshold ──► bloom_down_1 ─► … ─► bloom_down_5
+//! scene ─► reflections ─► transparents (HDR) ──► bloom_threshold ──► bloom_down_1 ─► … ─► bloom_down_5
 //!    │                   │                  │                   │
 //!    │                   ▼                  ▼                   ▼
 //!    │             bloom_up_0 ◄──── bloom_up_1 ◄── … ◄─── bloom_up_4   (each adds its level back)
@@ -15,8 +15,11 @@
 //!    └───────────────────┴──────────────────────────────► composite ──► output (sRGB)
 //! ```
 //!
-//! - **scene** — meshes (depth-tested, lit), then sprites/billboards (alpha, depth-tested), then
-//!   text, into a full-resolution HDR (`Rgba16Float`) target.
+//! - **scene** — opaque meshes (depth-tested, lit) into a full-resolution HDR (`Rgba16Float`)
+//!   target, and their normal+roughness and F0+specular-occlusion into two more.
+//! - **reflections** — a fullscreen additive pass over the opaque scene (the sky's indirect specular).
+//! - **transparents** — the sky, ground markers, sprites/billboards (alpha, depth-tested), particles
+//!   and text, over the same target.
 //! - **bloom_threshold / bloom_down_1..5 / bloom_up_4..0** — a six-level bloom pyramid: a bright-pass
 //!   writing level 0, five progressive 13-tap downsamples (Karis-averaged on the first, so a lone
 //!   bright pixel cannot ride the chain down as a firefly) and five 3×3 tent upsamples adding each
@@ -91,9 +94,15 @@
 //! ```
 //!
 //! The prepass owns its depth instead of handing one to the scene pass, so the scene pass's `Less`
-//! test and clear are untouched and the graph needs no write-after-write ordering concept it does not
-//! have ([`schedule`](fn@schedule) derives edges from reads only). An AO frame therefore rasterizes its geometry
-//! twice — which is exactly the geometry SSAO reads.
+//! test and clear are untouched. An AO frame therefore rasterizes its geometry twice — which is
+//! exactly the geometry SSAO reads.
+//!
+//! The scene's three passes write `scene` and `scene_depth` between them, which the graph orders by
+//! one rule: **passes that write the same subresource run in declaration order**
+//! ([`schedule`](fn@schedule): a later writer follows an earlier one, and a reader follows the
+//! latest writer declared before it). `scene` rasterizes the opaque meshes, `reflections` reads
+//! their depth, normal and specular targets and adds into `scene`, and `transparents` draws the
+//! rest into `scene` against `scene_depth`.
 //!
 //! When the scene carries screen-space UI ([`PostChain::ui`], `Plan/phase-14-ui.md` decision 5), the
 //! **composite** pass instead writes an LDR transient (`ldr`, `Rgba8UnormSrgb`) and a trailing
@@ -134,8 +143,15 @@ pub mod pass {
     /// only when the frame draws one — the scene carries a sun and this machine's quality keeps its
     /// shadows (`Plan/shadow-mapping.md` decision 6).
     pub const SHADOW: &str = "shadow";
-    /// The main scene pass (meshes + sprites + text into HDR).
+    /// The opaque scene pass: every mesh, lit, into the HDR colour target plus the normal+roughness
+    /// and F0+occlusion targets the reflections pass reads.
     pub const SCENE: &str = "scene";
+    /// The reflections pass: a fullscreen additive draw over the opaque scene. It reads its normal,
+    /// specular and depth targets and adds the sky's indirect specular into `scene`.
+    pub const REFLECTIONS: &str = "reflections";
+    /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
+    /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.
+    pub const TRANSPARENTS: &str = "transparents";
     /// Bright-pass threshold into the half-res bloom chain: it writes the pyramid's level 0.
     pub const BLOOM_THRESHOLD: &str = "bloom_threshold";
     /// The pyramid's progressive downsamples. **Index `i` is the pass that writes level `i + 1`,
@@ -163,9 +179,8 @@ pub mod pass {
     /// world-space normal target, ahead of the scene pass. Present only when the scene enables
     /// ambient occlusion ([`PostChain::ssao`](super::PostChain::ssao), `Plan/post-process-pipeline.md` decision 8).
     ///
-    /// It owns its depth rather than sharing `scene_depth`: the scheduler derives order from *reads*
-    /// alone, so two passes writing one resource are unordered in principle, and the scene pass
-    /// therefore keeps its own buffer and its own `Less` test.
+    /// It owns its depth rather than sharing `scene_depth`, so the scene pass keeps its own `Less`
+    /// test and clear.
     pub const PREPASS: &str = "prepass";
     /// The dynamic-light injection: the frame graph's one **compute** pass, replaying the GI bake's
     /// cached hits against a world-space bin of the scene's `GiDynamic`-marked lights into a
@@ -650,7 +665,7 @@ struct BloomTargets {
 ///
 /// let native = FrameSize::native(1920, 1080);
 /// let (graph, output) = ludion_renderer::build_frame_graph(native, PostChain::default());
-/// assert_eq!(graph.passes().len(), 13);
+/// assert_eq!(graph.passes().len(), 15);
 /// assert_eq!(
 ///     graph.resource(output).kind,
 ///     ludion_render_graph::ResourceKind::Output
@@ -660,28 +675,28 @@ struct BloomTargets {
 ///     ..PostChain::default()
 /// };
 /// let (ui_graph, _) = ludion_renderer::build_frame_graph(native, ui);
-/// assert_eq!(ui_graph.passes().len(), 14);
+/// assert_eq!(ui_graph.passes().len(), 16);
 /// // A shadow map prepends the depth-only shadow pass; the scene pass then samples it.
 /// let sun = PostChain {
 ///     shadow_map: Some(2048),
 ///     ..PostChain::default()
 /// };
 /// let (sun_graph, _) = ludion_renderer::build_frame_graph(native, sun);
-/// assert_eq!(sun_graph.passes().len(), 14);
+/// assert_eq!(sun_graph.passes().len(), 16);
 /// // A render scale adds exactly one pass in either direction, whatever the rest of the chain is.
 /// let ssaa = FrameSize::scaled(1920, 1080, RenderScale::new(2.0).unwrap());
 /// let (ssaa_graph, _) = ludion_renderer::build_frame_graph(ssaa, PostChain::default());
-/// assert_eq!(ssaa_graph.passes().len(), 14);
+/// assert_eq!(ssaa_graph.passes().len(), 16);
 /// let cheap = FrameSize::scaled(1920, 1080, RenderScale::new(0.5).unwrap());
 /// let (cheap_graph, _) = ludion_renderer::build_frame_graph(cheap, PostChain::default());
-/// assert_eq!(cheap_graph.passes().len(), 14);
+/// assert_eq!(cheap_graph.passes().len(), 16);
 /// // Ambient occlusion prepends the prepass, the estimate and its blur.
 /// let ao = PostChain {
 ///     ssao: true,
 ///     ..PostChain::default()
 /// };
 /// let (ao_graph, _) = ludion_renderer::build_frame_graph(native, ao);
-/// assert_eq!(ao_graph.passes().len(), 16);
+/// assert_eq!(ao_graph.passes().len(), 18);
 /// // Light shafts add the march and its blur. `PostChain::for_scene` only derives this from a scene
 /// // that has all three of a strength, a sun and a medium — see `PostChain::shafts`.
 /// let shafts = PostChain {
@@ -690,14 +705,14 @@ struct BloomTargets {
 ///     ..PostChain::default()
 /// };
 /// let (shafts_graph, _) = ludion_renderer::build_frame_graph(native, shafts);
-/// assert_eq!(shafts_graph.passes().len(), 16);
+/// assert_eq!(shafts_graph.passes().len(), 18);
 /// // Depth of field adds the prefilter and the gather.
 /// let dof = PostChain {
 ///     dof: true,
 ///     ..PostChain::default()
 /// };
 /// let (dof_graph, _) = ludion_renderer::build_frame_graph(native, dof);
-/// assert_eq!(dof_graph.passes().len(), 15);
+/// assert_eq!(dof_graph.passes().len(), 17);
 /// ```
 pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, ResourceId) {
     // The scene and its depth are the only targets drawn at the render extent; every post target
@@ -720,6 +735,10 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         "scene_depth",
         TextureDesc::sampled_depth(render_w, render_h),
     );
+    // The opaque pass's two extra targets, read by `reflections`: world normal + clamped roughness,
+    // and F0 + specular occlusion (sRGB storage gives the dielectric F0 its precision).
+    let scene_normal = graph.transient("scene_normal", TextureDesc::hdr_color(render_w, render_h));
+    let scene_specular = graph.transient("scene_specular", TextureDesc::color(render_w, render_h));
     // The sun shadow map (only when this frame draws one, so a sunless scene's — or a
     // shadows-masked machine's — resource list is exactly the pre-shadow graph's,
     // `Plan/shadow-mapping.md` decision 6). A square sampled depth texture: written depth-only by
@@ -807,7 +826,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // The depth-only shadow pass writes the shadow map with no reads; the scene pass then samples it
     // (the read edge orders scene after shadow, `depth_only_pass_orders_before_a_later_sampler`).
     if let Some(shadow_map) = shadow_map {
-        graph.add_external_depth_pass(pass::SHADOW, pass::SHADOW, vec![], shadow_map);
+        graph.add_external_pass_with_depth(pass::SHADOW, pass::SHADOW, vec![], vec![], shadow_map);
         scene_reads.push(shadow_map);
     }
     // Prepass → ssao → blur, each ordered by the next one's read, and the scene pass's read of the
@@ -817,11 +836,21 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             pass::PREPASS,
             pass::PREPASS,
             vec![],
-            ao.normal,
+            vec![ao.normal],
             ao.depth,
         );
-        graph.add_external_pass(pass::SSAO, pass::SSAO, vec![ao.depth, ao.normal], ao.raw);
-        graph.add_external_pass(pass::SSAO_BLUR, pass::SSAO_BLUR, vec![ao.raw], ao.blurred);
+        graph.add_external_pass(
+            pass::SSAO,
+            pass::SSAO,
+            vec![ao.depth, ao.normal],
+            vec![ao.raw],
+        );
+        graph.add_external_pass(
+            pass::SSAO_BLUR,
+            pass::SSAO_BLUR,
+            vec![ao.raw],
+            vec![ao.blurred],
+        );
         scene_reads.push(ao.blurred);
     }
     // The injection reads nothing the graph owns (its inputs — the bake's hit cache, the voxel
@@ -831,12 +860,32 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         graph.add_external_compute_pass(pass::GI_INJECT, pass::GI_INJECT, vec![], gi_dynamic);
         scene_reads.push(gi_dynamic);
     }
-    graph.add_external_pass_with_depth(pass::SCENE, pass::SCENE, scene_reads, scene, scene_depth);
+    graph.add_external_pass_with_depth(
+        pass::SCENE,
+        pass::SCENE,
+        scene_reads,
+        vec![scene, scene_normal, scene_specular],
+        scene_depth,
+    );
+    // Reads in the shader's binding order; additive into `scene`, after the opaque pass.
+    graph.add_external_pass(
+        pass::REFLECTIONS,
+        pass::REFLECTIONS,
+        vec![scene_normal, scene_specular, scene_depth],
+        vec![scene],
+    );
+    graph.add_external_pass_with_depth(
+        pass::TRANSPARENTS,
+        pass::TRANSPARENTS,
+        vec![],
+        vec![scene],
+        scene_depth,
+    );
     graph.add_external_pass(
         pass::BLOOM_THRESHOLD,
         pass::BLOOM_THRESHOLD,
         vec![scene],
-        bloom_bright,
+        vec![bloom_bright],
     );
     // The chain ends in one half-res resource the composite pass mixes in: level 0's accumulation.
     let bloom = {
@@ -848,7 +897,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
                 down[level - 2]
             };
             let label = pass::BLOOM_DOWN[level - 1];
-            graph.add_external_pass(label, label, vec![source], down[level - 1]);
+            graph.add_external_pass(label, label, vec![source], vec![down[level - 1]]);
         }
         // Upsampling walks back down the index, each pass reading [coarser accumulation, this
         // level's own downsample result] — the read order the recorder's bind group relies on.
@@ -864,7 +913,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
                 down[level - 1]
             };
             let label = pass::BLOOM_UP[level];
-            graph.add_external_pass(label, label, vec![coarser, same_level], up[level]);
+            graph.add_external_pass(label, label, vec![coarser, same_level], vec![up[level]]);
         }
         up[0]
     };
@@ -880,13 +929,13 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             pass::SHAFTS,
             pass::SHAFTS,
             vec![scene_depth, shadow_map],
-            shafts.raw,
+            vec![shafts.raw],
         );
         graph.add_external_pass(
             pass::SHAFTS_BLUR,
             pass::SHAFTS_BLUR,
             vec![shafts.raw],
-            shafts.blurred,
+            vec![shafts.blurred],
         );
         shafts.blurred
     });
@@ -898,9 +947,9 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             pass::DOF_COC,
             pass::DOF_COC,
             vec![scene, scene_depth],
-            dof.coc,
+            vec![dof.coc],
         );
-        graph.add_external_pass(pass::DOF, pass::DOF, vec![dof.coc], dof.gathered);
+        graph.add_external_pass(pass::DOF, pass::DOF, vec![dof.coc], vec![dof.gathered]);
         dof.gathered
     });
 
@@ -925,12 +974,12 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         pass::COMPOSITE,
         pass::COMPOSITE,
         composite_reads,
-        composited,
+        vec![composited],
     );
     let tail = match (ldr, resample) {
         (Some(ldr), Some(resample)) => {
             let target = ldr_resolved.unwrap_or(output);
-            graph.add_external_pass(resample, resample, vec![ldr], target);
+            graph.add_external_pass(resample, resample, vec![ldr], vec![target]);
             target
         }
         _ => composited,
@@ -942,7 +991,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         if chain.debug_lines {
             reads.push(scene_depth);
         }
-        graph.add_external_pass(pass::OVERLAY, pass::OVERLAY, reads, output);
+        graph.add_external_pass(pass::OVERLAY, pass::OVERLAY, reads, vec![output]);
     }
 
     (graph, output)
@@ -1064,6 +1113,8 @@ mod tests {
             pass_names(&bare_graph),
             [
                 "scene",
+                "reflections",
+                "transparents",
                 "bloom_threshold",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1177,8 +1228,56 @@ mod tests {
     /// five upsamples back down and the composite — the same resources in the same declaration
     /// order, the same passes, and the same scheduled execution order. These lists ARE the
     /// regression detector; if one changes, the shipped chain changed.
+    /// The opaque pass writes the extra targets, `reflections` reads them, and the transparents
+    /// draw over the same colour and depth — in that declaration order.
     #[test]
-    fn default_graph_is_the_fixed_thirteen_pass_chain() {
+    fn the_scene_pass_splits_around_reflections() {
+        let size = FrameSize::native(64, 64);
+        let (graph, _) = build_frame_graph(size, PostChain::default());
+        let order = schedule(&graph).unwrap();
+        assert_eq!(
+            order.order_names()[..3],
+            ["scene", "reflections", "transparents"]
+        );
+        let names = |ids: &[ResourceId]| -> Vec<String> {
+            ids.iter()
+                .map(|id| graph.resources()[id.index()].name.clone())
+                .collect()
+        };
+        let find = |name: &str| graph.passes().iter().find(|p| p.name == name).unwrap();
+        let scene = find("scene");
+        assert_eq!(
+            names(scene.color_targets()),
+            ["scene", "scene_normal", "scene_specular"]
+        );
+        assert_eq!(names(&[scene.depth_target().unwrap()]), ["scene_depth"]);
+        let reflections = find("reflections");
+        assert_eq!(
+            names(&reflections.reads()),
+            ["scene_normal", "scene_specular", "scene_depth"]
+        );
+        assert_eq!(names(reflections.color_targets()), ["scene"]);
+        let transparents = find("transparents");
+        assert_eq!(names(transparents.color_targets()), ["scene"]);
+        assert_eq!(
+            names(&[transparents.depth_target().unwrap()]),
+            ["scene_depth"]
+        );
+
+        let ao = PostChain {
+            ssao: true,
+            ..PostChain::default()
+        };
+        let (ao_graph, _) = build_frame_graph(size, ao);
+        let ao_order = schedule(&ao_graph).unwrap();
+        assert_eq!(
+            ao_order.order_names()[..5],
+            ["prepass", "ssao", "ssao_blur", "scene", "reflections"]
+        );
+    }
+
+    #[test]
+    fn default_graph_is_the_fixed_fifteen_pass_chain() {
         let (graph, output) =
             build_frame_graph(FrameSize::native(1920, 1080), PostChain::default());
         assert_eq!(
@@ -1186,6 +1285,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "bloom_bright",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1204,6 +1305,8 @@ mod tests {
             pass_names(&graph),
             [
                 "scene",
+                "reflections",
+                "transparents",
                 "bloom_threshold",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1231,7 +1334,7 @@ mod tests {
             .iter()
             .find(|p| p.name == "composite")
             .unwrap();
-        assert_eq!(composite.color_target(), Some(output));
+        assert_eq!(composite.color_targets(), [output]);
         assert_eq!(
             composite
                 .reads()
@@ -1246,6 +1349,8 @@ mod tests {
             scheduled.order_names(),
             [
                 "scene",
+                "reflections",
+                "transparents",
                 "bloom_threshold",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1277,6 +1382,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "bloom_bright",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1296,6 +1403,8 @@ mod tests {
             pass_names(&graph),
             [
                 "scene",
+                "reflections",
+                "transparents",
                 "bloom_threshold",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1320,7 +1429,7 @@ mod tests {
         let overlay = graph.passes().iter().find(|p| p.name == "overlay").unwrap();
         // `ldr` is the transient composite now writes and overlay reads (same handle), and it is not
         // the output — so the chain is composite → ldr → overlay → final.
-        let composite_target = composite.color_target().unwrap();
+        let composite_target = composite.color_targets()[0];
         assert_eq!(
             overlay.reads,
             vec![composite_target],
@@ -1336,8 +1445,8 @@ mod tests {
             "composite retargets to the ldr transient",
         );
         assert_eq!(
-            overlay.color_target(),
-            Some(output),
+            overlay.color_targets(),
+            [output],
             "overlay writes the final output"
         );
 
@@ -1424,6 +1533,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "shadow_map",
                 "bloom_bright",
                 "bloom_down_1",
@@ -1444,6 +1555,8 @@ mod tests {
             [
                 "shadow",
                 "scene",
+                "reflections",
+                "transparents",
                 "bloom_threshold",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1461,7 +1574,7 @@ mod tests {
 
         // The shadow pass is depth-only (no color target) and writes `shadow_map`.
         let shadow = graph.passes().iter().find(|p| p.name == "shadow").unwrap();
-        assert_eq!(shadow.color_target(), None, "shadow is depth-only");
+        assert!(shadow.color_targets().is_empty(), "shadow is depth-only");
         assert_eq!(
             graph.resources()[shadow.depth_target().unwrap().index()].name,
             "shadow_map",
@@ -1505,7 +1618,7 @@ mod tests {
             );
             assert_eq!(
                 pass_names(&graph).len(),
-                14,
+                16,
                 "the extent is not structure: the pass list is the same either way",
             );
         }
@@ -1589,6 +1702,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "bloom_bright",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1606,6 +1721,8 @@ mod tests {
         );
         let expected_passes = [
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",
@@ -1641,7 +1758,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["ldr"],
         );
-        assert_eq!(resolve.color_target(), Some(output));
+        assert_eq!(resolve.color_targets(), [output]);
     }
 
     /// Supersampling *and* UI: the resolve lands in a second LDR seam (`ldr_resolved`, at the output
@@ -1660,6 +1777,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "bloom_bright",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1678,6 +1797,8 @@ mod tests {
         );
         let expected_passes = [
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",
@@ -1715,7 +1836,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["ldr_resolved"],
         );
-        assert_eq!(overlay.color_target(), Some(output));
+        assert_eq!(overlay.color_targets(), [output]);
     }
 
     // --- Sub-native rendering (Plan/scalability.md) ---------------------------------------
@@ -1736,6 +1857,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "bloom_bright",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1753,6 +1876,8 @@ mod tests {
         );
         let expected_passes = [
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",
@@ -1796,7 +1921,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["ldr"],
         );
-        assert_eq!(upscale.color_target(), Some(output));
+        assert_eq!(upscale.color_targets(), [output]);
     }
 
     /// **UI stays native-crisp below native, and the graph is where that starts.** The upscale lands
@@ -1812,6 +1937,8 @@ mod tests {
         let (graph, output) = build_frame_graph(sub_native(960, 540), chain);
         let expected_passes = [
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",
@@ -1843,7 +1970,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["ldr_resolved"],
         );
-        assert_eq!(overlay.color_target(), Some(output));
+        assert_eq!(overlay.color_targets(), [output]);
         assert_eq!(
             extent(output),
             (960, 540),
@@ -1925,6 +2052,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "bloom_bright",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1943,6 +2072,8 @@ mod tests {
             pass_names(&graph),
             [
                 "scene",
+                "reflections",
+                "transparents",
                 "bloom_threshold",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -1970,6 +2101,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "prepass_normal",
                 "prepass_depth",
                 "ssao",
@@ -1993,6 +2126,8 @@ mod tests {
             "ssao",
             "ssao_blur",
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",
@@ -2024,7 +2159,7 @@ mod tests {
         let prepass = graph.passes().iter().find(|p| p.name == "prepass").unwrap();
         assert!(reads("prepass").is_empty());
         assert_eq!(
-            graph.resources()[prepass.color_target().unwrap().index()].name,
+            graph.resources()[prepass.color_targets()[0].index()].name,
             "prepass_normal",
         );
         assert_eq!(
@@ -2068,6 +2203,8 @@ mod tests {
                 "ssao",
                 "ssao_blur",
                 "scene",
+                "reflections",
+                "transparents",
                 "bloom_threshold",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -2236,6 +2373,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "shadow_map",
                 "bloom_bright",
                 "bloom_down_1",
@@ -2256,6 +2395,8 @@ mod tests {
         let expected_passes = [
             "shadow",
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",
@@ -2398,6 +2539,8 @@ mod tests {
             [
                 "scene",
                 "scene_depth",
+                "scene_normal",
+                "scene_specular",
                 "bloom_bright",
                 "bloom_down_1",
                 "bloom_down_2",
@@ -2416,6 +2559,8 @@ mod tests {
         );
         let expected_passes = [
             "scene",
+            "reflections",
+            "transparents",
             "bloom_threshold",
             "bloom_down_1",
             "bloom_down_2",
@@ -2548,7 +2693,7 @@ mod tests {
             assert!(!barely.supersampled());
             assert_eq!(barely.resample(), None);
             let (graph, _) = build_frame_graph(barely, PostChain::default());
-            assert_eq!(pass_names(&graph).len(), 13, "scale {factor}");
+            assert_eq!(pass_names(&graph).len(), 15, "scale {factor}");
         }
         // A tall frame at a scale whose short axis rounds back onto the output: one axis equal, one
         // magnified, and the answer is still a single direction.

@@ -15,8 +15,9 @@ use serde::Serialize;
 
 /// A handle to a virtual resource in a [`RenderGraph`](crate::RenderGraph).
 ///
-/// Plain, `Copy`, comparable id — an index into the graph's resource table. Passes reference
-/// resources only through these handles, never through backend textures.
+/// Plain, `Copy`, comparable id — an index into the graph's resource table, optionally narrowed to
+/// one mip level with [`mip`](ResourceId::mip). Passes reference resources only through these
+/// handles, never through backend textures.
 ///
 /// # Example
 /// ```
@@ -28,12 +29,60 @@ use serde::Serialize;
 /// assert_ne!(a, b);
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct ResourceId(pub(crate) usize);
+pub struct ResourceId {
+    pub(crate) index: usize,
+    pub(crate) mip: Option<u32>,
+}
 
 impl ResourceId {
+    /// A whole-resource handle for table slot `index`.
+    pub(crate) fn whole(index: usize) -> Self {
+        ResourceId { index, mip: None }
+    }
+
     /// The raw table index behind this handle.
     pub fn index(self) -> usize {
-        self.0
+        self.index
+    }
+
+    /// This handle narrowed to mip `level` of the resource: the one way to attach, write, or read a
+    /// single level of a mipped transient.
+    ///
+    /// # Panics
+    /// If the handle already names a mip.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_render_graph::{RenderGraph, TextureDesc};
+    ///
+    /// let mut graph = RenderGraph::new();
+    /// let pyramid = graph.transient("pyramid", TextureDesc::color(64, 64).with_mip_levels(3));
+    /// assert_eq!(pyramid.mip_level(), None);
+    /// assert_eq!(pyramid.mip(2).mip_level(), Some(2));
+    /// assert_eq!(pyramid.mip(2).index(), pyramid.index());
+    /// ```
+    pub fn mip(self, level: u32) -> ResourceId {
+        assert!(
+            self.mip.is_none(),
+            "resource handle already names mip {}",
+            self.mip.unwrap()
+        );
+        ResourceId {
+            index: self.index,
+            mip: Some(level),
+        }
+    }
+
+    /// The mip level this handle names, or `None` for the whole resource.
+    pub fn mip_level(self) -> Option<u32> {
+        self.mip
+    }
+
+    /// Whether two accesses touch common texels: same resource, and either is whole or both name
+    /// the same mip. Dependency edges use this, never `==`.
+    pub(crate) fn overlaps(self, other: ResourceId) -> bool {
+        self.index == other.index
+            && (self.mip.is_none() || other.mip.is_none() || self.mip == other.mip)
     }
 }
 
@@ -57,9 +106,16 @@ pub struct Extent2d {
 
 /// The pixel format of a virtual texture.
 ///
-/// Deliberately tiny — the milestone needs exactly one color format and this enum is the mapping
-/// point to `wgpu::TextureFormat`. New formats are added as passes demand them, one obvious variant
-/// each.
+/// Deliberately tiny — this enum is the mapping point to `wgpu::TextureFormat`. New formats are
+/// added as passes demand them, one obvious variant each.
+///
+/// The reflection split's extra colour targets reuse existing variants: world normal + roughness
+/// is [`Rgba16Float`](TextureFormat::Rgba16Float) (8-bit octahedral normals band in sharp
+/// reflections, and 16-bit unorm formats are not renderable on the WebGPU floor); F0 + specular
+/// occlusion is [`Rgba8UnormSrgb`](TextureFormat::Rgba8UnormSrgb) (sRGB gives the dielectric F0
+/// range ~0.02–0.05 about five times the codes of linear 8-bit; alpha stays linear). Together with
+/// the scene's `Rgba16Float` that is 24 render-target bytes per sample, under the WebGPU floor's
+/// 32.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextureFormat {
@@ -169,6 +225,9 @@ pub struct TextureDesc {
     pub depth_slices: Option<u32>,
     /// The texture's pixel format.
     pub format: TextureFormat,
+    /// The mip level count; 1 for an unmipped texture. A mipped resource is written one level at a
+    /// time (see [`ResourceId::mip`]).
+    pub mip_levels: u32,
     /// The usages this virtual resource requires. Kept sorted and deduplicated by the constructors
     /// so `dump-graph` output is stable.
     pub usages: Vec<TextureUsage>,
@@ -181,6 +240,7 @@ impl TextureDesc {
         TextureDesc {
             extent: Extent2d { width, height },
             depth_slices: None,
+            mip_levels: 1,
             format: TextureFormat::Rgba8UnormSrgb,
             usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
         }
@@ -192,6 +252,7 @@ impl TextureDesc {
         TextureDesc {
             extent: Extent2d { width, height },
             depth_slices: None,
+            mip_levels: 1,
             format: TextureFormat::Rgba16Float,
             usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
         }
@@ -217,6 +278,7 @@ impl TextureDesc {
         TextureDesc {
             extent: Extent2d { width, height },
             depth_slices: Some(depth),
+            mip_levels: 1,
             format: TextureFormat::Rgba16Float,
             usages: vec![TextureUsage::TextureBinding, TextureUsage::StorageBinding],
         }
@@ -228,6 +290,7 @@ impl TextureDesc {
         TextureDesc {
             extent: Extent2d { width, height },
             depth_slices: None,
+            mip_levels: 1,
             format: TextureFormat::Rgba8UnormSrgb,
             usages: vec![TextureUsage::RenderAttachment, TextureUsage::CopySrc],
         }
@@ -241,6 +304,7 @@ impl TextureDesc {
         TextureDesc {
             extent: Extent2d { width, height },
             depth_slices: None,
+            mip_levels: 1,
             format: TextureFormat::Depth32Float,
             usages: vec![TextureUsage::RenderAttachment],
         }
@@ -256,16 +320,44 @@ impl TextureDesc {
         TextureDesc {
             extent: Extent2d { width, height },
             depth_slices: None,
+            mip_levels: 1,
             format: TextureFormat::Depth32Float,
             usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
         }
     }
 
-    /// Whether two descriptions may share one physical texture: identical size, slice count, and
-    /// format. Usage sets need not match — they are unioned by the aliaser.
+    /// This description with a `levels`-deep mip chain.
+    ///
+    /// # Panics
+    /// If `levels` is 0, the texture is a volume, or `levels` exceeds the full chain for the extent.
+    pub fn with_mip_levels(mut self, levels: u32) -> Self {
+        assert!(levels >= 1, "a texture needs at least one mip level");
+        assert!(self.depth_slices.is_none(), "a 3D texture cannot be mipped");
+        let full = 32 - self.extent.width.max(self.extent.height).leading_zeros();
+        assert!(
+            levels <= full,
+            "{levels} mip levels exceed the full chain ({full}) of a {}x{} texture",
+            self.extent.width,
+            self.extent.height,
+        );
+        self.mip_levels = levels;
+        self
+    }
+
+    /// The pixel dimensions of mip `level`: each side halves per level, floored at 1.
+    pub fn mip_extent(&self, level: u32) -> Extent2d {
+        Extent2d {
+            width: (self.extent.width >> level).max(1),
+            height: (self.extent.height >> level).max(1),
+        }
+    }
+
+    /// Whether two descriptions may share one physical texture: identical size, slice count, mip
+    /// count, and format. Usage sets need not match — they are unioned by the aliaser.
     pub fn alias_compatible(&self, other: &TextureDesc) -> bool {
         self.extent == other.extent
             && self.depth_slices == other.depth_slices
+            && self.mip_levels == other.mip_levels
             && self.format == other.format
     }
 

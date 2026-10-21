@@ -45,14 +45,14 @@ use crate::voxel_bake::VoxelBake;
 // drift-tested against.
 use crate::shader_gen;
 use crate::shader_gen::{
-    ATLAS_TEX_GROUP, BONE_PALETTE_BINDING, BRDF_LUT_BINDING, BloomThreshold, CAMERA_BINDING,
-    CAMERA_GROUP, CLUSTER_LIGHTS_BINDING, CLUSTER_TABLE_BINDING, Camera, Composite,
-    DownsampleParams, ENV_BINDING, ENV_GROUP, ENV_SAMP_BINDING, EnvParams, IRRADIANCE_TEX_BINDING,
+    ATLAS_TEX_GROUP, BONE_PALETTE_BINDING, BloomThreshold, CAMERA_BINDING, CAMERA_GROUP,
+    CLUSTER_LIGHTS_BINDING, CLUSTER_TABLE_BINDING, Camera, Composite, DownsampleParams,
+    ENV_BINDING, ENV_GROUP, ENV_SAMP_BINDING, EnvParams, IRRADIANCE_TEX_BINDING,
     LIGHT_LIST_BINDING, LIGHTS_BINDING, LIGHTS_GROUP, MATERIAL_BASE_COLOR, MATERIAL_EMISSIVE,
     MATERIAL_GROUP, MATERIAL_METALLIC_ROUGHNESS, MATERIAL_NORMAL, MATERIAL_OCCLUSION, MeshMaterial,
     RECT_TEX_GROUP, ResolveParams, SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, SKY_GROUP,
-    SPECULAR_TEX_BINDING, SPRITE_TEX_GROUP, SRC_TEX_GROUP, SUN_GROUP, Sky, Sun, UI_GROUP, Ui,
-    UpsampleParams, UpscaleParams,
+    SPRITE_TEX_GROUP, SRC_TEX_GROUP, SUN_GROUP, Sky, Sun, UI_GROUP, Ui, UpsampleParams,
+    UpscaleParams,
 };
 // The clustered-forward light payload: the light array, the header uniform and the per-cell index
 // tables (`Plan/clustered-forward.md`). The renderer's job with them is upload and bind; which
@@ -1240,7 +1240,11 @@ impl Renderer {
                 // `Environment`, else the 1×1 fallback cubes + flag off. The group's bind group is
                 // built in `record_scene`, where the graph's AO transient is resolved. The sky bind
                 // group is built only when present.
-                let resolved_env = self.ibl.resolve(&self.gpu, scene.environment.as_ref());
+                let resolved_env = self.ibl.resolve(
+                    &self.gpu,
+                    scene.environment.as_ref(),
+                    self.quality_params.ibl_specular_size,
+                );
                 let sky_bg = scene
                     .environment
                     .as_ref()
@@ -2090,14 +2094,6 @@ impl Renderer {
                     resource: wgpu::BindingResource::TextureView(&env.irradiance),
                 },
                 wgpu::BindGroupEntry {
-                    binding: SPECULAR_TEX_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&env.specular),
-                },
-                wgpu::BindGroupEntry {
-                    binding: BRDF_LUT_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&env.brdf),
-                },
-                wgpu::BindGroupEntry {
                     binding: ENV_SAMP_BINDING,
                     resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
                 },
@@ -2518,6 +2514,8 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::SSAO_BLUR | pass::SHAFTS_BLUR => self.record_box_blur(pass),
             pass::GI_INJECT => self.record_gi_inject(pass),
             pass::SCENE => self.record_scene(pass),
+            pass::REFLECTIONS => self.record_reflections(pass),
+            pass::TRANSPARENTS => self.record_transparents(pass),
             // The bright-pass threshold (`PostProcess.bloom_threshold`; default 1.0 reproduces the
             // old shader literal).
             pass::BLOOM_THRESHOLD => {
@@ -2702,7 +2700,7 @@ impl FrameRecorder<'_> {
     /// the same restriction.
     fn record_prepass(&self, pass: &mut RecordedPass<'_>) {
         let depth_view = pass.depth.expect("the prepass declares a depth attachment");
-        let target = pass.target();
+        let target = pass.colors()[0].view;
 
         let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("prepass"),
@@ -2827,7 +2825,7 @@ impl FrameRecorder<'_> {
     /// comes from the pass, because the disc's radius is authored as a fraction of the frame's height
     /// and the gather walks it in texels.
     fn record_dof(&self, pass: &mut RecordedPass<'_>) {
-        let height = pass.target_extent().height.max(1) as f32;
+        let height = pass.colors()[0].extent.height.max(1) as f32;
         let params = shader_gen::Dof {
             max_coc: self.post.dof,
             texel: 1.0 / height,
@@ -2869,7 +2867,7 @@ impl FrameRecorder<'_> {
         self.r.gi_inject.dispatch(&mut compute, frame, &bind);
     }
 
-    /// The scene pass: meshes (opaque, depth-written), then sprites (alpha, depth-tested), then text.
+    /// The opaque scene pass: meshes (depth-written) into `scene`, `scene_normal` and `scene_specular`.
     fn record_scene(&self, pass: &mut RecordedPass<'_>) {
         // The depth attachment is a graph resource (`scene_depth`), resolved and handed over by the
         // executor. The recorder still owns its clear/store policy — clear to 1.0 and **store**,
@@ -2878,25 +2876,30 @@ impl FrameRecorder<'_> {
         let depth_view = pass
             .depth
             .expect("the scene pass declares a depth attachment");
-        let target = pass.target();
+        let [target, normal, specular] = [0, 1, 2].map(|i| pass.colors()[i].view);
 
         let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    // A dark ambient clear so an empty scene is deep blue-grey, not pure black.
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.02,
-                        g: 0.02,
-                        b: 0.035,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // A dark ambient clear so an empty scene is deep blue-grey, not pure black.
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.02,
+                            g: 0.02,
+                            b: 0.035,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                // A zero normal reads as "no opaque surface here".
+                Some(clear_transparent(normal)),
+                Some(clear_transparent(specular)),
+            ],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_view,
                 depth_ops: Some(wgpu::Operations {
@@ -3000,6 +3003,103 @@ impl FrameRecorder<'_> {
             rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             rp.draw_indexed(0..draw.mesh.index_count, 0, 0..draw.count);
         }
+    }
+
+    /// The reflections pass: a fullscreen additive draw over the opaque scene, reading its normal,
+    /// specular and depth targets (the pass's declared read order, which is the shader's binding
+    /// order), then the sky cube, BRDF LUT and probe volume. It adds the sky's indirect specular.
+    fn record_reflections(&self, pass: &mut RecordedPass<'_>) {
+        let mut env = self.resolved_env.params;
+        env[3] = self.gi_strengths.sky_visibility;
+        let uniform = shader_gen::Reflections {
+            inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
+            cam_pos: self.camera_position.extend(1.0).to_array(),
+            env,
+            gi_origin: self.resolved_gi.origin,
+            gi_scale: self.resolved_gi.scale,
+        };
+        let uniform_buf = init_buffer(
+            pass.device,
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::bytes_of(&uniform),
+        );
+        let bind_group = pass.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("reflections bind group"),
+            layout: self.r.layouts.get(LayoutId::Reflections),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_NORMAL_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_SPECULAR_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_DEPTH_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[2]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_SKY_CUBE_BINDING,
+                    resource: wgpu::BindingResource::TextureView(&self.resolved_env.specular),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_BRDF_LUT_BINDING,
+                    resource: wgpu::BindingResource::TextureView(&self.resolved_env.brdf),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_GI_BINDING,
+                    resource: wgpu::BindingResource::TextureView(&self.resolved_gi.probes),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_SAMP_BINDING,
+                    resource: wgpu::BindingResource::Sampler(&self.r.linear_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFLECTIONS_BINDING,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+        // Load, never clear: the draw adds onto the opaque scene.
+        let mut rp = pass.begin();
+        rp.set_pipeline(self.r.pipeline(ShaderId::Reflections));
+        rp.set_bind_group(0, &bind_group, &[]);
+        rp.draw(0..3, 0..1);
+    }
+
+    /// Everything drawn over the opaque scene: the sky, ground markers, sprites, particles and text,
+    /// loading `scene` and `scene_depth` as the opaque pass left them.
+    fn record_transparents(&self, pass: &mut RecordedPass<'_>) {
+        let depth_view = pass
+            .depth
+            .expect("the transparents pass declares a depth attachment");
+        let target = pass.colors()[0].view;
+
+        let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("transparents"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            // Hand-attached, as in `record_scene`; otherwise `--dump-timings` loses the pass.
+            timestamp_writes: pass.timestamp_writes(),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
 
         // The procedural sky: a far-depth fullscreen triangle filling the pixels no opaque mesh wrote,
         // emitted only when the scene has an `Environment` (else the clear color shows). Drawn after
@@ -3067,8 +3167,8 @@ impl FrameRecorder<'_> {
 
         let ui_uniform = Ui {
             viewport: [
-                pass.target_extent().width as f32,
-                pass.target_extent().height as f32,
+                pass.colors()[0].extent.width as f32,
+                pass.colors()[0].extent.height as f32,
             ],
             pad: [0.0, 0.0],
         };
@@ -3087,8 +3187,8 @@ impl FrameRecorder<'_> {
                 wgpu::BufferUsages::UNIFORM,
                 bytemuck::bytes_of(&shader_gen::DebugView {
                     viewport: [
-                        pass.target_extent().width as f32,
-                        pass.target_extent().height as f32,
+                        pass.colors()[0].extent.width as f32,
+                        pass.colors()[0].extent.height as f32,
                     ],
                     pad: [0.0, 0.0],
                 }),
@@ -3255,7 +3355,7 @@ impl FrameRecorder<'_> {
     /// over texels rather than re-deriving it per pixel.
     fn record_resolve(&self, pass: &mut RecordedPass<'_>) {
         let (source_w, source_h) = self.size.render;
-        let target = pass.target_extent();
+        let target = pass.colors()[0].extent;
         let params = ResolveParams {
             source_extent: [source_w as f32, source_h as f32],
             ratio: [
@@ -3272,7 +3372,7 @@ impl FrameRecorder<'_> {
     /// here below 1.
     fn record_upscale(&self, pass: &mut RecordedPass<'_>) {
         let (source_w, source_h) = self.size.render;
-        let target = pass.target_extent();
+        let target = pass.colors()[0].extent;
         let params = UpscaleParams {
             source_extent: [source_w as f32, source_h as f32],
             ratio: [
@@ -3339,7 +3439,7 @@ fn binding_plan(input_count: usize, absent: &[u32]) -> Vec<Option<usize>> {
 /// One texel of the pass's target, in UV. Every post parameter is expressed in these screen-relative
 /// units rather than source texels, so a filter's footprint is a fixed fraction of the frame.
 fn target_texel(pass: &RecordedPass<'_>) -> [f32; 2] {
-    let extent = pass.target_extent();
+    let extent = pass.colors()[0].extent;
     [
         1.0 / extent.width.max(1) as f32,
         1.0 / extent.height.max(1) as f32,
@@ -4065,6 +4165,7 @@ enum ShaderId {
     UiRect,
     UiText,
     DebugLine,
+    Reflections,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -4090,7 +4191,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 23;
+const SHADER_COUNT: usize = 24;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -4112,6 +4213,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Lights,
             Snippet::Bayer,
             Snippet::Hdr,
+            Snippet::GiProbe,
         ],
         layouts: &[
             LayoutId::CameraSkin,
@@ -4294,6 +4396,19 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         snippets: &[Snippet::Camera],
         layouts: &[LayoutId::Camera, LayoutId::DebugLine],
     },
+    ShaderDesc {
+        id: ShaderId::Reflections,
+        file_name: "reflections.wgsl",
+        body: include_str!("shaders/reflections.wgsl"),
+        snippets: &[
+            Snippet::FullscreenVs,
+            Snippet::Hdr,
+            Snippet::Lobe,
+            Snippet::SpecularIbl,
+            Snippet::GiProbe,
+        ],
+        layouts: &[LayoutId::Reflections],
+    },
 ];
 
 impl ShaderId {
@@ -4366,6 +4481,14 @@ enum Snippet {
     /// half-float overflow and reads a NaN as zero (mesh, and the bloom chain's threshold and
     /// pyramid).
     Hdr,
+    /// `specular_cube_lod`, the specular cube's lod for a roughness (`specular_ibl.wgsl`, so the
+    /// reflections pass; the twin of `lobe.rs::cube_lod`).
+    Lobe,
+    /// `sky_specular`, the sky's specular IBL for a surface point, binding-free (reflections).
+    SpecularIbl,
+    /// `sh_l1` and `sky_visibility_at`, the one read of the sky-visibility probe volume,
+    /// binding-free (mesh, reflections).
+    GiProbe,
     /// The glyph-atlas `@group(1)` bindings, the shared `VsOut` and the coverage `fs_main` (text,
     /// ui_text).
     Glyph,
@@ -4384,6 +4507,9 @@ impl Snippet {
             Snippet::SkyGradient => "sky_gradient.wgsl",
             Snippet::Skin => "skin.wgsl",
             Snippet::Hdr => "hdr.wgsl",
+            Snippet::Lobe => "lobe.wgsl",
+            Snippet::SpecularIbl => "specular_ibl.wgsl",
+            Snippet::GiProbe => "gi_probe.wgsl",
             Snippet::Glyph => "glyph.wgsl",
         }
     }
@@ -4399,6 +4525,9 @@ impl Snippet {
             Snippet::SkyGradient => include_str!("shaders/snippets/sky_gradient.wgsl"),
             Snippet::Skin => include_str!("shaders/snippets/skin.wgsl"),
             Snippet::Hdr => include_str!("shaders/snippets/hdr.wgsl"),
+            Snippet::Lobe => include_str!("shaders/snippets/lobe.wgsl"),
+            Snippet::SpecularIbl => include_str!("shaders/snippets/specular_ibl.wgsl"),
+            Snippet::GiProbe => include_str!("shaders/snippets/gi_probe.wgsl"),
             Snippet::Glyph => include_str!("shaders/snippets/glyph.wgsl"),
         }
     }
@@ -4415,6 +4544,9 @@ impl Snippet {
             Snippet::SkyGradient,
             Snippet::Skin,
             Snippet::Hdr,
+            Snippet::Lobe,
+            Snippet::SpecularIbl,
+            Snippet::GiProbe,
             Snippet::Glyph,
         ]
         .into_iter()
@@ -4471,10 +4603,11 @@ enum LayoutId {
     BoxBlur,
     Ui,
     DebugLine,
+    Reflections,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 25;
+const LAYOUT_COUNT: usize = 26;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -4505,7 +4638,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Env,
-        create: shader_gen::create_irradiance_tex_specular_tex_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_bgl,
+        create: shader_gen::create_irradiance_tex_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_bgl,
     },
     LayoutDesc {
         id: LayoutId::MeshMaterial,
@@ -4587,6 +4720,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::DebugLine,
         create: shader_gen::create_debug_depth_debug_view_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::Reflections,
+        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_bgl,
     },
 ];
 
@@ -4672,16 +4809,19 @@ fn build_pipeline(
         | ShaderId::BoxBlur
         | ShaderId::Threshold
         | ShaderId::BloomDown
-        | ShaderId::BloomUp => build_fullscreen_pipeline(device, label, src, &layout, HDR_FORMAT),
+        | ShaderId::BloomUp => {
+            build_fullscreen_pipeline(device, label, src, &layout, HDR_FORMAT, None)
+        }
         // `blit` is the overlay pass's passthrough copy of the composited LDR image, and `resolve`
         // and `upscale` are the two directions of the render scale's resampling; all four write the
         // LDR sRGB output.
         ShaderId::Composite | ShaderId::Resolve | ShaderId::Upscale | ShaderId::Blit => {
-            build_fullscreen_pipeline(device, label, src, &layout, OUTPUT_FORMAT)
+            build_fullscreen_pipeline(device, label, src, &layout, OUTPUT_FORMAT, None)
         }
         ShaderId::UiRect => build_ui_rect_pipeline(device, label, src, &layout),
         ShaderId::UiText => build_ui_text_pipeline(device, label, src, &layout),
         ShaderId::DebugLine => build_debug_line_pipeline(device, label, src, &layout),
+        ShaderId::Reflections => build_reflections_pipeline(device, label, src, &layout),
     };
     ShaderPipelines {
         main,
@@ -4917,11 +5057,15 @@ fn build_mesh_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: HDR_FORMAT,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            // The opaque scene pass's three targets, in the graph's declaration order: `scene` (HDR),
+            // `scene_normal` (HDR) and `scene_specular` (`OUTPUT_FORMAT`, sRGB 8-bit).
+            targets: &[HDR_FORMAT, HDR_FORMAT, OUTPUT_FORMAT].map(|format| {
+                Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })
+            }),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState {
@@ -5378,6 +5522,7 @@ fn build_fullscreen_pipeline(
     src: &str,
     layout: &wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
     let shader = module(device, label, src);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -5394,7 +5539,7 @@ fn build_fullscreen_pipeline(
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: None,
+                blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -5405,6 +5550,39 @@ fn build_fullscreen_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+/// A colour attachment that clears to transparent black and stores.
+fn clear_transparent(view: &wgpu::TextureView) -> wgpu::RenderPassColorAttachment<'_> {
+    wgpu::RenderPassColorAttachment {
+        view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: wgpu::Operations {
+            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            store: wgpu::StoreOp::Store,
+        },
+    }
+}
+
+/// The reflections pipeline: a fullscreen draw added onto the scene's colour (`One + One`; the
+/// scene's alpha is kept). Adding a zero source leaves the target's bits untouched.
+fn build_reflections_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    src: &str,
+    layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    let add = |src_factor, dst_factor| wgpu::BlendComponent {
+        src_factor,
+        dst_factor,
+        operation: wgpu::BlendOperation::Add,
+    };
+    let blend = wgpu::BlendState {
+        color: add(wgpu::BlendFactor::One, wgpu::BlendFactor::One),
+        alpha: add(wgpu::BlendFactor::Zero, wgpu::BlendFactor::One),
+    };
+    build_fullscreen_pipeline(device, label, src, layout, HDR_FORMAT, Some(blend))
 }
 
 #[cfg(test)]
@@ -6793,6 +6971,144 @@ mod tests {
         assert_eq!(
             with_a.rgba, with_b.rgba,
             "two independent prefilter runs of the same environment must be byte-identical"
+        );
+    }
+
+    /// A unit-radius sphere at the origin with the given material and hit-flash amount.
+    fn reflective_sphere(material: [f32; 3], flash: f32) -> MeshInstance {
+        MeshInstance {
+            shape: MeshShape::Sphere,
+            model: Mat4::from_scale(Vec3::splat(2.0)),
+            normal_matrix: Mat3::IDENTITY,
+            color: [0.9, 0.9, 0.9, 1.0],
+            material,
+            use_vertex_material: false,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash,
+            flash_color: [0.2, 0.3, 0.4],
+            bone_offset: 0,
+        }
+    }
+
+    /// A bright, saturated sky, so a sky reflection cannot be mistaken for anything else.
+    fn vivid_env(ibl_intensity: f32) -> crate::scene::EnvironmentData {
+        crate::scene::EnvironmentData {
+            sky_zenith: [0.1, 0.9, 0.2],
+            sky_horizon: [0.1, 0.9, 0.2],
+            sky_ground: [0.1, 0.9, 0.2],
+            sun_disc_size: 0.0,
+            sun_disc_intensity: 0.0,
+            ambient: [0.0; 3],
+            ibl_intensity,
+        }
+    }
+
+    fn pixel(img: &RenderedImage, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * img.width + x) * 4) as usize;
+        [
+            img.rgba[i],
+            img.rgba[i + 1],
+            img.rgba[i + 2],
+            img.rgba[i + 3],
+        ]
+    }
+
+    /// The reflections pass is masked at far depth: the sky is drawn later, so a texel no opaque
+    /// surface covers must not receive the sky's specular term (which a zero F0 still leaves as
+    /// `prefiltered × ab.y`). A rough metal box in the lower half changes nothing in the upper half.
+    /// A sky texel's zero normal already yields 0 (`normalize` gives NaN and `hdr_safe` reads it as
+    /// zero), so this guards the behaviour rather than the mask line itself.
+    #[test]
+    fn needs_gpu_reflections_mask_the_sky() {
+        let Some(renderer) = skip_or_renderer("reflections_mask_the_sky") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.environment = Some(test_env());
+        let eye = Vec3::new(0.0, 1.0, 8.0);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
+            projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.0, 0.1, 100.0),
+            position: eye,
+        };
+        let sky_only = renderer.render(&scene, size).expect("sky-only render");
+        let mut metal_box = cube(
+            Vec3::new(0.0, -0.5, 0.0),
+            Vec3::new(2.0, 1.0, 2.0),
+            [0.8; 4],
+        );
+        metal_box.material = [0.5, 1.0, 0.0];
+        scene.meshes = vec![metal_box];
+        let with_box = renderer.render(&scene, size).expect("box render");
+
+        assert_ne!(
+            sky_only.rgba, with_box.rgba,
+            "the box must be visible, or the comparison proves nothing"
+        );
+        for y in 0..h / 2 {
+            for x in 0..w {
+                assert_eq!(
+                    pixel(&sky_only, x, y),
+                    pixel(&with_box, x, y),
+                    "sky pixel ({x}, {y}) moved when a box entered the lower half",
+                );
+            }
+        }
+    }
+
+    /// A full hit-flash hides the reflection: the flash factor rides `scene_specular.a`, so
+    /// `mix(lit + s, flash, a)` stays exact. A mirror metal and a rough dielectric flashed to 1.0
+    /// render the same centre pixel.
+    #[test]
+    fn needs_gpu_a_full_flash_hides_the_reflection() {
+        let Some(renderer) = skip_or_renderer("a_full_flash_hides_the_reflection") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.environment = Some(vivid_env(1.0));
+        scene.meshes = vec![reflective_sphere([0.05, 1.0, 0.0], 1.0)];
+        let mirror = renderer.render(&scene, size).expect("mirror render");
+        scene.meshes = vec![reflective_sphere([0.9, 0.0, 0.0], 1.0)];
+        let rough = renderer.render(&scene, size).expect("rough render");
+        assert_eq!(
+            pixel(&mirror, w / 2, h / 2),
+            pixel(&rough, w / 2, h / 2),
+            "a fully flashed pixel shows the flash colour alone"
+        );
+    }
+
+    /// The pass adds the term at all: a mirror metal under a vivid sky is clearly brighter at its
+    /// centre than the same sphere with `ibl_intensity` 0.
+    #[test]
+    fn needs_gpu_metal_reflects_the_sky() {
+        let Some(renderer) = skip_or_renderer("metal_reflects_the_sky") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.meshes = vec![reflective_sphere([0.05, 1.0, 0.0], 0.0)];
+        scene.environment = Some(vivid_env(1.0));
+        let lit = renderer.render(&scene, size).expect("reflecting render");
+        scene.environment = Some(vivid_env(0.0));
+        let dark = renderer.render(&scene, size).expect("ibl-off render");
+        let centre = |img: &RenderedImage| {
+            let p = pixel(img, w / 2, h / 2);
+            u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])
+        };
+        assert!(
+            centre(&lit) > centre(&dark) + 60,
+            "the sky must show in the metal: {} vs {}",
+            centre(&lit),
+            centre(&dark),
         );
     }
 

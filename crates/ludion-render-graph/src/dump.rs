@@ -22,8 +22,8 @@ struct GraphDump<'a> {
 struct PassDump<'a> {
     name: &'a str,
     kind: &'a str,
-    reads: Vec<&'a str>,
-    writes: Vec<&'a str>,
+    reads: Vec<String>,
+    writes: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -37,6 +37,9 @@ struct ResourceDump<'a> {
     /// declares no volume dumps exactly the bytes it dumped before volumes existed.
     #[serde(skip_serializing_if = "Option::is_none")]
     depth: Option<u32>,
+    /// Present only for a mipped resource, for the same reason as `depth`.
+    #[serde(skip_serializing_if = "is_one")]
+    mips: u32,
     usages: Vec<&'a str>,
 }
 
@@ -55,6 +58,8 @@ struct PhysicalDump<'a> {
     height: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     depth: Option<u32>,
+    #[serde(skip_serializing_if = "is_one")]
+    mips: u32,
     usages: Vec<&'a str>,
     resources: Vec<&'a str>,
 }
@@ -63,6 +68,19 @@ struct PhysicalDump<'a> {
 struct AssignmentDump<'a> {
     resource: &'a str,
     physical: usize,
+}
+
+fn is_one(n: &u32) -> bool {
+    *n == 1
+}
+
+/// A handle's dump token: the resource name, with `@mip{k}` for a single-level handle.
+fn handle_str(resources: &[crate::graph::ResourceDecl], id: crate::resource::ResourceId) -> String {
+    let name = &resources[id.index()].name;
+    match id.mip_level() {
+        Some(level) => format!("{name}@mip{level}"),
+        None => name.clone(),
+    }
 }
 
 fn format_str(f: TextureFormat) -> &'static str {
@@ -101,12 +119,12 @@ impl Schedule {
                     reads: pass
                         .reads()
                         .iter()
-                        .map(|r| resources[r.index()].name.as_str())
+                        .map(|&r| handle_str(resources, r))
                         .collect(),
                     writes: pass
                         .writes()
                         .iter()
-                        .map(|w| resources[w.index()].name.as_str())
+                        .map(|&w| handle_str(resources, w))
                         .collect(),
                 }
             })
@@ -124,6 +142,7 @@ impl Schedule {
                 width: r.desc.extent.width,
                 height: r.desc.extent.height,
                 depth: r.desc.depth_slices,
+                mips: r.desc.mip_levels,
                 usages: usage_strs(&r.desc.usages),
             })
             .collect();
@@ -142,6 +161,7 @@ impl Schedule {
                     width,
                     height,
                     depth: p.depth_slices,
+                    mips: p.mip_levels,
                     usages: usage_strs(&p.usages),
                     resources: p
                         .resources

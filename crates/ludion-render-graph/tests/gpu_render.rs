@@ -6,8 +6,8 @@
 //! byte-identical pixels.
 
 use ludion_render_graph::{
-    Gpu, PassRecorder, PassTiming, PassTimingRing, RecordedPass, RenderGraph, ResourceId, Schedule,
-    TextureDesc, build_graph, schedule,
+    Extent2d, Gpu, PassRecorder, PassTiming, PassTimingRing, RecordedPass, RenderGraph, ResourceId,
+    Schedule, TextureDesc, build_graph, schedule,
 };
 
 /// Records every pass of the proving graph as a bare clear of its color target.
@@ -419,7 +419,10 @@ impl PassRecorder for VolumeRecorder {
         match pass.kind {
             "inject" => {
                 assert!(pass.is_compute(), "the inject pass is declared as compute");
-                assert!(!pass.has_color(), "a compute pass has no color attachment");
+                assert!(
+                    pass.colors().is_empty(),
+                    "a compute pass has no color attachment"
+                );
                 let view = pass.storage.expect("the graph resolved the storage target");
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("inject bind group"),
@@ -461,7 +464,7 @@ fn volume_graph() -> (RenderGraph, ResourceId) {
     let mut graph = RenderGraph::new();
     let volume = graph.transient("volume", TextureDesc::hdr_storage_volume(2, 2, 4));
     let out = graph.output("final", TextureDesc::present_target(8, 8));
-    graph.add_external_pass("shade", "shade", vec![volume], out);
+    graph.add_external_pass("shade", "shade", vec![volume], vec![out]);
     graph.add_external_compute_pass("inject", "inject", vec![], volume);
     (graph, out)
 }
@@ -621,4 +624,101 @@ fn needs_gpu_pending_fault_refuses_the_next_render_once() {
     assert_eq!(refused.code.as_str(), "L2010");
     gpu.render_to_image(&scheduled, output)
         .expect("the fault was taken; the next render runs");
+}
+
+/// Records the multi-target graph: `opaque` clears its two colours to distinct values through its
+/// own descriptor; `mip1`/`mip2` clear their single mip attachment; `final` clears the output.
+struct MrtRecorder;
+
+impl PassRecorder for MrtRecorder {
+    fn record(&self, pass: &mut RecordedPass<'_>) {
+        match pass.kind {
+            "opaque" => {
+                let colors = pass.colors();
+                assert_eq!(colors.len(), 2);
+                assert_eq!(
+                    colors[0].format,
+                    ludion_render_graph::resource::TextureFormat::Rgba16Float
+                );
+                assert_eq!(
+                    colors[1].format,
+                    ludion_render_graph::resource::TextureFormat::Rgba8UnormSrgb
+                );
+                let clears = [wgpu::Color::RED, wgpu::Color::GREEN];
+                let attachments: Vec<_> = colors
+                    .iter()
+                    .zip(clears)
+                    .map(|(c, clear)| {
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: c.view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(clear),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })
+                    })
+                    .collect();
+                let timestamp_writes = pass.timestamp_writes();
+                let _ = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("opaque"),
+                    color_attachments: &attachments,
+                    depth_stencil_attachment: None,
+                    timestamp_writes,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+            }
+            "mip1" | "mip2" => {
+                let level = if pass.kind == "mip1" { 1 } else { 2 };
+                assert_eq!(pass.colors().len(), 1);
+                assert_eq!(
+                    pass.colors()[0].extent,
+                    Extent2d {
+                        width: 8 >> level,
+                        height: 8 >> level
+                    }
+                );
+                let _ = pass.begin_clear(wgpu::Color::BLUE);
+            }
+            "final" => {
+                assert_eq!(pass.inputs.len(), 1);
+                let _ = pass.begin_clear(wgpu::Color::WHITE);
+            }
+            other => panic!("unexpected pass `{other}`"),
+        }
+    }
+}
+
+/// A multi-target pass and single-mip attachments of a mipped transient record without a wgpu
+/// validation error (a view spanning several mips would be rejected as an attachment).
+#[test]
+fn needs_gpu_multi_target_pass_and_mip_attachments_validate() {
+    let Some(gpu) = gpu_or_skip("multi_target_pass_and_mip_attachments_validate") else {
+        return;
+    };
+    let mut graph = RenderGraph::new();
+    let scene = graph.transient("scene", TextureDesc::hdr_color(8, 8));
+    let normal = graph.transient("normal", TextureDesc::color(8, 8));
+    let pyramid = graph.transient("pyramid", TextureDesc::color(8, 8).with_mip_levels(3));
+    let out = graph.output("final", TextureDesc::present_target(8, 8));
+    graph.add_external_pass("opaque", "opaque", vec![], vec![scene, normal]);
+    graph.add_external_pass("mip1", "mip1", vec![], vec![pyramid.mip(1)]);
+    graph.add_external_pass("mip2", "mip2", vec![pyramid.mip(1)], vec![pyramid.mip(2)]);
+    graph.add_external_pass("final", "final", vec![normal], vec![out]);
+    let scheduled = schedule(&graph).unwrap();
+
+    let image = gpu.execute(&scheduled, out, &MrtRecorder).unwrap();
+    assert!(
+        image
+            .rgba
+            .chunks_exact(4)
+            .all(|px| px == [255, 255, 255, 255]),
+        "the final pass clears the output white"
+    );
+    assert!(
+        gpu.take_fault().is_none(),
+        "wgpu rejected the multi-target or mip attachments"
+    );
 }

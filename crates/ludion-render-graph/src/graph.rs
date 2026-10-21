@@ -103,14 +103,15 @@ impl PassKind {
 
 /// A declared pass: a name, the work it does, and the resources it writes.
 ///
-/// A pass writes at most one color target, at most one depth attachment (multi-*color*-target passes
-/// are deferred), and at most one storage texture. All three are optional so the graph can express
-/// every shape the engine needs: a color-only post pass ([`color`](PassDecl::color) set), the scene
-/// pass (color + depth), a depth-only shadow pass (only `depth`), and a compute pass (only
-/// [`storage`](PassDecl::storage)). Its reads are stored on [`reads`](PassDecl::reads) — derived from
-/// the kind for built-ins, declared explicitly for externally-recorded passes. The scheduler treats
-/// the depth attachment and the storage write exactly like the color target, so a later pass that
-/// samples either orders after this one.
+/// A pass writes any number of color targets (one extent between them and the depth attachment), at
+/// most one depth attachment, and at most one storage texture. All are optional so the graph can
+/// express every shape the engine needs: a color-only post pass ([`color`](PassDecl::color) set),
+/// the scene pass (color + depth), a multi-target pass (several colors), a depth-only shadow pass
+/// (only `depth`), and a compute pass (only [`storage`](PassDecl::storage)). Its reads are stored on
+/// [`reads`](PassDecl::reads) — derived from the kind for built-ins, declared explicitly for
+/// externally-recorded passes. The scheduler treats the depth attachment and the storage write
+/// exactly like the color target, so a later pass that samples either orders after this one. Passes
+/// that write the same subresource run in declaration order.
 #[derive(Clone, Debug)]
 pub struct PassDecl {
     /// The pass's stable, human-readable name.
@@ -121,8 +122,9 @@ pub struct PassDecl {
     /// [`PassKind::intrinsic_reads`]; for externally-recorded passes it is supplied at declaration
     /// time. Either way it is the single source of truth the scheduler and aliaser consult.
     pub reads: Vec<ResourceId>,
-    /// The color resource this pass renders into, if any. `None` for a depth-only or compute pass.
-    pub color: Option<ResourceId>,
+    /// The color resources this pass renders into, in attachment order. Empty for a depth-only or
+    /// compute pass.
+    pub color: Vec<ResourceId>,
     /// The depth resource this pass renders into, if any.
     pub depth: Option<ResourceId>,
     /// The storage texture this pass writes, if any — set only by [`PassKind::Compute`]. A storage
@@ -136,9 +138,9 @@ impl PassDecl {
         self.reads.clone()
     }
 
-    /// The pass's color attachment, if it has one.
-    pub fn color_target(&self) -> Option<ResourceId> {
-        self.color
+    /// The pass's color attachments, in attachment order.
+    pub fn color_targets(&self) -> &[ResourceId] {
+        &self.color
     }
 
     /// The pass's depth attachment, if it has one.
@@ -151,12 +153,12 @@ impl PassDecl {
         self.storage
     }
 
-    /// Every resource this pass writes — color target, then depth attachment, then storage texture,
-    /// whichever are present. The scheduler and aliaser consult this for dependency edges and
+    /// Every resource this pass writes — color targets in declared order, then depth attachment, then
+    /// storage texture, whichever are present. The scheduler and aliaser consult this for dependency edges and
     /// lifetimes; the fixed order makes `dump-graph`'s `writes` array canonical.
     pub fn writes(&self) -> Vec<ResourceId> {
         let mut writes = Vec::new();
-        writes.extend(self.color);
+        writes.extend(self.color.iter().copied());
         writes.extend(self.depth);
         writes.extend(self.storage);
         writes
@@ -205,7 +207,7 @@ impl RenderGraph {
     /// graph's target when it renders.
     ///
     /// # Panics
-    /// If `desc` is a 3D texture: readback packs one 2D image, so a volume can never be an output.
+    /// If `desc` is a 3D or mipped texture: readback packs one 2D image, so neither can be an output.
     pub fn output(&mut self, name: impl Into<String>, desc: TextureDesc) -> ResourceId {
         let name = name.into();
         assert!(
@@ -213,15 +215,21 @@ impl RenderGraph {
             "output resource `{name}` is a 3D texture; readback produces one 2D image, so a volume \
              cannot be a graph output",
         );
+        assert!(
+            desc.mip_levels == 1,
+            "output resource `{name}` has {} mip levels; readback packs one image, so an output \
+             cannot be mipped",
+            desc.mip_levels,
+        );
         self.push_resource(name, desc, ResourceKind::Output)
     }
 
     /// Rejects a 3D resource in a position that must be a flat texture — a color or depth
     /// attachment. A volume is written by a compute pass and sampled; it is never attached. This is
-    /// a construction bug in the caller, the same class as reaching
-    /// [`RecordedPass::target`](crate::RecordedPass::target) on a depth-only pass.
+    /// a construction bug in the caller, the same class as indexing an empty
+    /// [`RecordedPass::colors`](crate::RecordedPass::colors) on a depth-only pass.
     fn require_flat(&self, id: ResourceId, role: &str) {
-        let decl = &self.resources[id.0];
+        let decl = &self.resources[id.index()];
         assert!(
             decl.desc.depth_slices.is_none(),
             "resource `{}` is a 3D texture and cannot be a pass {role}",
@@ -229,11 +237,89 @@ impl RenderGraph {
         );
     }
 
+    /// Rejects a mip index past the resource's chain.
+    fn require_mip_in_range(&self, id: ResourceId) {
+        let decl = &self.resources[id.index()];
+        if let Some(level) = id.mip_level() {
+            assert!(
+                level < decl.desc.mip_levels,
+                "resource `{}` has {} mip level(s); mip {level} does not exist",
+                decl.name,
+                decl.desc.mip_levels,
+            );
+        }
+    }
+
+    /// Rejects a handle that cannot be a render attachment: a volume, a mip past the chain, or a
+    /// whole handle to a mipped resource (wgpu attachments cover exactly one level, so a write must
+    /// name which).
+    fn require_attachable(&self, id: ResourceId, role: &str) {
+        self.require_flat(id, role);
+        self.require_mip_in_range(id);
+        let decl = &self.resources[id.index()];
+        assert!(
+            decl.desc.mip_levels == 1 || id.mip_level().is_some(),
+            "resource `{}` has {} mip levels; a pass {role} must name one with `.mip(level)`",
+            decl.name,
+            decl.desc.mip_levels,
+        );
+    }
+
+    /// The pixel extent an attachment handle covers: the named mip's, or the base level's.
+    fn attachment_extent(&self, id: ResourceId) -> crate::resource::Extent2d {
+        self.resources[id.index()]
+            .desc
+            .mip_extent(id.mip_level().unwrap_or(0))
+    }
+
+    /// Rejects colour/depth attachments of differing extents (wgpu requires one per pass) and a
+    /// resource attached twice among the colours.
+    fn require_one_extent(&self, name: &str, colors: &[ResourceId], depth: Option<ResourceId>) {
+        let mut attachments = colors.iter().chain(depth.iter());
+        let Some(first) = attachments.next() else {
+            return;
+        };
+        let extent = self.attachment_extent(*first);
+        for id in attachments {
+            assert!(
+                self.attachment_extent(*id) == extent,
+                "pass `{name}` attaches `{}` at {}x{} but `{}` at {}x{}; one pass's attachments \
+                 must share an extent",
+                self.resources[first.index()].name,
+                extent.width,
+                extent.height,
+                self.resources[id.index()].name,
+                self.attachment_extent(*id).width,
+                self.attachment_extent(*id).height,
+            );
+        }
+        for (i, color) in colors.iter().enumerate() {
+            assert!(
+                !colors[..i].contains(color),
+                "pass `{name}` lists color target `{}` twice",
+                self.resources[color.index()].name,
+            );
+        }
+    }
+
+    fn require_valid_reads(&self, reads: &[ResourceId]) {
+        for read in reads {
+            self.require_mip_in_range(*read);
+        }
+    }
+
     /// Rejects a compute pass whose storage target was not declared writable. Without
     /// [`TextureUsage::StorageBinding`] the physical texture is created without the wgpu usage and
     /// the recorder's bind group fails at record time, far from the declaration that caused it.
     fn require_storage(&self, id: ResourceId) {
-        let decl = &self.resources[id.0];
+        self.require_mip_in_range(id);
+        let decl = &self.resources[id.index()];
+        assert!(
+            decl.desc.mip_levels == 1 || id.mip_level().is_some(),
+            "compute pass storage target `{}` has {} mip levels; name one with `.mip(level)`",
+            decl.name,
+            decl.desc.mip_levels,
+        );
         assert!(
             decl.desc.usages.contains(&TextureUsage::StorageBinding),
             "compute pass storage target `{}` does not declare TextureUsage::StorageBinding; \
@@ -243,7 +329,7 @@ impl RenderGraph {
     }
 
     fn push_resource(&mut self, name: String, desc: TextureDesc, kind: ResourceKind) -> ResourceId {
-        let id = ResourceId(self.resources.len());
+        let id = ResourceId::whole(self.resources.len());
         self.resources.push(ResourceDecl { name, desc, kind });
         id
     }
@@ -251,96 +337,88 @@ impl RenderGraph {
     /// Declares a built-in pass that draws `kind` into `target`. Reads are derived from `kind`.
     ///
     /// # Panics
-    /// If `target` is a 3D resource.
+    /// If `target` is not attachable (a 3D resource, or a mipped one without a mip).
     pub fn add_pass(&mut self, name: impl Into<String>, kind: PassKind, target: ResourceId) {
-        self.require_flat(target, "color target");
+        self.require_attachable(target, "color target");
         let reads = kind.intrinsic_reads();
         self.passes.push(PassDecl {
             name: name.into(),
             kind,
             reads,
-            color: Some(target),
+            color: vec![target],
             depth: None,
             storage: None,
         });
     }
 
     /// Declares an externally-recorded pass ([`PassKind::External`]): it samples `reads` and writes
-    /// `target`, and its GPU work is recorded by the [`PassRecorder`](crate::PassRecorder) passed to
-    /// [`Gpu::execute`](crate::Gpu::execute). `label` is the recorder's dispatch token and the pass
-    /// kind shown in `dump-graph`.
+    /// the `colors` targets, and its GPU work is recorded by the [`PassRecorder`](crate::PassRecorder)
+    /// passed to [`Gpu::execute`](crate::Gpu::execute). `label` is the recorder's dispatch token and
+    /// the pass kind shown in `dump-graph`.
     ///
     /// This is how `ludion-renderer` builds its pipeline: the graph owns scheduling, aliasing,
     /// and the JSON dump, while the renderer owns the pipelines and draw calls — the declarative
     /// interface stays free of wgpu types.
     ///
     /// # Panics
-    /// If `target` is a 3D resource.
+    /// If `colors` is empty (use [`add_external_pass_with_depth`](RenderGraph::add_external_pass_with_depth)
+    /// for a depth-only pass), a target is not attachable, or the targets differ in extent.
     pub fn add_external_pass(
         &mut self,
         name: impl Into<String>,
         label: &'static str,
         reads: Vec<ResourceId>,
-        target: ResourceId,
+        colors: Vec<ResourceId>,
     ) {
-        self.require_flat(target, "color target");
-        self.passes.push(PassDecl {
-            name: name.into(),
-            kind: PassKind::External { label },
-            reads,
-            color: Some(target),
-            depth: None,
-            storage: None,
-        });
+        let name = name.into();
+        assert!(
+            !colors.is_empty(),
+            "pass `{name}` declares no color target; a depth-only pass uses add_external_pass_with_depth",
+        );
+        self.push_external(name, label, reads, colors, None);
     }
 
-    /// Declares an externally-recorded pass that writes both a `color` target and a `depth`
-    /// attachment (the renderer's scene pass). The recorder attaches both when it opens its render pass;
-    /// the graph owns and aliases the depth texture like any other resource, and the scheduler orders
-    /// a later pass that samples `depth` after this one.
+    /// Declares an externally-recorded pass that writes `colors` and a `depth` attachment (the
+    /// renderer's scene pass). `colors` may be empty: that is the depth-only shape, a shadow map. The
+    /// recorder attaches everything when it opens its render pass; the graph owns and aliases the depth
+    /// texture like any other resource, and the scheduler orders a later pass that samples `depth`
+    /// after this one.
     ///
     /// # Panics
-    /// If `color` or `depth` is a 3D resource.
+    /// If an attachment is not attachable, or the attachments differ in extent.
     pub fn add_external_pass_with_depth(
         &mut self,
         name: impl Into<String>,
         label: &'static str,
         reads: Vec<ResourceId>,
-        color: ResourceId,
+        colors: Vec<ResourceId>,
         depth: ResourceId,
     ) {
-        self.require_flat(color, "color target");
-        self.require_flat(depth, "depth attachment");
-        self.passes.push(PassDecl {
-            name: name.into(),
-            kind: PassKind::External { label },
-            reads,
-            color: Some(color),
-            depth: Some(depth),
-            storage: None,
-        });
+        self.push_external(name.into(), label, reads, colors, Some(depth));
     }
 
-    /// Declares an externally-recorded *depth-only* pass: it writes `depth` and no color target (a
-    /// shadow map is drawn this way). A later pass that samples the depth resource orders after this
-    /// one, exactly as with a color dependency.
-    ///
-    /// # Panics
-    /// If `depth` is a 3D resource.
-    pub fn add_external_depth_pass(
+    fn push_external(
         &mut self,
-        name: impl Into<String>,
+        name: String,
         label: &'static str,
         reads: Vec<ResourceId>,
-        depth: ResourceId,
+        colors: Vec<ResourceId>,
+        depth: Option<ResourceId>,
     ) {
-        self.require_flat(depth, "depth attachment");
+        for color in &colors {
+            self.require_attachable(*color, "color target");
+        }
+        if let Some(depth) = depth {
+            self.require_attachable(depth, "depth attachment");
+        }
+        self.require_one_extent(&name, &colors, depth);
+        self.require_valid_reads(&reads);
         self.passes.push(PassDecl {
-            name: name.into(),
+            name,
             kind: PassKind::External { label },
             reads,
-            color: None,
-            depth: Some(depth),
+            color: colors,
+            depth,
             storage: None,
         });
     }
@@ -355,7 +433,7 @@ impl RenderGraph {
     /// `dump-timings` and the profiler under its own name.
     ///
     /// # Panics
-    /// If `storage` does not declare [`TextureUsage::StorageBinding`].
+    /// If `storage` does not declare [`TextureUsage::StorageBinding`], or is mipped without a mip.
     ///
     /// # Example
     /// ```
@@ -365,7 +443,7 @@ impl RenderGraph {
     /// let volume = graph.transient("volume", TextureDesc::hdr_storage_volume(8, 8, 8));
     /// let out = graph.output("final", TextureDesc::present_target(16, 16));
     /// graph.add_external_compute_pass("inject", "inject", vec![], volume);
-    /// graph.add_external_pass("shade", "shade", vec![volume], out);
+    /// graph.add_external_pass("shade", "shade", vec![volume], vec![out]);
     ///
     /// let schedule = ludion_render_graph::schedule(&graph).unwrap();
     /// assert_eq!(schedule.order_names(), ["inject", "shade"]);
@@ -378,11 +456,12 @@ impl RenderGraph {
         storage: ResourceId,
     ) {
         self.require_storage(storage);
+        self.require_valid_reads(&reads);
         self.passes.push(PassDecl {
             name: name.into(),
             kind: PassKind::Compute { label },
             reads,
-            color: None,
+            color: Vec::new(),
             depth: None,
             storage: Some(storage),
         });
@@ -400,7 +479,7 @@ impl RenderGraph {
 
     /// Looks up a resource declaration by handle.
     pub fn resource(&self, id: ResourceId) -> &ResourceDecl {
-        &self.resources[id.0]
+        &self.resources[id.index()]
     }
 }
 
@@ -418,7 +497,7 @@ mod tests {
         graph.add_external_compute_pass("inject", "inject", vec![], volume);
         let pass = &graph.passes()[0];
         assert_eq!(pass.writes(), vec![volume]);
-        assert_eq!(pass.color_target(), None);
+        assert!(pass.color_targets().is_empty());
         assert_eq!(pass.depth_target(), None);
         assert_eq!(pass.storage_target(), Some(volume));
         assert!(pass.kind.is_compute());
@@ -450,5 +529,47 @@ mod tests {
     fn a_volume_cannot_be_the_graph_output() {
         let mut graph = RenderGraph::new();
         graph.output("final", TextureDesc::hdr_storage_volume(4, 4, 4));
+    }
+
+    fn pyramid() -> (RenderGraph, crate::resource::ResourceId) {
+        let mut graph = RenderGraph::new();
+        let pyramid = graph.transient("pyramid", TextureDesc::color(8, 8).with_mip_levels(4));
+        (graph, pyramid)
+    }
+
+    #[test]
+    #[should_panic(expected = "must name one with `.mip(level)`")]
+    fn writing_a_mipped_resource_needs_a_mip() {
+        let (mut graph, pyramid) = pyramid();
+        graph.add_external_pass("w", "w", vec![], vec![pyramid]);
+    }
+
+    #[test]
+    #[should_panic(expected = "mip 4 does not exist")]
+    fn a_mip_past_the_chain_is_rejected() {
+        let (mut graph, pyramid) = pyramid();
+        graph.add_external_pass("w", "w", vec![], vec![pyramid.mip(4)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "must share an extent")]
+    fn color_targets_of_one_pass_share_an_extent() {
+        let mut graph = RenderGraph::new();
+        let a = graph.transient("a", TextureDesc::color(8, 8));
+        let b = graph.transient("b", TextureDesc::color(4, 4));
+        graph.add_external_pass("w", "w", vec![], vec![a, b]);
+    }
+
+    #[test]
+    #[should_panic(expected = "declares no color target")]
+    fn an_external_pass_needs_a_color_target() {
+        let mut graph = RenderGraph::new();
+        graph.add_external_pass("w", "w", vec![], vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceed the full chain")]
+    fn mip_levels_beyond_the_full_chain_are_rejected() {
+        let _ = TextureDesc::color(8, 8).with_mip_levels(5);
     }
 }

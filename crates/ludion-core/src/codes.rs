@@ -6877,7 +6877,10 @@ an uninitialized texture.
 
 Fix: add the pass that writes the resource before the pass that reads it, or correct the read to
 name a resource that is actually produced. The message names both the reading pass and the
-unwritten resource.",
+unwritten resource.
+
+The same code covers a contested read: when several passes write what a pass reads, declaration
+order is the write order, so the reader must be declared after at least one of those writers.",
     },
     CodeEntry {
         code: code::RENDER_NO_ADAPTER,

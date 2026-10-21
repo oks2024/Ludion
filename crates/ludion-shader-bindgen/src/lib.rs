@@ -76,6 +76,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "mesh.wgsl",
     "particle.wgsl",
     "prepass.wgsl",
+    "reflections.wgsl",
     "resolve.wgsl",
     "shadow.wgsl",
     "shafts.wgsl",
@@ -118,6 +119,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "lights.wgsl",
             "bayer.wgsl",
             "hdr.wgsl",
+            "gi_probe.wgsl",
         ],
     ),
     ("sprite.wgsl", &["camera.wgsl", "lights.wgsl"]),
@@ -142,6 +144,16 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("ground_marker.wgsl", &["camera.wgsl"]),
     ("particle.wgsl", &["camera.wgsl"]),
     ("prepass.wgsl", &["camera.wgsl", "skin.wgsl", "bayer.wgsl"]),
+    (
+        "reflections.wgsl",
+        &[
+            "fullscreen_vs.wgsl",
+            "hdr.wgsl",
+            "lobe.wgsl",
+            "specular_ibl.wgsl",
+            "gi_probe.wgsl",
+        ],
+    ),
     ("resolve.wgsl", &["fullscreen_vs.wgsl"]),
     (
         "shafts.wgsl",

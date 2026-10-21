@@ -109,7 +109,7 @@ fn irradiance(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // Specular prefilter: GGX-importance-sampled prefiltered radiance for this mip's roughness, under the
-// N = V = R assumption. Mip 0 (roughness 0) collapses to a mirror sample of the gradient.
+// N = V = R assumption. Mip 0 (roughness 0) is the mirror sample.
 @compute @workgroup_size(8, 8, 1)
 fn prefilter(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(specular_out);

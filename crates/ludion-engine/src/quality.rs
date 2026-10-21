@@ -35,6 +35,7 @@
 //! shaft_steps = 16
 //! dof_taps = 12
 //! shadow_map_size = 1024
+//! ibl_specular_size = 128
 //! pcf = 1
 //! gi_rays = 32
 //! gi_probe_scale = 1.5
@@ -351,6 +352,8 @@ struct Params {
     #[serde(default)]
     shadow_map_size: Option<u32>,
     #[serde(default)]
+    ibl_specular_size: Option<u32>,
+    #[serde(default)]
     pcf: Option<u32>,
     #[serde(default)]
     gi_rays: Option<u32>,
@@ -435,6 +438,12 @@ fn parse_override_file(text: &str, path: &Path) -> Result<(Quality, QualityParam
                 QualityParams::FULL.shadow_map_size,
             ),
             (
+                "ibl_specular_size",
+                overrides.ibl_specular_size,
+                &mut params.ibl_specular_size,
+                QualityParams::FULL.ibl_specular_size,
+            ),
+            (
                 "pcf",
                 overrides.pcf,
                 &mut params.pcf,
@@ -469,6 +478,22 @@ fn parse_override_file(text: &str, path: &Path) -> Result<(Quality, QualityParam
             return Err(invalid(format!(
                 "`{}` sets `pcf` to {pcf}, which is even: the kernel is a square centred on the \
                  shaded texel, so its edge length in taps must be odd",
+                path.display(),
+            )));
+        }
+        // The sky cube's mip chain halves down to 8x8, so a face edge that is not a power of two
+        // would leave its last mips a texel short of the lod range the shader is told.
+        if let Some(size) = overrides.ibl_specular_size.filter(|s| !s.is_power_of_two()) {
+            return Err(invalid(format!(
+                "`{}` sets `ibl_specular_size` to {size}, which is not a power of two: the specular \
+                 cube's mips halve down to 8x8, and the shader's lod range counts them",
+                path.display(),
+            )));
+        }
+        if let Some(size) = overrides.ibl_specular_size.filter(|s| *s < 16) {
+            return Err(invalid(format!(
+                "`{}` sets `ibl_specular_size` to {size}, below 16: the specular chain stops at an \
+                 8x8 face and needs at least two mips",
                 path.display(),
             )));
         }
@@ -547,8 +572,8 @@ fn invalid(message: String) -> Diagnostic {
         "use one of the presets ({}), or the path to a TOML override file (an optional `preset = \
          \"...\"` base, an optional `[effects]` table of \
          `ssao`/`shafts`/`dof`/`gi_dynamic`/`shadows` booleans, and an optional `[params]` table of \
-         `ssao_samples`/`shaft_steps`/`dof_taps`/`shadow_map_size`/`pcf`/`gi_rays` counts plus the \
-         `gi_probe_scale`, `render_scale` and `particle_density` multipliers); a host's `--quality` \
+         `ssao_samples`/`shaft_steps`/`dof_taps`/`shadow_map_size`/`ibl_specular_size`/`pcf`/`gi_rays` \
+         counts plus the `gi_probe_scale`, `render_scale` and `particle_density` multipliers); a host's `--quality` \
          flag beats {QUALITY_ENV} either way",
         preset_list(),
     ))
@@ -891,14 +916,15 @@ mod tests {
         assert_eq!(
             params_of(
                 "[params]\nssao_samples = 2\nshaft_steps = 3\ndof_taps = 5\nshadow_map_size = 512\n\
-                 pcf = 1\ngi_rays = 16\ngi_probe_scale = 2.5\nrender_scale = 0.5\n\
-                 particle_density = 0.5\n",
+                 ibl_specular_size = 64\npcf = 1\ngi_rays = 16\ngi_probe_scale = 2.5\n\
+                 render_scale = 0.5\nparticle_density = 0.5\n",
             ),
             QualityParams {
                 ssao_samples: 2,
                 shaft_steps: 3,
                 dof_taps: 5,
                 shadow_map_size: 512,
+                ibl_specular_size: 64,
                 pcf: 1,
                 gi_rays: 16,
                 gi_probe_scale: 2.5,
@@ -1231,6 +1257,12 @@ mod tests {
                 1,
                 QualityParams::FULL.shadow_map_size,
             ),
+            (
+                "ibl_specular_size",
+                512,
+                16,
+                QualityParams::FULL.ibl_specular_size,
+            ),
             ("pcf", 5, 1, QualityParams::FULL.pcf),
             // The smallest legal `gi_rays` is one whole hit-cache stride, not `1`: the range admits
             // `1`, and the stride rule beside it does not.
@@ -1257,6 +1289,36 @@ mod tests {
                 "the ends of the range are legal",
             );
         }
+    }
+
+    #[test]
+    fn a_non_power_of_two_sky_cube_is_l0016_naming_the_mips() {
+        let diagnostic = parse_override_file(
+            "[params]\nibl_specular_size = 96\n",
+            Path::new("quality.toml"),
+        )
+        .expect_err("96 is not a power of two");
+        assert_eq!(diagnostic.code, code::QUALITY_SETTING_INVALID);
+        assert!(
+            diagnostic.message.contains("power of two"),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_sky_cube_below_two_mips_is_refused() {
+        let diagnostic = parse_override_file(
+            "[params]\nibl_specular_size = 8\n",
+            Path::new("quality.toml"),
+        )
+        .expect_err("8 leaves a single mip");
+        assert_eq!(diagnostic.code, code::QUALITY_SETTING_INVALID);
+        assert!(
+            diagnostic.message.contains("below 16"),
+            "{}",
+            diagnostic.message
+        );
     }
 
     /// `pcf` carries the one constraint no other axis has: a kernel centred on the shaded texel has

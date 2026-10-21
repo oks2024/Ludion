@@ -132,9 +132,9 @@ impl Default for Quality {
 ///
 /// Every axis is modulated. Four are uniform loop bounds the shaders read (`ssao_samples`,
 /// `shaft_steps`, `dof_taps`, `pcf`); `gi_rays` is a uniform both GI shaders read, one as a loop
-/// bound and one as a divisor; three are structure rather than arithmetic (`shadow_map_size` as the
-/// shadow map's extent, `gi_probe_scale` as the probe lattice's, `render_scale` as the extent the
-/// scene is drawn at before it is resampled to the output); and `particle_density` is spent before
+/// bound and one as a divisor; four are structure rather than arithmetic (`shadow_map_size` as the
+/// shadow map's extent, `ibl_specular_size` as the sky specular cube's, `gi_probe_scale` as the
+/// probe lattice's, `render_scale` as the extent the scene is drawn at before it is resampled to the output); and `particle_density` is spent before
 /// this crate ever sees the frame, thinning how many particles reach the scene at all. A preset
 /// carrying the full value for an axis is therefore a statement about that axis, not a placeholder.
 ///
@@ -151,6 +151,9 @@ impl Default for Quality {
 /// // A cheaper preset draws the sun into a smaller map and averages fewer comparison taps.
 /// assert_eq!(QualityParams::MEDIUM.shadow_map_size, 1024);
 /// assert_eq!(QualityParams::FULL.shadow_map_size, 2048);
+/// // The sky's specular cube halves its face edge at the cheapest preset.
+/// assert_eq!(QualityParams::FULL.ibl_specular_size, 256);
+/// assert_eq!(QualityParams::LOW.ibl_specular_size, 128);
 /// // Only the cheapest preset draws below the output extent; `full`'s 1.0 is that axis's ceiling.
 /// assert_eq!(QualityParams::LOW.render_scale, 0.75);
 /// assert_eq!(QualityParams::MEDIUM.render_scale, 1.0);
@@ -172,6 +175,10 @@ pub struct QualityParams {
     /// because a resource's extent is graph structure; the mesh shader needs no telling, since it
     /// derives its texel size from `textureDimensions`.
     pub shadow_map_size: u32,
+    /// Edge length of the sky IBL's specular cube faces, in texels — a power of two, at least 16 (two
+    /// mips), with a mip chain below it that stops at 8×8. Structure like [`shadow_map_size`](QualityParams::shadow_map_size): the mesh
+    /// shader learns the lod range from `EnvParams`, not from the size.
+    pub ibl_specular_size: u32,
     /// Edge length of the sun shadow map's PCF kernel, in taps (`Sun.pcf` in `mesh.wgsl`): `3` is
     /// the 3×3 the mesh pass averages, `1` a single centre tap. Odd, because the kernel is centred
     /// on the shaded texel.
@@ -259,6 +266,7 @@ impl QualityParams {
         shaft_steps: 32,
         dof_taps: 32,
         shadow_map_size: 2048,
+        ibl_specular_size: 256,
         pcf: 3,
         gi_rays: 64,
         gi_probe_scale: 1.0,
@@ -288,6 +296,7 @@ impl QualityParams {
         shaft_steps: 24,
         dof_taps: 20,
         shadow_map_size: QualityParams::FULL.shadow_map_size,
+        ibl_specular_size: QualityParams::FULL.ibl_specular_size,
         pcf: 3,
         gi_rays: 48,
         gi_probe_scale: 1.0,
@@ -310,6 +319,7 @@ impl QualityParams {
         shaft_steps: 16,
         dof_taps: 12,
         shadow_map_size: 1024,
+        ibl_specular_size: QualityParams::FULL.ibl_specular_size,
         pcf: 3,
         gi_rays: 32,
         gi_probe_scale: 1.5,
@@ -338,6 +348,7 @@ impl QualityParams {
     /// evaluates, uploads and blends. A plume reads visibly sparser for it, which is why no preset
     /// above spends it and why this one may.
     pub const LOW: QualityParams = QualityParams {
+        ibl_specular_size: 128,
         gi_rays: 16,
         gi_probe_scale: 2.0,
         render_scale: 0.75,
@@ -564,6 +575,11 @@ mod tests {
                 ("shaft_steps", low.shaft_steps, high.shaft_steps),
                 ("dof_taps", low.dof_taps, high.dof_taps),
                 ("shadow_map_size", low.shadow_map_size, high.shadow_map_size),
+                (
+                    "ibl_specular_size",
+                    low.ibl_specular_size,
+                    high.ibl_specular_size,
+                ),
                 ("pcf", low.pcf, high.pcf),
                 ("gi_rays", low.gi_rays, high.gi_rays),
             ] {

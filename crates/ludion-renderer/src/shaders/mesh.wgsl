@@ -45,9 +45,9 @@ struct Sun {
 @group(2) @binding(2) var shadow_samp: sampler_comparison;
 
 // Image-based lighting environment — a mesh-only @group(3), sourced from the scene's `Environment`
-// (Environment/IBL). The three textures are runtime-prefiltered from the analytic sky gradient
-// (never an image asset): a diffuse irradiance cube, a roughness-mipped specular cube, and the
-// split-sum BRDF LUT. `env.params.x` is the on/off flag: 0 (no `Environment`, 1×1 fallbacks bound)
+// (Environment/IBL). The textures are runtime-prefiltered from the analytic sky gradient (never an
+// image asset); this pass binds the diffuse irradiance cube, and the `reflections` pass binds the
+// roughness-mipped specular cube and the split-sum BRDF LUT. `env.params.x` is the on/off flag: 0 (no `Environment`, 1×1 fallbacks bound)
 // selects the exact historical flat-ambient math below — byte-identical to before; 1 selects IBL.
 //
 // Screen-space ambient occlusion rides this group too, because what it modulates is exactly what this
@@ -60,8 +60,8 @@ struct Sun {
 // `GiVolume` binds a 1×1×1 fallback volume and leaves the flag at 0, so the branch is not taken and
 // the volume is never sampled.
 struct EnvParams {
-    // x = ibl flag (1 = on), y = ibl_intensity, z = specular max LOD (mip count - 1),
-    // w = gi_strength (the authored `GiVolume.sky_visibility`).
+    // x = ibl flag (1 = on), y = ibl_intensity, z = the specular max LOD (mip count - 1; this pass
+    // does not read it, the `reflections` uniform carries it), w = gi_strength (the authored `GiVolume.sky_visibility`).
     params: vec4<f32>,
     // x = ambient-occlusion flag (1 = on), yz = the reciprocal of the render extent in pixels (what
     // turns this fragment's framebuffer position into the AO texture's UV), w = `ssao_direct`.
@@ -79,8 +79,7 @@ struct EnvParams {
     gi_bounce: vec4<f32>,
 };
 @group(3) @binding(0) var irradiance_tex: texture_cube<f32>;
-@group(3) @binding(1) var specular_tex: texture_cube<f32>;
-@group(3) @binding(2) var brdf_lut: texture_2d<f32>;
+// Bindings 1 and 2 (the specular cube and the BRDF LUT) are the `reflections` pass's.
 @group(3) @binding(3) var env_samp: sampler;
 @group(3) @binding(4) var<uniform> env: EnvParams;
 // The blurred SSAO factor, at a fraction of the output extent — read with the shared linear sampler,
@@ -305,26 +304,10 @@ fn sun_shadow(world_pos: vec3<f32>) -> f32 {
     return sum / f32(sun.pcf * sun.pcf);
 }
 
-// The cosine-convolved SH-L1 evaluation (A0 = 1, A1 = 2/3) both probe volumes reconstruct through —
-// correct because the term each one carries is a cosine-weighted mean. The bake writes a `3.0`-scaled
-// L1 vector, so the band's own normalization is already folded in and this is a plain `dot`.
-fn sh_l1(sh: vec4<f32>, n: vec3<f32>) -> f32 {
-    return sh.x + (2.0 / 3.0) * dot(sh.yzw, n);
-}
-
-// How much of the sky this surface point can reach, in [0, 1] — the ONE function that reads the
-// probe volume. An ambient-cube experiment replaces this body and the bake's write, and nothing
-// else in the pass has to know (`Plan/global-illumination.md` decision 4).
-//
-// The sample point is pushed `normal_bias` along the normal first, which is the leak control: a
-// probe lattice metres apart interpolates across a wall, and offsetting toward the lit side is what
-// keeps a surface from reading the darkness sealed behind it. The reconstruction is `sh_l1`, clamped
-// to [0, 1] because a visibility fraction has both a floor and a ceiling.
+// The sky-visibility read, through the shared probe snippet (`gi_probe.wgsl`): the ONE function that
+// reads the visibility volume is `sky_visibility_at`, and the mesh pass binds its inputs here.
 fn gi_sky_visibility(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
-    let p = world_pos + n * env.gi_scale.w;
-    let uv = (p - env.gi_origin.xyz) * env.gi_scale.xyz;
-    let sh = textureSampleLevel(gi_tex, env_samp, uv, 0.0);
-    return clamp(sh_l1(sh, n), 0.0, 1.0);
+    return sky_visibility_at(gi_tex, env_samp, env.gi_origin.xyz, env.gi_scale, world_pos, n);
 }
 
 // One bounce of light arriving at this surface point, as RGB irradiance in the same units as
@@ -355,6 +338,17 @@ fn gi_dynamic(world_pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return max(textureSampleLevel(gi_dyn_tex, env_samp, uv, 0.0).rgb, vec3<f32>(0.0));
 }
 
+// What `shade` hands back: the lit colour, and the surface description the reflections pass reads
+// from the opaque pass's extra targets. `specular_occlusion` is the AO factor (when AO is on) times
+// the baked occlusion map — the occlusion that applies to indirect specular too.
+struct Shaded {
+    lit: vec3<f32>,
+    n: vec3<f32>,
+    roughness: f32,
+    f0: vec3<f32>,
+    specular_occlusion: f32,
+}
+
 fn shade(
     world_pos: vec3<f32>,
     n_in: vec3<f32>,
@@ -368,7 +362,7 @@ fn shade(
     frag_pos: vec2<f32>,
     // The interpolated vertex UV, for the one map this function samples.
     uv: vec2<f32>,
-) -> vec3<f32> {
+) -> Shaded {
     // GGX is singular at roughness 0; metallic saturates.
     let roughness = clamp(surface.x, 0.045, 1.0);
     let metallic = clamp(surface.y, 0.0, 1.0);
@@ -394,20 +388,17 @@ fn shade(
     if (env.params.x > 0.5) {
         let irradiance = textureSampleLevel(irradiance_tex, env_samp, n, 0.0).rgb;
         let diffuse_ibl = irradiance * diffuse;
-        let r = reflect(-v, n);
-        let lod = roughness * env.params.z;
-        let prefiltered = textureSampleLevel(specular_tex, env_samp, r, lod).rgb;
-        let ab = textureSampleLevel(brdf_lut, env_samp, vec2<f32>(ndv, roughness), 0.0).rg;
-        let specular_ibl = prefiltered * (f0 * ab.x + vec3<f32>(ab.y));
-        acc = (diffuse_ibl + specular_ibl) * env.params.y;
+        acc = diffuse_ibl * env.params.y;
         // `Environment.ambient` is a flat floor under the sky's IBL, not scaled by `ibl_intensity`.
         // `diffuse`, not `albedo`, for the reason the IBL term uses it.
         acc = acc + lights.ambient.rgb * diffuse;
     } else {
         acc = lights.ambient.rgb * albedo;
     }
-    // Occlusion applies **here and nowhere else** — both kinds: the screen-space AO factor and the
-    // material's baked occlusion map. By the time this function returns, direct light, the sun and
+    // Occlusion applies **here and nowhere else** for the diffuse term — both kinds: the screen-space
+    // AO factor and the material's baked occlusion map. Indirect specular is added by the
+    // `reflections` pass, which scales it by `scene_specular.a`: the same two factors, written by
+    // `fs_main`. By the time this function returns, direct light, the sun and
     // emissive have been summed into the same number, and multiplying that by occlusion is the classic
     // "AO looks like dirt" failure — it would dim torch highlights and glowing props, which is the
     // worst case for a night city lit by point lights and emissive accents.
@@ -447,7 +438,7 @@ fn shade(
     // diffuse radiance is
     // `E(n) · (1 - metallic) · albedo` — the same factor the IBL branch's `irradiance * diffuse`
     // uses; `albedo` would light metals diffusely. Diffuse only: indirect specular is not in an
-    // SH-L1 volume's power and stays the prefiltered cube's job. Direct light and emissive are
+    // SH-L1 volume's power and is the `reflections` pass's job. Direct light and emissive are
     // outside, exactly as they are for sky visibility.
     // The dynamic half of that same bounce is added inside the same branch, one level deeper still,
     // so a frame that scheduled no injection cannot reach the condition at all. It rides the authored
@@ -522,11 +513,21 @@ fn shade(
         let shadow = sun_shadow(world_pos) * direct_ao;
         acc = acc + (diffuse + specular_sun) * sun.color.rgb * ndl_sun * shadow;
     }
-    return acc;
+    var specular_occlusion = occlusion_map;
+    if (env.ao.x > 0.5) {
+        specular_occlusion = specular_occlusion * ao;
+    }
+    return Shaded(acc, n, roughness, f0, specular_occlusion);
+}
+
+struct FsOut {
+    @location(0) color: vec4<f32>,
+    @location(1) normal_roughness: vec4<f32>,
+    @location(2) specular: vec4<f32>,
 }
 
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VsOut) -> FsOut {
     // Screen-door occlusion fade (opaque pipeline — no blend, no depth-write change; discard is the
     // whole mechanism). `height_min` (fade.y) gates by world height: only fragments strictly ABOVE it
     // fade, so the top-fade-stories case leaves the lower body fully opaque; at or below it the
@@ -579,7 +580,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         normal = normalize(mat3x3<f32>(t, b, n_geom) * scaled);
     }
 
-    var lit = shade(in.world_pos, normal, albedo, surface, ao, in.clip.xy, in.uv);
+    let shaded = shade(in.world_pos, normal, albedo, surface, ao, in.clip.xy, in.uv);
+    var lit = shaded.lit;
     // Emissive rides the HDR/bloom pipeline: colour * intensity, no new pass, no new uniform — times
     // the emissive map where one is bound.
     var emissive = base * max(in.material.z, 0.0);
@@ -592,5 +594,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     lit = mix(lit, in.flash.rgb, clamp(in.flash.a, 0.0, 1.0));
     // Clamp below half-float overflow: a mirror highlight can shade past 65504, which the scene
     // target would store as infinity (or saturate), and the bloom chain would smear it.
-    return vec4<f32>(hdr_safe(lit), in.color.a);
+    var out: FsOut;
+    out.color = vec4<f32>(hdr_safe(lit), in.color.a);
+    out.normal_roughness = vec4<f32>(shaded.n, shaded.roughness);
+    // The flash factor makes `mix(lit + s, flash, a) == mix(lit, flash, a) + (1 - a) * s` exact once
+    // the reflections pass adds `s` after the fact.
+    out.specular = vec4<f32>(
+        shaded.f0,
+        shaded.specular_occlusion * (1.0 - clamp(in.flash.a, 0.0, 1.0)),
+    );
+    return out;
 }

@@ -15,36 +15,34 @@ use std::cell::RefCell;
 
 use ludion_render_graph::Gpu;
 
+use crate::lobe;
 use crate::scene::EnvironmentData;
 use crate::shader_gen::{self, PrefilterParams, SkyColors};
 
 /// One cube face's edge length for the diffuse irradiance map. A smooth gradient needs no more — the
 /// map is a low-frequency hemisphere integral.
 const IRRADIANCE_SIZE: u32 = 32;
-/// The specular prefilter cube's base (mip 0) face edge length.
-const SPECULAR_SIZE: u32 = 64;
-/// The specular prefilter's mip count (roughness levels 0..=`SPECULAR_MIPS-1`). Mip `m` is prefiltered
-/// at roughness `m / (SPECULAR_MIPS-1)`; the mesh shader samples LOD `roughness * (SPECULAR_MIPS-1)`.
-const SPECULAR_MIPS: u32 = 5;
 /// The split-sum BRDF LUT's edge length (x = NdotV, y = roughness).
 const BRDF_SIZE: u32 = 128;
 
 /// The IBL working format for the prefiltered cubes and the LUT — HDR, storage-writable, filterable.
 const IBL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-/// The resolved IBL inputs for one frame: the three sampled views the mesh pass binds, plus the
+/// The resolved IBL inputs for one frame: the three sampled views (the mesh pass binds the
+/// irradiance cube; the `reflections` pass binds the specular cube and the LUT), plus the
 /// `EnvParams` the shader branches on. Views are cheap wgpu handle clones (an `Arc` bump each).
 pub(crate) struct ResolvedEnv {
     pub irradiance: wgpu::TextureView,
     pub specular: wgpu::TextureView,
     pub brdf: wgpu::TextureView,
-    /// `[flag, ibl_intensity, specular_max_lod, 0]` — the mesh `EnvParams.params` lane.
+    /// `[flag, ibl_intensity, specular_max_lod, 0]` — the mesh `EnvParams.params` lane and, with lane 3 set, the `reflections` uniform's `env`.
     pub params: [f32; 4],
 }
 
 /// A prefiltered environment, keyed by a content hash of its sky colors.
 struct Cached {
     hash: u64,
+    size: u32,
     irradiance_cube: wgpu::TextureView,
     specular_cube: wgpu::TextureView,
 }
@@ -58,8 +56,6 @@ pub(crate) struct Ibl {
     brdf_view: wgpu::TextureView,
     /// A 1×1×6 cube bound to both cube slots on an env-less frame (flag off ⇒ never sampled).
     fallback_cube: wgpu::TextureView,
-    /// The maximum specular LOD (`SPECULAR_MIPS - 1`), handed to the shader.
-    spec_max_lod: f32,
     cache: RefCell<Option<Cached>>,
 }
 
@@ -95,46 +91,57 @@ impl Ibl {
             prefilter_pipeline,
             brdf_view,
             fallback_cube,
-            spec_max_lod: (SPECULAR_MIPS - 1) as f32,
             cache: RefCell::new(None),
         }
     }
 
     /// Resolves the IBL inputs for `env`. `None` ⇒ the fallback cubes and the flag off (the mesh
     /// shader keeps its flat-ambient path). `Some` ⇒ prefilter (cache-hit on an unchanged sky) and
-    /// the flag on, carrying `ibl_intensity` and the specular max LOD.
-    pub(crate) fn resolve(&self, gpu: &Gpu, env: Option<&EnvironmentData>) -> ResolvedEnv {
+    /// the flag on, carrying `ibl_intensity` and the specular max LOD. The specular cube's face edge
+    /// is `specular_size` (a power of two, at least 16); its chain stops at 8×8; a change of size re-prefilters like a change of sky.
+    pub(crate) fn resolve(
+        &self,
+        gpu: &Gpu,
+        env: Option<&EnvironmentData>,
+        specular_size: u32,
+    ) -> ResolvedEnv {
+        debug_assert!(specular_size.is_power_of_two());
+        let max_lod = lobe::chain_max_lod(specular_size) as f32;
         let Some(env) = env else {
             return ResolvedEnv {
                 irradiance: self.fallback_cube.clone(),
                 specular: self.fallback_cube.clone(),
                 brdf: self.brdf_view.clone(),
-                params: [0.0, 0.0, self.spec_max_lod, 0.0],
+                params: [0.0, 0.0, 0.0, 0.0],
             };
         };
 
         let hash = sky_hash(env);
         {
             let cache = self.cache.borrow();
-            if let Some(c) = cache.as_ref().filter(|c| c.hash == hash) {
+            if let Some(c) = cache
+                .as_ref()
+                .filter(|c| c.hash == hash && c.size == specular_size)
+            {
                 return ResolvedEnv {
                     irradiance: c.irradiance_cube.clone(),
                     specular: c.specular_cube.clone(),
                     brdf: self.brdf_view.clone(),
-                    params: [1.0, env.ibl_intensity, self.spec_max_lod, 0.0],
+                    params: [1.0, env.ibl_intensity, max_lod, 0.0],
                 };
             }
         }
 
-        let (irradiance_cube, specular_cube) = self.prefilter(gpu, env);
+        let (irradiance_cube, specular_cube) = self.prefilter(gpu, env, specular_size);
         let out = ResolvedEnv {
             irradiance: irradiance_cube.clone(),
             specular: specular_cube.clone(),
             brdf: self.brdf_view.clone(),
-            params: [1.0, env.ibl_intensity, self.spec_max_lod, 0.0],
+            params: [1.0, env.ibl_intensity, max_lod, 0.0],
         };
         *self.cache.borrow_mut() = Some(Cached {
             hash,
+            size: specular_size,
             irradiance_cube,
             specular_cube,
         });
@@ -147,12 +154,15 @@ impl Ibl {
         &self,
         gpu: &Gpu,
         env: &EnvironmentData,
+        specular_size: u32,
     ) -> (wgpu::TextureView, wgpu::TextureView) {
+        let max_lod = lobe::chain_max_lod(specular_size);
+        let mips = max_lod + 1;
         let device = gpu.device();
         let colors_buf = uniform(device, "ibl colors", bytemuck::bytes_of(&sky_colors(env)));
 
         let irradiance = cube_texture(device, "irradiance", IRRADIANCE_SIZE, 1);
-        let specular = cube_texture(device, "specular", SPECULAR_SIZE, SPECULAR_MIPS);
+        let specular = cube_texture(device, "specular", specular_size, mips);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("ibl prefilter"),
@@ -192,13 +202,9 @@ impl Ibl {
         }
 
         // Specular: one dispatch per mip, its roughness in a per-mip uniform.
-        for mip in 0..SPECULAR_MIPS {
-            let size = (SPECULAR_SIZE >> mip).max(1);
-            let roughness = if SPECULAR_MIPS <= 1 {
-                0.0
-            } else {
-                mip as f32 / (SPECULAR_MIPS - 1) as f32
-            };
+        for mip in 0..mips {
+            let size = (specular_size >> mip).max(1);
+            let roughness = lobe::mip_roughness(mip, max_lod);
             let params_buf = uniform(
                 device,
                 "ibl prefilter params",
@@ -385,4 +391,34 @@ fn compute_brdf(gpu: &Gpu, pipeline: &wgpu::ComputePipeline) -> wgpu::TextureVie
         dimension: Some(wgpu::TextureViewDimension::D2),
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The size is part of the cache key and sets the lod range the shader is told.
+    #[test]
+    fn needs_gpu_the_sky_cube_follows_the_quality_size() {
+        let gpu = match Gpu::request() {
+            Ok(gpu) => gpu,
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+                eprintln!("SKIPPED the sky cube size test: no GPU adapter");
+                return;
+            }
+            Err(d) => panic!("gpu request failed: {d:?}"),
+        };
+        let env = EnvironmentData {
+            sky_zenith: [0.1, 0.2, 0.6],
+            sky_horizon: [0.7, 0.7, 0.8],
+            sky_ground: [0.1, 0.1, 0.1],
+            sun_disc_size: 0.0,
+            sun_disc_intensity: 0.0,
+            ambient: [0.0; 3],
+            ibl_intensity: 1.0,
+        };
+        let ibl = Ibl::new(&gpu);
+        let lod = |size| ibl.resolve(&gpu, Some(&env), size).params[2];
+        assert_eq!([lod(256), lod(128), lod(256)], [5.0, 4.0, 5.0]);
+    }
 }

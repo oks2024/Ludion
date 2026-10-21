@@ -50,6 +50,7 @@ mod gi_bin;
 mod gi_inject;
 pub mod graph;
 mod ibl;
+mod lobe;
 mod mesh;
 mod mipgen;
 mod quality;
