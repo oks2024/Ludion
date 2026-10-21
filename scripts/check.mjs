@@ -78,6 +78,19 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const LOG_DIR = path.join(REPO_ROOT, '.build');
 const HISTORY = path.join(REPO_ROOT, 'target', 'check-history.jsonl');
 const LOCK = path.join(REPO_ROOT, 'target', 'check.lock');
+// Cargo never prunes stale artifacts, and macOS's default unpacked split-debuginfo leaves a loose `.o`
+// per codegen unit in `target/debug/deps`. Past ~100k entries CoreAudio's per-boot directory scan
+// makes the embed/ffi boot tests fail with L4022 (dev-docs/test-box-failures.md). A warning only.
+const DEPS_WARN_FILES = Number(process.env.LUDION_DEPS_WARN_FILES ?? 60000);
+function warnIfDepsBloated() {
+  const deps = path.join(REPO_ROOT, 'target', 'debug', 'deps');
+  if (!existsSync(deps)) return;
+  const count = readdirSync(deps).length;
+  if (count > DEPS_WARN_FILES) {
+    console.log(`${YELLOW}check: target/debug/deps holds ${count} files (warn past ${DEPS_WARN_FILES}) — macOS boot tests may fail with L4022. Run \`cargo sweep --time 7\` or \`cargo clean\`.${RST}`);
+  }
+}
+
 // Many tests never remove their pid-suffixed scratch under the temp dir, and none survive a kill,
 // which filled C: over time. The test-running steps get one bounded temp root instead: wiped at the
 // start of a run, removed at the end when every test step passed, kept for diagnosis otherwise.
@@ -745,7 +758,7 @@ function printHistory() {
 
 // ── reporting ───────────────────────────────────────────────────────────────
 const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
-const GREEN = '\x1b[32m'; const RED = '\x1b[31m'; const DIM = '\x1b[2m'; const BOLD = '\x1b[1m'; const RST = '\x1b[0m';
+const YELLOW = '\x1b[33m'; const GREEN = '\x1b[32m'; const RED = '\x1b[31m'; const DIM = '\x1b[2m'; const BOLD = '\x1b[1m'; const RST = '\x1b[0m';
 
 function line(r) {
   const name = r.name.padEnd(16);
@@ -823,6 +836,7 @@ async function main() {
   }
 
   console.log(`Ludion check ${DIM}— ${mode} — logs in .build/${RST}`);
+  if (runRust) warnIfDepsBloated();
   const start = process.hrtime.bigint();
 
   if (values.fix) await applyFixes();

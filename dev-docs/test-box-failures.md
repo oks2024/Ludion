@@ -37,7 +37,11 @@ be performed on a file with a user-mapped section open"* when another process ho
 - **macOS embed/ffi boot tests fail with `L4022` under load when `target/debug/deps` holds a huge file
   count (~190k):** CoreAudio's `AudioUnitInitialize` → `CSCheckFix` scans the executable's directory on
   every audio boot, and nextest's parallel processes multiply the scan. Sweep or clean the target tree
-  (`cargo sweep`); never raise the timeout.
+  (`cargo sweep --time 7`, or `cargo clean` on a tree already past ~100k files); never raise the
+  timeout. Cargo never prunes stale objects, and macOS's default `split-debuginfo = "unpacked"` leaves
+  a loose `.o` per codegen unit there. `split-debuginfo = "packed"` would stop that but triples the
+  incremental rebuild (dsymutil), so it is not set; `check.mjs` warns instead when the directory
+  passes `LUDION_DEPS_WARN_FILES` (default 60000).
 - An older diagnosis blamed `model_sheet.rs` under parallel nextest. It is suspect: same scratch
   directory, same signature.
 
