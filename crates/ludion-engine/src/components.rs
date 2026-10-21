@@ -1214,6 +1214,16 @@ pub enum TonemapOperator {
 /// grain is static — it carries no frame index, so a moving camera moves through a fixed field rather
 /// than through a boiling one.
 ///
+/// # Screen-space reflections
+///
+/// `ssr` is the strength and the gate (default `0.0`, off): it scales the trace's confidence, so `0.0`
+/// is exactly the sky reflection and `1.0` trusts every hit. `ssr_fade` is the roughness band
+/// `[start, end]` over which the trace gives way to the sky, `ssr_max_distance` is how far a ray
+/// travels before it gives up, and `ssr_thickness` is how far behind a surface a ray may pass and
+/// still count as a hit, both in world units. A machine's quality can mask the whole effect
+/// (`Quality::ssr`), and a scene that authors none of it serializes exactly as before. The trace is
+/// single-bounce on what the frame already drew, so a miss falls back to the sky.
+///
 /// # Tuning a knob without touching the scene
 ///
 /// A sweep re-tunes a field the scene authors and creates one it does not, so one command renders a
@@ -1671,6 +1681,45 @@ pub struct PostProcess {
     #[schemars(range(min = 0.0, max = 1.0))]
     #[schemars(extend("x-ui-range" = [0.0, 0.01]))]
     pub grain_size: f32,
+    /// Screen-space reflections: the strength that scales the trace's confidence, validated `[0, 1]`
+    /// (default `0.0` — off, and the gate).
+    ///
+    /// `0.0` is exactly the sky reflection; `1.0` takes the traced hit wherever one is found.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub ssr: f32,
+    /// Screen-space reflections: the roughness band `[start, end]` over which the trace fades out
+    /// to the sky, each in `[0, 1]` with `start < end` (default `[0.45, 0.65]`).
+    ///
+    /// Rough surfaces scatter the reflection past what one traced ray can describe, so the trace is
+    /// full strength at `start` and gone at `end`.
+    #[serde(
+        default = "ssr_fade_default",
+        skip_serializing_if = "is_ssr_fade_default"
+    )]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub ssr_fade: [f32; 2],
+    /// Screen-space reflections: the longest a ray travels before the trace gives up, in world units,
+    /// validated `> 0` (default `30.0`).
+    #[serde(
+        default = "ssr_max_distance_default",
+        skip_serializing_if = "is_ssr_max_distance_default"
+    )]
+    #[schemars(range(min = 0.0))]
+    #[schemars(extend("x-ui-range" = [1.0, 100.0]))]
+    pub ssr_max_distance: f32,
+    /// Screen-space reflections: how far behind a surface a ray may pass and still count as a hit, in
+    /// world units, validated `> 0` (default `0.5`).
+    ///
+    /// Too thin and rays slip through thin geometry; too thick and objects smear behind occluders.
+    #[serde(
+        default = "ssr_thickness_default",
+        skip_serializing_if = "is_ssr_thickness_default"
+    )]
+    #[schemars(range(min = 0.0))]
+    #[schemars(extend("x-ui-range" = [0.05, 2.0]))]
+    pub ssr_thickness: f32,
 }
 
 impl SemanticValidate for PostProcess {
@@ -1701,8 +1750,64 @@ impl SemanticValidate for PostProcess {
                 }
             }
         }
+        post_process_ssr_diagnostics(value, &mut out);
         out
     }
+}
+
+/// `L1273` — the `PostProcess` SSR rules a schema `range` cannot spell: the fade band's elements and
+/// order, and a reach or thickness of exactly zero.
+fn post_process_ssr_diagnostics(value: &Value, out: &mut Vec<Diagnostic>) {
+    if let Some(band) = value.get("ssr_fade").and_then(Value::as_array) {
+        let ends: Vec<Option<f64>> = band.iter().map(as_stored_f32).collect();
+        for (index, end) in ends.iter().enumerate() {
+            if let Some(end) = end
+                && !(0.0..=1.0).contains(end)
+            {
+                out.push(post_process_invalid_ssr(
+                    &format!("/ssr_fade/{index}"),
+                    "a roughness is between 0 and 1",
+                    "give both ends of `ssr_fade` a value from 0 to 1",
+                ));
+            }
+        }
+        if let [Some(start), Some(end)] = ends[..]
+            && start >= end
+        {
+            out.push(post_process_invalid_ssr(
+                "/ssr_fade",
+                "the confidence divides by the band's width, so `start` must be below `end`",
+                "order `ssr_fade` as `[start, end]` with start < end, e.g. `[0.45, 0.65]`",
+            ));
+        }
+    }
+    for (field, role, help) in [
+        (
+            "ssr_max_distance",
+            "a ray that travels no distance can hit nothing",
+            "give `ssr_max_distance` a value above 0 (the default is `30.0`)",
+        ),
+        (
+            "ssr_thickness",
+            "a surface with no thickness can never be hit",
+            "give `ssr_thickness` a value above 0 (the default is `0.5`)",
+        ),
+    ] {
+        if let Some(number) = value.get(field).and_then(as_stored_f32)
+            && !ludion_core::number::positive_f32(number)
+        {
+            out.push(post_process_invalid_ssr(&format!("/{field}"), role, help));
+        }
+    }
+}
+
+fn post_process_invalid_ssr(pointer: &str, role: &str, help: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::POST_PROCESS_INVALID_SSR,
+        format!("this `PostProcess` screen-space reflection field is out of range; {role}"),
+    )
+    .with_path(pointer.to_string())
+    .with_help(help.to_string())
 }
 
 /// `L1130` — a `PostProcess` triple element is outside its valid range.
@@ -1770,6 +1875,10 @@ impl Default for PostProcess {
             halation: 0.0,
             grain: 0.0,
             grain_size: grain_size_default(),
+            ssr: 0.0,
+            ssr_fade: ssr_fade_default(),
+            ssr_max_distance: ssr_max_distance_default(),
+            ssr_thickness: ssr_thickness_default(),
         }
     }
 }
@@ -3897,6 +4006,27 @@ fn focus_distance_default() -> f32 {
 }
 fn grain_size_default() -> f32 {
     0.002
+}
+fn ssr_fade_default() -> [f32; 2] {
+    [0.45, 0.65]
+}
+fn ssr_max_distance_default() -> f32 {
+    30.0
+}
+fn ssr_thickness_default() -> f32 {
+    0.5
+}
+#[allow(clippy::float_cmp)]
+fn is_ssr_fade_default(value: &[f32; 2]) -> bool {
+    *value == ssr_fade_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_ssr_max_distance_default(value: &f32) -> bool {
+    *value == ssr_max_distance_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_ssr_thickness_default(value: &f32) -> bool {
+    *value == ssr_thickness_default()
 }
 fn one3() -> [f32; 3] {
     [1.0; 3]
@@ -6094,6 +6224,72 @@ mod tests {
         assert_eq!(post.halation, 0.0);
         assert_eq!(post.grain, 0.0);
         assert_eq!(post.grain_size, 0.002);
+        // Screen-space reflections off (the gate), with the look that would be used if turned on.
+        assert_eq!(post.ssr, 0.0);
+        assert_eq!(post.ssr_fade, [0.45, 0.65]);
+        assert_eq!(post.ssr_max_distance, 30.0);
+        assert_eq!(post.ssr_thickness, 0.5);
+    }
+
+    /// An unauthored SSR look serializes to none of its four keys, so the component's value in
+    /// `WorldHash` (and every committed scene's canonical text) is what it was before the fields.
+    #[test]
+    fn an_unauthored_ssr_look_serializes_nothing() {
+        let json = serde_json::to_value(PostProcess::default()).unwrap();
+        for key in ["ssr", "ssr_fade", "ssr_max_distance", "ssr_thickness"] {
+            assert!(json.get(key).is_none(), "`{key}` leaked into {json}");
+        }
+        let authored = serde_json::to_value(PostProcess {
+            ssr: 0.5,
+            ssr_fade: [0.3, 0.5],
+            ssr_max_distance: 12.0,
+            ssr_thickness: 0.25,
+            ..PostProcess::default()
+        })
+        .unwrap();
+        for key in ["ssr", "ssr_fade", "ssr_max_distance", "ssr_thickness"] {
+            assert!(
+                authored.get(key).is_some(),
+                "`{key}` missing from {authored}"
+            );
+        }
+    }
+
+    /// `L1273` names the offending pointer for each rule, and a valid authored look passes.
+    #[test]
+    fn invalid_ssr_fields_reach_l1273() {
+        for (bad, pointer) in [
+            (
+                serde_json::json!({ "ssr_fade": [-0.1, 0.5] }),
+                "/ssr_fade/0",
+            ),
+            (serde_json::json!({ "ssr_fade": [0.2, 1.5] }), "/ssr_fade/1"),
+            (serde_json::json!({ "ssr_fade": [0.6, 0.6] }), "/ssr_fade"),
+            (serde_json::json!({ "ssr_fade": [0.7, 0.4] }), "/ssr_fade"),
+            (
+                serde_json::json!({ "ssr_max_distance": 0.0 }),
+                "/ssr_max_distance",
+            ),
+            (
+                serde_json::json!({ "ssr_thickness": 0.0 }),
+                "/ssr_thickness",
+            ),
+        ] {
+            let out = PostProcess::validate_semantics(&bad);
+            assert!(
+                out.iter()
+                    .any(|d| d.code.as_str() == "L1273" && d.path.as_deref() == Some(pointer)),
+                "expected an L1273 at {pointer} for {bad}: {out:?}"
+            );
+        }
+        let good = serde_json::json!({
+            "ssr": 0.8,
+            "ssr_fade": [0.3, 0.5],
+            "ssr_max_distance": 12.0,
+            "ssr_thickness": 0.25,
+        });
+        assert!(PostProcess::validate_semantics(&good).is_empty());
+        assert!(PostProcess::validate_semantics(&serde_json::json!({})).is_empty());
     }
 
     /// `PostProcess` round-trips through serde with non-default fields, and its closed enum spells
@@ -6134,6 +6330,10 @@ mod tests {
             halation: 0.25,
             grain: 0.015,
             grain_size: 0.004,
+            ssr: 0.8,
+            ssr_fade: [0.3, 0.5],
+            ssr_max_distance: 12.0,
+            ssr_thickness: 0.25,
         };
         let json = serde_json::to_value(post).unwrap();
         assert_eq!(json["tonemap"], serde_json::json!("aces"));
@@ -6222,6 +6422,10 @@ mod tests {
             ("grain", "1.5"),
             ("grain_size", "-0.001"),
             ("grain_size", "1.5"),
+            ("ssr", "-0.1"),
+            ("ssr", "1.5"),
+            ("ssr_max_distance", "-1.0"),
+            ("ssr_thickness", "-0.1"),
         ] {
             let bad = format!(
                 "format: 1\nentities:\n  - components:\n      PostProcess:\n        \

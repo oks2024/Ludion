@@ -85,6 +85,7 @@ optional; an absent one keeps the base's, and an absent `preset` means `full`.
 | `effects.dof` | bool | render depth of field on scenes that author it |
 | `effects.gi_dynamic` | bool | inject dynamic-light GI bounce on scenes that author it (off ⇒ `GiDynamic`-marked lights contribute direct light only) |
 | `effects.shadows` | bool | draw the sun's shadow map on scenes that carry a sun (off ⇒ the sun still lights, and light shafts go with it) |
+| `effects.ssr` | bool | trace screen-space reflections on scenes that author `PostProcess.ssr` (off ⇒ the sky reflection) |
 | `params.ssao_samples` | int, `1..=16` | hemisphere samples per ambient-occlusion pixel |
 | `params.shaft_steps` | int, `1..=32` | ray-march steps per light-shaft pixel |
 | `params.dof_taps` | int, `1..=32` | taps in the depth-of-field disc |
@@ -95,6 +96,7 @@ optional; an absent one keeps the base's, and an absent `preset` means `full`.
 | `params.gi_probe_scale` | float, `1.0..=4.0` | multiplier on the scene's authored `GiVolume.probe_spacing` — **larger is cheaper** |
 | `params.render_scale` | float, `0.25..=1.0` | fraction of the output extent the frame is drawn at before being resampled up to it (`1.0` is native) |
 | `params.particle_density` | float, `0.0..=1.0` | multiplier on every `ParticleEmitter`'s `rate` and `burst` at extract time (`1.0` is the full authored population) |
+| `params.ssr_scale` | float, `0.25..=0.5` | fraction of the output extent the reflection trace runs at (`0.5` at every preset) |
 
 A complete file — `low`, but with contact shadows at half `medium`'s samples:
 
@@ -111,7 +113,8 @@ ssao_samples = 4
 ## Rules
 
 - **Precedence is `--quality` → `LUDION_QUALITY` → a packaged default → `full`.** The packaged
-  default is what an exported app ships with (`[ios] quality`, `ludion docs export`). An explicit
+  default is what an exported app ships with (`[ios] quality`, `ludion docs export`; `"low"` is how
+  iOS turns SSR off, and the report's descriptor does not carry `ssr` or `ssr_scale` yet). An explicit
   setting wins outright and lower sources are not read for validity, so a flag works on a box whose
   `LUDION_QUALITY` is malformed. Absent, empty or whitespace counts as not chosen.
 - **An unresolvable setting refuses to start** — one `L0016` naming both interpretations (the preset

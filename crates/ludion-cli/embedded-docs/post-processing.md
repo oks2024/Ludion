@@ -141,6 +141,12 @@ anisotropy.
   (default `0.0` — off, and the gate), with a cell side as a fraction of the frame's height `[0, 1]`
   (default `0.002`, about two pixels at 1080p). The pattern is a deterministic integer hash and
   static — it carries no frame index, so a moving camera moves through a fixed field.
+- **`ssr`** — screen-space reflections, `[0, 1]` (default `0.0` — off, and the gate): the strength
+  that scales the trace's confidence, so `0.0` is exactly the sky reflection. It is opt-in per
+  scene. **`ssr_fade`** is the roughness band `[start, end]` (default `[0.45, 0.65]`) over which the
+  trace gives way to the sky; **`ssr_max_distance`** (default `30`) and **`ssr_thickness`**
+  (default `0.5`) are world units, both `> 0`. A miss falls back to the sky, and a machine's
+  quality can switch it off (`ludion docs quality`).
 
 ## Rules
 
@@ -150,7 +156,8 @@ non-finite value cannot be authored at all — the scene format has no spelling 
 neither does JSON on the wire. The three **triples** are what a schema range cannot reach (it does not
 apply to array elements), so `gain >= 0`, `gamma > 0` and `fog_color >= 0` are checked semantically
 and report `L1130` at the offending element. `lift` is deliberately unbounded there: it is an offset,
-and a negative one legitimately crushes blacks.
+and a negative one legitimately crushes blacks. The SSR look is `L1273` when an `ssr_fade` end is
+outside `[0, 1]`, its start is not below its end, or `ssr_max_distance`/`ssr_thickness` is `0`.
 
 Tune any of these off a contact sheet rather than by reasoning about them — `render --sweep` creates a
 field the scene left unauthored, so nothing has to be added to the file first. The worked commands are

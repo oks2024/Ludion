@@ -54,6 +54,10 @@ const ENGINE_FIELDS = [
   'halation',
   'grain',
   'grain_size',
+  'ssr',
+  'ssr_fade',
+  'ssr_max_distance',
+  'ssr_thickness',
 ];
 
 /** The minimal thirteen-pass graph: no sun, no UI, none of the conditional effects. */
@@ -83,6 +87,7 @@ describe('the pinned pipeline order', () => {
   it('is the order composite.wgsl executes, with ambient occlusion ahead of it', () => {
     expect(EFFECT_ORDER.map((row) => row.id)).toEqual([
       'ssao',
+      'ssr',
       'chromatic_aberration',
       'dof',
       'bloom',
@@ -104,8 +109,9 @@ describe('the pinned pipeline order', () => {
     expect(effectRow('dof').stage).toBe('composite');
   });
 
-  it('gates frame-graph passes only for ambient occlusion, light shafts and depth of field', () => {
-    expect(PASS_GATING_EFFECTS).toEqual(['ssao', 'dof', 'shafts']);
+  it('gates frame-graph passes only for ambient occlusion, reflections, light shafts and depth of field', () => {
+    expect(PASS_GATING_EFFECTS).toEqual(['ssao', 'ssr', 'dof', 'shafts']);
+    expect(effectRow('ssr').gatedPasses).toEqual(['hiz_seed', 'ssr_color_seed', 'ssr_trace']);
     expect(effectRow('ssao').gatedPasses).toEqual(['prepass', 'ssao', 'ssao_blur']);
     expect(effectRow('shafts').gatedPasses).toEqual(['shafts', 'shafts_blur']);
     expect(effectRow('dof').gatedPasses).toEqual(['dof_coc', 'dof']);

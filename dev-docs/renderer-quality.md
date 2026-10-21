@@ -14,8 +14,8 @@ resolution knob beside it is `RenderScale` in `ludion devdocs ludion-renderer`.
 - `ludion devdocs renderer-quality-axes` — the modulated counts (uniform sample counts, `gi_rays`, `gi_probe_scale`) and what each axis can show in a dump.
 
 ## Layout
-- `crates/ludion-renderer/src/quality.rs` — `Quality` (five booleans, `shadows` the newest) and
-  `QualityParams` (nine axes, all modulated), each with four preset consts, plus
+- `crates/ludion-renderer/src/quality.rs` — `Quality` (six booleans, `ssr` the newest) and
+  `QualityParams` (eleven axes, all modulated; `ssr_scale` the newest, overridable in `[params]` within `RenderScale::MIN..=full`), each with four preset consts, plus
   `Quality::PRESET_NAMES` and the two `preset` lookups. Plain data: no serde, no I/O, no environment.
 - `crates/ludion-renderer/src/graph.rs` — `PostChain::masked`, the one site that applies a quality,
   `PostChain::shadow_map` (the extent, `None` when this frame draws none) and `PostChain::gi_inject`
@@ -107,7 +107,7 @@ its `QualitySetting::full()`: two routes, two pins.
   environment on its own and a developer's `LUDION_QUALITY=low` silently re-blesses — or reddens —
   every committed golden on their box, and a red image becomes a question about someone's shell
   rather than about the code.
-- **`Quality` carries five booleans (`ssao`, `shafts`, `dof`, `gi_dynamic`, `shadows`) and nothing
+- **`Quality` carries six booleans (`ssao`, `shafts`, `dof`, `gi_dynamic`, `shadows`, `ssr`) and nothing
   else**, with the counts in `QualityParams` beside it and the resolution in `RenderScale` beside
   both. The axes considered and rejected are recorded in `Plan/scalability.md` — bloom (calibrated
   imaging, masking it is a look change), the cluster grid dimensions, and the IBL prefilter sizes.

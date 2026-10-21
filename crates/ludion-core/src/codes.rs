@@ -1359,6 +1359,10 @@ pub mod code {
     /// angle is non-finite or outside `[0, 90)`, or `inner_angle` exceeds `outer_angle`. Raised by
     /// `SpotLight`'s semantic validator.
     pub const SPOT_LIGHT_INVALID_CONE: DiagnosticCode = DiagnosticCode::new("L1272");
+    /// `L1273` — a `PostProcess` screen-space reflection field is out of range: an `ssr_fade` end
+    /// outside `[0, 1]`, a band whose start is not below its end, or a zero `ssr_max_distance` or
+    /// `ssr_thickness`.
+    pub const POST_PROCESS_INVALID_SSR: DiagnosticCode = DiagnosticCode::new("L1273");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -6843,6 +6847,25 @@ A `SpotLight` cannot form a cone of light. Three causes:
 Fix: give `direction` a non-zero, finite `[x, y, z]` (e.g. `[0, -1, 0]`), keep both angles in
 `[0, 90)`, and make `inner_angle` at most `outer_angle` (defaults 20 and 30).",
     },
+    CodeEntry {
+        code: code::POST_PROCESS_INVALID_SSR,
+        severity: Severity::Error,
+        title: "post-process screen-space reflection field is out of range",
+        explanation: "\
+A `PostProcess` screen-space reflection field breaks a rule the schema's `range` cannot spell. Three
+causes:
+
+- An `ssr_fade` end is outside `[0, 1]` (pointer `/ssr_fade/0` or `/ssr_fade/1`). The band is a
+  roughness range, and roughness is between 0 and 1.
+- `ssr_fade[0]` is not below `ssr_fade[1]` (pointer `/ssr_fade`): the confidence divides by the
+  band's width, so an empty or reversed band has no meaning.
+- `ssr_max_distance` or `ssr_thickness` is exactly 0 (pointer `/ssr_max_distance` or
+  `/ssr_thickness`): a ray that travels no distance hits nothing, and a surface with no thickness
+  cannot be hit. A negative value is the schema's `L1014`.
+
+Fix: give `ssr_fade` two roughness values with start below end (the default is `[0.45, 0.65]`), and
+give `ssr_max_distance` and `ssr_thickness` values above 0 (defaults 30 and 0.5).",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9485,6 +9508,7 @@ mod tests {
         code::COOK_ENCODE_FAILED,
         code::TEXTURE_NOT_COOKED,
         code::SPOT_LIGHT_INVALID_CONE,
+        code::POST_PROCESS_INVALID_SSR,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

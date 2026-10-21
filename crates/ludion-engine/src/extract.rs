@@ -1376,7 +1376,10 @@ fn extract_post(world: &World, ids: &[EntityId]) -> Option<PostData> {
         halation: post.halation,
         grain: post.grain,
         grain_size: post.grain_size,
-        ..PostData::default()
+        ssr: post.ssr,
+        ssr_fade: post.ssr_fade,
+        ssr_max_distance: post.ssr_max_distance,
+        ssr_thickness: post.ssr_thickness,
     })
 }
 
@@ -4864,6 +4867,10 @@ mod tests {
                     halation: 0.3,
                     grain: 0.02,
                     grain_size: 0.005,
+                    ssr: 0.7,
+                    ssr_fade: [0.3, 0.5],
+                    ssr_max_distance: 12.0,
+                    ssr_thickness: 0.25,
                 },
             )
             .unwrap();
@@ -4905,8 +4912,19 @@ mod tests {
                 halation: 0.3,
                 grain: 0.02,
                 grain_size: 0.005,
-                ..PostData::default()
+                ssr: 0.7,
+                ssr_fade: [0.3, 0.5],
+                ssr_max_distance: 12.0,
+                ssr_thickness: 0.25,
             }
+        );
+
+        // The authored defaults are the renderer's own, field for field.
+        world.insert(entity, PostProcess::default()).unwrap();
+        assert_eq!(
+            extract_post(&world, &ids),
+            Some(PostData::default()),
+            "a default `PostProcess` is the renderer's default `PostData`"
         );
 
         for (authored, expected) in [

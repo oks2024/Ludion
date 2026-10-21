@@ -3,7 +3,7 @@
 // WHY THIS EXISTS. `Inspector.tsx` already edits `PostProcess` generically — schema in, widgets out.
 // What it structurally cannot show is the thing every look verdict in the post-process arc turned on:
 // a field's value does not tell you whether the effect is contributing. `PostChain::for_scene`
-// (crates/ludion-renderer/src/graph.rs) derives three of the effects out of the frame graph entirely
+// (crates/ludion-renderer/src/graph.rs) derives four of the effects out of the frame graph entirely
 // when their gate is neutral, and `shafts` needs two more things on top of its own field: a
 // `DirectionalLight` for the march to read, and a medium (`fog_density`) for it to scatter in. A scene
 // authoring `shafts: 0.02` with either missing renders nothing and reports no error, because "absence
@@ -30,6 +30,7 @@
 /** One row of the chain — an effect a human directs, not a field. */
 export type EffectId =
   | 'ssao'
+  | 'ssr'
   | 'chromatic_aberration'
   | 'dof'
   | 'bloom'
@@ -98,6 +99,15 @@ export const EFFECT_ORDER: readonly EffectRow[] = [
     label: 'Ambient occlusion',
     stage: 'scene',
     gatedPasses: ['prepass', 'ssao', 'ssao_blur'],
+    requires: null,
+    requiresEffect: null,
+    alwaysLive: false,
+  },
+  {
+    id: 'ssr',
+    label: 'Screen-space reflections',
+    stage: 'scene',
+    gatedPasses: ['hiz_seed', 'ssr_color_seed', 'ssr_trace'],
     requires: null,
     requiresEffect: null,
     alwaysLive: false,
@@ -210,6 +220,10 @@ export const FIELDS: Readonly<Record<string, FieldEntry>> = {
   halation: { effect: 'halation', neutral: 0, gate: true, shipped: 0 },
   grain: { effect: 'grain', neutral: 0, gate: true, shipped: 0 },
   grain_size: { effect: 'grain', neutral: null, gate: false, shipped: 0.002 },
+  ssr: { effect: 'ssr', neutral: 0, gate: true, shipped: 0 },
+  ssr_fade: { effect: 'ssr', neutral: null, gate: false, shipped: [0.45, 0.65] },
+  ssr_max_distance: { effect: 'ssr', neutral: null, gate: false, shipped: 30.0 },
+  ssr_thickness: { effect: 'ssr', neutral: null, gate: false, shipped: 0.5 },
 };
 
 /** Every field name this table knows, in the struct's declaration order. */
@@ -229,8 +243,8 @@ export function effectRow(effect: EffectId): EffectRow {
   return row;
 }
 
-/** The effects whose gate adds or removes frame-graph passes — ambient occlusion, light shafts and
- *  depth of field, and nothing else (`PostChain::for_scene`). Every other effect is a branch inside
+/** The effects whose gate adds or removes frame-graph passes — ambient occlusion, screen-space
+ *  reflections, light shafts and depth of field, and nothing else (`PostChain::for_scene`). Every other effect is a branch inside
  *  a pass that is always built, so switching it off saves ALU and never a pass. */
 export const PASS_GATING_EFFECTS: readonly EffectId[] = EFFECT_ORDER.filter(
   (row) => row.gatedPasses.length > 0,
@@ -388,7 +402,7 @@ export interface GraphDisagreement {
 /**
  * Cross-checks the derived states against the pass names `render.dump_graph` returns.
  *
- * Only the three pass-gating effects can disagree — every other effect is a branch inside a pass that
+ * Only the four pass-gating effects can disagree — every other effect is a branch inside a pass that
  * is always built, so the graph has nothing to say about it. An empty result is agreement; anything
  * else the panel shows, because a model that quietly diverges from the engine is worse than no model.
  */

@@ -432,8 +432,8 @@ pub struct PostData {
     /// Screen-space reflections: the strength that scales the trace's confidence, so `0.0` is exactly
     /// the sky fill (`0.0` = off, and the gate).
     pub ssr: f32,
-    /// Screen-space reflections: the screen-edge fade band, as `[start, end]` fractions of the way to
-    /// the edge over which the trace's confidence falls to zero.
+    /// Screen-space reflections: the roughness band `[start, end]` over which the trace fades out to
+    /// the sky.
     pub ssr_fade: [f32; 2],
     /// Screen-space reflections: the longest a ray travels before the trace gives up, in world units.
     pub ssr_max_distance: f32,

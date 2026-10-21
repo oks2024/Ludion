@@ -29,6 +29,7 @@
 //! dof = false
 //! gi_dynamic = false
 //! shadows = true
+//! ssr = false
 //!
 //! [params]
 //! ssao_samples = 8
@@ -41,6 +42,7 @@
 //! gi_probe_scale = 1.5
 //! render_scale = 0.75
 //! particle_density = 0.25
+//! ssr_scale = 0.25
 //! ```
 //!
 //! `[params]` names every axis a preset modulates. Each count is bounded by its own
@@ -55,6 +57,8 @@
 //! is the fraction of every emitter's authored `rate` and `burst` that is actually emitted, so
 //! `full`'s `1.0` is its ceiling too — a fuller plume is the emitter's own to author, never a
 //! machine's to ask for.
+//! `ssr_scale` is the fourth and reads the same way: the reflection trace's extent as a fraction of
+//! the output extent, so cheaper is smaller and `full`'s `0.5` is its ceiling.
 //!
 //! Unknown keys and unknown sections are rejected, not ignored: a file written against a build that
 //! knows more effects than this one must fail loudly here rather than render at a quality it does not
@@ -336,6 +340,8 @@ struct Effects {
     gi_dynamic: Option<bool>,
     #[serde(default)]
     shadows: Option<bool>,
+    #[serde(default)]
+    ssr: Option<bool>,
 }
 
 /// The `[params]` table: every axis a preset modulates. Each overrides the base preset's, and an
@@ -363,6 +369,8 @@ struct Params {
     render_scale: Option<f32>,
     #[serde(default)]
     particle_density: Option<f32>,
+    #[serde(default)]
+    ssr_scale: Option<f32>,
 }
 
 /// How many rays the GI bake's hit cache holds per probe, and therefore the granularity `gi_rays`
@@ -410,6 +418,7 @@ fn parse_override_file(text: &str, path: &Path) -> Result<(Quality, QualityParam
         quality.dof = effects.dof.unwrap_or(quality.dof);
         quality.gi_dynamic = effects.gi_dynamic.unwrap_or(quality.gi_dynamic);
         quality.shadows = effects.shadows.unwrap_or(quality.shadows);
+        quality.ssr = effects.ssr.unwrap_or(quality.ssr);
     }
     if let Some(overrides) = document.params {
         for (key, value, axis, ceiling) in [
@@ -562,6 +571,22 @@ fn parse_override_file(text: &str, path: &Path) -> Result<(Quality, QualityParam
             }
             params.particle_density = density;
         }
+        // The fourth multiplier, read like `render_scale` and bounded the same way: the trace is
+        // drawn at a fraction of the output extent, so `full`'s value is the ceiling and the
+        // floor is the smallest fraction `RenderScale` itself accepts.
+        if let Some(scale) = overrides.ssr_scale {
+            let (floor, ceiling) = (RenderScale::MIN, QualityParams::FULL.ssr_scale);
+            if !scale.is_finite() || !(floor..=ceiling).contains(&scale) {
+                return Err(invalid(format!(
+                    "`{}` sets `ssr_scale` to {scale}, which is outside {floor}..={ceiling}: it is \
+                     the fraction of the output extent the reflection trace runs at, so {ceiling} is \
+                     the finest trace a machine may ask for, and below {floor} there is too little \
+                     left to resample from",
+                    path.display(),
+                )));
+            }
+            params.ssr_scale = scale;
+        }
     }
     Ok((quality, params))
 }
@@ -571,9 +596,9 @@ fn invalid(message: String) -> Diagnostic {
     Diagnostic::new(code::QUALITY_SETTING_INVALID, message).with_help(format!(
         "use one of the presets ({}), or the path to a TOML override file (an optional `preset = \
          \"...\"` base, an optional `[effects]` table of \
-         `ssao`/`shafts`/`dof`/`gi_dynamic`/`shadows` booleans, and an optional `[params]` table of \
+         `ssao`/`shafts`/`dof`/`gi_dynamic`/`shadows`/`ssr` booleans, and an optional `[params]` table of \
          `ssao_samples`/`shaft_steps`/`dof_taps`/`shadow_map_size`/`ibl_specular_size`/`pcf`/`gi_rays` \
-         counts plus the `gi_probe_scale`, `render_scale` and `particle_density` multipliers); a host's `--quality` \
+         counts plus the `gi_probe_scale`, `render_scale`, `particle_density` and `ssr_scale` multipliers); a host's `--quality` \
          flag beats {QUALITY_ENV} either way",
         preset_list(),
     ))
@@ -847,16 +872,13 @@ mod tests {
             "no preset means the full base",
         );
         // Every toggle `[effects]` can spell, turned off against the full base: `Quality::LOW`
-        // except `ssr`, which no `[effects]` key reaches yet.
+        // except that the full base's `ssr` is switched off too.
         assert_eq!(
             effects_of(
                 "preset = \"full\"\n[effects]\nssao = false\nshafts = false\ndof = false\n\
-                 gi_dynamic = false\nshadows = false\n",
+                 gi_dynamic = false\nshadows = false\nssr = false\n",
             ),
-            Quality {
-                ssr: true,
-                ..Quality::LOW
-            },
+            Quality::LOW,
         );
     }
 
@@ -1015,6 +1037,31 @@ mod tests {
             GI_PROBE_SCALE_MAX,
             "both ends of the range are legal",
         );
+    }
+
+    /// `ssr_scale` reads like `render_scale`: cheaper is smaller, `full`'s `0.5` is the ceiling and
+    /// `RenderScale::MIN` the floor, and the `ssr` effect toggles in either direction.
+    #[test]
+    fn ssr_scale_is_bounded_and_ssr_is_an_effects_key() {
+        let path = Path::new("quality.toml");
+        for bad in ["0.1", "0.75", "0.0", "-0.5", "nan"] {
+            let diagnostic = parse_override_file(&format!("[params]\nssr_scale = {bad}\n"), path)
+                .expect_err("an out-of-range ssr scale must be refused");
+            assert_eq!(diagnostic.code, code::QUALITY_SETTING_INVALID);
+            assert!(
+                diagnostic.message.contains("0.25..=0.5"),
+                "the message names the range: {}",
+                diagnostic.message,
+            );
+        }
+        assert_eq!(params_of("[params]\nssr_scale = 0.25\n").ssr_scale, 0.25);
+        assert_eq!(
+            params_of("[params]\nssr_scale = 0.5\n").ssr_scale,
+            QualityParams::FULL.ssr_scale,
+            "both ends of the range are legal",
+        );
+        assert!(!effects_of("[effects]\nssr = false\n").ssr);
+        assert!(effects_of("preset = \"low\"\n[effects]\nssr = true\n").ssr);
     }
 
     /// **`render_scale` is the other multiplier, and it reads the ordinary way round.** It names the
