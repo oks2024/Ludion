@@ -34,6 +34,10 @@ be performed on a file with a user-mapped section open"* when another process ho
   end when those steps all passed, kept for diagnosis otherwise. It is outside `target/` on purpose:
   ludion-cli's `docs.rs` tests need scratch outside any checkout. A targeted `cargo test` still
   writes `ludion-*` dirs to the real temp dir; delete them when no test runs.
+- **macOS embed/ffi boot tests fail with `L4022` under load when `target/debug/deps` holds a huge file
+  count (~190k):** CoreAudio's `AudioUnitInitialize` → `CSCheckFix` scans the executable's directory on
+  every audio boot, and nextest's parallel processes multiply the scan. Sweep or clean the target tree
+  (`cargo sweep`); never raise the timeout.
 - An older diagnosis blamed `model_sheet.rs` under parallel nextest. It is suspect: same scratch
   directory, same signature.
 
