@@ -429,6 +429,17 @@ pub struct PostData {
     pub grain: f32,
     /// Film emulation: the grain cell's side, as a fraction of the frame's **height**.
     pub grain_size: f32,
+    /// Screen-space reflections: the strength that scales the trace's confidence, so `0.0` is exactly
+    /// the sky fill (`0.0` = off, and the gate).
+    pub ssr: f32,
+    /// Screen-space reflections: the screen-edge fade band, as `[start, end]` fractions of the way to
+    /// the edge over which the trace's confidence falls to zero.
+    pub ssr_fade: [f32; 2],
+    /// Screen-space reflections: the longest a ray travels before the trace gives up, in world units.
+    pub ssr_max_distance: f32,
+    /// Screen-space reflections: how far behind a surface a ray may pass and still count as a hit, in
+    /// world units.
+    pub ssr_thickness: f32,
 }
 
 impl Default for PostData {
@@ -480,6 +491,10 @@ impl Default for PostData {
             halation: 0.0,
             grain: 0.0,
             grain_size: 0.002,
+            ssr: 0.0,
+            ssr_fade: [0.45, 0.65],
+            ssr_max_distance: 30.0,
+            ssr_thickness: 0.5,
         }
     }
 }

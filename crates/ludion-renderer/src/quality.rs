@@ -33,6 +33,7 @@
 /// assert_eq!(Quality::preset("Low"), Some(Quality::LOW));
 /// assert_eq!(Quality::preset("cinematic"), None);
 /// assert!(Quality::FULL.ssao && !Quality::LOW.ssao);
+/// assert!(Quality::FULL.ssr && !Quality::LOW.ssr);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Quality {
@@ -64,6 +65,12 @@ pub struct Quality {
     /// ([`PostChain::masked`](crate::PostChain::masked)): the march has nothing to read, and keeping
     /// the map alive for it would make "shadows off" mean "the shadow pass still runs".
     pub shadows: bool,
+    /// Render screen-space reflections on the scenes that author them (`PostData.ssr > 0`).
+    ///
+    /// False removes the `ssr_trace` pass and the two pyramids it reads from the frame graph and
+    /// zeroes the flag `reflections` reads, so the pass falls back to the sky fill it blends
+    /// against — exactly what a scene with `ssr: 0` renders.
+    pub ssr: bool,
 }
 
 impl Quality {
@@ -75,6 +82,7 @@ impl Quality {
         dof: true,
         gi_dynamic: true,
         shadows: true,
+        ssr: true,
     };
 
     /// Equal to [`FULL`](Quality::FULL): every effect a scene authors still runs at this preset, and
@@ -88,13 +96,14 @@ impl Quality {
 
     /// None of the optional effects: a machine at this preset renders every scene as if it authored
     /// no ambient occlusion, no light shafts, nothing out of focus, and no light marked dynamic for
-    /// global illumination — and its suns light without casting.
+    /// global illumination, no screen-space reflections — and its suns light without casting.
     pub const LOW: Quality = Quality {
         ssao: false,
         shafts: false,
         dof: false,
         gi_dynamic: false,
         shadows: false,
+        ssr: false,
     };
 
     /// Every name [`preset`](Quality::preset) accepts, cheapest first — the list a host prints when
@@ -132,9 +141,10 @@ impl Default for Quality {
 ///
 /// Every axis is modulated. Four are uniform loop bounds the shaders read (`ssao_samples`,
 /// `shaft_steps`, `dof_taps`, `pcf`); `gi_rays` is a uniform both GI shaders read, one as a loop
-/// bound and one as a divisor; four are structure rather than arithmetic (`shadow_map_size` as the
+/// bound and one as a divisor; five are structure rather than arithmetic (`shadow_map_size` as the
 /// shadow map's extent, `ibl_specular_size` as the sky specular cube's, `gi_probe_scale` as the
-/// probe lattice's, `render_scale` as the extent the scene is drawn at before it is resampled to the output); and `particle_density` is spent before
+/// probe lattice's, `render_scale` as the extent the scene is drawn at before it is resampled to the output,
+/// `ssr_scale` as the reflection trace's); and `particle_density` is spent before
 /// this crate ever sees the frame, thinning how many particles reach the scene at all. A preset
 /// carrying the full value for an axis is therefore a statement about that axis, not a placeholder.
 ///
@@ -246,6 +256,12 @@ pub struct QualityParams {
     /// the profile report's quality descriptor does not carry — the descriptor is wire-schema-hashed
     /// and the particle feature ships no schema revision — so a report names it through `preset`.
     pub particle_density: f32,
+    /// Fraction of the **output** extent the SSR trace and its pyramids are sized at (not of the
+    /// render extent: `render_scale` does not move it). Structure like
+    /// [`shadow_map_size`](QualityParams::shadow_map_size) — a resource's extent is graph
+    /// structure ([`PostChain::ssr`](crate::PostChain)). Cheaper is *smaller* and `full`'s value is the
+    /// **ceiling**: a quality setting only ever spends less than the scene's authoring implies.
+    pub ssr_scale: f32,
 }
 
 impl QualityParams {
@@ -272,6 +288,7 @@ impl QualityParams {
         gi_probe_scale: 1.0,
         render_scale: 1.0,
         particle_density: 1.0,
+        ssr_scale: 0.5,
     };
 
     /// A modest discount on the three modulated axes. Each estimator pairs a count-free *direction*
@@ -302,6 +319,7 @@ impl QualityParams {
         gi_probe_scale: 1.0,
         render_scale: QualityParams::FULL.render_scale,
         particle_density: QualityParams::FULL.particle_density,
+        ssr_scale: QualityParams::FULL.ssr_scale,
     };
 
     /// Roughly half of [`FULL`](QualityParams::FULL) on every modulated axis — the cheapest the
@@ -325,6 +343,7 @@ impl QualityParams {
         gi_probe_scale: 1.5,
         render_scale: QualityParams::FULL.render_scale,
         particle_density: QualityParams::FULL.particle_density,
+        ssr_scale: QualityParams::FULL.ssr_scale,
     };
 
     /// [`Quality::LOW`] turns ambient occlusion, light shafts, depth of field and the sun's shadows
@@ -598,6 +617,10 @@ mod tests {
                 "a cheaper preset must never draw more pixels ({cheaper} vs {dearer})",
             );
             assert!(
+                low.ssr_scale <= high.ssr_scale,
+                "a cheaper preset must never trace more pixels ({cheaper} vs {dearer})",
+            );
+            assert!(
                 low.particle_density <= high.particle_density,
                 "a cheaper preset must never emit more particles ({cheaper} vs {dearer})",
             );
@@ -805,6 +828,7 @@ mod tests {
                 dof: true,
                 gi_dynamic: true,
                 shadows: true,
+                ssr: true,
             },
         );
         assert_eq!(
@@ -815,6 +839,7 @@ mod tests {
                 dof: false,
                 gi_dynamic: false,
                 shadows: false,
+                ssr: false,
             },
         );
     }

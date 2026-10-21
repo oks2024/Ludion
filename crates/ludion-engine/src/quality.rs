@@ -846,14 +846,17 @@ mod tests {
             },
             "no preset means the full base",
         );
-        // Every toggle `[effects]` can spell, turned off against the full base — all five now, so
-        // this is `Quality::LOW` exactly, not `LOW` short one field.
+        // Every toggle `[effects]` can spell, turned off against the full base: `Quality::LOW`
+        // except `ssr`, which no `[effects]` key reaches yet.
         assert_eq!(
             effects_of(
                 "preset = \"full\"\n[effects]\nssao = false\nshafts = false\ndof = false\n\
                  gi_dynamic = false\nshadows = false\n",
             ),
-            Quality::LOW,
+            Quality {
+                ssr: true,
+                ..Quality::LOW
+            },
         );
     }
 
@@ -930,6 +933,7 @@ mod tests {
                 gi_probe_scale: 2.5,
                 render_scale: 0.5,
                 particle_density: 0.5,
+                ssr_scale: QualityParams::FULL.ssr_scale,
             },
             "every axis at once — the table names them all",
         );

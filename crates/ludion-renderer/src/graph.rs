@@ -98,7 +98,7 @@
 //! exactly the geometry SSAO reads.
 //!
 //! [`PostChain::ssr`] adds the trace's two input pyramids between the opaque pass and `reflections`,
-//! at the trace extent (output × 0.5): `hiz` (`R32Float`, a per-cell min-Z of `scene_depth`) and
+//! at the trace extent (output × [`QualityParams::ssr_scale`]): `hiz` (`R32Float`, a per-cell min-Z of `scene_depth`) and
 //! `ssr_color` (`Rgba16Float`, the opaque `scene` pre-convolved per mip), each a seed pass plus one
 //! reduce pass per further mip. The `ssr_trace` pass then marches a ray per trace texel through them
 //! into `ssr_trace` (`Rgba16Float`: radiance and confidence); nothing reads it yet.
@@ -479,7 +479,7 @@ impl FrameSize {
 /// scene reference, a byte-stable dump. [`PostChain::default()`] is the minimal chain (no UI, no shadow map,
 /// none of the conditional effects) — the fixed fifteen-pass graph; derive the real one from a scene
 /// with [`PostChain::for_scene`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PostChain {
     /// The scene carries screen-space UI: `composite` retargets to the `ldr` transient and a trailing
     /// `overlay` pass is appended (`Plan/phase-14-ui.md` decision 5).
@@ -536,12 +536,16 @@ pub struct PostChain {
     /// [`ui`](PostChain::ui), and additionally reads `scene_depth` so the lines can be dimmed where
     /// geometry hides them.
     pub debug_lines: bool,
-    /// The scene enables screen-space reflections: the [`pass::HIZ_SEED`] / [`pass::HIZ_REDUCE`]
-    /// and [`pass::SSR_COLOR_SEED`] / [`pass::SSR_COLOR_REDUCE`] pyramid passes are added between
+    /// The trace's scale against the output extent, or `None` when the scene draws no screen-space
+    /// reflections: the [`pass::HIZ_SEED`] / [`pass::HIZ_REDUCE`] and
+    /// [`pass::SSR_COLOR_SEED`] / [`pass::SSR_COLOR_REDUCE`] pyramid passes are added between
     /// `scene` and `reflections`, building the `hiz` and `ssr_color` transients at the trace extent.
-    /// False leaves the graph with neither the resources nor the passes, which is what makes an
+    /// `None` leaves the graph with neither the resources nor the passes, which is what makes an
     /// SSR-free frame byte-identical by construction rather than by care.
-    pub ssr: bool,
+    ///
+    /// It carries the scale for the reason [`shadow_map`](PostChain::shadow_map) carries its edge: a
+    /// resource's extent is graph structure.
+    pub ssr: Option<f32>,
 }
 
 impl PostChain {
@@ -578,8 +582,12 @@ impl PostChain {
             // of a conjunction.
             gi_inject: crate::gi_inject::scheduled_lattice(scene),
             debug_lines: !scene.debug_lines.is_empty(),
-            // No scene field enables screen-space reflections yet.
-            ssr: false,
+            // `ssr` is a strength *and* the gate: at zero the blend takes the sky fill alone, so
+            // tracing would be work with no output. Machines scale it down in `masked`.
+            ssr: scene
+                .post
+                .is_some_and(|post| post.ssr > 0.0)
+                .then_some(QualityParams::FULL.ssr_scale),
         }
     }
 
@@ -592,8 +600,8 @@ impl PostChain {
     /// not an effect a scene could have left unauthored — see [`Quality::shadows`] for what stays
     /// lit.
     ///
-    /// `params` reaches the chain for exactly the two axes that are *resource extents* — the shadow
-    /// map's edge and the GI probe lattice's dimensions — because an extent is graph structure,
+    /// `params` reaches the chain for exactly the three axes that are *resource extents* — the shadow
+    /// map's edge, the GI probe lattice's dimensions and the SSR trace's scale — because an extent is graph structure,
     /// while every other count is a uniform the owning pass uploads.
     pub fn masked(self, quality: &Quality, params: &QualityParams) -> PostChain {
         // Off removes the map; on redraws it at this machine's extent rather than the scene-implied
@@ -610,6 +618,8 @@ impl PostChain {
             // schedule the `shadow` pass, and masking would mean weakening rather than absence.
             shafts: self.shafts && quality.shafts && shadow_map.is_some(),
             dof: self.dof && quality.dof,
+            // Off removes the trace and its pyramids; on re-sizes them to this machine's extent.
+            ssr: self.ssr.filter(|_| quality.ssr).map(|_| params.ssr_scale),
             // Off removes the pass and its volume; on re-lays the lattice at this machine's coarser
             // probe spacing, which only ever removes probes (`gi_bake::scaled_probe_count`). The
             // spacing itself cancels out of that arithmetic, which is what lets a scene-free
@@ -833,8 +843,8 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     });
     // The SSR input pyramids, at the trace extent (a post target: sized from the output). Declared
     // only when SSR is on, after the other conditional chains and before `final`.
-    let ssr = chain.ssr.then(|| {
-        declare_ssr_targets(&mut graph, size, |graph, (tw, th)| {
+    let ssr = chain.ssr.map(|scale| {
+        declare_ssr_targets(&mut graph, size, scale, |graph, (tw, th)| {
             graph.transient("ssr_trace", TextureDesc::hdr_color(tw, th))
         })
     });
@@ -1084,9 +1094,10 @@ struct SsrTargets {
 fn declare_ssr_targets(
     graph: &mut RenderGraph,
     size: FrameSize,
+    scale: f32,
     trace: impl FnOnce(&mut RenderGraph, (u32, u32)) -> ResourceId,
 ) -> SsrTargets {
-    let extent = crate::ssr_pyramid::trace_extent(size);
+    let extent = crate::ssr_pyramid::trace_extent(size, scale);
     let levels = crate::ssr_pyramid::levels(extent);
     let (tw, th) = extent;
     let hiz = graph.transient(
@@ -1181,11 +1192,16 @@ pub(crate) fn build_ssr_trace_graph(size: FrameSize) -> (RenderGraph, ResourceId
         vec![scene, scene_normal, scene_specular],
         scene_depth,
     );
-    let ssr = declare_ssr_targets(&mut graph, size, |graph, (tw, th)| {
-        let mut desc = TextureDesc::hdr_color(tw, th);
-        desc.usages.push(ludion_render_graph::TextureUsage::CopySrc);
-        graph.output("ssr_trace", desc)
-    });
+    let ssr = declare_ssr_targets(
+        &mut graph,
+        size,
+        QualityParams::FULL.ssr_scale,
+        |graph, (tw, th)| {
+            let mut desc = TextureDesc::hdr_color(tw, th);
+            desc.usages.push(ludion_render_graph::TextureUsage::CopySrc);
+            graph.output("ssr_trace", desc)
+        },
+    );
     declare_ssr_passes(&mut graph, &ssr, scene, scene_normal, scene_depth);
     (graph, ssr.trace)
 }
@@ -1319,8 +1335,8 @@ mod tests {
                 gi_inject: (bits & 32 != 0).then_some([4, 4, 4]),
                 // Content like `ui`, so masking leaves it alone (`ui` already varies over the walk).
                 debug_lines: bits & 1 != 0,
-                // Passes through `masked` untouched, so any value holds the identity.
-                ssr: bits & 4 != 0,
+                // Varies with `ssao` so both gates are walked; `FULL` keeps the same scale.
+                ssr: (bits & 4 != 0).then_some(QualityParams::FULL.ssr_scale),
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -1342,9 +1358,10 @@ mod tests {
                     dof: false,
                     gi_inject: None,
                     shadow_map: None,
+                    ssr: None,
                     ..chain
                 },
-                "LOW must clear the five effects of {chain:?} and nothing else",
+                "LOW must clear the six effects of {chain:?} and nothing else",
             );
         }
         assert_eq!(derivable, 48, "every chain a scene can derive was walked");
@@ -1391,6 +1408,47 @@ mod tests {
         assert_eq!(
             PostChain::default().masked(&Quality::FULL, &QualityParams::FULL),
             PostChain::default(),
+        );
+    }
+
+    /// `for_scene` derives SSR from the authored strength alone; `masked` drops it at `LOW` and
+    /// re-sizes it to the machine's own scale.
+    #[test]
+    fn ssr_is_gated_by_the_authored_strength_and_the_machine() {
+        let with = |ssr: f32| {
+            let mut scene = RenderScene::empty((1920, 1080));
+            scene.post = Some(crate::scene::PostData {
+                ssr,
+                ..crate::scene::PostData::default()
+            });
+            PostChain::for_scene(&scene).ssr
+        };
+        assert_eq!(
+            PostChain::for_scene(&RenderScene::empty((1920, 1080))).ssr,
+            None
+        );
+        assert_eq!(with(0.0), None);
+        assert_eq!(with(0.6), Some(0.5));
+        let chain = PostChain {
+            ssr: Some(QualityParams::FULL.ssr_scale),
+            ..PostChain::default()
+        };
+        assert_eq!(chain.masked(&Quality::LOW, &QualityParams::LOW).ssr, None);
+        let quarter = QualityParams {
+            ssr_scale: 0.25,
+            ..QualityParams::FULL
+        };
+        let masked = chain.masked(&Quality::FULL, &quarter);
+        assert_eq!(masked.ssr, Some(0.25));
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), masked);
+        let trace = graph
+            .resources()
+            .iter()
+            .find(|r| r.name == "ssr_trace")
+            .unwrap();
+        assert_eq!(
+            (trace.desc.extent.width, trace.desc.extent.height),
+            (480, 270)
         );
     }
 
@@ -1840,16 +1898,19 @@ mod tests {
 
     fn ssr_chain() -> PostChain {
         PostChain {
-            ssr: true,
+            ssr: Some(QualityParams::FULL.ssr_scale),
             ..PostChain::default()
         }
     }
 
-    /// With `ssr` off the graph has neither pyramid; `for_scene` derives false (no scene field
-    /// enables it yet), so every real frame is the pre-SSR graph.
+    /// With `ssr` off the graph has neither pyramid; `for_scene` derives `None` until a scene
+    /// authors a strength, so every other frame is the pre-SSR graph.
     #[test]
     fn ssr_off_declares_no_pyramids() {
-        assert!(!PostChain::for_scene(&RenderScene::empty((1920, 1080))).ssr);
+        assert_eq!(
+            PostChain::for_scene(&RenderScene::empty((1920, 1080))).ssr,
+            None
+        );
         let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), PostChain::default());
         assert!(!resource_names(&graph).contains(&"hiz"));
         assert!(

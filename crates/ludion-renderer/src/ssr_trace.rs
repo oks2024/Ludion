@@ -1,6 +1,6 @@
 //! The screen-space reflection trace, built only when `PostChain::ssr` is on.
 //!
-//! The `ssr_trace` pass marches one mirror ray per trace texel (output × [`SSR_SCALE`](crate::ssr_pyramid::SSR_SCALE))
+//! The `ssr_trace` pass marches one mirror ray per trace texel (output × [`QualityParams::ssr_scale`](crate::QualityParams::ssr_scale))
 //! through the `hiz` pyramid and, on a hit, reads `ssr_color` at the cone's footprint level. It
 //! writes `vec4(radiance, confidence)` into the `ssr_trace` transient; a miss writes `vec4(0)`. The
 //! march is a fixed [`SSR_MAX_ITERS`] iterations with no jitter and no history.
@@ -29,11 +29,22 @@ pub(crate) struct SsrLook {
     /// World-space depth behind a surface that still counts as a hit.
     pub thickness: f32,
     /// The blend's scale, read by the blend.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub intensity: f32,
 }
 
 impl SsrLook {
+    /// The authored look: the scene's `PostData` SSR fields.
+    pub(crate) fn from_post(post: &crate::PostData) -> SsrLook {
+        SsrLook {
+            fade: post.ssr_fade,
+            max_distance: post.ssr_max_distance,
+            thickness: post.ssr_thickness,
+            intensity: post.ssr,
+        }
+    }
+
+    /// `PostData`'s defaults at full strength, for the CPU twins' tests.
+    #[cfg(test)]
     pub(crate) const DEFAULT: SsrLook = SsrLook {
         fade: [0.45, 0.65],
         max_distance: 30.0,

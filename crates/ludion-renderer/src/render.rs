@@ -3028,7 +3028,7 @@ impl FrameRecorder<'_> {
             gi_scale: self.resolved_gi.scale,
             ssr: [
                 if ssr { 1.0 } else { 0.0 },
-                crate::ssr_trace::SsrLook::DEFAULT.intensity,
+                crate::ssr_trace::SsrLook::from_post(&self.post).intensity,
                 0.0,
                 0.0,
             ],
@@ -3404,7 +3404,7 @@ impl FrameRecorder<'_> {
     /// The SSR trace: one mirror ray per trace texel over `hiz`, `ssr_color`, the opaque normal and
     /// depth, in the graph's declared-reads order.
     fn record_ssr_trace(&self, pass: &mut RecordedPass<'_>) {
-        let look = crate::ssr_trace::SsrLook::DEFAULT;
+        let look = crate::ssr_trace::SsrLook::from_post(&self.post);
         let target = pass.colors()[0].extent;
         let levels = crate::ssr_pyramid::levels((target.width, target.height));
         let params = shader_gen::SsrTrace {
@@ -8195,6 +8195,10 @@ mod tests {
             halation: 0.0,
             grain: 0.0,
             grain_size: 0.002,
+            ssr: 0.0,
+            ssr_fade: [0.45, 0.65],
+            ssr_max_distance: 30.0,
+            ssr_thickness: 0.5,
         });
         let neutral = renderer
             .render(&scene, FrameSize::native(w, h))
@@ -12067,8 +12071,12 @@ mod tests {
             scene.meshes = vec![metal_box];
 
             let plain = renderer.render(&scene, size).expect("plain render");
+            scene.post = Some(PostData {
+                ssr: 1.0,
+                ..exact_post()
+            });
             let chain = PostChain {
-                ssr: true,
+                ssr: Some(QualityParams::FULL.ssr_scale),
                 ..PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params)
             };
             let (graph, output) = build_frame_graph(size, chain);
@@ -12113,8 +12121,12 @@ mod tests {
         scene.meshes = vec![floor, red_box];
 
         let off = renderer.render(&scene, size).expect("sky-only render");
+        scene.post = Some(PostData {
+            ssr: 1.0,
+            ..exact_post()
+        });
         let chain = PostChain {
-            ssr: true,
+            ssr: Some(QualityParams::FULL.ssr_scale),
             ..PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params)
         };
         let (graph, output) = build_frame_graph(size, chain);
@@ -12155,6 +12167,59 @@ mod tests {
         }
     }
 
+    /// Authoring `PostData.ssr` is the whole switch: through `Renderer::render` alone it reddens the
+    /// mirror floor, `ssr: 0` is the no-post frame, and `Quality::LOW` renders an `ssr: 1` scene as
+    /// the `ssr: 0` one.
+    #[test]
+    fn needs_gpu_authored_ssr_reflects_through_the_real_path() {
+        let Some(mut renderer) = skip_or_renderer("authored_ssr_reflects_through_the_real_path")
+        else {
+            return;
+        };
+        let size = FrameSize::native(96, 64);
+        let mut scene = RenderScene::empty(size.render);
+        scene.environment = Some(test_env());
+        let eye = Vec3::new(0.0, 4.5, 7.5);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::new(0.0, 0.5, 0.0), Vec3::Y),
+            projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.5, 0.1, 100.0),
+            position: eye,
+        };
+        let mut floor = ground(50.0);
+        floor.material = [0.02, 1.0, 0.0];
+        let mut red_box = cube(Vec3::new(0.0, 0.5, 0.0), Vec3::ONE, [1.0, 0.0, 0.0, 1.0]);
+        red_box.material = [0.5, 0.0, 1.0];
+        scene.meshes = vec![floor, red_box];
+        let with_ssr = |renderer: &Renderer, scene: &mut RenderScene, ssr: f32| {
+            scene.post = Some(PostData {
+                ssr,
+                ..PostData::default()
+            });
+            renderer.render(scene, size).expect("render")
+        };
+
+        let off = with_ssr(&renderer, &mut scene, 0.0);
+        let on = with_ssr(&renderer, &mut scene, 1.0);
+        let (w, h) = size.output;
+        let at = project(&scene.camera, Vec3::new(0.0, 0.0, 0.8), w, h);
+        let i = ((at.1 * w + at.0) * 4) as usize;
+        let redness =
+            |image: &RenderedImage| i32::from(image.rgba[i]) - i32::from(image.rgba[i + 2]);
+        assert!(
+            redness(&on) > redness(&off) + 8,
+            "authored ssr did not redden the floor at {at:?}"
+        );
+
+        scene.post = None;
+        let none = renderer.render(&scene, size).expect("no-post render");
+        assert_eq!(none.rgba, off.rgba, "ssr: 0 is not the no-post frame");
+
+        renderer.set_quality(crate::Quality::LOW, QualityParams::LOW);
+        let low_off = with_ssr(&renderer, &mut scene, 0.0);
+        let low_on = with_ssr(&renderer, &mut scene, 1.0);
+        assert_eq!(low_on.rgba, low_off.rgba, "LOW still traced");
+    }
+
     /// The SSR trace finds a box in a mirror floor: the floor just in front of the cube's base reflects
     /// its red front face (confident, red-dominant), floor well to the side reflects only the sky above
     /// the frame (confidence 0), and the sky itself is exactly zero. The trace is read back from a
@@ -12191,7 +12256,7 @@ mod tests {
             )
             .expect("the trace renders");
         assert!(renderer.gpu.take_fault().is_none(), "the trace faulted");
-        let (tw, th) = crate::ssr_pyramid::trace_extent(size);
+        let (tw, th) = crate::ssr_pyramid::trace_extent(size, QualityParams::FULL.ssr_scale);
         assert_eq!((image.width, image.height), (tw, th));
         let texel = |x: u32, y: u32| -> [f32; 4] {
             std::array::from_fn(|c| {

@@ -18,12 +18,10 @@
 
 use crate::graph::FrameSize;
 
-/// The trace extent as a fraction of the output extent.
-pub(crate) const SSR_SCALE: f32 = 0.5;
-
-/// The pyramids' base extent: the output extent × [`SSR_SCALE`], rounded, at least 1.
-pub(crate) fn trace_extent(size: FrameSize) -> (u32, u32) {
-    let scale = |n: u32| ((n as f32 * SSR_SCALE).round() as u32).max(1);
+/// The pyramids' base extent: the output extent × `ssr_scale` ([`QualityParams::ssr_scale`](crate::QualityParams::ssr_scale)),
+/// rounded, at least 1.
+pub(crate) fn trace_extent(size: FrameSize, ssr_scale: f32) -> (u32, u32) {
+    let scale = |n: u32| ((n as f32 * ssr_scale).round() as u32).max(1);
     (scale(size.output.0), scale(size.output.1))
 }
 
@@ -135,12 +133,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn trace_extent_is_half_the_output_never_the_render_extent() {
+    fn trace_extent_is_the_scaled_output_never_the_render_extent() {
         let native = FrameSize::native(1920, 1080);
-        assert_eq!(trace_extent(native), (960, 540));
+        assert_eq!(trace_extent(native, 0.5), (960, 540));
+        assert_eq!(trace_extent(native, 0.25), (480, 270));
         let ssaa = FrameSize::scaled(1920, 1080, crate::RenderScale::new(2.0).unwrap());
-        assert_eq!(trace_extent(ssaa), (960, 540));
-        assert_eq!(trace_extent(FrameSize::native(1, 1)), (1, 1));
+        assert_eq!(trace_extent(ssaa, 0.5), (960, 540));
+        assert_eq!(trace_extent(FrameSize::native(1, 1), 0.5), (1, 1));
         assert_eq!(levels((960, 540)), 10);
         assert_eq!(levels((1, 1)), 1);
     }

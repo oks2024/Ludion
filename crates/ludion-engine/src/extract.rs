@@ -1376,6 +1376,7 @@ fn extract_post(world: &World, ids: &[EntityId]) -> Option<PostData> {
         halation: post.halation,
         grain: post.grain,
         grain_size: post.grain_size,
+        ..PostData::default()
     })
 }
 
@@ -4904,6 +4905,7 @@ mod tests {
                 halation: 0.3,
                 grain: 0.02,
                 grain_size: 0.005,
+                ..PostData::default()
             }
         );
 
