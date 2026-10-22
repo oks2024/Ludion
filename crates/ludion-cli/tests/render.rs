@@ -1824,6 +1824,51 @@ fn needs_gpu_dump_probes_writes_strips_and_a_manifest() {
     assert!(frame.is_file());
 }
 
+/// `--debug-view probe_index` is drawn where the scene has probes and says why when it is not.
+#[test]
+fn needs_gpu_debug_view_probe_index_names_what_was_drawn() {
+    let run = |scene: &std::path::Path, name: &str| {
+        let out = out_path(name);
+        run_ludion(&[
+            "render",
+            "--scene",
+            scene.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--width",
+            "192",
+            "--height",
+            "108",
+            "--debug-view",
+            "probe_index",
+        ])
+    };
+    let drawn = run(&probe_scene("view"), "cli_debug_view_probe_on.png");
+    if !drawn.status.success() && is_no_adapter(&drawn) {
+        eprintln!("SKIPPED probe index view render: no GPU adapter");
+        return;
+    }
+    assert!(
+        drawn.status.success(),
+        "render failed: {}",
+        String::from_utf8_lossy(&drawn.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&drawn.stdout);
+    assert!(stdout.contains("debug view: probe_index"), "{stdout}");
+    assert!(!stdout.contains("not drawn"), "{stdout}");
+
+    let skipped = run(
+        &gallery_scene("night-sky.yaml"),
+        "cli_debug_view_probe_off.png",
+    );
+    assert!(skipped.status.success());
+    let stdout = String::from_utf8_lossy(&skipped.stdout);
+    assert!(
+        stdout.contains("debug view: probe_index not drawn: the scene has no reflection probes"),
+        "{stdout}"
+    );
+}
+
 #[test]
 fn dump_probes_is_refused_with_sweep() {
     let scene = probe_scene("sweep");

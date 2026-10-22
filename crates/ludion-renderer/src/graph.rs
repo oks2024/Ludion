@@ -102,7 +102,8 @@
 //! `ssr_color` (`Rgba16Float`, the opaque `scene` pre-convolved per mip), each a seed pass plus one
 //! reduce pass per further mip. The `ssr_trace` pass then marches a ray per trace texel through them
 //! into `ssr_trace` (`Rgba16Float`: radiance and confidence), which `reflections` blends. With
-//! [`PostChain::ssr_view`] set, [`pass::SSR_DEBUG`] replaces `composite` and draws the trace itself.
+//! [`PostChain::ssr_view`] set, [`pass::SSR_DEBUG`] replaces `composite` and draws the trace itself;
+//! [`PostChain::probe_view`] does the same with [`pass::PROBE_DEBUG`], drawing the winning probe per pixel.
 //!
 //! ```text
 //! scene ─► hiz_seed ─► hiz_reduce_1 ─► … ─► ssr_color_seed ─► ssr_color_reduce_1 ─► … ─► ssr_trace ─► reflections
@@ -176,6 +177,9 @@ pub mod pass {
     /// A full-screen view of the trace (`ludion render --debug-view`): replaces `composite`, reads
     /// `ssr_trace` and writes the same target.
     pub const SSR_DEBUG: &str = "ssr_debug";
+    /// A full-screen view of the winning reflection probe per pixel (`ludion render --debug-view
+    /// probe_index`): replaces `composite`, reads the normal and depth and writes the same target.
+    pub const PROBE_DEBUG: &str = "probe_debug";
     /// A probe capture's last pass: the lit face into the capture target, with sky visibility in
     /// alpha. Reads `scene` and `scene_depth`.
     pub const PROBE_FACE: &str = "probe_face";
@@ -557,6 +561,10 @@ pub struct PostChain {
     /// same target. Only ever set with [`ssr`](PostChain::ssr): a view never turns the trace on, so
     /// `for_scene` and `masked` drop it whenever SSR is absent.
     pub ssr_view: Option<crate::DebugView>,
+    /// A full-screen view of the winning probe: [`pass::PROBE_DEBUG`] replaces `composite`, writing
+    /// the same target. Only set when the scene has probes: a view never conjures its subject, so
+    /// a probe-free scene draws the normal frame. Probes have no quality toggle, so `masked` keeps it.
+    pub probe_view: bool,
 }
 
 impl PostChain {
@@ -601,8 +609,17 @@ impl PostChain {
                 .then_some(QualityParams::FULL.ssr_scale),
             ssr_view: scene
                 .debug_view
+                .filter(|v| v.is_ssr())
                 .filter(|_| scene.post.is_some_and(|post| post.ssr > 0.0)),
+            probe_view: scene.debug_view == Some(crate::DebugView::ProbeIndex)
+                && !scene.probes.is_empty(),
         }
+    }
+
+    /// The debug view this chain draws in place of the finished picture, if any.
+    pub fn view(&self) -> Option<crate::DebugView> {
+        self.ssr_view
+            .or_else(|| self.probe_view.then_some(crate::DebugView::ProbeIndex))
     }
 
     /// The chain the scene requires, minus what this machine's [`Quality`] disables — masking an
@@ -635,6 +652,7 @@ impl PostChain {
             // Off removes the trace and its pyramids; on re-sizes them to this machine's extent.
             ssr: self.ssr.filter(|_| quality.ssr).map(|_| params.ssr_scale),
             ssr_view: self.ssr_view.filter(|_| self.ssr.is_some() && quality.ssr),
+            probe_view: self.probe_view,
             // Off removes the pass and its volume; on re-lays the lattice at this machine's coarser
             // probe spacing, which only ever removes probes (`gi_bake::scaled_probe_count`). The
             // spacing itself cancels out of that arithmetic, which is what lets a scene-free
@@ -1047,6 +1065,12 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
+        _ if chain.probe_view => graph.add_external_pass(
+            pass::PROBE_DEBUG,
+            pass::PROBE_DEBUG,
+            vec![scene_normal, scene_depth],
+            vec![composited],
+        ),
         (Some(_), Some(ssr)) => graph.add_external_pass(
             pass::SSR_DEBUG,
             pass::SSR_DEBUG,
@@ -1239,7 +1263,7 @@ pub(crate) fn build_probe_capture_graph(face: u32, chain: PostChain) -> (RenderG
     debug_assert!(
         !chain.ssao
             && chain.ssr.is_none()
-            && chain.ssr_view.is_none()
+            && chain.view().is_none()
             && !chain.shafts
             && !chain.dof
             && !chain.ui
@@ -1473,6 +1497,8 @@ mod tests {
                 // Varies with `ssao` so both gates are walked; `FULL` keeps the same scale.
                 ssr: (bits & 4 != 0).then_some(QualityParams::FULL.ssr_scale),
                 ssr_view: None,
+                // Content like `ui`: masking keeps it.
+                probe_view: bits & 1 != 0,
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -2231,6 +2257,79 @@ mod tests {
                 .ssr_view,
             Some(crate::DebugView::SsrConfidence)
         );
+    }
+
+    fn probe_view_chain() -> PostChain {
+        PostChain {
+            probe_view: true,
+            ..PostChain::default()
+        }
+    }
+
+    fn graph_pass(graph: &RenderGraph, name: &str) -> Option<(Vec<String>, Vec<String>)> {
+        let pass = graph.passes().iter().find(|p| p.name == name)?;
+        let names = |ids: &[ResourceId]| {
+            ids.iter()
+                .map(|id| graph.resources()[id.index()].name.clone())
+                .collect::<Vec<_>>()
+        };
+        Some((names(&pass.reads()), names(pass.color_targets())))
+    }
+
+    /// The probe view replaces `composite` the way the SSR view does, reading normal and depth.
+    #[test]
+    fn a_probe_view_replaces_composite_and_reads_normal_and_depth() {
+        let size = FrameSize::native(1920, 1080);
+        let (graph, _) = build_frame_graph(size, probe_view_chain());
+        let (plain, _) = build_frame_graph(size, PostChain::default());
+        assert!(graph_pass(&graph, "composite").is_none());
+        let (reads, writes) = graph_pass(&graph, "probe_debug").unwrap();
+        assert_eq!(reads, ["scene_normal", "scene_depth"]);
+        assert_eq!(writes, graph_pass(&plain, "composite").unwrap().1);
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// `for_scene` sets the probe view only for a scene with probes; without them the graph is the
+    /// no-view graph. The probe view never doubles as an SSR view, and `view()` reports what is drawn.
+    #[test]
+    fn the_probe_view_needs_probes_and_never_sets_the_ssr_view() {
+        let mut scene = RenderScene::empty((1920, 1080));
+        scene.debug_view = Some(crate::DebugView::ProbeIndex);
+        let none = PostChain::for_scene(&scene);
+        assert!(!none.probe_view);
+        assert_eq!(none.view(), None);
+        let size = FrameSize::native(1920, 1080);
+        let (viewed, _) = build_frame_graph(size, none);
+        let (plain, _) = build_frame_graph(size, PostChain::default());
+        assert_eq!(pass_names(&viewed), pass_names(&plain));
+
+        scene.probes = vec![crate::ProbeData {
+            entity: ludion_core::ids::EntityId::new(1, 0),
+            position: Default::default(),
+            rotation: Default::default(),
+            volume: crate::ProbeVolume::Sphere { radius: 1.0 },
+            blend: 0.0,
+            priority: 0,
+        }];
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.probe_view);
+        assert_eq!(chain.ssr_view, None);
+        assert_eq!(chain.view(), Some(crate::DebugView::ProbeIndex));
+        assert!(chain.masked(&Quality::LOW, &QualityParams::LOW).probe_view);
+    }
+
+    /// With SSR on and the probe view asked, the probe pass is scheduled and the SSR one is not.
+    #[test]
+    fn the_probe_view_wins_over_an_ssr_chain() {
+        let chain = PostChain {
+            probe_view: true,
+            ..ssr_chain()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        assert!(graph_pass(&graph, "probe_debug").is_some());
+        assert!(graph_pass(&graph, "ssr_debug").is_none());
+        assert!(graph_pass(&graph, "composite").is_none());
+        assert!(schedule(&graph).is_ok());
     }
 
     /// The tail after the swapped pass (resample, overlay) still schedules.

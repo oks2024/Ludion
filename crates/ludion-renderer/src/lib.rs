@@ -44,6 +44,7 @@
 
 mod cluster;
 mod compressed;
+mod debug_view;
 mod frame_observer;
 mod gi_bake;
 mod gi_bin;
@@ -60,7 +61,6 @@ mod probe_store;
 mod quality;
 mod render;
 mod scene;
-mod ssr_debug;
 mod ssr_pyramid;
 mod ssr_trace;
 mod voxel_bake;
@@ -70,6 +70,7 @@ mod shader_gen;
 
 pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
+pub use debug_view::{DebugView, PROBE_VIEW_PALETTE};
 pub use frame_observer::{FrameObserver, FramePhase};
 pub use gi_bake::GiReadback;
 pub use graph::{FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json};
@@ -85,7 +86,6 @@ pub use scene::{
     RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunData, TextRun,
     TextureImage, TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
 };
-pub use ssr_debug::DebugView;
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`
 // directly.

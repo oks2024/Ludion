@@ -240,7 +240,7 @@ pub(crate) fn debug(
             .into_iter()
             .map(String::from)
             .collect(),
-        view: engine.debug_view().map(wire_view),
+        view: engine.debug_view().and_then(wire_view),
     })
 }
 
@@ -251,10 +251,12 @@ fn renderer_view(view: RenderDebugView) -> DebugView {
     }
 }
 
-fn wire_view(view: DebugView) -> RenderDebugView {
+/// `None` for a view the wire cannot name (host-only: the CLI's `probe_index`).
+fn wire_view(view: DebugView) -> Option<RenderDebugView> {
     match view {
-        DebugView::SsrConfidence => RenderDebugView::SsrConfidence,
-        DebugView::SsrFootprint => RenderDebugView::SsrFootprint,
+        DebugView::SsrConfidence => Some(RenderDebugView::SsrConfidence),
+        DebugView::SsrFootprint => Some(RenderDebugView::SsrFootprint),
+        DebugView::ProbeIndex => None,
     }
 }
 

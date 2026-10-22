@@ -104,9 +104,9 @@ pub fn render_scene(
 /// ragdoll without writing a test). `frames = 0` is a static tick-0 frame, byte-identical to every
 /// render before this parameter existed.
 ///
-/// `view` replaces the finished picture with a full-screen view of the SSR trace
-/// ([`DebugView`]); it is host render state, never part of the scene, and a frame that does not
-/// trace reflections ignores it ([`RenderOutcome::debug_view`] says what was drawn).
+/// `view` replaces the finished picture with a full-screen debug view ([`DebugView`]); it is host
+/// render state, never part of the scene, and a frame without its subject (no SSR trace, no probes)
+/// ignores it ([`RenderOutcome::debug_view`] says what was drawn).
 ///
 /// `overrides` (the `ludion render --set` payload) are applied between parse and validation, so an
 /// ill-typed override is rejected by the schema exactly as the same edit to the file would be. The
@@ -165,7 +165,7 @@ pub fn render_scene_with_registry(
     // not authored or is masked by the quality.
     let debug_view = PostChain::for_scene(&render_scene)
         .masked(&quality.quality, &quality.params)
-        .ssr_view;
+        .view();
 
     Ok(RenderOutcome {
         image,

@@ -2640,6 +2640,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::SSR_COLOR_SEED | pass::SSR_COLOR_REDUCE => self.record_ssr_color(pass),
             pass::SSR_TRACE => self.record_ssr_trace(pass),
             pass::SSR_DEBUG => self.record_ssr_debug(pass),
+            pass::PROBE_DEBUG => self.record_probe_debug(pass),
             pass::PROBE_FACE => self.record_probe_face(pass),
             pass::TRANSPARENTS => self.record_transparents(pass),
             // The bright-pass threshold (`PostProcess.bloom_threshold`; default 1.0 reproduces the
@@ -3589,6 +3590,55 @@ impl FrameRecorder<'_> {
         self.fullscreen_effect(pass, ShaderId::SsrDebug, &[], bytemuck::bytes_of(&params));
     }
 
+    /// The probe index debug view: the winning probe per pixel, in place of `composite`. Binds the
+    /// reflections pass's probe list and masks beside its normal and depth reads.
+    fn record_probe_debug(&self, pass: &mut RecordedPass<'_>) {
+        let mut palette = [[0.0; 4]; 8];
+        for (slot, rgb) in palette.iter_mut().zip(crate::PROBE_VIEW_PALETTE) {
+            *slot = [rgb[0], rgb[1], rgb[2], 1.0];
+        }
+        let uniform = shader_gen::ProbeDebug {
+            inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
+            cam_pos: self.camera_position.extend(1.0).to_array(),
+            palette,
+        };
+        let uniform_buf = init_buffer(
+            pass.device,
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::bytes_of(&uniform),
+        );
+        let bind_group = pass.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("probe debug bind group"),
+            layout: self.r.layouts.get(LayoutId::ProbeDebug),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::PDBG_NORMAL_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::PDBG_DEPTH_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::PROBE_LIST_BINDING,
+                    resource: self.probe_list_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::PROBE_MASK_BINDING,
+                    resource: self.probe_mask_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::PDBG_BINDING,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+        let mut rp = pass.begin();
+        rp.set_pipeline(self.r.pipeline(ShaderId::ProbeDebug));
+        rp.set_bind_group(0, &bind_group, &[]);
+        rp.draw(0..3, 0..1);
+    }
+
     /// The supersampling resolve: the composited render-extent image box-filtered down to the output
     /// extent. The source extent comes from the frame's [`FrameSize`] rather than the pass (a
     /// `RecordedPass` knows only what it writes), and the ratio is computed here so the shader loops
@@ -4412,6 +4462,7 @@ enum ShaderId {
     SsrTrace,
     SsrDebug,
     ProbeFace,
+    ProbeDebug,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -4437,7 +4488,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 30;
+const SHADER_COUNT: usize = 31;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -4708,6 +4759,18 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
         layouts: &[LayoutId::ProbeFace],
     },
+    ShaderDesc {
+        id: ShaderId::ProbeDebug,
+        file_name: "probe_debug.wgsl",
+        body: include_str!("shaders/probe_debug.wgsl"),
+        snippets: &[
+            Snippet::FullscreenVs,
+            Snippet::ClusterGrid,
+            Snippet::Probes,
+            Snippet::Srgb,
+        ],
+        layouts: &[LayoutId::ProbeDebug],
+    },
 ];
 
 impl ShaderId {
@@ -4801,7 +4864,7 @@ enum Snippet {
     /// (the trace; the twin of `ssr_trace.rs::confidence`).
     Ssr,
     /// `linear_to_srgb` / `srgb_to_linear`, the transfer pair, binding-free (composite,
-    /// ssr_debug).
+    /// ssr_debug, probe_debug).
     Srgb,
     /// The glyph-atlas `@group(1)` bindings, the shared `VsOut` and the coverage `fs_main` (text,
     /// ui_text).
@@ -4939,10 +5002,11 @@ enum LayoutId {
     SsrTrace,
     SsrDebug,
     ProbeFace,
+    ProbeDebug,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 32;
+const LAYOUT_COUNT: usize = 33;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -5084,6 +5148,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         id: LayoutId::ProbeFace,
         create: shader_gen::create_face_scene_face_depth_face_samp_face_params_bgl,
     },
+    LayoutDesc {
+        id: LayoutId::ProbeDebug,
+        create: shader_gen::create_pdbg_normal_pdbg_depth_pdbg_probe_list_probe_mask_bgl,
+    },
 ];
 
 /// Every bind group layout, built once and indexed by [`LayoutId`].
@@ -5178,7 +5246,8 @@ fn build_pipeline(
         | ShaderId::Resolve
         | ShaderId::Upscale
         | ShaderId::Blit
-        | ShaderId::SsrDebug => {
+        | ShaderId::SsrDebug
+        | ShaderId::ProbeDebug => {
             build_fullscreen_pipeline(device, label, src, &layout, OUTPUT_FORMAT, None)
         }
         ShaderId::UiRect => build_ui_rect_pipeline(device, label, src, &layout),

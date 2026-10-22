@@ -501,11 +501,13 @@ enum Command {
             conflicts_with_all = ["model", "sprite", "atlas", "sweep"]
         )]
         debug_draw: Option<String>,
-        /// (scene only) Draw a full-screen view of the screen-space reflection trace instead of the
-        /// finished picture: `ssr_confidence` (the trace's confidence as gray) or `ssr_footprint`
-        /// (the colour-pyramid level it read, over the level count; magenta where it found no hit).
-        /// A view never turns SSR on: where the scene's `PostProcess.ssr` is 0, or this quality
-        /// masks the trace, the normal frame is drawn and the summary line says so.
+        /// (scene only) Draw a full-screen debug view instead of the finished picture:
+        /// `ssr_confidence` (the screen-space reflection trace's confidence as gray),
+        /// `ssr_footprint` (the colour-pyramid level it read, over the level count; magenta where
+        /// it found no hit) or `probe_index` (the winning reflection probe per pixel, coloured by
+        /// rank; gray where no probe applies, black where there is no surface). A view never turns
+        /// its effect on: where the scene's `PostProcess.ssr` is 0, this quality masks the trace,
+        /// or the scene has no probes, the normal frame is drawn and the summary line says so.
         #[arg(
             long,
             value_enum,
@@ -1524,6 +1526,8 @@ enum CliDebugView {
     SsrConfidence,
     #[value(name = "ssr_footprint")]
     SsrFootprint,
+    #[value(name = "probe_index")]
+    ProbeIndex,
 }
 
 impl From<CliDebugView> for ludion_engine::DebugView {
@@ -1531,6 +1535,7 @@ impl From<CliDebugView> for ludion_engine::DebugView {
         match view {
             CliDebugView::SsrConfidence => ludion_engine::DebugView::SsrConfidence,
             CliDebugView::SsrFootprint => ludion_engine::DebugView::SsrFootprint,
+            CliDebugView::ProbeIndex => ludion_engine::DebugView::ProbeIndex,
         }
     }
 }

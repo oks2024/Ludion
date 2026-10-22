@@ -381,8 +381,12 @@ fn debug_view_note(
 ) -> String {
     match (asked, drawn) {
         (Some(_), Some(view)) => format!(" (debug view: {})", view.name()),
-        (Some(view), None) => format!(
+        (Some(view), None) if view.is_ssr() => format!(
             " (debug view: {} not drawn: SSR is off for this frame (PostProcess.ssr is 0, or this quality masks it))",
+            view.name()
+        ),
+        (Some(view), None) => format!(
+            " (debug view: {} not drawn: the scene has no reflection probes)",
             view.name()
         ),
         (None, _) => String::new(),

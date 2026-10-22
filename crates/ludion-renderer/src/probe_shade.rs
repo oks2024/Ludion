@@ -211,4 +211,110 @@ mod tests {
         let probed = r.render(&scene, size).expect("render with a far probe");
         assert!(bare.rgba == probed.rgba, "a probe nobody sees moved a byte");
     }
+
+    /// The render pixel the world point `p` lands on, for a `size`² frame.
+    fn pixel_of(scene: &RenderScene, size: u32, p: Vec3) -> (u32, u32) {
+        let clip = scene.camera.projection * scene.camera.view * p.extend(1.0);
+        let ndc = clip.truncate() / clip.w;
+        let extent = size as f32;
+        (
+            ((ndc.x + 1.0) * 0.5 * extent) as u32,
+            ((1.0 - ndc.y) * 0.5 * extent) as u32,
+        )
+    }
+
+    fn view_pixel(img: &RenderedImage, scene: &RenderScene, p: Vec3) -> [u8; 3] {
+        let (x, y) = pixel_of(scene, img.width, p);
+        pixel(img, x, y)
+    }
+
+    fn box_probe(entity: u32, extent: Vec3, priority: i32) -> ProbeData {
+        ProbeData {
+            entity: EntityId::new(entity, 0),
+            position: Vec3::new(0.0, 4.0, 0.0),
+            rotation: Quat::IDENTITY,
+            volume: ProbeVolume::Box { extent },
+            blend: 0.0,
+            priority,
+        }
+    }
+
+    fn palette_bytes(rank: usize) -> [u8; 3] {
+        crate::PROBE_VIEW_PALETTE[rank].map(|c| (c * 255.0).round() as u8)
+    }
+
+    fn assert_near(got: [u8; 3], want: [u8; 3], what: &str) {
+        let close = got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1);
+        assert!(close, "{what}: got {got:?}, want {want:?}");
+    }
+
+    /// The view paints each pixel with the winning probe's rank colour, gray where the volumes miss
+    /// the surface.
+    #[test]
+    fn needs_gpu_probe_index_view_colors_the_winner() {
+        let Some(r) = renderer_or_skip("the probe index view colours the winner") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = room_scene();
+        scene.debug_view = Some(crate::DebugView::ProbeIndex);
+        let origin = Vec3::ZERO;
+
+        scene.probes = vec![box_probe(1, Vec3::new(15.0, 5.0, 6.0), 0)];
+        let image = r.render(&scene, size).expect("render the view");
+        assert_near(
+            view_pixel(&image, &scene, origin),
+            palette_bytes(0),
+            "the lone box is rank 0",
+        );
+
+        // A higher priority ranks first: the sphere takes rank 0 over its side of the floor and the
+        // box falls to rank 1 elsewhere.
+        let mut sphere = box_probe(2, Vec3::ZERO, 1);
+        sphere.position = Vec3::new(-1.5, 0.0, 0.0);
+        sphere.volume = ProbeVolume::Sphere { radius: 0.8 };
+        scene.probes.push(sphere);
+        let image = r.render(&scene, size).expect("render the view");
+        assert_near(
+            view_pixel(&image, &scene, Vec3::new(-1.5, 0.0, 0.0)),
+            palette_bytes(0),
+            "inside the higher-priority sphere",
+        );
+        assert_near(
+            view_pixel(&image, &scene, origin),
+            palette_bytes(1),
+            "the box outside the sphere",
+        );
+
+        // A box narrowed in z leaves the floor nearer the camera outside every volume.
+        scene.probes = vec![box_probe(1, Vec3::new(15.0, 5.0, 1.0), 0)];
+        let image = r.render(&scene, size).expect("render the view");
+        assert_near(
+            view_pixel(&image, &scene, origin),
+            palette_bytes(0),
+            "inside the narrow box",
+        );
+        assert_near(
+            view_pixel(&image, &scene, Vec3::new(0.0, 0.0, 1.8)),
+            [64, 64, 64],
+            "floor outside every volume",
+        );
+    }
+
+    /// A scene with no probes ignores the view: the frame is the one drawn without it.
+    #[test]
+    fn needs_gpu_a_probe_view_without_probes_draws_the_normal_frame() {
+        let Some(r) = renderer_or_skip("a probe view without probes draws the normal frame") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = room_scene();
+        let plain = r.render(&scene, size).expect("render without a view");
+        scene.debug_view = Some(crate::DebugView::ProbeIndex);
+        let viewed = r.render(&scene, size).expect("render with the view");
+        assert!(
+            plain.rgba == viewed.rgba,
+            "the view moved a byte of a probe-free frame"
+        );
+    }
 }
