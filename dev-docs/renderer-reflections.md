@@ -30,6 +30,7 @@ description: Indirect specular: the reflections blend site, surface targets, lob
 - `transparents` has no pass-timing budget of its own: sprite and particle stress budgets' `scene` lines cover the opaque meshes only.
 - **fp16 residual stands**: the blend adds into `scene` after the opaque pass, so opaque + reflection can pass the half-float max (`hdr_safe` at the readers hides it). The exact fix is a `scene_opaque` target with `reflections` writing `hdr_safe(opaque + s)` unblended; it costs a full-res target and can move bytes, so it lands as a follow-up with the next re-bless.
 - No transparent meshes exist (`L1202` refuses the glTF feature), so only `reflections` calls `sky_specular`.
+- **The parity gate** (`ludion-engine` test `reflection_parity`, decision 27) scores SSR against the probes per roughness band on a fitted box room, over the fully confident floor, against `budgets/reflection-parity-<os>.toml`. It needs no render switch: probe-only is `PostProcess/ssr = 0`, SSR-only is `ssr = 1` with `ssr_fade = [0.9, 1.0]`, and the mask is the `ssr_confidence` view (R byte 255). The fixtures' headers give the `ludion render --set` lines.
 
 ## Verify
 ```
@@ -39,5 +40,6 @@ cargo test -p ludion-renderer needs_gpu_a_sky_filled_source
 cargo test -p ludion-renderer needs_gpu_reflections
 cargo test -p ludion-renderer needs_gpu_metal_reflects
 cargo test -p ludion-renderer needs_gpu_a_reflection_over_a_bright
+cargo nextest run -p ludion-engine --test reflection_parity
 cargo run -p ludion-cli -- dump-graph --scene examples/gallery/night-sky.yaml   # scene → reflections → transparents
 ```

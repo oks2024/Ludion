@@ -1,0 +1,161 @@
+# Feature: Reflections parity gate - the sky-to-probe seam half of `tests/reflection_parity.rs`
+# (`Plan/reflections.md` decision 27). A metallic floor and four emissive pillars under a dim night sky, with one sphere
+# probe over the middle of the floor (the pillars stand beyond its radius, so the floor mask holds floor only). The gate renders it with the probe in place and with the probe moved far away
+# (`/entities/3/components/Transform/translation/1=1000`), SSR off in both, and measures how far the probe's
+# reflection sits from the plain sky fill; the floor's roughness is the band
+# (`/entities/2/components/Mesh/roughness=0.05|0.2|0.35|0.55`).
+# `ludion render --scene <this file> --width 960 --height 540 --debug-view probe_index --out <png>` shows the floor mask.
+format: 1
+name: "reflection-parity-seam - a sphere probe over a metallic floor under a night sky"
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.015
+          - 0.028
+          - 0.075
+        sky_horizon:
+          - 0.07
+          - 0.1
+          - 0.17
+        sky_ground:
+          - 0.008
+          - 0.01
+          - 0.018
+        ibl_intensity: 1.2
+      PostProcess:
+        bloom_strength: 0.0
+        ssr: 0.0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 6.0
+        rotation:
+          - -15.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - -4.0
+        scale:
+          - 60.0
+          - 1.0
+          - 40.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.8
+          - 0.8
+          - 0.8
+          - 1.0
+        roughness: 0.05
+        metallic: 1.0
+  - name: probe
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.5
+          - -4.0
+      ReflectionProbe:
+        shape:
+          sphere:
+            radius: 12.0
+        blend: 0.0
+        priority: 0
+  - name: pillar-1
+    components:
+      Transform:
+        translation:
+          - -9.0
+          - 1.5
+          - -19.0
+        scale:
+          - 1.0
+          - 3.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.45
+          - 0.1
+          - 1.0
+        roughness: 0.6
+        metallic: 0.0
+        emissive: 2.0
+  - name: pillar-2
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 1.5
+          - -22.0
+        scale:
+          - 1.0
+          - 3.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.5
+          - 1.0
+          - 1.0
+        roughness: 0.6
+        metallic: 0.0
+        emissive: 2.0
+  - name: pillar-3
+    components:
+      Transform:
+        translation:
+          - 3.5
+          - 1.5
+          - -20.0
+        scale:
+          - 1.0
+          - 3.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.2
+          - 0.5
+          - 1.0
+        roughness: 0.6
+        metallic: 0.0
+        emissive: 2.0
+  - name: pillar-4
+    components:
+      Transform:
+        translation:
+          - 9.0
+          - 1.5
+          - -23.0
+        scale:
+          - 1.0
+          - 3.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.9
+          - 0.4
+          - 1.0
+        roughness: 0.6
+        metallic: 0.0
+        emissive: 2.0

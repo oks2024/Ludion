@@ -87,6 +87,6 @@ pub use imports::{missing_derived_imports, require_derived_imports};
 pub use report::DiffReport;
 pub use sim_assert::{assert_hash_sequences_match, assert_reaches, hash_sequence, run_until};
 pub use spelling::assert_saves_respell_nothing;
-pub use ssim::{Comparison, TileDiff, TileGrid, TileRect, compare};
+pub use ssim::{Comparison, MaskedSsim, TileDiff, TileGrid, TileRect, compare, masked_ssim};
 pub use stats::{ImageStats, image_stats};
 pub use suite::{DiscoveredTest, SuiteDefaults, SuiteTestResult, discover, run_suite};

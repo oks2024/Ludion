@@ -1,0 +1,504 @@
+# Feature: Reflections parity gate - a closed box room, the SSR-vs-probe half of
+# `tests/reflection_parity.rs` (`Plan/reflections.md` decision 27). A metallic floor reflects emissive slats on a
+# dark room; one box probe is fitted exactly to the interior, so its walls and floor carry full weight.
+# `ssr_fade` is authored (at its default) only so the override pointers resolve. Each image the gate compares is one `ludion render --scene <this file> --width 960 --height 540 --out <png>` away; the floor's
+# roughness is the band (`/entities/1/components/Mesh/roughness=0.05|0.2|0.35|0.55`):
+#   probe-only: --set /entities/0/components/PostProcess/ssr=0
+#   SSR-only:   --set /entities/0/components/PostProcess/ssr=1 --set /entities/0/components/PostProcess/ssr_fade/0=0.9 --set /entities/0/components/PostProcess/ssr_fade/1=1.0
+#   mask:       the SSR-only sets plus `--debug-view ssr_confidence`; a pixel is fully confident where its R byte is 255.
+format: 1
+name: "reflection-parity-room - a closed box room: SSR against its fitted probe"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.6
+          - 1.0
+        rotation:
+          - -20.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+      PostProcess:
+        bloom_strength: 0.0
+        ssr: 1.0
+        ssr_fade:
+          - 0.45
+          - 0.65
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - -3.0
+        scale:
+          - 8.0
+          - 1.0
+          - 10.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.8
+          - 0.8
+          - 0.8
+          - 1.0
+        roughness: 0.05
+        metallic: 1.0
+  - name: wall-back
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.5
+          - -8.2
+        scale:
+          - 8.8
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.35
+          - 0.38
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+  - name: wall-front
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.5
+          - 2.2
+        scale:
+          - 8.8
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.35
+          - 0.38
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+  - name: wall-left
+    components:
+      Transform:
+        translation:
+          - -4.2
+          - 1.5
+          - -3.0
+        scale:
+          - 0.4
+          - 3.0
+          - 10.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.35
+          - 0.38
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+  - name: wall-right
+    components:
+      Transform:
+        translation:
+          - 4.2
+          - 1.5
+          - -3.0
+        scale:
+          - 0.4
+          - 3.0
+          - 10.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.35
+          - 0.38
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+  - name: ceiling
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.2
+          - -3.0
+        scale:
+          - 8.8
+          - 0.4
+          - 10.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.35
+          - 0.38
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+  - name: probe
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.5
+          - -3.0
+      ReflectionProbe:
+        shape:
+          box:
+            extent:
+              - 4.0
+              - 1.5
+              - 5.0
+        blend: 0.0
+        priority: 0
+  - name: slat-back-0
+    components:
+      Transform:
+        translation:
+          - -3.5
+          - 1.5
+          - -7.975
+        scale:
+          - 0.6
+          - 2.8
+          - 0.05
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.45
+          - 0.1
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-back-1
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 1.5
+          - -7.975
+        scale:
+          - 0.6
+          - 2.8
+          - 0.05
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.5
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-back-2
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 1.5
+          - -7.975
+        scale:
+          - 0.6
+          - 2.8
+          - 0.05
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.45
+          - 0.1
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-back-3
+    components:
+      Transform:
+        translation:
+          - -0.5
+          - 1.5
+          - -7.975
+        scale:
+          - 0.6
+          - 2.8
+          - 0.05
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.5
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-back-4
+    components:
+      Transform:
+        translation:
+          - 0.5
+          - 1.5
+          - -7.975
+        scale:
+          - 0.6
+          - 2.8
+          - 0.05
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.45
+          - 0.1
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-back-5
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 1.5
+          - -7.975
+        scale:
+          - 0.6
+          - 2.8
+          - 0.05
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.5
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-back-6
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 1.5
+          - -7.975
+        scale:
+          - 0.6
+          - 2.8
+          - 0.05
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.45
+          - 0.1
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-back-7
+    components:
+      Transform:
+        translation:
+          - 3.5
+          - 1.5
+          - -7.975
+        scale:
+          - 0.6
+          - 2.8
+          - 0.05
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.5
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-left-0
+    components:
+      Transform:
+        translation:
+          - -3.975
+          - 1.5
+          - -7.0
+        scale:
+          - 0.05
+          - 2.8
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.45
+          - 0.1
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-left-1
+    components:
+      Transform:
+        translation:
+          - -3.975
+          - 1.5
+          - -5.0
+        scale:
+          - 0.05
+          - 2.8
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.5
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-left-2
+    components:
+      Transform:
+        translation:
+          - -3.975
+          - 1.5
+          - -3.0
+        scale:
+          - 0.05
+          - 2.8
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.45
+          - 0.1
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-left-3
+    components:
+      Transform:
+        translation:
+          - -3.975
+          - 1.5
+          - -1.0
+        scale:
+          - 0.05
+          - 2.8
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.5
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-right-0
+    components:
+      Transform:
+        translation:
+          - 3.975
+          - 1.5
+          - -7.0
+        scale:
+          - 0.05
+          - 2.8
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.5
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-right-1
+    components:
+      Transform:
+        translation:
+          - 3.975
+          - 1.5
+          - -5.0
+        scale:
+          - 0.05
+          - 2.8
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.45
+          - 0.1
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-right-2
+    components:
+      Transform:
+        translation:
+          - 3.975
+          - 1.5
+          - -3.0
+        scale:
+          - 0.05
+          - 2.8
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.5
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0
+  - name: slat-right-3
+    components:
+      Transform:
+        translation:
+          - 3.975
+          - 1.5
+          - -1.0
+        scale:
+          - 0.05
+          - 2.8
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.45
+          - 0.1
+          - 1.0
+        roughness: 1.0
+        metallic: 0.0
+        emissive: 3.0

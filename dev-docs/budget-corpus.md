@@ -60,6 +60,14 @@ description: Catalogue of budgets/ files: calibration scene, gated keys and meas
   GPUs render different bytes: the sets agree to within 0.003 on `edge_aliasing` but diverge up to
   29x on `banding_score` for flat-background content (`text.png`: 0.0090 on the RTX 3090, 0.2632 on
   the M4) — both files' headers record the sub-LSB-dither mechanism.
+- `budgets/reflection-parity-<os>.toml` — the reflection parity gate's floors
+  (`ludion-engine`'s `reflection_parity` test, `Plan/reflections.md` decision 27): per roughness band,
+  the SSIM between the SSR-only and probe-only floor of a fitted box room, over the pixels where SSR is
+  fully confident. The rule is `image-stats`' (the value is a pure function of one machine's render, so
+  each floor sits a flat `margin` = 0.02 below the measurement); per-OS because GPU float differs.
+  The sky-to-probe seam is recorded beside the bands, never checked. Re-calibrate with
+  `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity`; macOS was calibrated on
+  an unpinned M5, and a pinned OS with no file fails the test until it is calibrated.
 - `games/vigil/budgets/pinned-rtx3090.toml` / `pinned-apple-m4.toml` — vigil's own E6 gate (vigil is the private reference game: its files exist only in the Lore tree, absent from a public clone) over
   `scenes/budget-horde.yaml` (the generated 3x-scale, 500-enemy/300-projectile/200-pickup horde),
   checked **in-process**, from `games/vigil/`: `cargo run --release -p vigil -- --scene scenes/budget-horde.yaml

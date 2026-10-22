@@ -2815,7 +2815,7 @@ entities:
 
     /// Every committed profile budget (`budgets/*.toml`, `games/*/budgets/*.toml`) parses under
     /// `deny_unknown_fields` and names only producible passes and groups, so a pass rename fails
-    /// here on every push rather than on the next pinned-box run. The `image-stats-*` files are a
+    /// here on every push rather than on the next pinned-box run. The `image-stats-*` and `reflection-parity-*` files are a
     /// different schema.
     #[test]
     fn committed_budget_files_parse_and_name_producible_keys() {
@@ -2829,9 +2829,10 @@ entities:
             for entry in std::fs::read_dir(dir).expect("readable budgets dir") {
                 let path = entry.expect("readable entry").path();
                 let is_budget = path.extension().is_some_and(|ext| ext == "toml")
-                    && !path
-                        .file_name()
-                        .is_some_and(|name| name.to_string_lossy().starts_with("image-stats"));
+                    && !path.file_name().is_some_and(|name| {
+                        let name = name.to_string_lossy();
+                        name.starts_with("image-stats") || name.starts_with("reflection-parity")
+                    });
                 if is_budget {
                     files.push(path);
                 }

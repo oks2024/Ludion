@@ -143,6 +143,7 @@ pub fn compare(a: &DecodedImage, b: &DecodedImage) -> Comparison {
         height as usize,
         &cols,
         &rows,
+        None,
     );
     let color_errors = tile_color_errors(a, b, &cols, &rows);
 
@@ -198,6 +199,47 @@ pub fn compare(a: &DecodedImage, b: &DecodedImage) -> Comparison {
         },
         tiles,
     }
+}
+
+/// The result of [`masked_ssim`].
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct MaskedSsim {
+    /// The mean window SSIM over the windows lying wholly inside the mask.
+    pub ssim: f64,
+    /// How many windows that is.
+    pub windows: usize,
+}
+
+/// The mean SSIM of the 11×11 windows lying wholly inside `mask` (row-major, one flag per pixel),
+/// scored exactly as [`compare`] scores them. A mask's edge is eroded by the window for free.
+/// `None` when no window qualifies. Panics on a size mismatch between the images or the mask.
+pub fn masked_ssim(a: &DecodedImage, b: &DecodedImage, mask: &[bool]) -> Option<MaskedSsim> {
+    assert_eq!(
+        (a.width, a.height),
+        (b.width, b.height),
+        "masked_ssim() requires equal dimensions"
+    );
+    assert_eq!(
+        mask.len(),
+        a.width as usize * a.height as usize,
+        "masked_ssim() requires one mask flag per pixel"
+    );
+    let (width, height) = (a.width as usize, a.height as usize);
+    let cols = tile_bounds(a.width);
+    let rows = tile_bounds(a.height);
+    let windowed = windowed_ssim(
+        &luma_plane(a),
+        &luma_plane(b),
+        width,
+        height,
+        &cols,
+        &rows,
+        Some(mask),
+    );
+    (windowed.count > 0).then(|| MaskedSsim {
+        ssim: windowed.sum / windowed.count as f64,
+        windows: windowed.count as usize,
+    })
 }
 
 /// Mean absolute difference per channel (R, G, B, A), 0–255 scale, over every pixel.
@@ -282,6 +324,7 @@ fn windowed_ssim(
     height: usize,
     cols: &[(u32, u32)],
     rows: &[(u32, u32)],
+    mask: Option<&[bool]>,
 ) -> Windowed {
     let mut result = Windowed {
         sum: 0.0,
@@ -295,6 +338,7 @@ fn windowed_ssim(
     let out_h = height - (WINDOW - 1);
     let col_tile = tile_index_per_pixel(cols);
     let row_tile = tile_index_per_pixel(rows);
+    let inside = mask.map(|m| mask_window_counts(m, width, height));
 
     let mut planes: [Vec<f64>; 5] = std::array::from_fn(|_| vec![0.0; out_w * height]);
     let mut moments: [Vec<f64>; 5] = std::array::from_fn(|_| vec![0.0; width]);
@@ -335,6 +379,11 @@ fn windowed_ssim(
         }
         let tile_row = row_tile[oy + RADIUS] * cols.len();
         for ox in 0..out_w {
+            if let Some(counts) = &inside
+                && counts[oy * out_w + ox] != (WINDOW * WINDOW) as u32
+            {
+                continue;
+            }
             let (mean_a, mean_b) = (acc[0][ox], acc[1][ox]);
             let var_a = (acc[2][ox] - mean_a * mean_a).max(0.0);
             let var_b = (acc[3][ox] - mean_b * mean_b).max(0.0);
@@ -350,6 +399,33 @@ fn windowed_ssim(
         }
     }
     result
+}
+
+/// For every window position (row-major over the `(width - 10) × (height - 10)` grid), how many of
+/// its 121 pixels the mask covers; a window lies wholly inside the mask when it counts all of them.
+fn mask_window_counts(mask: &[bool], width: usize, height: usize) -> Vec<u32> {
+    let (out_w, out_h) = (width - (WINDOW - 1), height - (WINDOW - 1));
+    let stride = width + 1;
+    let mut integral = vec![0u32; stride * (height + 1)];
+    for y in 0..height {
+        let mut row = 0;
+        for x in 0..width {
+            row += u32::from(mask[y * width + x]);
+            integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + row;
+        }
+    }
+    let mut counts = Vec::with_capacity(out_w * out_h);
+    for y in 0..out_h {
+        for x in 0..out_w {
+            let (x1, y1) = (x + WINDOW, y + WINDOW);
+            counts.push(
+                integral[y1 * stride + x1] + integral[y * stride + x]
+                    - integral[y * stride + x1]
+                    - integral[y1 * stride + x],
+            );
+        }
+    }
+    counts
 }
 
 /// The SSIM index from one window's moments.
@@ -671,5 +747,47 @@ mod tests {
         let b = solid(10, 40, [0, 0, 0, 255]);
         let result = compare(&a, &b);
         assert!(result.ssim < 0.5, "{}", result.ssim);
+    }
+
+    fn rect_mask(width: u32, height: u32, x0: u32, y0: u32, w: u32, h: u32) -> Vec<bool> {
+        (0..height)
+            .flat_map(|y| {
+                (0..width).map(move |x| (x0..x0 + w).contains(&x) && (y0..y0 + h).contains(&y))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn masked_identical_images_score_one_over_the_expected_windows() {
+        let image = noise(64, 64, 3);
+        let mask = rect_mask(64, 64, 10, 10, 20, 20);
+        let result = masked_ssim(&image, &image, &mask).unwrap();
+        assert_eq!(result.ssim, 1.0);
+        assert_eq!(result.windows, 100);
+    }
+
+    #[test]
+    fn an_empty_mask_has_no_score() {
+        let image = noise(32, 32, 3);
+        assert_eq!(masked_ssim(&image, &image, &vec![false; 32 * 32]), None);
+        // A mask smaller than one window has none either.
+        assert_eq!(
+            masked_ssim(&image, &image, &rect_mask(32, 32, 4, 4, 10, 10)),
+            None
+        );
+    }
+
+    #[test]
+    fn masked_ssim_ignores_damage_outside_and_sees_damage_inside() {
+        let a = noise(64, 64, 3);
+        let mask = rect_mask(64, 64, 10, 10, 20, 20);
+        let mut outside = a.clone();
+        outside.rgba[..3].copy_from_slice(&[255, 0, 0]);
+        assert_eq!(masked_ssim(&a, &outside, &mask).unwrap().ssim, 1.0);
+
+        let mut inside = a.clone();
+        let i = (20 * 64 + 20) * 4;
+        inside.rgba[i..i + 3].copy_from_slice(&[0, 0, 0]);
+        assert!(masked_ssim(&a, &inside, &mask).unwrap().ssim < 1.0);
     }
 }
