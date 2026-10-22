@@ -159,6 +159,17 @@ export const ARCHETYPES: readonly Archetype[] = [
       ParticleEmitter: {},
     },
   },
+  {
+    // reflection-probe: a box at room scale a little above the floor, so the volume reaches below it.
+    // Resize `extent` in the inspector; the engine captures the probe on spawn, no bake step.
+    id: 'reflection-probe',
+    label: 'Reflection probe',
+    name: 'Reflection probe',
+    components: {
+      Transform: { translation: [0, 2, 0] },
+      ReflectionProbe: { shape: { box: { extent: [4, 2, 4] } }, blend: 0.5, priority: 0 },
+    },
+  },
 ];
 
 /** Builds the `entity.spawn` command for an archetype (name param + default components). */

@@ -213,3 +213,6 @@ Under StrictMode `tauri dev`, the engine's `stream.subscribe` count shows **one 
 **Pattern tab:** with a pattern open, edit the file from the terminal, then nudge a field: the conflict banner appears (Reload / Keep mine) and the terminal edit survives until a choice. **Drag a slider and switch documents mid-drag** in the Pattern tab, the Voxel Artist (palette drag) and the Models view (sculpt slider): the old file holds the last dragged value, the new file is untouched.
 
 **Generation children:** start a generate run, then close the editor: no `cargo` or `ludion gen` process survives (Task Manager / `ps`). On macOS, also note what a force-killed (SIGKILL) editor leaves: its process-group children are orphaned by design of the tree kill; record whether that is acceptable.
+
+## Reflection probe archetype
+Place **Reflection probe** from the Level Designer palette inside a room with a glossy floor: after the capture, the floor's reflection shows the room's walls instead of the sky. Edit `extent` in the inspector: the reflection's parallax follows, with no rebake prompt.

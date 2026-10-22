@@ -183,3 +183,4 @@ table above.
 - `ludion docs materials` — the three material scalars.
 - `ludion docs atmosphere` — fog and light shafts as one participating medium.
 - `ludion docs post-processing` — the imaging chain.
+- `ludion docs reflection-probes` — captured reflections that replace the sky inside a volume.

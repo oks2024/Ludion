@@ -107,8 +107,8 @@ cargo run -p ludion-cli -- serve --scene crates/ludion-cli/tests/fixtures/good.y
 - The package is `ludion-cli` but the binary is `ludion` (`[[bin]] name = "ludion"`); in integration
   tests that is `env!("CARGO_BIN_EXE_ludion")`, not `..._ludion-cli`. Clap derives kebab-case names
   from variants: `CheckScene` → `check-scene`, `DumpGraph` → `dump-graph`.
-- `ludion render --debug-view ssr_confidence|ssr_footprint|probe_index` draws the SSR trace, or the winning reflection probe per pixel, instead of the picture (scene mode only); it never turns its effect on, and the summary line says when the normal frame was drawn (`ludion devdocs renderer-reflections`).
-- `ludion render --dump-probes <dir>` writes each reflection probe's captured and prefiltered strips and `probes.json` (scene mode, needs a GPU, captures fresh, never touches the store; `ludion devdocs renderer-reflections`).
+- `ludion render --debug-view ssr_confidence|ssr_footprint|probe_index` draws the SSR trace, or the winning reflection probe per pixel, instead of the picture (scene mode only); it never turns its effect on, and the summary line says when the normal frame was drawn (`ludion devdocs renderer-ssr`, `ludion devdocs renderer-probes`).
+- `ludion render --dump-probes <dir>` writes each reflection probe's captured and prefiltered strips and `probes.json` (scene mode, needs a GPU, captures fresh, never touches the store; `ludion devdocs renderer-probes`).
 - `ludion-cli` carries the *strict* determinism clippy denylist even though it is a leaf bin — no
   `std::collections::HashMap` or `Instant::now` in CLI code either.
 - **The CLI links no game code, and three limits follow.** `sim-hash` runs no game systems, so world

@@ -171,5 +171,6 @@ whole roster and records, in its header, the sweep or the measurement behind eve
 - `ludion docs atmosphere` — fog and light shafts as one participating medium.
 - `ludion docs lighting` — the sun and its shadow map.
 - `ludion docs environment` — the sky and image-based lighting.
+- `ludion docs reflection-probes` — the captured reflections `ssr` blends over.
 - `ludion docs materials` — the three material scalars.
 - `ludion docs verify-loop` — the golden-image gate any change here moves.

@@ -19,6 +19,7 @@ describe('palette archetypes', () => {
       'hud-panel',
       'ui-list',
       'particles',
+      'reflection-probe',
     ]);
   });
 
@@ -48,6 +49,14 @@ describe('palette archetypes', () => {
     const light = spot.components.SpotLight as { inner_angle: number; outer_angle: number };
     expect(light.inner_angle).toBeLessThanOrEqual(light.outer_angle);
     expect(spot.components).not.toHaveProperty('GiDynamic');
+  });
+
+  it('ships the Reflection probe archetype with a positive box extent and a non-negative blend', () => {
+    const probe = ARCHETYPES.find((a) => a.id === 'reflection-probe')!;
+    const p = probe.components.ReflectionProbe as { shape: { box: { extent: number[] } }; blend: number };
+    expect(p.shape.box.extent).toHaveLength(3);
+    for (const e of p.shape.box.extent) expect(e).toBeGreaterThan(0);
+    expect(p.blend).toBeGreaterThanOrEqual(0);
   });
 
   it('ships the Text archetype with non-empty required text', () => {

@@ -1,0 +1,111 @@
+---
+description: Placing reflection probes: shapes, rank, blend, the probe store, bakes and their diagnostics
+---
+
+# Reflection probes
+
+**Scope:** The `ReflectionProbe` component — a captured cube of the scene that glossy and metallic
+surfaces inside its volume reflect, with parallax, in place of the sky. How to place probes, how they
+rank and blend, and the probe store and bake commands. The sky they fall back to is
+`ludion docs environment`; the optional screen-space trace blended over them is
+`ludion docs post-processing`; shipping the store is `ludion docs export`.
+
+A scene with no probe reflects the procedural sky alone. A probe adds a reflection of its
+surroundings — walls, props, lamps — inside its volume, and the sky fills whatever it does not
+cover. Probes are authored text; the captured pixels are derived and never committed.
+
+## The loop
+
+1. Place a `ReflectionProbe` entity: the `Transform` is the capture point (and a box's orientation).
+2. `ludion check-scene <scene>` — `L1274`–`L1278` name a bad volume, an overlap or a duplicate.
+3. `ludion render --scene <scene> --out probes.png`, then again with `--debug-view probe_index` to see
+   which probe owns each pixel (coloured by rank, gray where none does, black where there is no
+   surface). `ludion render --dump-probes <dir>` writes each captured cube and `probes.json`.
+   The `probes` debug-draw category (`ludion docs debug-draw`) outlines each volume live.
+4. `ludion bake-probes <scene>` fills the probe store for a CLI-loadable scene (`--probe <Name>`
+   recaptures one, `--json` for tooling); a game's scene is baked by the game binary's
+   `--bake-probes` (with `--bake-probe <Name>`), because the CLI cannot load a game's components.
+   `ludion sync` warms the store for every scene the CLI can load.
+5. `run`, `serve` and `dev` read the store; `--probes rebake` captures afresh and leaves it alone.
+   A probe added or edited in a live session is captured on the spot — no bake step.
+
+## Format
+
+```yaml
+  - name: room-probe
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 1.0
+          - -1.0
+      ReflectionProbe:
+        shape:
+          box:
+            extent:
+              - 3.0
+              - 2.0
+              - 3.0
+        blend: 0.25
+        priority: 0
+```
+
+(from `examples/gallery/probe-rooms.yaml`, which pairs it with a sphere probe over open floor.)
+
+| Field | Meaning | Default | Valid |
+| --- | --- | --- | --- |
+| `shape: { box: { extent: [hx, hy, hz] } }` | an oriented box; `extent` is **half**-extents along the probe's axes | `[2, 2, 2]` | each `> 0`, else `L1274` |
+| `shape: { sphere: { radius: r } }` | a sphere about the probe's position | `2` | `> 0`, else `L1274` |
+| `blend` | world units of inward fade from the boundary | `0.5` | `>= 0`, else `L1274` |
+| `priority` | higher wins where volumes overlap | `0` | integer |
+
+`Transform.translation` is the capture point, and the parallax correction projects the reflection
+onto the volume from there. `Transform.scale` is ignored — size the shape, never the transform.
+
+## Rules
+
+- **Fit a box to its room.** Set `extent` to the room's inner half-size and centre the probe in it:
+  the box faces then sit on the walls and the reflection parallaxes exactly. A box wider than the
+  room smears the walls; a sphere suits open areas, where no wall defines a box.
+- **Extend the volume past the floor.** A surface lying exactly on a volume face gets no coverage
+  (the `blend` fade is zero there), so the room's own floor reflects the sky unless the box reaches
+  below it — centre the probe a little above the floor and let `extent.y` cover it.
+- **Rank is static, never camera distance:** `priority` descending, then boxes before spheres, then
+  the smaller volume, then entity id. Up to 4 probes cover one pixel; each adds its weight times
+  what coverage is left, and the sky fills the rest. With `PostProcess.ssr > 0` the screen-space
+  trace blends over the probe-and-sky result.
+- **Use `priority`** for a small probe nested in a larger one (a lamp-lit alcove in a hall): the
+  nested one gets the higher number. Equal priority and volume overlapping is `L1275`; a probe wholly
+  inside a higher-ranked probe's full-weight core (its volume shrunk by its `blend`) never shows,
+  `L1276`; two probes with the same shape, size and pose are a copy-paste, `L1277`.
+- **At most 32 probes per scene** (`L1278`). Merge neighbours into larger volumes.
+- **A capture holds what the world looks like at load** — meshes, the sky and the lighting. Sprites,
+  particles, text and editor markers are absent, and a prop that moves later does not move in it.
+  Its sky-visible part scales with `Environment.ibl_intensity`.
+- **`shape`, `blend` and `priority` never recapture** — they only change how the cube is projected
+  and weighted. Moving the probe or changing what it sees (geometry, lights, `Environment`, the
+  textures, the quality) does, and gives a new store key.
+- **The store is per-machine, derived and ignored** — `.ludion/cooked/probes/` beside the project;
+  only the text is committed. `ludion render` and `ludion test` never read it: they capture fresh,
+  so a golden never depends on whether a store exists. Hosts read it and capture on a miss.
+- **Export ships the store:** `ludion export` bakes every probe of every shipped scene against the
+  written bundle at the target's quality; a missing entry is `L1281`.
+
+## Gotchas
+
+- A host run with `--textures source` misses the entries a bake wrote (bakes use cooked textures) and
+  warns `L1279` for every probe it captures — drop the flag, or accept the load-time cost.
+- `L1279` is a warning, not a failure: the pixels are the same, the load is slower. Bake the store, or
+  pass `--probes rebake` while iterating on a look.
+- `ludion bake-probes` on a game's scene fails `L1013`; use the game binary's `--bake-probes`.
+- `--probe`/`--bake-probe` take a `Name`; an unnamed probe cannot be forced, and an unknown name is
+  `L1280`.
+- A bake is keyed by the quality it ran at (`--quality`); bake at the quality the game will run.
+
+## Next
+
+- `ludion docs environment` — the sky probes fall back to.
+- `ludion docs post-processing` — `ssr`, the trace blended over probes.
+- `ludion docs export` — shipping a baked store.
+- `ludion docs debug-draw` — the `probes` category and the `probe_index` view over the wire.
+- `ludion docs components` — every component at a glance.
