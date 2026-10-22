@@ -1,6 +1,6 @@
 # Plan: Reflections — screen-space reflections over box and sphere probes
 
-> Status: **W1 mechanized (2026-10-20); W2 mechanized (2026-10-22); W3 waits on the user's word.** Design settled 2026-10-19. Decisions come from a grilling session with
+> Status: **W1 mechanized (2026-10-20); W2 mechanized (2026-10-22); W3 mechanized (2026-10-22); W4 waits on the user's word.** Design settled 2026-10-19. Decisions come from a grilling session with
 > the user on 2026-10-19. Current-code facts were read from the tree on that date; the file:line
 > pointers are from that date too, so re-grep before editing. This plan answers
 > `Plan/post-process-pipeline.md`'s deferred "Screen-space reflections" entry.
@@ -363,6 +363,29 @@ interiors**. Large open water is not a driver.
   `ssr_scale` and `ibl_specular_size`. `L1273` validates the authored fields. Every SSR-off golden is
   byte-identical. Owed: `examples/gallery/mirror-floor.yaml`'s golden on both pinned boxes and the 1080p
   pass time on the reference box (the Wave 2 Exit), in `Plan/owed.md`.
+- W3 (2026-10-22): reflection probes. `ReflectionProbe { shape: box | sphere, blend, priority }` ranks by a
+  static key (priority, then boxes before spheres, then smaller volume, then entity id); scene checks
+  L1274–L1278 cover invalid shapes, equal-rank overlaps, shadowed probes, near-duplicates and the 32-probe
+  cap. Each probe captures six world-axis faces of the world at frame 0 (meshes, sky, all lighting; sky
+  visibility in alpha) and prefilters them through the chain the sky cube uses into a slotted cube array.
+  `reflections` resolves probes between SSR and the sky: a per-cell rank bitmask in the clustered grid, at
+  most four probes per pixel by coverage accumulation, box and sphere parallax, and only the sky-visible
+  fraction scaled by `ibl_intensity` so the hand-off to the sky fill matches. The content-addressed store
+  (`.ludion/cooked/probes/`, KTX2) is keyed on the extracted capture input, the quality, the shader code and a
+  bake version; hosts load from it and capture on a miss (L1279), verification paths always capture fresh.
+  Commands: `ludion bake-probes` and a game binary's `--bake-probes` mode, `sync` warming, `--probes rebake`,
+  and `export` baking against the bundle at the target quality (L1281 on a missing entry). Observability:
+  `--dump-probes`, the `probe_index` view and a `probes` debug-draw category (CLI and wire), probe bake time
+  and hits in `ProfileReport`. The SSR trace's comb fringes were fixed on the way (level-0 hits resolve
+  against the render pixels). Decisions taken in implementation: the store key carries no GPU adapter (the
+  store is per machine; export bakes on the host like cooked textures, exact on one machine and within GPU
+  float noise across machines); the probe face size reuses `ibl_specular_size`; shape, blend and priority
+  never rebake. Known limits: a box fitted exactly to its walls gives those walls no weight (to be judged
+  with decision 27's parity scene, against the deferred separate projection box); a probe re-frozen after a
+  mid-session reload or a dev restore is keyed correctly but won't match a cold boot's entry. Owed:
+  `examples/gallery/probe-rooms.yaml`'s golden on both pinned boxes and the cold-store capture cost, in
+  `Plan/owed.md`. The Exit's reference-game district check moves to W4 with the real probe placement
+  (user, 2026-10-22).
 
 ## Deferred, with triggers
 

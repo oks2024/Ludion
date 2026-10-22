@@ -29,7 +29,7 @@ The name: a *ludion* is a Cartesian diver — a sealed figure that responds inst
 - `Plan/mesh-texture-editing.md` — W1–W2 mechanized (`kind: mesh-edit` op lists, `ludion-mesh-edit`, `ludion mesh pick`/`apply`); checkpoint 2 passed, the fill kept; Wave 3 waits on the user's word.
 - `Plan/font-assets.md` — W1–W3 mechanized (`layout()`, TTF bake, `font` field, SDF); W4 breakout on Inter, external adoption.
 - `Plan/textured-pbr.md` — W1–W4 mechanized; the exit gate's human look owed.
-- `Plan/reflections.md` — W1–W2 mechanized (the `reflections` blend site; opt-in Hi-Z SSR, `PostProcess.ssr`); re-blesses owed; W3 waits on the user's word.
+- `Plan/reflections.md` — W1–W3 mechanized (the `reflections` blend site; opt-in Hi-Z SSR; `ReflectionProbe` with a content-addressed store); re-blesses owed; W4 waits on the user's word.
 - `Plan/spot-light.md` — W1–W3 mechanized (`SpotLight`); look owed.
 - `Plan/editor-stage-camera.md` — W1–W4 mechanized (`render.view`, a free editor camera); the live smoke owed.
 - `Plan/transform-hierarchy-and-prefabs.md` — W0–W4 mechanized (`Parent`-local `Transform`, `kind: prefab`, `prefab.*`); live smoke and Exit owed.
@@ -63,7 +63,7 @@ Full detail in `engine-architecture.md`; headlines:
 - **Scene/data model:** custom ECS (freeze-listed, milestone-minimal) + strict-subset YAML 1.2 scenes with a canonical writer; JSON on the wire; TOML for the project manifest. JSON Schema generated from the component registry validates file and wire payloads.
 - **Editor:** Tauri + React, out-of-process protocol client; TS protocol types generated from JSON Schema in CI. The human viewport and the agent screenshot query are the same frame-streaming endpoint.
 - **Scripting/hot reload:** game crates are bins; `ludion dev` does recompile + restart-with-state-snapshot (`engine.snapshot`/`engine.restore`). No dylib reload.
-- **CLI (bin `ludion`; `--help` and `ludion devdocs ludion-cli` have the detail):** `new`, `check-scene`, `render`, `test`, `profile`, `dump-graph`, `explain`, `replay`, `sim-hash`, `serve` (hosts a scene over the wire), `dev`, `docs` / `devdocs`, `image-stats`; the pipeline verbs `import` (glTF → canonical text; PNG → `kind: sprite`), `generate-map` / `map-check`, `generate-atlas`, `gen` (ComfyUI recipes → runs → sheet → accept), `sync` (a project's `[[import]]` tables → ignored derived trees); the write-side verbs `voxel`, `sculpt`, `mesh` (`pick`, `apply`); `export` (an Xcode project for `ios`/`ios-sim`, `--run` on the simulator).
+- **CLI (bin `ludion`; `--help` and `ludion devdocs ludion-cli` have the detail):** `new`, `check-scene`, `render`, `test`, `profile`, `dump-graph`, `explain`, `replay`, `sim-hash`, `serve` (hosts a scene over the wire), `dev`, `docs` / `devdocs`, `image-stats`; the pipeline verbs `import` (glTF → canonical text; PNG → `kind: sprite`), `generate-map` / `map-check`, `generate-atlas`, `gen` (ComfyUI recipes → runs → sheet → accept), `bake-probes` (reflection probes → the ignored store), `sync` (a project's `[[import]]` tables → ignored derived trees); the write-side verbs `voxel`, `sculpt`, `mesh` (`pick`, `apply`); `export` (an Xcode project for `ios`/`ios-sim`, `--run` on the simulator).
 
 ## Deferred — do not build yet
 
