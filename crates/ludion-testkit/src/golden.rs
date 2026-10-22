@@ -403,6 +403,7 @@ impl GoldenTest {
                     &[],
                     self.frames,
                     &ludion_engine::DebugCategories::None,
+                    None,
                 )?;
                 (outcome.image, outcome.adapter)
             }

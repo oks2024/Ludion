@@ -1233,6 +1233,7 @@ fn extract_inner(
         sprites,
         ground_markers: extract_ground_markers(world, &ids, &mut poses),
         debug_lines: Vec::new(),
+        debug_view: None,
         particles: extract_particles(
             world,
             &ids,

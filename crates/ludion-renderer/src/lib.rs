@@ -56,6 +56,7 @@ mod mipgen;
 mod quality;
 mod render;
 mod scene;
+mod ssr_debug;
 mod ssr_pyramid;
 mod ssr_trace;
 mod voxel_bake;
@@ -78,6 +79,7 @@ pub use scene::{
     RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunData, TextRun,
     TextureImage, TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
 };
+pub use ssr_debug::DebugView;
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`
 // directly.

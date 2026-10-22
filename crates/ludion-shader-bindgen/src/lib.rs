@@ -86,6 +86,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "sprite.wgsl",
     "ssao.wgsl",
     "ssr_color.wgsl",
+    "ssr_debug.wgsl",
     "ssr_trace.wgsl",
     "text.wgsl",
     "threshold.wgsl",
@@ -146,6 +147,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "medium.wgsl",
             "sky_gradient.wgsl",
             "hdr.wgsl",
+            "srgb.wgsl",
         ],
     ),
     ("debug_line.wgsl", &["camera.wgsl"]),
@@ -179,6 +181,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         "ssr_color.wgsl",
         &["fullscreen_vs.wgsl", "hdr.wgsl", "footprint.wgsl"],
     ),
+    ("ssr_debug.wgsl", &["fullscreen_vs.wgsl", "srgb.wgsl"]),
     (
         "ssr_trace.wgsl",
         &["fullscreen_vs.wgsl", "hdr.wgsl", "lobe.wgsl", "ssr.wgsl"],

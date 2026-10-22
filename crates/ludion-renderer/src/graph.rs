@@ -101,7 +101,8 @@
 //! at the trace extent (output × [`QualityParams::ssr_scale`]): `hiz` (`R32Float`, a per-cell min-Z of `scene_depth`) and
 //! `ssr_color` (`Rgba16Float`, the opaque `scene` pre-convolved per mip), each a seed pass plus one
 //! reduce pass per further mip. The `ssr_trace` pass then marches a ray per trace texel through them
-//! into `ssr_trace` (`Rgba16Float`: radiance and confidence); nothing reads it yet.
+//! into `ssr_trace` (`Rgba16Float`: radiance and confidence), which `reflections` blends. With
+//! [`PostChain::ssr_view`] set, [`pass::SSR_DEBUG`] replaces `composite` and draws the trace itself.
 //!
 //! ```text
 //! scene ─► hiz_seed ─► hiz_reduce_1 ─► … ─► ssr_color_seed ─► ssr_color_reduce_1 ─► … ─► ssr_trace ─► reflections
@@ -172,6 +173,9 @@ pub mod pass {
     /// The SSR trace: one mirror ray per trace texel marched through `hiz`, written to `ssr_trace` as
     /// radiance and confidence. Reads both pyramids whole, the opaque normal and the depth.
     pub const SSR_TRACE: &str = "ssr_trace";
+    /// A full-screen view of the trace (`ludion render --debug-view`): replaces `composite`, reads
+    /// `ssr_trace` and writes the same target.
+    pub const SSR_DEBUG: &str = "ssr_debug";
     /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
     /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.
     pub const TRANSPARENTS: &str = "transparents";
@@ -546,6 +550,10 @@ pub struct PostChain {
     /// It carries the scale for the reason [`shadow_map`](PostChain::shadow_map) carries its edge: a
     /// resource's extent is graph structure.
     pub ssr: Option<f32>,
+    /// A full-screen view of the SSR trace: [`pass::SSR_DEBUG`] replaces `composite`, writing the
+    /// same target. Only ever set with [`ssr`](PostChain::ssr): a view never turns the trace on, so
+    /// `for_scene` and `masked` drop it whenever SSR is absent.
+    pub ssr_view: Option<crate::DebugView>,
 }
 
 impl PostChain {
@@ -588,6 +596,9 @@ impl PostChain {
                 .post
                 .is_some_and(|post| post.ssr > 0.0)
                 .then_some(QualityParams::FULL.ssr_scale),
+            ssr_view: scene
+                .debug_view
+                .filter(|_| scene.post.is_some_and(|post| post.ssr > 0.0)),
         }
     }
 
@@ -620,6 +631,7 @@ impl PostChain {
             dof: self.dof && quality.dof,
             // Off removes the trace and its pyramids; on re-sizes them to this machine's extent.
             ssr: self.ssr.filter(|_| quality.ssr).map(|_| params.ssr_scale),
+            ssr_view: self.ssr_view.filter(|_| self.ssr.is_some() && quality.ssr),
             // Off removes the pass and its volume; on re-lays the lattice at this machine's coarser
             // probe spacing, which only ever removes probes (`gi_bake::scaled_probe_count`). The
             // spacing itself cancels out of that arithmetic, which is what lets a scene-free
@@ -1029,12 +1041,22 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     let mut composite_reads = vec![scene, bloom, scene_depth];
     composite_reads.extend(shafts_term);
     composite_reads.extend(dof_term);
-    graph.add_external_pass(
-        pass::COMPOSITE,
-        pass::COMPOSITE,
-        composite_reads,
-        vec![composited],
-    );
+    // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
+    // and dof still schedule with unread outputs — acceptable for a debug frame.
+    match (chain.ssr_view, &ssr) {
+        (Some(_), Some(ssr)) => graph.add_external_pass(
+            pass::SSR_DEBUG,
+            pass::SSR_DEBUG,
+            vec![ssr.trace],
+            vec![composited],
+        ),
+        _ => graph.add_external_pass(
+            pass::COMPOSITE,
+            pass::COMPOSITE,
+            composite_reads,
+            vec![composited],
+        ),
+    };
     let tail = match (ldr, resample) {
         (Some(ldr), Some(resample)) => {
             let target = ldr_resolved.unwrap_or(output);
@@ -1337,6 +1359,7 @@ mod tests {
                 debug_lines: bits & 1 != 0,
                 // Varies with `ssao` so both gates are walked; `FULL` keeps the same scale.
                 ssr: (bits & 4 != 0).then_some(QualityParams::FULL.ssr_scale),
+                ssr_view: None,
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -2035,6 +2058,84 @@ mod tests {
     }
 
     /// A tiny or odd frame clamps the chain to its few levels and still schedules.
+    fn ssr_view_chain() -> PostChain {
+        PostChain {
+            ssr_view: Some(crate::DebugView::SsrConfidence),
+            ..ssr_chain()
+        }
+    }
+
+    /// The view replaces `composite`: it reads the trace alone and writes what composite would have.
+    #[test]
+    fn an_ssr_view_replaces_composite_and_reads_the_trace() {
+        let size = FrameSize::native(1920, 1080);
+        let (graph, _) = build_frame_graph(size, ssr_view_chain());
+        let (plain, _) = build_frame_graph(size, ssr_chain());
+        let find = |graph: &RenderGraph, name: &str| {
+            let pass = graph.passes().iter().find(|p| p.name == name)?;
+            let names = |ids: &[ResourceId]| {
+                ids.iter()
+                    .map(|id| graph.resources()[id.index()].name.clone())
+                    .collect::<Vec<_>>()
+            };
+            Some((names(&pass.reads()), names(pass.color_targets())))
+        };
+        assert!(find(&graph, "composite").is_none());
+        let (reads, writes) = find(&graph, "ssr_debug").unwrap();
+        assert_eq!(reads, ["ssr_trace"]);
+        assert_eq!(writes, find(&plain, "composite").unwrap().1);
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// A view with no SSR is not a chain `for_scene` produces, and the graph ignores it anyway.
+    #[test]
+    fn a_view_without_ssr_is_the_plain_graph() {
+        let size = FrameSize::native(1920, 1080);
+        let with_view = PostChain {
+            ssr_view: Some(crate::DebugView::SsrFootprint),
+            ..PostChain::default()
+        };
+        let (a, _) = build_frame_graph(size, with_view);
+        let (b, _) = build_frame_graph(size, PostChain::default());
+        assert_eq!(pass_names(&a), pass_names(&b));
+        assert_eq!(resource_names(&a), resource_names(&b));
+        let mut scene = RenderScene::empty((1920, 1080));
+        scene.debug_view = Some(crate::DebugView::SsrFootprint);
+        assert_eq!(PostChain::for_scene(&scene).ssr_view, None);
+    }
+
+    #[test]
+    fn masking_ssr_off_drops_the_view() {
+        assert_eq!(
+            ssr_view_chain()
+                .masked(&Quality::LOW, &QualityParams::LOW)
+                .ssr_view,
+            None
+        );
+        assert_eq!(
+            ssr_view_chain()
+                .masked(&Quality::FULL, &QualityParams::FULL)
+                .ssr_view,
+            Some(crate::DebugView::SsrConfidence)
+        );
+    }
+
+    /// The tail after the swapped pass (resample, overlay) still schedules.
+    #[test]
+    fn an_ssr_view_with_ui_and_a_resample_still_schedules_the_tail() {
+        let chain = PostChain {
+            ui: true,
+            ..ssr_view_chain()
+        };
+        let size = FrameSize::scaled(1920, 1080, RenderScale::new(2.0).unwrap());
+        let (graph, _) = build_frame_graph(size, chain);
+        let order = schedule(&graph).unwrap();
+        let names = order.order_names();
+        let pos = |n: &str| names.iter().position(|p| *p == n).unwrap();
+        assert!(pos("ssr_trace") < pos("ssr_debug"));
+        assert!(pos("ssr_debug") < pos("overlay"));
+    }
+
     #[test]
     fn ssr_pyramids_clamp_on_a_tiny_or_odd_frame() {
         for (w, h, levels) in [(1, 1, 1), (3, 1, 2), (67, 45, 6)] {

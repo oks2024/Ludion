@@ -155,17 +155,18 @@ fn all_repo_shaders_reflect_and_unify() {
             .is_some(),
         "the sprite texture group stays distinct from the atlas group despite the same shape"
     );
-    // Thirty-three layouts across every renderer and render-graph shader — a count that moves whenever
+    // Thirty-four layouts across every renderer and render-graph shader — a count that moves whenever
     // a shader gains or loses a group, so it is the tripwire that a new one was reflected on purpose.
     // Mesh/prepass's group 0 (`camera` + `bone_palette`) and shadow's (`shadow_view` + `bone_palette`)
     // are each a distinct name-set from ground-marker/sprite/particle/text's plain `camera`, so the
     // bone palette (Plan/skeletal-animation.md W2) adds one layout over the pre-skinning count, and
     // the debug-line pass's scene-depth + output-extent group (`debug_depth`) adds another, and the
     // reflections pass's normal + specular + depth group a third, and the SSR pyramids' three
-    // (Hi-Z seed, Hi-Z reduce, colour) three more, and the SSR trace's one. Of
+    // (Hi-Z seed, Hi-Z reduce, colour) three more, and the SSR trace's one, and the SSR debug view's
+    // trace group. Of
     // them exactly three are compute-only (gi_bake, gi_inject, the IBL prefilter trio): the emitter
     // skips their BGLs because compute pipelines keep auto-derived layouts.
-    assert_eq!(reflection.bind_groups.len(), 33);
+    assert_eq!(reflection.bind_groups.len(), 34);
     let mut compute_only: Vec<&str> = reflection
         .bind_groups
         .iter()

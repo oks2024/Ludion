@@ -78,6 +78,7 @@ fn render_or_skip(
         &[],
         0,
         &ludion_engine::DebugCategories::None,
+        None,
     ) {
         Ok(outcome) => Some(outcome),
         Err(errors) if no_adapter(&errors) => {

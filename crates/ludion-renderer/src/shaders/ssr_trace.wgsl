@@ -169,5 +169,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         level_f - lo,
     );
     let confidence = ssr_confidence(hit_uv, hit_distance, thickness_excess, facing, roughness, fade, max_distance);
+    // The footprint debug view reads the pyramid level in place of the radiance.
+    if (trace_params.proj_levels.z > 0.5) {
+        return vec4<f32>(level_f, 0.0, 0.0, confidence);
+    }
     return vec4<f32>(hdr_safe(rgb), confidence);
 }

@@ -27,7 +27,8 @@ use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
 use ludion_protocol::perf::LoadProfile;
 use ludion_renderer::{
-    FrameSize, GpuUploads, PostChain, QualityParams, RenderScene, RenderedImage, Renderer,
+    DebugView, FrameSize, GpuUploads, PostChain, QualityParams, RenderScene, RenderedImage,
+    Renderer,
 };
 use ludion_scene::{AppliedOverride, SceneOverride};
 
@@ -53,6 +54,9 @@ pub struct RenderOutcome {
     /// The debug-draw categories that drew anything on the last tick — with the categories asked
     /// for, what tells a typo'd name from a category with nothing to show. Empty when none were asked.
     pub debug_drawn: Vec<&'static str>,
+    /// The debug view actually drawn: the requested one when the frame traces reflections, `None`
+    /// when none was asked for or SSR is off for this frame (not authored, or masked by the quality).
+    pub debug_view: Option<DebugView>,
 }
 
 /// Renders the scene at `path` at `size` through the full pipeline, at [`QualitySetting::full`] —
@@ -82,6 +86,7 @@ pub fn render_scene(
         &[],
         0,
         &DebugCategories::None,
+        None,
     )
 }
 
@@ -98,6 +103,10 @@ pub fn render_scene(
 /// the instrument for judging a burst emitter, an assembly clip, or a physics-driven `SkinBone`
 /// ragdoll without writing a test). `frames = 0` is a static tick-0 frame, byte-identical to every
 /// render before this parameter existed.
+///
+/// `view` replaces the finished picture with a full-screen view of the SSR trace
+/// ([`DebugView`]); it is host render state, never part of the scene, and a frame that does not
+/// trace reflections ignores it ([`RenderOutcome::debug_view`] says what was drawn).
 ///
 /// `overrides` (the `ludion render --set` payload) are applied between parse and validation, so an
 /// ill-typed override is rejected by the schema exactly as the same edit to the file would be. The
@@ -119,8 +128,9 @@ pub fn render_scene_with_registry(
     overrides: &[SceneOverride],
     frames: u64,
     debug: &DebugCategories,
+    view: Option<DebugView>,
 ) -> Result<RenderOutcome, Vec<Diagnostic>> {
-    let (render_scene, applied_overrides, debug_drawn) = extract_scene_file(
+    let (mut render_scene, applied_overrides, debug_drawn) = extract_scene_file(
         registry,
         path,
         size,
@@ -129,6 +139,7 @@ pub fn render_scene_with_registry(
         quality.params.particle_density,
         debug,
     )?;
+    render_scene.debug_view = view;
 
     // GPU work happens only now, after all CPU-side validation has passed.
     let mut renderer = Renderer::new().map_err(|d| vec![d])?;
@@ -150,12 +161,19 @@ pub fn render_scene_with_registry(
         None
     };
 
+    // The view actually drawn: the same chain the frame was built from drops a view whose SSR is
+    // not authored or is masked by the quality.
+    let debug_view = PostChain::for_scene(&render_scene)
+        .masked(&quality.quality, &quality.params)
+        .ssr_view;
+
     Ok(RenderOutcome {
         image,
         adapter,
         timings_json,
         applied_overrides,
         debug_drawn,
+        debug_view,
     })
 }
 

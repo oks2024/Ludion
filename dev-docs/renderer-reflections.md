@@ -29,6 +29,12 @@ With `ssr` on, `ssr_trace` (`ssr_trace.wgsl`, `ssr_trace.rs`) marches one mirror
 - **Upsample**: bilinear over the four nearest trace texels, each weighted by depth (`1 - |Δdist| / 0.1·dist`, squared) and normal (`dot^8`) agreement between the pixel it traced from and the shaded pixel. No agreeing tap gives confidence 0.
 - **Blend**: `s = mix(sky_fill, ssr.rgb · (f0·ab.x + ab.y), confidence · intensity)` behind `if (confidence > 0)`, with the same split-sum `ab` as the sky. Intensity scales confidence, so intensity 0 is exactly the sky and confidence 0 is exactly the SSR-off term. SSR takes neither `scene_specular.a` nor sky visibility (decision 7: the trace found its own occluder). An SSR-only frame (no `Environment`) has `sky_fill = 0`.
 
+### Debug views
+`ludion render --debug-view ssr_confidence|ssr_footprint` (`DebugView`, `ssr_debug.rs`) replaces `composite` with `ssr_debug` (`ssr_debug.wgsl`), which reads `ssr_trace` and writes the same target, so resample and overlay follow unchanged. It is host state like `--debug-draw`: `RenderScene.debug_view` → `PostChain.ssr_view`, never in a scene file or a `WorldHash`. **A view never turns SSR on**: `for_scene` and `masked` drop it whenever `ssr` is `None`, the frame is the normal one, and `RenderOutcome.debug_view` (the view actually drawn) and the CLI summary say so.
+- **Confidence**: gray = the trace's `a`. **Footprint**: the trace writes `level_f` in `r` when `proj_levels.z` is 1 (set from the chain's view); gray = `level_f / (levels − 1)`, magenta `(255, 0, 255)` where `a == 0`, so a miss is not level 0.
+- The pass reads the trace texel **nearest** the render pixel (no upsample), and stores `srgb_to_linear(gray)` to the sRGB target so the byte is `round(value·255)` and `image-stats` reads the data directly. The transfer pair lives in `snippets/srgb.wgsl`, shared with `composite`.
+- Bloom, shafts and dof still schedule on a view frame with unread outputs; accepted for a debug frame.
+
 ## Rules
 - **The lobe function is one function for every path.** `cone_half_angle(r) = 2·atan(r²)`: 0 for a mirror, exactly π/2 at r = 1. The cube lod solves the lobe's solid angle against K texels, K = 32π, so r = 1 fills the 8×8 face and the chain stops there. A one-texel match sent rough metal to 1×1 faces and made a cube-face artifact on the gallery night-sky tile. `mip_roughness` is the exact inverse of `cube_lod` above mip 0, so the prefilter and the lookup agree by construction; the `needs_gpu_` test in `lobe.rs` holds `lobe.wgsl` to the Rust. Change one twin, change both.
 - **Both ends clamp.** `cube_lod` clamps to `[0, max_lod]`, so a mirror reads mip 0 (below r ≈ 0.149 the lobe is under 1.2° on 0.45° texels) and r = 1 never leaves the 8×8 face; `pyramid_level` clamps the half-angle (`MAX_HALF_ANGLE`) to keep `tan` finite.
@@ -52,6 +58,8 @@ cargo test -p ludion-renderer lobe::
 cargo test -p ludion-renderer needs_gpu_reflections
 cargo test -p ludion-renderer ssr_pyramid::
 cargo test -p ludion-renderer needs_gpu_ssr
+cargo test -p ludion-renderer needs_gpu_a_debug_view
+cargo test -p ludion-cli --test render debug_view
 cargo test -p ludion-renderer needs_gpu_metal_reflects
 cargo test -p ludion-renderer needs_gpu_a_reflection_over_a_bright
 cargo run -p ludion-cli -- dump-graph --scene examples/gallery/night-sky.yaml   # scene → reflections → transparents

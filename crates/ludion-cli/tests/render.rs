@@ -1673,3 +1673,52 @@ fn debug_draw_is_refused_on_a_strip_and_a_model_sheet() {
     assert!(!model.status.success());
     assert!(String::from_utf8_lossy(&model.stderr).contains("--debug-draw"));
 }
+
+/// `--debug-view` draws only where the frame traces reflections: with `PostProcess.ssr` authored it
+/// names the view on the summary line, without it the normal frame is drawn and the line says so.
+#[test]
+fn needs_gpu_debug_view_names_what_was_drawn() {
+    let scene = gallery_scene("night-sky.yaml");
+    let run = |name: &str, extra: &[&str]| {
+        let out = out_path(name);
+        let mut args = vec![
+            "render",
+            "--scene",
+            scene.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--width",
+            "192",
+            "--height",
+            "108",
+            "--debug-view",
+            "ssr_confidence",
+        ];
+        args.extend_from_slice(extra);
+        run_ludion(&args)
+    };
+    let drawn = run(
+        "cli_debug_view_on.png",
+        &["--set", "/entities/0/components/PostProcess/ssr=1.0"],
+    );
+    if !drawn.status.success() && is_no_adapter(&drawn) {
+        eprintln!("SKIPPED debug view render: no GPU adapter");
+        return;
+    }
+    assert!(
+        drawn.status.success(),
+        "render failed: {}",
+        String::from_utf8_lossy(&drawn.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&drawn.stdout);
+    assert!(stdout.contains("debug view: ssr_confidence"), "{stdout}");
+    assert!(!stdout.contains("not drawn"), "{stdout}");
+
+    let skipped = run("cli_debug_view_off.png", &[]);
+    assert!(skipped.status.success());
+    let stdout = String::from_utf8_lossy(&skipped.stdout);
+    assert!(
+        stdout.contains("debug view: ssr_confidence not drawn"),
+        "{stdout}"
+    );
+}

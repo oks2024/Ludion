@@ -1359,6 +1359,11 @@ impl Renderer {
             has_ao: chain.ssao,
             has_shafts: chain.shafts,
             has_dof: chain.dof,
+            ssr_view: chain.ssr.zip(chain.ssr_view).map(|(scale, view)| {
+                let levels =
+                    crate::ssr_pyramid::levels(crate::ssr_pyramid::trace_extent(size, scale));
+                (view, levels)
+            }),
             resolved_env,
             resolved_gi,
             gi_inject,
@@ -2444,6 +2449,10 @@ struct FrameRecorder<'a> {
     /// graph's `dof` target against the 1×1 fallback), sets its uniform flag, and mirrors the two
     /// passes' presence.
     has_dof: bool,
+    /// The full-screen SSR debug view this frame draws in place of `composite`, with the colour
+    /// pyramid's level count (the footprint view's scale). The trace also reads it to switch to
+    /// footprint output.
+    ssr_view: Option<(crate::DebugView, u32)>,
     /// The mesh pass's group-3 IBL inputs (real prefiltered cubes + flag on when the scene has an
     /// `Environment`, the 1×1 fallback cubes + flag off otherwise). Kept as the resolved views rather
     /// than a finished bind group because the group also carries the AO texture, which only the
@@ -2522,6 +2531,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::HIZ_SEED | pass::HIZ_REDUCE => self.record_hiz(pass),
             pass::SSR_COLOR_SEED | pass::SSR_COLOR_REDUCE => self.record_ssr_color(pass),
             pass::SSR_TRACE => self.record_ssr_trace(pass),
+            pass::SSR_DEBUG => self.record_ssr_debug(pass),
             pass::TRANSPARENTS => self.record_transparents(pass),
             // The bright-pass threshold (`PostProcess.bloom_threshold`; default 1.0 reproduces the
             // old shader literal).
@@ -3411,7 +3421,16 @@ impl FrameRecorder<'_> {
             view_proj: self.view_proj.to_cols_array_2d(),
             inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
             cam_pos: self.camera_position.extend(1.0).to_array(),
-            proj_levels: [self.proj_y, levels as f32, 0.0, 0.0],
+            proj_levels: [
+                self.proj_y,
+                levels as f32,
+                // The footprint view reads the pyramid level in place of the radiance.
+                f32::from(matches!(
+                    self.ssr_view,
+                    Some((crate::DebugView::SsrFootprint, _))
+                )),
+                0.0,
+            ],
             look: [
                 look.max_distance,
                 look.thickness,
@@ -3420,6 +3439,22 @@ impl FrameRecorder<'_> {
             ],
         };
         self.fullscreen_effect(pass, ShaderId::SsrTrace, &[], bytemuck::bytes_of(&params));
+    }
+
+    /// The SSR debug view: the trace's confidence or footprint level as gray, in place of `composite`.
+    fn record_ssr_debug(&self, pass: &mut RecordedPass<'_>) {
+        let (view, levels) = self
+            .ssr_view
+            .expect("the graph schedules ssr_debug only for a chain with a view");
+        let params = shader_gen::SsrDebug {
+            mode: [
+                f32::from(view == crate::DebugView::SsrFootprint),
+                levels as f32,
+                0.0,
+                0.0,
+            ],
+        };
+        self.fullscreen_effect(pass, ShaderId::SsrDebug, &[], bytemuck::bytes_of(&params));
     }
 
     /// The supersampling resolve: the composited render-extent image box-filtered down to the output
@@ -4243,6 +4278,7 @@ enum ShaderId {
     HizReduce,
     SsrColor,
     SsrTrace,
+    SsrDebug,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -4268,7 +4304,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 28;
+const SHADER_COUNT: usize = 29;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -4427,6 +4463,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Medium,
             Snippet::SkyGradient,
             Snippet::Hdr,
+            Snippet::Srgb,
         ],
         layouts: &[LayoutId::Composite],
     },
@@ -4521,6 +4558,13 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         ],
         layouts: &[LayoutId::SsrTrace],
     },
+    ShaderDesc {
+        id: ShaderId::SsrDebug,
+        file_name: "ssr_debug.wgsl",
+        body: include_str!("shaders/ssr_debug.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Srgb],
+        layouts: &[LayoutId::SsrDebug],
+    },
 ];
 
 impl ShaderId {
@@ -4607,6 +4651,9 @@ enum Snippet {
     /// `ssr_confidence` and `ssr_source_pixel`, the SSR trace's shared pure functions, binding-free
     /// (the trace; the twin of `ssr_trace.rs::confidence`).
     Ssr,
+    /// `linear_to_srgb` / `srgb_to_linear`, the transfer pair, binding-free (composite,
+    /// ssr_debug).
+    Srgb,
     /// The glyph-atlas `@group(1)` bindings, the shared `VsOut` and the coverage `fs_main` (text,
     /// ui_text).
     Glyph,
@@ -4630,6 +4677,7 @@ impl Snippet {
             Snippet::GiProbe => "gi_probe.wgsl",
             Snippet::Footprint => "footprint.wgsl",
             Snippet::Ssr => "ssr.wgsl",
+            Snippet::Srgb => "srgb.wgsl",
             Snippet::Glyph => "glyph.wgsl",
         }
     }
@@ -4650,6 +4698,7 @@ impl Snippet {
             Snippet::GiProbe => include_str!("shaders/snippets/gi_probe.wgsl"),
             Snippet::Footprint => include_str!("shaders/snippets/footprint.wgsl"),
             Snippet::Ssr => include_str!("shaders/snippets/ssr.wgsl"),
+            Snippet::Srgb => include_str!("shaders/snippets/srgb.wgsl"),
             Snippet::Glyph => include_str!("shaders/snippets/glyph.wgsl"),
         }
     }
@@ -4671,6 +4720,7 @@ impl Snippet {
             Snippet::GiProbe,
             Snippet::Footprint,
             Snippet::Ssr,
+            Snippet::Srgb,
             Snippet::Glyph,
         ]
         .into_iter()
@@ -4732,10 +4782,11 @@ enum LayoutId {
     HizReduce,
     SsrColor,
     SsrTrace,
+    SsrDebug,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 30;
+const LAYOUT_COUNT: usize = 31;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -4869,6 +4920,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         id: LayoutId::SsrTrace,
         create: shader_gen::create_trace_hiz_trace_color_trace_normal_trace_depth_trace_samp_trace_params_bgl,
     },
+    LayoutDesc {
+        id: LayoutId::SsrDebug,
+        create: shader_gen::create_dbg_trace_dbg_samp_dbg_params_bgl,
+    },
 ];
 
 /// Every bind group layout, built once and indexed by [`LayoutId`].
@@ -4959,7 +5014,11 @@ fn build_pipeline(
         // `blit` is the overlay pass's passthrough copy of the composited LDR image, and `resolve`
         // and `upscale` are the two directions of the render scale's resampling; all four write the
         // LDR sRGB output.
-        ShaderId::Composite | ShaderId::Resolve | ShaderId::Upscale | ShaderId::Blit => {
+        ShaderId::Composite
+        | ShaderId::Resolve
+        | ShaderId::Upscale
+        | ShaderId::Blit
+        | ShaderId::SsrDebug => {
             build_fullscreen_pipeline(device, label, src, &layout, OUTPUT_FORMAT, None)
         }
         ShaderId::UiRect => build_ui_rect_pipeline(device, label, src, &layout),
@@ -5976,6 +6035,16 @@ mod tests {
             [0, 1, 2, 3, 4, 5],
         );
         assert_eq!(fullscreen_layout(ShaderId::SsrTrace), LayoutId::SsrTrace);
+        // The debug view: the trace, sampler, uniform.
+        assert_eq!(
+            [
+                shader_gen::DBG_TRACE_BINDING,
+                shader_gen::DBG_SAMP_BINDING,
+                shader_gen::DBG_PARAMS_BINDING,
+            ],
+            [0, 1, 2],
+        );
+        assert_eq!(fullscreen_layout(ShaderId::SsrDebug), LayoutId::SsrDebug);
         // And each of those shaders binds exactly the one layout the helper fills.
         assert_eq!(fullscreen_layout(ShaderId::Resolve), LayoutId::Resolve);
         assert_eq!(fullscreen_layout(ShaderId::Upscale), LayoutId::Upscale);
@@ -12164,6 +12233,91 @@ mod tests {
                     "floor {world} {at:?} moved: off {off:?}, on {on:?}"
                 );
             }
+        }
+    }
+
+    /// The mirror-floor scene of the SSR tests with SSR authored on and `view` requested, rendered
+    /// through the real path; the pixel reader maps a world point to its RGB bytes.
+    fn ssr_view_frame(
+        renderer: &Renderer,
+        ssr: f32,
+        view: Option<crate::DebugView>,
+    ) -> (RenderedImage, RenderScene) {
+        let size = FrameSize::native(96, 64);
+        let mut scene = RenderScene::empty(size.render);
+        scene.post = Some(PostData {
+            ssr,
+            ..PostData::default()
+        });
+        scene.environment = Some(test_env());
+        scene.debug_view = view;
+        let eye = Vec3::new(0.0, 4.5, 7.5);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::new(0.0, 0.5, 0.0), Vec3::Y),
+            projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.5, 0.1, 100.0),
+            position: eye,
+        };
+        let mut floor = ground(50.0);
+        floor.material = [0.02, 1.0, 0.0];
+        let mut red_box = cube(Vec3::new(0.0, 0.5, 0.0), Vec3::ONE, [1.0, 0.0, 0.0, 1.0]);
+        red_box.material = [0.5, 0.0, 1.0];
+        scene.meshes = vec![floor, red_box];
+        let image = renderer.render(&scene, size).expect("render");
+        (image, scene)
+    }
+
+    fn view_pixel(image: &RenderedImage, (x, y): (u32, u32)) -> [u8; 3] {
+        let at = ((y * image.width + x) * 4) as usize;
+        [image.rgba[at], image.rgba[at + 1], image.rgba[at + 2]]
+    }
+
+    /// The confidence view draws the trace's alpha as gray: confident under the cube, zero in the
+    /// sky and where the ray leaves the top of the screen.
+    #[test]
+    fn needs_gpu_ssr_confidence_view_shows_the_trace() {
+        let Some(renderer) = skip_or_renderer("ssr_confidence_view_shows_the_trace") else {
+            return;
+        };
+        let (image, scene) = ssr_view_frame(&renderer, 1.0, Some(crate::DebugView::SsrConfidence));
+        let (w, h) = (image.width, image.height);
+        for z in [0.8, 1.0] {
+            let at = project(&scene.camera, Vec3::new(0.0, 0.0, z), w, h);
+            let [r, g, b] = view_pixel(&image, at);
+            assert!(
+                r >= 128 && r == g && g == b,
+                "floor z={z} {at:?}: {r},{g},{b}"
+            );
+        }
+        assert_eq!(view_pixel(&image, (w / 2, 1)), [0, 0, 0], "sky");
+        let at = project(&scene.camera, Vec3::new(5.0, 0.0, 0.0), w, h);
+        assert_eq!(view_pixel(&image, at), [0, 0, 0], "a ray leaving the top");
+    }
+
+    /// The footprint view draws a gray level over the pyramid on a hit and magenta on a miss.
+    #[test]
+    fn needs_gpu_ssr_footprint_view_marks_misses_magenta() {
+        let Some(renderer) = skip_or_renderer("ssr_footprint_view_marks_misses_magenta") else {
+            return;
+        };
+        let (image, scene) = ssr_view_frame(&renderer, 1.0, Some(crate::DebugView::SsrFootprint));
+        let (w, h) = (image.width, image.height);
+        assert_eq!(view_pixel(&image, (w / 2, 1)), [255, 0, 255], "sky");
+        let at = project(&scene.camera, Vec3::new(0.0, 0.0, 0.9), w, h);
+        let [r, g, b] = view_pixel(&image, at);
+        assert!(r == g && g == b, "floor under the cube {at:?}: {r},{g},{b}");
+    }
+
+    /// A view never turns SSR on: with `ssr` at zero the frame is the normal one.
+    #[test]
+    fn needs_gpu_a_debug_view_without_ssr_draws_the_normal_frame() {
+        let Some(renderer) = skip_or_renderer("a_debug_view_without_ssr_draws_the_normal_frame")
+        else {
+            return;
+        };
+        let (plain, _) = ssr_view_frame(&renderer, 0.0, None);
+        for view in crate::DebugView::ALL {
+            let (viewed, _) = ssr_view_frame(&renderer, 0.0, Some(view));
+            assert_eq!(plain.rgba, viewed.rgba, "{} moved the frame", view.name());
         }
     }
 

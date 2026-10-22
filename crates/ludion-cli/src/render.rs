@@ -148,6 +148,8 @@ pub struct Request<'a> {
     pub frames: &'a [u64],
     /// `--debug-draw` (scene mode), unparsed: `all` or a comma list of categories.
     pub debug_draw: Option<&'a str>,
+    /// `--debug-view` (scene mode): a full-screen view of the SSR trace instead of the finished picture.
+    pub debug_view: Option<ludion_engine::DebugView>,
     /// `--look-at` and its companions (scene mode): expanded into overrides by `framing::expand`.
     pub framing: crate::framing::FramingArgs<'a>,
     /// `--scale`, if it was given. In scene mode a render-extent multiplier; absent, the extent is
@@ -246,6 +248,7 @@ pub fn run(request: &Request) -> ExitCode {
                     ludion_engine::resolve_render_scale(explicit, request.quality),
                     request.quality,
                     &DebugCategories::parse(request.debug_draw.unwrap_or_default()),
+                    request.debug_view,
                 ),
             }
         }
@@ -274,6 +277,7 @@ fn run_scene(
     scale: RenderScale,
     quality: &QualitySetting,
     debug: &DebugCategories,
+    view: Option<ludion_engine::DebugView>,
 ) -> ExitCode {
     let overrides = match parse_overrides(set) {
         Ok(overrides) => overrides,
@@ -316,6 +320,7 @@ fn run_scene(
         &overrides,
         frames,
         debug,
+        view,
     ) {
         Ok(outcome) => {
             for applied in &outcome.applied_overrides {
@@ -337,18 +342,34 @@ fn run_scene(
                 return ExitCode::FAILURE;
             }
             println!(
-                "{}: rendered {width}x{height}{}{}{} on {}",
+                "{}: rendered {width}x{height}{}{}{}{} on {}",
                 out.display(),
                 resample_note(size),
                 frames_note(frames),
                 debug
                     .summary(&outcome.debug_drawn)
                     .map_or_else(String::new, |clause| format!(" ({clause})")),
+                debug_view_note(view, outcome.debug_view),
                 outcome.adapter
             );
             ExitCode::SUCCESS
         }
         Err(diagnostics) => report(scene, &diagnostics),
+    }
+}
+
+/// The summary clause for `--debug-view`: the view drawn, or why the normal frame was drawn instead.
+fn debug_view_note(
+    asked: Option<ludion_engine::DebugView>,
+    drawn: Option<ludion_engine::DebugView>,
+) -> String {
+    match (asked, drawn) {
+        (Some(_), Some(view)) => format!(" (debug view: {})", view.name()),
+        (Some(view), None) => format!(
+            " (debug view: {} not drawn: SSR is off for this frame (PostProcess.ssr is 0, or this quality masks it))",
+            view.name()
+        ),
+        (None, _) => String::new(),
     }
 }
 

@@ -1020,6 +1020,9 @@ pub struct RenderScene {
     pub ground_markers: Vec<GroundMarkerInstance>,
     /// World-space debug lines from the categories the host enabled; empty by default.
     pub debug_lines: Vec<DebugSegment>,
+    /// A full-screen debug view that replaces the finished picture, when the host asked for one and
+    /// the frame traces reflections; `None` draws the normal frame.
+    pub debug_view: Option<crate::DebugView>,
     /// Camera-facing particle discs, in `(ascending EntityId, particle index)` extract order. Drawn
     /// inside the scene pass **after** the sprites and **before** the world-space text, so a particle
     /// blends over the character it was emitted from and never paints over a label. The renderer
@@ -1088,6 +1091,7 @@ impl RenderScene {
             sprites: Vec::new(),
             ground_markers: Vec::new(),
             debug_lines: Vec::new(),
+            debug_view: None,
             particles: Vec::new(),
             lights: Vec::new(),
             spot_lights: Vec::new(),

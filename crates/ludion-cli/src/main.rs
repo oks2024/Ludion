@@ -490,6 +490,18 @@ enum Command {
             conflicts_with_all = ["model", "sprite", "atlas", "sweep"]
         )]
         debug_draw: Option<String>,
+        /// (scene only) Draw a full-screen view of the screen-space reflection trace instead of the
+        /// finished picture: `ssr_confidence` (the trace's confidence as gray) or `ssr_footprint`
+        /// (the colour-pyramid level it read, over the level count; magenta where it found no hit).
+        /// A view never turns SSR on: where the scene's `PostProcess.ssr` is 0, or this quality
+        /// masks the trace, the normal frame is drawn and the summary line says so.
+        #[arg(
+            long,
+            value_enum,
+            value_name = "VIEW",
+            conflicts_with_all = ["model", "sprite", "atlas", "font", "sweep"]
+        )]
+        debug_view: Option<CliDebugView>,
         /// (scene only) Frame the shot around a target: `--look-at x,y,z` moves the scene's one
         /// `Camera` to orbit that point and focuses the scene's `PostProcess` depth of field on it
         /// (`focus_distance` = the framing distance). Azimuth is degrees about +Y from +Z (0 puts the
@@ -1458,6 +1470,25 @@ enum CliModelView {
     Game,
 }
 
+/// The `--debug-view` token set, mirroring `ludion_engine::DebugView` (the engine type stays
+/// clap-free); the names are the engine's own spelling.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliDebugView {
+    #[value(name = "ssr_confidence")]
+    SsrConfidence,
+    #[value(name = "ssr_footprint")]
+    SsrFootprint,
+}
+
+impl From<CliDebugView> for ludion_engine::DebugView {
+    fn from(view: CliDebugView) -> Self {
+        match view {
+            CliDebugView::SsrConfidence => ludion_engine::DebugView::SsrConfidence,
+            CliDebugView::SsrFootprint => ludion_engine::DebugView::SsrFootprint,
+        }
+    }
+}
+
 /// The `--channel` token set, mirroring `ludion_engine::ModelChannel` — the [`CliModelView`] shape,
 /// for the same reason (the engine type stays clap-free).
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -1779,6 +1810,7 @@ fn main() -> std::process::ExitCode {
             sweep,
             frames,
             debug_draw,
+            debug_view,
             look_at,
             azimuth,
             pitch,
@@ -1891,6 +1923,7 @@ fn main() -> std::process::ExitCode {
                 sweep: sweep.as_deref(),
                 frames: &frames,
                 debug_draw: debug_draw.as_deref(),
+                debug_view: debug_view.map(Into::into),
                 framing: framing::FramingArgs {
                     look_at: look_at.as_deref(),
                     azimuth,
