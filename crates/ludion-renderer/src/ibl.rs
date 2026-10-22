@@ -284,23 +284,6 @@ impl Ibl {
         }
     }
 
-    /// The sky specular cube for `env` at `size`, resolved if it is not already resident.
-    #[cfg(test)]
-    pub(crate) fn sky_specular_texture(
-        &self,
-        gpu: &Gpu,
-        env: &EnvironmentData,
-        size: u32,
-    ) -> wgpu::Texture {
-        self.resolve(gpu, Some(env), size);
-        self.cache
-            .borrow()
-            .as_ref()
-            .expect("resolve filled the cache")
-            .specular_texture
-            .clone()
-    }
-
     /// Prefilters a captured `source` cube into slot `slot` of the cube array `target`, in one
     /// encoder and one submit: the source's mip chain is box-filtered down, then each target mip
     /// integrates the lobe over it with filtered importance sampling.

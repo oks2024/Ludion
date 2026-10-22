@@ -82,6 +82,8 @@ pub(crate) struct ProbeCubes {
     pub(crate) view: wgpu::TextureView,
     /// Probe index → slot. The identity today; the table is what lets residency change addressing.
     pub(crate) slots: Vec<u32>,
+    /// Probe index → the diffuse irradiance baked at its capture point (`probe_relight.wgsl`).
+    pub(crate) irradiance: Vec<[f32; 3]>,
     pub(crate) face_size: u32,
     pub(crate) max_lod: u32,
 }
@@ -335,6 +337,7 @@ impl Probes {
             self.captured.borrow_mut().clear();
         }
         let mut resolved = Vec::with_capacity(probes.len());
+        let mut irradiance = Vec::with_capacity(probes.len());
         // No borrow of the cache is held below: a face's own `prepare_frame` resolves its
         // probe-less scene back through here.
         for (slot, probe) in probes.iter().enumerate() {
@@ -343,8 +346,9 @@ impl Probes {
             let loaded = entry.and_then(|(dir, key)| {
                 probe_store::read_entry(dir, key, face_size, array.mip_level_count())
             });
-            if let Some(levels) = loaded {
+            if let Some((levels, baked)) = loaded {
                 probe_store::write_slot(gpu, &array, slot, &levels);
+                irradiance.push(baked);
                 if retain {
                     self.captured.borrow_mut().push(None);
                 }
@@ -355,12 +359,15 @@ impl Probes {
                 });
                 continue;
             }
+            let mut baked = [0.0; 3];
             r.observed_phase(observer, FramePhase::ProbeBake, || {
                 for face in 0..6 {
                     let derived = face_scene(capture_world(scene), probe.position, face);
-                    r.capture_probe_face(
+                    // The irradiance is a property of the capture point, not of a face: face 0 reads it.
+                    let measured = r.capture_probe_face(
                         &derived,
                         face_size,
+                        face == 0,
                         wgpu::TexelCopyTextureInfo {
                             texture: &source,
                             mip_level: 0,
@@ -372,6 +379,9 @@ impl Probes {
                             aspect: wgpu::TextureAspect::All,
                         },
                     );
+                    if let Some(e) = measured {
+                        baked = e;
+                    }
                 }
                 if retain {
                     let faces = probe_store::read_slot(gpu, &source, 0).swap_remove(0);
@@ -380,9 +390,10 @@ impl Probes {
                 r.ibl().prefilter_probe(gpu, &source, &array, slot);
                 if let Some((dir, key)) = entry {
                     let levels = probe_store::read_slot(gpu, &array, slot);
-                    probe_store::write_entry(dir, key, face_size, &levels);
+                    probe_store::write_entry(dir, key, face_size, &levels, baked);
                 }
             });
+            irradiance.push(baked);
             resolved.push(ResolvedProbe {
                 entity: probe.entity,
                 key: entry.map(|(_, key)| key),
@@ -404,6 +415,7 @@ impl Probes {
             texture: array,
             view,
             slots: (0..probes.len() as u32).collect(),
+            irradiance,
             face_size,
         };
         *self.cache.borrow_mut() = Some((key, cubes));
@@ -564,10 +576,10 @@ pub(crate) mod tests {
         );
     }
 
-    /// With no geometry the probe sees only the sky: every mip of slot 0 matches the sky cube
-    /// within the bound `ibl`'s sky-filled-source test records, and alpha is 1.
+    /// With no geometry the probe sees only the sky: every mip of slot 0 holds rgb 0 and alpha 1,
+    /// because the capture stores geometry only and the sky comes from the live sky cube.
     #[test]
-    fn needs_gpu_a_sky_only_probe_matches_the_sky_cube() {
+    fn needs_gpu_a_sky_only_probe_stores_no_radiance() {
         let Some(r) = renderer_or_skip("the sky-only probe") else {
             return;
         };
@@ -576,28 +588,13 @@ pub(crate) mod tests {
         scene.probes = vec![probe_at(1, Vec3::ZERO)];
         resolve(&r, &scene);
         let cubes = r.probes.cubes().expect("captured");
-        let probe_mips = read_rgba16_mips(r.gpu(), &cubes.texture);
-        let sky = r
-            .ibl()
-            .sky_specular_texture(r.gpu(), &test_env(), cubes.face_size);
-        let sky_mips = read_rgba16_mips(r.gpu(), &sky);
-        assert_eq!(sky_mips.len(), probe_mips.len());
-        for (mip, (sky, probe)) in sky_mips.iter().zip(&probe_mips).enumerate() {
-            let mut errors = Vec::new();
-            for (i, (&want, &got)) in sky.iter().zip(probe).enumerate() {
-                if i % 4 == 3 {
-                    assert!((got - 1.0).abs() < 1e-3, "mip {mip} texel {i}: alpha {got}");
-                } else {
-                    errors.push((got - want).abs() / want.abs().max(1e-3));
-                }
+        for (mip, texels) in read_rgba16_mips(r.gpu(), &cubes.texture).iter().enumerate() {
+            for (i, texel) in texels.chunks_exact(4).enumerate() {
+                assert!(
+                    texel[..3] == [0.0; 3] && (texel[3] - 1.0).abs() < 1e-3,
+                    "mip {mip} texel {i}: {texel:?}"
+                );
             }
-            errors.sort_by(f32::total_cmp);
-            let (median, worst) = (errors[errors.len() / 2], errors[errors.len() - 1]);
-            let (median_bound, worst_bound) = if mip == 0 { (0.01, 0.05) } else { (0.06, 0.35) };
-            assert!(
-                median <= median_bound && worst <= worst_bound,
-                "mip {mip}: median {median}, worst {worst} vs the sky cube"
-            );
         }
     }
 

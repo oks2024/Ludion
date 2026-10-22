@@ -34,7 +34,7 @@
 @group(0) @binding(9) var refl_probe_cubes: texture_cube_array<f32>;
 
 struct ProbeList {
-    // x = the probe count (0 skips the probe path), y = the cube's max LOD, z = `ibl_intensity`.
+    // x = the probe count (0 skips the probe path), y = the cube's max LOD.
     header: vec4<f32>,
     // The frame's `LightHeader.grid`, the cluster cell lookup's input.
     grid: vec4<f32>,
@@ -44,6 +44,8 @@ struct ProbeList {
 @group(0) @binding(10) var<uniform> probe_list: ProbeList;
 // One bit-mask per cluster cell, in the lights' cell order.
 @group(0) @binding(11) var<storage, read> probe_mask: array<u32>;
+// The live irradiance at each ranked probe's capture point, in `xyz` (`probe_relight.wgsl`).
+@group(0) @binding(12) var<storage, read> probe_live: array<vec4<f32>>;
 
 struct Reflections {
     inv_view_proj: mat4x4<f32>,
@@ -153,6 +155,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         var radiance = vec3<f32>(0.0);
         var taken = 0u;
         let lod = specular_cube_lod(roughness, probe_list.header.y);
+        // The captured sky fraction is the live sky fill's own lookup; with no `Environment` it is 0.
+        let sky_lod = specular_cube_lod(roughness, reflections.env.z);
+        let sky_k = select(0.0, reflections.env.y, env_on);
         // Lowest set bit first is rank order. Only a positive weight takes one of the four slots, so
         // a spuriously binned probe is skipped.
         loop {
@@ -169,7 +174,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let contribution = w * (1.0 - coverage);
             let dir = probe_lookup(probe, world, r);
             let sampled = textureSampleLevel(refl_probe_cubes, refl_samp, dir, i32(probe.center.w), lod);
-            radiance = radiance + contribution * probe_sky_scaled(sampled, probe_list.header.z);
+            let ratio = probe_ratio(probe.light.xyz, probe_live[k].xyz);
+            let sky = textureSampleLevel(refl_sky_cube, refl_samp, r, sky_lod).rgb;
+            radiance = radiance + contribution * probe_relit(sampled, ratio, sky, sky_k);
             coverage = coverage + contribution;
             taken = taken + 1u;
         }

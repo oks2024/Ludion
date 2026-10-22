@@ -125,10 +125,22 @@ pub fn probe_lookup(probe: &ProbeData, p: Vec3, r: Vec3) -> Vec3 {
 }
 
 #[cfg(test)]
-/// A prefiltered probe sample with `ibl_intensity` `k` applied to its sky-visible fraction
-/// (alpha) only. The WGSL twin is `probe_sky_scaled`.
-pub fn sky_scaled(sample: Vec4, k: f32) -> Vec3 {
-    sample.truncate() * (1.0 - sample.w + sample.w * k)
+/// The live-to-baked irradiance ratio per channel; 1 where the baked value is too small to divide
+/// by. The WGSL twin is `probe_ratio`.
+pub fn ratio(baked: Vec3, live: Vec3) -> Vec3 {
+    let channel = |b: f32, l: f32| if b > 1e-6 { l / b } else { 1.0 };
+    Vec3::new(
+        channel(baked.x, live.x),
+        channel(baked.y, live.y),
+        channel(baked.z, live.z),
+    )
+}
+
+#[cfg(test)]
+/// A prefiltered probe sample relit: the geometry radiance (rgb) scaled by `ratio`, the sky fraction
+/// (alpha) replaced by the live sky `sky` times `k`. The WGSL twin is `probe_relit`.
+pub fn relit(sample: Vec4, ratio: Vec3, sky: Vec3, k: f32) -> Vec3 {
+    sample.truncate() * ratio + sample.w * sky * k
 }
 
 #[cfg(test)]
@@ -309,12 +321,29 @@ mod tests {
     }
 
     #[test]
-    fn sky_scaled_scales_only_the_sky_visible_fraction() {
+    fn ratio_divides_per_channel_and_guards_a_dark_capture() {
+        let r = ratio(Vec3::new(0.5, 0.0, 2.0), Vec3::new(1.0, 3.0, 1.0));
+        assert_eq!(r, Vec3::new(2.0, 1.0, 0.5));
+        let same = Vec3::new(0.3, 0.07, 1.9);
+        assert_eq!(ratio(same, same), Vec3::ONE);
+    }
+
+    #[test]
+    fn relit_follows_the_ratio_for_geometry_and_the_live_sky_for_the_rest() {
         let rgb = Vec3::new(0.2, 0.4, 0.8);
-        let at = |a: f32, k: f32| sky_scaled(rgb.extend(a), k);
-        assert_eq!(at(0.0, 0.9), rgb);
-        assert!((at(1.0, 0.9) - rgb * 0.9).length() < 1e-6);
-        assert!((at(0.5, 0.9) - rgb * 0.95).length() < 1e-6);
-        assert!((at(0.37, 1.0) - rgb).length() < 1e-6);
+        let sky = Vec3::new(0.1, 0.2, 0.4);
+        // Geometry only: the ratio scales it, the sky and k do not matter.
+        assert_eq!(
+            relit(rgb.extend(0.0), Vec3::splat(2.0), sky, 0.9),
+            rgb * 2.0
+        );
+        // Sky only (captured rgb is 0): the live sky times k.
+        let at = relit(Vec4::new(0.0, 0.0, 0.0, 1.0), Vec3::splat(5.0), sky, 0.9);
+        assert!((at - sky * 0.9).length() < 1e-6);
+        // A mix adds the two parts; with no Environment (k = 0) only the geometry remains.
+        let mixed = relit(rgb.extend(0.5), Vec3::ONE, sky, 0.0);
+        assert_eq!(mixed, rgb);
+        let mixed = relit(rgb.extend(0.5), Vec3::ONE, sky, 1.0);
+        assert!((mixed - (rgb + sky * 0.5)).length() < 1e-6);
     }
 }

@@ -384,6 +384,8 @@ pub fn read_ktx2(
 /// Bytes per texel of a probe cube: `R16G16B16A16_SFLOAT`.
 const PROBE_TEXEL_BYTES: u64 = 8;
 const PROBE_ALIGN: usize = 16;
+/// The key/value entry that carries a probe's baked irradiance: three little-endian `f32`.
+const PROBE_IRRADIANCE_KEY: &[u8] = b"LudionProbeIrradiance\0";
 
 fn probe_level_bytes(face: u32, level: u32) -> u64 {
     let edge = u64::from((face >> level).max(1));
@@ -392,24 +394,36 @@ fn probe_level_bytes(face: u32, level: u32) -> u64 {
 
 /// Serialises a prefiltered probe cube as a KTX2 file: `R16G16B16A16_SFLOAT`, six faces, no layers,
 /// no supercompression. `levels[l]` holds mip `l`'s six faces back to back (+X, −X, +Y, −Y, +Z, −Z),
-/// each `edge × edge` texels with tight rows, `edge = max(face >> l, 1)`.
+/// each `edge × edge` texels with tight rows, `edge = max(face >> l, 1)`. `irradiance` is the
+/// probe's baked diffuse irradiance, stored as one key/value entry.
 ///
 /// # Example
 /// ```
 /// use ludion_assets::cooked::{read_probe_cube, write_probe_cube};
 /// let levels = vec![vec![7u8; 6 * 2 * 2 * 8], vec![9u8; 6 * 8]];
-/// let bytes = write_probe_cube(2, &levels);
-/// assert_eq!(read_probe_cube(&bytes, 2, 2)?, levels);
+/// let bytes = write_probe_cube(2, &levels, [0.5, 1.0, 2.0]);
+/// assert_eq!(read_probe_cube(&bytes, 2, 2)?, (levels, [0.5, 1.0, 2.0]));
 /// # Ok::<(), ludion_assets::cooked::Ktx2Error>(())
 /// ```
-pub fn write_probe_cube(face: u32, levels: &[Vec<u8>]) -> Vec<u8> {
+pub fn write_probe_cube(face: u32, levels: &[Vec<u8>], irradiance: [f32; 3]) -> Vec<u8> {
     let region = dfd_region_of(Format::R16G16B16A16_SFLOAT);
     let level_count = levels.len();
     let dfd_offset = Header::LENGTH + level_count * LevelIndex::LENGTH;
 
+    // The key/value block sits right after the descriptor (both are 4-aligned): the entry's byte
+    // length, the key, the value, then padding to 4.
+    let mut kvd = Vec::new();
+    kvd.extend_from_slice(&((PROBE_IRRADIANCE_KEY.len() + 12) as u32).to_le_bytes());
+    kvd.extend_from_slice(PROBE_IRRADIANCE_KEY);
+    for c in irradiance {
+        kvd.extend_from_slice(&c.to_le_bytes());
+    }
+    kvd.resize(kvd.len().next_multiple_of(4), 0);
+    let kvd_offset = dfd_offset + region.len();
+
     // Smallest level first: offsets run from the last level back to level 0.
     let mut offsets = vec![0usize; level_count];
-    let mut cursor = (dfd_offset + region.len()).next_multiple_of(PROBE_ALIGN);
+    let mut cursor = (kvd_offset + kvd.len()).next_multiple_of(PROBE_ALIGN);
     for (offset, level) in offsets.iter_mut().zip(levels).rev() {
         *offset = cursor;
         cursor = (cursor + level.len()).next_multiple_of(PROBE_ALIGN);
@@ -428,8 +442,8 @@ pub fn write_probe_cube(face: u32, levels: &[Vec<u8>]) -> Vec<u8> {
         index: Index {
             dfd_byte_offset: dfd_offset as u32,
             dfd_byte_length: region.len() as u32,
-            kvd_byte_offset: 0,
-            kvd_byte_length: 0,
+            kvd_byte_offset: kvd_offset as u32,
+            kvd_byte_length: kvd.len() as u32,
             sgd_byte_offset: 0,
             sgd_byte_length: 0,
         },
@@ -446,6 +460,7 @@ pub fn write_probe_cube(face: u32, levels: &[Vec<u8>]) -> Vec<u8> {
         out.extend_from_slice(&entry.as_bytes());
     }
     out.extend_from_slice(&region);
+    out.extend_from_slice(&kvd);
     for (offset, level) in offsets.iter().zip(levels).rev() {
         out.resize(*offset, 0);
         out.extend_from_slice(level);
@@ -455,12 +470,12 @@ pub fn write_probe_cube(face: u32, levels: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// Reads a probe cube written by [`write_probe_cube`], validating that it is exactly a
-/// `face × face` cube of `level_count` whole levels.
+/// `face × face` cube of `level_count` whole levels. Returns the levels and the stored irradiance.
 ///
 /// # Errors
 /// [`Ktx2Error`] for a malformed or truncated container, another format, supercompression, a layout
-/// that is not a six-face cube of the requested extent, or a level of the wrong length. Never
-/// panics on file data.
+/// that is not a six-face cube of the requested extent, a level of the wrong length, or a missing
+/// irradiance entry. Never panics on file data.
 ///
 /// # Example
 /// ```
@@ -471,7 +486,7 @@ pub fn read_probe_cube(
     bytes: &[u8],
     face: u32,
     level_count: u32,
-) -> Result<Vec<Vec<u8>>, Ktx2Error> {
+) -> Result<(Vec<Vec<u8>>, [f32; 3]), Ktx2Error> {
     let expected = Format::R16G16B16A16_SFLOAT;
     // `ktx2` 0.5 panics on some corrupt descriptors, so `Reader::new` only ever sees the exact
     // descriptor the writer emits.
@@ -525,6 +540,13 @@ pub fn read_probe_cube(
             max: level_count,
         });
     }
+    let irradiance = field(56)
+        .zip(field(60))
+        .and_then(|(offset, length)| {
+            bytes.get(offset as usize..(offset as usize).checked_add(length as usize)?)
+        })
+        .and_then(probe_irradiance)
+        .ok_or_else(|| Ktx2Error::Parse("the probe irradiance entry is missing".to_string()))?;
     let mut levels = Vec::with_capacity(level_count as usize);
     for (index, level) in reader.levels().enumerate() {
         let expected = probe_level_bytes(face, index as u32);
@@ -542,7 +564,19 @@ pub fn read_probe_cube(
             "the level index is incomplete".to_string(),
         ));
     }
-    Ok(levels)
+    Ok((levels, irradiance))
+}
+
+/// The irradiance value of the key/value block `kvd`, if its first entry is the probe's.
+fn probe_irradiance(kvd: &[u8]) -> Option<[f32; 3]> {
+    let length = u32::from_le_bytes(kvd.get(..4)?.try_into().ok()?) as usize;
+    let entry = kvd.get(4..4usize.checked_add(length)?)?;
+    let value = entry.strip_prefix(PROBE_IRRADIANCE_KEY)?;
+    if value.len() != 12 {
+        return None;
+    }
+    let c = |i: usize| f32::from_le_bytes(value[i * 4..i * 4 + 4].try_into().expect("4 bytes"));
+    Some([c(0), c(1), c(2)])
 }
 
 #[cfg(test)]
@@ -645,13 +679,28 @@ mod tests {
     #[test]
     fn a_probe_cube_round_trips() {
         let levels = probe_levels(8, 4);
-        let bytes = write_probe_cube(8, &levels);
-        assert_eq!(read_probe_cube(&bytes, 8, 4).unwrap(), levels);
+        let bytes = write_probe_cube(8, &levels, [0.25, 3.0, 1e-7]);
+        assert_eq!(
+            read_probe_cube(&bytes, 8, 4).unwrap(),
+            (levels, [0.25, 3.0, 1e-7])
+        );
+    }
+
+    #[test]
+    fn a_probe_cube_without_its_irradiance_is_an_error() {
+        let mut bytes = write_probe_cube(8, &probe_levels(8, 4), [1.0; 3]);
+        // Header index: kvd offset at byte 56, kvd length at 60.
+        bytes[60..64].copy_from_slice(&0u32.to_le_bytes());
+        assert!(read_probe_cube(&bytes, 8, 4).is_err());
+        let at = u32::from_le_bytes(bytes[56..60].try_into().unwrap()) as usize;
+        bytes[60..64].copy_from_slice(&40u32.to_le_bytes());
+        bytes[at + 4] = b'X';
+        assert!(read_probe_cube(&bytes, 8, 4).is_err());
     }
 
     #[test]
     fn a_truncated_probe_cube_is_an_error_not_a_panic() {
-        let bytes = write_probe_cube(8, &probe_levels(8, 4));
+        let bytes = write_probe_cube(8, &probe_levels(8, 4), [1.0; 3]);
         for cut in [0, 5, 12, 16, 60, 100, 200, bytes.len() / 2, bytes.len() - 1] {
             assert!(
                 read_probe_cube(&bytes[..cut], 8, 4).is_err(),
@@ -662,7 +711,7 @@ mod tests {
 
     #[test]
     fn a_probe_cube_of_another_shape_is_refused() {
-        let bytes = write_probe_cube(8, &probe_levels(8, 4));
+        let bytes = write_probe_cube(8, &probe_levels(8, 4), [1.0; 3]);
         assert!(read_probe_cube(&bytes, 16, 4).is_err());
         assert!(read_probe_cube(&bytes, 8, 3).is_err());
         assert!(read_probe_cube(&bytes, 8, 5).is_err());

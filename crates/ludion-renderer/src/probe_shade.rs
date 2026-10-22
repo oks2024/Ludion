@@ -17,11 +17,9 @@ pub(crate) fn build_probe_list(
     scene: &RenderScene,
     cubes: Option<&ProbeCubes>,
     grid: [f32; 4],
-    intensity: f32,
     render_extent: (u32, u32),
 ) -> (ProbeList, Vec<u32>) {
     let mut list: ProbeList = bytemuck::Zeroable::zeroed();
-    list.header[2] = intensity;
     list.grid = grid;
     let Some(cubes) = cubes else {
         return (list, vec![0]);
@@ -31,7 +29,7 @@ pub(crate) fn build_probe_list(
     order.sort_by(|&a, &b| probe_rank(&held[a], &held[b]));
     let ranked: Vec<ProbeData> = order.iter().map(|&i| held[i]).collect();
     for (k, &i) in order.iter().enumerate() {
-        list.probes[k] = shade_probe(&held[i], cubes.slots[i]);
+        list.probes[k] = shade_probe(&held[i], cubes.slots[i], cubes.irradiance[i]);
     }
     list.header[0] = ranked.len() as f32;
     list.header[1] = cubes.max_lod as f32;
@@ -39,7 +37,7 @@ pub(crate) fn build_probe_list(
     (list, masks)
 }
 
-fn shade_probe(probe: &ProbeData, slot: u32) -> ShadeProbe {
+fn shade_probe(probe: &ProbeData, slot: u32, baked: [f32; 3]) -> ShadeProbe {
     let column = |axis: Vec3| {
         let v = probe.rotation * axis;
         [v.x, v.y, v.z, 0.0]
@@ -60,6 +58,7 @@ fn shade_probe(probe: &ProbeData, slot: u32) -> ShadeProbe {
         axis_z: column(Vec3::Z),
         extent,
         params: [kind, probe.blend, 0.0, 0.0],
+        light: [baked[0], baked[1], baked[2], 0.0],
     }
 }
 
@@ -93,7 +92,8 @@ mod tests {
     use crate::probe_capture::tests::{lit_scene, mesh, probe_at};
     use crate::render::Renderer;
     use crate::scene::{
-        EnvironmentData, MeshShape, PostData, RenderCamera, RenderScene, TonemapOperator,
+        EnvironmentData, MeshShape, PostData, ProbeWorld, RenderCamera, RenderScene,
+        TonemapOperator,
     };
     use ludion_core::ids::EntityId;
     use ludion_core::math::glam::{Mat4, Quat};
@@ -333,5 +333,104 @@ mod tests {
             plain.rgba == viewed.rgba,
             "the view moved a byte of a probe-free frame"
         );
+    }
+
+    /// The probe the relight tests share: a box fitted to the room, no blend.
+    fn room_probe() -> ProbeData {
+        box_probe(1, Vec3::new(15.0, 5.0, 6.0), 0)
+    }
+
+    /// A static scene has live E = baked E, so the relight ratio is exactly 1: two frames agree, and
+    /// so do a fresh capture and a store hit.
+    #[test]
+    fn needs_gpu_a_static_probe_scene_renders_identically_across_frames_and_store_hits() {
+        let (Some(mut a), Some(mut b)) = (
+            renderer_or_skip("a static probe scene"),
+            renderer_or_skip("a static probe scene"),
+        ) else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("ludion-probe-relight-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        a.set_probe_store(Some(dir.clone()));
+        b.set_probe_store(Some(dir.clone()));
+        let size = FrameSize::native(64, 64);
+        let mut scene = room_scene();
+        scene.probes = vec![room_probe()];
+        let first = a.render(&scene, size).expect("first frame");
+        let second = a.render(&scene, size).expect("second frame");
+        assert!(
+            first.rgba == second.rgba,
+            "a static scene changed between frames"
+        );
+        let hit = b.render(&scene, size).expect("a store hit renders");
+        assert_eq!(
+            b.probe_resolve().probes.iter().filter(|p| p.loaded).count(),
+            1
+        );
+        assert!(
+            first.rgba == hit.rgba,
+            "a store hit differs from a fresh capture"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The capture is frozen, the live ambient is not: raising it brightens a pixel that reflects only
+    /// probe geometry, and leaving it alone changes nothing.
+    #[test]
+    fn needs_gpu_a_raised_live_ambient_brightens_the_probe_geometry() {
+        let Some(r) = renderer_or_skip("the relight follows the live ambient") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = room_scene();
+        scene.post = scene.post.map(|post| PostData {
+            exposure: 0.05,
+            ..post
+        });
+        scene.probes = vec![room_probe()];
+        scene.probe_world = Some(ProbeWorld::new(scene.clone()));
+        let before = r.render(&scene, size).expect("baseline");
+        let same = r.render(&scene, size).expect("unchanged ambient");
+        assert!(before.rgba == same.rgba);
+        scene.ambient = [1.0; 3];
+        let after = r.render(&scene, size).expect("raised ambient");
+        // The centre pixel reflects the red wall.
+        let [r0, _, _] = pixel(&before, 32, 32);
+        let [r1, _, _] = pixel(&after, 32, 32);
+        assert!(r0 > 0, "no signal to compare: {r0}");
+        assert!(r1 > r0 + 4, "the wall did not brighten: {r0} -> {r1}");
+        assert_eq!(
+            r.probe_resolve().resolve,
+            1,
+            "the ambient recaptured the probe"
+        );
+    }
+
+    /// A probe that captured nothing but sky shades like no probe: its sky fraction is the live sky.
+    #[test]
+    fn needs_gpu_a_sky_only_probe_matches_no_probe() {
+        let Some(r) = renderer_or_skip("a sky-only probe over a glossy floor") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = room_scene();
+        scene.meshes.truncate(1);
+        let bare = r.render(&scene, size).expect("render without a probe");
+        let mut empty_world = scene.clone();
+        empty_world.meshes.clear();
+        scene.probes = vec![room_probe()];
+        scene.probe_world = Some(ProbeWorld::new(empty_world));
+        let probed = r
+            .render(&scene, size)
+            .expect("render with a sky-only probe");
+        let worst = bare
+            .rgba
+            .iter()
+            .zip(&probed.rgba)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert!(worst <= 3, "a sky-only probe moved a channel by {worst}");
     }
 }

@@ -384,6 +384,9 @@ pub struct Renderer {
     /// grid-hash-keyed probe cache (`gi_bake.rs`, again the `ibl` shape). Resolved once per frame in
     /// [`Renderer::prepare_frame`] right after `voxel_bake`, whose occupancy texture it traces.
     gi_bake: GiBake,
+    /// The probe relight kernel: the irradiance E at a capture point (baked with a probe) and at the
+    /// ranked probes' centres (live, every frame) (`probe_relight.rs`).
+    probe_relight: crate::probe_relight::ProbeRelight,
     /// The dynamic-light injection: the compute pipeline the frame graph's one compute pass
     /// dispatches, and the 1×1×1 fallback volume every frame without that pass binds
     /// (`gi_inject.rs`). Its per-frame uploads are built in [`Renderer::prepare_frame`]; the volume
@@ -531,6 +534,7 @@ impl Renderer {
         let ibl = Ibl::new(&gpu);
         let voxel_bake = VoxelBake::new();
         let gi_bake = GiBake::new(&gpu);
+        let probe_relight = crate::probe_relight::ProbeRelight::new(&gpu);
         let gi_inject = GiInject::new(&gpu);
 
         Ok(Renderer {
@@ -563,6 +567,7 @@ impl Renderer {
             capture_code_key: Cell::new(None),
             voxel_bake,
             gi_bake,
+            probe_relight,
             gi_inject,
             quality: Quality::FULL,
             quality_params: QualityParams::FULL,
@@ -742,6 +747,10 @@ impl Renderer {
         part("ibl.wgsl", include_str!("shaders/ibl.wgsl"));
         part("gi_bake.wgsl", include_str!("shaders/gi_bake.wgsl"));
         part("gi_inject.wgsl", include_str!("shaders/gi_inject.wgsl"));
+        part(
+            "probe_relight.wgsl",
+            include_str!("shaders/probe_relight.wgsl"),
+        );
         let key = ludion_assets::content_hash(&bytes);
         self.capture_code_key.set(Some(key));
         key
@@ -1225,13 +1234,15 @@ impl Renderer {
     }
 
     /// Renders one derived probe-face scene through the capture graph and copies the result into
-    /// `dest`.
+    /// `dest`. With `measure`, also returns the irradiance at the face's camera, composed from the
+    /// face scene's own environment, GI volumes and ambient (`probe_relight.wgsl`).
     pub(crate) fn capture_probe_face(
         &self,
         face_scene: &RenderScene,
         face_size: u32,
+        measure: bool,
         dest: wgpu::TexelCopyTextureInfo<'_>,
-    ) {
+    ) -> Option<[f32; 3]> {
         let size = FrameSize::native(face_size, face_size);
         let chain = PostChain::for_scene(face_scene).masked(&self.quality, &self.quality_params);
         let (graph, output) = build_probe_capture_graph(face_size, chain);
@@ -1240,6 +1251,17 @@ impl Renderer {
         self.gpu
             .execute_into(&schedule, output, &recorder, dest)
             .expect("a probe face renders");
+        measure.then(|| {
+            let out = self.probe_relight.irradiance(
+                &self.gpu,
+                &recorder.resolved_env,
+                &recorder.resolved_gi,
+                recorder.gi_strengths,
+                face_scene.ambient,
+                &[face_scene.camera.position],
+            );
+            crate::probe_relight::ProbeRelight::read(&self.gpu, &out, 1)[0]
+        })
     }
 
     /// Uploads every per-frame resource and returns the recorder that will draw it. `size` rides
@@ -1449,13 +1471,26 @@ impl Renderer {
             scene,
             probe_cubes.as_ref(),
             lights_raw.header.grid,
-            if resolved_env.params[0] > 0.5 {
-                resolved_env.params[1]
-            } else {
-                1.0
-            },
             size.render,
         );
+        // The live irradiance at each ranked probe's capture point, the relight's numerator. Without
+        // probes a one-entry fallback is bound and never read.
+        let probe_live_buf = if probe_cubes.is_some() {
+            let centres: Vec<Vec3> = probe_list.probes[..probe_list.header[0] as usize]
+                .iter()
+                .map(|probe| Vec3::new(probe.center[0], probe.center[1], probe.center[2]))
+                .collect();
+            self.probe_relight.irradiance(
+                &self.gpu,
+                &resolved_env,
+                &resolved_gi,
+                gi_strengths,
+                scene.ambient,
+                &centres,
+            )
+        } else {
+            init_buffer(device, wgpu::BufferUsages::STORAGE, &[0u8; 16])
+        };
         let probe_list_buf = init_buffer(
             device,
             wgpu::BufferUsages::UNIFORM,
@@ -1485,6 +1520,7 @@ impl Renderer {
             lights_bg,
             probe_list_buf,
             probe_mask_buf,
+            probe_live_buf,
             probe_cube_view,
             sun_buf,
             sun: scene.sun,
@@ -2534,11 +2570,11 @@ enum UiBatch {
 /// one component, are both **sample-time** (neither participates in the bake's cache key by value),
 /// and land in the same uniform.
 #[derive(Clone, Copy)]
-struct GiStrengths {
+pub(crate) struct GiStrengths {
     /// `GiVolume.sky_visibility`, or `0` when the scene declares no `GiVolume`.
-    sky_visibility: f32,
+    pub(crate) sky_visibility: f32,
     /// `GiVolume.bounce`, or `0` when the scene declares no `GiVolume`.
-    bounce: f32,
+    pub(crate) bounce: f32,
 }
 
 /// Records the frame graph's passes; constructed per frame with the uploaded resources.
@@ -2562,6 +2598,8 @@ struct FrameRecorder<'a> {
     /// array (`None`: the renderer's fallback is bound and the uniform's count is 0).
     probe_list_buf: wgpu::Buffer,
     probe_mask_buf: wgpu::Buffer,
+    /// The live irradiance at each ranked probe's centre (`probe_relight.rs`), one `vec4` each.
+    probe_live_buf: wgpu::Buffer,
     probe_cube_view: Option<wgpu::TextureView>,
     /// The mesh group-2 sun uniform (real when the scene has a sun, zeroed otherwise). Also bound to
     /// the shadow pass's `ShadowView` layout — its first 64 bytes are `light_space`.
@@ -3247,6 +3285,10 @@ impl FrameRecorder<'_> {
                 wgpu::BindGroupEntry {
                     binding: shader_gen::PROBE_MASK_BINDING,
                     resource: self.probe_mask_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::PROBE_LIVE_BINDING,
+                    resource: self.probe_live_buf.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::REFLECTIONS_BINDING,
@@ -4857,7 +4899,7 @@ enum Snippet {
     /// The cluster grid's consts and `cluster_cell`, binding-free (`lights.wgsl`'s index, the
     /// reflections pass's probe masks).
     ClusterGrid,
-    /// `ShadeProbe`, `probe_weight`, `probe_lookup` and `probe_sky_scaled`, binding-free
+    /// `ShadeProbe`, `probe_weight`, `probe_lookup`, `probe_ratio` and `probe_relit`, binding-free
     /// (reflections; the twins of `probe.rs`).
     Probes,
     /// The clustered-forward light set: the grid consts, the `Light`/`LightHeader` structs, all four
@@ -5154,7 +5196,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Reflections,
-        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_refl_probe_cubes_probe_list_probe_mask_bgl,
+        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_refl_probe_cubes_probe_list_probe_mask_probe_live_bgl,
     },
     LayoutDesc {
         id: LayoutId::HizSeed,

@@ -1,7 +1,7 @@
 // Reflection-probe shading, binding-free: a probe's weight at a point and its parallax-corrected
-// cube lookup, plus the sky-fraction intensity. The `reflections` pass composes it; a transparent
-// mesh shades probes through the same functions. Twins of `probe.rs`'s `probe_weight`,
-// `probe_lookup` and `sky_scaled`, in the same operation order.
+// cube lookup, plus the relight of its captured radiance. The `reflections` pass composes it; a
+// transparent mesh shades probes through the same functions. Twins of `probe.rs`'s `probe_weight`,
+// `probe_lookup`, `ratio` and `relit`, in the same operation order.
 //
 // Every member is a `vec4` so the struct has a 16-byte stride in a uniform array.
 struct ShadeProbe {
@@ -15,6 +15,8 @@ struct ShadeProbe {
     extent: vec4<f32>,
     // x = 0 for a box, 1 for a sphere; y = the outward blend distance.
     params: vec4<f32>,
+    // xyz = the irradiance baked with the capture (the relight's denominator); w unused.
+    light: vec4<f32>,
 };
 
 const MAX_SHADE_PROBES: u32 = 32u;
@@ -70,8 +72,13 @@ fn probe_lookup(probe: ShadeProbe, p: vec3<f32>, r: vec3<f32>) -> vec3<f32> {
     return probe.axis_x.xyz * local.x + probe.axis_y.xyz * local.y + probe.axis_z.xyz * local.z;
 }
 
-// A prefiltered probe sample with `ibl_intensity` `k` applied to its sky-visible fraction (alpha)
-// only: the captured geometry stays physical, the captured sky matches the sky fill.
-fn probe_sky_scaled(sample: vec4<f32>, k: f32) -> vec3<f32> {
-    return sample.rgb * (1.0 - sample.a + sample.a * k);
+// The live-to-baked irradiance ratio, per channel; 1 where the baked value is too small to divide by.
+fn probe_ratio(baked: vec3<f32>, live: vec3<f32>) -> vec3<f32> {
+    return select(vec3<f32>(1.0), live / baked, baked > vec3<f32>(1e-6));
+}
+
+// A prefiltered probe sample relit: its geometry radiance (rgb) follows the irradiance `ratio`, its
+// sky fraction (alpha) is the live sky `sky` (the sky cube along the same ray) scaled by `k`.
+fn probe_relit(sample: vec4<f32>, ratio: vec3<f32>, sky: vec3<f32>, k: f32) -> vec3<f32> {
+    return sample.rgb * ratio + sample.a * sky * k;
 }

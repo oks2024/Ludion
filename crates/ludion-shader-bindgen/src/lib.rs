@@ -80,6 +80,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "prepass.wgsl",
     "probe_debug.wgsl",
     "probe_face.wgsl",
+    "probe_relight.wgsl",
     "reflections.wgsl",
     "resolve.wgsl",
     "shadow.wgsl",
@@ -108,7 +109,12 @@ pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl"];
 /// The renderer shaders built outside `ShaderId`, with auto-derived layouts (`layout: None`); the
 /// renderer's `shader_ids_cover_the_bindgen_list` test keeps this and `ShaderId::all()` disjoint and
 /// together equal to [`RENDERER_SHADERS`].
-pub const COMPUTE_SHADERS: &[&str] = &["gi_bake.wgsl", "gi_inject.wgsl", "ibl.wgsl"];
+pub const COMPUTE_SHADERS: &[&str] = &[
+    "gi_bake.wgsl",
+    "gi_inject.wgsl",
+    "ibl.wgsl",
+    "probe_relight.wgsl",
+];
 
 /// The shared-snippet composition registry (Plan/shader-bindgen.md decision 16): each renderer shader
 /// maps to the ordered snippet file names (under `shaders/snippets/`) prepended before its own body.

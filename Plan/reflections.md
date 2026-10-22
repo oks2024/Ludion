@@ -165,13 +165,28 @@ interiors**. Large open water is not a driver.
 
     Moving content is SSR's job.
 17. **Relight, so the run clock never forces a rebake.**
-    - The capture writes sky visibility into alpha, and the resolve fills sky-masked texels from the
-      live sky IBL.
-    - Probe radiance is stored divided by the baked diffuse irradiance at the capture point, then
-      multiplied by the live GI SH irradiance at runtime.
-    - Without a `GiVolume`, the ratio is 1.
-    - Known limit: a strong local light change inside a box room, which the reference game does not
-      do.
+    - The capture stores geometry only: rgb is 0 where the depth is untouched (sky) and alpha is the
+      sky mask, so after prefiltering rgb is geometry radiance and alpha the sky fraction. The resolve
+      is `rgb · ratio + a · sky_cube(r) · k`, the sky cube being the live sky specular cube along the
+      reflection ray and `k` = `ibl_intensity` with an `Environment`, 0 without one.
+    - `ratio` = live E / baked E per channel (1 where baked E ≤ 1e-6), E being the normal-free
+      diffuse irradiance at the probe's capture point, composed like `mesh.wgsl`'s ambient term with
+      `diffuse = 1` and no occlusion: `k · mean(irradiance cube at ±X ±Y ±Z) + ambient`, times
+      `mix(1, sky visibility DC, sky_visibility)` with a `GiVolume`, plus `bounce · bounce DC` at
+      `bounce > 0`. One kernel (`probe_relight.wgsl`) computes both: baked at capture, live per
+      frame, so a static scene's ratio is x / x = 1 exactly.
+    - Baked E is stored with the cube (a KTX2 key/value entry, bake version 4), not divided into the
+      texels: a dark capture's tiny E would overflow fp16.
+    - Amended 2026-10-22: E is computed with or without a `GiVolume` (the old "ratio 1 without one"
+      would freeze the ambient and `ibl_intensity` the clock moves). The dynamic injection is
+      excluded: it is a graph transient, and it carries moving lights, not the clock.
+    - Clock check (`games/vigil/src/clock.rs`): the moon direction and colour and the sky colours
+      change in quantized steps (GI rebake, IBL re-prefilter) and ambient and `ibl_intensity` follow
+      the clock continuously; E reads all of them live and the sky fraction reads the live sky cube,
+      so every clock quantity is tracked. Probes capture the frozen frame-0 world, so the store key
+      never sees the clock.
+    - Known limits: the moon's direct light on captured geometry is tracked only through the bounce
+      term; a strong local light change inside a box room, which the reference game does not do.
 18. **The sky cube matches the probe face size**, with a chain down to 8×8 on decision 4's function. It is
     a probe at infinity, prefiltered by the same code path, so the hand-off from probes to the sky is
     seamless.

@@ -19,8 +19,9 @@ use crate::quality::{Quality, QualityParams};
 use crate::scene::{MeshTexture, RenderScene};
 
 /// Bump whenever the capture or the prefilter produces different bytes for the same input; every
-/// stored entry is then orphaned.
-pub(crate) const PROBE_BAKE_VERSION: u32 = 3;
+/// stored entry is then orphaned. 4: the capture holds geometry only (sky rgb 0) and the entry
+/// carries the baked irradiance the live relight divides by.
+pub(crate) const PROBE_BAKE_VERSION: u32 = 4;
 
 const TEXEL_BYTES: u32 = 8;
 
@@ -169,25 +170,32 @@ fn entry_path(dir: &Path, key: u64) -> PathBuf {
     dir.join(cooked_file_name(key))
 }
 
-/// The stored levels for `key`, or `None` for a missing, unreadable or invalid entry (a miss).
+/// The stored levels and baked irradiance for `key`, or `None` for a missing, unreadable or invalid
+/// entry (a miss).
 pub(crate) fn read_entry(
     dir: &Path,
     key: u64,
     face: u32,
     level_count: u32,
-) -> Option<Vec<Vec<u8>>> {
+) -> Option<(Vec<Vec<u8>>, [f32; 3])> {
     let bytes = std::fs::read(entry_path(dir, key)).ok()?;
     read_probe_cube(&bytes, face, level_count).ok()
 }
 
 /// Writes the entry atomically (a temp file, then a rename). A failure is dropped: the store is a
 /// cache and the slot is already correct.
-pub(crate) fn write_entry(dir: &Path, key: u64, face: u32, levels: &[Vec<u8>]) {
+pub(crate) fn write_entry(
+    dir: &Path,
+    key: u64,
+    face: u32,
+    levels: &[Vec<u8>],
+    irradiance: [f32; 3],
+) {
     let path = entry_path(dir, key);
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        std::fs::write(&temp, write_probe_cube(face, levels))?;
+        std::fs::write(&temp, write_probe_cube(face, levels, irradiance))?;
         std::fs::rename(&temp, &path)
     };
     if write().is_err() {

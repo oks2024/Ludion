@@ -84,7 +84,8 @@ onto the volume from there. `Transform.scale` is ignored — size the shape, nev
 - **At most 32 probes per scene** (`L1278`). Merge neighbours into larger volumes.
 - **A capture holds what the world looks like at load** — meshes, the sky and the lighting. Sprites,
   particles, text and editor markers are absent, and a prop that moves later does not move in it.
-  Its sky-visible part scales with `Environment.ibl_intensity`.
+  Its sky part follows the live sky, and its geometry follows the live ambient, `ibl_intensity` and
+  GI, so a run clock needs no rebake.
 - **`shape`, `blend` and `priority` never recapture** — they only change how the cube is projected
   and weighted. Moving the probe recaptures it. What it sees (geometry, lights, `Environment`, the
   textures) is the world at the last load, so an in-session edit waits for a reload; the quality
