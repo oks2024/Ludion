@@ -734,18 +734,18 @@ pub struct Sun {
     pub direction: [f32; 4],
     pub color: [f32; 4],
     pub pcf: u32,
-    pub pad0: f32,
-    pub pad1: f32,
-    pub pad2: f32,
+    pub disc_sin: f32,
+    pub disc_cos: f32,
+    pub disc_spread: f32,
 }
 const _: () = assert!(core::mem::size_of::<Sun>() == 112);
 const _: () = assert!(core::mem::offset_of!(Sun, light_space) == 0);
 const _: () = assert!(core::mem::offset_of!(Sun, direction) == 64);
 const _: () = assert!(core::mem::offset_of!(Sun, color) == 80);
 const _: () = assert!(core::mem::offset_of!(Sun, pcf) == 96);
-const _: () = assert!(core::mem::offset_of!(Sun, pad0) == 100);
-const _: () = assert!(core::mem::offset_of!(Sun, pad1) == 104);
-const _: () = assert!(core::mem::offset_of!(Sun, pad2) == 108);
+const _: () = assert!(core::mem::offset_of!(Sun, disc_sin) == 100);
+const _: () = assert!(core::mem::offset_of!(Sun, disc_cos) == 104);
+const _: () = assert!(core::mem::offset_of!(Sun, disc_spread) == 108);
 
 /// WGSL `struct Ui`.
 ///

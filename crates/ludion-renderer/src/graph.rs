@@ -2974,6 +2974,7 @@ mod tests {
             color: ludion_core::math::glam::Vec3::ONE,
             light_space: ludion_core::math::glam::Mat4::IDENTITY,
             bias: 0.001,
+            angular_radius: 0.0,
         });
         scene
     }

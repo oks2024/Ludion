@@ -785,6 +785,14 @@ pub struct DirectionalLight {
     #[schemars(range(min = 0.0))]
     #[schemars(extend("x-ui-range" = [0.0, 0.5]))]
     pub shadow_bias: f32,
+    /// Angular **radius** of the sun's disc, in degrees (default `0.0`, a point light), validated to
+    /// `[0, 45]` by `L1282`. Above 0 the sun's **specular** uses the closest direction on the disc to
+    /// the mirror ray, so a glossy surface shows a soft disc; diffuse is unchanged. The sun and the
+    /// moon are about `0.27`. Pair it with `Environment.sun_disc_size = 2 ×` this for a matching sky
+    /// disc.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[schemars(extend("x-ui-range" = [0.0, 2.0]))]
+    pub angular_radius: f32,
 }
 
 impl Default for DirectionalLight {
@@ -797,6 +805,7 @@ impl Default for DirectionalLight {
             shadow_near: 1.0,
             shadow_far: 200.0,
             shadow_bias: 0.05,
+            angular_radius: 0.0,
         }
     }
 }
@@ -812,7 +821,8 @@ pub(crate) fn as_stored_f32(value: &Value) -> Option<f64> {
 impl SemanticValidate for DirectionalLight {
     /// Rejects a `direction` that is zero-length or non-finite and a `shadow_near` that is not less
     /// than `shadow_far` (`L1123`, pointers `/direction` and `/shadow_far`, or `/shadow_near` if far
-    /// is not authored), and checks `color` as an HDR colour (`L1263`). An absent depth bound
+    /// is not authored), an `angular_radius` that is non-finite or outside `[0, 45]` degrees
+    /// (`L1282`, pointer `/angular_radius`), and checks `color` as an HDR colour (`L1263`). An absent depth bound
     /// compares as its default, so `shadow_near: 300` alone is caught. Defensive: runs on a
     /// schema-clean value; a wrong *shape* (missing, non-array, wrong arity) is the schema's job
     /// (`L1014`) and is passed through here. An absent field (the default is valid) adds nothing.
@@ -827,6 +837,14 @@ impl SemanticValidate for DirectionalLight {
                     out.push(directional_light_invalid_direction("/direction"));
                 }
             }
+        }
+        if let Some(radius) = value.get("angular_radius").and_then(as_stored_f32)
+            && !(0.0..=45.0).contains(&radius)
+        {
+            out.push(directional_light_invalid_angular_radius(
+                "/angular_radius",
+                radius,
+            ));
         }
         let default = DirectionalLight::default();
         let near = value.get("shadow_near").and_then(as_stored_f32);
@@ -871,6 +889,21 @@ fn directional_light_invalid_direction(pointer: &str) -> Diagnostic {
     )
     .with_path(pointer.to_string())
     .with_help("give the direction a non-zero, finite `[x, y, z]` (e.g. `[-0.3, -1.0, -0.2]`)")
+}
+
+/// `L1282` — a `DirectionalLight`'s angular radius is non-finite or outside `[0, 45]` degrees.
+fn directional_light_invalid_angular_radius(pointer: &str, radius: f64) -> Diagnostic {
+    Diagnostic::new(
+        code::DIRECTIONAL_LIGHT_INVALID_ANGULAR_RADIUS,
+        format!(
+            "the `DirectionalLight` angular_radius {radius} is non-finite or outside [0, 45] degrees"
+        ),
+    )
+    .with_path(pointer.to_string())
+    .with_help(
+        "use a finite angular radius in [0, 45] degrees; the moon and the sun are about 0.27 \
+         (default 0, a point light)",
+    )
 }
 
 /// The scene's sky and lighting environment: an authored-gradient procedural sky, a flat ambient
@@ -5246,12 +5279,38 @@ mod tests {
             shadow_near: 0.5,
             shadow_far: 120.0,
             shadow_bias: 0.003,
+            angular_radius: 0.27,
         };
         let json = serde_json::to_value(sun).unwrap();
         assert_eq!(
             serde_json::from_value::<DirectionalLight>(json).unwrap(),
             sun
         );
+    }
+
+    /// `angular_radius` is validated to `[0, 45]` degrees (`L1282`) and absent from the serialized
+    /// default, which keeps WorldHash and scene text unchanged at 0.
+    #[test]
+    fn directional_light_angular_radius_is_validated_and_skipped_at_zero() {
+        let registry = builtin_registry();
+        let scene = |radius: &str| {
+            format!(
+                "format: 1\nentities:\n  - components:\n      DirectionalLight:\n        \
+                 angular_radius: {radius}\n"
+            )
+        };
+        ludion_scene::check(&scene("0.27"), &registry).expect("0.27 is clean");
+        for bad in ["-1", "46"] {
+            let diagnostics = ludion_scene::check(&scene(bad), &registry).unwrap_err();
+            assert!(
+                diagnostics.iter().any(|d| d.code.as_str() == "L1282"
+                    && d.path.as_deref()
+                        == Some("/entities/0/components/DirectionalLight/angular_radius")),
+                "expected an L1282 for {bad}: {diagnostics:?}"
+            );
+        }
+        let json = serde_json::to_value(DirectionalLight::default()).unwrap();
+        assert!(json.get("angular_radius").is_none());
     }
 
     /// A well-formed `DirectionalLight` validates through the real scene checker — the registry

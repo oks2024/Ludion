@@ -1388,6 +1388,9 @@ pub mod code {
     /// `L1281` — `ludion export` baked a scene's reflection probes but an entry is missing from the
     /// bundle's probe store.
     pub const REFLECTION_PROBE_NOT_BUNDLED: DiagnosticCode = DiagnosticCode::new("L1281");
+    /// `L1282` — a `DirectionalLight`'s `angular_radius` is non-finite or outside `[0, 45]` degrees.
+    pub const DIRECTIONAL_LIGHT_INVALID_ANGULAR_RADIUS: DiagnosticCode =
+        DiagnosticCode::new("L1282");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -6991,6 +6994,18 @@ probe and its scene.
 
 Fix: rerun `ludion export`; the bake could not write the entry (disk full or permissions?).",
     },
+    CodeEntry {
+        code: code::DIRECTIONAL_LIGHT_INVALID_ANGULAR_RADIUS,
+        severity: Severity::Error,
+        title: "directional light angular radius is out of range",
+        explanation: "\
+A `DirectionalLight`'s `angular_radius` (pointer `/angular_radius`) is non-finite or outside
+`[0, 45]`. It is the sun disc's angular radius in degrees; above 0 the sun's specular highlight
+becomes a soft disc instead of a point. 0 (the default) is a point light, and 45 is far wider than
+any real light: the moon and the sun are both about 0.27.
+
+Fix: use a finite angular radius in `[0, 45]` degrees, e.g. `0.27`.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9642,6 +9657,7 @@ mod tests {
         code::REFLECTION_PROBE_NOT_STORED,
         code::REFLECTION_PROBE_UNKNOWN,
         code::REFLECTION_PROBE_NOT_BUNDLED,
+        code::DIRECTIONAL_LIGHT_INVALID_ANGULAR_RADIUS,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

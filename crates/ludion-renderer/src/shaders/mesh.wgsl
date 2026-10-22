@@ -32,12 +32,12 @@ struct Sun {
     // makes, on the client's side of the split between what the machine pays for and what the scene
     // authors.
     pcf: u32,
-    // The matrices give this struct 16-byte alignment, so its size rounds up to a multiple of 16 and
-    // the three lanes past `pcf` are part of the layout. They are spelled because `shader_gen`'s
-    // generated POD carries no implicit padding — a hole has to have a name.
-    pad0: f32,
-    pad1: f32,
-    pad2: f32,
+    // The disc's angular radius θ, for the specular representative point: sin θ, cos θ and
+    // tan θ / 2 (the roughness widening). All zero for a point light or a sunless frame; `disc_sin`
+    // is the gate. The matrices give this struct 16-byte alignment, so its size is 112 either way.
+    disc_sin: f32,
+    disc_cos: f32,
+    disc_spread: f32,
 };
 
 @group(2) @binding(0) var<uniform> sun: Sun;
@@ -504,12 +504,39 @@ fn shade(
         let h_sun = normalize(l_sun + v);
         let ndh_sun = max(dot(n, h_sun), 0.0);
         let vdh_sun = max(dot(v, h_sun), 0.0);
-        let d_sun = distribution_ggx(ndh_sun, alpha);
-        let vis_sun = visibility_smith(ndl_sun, ndv, alpha);
-        let f_sun = fresnel_schlick(vdh_sun, f0);
-        let specular_sun = PI * d_sun * vis_sun * f_sun;
         let shadow = sun_shadow(world_pos) * direct_ao;
-        acc = acc + (diffuse + specular_sun) * sun.color.rgb * ndl_sun * shadow;
+        if (sun.disc_sin > 0.0) {
+            // Representative point (Karis 2013): the direction inside the sun's disc closest to the
+            // mirror ray. The disc is absent from the IBL, the probes and SSR's input, so this is
+            // its only specular source.
+            let r = reflect(-v, n);
+            let c = dot(r, l_sun);
+            var l_rep = r;
+            if (c < sun.disc_cos) {
+                let t = r - c * l_sun;
+                let t_len = length(t);
+                l_rep = l_sun;
+                if (t_len > 1e-6) {
+                    l_rep = sun.disc_cos * l_sun + sun.disc_sin * (t / t_len);
+                }
+            }
+            let h_rep = normalize(l_rep + v);
+            let ndl_rep = max(dot(n, l_rep), 0.0);
+            let ndh_rep = max(dot(n, h_rep), 0.0);
+            let vdh_rep = max(dot(v, h_rep), 0.0);
+            // Widening alpha by the disc keeps the lobe energy-correct: scale by (alpha / alpha')^2.
+            let alpha_wide = min(alpha + sun.disc_spread, 1.0);
+            let norm = (alpha / alpha_wide) * (alpha / alpha_wide);
+            let specular_rep = PI * distribution_ggx(ndh_rep, alpha) * visibility_smith(ndl_rep, ndv, alpha)
+                * fresnel_schlick(vdh_rep, f0) * norm;
+            acc = acc + (diffuse * ndl_sun + specular_rep * ndl_rep) * sun.color.rgb * shadow;
+        } else {
+            let d_sun = distribution_ggx(ndh_sun, alpha);
+            let vis_sun = visibility_smith(ndl_sun, ndv, alpha);
+            let f_sun = fresnel_schlick(vdh_sun, f0);
+            let specular_sun = PI * d_sun * vis_sun * f_sun;
+            acc = acc + (diffuse + specular_sun) * sun.color.rgb * ndl_sun * shadow;
+        }
     }
     var specular_occlusion = occlusion_map;
     if (env.ao.x > 0.5) {

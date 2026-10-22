@@ -1892,12 +1892,19 @@ fn build_sun(sun: &DirectionalLight, center: Vec3) -> SunData {
     };
     let view = Mat4::look_to_rh(eye, direction, up);
     let projection = Mat4::orthographic_rh(-extent, extent, -extent, extent, near, far);
+    // Out of `[0, 45]` degrees is rejected upstream (`L1282`); extract falls back to a point light.
+    let angular_radius = if (0.0..=45.0).contains(&sun.angular_radius) {
+        sun.angular_radius.to_radians()
+    } else {
+        0.0
+    };
 
     SunData {
         direction,
         color: (Vec3::from(sun.color) * sun.intensity).max(Vec3::ZERO),
         light_space: projection * view,
         bias: sun.shadow_bias / (far - near),
+        angular_radius,
     }
 }
 
@@ -4616,6 +4623,24 @@ mod tests {
             data.bias,
             sun.shadow_bias / (sun.shadow_far - sun.shadow_near)
         );
+    }
+
+    /// `angular_radius` reaches the renderer in radians; a value outside `[0, 45]` degrees falls back
+    /// to a point light.
+    #[test]
+    fn sun_angular_radius_is_radians_and_falls_back_to_zero() {
+        let radius = |degrees: f32| {
+            let sun = DirectionalLight {
+                angular_radius: degrees,
+                ..DirectionalLight::default()
+            };
+            build_sun(&sun, Vec3::ZERO).angular_radius
+        };
+        assert_eq!(radius(0.5), 0.5f32.to_radians());
+        assert_eq!(radius(0.0), 0.0);
+        for bad in [-1.0, 46.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(radius(bad), 0.0);
+        }
     }
 
     /// `shadow_bias` is authored in world units; the renderer takes light-NDC depth, so the same

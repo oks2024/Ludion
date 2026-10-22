@@ -2332,7 +2332,9 @@ fn build_sun(scene: &RenderScene, shadowed: bool, pcf: u32) -> Sun {
             direction: [s.direction.x, s.direction.y, s.direction.z, s.bias],
             color: [s.color.x, s.color.y, s.color.z, 0.0],
             pcf,
-            ..Sun::zeroed()
+            disc_sin: s.angular_radius.sin(),
+            disc_cos: s.angular_radius.cos(),
+            disc_spread: 0.5 * s.angular_radius.tan(),
         },
         None => Sun {
             pcf,
@@ -7205,6 +7207,7 @@ mod tests {
             color,
             light_space: projection * view,
             bias,
+            angular_radius: 0.0,
         }
     }
 
@@ -7300,6 +7303,59 @@ mod tests {
             sunlit.rgba, sunlit_again.rgba,
             "the same sun scene renders byte-identically twice",
         );
+    }
+
+    /// `angular_radius` turns the sun's specular point into a soft disc: on a near-mirror plane that
+    /// reflects the sun, more pixels are bright and the peak does not rise, and two renders agree.
+    #[test]
+    fn needs_gpu_sun_angular_radius_widens_the_specular_highlight() {
+        let Some(renderer) = skip_or_renderer("sun_angular_radius_widens_the_specular_highlight")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.ambient = [0.0; 3];
+        // The sun travels toward −z and down, so it sits at +z above the plane and the camera at −z
+        // looks straight at its mirror image.
+        let eye = Vec3::new(0.0, 3.0, -5.196);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::perspective_rh(40.0_f32.to_radians(), 1.0, 0.1, 100.0),
+            position: eye,
+        };
+        let mut mirror = ground(20.0);
+        mirror.color = [1.0, 1.0, 1.0, 1.0];
+        mirror.material = [0.05, 1.0, 0.0];
+        scene.meshes = vec![mirror];
+        let mut sun = test_sun(Vec3::new(0.0, -0.5, -0.866), Vec3::splat(2.0e-5), 0.002);
+        let stats = |renderer: &Renderer, scene: &RenderScene| {
+            let img = renderer.render(scene, size).expect("render");
+            let lumas: Vec<u32> = (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .map(|(x, y)| luma(&img, x, y))
+                .collect();
+            let peak = lumas.iter().copied().max().unwrap_or(0);
+            let bright = lumas.iter().filter(|&&l| l >= 20).count();
+            (img.rgba, peak, bright)
+        };
+        scene.sun = Some(sun);
+        let (_, point_peak, point_bright) = stats(&renderer, &scene);
+        sun.angular_radius = 2.0_f32.to_radians();
+        scene.sun = Some(sun);
+        let (disc, disc_peak, disc_bright) = stats(&renderer, &scene);
+        let (disc_again, _, _) = stats(&renderer, &scene);
+        assert!(
+            disc_bright > point_bright,
+            "the disc covers more pixels: {point_bright} -> {disc_bright} (peak {point_peak} -> {disc_peak})"
+        );
+        assert!(
+            disc_peak <= point_peak,
+            "the disc does not raise the peak: {point_peak} -> {disc_peak}"
+        );
+        assert_eq!(disc, disc_again, "the disc renders byte-identically twice");
     }
 
     /// The post settings that make a rendered byte the sRGB encoding of the linear HDR value itself.

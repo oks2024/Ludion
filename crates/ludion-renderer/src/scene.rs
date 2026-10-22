@@ -303,6 +303,9 @@ pub struct SunData {
     /// Depth bias applied when sampling the shadow map, to fight acne: light-NDC depth at a 2048²
     /// map. `extract` converts the authored world-unit bias.
     pub bias: f32,
+    /// Angular radius of the light's disc in radians (already validated); `0.0` is a point light.
+    /// Only the specular term reads it.
+    pub angular_radius: f32,
 }
 
 /// The scene's sky and lighting environment — plain data for the renderer, resolved from the

@@ -72,7 +72,8 @@ else:
 - **`sun_disc_size`** — angular diameter of a sun/moon disc drawn in the sky, in **degrees** (default
   `0.0` = no disc). The disc's *direction* is not authored here — it is read from the scene's
   `DirectionalLight` at render time, so it sits exactly where the sun/moon light comes from. A size
-  authored with no `DirectionalLight` in the scene simply draws no disc.
+  authored with no `DirectionalLight` in the scene simply draws no disc. Set it to
+  `2 × DirectionalLight.angular_radius` so the disc and the sun's specular highlight match.
 - **`sun_disc_intensity`** — the disc's brightness, linear HDR, `>= 0` (default `1.0`); only relevant
   once `sun_disc_size > 0`.
 - **`ambient`** — a flat ambient floor added to every lit surface (`ambient × diffuse` on meshes,

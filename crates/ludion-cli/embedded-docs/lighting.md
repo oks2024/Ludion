@@ -36,6 +36,13 @@ across the ground — no other setup needed. A scene with **no** `DirectionalLig
 shadow pass, and its frame graph is byte-identical to one with no shadow support at all (the same
 conditional-pass pattern as `ludion docs screen-ui`'s overlay).
 
+**A sun that is a disc, not a point.** `angular_radius` (degrees, default `0` = a point) makes the
+sun's *specular* a soft disc, so a mirror puddle shows the moon as a disc rather than a dot; diffuse
+and shadows are unchanged. The moon and the sun are about `0.27`; outside `[0, 45]` or non-finite is
+`L1282`. Pair it with `Environment.sun_disc_size = 2 × angular_radius` for a matching sky disc (the
+analytic light is the only specular source; the sky disc is not also reflected). At `0` the scene
+renders byte-identically to before.
+
 **Direction, not rotation.** `direction` is an explicit `[x, y, z]` field, not the entity's
 `Transform` rotation — a hand-authored vector reads far more legibly in YAML than a quaternion, and
 stays agent-legible as plain numbers. It need not be unit length (normalized at extract). A

@@ -516,6 +516,7 @@ pub(crate) mod tests {
             light_space: Mat4::orthographic_rh(-20.0, 20.0, -20.0, 20.0, 1.0, 40.0)
                 * Mat4::look_to_rh(-dir * 20.0, dir, Vec3::Y),
             bias: 0.002,
+            angular_radius: 0.0,
         });
         scene.meshes = vec![
             mesh(
