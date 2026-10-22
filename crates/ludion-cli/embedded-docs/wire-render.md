@@ -96,6 +96,16 @@ Games record world-space debug lines (a character's motor, a platform's path) un
 Any string is accepted; a category nobody draws is absent from `drawn`, which is how to tell a typo
 from a quiet scene.
 
+`view` shows an SSR debug view in place of the composite, the same two views as
+`ludion render --debug-view`: `"ssr_confidence"` or `"ssr_footprint"`. A name sets it, `null` clears it,
+absent keeps it; the reply's `view` is the one in force. A view never turns SSR on: on a frame without
+SSR the normal frame is drawn (`render.dump_graph` shows whether `ssr_debug` is scheduled).
+
+```jsonc
+{"v": 1, "id": 9, "method": "render.debug", "params": {"view": "ssr_confidence"}}
+{"id": 9, "ok": {"kind": "render_debug", "enabled": [], "drawn": [], "view": "ssr_confidence"}, "frame": 12, "game_frame": 12}
+```
+
 ## Next
 
 - `ludion docs wire-protocol` — handshake, envelope, events.

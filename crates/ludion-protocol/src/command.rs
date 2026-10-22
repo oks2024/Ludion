@@ -986,7 +986,7 @@ pub struct RenderViewParams {
     /// The pose to fly to, an explicit `null` to clear the override, or absent to read it.
     #[serde(
         default,
-        deserialize_with = "explicit_null_pose",
+        deserialize_with = "explicit_null",
         skip_serializing_if = "Option::is_none"
     )]
     #[schemars(with = "Option<ViewPose>")]
@@ -1000,17 +1000,22 @@ pub struct RenderViewParams {
 /// everything on. Any string is accepted — a category nothing draws is simply never in the reply's
 /// `drawn`, which is how a client checks what a scene actually emits.
 ///
-/// The set is host render state, never world state: not hashed, not captured by `engine.snapshot`,
+/// `view` shows an SSR debug view in place of the composite: a name sets it, an explicit `null`
+/// clears it, and absent keeps what is in force. A view never turns SSR on — on a frame without
+/// SSR the normal frame is drawn.
+///
+/// The state is host render state, never world state: not hashed, not captured by `engine.snapshot`,
 /// not recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a
 /// screenshot taken with `motor` enabled shows the motor's lines.
 ///
 /// # Example
 /// ```
 /// use ludion_protocol::Command;
-/// use ludion_protocol::command::RenderDebugParams;
+/// use ludion_protocol::command::{RenderDebugParams, RenderDebugView};
 ///
 /// let cmd = Command::RenderDebug(RenderDebugParams {
 ///     categories: Some(vec!["path".to_string()]),
+///     view: None,
 /// });
 /// assert_eq!(
 ///     serde_json::to_value(&cmd).unwrap(),
@@ -1019,24 +1024,50 @@ pub struct RenderViewParams {
 ///
 /// // An absent `categories` only reads.
 /// assert_eq!(RenderDebugParams::default().categories, None);
+///
+/// // A `view` sets an SSR debug view, an explicit `null` clears it, an absent one keeps it.
+/// let set: RenderDebugParams = serde_json::from_str(r#"{"view": "ssr_confidence"}"#).unwrap();
+/// assert_eq!(set.view, Some(Some(RenderDebugView::SsrConfidence)));
+/// let cleared: RenderDebugParams = serde_json::from_str(r#"{"view": null}"#).unwrap();
+/// assert_eq!(cleared.view, Some(None));
 /// ```
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct RenderDebugParams {
     /// The categories to enable (`[]` for none, `"all"` for every one), or absent to read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub categories: Option<Vec<String>>,
+    /// The SSR debug view to show, an explicit `null` to clear it, or absent to keep it.
+    #[serde(
+        default,
+        deserialize_with = "explicit_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<RenderDebugView>")]
+    pub view: Option<Option<RenderDebugView>>,
 }
 
-/// Reads `pose` as a *present* value, so an explicit `null` survives as `Some(None)`.
+/// A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.
+/// The spelling matches `ludion render --debug-view`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderDebugView {
+    /// The per-texel trace confidence as a grey ramp.
+    SsrConfidence,
+    /// The colour-pyramid level each hit read.
+    SsrFootprint,
+}
+
+/// Reads an optional field as a *present* value, so an explicit `null` survives as `Some(None)`.
 ///
 /// Serde collapses a plain `Option<Option<T>>` field: a `null` and a missing key both deserialize to
 /// `None`, which would make "clear the override" indistinguishable from "read it". `#[serde(default)]`
 /// supplies the missing-key `None`; this is the other half.
-fn explicit_null_pose<'de, D>(deserializer: D) -> Result<Option<Option<ViewPose>>, D::Error>
+fn explicit_null<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
 {
-    Option::<ViewPose>::deserialize(deserializer).map(Some)
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// Parameters for `render.bounds`.
@@ -1530,6 +1561,31 @@ mod tests {
                 }},
             }),
             "an omitted fov serializes away, so the scene camera's own is what the pose means",
+        );
+        assert_eq!(serde_json::from_value::<Command>(value).unwrap(), set);
+    }
+
+    /// `render.debug`'s `view` has the same three forms as `render.view`'s `pose`: absent reads, an
+    /// explicit `null` clears, a name sets. An unknown name is an error, not a silent no-op.
+    #[test]
+    fn render_debug_view_tells_clear_apart_from_read_and_set() {
+        let parse = |text: &str| serde_json::from_str::<RenderDebugParams>(text);
+        assert_eq!(parse("{}").unwrap().view, None);
+        assert_eq!(parse(r#"{"view": null}"#).unwrap().view, Some(None));
+        assert_eq!(
+            parse(r#"{"view": "ssr_footprint"}"#).unwrap().view,
+            Some(Some(RenderDebugView::SsrFootprint))
+        );
+        assert!(parse(r#"{"view": "ssr_nonsense"}"#).is_err());
+
+        let set = Command::RenderDebug(RenderDebugParams {
+            categories: None,
+            view: Some(Some(RenderDebugView::SsrConfidence)),
+        });
+        let value = serde_json::to_value(&set).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "method": "render.debug", "params": { "view": "ssr_confidence" } })
         );
         assert_eq!(serde_json::from_value::<Command>(value).unwrap(), set);
     }

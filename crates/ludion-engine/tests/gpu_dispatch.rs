@@ -2,7 +2,7 @@
 //! adapterless machine (an `L2003` in the diagnostic), so CI without a GPU stays green.
 
 use ludion_engine::{Engine, GiRebakeMode, Transform, dispatch};
-use ludion_protocol::command::RenderScreenshotParams;
+use ludion_protocol::command::{RenderDebugParams, RenderDebugView, RenderScreenshotParams};
 use ludion_protocol::{Command, ResponseBody};
 
 /// A small scene with visible content, so a screenshot is non-trivial.
@@ -292,4 +292,51 @@ fn check_render_extent_names_the_scaled_pair() {
     let diag = engine.check_render_extent().unwrap_err();
     assert_eq!(diag.code.as_str(), "L2012");
     assert!(diag.message.contains("15360x8640"), "{}", diag.message);
+}
+
+/// **A live host draws the SSR view `render.debug` sets**: the frame differs from the normal one,
+/// and is the very picture the offline `--debug-view` renders at the same size.
+#[test]
+fn needs_gpu_render_debug_view_draws_the_ssr_view_the_cli_draws() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/gallery/mirror-floor.yaml");
+    let (w, h) = (160, 90);
+    let mut engine = Engine::new();
+    engine
+        .load_inline_scene(&std::fs::read_to_string(&scene).unwrap())
+        .unwrap();
+    let normal = match engine.render_png(w, h) {
+        Ok(png) => png,
+        Err(diag) if is_no_adapter(&diag) => {
+            eprintln!("[render.debug view] SKIPPED: no GPU adapter available");
+            return;
+        }
+        Err(diag) => panic!("render failed: {diag}"),
+    };
+    engine
+        .execute(Command::RenderDebug(RenderDebugParams {
+            categories: None,
+            view: Some(Some(RenderDebugView::SsrConfidence)),
+        }))
+        .unwrap();
+    let live = engine.render_png(w, h).unwrap();
+    assert_ne!(live, normal, "the view replaces the composite");
+
+    let offline = ludion_engine::render_scene_with_registry(
+        &ludion_engine::builtin_registry(),
+        &scene,
+        ludion_engine::FrameSize::native(w, h),
+        &ludion_engine::QualitySetting::full(),
+        false,
+        &[],
+        0,
+        &ludion_engine::DebugCategories::None,
+        Some(ludion_engine::DebugView::SsrConfidence),
+    )
+    .unwrap();
+    assert_eq!(
+        live,
+        offline.image.encode_png().unwrap(),
+        "the same bytes as --debug-view"
+    );
 }

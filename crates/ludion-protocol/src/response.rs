@@ -254,6 +254,11 @@ pub enum ResponseBody {
         /// The categories the last completed tick emitted lines for, sorted, whether or not they are
         /// enabled — so enabling a category nobody draws shows up as a missing entry here.
         drawn: Vec<String>,
+        /// The SSR debug view in force. It does not say whether the view was drawn: a view on a
+        /// frame without SSR draws the normal frame, and `render.dump_graph` shows whether
+        /// `ssr_debug` is scheduled.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<crate::command::RenderDebugView>,
     },
 
     /// Result of `stream.subscribe`.

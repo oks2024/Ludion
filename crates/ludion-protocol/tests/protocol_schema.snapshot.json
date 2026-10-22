@@ -510,7 +510,7 @@
         "type": "object"
       },
       "RenderDebugParams": {
-        "description": "Parameters for `render.debug`.\n\nOne verb that reads and sets. `categories` absent (`{}`) is a pure read; a list replaces the set\nof enabled debug-draw categories: `[]` turns everything off, and a list containing `\"all\"` turns\neverything on. Any string is accepted — a category nothing draws is simply never in the reply's\n`drawn`, which is how a client checks what a scene actually emits.\n\nThe set is host render state, never world state: not hashed, not captured by `engine.snapshot`,\nnot recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a\nscreenshot taken with `motor` enabled shows the motor's lines.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::RenderDebugParams;\n\nlet cmd = Command::RenderDebug(RenderDebugParams {\n    categories: Some(vec![\"path\".to_string()]),\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({ \"method\": \"render.debug\", \"params\": { \"categories\": [\"path\"] } }),\n);\n\n// An absent `categories` only reads.\nassert_eq!(RenderDebugParams::default().categories, None);\n```",
+        "description": "Parameters for `render.debug`.\n\nOne verb that reads and sets. `categories` absent (`{}`) is a pure read; a list replaces the set\nof enabled debug-draw categories: `[]` turns everything off, and a list containing `\"all\"` turns\neverything on. Any string is accepted — a category nothing draws is simply never in the reply's\n`drawn`, which is how a client checks what a scene actually emits.\n\n`view` shows an SSR debug view in place of the composite: a name sets it, an explicit `null`\nclears it, and absent keeps what is in force. A view never turns SSR on — on a frame without\nSSR the normal frame is drawn.\n\nThe state is host render state, never world state: not hashed, not captured by `engine.snapshot`,\nnot recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a\nscreenshot taken with `motor` enabled shows the motor's lines.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{RenderDebugParams, RenderDebugView};\n\nlet cmd = Command::RenderDebug(RenderDebugParams {\n    categories: Some(vec![\"path\".to_string()]),\n    view: None,\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({ \"method\": \"render.debug\", \"params\": { \"categories\": [\"path\"] } }),\n);\n\n// An absent `categories` only reads.\nassert_eq!(RenderDebugParams::default().categories, None);\n\n// A `view` sets an SSR debug view, an explicit `null` clears it, an absent one keeps it.\nlet set: RenderDebugParams = serde_json::from_str(r#\"{\"view\": \"ssr_confidence\"}\"#).unwrap();\nassert_eq!(set.view, Some(Some(RenderDebugView::SsrConfidence)));\nlet cleared: RenderDebugParams = serde_json::from_str(r#\"{\"view\": null}\"#).unwrap();\nassert_eq!(cleared.view, Some(None));\n```",
         "properties": {
           "categories": {
             "description": "The categories to enable (`[]` for none, `\"all\"` for every one), or absent to read.",
@@ -521,9 +521,35 @@
               "array",
               "null"
             ]
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RenderDebugView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The SSR debug view to show, an explicit `null` to clear it, or absent to keep it."
           }
         },
         "type": "object"
+      },
+      "RenderDebugView": {
+        "description": "A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.\nThe spelling matches `ludion render --debug-view`.",
+        "oneOf": [
+          {
+            "const": "ssr_confidence",
+            "description": "The per-texel trace confidence as a grey ramp.",
+            "type": "string"
+          },
+          {
+            "const": "ssr_footprint",
+            "description": "The colour-pyramid level each hit read.",
+            "type": "string"
+          }
+        ]
       },
       "RenderGiRebakeParams": {
         "description": "Parameters for `render.gi_rebake`.\n\nBoth fields are optional and independent, which is what lets one verb set, trigger, and query:\nan omitted `mode` leaves the lever where it is, so `{}` is a pure read of the reply's\n`mode` + `stale`.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{GiRebakeMode, RenderGiRebakeParams};\n\n// Hold the baseline *and* refresh it once, in one call.\nlet cmd = Command::RenderGiRebake(RenderGiRebakeParams {\n    mode: Some(GiRebakeMode::Hold),\n    rebake: true,\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({\n        \"method\": \"render.gi_rebake\",\n        \"params\": { \"mode\": \"hold\", \"rebake\": true },\n    }),\n);\n\n// The query form changes nothing.\nassert_eq!(RenderGiRebakeParams::default(), serde_json::from_str(\"{}\").unwrap());\n```",
@@ -2665,7 +2691,7 @@
         "type": "object"
       },
       "RenderDebugParams": {
-        "description": "Parameters for `render.debug`.\n\nOne verb that reads and sets. `categories` absent (`{}`) is a pure read; a list replaces the set\nof enabled debug-draw categories: `[]` turns everything off, and a list containing `\"all\"` turns\neverything on. Any string is accepted — a category nothing draws is simply never in the reply's\n`drawn`, which is how a client checks what a scene actually emits.\n\nThe set is host render state, never world state: not hashed, not captured by `engine.snapshot`,\nnot recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a\nscreenshot taken with `motor` enabled shows the motor's lines.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::RenderDebugParams;\n\nlet cmd = Command::RenderDebug(RenderDebugParams {\n    categories: Some(vec![\"path\".to_string()]),\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({ \"method\": \"render.debug\", \"params\": { \"categories\": [\"path\"] } }),\n);\n\n// An absent `categories` only reads.\nassert_eq!(RenderDebugParams::default().categories, None);\n```",
+        "description": "Parameters for `render.debug`.\n\nOne verb that reads and sets. `categories` absent (`{}`) is a pure read; a list replaces the set\nof enabled debug-draw categories: `[]` turns everything off, and a list containing `\"all\"` turns\neverything on. Any string is accepted — a category nothing draws is simply never in the reply's\n`drawn`, which is how a client checks what a scene actually emits.\n\n`view` shows an SSR debug view in place of the composite: a name sets it, an explicit `null`\nclears it, and absent keeps what is in force. A view never turns SSR on — on a frame without\nSSR the normal frame is drawn.\n\nThe state is host render state, never world state: not hashed, not captured by `engine.snapshot`,\nnot recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a\nscreenshot taken with `motor` enabled shows the motor's lines.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{RenderDebugParams, RenderDebugView};\n\nlet cmd = Command::RenderDebug(RenderDebugParams {\n    categories: Some(vec![\"path\".to_string()]),\n    view: None,\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({ \"method\": \"render.debug\", \"params\": { \"categories\": [\"path\"] } }),\n);\n\n// An absent `categories` only reads.\nassert_eq!(RenderDebugParams::default().categories, None);\n\n// A `view` sets an SSR debug view, an explicit `null` clears it, an absent one keeps it.\nlet set: RenderDebugParams = serde_json::from_str(r#\"{\"view\": \"ssr_confidence\"}\"#).unwrap();\nassert_eq!(set.view, Some(Some(RenderDebugView::SsrConfidence)));\nlet cleared: RenderDebugParams = serde_json::from_str(r#\"{\"view\": null}\"#).unwrap();\nassert_eq!(cleared.view, Some(None));\n```",
         "properties": {
           "categories": {
             "description": "The categories to enable (`[]` for none, `\"all\"` for every one), or absent to read.",
@@ -2676,9 +2702,35 @@
               "array",
               "null"
             ]
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RenderDebugView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The SSR debug view to show, an explicit `null` to clear it, or absent to keep it."
           }
         },
         "type": "object"
+      },
+      "RenderDebugView": {
+        "description": "A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.\nThe spelling matches `ludion render --debug-view`.",
+        "oneOf": [
+          {
+            "const": "ssr_confidence",
+            "description": "The per-texel trace confidence as a grey ramp.",
+            "type": "string"
+          },
+          {
+            "const": "ssr_footprint",
+            "description": "The colour-pyramid level each hit read.",
+            "type": "string"
+          }
+        ]
       },
       "RenderGiRebakeParams": {
         "description": "Parameters for `render.gi_rebake`.\n\nBoth fields are optional and independent, which is what lets one verb set, trigger, and query:\nan omitted `mode` leaves the lever where it is, so `{}` is a pure read of the reply's\n`mode` + `stale`.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{GiRebakeMode, RenderGiRebakeParams};\n\n// Hold the baseline *and* refresh it once, in one call.\nlet cmd = Command::RenderGiRebake(RenderGiRebakeParams {\n    mode: Some(GiRebakeMode::Hold),\n    rebake: true,\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({\n        \"method\": \"render.gi_rebake\",\n        \"params\": { \"mode\": \"hold\", \"rebake\": true },\n    }),\n);\n\n// The query form changes nothing.\nassert_eq!(RenderGiRebakeParams::default(), serde_json::from_str(\"{}\").unwrap());\n```",
@@ -4213,7 +4265,7 @@
         "type": "object"
       },
       "QualityProfile": {
-        "description": "The render quality a measurement was taken at: what the machine chose, which optional effects\nthat resolved to, and how hard each one worked.\n\nIt travels with a report for the reason [`SimProfile::threads`] does — two measurements taken\nunder different machine settings are not comparable, and only the report can say so. Quality is a\nper-machine host switch (`--quality`, `LUDION_QUALITY`), never scene content and never sim state,\nso nothing here affects a `WorldHash`: a report at `low` and one at `full` describe the same\nsimulation costing different pixels.\n\nThe `preset` label and the five toggles are the *choice*; the parameter axes below them are the\n*build* — a shader's sample count or a texture descriptor's size, reported as the renderer\ncurrently runs them. A false toggle leaves that effect's passes out of the frame graph entirely,\nso its axis describes work that was not done: `shadows: false` beside a `shadow_map_size` of 1024\nmeans no map of any size was drawn, and reading the axis without the toggle is the misreading\nevery toggle here exists to prevent.",
+        "description": "The render quality a measurement was taken at: what the machine chose, which optional effects\nthat resolved to, and how hard each one worked.\n\nIt travels with a report for the reason [`SimProfile::threads`] does — two measurements taken\nunder different machine settings are not comparable, and only the report can say so. Quality is a\nper-machine host switch (`--quality`, `LUDION_QUALITY`), never scene content and never sim state,\nso nothing here affects a `WorldHash`: a report at `low` and one at `full` describe the same\nsimulation costing different pixels.\n\nThe `preset` label and the six toggles are the *choice*; the parameter axes below them are the\n*build* — a shader's sample count or a texture descriptor's size, reported as the renderer\ncurrently runs them. A false toggle leaves that effect's passes out of the frame graph entirely,\nso its axis describes work that was not done: `shadows: false` beside a `shadow_map_size` of 1024\nmeans no map of any size was drawn, and reading the axis without the toggle is the misreading\nevery toggle here exists to prevent.",
         "properties": {
           "dof": {
             "description": "Whether depth of field ran on a scene that authored it.",
@@ -4236,6 +4288,12 @@
           },
           "gi_rays": {
             "description": "Rays cast per probe by the GI bake.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ibl_specular_size": {
+            "description": "Edge length of a face of the sky's specular cube, in texels.",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
@@ -4284,6 +4342,15 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
+          },
+          "ssr": {
+            "description": "Whether screen-space reflections ran on a scene that authored them (`PostProcess.ssr > 0`).",
+            "type": "boolean"
+          },
+          "ssr_scale": {
+            "description": "The SSR trace's extent as a fraction of the **output** extent, independent of `render_scale`.",
+            "format": "float",
+            "type": "number"
           }
         },
         "required": [
@@ -4293,6 +4360,7 @@
           "dof",
           "gi_dynamic",
           "shadows",
+          "ssr",
           "ssao_samples",
           "shaft_steps",
           "dof_taps",
@@ -4300,9 +4368,26 @@
           "pcf",
           "gi_rays",
           "gi_probe_scale",
-          "render_scale"
+          "render_scale",
+          "ssr_scale",
+          "ibl_specular_size"
         ],
         "type": "object"
+      },
+      "RenderDebugView": {
+        "description": "A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.\nThe spelling matches `ludion render --debug-view`.",
+        "oneOf": [
+          {
+            "const": "ssr_confidence",
+            "description": "The per-texel trace confidence as a grey ramp.",
+            "type": "string"
+          },
+          {
+            "const": "ssr_footprint",
+            "description": "The colour-pyramid level each hit read.",
+            "type": "string"
+          }
+        ]
       },
       "RequestId": {
         "description": "A request correlation id, chosen by the client and echoed in the matching [`Response`].",
@@ -4919,6 +5004,17 @@
               "kind": {
                 "const": "render_debug",
                 "type": "string"
+              },
+              "view": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RenderDebugView"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The SSR debug view in force. It does not say whether the view was drawn: a view on a\nframe without SSR draws the normal frame, and `render.dump_graph` shows whether\n`ssr_debug` is scheduled."
               }
             },
             "required": [
@@ -6214,7 +6310,7 @@
         "type": "object"
       },
       "QualityProfile": {
-        "description": "The render quality a measurement was taken at: what the machine chose, which optional effects\nthat resolved to, and how hard each one worked.\n\nIt travels with a report for the reason [`SimProfile::threads`] does — two measurements taken\nunder different machine settings are not comparable, and only the report can say so. Quality is a\nper-machine host switch (`--quality`, `LUDION_QUALITY`), never scene content and never sim state,\nso nothing here affects a `WorldHash`: a report at `low` and one at `full` describe the same\nsimulation costing different pixels.\n\nThe `preset` label and the five toggles are the *choice*; the parameter axes below them are the\n*build* — a shader's sample count or a texture descriptor's size, reported as the renderer\ncurrently runs them. A false toggle leaves that effect's passes out of the frame graph entirely,\nso its axis describes work that was not done: `shadows: false` beside a `shadow_map_size` of 1024\nmeans no map of any size was drawn, and reading the axis without the toggle is the misreading\nevery toggle here exists to prevent.",
+        "description": "The render quality a measurement was taken at: what the machine chose, which optional effects\nthat resolved to, and how hard each one worked.\n\nIt travels with a report for the reason [`SimProfile::threads`] does — two measurements taken\nunder different machine settings are not comparable, and only the report can say so. Quality is a\nper-machine host switch (`--quality`, `LUDION_QUALITY`), never scene content and never sim state,\nso nothing here affects a `WorldHash`: a report at `low` and one at `full` describe the same\nsimulation costing different pixels.\n\nThe `preset` label and the six toggles are the *choice*; the parameter axes below them are the\n*build* — a shader's sample count or a texture descriptor's size, reported as the renderer\ncurrently runs them. A false toggle leaves that effect's passes out of the frame graph entirely,\nso its axis describes work that was not done: `shadows: false` beside a `shadow_map_size` of 1024\nmeans no map of any size was drawn, and reading the axis without the toggle is the misreading\nevery toggle here exists to prevent.",
         "properties": {
           "dof": {
             "description": "Whether depth of field ran on a scene that authored it.",
@@ -6237,6 +6333,12 @@
           },
           "gi_rays": {
             "description": "Rays cast per probe by the GI bake.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ibl_specular_size": {
+            "description": "Edge length of a face of the sky's specular cube, in texels.",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
@@ -6285,6 +6387,15 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
+          },
+          "ssr": {
+            "description": "Whether screen-space reflections ran on a scene that authored them (`PostProcess.ssr > 0`).",
+            "type": "boolean"
+          },
+          "ssr_scale": {
+            "description": "The SSR trace's extent as a fraction of the **output** extent, independent of `render_scale`.",
+            "format": "float",
+            "type": "number"
           }
         },
         "required": [
@@ -6294,6 +6405,7 @@
           "dof",
           "gi_dynamic",
           "shadows",
+          "ssr",
           "ssao_samples",
           "shaft_steps",
           "dof_taps",
@@ -6301,9 +6413,26 @@
           "pcf",
           "gi_rays",
           "gi_probe_scale",
-          "render_scale"
+          "render_scale",
+          "ssr_scale",
+          "ibl_specular_size"
         ],
         "type": "object"
+      },
+      "RenderDebugView": {
+        "description": "A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.\nThe spelling matches `ludion render --debug-view`.",
+        "oneOf": [
+          {
+            "const": "ssr_confidence",
+            "description": "The per-texel trace confidence as a grey ramp.",
+            "type": "string"
+          },
+          {
+            "const": "ssr_footprint",
+            "description": "The colour-pyramid level each hit read.",
+            "type": "string"
+          }
+        ]
       },
       "RestoreEntry": {
         "description": "One change an `engine.restore` migration made to a single component of a single entity.\n\nThe two `Component…` drop variants map to diagnostic codes ([`code`](RestoreEntry::code)); the\ninformational [`ComponentMigrated`](RestoreEntry::ComponentMigrated) field-diff has none. Run\n`ludion explain L3015` / `L3016` for the full explanation of each drop.",
@@ -7427,6 +7556,17 @@
           "kind": {
             "const": "render_debug",
             "type": "string"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RenderDebugView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The SSR debug view in force. It does not say whether the view was drawn: a view on a\nframe without SSR draws the normal frame, and `render.dump_graph` shows whether\n`ssr_debug` is scheduled."
           }
         },
         "required": [

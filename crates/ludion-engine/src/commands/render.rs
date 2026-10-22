@@ -11,8 +11,10 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_protocol::ResponseBody;
 use ludion_protocol::command::{
     CameraChoice, GiRebakeMode as WireGiRebakeMode, RenderBoundsParams, RenderDebugParams,
-    RenderGiRebakeParams, RenderScreenshotParams, RenderSizeParams, RenderViewParams,
+    RenderDebugView, RenderGiRebakeParams, RenderScreenshotParams, RenderSizeParams,
+    RenderViewParams,
 };
+use ludion_renderer::DebugView;
 use serde_json::Value;
 
 use crate::DebugCategories;
@@ -214,18 +216,22 @@ pub(crate) fn view(
 /// `render.debug` — read or set which debug-draw categories this host renders.
 ///
 /// Absent `categories` is a pure read; a list replaces the enabled set (`[]` is none, `"all"` is
-/// every category). The reply is the same either way: `enabled` once the command applied, and `drawn`,
+/// every category). Likewise `view`: absent keeps the SSR debug view, `null` clears it, a name sets
+/// it. The reply is the same either way: `enabled` once the command applied, and `drawn`,
 /// the categories the last completed tick emitted lines for. Any string is a valid category, so there
 /// is nothing to refuse.
 ///
 /// Pure host render state, like [`view`]: no frame index moves, no `WorldHash` changes, nothing is
-/// recorded ([`Engine::set_debug_draw`]).
+/// recorded ([`Engine::set_debug_draw`], [`Engine::set_debug_view`]).
 pub(crate) fn debug(
     engine: &mut Engine,
     params: RenderDebugParams,
 ) -> Result<ResponseBody, Diagnostic> {
     if let Some(names) = params.categories {
         engine.set_debug_draw(DebugCategories::from_names(names));
+    }
+    if let Some(view) = params.view {
+        engine.set_debug_view(view.map(renderer_view));
     }
     Ok(ResponseBody::RenderDebug {
         enabled: engine.debug_draw().names(),
@@ -234,7 +240,22 @@ pub(crate) fn debug(
             .into_iter()
             .map(String::from)
             .collect(),
+        view: engine.debug_view().map(wire_view),
     })
+}
+
+fn renderer_view(view: RenderDebugView) -> DebugView {
+    match view {
+        RenderDebugView::SsrConfidence => DebugView::SsrConfidence,
+        RenderDebugView::SsrFootprint => DebugView::SsrFootprint,
+    }
+}
+
+fn wire_view(view: DebugView) -> RenderDebugView {
+    match view {
+        DebugView::SsrConfidence => RenderDebugView::SsrConfidence,
+        DebugView::SsrFootprint => RenderDebugView::SsrFootprint,
+    }
 }
 
 /// `render.dump_graph` — the render graph structure as JSON (no GPU needed).
@@ -545,8 +566,16 @@ mod tests {
 
     fn debug_with(engine: &mut Engine, categories: Option<&[&str]>) -> (Vec<String>, Vec<String>) {
         let categories = categories.map(|names| names.iter().map(|n| n.to_string()).collect());
-        match debug(engine, RenderDebugParams { categories }).expect("any category is accepted") {
-            ResponseBody::RenderDebug { enabled, drawn } => (enabled, drawn),
+        match debug(
+            engine,
+            RenderDebugParams {
+                categories,
+                view: None,
+            },
+        )
+        .expect("any category is accepted")
+        {
+            ResponseBody::RenderDebug { enabled, drawn, .. } => (enabled, drawn),
             other => panic!("render.debug answered {other:?}"),
         }
     }

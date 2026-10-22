@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{DebugCategories, Engine, EngineBuilder, debug_draw, replay_hashes_with};
-use ludion_protocol::command::{RenderDebugParams, SimStepParams};
+use ludion_protocol::command::{RenderDebugParams, RenderDebugView, SimStepParams};
 use ludion_protocol::{Command, ResponseBody};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -171,6 +171,7 @@ fn toggle(engine: &mut Engine, tick: u64) {
     engine
         .execute(Command::RenderDebug(RenderDebugParams {
             categories: Some(categories),
+            view: None,
         }))
         .expect("render.debug is always accepted");
 }
@@ -232,4 +233,50 @@ fn toggling_the_hierarchy_category_never_perturbs_the_hash() {
         run(&DebugCategories::parse("hierarchy")),
         run(&DebugCategories::None)
     );
+}
+
+fn debug_view(
+    engine: &mut Engine,
+    view: Option<Option<RenderDebugView>>,
+) -> Option<RenderDebugView> {
+    match engine
+        .execute(Command::RenderDebug(RenderDebugParams {
+            categories: None,
+            view,
+        }))
+        .expect("render.debug is always accepted")
+        .body
+    {
+        ResponseBody::RenderDebug { view, .. } => view,
+        other => panic!("expected RenderDebug, got {other:?}"),
+    }
+}
+
+#[test]
+fn render_debug_sets_reads_and_clears_a_view() {
+    let root = fixture_root();
+    let mut engine = engine(&root, &DebugCategories::None);
+    assert_eq!(debug_view(&mut engine, None), None);
+    assert_eq!(
+        debug_view(&mut engine, Some(Some(RenderDebugView::SsrConfidence))),
+        Some(RenderDebugView::SsrConfidence),
+    );
+    assert_eq!(
+        debug_view(&mut engine, None),
+        Some(RenderDebugView::SsrConfidence),
+        "an absent view reads what is in force",
+    );
+    assert_eq!(debug_view(&mut engine, Some(None)), None);
+    assert_eq!(debug_view(&mut engine, None), None);
+}
+
+#[test]
+fn setting_a_view_moves_no_frame_and_no_hash() {
+    let root = fixture_root();
+    let mut engine = engine(&root, &DebugCategories::None);
+    engine.advance_live();
+    let (frame, hash) = (engine.frame(), engine.world_hash().unwrap());
+    debug_view(&mut engine, Some(Some(RenderDebugView::SsrFootprint)));
+    assert_eq!(engine.frame(), frame);
+    assert_eq!(engine.world_hash().unwrap(), hash);
 }

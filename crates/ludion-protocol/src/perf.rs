@@ -148,7 +148,7 @@ pub struct ProfileReport {
 /// so nothing here affects a `WorldHash`: a report at `low` and one at `full` describe the same
 /// simulation costing different pixels.
 ///
-/// The `preset` label and the five toggles are the *choice*; the parameter axes below them are the
+/// The `preset` label and the six toggles are the *choice*; the parameter axes below them are the
 /// *build* — a shader's sample count or a texture descriptor's size, reported as the renderer
 /// currently runs them. A false toggle leaves that effect's passes out of the frame graph entirely,
 /// so its axis describes work that was not done: `shadows: false` beside a `shadow_map_size` of 1024
@@ -177,6 +177,8 @@ pub struct QualityProfile {
     /// for `preset` — so without this field a capture could report `shadow_map_size` for a frame
     /// that drew no shadow map.
     pub shadows: bool,
+    /// Whether screen-space reflections ran on a scene that authored them (`PostProcess.ssr > 0`).
+    pub ssr: bool,
     /// Hemisphere samples per ambient-occlusion pixel.
     pub ssao_samples: u32,
     /// Ray-march steps per light-shaft pixel.
@@ -201,6 +203,10 @@ pub struct QualityProfile {
     /// faster one — the same class of lie [`shadows`](QualityProfile::shadows) is here to prevent,
     /// applied to every pass at once rather than to one.
     pub render_scale: f32,
+    /// The SSR trace's extent as a fraction of the **output** extent, independent of `render_scale`.
+    pub ssr_scale: f32,
+    /// Edge length of a face of the sky's specular cube, in texels.
+    pub ibl_specular_size: u32,
 }
 
 /// Clustered-forward light binning — the CPU build's cost, and the occupancy of the tables it built.
@@ -726,6 +732,7 @@ mod tests {
             dof: true,
             gi_dynamic: true,
             shadows: true,
+            ssr: true,
             ssao_samples: 16,
             shaft_steps: 32,
             dof_taps: 32,
@@ -734,6 +741,8 @@ mod tests {
             gi_rays: 64,
             gi_probe_scale: 1.0,
             render_scale: 1.0,
+            ssr_scale: 0.5,
+            ibl_specular_size: 256,
         };
         let text = serde_json::to_string(&full).unwrap();
         let parsed: QualityProfile = serde_json::from_str(&text).unwrap();

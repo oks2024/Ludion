@@ -149,6 +149,7 @@ impl QualitySetting {
             dof: self.quality.dof,
             gi_dynamic: self.quality.gi_dynamic,
             shadows: self.quality.shadows,
+            ssr: self.quality.ssr,
             ssao_samples: params.ssao_samples,
             shaft_steps: params.shaft_steps,
             dof_taps: params.dof_taps,
@@ -157,6 +158,8 @@ impl QualitySetting {
             gi_rays: params.gi_rays,
             gi_probe_scale: params.gi_probe_scale,
             render_scale: params.render_scale,
+            ssr_scale: params.ssr_scale,
+            ibl_specular_size: params.ibl_specular_size,
         }
     }
 }
@@ -750,6 +753,13 @@ mod tests {
         assert_eq!(full.gi_rays, params.gi_rays);
         assert_eq!(full.gi_probe_scale, params.gi_probe_scale);
         assert_eq!(full.render_scale, params.render_scale);
+        assert_eq!(full.ssr_scale, params.ssr_scale);
+        assert_eq!(full.ibl_specular_size, params.ibl_specular_size);
+        assert!(
+            full.ssr && !low.ssr,
+            "the toggle is read from the resolved Quality"
+        );
+        assert_eq!(low.ibl_specular_size, QualityParams::LOW.ibl_specular_size);
         assert!(
             full.gi_dynamic,
             "FULL renders dynamic injection, so the descriptor must say so",

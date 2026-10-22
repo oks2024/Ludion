@@ -226,7 +226,7 @@ interiors**. Large open water is not a driver.
       off in the iOS export preset), plus `ssr_scale` and the probe face size in `QualityParams`.
     - **Amended (W2, 2026-10-21):** the look is opt-in per scene through `PostProcess.ssr` (default 0, scaling
       the confidence). There is no iOS preset: "off on iOS" is `[ios] quality = "low"`. The probe
-      face size stays W3's axis, and the `QualityProfile` fields reach the wire later in W2.
+      face size stays W3's axis.
     - All of it is render-only: no `WorldHash` or replay effect.
 25. **Agent observability:**
     - **debug views:** reflection-only, SSR confidence, the winning probe per pixel, and the

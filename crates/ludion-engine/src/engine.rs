@@ -265,6 +265,9 @@ pub struct Engine {
     /// The host's debug-draw filter ([`set_debug_draw`](Engine::set_debug_draw)): which categories the
     /// stream's [`RenderScene`] carries. Host render state like `view_override`, never in a world.
     debug_draw: crate::DebugCategories,
+    /// The host's SSR debug view ([`set_debug_view`](Engine::set_debug_view)), shown in place of the
+    /// composite. Host render state like `debug_draw`, never in a world.
+    debug_view: Option<ludion_renderer::DebugView>,
     /// The host's explicit render scale ([`set_render_scale`](Engine::set_render_scale)), if it named
     /// one. `None` — the default — leaves the extent to whatever
     /// [`quality`](Engine::quality) resolved to, which is native unless the machine asked to draw
@@ -673,6 +676,7 @@ impl Engine {
             render_size,
             view_override: None,
             debug_draw: crate::DebugCategories::None,
+            debug_view: None,
             render_scale_override: None,
             quality: QualitySetting::default(),
             textures: TextureSource::default(),
@@ -824,6 +828,20 @@ impl Engine {
     /// extracts byte-identically to an engine without debug draw.
     pub fn set_debug_draw(&mut self, categories: crate::DebugCategories) {
         self.debug_draw = categories;
+    }
+
+    /// Chooses the SSR debug view the stream draws in place of the composite, or `None` for the
+    /// normal frame.
+    ///
+    /// Host render state, exactly as [`set_debug_draw`](Engine::set_debug_draw) is: never hashed,
+    /// snapshotted or recorded. A view never turns SSR on — a frame without SSR draws normally.
+    pub fn set_debug_view(&mut self, view: Option<ludion_renderer::DebugView>) {
+        self.debug_view = view;
+    }
+
+    /// The SSR debug view the host chose.
+    pub fn debug_view(&self) -> Option<ludion_renderer::DebugView> {
+        self.debug_view
     }
 
     /// The debug-draw categories the host enabled.
@@ -3458,6 +3476,7 @@ impl Engine {
         )
         .map(|mut scene| {
             scene.debug_lines = crate::debug_draw::segments(world, &self.debug_draw);
+            scene.debug_view = self.debug_view;
             scene
         });
         // References that drew a fallback instead of failing the frame, latched once per offender.

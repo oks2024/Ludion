@@ -2,8 +2,9 @@
 //! scene actually draws.
 //!
 //! One [`Command::RenderDebug`] verb, two wire shapes: `{}` reads, `{"categories": [...]}` sets
-//! (`[]` none, `"all"` every category). Both answer with `enabled` (the set in force) and `drawn`
-//! (the categories the last tick emitted lines for). The set is **host render state** — it moves
+//! (`[]` none, `"all"` every category). `"view"` shows an SSR debug view (`"ssr_confidence"` or
+//! `"ssr_footprint"`) and `null` clears it. Both answer with `enabled` (the set in force), `drawn`
+//! (the categories the last tick emitted lines for) and the `view` in force. The set is **host render state** — it moves
 //! what the stream and `render.screenshot` draw, never the world, so it is never hashed, snapshotted
 //! or recorded.
 //!
@@ -17,7 +18,7 @@ use std::process::ExitCode;
 
 use ludion_ecs::World;
 use ludion_engine::{Engine, debug_draw, dispatch};
-use ludion_protocol::command::RenderDebugParams;
+use ludion_protocol::command::{RenderDebugParams, RenderDebugView};
 use ludion_protocol::{Command, ResponseBody};
 
 fn marker(world: &mut World) {
@@ -54,6 +55,13 @@ fn main() -> ExitCode {
     println!("cleared     -> enabled {enabled:?}");
     assert!(enabled.is_empty());
 
+    // A view replaces the composite with a view of the SSR trace; `null` clears it, absent keeps it.
+    let view = set_view(&mut engine, Some(Some(RenderDebugView::SsrConfidence)));
+    println!("view set    -> {view:?}");
+    assert_eq!(view, Some(RenderDebugView::SsrConfidence));
+    assert_eq!(set_view(&mut engine, None), view);
+    assert_eq!(set_view(&mut engine, Some(None)), None);
+
     ExitCode::SUCCESS
 }
 
@@ -61,12 +69,31 @@ fn render_debug(engine: &mut Engine, categories: Option<&[&str]>) -> (Vec<String
     let categories = categories.map(|names| names.iter().map(|n| n.to_string()).collect());
     match dispatch(
         engine,
-        Command::RenderDebug(RenderDebugParams { categories }),
+        Command::RenderDebug(RenderDebugParams {
+            categories,
+            view: None,
+        }),
     )
     .expect("render.debug is always accepted")
     .body
     {
-        ResponseBody::RenderDebug { enabled, drawn } => (enabled, drawn),
+        ResponseBody::RenderDebug { enabled, drawn, .. } => (enabled, drawn),
+        other => panic!("expected RenderDebug, got {other:?}"),
+    }
+}
+
+fn set_view(engine: &mut Engine, view: Option<Option<RenderDebugView>>) -> Option<RenderDebugView> {
+    match dispatch(
+        engine,
+        Command::RenderDebug(RenderDebugParams {
+            categories: None,
+            view,
+        }),
+    )
+    .expect("render.debug is always accepted")
+    .body
+    {
+        ResponseBody::RenderDebug { view, .. } => view,
         other => panic!("expected RenderDebug, got {other:?}"),
     }
 }

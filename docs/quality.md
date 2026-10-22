@@ -114,7 +114,7 @@ ssao_samples = 4
 
 - **Precedence is `--quality` → `LUDION_QUALITY` → a packaged default → `full`.** The packaged
   default is what an exported app ships with (`[ios] quality`, `ludion docs export`; `"low"` is how
-  iOS turns SSR off, and the report's descriptor does not carry `ssr` or `ssr_scale` yet). An explicit
+  iOS turns SSR off, and the report's descriptor carries `ssr`, `ssr_scale` and `ibl_specular_size`). An explicit
   setting wins outright and lower sources are not read for validity, so a flag works on a box whose
   `LUDION_QUALITY` is malformed. Absent, empty or whitespace counts as not chosen.
 - **An unresolvable setting refuses to start** — one `L0016` naming both interpretations (the preset

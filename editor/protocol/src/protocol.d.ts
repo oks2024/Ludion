@@ -234,6 +234,11 @@ export type Command =
  */
 export type GiRebakeMode = 'auto' | 'hold';
 /**
+ * A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.
+ * The spelling matches `ludion render --debug-view`.
+ */
+export type RenderDebugView = 'ssr_confidence' | 'ssr_footprint';
+/**
  * The event envelope: one [`Event`] (its `event` name + `data`), plus `sub`, `seq`, and an optional
  * `frame`.
  *
@@ -846,6 +851,12 @@ export type Response1 =
              */
             enabled: string[];
             kind: 'render_debug';
+            /**
+             * The SSR debug view in force. It does not say whether the view was drawn: a view on a
+             * frame without SSR draws the normal frame, and `render.dump_graph` shows whether
+             * `ssr_debug` is scheduled.
+             */
+            view?: RenderDebugView | null;
             [k: string]: unknown;
           }
         | {
@@ -1290,6 +1301,12 @@ export type ResponseBody =
        */
       enabled: string[];
       kind: 'render_debug';
+      /**
+       * The SSR debug view in force. It does not say whether the view was drawn: a view on a
+       * frame without SSR draws the normal frame, and `render.dump_graph` shows whether
+       * `ssr_debug` is scheduled.
+       */
+      view?: RenderDebugView | null;
       [k: string]: unknown;
     }
   | {
@@ -2033,17 +2050,22 @@ export interface ViewPose {
  * everything on. Any string is accepted — a category nothing draws is simply never in the reply's
  * `drawn`, which is how a client checks what a scene actually emits.
  *
- * The set is host render state, never world state: not hashed, not captured by `engine.snapshot`,
+ * `view` shows an SSR debug view in place of the composite: a name sets it, an explicit `null`
+ * clears it, and absent keeps what is in force. A view never turns SSR on — on a frame without
+ * SSR the normal frame is drawn.
+ *
+ * The state is host render state, never world state: not hashed, not captured by `engine.snapshot`,
  * not recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a
  * screenshot taken with `motor` enabled shows the motor's lines.
  *
  * # Example
  * ```
  * use ludion_protocol::Command;
- * use ludion_protocol::command::RenderDebugParams;
+ * use ludion_protocol::command::{RenderDebugParams, RenderDebugView};
  *
  * let cmd = Command::RenderDebug(RenderDebugParams {
  *     categories: Some(vec!["path".to_string()]),
+ *     view: None,
  * });
  * assert_eq!(
  *     serde_json::to_value(&cmd).unwrap(),
@@ -2052,6 +2074,12 @@ export interface ViewPose {
  *
  * // An absent `categories` only reads.
  * assert_eq!(RenderDebugParams::default().categories, None);
+ *
+ * // A `view` sets an SSR debug view, an explicit `null` clears it, an absent one keeps it.
+ * let set: RenderDebugParams = serde_json::from_str(r#"{"view": "ssr_confidence"}"#).unwrap();
+ * assert_eq!(set.view, Some(Some(RenderDebugView::SsrConfidence)));
+ * let cleared: RenderDebugParams = serde_json::from_str(r#"{"view": null}"#).unwrap();
+ * assert_eq!(cleared.view, Some(None));
  * ```
  */
 export interface RenderDebugParams {
@@ -2059,6 +2087,10 @@ export interface RenderDebugParams {
    * The categories to enable (`[]` for none, `"all"` for every one), or absent to read.
    */
   categories?: string[] | null;
+  /**
+   * The SSR debug view to show, an explicit `null` to clear it, or absent to keep it.
+   */
+  view?: RenderDebugView | null;
   [k: string]: unknown;
 }
 /**
@@ -3046,7 +3078,7 @@ export interface AssetLoadCounters {
  * so nothing here affects a `WorldHash`: a report at `low` and one at `full` describe the same
  * simulation costing different pixels.
  *
- * The `preset` label and the five toggles are the *choice*; the parameter axes below them are the
+ * The `preset` label and the six toggles are the *choice*; the parameter axes below them are the
  * *build* — a shader's sample count or a texture descriptor's size, reported as the renderer
  * currently runs them. A false toggle leaves that effect's passes out of the frame graph entirely,
  * so its axis describes work that was not done: `shadows: false` beside a `shadow_map_size` of 1024
@@ -3076,6 +3108,10 @@ export interface QualityProfile {
    * Rays cast per probe by the GI bake.
    */
   gi_rays: number;
+  /**
+   * Edge length of a face of the sky's specular cube, in texels.
+   */
+  ibl_specular_size: number;
   /**
    * Edge length of the shadow map's PCF kernel, in taps (`3` is a 3×3 average).
    */
@@ -3127,6 +3163,14 @@ export interface QualityProfile {
    * Hemisphere samples per ambient-occlusion pixel.
    */
   ssao_samples: number;
+  /**
+   * Whether screen-space reflections ran on a scene that authored them (`PostProcess.ssr > 0`).
+   */
+  ssr: boolean;
+  /**
+   * The SSR trace's extent as a fraction of the **output** extent, independent of `render_scale`.
+   */
+  ssr_scale: number;
   [k: string]: unknown;
 }
 /**
