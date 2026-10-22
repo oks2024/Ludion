@@ -4,7 +4,8 @@
 // `ludion image-stats` reads the data directly.
 //
 // mode.x = 0: confidence (the trace's alpha). mode.x = 1: footprint — the pyramid level the trace
-// read, over `mode.y - 1`; magenta where the trace found no hit, so a miss is not level 0.
+// read, over `mode.y - 1`; magenta where the trace has no confident hit (a miss, a
+// back-face or past the fade band), so it is not level 0.
 //
 // `VsOut` + `vs_main` come from `snippets/fullscreen_vs.wgsl`; the transfer functions from
 // `snippets/srgb.wgsl`.

@@ -74,13 +74,15 @@ fn ssr_upsample(p: vec2<i32>, n: vec3<f32>, dist: f32) -> vec4<f32> {
         let wd = saturate(1.0 - depth_gap);
         let wn = pow(saturate(dot(n, normalize(textureLoad(refl_normal, g, 0).xyz))), 8.0);
         let w = bilinear * wd * wd * wn;
-        sum = sum + textureLoad(refl_ssr, t, 0) * w;
+        let tap = textureLoad(refl_ssr, t, 0);
+        // Premultiplied by confidence: a miss tap carries no radiance and must not darken a hit's.
+        sum = sum + vec4<f32>(tap.rgb * tap.a, tap.a) * w;
         total = total + w;
     }
     if (total < 1e-4) {
         return vec4<f32>(0.0);
     }
-    return sum / total;
+    return vec4<f32>(sum.rgb / max(sum.a, 1e-6), sum.a / total);
 }
 
 @fragment

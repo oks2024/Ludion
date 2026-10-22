@@ -177,7 +177,8 @@ pub struct QualityProfile {
     /// for `preset` — so without this field a capture could report `shadow_map_size` for a frame
     /// that drew no shadow map.
     pub shadows: bool,
-    /// Whether screen-space reflections ran on a scene that authored them (`PostProcess.ssr > 0`).
+    /// Whether this machine's quality allows screen-space reflections (a scene still opts in via
+    /// `PostProcess.ssr`).
     pub ssr: bool,
     /// Hemisphere samples per ambient-occlusion pixel.
     pub ssao_samples: u32,

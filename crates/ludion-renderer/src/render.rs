@@ -3024,7 +3024,8 @@ impl FrameRecorder<'_> {
 
     /// The reflections pass: a fullscreen additive draw over the opaque scene, reading its normal,
     /// specular and depth targets (the pass's declared read order, which is the shader's binding
-    /// order), then the sky cube, BRDF LUT and probe volume. It adds the sky's indirect specular.
+    /// order), then the sky cube, BRDF LUT and probe volume. It adds the sky's indirect specular and, when
+    /// SSR is on, the trace's.
     fn record_reflections(&self, pass: &mut RecordedPass<'_>) {
         // The trace is the fourth read, present only when the graph declared the SSR chain.
         let ssr = pass.inputs.len() == 4;
@@ -12269,6 +12270,30 @@ mod tests {
     fn view_pixel(image: &RenderedImage, (x, y): (u32, u32)) -> [u8; 3] {
         let at = ((y * image.width + x) * 4) as usize;
         [image.rgba[at], image.rgba[at + 1], image.rgba[at + 2]]
+    }
+
+    /// The upsample is premultiplied by confidence: a miss tap beside a hit must not drag the hit's
+    /// radiance toward black, so the reflection's last row keeps most of the box's red.
+    #[test]
+    fn needs_gpu_ssr_upsample_leaves_no_dark_halo() {
+        let Some(renderer) = skip_or_renderer("ssr_upsample_leaves_no_dark_halo") else {
+            return;
+        };
+        let (off, scene) = ssr_view_frame(&renderer, 0.0, None);
+        let (on, _) = ssr_view_frame(&renderer, 1.0, None);
+        let (_, centre) = project(&scene.camera, Vec3::new(0.0, 0.0, 0.0), on.width, on.height);
+        let x = on.width / 2;
+        let red = |image: &RenderedImage, y: u32| i32::from(view_pixel(image, (x, y))[0]);
+        let edge = (centre..on.height)
+            .rev()
+            .find(|&y| red(&on, y) > red(&off, y) + 8)
+            .expect("no floor texel picked up the reflection");
+        assert!(
+            red(&on, edge) >= 120,
+            "reflection edge row {edge} is a dark halo: red {} (off {})",
+            red(&on, edge),
+            red(&off, edge)
+        );
     }
 
     /// The confidence view draws the trace's alpha as gray: confident under the cube, zero in the

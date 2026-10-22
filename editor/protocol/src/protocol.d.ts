@@ -3164,7 +3164,8 @@ export interface QualityProfile {
    */
   ssao_samples: number;
   /**
-   * Whether screen-space reflections ran on a scene that authored them (`PostProcess.ssr > 0`).
+   * Whether this machine's quality allows screen-space reflections (a scene still opts in via
+   * `PostProcess.ssr`).
    */
   ssr: boolean;
   /**

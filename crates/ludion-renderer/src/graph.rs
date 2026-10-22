@@ -38,7 +38,7 @@
 //! [`FrameSize`] carries two extents — what the client asked for (`output`) and what the chain draws
 //! at (`render`, `output × scale`). The normative rule is that **only the scene pass's colour and
 //! depth targets, and `ldr`, are sized from the render extent; every other target is sized from the
-//! output extent** — the SSR pyramids (`hiz`, `ssr_color`) among them, at output × 0.5.
+//! output extent** — the SSR pyramids (`hiz`, `ssr_color`) among them, at output × `QualityParams::ssr_scale`.
 //!
 //! That is what makes a render scale a pure quality change. Expressing a filter's footprint in
 //! *target*-texel units (as `record_blur` and the pyramid do) only makes it screen-relative if the

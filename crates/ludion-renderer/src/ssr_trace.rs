@@ -42,15 +42,6 @@ impl SsrLook {
             intensity: post.ssr,
         }
     }
-
-    /// `PostData`'s defaults at full strength, for the CPU twins' tests.
-    #[cfg(test)]
-    pub(crate) const DEFAULT: SsrLook = SsrLook {
-        fade: [0.45, 0.65],
-        max_distance: 30.0,
-        thickness: 0.5,
-        intensity: 1.0,
-    };
 }
 
 fn saturate(x: f32) -> f32 {
@@ -83,11 +74,16 @@ mod tests {
     use super::*;
     use ludion_render_graph::Gpu;
 
-    const LOOK: SsrLook = SsrLook::DEFAULT;
+    fn look() -> SsrLook {
+        SsrLook {
+            intensity: 1.0,
+            ..SsrLook::from_post(&crate::PostData::default())
+        }
+    }
 
     /// A hit that is confident on every axis but the one a test varies.
     fn good(uv: [f32; 2], dist: f32, excess: f32, facing: f32, rough: f32) -> f32 {
-        confidence(uv, dist, excess, facing, rough, &LOOK)
+        confidence(uv, dist, excess, facing, rough, &look())
     }
 
     #[test]
@@ -120,9 +116,9 @@ mod tests {
     #[test]
     fn length_fades_towards_the_maximum() {
         let at = |d| good([0.5, 0.5], d, 0.0, -1.0, 0.0);
-        assert_eq!(at(LOOK.max_distance), 0.0);
-        assert_eq!(at(LOOK.max_distance * 2.0), 0.0);
-        assert_eq!(at(LOOK.max_distance * 0.75), 1.0);
+        assert_eq!(at(look().max_distance), 0.0);
+        assert_eq!(at(look().max_distance * 2.0), 0.0);
+        assert_eq!(at(look().max_distance * 0.75), 1.0);
         assert_eq!(at(0.0), 1.0);
     }
 
@@ -193,13 +189,13 @@ mod tests {
              let i = id.x * 6u;\n\
              out[id.x] = ssr_confidence(vec2<f32>(inp[i], inp[i + 1u]), inp[i + 2u], inp[i + 3u], inp[i + 4u], inp[i + 5u], vec2<f32>({:?}, {:?}), {:?});\n}}\n",
             include_str!("shaders/snippets/ssr.wgsl"),
-            LOOK.fade[0],
-            LOOK.fade[1],
-            LOOK.max_distance,
+            look().fade[0],
+            look().fade[1],
+            look().max_distance,
         );
         let got = crate::lobe::run_f32_kernel(&gpu, &src, &input, n);
         for (k, row) in input.chunks(6).enumerate() {
-            let want = confidence([row[0], row[1]], row[2], row[3], row[4], row[5], &LOOK);
+            let want = confidence([row[0], row[1]], row[2], row[3], row[4], row[5], &look());
             assert!(
                 (got[k] - want).abs() <= 1e-5,
                 "{row:?}: gpu {} vs {want}",

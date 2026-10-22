@@ -1173,6 +1173,25 @@ fn pass_matches(member: &str, name: &str) -> bool {
             .is_some_and(|level| !level.is_empty() && level.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// The deepest pyramid level a graph can name: a `u32` extent has at most 32 mips and level 0 is the
+/// seed, so reduce passes run `_1` to `_31`.
+const MAX_PYRAMID_LEVEL: u32 = 31;
+
+/// Whether a `[passes]` budget key names a pass this engine can produce: a fixed pass name, or a
+/// mipped kind with a level suffix in `1..=MAX_PYRAMID_LEVEL`. A bare mipped kind is not a pass
+/// (the graph only emits `<kind>_<level>`), so it would never match a measurement.
+fn budget_pass_producible(name: &str) -> bool {
+    KNOWN_PASS_NAMES.iter().any(|member| {
+        if !MIPPED_PASS_KINDS.contains(member) {
+            return member == &name;
+        }
+        name.strip_prefix(member)
+            .and_then(|rest| rest.strip_prefix('_'))
+            .and_then(|level| level.parse::<u32>().ok())
+            .is_some_and(|level| (1..=MAX_PYRAMID_LEVEL).contains(&level))
+    })
+}
+
 /// Sums the medians of the passes any of the `members` matches that this report actually measured,
 /// returning the sum and how many contributed — or `None` when *none* did, which is the group-level
 /// form of "producible but unmeasured" and skips rather than fails.
@@ -1344,10 +1363,17 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
                     ));
                 }
             }
-            None if KNOWN_PASS_NAMES.iter().any(|m| pass_matches(m, name)) => {
+            None if budget_pass_producible(name) => {
                 // Producible (a fixed frame-graph pass name) but not in this report — a UI-free
                 // scene, or no GPU adapter. Not a violation.
             }
+            None if MIPPED_PASS_KINDS.contains(&name.as_str()) => over.push(
+                unknown_budget_key("GPU pass", name, &KNOWN_PASS_NAMES).with_help(format!(
+                    "`{name}` is a pyramid kind: the graph names its passes `{name}_<level>`, one per \
+                     mip level — budget the `ssr` post group for the whole pyramid, or a level such as \
+                     `{name}_1`"
+                )),
+            ),
             None => over.push(unknown_budget_key("GPU pass", name, &KNOWN_PASS_NAMES)),
         }
     }
@@ -3046,6 +3072,30 @@ entities:
             ..Budget::default()
         };
         assert!(check_budget(&sample_report(), &budget).is_empty());
+    }
+
+    #[test]
+    fn a_bare_or_out_of_range_pyramid_pass_key_is_l4006() {
+        let key = |name: &str| Budget {
+            passes: BTreeMap::from([(name.to_string(), 1.0)]),
+            ..Budget::default()
+        };
+        for name in ["hiz_reduce", "ssr_color_reduce"] {
+            let over = check_budget(&pyramid_report(), &key(name));
+            assert_eq!(over.len(), 1, "{name}: {over:?}");
+            assert_eq!(over[0].code, code::BUDGET_UNKNOWN_KEY);
+            let help = over[0].help.as_deref().unwrap_or_default();
+            assert!(
+                help.contains("`ssr` post group") && help.contains(&format!("{name}_1")),
+                "{name}: {help}"
+            );
+        }
+        for name in ["hiz_reduce_99", "hiz_reduce_0", "ssr_color_reduce_32"] {
+            let over = check_budget(&pyramid_report(), &key(name));
+            assert_eq!(over.len(), 1, "{name}: {over:?}");
+            assert_eq!(over[0].code, code::BUDGET_UNKNOWN_KEY);
+        }
+        assert!(check_budget(&pyramid_report(), &key("hiz_reduce_1")).is_empty());
     }
 
     #[test]

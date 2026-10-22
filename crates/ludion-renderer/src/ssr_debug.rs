@@ -12,7 +12,7 @@ pub enum DebugView {
     /// The trace's confidence as gray: 0 where there is no hit, 1 for a certain one.
     SsrConfidence,
     /// The `ssr_color` pyramid level the trace read, as gray over the level count; magenta where the
-    /// trace found no hit, so a miss is distinct from level 0.
+    /// trace has no confident hit (a miss, a back-face or past the fade band), so it is distinct from level 0.
     SsrFootprint,
 }
 
