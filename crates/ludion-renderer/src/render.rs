@@ -788,6 +788,31 @@ impl Renderer {
         self.quality_params
     }
 
+    /// Names the directory reflection-probe captures are kept in, or `None` (the default) to capture
+    /// every probe fresh. With a store, a probe whose content key has an entry loads it and any other
+    /// probe is captured and written back, so a hit and a miss give identical bytes; a missing or
+    /// corrupt entry is just a miss, and a write that fails is dropped. Changing the directory makes
+    /// the next frame resolve the probes again.
+    ///
+    /// A host setting like [`set_quality`](Renderer::set_quality): never sim state, never hashed.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_renderer::Renderer;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut renderer = match Renderer::new() {
+    ///     Ok(renderer) => renderer,
+    ///     Err(_) => return Ok(()), // no GPU adapter
+    /// };
+    /// renderer.set_probe_store(Some(std::env::temp_dir().join("probes")));
+    /// renderer.set_probe_store(None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_probe_store(&mut self, dir: Option<std::path::PathBuf>) {
+        self.probes.set_store(dir);
+    }
+
     /// Holds (`true`) or releases (`false`) the baked GI baseline: while held, a bake-cache
     /// *content* miss (grid, lights) that has a cache to fall back on serves those volumes and
     /// reports staleness ([`gi_stale`](Renderer::gi_stale)) instead of re-baking. A structural miss

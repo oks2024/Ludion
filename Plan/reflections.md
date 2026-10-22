@@ -184,7 +184,8 @@ interiors**. Large open water is not a driver.
     - **The key hashes the extracted capture input:**
       - the render list the capture draws: mesh ids, transforms, material parameters, texture content
         keys, lights, `Environment`, the GI result's key;
-      - plus the probe's parameters;
+      - plus the probe's capture point (shape, blend and priority shade, they are not captured);
+      - plus the quality parameters and the adapter;
       - plus a bake-version constant.
 
       Anything not extracted cannot affect the capture, so staleness is impossible by construction.

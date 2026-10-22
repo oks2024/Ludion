@@ -37,10 +37,17 @@ With `ssr` on, `ssr_trace` (`ssr_trace.wgsl`, `ssr_trace.rs`) marches one mirror
 - Bloom, shafts and dof still schedule on a view frame with unread outputs; accepted for a debug frame.
 
 ### Probe capture
-`probe_capture.rs` captures each `RenderScene.probes` entry once, at the top of `prepare_frame`: six faces of `QualityParams::ibl_specular_size` (no new quality field), prefiltered by `Ibl::prefilter_probe` into slot `i` of a renderer-owned cube array (`ProbeCubes`: texture, cube-array view, probe → slot table, face size, `max_lod`). The cache key is the face size plus each probe's entity and position, so the world is captured once; a scene without probes frees the array and does no GPU work. Nothing samples it yet.
+`probe_capture.rs` captures each `RenderScene.probes` entry once, at the top of `prepare_frame`: six faces of `QualityParams::ibl_specular_size` (no new quality field), prefiltered by `Ibl::prefilter_probe` into slot `i` of a renderer-owned cube array (`ProbeCubes`: texture, cube-array view, probe → slot table, face size, `max_lod`). The in-memory cache key is the face size plus each probe's entity and position, so the world is captured once; a scene without probes frees the array and does no GPU work. Nothing samples it yet.
 - **Derived scene**: each face is an ordinary frame (`prepare_frame` + `build_probe_capture_graph` + `Gpu::execute_into`) of a clone of the scene with the sprites, particles, text, ground markers, UI, debug lines, probes and `debug_view` emptied, `ssao`/`ssr`/`shafts`/`dof` zeroed, and the sun disc off (the IBL excludes it, so a probe does). Textures, mesh assets, lights, sun, GI and voxel stay, so every cache is a hit. Passes: shadow, gi_inject, scene, reflections, transparents, then `probe_face`.
 - **Faces and the flip**: wgpu layer order +X, −X, +Y, −Y, +Z, −Z; up = +Y, +Y, −Z, +Z, +Y, +Y; world-axis-aligned (a probe's rotation belongs to its box proxy). The cube convention is left-handed against `look_to_rh`, so a face renders unmirrored and `probe_face.wgsl` flips x at store. Never flip the projection: it reverses the winding and fights `is_mirrored`. `capture_faces_match_the_cube_convention` pins it.
 - **Alpha is sky visibility**: `probe_face` writes `hdr_safe(scene.rgb)` with alpha 1 where `scene_depth >= 1.0` and 0 on geometry (`scene`'s own alpha is 1 for both). The rgb keeps the sky, so shading needs no relight.
+
+### Probe store
+`Renderer::set_probe_store(Some(dir))` (default `None`: capture fresh) makes resolve load `<dir>/<key:016x>.ktx2` per probe, or capture, read the slot back and write the entry. Hit, miss and store-less slots are byte-identical (`probe_store.rs`).
+- **Key** = `probe_key(world_key(face_scene(scene, ZERO, 0), …), position)`. It is built from the *face scene*, so a sprite, the sun disc, `ssr` or the camera never moves it. `world_key` destructures `RenderScene` with no `..`: a new field is a compile error until it is hashed or its exclusion argued. Small `Copy` structs hash through `Debug` (every field, automatically); meshes by `MeshData::hash` plus each map's `identity()`, wrap and scales; the voxel grid by `hash`. Machine terms: `QualityParams`, adapter name and backend, face size, `PROBE_BAKE_VERSION` (bump when capture or prefilter bytes change for the same input).
+- **Position only.** The capture is world-axis-aligned, so shape, blend, priority and rotation shade but never rebake.
+- **Entry**: KTX2, `R16G16B16A16_SFLOAT`, six faces, mips smallest first, each mip's faces back to back (`ludion_assets::cooked::{write,read}_probe_cube`). A missing or invalid entry is a miss and is rewritten. Writes go to `<name>.<pid>.tmp` then `rename`; a failed write is dropped.
+- Stale entries are never evicted.
 
 ## Rules
 - **The lobe function is one function for every path.** `cone_half_angle(r) = 2·atan(r²)`: 0 for a mirror, exactly π/2 at r = 1. The cube lod solves the lobe's solid angle against K texels, K = 32π, so r = 1 fills the 8×8 face and the chain stops there. A one-texel match sent rough metal to 1×1 faces and made a cube-face artifact on the gallery night-sky tile. `mip_roughness` is the exact inverse of `cube_lod` above mip 0, so the prefilter and the lookup agree by construction; the `needs_gpu_` test in `lobe.rs` holds `lobe.wgsl` to the Rust. Change one twin, change both.
@@ -69,6 +76,8 @@ cargo test -p ludion-renderer ssr_pyramid::
 cargo test -p ludion-renderer needs_gpu_ssr
 cargo test -p ludion-renderer needs_gpu_a_debug_view
 cargo test -p ludion-renderer probe_capture::
+cargo test -p ludion-renderer probe_store::
+cargo test -p ludion-assets cooked
 cargo test -p ludion-renderer graph::tests::the_probe_capture
 cargo test -p ludion-cli --test render debug_view
 cargo test -p ludion-renderer needs_gpu_metal_reflects

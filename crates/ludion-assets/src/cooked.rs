@@ -16,7 +16,7 @@
 
 use std::fmt;
 
-use ktx2::{Format, Reader, dfd};
+use ktx2::{Format, Header, Index, LevelIndex, Reader, dfd};
 use xxhash_rust::xxh3::xxh3_64;
 
 /// The cook format's version. Part of every [`cook_key`], so bumping it invalidates every cooked
@@ -267,10 +267,14 @@ fn expected_format_of(format: CompressedFormat, srgb: bool) -> Format {
 /// basic block `ktx2` generates for the format. `write_ktx2` emits exactly this and `read_ktx2`
 /// accepts nothing else.
 pub fn dfd_region(format: CompressedFormat, srgb: bool) -> Vec<u8> {
-    let vk = expected_format_of(format, srgb);
+    dfd_region_of(expected_format_of(format, srgb))
+}
+
+fn dfd_region_of(vk: Format) -> Vec<u8> {
     let block = match dfd::Basic::from_format(vk) {
         Ok((basic, _)) => dfd::Block::Basic(basic).to_vec(),
-        // Both formats are in ktx2's DFD table; an empty block still yields a well-formed prefix.
+        // Every format used here is in ktx2's DFD table; an empty block still yields a well-formed
+        // prefix, and writer and reader agree by construction.
         Err(_) => Vec::new(),
     };
     let mut region = ((block.len() + 4) as u32).to_le_bytes().to_vec();
@@ -377,6 +381,170 @@ pub fn read_ktx2(
     Ok(image)
 }
 
+/// Bytes per texel of a probe cube: `R16G16B16A16_SFLOAT`.
+const PROBE_TEXEL_BYTES: u64 = 8;
+const PROBE_ALIGN: usize = 16;
+
+fn probe_level_bytes(face: u32, level: u32) -> u64 {
+    let edge = u64::from((face >> level).max(1));
+    6 * edge * edge * PROBE_TEXEL_BYTES
+}
+
+/// Serialises a prefiltered probe cube as a KTX2 file: `R16G16B16A16_SFLOAT`, six faces, no layers,
+/// no supercompression. `levels[l]` holds mip `l`'s six faces back to back (+X, −X, +Y, −Y, +Z, −Z),
+/// each `edge × edge` texels with tight rows, `edge = max(face >> l, 1)`.
+///
+/// # Example
+/// ```
+/// use ludion_assets::cooked::{read_probe_cube, write_probe_cube};
+/// let levels = vec![vec![7u8; 6 * 2 * 2 * 8], vec![9u8; 6 * 8]];
+/// let bytes = write_probe_cube(2, &levels);
+/// assert_eq!(read_probe_cube(&bytes, 2, 2)?, levels);
+/// # Ok::<(), ludion_assets::cooked::Ktx2Error>(())
+/// ```
+pub fn write_probe_cube(face: u32, levels: &[Vec<u8>]) -> Vec<u8> {
+    let region = dfd_region_of(Format::R16G16B16A16_SFLOAT);
+    let level_count = levels.len();
+    let dfd_offset = Header::LENGTH + level_count * LevelIndex::LENGTH;
+
+    // Smallest level first: offsets run from the last level back to level 0.
+    let mut offsets = vec![0usize; level_count];
+    let mut cursor = (dfd_offset + region.len()).next_multiple_of(PROBE_ALIGN);
+    for (offset, level) in offsets.iter_mut().zip(levels).rev() {
+        *offset = cursor;
+        cursor = (cursor + level.len()).next_multiple_of(PROBE_ALIGN);
+    }
+
+    let header = Header {
+        format: Some(Format::R16G16B16A16_SFLOAT),
+        type_size: 2,
+        pixel_width: face,
+        pixel_height: face,
+        pixel_depth: 0,
+        layer_count: 0,
+        face_count: 6,
+        level_count: level_count as u32,
+        supercompression_scheme: None,
+        index: Index {
+            dfd_byte_offset: dfd_offset as u32,
+            dfd_byte_length: region.len() as u32,
+            kvd_byte_offset: 0,
+            kvd_byte_length: 0,
+            sgd_byte_offset: 0,
+            sgd_byte_length: 0,
+        },
+    };
+
+    let mut out = Vec::with_capacity(cursor);
+    out.extend_from_slice(&header.as_bytes());
+    for (offset, level) in offsets.iter().zip(levels) {
+        let entry = LevelIndex {
+            byte_offset: *offset as u64,
+            byte_length: level.len() as u64,
+            uncompressed_byte_length: level.len() as u64,
+        };
+        out.extend_from_slice(&entry.as_bytes());
+    }
+    out.extend_from_slice(&region);
+    for (offset, level) in offsets.iter().zip(levels).rev() {
+        out.resize(*offset, 0);
+        out.extend_from_slice(level);
+    }
+    out.resize(cursor, 0);
+    out
+}
+
+/// Reads a probe cube written by [`write_probe_cube`], validating that it is exactly a
+/// `face × face` cube of `level_count` whole levels.
+///
+/// # Errors
+/// [`Ktx2Error`] for a malformed or truncated container, another format, supercompression, a layout
+/// that is not a six-face cube of the requested extent, or a level of the wrong length. Never
+/// panics on file data.
+///
+/// # Example
+/// ```
+/// use ludion_assets::cooked::{Ktx2Error, read_probe_cube};
+/// assert!(matches!(read_probe_cube(&[0; 8], 2, 1), Err(Ktx2Error::FormatMismatch { .. })));
+/// ```
+pub fn read_probe_cube(
+    bytes: &[u8],
+    face: u32,
+    level_count: u32,
+) -> Result<Vec<Vec<u8>>, Ktx2Error> {
+    let expected = Format::R16G16B16A16_SFLOAT;
+    // `ktx2` 0.5 panics on some corrupt descriptors, so `Reader::new` only ever sees the exact
+    // descriptor the writer emits.
+    let stored_format = bytes
+        .get(12..16)
+        .and_then(|field| field.try_into().ok())
+        .map(u32::from_le_bytes);
+    if stored_format != Some(expected.value()) {
+        return Err(Ktx2Error::FormatMismatch {
+            expected: expected.value(),
+            found: stored_format.unwrap_or(0),
+        });
+    }
+    let field = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .and_then(|field| field.try_into().ok())
+            .map(u32::from_le_bytes)
+    };
+    let region = dfd_region_of(expected);
+    let stored_region = field(48)
+        .zip(field(52))
+        .filter(|(_, length)| *length as usize == region.len())
+        .and_then(|(offset, length)| {
+            bytes.get(offset as usize..(offset as usize).checked_add(length as usize)?)
+        });
+    if stored_region != Some(region.as_slice()) {
+        return Err(Ktx2Error::Parse(
+            "unexpected data format descriptor".to_string(),
+        ));
+    }
+    let reader = Reader::new(bytes).map_err(|error| Ktx2Error::Parse(error.to_string()))?;
+    let header = reader.header();
+    if header.supercompression_scheme.is_some() {
+        return Err(Ktx2Error::Supercompressed);
+    }
+    if header.pixel_depth != 0 || header.layer_count != 0 || header.face_count != 6 {
+        return Err(Ktx2Error::Parse(
+            "a probe cube has six faces, no layers and no depth".to_string(),
+        ));
+    }
+    if (header.pixel_width, header.pixel_height) != (face, face) {
+        return Err(Ktx2Error::Parse(format!(
+            "probe cube is {}x{}, expected {face}x{face}",
+            header.pixel_width, header.pixel_height
+        )));
+    }
+    if header.level_count != level_count {
+        return Err(Ktx2Error::BadLevelCount {
+            found: header.level_count,
+            max: level_count,
+        });
+    }
+    let mut levels = Vec::with_capacity(level_count as usize);
+    for (index, level) in reader.levels().enumerate() {
+        let expected = probe_level_bytes(face, index as u32);
+        if level.data.len() as u64 != expected {
+            return Err(Ktx2Error::BadLevelLength {
+                level: index as u32,
+                expected,
+                found: level.data.len() as u64,
+            });
+        }
+        levels.push(level.data.to_vec());
+    }
+    if levels.len() as u32 != level_count {
+        return Err(Ktx2Error::Parse(
+            "the level index is incomplete".to_string(),
+        ));
+    }
+    Ok(levels)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,5 +634,66 @@ mod tests {
         assert_eq!(image.blocks(0), (2, 1));
         assert_eq!(image.blocks(3), (1, 1));
         assert_eq!(image.level_extent(2), (2, 1));
+    }
+
+    fn probe_levels(face: u32, count: u32) -> Vec<Vec<u8>> {
+        (0..count)
+            .map(|l| vec![l as u8 + 1; probe_level_bytes(face, l) as usize])
+            .collect()
+    }
+
+    #[test]
+    fn a_probe_cube_round_trips() {
+        let levels = probe_levels(8, 4);
+        let bytes = write_probe_cube(8, &levels);
+        assert_eq!(read_probe_cube(&bytes, 8, 4).unwrap(), levels);
+    }
+
+    #[test]
+    fn a_truncated_probe_cube_is_an_error_not_a_panic() {
+        let bytes = write_probe_cube(8, &probe_levels(8, 4));
+        for cut in [0, 5, 12, 16, 60, 100, 200, bytes.len() / 2, bytes.len() - 1] {
+            assert!(
+                read_probe_cube(&bytes[..cut], 8, 4).is_err(),
+                "cut at {cut}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_probe_cube_of_another_shape_is_refused() {
+        let bytes = write_probe_cube(8, &probe_levels(8, 4));
+        assert!(read_probe_cube(&bytes, 16, 4).is_err());
+        assert!(read_probe_cube(&bytes, 8, 3).is_err());
+        assert!(read_probe_cube(&bytes, 8, 5).is_err());
+    }
+
+    #[test]
+    fn a_compressed_2d_file_is_not_a_probe_cube() {
+        let mut file = Vec::new();
+        let header = Header {
+            format: Some(Format::BC7_SRGB_BLOCK),
+            type_size: 1,
+            pixel_width: 4,
+            pixel_height: 4,
+            pixel_depth: 0,
+            layer_count: 0,
+            face_count: 1,
+            level_count: 1,
+            supercompression_scheme: None,
+            index: Index {
+                dfd_byte_offset: 0,
+                dfd_byte_length: 0,
+                kvd_byte_offset: 0,
+                kvd_byte_length: 0,
+                sgd_byte_offset: 0,
+                sgd_byte_length: 0,
+            },
+        };
+        file.extend_from_slice(&header.as_bytes());
+        assert!(matches!(
+            read_probe_cube(&file, 4, 1),
+            Err(Ktx2Error::FormatMismatch { .. })
+        ));
     }
 }

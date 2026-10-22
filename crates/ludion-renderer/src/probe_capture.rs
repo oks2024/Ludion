@@ -2,13 +2,15 @@
 //! derived scene and prefiltered into one slot of a cube array (`Plan/reflections.md` decisions 16,
 //! 17 and 21). Nothing samples the array yet.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::f32::consts::FRAC_PI_2;
+use std::path::PathBuf;
 
 use ludion_core::math::glam::{Mat4, Vec3};
 
 use crate::ibl;
 use crate::probe::MAX_PROBES;
+use crate::probe_store;
 use crate::render::Renderer;
 use crate::scene::{RenderCamera, RenderScene};
 
@@ -39,7 +41,7 @@ fn face_camera(position: Vec3, face: u32) -> RenderCamera {
 /// `scene` seen from one probe face: the lit world only. The overlay content, the screen-space
 /// effects and the sun disc (the IBL excludes it, so a probe does too) are dropped; the tables the
 /// caches key on stay, so the capture hits every cache the main frame filled.
-fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> RenderScene {
+pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> RenderScene {
     let mut out = scene.clone();
     out.camera = face_camera(position, face);
     out.sprites.clear();
@@ -76,6 +78,15 @@ pub(crate) struct ProbeCubes {
     pub(crate) max_lod: u32,
 }
 
+/// What the last resolve did: probes loaded from the store, and probes captured (every probe, with
+/// no store).
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[allow(dead_code, reason = "read by the tests; surfaced by observability")]
+pub(crate) struct ProbeStoreStats {
+    pub(crate) hits: u32,
+    pub(crate) captures: u32,
+}
+
 /// The renderer's probe captures.
 pub(crate) struct Probes {
     /// Keyed by the probe set (face size, entity, position): the world is captured once, and a
@@ -83,6 +94,9 @@ pub(crate) struct Probes {
     cache: RefCell<Option<(u64, ProbeCubes)>>,
     /// The capture target the faces are copied into, kept for the face size it was built for.
     source: RefCell<Option<(u32, wgpu::Texture)>>,
+    /// The probe store directory, when the host set one.
+    store: RefCell<Option<PathBuf>>,
+    stats: Cell<ProbeStoreStats>,
 }
 
 impl Probes {
@@ -90,7 +104,23 @@ impl Probes {
         Probes {
             cache: RefCell::new(None),
             source: RefCell::new(None),
+            store: RefCell::new(None),
+            stats: Cell::new(ProbeStoreStats::default()),
         }
+    }
+
+    /// Sets the store directory; the resident captures are dropped so the next resolve consults it.
+    pub(crate) fn set_store(&self, dir: Option<PathBuf>) {
+        if *self.store.borrow() != dir {
+            *self.store.borrow_mut() = dir;
+            self.cache.borrow_mut().take();
+        }
+    }
+
+    /// What the last resolve loaded and captured.
+    #[allow(dead_code, reason = "read by the tests; surfaced by observability")]
+    pub(crate) fn last_stats(&self) -> ProbeStoreStats {
+        self.stats.get()
     }
 
     fn key(probes: &[crate::probe::ProbeData], face_size: u32) -> u64 {
@@ -135,9 +165,33 @@ impl Probes {
             }
             held.as_ref().expect("just filled").1.clone()
         };
+        // The world key is taken once per resolve: a load-time event, the world at frame 0.
+        let store = self.store.borrow().clone();
+        let world = store.as_ref().map(|_| {
+            probe_store::world_key(
+                &face_scene(scene, Vec3::ZERO, 0),
+                &r.quality_params(),
+                (gpu.adapter_name(), gpu.adapter_backend()),
+                face_size,
+            )
+        });
+        let mut stats = ProbeStoreStats::default();
         // No borrow of the cache is held below: a face's own `prepare_frame` resolves its
         // probe-less scene back through here.
         for (slot, probe) in probes.iter().enumerate() {
+            let slot = slot as u32;
+            let entry = store
+                .as_deref()
+                .zip(world)
+                .map(|(dir, world)| (dir, probe_store::probe_key(world, probe.position)));
+            let loaded = entry.and_then(|(dir, key)| {
+                probe_store::read_entry(dir, key, face_size, array.mip_level_count())
+            });
+            if let Some(levels) = loaded {
+                probe_store::write_slot(gpu, &array, slot, &levels);
+                stats.hits += 1;
+                continue;
+            }
             for face in 0..6 {
                 let derived = face_scene(scene, probe.position, face);
                 r.capture_probe_face(
@@ -155,8 +209,14 @@ impl Probes {
                     },
                 );
             }
-            r.ibl().prefilter_probe(gpu, &source, &array, slot as u32);
+            r.ibl().prefilter_probe(gpu, &source, &array, slot);
+            stats.captures += 1;
+            if let Some((dir, key)) = entry {
+                let levels = probe_store::read_slot(gpu, &array, slot);
+                probe_store::write_entry(dir, key, face_size, &levels);
+            }
         }
+        self.stats.set(stats);
         let view = array.create_view(&wgpu::TextureViewDescriptor {
             label: Some("probe cube array"),
             dimension: Some(wgpu::TextureViewDimension::CubeArray),
@@ -183,7 +243,7 @@ impl Probes {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::ibl::tests::{face_dir, read_rgba16_mips, test_env};
     use crate::probe::{ProbeData, ProbeVolume};
@@ -218,7 +278,7 @@ mod tests {
         }
     }
 
-    fn probe_at(entity: u32, position: Vec3) -> ProbeData {
+    pub(crate) fn probe_at(entity: u32, position: Vec3) -> ProbeData {
         ProbeData {
             entity: EntityId::new(entity, 0),
             position,
@@ -245,7 +305,7 @@ mod tests {
         }
     }
 
-    fn renderer_or_skip(what: &str) -> Option<Renderer> {
+    pub(crate) fn renderer_or_skip(what: &str) -> Option<Renderer> {
         match Renderer::new() {
             Ok(r) => Some(r),
             Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
@@ -257,7 +317,7 @@ mod tests {
     }
 
     /// The array's bytes, every mip and layer.
-    fn array_bytes(r: &Renderer) -> Vec<f32> {
+    pub(crate) fn array_bytes(r: &Renderer) -> Vec<f32> {
         let cubes = r.probes.cubes().expect("the scene has a probe");
         read_rgba16_mips(r.gpu(), &cubes.texture)
             .into_iter()
@@ -265,11 +325,11 @@ mod tests {
             .collect()
     }
 
-    fn resolve(r: &Renderer, scene: &RenderScene) {
+    pub(crate) fn resolve(r: &Renderer, scene: &RenderScene) {
         r.probes.resolve(r, scene);
     }
 
-    fn lit_scene() -> RenderScene {
+    pub(crate) fn lit_scene() -> RenderScene {
         let mut scene = RenderScene::empty((64, 64));
         scene.environment = Some(test_env());
         let dir = Vec3::new(-0.4, -1.0, -0.3).normalize();

@@ -424,7 +424,8 @@ pub(crate) fn source_cube(device: &wgpu::Device, size: u32) -> wgpu::Texture {
 }
 
 /// The prefiltered probe cube array: `slots` cubes of `size`² faces (`6 · slots` layers) with the
-/// sky's roughness chain, readable by a shader and by a copy.
+/// sky's roughness chain, readable by a shader and by a copy and writable by a copy (a stored entry
+/// is uploaded into a slot).
 pub(crate) fn probe_array(device: &wgpu::Device, size: u32, slots: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("ibl probe array"),
@@ -439,7 +440,8 @@ pub(crate) fn probe_array(device: &wgpu::Device, size: u32, slots: u32) -> wgpu:
         format: IBL_FORMAT,
         usage: wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })
 }
