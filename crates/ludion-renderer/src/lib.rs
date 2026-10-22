@@ -54,6 +54,7 @@ mod lobe;
 mod mesh;
 mod mipgen;
 mod probe;
+mod probe_capture;
 mod quality;
 mod render;
 mod scene;

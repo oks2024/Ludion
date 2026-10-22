@@ -26,10 +26,11 @@ use crate::compressed::{self, CompressedUploadError};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
-use crate::graph::{FrameSize, PostChain, build_frame_graph, pass};
+use crate::graph::{FrameSize, PostChain, build_frame_graph, build_probe_capture_graph, pass};
 use crate::ibl::{Ibl, ResolvedEnv};
 use crate::mesh::{self, MeshVertex};
 use crate::mipgen::{MipGen, mip_level_count};
+use crate::probe_capture::Probes;
 use crate::quality::{Quality, QualityParams};
 use crate::scene::{
     DebugSegment, FontDraw, GroundMarkerInstance, MapImage, MeshData, MeshInstance, MeshShape,
@@ -368,6 +369,9 @@ pub struct Renderer {
     /// fallback cube, and the content-hash-keyed prefilter cache. Consulted once per frame in
     /// [`Renderer::prepare_frame`] to resolve the mesh pass's group-3 env inputs.
     ibl: Ibl,
+    /// The reflection probes' captures: resolved at the top of [`Renderer::prepare_frame`], bound by
+    /// nothing yet.
+    pub(crate) probes: Probes,
     /// The voxelizer's grid, uploaded to a pair of inert 3D textures and content-hash-cached
     /// (`voxel_bake.rs`, the `ibl` shape minus the binding). Consulted once per frame in
     /// [`Renderer::prepare_frame`] beside `ibl`; nothing downstream reads its output.
@@ -549,6 +553,7 @@ impl Renderer {
             shader_body_overrides: HashMap::new(),
             snippet_overrides: HashMap::new(),
             ibl,
+            probes: Probes::new(),
             voxel_bake,
             gi_bake,
             gi_inject,
@@ -1139,6 +1144,39 @@ impl Renderer {
         out
     }
 
+    /// The GPU, for the sibling modules that record their own submits.
+    pub(crate) fn gpu(&self) -> &Gpu {
+        &self.gpu
+    }
+
+    /// The image-based-lighting pipelines, which prefilter probe captures too.
+    pub(crate) fn ibl(&self) -> &Ibl {
+        &self.ibl
+    }
+
+    /// The edge of a probe face and of the sky's specular cube (`QualityParams::ibl_specular_size`).
+    pub(crate) fn ibl_specular_size(&self) -> u32 {
+        self.quality_params.ibl_specular_size
+    }
+
+    /// Renders one derived probe-face scene through the capture graph and copies the result into
+    /// `dest`.
+    pub(crate) fn capture_probe_face(
+        &self,
+        face_scene: &RenderScene,
+        face_size: u32,
+        dest: wgpu::TexelCopyTextureInfo<'_>,
+    ) {
+        let size = FrameSize::native(face_size, face_size);
+        let chain = PostChain::for_scene(face_scene).masked(&self.quality, &self.quality_params);
+        let (graph, output) = build_probe_capture_graph(face_size, chain);
+        let schedule = schedule(&graph).expect("the probe capture graph schedules");
+        let recorder = self.prepare_frame(face_scene, size, None);
+        self.gpu
+            .execute_into(&schedule, output, &recorder, dest)
+            .expect("a probe face renders");
+    }
+
     /// Uploads every per-frame resource and returns the recorder that will draw it. `size` rides
     /// along because the resolve pass needs the render extent its source was drawn at, which a
     /// `RecordedPass` (which knows only its own target) cannot tell it.
@@ -1155,6 +1193,7 @@ impl Renderer {
         mut observer: Option<&mut dyn FrameObserver>,
     ) -> FrameRecorder<'_> {
         let device = self.gpu.device();
+        self.probes.resolve(self, scene);
         // The one place "which conditional passes does this scene need" is answered, shared with the
         // graph the executor is about to build — masking included, so a recorder can never disagree
         // with it about which inputs a pass was handed.
@@ -2532,6 +2571,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::SSR_COLOR_SEED | pass::SSR_COLOR_REDUCE => self.record_ssr_color(pass),
             pass::SSR_TRACE => self.record_ssr_trace(pass),
             pass::SSR_DEBUG => self.record_ssr_debug(pass),
+            pass::PROBE_FACE => self.record_probe_face(pass),
             pass::TRANSPARENTS => self.record_transparents(pass),
             // The bright-pass threshold (`PostProcess.bloom_threshold`; default 1.0 reproduces the
             // old shader literal).
@@ -3442,6 +3482,12 @@ impl FrameRecorder<'_> {
         self.fullscreen_effect(pass, ShaderId::SsrTrace, &[], bytemuck::bytes_of(&params));
     }
 
+    /// A probe face: the lit scene and sky visibility, mirrored for the cube convention.
+    fn record_probe_face(&self, pass: &mut RecordedPass<'_>) {
+        let params = shader_gen::ProbeFace { pad: [0.0; 4] };
+        self.fullscreen_effect(pass, ShaderId::ProbeFace, &[], bytemuck::bytes_of(&params));
+    }
+
     /// The SSR debug view: the trace's confidence or footprint level as gray, in place of `composite`.
     fn record_ssr_debug(&self, pass: &mut RecordedPass<'_>) {
         let (view, levels) = self
@@ -4280,6 +4326,7 @@ enum ShaderId {
     SsrColor,
     SsrTrace,
     SsrDebug,
+    ProbeFace,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -4305,7 +4352,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 29;
+const SHADER_COUNT: usize = 30;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -4566,6 +4613,13 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         snippets: &[Snippet::FullscreenVs, Snippet::Srgb],
         layouts: &[LayoutId::SsrDebug],
     },
+    ShaderDesc {
+        id: ShaderId::ProbeFace,
+        file_name: "probe_face.wgsl",
+        body: include_str!("shaders/probe_face.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
+        layouts: &[LayoutId::ProbeFace],
+    },
 ];
 
 impl ShaderId {
@@ -4784,10 +4838,11 @@ enum LayoutId {
     SsrColor,
     SsrTrace,
     SsrDebug,
+    ProbeFace,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 31;
+const LAYOUT_COUNT: usize = 32;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -4925,6 +4980,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         id: LayoutId::SsrDebug,
         create: shader_gen::create_dbg_trace_dbg_samp_dbg_params_bgl,
     },
+    LayoutDesc {
+        id: LayoutId::ProbeFace,
+        create: shader_gen::create_face_scene_face_depth_face_samp_face_params_bgl,
+    },
 ];
 
 /// Every bind group layout, built once and indexed by [`LayoutId`].
@@ -5036,7 +5095,7 @@ fn build_pipeline(
             wgpu::TextureFormat::R32Float,
             None,
         ),
-        ShaderId::SsrColor | ShaderId::SsrTrace => {
+        ShaderId::SsrColor | ShaderId::SsrTrace | ShaderId::ProbeFace => {
             build_fullscreen_pipeline(device, label, src, &layout, HDR_FORMAT, None)
         }
     };

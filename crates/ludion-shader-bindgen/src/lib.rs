@@ -78,6 +78,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "mesh.wgsl",
     "particle.wgsl",
     "prepass.wgsl",
+    "probe_face.wgsl",
     "reflections.wgsl",
     "resolve.wgsl",
     "shadow.wgsl",
@@ -169,6 +170,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "ssr.wgsl",
         ],
     ),
+    ("probe_face.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("resolve.wgsl", &["fullscreen_vs.wgsl"]),
     (
         "shafts.wgsl",

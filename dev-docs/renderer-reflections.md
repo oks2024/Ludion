@@ -7,6 +7,7 @@ description: Indirect specular: the reflections blend site, surface targets, lob
 
 ## Layout
 - `crates/ludion-renderer/src/shaders/reflections.wgsl` — the fullscreen additive pass.
+- `crates/ludion-renderer/src/probe_capture.rs`, `shaders/probe_face.wgsl` — the probe capture (below).
 - `crates/ludion-renderer/src/lobe.rs` — the CPU lobe function (`cone_half_angle`, `cube_lod`, `mip_roughness`, `chain_max_lod`); `shaders/snippets/lobe.wgsl` is its WGSL twin.
 - `crates/ludion-renderer/src/shaders/snippets/{specular_ibl,gi_probe}.wgsl` — binding-free sky specular and the sky-visibility read.
 
@@ -35,6 +36,12 @@ With `ssr` on, `ssr_trace` (`ssr_trace.wgsl`, `ssr_trace.rs`) marches one mirror
 - The pass reads the trace texel **nearest** the render pixel (no upsample), and stores `srgb_to_linear(gray)` to the sRGB target so the byte is `round(value·255)` and `image-stats` reads the data directly. The transfer pair lives in `snippets/srgb.wgsl`, shared with `composite`.
 - Bloom, shafts and dof still schedule on a view frame with unread outputs; accepted for a debug frame.
 
+### Probe capture
+`probe_capture.rs` captures each `RenderScene.probes` entry once, at the top of `prepare_frame`: six faces of `QualityParams::ibl_specular_size` (no new quality field), prefiltered by `Ibl::prefilter_probe` into slot `i` of a renderer-owned cube array (`ProbeCubes`: texture, cube-array view, probe → slot table, face size, `max_lod`). The cache key is the face size plus each probe's entity and position, so the world is captured once; a scene without probes frees the array and does no GPU work. Nothing samples it yet.
+- **Derived scene**: each face is an ordinary frame (`prepare_frame` + `build_probe_capture_graph` + `Gpu::execute_into`) of a clone of the scene with the sprites, particles, text, ground markers, UI, debug lines, probes and `debug_view` emptied, `ssao`/`ssr`/`shafts`/`dof` zeroed, and the sun disc off (the IBL excludes it, so a probe does). Textures, mesh assets, lights, sun, GI and voxel stay, so every cache is a hit. Passes: shadow, gi_inject, scene, reflections, transparents, then `probe_face`.
+- **Faces and the flip**: wgpu layer order +X, −X, +Y, −Y, +Z, −Z; up = +Y, +Y, −Z, +Z, +Y, +Y; world-axis-aligned (a probe's rotation belongs to its box proxy). The cube convention is left-handed against `look_to_rh`, so a face renders unmirrored and `probe_face.wgsl` flips x at store. Never flip the projection: it reverses the winding and fights `is_mirrored`. `capture_faces_match_the_cube_convention` pins it.
+- **Alpha is sky visibility**: `probe_face` writes `hdr_safe(scene.rgb)` with alpha 1 where `scene_depth >= 1.0` and 0 on geometry (`scene`'s own alpha is 1 for both). The rgb keeps the sky, so shading needs no relight.
+
 ## Rules
 - **The lobe function is one function for every path.** `cone_half_angle(r) = 2·atan(r²)`: 0 for a mirror, exactly π/2 at r = 1. The cube lod solves the lobe's solid angle against K texels, K = 32π, so r = 1 fills the 8×8 face and the chain stops there. A one-texel match sent rough metal to 1×1 faces and made a cube-face artifact on the gallery night-sky tile. `mip_roughness` is the exact inverse of `cube_lod` above mip 0, so the prefilter and the lookup agree by construction; the `needs_gpu_` test in `lobe.rs` holds `lobe.wgsl` to the Rust. Change one twin, change both.
 - **Both ends clamp.** `cube_lod` clamps to `[0, max_lod]`, so a mirror reads mip 0 (below r ≈ 0.149 the lobe is under 1.2° on 0.45° texels) and r = 1 never leaves the 8×8 face; `pyramid_level` clamps the half-angle (`MAX_HALF_ANGLE`) to keep `tan` finite.
@@ -61,6 +68,8 @@ cargo test -p ludion-renderer needs_gpu_reflections
 cargo test -p ludion-renderer ssr_pyramid::
 cargo test -p ludion-renderer needs_gpu_ssr
 cargo test -p ludion-renderer needs_gpu_a_debug_view
+cargo test -p ludion-renderer probe_capture::
+cargo test -p ludion-renderer graph::tests::the_probe_capture
 cargo test -p ludion-cli --test render debug_view
 cargo test -p ludion-renderer needs_gpu_metal_reflects
 cargo test -p ludion-renderer needs_gpu_a_reflection_over_a_bright

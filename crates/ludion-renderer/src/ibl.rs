@@ -286,6 +286,23 @@ impl Ibl {
         }
     }
 
+    /// The sky specular cube for `env` at `size`, resolved if it is not already resident.
+    #[cfg(test)]
+    pub(crate) fn sky_specular_texture(
+        &self,
+        gpu: &Gpu,
+        env: &EnvironmentData,
+        size: u32,
+    ) -> wgpu::Texture {
+        self.resolve(gpu, Some(env), size);
+        self.cache
+            .borrow()
+            .as_ref()
+            .expect("resolve filled the cache")
+            .specular_texture
+            .clone()
+    }
+
     /// Prefilters a captured `source` cube into slot `slot` of the cube array `target`, in one
     /// encoder and one submit: the source's mip chain is box-filtered down, then each target mip
     /// integrates the lobe over it with filtered importance sampling.
@@ -293,7 +310,6 @@ impl Ibl {
     /// `source` is built by [`source_cube`]: face², six layers, a full chain to 1×1, `Rgba16Float`,
     /// `TEXTURE_BINDING | STORAGE_BINDING | COPY_DST`, with mip 0 filled by the caller. `target` is
     /// built by [`probe_array`]; slot `s` occupies layers `6s..6s + 6` and no other slot is written.
-    #[allow(dead_code, reason = "the probe path; exercised by the tests")]
     pub(crate) fn prefilter_probe(
         &self,
         gpu: &Gpu,
@@ -388,7 +404,6 @@ impl Ibl {
 
 /// A probe capture's source cube: `size`² faces, six layers, a full mip chain to 1×1 (the
 /// downsample fills mips 1..), `Rgba16Float`; the caller fills mip 0.
-#[allow(dead_code, reason = "the probe path; exercised by the tests")]
 pub(crate) fn source_cube(device: &wgpu::Device, size: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("ibl probe source"),
@@ -410,7 +425,6 @@ pub(crate) fn source_cube(device: &wgpu::Device, size: u32) -> wgpu::Texture {
 
 /// The prefiltered probe cube array: `slots` cubes of `size`² faces (`6 · slots` layers) with the
 /// sky's roughness chain, readable by a shader and by a copy.
-#[allow(dead_code, reason = "the probe path; exercised by the tests")]
 pub(crate) fn probe_array(device: &wgpu::Device, size: u32, slots: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("ibl probe array"),
@@ -584,7 +598,7 @@ fn compute_brdf(gpu: &Gpu, pipeline: &wgpu::ComputePipeline) -> wgpu::TextureVie
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The size is part of the cache key and sets the lod range the shader is told.
@@ -623,7 +637,7 @@ mod tests {
         }
     }
 
-    fn test_env() -> EnvironmentData {
+    pub(crate) fn test_env() -> EnvironmentData {
         EnvironmentData {
             sky_zenith: [0.1, 0.2, 0.6],
             sky_horizon: [0.7, 0.7, 0.8],
@@ -637,7 +651,7 @@ mod tests {
 
     /// Reads every mip of a 6-layer-multiple `Rgba16Float` texture back: per mip, per layer, rgba
     /// `f32` texels row-major. Unpads the 256-byte row alignment.
-    fn read_rgba16_mips(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<Vec<f32>> {
+    pub(crate) fn read_rgba16_mips(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<Vec<f32>> {
         let device = gpu.device();
         let layers = texture.depth_or_array_layers();
         (0..texture.mip_level_count())
@@ -731,7 +745,7 @@ mod tests {
     }
 
     /// Rust twin of `ibl.wgsl`'s `face_dir`.
-    fn face_dir(face: u32, u: f32, v: f32) -> [f32; 3] {
+    pub(crate) fn face_dir(face: u32, u: f32, v: f32) -> [f32; 3] {
         let d = match face {
             0 => [1.0, -v, -u],
             1 => [-1.0, -v, u],

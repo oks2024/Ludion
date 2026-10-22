@@ -176,6 +176,9 @@ pub mod pass {
     /// A full-screen view of the trace (`ludion render --debug-view`): replaces `composite`, reads
     /// `ssr_trace` and writes the same target.
     pub const SSR_DEBUG: &str = "ssr_debug";
+    /// A probe capture's last pass: the lit face into the capture target, with sky visibility in
+    /// alpha. Reads `scene` and `scene_depth`.
+    pub const PROBE_FACE: &str = "probe_face";
     /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
     /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.
     pub const TRANSPARENTS: &str = "transparents";
@@ -1228,6 +1231,75 @@ pub(crate) fn build_ssr_trace_graph(size: FrameSize) -> (RenderGraph, ResourceId
     (graph, ssr.trace)
 }
 
+/// One reflection-probe cube face: the opaque scene lit as an ordinary frame (shadow, GI inject,
+/// scene, reflections, transparents), then `probe_face` writes the linear HDR result with sky
+/// visibility in alpha to the output. `chain` is the derived face scene's, which schedules no AO,
+/// SSR, shafts, DoF, UI or debug lines.
+pub(crate) fn build_probe_capture_graph(face: u32, chain: PostChain) -> (RenderGraph, ResourceId) {
+    debug_assert!(
+        !chain.ssao
+            && chain.ssr.is_none()
+            && chain.ssr_view.is_none()
+            && !chain.shafts
+            && !chain.dof
+            && !chain.ui
+            && !chain.debug_lines,
+        "a probe face schedules none of the screen-space chains: {chain:?}"
+    );
+    let mut graph = RenderGraph::new();
+    let scene = graph.transient("scene", TextureDesc::hdr_color(face, face));
+    let scene_depth = graph.transient("scene_depth", TextureDesc::sampled_depth(face, face));
+    let scene_normal = graph.transient("scene_normal", TextureDesc::hdr_color(face, face));
+    let scene_specular = graph.transient("scene_specular", TextureDesc::color(face, face));
+    let shadow_map = chain
+        .shadow_map
+        .map(|edge| graph.transient("shadow_map", TextureDesc::sampled_depth(edge, edge)));
+    let gi_dynamic = chain.gi_inject.map(|[cx, cy, cz]| {
+        graph.transient(pass::GI_INJECT, TextureDesc::hdr_storage_volume(cx, cy, cz))
+    });
+    let mut desc = TextureDesc::hdr_color(face, face);
+    desc.usages.push(ludion_render_graph::TextureUsage::CopySrc);
+    let output = graph.output(pass::PROBE_FACE, desc);
+
+    // Reads in `build_frame_graph`'s order: `record_scene` unpacks them by flag.
+    let mut scene_reads = Vec::new();
+    if let Some(shadow_map) = shadow_map {
+        graph.add_external_pass_with_depth(pass::SHADOW, pass::SHADOW, vec![], vec![], shadow_map);
+        scene_reads.push(shadow_map);
+    }
+    if let Some(gi_dynamic) = gi_dynamic {
+        graph.add_external_compute_pass(pass::GI_INJECT, pass::GI_INJECT, vec![], gi_dynamic);
+        scene_reads.push(gi_dynamic);
+    }
+    graph.add_external_pass_with_depth(
+        pass::SCENE,
+        pass::SCENE,
+        scene_reads,
+        vec![scene, scene_normal, scene_specular],
+        scene_depth,
+    );
+    graph.add_external_pass(
+        pass::REFLECTIONS,
+        pass::REFLECTIONS,
+        vec![scene_normal, scene_specular, scene_depth],
+        vec![scene],
+    );
+    graph.add_external_pass_with_depth(
+        pass::TRANSPARENTS,
+        pass::TRANSPARENTS,
+        vec![],
+        vec![scene],
+        scene_depth,
+    );
+    graph.add_external_pass(
+        pass::PROBE_FACE,
+        pass::PROBE_FACE,
+        vec![scene, scene_depth],
+        vec![output],
+    );
+    (graph, output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1268,6 +1340,47 @@ mod tests {
 
     fn pass_names(graph: &RenderGraph) -> Vec<&str> {
         graph.passes().iter().map(|p| p.name.as_str()).collect()
+    }
+
+    /// The capture graph's pass order, with and without a shadow map and a GI injection, and an
+    /// output a copy can read.
+    #[test]
+    fn the_probe_capture_graph_orders_its_passes() {
+        let bare = PostChain::default();
+        let (graph, output) = build_probe_capture_graph(64, bare);
+        assert_eq!(
+            pass_names(&graph),
+            ["scene", "reflections", "transparents", "probe_face"]
+        );
+        let lit = PostChain {
+            shadow_map: Some(256),
+            gi_inject: Some([2, 2, 2]),
+            ..bare
+        };
+        let (graph, output_lit) = build_probe_capture_graph(64, lit);
+        assert_eq!(
+            pass_names(&graph),
+            [
+                "shadow",
+                "gi_inject",
+                "scene",
+                "reflections",
+                "transparents",
+                "probe_face"
+            ]
+        );
+        for (graph, output) in [
+            (build_probe_capture_graph(64, bare).0, output),
+            (graph, output_lit),
+        ] {
+            schedule(&graph).expect("the capture graph schedules");
+            let desc = &graph.resources()[output.index()].desc;
+            assert!(
+                desc.usages
+                    .contains(&ludion_render_graph::TextureUsage::CopySrc)
+            );
+            assert_eq!(desc.extent.width, 64);
+        }
     }
 
     fn resource_names(graph: &RenderGraph) -> Vec<&str> {
