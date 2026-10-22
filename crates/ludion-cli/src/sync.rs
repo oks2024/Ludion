@@ -36,6 +36,8 @@ use crate::import::import_gltf;
 use ludion_assets::cooked::CookTarget;
 use ludion_engine::manifest::{self, ImportSection};
 
+use crate::bake_probes::{self, Warmed};
+
 /// One glTF a table's `from` matched.
 #[derive(Debug, Clone)]
 struct Entry {
@@ -357,19 +359,21 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
                 diagnostic::print(diagnostic);
             }
             if json {
-                print_json(false, &Outcome::default(), &diagnostics);
+                print_json(false, &Outcome::default(), &Warmed::default(), &diagnostics);
             }
             return ExitCode::FAILURE;
         }
     };
     if outcome.no_tables {
-        if json {
-            print_json(true, &outcome, &[]);
-        } else {
+        if !json {
             println!(
                 "sync: no [[import]] tables in {}",
                 project.join("ludion.toml").display()
             );
+        }
+        let warmed = warm_probes(project, json);
+        if json {
+            print_json(true, &outcome, &warmed, &[]);
         }
         return ExitCode::SUCCESS;
     }
@@ -387,6 +391,7 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
         }
     }
     let ok = outcome.failed.is_empty() && cook_failed.clone().next().is_none();
+    let warmed = warm_probes(project, json);
     if json {
         let rendered: Vec<Diagnostic> = outcome
             .warnings
@@ -395,7 +400,7 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
             .chain(cook_failed.flat_map(|failed| &failed.diagnostics))
             .cloned()
             .collect();
-        print_json(ok, &outcome, &rendered);
+        print_json(ok, &outcome, &warmed, &rendered);
     } else {
         for stem in &outcome.imported {
             println!("imported {stem}");
@@ -424,6 +429,7 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
                 cook.failed.len()
             );
         }
+        print_warmed(&warmed);
     }
     if ok {
         ExitCode::SUCCESS
@@ -432,9 +438,38 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
     }
 }
 
+/// Warms the probe store for the default scene's directory. Human progress notes print only when
+/// `quiet` is false, so `--json` keeps stdout to the one object. A manifest `run` has already loaded
+/// is read again here, cheaply.
+fn warm_probes(project: &Path, quiet: bool) -> Warmed {
+    let Ok(manifest) = manifest::load(project) else {
+        return Warmed::default();
+    };
+    let Some(scene_dir) = manifest.default_scene.parent() else {
+        return Warmed::default();
+    };
+    bake_probes::warm(project, scene_dir, quiet)
+}
+
+/// The human summary of a warm, silent when no scene held a probe.
+fn print_warmed(warmed: &Warmed) {
+    if warmed.scenes > 0 {
+        println!(
+            "probes: {} captured, {} stored, in {} scenes",
+            warmed.captured, warmed.stored, warmed.scenes
+        );
+    }
+    if !warmed.skipped.is_empty() {
+        println!(
+            "skipped {} scenes the CLI cannot load: bake them with the game's --bake-probes",
+            warmed.skipped.len()
+        );
+    }
+}
+
 /// The shared `--json` envelope: the per-stem lists, then `rendered` — every diagnostic the run
 /// printed, in print order (a refusal is `ok: false` and `L1245` here).
-fn print_json(ok: bool, outcome: &Outcome, rendered: &[Diagnostic]) {
+fn print_json(ok: bool, outcome: &Outcome, warmed: &Warmed, rendered: &[Diagnostic]) {
     let failed: Vec<_> = outcome
         .failed
         .iter()
@@ -461,6 +496,9 @@ fn print_json(ok: bool, outcome: &Outcome, rendered: &[Diagnostic]) {
         "cook_reused": cook.map_or(0, |cook| cook.reused),
         "cook_failed": cook_failed,
         "store_bytes": cook.map_or(0, |cook| cook.store_bytes),
+        "probes_captured": warmed.captured,
+        "probes_stored": warmed.stored,
+        "probe_scenes_skipped": warmed.skipped,
     });
     let envelope = serde_json::Value::Object(diagnostic::json_envelope(ok, fields, rendered));
     println!("{envelope}");

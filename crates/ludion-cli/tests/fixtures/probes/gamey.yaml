@@ -1,0 +1,9 @@
+format: 1
+entities:
+  - name: room
+    components:
+      NotAComponent: {}
+      ReflectionProbe:
+        shape:
+          sphere:
+            radius: 2.0

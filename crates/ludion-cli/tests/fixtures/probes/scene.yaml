@@ -1,0 +1,73 @@
+format: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 6.0
+      Camera:
+        near: 0.1
+        far: 100.0
+  - name: sky
+    components:
+      Environment:
+        ibl_intensity: 1.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 8.0
+          - 0.2
+          - 8.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.6
+          - 0.6
+          - 1.0
+  - name: crate
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.5
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.3
+          - 0.2
+          - 1.0
+  - name: room
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 0.0
+      ReflectionProbe:
+        shape:
+          box:
+            extent:
+              - 4.0
+              - 2.0
+              - 4.0
+  - name: orb
+    components:
+      Transform:
+        translation:
+          - 9.0
+          - 1.0
+          - 0.0
+      ReflectionProbe:
+        shape:
+          sphere:
+            radius: 2.0

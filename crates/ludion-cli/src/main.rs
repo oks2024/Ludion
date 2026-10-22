@@ -21,7 +21,8 @@
 //! (drive a scene for N frames — or `--attach` a running host and capture its next N live frames —
 //! and report sim per-system, GPU per-pass, and frame-total median timings as JSON, optionally
 //! checked against a TOML budget file or exported as a Perfetto/Chrome trace with `--perfetto`),
-//! `ludion generate-map`
+//! `ludion bake-probes <SCENE>` (capture a scene's reflection probes into the probe store, or
+//! report that they are already there), `ludion generate-map`
 //! (compile a `kind: map` source into a canonical scene of real entities — the map-authoring
 //! pipeline's deterministic compile verb), `ludion map-check` (validate a map source and print
 //! a compact ASCII occupancy/reachability/gate-link report from its generated entities),
@@ -39,6 +40,7 @@
 //! classes, validate a `kind: generation` recipe offline and against `/object_info`, submit a run
 //! and follow it to a folder of candidates, and check on or complete a `--no-wait` one).
 
+mod bake_probes;
 mod check_scene;
 mod clip_report;
 mod cook;
@@ -649,6 +651,23 @@ enum Command {
         #[arg(long, conflicts_with = "model")]
         scale: Option<f32>,
     },
+    /// Capture a scene's reflection probes into the probe store (`.ludion/cooked/probes/` beside the
+    /// scene) and print one line per probe: its name, store key and whether it was `captured` now or
+    /// already `loaded`. Bakes at this machine's `--quality`, the one the hosts will run, because the
+    /// key hashes it. `--probe` recaptures the one probe with that `Name`. A scene without probes
+    /// prints `no reflection probes`; an unknown `--probe` is `L1280`; no GPU is `L2003`. Loads with
+    /// the built-in registry, so a game's scene (`L1013`) is baked by the game's `--bake-probes`.
+    /// `--json` prints `{ok, scene, store, probes, diagnostics}`, the object that mode prints too.
+    BakeProbes {
+        /// Path to the scene file (strict-subset YAML).
+        scene: PathBuf,
+        /// Recapture only the probe with this `Name`, replacing its stored entry.
+        #[arg(long, value_name = "NAME")]
+        probe: Option<String>,
+        /// Print one JSON object on stdout instead of the per-probe lines.
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate a scene, then print the scheduled frame graph as JSON (passes, virtual
     /// resources, execution order, and transient aliasing). Pure CPU — needs no GPU.
     DumpGraph {
@@ -773,6 +792,13 @@ enum Command {
     /// reported (`L1270`) and exits 1 without undoing the import. `--no-cook` (or `[cook] textures =
     /// false`) skips the stage and the sweep. `--json` adds `cooked`, `cook_reused`, `cook_failed`
     /// (each `{map, target, diagnostics}`) and `store_bytes`.
+    ///
+    /// Last, sync warms the reflection-probe store: each scene under the default scene's directory
+    /// that holds a `ReflectionProbe` and loads with the built-in registry is baked as `bake-probes`
+    /// does, at this machine's quality. A project without probes touches no GPU; a lane with no GPU
+    /// skips. A scene the CLI cannot load (a game's components) is named, to bake with the game's
+    /// `--bake-probes`. Warming never changes the exit code; `--json` adds `probes_captured`,
+    /// `probes_stored` and `probe_scenes_skipped`.
     Sync {
         /// The game's project directory (the one holding `ludion.toml`).
         #[arg(long, default_value = ".")]
@@ -1952,6 +1978,9 @@ fn main() -> std::process::ExitCode {
                 onion,
                 quality: &quality,
             })
+        }
+        Command::BakeProbes { scene, probe, json } => {
+            bake_probes::run(&scene, probe.as_deref(), &quality, json)
         }
         Command::DumpGraph {
             scene,

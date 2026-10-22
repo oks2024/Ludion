@@ -1,0 +1,12 @@
+format: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 6.0
+      Camera:
+        near: 0.1
+        far: 100.0

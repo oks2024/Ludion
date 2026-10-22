@@ -304,7 +304,7 @@ pub(crate) struct RunArgs {
         long,
         value_name = "source|cooked",
         value_parser = ["source", "cooked"],
-        conflicts_with_all = ["check_scene", "render_out", "check_docs", "replay_frames", "replay_verify", "profile_replay"]
+        conflicts_with_all = ["check_scene", "render_out", "check_docs", "replay_frames", "replay_verify", "profile_replay", "bake_probes"]
     )]
     textures: Option<String>,
     /// Reflection-probe source: `store` (the default) reads the content-addressed probe store
@@ -315,9 +315,22 @@ pub(crate) struct RunArgs {
         long,
         value_name = "store|rebake",
         value_parser = ["store", "rebake"],
-        conflicts_with_all = ["check_scene", "render_out", "check_docs", "replay_frames", "replay_verify", "profile_replay", "profile"]
+        conflicts_with_all = ["check_scene", "render_out", "check_docs", "replay_frames", "replay_verify", "profile_replay", "profile", "bake_probes"]
     )]
     probes: Option<String>,
+    /// Instead of hosting, capture **this game's** scene's reflection probes into the probe store and
+    /// exit, printing the `ludion bake-probes --json` object on stdout: the `bake-probes` a game scene
+    /// can use, since the CLI's is built-in-only and rejects every game component with `L1013`. The
+    /// scene is `--scene`, else the default scene; `--quality` applies (the store key hashes it), so
+    /// bake at the quality the game will run. Needs a GPU; a scene with no probe prints an empty list.
+    #[arg(
+        long,
+        conflicts_with_all = ["addr", "window", "profile", "profile_replay", "check_docs", "check_scene", "replay_frames", "replay_verify", "render_out", "textures", "probes"]
+    )]
+    bake_probes: bool,
+    /// With `--bake-probes`, recapture only the probe with this `Name`, replacing its stored entry.
+    #[arg(long, value_name = "NAME", requires = "bake_probes")]
+    bake_probe: Option<String>,
     /// Render extent for this machine, as `WIDTHxHEIGHT` in whole pixels (`960x540`) — the size the
     /// hosted engine streams and screenshots at. Overrides `LUDION_RENDER_SIZE`; without either, the
     /// engine's default extent stands. Every stage of the frame path costs in proportion to the pixel
@@ -653,6 +666,16 @@ pub(crate) fn run_short_circuit(
                 .as_deref()
                 .and_then(TextureSource::from_name)
                 .unwrap_or_default(),
+        ));
+    }
+
+    // `--bake-probes` fills the probe store from this game's engine and exits.
+    if args.bake_probes {
+        return Ok(run_bake_probes(
+            builder,
+            &scene,
+            args.bake_probe.as_deref(),
+            quality,
         ));
     }
 
@@ -1468,6 +1491,34 @@ fn quality_refusal(preset: &str, budget: &Path) -> Diagnostic {
     ))
 }
 
+/// Runs `--bake-probes`: loads `scene` through the game's builder, bakes its reflection probes at
+/// `quality` and prints the report as JSON, the object `ludion bake-probes --json` prints. A failure
+/// prints its diagnostic on stderr, exits 1, and is also the JSON's `diagnostics`.
+#[cfg(feature = "wire")]
+fn run_bake_probes(
+    builder: EngineBuilder,
+    scene: &Path,
+    probe: Option<&str>,
+    quality: ludion_engine::QualitySetting,
+) -> ExitCode {
+    let baked = builder.load_scene_file(scene).and_then(|mut engine| {
+        engine.set_quality(quality);
+        engine.bake_probes(probe)
+    });
+    match baked {
+        Ok(report) => {
+            println!("{}", report.to_json(scene, true, &[]));
+            ExitCode::SUCCESS
+        }
+        Err(diagnostic) => {
+            eprintln!("{diagnostic}");
+            let empty = ludion_engine::ProbeBakeReport::default();
+            println!("{}", empty.to_json(scene, false, &[diagnostic]));
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Runs `--check-docs`: builds the game's engine (its components, systems, default scene, and
 /// registered [`EngineBuilder::doc_kind`] kinds) against the resolved scene's content root and exits
 /// — no `Server::bind`, no GPU, no "listening" line. Building already performs the full content-root
@@ -2145,6 +2196,26 @@ mod host_diagnostic_tests {
             assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
         }
         assert!(RunArgs::try_parse_from(["game", "--check-docs", "--probes", "rebake"]).is_err());
+    }
+
+    #[test]
+    fn bake_probes_stands_alone_and_bake_probe_needs_it() {
+        assert!(RunArgs::try_parse_from(["game", "--bake-probes"]).is_ok());
+        assert!(RunArgs::try_parse_from(["game", "--bake-probes", "--bake-probe", "room"]).is_ok());
+        assert!(RunArgs::try_parse_from(["game", "--bake-probe", "room"]).is_err());
+        for other in [
+            ["--profile", "5"],
+            ["--check-docs", ""],
+            ["--textures", "cooked"],
+            ["--probes", "rebake"],
+            ["--window", ""],
+        ] {
+            let mut args = vec!["game", "--bake-probes", other[0]];
+            if !other[1].is_empty() {
+                args.push(other[1]);
+            }
+            assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
+        }
     }
 }
 
