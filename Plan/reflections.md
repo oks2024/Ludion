@@ -1,6 +1,6 @@
 # Plan: Reflections — screen-space reflections over box and sphere probes
 
-> Status: **W1 mechanized (2026-10-20); W2 waits on the user's word.** Design settled 2026-10-19. Decisions come from a grilling session with
+> Status: **W1 mechanized (2026-10-20); W2 mechanized (2026-10-22); W3 waits on the user's word.** Design settled 2026-10-19. Decisions come from a grilling session with
 > the user on 2026-10-19. Current-code facts were read from the tree on that date; the file:line
 > pointers are from that date too, so re-grep before editing. This plan answers
 > `Plan/post-process-pipeline.md`'s deferred "Screen-space reflections" entry.
@@ -342,6 +342,22 @@ interiors**. Large open water is not a driver.
   to 1×1 faces and made a cube-face artifact on rough metal).
   Owed: the re-bless on both pinned boxes, the `transparents`/`reflections` budgets and the 256²
   re-prefilter spike, in `Plan/owed.md`.
+- W2 (2026-10-22): screen-space reflections, opt-in per scene. Two half-resolution input pyramids
+  (`hiz`, an R32Float min-Z pyramid of the opaque depth; `ssr_color`, the opaque colour reduced by a
+  1-3-3-1 tent whose blur matches the lobe function's footprint per level); the `ssr_trace` pass marches
+  one mirror ray per texel through `hiz` with a fixed iteration cap (no jitter, no history) and writes
+  radiance plus a confidence that falls off at the screen edge, with ray length, on thickness misses and
+  back faces; `reflections` upsamples it depth-, normal- and confidence-aware and blends it against the
+  sky fill with the same split-sum term. Decisions taken in implementation: the look is opt-in through
+  `PostProcess.ssr` (0–1, default 0), which scales the confidence so 0 is exactly the sky and no
+  unauthored frame moves (decision 24 amended); `Quality::ssr` (off at LOW) and `QualityParams::ssr_scale`
+  carry the cost, and an iOS export turns SSR off through the low preset; SSR skips all of `spec.a`
+  (decision 7), so the hit flash no longer gates it — accepted, a short white emissive swamps the term.
+  Observability: `ludion render --debug-view ssr_confidence|ssr_footprint` and `render.debug`'s `view`
+  over the wire; the SSR passes are budgetable (an `ssr` group); `QualityProfile` reports `ssr`,
+  `ssr_scale` and `ibl_specular_size`. `L1273` validates the authored fields. Every SSR-off golden is
+  byte-identical. Owed: `examples/gallery/mirror-floor.yaml`'s golden on both pinned boxes and the 1080p
+  pass time on the reference box (the Wave 2 Exit), in `Plan/owed.md`.
 
 ## Deferred, with triggers
 
