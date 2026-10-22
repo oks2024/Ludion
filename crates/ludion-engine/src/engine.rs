@@ -1082,6 +1082,7 @@ impl Engine {
         let world = self.driver.world();
         world
             .entities()
+            .chain(world.presentation_entities())
             .filter(|&id| matches!(world.get::<ReflectionProbe>(id), Ok(Some(_))))
             .map(|id| {
                 let name = world.get::<Name>(id).ok().flatten().map(|n| n.0.clone());

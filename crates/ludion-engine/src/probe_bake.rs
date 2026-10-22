@@ -374,6 +374,46 @@ entities:
     }
 
     #[test]
+    fn needs_gpu_a_presentation_probe_is_baked() {
+        let dir = project("presentation");
+        let mut engine = engine(
+            &dir,
+            "format: 1
+entities:
+  - name: floor
+    components:
+      Transform:
+        scale:
+          - 10.0
+          - 1.0
+          - 10.0
+      Mesh:
+        shape: cube
+  - name: seen
+    presentation: true
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 0.0
+      ReflectionProbe: {}
+",
+        );
+        if no_gpu(&mut engine) {
+            return;
+        }
+        let report = engine.bake_probes(None).unwrap();
+        let outcomes: Vec<_> = report
+            .probes
+            .iter()
+            .map(|p| (p.name.as_deref().unwrap(), p.outcome))
+            .collect();
+        assert_eq!(outcomes, [("seen", ProbeOutcome::Captured)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn needs_gpu_bake_then_a_store_host_hits() {
         let dir = project("gpu");
         let mut a = engine(&dir, scene());
