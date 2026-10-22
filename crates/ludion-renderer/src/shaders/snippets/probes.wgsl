@@ -1,0 +1,72 @@
+// Reflection-probe shading, binding-free: a probe's weight at a point and its parallax-corrected
+// cube lookup, plus the sky-fraction intensity. The `reflections` pass composes it; a transparent
+// mesh shades probes through the same functions. Twins of `probe.rs`'s `probe_weight`,
+// `probe_lookup` and `sky_scaled`, in the same operation order.
+//
+// Every member is a `vec4` so the struct has a 16-byte stride in a uniform array.
+struct ShadeProbe {
+    // xyz = world position (the capture point and volume centre), w = the cube array slot.
+    center: vec4<f32>,
+    // The world-space columns of the box rotation (xyz); w unused.
+    axis_x: vec4<f32>,
+    axis_y: vec4<f32>,
+    axis_z: vec4<f32>,
+    // A box: xyz = half-extents. A sphere: x = radius.
+    extent: vec4<f32>,
+    // x = 0 for a box, 1 for a sphere; y = the inward blend distance.
+    params: vec4<f32>,
+};
+
+const MAX_SHADE_PROBES: u32 = 32u;
+
+// The world offset `v` in the probe's local frame (the rotation's transpose).
+fn probe_to_local(probe: ShadeProbe, v: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(probe.axis_x.xyz, v), dot(probe.axis_y.xyz, v), dot(probe.axis_z.xyz, v));
+}
+
+// 0 outside the volume, ramping to 1 over `blend` inside it.
+fn probe_weight(probe: ShadeProbe, p: vec3<f32>) -> f32 {
+    var inside: f32;
+    if (probe.params.x > 0.5) {
+        inside = probe.extent.x - length(p - probe.center.xyz);
+    } else {
+        let q = probe_to_local(probe, p - probe.center.xyz);
+        let e = probe.extent.xyz - abs(q);
+        inside = min(e.x, min(e.y, e.z));
+    }
+    if (inside <= 0.0) {
+        return 0.0;
+    }
+    if (probe.params.y <= 0.0) {
+        return 1.0;
+    }
+    return clamp(inside / probe.params.y, 0.0, 1.0);
+}
+
+// The direction from the capture point to sample for reflection ray `r` from `p`: the ray's hit on
+// the volume, relative to the capture point.
+fn probe_lookup(probe: ShadeProbe, p: vec3<f32>, r: vec3<f32>) -> vec3<f32> {
+    if (probe.params.x > 0.5) {
+        let q = p - probe.center.xyz;
+        let b = dot(q, r);
+        let c = dot(q, q) - probe.extent.x * probe.extent.x;
+        let t = -b + sqrt(max(b * b - c, 0.0));
+        return q + t * r;
+    }
+    let q = probe_to_local(probe, p - probe.center.xyz);
+    let d = probe_to_local(probe, r);
+    let guarded = select(max(d, vec3<f32>(1e-6)), min(d, vec3<f32>(-1e-6)), d < vec3<f32>(0.0));
+    let inv = vec3<f32>(1.0) / guarded;
+    let a = (probe.extent.xyz - q) * inv;
+    let b = (-probe.extent.xyz - q) * inv;
+    let far = max(a, b);
+    let t = min(far.x, min(far.y, far.z));
+    let local = q + t * d;
+    return probe.axis_x.xyz * local.x + probe.axis_y.xyz * local.y + probe.axis_z.xyz * local.z;
+}
+
+// A prefiltered probe sample with `ibl_intensity` `k` applied to its sky-visible fraction (alpha)
+// only: the captured geometry stays physical, the captured sky matches the sky fill.
+fn probe_sky_scaled(sample: vec4<f32>, k: f32) -> vec3<f32> {
+    return sample.rgb * (1.0 - sample.a + sample.a * k);
+}

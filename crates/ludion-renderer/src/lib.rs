@@ -55,6 +55,7 @@ mod mesh;
 mod mipgen;
 mod probe;
 mod probe_capture;
+mod probe_shade;
 mod probe_store;
 mod quality;
 mod render;

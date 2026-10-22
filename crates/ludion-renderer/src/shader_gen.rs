@@ -18,17 +18,17 @@ pub const BRDF_SAMPLES: u32 = 256;
 
 /// `CLUSTER_SLICES`, hoisted from WGSL `const CLUSTER_SLICES: u32`.
 ///
-/// Declared in `mesh.wgsl`, `sprite.wgsl`.
+/// Declared in `mesh.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
 pub const CLUSTER_SLICES: u32 = 16;
 
 /// `CLUSTER_TILES_X`, hoisted from WGSL `const CLUSTER_TILES_X: u32`.
 ///
-/// Declared in `mesh.wgsl`, `sprite.wgsl`.
+/// Declared in `mesh.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
 pub const CLUSTER_TILES_X: u32 = 16;
 
 /// `CLUSTER_TILES_Y`, hoisted from WGSL `const CLUSTER_TILES_Y: u32`.
 ///
-/// Declared in `mesh.wgsl`, `sprite.wgsl`.
+/// Declared in `mesh.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
 pub const CLUSTER_TILES_Y: u32 = 9;
 
 /// `FLAG_ADDITIVE`, hoisted from WGSL `const FLAG_ADDITIVE: u32`.
@@ -95,6 +95,11 @@ pub const MATERIAL_NORMAL: u32 = 4;
 ///
 /// Declared in `mesh.wgsl`.
 pub const MATERIAL_OCCLUSION: u32 = 8;
+
+/// `MAX_SHADE_PROBES`, hoisted from WGSL `const MAX_SHADE_PROBES: u32`.
+///
+/// Declared in `reflections.wgsl`.
+pub const MAX_SHADE_PROBES: u32 = 32;
 
 /// `PUSH_OUT_RADIUS`, hoisted from WGSL `const PUSH_OUT_RADIUS: i32`.
 ///
@@ -478,6 +483,21 @@ pub struct ProbeFace {
 const _: () = assert!(core::mem::size_of::<ProbeFace>() == 16);
 const _: () = assert!(core::mem::offset_of!(ProbeFace, pad) == 0);
 
+/// WGSL `struct ProbeList`.
+///
+/// Declared in `reflections.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct ProbeList {
+    pub header: [f32; 4],
+    pub grid: [f32; 4],
+    pub probes: [ShadeProbe; 32],
+}
+const _: () = assert!(core::mem::size_of::<ProbeList>() == 3104);
+const _: () = assert!(core::mem::offset_of!(ProbeList, header) == 0);
+const _: () = assert!(core::mem::offset_of!(ProbeList, grid) == 16);
+const _: () = assert!(core::mem::offset_of!(ProbeList, probes) == 32);
+
 /// WGSL `struct Reflections`.
 ///
 /// Declared in `reflections.wgsl`.
@@ -511,6 +531,27 @@ pub struct ResolveParams {
 const _: () = assert!(core::mem::size_of::<ResolveParams>() == 16);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, source_extent) == 0);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, ratio) == 8);
+
+/// WGSL `struct ShadeProbe`.
+///
+/// Declared in `reflections.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct ShadeProbe {
+    pub center: [f32; 4],
+    pub axis_x: [f32; 4],
+    pub axis_y: [f32; 4],
+    pub axis_z: [f32; 4],
+    pub extent: [f32; 4],
+    pub params: [f32; 4],
+}
+const _: () = assert!(core::mem::size_of::<ShadeProbe>() == 96);
+const _: () = assert!(core::mem::offset_of!(ShadeProbe, center) == 0);
+const _: () = assert!(core::mem::offset_of!(ShadeProbe, axis_x) == 16);
+const _: () = assert!(core::mem::offset_of!(ShadeProbe, axis_y) == 32);
+const _: () = assert!(core::mem::offset_of!(ShadeProbe, axis_z) == 48);
+const _: () = assert!(core::mem::offset_of!(ShadeProbe, extent) == 64);
+const _: () = assert!(core::mem::offset_of!(ShadeProbe, params) == 80);
 
 /// WGSL `struct ShadowView`.
 ///
@@ -1134,9 +1175,21 @@ pub const REFL_SSR_BINDING: u32 = 8;
 pub const BAKE_BIN_INDICES_GROUP: u32 = 0;
 pub const BAKE_BIN_INDICES_BINDING: u32 = 9;
 
+/// `refl_probe_cubes` — `@group(0) @binding(9)`, in `reflections.wgsl`.
+pub const REFL_PROBE_CUBES_GROUP: u32 = 0;
+pub const REFL_PROBE_CUBES_BINDING: u32 = 9;
+
 /// `bake_hit_cache` — `@group(0) @binding(10)`, in `gi_bake.wgsl`.
 pub const BAKE_HIT_CACHE_GROUP: u32 = 0;
 pub const BAKE_HIT_CACHE_BINDING: u32 = 10;
+
+/// `probe_list` — `@group(0) @binding(10)`, in `reflections.wgsl`.
+pub const PROBE_LIST_GROUP: u32 = 0;
+pub const PROBE_LIST_BINDING: u32 = 10;
+
+/// `probe_mask` — `@group(0) @binding(11)`, in `reflections.wgsl`.
+pub const PROBE_MASK_GROUP: u32 = 0;
+pub const PROBE_MASK_BINDING: u32 = 11;
 
 /// `atlas_tex` — `@group(1) @binding(0)`, in `text.wgsl`, `ui_text.wgsl`.
 pub const ATLAS_TEX_GROUP: u32 = 1;
@@ -1916,12 +1969,12 @@ pub fn create_rect_tex_rect_sampler_bgl(device: &wgpu::Device) -> wgpu::BindGrou
     })
 }
 
-/// Bind group layout `refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr` (@group 0), from `reflections.wgsl`.
-pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_bgl(
+/// Bind group layout `refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_refl_probe_cubes_probe_list_probe_mask` (@group 0), from `reflections.wgsl`.
+pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_refl_probe_cubes_probe_list_probe_mask_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr"),
+        label: Some("refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_refl_probe_cubes_probe_list_probe_mask"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: REFL_NORMAL_BINDING,
@@ -2006,6 +2059,36 @@ pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_r
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: REFL_PROBE_CUBES_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::CubeArray,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: PROBE_LIST_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(3104),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: PROBE_MASK_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(4),
                 },
                 count: None,
             },

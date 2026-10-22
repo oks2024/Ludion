@@ -1,6 +1,6 @@
 //! Reflection-probe capture: six world-axis faces per probe, rendered as ordinary frames of a
 //! derived scene and prefiltered into one slot of a cube array (`Plan/reflections.md` decisions 16,
-//! 17 and 21). Nothing samples the array yet.
+//! 17 and 21). The `reflections` pass samples the array (`probe_shade.rs`).
 
 use std::cell::{Cell, RefCell};
 use std::f32::consts::FRAC_PI_2;
@@ -67,7 +67,10 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
 
 /// The captured, prefiltered probes: a cube array with one slot per probe.
 #[derive(Clone)]
-#[allow(dead_code, reason = "the probe path; bound by the shading pass")]
+#[allow(
+    dead_code,
+    reason = "read by the tests; the shading pass binds only the view"
+)]
 pub(crate) struct ProbeCubes {
     pub(crate) texture: wgpu::Texture,
     /// A cube-array view of every layer and mip.
@@ -233,10 +236,6 @@ impl Probes {
     }
 
     /// The resident captures, or `None` for a scene without probes.
-    #[allow(
-        dead_code,
-        reason = "bound by the shading pass; exercised by the tests"
-    )]
     pub(crate) fn cubes(&self) -> Option<ProbeCubes> {
         self.cache.borrow().as_ref().map(|(_, cubes)| cubes.clone())
     }
@@ -289,7 +288,12 @@ pub(crate) mod tests {
         }
     }
 
-    fn mesh(shape: MeshShape, model: Mat4, color: [f32; 4], material: [f32; 3]) -> MeshInstance {
+    pub(crate) fn mesh(
+        shape: MeshShape,
+        model: Mat4,
+        color: [f32; 4],
+        material: [f32; 3],
+    ) -> MeshInstance {
         MeshInstance {
             shape,
             model,

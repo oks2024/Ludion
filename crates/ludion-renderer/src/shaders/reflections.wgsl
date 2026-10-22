@@ -1,11 +1,14 @@
 // The reflections pass: a fullscreen additive draw over the opaque scene that adds the indirect
 // specular. It reads the opaque pass's surface description (normal + roughness, F0 + specular
-// occlusion, depth) and resolves each texel through a chain, SSR then sky: with screen-space
+// occlusion, depth) and resolves each texel through a chain, SSR then probes then sky: the ranked
+// reflection probes whose volume holds the texel (its cluster cell's mask, at most four) take
+// `weight × (1 − coverage)` each and the sky fills the remaining coverage; with screen-space
 // reflections on, the half-res `ssr_trace` is upsampled with depth and normal weights and mixed over
-// the sky fill by its confidence, so a texel the trace missed is exactly the sky's term. The sky is
-// shaded through the shared `sky_specular` snippet; `mesh.wgsl` adds no indirect specular itself
-// (`Plan/reflections.md` decisions 3, 5). Occlusion follows decision 7: the sky fill is darkened by
-// specular occlusion and sky visibility, the SSR term by neither (the trace found the occluder).
+// that fill by its confidence, so a texel the trace missed is exactly the fill. The sky is shaded
+// through the shared `sky_specular` snippet; `mesh.wgsl` adds no indirect specular itself
+// (`Plan/reflections.md` decisions 2, 3, 5). Occlusion follows decision 7: the sky fill is darkened
+// by specular occlusion and sky visibility, the probe term by specular occlusion only, the SSR term
+// by neither (the trace found the occluder).
 //
 // The first three inputs are bound in the order the frame graph declares the pass's reads (the trace
 // is the fourth, present only with SSR on), so the bind group follows the graph.
@@ -27,6 +30,20 @@
 // The SSR trace at its own (smaller) extent: radiance in `rgb`, confidence in `a`. A 1×1 fallback
 // when SSR is off, never read then.
 @group(0) @binding(8) var refl_ssr: texture_2d<f32>;
+// The slotted array of prefiltered probe cubes (a 1×1 fallback when no probe was captured).
+@group(0) @binding(9) var refl_probe_cubes: texture_cube_array<f32>;
+
+struct ProbeList {
+    // x = the probe count (0 skips the probe path), y = the cube's max LOD, z = `ibl_intensity`.
+    header: vec4<f32>,
+    // The frame's `LightHeader.grid`, the cluster cell lookup's input.
+    grid: vec4<f32>,
+    // The ranked probes; bit `k` of a cell's mask is `probes[k]`.
+    probes: array<ShadeProbe, 32>,
+}
+@group(0) @binding(10) var<uniform> probe_list: ProbeList;
+// One bit-mask per cluster cell, in the lights' cell order.
+@group(0) @binding(11) var<storage, read> probe_mask: array<u32>;
 
 struct Reflections {
     inv_view_proj: mat4x4<f32>,
@@ -92,7 +109,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ssr_on = reflections.ssr.x > 0.5;
     // No `Environment` and no SSR: nothing to add. First, so such a frame never reaches a sample and
     // 0 + dst is exact.
-    if (!env_on && !ssr_on) {
+    let probe_count = u32(probe_list.header.x);
+    if (!env_on && !ssr_on && probe_count == 0u) {
         return vec4<f32>(0.0);
     }
     // Far depth is the sky, which `transparents` draws later; a sky texel would otherwise pick up
@@ -127,7 +145,40 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             );
         }
     }
-    var s = sky_fill;
+    var fill = sky_fill;
+    if (probe_count > 0u) {
+        let cell = cluster_cell(in.pos.xy, dot(world - reflections.cam_pos.xyz, world - reflections.cam_pos.xyz), probe_list.grid);
+        var mask = probe_mask[cell];
+        var coverage = 0.0;
+        var radiance = vec3<f32>(0.0);
+        var taken = 0u;
+        let lod = specular_cube_lod(roughness, probe_list.header.y);
+        // Lowest set bit first is rank order. Only a positive weight takes one of the four slots, so
+        // a spuriously binned probe is skipped.
+        loop {
+            if (mask == 0u || taken >= 4u || coverage >= 1.0) {
+                break;
+            }
+            let k = firstTrailingBit(mask);
+            mask = mask & (mask - 1u);
+            let probe = probe_list.probes[k];
+            let w = probe_weight(probe, world);
+            if (w <= 0.0) {
+                continue;
+            }
+            let contribution = w * (1.0 - coverage);
+            let dir = probe_lookup(probe, world, r);
+            let sampled = textureSampleLevel(refl_probe_cubes, refl_samp, dir, i32(probe.center.w), lod);
+            radiance = radiance + contribution * probe_sky_scaled(sampled, probe_list.header.z);
+            coverage = coverage + contribution;
+            taken = taken + 1u;
+        }
+        if (coverage > 0.0) {
+            let ab = textureSampleLevel(refl_brdf_lut, refl_samp, vec2<f32>(ndv, roughness), 0.0).rg;
+            fill = radiance * (spec.rgb * ab.x + vec3<f32>(ab.y)) * spec.a + sky_fill * (1.0 - coverage);
+        }
+    }
+    var s = fill;
     if (ssr_on) {
         let hit = ssr_upsample(p, n, length(world - reflections.cam_pos.xyz));
         // The intensity scales the confidence, so intensity 0 is exactly the sky.
@@ -135,7 +186,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         if (confidence > 0.0) {
             // The sky's split-sum scale and bias, so the two paths match in BRDF.
             let ab = textureSampleLevel(refl_brdf_lut, refl_samp, vec2<f32>(ndv, roughness), 0.0).rg;
-            s = mix(sky_fill, hit.rgb * (spec.rgb * ab.x + vec3<f32>(ab.y)), confidence);
+            s = mix(fill, hit.rgb * (spec.rgb * ab.x + vec3<f32>(ab.y)), confidence);
         }
     }
     return vec4<f32>(hdr_safe(s), 0.0);

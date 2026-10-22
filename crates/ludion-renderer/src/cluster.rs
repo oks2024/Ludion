@@ -21,6 +21,7 @@
 use bytemuck::Zeroable;
 use ludion_core::math::glam::{Mat4, Vec3};
 
+use crate::probe::{MAX_PROBES, ProbeData, ProbeVolume};
 use crate::scene::{RenderCamera, RenderScene};
 use crate::shader_gen::{CLUSTER_SLICES, CLUSTER_TILES_X, CLUSTER_TILES_Y, Light, LightHeader};
 
@@ -372,7 +373,18 @@ fn footprint_of(
     ladder: (f32, f32),
 ) -> Footprint {
     let (center, range) = bounding_sphere(light);
+    sphere_footprint(center, range, cam_pos, view_proj, render_extent, ladder)
+}
 
+/// The cells a bounding sphere can reach, rounded outward.
+fn sphere_footprint(
+    center: Vec3,
+    range: f32,
+    cam_pos: Vec3,
+    view_proj: &Mat4,
+    render_extent: (u32, u32),
+    ladder: (f32, f32),
+) -> Footprint {
     // The scalar-f32 discipline the deleted `dist2` documented: three multiply-adds written out, no
     // glam reducing op, no fused intrinsic — one value, computed the same way everywhere.
     let dx = center.x - cam_pos.x;
@@ -392,6 +404,38 @@ fn footprint_of(
         .unwrap_or(((0, CLUSTER_TILES_X - 1), (0, CLUSTER_TILES_Y - 1)));
 
     Footprint { tx, ty, shell }
+}
+
+/// Per-cell reflection-probe bitmasks: bit `k` of cell `c` is set when the `k`th probe of `ranked`
+/// (rank order) can reach a fragment in `c`. Same conservatism as the light tables — a probe's
+/// weight is an exact 0 outside its volume, so over-inclusion cannot move a pixel.
+pub(crate) fn probe_masks(
+    ranked: &[ProbeData],
+    camera: &RenderCamera,
+    render_extent: (u32, u32),
+) -> Vec<u32> {
+    const _: () = assert!(MAX_PROBES <= 32);
+    let view_proj = camera.projection * camera.view;
+    let ladder = shell_ladder();
+    let mut masks = vec![0u32; CLUSTER_CELLS];
+    for (k, probe) in ranked.iter().take(MAX_PROBES).enumerate() {
+        let radius = match probe.volume {
+            ProbeVolume::Box { extent } => extent.length(),
+            ProbeVolume::Sphere { radius } => radius,
+        };
+        let footprint = sphere_footprint(
+            probe.position,
+            radius,
+            camera.position,
+            &view_proj,
+            render_extent,
+            ladder,
+        );
+        for cell in footprint.cells() {
+            masks[cell] |= 1 << k;
+        }
+    }
+    masks
 }
 
 /// The sphere every fragment a light can reach lies in, as `(centre, radius)`.
@@ -771,6 +815,94 @@ mod tests {
             checked > 2_000,
             "only {checked} in-frustum samples were checked — the fixture stopped covering the frame",
         );
+    }
+
+    #[test]
+    fn a_probe_mask_covers_every_in_volume_point_in_view() {
+        use ludion_core::ids::EntityId;
+        use ludion_core::math::glam::Quat;
+
+        let camera = camera_at(Vec3::new(0.0, 2.0, 12.0), Vec3::ZERO);
+        let probe = |entity, position, rotation, volume| ProbeData {
+            entity: EntityId::new(entity, 0),
+            position,
+            rotation,
+            volume,
+            blend: 0.5,
+            priority: 0,
+        };
+        let ranked = [
+            probe(
+                0,
+                Vec3::new(-3.0, 0.0, 0.0),
+                Quat::from_rotation_y(0.7),
+                ProbeVolume::Box {
+                    extent: Vec3::new(2.0, 1.0, 3.0),
+                },
+            ),
+            probe(
+                1,
+                Vec3::new(4.0, 1.0, -2.0),
+                Quat::IDENTITY,
+                ProbeVolume::Sphere { radius: 2.5 },
+            ),
+            probe(
+                2,
+                Vec3::new(0.0, 0.0, 6.0),
+                Quat::IDENTITY,
+                ProbeVolume::Box {
+                    extent: Vec3::splat(1.5),
+                },
+            ),
+        ];
+        let masks = probe_masks(&ranked, &camera, EXTENT);
+        assert_eq!(masks.len(), CLUSTER_CELLS);
+        let header = build_lights(
+            &scene_with(camera, Vec::new()),
+            EXTENT,
+            ClusterBuild::Culled,
+        )
+        .header;
+        let view_proj = camera.projection * camera.view;
+        let mut rng = DeterministicRng::new(0x0094_0BE5);
+        let mut checked = 0;
+        for (k, probe) in ranked.iter().enumerate() {
+            for _ in 0..1500 {
+                let mut unit = || (rng.next_f32() - 0.5) * 2.0;
+                let (x, y, z) = (unit(), unit(), unit());
+                let local = match probe.volume {
+                    ProbeVolume::Box { extent } => Vec3::new(x, y, z) * extent,
+                    ProbeVolume::Sphere { radius } => {
+                        let v = Vec3::new(x, y, z);
+                        if v.length() > 1.0 {
+                            continue;
+                        }
+                        v * radius
+                    }
+                };
+                let sample = probe.position + probe.rotation * local;
+                let clip = view_proj * sample.extend(1.0);
+                if clip.w <= 0.0
+                    || clip.x.abs() > clip.w
+                    || clip.y.abs() > clip.w
+                    || clip.z < 0.0
+                    || clip.z > clip.w
+                {
+                    continue;
+                }
+                let frag = (
+                    (clip.x / clip.w * 0.5 + 0.5) * EXTENT.0 as f32,
+                    (0.5 - clip.y / clip.w * 0.5) * EXTENT.1 as f32,
+                );
+                let cell = cell_read_by(frag, (camera.position - sample).length_squared(), &header);
+                assert!(
+                    masks[cell] & (1 << k) != 0,
+                    "probe {k} holds {sample:?} but is absent from cell {cell}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 1_000, "only {checked} samples were in view");
     }
 
     fn spot(

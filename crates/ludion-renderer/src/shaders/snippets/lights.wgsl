@@ -25,14 +25,6 @@
 // (an effect that wants a per-light texture read moves the read out of the loop, or pays
 // `textureSampleLevel`).
 
-// The cluster grid's shape: fixed *counts*, never a fixed pixel size, so the grid is identical at
-// every `--scale` — a supersampled frame clusters exactly like its native twin. WGSL is the source
-// of truth: `ludion-shader-bindgen` reflects these into `shader_gen`, and the renderer's CPU-side
-// build sizes `cluster_table` from them.
-const CLUSTER_TILES_X: u32 = 16u;
-const CLUSTER_TILES_Y: u32 = 9u;
-const CLUSTER_SLICES: u32 = 16u;
-
 struct Light {
     // xyz = world position, w = range.
     position: vec4<f32>,
@@ -71,20 +63,13 @@ struct LightHeader {
 // The concatenated per-cell index lists; each entry indexes `light_list`.
 @group(1) @binding(3) var<storage, read> cluster_lights: array<u32>;
 
-// This fragment's (offset, count) slice of `cluster_lights`: the tile from its framebuffer position,
-// the shell from its **squared** radial distance to the camera. Everything arrives as a parameter
-// rather than through the camera snippet's globals, so this snippet stays self-contained and either
+// This fragment's (offset, count) slice of `cluster_lights`: the cell from its framebuffer position
+// and **squared** radial distance to the camera (`cluster_cell`, composed ahead of this snippet).
+// Everything arrives as a parameter rather than through the camera snippet's globals, so either
 // consumer can compose it alone; taking the squared distance also lets both consumers hand over a
-// `dot` of a vector they already had instead of a square root. Both coordinates clamp on the float
-// side before the u32 conversion, so an edge fragment or a distance off either end of the ladder
-// lands in a real cell instead of reading out of bounds.
+// `dot` of a vector they already had instead of a square root.
 fn cluster_slice(frag_pos: vec2<f32>, view_dist_sq: f32) -> vec2<u32> {
-    let tile_uv = clamp(frag_pos * lights.grid.xy, vec2<f32>(0.0), vec2<f32>(1.0));
-    let tx = min(u32(tile_uv.x * f32(CLUSTER_TILES_X)), CLUSTER_TILES_X - 1u);
-    let ty = min(u32(tile_uv.y * f32(CLUSTER_TILES_Y)), CLUSTER_TILES_Y - 1u);
-    let ladder = log2(max(view_dist_sq, 1e-12)) * lights.grid.z + lights.grid.w;
-    let shell = u32(clamp(ladder, 0.0, f32(CLUSTER_SLICES - 1u)));
-    return cluster_table[(shell * CLUSTER_TILES_Y + ty) * CLUSTER_TILES_X + tx];
+    return cluster_table[cluster_cell(frag_pos, view_dist_sq, lights.grid)];
 }
 
 // A spot's cone factor for the surface-to-light unit vector `l`: 1 inside the inner cone, a Hermite

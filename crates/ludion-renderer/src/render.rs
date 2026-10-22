@@ -320,6 +320,8 @@ pub struct Renderer {
     /// uniform flag is zero then and the shader takes the branch
     /// (`Plan/post-process-pipeline.md` decision 9).
     fallback_hdr: GpuTexture,
+    /// The cube-array view the reflections pass binds when no probe was captured; never sampled.
+    fallback_probe_cubes: wgpu::TextureView,
     meshes: [MeshBuffer; 3],
     white: GpuTexture,
     atlas: GpuTexture,
@@ -461,6 +463,7 @@ impl Renderer {
         let comparison_sampler = comparison_sampler(device);
         let fallback_shadow = depth_1x1(device);
         let fallback_hdr = hdr_1x1(device);
+        let fallback_probe_cubes = crate::probe_shade::fallback_cubes(device);
 
         let meshes = [
             mesh_buffer(device, MeshShape::Cube),
@@ -537,6 +540,7 @@ impl Renderer {
             comparison_sampler,
             fallback_shadow,
             fallback_hdr,
+            fallback_probe_cubes,
             meshes,
             white,
             atlas,
@@ -1402,6 +1406,32 @@ impl Renderer {
         };
 
         let mesh_draws = self.build_mesh_draws(scene, device);
+        // The reflections pass's probes: the ranked list and its cell masks, with the sky's
+        // intensity when an `Environment` exists.
+        let probe_cubes = self.probes.cubes();
+        let (probe_list, probe_masks) = crate::probe_shade::build_probe_list(
+            scene,
+            probe_cubes.as_ref(),
+            lights_raw.header.grid,
+            if resolved_env.params[0] > 0.5 {
+                resolved_env.params[1]
+            } else {
+                1.0
+            },
+            size.render,
+        );
+        let probe_list_buf = init_buffer(
+            device,
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::bytes_of(&probe_list),
+        );
+        let probe_mask_buf = init_buffer(
+            device,
+            wgpu::BufferUsages::STORAGE,
+            bytemuck::cast_slice(&probe_masks),
+        );
+        let probe_cube_view = probe_cubes.map(|c| c.view);
+
         let mesh_asset_draws = self.build_mesh_asset_draws(scene, device, &mesh_assets);
         let ground_marker_draw = self.build_ground_marker_draw(scene, device);
         let debug_line_draw = self.build_debug_line_draw(scene, device);
@@ -1417,6 +1447,9 @@ impl Renderer {
             camera_skin_bg,
             bone_palette_buf,
             lights_bg,
+            probe_list_buf,
+            probe_mask_buf,
+            probe_cube_view,
             sun_buf,
             sun: scene.sun,
             has_shadow_map: chain.shadow_map.is_some(),
@@ -2487,6 +2520,11 @@ struct FrameRecorder<'a> {
     /// own `{shadow_view, bone_palette}` group without re-uploading it.
     bone_palette_buf: wgpu::Buffer,
     lights_bg: wgpu::BindGroup,
+    /// The reflections pass's ranked probe uniform, its per-cell mask buffer and the captured cube
+    /// array (`None`: the renderer's fallback is bound and the uniform's count is 0).
+    probe_list_buf: wgpu::Buffer,
+    probe_mask_buf: wgpu::Buffer,
+    probe_cube_view: Option<wgpu::TextureView>,
     /// The mesh group-2 sun uniform (real when the scene has a sun, zeroed otherwise). Also bound to
     /// the shadow pass's `ShadowView` layout — its first 64 bytes are `light_space`.
     sun_buf: wgpu::Buffer,
@@ -3089,8 +3127,8 @@ impl FrameRecorder<'_> {
 
     /// The reflections pass: a fullscreen additive draw over the opaque scene, reading its normal,
     /// specular and depth targets (the pass's declared read order, which is the shader's binding
-    /// order), then the sky cube, BRDF LUT and probe volume. It adds the sky's indirect specular and, when
-    /// SSR is on, the trace's.
+    /// order), then the sky cube, BRDF LUT and probe volume, and the probe cubes, list and masks. It adds the
+    /// indirect specular: SSR over probes over the sky.
     fn record_reflections(&self, pass: &mut RecordedPass<'_>) {
         // The trace is the fourth read, present only when the graph declared the SSR chain.
         let ssr = pass.inputs.len() == 4;
@@ -3154,6 +3192,22 @@ impl FrameRecorder<'_> {
                             .copied()
                             .unwrap_or(&self.r.fallback_hdr.view),
                     ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_PROBE_CUBES_BINDING,
+                    resource: wgpu::BindingResource::TextureView(
+                        self.probe_cube_view
+                            .as_ref()
+                            .unwrap_or(&self.r.fallback_probe_cubes),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::PROBE_LIST_BINDING,
+                    resource: self.probe_list_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::PROBE_MASK_BINDING,
+                    resource: self.probe_mask_buf.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::REFLECTIONS_BINDING,
@@ -4396,6 +4450,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         snippets: &[
             Snippet::Camera,
             Snippet::Skin,
+            Snippet::ClusterGrid,
             Snippet::Lights,
             Snippet::Bayer,
             Snippet::Hdr,
@@ -4446,7 +4501,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::Sprite,
         file_name: "sprite.wgsl",
         body: include_str!("shaders/sprite.wgsl"),
-        snippets: &[Snippet::Camera, Snippet::Lights],
+        snippets: &[Snippet::Camera, Snippet::ClusterGrid, Snippet::Lights],
         layouts: &[LayoutId::Camera, LayoutId::Lights, LayoutId::SpriteTex],
     },
     ShaderDesc {
@@ -4593,6 +4648,8 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Hdr,
             Snippet::Lobe,
             Snippet::SpecularIbl,
+            Snippet::ClusterGrid,
+            Snippet::Probes,
             Snippet::GiProbe,
             Snippet::Ssr,
         ],
@@ -4696,6 +4753,12 @@ impl ShaderId {
 enum Snippet {
     /// `Camera` uniform struct + its `@group(0)` binding (mesh, sprite, text, ground marker).
     Camera,
+    /// The cluster grid's consts and `cluster_cell`, binding-free (`lights.wgsl`'s index, the
+    /// reflections pass's probe masks).
+    ClusterGrid,
+    /// `ShadeProbe`, `probe_weight`, `probe_lookup` and `probe_sky_scaled`, binding-free
+    /// (reflections; the twins of `probe.rs`).
+    Probes,
     /// The clustered-forward light set: the grid consts, the `Light`/`LightHeader` structs, all four
     /// `@group(1)` bindings and the `cluster_slice` lookup (mesh, sprite).
     Lights,
@@ -4745,6 +4808,8 @@ impl Snippet {
     fn file_name(self) -> &'static str {
         match self {
             Snippet::Camera => "camera.wgsl",
+            Snippet::ClusterGrid => "cluster_grid.wgsl",
+            Snippet::Probes => "probes.wgsl",
             Snippet::Lights => "lights.wgsl",
             Snippet::FullscreenVs => "fullscreen_vs.wgsl",
             Snippet::Bayer => "bayer.wgsl",
@@ -4766,6 +4831,8 @@ impl Snippet {
     fn builtin_source(self) -> &'static str {
         match self {
             Snippet::Camera => include_str!("shaders/snippets/camera.wgsl"),
+            Snippet::ClusterGrid => include_str!("shaders/snippets/cluster_grid.wgsl"),
+            Snippet::Probes => include_str!("shaders/snippets/probes.wgsl"),
             Snippet::Lights => include_str!("shaders/snippets/lights.wgsl"),
             Snippet::FullscreenVs => include_str!("shaders/snippets/fullscreen_vs.wgsl"),
             Snippet::Bayer => include_str!("shaders/snippets/bayer.wgsl"),
@@ -4788,6 +4855,8 @@ impl Snippet {
         let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
         [
             Snippet::Camera,
+            Snippet::ClusterGrid,
+            Snippet::Probes,
             Snippet::Lights,
             Snippet::FullscreenVs,
             Snippet::Bayer,
@@ -4983,7 +5052,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Reflections,
-        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_bgl,
+        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_refl_probe_cubes_probe_list_probe_mask_bgl,
     },
     LayoutDesc {
         id: LayoutId::HizSeed,
