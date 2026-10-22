@@ -537,7 +537,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -547,6 +547,11 @@
           {
             "const": "ssr_footprint",
             "description": "The colour-pyramid level each hit read.",
+            "type": "string"
+          },
+          {
+            "const": "probe_index",
+            "description": "The winning reflection probe per pixel, coloured by rank.",
             "type": "string"
           }
         ]
@@ -2718,7 +2723,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -2728,6 +2733,11 @@
           {
             "const": "ssr_footprint",
             "description": "The colour-pyramid level each hit read.",
+            "type": "string"
+          },
+          {
+            "const": "probe_index",
+            "description": "The winning reflection probe per pixel, coloured by rank.",
             "type": "string"
           }
         ]
@@ -3947,6 +3957,14 @@
             "format": "double",
             "type": "number"
           },
+          "probe_bake_ms": {
+            "description": "Time spent capturing and prefiltering reflection probes the store did not hold; absent when\nnone was captured.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "renderer_init_ms": {
             "description": "Time spent creating the renderer's device and pipelines; absent until the renderer reports it.",
             "format": "double",
@@ -4078,6 +4096,28 @@
         ],
         "type": "object"
       },
+      "ProbeProfile": {
+        "description": "The last reflection-probe resolve: probes loaded from the store versus captured.\n\n`hits` stays 0 on the Fresh paths (`ludion profile`, `--profile`), which never read the store, by\ndesign: committed images and measurements never depend on a cache file existing.",
+        "properties": {
+          "captures": {
+            "description": "Probes captured and prefiltered.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hits": {
+            "description": "Probes loaded from the probe store.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hits",
+          "captures"
+        ],
+        "type": "object"
+      },
       "ProfileReport": {
         "description": "One profiling run's result: the input, the frame counts, and the timing sections.\n\n[`Deserialize`] as well as [`Serialize`]: a report is an artifact tooling reads back — a\ncommitted baseline JSON compared against a later run, an Amdahl split computed off it — not only\nsomething a host prints once. Every optional section defaults to `None`, so a report written\nbefore that section existed still parses; which of them a given report carries depends on which\nhost produced it, and each field below says so.",
         "properties": {
@@ -4112,6 +4152,17 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "probes": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProbeProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reflection probes of the last resolve: loaded from the store versus captured. Absent for a\nscene without probes. Filled offline and by a live capture."
           },
           "quality": {
             "anyOf": [
@@ -4375,7 +4426,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -4385,6 +4436,11 @@
           {
             "const": "ssr_footprint",
             "description": "The colour-pyramid level each hit read.",
+            "type": "string"
+          },
+          {
+            "const": "probe_index",
+            "description": "The winning reflection probe per pixel, coloured by rank.",
             "type": "string"
           }
         ]
@@ -5992,6 +6048,14 @@
             "format": "double",
             "type": "number"
           },
+          "probe_bake_ms": {
+            "description": "Time spent capturing and prefiltering reflection probes the store did not hold; absent when\nnone was captured.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "renderer_init_ms": {
             "description": "Time spent creating the renderer's device and pipelines; absent until the renderer reports it.",
             "format": "double",
@@ -6123,6 +6187,28 @@
         ],
         "type": "object"
       },
+      "ProbeProfile": {
+        "description": "The last reflection-probe resolve: probes loaded from the store versus captured.\n\n`hits` stays 0 on the Fresh paths (`ludion profile`, `--profile`), which never read the store, by\ndesign: committed images and measurements never depend on a cache file existing.",
+        "properties": {
+          "captures": {
+            "description": "Probes captured and prefiltered.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hits": {
+            "description": "Probes loaded from the probe store.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hits",
+          "captures"
+        ],
+        "type": "object"
+      },
       "ProfileReport": {
         "description": "One profiling run's result: the input, the frame counts, and the timing sections.\n\n[`Deserialize`] as well as [`Serialize`]: a report is an artifact tooling reads back — a\ncommitted baseline JSON compared against a later run, an Amdahl split computed off it — not only\nsomething a host prints once. Every optional section defaults to `None`, so a report written\nbefore that section existed still parses; which of them a given report carries depends on which\nhost produced it, and each field below says so.",
         "properties": {
@@ -6157,6 +6243,17 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "probes": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProbeProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reflection probes of the last resolve: loaded from the store versus captured. Absent for a\nscene without probes. Filled offline and by a live capture."
           },
           "quality": {
             "anyOf": [
@@ -6420,7 +6517,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -6430,6 +6527,11 @@
           {
             "const": "ssr_footprint",
             "description": "The colour-pyramid level each hit read.",
+            "type": "string"
+          },
+          {
+            "const": "probe_index",
+            "description": "The winning reflection probe per pixel, coloured by rank.",
             "type": "string"
           }
         ]

@@ -32,6 +32,8 @@ pub(crate) enum LoadPhase {
     GpuUpload,
     /// Uploading the voxel grid and baking the GI probes.
     GiBake,
+    /// Capturing and prefiltering reflection probes the store did not hold.
+    ProbeBake,
 }
 
 /// Adapts a [`LoadObserver`] to the renderer's [`FrameObserver`], mapping the renderer's phases onto
@@ -43,6 +45,7 @@ impl FrameLoadObserver<'_> {
         match phase {
             FramePhase::Upload => LoadPhase::GpuUpload,
             FramePhase::GiBake => LoadPhase::GiBake,
+            FramePhase::ProbeBake => LoadPhase::ProbeBake,
         }
     }
 }

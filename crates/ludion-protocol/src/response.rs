@@ -605,6 +605,7 @@ mod tests {
                 transport: None,
                 cluster: None,
                 load: None,
+                probes: None,
                 samples: None,
             }),
         };

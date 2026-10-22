@@ -1341,6 +1341,7 @@ fn load_summary(load: &ludion_protocol::perf::LoadProfile) -> String {
         ("renderer init", load.renderer_init_ms),
         ("gpu upload", load.gpu_upload_ms),
         ("gi bake", load.gi_bake_ms),
+        ("probe bake", load.probe_bake_ms),
         ("first frame", load.first_frame_ms),
     ];
     let attributed: f64 = phases.iter().filter_map(|(_, ms)| *ms).sum();
@@ -2256,6 +2257,7 @@ mod budget_quality_tests {
             transport: None,
             cluster: None,
             load: None,
+            probes: None,
             samples: None,
         }
     }
@@ -2680,6 +2682,7 @@ entities:
             voxelize_ms: Some(300.0),
             renderer_init_ms: Some(250.0),
             gi_bake_ms: Some(600.0),
+            probe_bake_ms: None,
             total_ms: 5712.0,
             assets: vec![
                 counters("texture", 235),

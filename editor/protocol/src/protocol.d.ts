@@ -234,10 +234,10 @@ export type Command =
  */
 export type GiRebakeMode = 'auto' | 'hold';
 /**
- * A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.
+ * A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.
  * The spelling matches `ludion render --debug-view`.
  */
-export type RenderDebugView = 'ssr_confidence' | 'ssr_footprint';
+export type RenderDebugView = 'ssr_confidence' | 'ssr_footprint' | 'probe_index';
 /**
  * The event envelope: one [`Event`] (its `event` name + `data`), plus `sub`, `seq`, and an optional
  * `frame`.
@@ -2887,6 +2887,11 @@ export interface ProfileReport {
    */
   measured_frames: number;
   /**
+   * Reflection probes of the last resolve: loaded from the store versus captured. Absent for a
+   * scene without probes. Filled offline and by a live capture.
+   */
+  probes?: ProbeProfile | null;
+  /**
    * The render quality this measurement was taken at — the setting the host chose and the
    * parameter axes every GPU number below depends on. Filled by the host that owns the setting
    * (the offline driver directly, the live host when it answers a capture), so `None` means only
@@ -3020,6 +3025,11 @@ export interface LoadProfile {
    */
   other_ms: number;
   /**
+   * Time spent capturing and prefiltering reflection probes the store did not hold; absent when
+   * none was captured.
+   */
+  probe_bake_ms?: number | null;
+  /**
    * Time spent creating the renderer's device and pipelines; absent until the renderer reports it.
    */
   renderer_init_ms?: number | null;
@@ -3066,6 +3076,23 @@ export interface AssetLoadCounters {
    * Distinct keys whose first lookup in the window was a cache hit.
    */
   reused: number;
+  [k: string]: unknown;
+}
+/**
+ * The last reflection-probe resolve: probes loaded from the store versus captured.
+ *
+ * `hits` stays 0 on the Fresh paths (`ludion profile`, `--profile`), which never read the store, by
+ * design: committed images and measurements never depend on a cache file existing.
+ */
+export interface ProbeProfile {
+  /**
+   * Probes captured and prefiltered.
+   */
+  captures: number;
+  /**
+   * Probes loaded from the probe store.
+   */
+  hits: number;
   [k: string]: unknown;
 }
 /**

@@ -27,10 +27,10 @@ use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
 use ludion_ecs::World;
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
-    EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, MeshData,
-    MeshInstance, MeshShape, ParticleInstance, PointLightData, PostData, ProbeData, ProbeVolume,
-    QualityParams, RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunData,
-    TextRun, TextureImage, UiInstance, WorldVoxelGrid, aspect_ratio,
+    DebugSegment, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData, GroundMarkerInstance,
+    MeshData, MeshInstance, MeshShape, ParticleInstance, PointLightData, PostData, ProbeData,
+    ProbeVolume, QualityParams, RenderCamera, RenderScene, SkinJoint, SpotLightData,
+    SpriteInstance, SunData, TextRun, TextureImage, UiInstance, WorldVoxelGrid, aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -1765,6 +1765,85 @@ pub(crate) fn extract_probes(
             probe_data(probe, &render_pose(world, poses, id), id)
         })
         .collect()
+}
+
+/// Whether any entity has a [`ReflectionProbe`], for the `probes` debug-draw category.
+pub(crate) fn any_probe(world: &World) -> bool {
+    world
+        .entities()
+        .chain(world.presentation_entities())
+        .any(|id| world.has::<ReflectionProbe>(id))
+}
+
+/// Segments in one great circle of a sphere probe's volume.
+const PROBE_CIRCLE_SEGMENTS: usize = 32;
+/// Half-length of the cross that marks a probe's capture point.
+const PROBE_CAPTURE_HALF: f32 = 0.25;
+/// The colour of a probe past `MAX_PROBES`, which is not shaded.
+const PROBE_UNSHADED_COLOR: [f32; 4] = [0.25, 0.25, 0.25, 1.0];
+
+/// The `probes` debug-draw category: each probe's volume wireframe and its capture point, coloured
+/// by rank like the `probe_index` view. Linear RGBA, as `DebugSegment.color` is.
+pub(crate) fn probe_debug_lines(world: &World) -> Vec<DebugSegment> {
+    let ids: Vec<EntityId> = world
+        .entities()
+        .chain(world.presentation_entities())
+        .collect();
+    let mut probes = extract_probes(world, &ids, &mut WorldAffines::new());
+    probes.sort_by(ludion_renderer::probe_rank);
+    let mut lines = Vec::new();
+    for (rank, probe) in probes.iter().enumerate() {
+        let color = if rank < ludion_renderer::MAX_PROBES {
+            let [r, g, b] =
+                ludion_renderer::PROBE_VIEW_PALETTE[rank % 8].map(ludion_sprite::srgb_decode);
+            [r, g, b, 1.0]
+        } else {
+            PROBE_UNSHADED_COLOR
+        };
+        let mut line = |a: Vec3, b: Vec3| {
+            lines.push(DebugSegment {
+                a: a.to_array(),
+                b: b.to_array(),
+                color,
+            });
+        };
+        match probe.volume {
+            ProbeVolume::Box { extent } => {
+                let corner = |i: usize| {
+                    let sign = |bit: usize| if i >> bit & 1 == 1 { 1.0 } else { -1.0 };
+                    probe.position
+                        + probe.rotation * (extent * Vec3::new(sign(0), sign(1), sign(2)))
+                };
+                for i in 0..8 {
+                    for bit in 0..3 {
+                        if i >> bit & 1 == 0 {
+                            line(corner(i), corner(i | 1 << bit));
+                        }
+                    }
+                }
+            }
+            ProbeVolume::Sphere { radius } => {
+                for (u, v) in [(Vec3::X, Vec3::Y), (Vec3::Y, Vec3::Z), (Vec3::Z, Vec3::X)] {
+                    let at = |step: usize| {
+                        let (sin, cos) = ludion_core::math::sin_cos(
+                            step as f32 / PROBE_CIRCLE_SEGMENTS as f32 * std::f32::consts::TAU,
+                        );
+                        probe.position + (u * cos + v * sin) * radius
+                    };
+                    for step in 0..PROBE_CIRCLE_SEGMENTS {
+                        line(at(step), at(step + 1));
+                    }
+                }
+            }
+        }
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            line(
+                probe.position - axis * PROBE_CAPTURE_HALF,
+                probe.position + axis * PROBE_CAPTURE_HALF,
+            );
+        }
+    }
+    lines
 }
 
 /// Builds [`SunData`] from a `DirectionalLight` and its Transform-anchored frustum center. Pure and

@@ -111,6 +111,10 @@ encode/send it measures is that viewer's own delivery cost, not one the game pay
 a `LoadClock` before the scene load, and a disarmed host reads no clock for loading. Its phases are
 exclusive self-times, and its decoded/cooked/reused/bytes counters are deterministic. `cooked` counts
 KTX2 reads from the cooked store (texture only) apart from `decoded`; `bytes_read` covers both.
+`probe_bake_ms` is the `ProbeBake` frame phase (capture plus prefilter of probes the store missed,
+fenced per probe); `ProfileReport.probes` is `{ hits, captures }` of the last resolve, offline and on a
+live capture. `hits` is 0 on the Fresh paths by design. `ludion render --dump-probes` times each probe
+with `SpanClock`, the same phase observed per span.
 
 The offline driver, live channel, `profile.capture`, tails, the `cluster` section and the Perfetto export are `ludion devdocs profiling-capture`.
 

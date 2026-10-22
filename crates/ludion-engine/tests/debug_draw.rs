@@ -280,3 +280,34 @@ fn setting_a_view_moves_no_frame_and_no_hash() {
     assert_eq!(engine.frame(), frame);
     assert_eq!(engine.world_hash().unwrap(), hash);
 }
+
+#[test]
+fn render_debug_draws_probes_and_takes_the_probe_index_view() {
+    let root = fixture_root();
+    let scene = format!(
+        "{SCENE}  - name: mirror\n    components:\n      Transform: {{}}\n      ReflectionProbe:\n        shape:\n          sphere:\n            radius: 3.0\n"
+    );
+    let mut engine = game(&root).build().expect("the game builds");
+    engine.load_inline_scene(&scene).expect("the scene loads");
+    engine.advance_live();
+    let (frame, hash) = (engine.frame(), engine.world_hash().unwrap());
+    let reply = engine
+        .execute(Command::RenderDebug(RenderDebugParams {
+            categories: Some(vec!["probes".to_string()]),
+            view: Some(Some(RenderDebugView::ProbeIndex)),
+        }))
+        .expect("render.debug is always accepted");
+    let ResponseBody::RenderDebug {
+        enabled,
+        drawn,
+        view,
+    } = reply.body
+    else {
+        panic!("expected RenderDebug");
+    };
+    assert_eq!(enabled, ["probes"]);
+    assert!(drawn.iter().any(|name| name == "probes"), "{drawn:?}");
+    assert_eq!(view, Some(RenderDebugView::ProbeIndex));
+    assert_eq!(engine.frame(), frame);
+    assert_eq!(engine.world_hash().unwrap(), hash);
+}

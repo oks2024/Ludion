@@ -57,6 +57,8 @@ pub struct DumpedProbe {
     pub prefiltered: RenderedImage,
     /// The mean alpha of the capture: the fraction of the view that is sky.
     pub sky_visible: f32,
+    /// Wall time to capture and prefilter this probe, in milliseconds.
+    pub capture_ms: Option<f64>,
 }
 
 /// Captures the reflection probes of the scene at `path` fresh and reads them back.
@@ -81,7 +83,8 @@ pub fn render_probe_dump(
     )?;
     let mut renderer = Renderer::new().map_err(|d| vec![d])?;
     renderer.set_quality(quality.quality, quality.params);
-    let readbacks = renderer.read_probes(&scene);
+    let mut clock = crate::profile::SpanClock::default();
+    let readbacks = renderer.read_probes(&scene, Some(&mut clock));
     let (keys, key_source) = if overrides.is_empty() {
         (store_host_keys(path, quality)?, "store-host")
     } else {
@@ -98,7 +101,13 @@ pub fn render_probe_dump(
                 .get(readback.slot as usize)
                 .copied()
                 .unwrap_or(readback.key);
-            dumped(&store, readback, key, data.volume, data.position.to_array())
+            let capture_ms = clock
+                .spans
+                .get(readback.slot as usize)
+                .map(|span| span.as_secs_f64() * 1000.0);
+            let mut probe = dumped(&store, readback, key, data.volume, data.position.to_array());
+            probe.capture_ms = capture_ms;
+            probe
         })
         .collect();
     Ok(ProbeDumpOutcome {
@@ -166,6 +175,7 @@ fn dumped(
                 .collect::<Vec<_>>(),
         ),
         sky_visible,
+        capture_ms: None,
     }
 }
 
@@ -251,6 +261,7 @@ impl DumpedProbe {
             "key": format!("{:016x}", self.key),
             "stored": self.stored,
             "sky_visible": self.sky_visible,
+            "capture_ms": self.capture_ms,
             "captured": self.captured.as_ref().map(|_| self.captured_file()),
             "prefiltered": self.prefiltered_file(),
         })
@@ -352,6 +363,7 @@ entities:
             assert_eq!(probe.prefiltered.width, 6 * f);
             assert_eq!(probe.prefiltered.height, edges);
             assert!(!probe.stored);
+            assert!(probe.capture_ms.is_some_and(|ms| ms > 0.0), "{probe:?}");
         }
         assert_eq!(first.probes[0].shape_name(), "box");
         assert_eq!(first.probes[1].shape_name(), "sphere");

@@ -277,6 +277,7 @@ mod tests {
             // per-frame column to lay out, and a timeline is drawn from columns.
             cluster: None,
             load: None,
+            probes: None,
             samples: Some(ProfileSamples {
                 frames: vec![10, 11],
                 system_names: vec!["bump".to_string()],

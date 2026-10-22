@@ -566,11 +566,15 @@ fn run_dump_probes(
     for probe in &outcome.probes {
         let [x, y, z] = probe.position;
         println!(
-            "  #{} {} at ({x}, {y}, {z}) key {:016x} {}",
+            "  #{} {} at ({x}, {y}, {z}) key {:016x} {}{}",
             probe.slot,
             probe.shape_name(),
             probe.key,
             if probe.stored { "stored" } else { "not stored" },
+            probe
+                .capture_ms
+                .map(|ms| format!(", capture {ms:.1} ms"))
+                .unwrap_or_default(),
         );
     }
     Ok(())

@@ -1162,7 +1162,7 @@ impl Renderer {
     /// Runs `work`, bracketed as `phase` for an observer. Observed, the device is fenced before the
     /// phase ends so the GPU time of what `work` submitted is attributed to it; unobserved, `work`
     /// runs as is.
-    fn observed_phase<T>(
+    pub(crate) fn observed_phase<T>(
         &self,
         observer: &mut Option<&mut dyn FrameObserver>,
         phase: FramePhase,
@@ -1228,7 +1228,7 @@ impl Renderer {
         mut observer: Option<&mut dyn FrameObserver>,
     ) -> FrameRecorder<'_> {
         let device = self.gpu.device();
-        self.probes.resolve(self, scene);
+        self.probes.resolve(self, scene, &mut observer);
         // The one place "which conditional passes does this scene need" is answered, shared with the
         // graph the executor is about to build — masking included, so a recorder can never disagree
         // with it about which inputs a pass was handed.

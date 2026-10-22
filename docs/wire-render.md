@@ -96,8 +96,9 @@ Games record world-space debug lines (a character's motor, a platform's path) un
 Any string is accepted; a category nobody draws is absent from `drawn`, which is how to tell a typo
 from a quiet scene.
 
-`view` shows an SSR debug view in place of the composite, the same two views as
-`ludion render --debug-view`: `"ssr_confidence"` or `"ssr_footprint"`. A name sets it, `null` clears it,
+`view` shows a debug view in place of the composite, the same views as
+`ludion render --debug-view`: `"ssr_confidence"`, `"ssr_footprint"` or `"probe_index"` (the winning
+reflection probe per pixel, coloured by rank; the `probes` category draws the volumes). A name sets it, `null` clears it,
 absent keeps it; the reply's `view` is the one in force. A view never turns SSR on: on a frame without
 SSR the normal frame is drawn (`render.dump_graph` shows whether `ssr_debug` is scheduled).
 

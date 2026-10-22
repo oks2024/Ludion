@@ -1801,6 +1801,7 @@ fn needs_gpu_dump_probes_writes_strips_and_a_manifest() {
         stdout.contains("box") && stdout.contains("sphere"),
         "{stdout}"
     );
+    assert!(stdout.contains("capture "), "{stdout}");
     for rank in 0..2 {
         for kind in ["captured", "prefiltered"] {
             assert!(dump.join(format!("probe-{rank}-{kind}.png")).is_file());

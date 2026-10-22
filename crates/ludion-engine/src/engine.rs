@@ -1095,6 +1095,20 @@ impl Engine {
         Ok(report)
     }
 
+    /// The last probe resolve as a profile section: store hits against captures. `None` for a scene
+    /// without probes or an engine that has not rendered.
+    pub fn probe_profile(&self) -> Option<ludion_protocol::perf::ProbeProfile> {
+        let resolved = self.renderer.as_ref()?.probe_resolve();
+        if resolved.probes.is_empty() {
+            return None;
+        }
+        let hits = resolved.probes.iter().filter(|p| p.loaded).count() as u64;
+        Some(ludion_protocol::perf::ProbeProfile {
+            hits,
+            captures: resolved.probes.len() as u64 - hits,
+        })
+    }
+
     fn probe_bake_report(
         &self,
         dir: &Path,

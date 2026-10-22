@@ -15,6 +15,8 @@ pub enum FramePhase {
     Upload,
     /// Uploading the voxel grid and baking the GI probes.
     GiBake,
+    /// Capturing and prefiltering one reflection probe the store did not hold.
+    ProbeBake,
 }
 
 /// Receives frame-preparation events. Every `begin` is paired with an `end`.

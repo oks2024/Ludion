@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use ludion_core::math::glam::{Mat4, Vec3};
 
+use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::ibl;
 use crate::probe::MAX_PROBES;
 use crate::probe_store;
@@ -170,7 +171,11 @@ impl Renderer {
 
     /// Captures `scene`'s probes fresh and reads them back, in rank order. A dump path: it ignores
     /// the store, and leaves the resident cubes a fresh capture of the same probe set.
-    pub fn read_probes(&self, scene: &RenderScene) -> Vec<ProbeReadback> {
+    pub fn read_probes(
+        &self,
+        scene: &RenderScene,
+        mut observer: Option<&mut dyn FrameObserver>,
+    ) -> Vec<ProbeReadback> {
         let count = scene.probes.len().min(MAX_PROBES);
         if count == 0 {
             return Vec::new();
@@ -178,7 +183,7 @@ impl Renderer {
         let probes = &self.probes;
         probes.retain.set(true);
         probes.recapture();
-        probes.resolve(self, scene);
+        probes.resolve(self, scene, &mut observer);
         probes.retain.set(false);
         let captured = std::mem::take(&mut *probes.captured.borrow_mut());
         let cubes = probes.cubes().expect("the scene has probes");
@@ -246,8 +251,14 @@ impl Probes {
     }
 
     /// Captures and prefilters `scene`'s probes unless the probe set is the one already resident.
+    /// An `observer` brackets each captured probe as `ProbeBake`; loaded probes are not bracketed.
     /// A scene with no probes frees the array and does no GPU work.
-    pub(crate) fn resolve(&self, r: &Renderer, scene: &RenderScene) {
+    pub(crate) fn resolve(
+        &self,
+        r: &Renderer,
+        scene: &RenderScene,
+        observer: &mut Option<&mut dyn FrameObserver>,
+    ) {
         debug_assert!(scene.probes.len() <= MAX_PROBES, "13 caps the probe list");
         let probes = &scene.probes[..scene.probes.len().min(MAX_PROBES)];
         if probes.is_empty() {
@@ -306,37 +317,39 @@ impl Probes {
                 });
                 continue;
             }
-            for face in 0..6 {
-                let derived = face_scene(scene, probe.position, face);
-                r.capture_probe_face(
-                    &derived,
-                    face_size,
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &source,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: 0,
-                            y: 0,
-                            z: face,
+            r.observed_phase(observer, FramePhase::ProbeBake, || {
+                for face in 0..6 {
+                    let derived = face_scene(scene, probe.position, face);
+                    r.capture_probe_face(
+                        &derived,
+                        face_size,
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &source,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: 0,
+                                y: 0,
+                                z: face,
+                            },
+                            aspect: wgpu::TextureAspect::All,
                         },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                );
-            }
-            if retain {
-                let faces = probe_store::read_slot(gpu, &source, 0).swap_remove(0);
-                self.captured.borrow_mut().push(Some(faces));
-            }
-            r.ibl().prefilter_probe(gpu, &source, &array, slot);
+                    );
+                }
+                if retain {
+                    let faces = probe_store::read_slot(gpu, &source, 0).swap_remove(0);
+                    self.captured.borrow_mut().push(Some(faces));
+                }
+                r.ibl().prefilter_probe(gpu, &source, &array, slot);
+                if let Some((dir, key)) = entry {
+                    let levels = probe_store::read_slot(gpu, &array, slot);
+                    probe_store::write_entry(dir, key, face_size, &levels);
+                }
+            });
             resolved.push(ResolvedProbe {
                 entity: probe.entity,
                 key: entry.map(|(_, key)| key),
                 loaded: false,
             });
-            if let Some((dir, key)) = entry {
-                let levels = probe_store::read_slot(gpu, &array, slot);
-                probe_store::write_entry(dir, key, face_size, &levels);
-            }
         }
         {
             let mut report = self.report.borrow_mut();
@@ -452,7 +465,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn resolve(r: &Renderer, scene: &RenderScene) {
-        r.probes.resolve(r, scene);
+        r.probes.resolve(r, scene, &mut None);
     }
 
     pub(crate) fn lit_scene() -> RenderScene {
@@ -637,7 +650,7 @@ pub(crate) mod tests {
             .map(|p| p.key.expect("a store-backed resolve records keys"))
             .collect();
 
-        let readbacks = dumped.read_probes(&scene);
+        let readbacks = dumped.read_probes(&scene, None);
         assert_eq!(readbacks.len(), 2);
         let max_lod = dumped.probes.cubes().expect("resident").max_lod;
         for (slot, probe) in readbacks.iter().enumerate() {
@@ -652,7 +665,7 @@ pub(crate) mod tests {
             assert_eq!(probe.levels.len() as u32, max_lod + 1);
         }
         assert_ne!(readbacks[0].key, readbacks[1].key);
-        let again = dumped.read_probes(&scene);
+        let again = dumped.read_probes(&scene, None);
         for (a, b) in readbacks.iter().zip(&again) {
             assert!(
                 a.captured == b.captured && a.levels == b.levels,

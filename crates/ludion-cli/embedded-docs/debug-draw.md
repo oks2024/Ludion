@@ -27,7 +27,7 @@ radius)` (three great circles), `capsule(a, b, radius)` (`a == b` is a sphere). 
 ## Categories
 
 A category is a name a system draws under and a host enables: `motor`, `camera`, `ai`. The engine
-emits `path` — every `PathFollower`'s route — and `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`). `DebugCategories::parse("path,motor")` builds a
+emits `path` — every `PathFollower`'s route — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap. `DebugCategories::parse("path,motor")` builds a
 filter; `all` enables every category, an empty list none (the default).
 
 ## What a frame shows
@@ -64,7 +64,7 @@ The summary line echoes the request: `(debug draw: path)`. A category that drew 
 categories the last tick emitted, whether enabled or not — a category you enabled that is missing
 from `drawn` is a typo or a quiet scene). It applies to the live stream and to `render.screenshot`,
 so an agent that enables `motor` gets the lines in its screenshot. There is no per-call opt-out.
-`view` (`"ssr_confidence"`, `"ssr_footprint"`, or `null` to clear) shows an SSR trace view in place of
+`view` (`"ssr_confidence"`, `"ssr_footprint"`, `"probe_index"`, or `null` to clear) shows a debug view in place of
 the composite; a view never turns SSR on (`ludion docs wire-render`).
 Runnable: `cargo run -p ludion-engine --example render_debug`.
 

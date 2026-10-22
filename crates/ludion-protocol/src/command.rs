@@ -1046,7 +1046,7 @@ pub struct RenderDebugParams {
     pub view: Option<Option<RenderDebugView>>,
 }
 
-/// A debug view of the SSR trace, shown at the trace's own resolution in place of the composite.
+/// A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.
 /// The spelling matches `ludion render --debug-view`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1055,6 +1055,8 @@ pub enum RenderDebugView {
     SsrConfidence,
     /// The colour-pyramid level each hit read.
     SsrFootprint,
+    /// The winning reflection probe per pixel, coloured by rank.
+    ProbeIndex,
 }
 
 /// Reads an optional field as a *present* value, so an explicit `null` survives as `Some(None)`.
@@ -1575,6 +1577,10 @@ mod tests {
         assert_eq!(
             parse(r#"{"view": "ssr_footprint"}"#).unwrap().view,
             Some(Some(RenderDebugView::SsrFootprint))
+        );
+        assert_eq!(
+            parse(r#"{"view": "probe_index"}"#).unwrap().view,
+            Some(Some(RenderDebugView::ProbeIndex))
         );
         assert!(parse(r#"{"view": "ssr_nonsense"}"#).is_err());
 

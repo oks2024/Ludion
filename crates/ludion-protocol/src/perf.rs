@@ -134,9 +134,25 @@ pub struct ProfileReport {
     /// host has already run by the time a capture asks, and a disarmed host reads no clock for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load: Option<LoadProfile>,
+    /// Reflection probes of the last resolve: loaded from the store versus captured. Absent for a
+    /// scene without probes. Filled offline and by a live capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probes: Option<ProbeProfile>,
     /// The measured frames' raw per-frame columns, present when the request asked for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<ProfileSamples>,
+}
+
+/// The last reflection-probe resolve: probes loaded from the store versus captured.
+///
+/// `hits` stays 0 on the Fresh paths (`ludion profile`, `--profile`), which never read the store, by
+/// design: committed images and measurements never depend on a cache file existing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProbeProfile {
+    /// Probes loaded from the probe store.
+    pub hits: u64,
+    /// Probes captured and prefiltered.
+    pub captures: u64,
 }
 
 /// The render quality a measurement was taken at: what the machine chose, which optional effects
@@ -276,6 +292,10 @@ pub struct LoadProfile {
     /// Time spent baking GI probes; absent until the renderer reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gi_bake_ms: Option<f64>,
+    /// Time spent capturing and prefiltering reflection probes the store did not hold; absent when
+    /// none was captured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_bake_ms: Option<f64>,
     /// First phase start to end of the measured load.
     pub total_ms: f64,
     /// One entry per asset kind, always all of them, in a fixed order.
@@ -546,6 +566,7 @@ impl ProfileWindowData {
             transport: self.transport,
             cluster: None,
             load: None,
+            probes: None,
             samples: include_samples.then_some(self.samples),
         }
     }
@@ -568,6 +589,7 @@ mod tests {
             voxelize_ms: None,
             renderer_init_ms: None,
             gi_bake_ms: None,
+            probe_bake_ms: None,
             total_ms: 7.0,
             assets: vec![AssetLoadCounters {
                 kind: "mesh".into(),
@@ -579,6 +601,7 @@ mod tests {
         });
         let json = serde_json::to_value(&report).unwrap();
         assert!(json["load"]["gpu_upload_ms"].is_null());
+        assert!(json["load"].get("probe_bake_ms").is_none());
         assert_eq!(
             serde_json::from_value::<ProfileReport>(json).unwrap(),
             report
@@ -588,6 +611,21 @@ mod tests {
         report.load = None;
         let json = serde_json::to_value(&report).unwrap();
         assert!(json.get("load").is_none());
+        assert!(json.get("probes").is_none());
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json).unwrap(),
+            report
+        );
+
+        report.probes = Some(ProbeProfile {
+            hits: 1,
+            captures: 2,
+        });
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(
+            json["probes"],
+            serde_json::json!({ "hits": 1, "captures": 2 })
+        );
         assert_eq!(
             serde_json::from_value::<ProfileReport>(json).unwrap(),
             report

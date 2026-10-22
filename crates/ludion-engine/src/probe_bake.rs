@@ -216,6 +216,7 @@ pub(crate) fn unknown_probe(name: &str, names: &[String]) -> Diagnostic {
 mod tests {
     use super::*;
     use crate::{Engine, TextureSource};
+    use ludion_protocol::perf::ProbeProfile;
 
     #[test]
     fn the_store_dir_follows_the_manifest() {
@@ -388,6 +389,13 @@ entities:
             .unwrap();
         let loaded = b.renderer().unwrap().probe_resolve();
         assert!(loaded.probes.iter().all(|p| p.loaded), "{loaded:?}");
+        assert_eq!(
+            b.probe_profile(),
+            Some(ProbeProfile {
+                hits: 2,
+                captures: 0
+            })
+        );
         assert!(codes(&mut b).is_empty());
 
         let forced = b.bake_probes(Some("left")).unwrap();
@@ -424,6 +432,49 @@ entities:
             fresh.probes.iter().all(|p| p.key.is_none() && !p.loaded),
             "{fresh:?}"
         );
+        assert_eq!(
+            d.probe_profile(),
+            Some(ProbeProfile {
+                hits: 0,
+                captures: 2
+            })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An observed offline profile times the probe captures as their own load phase and reports the
+    /// resolve; a scene without probes reports neither.
+    #[test]
+    fn needs_gpu_profile_reports_probe_bake_time_and_captures() {
+        let dir = project("profile");
+        let mut engine = engine(&dir, scene());
+        engine.observe_load();
+        let report = match crate::profile_engine(&mut engine, "probes".into(), 2, 1) {
+            Ok(report) => report,
+            Err(d) if ludion_core::require_gpu::is_no_adapter(&d) => {
+                eprintln!("SKIPPED probe profile: no GPU adapter");
+                return;
+            }
+            Err(d) => panic!("profile failed: {d:?}"),
+        };
+        let load = report.load.expect("an observed load");
+        let bake = load.probe_bake_ms.expect("two probes were captured");
+        assert!(bake > 0.0 && bake <= load.total_ms, "{load:?}");
+        assert_eq!(
+            report.probes,
+            Some(ProbeProfile {
+                hits: 0,
+                captures: 2
+            })
+        );
+
+        let mut bare = Engine::builder().project_root(&dir).build().unwrap();
+        bare.observe_load();
+        bare.load_inline_scene("format: 1\nentities:\n  - name: a\n")
+            .unwrap();
+        let report = crate::profile_engine(&mut bare, "bare".into(), 2, 1).unwrap();
+        assert_eq!(report.probes, None);
+        assert_eq!(report.load.and_then(|l| l.probe_bake_ms), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

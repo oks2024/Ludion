@@ -26,6 +26,9 @@ const ARC_SEGMENTS: usize = CIRCLE_SEGMENTS / 2;
 /// The category [`segments`] draws from the world's `Parent` links.
 pub(crate) const HIERARCHY: &str = "hierarchy";
 
+/// The category [`segments`] draws from the world's reflection probes.
+pub(crate) const PROBES: &str = "probes";
+
 /// The category name that stands for every category in [`DebugCategories`]; no system may draw under it.
 const ALL: &str = "all";
 
@@ -320,7 +323,8 @@ impl DebugCategories {
 /// The last completed tick's segments in the categories `filter` enables, in category order.
 ///
 /// The `hierarchy` category is drawn here from the live world rather than by a system, so it is
-/// always current, even paused, and costs nothing unless enabled. It sorts among the categories.
+/// always current, even paused, and costs nothing unless enabled. It sorts among the categories;
+/// `probes` is drawn the same way.
 pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegment> {
     if *filter == DebugCategories::None {
         return Vec::new();
@@ -340,17 +344,26 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
             .or_default()
             .extend(crate::hierarchy::debug_lines(world));
     }
+    if filter.enables(PROBES) {
+        categories
+            .entry(PROBES)
+            .or_default()
+            .extend(crate::extract::probe_debug_lines(world));
+    }
     categories.into_values().flatten().collect()
 }
 
 /// The categories the world has drawn: what [`DebugDraw::drawn`] lists plus `hierarchy` when any
-/// entity has a `Parent`, sorted.
+/// entity has a `Parent` and `probes` when any has a `ReflectionProbe`, sorted.
 pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = world
         .resource::<DebugDraw>()
         .map_or_else(Vec::new, |draw| draw.drawn().collect());
     if crate::hierarchy::any_parent(world) {
         names.push(HIERARCHY);
+    }
+    if crate::extract::any_probe(world) {
+        names.push(PROBES);
     }
     names.sort_unstable();
     names.dedup();
@@ -525,6 +538,62 @@ mod tests {
         debug_draw(&mut world, "z").cross([0.0; 3], 1.0, RED);
         world.resource_mut::<DebugDraw>().unwrap().end_tick();
         assert_eq!(drawn(&world), ["a", "hierarchy", "z"]);
+    }
+
+    fn with_probe(shape: crate::components::ProbeShape) -> World {
+        use crate::components::{ReflectionProbe, Transform};
+        let mut world = world();
+        let id = world.spawn();
+        world
+            .insert(
+                id,
+                Transform {
+                    translation: [1.0, 2.0, 3.0],
+                    ..Transform::default()
+                },
+            )
+            .unwrap();
+        world
+            .insert(
+                id,
+                ReflectionProbe {
+                    shape,
+                    blend: 0.5,
+                    priority: 0,
+                },
+            )
+            .unwrap();
+        world
+    }
+
+    #[test]
+    fn the_probes_category_draws_each_volume_and_its_capture_point() {
+        use crate::components::ProbeShape;
+        let probes = DebugCategories::parse("probes");
+        let boxed = with_probe(ProbeShape::Box {
+            extent: [1.0, 2.0, 3.0],
+        });
+        let lines = segments(&boxed, &probes);
+        assert_eq!(lines.len(), 12 + 3);
+        let red = ludion_renderer::PROBE_VIEW_PALETTE[0].map(ludion_sprite::srgb_decode);
+        assert!(
+            lines
+                .iter()
+                .all(|l| l.color == [red[0], red[1], red[2], 1.0])
+        );
+        assert!(lines.iter().any(|l| l.a == [0.0, 0.0, 0.0]));
+        let sphere = with_probe(ProbeShape::Sphere { radius: 2.0 });
+        assert_eq!(segments(&sphere, &probes).len(), 96 + 3);
+        assert!(segments(&sphere, &DebugCategories::None).is_empty());
+        assert!(segments(&sphere, &DebugCategories::parse("path")).is_empty());
+    }
+
+    #[test]
+    fn drawn_lists_probes_only_when_a_probe_exists() {
+        use crate::components::ProbeShape;
+        assert!(drawn(&world()).is_empty());
+        let world = with_probe(ProbeShape::Sphere { radius: 1.0 });
+        assert_eq!(drawn(&world), ["probes"]);
     }
 
     #[test]

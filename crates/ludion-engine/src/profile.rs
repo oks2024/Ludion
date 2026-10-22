@@ -17,8 +17,8 @@
 //! [`ScheduleObserver`] it attaches cannot mutate sim state, so a
 //! profiled run's [`WorldHash`](Engine::world_hash) is bit-identical to an unprofiled one (asserted
 //! by the `observer_does_not_change_world_hash` test below). The crate's clippy denylist bans
-//! [`std::time::Instant::now`] everywhere; the functions here that call it — and `LoadClock`, the
-//! one implementor of the clock-free `LoadObserver` — scope an `allow` with that rationale,
+//! [`std::time::Instant::now`] everywhere; the functions here that call it — and `LoadClock` and
+//! `SpanClock`, the implementors of the clock-free observers — scope an `allow` with that rationale,
 //! exactly as `live.rs` does for the tick clock.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -175,6 +175,7 @@ pub fn profile_engine(
         transport: None,
         cluster: Some(cluster),
         load,
+        probes: engine.probe_profile(),
         samples: Some(samples),
     })
 }
@@ -238,6 +239,7 @@ pub(crate) struct LoadClock {
     renderer_init: Option<Duration>,
     gpu_upload: Option<Duration>,
     gi_bake: Option<Duration>,
+    probe_bake: Option<Duration>,
     decoded: [u64; 8],
     cooked: [u64; 8],
     reused: [u64; 8],
@@ -261,6 +263,7 @@ impl LoadClock {
             LoadPhase::RendererInit => Some(&mut self.renderer_init),
             LoadPhase::GpuUpload => Some(&mut self.gpu_upload),
             LoadPhase::GiBake => Some(&mut self.gi_bake),
+            LoadPhase::ProbeBake => Some(&mut self.probe_bake),
             LoadPhase::Scene | LoadPhase::Mesh | LoadPhase::Texture | LoadPhase::Other => None,
         }
     }
@@ -277,6 +280,7 @@ impl LoadClock {
             voxelize_ms: self.voxelize.map(ms),
             renderer_init_ms: self.renderer_init.map(ms),
             gi_bake_ms: self.gi_bake.map(ms),
+            probe_bake_ms: self.probe_bake.map(ms),
             total_ms: match (self.origin, self.last_end) {
                 (Some(origin), Some(end)) => ms(end.saturating_duration_since(origin)),
                 _ => 0.0,
@@ -292,6 +296,34 @@ impl LoadClock {
                     bytes_read: self.bytes[i],
                 })
                 .collect(),
+        }
+    }
+}
+
+/// A [`ludion_renderer::FrameObserver`] that records the wall time of each `ProbeBake` span, in
+/// order, and ignores every other phase.
+#[derive(Default)]
+pub(crate) struct SpanClock {
+    started: Option<Instant>,
+    pub(crate) spans: Vec<Duration>,
+}
+
+impl ludion_renderer::FrameObserver for SpanClock {
+    // Sanctioned wall-clock site (see the module docs).
+    #[allow(clippy::disallowed_methods)]
+    fn begin(&mut self, phase: ludion_renderer::FramePhase) {
+        if phase == ludion_renderer::FramePhase::ProbeBake {
+            self.started = Some(Instant::now());
+        }
+    }
+
+    // Sanctioned wall-clock site (see the module docs).
+    #[allow(clippy::disallowed_methods)]
+    fn end(&mut self, phase: ludion_renderer::FramePhase) {
+        if phase == ludion_renderer::FramePhase::ProbeBake
+            && let Some(start) = self.started.take()
+        {
+            self.spans.push(start.elapsed());
         }
     }
 }
@@ -715,6 +747,7 @@ pub(crate) fn profile_replay_engine(
         transport: None,
         cluster: None,
         load: None,
+        probes: None,
         samples: Some(samples),
     };
     Ok((report, engine))
@@ -2052,7 +2085,8 @@ entities:
             + init
             + upload
             + load.voxelize_ms.unwrap_or(0.0)
-            + load.gi_bake_ms.unwrap_or(0.0);
+            + load.gi_bake_ms.unwrap_or(0.0)
+            + load.probe_bake_ms.unwrap_or(0.0);
         assert!(
             load.total_ms >= phases - 1e-6,
             "total {} ms is less than its phases' {phases} ms",
@@ -2166,6 +2200,7 @@ entities:
             transport: None,
             cluster: None,
             load: None,
+            probes: None,
             samples: None,
         };
 
@@ -2574,6 +2609,7 @@ entities:
             transport: None,
             cluster: None,
             load: None,
+            probes: None,
             samples: None,
         }
     }
@@ -2610,6 +2646,7 @@ entities:
                 voxelize_ms: None,
                 renderer_init_ms: None,
                 gi_bake_ms: None,
+                probe_bake_ms: None,
                 total_ms,
                 assets: Vec::new(),
             }),

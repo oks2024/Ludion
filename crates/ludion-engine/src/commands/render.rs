@@ -216,7 +216,7 @@ pub(crate) fn view(
 /// `render.debug` — read or set which debug-draw categories this host renders.
 ///
 /// Absent `categories` is a pure read; a list replaces the enabled set (`[]` is none, `"all"` is
-/// every category). Likewise `view`: absent keeps the SSR debug view, `null` clears it, a name sets
+/// every category). Likewise `view`: absent keeps the debug view, `null` clears it, a name sets
 /// it. The reply is the same either way: `enabled` once the command applied, and `drawn`,
 /// the categories the last completed tick emitted lines for. Any string is a valid category, so there
 /// is nothing to refuse.
@@ -240,7 +240,7 @@ pub(crate) fn debug(
             .into_iter()
             .map(String::from)
             .collect(),
-        view: engine.debug_view().and_then(wire_view),
+        view: engine.debug_view().map(wire_view),
     })
 }
 
@@ -248,15 +248,15 @@ fn renderer_view(view: RenderDebugView) -> DebugView {
     match view {
         RenderDebugView::SsrConfidence => DebugView::SsrConfidence,
         RenderDebugView::SsrFootprint => DebugView::SsrFootprint,
+        RenderDebugView::ProbeIndex => DebugView::ProbeIndex,
     }
 }
 
-/// `None` for a view the wire cannot name (host-only: the CLI's `probe_index`).
-fn wire_view(view: DebugView) -> Option<RenderDebugView> {
+fn wire_view(view: DebugView) -> RenderDebugView {
     match view {
-        DebugView::SsrConfidence => Some(RenderDebugView::SsrConfidence),
-        DebugView::SsrFootprint => Some(RenderDebugView::SsrFootprint),
-        DebugView::ProbeIndex => None,
+        DebugView::SsrConfidence => RenderDebugView::SsrConfidence,
+        DebugView::SsrFootprint => RenderDebugView::SsrFootprint,
+        DebugView::ProbeIndex => RenderDebugView::ProbeIndex,
     }
 }
 
