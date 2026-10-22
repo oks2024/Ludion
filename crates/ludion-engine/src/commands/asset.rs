@@ -67,6 +67,7 @@ pub(crate) fn reload(
         // `L1101`/`L1102` here (the file went missing or is now unreadable) is reported honestly, not
         // faked as a success. This path is render-only and never recorded.
         let hash = engine.asset_cache_mut().reload(&root, &key)?;
+        engine.probe_world_stale();
         engine.push_event(Event::AssetReloaded(AssetReloadedData {
             path: path.clone(),
             hash: format!("{hash:016x}"),
@@ -80,6 +81,7 @@ pub(crate) fn reload(
     // edit is a diagnosed `L1119`/`L1120` error and leaves the store unchanged; so is an edit that
     // makes a registered validator report a new error (`L1144`, `L1149`–`L1152`).
     if let Some(hash) = engine.reload_doc_from_disk(&path)? {
+        engine.probe_world_stale();
         engine.push_event(Event::AssetReloaded(AssetReloadedData {
             path: path.clone(),
             hash: format!("{hash:016x}"),

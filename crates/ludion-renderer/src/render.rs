@@ -374,6 +374,8 @@ pub struct Renderer {
     /// The reflection probes' captures: resolved at the top of [`Renderer::prepare_frame`], bound by
     /// nothing yet.
     pub(crate) probes: Probes,
+    /// [`Renderer::capture_code_key`]'s memo, cleared by a shader or snippet reload.
+    capture_code_key: Cell<Option<u64>>,
     /// The voxelizer's grid, uploaded to a pair of inert 3D textures and content-hash-cached
     /// (`voxel_bake.rs`, the `ibl` shape minus the binding). Consulted once per frame in
     /// [`Renderer::prepare_frame`] beside `ibl`; nothing downstream reads its output.
@@ -558,6 +560,7 @@ impl Renderer {
             snippet_overrides: HashMap::new(),
             ibl,
             probes: Probes::new(),
+            capture_code_key: Cell::new(None),
             voxel_bake,
             gi_bake,
             gi_inject,
@@ -610,6 +613,7 @@ impl Renderer {
         let hash = ludion_assets::content_hash(source.as_bytes());
         self.shader_body_overrides.insert(id, source);
         self.set_pipeline(id, rebuilt);
+        self.capture_code_key.set(None);
         Ok(hash)
     }
 
@@ -637,6 +641,7 @@ impl Renderer {
         for (id, pipeline) in rebuilt {
             self.set_pipeline(id, pipeline);
         }
+        self.capture_code_key.set(None);
         Ok(hash)
     }
 
@@ -715,6 +720,31 @@ impl Renderer {
             .mirrored
             .as_ref()
             .unwrap_or_else(|| panic!("{} has no mirrored pipeline twin", id.label()))
+    }
+
+    /// A hash of the shader code a probe capture runs: every registry shader as composed now (so a
+    /// reload moves it), plus the three compute shaders outside the registry. Registry-wide rather
+    /// than a capture subset: an extra shader only costs a recapture, a missing one is a stale cube.
+    pub(crate) fn capture_code_key(&self) -> u64 {
+        if let Some(key) = self.capture_code_key.get() {
+            return key;
+        }
+        let mut bytes = Vec::new();
+        let mut part = |name: &str, source: &str| {
+            for text in [name, source] {
+                bytes.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                bytes.extend_from_slice(text.as_bytes());
+            }
+        };
+        for id in ShaderId::all() {
+            part(id.file_name(), &self.compose(id, None));
+        }
+        part("ibl.wgsl", include_str!("shaders/ibl.wgsl"));
+        part("gi_bake.wgsl", include_str!("shaders/gi_bake.wgsl"));
+        part("gi_inject.wgsl", include_str!("shaders/gi_inject.wgsl"));
+        let key = ludion_assets::content_hash(&bytes);
+        self.capture_code_key.set(Some(key));
+        key
     }
 
     /// Installs freshly built pipelines into the slot `id` indexes.

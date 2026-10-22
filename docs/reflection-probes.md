@@ -27,7 +27,8 @@ cover. Probes are authored text; the captured pixels are derived and never commi
    `--bake-probes` (with `--bake-probe <Name>`), because the CLI cannot load a game's components.
    `ludion sync` warms the store for every scene the CLI can load.
 5. `run`, `serve` and `dev` read the store; `--probes rebake` captures afresh and leaves it alone.
-   A probe added or edited in a live session is captured on the spot — no bake step.
+   A probe added, moved or removed in a live session is captured on the spot — no bake step. A
+   geometry, light or sky edit shows in the probes after a reload (`scene.load`, `asset.reload`).
 
 ## Format
 
@@ -83,8 +84,9 @@ onto the volume from there. `Transform.scale` is ignored — size the shape, nev
   particles, text and editor markers are absent, and a prop that moves later does not move in it.
   Its sky-visible part scales with `Environment.ibl_intensity`.
 - **`shape`, `blend` and `priority` never recapture** — they only change how the cube is projected
-  and weighted. Moving the probe or changing what it sees (geometry, lights, `Environment`, the
-  textures, the quality) does, and gives a new store key.
+  and weighted. Moving the probe recaptures it. What it sees (geometry, lights, `Environment`, the
+  textures) is the world at the last load, so an in-session edit waits for a reload; the quality
+  and an engine shader change give a new store key too. The grade (`PostProcess`) never does.
 - **The store is per-machine, derived and ignored** — `.ludion/cooked/probes/` beside the project;
   only the text is committed. `ludion render` and `ludion test` never read it: they capture fresh,
   so a golden never depends on whether a store exists. Hosts read it and capture on a miss.

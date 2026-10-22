@@ -994,6 +994,43 @@ pub struct TextureImage {
     pub premultiplied_on_load: bool,
 }
 
+/// A frozen [`RenderScene`] the reflection-probe captures read, so a capture does not depend on
+/// which frame first renders.
+///
+/// The id names the extraction: the renderer memoizes the world's store key on it. Equality compares
+/// the scene content, so two extractions of the same world stay equal.
+#[derive(Clone, Debug)]
+pub struct ProbeWorld {
+    id: u64,
+    scene: Arc<RenderScene>,
+}
+
+impl ProbeWorld {
+    /// Freezes `scene` under a process-unique id.
+    pub fn new(scene: RenderScene) -> ProbeWorld {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        ProbeWorld {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            scene: Arc::new(scene),
+        }
+    }
+
+    /// The frozen scene.
+    pub fn scene(&self) -> &RenderScene {
+        &self.scene
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+impl PartialEq for ProbeWorld {
+    fn eq(&self, other: &ProbeWorld) -> bool {
+        self.scene == other.scene
+    }
+}
+
 /// Everything the renderer needs to draw one frame — plain data, no ECS, no paths.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RenderScene {
@@ -1043,6 +1080,9 @@ pub struct RenderScene {
     /// Reflection probes in ascending-`EntityId` extract order, unranked (`probe_rank` orders
     /// them). No render code reads this yet.
     pub probes: Vec<ProbeData>,
+    /// The frame-0 world the probe captures read instead of this frame's meshes, lights and sky; the
+    /// probe list, positions included, stays live. `None` captures this scene itself.
+    pub probe_world: Option<ProbeWorld>,
     /// The single directional "sun" (lowest-`EntityId` `DirectionalLight`), or `None` for a sunless
     /// scene (a zeroed `Sun` uniform, byte-identical to the pre-sun pipeline).
     pub sun: Option<SunData>,
@@ -1101,6 +1141,7 @@ impl RenderScene {
             lights: Vec::new(),
             spot_lights: Vec::new(),
             probes: Vec::new(),
+            probe_world: None,
             sun: None,
             environment: None,
             post: None,

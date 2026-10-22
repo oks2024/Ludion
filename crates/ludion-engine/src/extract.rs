@@ -1245,6 +1245,7 @@ fn extract_inner(
         lights: extract_lights(placed.lights),
         spot_lights: extract_spot_lights(placed.spot_lights),
         probes: extract_probes(world, &ids, &mut poses),
+        probe_world: None,
         sun: extract_sun(world, &ids),
         environment,
         post: extract_post(world, &ids),

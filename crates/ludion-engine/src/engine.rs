@@ -52,7 +52,7 @@ use ludion_protocol::replay::{
 use ludion_protocol::response::EntityBounds;
 use ludion_protocol::{Channel, PROTOCOL_VERSION, SubId, schema};
 use ludion_renderer::{
-    FrameSinks, FrameSize, Gpu, PresentSize, PresentTarget, RenderScale, RenderScene,
+    FrameSinks, FrameSize, Gpu, PresentSize, PresentTarget, ProbeWorld, RenderScale, RenderScene,
     RenderedImage, Renderer, StreamReadback,
 };
 use ludion_scene::{ExpandedScene, InstanceTransform, Scene, SceneEntity, ScenePhysics};
@@ -298,6 +298,11 @@ pub struct Engine {
     probes: ProbeSource,
     /// The probe store directory under `Store`, resolved when the axis is set.
     probe_store: Option<PathBuf>,
+    /// The world the probe captures read, frozen at the first tick or render after a load; `None`
+    /// until a scene with probes freezes one.
+    probe_world: Option<ProbeWorld>,
+    /// A load-class event happened: the next tick or render re-freezes the probe world.
+    probe_world_pending: bool,
     /// The renderer's probe resolve count `finish_probe_frame` last examined.
     probe_resolve_seen: u64,
     /// Whether a bake is rendering, which writes the store on purpose and so warns of no miss.
@@ -694,6 +699,8 @@ impl Engine {
             cook_resolved: false,
             probes: ProbeSource::default(),
             probe_store: None,
+            probe_world: None,
+            probe_world_pending: true,
             probe_resolve_seen: 0,
             probe_baking: false,
             gi_rebake: GiRebakeMode::default(),
@@ -966,6 +973,7 @@ impl Engine {
     pub fn set_textures(&mut self, source: TextureSource) {
         self.textures = source;
         self.cook_resolved = false;
+        self.probe_world_stale();
     }
 
     /// Where this host's imported mesh maps come from (see [`set_textures`](Engine::set_textures)).
@@ -1044,6 +1052,29 @@ impl Engine {
         let report = self.bake_renders(force, &named);
         self.probe_baking = false;
         report
+    }
+
+    /// Marks the frozen probe world stale: the next tick or render re-freezes it, so a load-class
+    /// event (a world rebuild, a reloaded asset, another texture source) recaptures the probes.
+    pub(crate) fn probe_world_stale(&mut self) {
+        self.probe_world_pending = true;
+    }
+
+    /// Freezes the probe world from the frame-0 world before the first tick after a load-class
+    /// event, so a bake and a host that ticks first capture the same world. A world without probes
+    /// pays nothing but the entity scan, once.
+    fn freeze_probe_world_before_tick(&mut self) {
+        if !self.probe_world_pending {
+            return;
+        }
+        self.probe_world_pending = false;
+        self.probe_world = if self.named_probes().is_empty() {
+            None
+        } else {
+            self.extract_render_scene_inner(self.render_size.0, self.render_size.1, false)
+                .ok()
+                .map(ProbeWorld::new)
+        };
     }
 
     /// The scene's `ReflectionProbe` entities with their `Name`s, in entity order.
@@ -1346,6 +1377,7 @@ impl Engine {
     /// path instead; the branch is one `Option` test, and the tick it performs is the same one (see
     /// the private `advance_live_profiled`).
     pub fn advance_live(&mut self) -> bool {
+        self.freeze_probe_world_before_tick();
         if self.perf.is_some() {
             return self.advance_live_profiled();
         }
@@ -1558,6 +1590,7 @@ impl Engine {
         &mut self,
         observer: &mut dyn ludion_ecs::ScheduleObserver,
     ) -> bool {
+        self.freeze_probe_world_before_tick();
         let frame = self.driver.frame();
         let ran = self.driver.advance_observed(observer);
         if ran {
@@ -1574,6 +1607,7 @@ impl Engine {
     /// enters sim state, so the tick — and the resulting [`WorldHash`](Engine::world_hash) — is
     /// bit-identical to [`advance_live`](Engine::advance_live)'s.
     pub(crate) fn advance_probed(&mut self, probe: &mut crate::bisect::SystemProbe<'_>) -> bool {
+        self.freeze_probe_world_before_tick();
         let frame = self.driver.frame();
         // Disjoint field borrows: the registry is read by the probe while the driver ticks.
         let registry = &self.registry;
@@ -3656,6 +3690,24 @@ impl Engine {
         height: u32,
         use_view: bool,
     ) -> Result<RenderScene, Vec<Diagnostic>> {
+        let mut scene = self.extract_render_scene_inner(width, height, use_view)?;
+        if !scene.probes.is_empty() {
+            if self.probe_world_pending || self.probe_world.is_none() {
+                self.probe_world = Some(ProbeWorld::new(scene.clone()));
+                self.probe_world_pending = false;
+            }
+            scene.probe_world = self.probe_world.clone();
+        }
+        Ok(scene)
+    }
+
+    /// The extract without the probe world attached: what a freeze stores.
+    fn extract_render_scene_inner(
+        &mut self,
+        width: u32,
+        height: u32,
+        use_view: bool,
+    ) -> Result<RenderScene, Vec<Diagnostic>> {
         // The CPU half of the rebake lever, applied where every cached extract passes: the same
         // answer `ensure_renderer` gives the bake, since nothing between them can move the lever
         // (commands apply at frame boundaries).
@@ -5157,6 +5209,7 @@ impl Engine {
         // A rebuilt world is never lit from the old world's voxelization or probe bake: the first
         // frame runs unheld, so both GI caches rebuild and become the new baseline.
         self.gi_rebake_force = true;
+        self.probe_world_stale();
         // Prefetched at the first extract, not here: headless rebuilds (replay verification, sim
         // hashing) never draw, and must not pay the decode bill.
         self.prefetch_pending = true;

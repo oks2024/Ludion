@@ -83,8 +83,8 @@ pub use scene::{
     CookedMap, DEFAULT_AMBIENT, DebugSegment, EnvironmentData, FontDraw, GROUND_MARKER_LIFT,
     GiData, GroundMarkerInstance, GroundMarkerShape, MAX_GI_TEXTURE_AXIS, MapImage, MeshData,
     MeshInstance, MeshShape, MeshTexture, MeshTextures, ParticleInstance, PointLightData, PostData,
-    RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunData, TextRun,
-    TextureImage, TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
+    ProbeWorld, RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunData,
+    TextRun, TextureImage, TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
 };
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`

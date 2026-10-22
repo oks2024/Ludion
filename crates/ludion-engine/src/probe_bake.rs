@@ -215,7 +215,9 @@ pub(crate) fn unknown_probe(name: &str, names: &[String]) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{Name, Transform};
     use crate::{Engine, TextureSource};
+    use ludion_ecs::{SystemCtx, World};
     use ludion_protocol::perf::ProbeProfile;
 
     #[test]
@@ -262,6 +264,15 @@ entities:
           - 10.0
           - 1.0
           - 10.0
+      Mesh:
+        shape: cube
+  - name: box
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - -3.0
       Mesh:
         shape: cube
   - name: left
@@ -439,6 +450,107 @@ entities:
                 captures: 2
             })
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Moves the entity named `name` by `dx` along x.
+    fn shift(world: &mut World, name: &str, dx: f32) {
+        let ids: Vec<_> = world.entities().collect();
+        for id in ids {
+            if world
+                .get::<Name>(id)
+                .ok()
+                .flatten()
+                .is_some_and(|n| n.0 == name)
+                && let Ok(Some(transform)) = world.get_mut::<Transform>(id)
+            {
+                transform.translation[0] += dx;
+            }
+        }
+    }
+
+    fn slide(world: &mut World, _ctx: &SystemCtx) {
+        shift(world, "box", 0.5);
+    }
+
+    fn sliding_engine(dir: &Path) -> Engine {
+        let mut engine = Engine::builder()
+            .system("slide", slide)
+            .project_root(dir)
+            .build()
+            .expect("builds");
+        engine.load_inline_scene(scene()).expect("the scene loads");
+        engine
+    }
+
+    /// A host that ticks before it first renders captures the world as loaded, so it hits the entries
+    /// a bake (frame 0, no ticks) wrote.
+    #[test]
+    fn needs_gpu_a_ticked_store_host_hits_the_bake() {
+        let dir = project("ticked");
+        let mut a = sliding_engine(&dir);
+        if no_gpu(&mut a) {
+            return;
+        }
+        let baked = a.bake_probes(None).unwrap();
+        assert!(codes(&mut a).is_empty());
+
+        let mut b = sliding_engine(&dir);
+        b.set_textures(TextureSource::Cooked);
+        b.set_probes(ProbeSource::Store);
+        b.step_ticks(5);
+        b.render_image(64, 64, false)
+            .map_err(|d| d[0].clone())
+            .unwrap();
+        let resolved = b.renderer().unwrap().probe_resolve();
+        assert!(resolved.probes.iter().all(|p| p.loaded), "{resolved:?}");
+        let keys: Vec<_> = resolved.probes.iter().map(|p| p.key).collect();
+        let baked_keys: Vec<_> = baked.probes.iter().map(|p| Some(p.key)).collect();
+        assert_eq!(keys, baked_keys);
+        assert!(codes(&mut b).is_empty(), "a ticked host reported a miss");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Only a load recaptures: an in-session edit of the world leaves the probes alone, a reload of
+    /// the same text with other geometry, or another scene with the same probes, does not.
+    #[test]
+    fn needs_gpu_a_reload_recaptures_and_an_edit_does_not() {
+        let dir = project("reload");
+        let mut engine = engine(&dir, scene());
+        if no_gpu(&mut engine) {
+            return;
+        }
+        engine.set_textures(TextureSource::Cooked);
+        engine.set_probes(ProbeSource::Store);
+        let render = |engine: &mut Engine| {
+            engine
+                .render_image(64, 64, false)
+                .map_err(|d| d[0].clone())
+                .unwrap();
+            engine.renderer().unwrap().probe_resolve()
+        };
+        let first = render(&mut engine);
+        assert_eq!(first.resolve, 1);
+
+        shift(engine.world_mut(), "floor", 1.0);
+        let edited = render(&mut engine);
+        assert_eq!(edited.resolve, first.resolve, "an edit recaptured");
+
+        engine
+            .load_inline_scene(&scene().replace("- -0.5", "- -0.6"))
+            .unwrap();
+        let moved = render(&mut engine);
+        assert_eq!(moved.resolve, first.resolve + 1);
+        assert_ne!(moved.probes[0].key, first.probes[0].key);
+
+        let other = format!(
+            "{}  - name: extra\n    components:\n      Mesh:\n        shape: cube\n",
+            scene()
+        );
+        engine.load_inline_scene(&other).unwrap();
+        let swapped = render(&mut engine);
+        assert_eq!(swapped.resolve, moved.resolve + 1);
+        assert_ne!(swapped.probes[0].key, moved.probes[0].key);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -12,8 +12,9 @@ use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::ibl;
 use crate::probe::{MAX_PROBES, probe_rank};
 use crate::probe_store;
+use crate::quality::{Quality, QualityParams};
 use crate::render::Renderer;
-use crate::scene::{RenderCamera, RenderScene};
+use crate::scene::{ProbeWorld, RenderCamera, RenderScene};
 use ludion_core::ids::EntityId;
 
 const CAPTURE_NEAR: f32 = 0.05;
@@ -53,6 +54,7 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     out.ui.clear();
     out.debug_lines.clear();
     out.probes.clear();
+    out.probe_world = None;
     out.debug_view = None;
     let mut post = out.post.unwrap_or_default();
     post.ssao = 0.0;
@@ -65,6 +67,11 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
         env.sun_disc_intensity = 0.0;
     }
     out
+}
+
+/// The scene a capture reads its world from: the frozen probe world when the scene carries one.
+fn capture_world(scene: &RenderScene) -> &RenderScene {
+    scene.probe_world.as_ref().map_or(scene, ProbeWorld::scene)
 }
 
 /// The captured, prefiltered probes: a cube array with one slot per probe.
@@ -100,11 +107,17 @@ pub struct ResolvedProbe {
     pub loaded: bool,
 }
 
+/// What the world key was computed from: the probe world, the quality toggles and parameters, the
+/// shader code key and the face size.
+type WorldMemo = (u64, Quality, QualityParams, u64, u32);
+
 /// The renderer's probe captures.
 pub(crate) struct Probes {
-    /// Keyed by the probe set (face size, entity, position): the world is captured once, and a
-    /// change to the meshes or the sky does not recapture.
+    /// Keyed by the probes' store keys (see [`Probes::resident_key`]): anything that can change a
+    /// capture's bytes recaptures.
     cache: RefCell<Option<(u64, ProbeCubes)>>,
+    /// The world key of the last probe world, so a live frame pays a compare, not a hash of every mesh.
+    world_memo: RefCell<Option<(WorldMemo, u64)>>,
     /// The capture target the faces are copied into, kept for the face size it was built for.
     source: RefCell<Option<(u32, wgpu::Texture)>>,
     /// The probe store directory, when the host set one.
@@ -146,11 +159,7 @@ fn f16_texels(bytes: &[u8]) -> Vec<f32> {
 /// The store key of each probe of `scene` at `r`'s quality: the world key once, then the capture
 /// point. The one place keys are computed, so a dump can never disagree with a host.
 fn store_keys(r: &Renderer, scene: &RenderScene, face_size: u32) -> Vec<u64> {
-    let world = probe_store::world_key(
-        &face_scene(scene, Vec3::ZERO, 0),
-        &r.quality_params(),
-        face_size,
-    );
+    let world = r.probes.world_key(r, scene, face_size);
     scene.probes[..scene.probes.len().min(MAX_PROBES)]
         .iter()
         .map(|probe| probe_store::probe_key(world, probe.position))
@@ -217,6 +226,7 @@ impl Probes {
     pub(crate) fn new() -> Probes {
         Probes {
             cache: RefCell::new(None),
+            world_memo: RefCell::new(None),
             source: RefCell::new(None),
             store: RefCell::new(None),
             report: RefCell::new(ProbeResolve::default()),
@@ -243,15 +253,41 @@ impl Probes {
         self.report.borrow().clone()
     }
 
-    fn key(probes: &[crate::probe::ProbeData], face_size: u32) -> u64 {
-        let mut bytes = Vec::with_capacity(4 + probes.len() * 20);
+    /// The world key of `scene`'s capture world at `r`'s quality and code. Memoized while the scene
+    /// carries the same probe world; a scene without one is hashed on every call.
+    fn world_key(&self, r: &Renderer, scene: &RenderScene, face_size: u32) -> u64 {
+        let quality = r.quality();
+        let params = r.quality_params();
+        let code = r.capture_code_key();
+        let memo = scene
+            .probe_world
+            .as_ref()
+            .map(|world| (world.id(), quality, params, code, face_size));
+        if let Some((held, key)) = &*self.world_memo.borrow()
+            && memo.as_ref() == Some(held)
+        {
+            return *key;
+        }
+        let key = probe_store::world_key(
+            &face_scene(capture_world(scene), Vec3::ZERO, 0),
+            &quality,
+            &params,
+            code,
+            face_size,
+        );
+        *self.world_memo.borrow_mut() = memo.map(|memo| (memo, key));
+        key
+    }
+
+    /// The resident cubes' key: the face size and each probe's entity and store key, so the probe
+    /// set, the capture world and everything the store key hashes decide a recapture.
+    fn resident_key(probes: &[crate::probe::ProbeData], keys: &[u64], face_size: u32) -> u64 {
+        let mut bytes = Vec::with_capacity(4 + probes.len() * 16);
         bytes.extend_from_slice(&face_size.to_le_bytes());
-        for probe in probes {
+        for (probe, key) in probes.iter().zip(keys) {
             bytes.extend_from_slice(&probe.entity.index().to_le_bytes());
             bytes.extend_from_slice(&probe.entity.generation().to_le_bytes());
-            for c in probe.position.to_array() {
-                bytes.extend_from_slice(&c.to_le_bytes());
-            }
+            bytes.extend_from_slice(&key.to_le_bytes());
         }
         ludion_assets::content_hash(&bytes)
     }
@@ -273,7 +309,8 @@ impl Probes {
             return;
         }
         let face_size = r.ibl_specular_size();
-        let key = Self::key(probes, face_size);
+        let keys = store_keys(r, scene, face_size);
+        let key = Self::resident_key(probes, &keys, face_size);
         if self
             .cache
             .borrow()
@@ -292,9 +329,7 @@ impl Probes {
             }
             held.as_ref().expect("just filled").1.clone()
         };
-        // The world key is taken once per resolve: a load-time event, the world at frame 0.
         let store = self.store.borrow().clone();
-        let keys = store.as_ref().map(|_| store_keys(r, scene, face_size));
         let retain = self.retain.get();
         if retain {
             self.captured.borrow_mut().clear();
@@ -304,10 +339,7 @@ impl Probes {
         // probe-less scene back through here.
         for (slot, probe) in probes.iter().enumerate() {
             let slot = slot as u32;
-            let entry = store
-                .as_deref()
-                .zip(keys.as_ref())
-                .map(|(dir, keys)| (dir, keys[slot as usize]));
+            let entry = store.as_deref().map(|dir| (dir, keys[slot as usize]));
             let loaded = entry.and_then(|(dir, key)| {
                 probe_store::read_entry(dir, key, face_size, array.mip_level_count())
             });
@@ -325,7 +357,7 @@ impl Probes {
             }
             r.observed_phase(observer, FramePhase::ProbeBake, || {
                 for face in 0..6 {
-                    let derived = face_scene(scene, probe.position, face);
+                    let derived = face_scene(capture_world(scene), probe.position, face);
                     r.capture_probe_face(
                         &derived,
                         face_size,
@@ -704,5 +736,92 @@ pub(crate) mod tests {
         scene.probes.clear();
         resolve(&r, &scene);
         assert!(r.probes.cubes().is_none());
+    }
+
+    fn nudge(scene: &mut RenderScene) {
+        scene.meshes[1].model *= Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0));
+    }
+
+    #[test]
+    fn needs_gpu_the_resident_cubes_follow_the_store_key() {
+        let Some(mut r) = renderer_or_skip("the resident cubes") else {
+            return;
+        };
+        let mut scene = lit_scene();
+        resolve(&r, &scene);
+        let count = |r: &Renderer| r.probe_resolve().resolve;
+        assert_eq!(count(&r), 1);
+        resolve(&r, &scene);
+        assert_eq!(count(&r), 1, "the same scene resolved again");
+
+        let key = r.probe_keys(&scene);
+        nudge(&mut scene);
+        assert_ne!(r.probe_keys(&scene), key);
+        resolve(&r, &scene);
+        assert_eq!(count(&r), 2, "a moved mesh");
+
+        let key = r.probe_keys(&scene);
+        r.set_quality(
+            Quality {
+                shadows: false,
+                ..r.quality()
+            },
+            r.quality_params(),
+        );
+        assert_ne!(r.probe_keys(&scene), key);
+        resolve(&r, &scene);
+        assert_eq!(count(&r), 3, "a quality toggle");
+
+        let key = r.probe_keys(&scene);
+        let edited = format!("{}\n// edit\n", include_str!("shaders/mesh.wgsl"));
+        r.reload_shader("mesh.wgsl", edited).unwrap();
+        assert_ne!(r.probe_keys(&scene), key);
+        resolve(&r, &scene);
+        assert_eq!(count(&r), 4, "a shader reload");
+    }
+
+    #[test]
+    fn needs_gpu_a_probe_world_freezes_the_capture() {
+        let Some(r) = renderer_or_skip("the probe world") else {
+            return;
+        };
+        let mut scene = lit_scene();
+        scene.probe_world = Some(ProbeWorld::new(scene.clone()));
+        resolve(&r, &scene);
+        let frozen = array_bytes(&r);
+        let key = r.probe_keys(&scene);
+        assert_eq!(r.probe_resolve().resolve, 1);
+
+        nudge(&mut scene);
+        resolve(&r, &scene);
+        assert_eq!(r.probe_resolve().resolve, 1, "a live mesh edit recaptured");
+        assert!(array_bytes(&r) == frozen);
+        assert_eq!(r.probe_keys(&scene), key);
+
+        scene.probes[0].position.x += 1.0;
+        resolve(&r, &scene);
+        assert_eq!(r.probe_resolve().resolve, 2, "a moved probe");
+    }
+
+    #[test]
+    fn needs_gpu_post_does_not_reach_the_capture() {
+        let (Some(a), Some(b)) = (
+            renderer_or_skip("post and the capture"),
+            renderer_or_skip("post and the capture"),
+        ) else {
+            return;
+        };
+        let plain = lit_scene();
+        let mut graded = lit_scene();
+        graded.post = Some(crate::scene::PostData {
+            exposure: 2.5,
+            fog_density: 0.3,
+            bloom_strength: 0.9,
+            ..Default::default()
+        });
+        assert_eq!(a.probe_keys(&plain), b.probe_keys(&graded));
+        resolve(&a, &plain);
+        resolve(&b, &graded);
+        assert!(array_bytes(&a) == array_bytes(&b));
     }
 }

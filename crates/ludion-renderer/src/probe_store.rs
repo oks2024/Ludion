@@ -2,9 +2,10 @@
 //! the slot readback and upload around it (`Plan/reflections.md` decisions 19 and 22).
 //!
 //! The key hashes exactly what `probe_capture`'s capture reads: the derived face scene (so a sprite,
-//! the sun disc or the camera never moves it), the quality parameters, the face size
-//! and [`PROBE_BAKE_VERSION`], plus the probe's capture point. Shape, blend and priority shade the
-//! probe; they are not captured, so they are not in the key.
+//! the sun disc, the camera or the composite's `post` never moves it), the quality toggles and
+//! parameters, the renderer's shader code key, the face size and [`PROBE_BAKE_VERSION`], plus the
+//! probe's capture point. Shape, blend and priority shade the probe; they are not captured, so they
+//! are not in the key.
 
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -14,12 +15,12 @@ use ludion_assets::cooked::{cooked_file_name, read_probe_cube, write_probe_cube}
 use ludion_core::math::glam::Vec3;
 use ludion_render_graph::Gpu;
 
-use crate::quality::QualityParams;
+use crate::quality::{Quality, QualityParams};
 use crate::scene::{MeshTexture, RenderScene};
 
 /// Bump whenever the capture or the prefilter produces different bytes for the same input; every
 /// stored entry is then orphaned.
-pub(crate) const PROBE_BAKE_VERSION: u32 = 2;
+pub(crate) const PROBE_BAKE_VERSION: u32 = 3;
 
 const TEXEL_BYTES: u32 = 8;
 
@@ -70,7 +71,13 @@ impl KeyWriter {
 ///
 /// Small `Copy` structs are hashed through `Debug`; heavy data (meshes, maps, the voxel grid)
 /// through its content key.
-pub(crate) fn world_key(face_scene: &RenderScene, quality: &QualityParams, face: u32) -> u64 {
+pub(crate) fn world_key(
+    face_scene: &RenderScene,
+    quality: &Quality,
+    params: &QualityParams,
+    code: u64,
+    face: u32,
+) -> u64 {
     let RenderScene {
         // per face; the capture point enters through `probe_key`
         camera: _,
@@ -88,11 +95,15 @@ pub(crate) fn world_key(face_scene: &RenderScene, quality: &QualityParams, face:
         texts: _,
         ui: _,
         probes: _,
+        // the capture reads the frozen world, never a nested one
+        probe_world: _,
         lights,
         spot_lights,
         sun,
         environment,
-        post,
+        // the capture graph has no composite, and the face scene zeroes the strengths that gate the
+        // screen-space chains, so no pass of it reads `post`
+        post: _,
         voxel,
         gi,
         bone_palette,
@@ -101,7 +112,9 @@ pub(crate) fn world_key(face_scene: &RenderScene, quality: &QualityParams, face:
     let mut w = KeyWriter(Vec::new());
     w.u32(PROBE_BAKE_VERSION);
     w.u32(face);
+    w.u64(code);
     w.debug(quality);
+    w.debug(params);
     w.debug(ambient);
     for asset in mesh_assets {
         w.u64(asset.hash);
@@ -128,7 +141,6 @@ pub(crate) fn world_key(face_scene: &RenderScene, quality: &QualityParams, face:
     w.debug(spot_lights);
     w.debug(sun);
     w.debug(environment);
-    w.debug(post);
     match voxel {
         Some(grid) => {
             w.u32(1);
@@ -282,13 +294,15 @@ mod tests {
     use crate::render::Renderer;
     use crate::scene::{
         EnvironmentData, GiData, MapImage, MeshData, MeshTextures, PointLightData, PostData,
-        SpotLightData, SpriteInstance, TextureImage, TextureWrap, WorldVoxelGrid,
+        SpotLightData, SpriteInstance, TextureImage, TextureWrap, TonemapOperator, WorldVoxelGrid,
     };
     use ludion_core::math::glam::{Mat4, Quat};
 
     struct Fixture {
         scene: RenderScene,
+        toggles: Quality,
         quality: QualityParams,
+        code: u64,
         face: u32,
         position: Vec3,
     }
@@ -378,7 +392,9 @@ mod tests {
         scene.post = Some(PostData::default());
         Fixture {
             scene,
+            toggles: Quality::FULL,
             quality: QualityParams::MEDIUM,
+            code: 7,
             face: 64,
             position: Vec3::new(0.0, 1.5, 0.0),
         }
@@ -386,7 +402,13 @@ mod tests {
 
     /// The key as `Probes::resolve` computes it: through the face scene.
     fn key_of(f: &Fixture) -> u64 {
-        let world = world_key(&face_scene(&f.scene, Vec3::ZERO, 0), &f.quality, f.face);
+        let world = world_key(
+            &face_scene(&f.scene, Vec3::ZERO, 0),
+            &f.toggles,
+            &f.quality,
+            f.code,
+            f.face,
+        );
         probe_key(world, f.position)
     }
 
@@ -454,10 +476,10 @@ mod tests {
             ("bone palette", |f| {
                 f.scene.bone_palette[0] = Mat4::from_translation(Vec3::Y)
             }),
-            ("post field", |f| {
-                f.scene.post.as_mut().unwrap().fog_density = 0.2
-            }),
             ("quality", |f| f.quality = QualityParams::LOW),
+            ("shadows toggle", |f| f.toggles.shadows = false),
+            ("dynamic gi toggle", |f| f.toggles.gi_dynamic = false),
+            ("shader code", |f| f.code += 1),
             ("face size", |f| f.face = 128),
             ("position", |f| f.position.x += 1.0),
         ];
@@ -500,6 +522,13 @@ mod tests {
                 env.sun_disc_intensity = 10.0;
             }),
             ("ssr", |f| f.scene.post.as_mut().unwrap().ssr = 0.7),
+            ("post", |f| {
+                let post = f.scene.post.as_mut().unwrap();
+                post.exposure = 2.0;
+                post.bloom_strength = 0.9;
+                post.tonemap = TonemapOperator::Aces;
+                post.fog_density = 0.2;
+            }),
             ("the camera", |f| {
                 f.scene.camera.position += Vec3::new(5.0, 1.0, 2.0)
             }),
