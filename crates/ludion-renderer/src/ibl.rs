@@ -56,9 +56,7 @@ pub(crate) struct Ibl {
     irradiance_pipeline: wgpu::ComputePipeline,
     prefilter_pipeline: wgpu::ComputePipeline,
     /// The probe path: the same lobe over a captured, mipped source cube.
-    #[allow(dead_code, reason = "the probe path; exercised by the tests")]
     prefilter_cube_pipeline: wgpu::ComputePipeline,
-    #[allow(dead_code, reason = "the probe path; exercised by the tests")]
     downsample_pipeline: wgpu::ComputePipeline,
     /// The environment-independent split-sum LUT (2D), computed once.
     brdf_view: wgpu::TextureView,

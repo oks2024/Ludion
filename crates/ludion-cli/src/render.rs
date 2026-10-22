@@ -567,7 +567,7 @@ fn run_dump_probes(
         let [x, y, z] = probe.position;
         println!(
             "  #{} {} at ({x}, {y}, {z}) key {:016x} {}{}",
-            probe.slot,
+            probe.rank,
             probe.shape_name(),
             probe.key,
             if probe.stored { "stored" } else { "not stored" },

@@ -10,7 +10,7 @@ use ludion_core::math::glam::{Mat4, Vec3};
 
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::ibl;
-use crate::probe::MAX_PROBES;
+use crate::probe::{MAX_PROBES, probe_rank};
 use crate::probe_store;
 use crate::render::Renderer;
 use crate::scene::{RenderCamera, RenderScene};
@@ -69,10 +69,6 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
 
 /// The captured, prefiltered probes: a cube array with one slot per probe.
 #[derive(Clone)]
-#[allow(
-    dead_code,
-    reason = "read by the tests; the shading pass binds only the view"
-)]
 pub(crate) struct ProbeCubes {
     pub(crate) texture: wgpu::Texture,
     /// A cube-array view of every layer and mip.
@@ -89,7 +85,7 @@ pub(crate) struct ProbeCubes {
 pub struct ProbeResolve {
     /// Increments on each resolve that does GPU work.
     pub resolve: u64,
-    /// The last resolve's probes, in rank order.
+    /// The last resolve's probes, in slot (entity) order.
     pub probes: Vec<ResolvedProbe>,
 }
 
@@ -126,8 +122,10 @@ pub(crate) struct Probes {
 pub struct ProbeReadback {
     /// The probe's entity.
     pub entity: EntityId,
-    /// The probe's rank index, which is its slot.
+    /// The probe's cube-array index: its position in entity order.
     pub slot: u32,
+    /// The probe's position in [`probe_rank`] order: 0 is shaded first.
+    pub rank: u32,
     /// The store key at this renderer's quality, with or without a store.
     pub key: u64,
     /// The cube's edge in texels.
@@ -160,7 +158,7 @@ fn store_keys(r: &Renderer, scene: &RenderScene, face_size: u32) -> Vec<u64> {
 }
 
 impl Renderer {
-    /// The store key of each of `scene`'s probes at this renderer's quality, in rank order: what a
+    /// The store key of each of `scene`'s probes at this renderer's quality, in slot order: what a
     /// `Store` host loading `scene` would look up.
     pub fn probe_keys(&self, scene: &RenderScene) -> Vec<u64> {
         if scene.probes.is_empty() {
@@ -169,8 +167,9 @@ impl Renderer {
         store_keys(self, scene, self.ibl_specular_size())
     }
 
-    /// Captures `scene`'s probes fresh and reads them back, in rank order. A dump path: it ignores
-    /// the store, and leaves the resident cubes a fresh capture of the same probe set.
+    /// Captures `scene`'s probes fresh and reads them back, in slot order. A dump path: it captures
+    /// every probe rather than loading from the store, and leaves the resident cubes a fresh capture
+    /// of the same probe set.
     pub fn read_probes(
         &self,
         scene: &RenderScene,
@@ -188,10 +187,17 @@ impl Renderer {
         let captured = std::mem::take(&mut *probes.captured.borrow_mut());
         let cubes = probes.cubes().expect("the scene has probes");
         let keys = store_keys(self, scene, cubes.face_size);
+        let mut by_rank: Vec<usize> = (0..count).collect();
+        by_rank.sort_by(|&a, &b| probe_rank(&scene.probes[a], &scene.probes[b]));
+        let mut rank_of = vec![0u32; count];
+        for (rank, &slot) in by_rank.iter().enumerate() {
+            rank_of[slot] = rank as u32;
+        }
         (0..count)
             .map(|slot| ProbeReadback {
                 entity: scene.probes[slot].entity,
                 slot: slot as u32,
+                rank: rank_of[slot],
                 key: keys[slot],
                 face_size: cubes.face_size,
                 captured: captured

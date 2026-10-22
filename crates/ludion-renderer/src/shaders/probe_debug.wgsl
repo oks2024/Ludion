@@ -74,5 +74,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (best <= 0.0) {
         return vec4<f32>(srgb_to_linear(vec3<f32>(0.25)), 1.0);
     }
-    return vec4<f32>(srgb_to_linear(pdbg.palette[winner % 8u].rgb * best), 1.0);
+    return vec4<f32>(srgb_to_linear(mix(vec3<f32>(0.25), pdbg.palette[winner % 8u].rgb, best)), 1.0);
 }

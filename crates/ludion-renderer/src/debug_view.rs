@@ -15,7 +15,7 @@ pub enum DebugView {
     /// trace has no confident hit (a miss, a back-face or past the fade band), so it is distinct from level 0.
     SsrFootprint,
     /// The winning reflection probe per pixel, coloured by rank from [`PROBE_VIEW_PALETTE`] and scaled
-    /// by its contribution; gray where no probe weights the surface, black where there is none.
+    /// by its contribution; gray where no probe weights the surface, black only where there is no surface.
     ProbeIndex,
 }
 

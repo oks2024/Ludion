@@ -18,7 +18,7 @@ description: Reflection probes in the renderer: capture, ranked shading, the pro
 
 ### Probe shading
 `build_probe_list` ranks the extract indices by `probe_rank`; GPU probe `k` is rank `k`, and bit `k` of a cluster cell's `u32` mask (`probe_masks`, bounding spheres through the lights' margins) says the probe may reach it. The pass walks a cell's set bits lowest first, takes at most four with `weight > 0`, each `weight × (1 − coverage)`, and `fill = Σ probe · (F0·ab.x + ab.y) · spec.a + sky_fill · (1 − coverage)`; SSR then mixes over `fill`. Occlusion: the probe term takes specular occlusion only, sky visibility stays on the sky fill. Box lookups intersect the oriented box, spheres the sphere (`probe_lookup`).
-- **Sky-fraction intensity**: `rgb · (1 − a + a·k)` with `a` the prefiltered alpha and `k` = `ibl_intensity` (1 with no `Environment`), so captured sky matches the sky fill and captured geometry stays physical. The interim form of the W4 relight.
+- **Sky-fraction intensity**: `rgb · (1 − a + a·k)` with `a` the prefiltered alpha and `k` = `ibl_intensity` (1 with no `Environment`), so captured sky matches the sky fill and captured geometry stays physical. It is the form the probe radiance takes until the relight of `Plan/reflections.md` decision 17.
 - **Transparents**: `probes.wgsl` is binding-free so a transparent mesh composes it; none exists. Its fragment would bind 13 mesh textures + sky cube + BRDF LUT + probe array = 16, the floor, and one storage buffer (the mask).
 - A frame with no probe uploads count 0, binds a 1×1 fallback array and is byte-identical to a probe-less renderer.
 
@@ -35,7 +35,7 @@ description: Reflection probes in the renderer: capture, ranked shading, the pro
 
 ### Debug view
 - **`probe_index`**: `probe_debug` (`probe_debug.wgsl`) replaces `composite` the same way via `PostChain.probe_view`, set only when the scene has probes (else the normal frame is drawn and the summary says so). Same mask walk as `reflections`; the winner is the largest `weight × (1 − coverage)`.
-  Colour = `PROBE_VIEW_PALETTE[rank % 8]` (sRGB) × that contribution; gray 64 where no probe weights the surface, black where there is no surface.
+  Colour = the no-probe gray 64 mixed toward `PROBE_VIEW_PALETTE[rank % 8]` (sRGB) by that contribution, so a barely-weighted probe reads near gray; black only where there is no surface.
 
 ## Rules
 - Probe shape, blend, priority and rotation shade but never rebake: the capture is world-axis-aligned and keyed on position (`Probe store`).

@@ -1144,8 +1144,9 @@ impl Engine {
         }
     }
 
-    /// Reports an `L1279` once per session when a `Store` host's latest probe resolve captured
-    /// probes instead of loading them. Called after every render.
+    /// Reports an `L1279` for each probe resolve that captured probes a `Store` host expected to
+    /// load, once per resolve (a resolve with nothing missing reports nothing). Called after every
+    /// render.
     fn finish_probe_frame(&mut self) {
         if self.probes != ProbeSource::Store || self.probe_baking {
             return;

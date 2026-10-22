@@ -19,8 +19,8 @@ cover. Probes are authored text; the captured pixels are derived and never commi
 1. Place a `ReflectionProbe` entity: the `Transform` is the capture point (and a box's orientation).
 2. `ludion check-scene <scene>` — `L1274`–`L1278` name a bad volume, an overlap or a duplicate.
 3. `ludion render --scene <scene> --out probes.png`, then again with `--debug-view probe_index` to see
-   which probe owns each pixel (coloured by rank, gray where none does, black where there is no
-   surface). `ludion render --dump-probes <dir>` writes each captured cube and `probes.json`.
+   which probe owns each pixel (coloured by rank, fading to gray as a probe's weight falls, gray where none
+   covers, black only where there is no surface). `ludion render --dump-probes <dir>` writes each captured cube and `probes.json`.
    The `probes` debug-draw category (`ludion docs debug-draw`) outlines each volume live.
 4. `ludion bake-probes <scene>` fills the probe store for a CLI-loadable scene (`--probe <Name>`
    recaptures one, `--json` for tooling); a game's scene is baked by the game binary's

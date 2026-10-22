@@ -1790,10 +1790,12 @@ pub(crate) fn probe_debug_lines(world: &World) -> Vec<DebugSegment> {
         .chain(world.presentation_entities())
         .collect();
     let mut probes = extract_probes(world, &ids, &mut WorldAffines::new());
-    probes.sort_by(ludion_renderer::probe_rank);
+    // The renderer keeps the first `MAX_PROBES` in entity order and ranks those.
+    let held = probes.len().min(ludion_renderer::MAX_PROBES);
+    probes[..held].sort_by(ludion_renderer::probe_rank);
     let mut lines = Vec::new();
     for (rank, probe) in probes.iter().enumerate() {
-        let color = if rank < ludion_renderer::MAX_PROBES {
+        let color = if rank < held {
             let [r, g, b] =
                 ludion_renderer::PROBE_VIEW_PALETTE[rank % 8].map(ludion_sprite::srgb_decode);
             [r, g, b, 1.0]

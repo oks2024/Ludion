@@ -26,7 +26,7 @@ pub struct ProbeDumpOutcome {
     pub store: PathBuf,
     /// The cube edge in texels.
     pub face_size: u32,
-    /// The scene's probes in rank order.
+    /// The scene's probes in [`probe_rank`](ludion_renderer::probe_rank) order.
     pub probes: Vec<DumpedProbe>,
     /// Whose extract the keys come from: `"store-host"` (a host reading cooked textures, so a key
     /// is the one the store holds) or `"dump"` (this dump's own extract, when `--set` overrides
@@ -41,7 +41,9 @@ pub struct ProbeDumpOutcome {
 pub struct DumpedProbe {
     /// The probe's entity.
     pub entity: EntityId,
-    /// The probe's rank index, which is its slot.
+    /// The probe's position in `probe_rank` order: 0 is shaded first.
+    pub rank: u32,
+    /// The probe's cube-array index: its position in entity order.
     pub slot: u32,
     /// The probe's influence and parallax volume.
     pub volume: ProbeVolume,
@@ -93,7 +95,7 @@ pub fn render_probe_dump(
 
     let store = crate::probe_bake::store_dir(path.parent().unwrap_or_else(|| Path::new(".")));
     let face_size = quality.params.ibl_specular_size;
-    let probes = readbacks
+    let mut probes: Vec<DumpedProbe> = readbacks
         .into_iter()
         .map(|readback| {
             let data = &scene.probes[readback.slot as usize];
@@ -110,6 +112,7 @@ pub fn render_probe_dump(
             probe
         })
         .collect();
+    probes.sort_by_key(|probe| probe.rank);
     Ok(ProbeDumpOutcome {
         store,
         face_size,
@@ -143,6 +146,7 @@ fn dumped(
     let ProbeReadback {
         entity,
         slot,
+        rank,
         key: _,
         face_size,
         captured,
@@ -159,6 +163,7 @@ fn dumped(
     };
     DumpedProbe {
         entity,
+        rank,
         slot,
         volume,
         position,
@@ -212,7 +217,9 @@ fn strip(levels: &[(Vec<f32>, u32)]) -> RenderedImage {
 }
 
 impl ProbeDumpOutcome {
-    /// The dump's `probes.json` document. `scene` and `quality` are the names the caller ran with.
+    /// The dump's `probes.json` document, probes in rank order. `rank` is the probe's position in
+    /// `probe_rank` order (the `probe_index` view's colour); `slot` is its entity-order index into
+    /// the cube array. `scene` and `quality` are the names the caller ran with.
     pub fn manifest(&self, scene: &Path, quality: &str) -> serde_json::Value {
         serde_json::json!({
             "scene": scene.display().to_string(),
@@ -226,14 +233,14 @@ impl ProbeDumpOutcome {
 }
 
 impl DumpedProbe {
-    /// The file name of this probe's captured strip.
+    /// The file name of this probe's captured strip. Files are named by rank, not slot.
     pub fn captured_file(&self) -> String {
-        format!("probe-{}-captured.png", self.slot)
+        format!("probe-{}-captured.png", self.rank)
     }
 
     /// The file name of this probe's prefiltered strip.
     pub fn prefiltered_file(&self) -> String {
-        format!("probe-{}-prefiltered.png", self.slot)
+        format!("probe-{}-prefiltered.png", self.rank)
     }
 
     /// `box` or `sphere`.
@@ -253,7 +260,7 @@ impl DumpedProbe {
             ProbeVolume::Sphere { radius } => serde_json::json!({ "sphere": { "radius": radius } }),
         };
         serde_json::json!({
-            "rank": self.slot,
+            "rank": self.rank,
             "slot": self.slot,
             "entity": self.entity.to_string(),
             "shape": shape,
@@ -394,6 +401,26 @@ entities:
             assert_eq!(key.len(), 16);
             assert_eq!(u64::from_str_radix(key, 16).unwrap(), probe.key);
         }
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn needs_gpu_rank_is_the_static_order_and_slot_the_entity_order() {
+        let source = SCENE.replace(
+            "      ReflectionProbe:\n        shape:",
+            "      ReflectionProbe:\n        priority: 5\n        shape:",
+        );
+        let path = scene_file("rank", &source);
+        let Some(outcome) = dump(&path) else {
+            return;
+        };
+        let ranked: Vec<_> = outcome.probes.iter().map(|p| (p.rank, p.slot)).collect();
+        assert_eq!(ranked, [(0, 1), (1, 0)]);
+        assert_eq!(outcome.probes[0].shape_name(), "sphere");
+        let manifest = outcome.manifest(&path, "full");
+        assert_eq!(manifest["probes"][0]["rank"], 0);
+        assert_eq!(manifest["probes"][0]["slot"], 1);
+        assert_eq!(outcome.probes[0].captured_file(), "probe-0-captured.png");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

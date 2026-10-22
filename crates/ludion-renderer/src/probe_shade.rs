@@ -299,6 +299,23 @@ mod tests {
             [64, 64, 64],
             "floor outside every volume",
         );
+
+        // A blend band fades toward gray, never toward black.
+        let mut soft = box_probe(1, Vec3::new(15.0, 5.0, 1.0), 0);
+        soft.blend = 1.0;
+        scene.probes = vec![soft];
+        let image = r.render(&scene, size).expect("render the view");
+        let edge = view_pixel(&image, &scene, Vec3::new(0.0, 0.0, 0.9));
+        let winner = palette_bytes(0);
+        assert_ne!(edge, [0, 0, 0], "a weak probe is not black");
+        assert!(
+            edge != [64, 64, 64] && edge != winner,
+            "{edge:?} is mid-blend"
+        );
+        for c in 0..3 {
+            let (lo, hi) = (winner[c].min(64), winner[c].max(64));
+            assert!((lo..=hi).contains(&edge[c]), "channel {c} of {edge:?}");
+        }
     }
 
     /// A scene with no probes ignores the view: the frame is the one drawn without it.

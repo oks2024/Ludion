@@ -589,6 +589,30 @@ mod tests {
     }
 
     #[test]
+    fn probes_past_the_renderer_cap_draw_gray_whatever_their_priority() {
+        use crate::components::{ProbeShape, ReflectionProbe, Transform};
+        let mut world = world();
+        let count = ludion_renderer::MAX_PROBES + 1;
+        for i in 0..count {
+            let id = world.spawn();
+            world.insert(id, Transform::default()).unwrap();
+            let probe = ReflectionProbe {
+                shape: ProbeShape::Box {
+                    extent: [1.0, 1.0, 1.0],
+                },
+                blend: 0.5,
+                priority: if i == count - 1 { 9 } else { 0 },
+            };
+            world.insert(id, probe).unwrap();
+        }
+        let lines = segments(&world, &DebugCategories::parse("probes"));
+        assert_eq!(lines.len(), count * 15);
+        let red = ludion_renderer::PROBE_VIEW_PALETTE[0].map(ludion_sprite::srgb_decode);
+        assert_eq!(lines[0].color, [red[0], red[1], red[2], 1.0]);
+        assert_eq!(lines[count * 15 - 1].color, [0.25, 0.25, 0.25, 1.0]);
+    }
+
+    #[test]
     fn drawn_lists_probes_only_when_a_probe_exists() {
         use crate::components::ProbeShape;
         assert!(drawn(&world()).is_empty());
