@@ -353,7 +353,8 @@ enum Command {
         // other side — see the clap 4.6 note on `--views`.
         #[arg(long, value_name = "DOC", conflicts_with_all = [
             "scene", "model", "atlas", "rig", "views", "dump_timings", "dump_voxels", "dump_gi",
-            "frames", "clip", "time", "strip", "onion", "true_size", "part", "isolate", "channel",
+            "dump_probes", "frames", "clip", "time", "strip", "onion", "true_size", "part", "isolate",
+            "channel",
         ])]
         sprite: Option<PathBuf>,
         /// Overview sheet of a `kind: atlas` document: the packed image upscaled, every region
@@ -368,7 +369,7 @@ enum Command {
         // `ludion_engine::check_atlas_clip_flags`, which is `L4008` with the spelling that works.
         #[arg(long, value_name = "DOC", conflicts_with_all = [
             "scene", "model", "sprite", "rig", "views", "dump_timings", "dump_voxels", "dump_gi",
-            "frames", "true_size", "set", "sweep", "part", "isolate", "channel",
+            "dump_probes", "frames", "true_size", "set", "sweep", "part", "isolate", "channel",
         ])]
         atlas: Option<PathBuf>,
         /// Specimen sheet of a `kind: font` document: its atlas image, a metric band over
@@ -376,11 +377,12 @@ enum Command {
         /// at three sizes, drawn through the same layout the game uses. Needs no GPU adapter.
         #[arg(long, value_name = "DOC", conflicts_with_all = [
             "scene", "model", "sprite", "atlas", "rig", "views", "dump_timings", "dump_voxels",
-            "dump_gi", "frames", "true_size", "set", "sweep", "part", "isolate", "channel",
+            "dump_gi", "dump_probes", "frames", "true_size", "set", "sweep", "part", "isolate",
+            "channel",
         ])]
         font: Option<PathBuf>,
         /// Where to write the rendered PNG. Required with `--scene`, unless `--dump-voxels`/
-        /// `--dump-gi` is the only thing being asked for; with one `--model` or `--sprite` it
+        /// `--dump-gi`/`--dump-probes` is the only thing being asked for; with one `--model` or `--sprite` it
         /// defaults to `<name>.sheet.png` in the current directory (the document's file stem,
         /// `.voxel`/`.mesh`/`.assembly`/`.sprite` suffix stripped) and with `--atlas` to
         /// `<name>.atlas-sheet.png` (`.atlas` stripped), with `--font` to `<name>.font-sheet.png`
@@ -389,7 +391,7 @@ enum Command {
         /// document and the atlas packed from it share a stem, so their sheets must not share a
         /// name. A lineup names no single model, so it requires this.
         #[arg(long, required_unless_present_any = [
-            "model", "dump_voxels", "dump_gi", "sprite", "atlas", "font",
+            "model", "dump_voxels", "dump_gi", "dump_probes", "sprite", "atlas", "font",
         ])]
         out: Option<PathBuf>,
         /// Output width in pixels (the sheet width in `--model` mode; integer cell division may
@@ -430,6 +432,13 @@ enum Command {
         /// difference from its sibling.
         #[arg(long, conflicts_with_all = ["model", "sweep"])]
         dump_gi: Option<PathBuf>,
+        /// Writes each reflection probe of the `--scene` to `<DIR>`: `probe-<rank>-captured.png` (the
+        /// six cube faces side by side), `probe-<rank>-prefiltered.png` (one row per mip) and
+        /// `probes.json` (rank, shape, position, store key, and whether the probe store holds it).
+        /// Needs a GPU adapter. Captures every probe fresh and never reads or writes the store, so
+        /// the files are a function of the scene alone. Without `--out` it writes only the dump.
+        #[arg(long, value_name = "DIR", conflicts_with_all = ["model", "sweep"])]
+        dump_probes: Option<PathBuf>,
         /// Override one value for this render, in memory only — the file on disk is never written.
         /// Repeatable. Spelled `<json-pointer>=<value>`, e.g.
         /// `--set /entities/0/components/PostProcess/bloom_strength=0.8`. The value is read as JSON
@@ -1843,6 +1852,7 @@ fn main() -> std::process::ExitCode {
             dump_timings,
             dump_voxels,
             dump_gi,
+            dump_probes,
             set,
             sweep,
             frames,
@@ -1956,6 +1966,7 @@ fn main() -> std::process::ExitCode {
                 dump_timings: dump_timings.as_deref(),
                 dump_voxels: dump_voxels.as_deref(),
                 dump_gi: dump_gi.as_deref(),
+                dump_probes: dump_probes.as_deref(),
                 set: &set,
                 sweep: sweep.as_deref(),
                 frames: &frames,

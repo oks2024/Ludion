@@ -418,6 +418,7 @@ pub(crate) fn source_cube(device: &wgpu::Device, size: u32) -> wgpu::Texture {
         format: IBL_FORMAT,
         usage: wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })

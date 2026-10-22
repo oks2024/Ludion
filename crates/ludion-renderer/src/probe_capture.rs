@@ -2,7 +2,7 @@
 //! derived scene and prefiltered into one slot of a cube array (`Plan/reflections.md` decisions 16,
 //! 17 and 21). The `reflections` pass samples the array (`probe_shade.rs`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
 
@@ -13,6 +13,7 @@ use crate::probe::MAX_PROBES;
 use crate::probe_store;
 use crate::render::Renderer;
 use crate::scene::{RenderCamera, RenderScene};
+use ludion_core::ids::EntityId;
 
 const CAPTURE_NEAR: f32 = 0.05;
 const CAPTURE_FAR: f32 = 1000.0;
@@ -112,6 +113,93 @@ pub(crate) struct Probes {
     /// The probe store directory, when the host set one.
     store: RefCell<Option<PathBuf>>,
     report: RefCell<ProbeResolve>,
+    /// Set while a readback runs: each captured probe's raw faces are kept before the shared
+    /// source cube is overwritten by the next one.
+    retain: Cell<bool>,
+    /// One entry per slot of the retained resolve; `None` for a slot the store supplied.
+    captured: RefCell<Vec<Option<Vec<u8>>>>,
+}
+
+/// One probe as `Renderer::read_probes` returns it, for a dump or a test.
+#[derive(Clone, Debug)]
+pub struct ProbeReadback {
+    /// The probe's entity.
+    pub entity: EntityId,
+    /// The probe's rank index, which is its slot.
+    pub slot: u32,
+    /// The store key at this renderer's quality, with or without a store.
+    pub key: u64,
+    /// The cube's edge in texels.
+    pub face_size: u32,
+    /// The raw capture, mip 0 RGBA, faces in layer order (+X −X +Y −Y +Z −Z).
+    pub captured: Option<Vec<f32>>,
+    /// The prefiltered slot, one entry per mip, same layout.
+    pub levels: Vec<Vec<f32>>,
+}
+
+fn f16_texels(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(2)
+        .map(|b| crate::gi_bake::f16_to_f32(u16::from_le_bytes([b[0], b[1]])))
+        .collect()
+}
+
+/// The store key of each probe of `scene` at `r`'s quality: the world key once, then the capture
+/// point. The one place keys are computed, so a dump can never disagree with a host.
+fn store_keys(r: &Renderer, scene: &RenderScene, face_size: u32) -> Vec<u64> {
+    let world = probe_store::world_key(
+        &face_scene(scene, Vec3::ZERO, 0),
+        &r.quality_params(),
+        face_size,
+    );
+    scene.probes[..scene.probes.len().min(MAX_PROBES)]
+        .iter()
+        .map(|probe| probe_store::probe_key(world, probe.position))
+        .collect()
+}
+
+impl Renderer {
+    /// The store key of each of `scene`'s probes at this renderer's quality, in rank order: what a
+    /// `Store` host loading `scene` would look up.
+    pub fn probe_keys(&self, scene: &RenderScene) -> Vec<u64> {
+        if scene.probes.is_empty() {
+            return Vec::new();
+        }
+        store_keys(self, scene, self.ibl_specular_size())
+    }
+
+    /// Captures `scene`'s probes fresh and reads them back, in rank order. A dump path: it ignores
+    /// the store, and leaves the resident cubes a fresh capture of the same probe set.
+    pub fn read_probes(&self, scene: &RenderScene) -> Vec<ProbeReadback> {
+        let count = scene.probes.len().min(MAX_PROBES);
+        if count == 0 {
+            return Vec::new();
+        }
+        let probes = &self.probes;
+        probes.retain.set(true);
+        probes.recapture();
+        probes.resolve(self, scene);
+        probes.retain.set(false);
+        let captured = std::mem::take(&mut *probes.captured.borrow_mut());
+        let cubes = probes.cubes().expect("the scene has probes");
+        let keys = store_keys(self, scene, cubes.face_size);
+        (0..count)
+            .map(|slot| ProbeReadback {
+                entity: scene.probes[slot].entity,
+                slot: slot as u32,
+                key: keys[slot],
+                face_size: cubes.face_size,
+                captured: captured
+                    .get(slot)
+                    .and_then(|bytes| bytes.as_deref())
+                    .map(f16_texels),
+                levels: probe_store::read_slot(self.gpu(), &cubes.texture, slot as u32)
+                    .iter()
+                    .map(|level| f16_texels(level))
+                    .collect(),
+            })
+            .collect()
+    }
 }
 
 impl Probes {
@@ -121,7 +209,14 @@ impl Probes {
             source: RefCell::new(None),
             store: RefCell::new(None),
             report: RefCell::new(ProbeResolve::default()),
+            retain: Cell::new(false),
+            captured: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Drops the resident captures so the next resolve captures again.
+    pub(crate) fn recapture(&self) {
+        self.cache.borrow_mut().take();
     }
 
     /// Sets the store directory; the resident captures are dropped so the next resolve consults it.
@@ -182,13 +277,11 @@ impl Probes {
         };
         // The world key is taken once per resolve: a load-time event, the world at frame 0.
         let store = self.store.borrow().clone();
-        let world = store.as_ref().map(|_| {
-            probe_store::world_key(
-                &face_scene(scene, Vec3::ZERO, 0),
-                &r.quality_params(),
-                face_size,
-            )
-        });
+        let keys = store.as_ref().map(|_| store_keys(r, scene, face_size));
+        let retain = self.retain.get();
+        if retain {
+            self.captured.borrow_mut().clear();
+        }
         let mut resolved = Vec::with_capacity(probes.len());
         // No borrow of the cache is held below: a face's own `prepare_frame` resolves its
         // probe-less scene back through here.
@@ -196,13 +289,16 @@ impl Probes {
             let slot = slot as u32;
             let entry = store
                 .as_deref()
-                .zip(world)
-                .map(|(dir, world)| (dir, probe_store::probe_key(world, probe.position)));
+                .zip(keys.as_ref())
+                .map(|(dir, keys)| (dir, keys[slot as usize]));
             let loaded = entry.and_then(|(dir, key)| {
                 probe_store::read_entry(dir, key, face_size, array.mip_level_count())
             });
             if let Some(levels) = loaded {
                 probe_store::write_slot(gpu, &array, slot, &levels);
+                if retain {
+                    self.captured.borrow_mut().push(None);
+                }
                 resolved.push(ResolvedProbe {
                     entity: probe.entity,
                     key: entry.map(|(_, key)| key),
@@ -226,6 +322,10 @@ impl Probes {
                         aspect: wgpu::TextureAspect::All,
                     },
                 );
+            }
+            if retain {
+                let faces = probe_store::read_slot(gpu, &source, 0).swap_remove(0);
+                self.captured.borrow_mut().push(Some(faces));
             }
             r.ibl().prefilter_probe(gpu, &source, &array, slot);
             resolved.push(ResolvedProbe {
@@ -270,7 +370,6 @@ pub(crate) mod tests {
     use crate::ibl::tests::{face_dir, read_rgba16_mips, test_env};
     use crate::probe::{ProbeData, ProbeVolume};
     use crate::scene::{MeshInstance, MeshShape, SunData};
-    use ludion_core::ids::EntityId;
     use ludion_core::math::glam::{Mat3, Quat};
 
     /// Every face's camera maps the cube direction `face_dir` gives to the mirrored NDC point
@@ -510,6 +609,65 @@ pub(crate) mod tests {
         for face in [2, 3] {
             assert_eq!(centre(face)[3], 1.0, "face {face} sees only sky");
         }
+    }
+
+    #[test]
+    fn needs_gpu_read_probes_returns_every_slot() {
+        let (Some(mut stored), Some(dumped), Some(fresh)) = (
+            renderer_or_skip("probe readback"),
+            renderer_or_skip("probe readback"),
+            renderer_or_skip("probe readback"),
+        ) else {
+            return;
+        };
+        let mut scene = lit_scene();
+        scene.probes = vec![
+            probe_at(1, Vec3::new(0.0, 1.5, 0.0)),
+            probe_at(2, Vec3::new(-4.0, 1.5, 2.0)),
+        ];
+        let dir =
+            std::env::temp_dir().join(format!("ludion-probe-readback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        stored.set_probe_store(Some(dir.clone()));
+        resolve(&stored, &scene);
+        let recorded: Vec<_> = stored
+            .probe_resolve()
+            .probes
+            .iter()
+            .map(|p| p.key.expect("a store-backed resolve records keys"))
+            .collect();
+
+        let readbacks = dumped.read_probes(&scene);
+        assert_eq!(readbacks.len(), 2);
+        let max_lod = dumped.probes.cubes().expect("resident").max_lod;
+        for (slot, probe) in readbacks.iter().enumerate() {
+            let edge = probe.face_size as usize;
+            assert_eq!(probe.slot, slot as u32);
+            assert_eq!(probe.entity, scene.probes[slot].entity);
+            assert_eq!(probe.key, recorded[slot]);
+            assert_eq!(
+                probe.captured.as_ref().expect("fresh").len(),
+                6 * edge * edge * 4
+            );
+            assert_eq!(probe.levels.len() as u32, max_lod + 1);
+        }
+        assert_ne!(readbacks[0].key, readbacks[1].key);
+        let again = dumped.read_probes(&scene);
+        for (a, b) in readbacks.iter().zip(&again) {
+            assert!(
+                a.captured == b.captured && a.levels == b.levels,
+                "a second readback differs"
+            );
+        }
+
+        let size = crate::FrameSize::native(64, 64);
+        let after = dumped.render(&scene, size).expect("renders");
+        let direct = fresh.render(&scene, size).expect("renders");
+        assert!(
+            after.rgba == direct.rgba,
+            "a render after a dump differs from a fresh one"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

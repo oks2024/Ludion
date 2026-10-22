@@ -137,6 +137,8 @@ pub struct Request<'a> {
     pub dump_voxels: Option<&'a Path>,
     /// `--dump-gi` (scene mode).
     pub dump_gi: Option<&'a Path>,
+    /// `--dump-probes` (scene mode).
+    pub dump_probes: Option<&'a Path>,
     /// `--set`, unparsed.
     pub set: &'a [String],
     /// `--sweep`, unparsed.
@@ -243,6 +245,7 @@ pub fn run(request: &Request) -> ExitCode {
                     request.dump_timings,
                     request.dump_voxels,
                     request.dump_gi,
+                    request.dump_probes,
                     set,
                     request.frames.first().copied().unwrap_or(0),
                     ludion_engine::resolve_render_scale(explicit, request.quality),
@@ -272,6 +275,7 @@ fn run_scene(
     dump_timings: Option<&Path>,
     dump_voxels: Option<&Path>,
     dump_gi: Option<&Path>,
+    dump_probes: Option<&Path>,
     set: &[String],
     frames: u64,
     scale: RenderScale,
@@ -299,6 +303,18 @@ fn run_scene(
     }
     if let Some(gi_out) = dump_gi
         && let Err(failure) = run_dump_gi(scene, gi_out, size, &overrides, &mut echo_overrides)
+    {
+        return failure;
+    }
+    if let Some(probes_out) = dump_probes
+        && let Err(failure) = run_dump_probes(
+            scene,
+            probes_out,
+            size,
+            quality,
+            &overrides,
+            &mut echo_overrides,
+        )
     {
         return failure;
     }
@@ -486,6 +502,82 @@ fn run_dump_gi(
         }
         Err(diagnostics) => Err(report(scene, &diagnostics)),
     }
+}
+
+/// `--dump-probes`: writes each reflection probe's captured and prefiltered strips and the
+/// `probes.json` manifest into `dir`, then a summary and one line per probe. Needs a GPU adapter;
+/// `echo_overrides` follows [`run_dump_voxels`]'s convention.
+fn run_dump_probes(
+    scene: &Path,
+    dir: &Path,
+    size: FrameSize,
+    quality: &QualitySetting,
+    overrides: &[SceneOverride],
+    echo_overrides: &mut bool,
+) -> Result<(), ExitCode> {
+    let outcome = match ludion_engine::render_probe_dump(
+        &crate::check_scene::builtin_registry(),
+        scene,
+        size,
+        quality,
+        overrides,
+    ) {
+        Ok(outcome) => outcome,
+        Err(diagnostics) => return Err(report(scene, &diagnostics)),
+    };
+    if *echo_overrides {
+        for applied in &outcome.applied_overrides {
+            echo(applied);
+        }
+        *echo_overrides = false;
+    }
+    let write = || -> Result<(), Diagnostic> {
+        std::fs::create_dir_all(dir).map_err(|error| output_io(dir, &error))?;
+        for probe in &outcome.probes {
+            if let Some(captured) = &probe.captured {
+                captured.write_png(dir.join(probe.captured_file()))?;
+            }
+            probe
+                .prefiltered
+                .write_png(dir.join(probe.prefiltered_file()))?;
+        }
+        let mut manifest = serde_json::to_string_pretty(&outcome.manifest(scene, &quality.label))
+            .expect("a manifest serializes");
+        manifest.push('\n');
+        let path = dir.join("probes.json");
+        ludion_core::atomic::write_atomic(&path, manifest.as_bytes())
+            .map_err(|error| output_io(&path, &error))
+    };
+    if let Err(diagnostic) = write() {
+        eprintln!("{diagnostic}");
+        return Err(ExitCode::FAILURE);
+    }
+    println!(
+        "{}: {} probes, face {}, quality {}",
+        dir.display(),
+        outcome.probes.len(),
+        outcome.face_size,
+        quality.label
+    );
+    for probe in &outcome.probes {
+        let [x, y, z] = probe.position;
+        println!(
+            "  #{} {} at ({x}, {y}, {z}) key {:016x} {}",
+            probe.slot,
+            probe.shape_name(),
+            probe.key,
+            if probe.stored { "stored" } else { "not stored" },
+        );
+    }
+    Ok(())
+}
+
+fn output_io(path: &Path, error: &std::io::Error) -> Diagnostic {
+    Diagnostic::new(
+        code::OUTPUT_IO,
+        format!("could not write `{}`: {error}", path.display()),
+    )
+    .with_help("check the output location is writable")
 }
 
 /// Which way the frame was resampled, as the word a summary line says it with, or `None` when the

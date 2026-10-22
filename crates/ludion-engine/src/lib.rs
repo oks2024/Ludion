@@ -71,6 +71,7 @@ mod prefab;
 mod prefab_ops;
 mod probe_bake;
 mod probe_check;
+mod probe_dump;
 pub mod profile;
 mod quality;
 mod query_drift;
@@ -163,6 +164,7 @@ pub use prefab::{PrefabInstance, spawn_prefab};
 pub use prefab_ops::{PrefabApplied, PrefabReverted, revert_prefab, unpack_prefab};
 pub use probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 pub use probe_check::scene_probe_diagnostics;
+pub use probe_dump::{DumpedProbe, ProbeDumpOutcome, render_probe_dump};
 pub use profile::{
     Budget, GpuProfile, PassTiming, ProfileReport, QualityProfile, SEQUENTIAL_NAMES, SimProfile,
     SystemTiming, TimingTail, check_budget, load_budget, profile_engine, profile_replay,

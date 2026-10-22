@@ -1722,3 +1722,143 @@ fn needs_gpu_debug_view_names_what_was_drawn() {
         "{stdout}"
     );
 }
+
+const PROBE_SCENE: &str = "format: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.5
+          - 6.0
+      Camera: {}
+  - name: environment
+    components:
+      Environment: {}
+  - name: block
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.0
+      Mesh:
+        shape: cube
+  - name: left
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 1.0
+          - 0.0
+      ReflectionProbe: {}
+  - name: right
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 1.0
+          - 0.0
+      ReflectionProbe:
+        shape:
+          sphere:
+            radius: 4.0
+";
+
+fn probe_scene(tag: &str) -> PathBuf {
+    let dir = out_path(&format!("cli_dump_probes_{tag}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("scene.yaml");
+    std::fs::write(&scene, PROBE_SCENE).unwrap();
+    scene
+}
+
+/// `--dump-probes` alone writes the manifest and both strips per probe, and with `--out` the frame
+/// as well.
+#[test]
+fn needs_gpu_dump_probes_writes_strips_and_a_manifest() {
+    let scene = probe_scene("both");
+    let dump = out_path("cli_dump_probes_both_out");
+    let _ = std::fs::remove_dir_all(&dump);
+    let frame = out_path("cli_dump_probes_both_frame.png");
+    let _ = std::fs::remove_file(&frame);
+    let output = run_ludion(&[
+        "render",
+        "--scene",
+        scene.to_str().unwrap(),
+        "--dump-probes",
+        dump.to_str().unwrap(),
+    ]);
+    if is_no_adapter(&output) {
+        return;
+    }
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("2 probes"), "{stdout}");
+    assert!(
+        stdout.contains("box") && stdout.contains("sphere"),
+        "{stdout}"
+    );
+    for rank in 0..2 {
+        for kind in ["captured", "prefiltered"] {
+            assert!(dump.join(format!("probe-{rank}-{kind}.png")).is_file());
+        }
+    }
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dump.join("probes.json")).unwrap()).unwrap();
+    assert_eq!(manifest["probes"].as_array().unwrap().len(), 2);
+    assert!(!frame.exists(), "a dump-only run wrote a frame");
+
+    let output = run_ludion(&[
+        "render",
+        "--scene",
+        scene.to_str().unwrap(),
+        "--dump-probes",
+        dump.to_str().unwrap(),
+        "--out",
+        frame.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(frame.is_file());
+}
+
+#[test]
+fn dump_probes_is_refused_with_sweep() {
+    let scene = probe_scene("sweep");
+    let output = run_ludion(&[
+        "render",
+        "--scene",
+        scene.to_str().unwrap(),
+        "--dump-probes",
+        out_path("cli_dump_probes_sweep_out").to_str().unwrap(),
+        "--sweep",
+        "/entities/0/components/Transform/translation/0=1,2",
+        "--out",
+        out_path("cli_dump_probes_sweep.png").to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn needs_gpu_dump_probes_on_a_probeless_scene_prints_zero() {
+    let dump = out_path("cli_dump_probes_none_out");
+    let _ = std::fs::remove_dir_all(&dump);
+    let output = run_ludion(&[
+        "render",
+        "--scene",
+        gallery_scene("night-sky.yaml").to_str().unwrap(),
+        "--dump-probes",
+        dump.to_str().unwrap(),
+    ]);
+    if is_no_adapter(&output) {
+        return;
+    }
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("0 probes"));
+}
