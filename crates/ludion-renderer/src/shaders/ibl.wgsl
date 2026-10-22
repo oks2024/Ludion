@@ -1,4 +1,4 @@
-// IBL prefilter compute — three entry points that bake the analytic sky gradient into the mesh
+// IBL prefilter compute — entry points that bake the analytic sky gradient into the mesh
 // pass's IBL inputs, run at environment load/change (keyed by a content hash of the sky colors).
 //
 // Deterministic: fixed sample counts and a pure Hammersley sequence, no RNG and no atomics — every
@@ -16,7 +16,8 @@ struct SkyColors {
     horizon: vec4<f32>,
     ground: vec4<f32>,
 };
-// x = roughness for this specular mip, y = face size (unused, informational), zw = pad.
+// x = roughness for this specular mip, y = face size (unused, informational). zw: the probe path's
+// source cube — z = its mip-0 face size, w = its last mip index; the sky path leaves them 0.
 struct PrefilterParams {
     params: vec4<f32>,
 };
@@ -26,6 +27,10 @@ struct PrefilterParams {
 @group(0) @binding(2) var irradiance_out: texture_storage_2d_array<rgba16float, write>;
 @group(0) @binding(3) var specular_out: texture_storage_2d_array<rgba16float, write>;
 @group(0) @binding(4) var brdf_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var source_cube: texture_cube<f32>;
+@group(0) @binding(6) var source_sampler: sampler;
+@group(0) @binding(7) var downsample_src: texture_2d_array<f32>;
+@group(0) @binding(8) var downsample_dst: texture_storage_2d_array<rgba16float, write>;
 
 // The authored gradient, byte-for-byte the same easing as `sky.wgsl`'s `sky_gradient` (they cannot
 // share a module — one is composed for a render pipeline, this drives compute — so both encode it).
@@ -132,6 +137,62 @@ fn prefilter(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     color = color / max(total, 1e-4);
     textureStore(specular_out, vec2<i32>(gid.xy), i32(gid.z), vec4<f32>(color, 1.0));
+}
+
+// Probe specular prefilter: the `prefilter` lobe integral over a captured, mipped source cube. A
+// captured scene is high-frequency, so each sample reads the source mip whose texel solid angle
+// matches the sample's (filtered importance sampling) instead of aliasing off mip 0. rgba is
+// accumulated with one weight, so alpha (sky visibility) is filtered exactly like colour.
+@compute @workgroup_size(8, 8, 1)
+fn prefilter_cube(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let size = textureDimensions(specular_out);
+    if (gid.x >= size.x || gid.y >= size.y) { return; }
+    let uv = (vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5) / vec2<f32>(size)) * 2.0 - 1.0;
+    let n = face_dir(gid.z, uv);
+    let v = n;
+    let roughness = prefilter_params.params.x;
+    let src_size = prefilter_params.params.z;
+    let src_max_mip = prefilter_params.params.w;
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let sa_texel = 4.0 * PI / (6.0 * src_size * src_size);
+    var color = vec4<f32>(0.0);
+    var total = 0.0;
+    for (var i = 0u; i < SPEC_SAMPLES; i = i + 1u) {
+        let xi = hammersley(i, SPEC_SAMPLES);
+        let h = importance_sample_ggx(xi, n, roughness);
+        let l = normalize(2.0 * dot(v, h) * h - v);
+        let ndl = dot(n, l);
+        if (ndl > 0.0) {
+            var lod = 0.0;
+            if (roughness > 0.0) {
+                let ndh = dot(n, h);
+                let d_term = ndh * ndh * (a2 - 1.0) + 1.0;
+                let pdf = a2 / (PI * d_term * d_term) / 4.0;
+                let sa_sample = 1.0 / (f32(SPEC_SAMPLES) * pdf + 1e-4);
+                lod = clamp(0.5 * log2(sa_sample / sa_texel) + 1.0, 0.0, src_max_mip);
+            }
+            color = color + textureSampleLevel(source_cube, source_sampler, l, lod) * ndl;
+            total = total + ndl;
+        }
+    }
+    color = color / max(total, 1e-4);
+    textureStore(specular_out, vec2<i32>(gid.xy), i32(gid.z), color);
+}
+
+// One 2×2 box-filter step of the probe source's mip chain, per layer: `downsample_src` is mip k,
+// `downsample_dst` mip k + 1.
+@compute @workgroup_size(8, 8, 1)
+fn downsample(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let size = textureDimensions(downsample_dst);
+    if (gid.x >= size.x || gid.y >= size.y) { return; }
+    let at = vec2<i32>(gid.xy) * 2;
+    let layer = i32(gid.z);
+    let sum = textureLoad(downsample_src, at, layer, 0)
+        + textureLoad(downsample_src, at + vec2<i32>(1, 0), layer, 0)
+        + textureLoad(downsample_src, at + vec2<i32>(0, 1), layer, 0)
+        + textureLoad(downsample_src, at + vec2<i32>(1, 1), layer, 0);
+    textureStore(downsample_dst, vec2<i32>(gid.xy), layer, sum * 0.25);
 }
 
 fn geometry_smith_ibl(ndv: f32, ndl: f32, roughness: f32) -> f32 {

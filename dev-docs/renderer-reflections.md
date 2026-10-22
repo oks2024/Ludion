@@ -55,6 +55,8 @@ With `ssr` on, `ssr_trace` (`ssr_trace.wgsl`, `ssr_trace.rs`) marches one mirror
 ## Verify
 ```
 cargo test -p ludion-renderer lobe::
+cargo test -p ludion-renderer needs_gpu_the_sky_cube_bytes
+cargo test -p ludion-renderer needs_gpu_a_sky_filled_source
 cargo test -p ludion-renderer needs_gpu_reflections
 cargo test -p ludion-renderer ssr_pyramid::
 cargo test -p ludion-renderer needs_gpu_ssr

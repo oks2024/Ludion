@@ -1046,6 +1046,10 @@ pub const REFL_GI_BINDING: u32 = 5;
 pub const SAMP_GROUP: u32 = 0;
 pub const SAMP_BINDING: u32 = 5;
 
+/// `source_cube` — `@group(0) @binding(5)`, in `ibl.wgsl`.
+pub const SOURCE_CUBE_GROUP: u32 = 0;
+pub const SOURCE_CUBE_BINDING: u32 = 5;
+
 /// `trace_params` — `@group(0) @binding(5)`, in `ssr_trace.wgsl`.
 pub const TRACE_PARAMS_GROUP: u32 = 0;
 pub const TRACE_PARAMS_BINDING: u32 = 5;
@@ -1066,9 +1070,17 @@ pub const DYN_OUT_BINDING: u32 = 6;
 pub const REFL_SAMP_GROUP: u32 = 0;
 pub const REFL_SAMP_BINDING: u32 = 6;
 
+/// `source_sampler` — `@group(0) @binding(6)`, in `ibl.wgsl`.
+pub const SOURCE_SAMPLER_GROUP: u32 = 0;
+pub const SOURCE_SAMPLER_BINDING: u32 = 6;
+
 /// `bounce_b_out` — `@group(0) @binding(7)`, in `gi_bake.wgsl`.
 pub const BOUNCE_B_OUT_GROUP: u32 = 0;
 pub const BOUNCE_B_OUT_BINDING: u32 = 7;
+
+/// `downsample_src` — `@group(0) @binding(7)`, in `ibl.wgsl`.
+pub const DOWNSAMPLE_SRC_GROUP: u32 = 0;
+pub const DOWNSAMPLE_SRC_BINDING: u32 = 7;
 
 /// `reflections` — `@group(0) @binding(7)`, in `reflections.wgsl`.
 pub const REFLECTIONS_GROUP: u32 = 0;
@@ -1077,6 +1089,10 @@ pub const REFLECTIONS_BINDING: u32 = 7;
 /// `bake_bin_table` — `@group(0) @binding(8)`, in `gi_bake.wgsl`.
 pub const BAKE_BIN_TABLE_GROUP: u32 = 0;
 pub const BAKE_BIN_TABLE_BINDING: u32 = 8;
+
+/// `downsample_dst` — `@group(0) @binding(8)`, in `ibl.wgsl`.
+pub const DOWNSAMPLE_DST_GROUP: u32 = 0;
+pub const DOWNSAMPLE_DST_BINDING: u32 = 8;
 
 /// `refl_ssr` — `@group(0) @binding(8)`, in `reflections.wgsl`.
 pub const REFL_SSR_GROUP: u32 = 0;
@@ -2630,8 +2646,14 @@ pub const GI_INJECT_INJECT_WORKGROUP_SIZE: [u32; 3] = [4, 4, 4];
 /// `ibl.wgsl`'s `brdf` `@workgroup_size`.
 pub const IBL_BRDF_WORKGROUP_SIZE: [u32; 3] = [8, 8, 1];
 
+/// `ibl.wgsl`'s `downsample` `@workgroup_size`.
+pub const IBL_DOWNSAMPLE_WORKGROUP_SIZE: [u32; 3] = [8, 8, 1];
+
 /// `ibl.wgsl`'s `irradiance` `@workgroup_size`.
 pub const IBL_IRRADIANCE_WORKGROUP_SIZE: [u32; 3] = [8, 8, 1];
 
 /// `ibl.wgsl`'s `prefilter` `@workgroup_size`.
 pub const IBL_PREFILTER_WORKGROUP_SIZE: [u32; 3] = [8, 8, 1];
+
+/// `ibl.wgsl`'s `prefilter_cube` `@workgroup_size`.
+pub const IBL_PREFILTER_CUBE_WORKGROUP_SIZE: [u32; 3] = [8, 8, 1];

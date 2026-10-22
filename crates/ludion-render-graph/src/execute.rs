@@ -654,6 +654,84 @@ impl Gpu {
         })
     }
 
+    /// Executes `schedule` like [`execute`](Gpu::execute), but copies `output` into `dest` — a
+    /// subresource of the caller's texture (a cube-array layer, say) — instead of reading it back.
+    /// One submit, no wait: the copy is ordered after the passes on the queue, so a later submit
+    /// that samples `dest` sees the finished frame.
+    ///
+    /// `output` must declare [`TextureUsage::CopySrc`](crate::TextureUsage::CopySrc) and match
+    /// `dest`'s format; `dest`'s texture needs `COPY_DST` and room for `output`'s extent at
+    /// `dest.origin`.
+    ///
+    /// # Errors
+    /// `L2010` / `L2011` if the GPU rejected the work or the device was lost (see
+    /// [`Gpu::take_fault`]).
+    ///
+    /// # Example (requires a GPU adapter)
+    /// ```no_run
+    /// use ludion_render_graph::{Gpu, RecordedPass, PassRecorder, RenderGraph, TextureDesc};
+    ///
+    /// struct Clear;
+    /// impl PassRecorder for Clear {
+    ///     fn record(&self, pass: &mut RecordedPass<'_>) {
+    ///         let _ = pass.begin_clear(wgpu::Color::BLUE);
+    ///     }
+    /// }
+    ///
+    /// let gpu = Gpu::request().unwrap();
+    /// let mut graph = RenderGraph::new();
+    /// let out = graph.output("final", TextureDesc::present_target(16, 16));
+    /// graph.add_external_pass("clear", "clear", vec![], vec![out]);
+    /// let schedule = ludion_render_graph::schedule(&graph).unwrap();
+    /// let target = gpu.device().create_texture(&wgpu::TextureDescriptor {
+    ///     label: Some("layers"),
+    ///     size: wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 3 },
+    ///     mip_level_count: 1,
+    ///     sample_count: 1,
+    ///     dimension: wgpu::TextureDimension::D2,
+    ///     format: wgpu::TextureFormat::Rgba8UnormSrgb,
+    ///     usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+    ///     view_formats: &[],
+    /// });
+    /// let dest = wgpu::TexelCopyTextureInfo {
+    ///     texture: &target,
+    ///     mip_level: 0,
+    ///     origin: wgpu::Origin3d { x: 0, y: 0, z: 2 },
+    ///     aspect: wgpu::TextureAspect::All,
+    /// };
+    /// gpu.execute_into(&schedule, out, &Clear, dest).unwrap();
+    /// ```
+    pub fn execute_into(
+        &self,
+        schedule: &Schedule,
+        output: ResourceId,
+        recorder: &dyn PassRecorder,
+        dest: wgpu::TexelCopyTextureInfo<'_>,
+    ) -> Result<(), Diagnostic> {
+        self.guarded(|| {
+            let frame = self.allocate_physicals(schedule);
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("ludion-render-graph external frame into"),
+                });
+            self.record_external_passes(schedule, &frame, &mut encoder, recorder, None);
+            let output_view = &frame[schedule.aliasing.assignment[output.index()]];
+            let extent = schedule.resource(output).desc().extent;
+            encoder.copy_texture_to_texture(
+                output_view.texture.as_image_copy(),
+                dest,
+                wgpu::Extent3d {
+                    width: extent.width,
+                    height: extent.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.queue.submit([encoder.finish()]);
+            Ok(())
+        })
+    }
+
     /// Records every externally-declared pass into `encoder` in scheduled order, resolving virtual
     /// resources to physical texture views and dispatching to `recorder`. When `query_set` is
     /// given, each pass receives a `(begin, end)` timestamp pair at `(position*2, position*2+1)` —
@@ -1087,6 +1165,90 @@ fn build_pipelines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cleared 16² output lands in layer 2 of a 3-layer texture, with no readback of the graph.
+    #[test]
+    fn needs_gpu_execute_into_copies_the_output_to_a_layer() {
+        struct Red;
+        impl PassRecorder for Red {
+            fn record(&self, pass: &mut RecordedPass<'_>) {
+                let _ = pass.begin_clear(wgpu::Color::RED);
+            }
+        }
+        let gpu = match Gpu::request() {
+            Ok(gpu) => gpu,
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+                eprintln!("SKIPPED execute_into: no GPU adapter");
+                return;
+            }
+            Err(d) => panic!("gpu request failed: {d:?}"),
+        };
+        let mut graph = crate::RenderGraph::new();
+        let out = graph.output("final", crate::TextureDesc::present_target(16, 16));
+        graph.add_external_pass("clear", "clear", vec![], vec![out]);
+        let schedule = crate::schedule(&graph).unwrap();
+        let device = gpu.device();
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("layers"),
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 3,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let layer = |z| wgpu::TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: 0, y: 0, z },
+            aspect: wgpu::TextureAspect::All,
+        };
+        gpu.execute_into(&schedule, out, &Red, layer(2)).unwrap();
+
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("layers readback"),
+            size: 256 * 16 * 3,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            layer(0),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: Some(16),
+                },
+            },
+            target.size(),
+        );
+        gpu.queue().submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the device polls");
+        rx.recv().unwrap().expect("the buffer maps");
+        let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
+        let texel = |z: usize, x: usize, y: usize| {
+            let at = z * 256 * 16 + y * 256 + x * 4;
+            [mapped[at], mapped[at + 1], mapped[at + 2], mapped[at + 3]]
+        };
+        assert_eq!(texel(2, 0, 0), [255, 0, 0, 255]);
+        assert_eq!(texel(2, 15, 15), [255, 0, 0, 255]);
+        assert_eq!(texel(0, 8, 8), [0, 0, 0, 0], "layer 0 was written");
+        assert_eq!(texel(1, 8, 8), [0, 0, 0, 0], "layer 1 was written");
+    }
 
     #[test]
     fn compressed_support_follows_the_matching_feature() {

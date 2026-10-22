@@ -32,6 +32,15 @@ All three passes are deterministic by construction: fixed sample counts, a pure 
 low-discrepancy sequence (`radical_inverse_vdc`/`hammersley`), no RNG and no atomics — same input,
 same bytes, on a pinned GPU.
 
+**One chain, two sources.** The specular mip loop is `Ibl::dispatch_chain`, shared with the probe path
+(`Ibl::prefilter_probe`): each mip runs at `lobe::mip_roughness` into six layers of a target, and a
+probe writes slot `s` of a cube array at `base_layer = 6·s`. The sky's `prefilter` entry stays analytic
+(it samples `sky_gradient`), so its bytes are pinned; the probe's `prefilter_cube` entry integrates the
+same lobe, the same Hammersley sequence and `SPEC_SAMPLES` over a captured source cube, reading the
+source mip whose texel solid angle matches each sample's (filtered importance sampling), because a
+captured scene is high-frequency and 64 samples off mip 0 would alias. The `downsample` entry builds
+the source chain. Alpha is filtered with rgb by the same weights.
+
 **Sampling.** `env.params.x > 0.5` (IBL on) makes `mesh.wgsl` sample `irradiance_tex` at the surface
 normal for the diffuse term, times `ibl_intensity` (`env.params.y`). **`mesh.wgsl` does not sample the
 specular cube**: the `reflections` pass reads it through `sky_specular` (`ludion devdocs
