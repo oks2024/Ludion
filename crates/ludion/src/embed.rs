@@ -81,6 +81,9 @@ pub struct StartOptions {
     /// Where imported mesh maps are read from; a host that names none gets
     /// [`Cooked`](ludion_engine::TextureSource::Cooked), which falls back to the PNG per map.
     pub textures: Option<ludion_engine::TextureSource>,
+    /// Where reflection-probe cubes are read from; a host that names none gets
+    /// [`Store`](ludion_engine::ProbeSource::Store), which captures on a miss.
+    pub probes: Option<ludion_engine::ProbeSource>,
     /// The quality a packaged build ships with, used when neither `quality` nor `LUDION_QUALITY`
     /// chooses one — so whoever launches the build can still override it.
     pub packaged_quality: Option<String>,
@@ -114,6 +117,11 @@ impl StartOptions {
     fn live_textures(&self) -> ludion_engine::TextureSource {
         self.textures
             .unwrap_or(ludion_engine::TextureSource::Cooked)
+    }
+
+    /// The probe source a hosted engine runs with: the named one, else `Store`.
+    fn live_probes(&self) -> ludion_engine::ProbeSource {
+        self.probes.unwrap_or(ludion_engine::ProbeSource::Store)
     }
 }
 
@@ -721,6 +729,7 @@ fn run_boot(boot: Boot) -> bool {
                 options.restore.as_deref(),
                 quality,
                 options.live_textures(),
+                options.live_probes(),
                 render_size,
             ) else {
                 return false;
@@ -1060,10 +1069,37 @@ mod tests {
             None,
             QualitySetting::full(),
             StartOptions::default().live_textures(),
+            StartOptions::default().live_probes(),
             None,
         )
         .unwrap_or_else(|_| panic!("the engine boots"));
         assert_eq!(engine.textures(), TextureSource::Cooked);
+    }
+
+    /// A host that names no probe source boots on the store; one that names `Fresh` keeps it.
+    #[test]
+    fn a_hosted_engine_defaults_to_the_probe_store() {
+        use ludion_engine::ProbeSource;
+
+        assert_eq!(StartOptions::default().live_probes(), ProbeSource::Store);
+        let fresh = StartOptions {
+            probes: Some(ProbeSource::Fresh),
+            ..StartOptions::default()
+        };
+        assert_eq!(fresh.live_probes(), ProbeSource::Fresh);
+
+        let content = content_root("probes-default");
+        let engine = crate::prepare_game_engine(
+            builder(),
+            &content.join("scenes/main.yaml"),
+            None,
+            QualitySetting::full(),
+            StartOptions::default().live_textures(),
+            StartOptions::default().live_probes(),
+            None,
+        )
+        .unwrap_or_else(|_| panic!("the engine boots"));
+        assert_eq!(engine.probes(), ProbeSource::Store);
     }
 
     fn step_hash(embedded: &Embedded, ticks: u32) -> WireHash {

@@ -147,8 +147,8 @@
 //!
 //! ## What reaches the child, and what does not
 //!
-//! A child's argv is exactly `--addr`, `--scene`, `--restore`, `--dev-shaders` and `--supervised` (see
-//! `try_launch_once`) — the five things dev itself decides; `--supervised` is what makes the child
+//! A child's argv is exactly `--addr`, `--scene`, `--restore`, `--dev-shaders`, `--probes rebake` and
+//! `--supervised` (see `try_launch_once`) — the six things dev itself decides; `--supervised` is what makes the child
 //! exit when dev's end of its stdin closes. Nothing else on `ludion dev`'s own
 //! command line is forwarded, deliberately: dev supervises a game binary whose flags are the game's
 //! (`ludion::run`'s `RunArgs`), not this CLI's, and translating between the two would make dev a
@@ -531,7 +531,7 @@ fn rfc3339_utc(time: SystemTime) -> String {
 /// the window rides each reload's same-port blink via `ludion-window`'s reconnect. The child is
 /// always headless — passing `--window` to the child would make the window die and reopen on every
 /// reload.
-pub fn run(scene: Option<&Path>, addr: &str, window: bool) -> ExitCode {
+pub fn run(scene: Option<&Path>, addr: &str, window: bool, rebake_probes: bool) -> ExitCode {
     let project = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(error) => {
@@ -573,7 +573,10 @@ pub fn run(scene: Option<&Path>, addr: &str, window: bool) -> ExitCode {
     // The WGSL fast path: children launch with `--dev-shaders` and a `.wgsl` edit reloads over
     // the wire. A standalone game leaves this `None` and everything below is unchanged.
     let shader_dir = find_engine_shaders(&project);
-    let dev_shaders = shader_dir.is_some();
+    let flags = ChildFlags {
+        dev_shaders: shader_dir.is_some(),
+        rebake_probes,
+    };
 
     // First start: sync the derived imports, build, then launch a plain (not paused) child and wait
     // for it to serve.
@@ -618,7 +621,7 @@ pub fn run(scene: Option<&Path>, addr: &str, window: bool) -> ExitCode {
             addr,
             scene,
             exe: &exe,
-            dev_shaders,
+            flags,
             build_ms,
             watch: &launch_watch,
             origin: RestoreOrigin::Resume,
@@ -637,7 +640,7 @@ pub fn run(scene: Option<&Path>, addr: &str, window: bool) -> ExitCode {
             }
         }
     } else {
-        match launch(&project, addr, scene, None, &exe, dev_shaders) {
+        match launch(&project, addr, scene, None, &exe, flags) {
             Ok(child) => {
                 // The initial launch restores nothing, so `restored_frame` is absent on this first `ok`.
                 status_ok(Some(build_ms), None, None, None);
@@ -690,7 +693,8 @@ pub fn run(scene: Option<&Path>, addr: &str, window: bool) -> ExitCode {
     // takes that arm. A failed scenes watch is reported but does not end the session: `src` reload is
     // the load-bearing capability, the hint is a nicety.
     let mut watches = DevWatches::none();
-    watches.dev_shaders = dev_shaders;
+    watches.dev_shaders = flags.dev_shaders;
+    watches.rebake_probes = flags.rebake_probes;
     let scenes = project.join("scenes");
     if scenes.is_dir() {
         match ludion_assets::watch(&scenes, WATCH_DEBOUNCE) {
@@ -758,6 +762,8 @@ struct DevWatches {
     /// WGSL fast path can actually round-trip a reload. A standalone game leaves this `false` and
     /// launches its children without `--dev-shaders` and watches no shader directory.
     dev_shaders: bool,
+    /// Whether launched children get `--probes rebake`.
+    rebake_probes: bool,
 }
 
 impl DevWatches {
@@ -769,7 +775,31 @@ impl DevWatches {
             shader_changes: crossbeam_channel::never(),
             _shaders_handle: None,
             dev_shaders: false,
+            rebake_probes: false,
         }
+    }
+}
+
+/// The flags dev decides for every child it launches, beyond the address, scene and restore path.
+#[derive(Clone, Copy)]
+struct ChildFlags {
+    /// The child honors `asset.reload` on a renderer `.wgsl` so dev's WGSL fast path can round-trip
+    /// an edit over the wire. Only set when an engine shader dir was found to watch.
+    dev_shaders: bool,
+    /// The child captures its reflection probes afresh instead of reading the probe store.
+    rebake_probes: bool,
+}
+
+impl ChildFlags {
+    fn args(self) -> Vec<&'static str> {
+        let mut args = Vec::new();
+        if self.dev_shaders {
+            args.push("--dev-shaders");
+        }
+        if self.rebake_probes {
+            args.extend(["--probes", "rebake"]);
+        }
+        args
     }
 }
 
@@ -903,7 +933,10 @@ fn supervise_loop(
     watches: &mut DevWatches,
     stop: &Receiver<()>,
 ) {
-    let dev_shaders = watches.dev_shaders;
+    let flags = ChildFlags {
+        dev_shaders: watches.dev_shaders,
+        rebake_probes: watches.rebake_probes,
+    };
     // A snapshot is kept on disk, waiting for a launch to restore it (see `reload`): the file exists
     // exactly while one is kept, so a resume that failed at startup arrives here with it set.
     let mut kept = kept_snapshot_path(project).is_file();
@@ -938,7 +971,7 @@ fn supervise_loop(
                     {
                         break;
                     }
-                    match reload(project, addr, scene, child, dev_shaders, &mut kept) {
+                    match reload(project, addr, scene, child, flags, &mut kept) {
                         ReloadOutcome::Continued {
                             source_changed_during_build,
                             built_from,
@@ -1058,7 +1091,7 @@ fn reload(
     addr: &str,
     scene: Option<&Path>,
     child: &mut GameChild,
-    dev_shaders: bool,
+    flags: ChildFlags,
     kept: &mut bool,
 ) -> ReloadOutcome {
     let watch = Stopwatch::start();
@@ -1101,7 +1134,7 @@ fn reload(
         addr,
         scene,
         exe: &exe,
-        dev_shaders,
+        flags,
         build_ms,
         watch: &watch,
         origin: RestoreOrigin::Reload,
@@ -1127,7 +1160,7 @@ fn reload(
     // Nothing is serving and nothing is kept (an earlier boot failed before any snapshot was taken):
     // there is nothing to restore, so start the new binary as a first start does.
     if child.process.is_none() {
-        match launch(project, addr, scene, None, &exe, dev_shaders) {
+        match launch(project, addr, scene, None, &exe, flags) {
             Ok(fresh) => {
                 *child = fresh;
                 status_ok(Some(build_ms), None, None, None);
@@ -1162,7 +1195,7 @@ fn reload(
             status_crashed(message);
             // Dropping stops the old child: stdin EOF, `SHUTDOWN_GRACE`, then a kill.
             drop(std::mem::replace(child, GameChild::placeholder()));
-            match launch(project, addr, scene, None, &exe, dev_shaders) {
+            match launch(project, addr, scene, None, &exe, flags) {
                 Ok(fresh) => {
                     *child = fresh;
                     status_ok(
@@ -1217,7 +1250,7 @@ struct Relaunch<'a> {
     addr: &'a str,
     scene: Option<&'a Path>,
     exe: &'a Path,
-    dev_shaders: bool,
+    flags: ChildFlags,
     /// The build's duration, for the status document.
     build_ms: u128,
     /// The reload's own stopwatch, for the `restored` line's source-change → restored time.
@@ -1248,7 +1281,7 @@ fn relaunch_and_restore(ctx: &Relaunch<'_>, kept: &mut bool) -> Result<GameChild
         ctx.scene,
         Some(&path),
         ctx.exe,
-        ctx.dev_shaders,
+        ctx.flags,
     )?;
     match parse_boot_restore(fresh.boot_restore.as_deref()) {
         Ok((frame, report)) => {
@@ -1791,7 +1824,7 @@ fn launch(
     scene: Option<&Path>,
     restore: Option<&Path>,
     exe: &Path,
-    dev_shaders: bool,
+    flags: ChildFlags,
 ) -> Result<GameChild, Diagnostic> {
     let exe_copy = copy_binary(exe).map_err(|error| {
         Diagnostic::new(
@@ -1802,7 +1835,7 @@ fn launch(
 
     let retry_deadline = Deadline::after(BIND_RETRY_WINDOW);
     let (last_reason, last_output) = loop {
-        match try_launch_once(project, addr, scene, restore, &exe_copy, dev_shaders) {
+        match try_launch_once(project, addr, scene, restore, &exe_copy, flags) {
             Ok(child) => return Ok(child),
             Err((reason, output)) => {
                 let bind_race =
@@ -1828,7 +1861,7 @@ fn try_launch_once(
     scene: Option<&Path>,
     restore: Option<&Path>,
     exe_copy: &Path,
-    dev_shaders: bool,
+    flags: ChildFlags,
 ) -> Result<GameChild, (ListenFailure, String)> {
     let mut command = Command::new(exe_copy);
     command
@@ -1846,11 +1879,7 @@ fn try_launch_once(
     if let Some(restore) = restore {
         command.arg("--restore").arg(restore);
     }
-    if dev_shaders {
-        // The child honors `asset.reload` on a renderer `.wgsl` so dev's WGSL fast path can round-trip
-        // an edit over the wire. Only set when an engine shader dir was found to watch.
-        command.arg("--dev-shaders");
-    }
+    command.args(flags.args());
 
     let mut process = match command.spawn() {
         Ok(process) => process,
@@ -2583,6 +2612,20 @@ use clock::{Deadline, Stopwatch};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_flags_become_child_args() {
+        let none = ChildFlags {
+            dev_shaders: false,
+            rebake_probes: false,
+        };
+        assert!(none.args().is_empty());
+        let both = ChildFlags {
+            dev_shaders: true,
+            rebake_probes: true,
+        };
+        assert_eq!(both.args(), ["--dev-shaders", "--probes", "rebake"]);
+    }
 
     #[test]
     fn status_from_diagnostics_keeps_the_severity() {

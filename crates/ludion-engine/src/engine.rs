@@ -65,13 +65,14 @@ use crate::audio::{
     AudioLogEntry, AudioMessage, AudioQueue, CategoryGains, LoopId, Queued, SentLoop, audible_gain,
 };
 use crate::builtin_registry;
-use crate::components::{AudioEmitter, Camera, Transform};
+use crate::components::{AudioEmitter, Camera, Name, ReflectionProbe, Transform};
 use crate::cooked_maps::TextureSource;
 use crate::dispatch::Dispatched;
 use crate::docs::{DocKind, DocValidator, PreparedDocs};
 use crate::load_observer::{FrameLoadObserver, LoadObserver, LoadPhase};
 use crate::perf_live::{LivePerf, ProfileWindowData, Span};
 use crate::player_profile::{ProfileKind, ProfileSaveEntry};
+use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 use crate::quality::QualitySetting;
 use crate::recording::{AppliedDocReload, Recorder};
 use crate::scene_physics;
@@ -291,6 +292,16 @@ pub struct Engine {
     /// current [`textures`](Engine::textures) value. Cleared by `set_textures`, set by the first
     /// extract after, which needs the renderer's cook target to resolve it.
     cook_resolved: bool,
+    /// Where reflection-probe cubes come from ([`set_probes`](Engine::set_probes)). Default
+    /// [`ProbeSource::Fresh`]. A client setting exactly as [`textures`](Engine::textures) is: not
+    /// hashed, not snapshotted, not recorded and invisible to the simulation.
+    probes: ProbeSource,
+    /// The probe store directory under `Store`, resolved when the axis is set.
+    probe_store: Option<PathBuf>,
+    /// The renderer's probe resolve count `finish_probe_frame` last examined.
+    probe_resolve_seen: u64,
+    /// Whether a bake is rendering, which writes the store on purpose and so warns of no miss.
+    probe_baking: bool,
     /// This host's GI rebake lever ([`set_gi_rebake`](Engine::set_gi_rebake)). Default
     /// [`GiRebakeMode::Auto`] — today's behaviour, byte-identical. A client/session setting exactly
     /// as [`quality`](Engine::quality) is: not hashed, not snapshotted, not recorded, and invisible
@@ -681,6 +692,10 @@ impl Engine {
             quality: QualitySetting::default(),
             textures: TextureSource::default(),
             cook_resolved: false,
+            probes: ProbeSource::default(),
+            probe_store: None,
+            probe_resolve_seen: 0,
+            probe_baking: false,
             gi_rebake: GiRebakeMode::default(),
             gi_rebake_force: false,
             prefetch_pending: false,
@@ -956,6 +971,198 @@ impl Engine {
     /// Where this host's imported mesh maps come from (see [`set_textures`](Engine::set_textures)).
     pub fn textures(&self) -> TextureSource {
         self.textures
+    }
+
+    /// Sets where this host's reflection-probe cubes come from: [`ProbeSource::Store`] reads the
+    /// content-addressed probe store under the project (`.ludion/cooked/probes/`) and captures,
+    /// writing the entry, on a miss, reporting the miss as `L1279`; the default
+    /// [`ProbeSource::Fresh`] captures every probe at load and never touches the store. A render
+    /// setting like [`set_textures`](Engine::set_textures): never hashed, snapshotted or recorded.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{Engine, ProbeSource};
+    ///
+    /// let mut engine = Engine::new();
+    /// assert_eq!(engine.probes(), ProbeSource::Fresh);
+    /// engine.set_probes(ProbeSource::Store);
+    /// assert_eq!(engine.probes(), ProbeSource::Store);
+    /// ```
+    pub fn set_probes(&mut self, source: ProbeSource) {
+        self.probes = source;
+        self.probe_store = match source {
+            ProbeSource::Fresh => None,
+            ProbeSource::Store => Some(crate::probe_bake::store_dir(&self.project_root)),
+        };
+    }
+
+    #[cfg(test)]
+    pub(crate) fn probe_store_dir(&self) -> Option<&Path> {
+        self.probe_store.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_renderer(&self) -> bool {
+        self.renderer.is_some()
+    }
+
+    /// Where this host's reflection-probe cubes come from (see [`set_probes`](Engine::set_probes)).
+    pub fn probes(&self) -> ProbeSource {
+        self.probes
+    }
+
+    /// Bakes the scene's reflection probes into the probe store and reports each one. Bakes use
+    /// cooked textures and the store, because the store key hashes a map's cook key and the hosts
+    /// default to cooked maps: a bake from the PNGs would never hit. A scene with no probe gives an
+    /// empty report and builds no renderer.
+    ///
+    /// With `force` naming a probe's `Name`, that probe's entry is deleted first and recaptured.
+    ///
+    /// # Errors
+    /// `L1280` if `force` names no probe; a render failure (`L2003` with no GPU) as it comes.
+    pub fn bake_probes(&mut self, force: Option<&str>) -> Result<ProbeBakeReport, Diagnostic> {
+        let store = crate::probe_bake::store_dir(&self.project_root);
+        let named = self.named_probes();
+        if named.is_empty() {
+            return match force {
+                Some(name) => Err(crate::probe_bake::unknown_probe(name, &[])),
+                None => Ok(ProbeBakeReport {
+                    store,
+                    probes: Vec::new(),
+                }),
+            };
+        }
+        if let Some(name) = force {
+            let names: Vec<String> = named.iter().filter_map(|(_, n)| n.clone()).collect();
+            if !names.iter().any(|n| n == name) {
+                return Err(crate::probe_bake::unknown_probe(name, &names));
+            }
+        }
+        self.set_textures(TextureSource::Cooked);
+        self.set_probes(ProbeSource::Store);
+        self.probe_baking = true;
+        let report = self.bake_renders(force, &named);
+        self.probe_baking = false;
+        report
+    }
+
+    /// The scene's `ReflectionProbe` entities with their `Name`s, in entity order.
+    fn named_probes(&self) -> Vec<(EntityId, Option<String>)> {
+        let world = self.driver.world();
+        world
+            .entities()
+            .filter(|&id| matches!(world.get::<ReflectionProbe>(id), Ok(Some(_))))
+            .map(|id| {
+                let name = world.get::<Name>(id).ok().flatten().map(|n| n.0.clone());
+                (id, name)
+            })
+            .collect()
+    }
+
+    fn bake_renders(
+        &mut self,
+        force: Option<&str>,
+        named: &[(EntityId, Option<String>)],
+    ) -> Result<ProbeBakeReport, Diagnostic> {
+        // The face size comes from the quality setting, not the extent.
+        let render = |engine: &mut Engine| {
+            engine
+                .render_image(256, 144, false)
+                .map(|_| ())
+                .map_err(|mut diagnostics| diagnostics.swap_remove(0))
+        };
+        render(self)?;
+        let dir = self.probe_store.clone().expect("the bake set the store");
+        let mut report = self.probe_bake_report(&dir, named);
+        if let Some(name) = force {
+            let forced = report
+                .probes
+                .iter()
+                .find(|p| p.name.as_deref() == Some(name));
+            if let Some(probe) = forced {
+                let _ = std::fs::remove_file(
+                    dir.join(ludion_assets::cooked::cooked_file_name(probe.key)),
+                );
+            }
+            let renderer = self.renderer_mut()?;
+            // Changing the store directory drops the resident captures, so the next render resolves
+            // again and finds the entry gone.
+            renderer.set_probe_store(None);
+            renderer.set_probe_store(Some(dir.clone()));
+            render(self)?;
+            report = self.probe_bake_report(&dir, named);
+        }
+        Ok(report)
+    }
+
+    fn probe_bake_report(
+        &self,
+        dir: &Path,
+        named: &[(EntityId, Option<String>)],
+    ) -> ProbeBakeReport {
+        let resolved = self
+            .renderer
+            .as_ref()
+            .map(Renderer::probe_resolve)
+            .unwrap_or_default();
+        let probes = resolved
+            .probes
+            .iter()
+            .filter_map(|probe| {
+                Some(ProbeBake {
+                    entity: probe.entity,
+                    name: named
+                        .iter()
+                        .find(|(id, _)| *id == probe.entity)
+                        .and_then(|(_, name)| name.clone()),
+                    key: probe.key?,
+                    outcome: if probe.loaded {
+                        ProbeOutcome::Loaded
+                    } else {
+                        ProbeOutcome::Captured
+                    },
+                })
+            })
+            .collect();
+        ProbeBakeReport {
+            store: dir.to_path_buf(),
+            probes,
+        }
+    }
+
+    /// Reports an `L1279` once per session when a `Store` host's latest probe resolve captured
+    /// probes instead of loading them. Called after every render.
+    fn finish_probe_frame(&mut self) {
+        if self.probes != ProbeSource::Store || self.probe_baking {
+            return;
+        }
+        let Some(renderer) = self.renderer.as_ref() else {
+            return;
+        };
+        let resolved = renderer.probe_resolve();
+        if resolved.resolve == self.probe_resolve_seen {
+            return;
+        }
+        self.probe_resolve_seen = resolved.resolve;
+        let world = self.driver.world();
+        let missing: Vec<String> = resolved
+            .probes
+            .iter()
+            .filter(|probe| !probe.loaded)
+            .map(
+                |probe| match world.get::<Name>(probe.entity).ok().flatten() {
+                    Some(name) => format!("probe `{}`", name.0),
+                    None => format!("the unnamed probe {:?}", probe.entity),
+                },
+            )
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let diagnostic = crate::probe_bake::not_stored_warning(&missing);
+        if let Some(sink) = self.driver.world_mut().resource_mut::<crate::Diagnostics>() {
+            sink.report_full("probes: store", diagnostic);
+        }
     }
 
     /// Points the asset cache at the cooked store this host's [`textures`](Engine::textures) and
@@ -3008,6 +3215,7 @@ impl Engine {
         }
         self.collect_perf_timings();
         self.finish_gi_frame();
+        self.finish_probe_frame();
         collected
     }
 
@@ -3247,6 +3455,7 @@ impl Engine {
         };
         self.asset_cache.set_observer(observer);
         self.finish_gi_frame();
+        self.finish_probe_frame();
         image.map_err(|d| vec![d])
     }
 
@@ -3273,10 +3482,10 @@ impl Engine {
             self.renderer = Some(renderer?);
         }
         let hold = self.gi_hold();
-        self.renderer
-            .as_mut()
-            .expect("just initialized")
-            .set_gi_hold(hold);
+        let store = self.probe_store.clone();
+        let renderer = self.renderer.as_mut().expect("just initialized");
+        renderer.set_gi_hold(hold);
+        renderer.set_probe_store(store);
         Ok(())
     }
 

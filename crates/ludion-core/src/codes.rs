@@ -1379,6 +1379,12 @@ pub mod code {
     /// `L1278` — a scene has more reflection probes than the 32 the renderer binds. Raised by the
     /// reflection-probe scene check.
     pub const REFLECTION_PROBE_OVER_CAP: DiagnosticCode = DiagnosticCode::new("L1278");
+    /// `L1279` — a host serving the probe store had to capture some reflection probes because the
+    /// store held no entry for them; one warning per resolve.
+    pub const REFLECTION_PROBE_NOT_STORED: DiagnosticCode = DiagnosticCode::new("L1279");
+    /// `L1280` — `Engine::bake_probes` was asked to force a probe by a name no probe in the scene
+    /// carries.
+    pub const REFLECTION_PROBE_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1280");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -6945,6 +6951,31 @@ first probe past the cap; each further probe is a related diagnostic.
 Fix: merge neighbouring probes into larger ones. Streaming probes in and out of the budget is not
 supported.",
     },
+    CodeEntry {
+        code: code::REFLECTION_PROBE_NOT_STORED,
+        severity: Severity::Warning,
+        title: "reflection probes captured at load, not read from the store",
+        explanation: "\
+This host reads reflection probes from the content-addressed probe store
+(`.ludion/cooked/probes/`), and the store held no entry for some of them: they were never baked, or
+the scene, its lighting, its textures or the quality setting changed since. The engine captured them
+instead, which renders the same but costs a capture at load. The related diagnostics name the probes.
+
+Bakes use cooked textures, so a host run with `--textures source` misses the entries a bake wrote.
+
+Fix: bake the store (`ludion bake-probes <scene>`, or the game's `--bake-probes`). To iterate on a
+scene's look without the store, run the host with `--probes rebake`.",
+    },
+    CodeEntry {
+        code: code::REFLECTION_PROBE_UNKNOWN,
+        severity: Severity::Error,
+        title: "no reflection probe has that name",
+        explanation: "\
+A probe bake was asked to force one probe by `Name`, and no `ReflectionProbe` entity in the scene
+carries it. The help lists the names the scene has; an unnamed probe cannot be forced by name.
+
+Fix: use one of the listed names, or give the probe a `Name`.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9593,6 +9624,8 @@ mod tests {
         code::REFLECTION_PROBE_SHADOWED,
         code::REFLECTION_PROBE_DUPLICATE,
         code::REFLECTION_PROBE_OVER_CAP,
+        code::REFLECTION_PROBE_NOT_STORED,
+        code::REFLECTION_PROBE_UNKNOWN,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -9839,6 +9872,7 @@ mod tests {
             code::TEXTURE_NOT_COOKED,
             code::REFLECTION_PROBE_EQUAL_RANK,
             code::REFLECTION_PROBE_SHADOWED,
+            code::REFLECTION_PROBE_NOT_STORED,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

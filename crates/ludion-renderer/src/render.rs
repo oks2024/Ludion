@@ -817,6 +817,12 @@ impl Renderer {
         self.probes.set_store(dir);
     }
 
+    /// What the probe resolves did: the count of resolves that ran GPU work, and the last one's
+    /// probes with their store keys and whether each loaded from the store.
+    pub fn probe_resolve(&self) -> crate::ProbeResolve {
+        self.probes.report()
+    }
+
     /// Holds (`true`) or releases (`false`) the baked GI baseline: while held, a bake-cache
     /// *content* miss (grid, lights) that has a cache to fall back on serves those volumes and
     /// reports staleness ([`gi_stale`](Renderer::gi_stale)) instead of re-baking. A structural miss

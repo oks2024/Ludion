@@ -719,6 +719,11 @@ enum Command {
         /// quality's own.
         #[arg(long)]
         scale: Option<f32>,
+        /// Reflection-probe source: `store` (the default) reads the probe store `ludion bake-probes`
+        /// fills and captures on a miss with an L1279 warning; `rebake` captures every probe afresh
+        /// and leaves the store alone.
+        #[arg(long, value_name = "store|rebake", value_parser = ["store", "rebake"])]
+        probes: Option<String>,
     },
     /// Compile a foreign format into canonical Ludion text: a glTF (`.gltf`/`.glb`) into a `kind: prefab`
     /// plus its mesh, animation-clip and texture assets, or a `.png` into an editable
@@ -889,6 +894,10 @@ enum Command {
         /// child stays headless). The window rides each reload's same-port blink via auto-reconnect.
         #[arg(long)]
         window: bool,
+        /// Reflection-probe source for the game: `rebake` forwards `--probes rebake` to every
+        /// launch, so a reload captures its probes afresh instead of reading the probe store.
+        #[arg(long, value_name = "store|rebake", value_parser = ["store", "rebake"])]
+        probes: Option<String>,
     },
     /// Compile a `kind: map` source into a canonical scene of concrete entities — the map-authoring
     /// pipeline's deterministic compile verb (mirrors `import`). Resolves the map's `kit:` and each
@@ -1959,6 +1968,7 @@ fn main() -> std::process::ExitCode {
             window,
             dev_shaders,
             scale,
+            probes,
         } => serve::run(
             &scene,
             &addr,
@@ -1969,6 +1979,7 @@ fn main() -> std::process::ExitCode {
             scale,
             quality,
             render_size,
+            probes.as_deref(),
         ),
         Command::Import {
             input,
@@ -2045,7 +2056,13 @@ fn main() -> std::process::ExitCode {
             scene,
             addr,
             window,
-        } => dev::run(scene.as_deref(), &addr, window),
+            probes,
+        } => dev::run(
+            scene.as_deref(),
+            &addr,
+            window,
+            probes.as_deref() == Some("rebake"),
+        ),
         Command::GenerateMap { maps, out, check } => {
             generate_map::run(&maps, out.as_deref(), check)
         }

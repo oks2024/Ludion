@@ -2,7 +2,7 @@
 //! derived scene and prefiltered into one slot of a cube array (`Plan/reflections.md` decisions 16,
 //! 17 and 21). The `reflections` pass samples the array (`probe_shade.rs`).
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
 
@@ -81,13 +81,25 @@ pub(crate) struct ProbeCubes {
     pub(crate) max_lod: u32,
 }
 
-/// What the last resolve did: probes loaded from the store, and probes captured (every probe, with
-/// no store).
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-#[allow(dead_code, reason = "read by the tests; surfaced by observability")]
-pub(crate) struct ProbeStoreStats {
-    pub(crate) hits: u32,
-    pub(crate) captures: u32,
+/// What the renderer's probe resolves did: how many ran GPU work, and for the last one each probe's
+/// store key and whether its cube came from the store.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ProbeResolve {
+    /// Increments on each resolve that does GPU work.
+    pub resolve: u64,
+    /// The last resolve's probes, in rank order.
+    pub probes: Vec<ResolvedProbe>,
+}
+
+/// One probe of the last resolve.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedProbe {
+    /// The probe's entity.
+    pub entity: ludion_core::ids::EntityId,
+    /// The store key; `None` without a store.
+    pub key: Option<u64>,
+    /// The cube came from the store rather than a capture.
+    pub loaded: bool,
 }
 
 /// The renderer's probe captures.
@@ -99,7 +111,7 @@ pub(crate) struct Probes {
     source: RefCell<Option<(u32, wgpu::Texture)>>,
     /// The probe store directory, when the host set one.
     store: RefCell<Option<PathBuf>>,
-    stats: Cell<ProbeStoreStats>,
+    report: RefCell<ProbeResolve>,
 }
 
 impl Probes {
@@ -108,7 +120,7 @@ impl Probes {
             cache: RefCell::new(None),
             source: RefCell::new(None),
             store: RefCell::new(None),
-            stats: Cell::new(ProbeStoreStats::default()),
+            report: RefCell::new(ProbeResolve::default()),
         }
     }
 
@@ -120,10 +132,9 @@ impl Probes {
         }
     }
 
-    /// What the last resolve loaded and captured.
-    #[allow(dead_code, reason = "read by the tests; surfaced by observability")]
-    pub(crate) fn last_stats(&self) -> ProbeStoreStats {
-        self.stats.get()
+    /// What the resolves did so far.
+    pub(crate) fn report(&self) -> ProbeResolve {
+        self.report.borrow().clone()
     }
 
     fn key(probes: &[crate::probe::ProbeData], face_size: u32) -> u64 {
@@ -146,6 +157,7 @@ impl Probes {
         let probes = &scene.probes[..scene.probes.len().min(MAX_PROBES)];
         if probes.is_empty() {
             self.cache.borrow_mut().take();
+            self.report.borrow_mut().probes.clear();
             return;
         }
         let face_size = r.ibl_specular_size();
@@ -174,11 +186,10 @@ impl Probes {
             probe_store::world_key(
                 &face_scene(scene, Vec3::ZERO, 0),
                 &r.quality_params(),
-                (gpu.adapter_name(), gpu.adapter_backend()),
                 face_size,
             )
         });
-        let mut stats = ProbeStoreStats::default();
+        let mut resolved = Vec::with_capacity(probes.len());
         // No borrow of the cache is held below: a face's own `prepare_frame` resolves its
         // probe-less scene back through here.
         for (slot, probe) in probes.iter().enumerate() {
@@ -192,7 +203,11 @@ impl Probes {
             });
             if let Some(levels) = loaded {
                 probe_store::write_slot(gpu, &array, slot, &levels);
-                stats.hits += 1;
+                resolved.push(ResolvedProbe {
+                    entity: probe.entity,
+                    key: entry.map(|(_, key)| key),
+                    loaded: true,
+                });
                 continue;
             }
             for face in 0..6 {
@@ -213,13 +228,21 @@ impl Probes {
                 );
             }
             r.ibl().prefilter_probe(gpu, &source, &array, slot);
-            stats.captures += 1;
+            resolved.push(ResolvedProbe {
+                entity: probe.entity,
+                key: entry.map(|(_, key)| key),
+                loaded: false,
+            });
             if let Some((dir, key)) = entry {
                 let levels = probe_store::read_slot(gpu, &array, slot);
                 probe_store::write_entry(dir, key, face_size, &levels);
             }
         }
-        self.stats.set(stats);
+        {
+            let mut report = self.report.borrow_mut();
+            report.resolve += 1;
+            report.probes = resolved;
+        }
         let view = array.create_view(&wgpu::TextureViewDescriptor {
             label: Some("probe cube array"),
             dimension: Some(wgpu::TextureViewDimension::CubeArray),

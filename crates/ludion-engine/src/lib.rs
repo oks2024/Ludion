@@ -69,6 +69,7 @@ pub mod perf_live;
 mod player_profile;
 mod prefab;
 mod prefab_ops;
+mod probe_bake;
 mod probe_check;
 pub mod profile;
 mod quality;
@@ -160,6 +161,7 @@ pub use perf_live::{
 pub use player_profile::{Profile, ProfileSaveEntry};
 pub use prefab::{PrefabInstance, spawn_prefab};
 pub use prefab_ops::{PrefabApplied, PrefabReverted, revert_prefab, unpack_prefab};
+pub use probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 pub use probe_check::scene_probe_diagnostics;
 pub use profile::{
     Budget, GpuProfile, PassTiming, ProfileReport, QualityProfile, SEQUENTIAL_NAMES, SimProfile,

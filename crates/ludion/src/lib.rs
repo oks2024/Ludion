@@ -119,7 +119,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_engine::{EngineBuilder, TextureSource};
+use ludion_engine::{EngineBuilder, ProbeSource, TextureSource};
 
 /// `ludion::run`'s fixed argument set, mirroring `ludion serve` so a game's own binary and the CLI
 /// host a scene the same way.
@@ -307,6 +307,17 @@ pub(crate) struct RunArgs {
         conflicts_with_all = ["check_scene", "render_out", "check_docs", "replay_frames", "replay_verify", "profile_replay"]
     )]
     textures: Option<String>,
+    /// Reflection-probe source: `store` (the default) reads the content-addressed probe store
+    /// `ludion bake-probes` fills and captures on a miss with an L1279 warning; `rebake` captures
+    /// every probe at load and leaves the store alone. Live hosting only: verification modes and
+    /// `--profile` always capture.
+    #[arg(
+        long,
+        value_name = "store|rebake",
+        value_parser = ["store", "rebake"],
+        conflicts_with_all = ["check_scene", "render_out", "check_docs", "replay_frames", "replay_verify", "profile_replay", "profile"]
+    )]
+    probes: Option<String>,
     /// Render extent for this machine, as `WIDTHxHEIGHT` in whole pixels (`960x540`) — the size the
     /// hosted engine streams and screenshots at. Overrides `LUDION_RENDER_SIZE`; without either, the
     /// engine's default extent stands. Every stage of the frame path costs in proportion to the pixel
@@ -464,6 +475,7 @@ pub fn run(builder: EngineBuilder) -> ExitCode {
         threads: args.threads,
         quality: args.quality,
         textures: args.textures.as_deref().and_then(TextureSource::from_name),
+        probes: Some(ProbeSource::from_flag(args.probes.as_deref())),
         render_size: args.render_size,
         dev_shaders: args.dev_shaders,
         print_schema_hash: false,
@@ -733,6 +745,7 @@ pub(crate) fn prepare_game_engine(
     restore: Option<&Path>,
     quality: ludion_engine::QualitySetting,
     textures: TextureSource,
+    probes: ProbeSource,
     render_size: Option<(u32, u32)>,
 ) -> Result<ludion_engine::Engine, ExitCode> {
     // Player-profile persistence is on for this live host run — the one place a `profile.save()`
@@ -763,6 +776,7 @@ pub(crate) fn prepare_game_engine(
     engine.set_quality(quality);
     // Likewise a host switch, pixels only: where imported mesh maps are read from.
     engine.set_textures(textures);
+    engine.set_probes(probes);
     // The render extent rides beside it, and unlike quality it moves the bytes a stream delivers
     // rather than the GPU work behind them. Set only when a host named one, so an absent flag leaves
     // the engine's own default.
@@ -2108,6 +2122,29 @@ mod host_diagnostic_tests {
             assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
         }
         assert!(RunArgs::try_parse_from(["game", "--check-docs", "--textures", "cooked"]).is_err());
+    }
+
+    #[test]
+    fn probes_parses_a_source_and_refuses_verification_modes() {
+        for value in ["store", "rebake"] {
+            let parsed = RunArgs::try_parse_from(["game", "--probes", value]).unwrap();
+            assert_eq!(parsed.probes.as_deref(), Some(value));
+        }
+        assert!(RunArgs::try_parse_from(["game", "--probes", "bogus"]).is_err());
+        for other in [
+            ["--render-out", "y"],
+            ["--replay-verify", "y"],
+            ["--replay-frames", "y"],
+            ["--profile", "5"],
+            ["--check-scene", ""],
+        ] {
+            let mut args = vec!["game", "--scene", "s.yaml", "--probes", "rebake", other[0]];
+            if !other[1].is_empty() {
+                args.push(other[1]);
+            }
+            assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
+        }
+        assert!(RunArgs::try_parse_from(["game", "--check-docs", "--probes", "rebake"]).is_err());
     }
 }
 

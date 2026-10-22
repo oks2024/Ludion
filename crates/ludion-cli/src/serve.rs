@@ -53,6 +53,7 @@ pub fn run(
     scale: Option<f32>,
     quality: ludion_engine::QualitySetting,
     render_size: Option<(u32, u32)>,
+    probes: Option<&str>,
 ) -> ExitCode {
     let scale = match scale.map(ludion_engine::RenderScale::new).transpose() {
         Ok(scale) => scale,
@@ -76,6 +77,8 @@ pub fn run(
     engine.set_quality(quality);
     // Served scenes are live content too: read cooked maps where `ludion sync` wrote them, else the PNG.
     engine.set_textures(ludion_engine::TextureSource::Cooked);
+    // And so is the probe store, unless `--probes rebake` asked to capture afresh.
+    engine.set_probes(ludion_engine::ProbeSource::from_flag(probes));
     // The extent is the third of them, and the one that moves bytes rather than GPU work: it sizes
     // every streamed frame's readback, encode and socket write, which `--scale` deliberately does
     // not (it renders at `render_size × scale` and resamples back). Set only when a host named one,

@@ -2,7 +2,7 @@
 //! the slot readback and upload around it (`Plan/reflections.md` decisions 19 and 22).
 //!
 //! The key hashes exactly what `probe_capture`'s capture reads: the derived face scene (so a sprite,
-//! the sun disc or the camera never moves it), the quality parameters, the adapter, the face size
+//! the sun disc or the camera never moves it), the quality parameters, the face size
 //! and [`PROBE_BAKE_VERSION`], plus the probe's capture point. Shape, blend and priority shade the
 //! probe; they are not captured, so they are not in the key.
 
@@ -19,7 +19,7 @@ use crate::scene::{MeshTexture, RenderScene};
 
 /// Bump whenever the capture or the prefilter produces different bytes for the same input; every
 /// stored entry is then orphaned.
-pub(crate) const PROBE_BAKE_VERSION: u32 = 1;
+pub(crate) const PROBE_BAKE_VERSION: u32 = 2;
 
 const TEXEL_BYTES: u32 = 8;
 
@@ -70,12 +70,7 @@ impl KeyWriter {
 ///
 /// Small `Copy` structs are hashed through `Debug`; heavy data (meshes, maps, the voxel grid)
 /// through its content key.
-pub(crate) fn world_key(
-    face_scene: &RenderScene,
-    quality: &QualityParams,
-    adapter: (&str, &str),
-    face: u32,
-) -> u64 {
+pub(crate) fn world_key(face_scene: &RenderScene, quality: &QualityParams, face: u32) -> u64 {
     let RenderScene {
         // per face; the capture point enters through `probe_key`
         camera: _,
@@ -107,8 +102,6 @@ pub(crate) fn world_key(
     w.u32(PROBE_BAKE_VERSION);
     w.u32(face);
     w.debug(quality);
-    w.str(adapter.0);
-    w.str(adapter.1);
     w.debug(ambient);
     for asset in mesh_assets {
         w.u64(asset.hash);
@@ -296,7 +289,6 @@ mod tests {
     struct Fixture {
         scene: RenderScene,
         quality: QualityParams,
-        adapter: (String, String),
         face: u32,
         position: Vec3,
     }
@@ -387,7 +379,6 @@ mod tests {
         Fixture {
             scene,
             quality: QualityParams::MEDIUM,
-            adapter: ("adapter".into(), "backend".into()),
             face: 64,
             position: Vec3::new(0.0, 1.5, 0.0),
         }
@@ -395,12 +386,7 @@ mod tests {
 
     /// The key as `Probes::resolve` computes it: through the face scene.
     fn key_of(f: &Fixture) -> u64 {
-        let world = world_key(
-            &face_scene(&f.scene, Vec3::ZERO, 0),
-            &f.quality,
-            (&f.adapter.0, &f.adapter.1),
-            f.face,
-        );
+        let world = world_key(&face_scene(&f.scene, Vec3::ZERO, 0), &f.quality, f.face);
         probe_key(world, f.position)
     }
 
@@ -472,8 +458,6 @@ mod tests {
                 f.scene.post.as_mut().unwrap().fog_density = 0.2
             }),
             ("quality", |f| f.quality = QualityParams::LOW),
-            ("adapter name", |f| f.adapter.0 = "other".into()),
-            ("adapter backend", |f| f.adapter.1 = "other".into()),
             ("face size", |f| f.face = 128),
             ("position", |f| f.position.x += 1.0),
         ];
@@ -568,6 +552,13 @@ mod tests {
         Some(r)
     }
 
+    /// (loaded, captured) of the renderer's last resolve.
+    fn loaded_captured(r: &Renderer) -> (usize, usize) {
+        let probes = r.probe_resolve().probes;
+        let loaded = probes.iter().filter(|p| p.loaded).count();
+        (loaded, probes.len() - loaded)
+    }
+
     fn entries(dir: &Path) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(dir)
             .map(|rd| {
@@ -591,33 +582,15 @@ mod tests {
         };
         let scene = two_probe_scene();
         resolve(&a, &scene);
-        assert_eq!(
-            a.probes.last_stats(),
-            crate::probe_capture::ProbeStoreStats {
-                hits: 0,
-                captures: 2
-            }
-        );
+        assert_eq!(loaded_captured(&a), (0, 2));
         let names = entries(&dir);
         assert_eq!(names.len(), 2, "{names:?}");
         assert!(names.iter().all(|n| n.ends_with(".ktx2")), "{names:?}");
 
         resolve(&b, &scene);
-        assert_eq!(
-            b.probes.last_stats(),
-            crate::probe_capture::ProbeStoreStats {
-                hits: 2,
-                captures: 0
-            }
-        );
+        assert_eq!(loaded_captured(&b), (2, 0));
         resolve(&c, &scene);
-        assert_eq!(
-            c.probes.last_stats(),
-            crate::probe_capture::ProbeStoreStats {
-                hits: 0,
-                captures: 2
-            }
-        );
+        assert_eq!(loaded_captured(&c), (0, 2));
         let (bytes_a, bytes_b, bytes_c) = (array_bytes(&a), array_bytes(&b), array_bytes(&c));
         assert!(bytes_a.iter().any(|&v| v > 0.0), "the capture is empty");
         assert!(bytes_a == bytes_b, "a store hit differs from the miss");
@@ -642,13 +615,7 @@ mod tests {
         std::fs::write(&path, &original[..original.len() / 2]).unwrap();
 
         resolve(&b, &scene);
-        assert_eq!(
-            b.probes.last_stats(),
-            crate::probe_capture::ProbeStoreStats {
-                hits: 1,
-                captures: 1
-            }
-        );
+        assert_eq!(loaded_captured(&b), (1, 1));
         assert_eq!(std::fs::read(&path).unwrap(), original);
         assert!(array_bytes(&a) == array_bytes(&b));
         let _ = std::fs::remove_dir_all(&dir);
@@ -668,13 +635,7 @@ mod tests {
         let before = entries(&dir);
         scene.meshes[1].model *= Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0));
         resolve(&b, &scene);
-        assert_eq!(
-            b.probes.last_stats(),
-            crate::probe_capture::ProbeStoreStats {
-                hits: 0,
-                captures: 2
-            }
-        );
+        assert_eq!(loaded_captured(&b), (0, 2));
         let after = entries(&dir);
         assert_eq!(after.len(), 4, "{after:?}");
         assert!(before.iter().all(|n| after.contains(n)));
