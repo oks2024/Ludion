@@ -1367,11 +1367,11 @@ pub mod code {
     /// `radius`, or a negative or non-finite `blend`. Raised by `ReflectionProbe`'s semantic
     /// validator.
     pub const REFLECTION_PROBE_INVALID: DiagnosticCode = DiagnosticCode::new("L1274");
-    /// `L1275` — two overlapping reflection probes have equal priority and volume, so their order
-    /// falls to entity id. Raised by the reflection-probe scene check.
+    /// `L1275` — two reflection probes have equal priority and volume and overlap, their `blend`
+    /// bands counted, so their order falls to entity id. Raised by the reflection-probe scene check.
     pub const REFLECTION_PROBE_EQUAL_RANK: DiagnosticCode = DiagnosticCode::new("L1275");
-    /// `L1276` — a reflection probe lies entirely inside a higher-ranked probe's full-weight
-    /// region, so it never contributes. Raised by the reflection-probe scene check.
+    /// `L1276` — a reflection probe lies entirely inside a higher-ranked probe's volume, where
+    /// its weight is 1, so it never contributes. Raised by the reflection-probe scene check.
     pub const REFLECTION_PROBE_SHADOWED: DiagnosticCode = DiagnosticCode::new("L1276");
     /// `L1277` — two reflection probes have the same shape, size and pose, almost always a
     /// copy-paste. Raised by the reflection-probe scene check.
@@ -6904,7 +6904,7 @@ A `ReflectionProbe` has a value that cannot describe a volume. Two causes:
 - A box `extent` component or a sphere `radius` is non-finite or not above 0 (pointer
   `/shape/box/extent/<i>` or `/shape/sphere/radius`). `extent` holds half-extents, so a zero or
   negative one is an empty volume.
-- `blend` is non-finite or negative (pointer `/blend`). It is a distance inward from the boundary.
+- `blend` is non-finite or negative (pointer `/blend`). It is a distance outside the volume.
 
 Fix: give every `extent` component and the `radius` a finite value above 0 (defaults 2), and
 `blend` a finite value of 0 or more (default 0.5).",
@@ -6915,7 +6915,8 @@ Fix: give every `extent` component and the `radius` a finite value above 0 (defa
         title: "overlapping reflection probes have equal rank",
         explanation: "\
 Two reflection probes overlap, share a `priority` and have the same volume, so nothing but their
-entity ids decides which one wins where they meet. Reordering the scene file would not change that,
+entity ids decides which one wins where they meet. Each probe's `blend` band, the fade outside its
+volume, counts as part of it, so volumes that only touch overlap when either has a `blend`. Reordering the scene file would not change that,
 but adding or removing an entity can. The path is the lower-ranked probe; the related diagnostic is
 the other.
 
@@ -6926,8 +6927,8 @@ Fix: give one of the two a higher `priority`, or resize or move one so they no l
         severity: Severity::Warning,
         title: "reflection probe is shadowed",
         explanation: "\
-A reflection probe lies entirely inside the full-weight region of a higher-ranked probe (that
-probe's volume shrunk inward by its `blend`), so it never contributes a pixel. Probes rank by
+A reflection probe lies entirely inside a higher-ranked probe's volume (inside it that probe's
+weight is 1), and its own `blend` band lies inside it too, so it never contributes a pixel. Probes rank by
 `priority`, then boxes before spheres, then the smaller volume. The path is the shadowed probe; the
 related diagnostic is the one covering it. Only a single covering probe is detected; a union of
 several is not.

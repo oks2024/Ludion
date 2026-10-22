@@ -408,7 +408,7 @@ fn sphere_footprint(
 
 /// Per-cell reflection-probe bitmasks: bit `k` of cell `c` is set when the `k`th probe of `ranked`
 /// (rank order) can reach a fragment in `c`. Same conservatism as the light tables — a probe's
-/// weight is an exact 0 outside its volume, so over-inclusion cannot move a pixel.
+/// weight is an exact 0 outside its volume grown by `blend`, so over-inclusion cannot move a pixel.
 pub(crate) fn probe_masks(
     ranked: &[ProbeData],
     camera: &RenderCamera,
@@ -419,10 +419,11 @@ pub(crate) fn probe_masks(
     let ladder = shell_ladder();
     let mut masks = vec![0u32; CLUSTER_CELLS];
     for (k, probe) in ranked.iter().take(MAX_PROBES).enumerate() {
-        let radius = match probe.volume {
-            ProbeVolume::Box { extent } => extent.length(),
-            ProbeVolume::Sphere { radius } => radius,
-        };
+        let radius = probe.blend
+            + match probe.volume {
+                ProbeVolume::Box { extent } => extent.length(),
+                ProbeVolume::Sphere { radius } => radius,
+            };
         let footprint = sphere_footprint(
             probe.position,
             radius,
@@ -880,26 +881,31 @@ mod tests {
                         v * radius
                     }
                 };
-                let sample = probe.position + probe.rotation * local;
-                let clip = view_proj * sample.extend(1.0);
-                if clip.w <= 0.0
-                    || clip.x.abs() > clip.w
-                    || clip.y.abs() > clip.w
-                    || clip.z < 0.0
-                    || clip.z > clip.w
-                {
-                    continue;
+                // The in-volume point, then the same point pushed out into the blend shell.
+                let pushed = local + local.normalize_or_zero() * probe.blend * 0.9;
+                for local in [local, pushed] {
+                    let sample = probe.position + probe.rotation * local;
+                    let clip = view_proj * sample.extend(1.0);
+                    if clip.w <= 0.0
+                        || clip.x.abs() > clip.w
+                        || clip.y.abs() > clip.w
+                        || clip.z < 0.0
+                        || clip.z > clip.w
+                    {
+                        continue;
+                    }
+                    let frag = (
+                        (clip.x / clip.w * 0.5 + 0.5) * EXTENT.0 as f32,
+                        (0.5 - clip.y / clip.w * 0.5) * EXTENT.1 as f32,
+                    );
+                    let cell =
+                        cell_read_by(frag, (camera.position - sample).length_squared(), &header);
+                    assert!(
+                        masks[cell] & (1 << k) != 0,
+                        "probe {k} holds {sample:?} but is absent from cell {cell}"
+                    );
+                    checked += 1;
                 }
-                let frag = (
-                    (clip.x / clip.w * 0.5 + 0.5) * EXTENT.0 as f32,
-                    (0.5 - clip.y / clip.w * 0.5) * EXTENT.1 as f32,
-                );
-                let cell = cell_read_by(frag, (camera.position - sample).length_squared(), &header);
-                assert!(
-                    masks[cell] & (1 << k) != 0,
-                    "probe {k} holds {sample:?} but is absent from cell {cell}"
-                );
-                checked += 1;
             }
         }
         assert!(checked > 1_000, "only {checked} samples were in view");

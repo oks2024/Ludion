@@ -40,7 +40,7 @@ pub struct ProbeData {
     pub rotation: Quat,
     /// Influence and parallax volume.
     pub volume: ProbeVolume,
-    /// Inward fade distance: weight 1 at `blend` inside the boundary.
+    /// Outward fade distance: weight 1 inside the volume, 0 at `blend` outside it.
     pub blend: f32,
     /// Higher wins.
     pub priority: i32,
@@ -74,33 +74,34 @@ use ludion_core::math::glam::Vec4;
 pub const MAX_TAKEN: usize = 4;
 
 #[cfg(test)]
-/// A probe's weight at world point `p`: 0 outside its volume, ramping to 1 over `blend`.
-/// The WGSL twin is `probe_weight` in `snippets/probes.wgsl`.
+/// A probe's weight at world point `p`: 1 inside and on its volume, ramping to 0 over `blend`
+/// outside it. The WGSL twin is `probe_weight` in `snippets/probes.wgsl`.
 pub fn probe_weight(probe: &ProbeData, p: Vec3) -> f32 {
-    let inside = match probe.volume {
+    let d = match probe.volume {
         ProbeVolume::Box { extent } => {
             let q = probe.rotation.inverse() * (p - probe.position);
-            (extent - q.abs()).min_element()
+            (q.abs() - extent).max(Vec3::ZERO).length()
         }
-        ProbeVolume::Sphere { radius } => radius - (p - probe.position).length(),
+        ProbeVolume::Sphere { radius } => ((p - probe.position).length() - radius).max(0.0),
     };
-    if inside <= 0.0 {
-        0.0
-    } else if probe.blend <= 0.0 {
+    if d <= 0.0 {
         1.0
+    } else if probe.blend <= 0.0 {
+        0.0
     } else {
-        (inside / probe.blend).clamp(0.0, 1.0)
+        (1.0 - d / probe.blend).clamp(0.0, 1.0)
     }
 }
 
 #[cfg(test)]
 /// The world direction from the capture point to sample for a reflection ray `r` from `p`,
-/// parallax-corrected against the probe's volume. The WGSL twin is `probe_lookup`.
+/// parallax-corrected against the probe's volume. A point outside the volume is clamped onto it
+/// first. The WGSL twin is `probe_lookup`.
 pub fn probe_lookup(probe: &ProbeData, p: Vec3, r: Vec3) -> Vec3 {
     match probe.volume {
         ProbeVolume::Box { extent } => {
             let inv_rot = probe.rotation.inverse();
-            let q = inv_rot * (p - probe.position);
+            let q = (inv_rot * (p - probe.position)).clamp(-extent, extent);
             let d = inv_rot * r;
             let guard = |v: f32| if v < 0.0 { v.min(-1e-6) } else { v.max(1e-6) };
             let inv = Vec3::new(guard(d.x), guard(d.y), guard(d.z)).recip();
@@ -110,7 +111,11 @@ pub fn probe_lookup(probe: &ProbeData, p: Vec3, r: Vec3) -> Vec3 {
             probe.rotation * (q + t * d)
         }
         ProbeVolume::Sphere { radius } => {
-            let q = p - probe.position;
+            let mut q = p - probe.position;
+            let len = q.length();
+            if len > radius {
+                q *= radius / len;
+            }
             let b = q.dot(r);
             let c = q.dot(q) - radius * radius;
             let t = -b + (b * b - c).max(0.0).sqrt();
@@ -250,18 +255,45 @@ mod tests {
     }
 
     #[test]
-    fn weight_is_zero_outside_ramps_in_the_band_and_one_deep_inside() {
+    fn weight_is_one_inside_ramps_to_zero_outside_the_volume() {
         let b = boxed(Vec3::splat(2.0), Quat::IDENTITY, 1.0);
-        assert_eq!(probe_weight(&b, Vec3::new(2.5, 0.0, 0.0)), 0.0);
-        assert!((probe_weight(&b, Vec3::new(1.5, 0.0, 0.0)) - 0.5).abs() < 1e-6);
         assert_eq!(probe_weight(&b, Vec3::ZERO), 1.0);
+        assert_eq!(probe_weight(&b, Vec3::new(2.0, 0.0, 0.0)), 1.0);
+        assert!((probe_weight(&b, Vec3::new(2.5, 0.0, 0.0)) - 0.5).abs() < 1e-6);
+        assert_eq!(probe_weight(&b, Vec3::new(3.5, 0.0, 0.0)), 0.0);
+        // A corner is measured as the Euclidean distance to the box.
+        let corner = Vec3::splat(2.0) + Vec3::splat(0.5 / 3.0_f32.sqrt());
+        assert!((probe_weight(&b, corner) - 0.5).abs() < 1e-5);
         let mut s = probe(0, 0, ProbeVolume::Sphere { radius: 2.0 });
         s.blend = 1.0;
-        assert_eq!(probe_weight(&s, Vec3::new(3.0, 0.0, 0.0)), 0.0);
-        assert!((probe_weight(&s, Vec3::new(1.5, 0.0, 0.0)) - 0.5).abs() < 1e-6);
         assert_eq!(probe_weight(&s, Vec3::ZERO), 1.0);
+        assert_eq!(probe_weight(&s, Vec3::new(2.0, 0.0, 0.0)), 1.0);
+        assert!((probe_weight(&s, Vec3::new(2.5, 0.0, 0.0)) - 0.5).abs() < 1e-6);
+        assert_eq!(probe_weight(&s, Vec3::new(3.5, 0.0, 0.0)), 0.0);
         s.blend = 0.0;
-        assert_eq!(probe_weight(&s, Vec3::new(1.9, 0.0, 0.0)), 1.0);
+        assert_eq!(probe_weight(&s, Vec3::new(2.0, 0.0, 0.0)), 1.0);
+        assert_eq!(probe_weight(&s, Vec3::new(2.01, 0.0, 0.0)), 0.0);
+        let mut b0 = b;
+        b0.blend = 0.0;
+        assert_eq!(probe_weight(&b0, Vec3::new(2.0, 0.0, 0.0)), 1.0);
+        assert_eq!(probe_weight(&b0, Vec3::new(2.01, 0.0, 0.0)), 0.0);
+    }
+
+    #[test]
+    fn a_lookup_from_the_band_equals_the_lookup_from_the_surface() {
+        let r = Vec3::new(0.3, 0.9, -0.2).normalize();
+        let b = boxed(Vec3::new(2.0, 1.0, 4.0), Quat::from_rotation_y(0.4), 1.0);
+        let on_face = Vec3::new(2.0, 0.5, 1.0);
+        let outside = b.rotation * (on_face + Vec3::new(0.5, 0.0, 0.0));
+        let on_face = b.rotation * on_face;
+        let a = probe_lookup(&b, outside, r);
+        let c = probe_lookup(&b, on_face, r);
+        assert!(a.is_finite() && (a - c).length() < 1e-4, "{a:?} {c:?}");
+        let s = probe(0, 0, ProbeVolume::Sphere { radius: 3.0 });
+        let dir = Vec3::new(1.0, 0.5, -0.5).normalize();
+        let a = probe_lookup(&s, dir * 3.6, r);
+        let c = probe_lookup(&s, dir * 3.0, r);
+        assert!(a.is_finite() && (a - c).length() < 1e-4, "{a:?} {c:?}");
     }
 
     #[test]

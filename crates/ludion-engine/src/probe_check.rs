@@ -22,7 +22,7 @@ const CONTACT_EPSILON: f32 = 1e-4;
 const COMPONENT: &str = "ReflectionProbe";
 
 /// Every probe-placement diagnostic for `scene`: `L1277` duplicates, `L1275` equal-rank overlaps,
-/// `L1276` shadowed probes (inside a higher-ranked probe's full-weight region) and `L1278` for more
+/// `L1276` shadowed probes (inside a higher-ranked probe's volume, where its weight is 1) and `L1278` for more
 /// than [`MAX_PROBES`] probes. Pair diagnostics point at the lower-ranked probe and carry the other
 /// as `related`.
 ///
@@ -91,7 +91,7 @@ pub fn scene_probe_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 code::REFLECTION_PROBE_SHADOWED,
                 probes[lo].0,
                 probes[hi].0,
-                "lies entirely inside the full-weight region of the higher-ranked probe on",
+                "lies entirely inside the volume, where the weight is 1, of the higher-ranked probe on",
                 "raise its `priority`, shrink or move the other probe, or delete it",
             ));
         }
@@ -223,32 +223,41 @@ fn box_axes(rotation: Quat) -> [Vec3; 3] {
     [rotation * Vec3::X, rotation * Vec3::Y, rotation * Vec3::Z]
 }
 
-/// Whether two volumes overlap with positive depth; touching is not overlap.
+/// Whether two probes' influence regions (each volume grown by its `blend`) overlap with positive
+/// depth; touching is not overlap. They meet when the volumes are closer than the summed blends.
 fn overlaps(a: &ProbeData, b: &ProbeData) -> bool {
+    let margin = a.blend + b.blend;
     match (a.volume, b.volume) {
         (ProbeVolume::Sphere { radius: ra }, ProbeVolume::Sphere { radius: rb }) => {
-            a.position.distance(b.position) < ra + rb - CONTACT_EPSILON
+            a.position.distance(b.position) < ra + rb + margin - CONTACT_EPSILON
         }
         (ProbeVolume::Box { extent }, ProbeVolume::Sphere { radius }) => {
-            box_sphere_overlap(a, extent, b, radius)
+            box_sphere_overlap(a, extent, b, radius, margin)
         }
         (ProbeVolume::Sphere { radius }, ProbeVolume::Box { extent }) => {
-            box_sphere_overlap(b, extent, a, radius)
+            box_sphere_overlap(b, extent, a, radius, margin)
         }
         (ProbeVolume::Box { extent: ea }, ProbeVolume::Box { extent: eb }) => {
-            box_box_overlap(a, ea, b, eb)
+            box_box_overlap(a, ea, b, eb, margin)
         }
     }
 }
 
-fn box_sphere_overlap(boxed: &ProbeData, extent: Vec3, sphere: &ProbeData, radius: f32) -> bool {
+fn box_sphere_overlap(
+    boxed: &ProbeData,
+    extent: Vec3,
+    sphere: &ProbeData,
+    radius: f32,
+    margin: f32,
+) -> bool {
     let local = boxed.rotation.inverse() * (sphere.position - boxed.position);
     let closest = local.clamp(-extent, extent);
-    local.distance(closest) < radius - CONTACT_EPSILON
+    local.distance(closest) < radius + margin - CONTACT_EPSILON
 }
 
-/// Separating-axis test over the 3 + 3 face axes and 9 edge cross axes.
-fn box_box_overlap(a: &ProbeData, ea: Vec3, b: &ProbeData, eb: Vec3) -> bool {
+/// Separating-axis test over the 3 + 3 face axes and 9 edge cross axes. The `margin` slack on every
+/// axis is conservative: it can over-report near edges and corners of the grown boxes.
+fn box_box_overlap(a: &ProbeData, ea: Vec3, b: &ProbeData, eb: Vec3, margin: f32) -> bool {
     let (axes_a, axes_b) = (box_axes(a.rotation), box_axes(b.rotation));
     let offset = b.position - a.position;
     let radius = |axes: &[Vec3; 3], extent: Vec3, axis: Vec3| {
@@ -270,15 +279,14 @@ fn box_box_overlap(a: &ProbeData, ea: Vec3, b: &ProbeData, eb: Vec3) -> bool {
         }
         let axis = axis.normalize();
         let depth = radius(&axes_a, ea, axis) + radius(&axes_b, eb, axis) - offset.dot(axis).abs();
-        depth > CONTACT_EPSILON
+        depth + margin > CONTACT_EPSILON
     })
 }
 
-/// Whether `container`'s full-weight region (its volume shrunk inward by `blend`) holds all of
-/// `inner`'s volume.
+/// Whether `container`'s full-weight region (its volume itself) holds all of `inner`'s influence
+/// region (its volume grown by its own `blend`).
 fn covers(container: &ProbeData, inner: &ProbeData) -> bool {
-    let blend = container.blend;
-    // Points of `inner` that must lie inside, with the extra slack a sphere needs.
+    // Points of `inner` that must lie inside, with the extra slack a sphere and the blend need.
     let (points, slack): (Vec<Vec3>, f32) = match inner.volume {
         ProbeVolume::Box { extent } => (
             (0..8)
@@ -289,31 +297,21 @@ fn covers(container: &ProbeData, inner: &ProbeData) -> bool {
                             * Vec3::new(sign(1) * extent.x, sign(2) * extent.y, sign(4) * extent.z)
                 })
                 .collect(),
-            0.0,
+            inner.blend,
         ),
-        ProbeVolume::Sphere { radius } => (vec![inner.position], radius),
+        ProbeVolume::Sphere { radius } => (vec![inner.position], radius + inner.blend),
     };
     match container.volume {
         ProbeVolume::Box { extent } => {
-            let shrunk = extent - Vec3::splat(blend);
-            if shrunk.min_element() <= 0.0 {
-                return false;
-            }
             let inverse = container.rotation.inverse();
             points.iter().all(|&point| {
                 let local = (inverse * (point - container.position)).abs() + Vec3::splat(slack);
-                local.cmple(shrunk + Vec3::splat(CONTACT_EPSILON)).all()
+                local.cmple(extent + Vec3::splat(CONTACT_EPSILON)).all()
             })
         }
-        ProbeVolume::Sphere { radius } => {
-            let shrunk = radius - blend;
-            if shrunk <= 0.0 {
-                return false;
-            }
-            points.iter().all(|&point| {
-                point.distance(container.position) + slack <= shrunk + CONTACT_EPSILON
-            })
-        }
+        ProbeVolume::Sphere { radius } => points
+            .iter()
+            .all(|&point| point.distance(container.position) + slack <= radius + CONTACT_EPSILON),
     }
 }
 
@@ -361,6 +359,7 @@ mod tests {
 
     const PRIORITY_1: &str = "        priority: 1\n";
     const PRIORITY_3: &str = "        priority: 3\n";
+    const NO_BLEND: &str = "        blend: 0.0\n";
 
     #[test]
     fn a_copy_pasted_pair_is_one_duplicate_error() {
@@ -408,13 +407,23 @@ mod tests {
     }
 
     #[test]
-    fn touching_boxes_are_clean() {
+    fn touching_boxes_without_a_blend_are_clean() {
+        let diagnostics = check(&format!(
+            "{}{}",
+            probe("a", [0.0; 3], &cube(2.0), NO_BLEND),
+            probe("b", [4.0, 0.0, 0.0], &cube(2.0), NO_BLEND)
+        ));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn touching_boxes_with_a_blend_overlap_in_their_bands() {
         let diagnostics = check(&format!(
             "{}{}",
             probe("a", [0.0; 3], &cube(2.0), ""),
             probe("b", [4.0, 0.0, 0.0], &cube(2.0), "")
         ));
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(codes(&diagnostics), ["L1275"]);
     }
 
     #[test]
@@ -456,7 +465,17 @@ mod tests {
     }
 
     #[test]
-    fn a_wide_blend_uncovers_the_small_probe() {
+    fn a_wide_blend_on_the_small_probe_uncovers_it() {
+        let diagnostics = check(&format!(
+            "{}{}",
+            probe("big", [0.0; 3], &cube(10.0), PRIORITY_1),
+            probe("small", [0.0; 3], &cube(1.0), "        blend: 10.0\n")
+        ));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn a_wide_blend_on_the_container_still_shadows_the_small_probe() {
         let diagnostics = check(&format!(
             "{}{}",
             probe(
@@ -467,7 +486,7 @@ mod tests {
             ),
             probe("small", [0.0; 3], &cube(1.0), "")
         ));
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(codes(&diagnostics), ["L1276"]);
     }
 
     #[test]

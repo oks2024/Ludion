@@ -147,7 +147,8 @@ interiors**. Large open water is not a driver.
     - **One oriented box** is both the influence volume and the parallax proxy; there is no separate
       projection box.
     - Spheres are parallax-corrected against their own sphere.
-    - `blend` is an inward fade distance.
+    - `blend` is an outward fade distance: weight 1 inside the volume, 0 at `blend` outside it (amended
+      2026-10-22, so a box fitted to its room gives its walls full weight).
     - The component is registered last, because the registry is append-only.
 15. **Overlap is resolved by coverage accumulation.**
     - Probes are ranked by `priority`, then smallest volume, then `EntityId`.

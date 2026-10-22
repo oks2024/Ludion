@@ -305,7 +305,7 @@ mod tests {
         soft.blend = 1.0;
         scene.probes = vec![soft];
         let image = r.render(&scene, size).expect("render the view");
-        let edge = view_pixel(&image, &scene, Vec3::new(0.0, 0.0, 0.9));
+        let edge = view_pixel(&image, &scene, Vec3::new(0.0, 0.0, 1.5));
         let winner = palette_bytes(0);
         assert_ne!(edge, [0, 0, 0], "a weak probe is not black");
         assert!(

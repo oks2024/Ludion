@@ -57,7 +57,7 @@ cover. Probes are authored text; the captured pixels are derived and never commi
 | --- | --- | --- | --- |
 | `shape: { box: { extent: [hx, hy, hz] } }` | an oriented box; `extent` is **half**-extents along the probe's axes | `[2, 2, 2]` | each `> 0`, else `L1274` |
 | `shape: { sphere: { radius: r } }` | a sphere about the probe's position | `2` | `> 0`, else `L1274` |
-| `blend` | world units of inward fade from the boundary | `0.5` | `>= 0`, else `L1274` |
+| `blend` | world units of fade outside the volume (weight 1 inside it) | `0.5` | `>= 0`, else `L1274` |
 | `priority` | higher wins where volumes overlap | `0` | integer |
 
 `Transform.translation` is the capture point, and the parallax correction projects the reflection
@@ -68,16 +68,18 @@ onto the volume from there. `Transform.scale` is ignored — size the shape, nev
 - **Fit a box to its room.** Set `extent` to the room's inner half-size and centre the probe in it:
   the box faces then sit on the walls and the reflection parallaxes exactly. A box wider than the
   room smears the walls; a sphere suits open areas, where no wall defines a box.
-- **Extend the volume past the floor.** A surface lying exactly on a volume face gets no coverage
-  (the `blend` fade is zero there), so the room's own floor reflects the sky unless the box reaches
-  below it — centre the probe a little above the floor and let `extent.y` cover it.
+- **Walls and floor on the faces get full weight.** The weight is 1 inside the volume and on its
+  surface, so a box fitted exactly to its room covers the room's own floor and walls.
+- **The fade band reaches `blend` past the faces.** Where two fitted rooms share a wall, the
+  higher-ranked room's band shows through into its neighbour, so keep `blend` at most the wall
+  thickness (or 0) between rooms. Open edges, such as a doorway onto a street, want a real band.
 - **Rank is static, never camera distance:** `priority` descending, then boxes before spheres, then
   the smaller volume, then entity id. Up to 4 probes cover one pixel; each adds its weight times
   what coverage is left, and the sky fills the rest. With `PostProcess.ssr > 0` the screen-space
   trace blends over the probe-and-sky result.
 - **Use `priority`** for a small probe nested in a larger one (a lamp-lit alcove in a hall): the
   nested one gets the higher number. Equal priority and volume overlapping is `L1275`; a probe wholly
-  inside a higher-ranked probe's full-weight core (its volume shrunk by its `blend`) never shows,
+  inside a higher-ranked probe's volume (weight 1 there), its own band included, never shows,
   `L1276`; two probes with the same shape, size and pose are a copy-paste, `L1277`.
 - **At most 32 probes per scene** (`L1278`). Merge neighbours into larger volumes.
 - **A capture holds what the world looks like at load** — meshes, the sky and the lighting. Sprites,

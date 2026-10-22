@@ -614,15 +614,16 @@ fn spot_light_inverted_cone(inner: f64, outer: f64) -> Diagnostic {
 ///
 /// The [`Transform`] gives the capture point and the box's orientation; its scale is ignored, the
 /// size lives in `shape`. The one oriented volume is both the influence region and the parallax
-/// proxy. `blend` is the distance inward from the boundary over which the weight rises from 0 to 1,
-/// and where volumes overlap the higher `priority` wins (then boxes before spheres, then the
-/// smaller volume, then entity id).
+/// proxy. The weight is 1 inside the volume and `blend` is the distance outside it over which the
+/// weight falls to 0, so a box fitted to its room gives the walls and floor full weight. Where
+/// volumes overlap the higher `priority` wins (then boxes before spheres, then the smaller volume,
+/// then entity id).
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
 pub struct ReflectionProbe {
     /// The influence and parallax volume (default a box of half-extents `[2, 2, 2]`).
     #[serde(default)]
     pub shape: ProbeShape,
-    /// Inward fade distance in world units (default `0.5`), validated `>= 0` (`L1274`).
+    /// Outward fade distance in world units (default `0.5`), validated `>= 0` (`L1274`).
     #[serde(default = "probe_blend")]
     #[schemars(extend("x-ui-range" = [0.0, 4.0]))]
     pub blend: f32,
@@ -713,7 +714,7 @@ impl SemanticValidate for ReflectionProbe {
                     code::REFLECTION_PROBE_INVALID,
                     format!(
                         "the `ReflectionProbe` blend {blend} is negative or non-finite; it is a \
-                         distance inward from the boundary"
+                         distance outside the volume"
                     ),
                 )
                 .with_path("/blend")

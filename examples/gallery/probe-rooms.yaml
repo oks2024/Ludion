@@ -154,14 +154,14 @@ entities:
       Transform:
         translation:
           - -6.0
-          - 1.0
+          - 1.5
           - -1.0
       ReflectionProbe:
         shape:
           box:
             extent:
               - 3.0
-              - 2.0
+              - 1.5
               - 3.0
         blend: 0.25
         priority: 0
