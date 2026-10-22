@@ -12483,6 +12483,209 @@ mod tests {
         assert_eq!(low_on.rgba, low_off.rgba, "LOW still traced");
     }
 
+    /// The SSR trace of `scene`, read back from a harness graph that makes it an output: the trace
+    /// extent and its texels as `[radiance, confidence]`.
+    fn ssr_trace_texels(
+        renderer: &Renderer,
+        scene: &RenderScene,
+        size: FrameSize,
+    ) -> (u32, u32, Vec<[f32; 4]>) {
+        let (graph, trace) = crate::graph::build_ssr_trace_graph(size);
+        let recorder = renderer.prepare_frame(scene, size, None);
+        let image = renderer
+            .gpu
+            .execute(
+                &schedule(&graph).expect("the trace graph schedules"),
+                trace,
+                &recorder,
+            )
+            .expect("the trace renders");
+        assert!(renderer.gpu.take_fault().is_none(), "the trace faulted");
+        let (tw, th) = crate::ssr_pyramid::trace_extent(size, QualityParams::FULL.ssr_scale);
+        assert_eq!((image.width, image.height), (tw, th));
+        let texels = (0..tw * th)
+            .map(|i| {
+                std::array::from_fn(|c| {
+                    let at = (i * 8) as usize + c * 2;
+                    crate::gi_bake::f16_to_f32(u16::from_le_bytes([
+                        image.rgba[at],
+                        image.rgba[at + 1],
+                    ]))
+                })
+            })
+            .collect();
+        (tw, th, texels)
+    }
+
+    /// The gallery's mirror floor at 1080p: a back wall, a sphere and a cube, all rough so their own
+    /// texels early-out, under the gallery camera. The same scene the confidence view is read from.
+    fn mirror_floor_gallery() -> (FrameSize, RenderScene) {
+        let size = FrameSize::native(1920, 1080);
+        let mut scene = RenderScene::empty(size.render);
+        scene.post = Some(PostData {
+            ssr: 1.0,
+            ..exact_post()
+        });
+        scene.environment = Some(test_env());
+        let eye = Vec3::new(0.0, 5.0, 11.0);
+        let pitch = 25.0_f32.to_radians();
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(
+                eye,
+                eye + Vec3::new(0.0, -pitch.sin(), -pitch.cos()),
+                Vec3::Y,
+            ),
+            projection: Mat4::perspective_rh(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0),
+            position: eye,
+        };
+        let mut floor = ground(50.0);
+        floor.material = [0.02, 1.0, 0.0];
+        let rough = |mut m: MeshInstance, shape: Option<MeshShape>| {
+            m.material = [0.9, 0.0, 0.0];
+            if let Some(shape) = shape {
+                m.shape = shape;
+            }
+            m
+        };
+        let wall = rough(
+            cube(
+                Vec3::new(0.0, 3.0, -7.0),
+                Vec3::new(18.0, 6.0, 0.4),
+                [0.6; 4],
+            ),
+            None,
+        );
+        let ball = rough(
+            cube(
+                Vec3::new(-3.0, 0.8, -3.0),
+                Vec3::splat(1.6),
+                [0.8, 0.2, 0.2, 1.0],
+            ),
+            Some(MeshShape::Sphere),
+        );
+        let block = rough(
+            cube(
+                Vec3::new(6.0, 0.8, -2.0),
+                Vec3::splat(1.6),
+                [0.2, 0.2, 0.8, 1.0],
+            ),
+            None,
+        );
+        scene.meshes = vec![floor, wall, ball, block];
+        (size, scene)
+    }
+
+    /// The trace texel `(x, y)` of a gallery trace at `(tw, th)` as a camera-ray hit test against the
+    /// sphere at `centre` of `radius`, through the texel's source pixel (the trace's own mapping).
+    fn source_ray_hits_sphere(
+        camera: &crate::scene::RenderCamera,
+        size: FrameSize,
+        (tw, th): (u32, u32),
+        (x, y): (u32, u32),
+        centre: Vec3,
+        radius: f32,
+    ) -> bool {
+        let (rw, rh) = size.render;
+        let px = (((x as f32 + 0.5) * rw as f32 / tw as f32).floor()).min(rw as f32 - 1.0);
+        let py = (((y as f32 + 0.5) * rh as f32 / th as f32).floor()).min(rh as f32 - 1.0);
+        let ndc = ludion_core::math::glam::Vec2::new(
+            (px + 0.5) / rw as f32 * 2.0 - 1.0,
+            1.0 - (py + 0.5) / rh as f32 * 2.0,
+        );
+        let inv = (camera.projection * camera.view).inverse();
+        let unproject = |z: f32| {
+            let p = inv * ludion_core::math::glam::Vec4::new(ndc.x, ndc.y, z, 1.0);
+            p.truncate() / p.w
+        };
+        let near = unproject(0.0);
+        let dir = (unproject(1.0) - near).normalize();
+        let oc = near - centre;
+        let b = oc.dot(dir);
+        b * b - (oc.dot(oc) - radius * radius) >= 0.0 && -b > 0.0
+    }
+
+    /// Under a mirror-floor sphere, scanning a column from the reflection's centre up to the sphere
+    /// itself: sphere hits, then a thickness ramp, then a clean miss band. Hit attributes from the
+    /// wrong render pixel at the silhouette used to black out texels in between, a comb of
+    /// confidence crossing 0.5 many times in one column. Measured over the 69 columns scanned: 36
+    /// columns crossed more than once (up to 7 times) before the fix, 3 after (3 times each, where
+    /// the rim's facing ramp meets the thickness ramp).
+    #[test]
+    fn needs_gpu_ssr_trace_has_no_comb_under_a_sphere() {
+        let Some(renderer) = skip_or_renderer("ssr_trace_has_no_comb_under_a_sphere") else {
+            return;
+        };
+        let (size, scene) = mirror_floor_gallery();
+        let (tw, th, texels) = ssr_trace_texels(&renderer, &scene, size);
+        let centre = Vec3::new(-3.0, 0.8, -3.0);
+        let clip = scene.camera.projection * scene.camera.view * centre.extend(1.0);
+        let radius_px = 0.8 * scene.camera.projection.y_axis.y * 0.5 * th as f32 / clip.w;
+        let (cx, _) = project(&scene.camera, centre, tw, th);
+        let (_, start_y) = project(&scene.camera, Vec3::new(-3.0, -0.8, -3.0), tw, th);
+        let (mut columns, mut combed) = (0, 0);
+        for x in (cx - radius_px as u32 + 2)..=(cx + radius_px as u32 - 2) {
+            let mut crossings = 0;
+            let mut previous = None;
+            for y in (0..=start_y).rev() {
+                if source_ray_hits_sphere(&scene.camera, size, (tw, th), (x, y), centre, 0.8) {
+                    break;
+                }
+                let confident = texels[(y * tw + x) as usize][3] > 0.5;
+                match previous {
+                    None => assert!(confident, "column {x}: the first texel {y} is not a hit"),
+                    Some(p) if p != confident => crossings += 1,
+                    _ => {}
+                }
+                previous = Some(confident);
+            }
+            assert!(
+                crossings <= 3,
+                "column {x}: confidence crosses 0.5 {crossings} times"
+            );
+            combed += usize::from(crossings > 1);
+            columns += 1;
+        }
+        assert!(columns >= 20, "only {columns} columns scanned");
+        assert!(combed <= 4, "{combed} of {columns} columns are combed");
+    }
+
+    /// Beside a reflected cube edge the march used to run out of iterations on rays grazing the
+    /// silhouette, leaving a miss band between two hits. Counts the sandwiched misses in the rows
+    /// between the cube's bottom-front edge and its mirror image's bottom. Measured: 43 before the
+    /// fix, 1 after.
+    #[test]
+    fn needs_gpu_ssr_trace_has_no_gap_beside_a_reflected_edge() {
+        let Some(renderer) = skip_or_renderer("ssr_trace_has_no_gap_beside_a_reflected_edge")
+        else {
+            return;
+        };
+        let (size, scene) = mirror_floor_gallery();
+        let (tw, th, texels) = ssr_trace_texels(&renderer, &scene, size);
+        let (_, top) = project(&scene.camera, Vec3::new(6.0, 0.0, -1.2), tw, th);
+        let (_, bottom) = project(&scene.camera, Vec3::new(6.0, -1.6, -1.2), tw, th);
+        let mut xs = (u32::MAX, 0);
+        for corner in 0..8 {
+            let at = Vec3::new(
+                if corner & 1 == 0 { 5.2 } else { 6.8 },
+                if corner & 2 == 0 { 0.0 } else { -1.6 },
+                if corner & 4 == 0 { -2.8 } else { -1.2 },
+            );
+            let (x, _) = project(&scene.camera, at, tw, th);
+            xs = (xs.0.min(x), xs.1.max(x));
+        }
+        let (lo, hi) = (xs.0.saturating_sub(12), (xs.1 + 12).min(tw - 1));
+        let mut sandwiched = 0;
+        for y in top..=bottom {
+            let row = |x: u32| texels[(y * tw + x) as usize][3] > 0.5;
+            let first = (lo..=hi).find(|&x| row(x));
+            let last = (lo..=hi).rev().find(|&x| row(x));
+            if let (Some(first), Some(last)) = (first, last) {
+                sandwiched += (first..=last).filter(|&x| !row(x)).count();
+            }
+        }
+        assert!(sandwiched <= 4, "{sandwiched} sandwiched misses");
+    }
+
     /// The SSR trace finds a box in a mirror floor: the floor just in front of the cube's base reflects
     /// its red front face (confident, red-dominant), floor well to the side reflects only the sky above
     /// the frame (confidence 0), and the sky itself is exactly zero. The trace is read back from a
@@ -12508,25 +12711,8 @@ mod tests {
         red_box.material = [0.5, 0.0, 1.0];
         scene.meshes = vec![floor, red_box];
 
-        let (graph, trace) = crate::graph::build_ssr_trace_graph(size);
-        let recorder = renderer.prepare_frame(&scene, size, None);
-        let image = renderer
-            .gpu
-            .execute(
-                &schedule(&graph).expect("the trace graph schedules"),
-                trace,
-                &recorder,
-            )
-            .expect("the trace renders");
-        assert!(renderer.gpu.take_fault().is_none(), "the trace faulted");
-        let (tw, th) = crate::ssr_pyramid::trace_extent(size, QualityParams::FULL.ssr_scale);
-        assert_eq!((image.width, image.height), (tw, th));
-        let texel = |x: u32, y: u32| -> [f32; 4] {
-            std::array::from_fn(|c| {
-                let at = ((y * tw + x) * 8) as usize + c * 2;
-                crate::gi_bake::f16_to_f32(u16::from_le_bytes([image.rgba[at], image.rgba[at + 1]]))
-            })
-        };
+        let (tw, th, texels) = ssr_trace_texels(&renderer, &scene, size);
+        let texel = |x: u32, y: u32| texels[(y * tw + x) as usize];
         for y in 0..th {
             for x in 0..tw {
                 assert!(texel(x, y).iter().all(|v| v.is_finite()), "({x}, {y})");

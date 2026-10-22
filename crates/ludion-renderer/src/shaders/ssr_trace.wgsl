@@ -12,12 +12,20 @@
 //
 // **Cell geometry.** The pyramid's footprints are conservative, so level-k cell `c` covers at least
 // `[c, c+1)·s_k` in mip-0 texels, `s_k = dims(0) / dims(k)` per axis (not `2^k` on odd sizes); a stored
-// minimum never exceeds the true one, so a skip stays safe. The march is a fixed 64 iterations with no
-// jitter and no history.
+// minimum never exceeds the true one, so a skip stays safe. The march is a fixed 128 iterations with no
+// jitter and no history. After a descent the march only climbs again once the ray has left the coarse
+// cell that forced it, so a ray grazing a silhouette does not ping-pong between levels.
+//
+// **Level-0 resolve.** A level-0 cell holds the minimum depth of its 2x2 render footprint, so a
+// candidate there is resolved against the real render pixels the ray crosses: the first pixel the ray
+// is behind decides. Within the thickness it is a hit, beyond it the ray is occluded and the march
+// ends as a miss. Normal, colour and thickness all come from that pixel.
 //
 // `VsOut` + `vs_main` come from `snippets/fullscreen_vs.wgsl`.
 
-const SSR_MAX_ITERS: u32 = 64u;
+const SSR_MAX_ITERS: u32 = 128u;
+// The most render pixels a level-0 resolve walks: a cell spans at most 8 per axis, so a line crosses 17.
+const SSR_RESOLVE_MAX: u32 = 32u;
 // Nudge past a cell boundary, in trace pixels, so a step cannot land back in the cell it left.
 const SSR_STEP_EPSILON: f32 = 0.01;
 
@@ -61,6 +69,53 @@ fn trace_exit(o: vec3<f32>, d: vec3<f32>, cell: vec2<i32>, s: vec2<f32>) -> f32 
     return min(tx, ty);
 }
 
+struct Resolve {
+    // 0 clear, 1 hit, 2 occluded.
+    state: u32,
+    t: f32,
+    pixel: vec2<i32>,
+    uv: vec2<f32>,
+    excess: f32,
+}
+
+// Walks the render pixels the ray crosses over `[t0, t1]` and reports the first one it is behind.
+fn trace_resolve(o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> Resolve {
+    let render = textureDimensions(trace_depth);
+    let r = vec2<f32>(render) / vec2<f32>(textureDimensions(trace_hiz, 0));
+    let ro = vec3<f32>(o.xy * r, o.z);
+    let rd = vec3<f32>(d.xy * r, d.z);
+    let eps_r = SSR_STEP_EPSILON / max(max(abs(rd.x), abs(rd.y)), 1e-6);
+    var out: Resolve;
+    out.state = 0u;
+    var t = t0;
+    for (var i = 0u; i < SSR_RESOLVE_MAX; i = i + 1u) {
+        if (t > t1) {
+            break;
+        }
+        let px = clamp(vec2<i32>(floor((ro + rd * t).xy)), vec2<i32>(0), vec2<i32>(render) - vec2<i32>(1));
+        let tb = min(t1, trace_exit(ro, rd, px, vec2<f32>(1.0)));
+        let pz = textureLoad(trace_depth, px, 0);
+        let za = o.z + d.z * t;
+        let zb = o.z + d.z * tb;
+        if (pz < 1.0 && max(za, zb) >= pz) {
+            // The least-excess behind point: the crossing, else the end nearer the camera.
+            var ts = select(tb, t, d.z >= 0.0);
+            if (min(za, zb) < pz) {
+                ts = (pz - o.z) / d.z;
+            }
+            let uv = (ro.xy + rd.xy * ts) / vec2<f32>(render);
+            out.t = ts;
+            out.pixel = px;
+            out.uv = uv;
+            out.excess = length(trace_unproject(uv, o.z + d.z * ts) - trace_unproject(uv, pz)) / trace_params.look.y;
+            out.state = select(2u, 1u, out.excess <= 1.0);
+            return out;
+        }
+        t = tb + eps_r;
+    }
+    return out;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let render = textureDimensions(trace_depth);
@@ -101,8 +156,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let max_level = i32(trace_params.proj_levels.y) - 1;
     var t = trace_exit(o, d, vec2<i32>(floor(o.xy)), vec2<f32>(1.0)) + eps_t;
     var hit = false;
-    var hit_q = vec3<f32>(0.0);
-    var hit_zmin = 0.0;
+    var hit_t = 0.0;
+    var hit_pixel = vec2<i32>(0);
+    var hit_uv = vec2<f32>(0.0);
+    var thickness_excess = 0.0;
+    var hold = 0.0;
     for (var i = 0u; i < SSR_MAX_ITERS; i = i + 1u) {
         if (t > 1.0) {
             break;
@@ -116,32 +174,43 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let cell = clamp(vec2<i32>(floor(q.xy / s)), vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1));
         let zmin = textureLoad(trace_hiz, cell, level).r;
         let solid = zmin < 1.0;
-        if (solid && q.z >= zmin) {
-            if (level == 0) {
-                hit = true;
-                hit_q = q;
-                hit_zmin = zmin;
-                break;
+        let t_exit = trace_exit(o, d, cell, s) + eps_t;
+        var t_from = t;
+        var candidate = solid && q.z >= zmin;
+        if (!candidate && solid && d.z > 0.0) {
+            let t_plane = (zmin - o.z) / d.z;
+            if (t_plane < t_exit) {
+                if (t_plane > 1.0) {
+                    break;
+                }
+                t = t_plane;
+                t_from = t_plane;
+                candidate = true;
             }
+        }
+        if (candidate) {
+            if (level == 0) {
+                let res = trace_resolve(o, d, t_from, min(t_exit, 1.0));
+                if (res.state == 2u) {
+                    break;
+                }
+                if (res.state == 1u) {
+                    hit = true;
+                    hit_t = res.t;
+                    hit_pixel = res.pixel;
+                    hit_uv = res.uv;
+                    thickness_excess = res.excess;
+                    break;
+                }
+                t = t_exit;
+                continue;
+            }
+            hold = t_exit;
             level = level - 1;
             continue;
         }
-        let t_exit = trace_exit(o, d, cell, s) + eps_t;
-        let t_plane = select(1e30, (zmin - o.z) / d.z, solid && d.z > 0.0);
-        if (t_plane < t_exit) {
-            t = t_plane;
-            if (t > 1.0) {
-                break;
-            }
-            if (level == 0) {
-                hit = true;
-                hit_q = o + d * t;
-                hit_zmin = zmin;
-                break;
-            }
-            level = level - 1;
-        } else {
-            t = t_exit;
+        t = t_exit;
+        if (t >= hold) {
             level = min(level + 1, max_level);
         }
     }
@@ -149,12 +218,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    let hit_uv = hit_q.xy / trace_f;
-    let hit_world = trace_unproject(hit_uv, hit_q.z);
-    let surf_world = trace_unproject(hit_uv, hit_zmin);
+    let hit_world = trace_unproject(hit_uv, o.z + d.z * hit_t);
     let hit_distance = length(hit_world - world);
-    let thickness_excess = length(hit_world - surf_world) / trace_params.look.y;
-    let hit_pixel = clamp(vec2<i32>(floor(hit_uv * vec2<f32>(render))), vec2<i32>(0), vec2<i32>(render) - vec2<i32>(1));
     let hit_normal = textureLoad(trace_normal, hit_pixel, 0).xyz;
     let facing = dot(hit_normal / max(length(hit_normal), 1e-4), r);
 

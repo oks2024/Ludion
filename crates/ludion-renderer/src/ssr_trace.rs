@@ -3,7 +3,8 @@
 //! The `ssr_trace` pass marches one mirror ray per trace texel (output × [`QualityParams::ssr_scale`](crate::QualityParams::ssr_scale))
 //! through the `hiz` pyramid and, on a hit, reads `ssr_color` at the cone's footprint level. It
 //! writes `vec4(radiance, confidence)` into the `ssr_trace` transient; a miss writes `vec4(0)`. The
-//! march is a fixed [`SSR_MAX_ITERS`] iterations with no jitter and no history.
+//! march is a fixed [`SSR_MAX_ITERS`] iterations with no jitter and no history; a level-0 candidate
+//! is resolved against the render pixels the ray crosses, and the first one it is behind decides.
 //!
 //! **Confidence** is a product of linear ramps ([`confidence`], twin of `ssr_confidence` in
 //! `shaders/snippets/ssr.wgsl`): screen edge, ray length, hit thickness, back-facing hits and the
@@ -11,7 +12,7 @@
 
 /// The march's iteration cap (the WGSL's `SSR_MAX_ITERS`).
 #[cfg_attr(not(test), allow(dead_code))] // the CPU twin of ssr_trace.wgsl; outside tests only the sync test reads it
-pub(crate) const SSR_MAX_ITERS: u32 = 64;
+pub(crate) const SSR_MAX_ITERS: u32 = 128;
 /// UV distance from a screen edge over which confidence ramps up.
 pub(crate) const EDGE_FADE: f32 = 0.1;
 /// Fraction of the maximum distance over which confidence ramps down.

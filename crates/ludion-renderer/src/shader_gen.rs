@@ -109,7 +109,12 @@ pub const SPEC_SAMPLES: u32 = 64;
 /// `SSR_MAX_ITERS`, hoisted from WGSL `const SSR_MAX_ITERS: u32`.
 ///
 /// Declared in `ssr_trace.wgsl`.
-pub const SSR_MAX_ITERS: u32 = 64;
+pub const SSR_MAX_ITERS: u32 = 128;
+
+/// `SSR_RESOLVE_MAX`, hoisted from WGSL `const SSR_RESOLVE_MAX: u32`.
+///
+/// Declared in `ssr_trace.wgsl`.
+pub const SSR_RESOLVE_MAX: u32 = 32;
 
 /// `TONEMAP_ACES`, hoisted from WGSL `const TONEMAP_ACES: u32`.
 ///
