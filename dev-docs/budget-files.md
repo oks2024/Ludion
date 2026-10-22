@@ -90,6 +90,9 @@ The per-file catalogue (one entry per calibration scene and per-OS twin, with me
   above the file uses, and leave the old measured value in a comment — every file in the corpus does
   this, and a ceiling with no measured-value comment leaves the next contributor unable to tell
   whether a future breach is real or was always this loose.
+- **SSR cost is the `ssr` post group** (the Hi-Z and colour pyramids plus the trace; `reflections` runs
+  every frame for the sky, so it is its own `[passes]` line). A pyramid pass is one per level, named
+  `hiz_reduce_<k>` / `ssr_color_reduce_<k>`: a `[passes]` key may name any level, and the group sums them all.
 - **A budget with GPU lines needs a GPU measurement.** `[passes]`, `[post_groups]` and
   `post_total_ms` against a run with no adapter, or no timestamp queries, is `L4019` (exit non-zero),
   not a quiet pass; a pass merely absent from a run that did measure stays quiet. A CPU-only budget

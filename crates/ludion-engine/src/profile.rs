@@ -1041,12 +1041,12 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 
 /// The frame graph's fixed pass names — the full universe
 /// [`build_frame_graph`](ludion_renderer::build_frame_graph) can ever produce (`shadow` only for a
-/// scene with a sun, `overlay` only for a scene with UI, `resolve` only above a render scale of 1,
+/// scene with a sun, `overlay` only for a scene with UI, `resolve` only above a render scale of 1, `upscale` only below it,
 /// `gi_inject` only for a scene with a bouncing `GiVolume` and a light marked dynamic).
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 26] = [
+const KNOWN_PASS_NAMES: [&str; 33] = [
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::PREPASS,
     ludion_renderer::graph::pass::SSAO,
@@ -1055,6 +1055,12 @@ const KNOWN_PASS_NAMES: [&str; 26] = [
     ludion_renderer::graph::pass::SCENE,
     ludion_renderer::graph::pass::REFLECTIONS,
     ludion_renderer::graph::pass::TRANSPARENTS,
+    ludion_renderer::graph::pass::HIZ_SEED,
+    ludion_renderer::graph::pass::HIZ_REDUCE,
+    ludion_renderer::graph::pass::SSR_COLOR_SEED,
+    ludion_renderer::graph::pass::SSR_COLOR_REDUCE,
+    ludion_renderer::graph::pass::SSR_TRACE,
+    ludion_renderer::graph::pass::SSR_DEBUG,
     ludion_renderer::graph::pass::SHAFTS,
     ludion_renderer::graph::pass::SHAFTS_BLUR,
     ludion_renderer::graph::pass::DOF_COC,
@@ -1072,6 +1078,7 @@ const KNOWN_PASS_NAMES: [&str; 26] = [
     ludion_renderer::graph::pass::BLOOM_UP[4],
     ludion_renderer::graph::pass::COMPOSITE,
     ludion_renderer::graph::pass::RESOLVE,
+    ludion_renderer::graph::pass::UPSCALE,
     ludion_renderer::graph::pass::OVERLAY,
 ];
 
@@ -1093,7 +1100,10 @@ const KNOWN_PASS_NAMES: [&str; 26] = [
 /// schedules it — so it is a *member of* `ssao`, which is the effect a budget wants to name. If a
 /// second consumer of the prepass ever arrives (depth/normal outlines are the recorded candidate), it
 /// stops being SSAO's cost alone and earns its own line.
-const POST_GROUPS: [(&str, &[&str]); 4] = [
+///
+/// `ssr` is the pyramids and the trace, not `reflections` (which runs every frame for the sky) and not
+/// the `ssr_debug` view.
+const POST_GROUPS: [(&str, &[&str]); 5] = [
     (
         "bloom",
         &[
@@ -1132,16 +1142,45 @@ const POST_GROUPS: [(&str, &[&str]); 4] = [
             ludion_renderer::graph::pass::DOF,
         ],
     ),
+    (
+        "ssr",
+        &[
+            ludion_renderer::graph::pass::HIZ_SEED,
+            ludion_renderer::graph::pass::HIZ_REDUCE,
+            ludion_renderer::graph::pass::SSR_COLOR_SEED,
+            ludion_renderer::graph::pass::SSR_COLOR_REDUCE,
+            ludion_renderer::graph::pass::SSR_TRACE,
+        ],
+    ),
 ];
 
-/// Sums the medians of the `members` this report actually measured, returning the sum and how many
-/// contributed — or `None` when *none* did, which is the group-level form of "producible but
-/// unmeasured" and skips rather than fails.
+/// Pass kinds whose graph names carry a mip suffix (`hiz_reduce_3`): one pass per pyramid level, and
+/// the level count depends on the render extent.
+const MIPPED_PASS_KINDS: [&str; 2] = [
+    ludion_renderer::graph::pass::HIZ_REDUCE,
+    ludion_renderer::graph::pass::SSR_COLOR_REDUCE,
+];
+
+/// Whether the pass `name` is `member` itself, or — for a mipped kind — `member` plus `_<level>`.
+fn pass_matches(member: &str, name: &str) -> bool {
+    if member == name {
+        return true;
+    }
+    MIPPED_PASS_KINDS.contains(&member)
+        && name
+            .strip_prefix(member)
+            .and_then(|rest| rest.strip_prefix('_'))
+            .is_some_and(|level| !level.is_empty() && level.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Sums the medians of the passes any of the `members` matches that this report actually measured,
+/// returning the sum and how many contributed — or `None` when *none* did, which is the group-level
+/// form of "producible but unmeasured" and skips rather than fails.
 fn measured_sum(report: &ProfileReport, members: &[&str]) -> Option<(f64, usize)> {
     let mut total = 0.0;
     let mut counted = 0usize;
-    for member in members {
-        if let Some(pass) = report.gpu.passes.iter().find(|p| p.name == *member)
+    for pass in &report.gpu.passes {
+        if members.iter().any(|m| pass_matches(m, &pass.name))
             && let Some(ms) = pass.median_ms
         {
             total += ms;
@@ -1305,7 +1344,7 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
                     ));
                 }
             }
-            None if KNOWN_PASS_NAMES.contains(&name.as_str()) => {
+            None if KNOWN_PASS_NAMES.iter().any(|m| pass_matches(m, name)) => {
                 // Producible (a fixed frame-graph pass name) but not in this report — a UI-free
                 // scene, or no GPU adapter. Not a violation.
             }
@@ -3069,6 +3108,96 @@ entities:
                 );
             }
         }
+    }
+
+    /// Every pass any chain can schedule — each optional effect on, at a super-sampled and a
+    /// sub-sampled render scale — is a name a budget may use. This is what keeps `KNOWN_PASS_NAMES`
+    /// from drifting behind the frame graph.
+    #[test]
+    fn every_scheduled_pass_is_producible() {
+        use ludion_renderer::{
+            DebugView, FrameSize, PostChain, RenderScale, dump_frame_graph_json,
+        };
+        let everything = PostChain {
+            ui: true,
+            shadow_map: Some(1024),
+            ssao: true,
+            shafts: true,
+            dof: true,
+            gi_inject: Some([4, 4, 4]),
+            debug_lines: true,
+            ssr: Some(0.5),
+            ssr_view: Some(DebugView::SsrConfidence),
+        };
+        let sizes = [
+            FrameSize::native(1280, 720),
+            FrameSize::scaled(1280, 720, RenderScale::new(2.0).unwrap()),
+            FrameSize::scaled(1280, 720, RenderScale::new(0.5).unwrap()),
+        ];
+        for size in sizes {
+            for chain in [PostChain::default(), everything] {
+                let json = dump_frame_graph_json(size, chain).expect("the graph schedules");
+                let dump: serde_json::Value = serde_json::from_str(&json).unwrap();
+                for pass in dump["passes"].as_array().expect("passes array") {
+                    let name = pass["name"].as_str().expect("pass name");
+                    assert!(
+                        KNOWN_PASS_NAMES.iter().any(|m| pass_matches(m, name)),
+                        "the frame graph schedules `{name}`, which no budget key can name"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pass_matches_takes_a_level_suffix_only_on_mipped_kinds() {
+        assert!(pass_matches("hiz_reduce", "hiz_reduce_3"));
+        assert!(pass_matches("ssr_color_reduce", "ssr_color_reduce_12"));
+        assert!(pass_matches("hiz_reduce", "hiz_reduce"));
+        assert!(!pass_matches("hiz_reduce", "hiz_reduce_"));
+        assert!(!pass_matches("hiz_reduce", "hiz_reduce_x"));
+        assert!(!pass_matches("hiz_reduce", "hiz_reduce3"));
+        assert!(!pass_matches("ssr_trace", "ssr_trace_1"));
+    }
+
+    #[test]
+    fn the_ssr_group_sums_its_pyramid_levels_and_the_trace() {
+        let mut report = sample_report();
+        report.gpu.passes.extend(
+            [
+                "hiz_seed",
+                "hiz_reduce_1",
+                "hiz_reduce_2",
+                "ssr_trace",
+                "reflections",
+            ]
+            .map(|name| PassTiming {
+                name: name.to_string(),
+                median_ms: Some(0.5),
+            }),
+        );
+        let (sum, counted) = measured_sum(
+            &report,
+            POST_GROUPS.iter().find(|(g, _)| *g == "ssr").unwrap().1,
+        )
+        .expect("measured");
+        assert_eq!(counted, 4, "reflections is not in the group");
+        assert!((sum - 2.0).abs() < 1e-9);
+
+        let budget = |ms| Budget {
+            post_groups: BTreeMap::from([("ssr".to_string(), ms)]),
+            ..Budget::default()
+        };
+        assert!(check_budget(&report, &budget(2.5)).is_empty());
+        let over = check_budget(&report, &budget(1.0));
+        assert_eq!(over.len(), 1);
+        assert_eq!(over[0].code, code::BUDGET_EXCEEDED);
+
+        let by_level = Budget {
+            passes: BTreeMap::from([("hiz_reduce_4".to_string(), 1.0)]),
+            ..Budget::default()
+        };
+        assert!(check_budget(&report, &by_level).is_empty());
     }
 
     /// The `ssao` group spans the whole effect — the prepass included. The prepass is not itself a

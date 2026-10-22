@@ -147,6 +147,8 @@ anisotropy.
   trace gives way to the sky; **`ssr_max_distance`** (default `30`) and **`ssr_thickness`**
   (default `0.5`) are world units, both `> 0`. A miss falls back to the sky, and a machine's
   quality can switch it off (`ludion docs quality`).
+  `examples/gallery/mirror-floor.yaml` is the worked scene; `ludion render --debug-view ssr_confidence`
+  (or `ssr_footprint`) shows what the trace found.
 
 ## Rules
 
