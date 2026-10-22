@@ -609,6 +609,133 @@ fn spot_light_inverted_cone(inner: f64, outer: f64) -> Diagnostic {
     .with_help("make `inner_angle` at most `outer_angle` (equal gives a hard edge)")
 }
 
+/// A reflection probe: a captured cube of the scene around the entity, projected onto a box or
+/// sphere proxy so reflections show the right parallax.
+///
+/// The [`Transform`] gives the capture point and the box's orientation; its scale is ignored, the
+/// size lives in `shape`. The one oriented volume is both the influence region and the parallax
+/// proxy. `blend` is the distance inward from the boundary over which the weight rises from 0 to 1,
+/// and where volumes overlap the higher `priority` wins (then boxes before spheres, then the
+/// smaller volume, then entity id).
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct ReflectionProbe {
+    /// The influence and parallax volume (default a box of half-extents `[2, 2, 2]`).
+    #[serde(default)]
+    pub shape: ProbeShape,
+    /// Inward fade distance in world units (default `0.5`), validated `>= 0` (`L1274`).
+    #[serde(default = "probe_blend")]
+    #[schemars(extend("x-ui-range" = [0.0, 4.0]))]
+    pub blend: f32,
+    /// Higher wins where volumes overlap (default `0`).
+    #[serde(default)]
+    #[schemars(extend("x-ui-range" = [-8, 8]))]
+    pub priority: i32,
+}
+
+/// A [`ReflectionProbe`]'s volume, externally tagged: `shape: { box: { extent: [4, 2, 3] } }` or
+/// `shape: { sphere: { radius: 3 } }`.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeShape {
+    /// An oriented box.
+    Box {
+        /// Half-extents along the probe's local axes (each validated `> 0`, default `[2, 2, 2]`).
+        #[serde(default = "probe_extent")]
+        extent: [f32; 3],
+    },
+    /// A sphere about the probe's position.
+    Sphere {
+        /// Radius in world units (validated `> 0`, default `2`).
+        #[serde(default = "probe_radius")]
+        radius: f32,
+    },
+}
+
+impl Default for ProbeShape {
+    fn default() -> Self {
+        ProbeShape::Box {
+            extent: probe_extent(),
+        }
+    }
+}
+
+impl Default for ReflectionProbe {
+    fn default() -> Self {
+        ReflectionProbe {
+            shape: ProbeShape::default(),
+            blend: probe_blend(),
+            priority: 0,
+        }
+    }
+}
+
+impl SemanticValidate for ReflectionProbe {
+    /// A non-finite or non-positive `extent` component or `radius`, and a non-finite or negative
+    /// `blend`, are `L1274` at the offending field. A wrong *shape* is the schema's job (`L1014`)
+    /// and is passed through here.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        let positive = |v: f64| v.is_finite() && v > 0.0;
+        if let Some(shape) = value.get("shape") {
+            if let Some(extent) = shape
+                .get("box")
+                .and_then(|b| b.get("extent"))
+                .and_then(Value::as_array)
+            {
+                for (i, component) in extent.iter().enumerate() {
+                    if let Some(authored) = as_stored_f32(component)
+                        && !positive(authored)
+                    {
+                        out.push(reflection_probe_invalid(
+                            &format!("/shape/box/extent/{i}"),
+                            &format!("extent component {authored}"),
+                        ));
+                    }
+                }
+            }
+            if let Some(radius) = shape
+                .get("sphere")
+                .and_then(|s| s.get("radius"))
+                .and_then(as_stored_f32)
+                && !positive(radius)
+            {
+                out.push(reflection_probe_invalid(
+                    "/shape/sphere/radius",
+                    &format!("radius {radius}"),
+                ));
+            }
+        }
+        if let Some(blend) = value.get("blend").and_then(as_stored_f32)
+            && !(blend.is_finite() && blend >= 0.0)
+        {
+            out.push(
+                Diagnostic::new(
+                    code::REFLECTION_PROBE_INVALID,
+                    format!(
+                        "the `ReflectionProbe` blend {blend} is negative or non-finite; it is a \
+                         distance inward from the boundary"
+                    ),
+                )
+                .with_path("/blend")
+                .with_help("use a finite blend of 0 or more (default 0.5)"),
+            );
+        }
+        out
+    }
+}
+
+/// `L1274` — a `ReflectionProbe` extent component or radius is not a finite value above 0.
+fn reflection_probe_invalid(pointer: &str, what: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::REFLECTION_PROBE_INVALID,
+        format!(
+            "the `ReflectionProbe` {what} is not a finite value above 0, so the volume is empty"
+        ),
+    )
+    .with_path(pointer.to_string())
+    .with_help("give every extent component and the radius a finite value above 0 (default 2)")
+}
+
 /// A directional "sun" light: one global light with a parallel direction, casting a single
 /// orthographic shadow map.
 ///
@@ -3938,6 +4065,15 @@ fn two_hundred() -> f32 {
 fn shadow_bias_default() -> f32 {
     0.05
 }
+fn probe_blend() -> f32 {
+    0.5
+}
+fn probe_extent() -> [f32; 3] {
+    [2.0; 3]
+}
+fn probe_radius() -> f32 {
+    2.0
+}
 fn spot_direction() -> [f32; 3] {
     [0.0, -1.0, 0.0]
 }
@@ -4233,6 +4369,11 @@ pub fn builtin_registry() -> Registry {
     // per the append-only order above.
     registry
         .register_validated::<SpotLight>("SpotLight")
+        .expect("unique");
+    // `ReflectionProbe` carries a semantic validator (volume bounds `L1274`). Registered last, per
+    // the append-only order above.
+    registry
+        .register_validated::<ReflectionProbe>("ReflectionProbe")
         .expect("unique");
     registry
 }
@@ -4704,12 +4845,13 @@ mod tests {
                 "PrefabInstance",
                 "MeshGrid",
                 "SpotLight",
+                "ReflectionProbe",
             ]
         );
         assert_eq!(
             registry.len(),
-            34,
-            "appending SpotLight grows the registry by exactly one"
+            35,
+            "appending ReflectionProbe grows the registry by exactly one"
         );
     }
 
@@ -5202,6 +5344,50 @@ mod tests {
         );
     }
 
+    /// An empty `ReflectionProbe: {}` is the default box, and a sphere probe round-trips.
+    #[test]
+    fn reflection_probe_defaults_and_round_trips() {
+        let probe: ReflectionProbe = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(probe, ReflectionProbe::default());
+        assert_eq!(probe.shape, ProbeShape::Box { extent: [2.0; 3] });
+        assert_eq!((probe.blend, probe.priority), (0.5, 0));
+        let custom = ReflectionProbe {
+            shape: ProbeShape::Sphere { radius: 3.5 },
+            blend: 1.0,
+            priority: -2,
+        };
+        let json = serde_json::to_value(custom).unwrap();
+        assert_eq!(
+            json["shape"],
+            serde_json::json!({ "sphere": { "radius": 3.5 } })
+        );
+        assert_eq!(
+            serde_json::from_value::<ReflectionProbe>(json).unwrap(),
+            custom
+        );
+    }
+
+    /// Each bad `ReflectionProbe` value is `L1274` at the offending field.
+    #[test]
+    fn a_bad_reflection_probe_is_l1274() {
+        let extent = "        shape:\n          box:\n            extent:\n              - 4.0\n              - 0.0\n              - 3.0\n";
+        refused_with("ReflectionProbe", extent, "L1274", "/shape/box/extent/1");
+        let radius = "        shape:\n          sphere:\n            radius: -1.0\n";
+        refused_with("ReflectionProbe", radius, "L1274", "/shape/sphere/radius");
+        refused_with(
+            "ReflectionProbe",
+            "        blend: -0.5\n",
+            "L1274",
+            "/blend",
+        );
+        for clean in [
+            "        blend: 0.0\n",
+            "        shape:\n          sphere:\n            radius: 3.0\n",
+        ] {
+            assert!(refusals("ReflectionProbe", clean).is_empty(), "{clean:?}");
+        }
+    }
+
     /// An empty `SpotLight: {}` is the default, and a non-default one round-trips through serde.
     #[test]
     fn spot_light_defaults_and_round_trips() {
@@ -5490,6 +5676,7 @@ mod tests {
         }
         clean::<PointLight>("PointLight");
         clean::<SpotLight>("SpotLight");
+        clean::<ReflectionProbe>("ReflectionProbe");
         clean::<DirectionalLight>("DirectionalLight");
         clean::<Sprite>("Sprite");
         clean::<Mesh>("Mesh");

@@ -15,6 +15,8 @@ use ludion_assets::cooked::CompressedImage;
 use ludion_core::math::glam::{Mat3, Mat4, Quat, Vec3};
 use ludion_font::GlyphQuad;
 
+use crate::probe::ProbeData;
+
 /// The engine's historical flat-ambient term (linear RGB) — the small constant light added to every
 /// lit surface when a scene declares no [`EnvironmentData`]. One source of truth for both the
 /// extract default (`ludion-engine`'s former private `AMBIENT` constant) and [`RenderScene::empty`],
@@ -1038,6 +1040,9 @@ pub struct RenderScene {
     /// Spot lights in ascending-`EntityId` extract order, packed after every point light
     /// (`Plan/spot-light.md` decision 4). Not a GI input: `lights` alone feeds the bake and inject.
     pub spot_lights: Vec<SpotLightData>,
+    /// Reflection probes in ascending-`EntityId` extract order, unranked (`probe_rank` orders
+    /// them). No render code reads this yet.
+    pub probes: Vec<ProbeData>,
     /// The single directional "sun" (lowest-`EntityId` `DirectionalLight`), or `None` for a sunless
     /// scene (a zeroed `Sun` uniform, byte-identical to the pre-sun pipeline).
     pub sun: Option<SunData>,
@@ -1095,6 +1100,7 @@ impl RenderScene {
             particles: Vec::new(),
             lights: Vec::new(),
             spot_lights: Vec::new(),
+            probes: Vec::new(),
             sun: None,
             environment: None,
             post: None,

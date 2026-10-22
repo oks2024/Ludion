@@ -53,6 +53,7 @@ mod ibl;
 mod lobe;
 mod mesh;
 mod mipgen;
+mod probe;
 mod quality;
 mod render;
 mod scene;
@@ -70,6 +71,7 @@ pub use frame_observer::{FrameObserver, FramePhase};
 pub use gi_bake::GiReadback;
 pub use graph::{FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json};
 pub use ludion_font::GlyphQuad;
+pub use probe::{MAX_PROBES, ProbeData, ProbeVolume, probe_rank};
 pub use quality::{Quality, QualityParams};
 pub use render::{GpuUploads, Renderer, is_renderer_shader};
 pub use scene::{

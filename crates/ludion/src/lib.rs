@@ -1141,7 +1141,7 @@ fn fail_on_errors(source: &Path, diagnostics: &[Diagnostic]) -> Option<ExitCode>
 ///
 /// Everything the CLI's check runs runs here, and everything the wire's `scene.check` runs:
 /// [`ludion_engine::scene_engine_diagnostics`] is the one list of engine passes (atlas, font,
-/// collider layer, parented body, physics, skin bone and audio), run over the expanded scene after
+/// collider layer, parented body, physics, skin bone, reflection probe and audio), run over the expanded scene after
 /// the font table's own faults, so the three clients cannot answer differently about the same scene.
 #[cfg(feature = "wire")]
 fn run_check_scene(builder: EngineBuilder, scene: &Path) -> ExitCode {

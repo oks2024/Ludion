@@ -1363,6 +1363,22 @@ pub mod code {
     /// outside `[0, 1]`, a band whose start is not below its end, or a zero `ssr_max_distance` or
     /// `ssr_thickness`.
     pub const POST_PROCESS_INVALID_SSR: DiagnosticCode = DiagnosticCode::new("L1273");
+    /// `L1274` — a `ReflectionProbe` has a non-positive or non-finite `extent` component or
+    /// `radius`, or a negative or non-finite `blend`. Raised by `ReflectionProbe`'s semantic
+    /// validator.
+    pub const REFLECTION_PROBE_INVALID: DiagnosticCode = DiagnosticCode::new("L1274");
+    /// `L1275` — two overlapping reflection probes have equal priority and volume, so their order
+    /// falls to entity id. Raised by the reflection-probe scene check.
+    pub const REFLECTION_PROBE_EQUAL_RANK: DiagnosticCode = DiagnosticCode::new("L1275");
+    /// `L1276` — a reflection probe lies entirely inside a higher-ranked probe's full-weight
+    /// region, so it never contributes. Raised by the reflection-probe scene check.
+    pub const REFLECTION_PROBE_SHADOWED: DiagnosticCode = DiagnosticCode::new("L1276");
+    /// `L1277` — two reflection probes have the same shape, size and pose, almost always a
+    /// copy-paste. Raised by the reflection-probe scene check.
+    pub const REFLECTION_PROBE_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L1277");
+    /// `L1278` — a scene has more reflection probes than the 32 the renderer binds. Raised by the
+    /// reflection-probe scene check.
+    pub const REFLECTION_PROBE_OVER_CAP: DiagnosticCode = DiagnosticCode::new("L1278");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -6866,6 +6882,69 @@ causes:
 Fix: give `ssr_fade` two roughness values with start below end (the default is `[0.45, 0.65]`), and
 give `ssr_max_distance` and `ssr_thickness` values above 0 (defaults 30 and 0.5).",
     },
+    CodeEntry {
+        code: code::REFLECTION_PROBE_INVALID,
+        severity: Severity::Error,
+        title: "reflection probe is invalid",
+        explanation: "\
+A `ReflectionProbe` has a value that cannot describe a volume. Two causes:
+
+- A box `extent` component or a sphere `radius` is non-finite or not above 0 (pointer
+  `/shape/box/extent/<i>` or `/shape/sphere/radius`). `extent` holds half-extents, so a zero or
+  negative one is an empty volume.
+- `blend` is non-finite or negative (pointer `/blend`). It is a distance inward from the boundary.
+
+Fix: give every `extent` component and the `radius` a finite value above 0 (defaults 2), and
+`blend` a finite value of 0 or more (default 0.5).",
+    },
+    CodeEntry {
+        code: code::REFLECTION_PROBE_EQUAL_RANK,
+        severity: Severity::Warning,
+        title: "overlapping reflection probes have equal rank",
+        explanation: "\
+Two reflection probes overlap, share a `priority` and have the same volume, so nothing but their
+entity ids decides which one wins where they meet. Reordering the scene file would not change that,
+but adding or removing an entity can. The path is the lower-ranked probe; the related diagnostic is
+the other.
+
+Fix: give one of the two a higher `priority`, or resize or move one so they no longer overlap.",
+    },
+    CodeEntry {
+        code: code::REFLECTION_PROBE_SHADOWED,
+        severity: Severity::Warning,
+        title: "reflection probe is shadowed",
+        explanation: "\
+A reflection probe lies entirely inside the full-weight region of a higher-ranked probe (that
+probe's volume shrunk inward by its `blend`), so it never contributes a pixel. Probes rank by
+`priority`, then boxes before spheres, then the smaller volume. The path is the shadowed probe; the
+related diagnostic is the one covering it. Only a single covering probe is detected; a union of
+several is not.
+
+Fix: raise the shadowed probe's `priority`, shrink or move the other probe, or delete the shadowed
+one.",
+    },
+    CodeEntry {
+        code: code::REFLECTION_PROBE_DUPLICATE,
+        severity: Severity::Error,
+        title: "reflection probes are duplicates",
+        explanation: "\
+Two reflection probes have the same shape, size and pose, which is almost always a copy-pasted
+probe that was never moved. One of them can never contribute. The path is the later probe; the
+related diagnostic is the other. `priority` and `blend` are ignored by this check.
+
+Fix: delete one of the two, or move it to where it was meant to go.",
+    },
+    CodeEntry {
+        code: code::REFLECTION_PROBE_OVER_CAP,
+        severity: Severity::Error,
+        title: "too many reflection probes",
+        explanation: "\
+The scene has more than 32 reflection probes, the most the renderer binds at once. The path is the
+first probe past the cap; each further probe is a related diagnostic.
+
+Fix: merge neighbouring probes into larger ones. Streaming probes in and out of the budget is not
+supported.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9509,6 +9588,11 @@ mod tests {
         code::TEXTURE_NOT_COOKED,
         code::SPOT_LIGHT_INVALID_CONE,
         code::POST_PROCESS_INVALID_SSR,
+        code::REFLECTION_PROBE_INVALID,
+        code::REFLECTION_PROBE_EQUAL_RANK,
+        code::REFLECTION_PROBE_SHADOWED,
+        code::REFLECTION_PROBE_DUPLICATE,
+        code::REFLECTION_PROBE_OVER_CAP,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -9753,6 +9837,8 @@ mod tests {
             code::PATTERN_AUTHORING_LINT,
             code::GENERATION_IDENTICAL_CANDIDATES,
             code::TEXTURE_NOT_COOKED,
+            code::REFLECTION_PROBE_EQUAL_RANK,
+            code::REFLECTION_PROBE_SHADOWED,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

@@ -557,8 +557,8 @@ pub fn scene_audio_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagno
 }
 
 /// Every engine pass over an expanded scene, in one list: atlas, font, collider layer, parented
-/// body, physics, skin bone and audio diagnostics, errors and warnings together (`severity` tells
-/// them apart). `ludion check-scene`, a game's `--check-scene` and `scene.check` all run exactly
+/// body, physics, skin bone, audio and reflection probe diagnostics, errors and warnings together
+/// (`severity` tells them apart). `ludion check-scene`, a game's `--check-scene` and `scene.check` all run exactly
 /// this, so no client answers "is this scene valid" differently.
 ///
 /// The diagnostics are unlocated: map each through [`ExpandedScene::locate`] to point into the
@@ -587,6 +587,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
         scene,
     ));
     diagnostics.extend(scene_audio_diagnostics(project_root, scene));
+    diagnostics.extend(crate::probe_check::scene_probe_diagnostics(scene));
     diagnostics
 }
 

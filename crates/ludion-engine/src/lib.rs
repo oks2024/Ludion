@@ -69,6 +69,7 @@ pub mod perf_live;
 mod player_profile;
 mod prefab;
 mod prefab_ops;
+mod probe_check;
 pub mod profile;
 mod quality;
 mod query_drift;
@@ -116,8 +117,9 @@ pub use components::{
     Anchor, Animation, AudioEmitter, Camera, ClipAnchor, DirectionalLight, EmitShape, Environment,
     Fade, GiDynamic, GiVolume, GroundMarker, GroundMarkerShape, Mesh, MeshGrid, MeshSource, Name,
     PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PointLight, PostProcess,
-    Projection, Residue, SkinBone, SpotLight, Sprite, SpriteBlend, Text, TileAppearance, Tilemap,
-    Transform, UiList, UiListItem, UiRect, UiText, builtin_registry, crossfade, set_speed,
+    ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight, Sprite, SpriteBlend,
+    Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect, UiText, builtin_registry,
+    crossfade, set_speed,
 };
 pub use cooked_maps::TextureSource;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
@@ -158,6 +160,7 @@ pub use perf_live::{
 pub use player_profile::{Profile, ProfileSaveEntry};
 pub use prefab::{PrefabInstance, spawn_prefab};
 pub use prefab_ops::{PrefabApplied, PrefabReverted, revert_prefab, unpack_prefab};
+pub use probe_check::scene_probe_diagnostics;
 pub use profile::{
     Budget, GpuProfile, PassTiming, ProfileReport, QualityProfile, SEQUENTIAL_NAMES, SimProfile,
     SystemTiming, TimingTail, check_budget, load_budget, profile_engine, profile_replay,

@@ -28,9 +28,9 @@ use ludion_ecs::World;
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
     EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, MeshData,
-    MeshInstance, MeshShape, ParticleInstance, PointLightData, PostData, QualityParams,
-    RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunData, TextRun,
-    TextureImage, UiInstance, WorldVoxelGrid, aspect_ratio,
+    MeshInstance, MeshShape, ParticleInstance, PointLightData, PostData, ProbeData, ProbeVolume,
+    QualityParams, RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunData,
+    TextRun, TextureImage, UiInstance, WorldVoxelGrid, aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -40,8 +40,8 @@ use crate::character::CharacterData;
 use crate::components::{
     Animation, Camera, ClipAnchor, DirectionalLight, Environment, GiDynamic, GiVolume,
     GroundMarker, GroundMarkerShape, Mesh, MeshGrid, MeshSource, ParticleEmitter, PointLight,
-    PostProcess, Projection, SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap,
-    TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
+    PostProcess, ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite, SpriteBlend,
+    Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
 };
 use crate::docs::DocStore;
 use crate::fonts::FontLibrary;
@@ -1244,6 +1244,7 @@ fn extract_inner(
         ),
         lights: extract_lights(placed.lights),
         spot_lights: extract_spot_lights(placed.spot_lights),
+        probes: extract_probes(world, &ids, &mut poses),
         sun: extract_sun(world, &ids),
         environment,
         post: extract_post(world, &ids),
@@ -1724,6 +1725,46 @@ fn spot_light_data(light: &SpotLight, position: Vec3) -> Option<SpotLightData> {
         cos_inner: ludion_core::math::cos(inner.to_radians()),
         cos_outer: ludion_core::math::cos(outer.to_radians()),
     })
+}
+
+/// Builds [`ProbeData`] from a `ReflectionProbe` at `pose`, or `None` for a value `L1274` refuses
+/// (a Rust-built world skips validation). The pose gives the position and orientation; scale is
+/// ignored, the size lives in the shape.
+fn probe_data(probe: &ReflectionProbe, pose: &RenderPose, entity: EntityId) -> Option<ProbeData> {
+    let positive = |v: f32| v.is_finite() && v > 0.0;
+    let volume = match probe.shape {
+        ProbeShape::Box { extent } if extent.into_iter().all(positive) => ProbeVolume::Box {
+            extent: Vec3::from(extent),
+        },
+        ProbeShape::Sphere { radius } if positive(radius) => ProbeVolume::Sphere { radius },
+        _ => return None,
+    };
+    if !(probe.blend.is_finite() && probe.blend >= 0.0) {
+        return None;
+    }
+    Some(ProbeData {
+        entity,
+        position: Vec3::from(pose.translation()),
+        rotation: pose.quat(),
+        volume,
+        blend: probe.blend,
+        priority: probe.priority,
+    })
+}
+
+/// Every usable [`ReflectionProbe`] in ascending-`EntityId` order (the order `ids` carries),
+/// unranked: `ludion_renderer::probe_rank` orders them.
+pub(crate) fn extract_probes(
+    world: &World,
+    ids: &[EntityId],
+    poses: &mut WorldAffines,
+) -> Vec<ProbeData> {
+    ids.iter()
+        .filter_map(|&id| {
+            let probe = get::<ReflectionProbe>(world, id)?;
+            probe_data(probe, &render_pose(world, poses, id), id)
+        })
+        .collect()
 }
 
 /// Builds [`SunData`] from a `DirectionalLight` and its Transform-anchored frustum center. Pure and
@@ -5092,6 +5133,68 @@ mod tests {
             "point lights unperturbed"
         );
         assert_eq!(with_spots.lights.len(), 1);
+    }
+
+    /// Probes reach `RenderScene.probes` in ascending-`EntityId` order, bad ones dropped; a parented
+    /// probe takes the composed world pose.
+    #[test]
+    fn probes_extract_in_entity_order_with_the_composed_pose() {
+        use ludion_core::math::glam::Vec3;
+        use ludion_ecs::Parent;
+        use ludion_ecs::World;
+        use std::path::Path;
+
+        let mut world = World::new();
+        let spawn = |world: &mut World, translation: [f32; 3], rotation: [f32; 3]| {
+            let id = world.spawn();
+            let xform = Transform {
+                translation,
+                rotation,
+                ..Transform::default()
+            };
+            world.insert(id, xform).unwrap();
+            id
+        };
+        let root = spawn(&mut world, [5.0, 0.0, 0.0], [0.0; 3]);
+        world.insert(root, ReflectionProbe::default()).unwrap();
+        let broken = spawn(&mut world, [0.0; 3], [0.0; 3]);
+        let bad = ReflectionProbe {
+            shape: ProbeShape::Sphere { radius: 0.0 },
+            ..ReflectionProbe::default()
+        };
+        world.insert(broken, bad).unwrap();
+        let pivot = spawn(&mut world, [0.0, 0.0, 10.0], [0.0, 90.0, 0.0]);
+        let child = spawn(&mut world, [1.0, 0.0, 0.0], [0.0; 3]);
+        world.insert(child, Parent(pivot)).unwrap();
+        world
+            .insert(
+                child,
+                ReflectionProbe {
+                    priority: 3,
+                    ..ReflectionProbe::default()
+                },
+            )
+            .unwrap();
+
+        let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+        assert_eq!(scene.probes.len(), 2);
+        assert_eq!(scene.probes[0].entity, root);
+        assert_eq!(scene.probes[0].position, Vec3::new(5.0, 0.0, 0.0));
+        assert_eq!(scene.probes[1].entity, child);
+        assert_eq!(scene.probes[1].priority, 3);
+        // A +90° turn about Y carries the child's local +X to world -Z.
+        assert!(
+            (scene.probes[1].position - Vec3::new(0.0, 0.0, 9.0)).length() < 1e-4,
+            "{:?}",
+            scene.probes[1].position
+        );
+        let turned = scene.probes[1].rotation * Vec3::X;
+        assert!((turned - Vec3::NEG_Z).length() < 1e-4, "{turned:?}");
+
+        world.remove::<ReflectionProbe>(root).unwrap();
+        world.remove::<ReflectionProbe>(child).unwrap();
+        let none = extract(&world, (320, 180), Path::new(".")).unwrap();
+        assert!(none.probes.is_empty());
     }
 
     /// The order contract, replacing the two `select_lights` tests the cap removal deleted
