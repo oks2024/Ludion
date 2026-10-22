@@ -185,7 +185,9 @@ interiors**. Large open water is not a driver.
       - the render list the capture draws: mesh ids, transforms, material parameters, texture content
         keys, lights, `Environment`, the GI result's key;
       - plus the probe's capture point (shape, blend and priority shade, they are not captured);
-      - plus the quality parameters and the adapter;
+      - plus the quality parameters (the store is a per-machine ignored directory, so an adapter term
+        only guarded a GPU swap on one machine; decision 6 holds exactly on one machine and up to GPU
+        float noise across machines, the perceptual tier images already gate on, decided 2026-10-22);
       - plus a bake-version constant.
 
       Anything not extracted cannot affect the capture, so staleness is impossible by construction.
@@ -196,7 +198,9 @@ interiors**. Large open water is not a driver.
     - Each pinned machine bakes its own probes; goldens are per-OS anyway.
 20. **Export.**
     - `ludion export` bakes every probe of every shipped scene and ships the store entries.
-    - It **fails** with an `L####` naming the scene and probe if a key is missing from the bundle.
+    - It bakes against the written bundle (the game binary's `--bake-probes`, at `[ios] quality`), so
+      the cooked maps' ios cook keys match the device's.
+    - It **fails** with `L1281` naming the scene and probe if a key is missing from the bundle.
     - The runtime still captures on a miss, with a warning diagnostic, as a safety net.
 21. **Budget.**
     - Faces are 256², `Rgba16Float`, with a mip chain down to 8×8, about 4 MB each. LOW and iOS use 128².

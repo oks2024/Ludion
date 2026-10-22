@@ -1385,6 +1385,9 @@ pub mod code {
     /// `L1280` — `Engine::bake_probes` was asked to force a probe by a name no probe in the scene
     /// carries.
     pub const REFLECTION_PROBE_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1280");
+    /// `L1281` — `ludion export` baked a scene's reflection probes but an entry is missing from the
+    /// bundle's probe store.
+    pub const REFLECTION_PROBE_NOT_BUNDLED: DiagnosticCode = DiagnosticCode::new("L1281");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -6976,6 +6979,18 @@ carries it. The help lists the names the scene has; an unnamed probe cannot be f
 
 Fix: use one of the listed names, or give the probe a `Name`.",
     },
+    CodeEntry {
+        code: code::REFLECTION_PROBE_NOT_BUNDLED,
+        severity: Severity::Error,
+        title: "a baked reflection probe is missing from the export",
+        explanation: "\
+`ludion export` baked the reflection probes of a shipped scene into the bundle's probe store
+(`content/.ludion/cooked/probes/`), but an entry the bake reported is not there. The bake drops a
+failed write silently, so this check is what catches it. The related diagnostics name each missing
+probe and its scene.
+
+Fix: rerun `ludion export`; the bake could not write the entry (disk full or permissions?).",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9626,6 +9641,7 @@ mod tests {
         code::REFLECTION_PROBE_OVER_CAP,
         code::REFLECTION_PROBE_NOT_STORED,
         code::REFLECTION_PROBE_UNKNOWN,
+        code::REFLECTION_PROBE_NOT_BUNDLED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

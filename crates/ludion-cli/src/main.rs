@@ -825,7 +825,9 @@ enum Command {
     /// as a static library, and the default scene's directory plus every `[[import]]` tree (synced
     /// first, at its project-relative path) as bundle content. Reads the
     /// project's `ludion.toml` (`name`, `default_scene`, and `[ios] bundle_id`); needs Xcode and the
-    /// matching rustup target (`L0022` otherwise). Prints the `xcodebuild` command that builds it.
+    /// matching rustup target (`L0022` otherwise). A scene with reflection probes is baked into the
+    /// bundle through the game binary's `--bake-probes` (`L1281` if an entry is missing). Prints the
+    /// `xcodebuild` command that builds it.
     ///
     /// `--run` (simulator only) builds it, installs it on the first booted simulator (else boots an
     /// iPhone) and launches it, streaming the app's console until it exits; the app exits when its

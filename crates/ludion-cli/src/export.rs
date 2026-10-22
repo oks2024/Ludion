@@ -9,17 +9,23 @@
 //! The cheap refusals (flag combinations, manifest, output folder, toolchain) all run before the
 //! build. `--run` then builds the project with `xcodebuild` and installs and launches it in the
 //! simulator with `xcrun simctl`, every step's output streaming through.
+//!
+//! Reflection probes are baked against the written bundle, not the project: only `cooked/ios` is in
+//! the bundle, so the cooked maps' identities (which fold the cook target) key the probes as the
+//! device computes them. The bake assumes a GPU with ASTC, as every Apple-silicon Mac has.
 
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use clap::ValueEnum;
 use ludion_core::codes::code::{
-    EXPORT_FAILED, EXPORT_FLAGS_INVALID, EXPORT_TOOLCHAIN_UNAVAILABLE, OUTPUT_IO, SCENE_IO,
+    EXPORT_FAILED, EXPORT_FLAGS_INVALID, EXPORT_TOOLCHAIN_UNAVAILABLE, OUTPUT_IO,
+    REFLECTION_PROBE_NOT_BUNDLED, SCENE_IO,
 };
 use ludion_core::diagnostics::Diagnostic;
 
 use ludion_engine::manifest::{self, Manifest};
+use ludion_engine::{ProbeBake, ProbeBakeReport, ProbeOutcome};
 
 /// The file a finished export leaves in its folder, so a re-export may overwrite it.
 const MARKER: &str = ".ludion-export";
@@ -217,12 +223,20 @@ fn export(target: IosTarget, out: &Path, project: &Path, options: &Options) -> R
         &archive,
         options.replays,
     )?;
+    let probes = bake_bundle_probes(&project, &manifest, &out.join("content"))?;
 
     let mut line = format!(
         "shipped {} cooked ios maps ({:.1} MB)",
         shipped.maps,
         shipped.bytes as f64 / 1e6
     );
+    if probes.cubes > 0 {
+        line.push_str(&format!(
+            "; shipped {} probe cubes ({:.1} MB)",
+            probes.cubes,
+            probes.bytes as f64 / 1e6
+        ));
+    }
     if shipped.uncooked > 0 {
         line.push_str(&format!(
             "; {} referenced maps not cooked load their PNG",
@@ -438,6 +452,193 @@ fn archive_from_messages(stdout: &str) -> Option<PathBuf> {
                 .find(|name| name.ends_with(".a"))
                 .map(PathBuf::from)
         })
+        .next_back()
+}
+
+/// The probe entries the bundle's store holds after the bake.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ProbesShipped {
+    cubes: usize,
+    bytes: u64,
+}
+
+/// A probe as the user knows it: its `Name`, else its entity.
+fn probe_label(probe: &ProbeBake) -> String {
+    probe
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("entity {}", probe.entity.index()))
+}
+
+/// Checks each baked probe has its entry in the bundle's store. Reports the first missing one, the
+/// rest as `related`: the bake drops a failed write silently, so this is the only catch.
+fn check_probe_entries(
+    content_root: &Path,
+    baked: &[(PathBuf, ProbeBakeReport)],
+) -> Result<ProbesShipped, Diagnostic> {
+    let store = content_root.join(".ludion/cooked/probes");
+    let mut shipped = ProbesShipped::default();
+    let mut missing = Vec::new();
+    for (scene, report) in baked {
+        let scene = scene
+            .strip_prefix(content_root)
+            .unwrap_or(scene)
+            .to_string_lossy()
+            .replace('\\', "/");
+        for probe in &report.probes {
+            let entry = store.join(ludion_assets::cooked::cooked_file_name(probe.key));
+            match std::fs::metadata(&entry) {
+                Ok(meta) => {
+                    shipped.cubes += 1;
+                    shipped.bytes += meta.len();
+                }
+                Err(_) => missing.push(format!(
+                    "reflection probe `{}` of `{scene}` has no entry in the bundle's probe store",
+                    probe_label(probe)
+                )),
+            }
+        }
+    }
+    let mut missing = missing.into_iter();
+    let Some(first) = missing.next() else {
+        return Ok(shipped);
+    };
+    let mut diagnostic = Diagnostic::new(REFLECTION_PROBE_NOT_BUNDLED, first).with_help(
+        "rerun `ludion export`; the bake could not write the entry (disk full or permissions?)",
+    );
+    for message in missing {
+        diagnostic =
+            diagnostic.with_related(Diagnostic::new(REFLECTION_PROBE_NOT_BUNDLED, message));
+    }
+    Err(diagnostic)
+}
+
+/// Bakes every probe of the bundle's scenes into the bundle's store through the game binary
+/// (`--bake-probes`, at the quality the device resolves) and checks the entries landed. A project
+/// without probes builds nothing.
+fn bake_bundle_probes(
+    project: &Path,
+    manifest: &Manifest,
+    content_root: &Path,
+) -> Result<ProbesShipped, Failure> {
+    let scene_dir = manifest
+        .default_scene
+        .parent()
+        .expect("manifest::load guarantees a parent directory");
+    let scenes = crate::bake_probes::probe_scenes(&content_root.join(scene_dir));
+    if scenes.is_empty() {
+        return Ok(ProbesShipped::default());
+    }
+    // Explicit, so a developer's `LUDION_QUALITY` cannot leak in: the flag beats the environment.
+    let quality = manifest.ios_quality()?.unwrap_or("full");
+    let bin = build_host_bin(project)?;
+    let mut baked = Vec::new();
+    for scene in scenes {
+        let rel = scene.strip_prefix(content_root).unwrap_or(&scene);
+        let failed = |detail: String| {
+            export_failed(
+                format!("baking the probes of `{}` failed: {detail}", rel.display()),
+                "the game's own output is above; fix it and rerun",
+            )
+        };
+        let output = Command::new(&bin)
+            .arg("--scene")
+            .arg(&scene)
+            .args(["--bake-probes", "--quality", quality])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .output()
+            .map_err(|err| failed(format!("could not run `{}`: {err}", bin.display())))?;
+        let report = parse_bake_report(&String::from_utf8_lossy(&output.stdout));
+        let ok = report.as_ref().is_some_and(|(ok, _, _)| *ok);
+        if !output.status.success() || !ok {
+            let detail = report
+                .map(|(_, _, diagnostics)| diagnostics)
+                .filter(|diagnostics| !diagnostics.is_empty())
+                .unwrap_or_else(|| format!("{}", output.status));
+            return Err(failed(detail).into());
+        }
+        let (_, report, _) = report.expect("ok implies a parsed report");
+        baked.push((scene, report));
+    }
+    Ok(check_probe_entries(content_root, &baked)?)
+}
+
+/// `(ok, report, diagnostic messages)` from the JSON a game's `--bake-probes` prints
+/// ([`ProbeBakeReport::to_json`]'s shape).
+fn parse_bake_report(stdout: &str) -> Option<(bool, ProbeBakeReport, String)> {
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    let probes = json["probes"]
+        .as_array()?
+        .iter()
+        .map(|probe| {
+            Some(ProbeBake {
+                entity: serde_json::from_value(probe["entity"].clone()).ok()?,
+                name: probe["name"].as_str().map(str::to_string),
+                key: u64::from_str_radix(probe["key"].as_str()?, 16).ok()?,
+                outcome: serde_json::from_value::<ProbeOutcome>(probe["outcome"].clone()).ok()?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let diagnostics = json["diagnostics"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|d| d["message"].as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_default();
+    Some((
+        json["ok"].as_bool()?,
+        ProbeBakeReport {
+            store: json["store"].as_str().unwrap_or_default().into(),
+            probes,
+        },
+        diagnostics,
+    ))
+}
+
+/// Builds the project's host binary (default features: `--bake-probes` lives behind `wire`) and
+/// returns its path. Debug is enough: the bake is GPU work.
+fn build_host_bin(project: &Path) -> Result<PathBuf, Diagnostic> {
+    let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        .args(["build", "--manifest-path"])
+        .arg(project.join("Cargo.toml"))
+        .args(["--bins", "--message-format=json-render-diagnostics"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|err| {
+            export_failed(
+                format!("could not run cargo: {err}"),
+                "check that `cargo` is on PATH (`cargo --version`)",
+            )
+        })?;
+    if !output.status.success() {
+        return Err(export_failed(
+            format!(
+                "the host binary build, needed to bake reflection probes, failed ({})",
+                output.status
+            ),
+            "cargo printed its own errors above; fix the game's build and rerun",
+        ));
+    }
+    executable_from_messages(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
+        export_failed(
+            "cargo reported no executable for the game",
+            "the game needs a `[[bin]]` target to bake its probes",
+        )
+    })
+}
+
+/// The last `compiler-artifact` message's `executable`: the final crate built, the game's.
+fn executable_from_messages(stdout: &str) -> Option<PathBuf> {
+    stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["reason"] == "compiler-artifact")
+        .filter_map(|message| message["executable"].as_str().map(PathBuf::from))
         .next_back()
 }
 
@@ -789,6 +990,111 @@ fn simulator_lane(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn baked(key: u64, name: Option<&str>) -> ProbeBake {
+        ProbeBake {
+            entity: ludion_core::ids::EntityId::new(7, 0),
+            name: name.map(str::to_string),
+            key,
+            outcome: ProbeOutcome::Captured,
+        }
+    }
+
+    fn bundle_with_entries(tag: &str, keys: &[u64]) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ludion-export-probes-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = root.join(".ludion/cooked/probes");
+        std::fs::create_dir_all(&store).unwrap();
+        for key in keys {
+            std::fs::write(
+                store.join(ludion_assets::cooked::cooked_file_name(*key)),
+                [0u8; 10],
+            )
+            .unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn present_probe_entries_pass_and_are_counted() {
+        let root = bundle_with_entries("ok", &[1, 2]);
+        let report = ProbeBakeReport {
+            store: PathBuf::new(),
+            probes: vec![baked(1, Some("a")), baked(2, None)],
+        };
+        let shipped = check_probe_entries(&root, &[(root.join("scenes/m.yaml"), report)]).unwrap();
+        assert_eq!(
+            shipped,
+            ProbesShipped {
+                cubes: 2,
+                bytes: 20
+            }
+        );
+    }
+
+    #[test]
+    fn a_missing_probe_entry_names_the_scene_and_the_probe() {
+        let root = bundle_with_entries("miss", &[1]);
+        let report = ProbeBakeReport {
+            store: PathBuf::new(),
+            probes: vec![baked(1, Some("a")), baked(2, Some("lamp"))],
+        };
+        let err = check_probe_entries(&root, &[(root.join("scenes/m.yaml"), report)]).unwrap_err();
+        assert_eq!(err.code, REFLECTION_PROBE_NOT_BUNDLED);
+        assert!(err.message.contains("`lamp`") && err.message.contains("scenes/m.yaml"));
+        assert!(err.related.is_empty());
+    }
+
+    #[test]
+    fn several_missing_entries_are_one_diagnostic_with_related() {
+        let root = bundle_with_entries("two", &[]);
+        let report = ProbeBakeReport {
+            store: PathBuf::new(),
+            probes: vec![baked(1, None), baked(2, None)],
+        };
+        let err = check_probe_entries(&root, &[(root.join("m.yaml"), report)]).unwrap_err();
+        assert!(err.message.contains("entity 7"));
+        assert_eq!(err.related.len(), 1);
+    }
+
+    #[test]
+    fn the_last_artifacts_executable_is_the_host_binary() {
+        let stdout = concat!(
+            "{\"reason\":\"compiler-artifact\",\"executable\":\"/t/dep-bin\"}\n",
+            "{\"reason\":\"compiler-artifact\",\"executable\":\"/t/game\"}\n",
+            "{\"reason\":\"compiler-artifact\",\"executable\":null}\n",
+            "{\"reason\":\"build-finished\",\"success\":true}\n",
+        );
+        assert_eq!(
+            executable_from_messages(stdout),
+            Some(PathBuf::from("/t/game"))
+        );
+        assert_eq!(executable_from_messages("not json\n"), None);
+    }
+
+    #[test]
+    fn a_probe_less_bundle_builds_no_host_binary() {
+        let root =
+            std::env::temp_dir().join(format!("ludion-export-noprobe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let content = root.join("content");
+        std::fs::create_dir_all(content.join("scenes")).unwrap();
+        std::fs::write(
+            content.join("scenes/main.yaml"),
+            "format: 1\nentities: []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("ludion.toml"),
+            "name = \"probe\"\ndefault_scene = \"scenes/main.yaml\"\n",
+        )
+        .unwrap();
+        let manifest = manifest::load(&root).unwrap();
+        // The project has no Cargo.toml: any build attempt would fail.
+        let shipped = bake_bundle_probes(&root, &manifest, &content).ok().unwrap();
+        assert_eq!(shipped, ProbesShipped::default());
+    }
 
     #[test]
     fn a_missing_xcrun_is_the_toolchain_diagnostic() {
