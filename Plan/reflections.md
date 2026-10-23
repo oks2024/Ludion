@@ -89,10 +89,10 @@ interiors**. Large open water is not a driver.
      - normal + roughness;
      - F0 + specular occlusion.
    - Opaque meshes no longer add indirect specular themselves.
-   - The full-screen `reflections` pass evaluates SSR, box probes, sphere probes and the sky in one
-     shader, blends them, and adds the result to `scene`.
-   - With SSR off, the same pass runs with confidence 0. There is one code path, not an inline path
-     plus a correction.
+   - The full-screen `reflections` pass evaluates box probes, sphere probes and the sky (the fill) in
+     one shader and adds it to `scene`. With SSR on it also writes the fill to `refl_fill`, the colour
+     pyramid seeds from the lit scene, and `ssr_blend` adds `confidence × (hit·DFG − fill)`
+     (decision 29). There is one fill, not an inline path plus a correction.
    - This also moves the cube bindings out of the mesh shader's nearly full texture budget.
 6. **Receivers.**
    - Opaque meshes get the full chain.
@@ -116,8 +116,8 @@ interiors**. Large open water is not a driver.
    - Roughness comes from reading a pre-convolved scene-colour mip pyramid at the cone footprint
      given by decision 4.
    - It is deterministic and noise-free in a single frame.
-   - The trace input is the opaque scene colour before reflections are added, so reflections are
-     single-bounce.
+   - The trace reads the scene after the probe and sky fill and before transparents. It is still
+     single-bounce: a hit never carries SSR.
 10. **The trace resolution is output extent × `ssr_scale`**, independent of `render_scale`, followed
     by a depth- and normal-aware upsample to render extent. SSAA buys edge quality; reflections are
     roughness-blurred, so their cost follows what the player sees.
@@ -281,6 +281,28 @@ interiors**. Large open water is not a driver.
     - The gate runs in `check.mjs` and CI.
 28. **The human gate** is one sitting on a rain street in the reference game.
 
+### PBR correctness
+
+29. **SSR sees the fill; `reflections` is split, not duplicated.**
+    - The SSR colour pyramid used to seed from the scene before any indirect specular, so a metal
+      reflected by SSR went black and popped as confidence faded into the probe path.
+    - `reflections` keeps the one fill and, with SSR on, writes it to two targets (`scene` additively,
+      `refl_fill` replacing). The pyramid seeds from the lit scene. `ssr_blend` then adds
+      `confidence × (hdr_safe(hit·(F0·ab.x + ab.y)) − fill)`, which ends at `mix(fill, hit, confidence)`.
+    - Why not add the fill inside the seed: the fill is still evaluated once (the extras are an 8 B/px
+      MRT write and `ssr_blend`'s upsample, against a second full fill evaluation per render pixel plus
+      a 13-binding seed); the pyramid is exactly the pixel an SSR-off camera shows; and there stays one
+      fill.
+    - Containment: SSR-off frames and probe captures run the unchanged single-target path, and a
+      zero-confidence pixel adds exactly 0. Probe-store keys moved once with the shader text.
+    - Codegen note: factoring the fill into a function drifts Environment scenes by at most 1 LSB on a
+      few pixels, and one captured probe cube by the same last bit (verified math-neutral: inlining the
+      old body restores byte identity).
+    - Limit: probe-capture faces carry no probes, so a metal inside a capture holds only the sky's
+      fill. In an enclosed room a reflected metal can therefore still differ between SSR and the probe
+      (decision 17's multi-bounce limit, out of scope). The parity test over open sky
+      (`needs_gpu_ssr_over_probes_hands_off_without_a_pop`) measures the hand-off.
+
 ## Waves
 
 ### Wave 1 — Foundation: one blend site
@@ -349,6 +371,16 @@ interiors**. Large open water is not a driver.
 - Probe placement in the reference game, recorded in its own private tree.
 - **Owed:** the M4 twins, and the decision-28 sitting in `Plan/owed.md`.
 - **Exit:** the parity gate is green in `check.mjs`, and the sitting is queued.
+
+### Wave 5 — PBR correctness
+
+- A PBR-correctness review of W1–W4 (2026-10-23).
+- Fix 1–4: the SSR pyramid without indirect specular (decision 29), the relight scaling emissive, the
+  DFG LUT's uncorrelated visibility, no multi-scatter compensation.
+- Verify 5–9 first and fix only what is confirmed; refuted ones are recorded: distance-based probe
+  roughness, dominant direction, specular-occlusion form, decision 7's text, relight colour limits.
+- **Owed:** the M4/3090 blesses (`Plan/owed.md`).
+- **Exit:** 1–4 shipped with provisional goldens; 5–9 each verified and either fixed or recorded.
 
 ## Status
 

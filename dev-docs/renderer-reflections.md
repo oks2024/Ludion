@@ -11,11 +11,11 @@ description: Indirect specular: the reflections blend site, surface targets, lob
 - `crates/ludion-renderer/src/shaders/snippets/{specular_ibl,gi_probe}.wgsl` — binding-free sky specular and the sky-visibility read.
 
 ## Dataflow
-`scene` (opaque meshes, a multi-target pass) → `reflections` → `transparents` (sky, ground markers, sprites, particles, text). All three write `scene`, and `reflections` and `transparents` also attach or read `scene_depth`; the graph orders them by declaration order (`ludion devdocs ludion-render-graph`).
+`scene` (opaque meshes, a multi-target pass) → `reflections` → (`ssr_blend`, SSR only) → `transparents` (sky, ground markers, sprites, particles, text). Each pass writes `scene`, and `reflections` and `transparents` also attach or read `scene_depth`; the graph orders them by declaration order (`ludion devdocs ludion-render-graph`).
 
 - `scene` writes the HDR colour plus two surface targets: `scene_normal` (world normal in `xyz`, clamped roughness in `w`; `Rgba16Float`) and `scene_specular` (F0 in `rgb`, specular occlusion in `a`; `Rgba8UnormSrgb`). Specular occlusion is SSAO × the occlusion map × the hit-flash complement.
-- `reflections` is the **one blend site**: it adds `sky_specular × ibl_intensity × occlusion` into `scene`. `mesh.wgsl` adds no indirect specular and never samples the specular cube. A scene without an `Environment` adds exactly zero, before any sample.
-- The resolution chain is SSR, then probes, then the sky cube (`ludion devdocs renderer-ssr`, `ludion devdocs renderer-probes`). Every source joins this pass, so the sources blend in one place.
+- `reflections` is the **one fill site**: it adds the probe and sky fill (`sky_specular × ibl_intensity × occlusion` over the sky) into `scene`; with SSR on it also writes the same fill to `refl_fill`, and `ssr_blend` then layers the trace over it (`ludion devdocs renderer-ssr`). `mesh.wgsl` adds no indirect specular and never samples the specular cube. A scene without an `Environment` adds exactly zero, before any sample.
+- The fill chain is probes, then the sky cube (`ludion devdocs renderer-probes`), and SSR mixes over it afterwards in `ssr_blend`.
 
 ## Rules
 - **The lobe function is one function for every path.** `cone_half_angle(r) = 2·atan(r²)`: 0 for a mirror, exactly π/2 at r = 1. The cube lod solves the lobe's solid angle against K texels, K = 32π, so r = 1 fills the 8×8 face and the chain stops there. A one-texel match sent rough metal to 1×1 faces and made a cube-face artifact on the gallery night-sky tile. `mip_roughness` is the exact inverse of `cube_lod` above mip 0, so the prefilter and the lookup agree by construction; the `needs_gpu_` test in `lobe.rs` holds `lobe.wgsl` to the Rust. Change one twin, change both.

@@ -286,11 +286,22 @@ const BLEND_POST: &str = "/entities/0/components/PostProcess";
 const BLEND_CUBE_AWAY: &str = "/entities/4/components/Transform/translation/1=1000";
 /// Pixels the confidence masks are eroded by.
 const MASK_ERODE: usize = 4;
-/// The largest mean relative luma step between the probe-only and the SSR-only render over the chrome
-/// props, where SSR is fully confident. Measured on an unpinned M5: 1.0000 before SSR's colour
-/// pyramid carried the fill (the props traced black), 0.3808 after; the remainder is real parallax
-/// between the probe's single capture point and the screen-space hit.
-const MAX_POP: f64 = 0.45;
+/// The fixture's four pillars (entities 6..=9), moved away to find the pixels that reflect them.
+const BLEND_PILLARS: std::ops::RangeInclusive<usize> = 6..=9;
+
+/// The hand-off has no absolute pop budget, because SSR and a probe disagree on *where* near content is
+/// even when they agree on how it looks: the probe captures from one point and a sphere volume
+/// reprojects it (parallax and cube resolution), SSR reads the screen. The same disagreement already
+/// exists for dielectric pillars, whose fill both paths carry, so the dielectric reflection is the
+/// reference and the chrome props may be no worse than it: `pop_metal <= POP_K * pop_dielectric`, with
+/// `POP_K = 1` because the fill the metal adds is the same function of the same inputs, so nothing
+/// but the placement error is left. Likewise brightness: the metal region's mean luma under SSR over
+/// its mean luma under the probe must sit as close to 1 as the dielectric's does, to within
+/// `RATIO_FLOOR` (the 8-bit rounding of a region mean, not a fit). Measured on an unpinned M5 over the
+/// cube's mask: pop 0.381, ratio 1.017 (the cube's direct pixels 0.281, 0.972), against the pillars'
+/// reflection 0.516, 0.741; before SSR's colour pyramid carried the fill the cube traced black: pop 1.0.
+const POP_K: f64 = 1.0;
+const RATIO_FLOOR: f64 = 0.05;
 
 /// The metal props of `reflection-blend-metal.yaml` hand off from the probe fill to SSR without a pop:
 /// SSR's colour pyramid carries the fill, so where the trace is fully confident it shows the props
@@ -319,6 +330,12 @@ fn needs_gpu_ssr_over_probes_hands_off_without_a_pop() {
     let mut moved = with("0");
     moved.push(BLEND_CUBE_AWAY.to_string());
     let (cube_away, _) = render(scene, &moved, None).expect("the adapter rendered the probe frame");
+    let mut no_pillars = with("0");
+    no_pillars.extend(
+        BLEND_PILLARS.map(|i| format!("/entities/{i}/components/Transform/translation/1=1000")),
+    );
+    let (pillars_away, _) =
+        render(scene, &no_pillars, None).expect("the adapter rendered the probe frame");
 
     // Linear luma (0..255 scale): the fixture has no tonemap, so the blend is linear only before the
     // sRGB encoding.
@@ -338,11 +355,12 @@ fn needs_gpu_ssr_over_probes_hands_off_without_a_pop() {
             .map(|px| 0.2126 * linear(px[0]) + 0.7152 * linear(px[1]) + 0.0722 * linear(px[2]))
             .collect()
     };
-    let (p, h, c, away) = (
+    let (p, h, c, away, no_pillar) = (
         pixels(&probe),
         pixels(&half),
         pixels(&full),
         pixels(&cube_away),
+        pixels(&pillars_away),
     );
     // The view shows the half-resolution trace, while the blend upsamples it: a pixel is only taken as
     // confident (or zero) when every pixel within `MASK_ERODE` agrees, so the mask edge is not measured.
@@ -364,11 +382,11 @@ fn needs_gpu_ssr_over_probes_hands_off_without_a_pop() {
             .collect()
     };
     let (confident, unconfident) = (eroded(255), eroded(0));
-    let props: Vec<bool> = p
-        .iter()
-        .zip(&away)
-        .map(|(a, b)| (a - b).abs() > 1.0)
-        .collect();
+    let differs = |a: &[f64], b: &[f64]| -> Vec<bool> {
+        a.iter().zip(b).map(|(a, b)| (a - b).abs() > 1.0).collect()
+    };
+    let props = differs(&p, &away);
+    let pillar_reflections = differs(&p, &no_pillar);
 
     // Confidence 0 is the probe-only frame, byte for byte.
     for (name, image) in [("ssr 0.5", &half), ("ssr 1", &full)] {
@@ -383,21 +401,34 @@ fn needs_gpu_ssr_over_probes_hands_off_without_a_pop() {
         );
     }
 
-    // Confidence 1 is SSR-only and agrees with the probe-only look of the props: no pop.
-    let (mut pop, mut n) = (0.0, 0usize);
-    for i in (0..p.len()).filter(|&i| confident[i] && props[i]) {
-        pop += (c[i] - p[i]).abs() / p[i].max(1.0);
-        n += 1;
-    }
-    assert!(
-        n >= 500,
-        "only {n} confident prop pixels: the props no longer frame a measurement"
+    // Confidence 1 is SSR-only and agrees with the probe-only look of the props: no pop beyond the
+    // placement disagreement the dielectric reflection shows.
+    let measure = |mask: &[bool]| -> (f64, f64, usize) {
+        let (mut pop, mut n, mut sum_p, mut sum_c) = (0.0, 0usize, 0.0, 0.0);
+        for i in (0..p.len()).filter(|&i| confident[i] && mask[i]) {
+            pop += (c[i] - p[i]).abs() / p[i].max(1.0);
+            (sum_p, sum_c, n) = (sum_p + p[i], sum_c + c[i], n + 1);
+        }
+        (pop / n.max(1) as f64, sum_c / sum_p.max(f64::EPSILON), n)
+    };
+    let (pop, ratio, n) = measure(&props);
+    let (pop_ref, ratio_ref, n_ref) = measure(&pillar_reflections);
+    println!(
+        "ssr over probes: props pop {pop:.4} ratio {ratio:.4} ({n} px); pillar reflections pop \
+         {pop_ref:.4} ratio {ratio_ref:.4} ({n_ref} px)"
     );
-    let pop = pop / n as f64;
-    println!("ssr over probes: pop {pop:.4} over {n} pixels (MAX_POP {MAX_POP})");
     assert!(
-        pop <= MAX_POP,
-        "the hand-off pops: mean relative luma step {pop:.4} > {MAX_POP}"
+        n >= 500 && n_ref >= 500,
+        "only {n} prop and {n_ref} pillar-reflection confident pixels: the fixture no longer frames a measurement"
+    );
+    assert!(
+        pop <= POP_K * pop_ref,
+        "the hand-off pops: mean relative luma step {pop:.4} on the chrome props exceeds {POP_K} x the \
+         dielectric reflection's {pop_ref:.4}"
+    );
+    assert!(
+        (ratio - 1.0).abs() <= (ratio_ref - 1.0).abs().max(RATIO_FLOOR),
+        "the props are {ratio:.4}x as bright under SSR as under the probe; the dielectric reflection is {ratio_ref:.4}x"
     );
 
     // Halfway is halfway: monotonic, no step.
