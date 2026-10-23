@@ -79,7 +79,9 @@ struct EnvParams {
     gi_bounce: vec4<f32>,
 };
 @group(3) @binding(0) var irradiance_tex: texture_cube<f32>;
-// Bindings 1 and 2 (the specular cube and the BRDF LUT) are the `reflections` pass's.
+// Binding 1 (the specular cube) is the `reflections` pass's; binding 2, the split-sum BRDF LUT, is read by
+// both passes (here for the direct lobes' multi-scatter compensation and the diffuse's `1 - E_ss`).
+@group(3) @binding(2) var env_brdf_lut: texture_2d<f32>;
 @group(3) @binding(3) var env_samp: sampler;
 @group(3) @binding(4) var<uniform> env: EnvParams;
 // The blurred SSAO factor, at a fraction of the output extent — read with the shared linear sampler,
@@ -254,14 +256,6 @@ fn distribution_ggx(ndh: f32, alpha: f32) -> f32 {
     return a2 / (PI * d * d);
 }
 
-// Smith height-correlated visibility (the 1 / (4 ndl ndv) denominator is folded in).
-fn visibility_smith(ndl: f32, ndv: f32, alpha: f32) -> f32 {
-    let a2 = alpha * alpha;
-    let v = ndl * sqrt(ndv * ndv * (1.0 - a2) + a2);
-    let l = ndv * sqrt(ndl * ndl * (1.0 - a2) + a2);
-    return 0.5 / max(v + l, 1e-5);
-}
-
 fn fresnel_schlick(vdh: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - vdh, 0.0, 1.0), 5.0);
 }
@@ -378,10 +372,12 @@ fn shade(
     let to_camera = camera.cam_pos.xyz - world_pos;
     let v = normalize(to_camera);
     let ndv = max(dot(n, v), 1e-4);
+    // Before the light loop: its non-uniform bound forbids implicit derivatives.
+    let dfg = textureSampleLevel(env_brdf_lut, env_samp, vec2<f32>(ndv, roughness), 0.0).rg;
+    let energy = dfg_energy(dfg, f0);
 
-    // Ambient / environment term. Flag off ⇒ the exact historical flat ambient (`ambient * albedo`),
-    // so an env-less scene is byte-identical. Flag on ⇒ the irradiance cube feeds the diffuse lobe,
-    // scaled by `ibl_intensity`; the sky's specular is added later by the `reflections` pass.
+    // Ambient / environment term. Flag off ⇒ the exact historical flat ambient (`ambient * albedo`).
+    // Flag on ⇒ the irradiance cube feeds the diffuse lobe, scaled by `ibl_intensity`; the sky's specular is added later by the `reflections` pass.
     var acc: vec3<f32>;
     if (env.params.x > 0.5) {
         let irradiance = textureSampleLevel(irradiance_tex, env_samp, n, 0.0).rgb;
@@ -390,6 +386,8 @@ fn shade(
         // `Environment.ambient` is a flat floor under the sky's IBL, not scaled by `ibl_intensity`.
         // `diffuse`, not `albedo`, for the reason the IBL term uses it.
         acc = acc + lights.ambient.rgb * diffuse;
+        // The specular lobe took E_ss of the energy; the diffuse keeps the rest (Filament's 1 - E).
+        acc = acc * (vec3<f32>(1.0) - (f0 * dfg.x + vec3<f32>(dfg.y)));
     } else {
         acc = lights.ambient.rgb * albedo;
     }
@@ -491,7 +489,7 @@ fn shade(
         let vis = visibility_smith(ndl, ndv, alpha);
         let f = fresnel_schlick(vdh, f0);
         // Specular scaled by PI to stay proportioned with the 1/PI-free diffuse lobe.
-        let specular = PI * d * vis * f;
+        let specular = PI * d * vis * f * energy;
         acc = acc + (diffuse + specular) * radiance;
     }
 
@@ -528,13 +526,13 @@ fn shade(
             let alpha_wide = min(alpha + sun.disc_spread, 1.0);
             let norm = (alpha / alpha_wide) * (alpha / alpha_wide);
             let specular_rep = PI * distribution_ggx(ndh_rep, alpha) * visibility_smith(ndl_rep, ndv, alpha)
-                * fresnel_schlick(vdh_rep, f0) * norm;
+                * fresnel_schlick(vdh_rep, f0) * norm * energy;
             acc = acc + (diffuse * ndl_sun + specular_rep * ndl_rep) * sun.color.rgb * shadow;
         } else {
             let d_sun = distribution_ggx(ndh_sun, alpha);
             let vis_sun = visibility_smith(ndl_sun, ndv, alpha);
             let f_sun = fresnel_schlick(vdh_sun, f0);
-            let specular_sun = PI * d_sun * vis_sun * f_sun;
+            let specular_sun = PI * d_sun * vis_sun * f_sun * energy;
             acc = acc + (diffuse + specular_sun) * sun.color.rgb * ndl_sun * shadow;
         }
     }

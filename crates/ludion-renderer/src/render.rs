@@ -2328,6 +2328,10 @@ impl Renderer {
                     resource: wgpu::BindingResource::TextureView(&env.irradiance),
                 },
                 wgpu::BindGroupEntry {
+                    binding: shader_gen::ENV_BRDF_LUT_BINDING,
+                    resource: wgpu::BindingResource::TextureView(&env.brdf),
+                },
+                wgpu::BindGroupEntry {
                     binding: ENV_SAMP_BINDING,
                     resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
                 },
@@ -4752,6 +4756,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Lights,
             Snippet::Bayer,
             Snippet::Hdr,
+            Snippet::Dfg,
             Snippet::GiProbe,
         ],
         layouts: &[
@@ -4945,6 +4950,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::FullscreenVs,
             Snippet::Hdr,
             Snippet::Lobe,
+            Snippet::Dfg,
             Snippet::SpecularIbl,
             Snippet::ClusterGrid,
             Snippet::Probes,
@@ -4956,7 +4962,12 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::SsrBlend,
         file_name: "ssr_blend.wgsl",
         body: include_str!("shaders/ssr_blend.wgsl"),
-        snippets: &[Snippet::FullscreenVs, Snippet::Hdr, Snippet::Ssr],
+        snippets: &[
+            Snippet::FullscreenVs,
+            Snippet::Hdr,
+            Snippet::Dfg,
+            Snippet::Ssr,
+        ],
         layouts: &[LayoutId::SsrBlend],
     },
     ShaderDesc {
@@ -5099,6 +5110,9 @@ enum Snippet {
     /// `specular_cube_lod`, the specular cube's lod for a roughness (`specular_ibl.wgsl`, so the
     /// reflections pass; the twin of `lobe.rs::cube_lod`).
     Lobe,
+    /// `visibility_smith` and the multi-scatter DFG compensation (`dfg_energy`, `dfg_specular`),
+    /// binding-free (mesh, reflections, ssr_blend, and the `ibl.wgsl` compute).
+    Dfg,
     /// `sky_specular`, the sky's specular IBL for a surface point, binding-free (reflections).
     SpecularIbl,
     /// `sh_l1` and `sky_visibility_at`, the one read of the sky-visibility probe volume,
@@ -5134,6 +5148,7 @@ impl Snippet {
             Snippet::Skin => "skin.wgsl",
             Snippet::Hdr => "hdr.wgsl",
             Snippet::Lobe => "lobe.wgsl",
+            Snippet::Dfg => "dfg.wgsl",
             Snippet::SpecularIbl => "specular_ibl.wgsl",
             Snippet::GiProbe => "gi_probe.wgsl",
             Snippet::Footprint => "footprint.wgsl",
@@ -5157,6 +5172,7 @@ impl Snippet {
             Snippet::Skin => include_str!("shaders/snippets/skin.wgsl"),
             Snippet::Hdr => include_str!("shaders/snippets/hdr.wgsl"),
             Snippet::Lobe => include_str!("shaders/snippets/lobe.wgsl"),
+            Snippet::Dfg => include_str!("shaders/snippets/dfg.wgsl"),
             Snippet::SpecularIbl => include_str!("shaders/snippets/specular_ibl.wgsl"),
             Snippet::GiProbe => include_str!("shaders/snippets/gi_probe.wgsl"),
             Snippet::Footprint => include_str!("shaders/snippets/footprint.wgsl"),
@@ -5181,6 +5197,7 @@ impl Snippet {
             Snippet::Skin,
             Snippet::Hdr,
             Snippet::Lobe,
+            Snippet::Dfg,
             Snippet::SpecularIbl,
             Snippet::GiProbe,
             Snippet::Footprint,
@@ -5285,7 +5302,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Env,
-        create: shader_gen::create_irradiance_tex_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_bgl,
+        create: shader_gen::create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_bgl,
     },
     LayoutDesc {
         id: LayoutId::MeshMaterial,

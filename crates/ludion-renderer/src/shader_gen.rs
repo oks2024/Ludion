@@ -1395,6 +1395,10 @@ pub const SHADOW_SAMP_BINDING: u32 = 2;
 pub const IRRADIANCE_TEX_GROUP: u32 = 3;
 pub const IRRADIANCE_TEX_BINDING: u32 = 0;
 
+/// `env_brdf_lut` — `@group(3) @binding(2)`, in `mesh.wgsl`.
+pub const ENV_BRDF_LUT_GROUP: u32 = 3;
+pub const ENV_BRDF_LUT_BINDING: u32 = 2;
+
 /// `env_samp` — `@group(3) @binding(3)`, in `mesh.wgsl`.
 pub const ENV_SAMP_GROUP: u32 = 3;
 pub const ENV_SAMP_BINDING: u32 = 3;
@@ -2033,12 +2037,12 @@ pub fn create_hiz_src_hiz_samp_hiz_params_bgl(device: &wgpu::Device) -> wgpu::Bi
     })
 }
 
-/// Bind group layout `irradiance_tex_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex` (@group 3), from `mesh.wgsl`.
-pub fn create_irradiance_tex_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_bgl(
+/// Bind group layout `irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex` (@group 3), from `mesh.wgsl`.
+pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("irradiance_tex_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex"),
+        label: Some("irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: IRRADIANCE_TEX_BINDING,
@@ -2046,6 +2050,16 @@ pub fn create_irradiance_tex_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::Cube,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: ENV_BRDF_LUT_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
                 count: None,

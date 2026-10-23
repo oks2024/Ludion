@@ -139,6 +139,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "lights.wgsl",
             "bayer.wgsl",
             "hdr.wgsl",
+            "dfg.wgsl",
             "gi_probe.wgsl",
         ],
     ),
@@ -149,6 +150,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("text.wgsl", &["camera.wgsl", "glyph.wgsl"]),
     ("ui_text.wgsl", &["glyph.wgsl"]),
     ("blit.wgsl", &["fullscreen_vs.wgsl"]),
+    ("ibl.wgsl", &["dfg.wgsl"]),
     ("bloom_down.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("bloom_up.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("box_blur.wgsl", &["fullscreen_vs.wgsl"]),
@@ -177,6 +179,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "fullscreen_vs.wgsl",
             "hdr.wgsl",
             "lobe.wgsl",
+            "dfg.wgsl",
             "specular_ibl.wgsl",
             "cluster_grid.wgsl",
             "probes.wgsl",
@@ -203,7 +206,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("ssao.wgsl", &["fullscreen_vs.wgsl", "bayer.wgsl"]),
     (
         "ssr_blend.wgsl",
-        &["fullscreen_vs.wgsl", "hdr.wgsl", "ssr.wgsl"],
+        &["fullscreen_vs.wgsl", "hdr.wgsl", "dfg.wgsl", "ssr.wgsl"],
     ),
     (
         "ssr_color.wgsl",

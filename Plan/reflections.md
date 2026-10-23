@@ -306,6 +306,16 @@ interiors**. Large open water is not a driver.
       (decision 17's multi-bounce limit, out of scope). The parity test over open sky
       (`needs_gpu_ssr_over_probes_hands_off_without_a_pop`) measures the hand-off.
 
+30. **One DFG, energy-compensated.**
+    - The split-sum LUT integrates the direct lobe's own height-correlated Smith visibility
+      (`snippets/dfg.wgsl`), so R + G is the single-scatter albedo at F0 = 1.
+    - Every specular site (point/spot loop, sun, sun disc, sky fill, probes, SSR's `hit·DFG`) is scaled by
+      `1 + F0·(1/(a+b) − 1)`; with an `Environment`, the IBL diffuse and ambient floor take `1 − (F0·a + b)`.
+    - The direct lobes compensate with or without an `Environment`: multi-scatter is a BRDF property, so
+      env-less scenes with specular move too (dielectrics by under 1% of their highlight, rough metals most).
+      The mesh pass binds the LUT at `@group(3) @binding(2)`. Render-only: no bake-version bump, the store
+      keys move with the shader text.
+
 ## Waves
 
 ### Wave 1 — Foundation: one blend site
@@ -386,6 +396,8 @@ interiors**. Large open water is not a driver.
   stores T and E (a two-layer KTX2 entry, bake version 5; the emissive cubes are allocated only when a
   probe sees emissive), and the resolve is `T · ratio + E · (1 − ratio)` (decision 17). The probe dump
   (`read_probes`) still shows T only.
+- Shipped items 3–4 (decision 30): the LUT's correlated visibility and multi-scatter energy on every
+  specular site and the IBL diffuse.
 - **Owed:** the M4/3090 blesses (`Plan/owed.md`).
 - **Exit:** 1–4 shipped with provisional goldens; 5–9 each verified and either fixed or recorded.
 

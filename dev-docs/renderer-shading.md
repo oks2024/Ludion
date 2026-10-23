@@ -20,6 +20,11 @@ re-blesses every mesh-bearing golden:
   `ludion devdocs renderer-clustering`); the specular lobe is scaled by `π` (`π·D·V·F`) so the
   two lobes stay physically proportioned against that convention. Break the convention on one lobe
   and every lit scene changes brightness rather than gaining highlights.
+- **Multi-scatter energy** — every specular site (point/spot loop, sun, sun disc, and the sky, probe
+  and SSR fills) is scaled by `dfg_energy = 1 + F0·(1/(a+b) − 1)` from the split-sum LUT
+  (`snippets/dfg.wgsl`), with or without an `Environment`: it is a BRDF property. With an
+  `Environment`, the IBL diffuse and the ambient floor are scaled by `1 − (F0·a + b)`, the energy the
+  specular took.
 - **Ambient** — `ambient.rgb × albedo` when the scene carries no `Environment`. An `Environment`
   supersedes this branch entirely with split-sum image-based lighting
   (`ludion devdocs renderer-ibl`).

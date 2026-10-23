@@ -141,7 +141,7 @@ fn reflection_fill(pos: vec4<f32>) -> vec3<f32> {
         }
         if (coverage > 0.0) {
             let ab = textureSampleLevel(refl_brdf_lut, refl_samp, vec2<f32>(ndv, roughness), 0.0).rg;
-            fill = radiance * (spec.rgb * ab.x + vec3<f32>(ab.y)) * spec.a + sky_fill * (1.0 - coverage);
+            fill = radiance * dfg_specular(ab, spec.rgb) * spec.a + sky_fill * (1.0 - coverage);
         }
     }
     return hdr_safe(fill);

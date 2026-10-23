@@ -195,15 +195,9 @@ fn downsample(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(downsample_dst, vec2<i32>(gid.xy), layer, sum * 0.25);
 }
 
-fn geometry_smith_ibl(ndv: f32, ndl: f32, roughness: f32) -> f32 {
-    let k = (roughness * roughness) / 2.0;
-    let gv = ndv / (ndv * (1.0 - k) + k);
-    let gl = ndl / (ndl * (1.0 - k) + k);
-    return gv * gl;
-}
-
 // The split-sum BRDF LUT (environment-independent): the scale/bias for f0, integrated once. R = scale,
-// G = bias; the mesh shader forms `f0 * scale + bias`.
+// G = bias; shaders form `f0 * scale + bias`. Weighted by the direct lobe's height-correlated Smith
+// visibility, so R + G = the single-scatter albedo at F0 = 1.
 @compute @workgroup_size(8, 8, 1)
 fn brdf(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(brdf_out);
@@ -222,8 +216,8 @@ fn brdf(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ndh = max(h.z, 0.0);
         let vdh = max(dot(v, h), 0.0);
         if (ndl > 0.0) {
-            let g = geometry_smith_ibl(ndv, ndl, roughness);
-            let g_vis = (g * vdh) / max(ndh * ndv, 1e-6);
+            let alpha = roughness * roughness;
+            let g_vis = 4.0 * visibility_smith(ndl, ndv, alpha) * ndl * vdh / max(ndh, 1e-6);
             let fc = pow(1.0 - vdh, 5.0);
             a = a + (1.0 - fc) * g_vis;
             b = b + fc * g_vis;

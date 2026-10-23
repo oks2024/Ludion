@@ -27,6 +27,8 @@ extents and mip counts are the `*_SIZE`/`*_MIPS` consts in `ibl.rs`, sample coun
   function every reflection path shares: `ludion devdocs renderer-reflections`.
 - **BRDF LUT** — environment-independent (`NdotV` × roughness → a `(scale, bias)` pair for `f0`),
   computed **once** in `Ibl::new`. Every environment reuses it; only the two cubes re-bake per sky.
+  It integrates the direct lobe's own height-correlated Smith visibility (`snippets/dfg.wgsl`), so
+  R + G is the single-scatter albedo at `F0 = 1` and `dfg_specular` can compensate multi-scatter.
 
 All three passes are deterministic by construction: fixed sample counts, a pure Hammersley
 low-discrepancy sequence (`radical_inverse_vdc`/`hammersley`), no RNG and no atomics — same input,

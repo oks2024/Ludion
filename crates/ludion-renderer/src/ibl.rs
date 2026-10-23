@@ -60,6 +60,9 @@ pub(crate) struct Ibl {
     downsample_pipeline: wgpu::ComputePipeline,
     /// The environment-independent split-sum LUT (2D), computed once.
     brdf_view: wgpu::TextureView,
+    /// The texture behind `brdf_view`, kept so tests can read the LUT back.
+    #[allow(dead_code, reason = "read by the tests")]
+    brdf_texture: wgpu::Texture,
     /// A 1×1×6 cube bound to both cube slots on an env-less frame (flag off ⇒ never sampled).
     fallback_cube: wgpu::TextureView,
     cache: RefCell<Option<Cached>>,
@@ -71,8 +74,10 @@ impl Ibl {
         let device = gpu.device();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ibl"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "shaders/ibl.wgsl"
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(concat!(
+                include_str!("shaders/snippets/dfg.wgsl"),
+                "\n",
+                include_str!("shaders/ibl.wgsl")
             ))),
         });
         let pipeline = |entry: &str| {
@@ -91,7 +96,7 @@ impl Ibl {
         let downsample_pipeline = pipeline("downsample");
         let brdf_pipeline = pipeline("brdf");
 
-        let brdf_view = compute_brdf(gpu, &brdf_pipeline);
+        let (brdf_view, brdf_texture) = compute_brdf(gpu, &brdf_pipeline);
         let fallback_cube = fallback_cube(device);
 
         Ibl {
@@ -100,6 +105,7 @@ impl Ibl {
             prefilter_cube_pipeline,
             downsample_pipeline,
             brdf_view,
+            brdf_texture,
             fallback_cube,
             cache: RefCell::new(None),
         }
@@ -531,7 +537,7 @@ fn fallback_cube(device: &wgpu::Device) -> wgpu::TextureView {
 }
 
 /// Computes the split-sum BRDF LUT (once), returning its 2D sampling view.
-fn compute_brdf(gpu: &Gpu, pipeline: &wgpu::ComputePipeline) -> wgpu::TextureView {
+fn compute_brdf(gpu: &Gpu, pipeline: &wgpu::ComputePipeline) -> (wgpu::TextureView, wgpu::Texture) {
     let device = gpu.device();
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("ibl brdf lut"),
@@ -544,7 +550,9 @@ fn compute_brdf(gpu: &Gpu, pipeline: &wgpu::ComputePipeline) -> wgpu::TextureVie
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: IBL_FORMAT,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let storage_view = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -574,11 +582,12 @@ fn compute_brdf(gpu: &Gpu, pipeline: &wgpu::ComputePipeline) -> wgpu::TextureVie
         pass.dispatch_workgroups(BRDF_SIZE.div_ceil(wx), BRDF_SIZE.div_ceil(wy), 1);
     }
     gpu.queue().submit(Some(encoder.finish()));
-    texture.create_view(&wgpu::TextureViewDescriptor {
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
         label: Some("ibl brdf view"),
         dimension: Some(wgpu::TextureViewDimension::D2),
         ..Default::default()
-    })
+    });
+    (view, texture)
 }
 
 #[cfg(test)]
@@ -694,6 +703,116 @@ pub(crate) mod tests {
                 out
             })
             .collect()
+    }
+
+    /// The LUT's two channels (R = scale, G = bias) by midpoint quadrature over the hemisphere, in f64:
+    /// ∫ (1 or Fc) · D · V · ndl dω, with `correlated` choosing the height-correlated visibility the
+    /// LUT integrates or the old uncorrelated Schlick-Smith (k = α/2) it replaced.
+    fn integrate_dfg(
+        ndv: f64,
+        roughness: f64,
+        correlated: bool,
+        mu_steps: u32,
+        phi_steps: u32,
+    ) -> [f64; 2] {
+        let alpha = roughness * roughness;
+        let a2 = alpha * alpha;
+        let v = [(1.0 - ndv * ndv).sqrt(), 0.0, ndv];
+        let (mut a, mut b) = (0.0, 0.0);
+        for i in 0..mu_steps {
+            let ndl = (f64::from(i) + 0.5) / f64::from(mu_steps);
+            let sin_l = (1.0 - ndl * ndl).sqrt();
+            for j in 0..phi_steps {
+                let phi = std::f64::consts::PI * (f64::from(j) + 0.5) / f64::from(phi_steps);
+                let l = [sin_l * phi.cos(), sin_l * phi.sin(), ndl];
+                let h = [l[0] + v[0], l[1] + v[1], l[2] + v[2]];
+                let len = (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt();
+                let h = [h[0] / len, h[1] / len, h[2] / len];
+                let ndh = h[2];
+                let vdh = v[0] * h[0] + v[1] * h[1] + v[2] * h[2];
+                let d_ndh = ndh * ndh * (a2 - 1.0) + 1.0;
+                let d = a2 / (std::f64::consts::PI * d_ndh * d_ndh);
+                let vis = if correlated {
+                    let gv = ndl * (ndv * ndv * (1.0 - a2) + a2).sqrt();
+                    let gl = ndv * (ndl * ndl * (1.0 - a2) + a2).sqrt();
+                    0.5 / (gv + gl)
+                } else {
+                    let k = alpha / 2.0;
+                    let g = ndv / (ndv * (1.0 - k) + k) * (ndl / (ndl * (1.0 - k) + k));
+                    g / (4.0 * ndl * ndv)
+                };
+                let fc = (1.0 - vdh).powi(5);
+                let w = d * vis * ndl;
+                a += (1.0 - fc) * w;
+                b += fc * w;
+            }
+        }
+        // dω = dμ dφ; φ covers half the circle, doubled by symmetry.
+        let cell = 2.0 * std::f64::consts::PI / (f64::from(mu_steps) * 2.0 * f64::from(phi_steps));
+        [a * cell * 2.0, b * cell * 2.0]
+    }
+
+    /// The LUT is the numeric integral of the direct lobe's own BRDF, so R + G is its single-scatter
+    /// albedo at F0 = 1.
+    #[test]
+    fn needs_gpu_the_dfg_lut_matches_a_numeric_integration() {
+        let Some(gpu) = gpu_or_skip("the DFG LUT oracle test") else {
+            return;
+        };
+        let ibl = Ibl::new(&gpu);
+        let lut = read_rgba16_mips(&gpu, &ibl.brdf_texture).remove(0);
+        let size = BRDF_SIZE as usize;
+        let texel = |x: usize, y: usize| {
+            [
+                f64::from(lut[(y * size + x) * 4]),
+                f64::from(lut[(y * size + x) * 4 + 1]),
+            ]
+        };
+        let center = |i: usize| (i as f64 + 0.5) / f64::from(BRDF_SIZE);
+        let mut max_err = 0.0_f64;
+        // (roughness, ndv), the review's points first.
+        let points = [(0.25, 0.2), (0.5, 0.2), (0.5, 0.5), (0.75, 0.5), (1.0, 0.5)];
+        for (r, ndv) in points {
+            let x = ((ndv * f64::from(BRDF_SIZE)) as usize).min(size - 1);
+            let y = ((r * f64::from(BRDF_SIZE)) as usize).min(size - 1);
+            let got = texel(x, y);
+            let want = integrate_dfg(center(x), center(y), true, 2048, 1024);
+            for c in 0..2 {
+                let err = (got[c] - want[c]).abs();
+                max_err = max_err.max(err);
+                assert!(
+                    err < 0.015,
+                    "LUT[{c}] at r={r} ndv={ndv}: gpu {} vs integral {}",
+                    got[c],
+                    want[c]
+                );
+            }
+            eprintln!("dfg r={r} ndv={ndv}: gpu {got:?} integral {want:?}");
+        }
+        eprintln!("dfg LUT max error {max_err}");
+        // The review's single-scatter albedos, with the corrected and the old visibility.
+        let review = [
+            (0.25, 0.2, 0.95, 0.79),
+            (0.5, 0.2, 0.85, 0.66),
+            (0.5, 0.5, 0.86, 0.75),
+        ];
+        for (r, ndv, new, old) in review {
+            let x = ((ndv * f64::from(BRDF_SIZE)) as usize).min(size - 1);
+            let y = ((r * f64::from(BRDF_SIZE)) as usize).min(size - 1);
+            let [a, b] = integrate_dfg(center(x), center(y), true, 2048, 1024);
+            let [oa, ob] = integrate_dfg(center(x), center(y), false, 2048, 1024);
+            eprintln!("dfg r={r} ndv={ndv}: a+b new {} old {}", a + b, oa + ob);
+            assert!(
+                (a + b - new).abs() < 0.02,
+                "correlated a+b at r={r} ndv={ndv}: {}",
+                a + b
+            );
+            assert!(
+                (oa + ob - old).abs() < 0.02,
+                "uncorrelated a+b at r={r} ndv={ndv}: {}",
+                oa + ob
+            );
+        }
     }
 
     /// The sky specular cube's bytes at 128², every mip. Recorded on macOS (the unpinned M5); the

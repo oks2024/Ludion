@@ -17,5 +17,5 @@ fn sky_specular(
     let lod = specular_cube_lod(roughness, max_lod);
     let prefiltered = textureSampleLevel(cube, samp, r, lod).rgb;
     let ab = textureSampleLevel(lut, samp, vec2<f32>(ndv, roughness), 0.0).rg;
-    return prefiltered * (f0 * ab.x + vec3<f32>(ab.y));
+    return prefiltered * dfg_specular(ab, f0);
 }
