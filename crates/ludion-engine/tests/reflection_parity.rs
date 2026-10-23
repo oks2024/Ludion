@@ -41,7 +41,7 @@ const MARGIN: f64 = 0.02;
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 540;
 
-const ROOM_ENTITY: &str = "/entities/0/components/PostProcess";
+const ROOM_POST: &str = "/entities/0/components/PostProcess";
 const ROOM_ROUGHNESS: &str = "/entities/1/components/Mesh/roughness";
 const SEAM_ROUGHNESS: &str = "/entities/2/components/Mesh/roughness";
 const SEAM_PROBE_HEIGHT: &str = "/entities/3/components/Transform/translation/1=1000";
@@ -104,13 +104,13 @@ fn room_band(roughness: f32) -> Option<f64> {
     let rough = format!("{ROOM_ROUGHNESS}={roughness}");
     let ssr_only = [
         rough.clone(),
-        format!("{ROOM_ENTITY}/ssr=1"),
-        format!("{ROOM_ENTITY}/ssr_fade/0=0.9"),
-        format!("{ROOM_ENTITY}/ssr_fade/1=1.0"),
+        format!("{ROOM_POST}/ssr=1"),
+        format!("{ROOM_POST}/ssr_fade/0=0.9"),
+        format!("{ROOM_POST}/ssr_fade/1=1.0"),
     ];
     let (probe, _) = render(
         "reflection-parity-room.yaml",
-        &[rough, format!("{ROOM_ENTITY}/ssr=0")],
+        &[rough, format!("{ROOM_POST}/ssr=0")],
         None,
     )?;
     let (ssr, _) = render("reflection-parity-room.yaml", &ssr_only, None)?;

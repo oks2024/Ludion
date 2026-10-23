@@ -155,7 +155,7 @@ fn all_repo_shaders_reflect_and_unify() {
             .is_some(),
         "the sprite texture group stays distinct from the atlas group despite the same shape"
     );
-    // Thirty-six layouts across every renderer and render-graph shader — a count that moves whenever
+    // Thirty-seven layouts across every renderer and render-graph shader — a count that moves whenever
     // a shader gains or loses a group, so it is the tripwire that a new one was reflected on purpose.
     // Mesh/prepass's group 0 (`camera` + `bone_palette`) and shadow's (`shadow_view` + `bone_palette`)
     // are each a distinct name-set from ground-marker/sprite/particle/text's plain `camera`, so the
@@ -164,10 +164,10 @@ fn all_repo_shaders_reflect_and_unify() {
     // reflections pass's normal + specular + depth group a third, and the SSR pyramids' three
     // (Hi-Z seed, Hi-Z reduce, colour) three more, and the SSR trace's one, and the SSR debug view's
     // trace group, the probe capture's face group, and the probe index view's
-    // normal + depth group. Of
-    // them exactly three are compute-only (gi_bake, gi_inject, the IBL prefilter trio): the emitter
+    // normal + depth group, and the probe relight kernel's. Of
+    // them exactly four are compute-only (gi_bake, gi_inject, probe_relight, the IBL prefilter trio): the emitter
     // skips their BGLs because compute pipelines keep auto-derived layouts.
-    assert_eq!(reflection.bind_groups.len(), 36);
+    assert_eq!(reflection.bind_groups.len(), 37);
     let mut compute_only: Vec<&str> = reflection
         .bind_groups
         .iter()
@@ -179,7 +179,15 @@ fn all_repo_shaders_reflect_and_unify() {
         .flat_map(|g| g.units.iter().map(String::as_str))
         .collect();
     compute_only.sort();
-    assert_eq!(compute_only, ["gi_bake.wgsl", "gi_inject.wgsl", "ibl.wgsl"]);
+    assert_eq!(
+        compute_only,
+        [
+            "gi_bake.wgsl",
+            "gi_inject.wgsl",
+            "ibl.wgsl",
+            "probe_relight.wgsl"
+        ]
+    );
 
     // The mesh sun group is a mesh-only @group(2): a uniform + a depth texture + a comparison sampler.
     let sun_group = reflection
