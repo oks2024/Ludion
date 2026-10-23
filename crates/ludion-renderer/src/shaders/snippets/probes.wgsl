@@ -1,6 +1,6 @@
 // Reflection-probe shading, binding-free: a probe's weight at a point and its parallax-corrected
-// cube lookup, plus the relight of its captured radiance. The `reflections` pass composes it; a
-// transparent mesh shades probes through the same functions. Twins of `probe.rs`'s `probe_weight`,
+// cube lookup, plus the relight of its captured radiance. The `reflections` pass composes it; the
+// functions take their inputs as arguments, so any pass could call them. Twins of `probe.rs`'s `probe_weight`,
 // `probe_lookup`, `ratio` and `relit`, in the same operation order.
 //
 // Every member is a `vec4` so the struct has a 16-byte stride in a uniform array.

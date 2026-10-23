@@ -210,7 +210,7 @@ fn floors_text(os: &str, rows: &[(f32, f64, f64, f64)]) -> String {
          #\n\
          # Recalibrate (after a deliberate renderer change, with the reason in the commit):\n\
          #   LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity\n\
-         # Calibrated on an unpinned Apple M5, 2026-10-22 (`Plan/owed.md`: pinned confirmation owed).\n\n\
+         # Floors are the measured value minus the margin, written by LUDION_BLESS=1; the commit records the machine.\n\n\
          margin = {MARGIN}\n"
     );
     for (band, ssim, seam_ssim, seam_rel) in rows {

@@ -85,7 +85,9 @@ onto the volume from there. `Transform.scale` is ignored — size the shape, nev
 - **A capture holds what the world looks like at load** — meshes, the sky and the lighting. Sprites,
   particles, text and editor markers are absent, and a prop that moves later does not move in it.
   Its sky part follows the live sky, and its geometry follows the live ambient, `ibl_intensity` and
-  GI, so a run clock needs no rebake.
+  GI, so a run clock needs no rebake. Direct light on the captured geometry (sun, moon, point and
+  spot lights) is frozen at capture and only scaled by that ambient ratio, so moving a
+  `DirectionalLight` or switching a lamp does not follow in probe reflections until a rebake.
 - **`shape`, `blend` and `priority` never recapture** — they only change how the cube is projected
   and weighted. Moving the probe recaptures it. What it sees (geometry, lights, `Environment`, the
   textures) is the world at the last load, so an in-session edit waits for a reload; the quality

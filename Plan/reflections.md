@@ -175,6 +175,10 @@ interiors**. Large open water is not a driver.
       `mix(1, sky visibility DC, sky_visibility)` with a `GiVolume`, plus `bounce · bounce DC` at
       `bounce > 0`. One kernel (`probe_relight.wgsl`) computes both: baked at capture, live per
       frame, so a static scene's ratio is x / x = 1 exactly.
+    - Known limit: direct light on the captured geometry (sun/moon, point and spot lights) is frozen at
+      capture; the per-channel ambient ratio scales it too, so a clock that raises ambient N× brightens
+      lantern-lit walls in reflections N× while the lanterns stay put, and moving a `DirectionalLight`
+      or switching a lamp does not follow until a rebake.
     - Baked E is stored with the cube (a KTX2 key/value entry, bake version 4), not divided into the
       texels: a dark capture's tiny E would overflow fp16.
     - Amended 2026-10-22: E is computed with or without a `GiVolume` (the old "ratio 1 without one"
