@@ -29,7 +29,12 @@ pub(crate) fn build_probe_list(
     order.sort_by(|&a, &b| probe_rank(&held[a], &held[b]));
     let ranked: Vec<ProbeData> = order.iter().map(|&i| held[i]).collect();
     for (k, &i) in order.iter().enumerate() {
-        list.probes[k] = shade_probe(&held[i], cubes.slots[i], cubes.irradiance[i]);
+        list.probes[k] = shade_probe(
+            &held[i],
+            cubes.slots[i],
+            cubes.irradiance[i],
+            cubes.emissive_slots[i],
+        );
     }
     list.header[0] = ranked.len() as f32;
     list.header[1] = cubes.max_lod as f32;
@@ -37,7 +42,7 @@ pub(crate) fn build_probe_list(
     (list, masks)
 }
 
-fn shade_probe(probe: &ProbeData, slot: u32, baked: [f32; 3]) -> ShadeProbe {
+fn shade_probe(probe: &ProbeData, slot: u32, baked: [f32; 3], emissive: bool) -> ShadeProbe {
     let column = |axis: Vec3| {
         let v = probe.rotation * axis;
         [v.x, v.y, v.z, 0.0]
@@ -58,7 +63,7 @@ fn shade_probe(probe: &ProbeData, slot: u32, baked: [f32; 3]) -> ShadeProbe {
         axis_z: column(Vec3::Z),
         extent,
         params: [kind, probe.blend, 0.0, 0.0],
-        light: [baked[0], baked[1], baked[2], 0.0],
+        light: [baked[0], baked[1], baked[2], f32::from(emissive)],
     }
 }
 
@@ -388,6 +393,9 @@ mod tests {
             exposure: 0.05,
             ..post
         });
+        // The wall's own light is ambient only: the test follows the geometry, not its emission.
+        scene.meshes[1].material[2] = 0.0;
+        scene.ambient = [0.2; 3];
         scene.probes = vec![room_probe()];
         scene.probe_world = Some(ProbeWorld::new(scene.clone()));
         let before = r.render(&scene, size).expect("baseline");
@@ -404,6 +412,111 @@ mod tests {
             r.probe_resolve().resolve,
             1,
             "the ambient recaptured the probe"
+        );
+    }
+
+    fn srgb_to_linear(byte: u8) -> f32 {
+        let c = f32::from(byte) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    /// A mirror floor reflecting two wall panels through a fitted box probe: an emissive metal one
+    /// (no lit part) at `x = -4` and a lit white dielectric one at `x = 4`.
+    fn panel_scene(emissive: f32) -> RenderScene {
+        let mut scene = room_scene();
+        scene.environment = None;
+        scene.post = scene.post.map(|post| PostData {
+            exposure: 0.25,
+            ..post
+        });
+        scene.meshes.truncate(1);
+        let panel = |x: f32, color: [f32; 4], material: [f32; 3]| {
+            mesh(
+                MeshShape::Cube,
+                Mat4::from_translation(Vec3::new(x, 3.0, -5.9))
+                    * Mat4::from_scale(Vec3::new(4.0, 4.0, 0.2)),
+                color,
+                material,
+            )
+        };
+        scene
+            .meshes
+            .push(panel(-4.0, [1.0, 0.0, 0.0, 1.0], [1.0, 1.0, emissive]));
+        scene
+            .meshes
+            .push(panel(4.0, [1.0, 1.0, 1.0, 1.0], [1.0, 0.0, 0.0]));
+        scene.ambient = [1.0; 3];
+        scene.probes = vec![room_probe()];
+        scene.probe_world = Some(ProbeWorld::new(scene.clone()));
+        scene
+    }
+
+    /// The probe relight scales a captured wall's lit part by the live ambient and leaves its emission
+    /// alone: dimming the ambient to a quarter dims the lit panel's reflection to a quarter and
+    /// leaves the emissive one's where it was.
+    #[test]
+    fn needs_gpu_probe_emissive_ignores_the_ambient_ratio() {
+        let Some(r) = renderer_or_skip("probe emissive ignores the ambient ratio") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = panel_scene(2.0);
+        // Each panel's reflection in the floor, at the point where the mirrored ray meets y = 0.
+        let (emissive_at, lit_at) = (Vec3::new(-1.6, 0.0, 0.0), Vec3::new(1.6, 0.0, 0.0));
+        let before = r.render(&scene, size).expect("frozen ambient");
+        assert!(
+            r.probes.cubes().expect("a probe").emissive.is_some(),
+            "a probe that sees an emissive panel stores its emissive part"
+        );
+        scene.ambient = [0.25; 3];
+        let after = r.render(&scene, size).expect("dimmed ambient");
+        assert_eq!(
+            r.probe_resolve().resolve,
+            1,
+            "the ambient recaptured the probe"
+        );
+        // The same scene with the emission off: the metal panel keeps a lit part, so the emission is
+        // what the full scene adds on top of it.
+        let mut dark = panel_scene(0.0);
+        let dark_before = r.render(&dark, size).expect("no emission");
+        assert!(
+            r.probes.cubes().expect("a probe").emissive.is_none(),
+            "a probe set without emissive allocates no emissive cubes"
+        );
+        dark.ambient = [0.25; 3];
+        let dark_after = r.render(&dark, size).expect("no emission, dimmed");
+        let red = |image: &RenderedImage, scene: &RenderScene, at| {
+            srgb_to_linear(view_pixel(image, scene, at)[0])
+        };
+        let emission_before =
+            red(&before, &scene, emissive_at) - red(&dark_before, &dark, emissive_at);
+        let emission_after =
+            red(&after, &scene, emissive_at) - red(&dark_after, &dark, emissive_at);
+        eprintln!(
+            "emissive panel {:?} -> {:?} (lit part alone {:?} -> {:?}), lit panel {:?} -> {:?}",
+            view_pixel(&before, &scene, emissive_at),
+            view_pixel(&after, &scene, emissive_at),
+            view_pixel(&dark_before, &dark, emissive_at),
+            view_pixel(&dark_after, &dark, emissive_at),
+            view_pixel(&before, &scene, lit_at),
+            view_pixel(&after, &scene, lit_at),
+        );
+        assert!(
+            emission_before > 0.1,
+            "no emission to compare: {emission_before}"
+        );
+        assert!(
+            (emission_after / emission_before - 1.0).abs() < 0.03,
+            "the emission followed the ambient: {emission_before} -> {emission_after}"
+        );
+        let scale = red(&after, &scene, lit_at) / red(&before, &scene, lit_at);
+        assert!(
+            (scale - 0.25).abs() < 0.05,
+            "the lit part scaled by {scale}"
         );
     }
 

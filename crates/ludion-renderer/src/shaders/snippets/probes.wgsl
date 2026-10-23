@@ -15,7 +15,8 @@ struct ShadeProbe {
     extent: vec4<f32>,
     // x = 0 for a box, 1 for a sphere; y = the outward blend distance.
     params: vec4<f32>,
-    // xyz = the irradiance baked with the capture (the relight's denominator); w unused.
+    // xyz = the irradiance baked with the capture (the relight's denominator); w = 1 when the probe
+    // has an emissive cube to sample, else 0.
     light: vec4<f32>,
 };
 
@@ -77,8 +78,11 @@ fn probe_ratio(baked: vec3<f32>, live: vec3<f32>) -> vec3<f32> {
     return select(vec3<f32>(1.0), live / baked, baked > vec3<f32>(1e-6));
 }
 
-// A prefiltered probe sample relit: its geometry radiance (rgb) follows the irradiance `ratio`, its
-// sky fraction (alpha) is the live sky `sky` (the sky cube along the same ray) scaled by `k`.
-fn probe_relit(sample: vec4<f32>, ratio: vec3<f32>, sky: vec3<f32>, k: f32) -> vec3<f32> {
-    return sample.rgb * ratio + sample.a * sky * k;
+// A prefiltered probe sample relit: its geometry radiance (rgb) is the capture `T` with the emissive
+// part `em` taken out of the irradiance `ratio` (`T·ratio + em·(1 - ratio)`, so only the lit part
+// follows the ambient); its sky fraction (alpha) is the live sky `sky` (the sky cube along the same
+// ray) scaled by `k`. At ratio 1 the em term is exactly 0. The sum is clamped because `T` and `em`
+// are rounded to fp16 independently.
+fn probe_relit(sample: vec4<f32>, em: vec3<f32>, ratio: vec3<f32>, sky: vec3<f32>, k: f32) -> vec3<f32> {
+    return max(sample.rgb * ratio + em * (vec3<f32>(1.0) - ratio), vec3<f32>(0.0)) + sample.a * sky * k;
 }

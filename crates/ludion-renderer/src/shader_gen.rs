@@ -1063,9 +1063,9 @@ pub const DOF_PARAMS_BINDING: u32 = 2;
 pub const DOWN_PARAMS_GROUP: u32 = 0;
 pub const DOWN_PARAMS_BINDING: u32 = 2;
 
-/// `face_samp` — `@group(0) @binding(2)`, in `probe_face.wgsl`.
-pub const FACE_SAMP_GROUP: u32 = 0;
-pub const FACE_SAMP_BINDING: u32 = 2;
+/// `face_emissive` — `@group(0) @binding(2)`, in `probe_face.wgsl`.
+pub const FACE_EMISSIVE_GROUP: u32 = 0;
+pub const FACE_EMISSIVE_BINDING: u32 = 2;
 
 /// `hiz_params` — `@group(0) @binding(2)`, in `hiz_reduce.wgsl`, `hiz_seed.wgsl`.
 pub const HIZ_PARAMS_GROUP: u32 = 0;
@@ -1139,9 +1139,9 @@ pub const BLEND_DEPTH_BINDING: u32 = 3;
 pub const COC_PARAMS_GROUP: u32 = 0;
 pub const COC_PARAMS_BINDING: u32 = 3;
 
-/// `face_params` — `@group(0) @binding(3)`, in `probe_face.wgsl`.
-pub const FACE_PARAMS_GROUP: u32 = 0;
-pub const FACE_PARAMS_BINDING: u32 = 3;
+/// `face_samp` — `@group(0) @binding(3)`, in `probe_face.wgsl`.
+pub const FACE_SAMP_GROUP: u32 = 0;
+pub const FACE_SAMP_BINDING: u32 = 3;
 
 /// `inject_light_list` — `@group(0) @binding(3)`, in `gi_inject.wgsl`.
 pub const INJECT_LIGHT_LIST_GROUP: u32 = 0;
@@ -1194,6 +1194,10 @@ pub const BRDF_OUT_BINDING: u32 = 4;
 /// `dof_tex` — `@group(0) @binding(4)`, in `composite.wgsl`.
 pub const DOF_TEX_GROUP: u32 = 0;
 pub const DOF_TEX_BINDING: u32 = 4;
+
+/// `face_params` — `@group(0) @binding(4)`, in `probe_face.wgsl`.
+pub const FACE_PARAMS_GROUP: u32 = 0;
+pub const FACE_PARAMS_BINDING: u32 = 4;
 
 /// `inject_bin_table` — `@group(0) @binding(4)`, in `gi_inject.wgsl`.
 pub const INJECT_BIN_TABLE_GROUP: u32 = 0;
@@ -1322,6 +1326,10 @@ pub const PROBE_MASK_BINDING: u32 = 11;
 /// `probe_live` — `@group(0) @binding(12)`, in `reflections.wgsl`.
 pub const PROBE_LIVE_GROUP: u32 = 0;
 pub const PROBE_LIVE_BINDING: u32 = 12;
+
+/// `refl_probe_emissive` — `@group(0) @binding(13)`, in `reflections.wgsl`.
+pub const REFL_PROBE_EMISSIVE_GROUP: u32 = 0;
+pub const REFL_PROBE_EMISSIVE_BINDING: u32 = 13;
 
 /// `atlas_tex` — `@group(1) @binding(0)`, in `text.wgsl`, `ui_text.wgsl`.
 pub const ATLAS_TEX_GROUP: u32 = 1;
@@ -1898,12 +1906,12 @@ pub fn create_down_src_down_samp_down_params_bgl(device: &wgpu::Device) -> wgpu:
     })
 }
 
-/// Bind group layout `face_scene_face_depth_face_samp_face_params` (@group 0), from `probe_face.wgsl`.
-pub fn create_face_scene_face_depth_face_samp_face_params_bgl(
+/// Bind group layout `face_scene_face_depth_face_emissive_face_samp_face_params` (@group 0), from `probe_face.wgsl`.
+pub fn create_face_scene_face_depth_face_emissive_face_samp_face_params_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("face_scene_face_depth_face_samp_face_params"),
+        label: Some("face_scene_face_depth_face_emissive_face_samp_face_params"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: FACE_SCENE_BINDING,
@@ -1920,6 +1928,16 @@ pub fn create_face_scene_face_depth_face_samp_face_params_bgl(
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: FACE_EMISSIVE_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -2249,12 +2267,12 @@ pub fn create_rect_tex_rect_sampler_bgl(device: &wgpu::Device) -> wgpu::BindGrou
     })
 }
 
-/// Bind group layout `refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_probe_cubes_probe_list_probe_mask_probe_live` (@group 0), from `reflections.wgsl`.
-pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_probe_cubes_probe_list_probe_mask_probe_live_bgl(
+/// Bind group layout `refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_probe_cubes_probe_list_probe_mask_probe_live_refl_probe_emissive` (@group 0), from `reflections.wgsl`.
+pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_probe_cubes_probe_list_probe_mask_probe_live_refl_probe_emissive_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_probe_cubes_probe_list_probe_mask_probe_live"),
+        label: Some("refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_probe_cubes_probe_list_probe_mask_probe_live_refl_probe_emissive"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: REFL_NORMAL_BINDING,
@@ -2368,6 +2386,16 @@ pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_r
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: false },
                     view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: REFL_PROBE_EMISSIVE_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::CubeArray,
                     multisampled: false,
                 },
                 count: None,

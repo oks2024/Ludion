@@ -551,8 +551,27 @@ struct FsOut {
     @location(2) specular: vec4<f32>,
 }
 
+// The probe capture's extra target: the part of `color` that does not scale with the live ambient —
+// emissive and hit-flash — so the relight (decision 17) can leave it out of the live-to-baked ratio.
+struct CaptureOut {
+    @location(0) color: vec4<f32>,
+    @location(1) normal_roughness: vec4<f32>,
+    @location(2) specular: vec4<f32>,
+    @location(3) emissive: vec4<f32>,
+}
+
 @fragment
 fn fs_main(in: VsOut) -> FsOut {
+    let c = shade_fragment(in);
+    return FsOut(c.color, c.normal_roughness, c.specular);
+}
+
+@fragment
+fn fs_capture(in: VsOut) -> CaptureOut {
+    return shade_fragment(in);
+}
+
+fn shade_fragment(in: VsOut) -> CaptureOut {
     // Screen-door occlusion fade (opaque pipeline — no blend, no depth-write change; discard is the
     // whole mechanism). `height_min` (fade.y) gates by world height: only fragments strictly ABOVE it
     // fade, so the top-fade-stories case leaves the lower body fully opaque; at or below it the
@@ -619,8 +638,12 @@ fn fs_main(in: VsOut) -> FsOut {
     lit = mix(lit, in.flash.rgb, clamp(in.flash.a, 0.0, 1.0));
     // Clamp below half-float overflow: a mirror highlight can shade past 65504, which the scene
     // target would store as infinity (or saturate), and the bloom chain would smear it.
-    var out: FsOut;
+    var out: CaptureOut;
     out.color = vec4<f32>(hdr_safe(lit), in.color.a);
+    out.emissive = vec4<f32>(
+        hdr_safe(mix(emissive, in.flash.rgb, clamp(in.flash.a, 0.0, 1.0))),
+        0.0,
+    );
     out.normal_roughness = vec4<f32>(shaded.n, shaded.roughness);
     // The flash factor makes `mix(lit + s, flash, a) == mix(lit, flash, a) + (1 - a) * s` exact once
     // the reflections pass adds `s` after the fact.

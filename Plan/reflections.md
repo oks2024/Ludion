@@ -166,9 +166,12 @@ interiors**. Large open water is not a driver.
     Moving content is SSR's job.
 17. **Relight, so the run clock never forces a rebake.**
     - The capture stores geometry only: rgb is 0 where the depth is untouched (sky) and alpha is the
-      sky mask, so after prefiltering rgb is geometry radiance and alpha the sky fraction. The resolve
-      is `rgb · ratio + a · sky_cube(r) · k`, the sky cube being the live sky specular cube along the
-      reflection ray and `k` = `ibl_intensity` with an `Environment`, 0 without one.
+      sky mask, so after prefiltering rgb is geometry radiance T and alpha the sky fraction. A probe
+      that sees emissive (or hit-flash) surfaces also stores that part E, a second layer from the
+      capture's fourth scene target, prefiltered through the same chain. The resolve is
+      `T · ratio + E · (1 − ratio) + a · sky_cube(r) · k`, equal to `lit · ratio + E + …`: emission
+      never follows the ambient. The sky cube is the live sky specular cube along the reflection ray
+      and `k` = `ibl_intensity` with an `Environment`, 0 without one.
     - `ratio` = live E / baked E per channel (1 where baked E ≤ 1e-6), E being the normal-free
       diffuse irradiance at the probe's capture point, composed like `mesh.wgsl`'s ambient term with
       `diffuse = 1` and no occlusion: `k · mean(irradiance cube at ±X ±Y ±Z) + ambient`, times
@@ -176,10 +179,10 @@ interiors**. Large open water is not a driver.
       `bounce > 0`. One kernel (`probe_relight.wgsl`) computes both: baked at capture, live per
       frame, so a static scene's ratio is x / x = 1 exactly.
     - Known limit: direct light on the captured geometry (sun/moon, point and spot lights) is frozen at
-      capture; the per-channel ambient ratio scales it too, so a clock that raises ambient N× brightens
+      capture; the per-channel ambient ratio scales it too (emissive does not), so a clock that raises ambient N× brightens
       lantern-lit walls in reflections N× while the lanterns stay put, and moving a `DirectionalLight`
       or switching a lamp does not follow until a rebake.
-    - Baked E is stored with the cube (a KTX2 key/value entry, bake version 4), not divided into the
+    - Baked E is stored with the cube (a KTX2 key/value entry, bake version 5), not divided into the
       texels: a dark capture's tiny E would overflow fp16.
     - Amended 2026-10-22: E is computed with or without a `GiVolume` (the old "ratio 1 without one"
       would freeze the ambient and `ibl_intensity` the clock moves). The dynamic injection is
@@ -379,6 +382,10 @@ interiors**. Large open water is not a driver.
   DFG LUT's uncorrelated visibility, no multi-scatter compensation.
 - Verify 5–9 first and fix only what is confirmed; refuted ones are recorded: distance-based probe
   roughness, dominant direction, specular-occlusion form, decision 7's text, relight colour limits.
+- Shipped item 2: the capture graph's scene pass writes a fourth target (`fs_capture`), a flagged probe
+  stores T and E (a two-layer KTX2 entry, bake version 5; the emissive cubes are allocated only when a
+  probe sees emissive), and the resolve is `T · ratio + E · (1 − ratio)` (decision 17). The probe dump
+  (`read_probes`) still shows T only.
 - **Owed:** the M4/3090 blesses (`Plan/owed.md`).
 - **Exit:** 1–4 shipped with provisional goldens; 5–9 each verified and either fixed or recorded.
 

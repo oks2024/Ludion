@@ -654,13 +654,13 @@ impl Gpu {
         })
     }
 
-    /// Executes `schedule` like [`execute`](Gpu::execute), but copies `output` into `dest` — a
-    /// subresource of the caller's texture (a cube-array layer, say) — instead of reading it back.
+    /// Executes `schedule` like [`execute`](Gpu::execute), but copies each `(output, dest)` pair —
+    /// `dest` a subresource of the caller's texture (a cube-array layer, say) — instead of reading back.
     /// One submit, no wait: the copy is ordered after the passes on the queue, so a later submit
     /// that samples `dest` sees the finished frame.
     ///
-    /// `output` must declare [`TextureUsage::CopySrc`](crate::TextureUsage::CopySrc) and match
-    /// `dest`'s format; `dest`'s texture needs `COPY_DST` and room for `output`'s extent at
+    /// Each `output` must declare [`TextureUsage::CopySrc`](crate::TextureUsage::CopySrc) and match
+    /// its `dest`'s format; `dest`'s texture needs `COPY_DST` and room for `output`'s extent at
     /// `dest.origin`.
     ///
     /// # Errors
@@ -699,14 +699,13 @@ impl Gpu {
     ///     origin: wgpu::Origin3d { x: 0, y: 0, z: 2 },
     ///     aspect: wgpu::TextureAspect::All,
     /// };
-    /// gpu.execute_into(&schedule, out, &Clear, dest).unwrap();
+    /// gpu.execute_into(&schedule, &Clear, &[(out, dest)]).unwrap();
     /// ```
     pub fn execute_into(
         &self,
         schedule: &Schedule,
-        output: ResourceId,
         recorder: &dyn PassRecorder,
-        dest: wgpu::TexelCopyTextureInfo<'_>,
+        copies: &[(ResourceId, wgpu::TexelCopyTextureInfo<'_>)],
     ) -> Result<(), Diagnostic> {
         self.guarded(|| {
             let frame = self.allocate_physicals(schedule);
@@ -716,17 +715,19 @@ impl Gpu {
                     label: Some("ludion-render-graph external frame into"),
                 });
             self.record_external_passes(schedule, &frame, &mut encoder, recorder, None);
-            let output_view = &frame[schedule.aliasing.assignment[output.index()]];
-            let extent = schedule.resource(output).desc().extent;
-            encoder.copy_texture_to_texture(
-                output_view.texture.as_image_copy(),
-                dest,
-                wgpu::Extent3d {
-                    width: extent.width,
-                    height: extent.height,
-                    depth_or_array_layers: 1,
-                },
-            );
+            for (output, dest) in copies {
+                let output_view = &frame[schedule.aliasing.assignment[output.index()]];
+                let extent = schedule.resource(*output).desc().extent;
+                encoder.copy_texture_to_texture(
+                    output_view.texture.as_image_copy(),
+                    *dest,
+                    wgpu::Extent3d {
+                        width: extent.width,
+                        height: extent.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             self.queue.submit([encoder.finish()]);
             Ok(())
         })
@@ -1166,7 +1167,7 @@ fn build_pipelines(
 mod tests {
     use super::*;
 
-    /// A cleared 16² output lands in layer 2 of a 3-layer texture, with no readback of the graph.
+    /// Two cleared 16² outputs land in layers 2 and 1 of a 3-layer texture, with no readback of the graph.
     #[test]
     fn needs_gpu_execute_into_copies_the_output_to_a_layer() {
         struct Red;
@@ -1185,7 +1186,8 @@ mod tests {
         };
         let mut graph = crate::RenderGraph::new();
         let out = graph.output("final", crate::TextureDesc::present_target(16, 16));
-        graph.add_external_pass("clear", "clear", vec![], vec![out]);
+        let second = graph.output("second", crate::TextureDesc::present_target(16, 16));
+        graph.add_external_pass("clear", "clear", vec![], vec![out, second]);
         let schedule = crate::schedule(&graph).unwrap();
         let device = gpu.device();
         let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -1208,7 +1210,8 @@ mod tests {
             origin: wgpu::Origin3d { x: 0, y: 0, z },
             aspect: wgpu::TextureAspect::All,
         };
-        gpu.execute_into(&schedule, out, &Red, layer(2)).unwrap();
+        gpu.execute_into(&schedule, &Red, &[(out, layer(2)), (second, layer(1))])
+            .unwrap();
 
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("layers readback"),
@@ -1246,8 +1249,8 @@ mod tests {
         };
         assert_eq!(texel(2, 0, 0), [255, 0, 0, 255]);
         assert_eq!(texel(2, 15, 15), [255, 0, 0, 255]);
+        assert_eq!(texel(1, 15, 15), [255, 0, 0, 255]);
         assert_eq!(texel(0, 8, 8), [0, 0, 0, 0], "layer 0 was written");
-        assert_eq!(texel(1, 8, 8), [0, 0, 0, 0], "layer 1 was written");
     }
 
     #[test]

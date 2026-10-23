@@ -137,10 +137,11 @@ pub fn ratio(baked: Vec3, live: Vec3) -> Vec3 {
 }
 
 #[cfg(test)]
-/// A prefiltered probe sample relit: the geometry radiance (rgb) scaled by `ratio`, the sky fraction
-/// (alpha) replaced by the live sky `sky` times `k`. The WGSL twin is `probe_relit`.
-pub fn relit(sample: Vec4, ratio: Vec3, sky: Vec3, k: f32) -> Vec3 {
-    sample.truncate() * ratio + sample.w * sky * k
+/// A prefiltered probe sample relit: the geometry radiance (rgb) scaled by `ratio` except its
+/// emissive part `em`, the sky fraction (alpha) replaced by the live sky `sky` times `k`. The WGSL
+/// twin is `probe_relit`.
+pub fn relit(sample: Vec4, em: Vec3, ratio: Vec3, sky: Vec3, k: f32) -> Vec3 {
+    (sample.truncate() * ratio + em * (Vec3::ONE - ratio)).max(Vec3::ZERO) + sample.w * sky * k
 }
 
 #[cfg(test)]
@@ -334,16 +335,22 @@ mod tests {
         let sky = Vec3::new(0.1, 0.2, 0.4);
         // Geometry only: the ratio scales it, the sky and k do not matter.
         assert_eq!(
-            relit(rgb.extend(0.0), Vec3::splat(2.0), sky, 0.9),
+            relit(rgb.extend(0.0), Vec3::ZERO, Vec3::splat(2.0), sky, 0.9),
             rgb * 2.0
         );
         // Sky only (captured rgb is 0): the live sky times k.
-        let at = relit(Vec4::new(0.0, 0.0, 0.0, 1.0), Vec3::splat(5.0), sky, 0.9);
+        let at = relit(
+            Vec4::new(0.0, 0.0, 0.0, 1.0),
+            Vec3::ZERO,
+            Vec3::splat(5.0),
+            sky,
+            0.9,
+        );
         assert!((at - sky * 0.9).length() < 1e-6);
         // A mix adds the two parts; with no Environment (k = 0) only the geometry remains.
-        let mixed = relit(rgb.extend(0.5), Vec3::ONE, sky, 0.0);
+        let mixed = relit(rgb.extend(0.5), Vec3::ZERO, Vec3::ONE, sky, 0.0);
         assert_eq!(mixed, rgb);
-        let mixed = relit(rgb.extend(0.5), Vec3::ONE, sky, 1.0);
+        let mixed = relit(rgb.extend(0.5), Vec3::ZERO, Vec3::ONE, sky, 1.0);
         assert!((mixed - (rgb + sky * 0.5)).length() < 1e-6);
     }
 }

@@ -84,6 +84,11 @@ pub(crate) struct ProbeCubes {
     pub(crate) slots: Vec<u32>,
     /// Probe index → the diffuse irradiance baked at its capture point (`probe_relight.wgsl`).
     pub(crate) irradiance: Vec<[f32; 3]>,
+    /// The emissive part of each flagged probe's capture, prefiltered into the same slots: allocated
+    /// only when some probe sees emissive. The relight leaves it unscaled (decision 17).
+    pub(crate) emissive: Option<(wgpu::Texture, wgpu::TextureView)>,
+    /// Probe index → whether its slot of `emissive` holds an emissive cube.
+    pub(crate) emissive_slots: Vec<bool>,
     pub(crate) face_size: u32,
     pub(crate) max_lod: u32,
 }
@@ -120,8 +125,9 @@ pub(crate) struct Probes {
     cache: RefCell<Option<(u64, ProbeCubes)>>,
     /// The world key of the last probe world, so a live frame pays a compare, not a hash of every mesh.
     world_memo: RefCell<Option<(WorldMemo, u64)>>,
-    /// The capture target the faces are copied into, kept for the face size it was built for.
-    source: RefCell<Option<(u32, wgpu::Texture)>>,
+    /// The capture targets the faces are copied into (lit, emissive), kept for the face size they
+    /// were built for.
+    source: RefCell<Option<(u32, wgpu::Texture, wgpu::Texture)>>,
     /// The probe store directory, when the host set one.
     store: RefCell<Option<PathBuf>>,
     report: RefCell<ProbeResolve>,
@@ -233,6 +239,20 @@ impl Renderer {
     }
 }
 
+/// Layer `face` of a capture cube's mip 0, the copy destination of one rendered face.
+fn face_layer(cube: &wgpu::Texture, face: u32) -> wgpu::TexelCopyTextureInfo<'_> {
+    wgpu::TexelCopyTextureInfo {
+        texture: cube,
+        mip_level: 0,
+        origin: wgpu::Origin3d {
+            x: 0,
+            y: 0,
+            z: face,
+        },
+        aspect: wgpu::TextureAspect::All,
+    }
+}
+
 impl Probes {
     pub(crate) fn new() -> Probes {
         Probes {
@@ -333,12 +353,25 @@ impl Probes {
 
         let gpu = r.gpu();
         let array = ibl::probe_array(gpu.device(), face_size, probes.len() as u32);
-        let source = {
+        let (source, emissive_source) = {
             let mut held = self.source.borrow_mut();
-            if held.as_ref().is_none_or(|(size, _)| *size != face_size) {
-                *held = Some((face_size, ibl::source_cube(gpu.device(), face_size)));
+            if held.as_ref().is_none_or(|(size, ..)| *size != face_size) {
+                *held = Some((
+                    face_size,
+                    ibl::source_cube(gpu.device(), face_size),
+                    ibl::source_cube(gpu.device(), face_size),
+                ));
             }
-            held.as_ref().expect("just filled").1.clone()
+            let (_, lit, emissive) = held.as_ref().expect("just filled");
+            (lit.clone(), emissive.clone())
+        };
+        // Allocated by the first probe that sees emissive; a probe set without any costs nothing.
+        let mut emissive_array: Option<wgpu::Texture> = None;
+        let mut emissive_slots = Vec::with_capacity(probes.len());
+        let emissive_slot = |array: &Option<wgpu::Texture>| -> wgpu::Texture {
+            array
+                .clone()
+                .unwrap_or_else(|| ibl::probe_array(gpu.device(), face_size, probes.len() as u32))
         };
         let store = self.store.borrow().clone();
         let retain = self.retain.get();
@@ -355,9 +388,15 @@ impl Probes {
             let loaded = entry.and_then(|(dir, key)| {
                 probe_store::read_entry(dir, key, face_size, array.mip_level_count())
             });
-            if let Some((levels, baked)) = loaded {
-                probe_store::write_slot(gpu, &array, slot, &levels);
-                irradiance.push(baked);
+            if let Some(cube) = loaded {
+                probe_store::write_slot(gpu, &array, slot, &cube.levels);
+                if let Some(levels) = &cube.emissive {
+                    let target = emissive_slot(&emissive_array);
+                    probe_store::write_slot(gpu, &target, slot, levels);
+                    emissive_array = Some(target);
+                }
+                emissive_slots.push(cube.emissive.is_some());
+                irradiance.push(cube.irradiance);
                 if retain {
                     self.captured.borrow_mut().push(None);
                 }
@@ -377,16 +416,8 @@ impl Probes {
                         &derived,
                         face_size,
                         face == 0,
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &source,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d {
-                                x: 0,
-                                y: 0,
-                                z: face,
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
+                        face_layer(&source, face),
+                        face_layer(&emissive_source, face),
                     );
                     if let Some(e) = measured {
                         baked = e;
@@ -397,9 +428,30 @@ impl Probes {
                     self.captured.borrow_mut().push(Some(faces));
                 }
                 r.ibl().prefilter_probe(gpu, &source, &array, slot);
+                let sees_emissive = probe_store::read_slot(gpu, &emissive_source, 0)[0]
+                    .iter()
+                    .any(|&b| b != 0);
+                if sees_emissive {
+                    let target = emissive_slot(&emissive_array);
+                    r.ibl()
+                        .prefilter_probe(gpu, &emissive_source, &target, slot);
+                    emissive_array = Some(target);
+                }
+                emissive_slots.push(sees_emissive);
                 if let Some((dir, key)) = entry {
                     let levels = probe_store::read_slot(gpu, &array, slot);
-                    probe_store::write_entry(dir, key, face_size, &levels, baked);
+                    let emissive = emissive_array
+                        .as_ref()
+                        .filter(|_| sees_emissive)
+                        .map(|target| probe_store::read_slot(gpu, target, slot));
+                    probe_store::write_entry(
+                        dir,
+                        key,
+                        face_size,
+                        &levels,
+                        emissive.as_deref(),
+                        baked,
+                    );
                 }
             });
             irradiance.push(baked);
@@ -419,8 +471,18 @@ impl Probes {
             dimension: Some(wgpu::TextureViewDimension::CubeArray),
             ..Default::default()
         });
+        let emissive = emissive_array.map(|texture| {
+            let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("probe emissive cube array"),
+                dimension: Some(wgpu::TextureViewDimension::CubeArray),
+                ..Default::default()
+            });
+            (texture, view)
+        });
         let cubes = ProbeCubes {
             max_lod: array.mip_level_count() - 1,
+            emissive,
+            emissive_slots,
             texture: array,
             view,
             slots: (0..probes.len() as u32).collect(),

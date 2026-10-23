@@ -728,6 +728,15 @@ impl Renderer {
             .unwrap_or_else(|| panic!("{} has no mirrored pipeline twin", id.label()))
     }
 
+    /// The mesh shader's probe-capture pipeline (four targets), winding-reversed when `mirrored`.
+    fn capture_pipeline(&self, id: ShaderId, mirrored: bool) -> &wgpu::RenderPipeline {
+        let pair = self.pipelines[id as usize]
+            .capture
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has no capture pipeline twin", id.label()));
+        &pair[usize::from(mirrored)]
+    }
+
     /// The reflections shader's two-target pipeline, which also writes the fill to `refl_fill`.
     fn split_pipeline(&self, id: ShaderId) -> &wgpu::RenderPipeline {
         self.pipelines[id as usize]
@@ -1243,7 +1252,7 @@ impl Renderer {
     }
 
     /// Renders one derived probe-face scene through the capture graph and copies the result into
-    /// `dest`. With `measure`, also returns the irradiance at the face's camera, composed from the
+    /// `dest` and its emissive part into `emissive_dest`. With `measure`, also returns the irradiance at the face's camera, composed from the
     /// face scene's own environment, GI volumes and ambient (`probe_relight.wgsl`).
     pub(crate) fn capture_probe_face(
         &self,
@@ -1251,14 +1260,19 @@ impl Renderer {
         face_size: u32,
         measure: bool,
         dest: wgpu::TexelCopyTextureInfo<'_>,
+        emissive_dest: wgpu::TexelCopyTextureInfo<'_>,
     ) -> Option<[f32; 3]> {
         let size = FrameSize::native(face_size, face_size);
         let chain = PostChain::for_scene(face_scene).masked(&self.quality, &self.quality_params);
-        let (graph, output) = build_probe_capture_graph(face_size, chain);
+        let (graph, output, emissive) = build_probe_capture_graph(face_size, chain);
         let schedule = schedule(&graph).expect("the probe capture graph schedules");
         let recorder = self.prepare_frame(face_scene, size, None);
         self.gpu
-            .execute_into(&schedule, output, &recorder, dest)
+            .execute_into(
+                &schedule,
+                &recorder,
+                &[(output, dest), (emissive, emissive_dest)],
+            )
             .expect("a probe face renders");
         measure.then(|| {
             self.probe_relight.measure(
@@ -1542,6 +1556,9 @@ impl Renderer {
             wgpu::BufferUsages::STORAGE,
             bytemuck::cast_slice(&probe_masks),
         );
+        let probe_emissive_view = probe_cubes
+            .as_ref()
+            .and_then(|c| c.emissive.as_ref().map(|(_, view)| view.clone()));
         let probe_cube_view = probe_cubes.map(|c| c.view);
 
         let mesh_asset_draws = self.build_mesh_asset_draws(scene, device, &mesh_assets);
@@ -1563,6 +1580,7 @@ impl Renderer {
             probe_mask_buf,
             probe_relight,
             probe_cube_view,
+            probe_emissive_view,
             sun_buf,
             sun: scene.sun,
             has_shadow_map: chain.shadow_map.is_some(),
@@ -2643,6 +2661,8 @@ struct FrameRecorder<'a> {
     /// declares the pass.
     probe_relight: Option<crate::probe_relight::RelightFrame>,
     probe_cube_view: Option<wgpu::TextureView>,
+    /// The probes' emissive cube array; absent when no probe sees emissive.
+    probe_emissive_view: Option<wgpu::TextureView>,
     /// The mesh group-2 sun uniform (real when the scene has a sun, zeroed otherwise). Also bound to
     /// the shadow pass's `ShadowView` layout — its first 64 bytes are `light_space`.
     sun_buf: wgpu::Buffer,
@@ -3140,6 +3160,9 @@ impl FrameRecorder<'_> {
             .depth
             .expect("the scene pass declares a depth attachment");
         let [target, normal, specular] = [0, 1, 2].map(|i| pass.colors()[i].view);
+        // Only the probe capture graph declares a fourth target (the emissive part the relight
+        // leaves unscaled), and it draws through the `fs_capture` pipelines.
+        let emissive = pass.colors().get(3).map(|c| c.view);
 
         let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene"),
@@ -3162,7 +3185,10 @@ impl FrameRecorder<'_> {
                 // A zero normal reads as "no opaque surface here".
                 Some(clear_transparent(normal)),
                 Some(clear_transparent(specular)),
-            ],
+            ]
+            .into_iter()
+            .chain(emissive.map(|view| Some(clear_transparent(view))))
+            .collect::<Vec<_>>(),
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_view,
                 depth_ops: Some(wgpu::Operations {
@@ -3233,7 +3259,14 @@ impl FrameRecorder<'_> {
         );
 
         // Meshes.
-        rp.set_pipeline(self.r.pipeline(ShaderId::Mesh));
+        let mesh_pipeline = |mirrored| {
+            if emissive.is_some() {
+                self.r.capture_pipeline(ShaderId::Mesh, mirrored)
+            } else {
+                self.mesh_pipeline(ShaderId::Mesh, mirrored)
+            }
+        };
+        rp.set_pipeline(mesh_pipeline(false));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_skin_bg, &[]);
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
         rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);
@@ -3242,7 +3275,7 @@ impl FrameRecorder<'_> {
         for draw in &self.mesh_draws {
             if draw.mirrored != mirrored {
                 mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Mesh, mirrored));
+                rp.set_pipeline(mesh_pipeline(mirrored));
             }
             let mb = self.r.mesh_of(draw.shape);
             // Group 4 is the per-draw material. A procedural primitive has no material document, so it
@@ -3258,7 +3291,7 @@ impl FrameRecorder<'_> {
         for draw in &self.mesh_asset_draws {
             if draw.mirrored != mirrored {
                 mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Mesh, mirrored));
+                rp.set_pipeline(mesh_pipeline(mirrored));
             }
             rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
@@ -3346,6 +3379,14 @@ impl FrameRecorder<'_> {
                     } else {
                         self.r.probe_relight.fallback()
                     }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::REFL_PROBE_EMISSIVE_BINDING,
+                    resource: wgpu::BindingResource::TextureView(
+                        self.probe_emissive_view
+                            .as_ref()
+                            .unwrap_or(&self.r.fallback_probe_cubes),
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::REFLECTIONS_BINDING,
@@ -5329,7 +5370,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Reflections,
-        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_probe_cubes_probe_list_probe_mask_probe_live_bgl,
+        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_probe_cubes_probe_list_probe_mask_probe_live_refl_probe_emissive_bgl,
     },
     LayoutDesc {
         id: LayoutId::SsrBlend,
@@ -5357,7 +5398,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::ProbeFace,
-        create: shader_gen::create_face_scene_face_depth_face_samp_face_params_bgl,
+        create: shader_gen::create_face_scene_face_depth_face_emissive_face_samp_face_params_bgl,
     },
     LayoutDesc {
         id: LayoutId::ProbeDebug,
@@ -5391,6 +5432,9 @@ struct ShaderPipelines {
     mirrored: Option<wgpu::RenderPipeline>,
     /// The reflections shader's twin that also writes `refl_fill` (entry `fs_split`).
     split: Option<wgpu::RenderPipeline>,
+    /// The mesh shader's probe-capture twins — `[main, mirrored]` with the fourth, emissive target
+    /// (entry `fs_capture`).
+    capture: Option<[wgpu::RenderPipeline; 2]>,
 }
 
 /// Builds the pipelines shader `id` feeds, from `src` and the layouts its registry row names. The
@@ -5428,9 +5472,19 @@ fn build_pipeline(
         main: build(device, label, src, &layout, wgpu::FrontFace::Ccw),
         mirrored: Some(build(device, label, src, &layout, wgpu::FrontFace::Cw)),
         split: None,
+        capture: None,
     };
     let main = match id {
-        ShaderId::Mesh => return twinned(build_mesh_pipeline),
+        ShaderId::Mesh => {
+            return ShaderPipelines {
+                capture: Some(
+                    [wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw].map(|front_face| {
+                        build_mesh_capture_pipeline(device, label, src, &layout, front_face)
+                    }),
+                ),
+                ..twinned(build_mesh_pipeline)
+            };
+        }
         ShaderId::Shadow => return twinned(build_shadow_pipeline),
         ShaderId::Prepass => return twinned(build_prepass_pipeline),
         ShaderId::Sky => build_sky_pipeline(device, label, src, &layout),
@@ -5474,6 +5528,7 @@ fn build_pipeline(
                 split: Some(build_reflections_split_pipeline(
                     device, label, src, &layout,
                 )),
+                capture: None,
             };
         }
         ShaderId::SsrBlend => build_reflections_pipeline(device, label, src, &layout),
@@ -5487,14 +5542,16 @@ fn build_pipeline(
             wgpu::TextureFormat::R32Float,
             None,
         ),
-        ShaderId::SsrColor | ShaderId::SsrTrace | ShaderId::ProbeFace => {
+        ShaderId::SsrColor | ShaderId::SsrTrace => {
             build_fullscreen_pipeline(device, label, src, &layout, HDR_FORMAT, None)
         }
+        ShaderId::ProbeFace => build_probe_face_pipeline(device, label, src, &layout),
     };
     ShaderPipelines {
         main,
         mirrored: None,
         split: None,
+        capture: None,
     }
 }
 
@@ -5700,6 +5757,48 @@ fn build_mesh_pipeline(
     layout: &wgpu::PipelineLayout,
     front_face: wgpu::FrontFace,
 ) -> wgpu::RenderPipeline {
+    // The opaque scene pass's three targets, in the graph's declaration order: `scene` (HDR),
+    // `scene_normal` (HDR) and `scene_specular` (`OUTPUT_FORMAT`, sRGB 8-bit).
+    build_mesh_pipeline_for(
+        device,
+        label,
+        src,
+        layout,
+        front_face,
+        "fs_main",
+        &[HDR_FORMAT, HDR_FORMAT, OUTPUT_FORMAT],
+    )
+}
+
+/// The probe capture's scene pass: [`build_mesh_pipeline`]'s three targets plus `scene_emissive`
+/// (HDR), the part of the shaded colour the live-ambient relight must not scale.
+fn build_mesh_capture_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    src: &str,
+    layout: &wgpu::PipelineLayout,
+    front_face: wgpu::FrontFace,
+) -> wgpu::RenderPipeline {
+    build_mesh_pipeline_for(
+        device,
+        label,
+        src,
+        layout,
+        front_face,
+        "fs_capture",
+        &[HDR_FORMAT, HDR_FORMAT, OUTPUT_FORMAT, HDR_FORMAT],
+    )
+}
+
+fn build_mesh_pipeline_for(
+    device: &wgpu::Device,
+    label: &str,
+    src: &str,
+    layout: &wgpu::PipelineLayout,
+    front_face: wgpu::FrontFace,
+    fragment_entry: &str,
+    formats: &[wgpu::TextureFormat],
+) -> wgpu::RenderPipeline {
     // `src` is the already-composed source (camera + lights snippets + the mesh body); the caller
     // (`Renderer::compose` / `builtin_composed`) did the composition, so this just builds the module.
     let shader = module(device, label, src);
@@ -5725,16 +5824,17 @@ fn build_mesh_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
-            // The opaque scene pass's three targets, in the graph's declaration order: `scene` (HDR),
-            // `scene_normal` (HDR) and `scene_specular` (`OUTPUT_FORMAT`, sRGB 8-bit).
-            targets: &[HDR_FORMAT, HDR_FORMAT, OUTPUT_FORMAT].map(|format| {
-                Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
+            entry_point: Some(fragment_entry),
+            targets: &formats
+                .iter()
+                .map(|&format| {
+                    Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })
                 })
-            }),
+                .collect::<Vec<_>>(),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState {
@@ -6211,6 +6311,43 @@ fn build_fullscreen_pipeline(
                 blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The probe face pipeline: the lit face and its emissive part, two HDR targets, no blending.
+fn build_probe_face_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    src: &str,
+    layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    let shader = module(device, label, src);
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[(); 2].map(|()| {
+                Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })
+            }),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState::default(),

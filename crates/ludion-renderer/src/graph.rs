@@ -1312,8 +1312,12 @@ pub(crate) fn build_ssr_trace_graph(size: FrameSize) -> (RenderGraph, ResourceId
 /// One reflection-probe cube face: the opaque scene lit as an ordinary frame (shadow, GI inject,
 /// scene, reflections, transparents), then `probe_face` writes the linear HDR result with sky
 /// visibility in alpha to the output. `chain` is the derived face scene's, which schedules no AO,
-/// SSR, shafts, DoF, UI or debug lines.
-pub(crate) fn build_probe_capture_graph(face: u32, chain: PostChain) -> (RenderGraph, ResourceId) {
+/// SSR, shafts, DoF, UI or debug lines. A second output, `probe_face_emissive`, carries the part of the
+/// face that does not scale with the live ambient (the scene pass's fourth target), same layout.
+pub(crate) fn build_probe_capture_graph(
+    face: u32,
+    chain: PostChain,
+) -> (RenderGraph, ResourceId, ResourceId) {
     debug_assert!(
         !chain.ssao
             && chain.ssr.is_none()
@@ -1330,6 +1334,7 @@ pub(crate) fn build_probe_capture_graph(face: u32, chain: PostChain) -> (RenderG
     let scene_depth = graph.transient("scene_depth", TextureDesc::sampled_depth(face, face));
     let scene_normal = graph.transient("scene_normal", TextureDesc::hdr_color(face, face));
     let scene_specular = graph.transient("scene_specular", TextureDesc::color(face, face));
+    let scene_emissive = graph.transient("scene_emissive", TextureDesc::hdr_color(face, face));
     let shadow_map = chain
         .shadow_map
         .map(|edge| graph.transient("shadow_map", TextureDesc::sampled_depth(edge, edge)));
@@ -1338,7 +1343,8 @@ pub(crate) fn build_probe_capture_graph(face: u32, chain: PostChain) -> (RenderG
     });
     let mut desc = TextureDesc::hdr_color(face, face);
     desc.usages.push(ludion_render_graph::TextureUsage::CopySrc);
-    let output = graph.output(pass::PROBE_FACE, desc);
+    let output = graph.output(pass::PROBE_FACE, desc.clone());
+    let emissive = graph.output("probe_face_emissive", desc);
 
     // Reads in `build_frame_graph`'s order: `record_scene` unpacks them by flag.
     let mut scene_reads = Vec::new();
@@ -1354,7 +1360,7 @@ pub(crate) fn build_probe_capture_graph(face: u32, chain: PostChain) -> (RenderG
         pass::SCENE,
         pass::SCENE,
         scene_reads,
-        vec![scene, scene_normal, scene_specular],
+        vec![scene, scene_normal, scene_specular, scene_emissive],
         scene_depth,
     );
     graph.add_external_pass(
@@ -1373,10 +1379,10 @@ pub(crate) fn build_probe_capture_graph(face: u32, chain: PostChain) -> (RenderG
     graph.add_external_pass(
         pass::PROBE_FACE,
         pass::PROBE_FACE,
-        vec![scene, scene_depth],
-        vec![output],
+        vec![scene, scene_depth, scene_emissive],
+        vec![output, emissive],
     );
-    (graph, output)
+    (graph, output, emissive)
 }
 
 #[cfg(test)]
@@ -1426,7 +1432,7 @@ mod tests {
     #[test]
     fn the_probe_capture_graph_orders_its_passes() {
         let bare = PostChain::default();
-        let (graph, output) = build_probe_capture_graph(64, bare);
+        let (graph, output, _) = build_probe_capture_graph(64, bare);
         assert_eq!(
             pass_names(&graph),
             ["scene", "reflections", "transparents", "probe_face"]
@@ -1436,7 +1442,7 @@ mod tests {
             gi_inject: Some([2, 2, 2]),
             ..bare
         };
-        let (graph, output_lit) = build_probe_capture_graph(64, lit);
+        let (graph, output_lit, _) = build_probe_capture_graph(64, lit);
         assert_eq!(
             pass_names(&graph),
             [
@@ -1460,6 +1466,24 @@ mod tests {
             );
             assert_eq!(desc.extent.width, 64);
         }
+    }
+
+    /// The scene pass writes the capture's fourth, emissive target, and the face pass copies it out
+    /// beside the lit face.
+    #[test]
+    fn the_probe_capture_graph_carries_the_emissive_target() {
+        let (graph, output, emissive) = build_probe_capture_graph(64, PostChain::default());
+        let colors_of = |name: &str| {
+            graph
+                .passes()
+                .iter()
+                .find(|p| p.name == name)
+                .expect("the pass exists")
+                .color_targets()
+                .to_vec()
+        };
+        assert_eq!(colors_of("scene").len(), 4);
+        assert_eq!(colors_of("probe_face"), [output, emissive]);
     }
 
     fn resource_names(graph: &RenderGraph) -> Vec<&str> {

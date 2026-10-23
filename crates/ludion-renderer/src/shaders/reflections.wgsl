@@ -4,6 +4,7 @@
 // volume holds the texel (its cluster cell's mask, at most four) take `weight × (1 - coverage)` each
 // and the sky fills the remaining coverage. The sky is shaded through the shared `sky_specular`
 // snippet; `mesh.wgsl` adds no indirect specular itself (`Plan/reflections.md` decisions 2, 3, 5).
+// A probe's emissive part rides a second cube array the relight's ambient ratio does not scale.
 // Occlusion follows decision 7: the sky fill is darkened by specular occlusion and sky visibility, the
 // probe term by specular occlusion only.
 //
@@ -43,6 +44,9 @@ struct ProbeList {
 @group(0) @binding(11) var<storage, read> probe_mask: array<u32>;
 // The live irradiance at each ranked probe's capture point, in `xyz` (`probe_relight.wgsl`).
 @group(0) @binding(12) var probe_live: texture_2d<f32>;
+// The emissive part of each flagged probe's capture, prefiltered into the same slots (the cube array
+// above as a fallback when no probe sees emissive; a probe sets `light.w` to sample it).
+@group(0) @binding(13) var refl_probe_emissive: texture_cube_array<f32>;
 
 struct Reflections {
     inv_view_proj: mat4x4<f32>,
@@ -125,9 +129,13 @@ fn reflection_fill(pos: vec4<f32>) -> vec3<f32> {
             let contribution = w * (1.0 - coverage);
             let dir = probe_lookup(probe, world, r);
             let sampled = textureSampleLevel(refl_probe_cubes, refl_samp, dir, i32(probe.center.w), lod);
+            var em = vec3<f32>(0.0);
+            if (probe.light.w > 0.5) {
+                em = textureSampleLevel(refl_probe_emissive, refl_samp, dir, i32(probe.center.w), lod).rgb;
+            }
             let ratio = probe_ratio(probe.light.xyz, textureLoad(probe_live, vec2<i32>(i32(k), 0), 0).xyz);
             let sky = textureSampleLevel(refl_sky_cube, refl_samp, r, sky_lod).rgb;
-            radiance = radiance + contribution * probe_relit(sampled, ratio, sky, sky_k);
+            radiance = radiance + contribution * probe_relit(sampled, em, ratio, sky, sky_k);
             coverage = coverage + contribution;
             taken = taken + 1u;
         }
