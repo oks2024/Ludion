@@ -29,7 +29,7 @@ The name: a *ludion* is a Cartesian diver — a sealed figure that responds inst
 - `Plan/mesh-texture-editing.md` — W1–W2 mechanized (`kind: mesh-edit` op lists, `ludion-mesh-edit`, `ludion mesh pick`/`apply`); checkpoint 2 passed, the fill kept; Wave 3 waits on the user's word.
 - `Plan/font-assets.md` — W1–W3 mechanized (`layout()`, TTF bake, `font` field, SDF); W4 breakout on Inter, external adoption.
 - `Plan/textured-pbr.md` — W1–W4 mechanized; the exit gate's human look owed.
-- `Plan/reflections.md` — W1–W3 mechanized (the `reflections` blend site; opt-in Hi-Z SSR; `ReflectionProbe` with a content-addressed store); re-blesses owed; W4 waits on the user's word.
+- `Plan/reflections.md` — W1–W4 mechanized (the `reflections` blend site; opt-in Hi-Z SSR; `ReflectionProbe`, content-addressed store, live relight; SSR↔probe parity gate); re-blesses and parity calibration owed.
 - `Plan/spot-light.md` — W1–W3 mechanized (`SpotLight`); look owed.
 - `Plan/editor-stage-camera.md` — W1–W4 mechanized (`render.view`, a free editor camera); the live smoke owed.
 - `Plan/transform-hierarchy-and-prefabs.md` — W0–W4 mechanized (`Parent`-local `Transform`, `kind: prefab`, `prefab.*`); live smoke and Exit owed.

@@ -1,6 +1,6 @@
 # Plan: Reflections — screen-space reflections over box and sphere probes
 
-> Status: **W1 mechanized (2026-10-20); W2 mechanized (2026-10-22); W3 mechanized (2026-10-22); W4 waits on the user's word.** Design settled 2026-10-19. Decisions come from a grilling session with
+> Status: **W1 mechanized (2026-10-20); W2 mechanized (2026-10-22); W3 mechanized (2026-10-22); W4 mechanized (2026-10-22).** Design settled 2026-10-19. Decisions come from a grilling session with
 > the user on 2026-10-19. Current-code facts were read from the tree on that date; the file:line
 > pointers are from that date too, so re-grep before editing. This plan answers
 > `Plan/post-process-pipeline.md`'s deferred "Screen-space reflections" entry.
@@ -400,12 +400,31 @@ interiors**. Large open water is not a driver.
   against the render pixels). Decisions taken in implementation: the store key carries no GPU adapter (the
   store is per machine; export bakes on the host like cooked textures, exact on one machine and within GPU
   float noise across machines); the probe face size reuses `ibl_specular_size`; shape, blend and priority
-  never rebake. Known limits: a box fitted exactly to its walls gives those walls no weight (to be judged
-  with decision 27's parity scene, against the deferred separate projection box); a probe re-frozen after a
+  never rebake. Known limits: a probe re-frozen after a
   mid-session reload or a dev restore is keyed correctly but won't match a cold boot's entry. Owed:
   `examples/gallery/probe-rooms.yaml`'s golden on both pinned boxes and the cold-store capture cost, in
   `Plan/owed.md`. The Exit's reference-game district check moves to W4 with the real probe placement
   (user, 2026-10-22).
+
+- W4 (2026-10-22): disc light, outward fade, live relight, parity gate. `DirectionalLight.angular_radius` (opt-in,
+  degrees, default 0, L1282) gives the sun's specular a representative-point lobe, so a mirror floor shows the
+  moon as a soft disc; at 0 the shader and every hash are unchanged (decision 23). A probe's `blend` now fades
+  outward: weight 1 everywhere inside the volume, its surface included, ramping to 0 over `blend` outside, so a
+  box fitted exactly to its walls gives them full weight with exact parallax (decision 14 amended; L1275 counts
+  the fade bands, L1276 tests the container's full volume; keep `blend` at or below the wall thickness between
+  two fitted rooms). Probe captures store geometry only, the sky masked to zero with its coverage in alpha, and
+  the resolve fills the sky fraction from the live sky cube and scales the geometry by the live-to-baked diffuse
+  irradiance ratio, so a clock stepping the sky or ambient no longer forces a rebake (decision 17; bake version
+  4). The `probe_relight` compute pass evaluates that irradiance, once at capture and once per frame into a
+  graph-owned `probe_live` transient, timed and budgetable like any pass. Presentation-entity probes are baked
+  and frozen like simulated ones. The parity gate (decision 27) renders a closed box room twice, SSR-only and
+  probe-only, at four floor roughness bands, and compares them with a masked SSIM over the texels where SSR is
+  fully confident, against per-band floors in `budgets/reflection-parity-<os>.toml`; the same file records the
+  sky-to-probe seam per band, reported, never checked (decision 18). The reference game has agent-placed probes
+  on one rain street. Known limits: direct light on captured geometry is frozen at capture and only scaled by the
+  ambient ratio, so moving a light or switching a lamp waits for a rebake (decision 17); the sky-to-probe seam is
+  measured, not fixed. Owed: the parity floors on both pinned boxes (Windows fails with a message naming it
+  until then) and the re-blessed provisional probe-rooms golden, in `Plan/owed.md`.
 
 ## Deferred, with triggers
 
