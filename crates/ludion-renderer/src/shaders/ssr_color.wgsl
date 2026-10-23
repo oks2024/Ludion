@@ -2,8 +2,7 @@
 // reads the level whose texels span its diameter (`lobe::pyramid_level`).
 //
 // Seed (`reduce == 0`, mip 0): the area-weighted box over the footprint (`snippets/footprint.wgsl`),
-// `hdr_safe` on each fetch — the sharp mirror level, from the opaque scene before reflections add
-// into it.
+// `hdr_safe` on each fetch — the sharp mirror level, from the lit scene after the probe and sky fill.
 //
 // Reduce (`reduce == 1`, mip k >= 1): a separable 4x4 tent with weights [1,3,3,1]/8 over the parent,
 // taps `b ..= b+3` per axis with `b = floor(c - 0.5) - 1`, `c = (i + 0.5) * r` (at r = 2 that is

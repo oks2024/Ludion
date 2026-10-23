@@ -97,24 +97,25 @@
 //! test and clear are untouched. An AO frame therefore rasterizes its geometry twice — which is
 //! exactly the geometry SSAO reads.
 //!
-//! [`PostChain::ssr`] adds the trace's two input pyramids between the opaque pass and `reflections`,
+//! [`PostChain::ssr`] adds the trace's two input pyramids between `reflections` and `transparents`,
 //! at the trace extent (output × [`QualityParams::ssr_scale`]): `hiz` (`R32Float`, a per-cell min-Z of `scene_depth`) and
-//! `ssr_color` (`Rgba16Float`, the opaque `scene` pre-convolved per mip), each a seed pass plus one
+//! `ssr_color` (`Rgba16Float`, the lit `scene` after the fill, pre-convolved per mip), each a seed pass plus one
 //! reduce pass per further mip. The `ssr_trace` pass then marches a ray per trace texel through them
-//! into `ssr_trace` (`Rgba16Float`: radiance and confidence), which `reflections` blends. With
+//! into `ssr_trace` (`Rgba16Float`: radiance and confidence), which `ssr_blend` mixes over the fill. With
 //! [`PostChain::ssr_view`] set, [`pass::SSR_DEBUG`] replaces `composite` and draws the trace itself;
 //! [`PostChain::probe_view`] does the same with [`pass::PROBE_DEBUG`], drawing the winning probe per pixel.
 //!
 //! ```text
-//! scene ─► hiz_seed ─► hiz_reduce_1 ─► … ─► ssr_color_seed ─► ssr_color_reduce_1 ─► … ─► ssr_trace ─► reflections
+//! scene ─► reflections ─► hiz_seed ─► hiz_reduce_1 ─► … ─► ssr_color_seed ─► ssr_color_reduce_1 ─► … ─► ssr_trace ─► ssr_blend
 //! ```
 //!
 //! The scene's three passes write `scene` and `scene_depth` between them, which the graph orders by
 //! one rule: **passes that write the same subresource run in declaration order**
 //! ([`schedule`](fn@schedule): a later writer follows an earlier one, and a reader follows the
 //! latest writer declared before it). `scene` rasterizes the opaque meshes, `reflections` reads
-//! their depth, normal and specular targets and adds into `scene`, and `transparents` draws the
-//! rest into `scene` against `scene_depth`.
+//! their depth, normal and specular targets and adds into `scene` (and, with SSR on, writes the fill
+//! to `refl_fill` too), `ssr_blend` adds the trace's difference from that fill, and `transparents`
+//! draws the rest into `scene` against `scene_depth`.
 //!
 //! When the scene carries screen-space UI ([`PostChain::ui`], `Plan/phase-14-ui.md` decision 5), the
 //! **composite** pass instead writes an LDR transient (`ldr`, `Rgba8UnormSrgb`) and a trailing
@@ -159,14 +160,15 @@ pub mod pass {
     /// and F0+occlusion targets the reflections pass reads.
     pub const SCENE: &str = "scene";
     /// The reflections pass: a fullscreen additive draw over the opaque scene. It reads its normal,
-    /// specular and depth targets and adds the sky's indirect specular into `scene`.
+    /// specular and depth targets and adds the probe and sky fill into `scene`; with SSR on it also
+    /// writes the fill to the `refl_fill` transient.
     pub const REFLECTIONS: &str = "reflections";
     /// The Hi-Z seed: scene depth into `hiz` mip 0 as a per-cell minimum.
     pub const HIZ_SEED: &str = "hiz_seed";
     /// A Hi-Z reduce: one `hiz` mip's per-cell minimum over the mip above. Named `hiz_reduce_{k}`
     /// for the mip it writes.
     pub const HIZ_REDUCE: &str = "hiz_reduce";
-    /// The colour-pyramid seed: the opaque `scene` into `ssr_color` mip 0, before `reflections`.
+    /// The colour-pyramid seed: the lit `scene` into `ssr_color` mip 0, after `reflections`' fill.
     pub const SSR_COLOR_SEED: &str = "ssr_color_seed";
     /// A colour-pyramid reduce: a 4×4 tent over the mip above. Named `ssr_color_reduce_{k}` for the
     /// mip it writes.
@@ -174,6 +176,9 @@ pub mod pass {
     /// The SSR trace: one mirror ray per trace texel marched through `hiz`, written to `ssr_trace` as
     /// radiance and confidence. Reads both pyramids whole, the opaque normal and the depth.
     pub const SSR_TRACE: &str = "ssr_trace";
+    /// The SSR blend: mixes the upsampled trace over the fill by its confidence, additive into
+    /// `scene`. Reads `refl_fill`, the opaque normal, specular and depth, and the trace.
+    pub const SSR_BLEND: &str = "ssr_blend";
     /// A full-screen view of the trace (`ludion render --debug-view`): replaces `composite`, reads
     /// `ssr_trace` and writes the same target.
     pub const SSR_DEBUG: &str = "ssr_debug";
@@ -554,8 +559,9 @@ pub struct PostChain {
     pub debug_lines: bool,
     /// The trace's scale against the output extent, or `None` when the scene draws no screen-space
     /// reflections: the [`pass::HIZ_SEED`] / [`pass::HIZ_REDUCE`] and
-    /// [`pass::SSR_COLOR_SEED`] / [`pass::SSR_COLOR_REDUCE`] pyramid passes are added between
-    /// `scene` and `reflections`, building the `hiz` and `ssr_color` transients at the trace extent.
+    /// [`pass::SSR_COLOR_SEED`] / [`pass::SSR_COLOR_REDUCE`] pyramid passes, the trace and
+    /// [`pass::SSR_BLEND`] are added between `reflections` and `transparents`, building the `hiz` and
+    /// `ssr_color` transients at the trace extent and the `refl_fill` transient at the render extent.
     /// `None` leaves the graph with neither the resources nor the passes, which is what makes an
     /// SSR-free frame byte-identical by construction rather than by care.
     ///
@@ -970,20 +976,11 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         vec![scene, scene_normal, scene_specular],
         scene_depth,
     );
-    // The pyramids sit between `scene` and `reflections`: a read follows the latest writer declared
-    // before it, so the colour seed sees the opaque scene before `reflections` adds into it, and the
-    // Hi-Z seed runs before `transparents` attach the depth.
-    if let Some(ssr) = &ssr {
-        declare_ssr_passes(&mut graph, ssr, scene, scene_normal, scene_depth);
-    }
-    // Reads in the shader's binding order; additive into `scene`, after the opaque pass. The trace
-    // is the fourth read when SSR is on, and the edge that orders it before this pass; the relight
-    // table is the last read when the scene has probes. Like the injection, the relight reads
-    // nothing the graph owns.
+    // Reads in the shader's binding order; additive into `scene`, after the opaque pass. The relight
+    // table is the last read when the scene has probes. Like the injection, the relight reads nothing
+    // the graph owns. With SSR on the pass also writes the fill into `refl_fill`, which `ssr_blend`
+    // subtracts.
     let mut reflections_reads = vec![scene_normal, scene_specular, scene_depth];
-    if let Some(ssr) = &ssr {
-        reflections_reads.push(ssr.trace);
-    }
     if let Some(probe_live) = probe_live {
         graph.add_external_compute_pass(
             pass::PROBE_RELIGHT,
@@ -993,12 +990,36 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         );
         reflections_reads.push(probe_live);
     }
+    let refl_fill = ssr
+        .is_some()
+        .then(|| graph.transient("refl_fill", TextureDesc::hdr_color(render_w, render_h)));
+    let mut reflections_writes = vec![scene];
+    reflections_writes.extend(refl_fill);
     graph.add_external_pass(
         pass::REFLECTIONS,
         pass::REFLECTIONS,
         reflections_reads,
-        vec![scene],
+        reflections_writes,
     );
+    // The pyramids sit between `reflections` and `transparents`: a read follows the latest writer
+    // declared before it, so the colour seed sees the lit scene with the probe and sky fill, the Hi-Z
+    // seed runs before `transparents` attach the depth, and the blend, which reads the trace and adds
+    // into `scene`, runs before `transparents` too.
+    if let (Some(ssr), Some(refl_fill)) = (&ssr, refl_fill) {
+        declare_ssr_passes(&mut graph, ssr, scene, scene_normal, scene_depth);
+        graph.add_external_pass(
+            pass::SSR_BLEND,
+            pass::SSR_BLEND,
+            vec![
+                refl_fill,
+                scene_normal,
+                scene_specular,
+                scene_depth,
+                ssr.trace,
+            ],
+            vec![scene],
+        );
+    }
     graph.add_external_pass_with_depth(
         pass::TRANSPARENTS,
         pass::TRANSPARENTS,
@@ -1199,10 +1220,10 @@ fn declare_ssr_targets(
     }
 }
 
-/// The pyramids' seed and reduce passes, then the trace. They sit between the opaque `scene` pass and
-/// `reflections`: a read follows the latest writer declared before it, so the colour seed sees the
-/// opaque scene before `reflections` adds into it, and the Hi-Z seed runs before `transparents`
-/// attach the depth. The trace reads each pyramid whole, which orders it after every reduce.
+/// The pyramids' seed and reduce passes, then the trace. They sit between `reflections` and
+/// `transparents`: a read follows the latest writer declared before it, so the colour seed sees the
+/// lit scene with the probe and sky fill, and the Hi-Z seed runs before `transparents` attach the
+/// depth. The trace reads each pyramid whole, which orders it after every reduce.
 fn declare_ssr_passes(
     graph: &mut RenderGraph,
     ssr: &SsrTargets,
@@ -2151,17 +2172,19 @@ mod tests {
     }
 
     #[test]
-    fn ssr_pyramids_schedule_between_scene_and_reflections() {
+    fn ssr_pyramids_schedule_between_reflections_and_the_blend() {
         let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), ssr_chain());
         let order = schedule(&graph).unwrap();
         let names = order.order_names();
         let pos = |n: &str| names.iter().position(|p| *p == n).unwrap();
-        assert!(pos("scene") < pos("hiz_seed"));
-        assert!(pos("scene") < pos("ssr_color_seed"));
+        assert!(pos("scene") < pos("reflections"));
+        // The colour seed sees the lit scene with the fill; the Hi-Z seed reads the depth only.
+        assert!(pos("reflections") < pos("ssr_color_seed"));
         assert!(pos("hiz_seed") < pos("hiz_reduce_1"));
-        assert!(pos("hiz_reduce_9") < pos("reflections"));
-        assert!(pos("ssr_color_reduce_9") < pos("reflections"));
-        assert!(pos("reflections") < pos("transparents"));
+        assert!(pos("hiz_reduce_9") < pos("ssr_trace"));
+        assert!(pos("ssr_color_reduce_9") < pos("ssr_trace"));
+        assert!(pos("ssr_trace") < pos("ssr_blend"));
+        assert!(pos("ssr_blend") < pos("transparents"));
         let find = |name: &str| graph.passes().iter().find(|p| p.name == name).unwrap();
         let label = |id: &ResourceId| {
             let name = &graph.resources()[id.index()].name;
@@ -2179,7 +2202,7 @@ mod tests {
     }
 
     #[test]
-    fn the_ssr_trace_reads_both_pyramids_and_runs_before_transparents() {
+    fn the_ssr_trace_reads_both_pyramids_and_the_blend_runs_before_transparents() {
         let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), ssr_chain());
         let trace = graph
             .resources()
@@ -2210,18 +2233,43 @@ mod tests {
             reads("ssr_trace"),
             ["hiz", "ssr_color", "scene_normal", "scene_depth"]
         );
-        // `reflections` reads its three surface targets and then the trace.
+        // `reflections` reads its three surface targets and never the trace; the blend reads the fill,
+        // the surface targets and the trace.
         assert_eq!(
             reads("reflections"),
-            ["scene_normal", "scene_specular", "scene_depth", "ssr_trace"]
+            ["scene_normal", "scene_specular", "scene_depth"]
         );
+        assert_eq!(
+            reads("ssr_blend"),
+            [
+                "refl_fill",
+                "scene_normal",
+                "scene_specular",
+                "scene_depth",
+                "ssr_trace"
+            ]
+        );
+        let writes = |name: &str| {
+            graph
+                .passes()
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap()
+                .color_targets()
+                .iter()
+                .map(|id| graph.resources()[id.index()].name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(writes("reflections"), ["scene", "refl_fill"]);
+        assert_eq!(writes("ssr_blend"), ["scene"]);
         let order = schedule(&graph).unwrap();
         let names = order.order_names();
         let pos = |n: &str| names.iter().position(|p| *p == n).unwrap();
         assert!(pos("hiz_reduce_9") < pos("ssr_trace"));
         assert!(pos("ssr_color_reduce_9") < pos("ssr_trace"));
-        assert!(pos("ssr_trace") < pos("reflections"));
-        assert!(pos("ssr_trace") < pos("transparents"));
+        assert!(pos("reflections") < pos("ssr_color_seed"));
+        assert!(pos("ssr_trace") < pos("ssr_blend"));
+        assert!(pos("ssr_blend") < pos("transparents"));
     }
 
     #[test]

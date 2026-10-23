@@ -1080,7 +1080,7 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 35] = [
+const KNOWN_PASS_NAMES: [&str; 36] = [
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::PREPASS,
     ludion_renderer::graph::pass::SSAO,
@@ -1094,6 +1094,7 @@ const KNOWN_PASS_NAMES: [&str; 35] = [
     ludion_renderer::graph::pass::SSR_COLOR_SEED,
     ludion_renderer::graph::pass::SSR_COLOR_REDUCE,
     ludion_renderer::graph::pass::SSR_TRACE,
+    ludion_renderer::graph::pass::SSR_BLEND,
     ludion_renderer::graph::pass::SSR_DEBUG,
     ludion_renderer::graph::pass::PROBE_DEBUG,
     ludion_renderer::graph::pass::PROBE_RELIGHT,
@@ -1186,6 +1187,7 @@ const POST_GROUPS: [(&str, &[&str]); 5] = [
             ludion_renderer::graph::pass::SSR_COLOR_SEED,
             ludion_renderer::graph::pass::SSR_COLOR_REDUCE,
             ludion_renderer::graph::pass::SSR_TRACE,
+            ludion_renderer::graph::pass::SSR_BLEND,
         ],
     ),
 ];
@@ -3262,6 +3264,7 @@ entities:
                 "hiz_reduce_1",
                 "hiz_reduce_2",
                 "ssr_trace",
+                "ssr_blend",
                 "reflections",
             ]
             .map(|name| PassTiming {
@@ -3274,14 +3277,14 @@ entities:
             POST_GROUPS.iter().find(|(g, _)| *g == "ssr").unwrap().1,
         )
         .expect("measured");
-        assert_eq!(counted, 4, "reflections is not in the group");
-        assert!((sum - 2.0).abs() < 1e-9);
+        assert_eq!(counted, 5, "reflections is not in the group");
+        assert!((sum - 2.5).abs() < 1e-9);
 
         let budget = |ms| Budget {
             post_groups: BTreeMap::from([("ssr".to_string(), ms)]),
             ..Budget::default()
         };
-        assert!(check_budget(&report, &budget(2.5)).is_empty());
+        assert!(check_budget(&report, &budget(3.0)).is_empty());
         let over = check_budget(&report, &budget(1.0));
         assert_eq!(over.len(), 1);
         assert_eq!(over[0].code, code::BUDGET_EXCEEDED);

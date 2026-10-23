@@ -281,3 +281,142 @@ fn needs_gpu_ssr_and_probes_agree_in_a_fitted_box_room() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+const BLEND_POST: &str = "/entities/0/components/PostProcess";
+const BLEND_CUBE_AWAY: &str = "/entities/4/components/Transform/translation/1=1000";
+/// Pixels the confidence masks are eroded by.
+const MASK_ERODE: usize = 4;
+/// The largest mean relative luma step between the probe-only and the SSR-only render over the chrome
+/// props, where SSR is fully confident. Measured on an unpinned M5: 1.0000 before SSR's colour
+/// pyramid carried the fill (the props traced black), 0.3808 after; the remainder is real parallax
+/// between the probe's single capture point and the screen-space hit.
+const MAX_POP: f64 = 0.45;
+
+/// The metal props of `reflection-blend-metal.yaml` hand off from the probe fill to SSR without a pop:
+/// SSR's colour pyramid carries the fill, so where the trace is fully confident it shows the props
+/// as the probe path does, and the blend between the two is monotonic in confidence.
+#[test]
+fn needs_gpu_ssr_over_probes_hands_off_without_a_pop() {
+    let scene = "reflection-blend-metal.yaml";
+    let fade = [
+        format!("{BLEND_POST}/ssr_fade/0=0.9"),
+        format!("{BLEND_POST}/ssr_fade/1=1.0"),
+    ];
+    let with = |ssr: &str| -> Vec<String> {
+        let mut set = vec![format!("{BLEND_POST}/ssr={ssr}")];
+        set.extend(fade.iter().cloned());
+        set
+    };
+    let Some((probe, _)) = render(scene, &with("0"), None) else {
+        eprintln!("[reflection_parity] SKIPPED: no GPU adapter available");
+        return;
+    };
+    let (half, _) =
+        render(scene, &with("0.5"), None).expect("the adapter rendered the probe frame");
+    let (full, _) = render(scene, &with("1"), None).expect("the adapter rendered the probe frame");
+    let (confidence, _) = render(scene, &with("1"), Some(DebugView::SsrConfidence))
+        .expect("the adapter rendered the probe frame");
+    let mut moved = with("0");
+    moved.push(BLEND_CUBE_AWAY.to_string());
+    let (cube_away, _) = render(scene, &moved, None).expect("the adapter rendered the probe frame");
+
+    // Linear luma (0..255 scale): the fixture has no tonemap, so the blend is linear only before the
+    // sRGB encoding.
+    let linear = |byte: u8| -> f64 {
+        let c = f64::from(byte) / 255.0;
+        255.0
+            * if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ludion_core::math::f64::powf((c + 0.055) / 1.055, 2.4)
+            }
+    };
+    let pixels = |image: &DecodedImage| -> Vec<f64> {
+        image
+            .rgba
+            .chunks_exact(4)
+            .map(|px| 0.2126 * linear(px[0]) + 0.7152 * linear(px[1]) + 0.0722 * linear(px[2]))
+            .collect()
+    };
+    let (p, h, c, away) = (
+        pixels(&probe),
+        pixels(&half),
+        pixels(&full),
+        pixels(&cube_away),
+    );
+    // The view shows the half-resolution trace, while the blend upsamples it: a pixel is only taken as
+    // confident (or zero) when every pixel within `MASK_ERODE` agrees, so the mask edge is not measured.
+    let eroded = |wanted: u8| -> Vec<bool> {
+        let (w, h) = (WIDTH as usize, HEIGHT as usize);
+        let hit: Vec<bool> = confidence
+            .rgba
+            .chunks_exact(4)
+            .map(|px| px[0] == wanted)
+            .collect();
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                (y.saturating_sub(MASK_ERODE)..=(y + MASK_ERODE).min(h - 1)).all(|yy| {
+                    (x.saturating_sub(MASK_ERODE)..=(x + MASK_ERODE).min(w - 1))
+                        .all(|xx| hit[yy * w + xx])
+                })
+            })
+            .collect()
+    };
+    let (confident, unconfident) = (eroded(255), eroded(0));
+    let props: Vec<bool> = p
+        .iter()
+        .zip(&away)
+        .map(|(a, b)| (a - b).abs() > 1.0)
+        .collect();
+
+    // Confidence 0 is the probe-only frame, byte for byte.
+    for (name, image) in [("ssr 0.5", &half), ("ssr 1", &full)] {
+        let drifted = (0..p.len())
+            .filter(|&i| {
+                unconfident[i] && probe.rgba[i * 4..i * 4 + 3] != image.rgba[i * 4..i * 4 + 3]
+            })
+            .count();
+        assert_eq!(
+            drifted, 0,
+            "{name}: {drifted} zero-confidence pixels differ from the probe-only frame"
+        );
+    }
+
+    // Confidence 1 is SSR-only and agrees with the probe-only look of the props: no pop.
+    let (mut pop, mut n) = (0.0, 0usize);
+    for i in (0..p.len()).filter(|&i| confident[i] && props[i]) {
+        pop += (c[i] - p[i]).abs() / p[i].max(1.0);
+        n += 1;
+    }
+    assert!(
+        n >= 500,
+        "only {n} confident prop pixels: the props no longer frame a measurement"
+    );
+    let pop = pop / n as f64;
+    println!("ssr over probes: pop {pop:.4} over {n} pixels (MAX_POP {MAX_POP})");
+    assert!(
+        pop <= MAX_POP,
+        "the hand-off pops: mean relative luma step {pop:.4} > {MAX_POP}"
+    );
+
+    // Halfway is halfway: monotonic, no step.
+    for i in (0..p.len()).filter(|&i| confident[i]) {
+        let (lo, hi) = (p[i].min(c[i]), p[i].max(c[i]));
+        assert!(
+            h[i] >= lo - 2.0 && h[i] <= hi + 2.0,
+            "pixel {i}: ssr 0.5 luma {:.1} lies outside probe {:.1} .. ssr {:.1}",
+            h[i],
+            p[i],
+            c[i]
+        );
+        let mid = (p[i] + c[i]) / 2.0;
+        assert!(
+            (h[i] - mid).abs() <= 0.25 * (c[i] - p[i]).abs() + 2.0,
+            "pixel {i}: ssr 0.5 luma {:.1} is not halfway between probe {:.1} and ssr {:.1}",
+            h[i],
+            p[i],
+            c[i]
+        );
+    }
+}

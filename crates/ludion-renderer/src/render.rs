@@ -728,6 +728,14 @@ impl Renderer {
             .unwrap_or_else(|| panic!("{} has no mirrored pipeline twin", id.label()))
     }
 
+    /// The reflections shader's two-target pipeline, which also writes the fill to `refl_fill`.
+    fn split_pipeline(&self, id: ShaderId) -> &wgpu::RenderPipeline {
+        self.pipelines[id as usize]
+            .split
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has no split pipeline twin", id.label()))
+    }
+
     /// A hash of the shader code a probe capture runs: every registry shader as composed now (so a
     /// reload moves it), plus the three compute shaders outside the registry. Registry-wide rather
     /// than a capture subset: an extra shader only costs a recapture, a missing one is a stale cube.
@@ -2741,6 +2749,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::PROBE_RELIGHT => self.record_probe_relight(pass),
             pass::SCENE => self.record_scene(pass),
             pass::REFLECTIONS => self.record_reflections(pass),
+            pass::SSR_BLEND => self.record_ssr_blend(pass),
             pass::HIZ_SEED | pass::HIZ_REDUCE => self.record_hiz(pass),
             pass::SSR_COLOR_SEED | pass::SSR_COLOR_REDUCE => self.record_ssr_color(pass),
             pass::SSR_TRACE => self.record_ssr_trace(pass),
@@ -3264,10 +3273,10 @@ impl FrameRecorder<'_> {
     /// order), then the sky cube, BRDF LUT and probe volume, and the probe cubes, list and masks. It adds the
     /// indirect specular: SSR over probes over the sky.
     fn record_reflections(&self, pass: &mut RecordedPass<'_>) {
-        // The trace is the fourth read, present only when the graph declared the SSR chain; the
-        // relight table is always the last read, present only with probes.
+        // The relight table is the last read, present only with probes. With SSR on the graph gives
+        // the pass a second colour target, `refl_fill`.
         let relit = self.probe_relight.is_some();
-        let ssr = pass.inputs.len() == 4 + usize::from(relit);
+        let split = pass.colors().len() == 2;
         let mut env = self.resolved_env.params;
         env[3] = self.gi_strengths.sky_visibility;
         let uniform = shader_gen::Reflections {
@@ -3276,12 +3285,6 @@ impl FrameRecorder<'_> {
             env,
             gi_origin: self.resolved_gi.origin,
             gi_scale: self.resolved_gi.scale,
-            ssr: [
-                if ssr { 1.0 } else { 0.0 },
-                crate::ssr_trace::SsrLook::from_post(&self.post).intensity,
-                0.0,
-                0.0,
-            ],
         };
         let uniform_buf = init_buffer(
             pass.device,
@@ -3321,14 +3324,6 @@ impl FrameRecorder<'_> {
                     resource: wgpu::BindingResource::Sampler(&self.r.linear_sampler),
                 },
                 wgpu::BindGroupEntry {
-                    binding: shader_gen::REFL_SSR_BINDING,
-                    resource: wgpu::BindingResource::TextureView(if ssr {
-                        pass.inputs[3]
-                    } else {
-                        &self.r.fallback_hdr.view
-                    }),
-                },
-                wgpu::BindGroupEntry {
                     binding: shader_gen::REFL_PROBE_CUBES_BINDING,
                     resource: wgpu::BindingResource::TextureView(
                         self.probe_cube_view
@@ -3360,7 +3355,75 @@ impl FrameRecorder<'_> {
         });
         // Load, never clear: the draw adds onto the opaque scene.
         let mut rp = pass.begin();
-        rp.set_pipeline(self.r.pipeline(ShaderId::Reflections));
+        rp.set_pipeline(if split {
+            self.r.split_pipeline(ShaderId::Reflections)
+        } else {
+            self.r.pipeline(ShaderId::Reflections)
+        });
+        rp.set_bind_group(0, &bind_group, &[]);
+        rp.draw(0..3, 0..1);
+    }
+
+    /// The SSR blend: a fullscreen additive draw into `scene`, reading `refl_fill`, the opaque normal,
+    /// specular and depth, and the trace (the pass's declared read order, which is the shader's
+    /// binding order), then the BRDF LUT.
+    fn record_ssr_blend(&self, pass: &mut RecordedPass<'_>) {
+        let uniform = shader_gen::SsrBlendParams {
+            inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
+            cam_pos: self.camera_position.extend(1.0).to_array(),
+            look: [
+                crate::ssr_trace::SsrLook::from_post(&self.post).intensity,
+                0.0,
+                0.0,
+                0.0,
+            ],
+        };
+        let uniform_buf = init_buffer(
+            pass.device,
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::bytes_of(&uniform),
+        );
+        let bind_group = pass.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ssr_blend bind group"),
+            layout: self.r.layouts.get(LayoutId::SsrBlend),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_FILL_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_NORMAL_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_SPECULAR_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[2]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_DEPTH_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[3]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_TRACE_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[4]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_BRDF_LUT_BINDING,
+                    resource: wgpu::BindingResource::TextureView(&self.resolved_env.brdf),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_SAMP_BINDING,
+                    resource: wgpu::BindingResource::Sampler(&self.r.linear_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_PARAMS_BINDING,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+        // Load, never clear: the draw adds onto the lit scene.
+        let mut rp = pass.begin();
+        rp.set_pipeline(self.r.pipeline(ShaderId::SsrBlend));
         rp.set_bind_group(0, &bind_group, &[]);
         rp.draw(0..3, 0..1);
     }
@@ -4592,6 +4655,7 @@ enum ShaderId {
     UiText,
     DebugLine,
     Reflections,
+    SsrBlend,
     HizSeed,
     HizReduce,
     SsrColor,
@@ -4624,7 +4688,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 31;
+const SHADER_COUNT: usize = 32;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -4844,9 +4908,15 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::ClusterGrid,
             Snippet::Probes,
             Snippet::GiProbe,
-            Snippet::Ssr,
         ],
         layouts: &[LayoutId::Reflections],
+    },
+    ShaderDesc {
+        id: ShaderId::SsrBlend,
+        file_name: "ssr_blend.wgsl",
+        body: include_str!("shaders/ssr_blend.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Hdr, Snippet::Ssr],
+        layouts: &[LayoutId::SsrBlend],
     },
     ShaderDesc {
         id: ShaderId::HizSeed,
@@ -5132,6 +5202,7 @@ enum LayoutId {
     Ui,
     DebugLine,
     Reflections,
+    SsrBlend,
     HizSeed,
     HizReduce,
     SsrColor,
@@ -5142,7 +5213,7 @@ enum LayoutId {
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 33;
+const LAYOUT_COUNT: usize = 34;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -5258,7 +5329,11 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Reflections,
-        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_ssr_refl_probe_cubes_probe_list_probe_mask_probe_live_bgl,
+        create: shader_gen::create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_refl_gi_refl_samp_reflections_refl_probe_cubes_probe_list_probe_mask_probe_live_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::SsrBlend,
+        create: shader_gen::create_blend_fill_blend_normal_blend_specular_blend_depth_blend_trace_blend_brdf_lut_blend_samp_blend_params_bgl,
     },
     LayoutDesc {
         id: LayoutId::HizSeed,
@@ -5314,6 +5389,8 @@ impl Layouts {
 struct ShaderPipelines {
     main: wgpu::RenderPipeline,
     mirrored: Option<wgpu::RenderPipeline>,
+    /// The reflections shader's twin that also writes `refl_fill` (entry `fs_split`).
+    split: Option<wgpu::RenderPipeline>,
 }
 
 /// Builds the pipelines shader `id` feeds, from `src` and the layouts its registry row names. The
@@ -5350,6 +5427,7 @@ fn build_pipeline(
     ) -> wgpu::RenderPipeline| ShaderPipelines {
         main: build(device, label, src, &layout, wgpu::FrontFace::Ccw),
         mirrored: Some(build(device, label, src, &layout, wgpu::FrontFace::Cw)),
+        split: None,
     };
     let main = match id {
         ShaderId::Mesh => return twinned(build_mesh_pipeline),
@@ -5389,7 +5467,16 @@ fn build_pipeline(
         ShaderId::UiRect => build_ui_rect_pipeline(device, label, src, &layout),
         ShaderId::UiText => build_ui_text_pipeline(device, label, src, &layout),
         ShaderId::DebugLine => build_debug_line_pipeline(device, label, src, &layout),
-        ShaderId::Reflections => build_reflections_pipeline(device, label, src, &layout),
+        ShaderId::Reflections => {
+            return ShaderPipelines {
+                main: build_reflections_pipeline(device, label, src, &layout),
+                mirrored: None,
+                split: Some(build_reflections_split_pipeline(
+                    device, label, src, &layout,
+                )),
+            };
+        }
+        ShaderId::SsrBlend => build_reflections_pipeline(device, label, src, &layout),
         // The Hi-Z pyramid is single-channel 32-bit float: fp16 depth would have 2^-11 spacing
         // near the far plane, where the whole scene lives.
         ShaderId::HizSeed | ShaderId::HizReduce => build_fullscreen_pipeline(
@@ -5407,6 +5494,7 @@ fn build_pipeline(
     ShaderPipelines {
         main,
         mirrored: None,
+        split: None,
     }
 }
 
@@ -6164,6 +6252,54 @@ fn build_reflections_pipeline(
         alpha: add(wgpu::BlendFactor::Zero, wgpu::BlendFactor::One),
     };
     build_fullscreen_pipeline(device, label, src, layout, HDR_FORMAT, Some(blend))
+}
+
+/// The reflections pipeline with SSR on: `fs_split` adds the fill onto the scene and writes it to the
+/// `refl_fill` target beside it, without blending.
+fn build_reflections_split_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    src: &str,
+    layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    let add = |src_factor, dst_factor| wgpu::BlendComponent {
+        src_factor,
+        dst_factor,
+        operation: wgpu::BlendOperation::Add,
+    };
+    let additive = wgpu::BlendState {
+        color: add(wgpu::BlendFactor::One, wgpu::BlendFactor::One),
+        alpha: add(wgpu::BlendFactor::Zero, wgpu::BlendFactor::One),
+    };
+    let target = |blend| {
+        Some(wgpu::ColorTargetState {
+            format: HDR_FORMAT,
+            blend,
+            write_mask: wgpu::ColorWrites::ALL,
+        })
+    };
+    let shader = module(device, label, src);
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_split"),
+            targets: &[target(Some(additive)), target(None)],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 #[cfg(test)]
@@ -12653,6 +12789,75 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// SSR's colour pyramid carries the probe and sky fill, so a metal box seen in a mirror floor keeps
+    /// its look: the floor's reflection of the box is at least half as bright as the box's own face.
+    #[test]
+    fn needs_gpu_ssr_reflects_a_metal_box_with_its_fill() {
+        let Some(renderer) = skip_or_renderer("ssr_reflects_a_metal_box_with_its_fill") else {
+            return;
+        };
+        let size = FrameSize::native(96, 64);
+        let mut scene = RenderScene::empty(size.render);
+        scene.post = Some(PostData {
+            ssr: 1.0,
+            ..exact_post()
+        });
+        scene.environment = Some(test_env());
+        let eye = Vec3::new(0.0, 1.0, 7.5);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::new(0.0, 0.5, 0.0), Vec3::Y),
+            projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.5, 0.1, 100.0),
+            position: eye,
+        };
+        let mut floor = ground(50.0);
+        floor.material = [0.02, 1.0, 0.0];
+        let mut metal_box = cube(Vec3::new(0.0, 0.5, 0.0), Vec3::ONE, [0.9, 0.9, 0.9, 1.0]);
+        metal_box.material = [0.1, 1.0, 0.0];
+        scene.meshes = vec![floor, metal_box];
+        let chain = PostChain {
+            ssr: Some(QualityParams::FULL.ssr_scale),
+            ..PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params)
+        };
+        let (graph, output) = build_frame_graph(size, chain);
+        let scheduled = schedule(&graph).expect("the ssr graph schedules");
+        let recorder = renderer.prepare_frame(&scene, size, None);
+        let on = renderer
+            .gpu
+            .execute(&scheduled, output, &recorder)
+            .expect("the ssr frame renders");
+        assert!(renderer.gpu.take_fault().is_none(), "the ssr frame faulted");
+
+        let (w, h) = size.output;
+        let mean_luma = |points: &[Vec3]| -> f32 {
+            let sum: f32 = points
+                .iter()
+                .map(|&p| {
+                    let (x, y) = project(&scene.camera, p, w, h);
+                    let at = ((y * w + x) * 4) as usize;
+                    let c = |i: usize| f32::from(on.rgba[at + i]);
+                    0.2126 * c(0) + 0.7152 * c(1) + 0.0722 * c(2)
+                })
+                .sum();
+            sum / points.len() as f32
+        };
+        let face = mean_luma(&[
+            Vec3::new(-0.2, 0.3, 0.5),
+            Vec3::new(0.0, 0.5, 0.5),
+            Vec3::new(0.2, 0.7, 0.5),
+        ]);
+        let reflection = mean_luma(&[
+            Vec3::new(-0.2, 0.0, 1.0),
+            Vec3::new(0.0, 0.0, 2.0),
+            Vec3::new(0.2, 0.0, 3.0),
+        ]);
+        assert!(
+            reflection >= 0.5 * face,
+            "the mirror shows the metal box at {reflection:.1} luma against {face:.1} on the box itself \
+             (ratio {:.3})",
+            reflection / face
+        );
     }
 
     /// The mirror-floor scene of the SSR tests with SSR authored on and `view` requested, rendered
