@@ -99,36 +99,47 @@ fn luma(px: &[u8]) -> f64 {
     0.2126 * f64::from(px[0]) + 0.7152 * f64::from(px[1]) + 0.0722 * f64::from(px[2])
 }
 
-/// One band's SSR-against-probe SSIM over the fully confident floor.
-fn room_band(roughness: f32) -> Option<f64> {
-    let rough = format!("{ROOM_ROUGHNESS}={roughness}");
-    let ssr_only = [
-        rough.clone(),
+/// One band's probe-only image, SSR-only image and fully confident mask (the `ssr_confidence` view's R
+/// byte is 255), with `extra` overrides applied to every render, and the view the engine showed.
+fn room_renders(
+    roughness: f32,
+    extra: &[String],
+) -> Option<(DecodedImage, DecodedImage, Vec<bool>, Option<DebugView>)> {
+    let mut probe_only = vec![
+        format!("{ROOM_ROUGHNESS}={roughness}"),
+        format!("{ROOM_POST}/ssr=0"),
+    ];
+    let mut ssr_only = vec![
+        format!("{ROOM_ROUGHNESS}={roughness}"),
         format!("{ROOM_POST}/ssr=1"),
         format!("{ROOM_POST}/ssr_fade/0=0.9"),
         format!("{ROOM_POST}/ssr_fade/1=1.0"),
     ];
-    let (probe, _) = render(
-        "reflection-parity-room.yaml",
-        &[rough, format!("{ROOM_POST}/ssr=0")],
-        None,
-    )?;
+    probe_only.extend_from_slice(extra);
+    ssr_only.extend_from_slice(extra);
+    let (probe, _) = render("reflection-parity-room.yaml", &probe_only, None)?;
     let (ssr, _) = render("reflection-parity-room.yaml", &ssr_only, None)?;
     let (confidence, shown) = render(
         "reflection-parity-room.yaml",
         &ssr_only,
         Some(DebugView::SsrConfidence),
     )?;
+    let mask = confidence
+        .rgba
+        .chunks_exact(4)
+        .map(|px| px[0] == 255)
+        .collect();
+    Some((probe, ssr, mask, shown))
+}
+
+/// One band's SSR-against-probe SSIM over the fully confident floor.
+fn room_band(roughness: f32) -> Option<f64> {
+    let (probe, ssr, mask, shown) = room_renders(roughness, &[])?;
     assert_eq!(
         shown,
         Some(DebugView::SsrConfidence),
         "band {roughness}: the ssr_confidence view was dropped, so there is no mask to measure over"
     );
-    let mask: Vec<bool> = confidence
-        .rgba
-        .chunks_exact(4)
-        .map(|px| px[0] == 255)
-        .collect();
     let measured = masked_ssim(&probe, &ssr, &mask);
     let measured = measured.unwrap_or_else(|| {
         panic!("band {roughness}: no fully confident floor window — the room or camera no longer frames one")
@@ -140,6 +151,172 @@ fn room_band(roughness: f32) -> Option<f64> {
         measured.windows
     );
     Some(measured.ssim)
+}
+
+/// The room's camera (the fixture's transform and projection) and probe centre.
+const ROOM_CAMERA: [f64; 3] = [0.0, 1.6, 1.0];
+const ROOM_PITCH_DEG: f64 = -20.0;
+const ROOM_FOV_Y_DEG: f64 = 45.0;
+const ROOM_PROBE_CENTRE: [f64; 3] = [0.0, 1.5, -3.0];
+/// The back wall's inner face and the room's height.
+const ROOM_BACK_Z: f64 = -8.0;
+const ROOM_HEIGHT: f64 = 3.0;
+
+/// For image row `y` (centre column): the floor point it shows and the back-wall point the mirrored
+/// view of that floor point reflects, as `(floor z, d_p / d_c)`, or `None` when the row misses the floor
+/// or the reflected ray ends on the ceiling or the floor.
+fn room_row_geometry(y: usize) -> Option<(f64, f64)> {
+    let pitch = ROOM_PITCH_DEG.to_radians();
+    let ndc = 1.0 - 2.0 * (y as f64 + 0.5) / f64::from(HEIGHT);
+    let a = ndc * ludion_core::math::f64::tan(ROOM_FOV_Y_DEG.to_radians() / 2.0);
+    let (sin, cos) = (
+        ludion_core::math::f64::sin(pitch),
+        ludion_core::math::f64::cos(pitch),
+    );
+    let (dir_y, dir_z) = (a * cos + sin, a * sin - cos);
+    if dir_y >= 0.0 {
+        return None;
+    }
+    let floor_z = ROOM_CAMERA[2] + ROOM_CAMERA[1] / -dir_y * dir_z;
+    // The mirrored camera (0, -1.6, 1) looks through the floor point (0, 0, floor_z).
+    let s = (ROOM_BACK_Z - ROOM_CAMERA[2]) / (floor_z - ROOM_CAMERA[2]);
+    let hit = [0.0, -ROOM_CAMERA[1] + s * ROOM_CAMERA[1], ROOM_BACK_Z];
+    if !(0.0..=ROOM_HEIGHT).contains(&hit[1]) {
+        return None;
+    }
+    let dist = |from: [f64; 3]| {
+        let (dy, dz) = (hit[1] - from[1], hit[2] - from[2]);
+        (dy * dy + dz * dz).sqrt()
+    };
+    Some((floor_z, dist([0.0, 0.0, floor_z]) / dist(ROOM_PROBE_CENTRE)))
+}
+
+fn median(values: &mut [f64]) -> f64 {
+    values.sort_by(f64::total_cmp);
+    values[values.len() / 2]
+}
+
+/// Probe blur against the distance to the reflected wall: the room's mirror floor rendered probe-only
+/// and SSR-only, and per row the ratio `S = TV_probe / TV_ssr` of the mean adjacent-pixel luma step over
+/// the confident pixels (relative to the row's mean luma). A probe that blurs by distance to the capture
+/// point rather than to the hit has `S` fall where the hit is near, `d_p / d_c` small.
+///
+/// CONFIRMED if, in both bands, the median `S` of rows with `d_p / d_c <= NEAR` is <= 0.7 and the median
+/// of rows with `d_p / d_c >= FAR` exceeds it by >= 0.2; REFUTED if the near median is >= 0.85 in both;
+/// otherwise INCONCLUSIVE. Dither is off for these renders so it does not feed `S`. A second ratio,
+/// `S_M`, compares the swing `(p95 - p5) / mean` of the 5-px box-filtered confident profile, and gets
+/// its own verdict by the same rule. Prints the per-row table and the medians.
+#[test]
+fn needs_gpu_probe_blur_tracks_the_hit_distance() {
+    const NEAR: f64 = 0.4;
+    const FAR: f64 = 0.8;
+    let mut verdicts = Vec::new();
+    for band in [0.2_f32, 0.35] {
+        let no_dither = [format!("{ROOM_POST}/dither=false")];
+        let Some((probe, ssr, mask, _)) = room_renders(band, &no_dither) else {
+            eprintln!("[reflection_parity] SKIPPED: no GPU adapter available");
+            return;
+        };
+        let linear = |byte: u8| -> f64 {
+            let c = f64::from(byte) / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ludion_core::math::f64::powf((c + 0.055) / 1.055, 2.4)
+            }
+        };
+        let lumas = |image: &DecodedImage| -> Vec<f64> {
+            image
+                .rgba
+                .chunks_exact(4)
+                .map(|px| 0.2126 * linear(px[0]) + 0.7152 * linear(px[1]) + 0.0722 * linear(px[2]))
+                .collect()
+        };
+        let (p, c) = (lumas(&probe), lumas(&ssr));
+        let w = WIDTH as usize;
+        let tv = |luma: &[f64], row: usize| -> f64 {
+            let at = |x: usize| row * w + x;
+            let (mut steps, mut pairs, mut sum, mut n) = (0.0, 0usize, 0.0, 0usize);
+            for x in 0..w {
+                if mask[at(x)] {
+                    sum += luma[at(x)];
+                    n += 1;
+                    if x + 1 < w && mask[at(x + 1)] {
+                        steps += (luma[at(x + 1)] - luma[at(x)]).abs();
+                        pairs += 1;
+                    }
+                }
+            }
+            steps / pairs.max(1) as f64 / (sum / n.max(1) as f64).max(f64::EPSILON)
+        };
+        // The 5-px box-filtered confident profile's (p95 - p5) / mean: the swing of the signal, which
+        // dither and pixel noise barely move.
+        let swing = |luma: &[f64], row: usize| -> f64 {
+            let profile: Vec<f64> = (0..w)
+                .filter(|&x| mask[row * w + x])
+                .map(|x| luma[row * w + x])
+                .collect();
+            let mut smooth: Vec<f64> = profile
+                .windows(5)
+                .map(|win| win.iter().sum::<f64>() / 5.0)
+                .collect();
+            let mean = smooth.iter().sum::<f64>() / smooth.len().max(1) as f64;
+            smooth.sort_by(f64::total_cmp);
+            let at = |q: f64| smooth[((smooth.len() - 1) as f64 * q).round() as usize];
+            (at(0.95) - at(0.05)) / mean.max(f64::EPSILON)
+        };
+        println!("band {band}: row floor_z d_p/d_c TV_probe TV_ssr S M_probe M_ssr S_M");
+        let (mut near, mut far) = (Vec::new(), Vec::new());
+        let (mut near_m, mut far_m) = (Vec::new(), Vec::new());
+        for row in 0..HEIGHT as usize {
+            let confident = (0..w).filter(|&x| mask[row * w + x]).count();
+            let Some((floor_z, ratio)) = room_row_geometry(row).filter(|_| confident >= 64) else {
+                continue;
+            };
+            let (tv_p, tv_c) = (tv(&p, row), tv(&c, row));
+            let (m_p, m_c) = (swing(&p, row), swing(&c, row));
+            let s = tv_p / tv_c.max(f64::EPSILON);
+            let s_m = m_p / m_c.max(f64::EPSILON);
+            println!(
+                "  {row} {floor_z:.3} {ratio:.3} {tv_p:.5} {tv_c:.5} {s:.3} {m_p:.4} {m_c:.4} {s_m:.3}"
+            );
+            if ratio <= NEAR {
+                near.push(s);
+                near_m.push(s_m);
+            } else if ratio >= FAR {
+                far.push(s);
+                far_m.push(s_m);
+            }
+        }
+        assert!(
+            near.len() >= 20 && far.len() >= 20,
+            "band {band}: {} near-wall and {} far rows measured; the camera no longer frames both",
+            near.len(),
+            far.len()
+        );
+        let (rows_near, rows_far) = (near.len(), far.len());
+        let medians = [&mut near, &mut far, &mut near_m, &mut far_m].map(|v| median(v));
+        println!(
+            "band {band}: near (d_p/d_c <= {NEAR}) median S {:.3} S_M {:.3} over {rows_near} rows; far \
+             (>= {FAR}) median S {:.3} S_M {:.3} over {rows_far} rows",
+            medians[0], medians[2], medians[1], medians[3]
+        );
+        verdicts.push(medians);
+    }
+    let verdict = |near: usize, far: usize| {
+        if verdicts
+            .iter()
+            .all(|m| m[near] <= 0.7 && m[far] - m[near] >= 0.2)
+        {
+            "CONFIRMED"
+        } else if verdicts.iter().all(|m| m[near] >= 0.85) {
+            "REFUTED"
+        } else {
+            "INCONCLUSIVE"
+        }
+    };
+    println!("probe blur verdict (S): {}", verdict(0, 1));
+    println!("probe blur verdict (S_M): {}", verdict(2, 3));
 }
 
 /// The probe-in-place floor against the probe moved away, over the floor the probe covers:
