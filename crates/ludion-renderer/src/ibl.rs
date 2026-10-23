@@ -965,13 +965,6 @@ pub(crate) mod tests {
         sum / norm
     }
 
-    /// Frostbite 2014 §4.9.3: the direction the specular lobe's mean radiance actually comes from.
-    fn dominant_direction(n: [f64; 3], r: [f64; 3], alpha: f64) -> [f64; 3] {
-        let s = 1.0 - alpha;
-        let f = s * (s.sqrt() + alpha);
-        norm3(std::array::from_fn(|c| n[c] + (r[c] - n[c]) * f))
-    }
-
     fn sky_luma(env: &EnvironmentData, d: [f64; 3]) -> f64 {
         let c = sky_gradient(env, d.map(|x| x as f32));
         0.2126 * f64::from(c[0]) + 0.7152 * f64::from(c[1]) + 0.0722 * f64::from(c[2])
@@ -990,16 +983,18 @@ pub(crate) mod tests {
         [(1.0 - ndv * ndv).sqrt(), ndv, 0.0]
     }
 
-    /// Prefiltered radiance along the mirror direction R, against the BRDF-weighted mean radiance a
-    /// floor (`n = +Y`, nothing below it) actually reflects, with and without the dominant-direction
-    /// bend. Prints the table `rel_err_R` / `rel_err_dom` per sky, roughness and `ndv`, beside two
-    /// alternatives at fewer samples: Filament's `normalize(mix(r, n, α²))` and an oracle that picks the
-    /// best of 16 directions from R to n, which bounds what any direction fix can reach.
+    /// The dominant-direction bend `lobe::dominant_lerp` against a full BRDF integral. For each sky,
+    /// roughness and `ndv` it prints the radiance a floor (`n = +Y`, nothing below it) reflects by the
+    /// BRDF-weighted mean, the prefilter's value along R and along the fitted bend, and the relative
+    /// errors, beside Frostbite's `1 − s(√s+α)` and Filament's `α²` bends as context.
     ///
-    /// CONFIRMED if, for roughness >= 0.5 and ndv <= 0.3, the worst `rel_err_R` is >= 0.10 on either
-    /// sky and the dominant direction at least halves it (mean over those points and at the worst
-    /// point) without raising any error above 0.05; REFUTED if `rel_err_R` is < 0.05 everywhere or the
-    /// dominant direction is no better there; otherwise INCONCLUSIVE.
+    /// Gate. On the two `fit_skies`, the mean fitted error over roughness >= 0.5, `ndv` <= 0.3 is
+    /// <= 0.012 and at every grid point it is at most R's error + 0.002 ("mean <= ~0.01, never worse
+    /// than R"; R alone is 0.15 to 0.25 off there). On a dusk sky held out of the fit the bounds are
+    /// looser: mean <= 0.022 and <= 0.35x R's mean there, per point <= R + 0.02. Dusk's own per-point
+    /// oracle floor is 0.0109 (the split-sum lobe shape cannot follow its bright zenith), and the few
+    /// points where R wins are luma cancellations at sub-1% R error. `fit_dominant_lerp` re-derives
+    /// the coefficients.
     #[test]
     fn dominant_direction_against_a_full_brdf_integral() {
         let flat = EnvironmentData {
@@ -1024,112 +1019,178 @@ pub(crate) mod tests {
             (sharp - want).abs() <= 0.01 * want,
             "mirror prefilter {sharp} vs the sky {want}"
         );
-        let (mut region_r, mut region_dom, mut region_n) = (0.0, 0.0, 0);
-        let (mut worst_r, mut worst_r_dom, mut worst_all_r) = (0.0_f64, 0.0, 0.0_f64);
-        let (mut worst_rise, mut worst_dom_err) = (f64::MIN, 0.0_f64);
-        // Per alternative direction: [region error sum, region worst, worst increase over R anywhere].
-        let (mut filament, mut oracle) = ([0.0_f64, 0.0, f64::MIN], [0.0_f64, 0.0, f64::MIN]);
-        for (name, env) in [("test_env", test_env()), ("blend-metal", overcast_env())] {
+        let dusk = EnvironmentData {
+            sky_zenith: [0.12, 0.05, 0.02],
+            sky_horizon: [0.07, 0.1, 0.17],
+            sky_ground: [0.008, 0.01, 0.018],
+            ..test_env()
+        };
+        let skies = [
+            ("test_env", test_env()),
+            ("blend-metal", overcast_env()),
+            ("dusk (held out)", dusk),
+        ];
+        let mut failures = Vec::new();
+        for (index, (name, env)) in skies.iter().enumerate() {
+            let held_out = index == 2;
+            let slack = if held_out { 0.02 } else { 0.002 };
             println!(
-                "{name}: roughness ndv  L_ref  L_pre(R)  L_pre(dom)  rel_err_R  rel_err_dom  \
-                 rel_err_filament  rel_err_oracle (best angle t of 15, R to n)"
+                "{name}: roughness ndv  L_ref  L_pre(R)  L_pre(fit)  rel_err_R  rel_err_fit  \
+                 rel_err_frostbite  rel_err_filament"
             );
+            let (mut region_r, mut region_fit, mut region_n) = (0.0, 0.0, 0);
             for roughness in [0.25, 0.5, 0.75, 1.0] {
                 let alpha = roughness * roughness;
                 for ndv in [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0] {
                     let v = viewer(ndv);
-                    let n = [0.0, 1.0, 0.0];
-                    let r = [-v[0], v[1], 0.0];
-                    let reference = floor_lobe_mean(v, alpha, |l| sky_luma(&env, l));
-                    let at_r = prefiltered(r, alpha, LOBE_SAMPLES, |l| sky_luma(&env, l));
-                    let dom = dominant_direction(n, r, alpha);
-                    let at_dom = prefiltered(dom, alpha, LOBE_SAMPLES, |l| sky_luma(&env, l));
-                    let (err_r, err_dom) = (
-                        (at_r - reference).abs() / reference,
-                        (at_dom - reference).abs() / reference,
+                    let (n, r) = ([0.0, 1.0, 0.0], [-v[0], v[1], 0.0]);
+                    let reference = floor_lobe_mean(v, alpha, |l| sky_luma(env, l));
+                    let at =
+                        |d: [f64; 3]| prefiltered(d, alpha, LOBE_SAMPLES, |l| sky_luma(env, l));
+                    let err = |d: [f64; 3]| (at(d) - reference).abs() / reference;
+                    let t = f64::from(crate::lobe::dominant_lerp(alpha as f32, ndv as f32));
+                    let s = 1.0 - alpha;
+                    let (err_r, err_fit) = (err(r), err(bent(n, r, t)));
+                    let (err_frostbite, err_filament) = (
+                        err(bent(n, r, 1.0 - s * (s.sqrt() + alpha))),
+                        err(bent(n, r, alpha * alpha)),
                     );
-                    // Filament: normalize(mix(r, n, α²)); the oracle: the best of 16 directions on the
-                    // great circle from R to n, by the same error.
-                    let search = |d: [f64; 3]| {
-                        let at = prefiltered(d, alpha, SEARCH_SAMPLES, |l| sky_luma(&env, l));
-                        (at - reference).abs() / reference
-                    };
-                    let a2 = alpha * alpha;
-                    let err_fil = search(norm3(std::array::from_fn(|c| r[c] + (n[c] - r[c]) * a2)));
-                    let angle = dot3(n, r).clamp(-1.0, 1.0).acos();
-                    let (err_ora, best_t) = (0..16)
-                        .map(|t| {
-                            let k = f64::from(t) / 15.0;
-                            let d = if angle < 1e-6 {
-                                r
-                            } else {
-                                let (wr, wn) = (((1.0 - k) * angle).sin(), (k * angle).sin());
-                                norm3(std::array::from_fn(|c| wr * r[c] + wn * n[c]))
-                            };
-                            (search(d), t)
-                        })
-                        .min_by(|a, b| a.0.total_cmp(&b.0))
-                        .expect("16 candidates");
                     println!(
-                        "  {roughness:.2} {ndv:.2}  {reference:.5}  {at_r:.5}  {at_dom:.5}  {err_r:.4}  \
-                         {err_dom:.4}  {err_fil:.4}  {err_ora:.4} (t={best_t})"
+                        "  {roughness:.2} {ndv:.2}  {reference:.5}  {:.5}  {:.5}  {err_r:.4}  \
+                         {err_fit:.4}  {err_frostbite:.4}  {err_filament:.4}",
+                        at(r),
+                        at(bent(n, r, t)),
                     );
-                    for (acc, err) in [(&mut filament, err_fil), (&mut oracle, err_ora)] {
-                        acc[2] = acc[2].max(err - err_r);
-                        if roughness >= 0.5 && ndv <= 0.3 {
-                            acc[0] += err;
-                            acc[1] = acc[1].max(err);
-                        }
+                    if err_fit > err_r + slack {
+                        failures.push(format!(
+                            "{name} r {roughness} ndv {ndv}: fit {err_fit:.4} vs R {err_r:.4}"
+                        ));
                     }
-                    worst_all_r = worst_all_r.max(err_r);
-                    worst_rise = worst_rise.max(err_dom - err_r);
-                    worst_dom_err = worst_dom_err.max(err_dom);
                     if roughness >= 0.5 && ndv <= 0.3 {
                         region_r += err_r;
-                        region_dom += err_dom;
+                        region_fit += err_fit;
                         region_n += 1;
-                        if err_r > worst_r {
-                            (worst_r, worst_r_dom) = (err_r, err_dom);
-                        }
                     }
                 }
             }
-        }
-        let (mean_r, mean_dom) = (
-            region_r / f64::from(region_n),
-            region_dom / f64::from(region_n),
-        );
-        println!(
-            "rough>=0.5, ndv<=0.3: mean rel_err_R {mean_r:.4} -> dom {mean_dom:.4}; worst rel_err_R \
-             {worst_r:.4} -> dom {worst_r_dom:.4}; worst rel_err_R anywhere {worst_all_r:.4}; worst \
-             dom increase over R {worst_rise:.4}; worst rel_err_dom anywhere {worst_dom_err:.4}"
-        );
-        for (name, acc) in [("Filament mix(r, n, α²)", filament), ("oracle", oracle)] {
-            println!(
-                "{name}: region mean {:.4}, region worst {:.4}, worst increase over R {:.4}",
-                acc[0] / f64::from(region_n),
-                acc[1],
-                acc[2]
+            let (mean_r, mean_fit) = (
+                region_r / f64::from(region_n),
+                region_fit / f64::from(region_n),
             );
+            println!(
+                "{name}: rough>=0.5, ndv<=0.3 mean rel_err R {mean_r:.4} -> fit {mean_fit:.4}"
+            );
+            let (mean_bound, ratio_bound) = if held_out {
+                (0.022, 0.35)
+            } else {
+                (0.012, 1.0)
+            };
+            if mean_fit > mean_bound || mean_fit > ratio_bound * mean_r {
+                failures.push(format!(
+                    "{name}: region mean {mean_fit:.4} vs bound {mean_bound} / {ratio_bound}x R {mean_r:.4}"
+                ));
+            }
         }
-        let halves = mean_dom <= 0.5 * mean_r && worst_r_dom <= 0.5 * worst_r;
-        let verdict = if worst_r >= 0.10 && halves && worst_dom_err <= 0.05 {
-            "CONFIRMED"
-        } else if worst_all_r < 0.05 || mean_dom >= mean_r {
-            "REFUTED"
-        } else {
-            "INCONCLUSIVE"
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The direction `normalize(mix(r, n, t))`, the shipped parametrization of the dominant bend.
+    fn bent(n: [f64; 3], r: [f64; 3], t: f64) -> [f64; 3] {
+        norm3(std::array::from_fn(|c| r[c] + (n[c] - r[c]) * t))
+    }
+
+    /// The skies the dominant-direction fit is derived from; the gate also holds out a third.
+    fn fit_skies() -> [EnvironmentData; 2] {
+        [test_env(), overcast_env()]
+    }
+
+    /// Relative error of the prefiltered radiance along `normalize(mix(r, n, t))` against the floor's
+    /// BRDF-weighted mean, for a viewer at `ndv`.
+    fn bend_error(env: &EnvironmentData, roughness: f64, ndv: f64, t: f64, samples: u32) -> f64 {
+        let alpha = roughness * roughness;
+        let v = viewer(ndv);
+        let (n, r) = ([0.0, 1.0, 0.0], [-v[0], v[1], 0.0]);
+        let reference = floor_lobe_mean(v, alpha, |l| sky_luma(env, l));
+        let at = prefiltered(bent(n, r, t), alpha, samples, |l| sky_luma(env, l));
+        (at - reference).abs() / reference
+    }
+
+    /// The reproducible tool behind `lobe::dominant_lerp`'s coefficients. For each (roughness, `ndv`)
+    /// it finds the `t` minimising the error summed over [`fit_skies`] (golden-section, 16k samples),
+    /// prints the oracle table, then scores the shipped form against it:
+    /// `cargo nextest run -p ludion-renderer --release --run-ignored only fit_dominant_lerp --no-capture`.
+    #[test]
+    #[ignore = "a fit tool: prints the oracle table and the shipped form's error"]
+    fn fit_dominant_lerp() {
+        const NDV: [f64; 8] = [0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9];
+        let skies = fit_skies();
+        let total = |roughness: f64, ndv: f64, t: f64| -> f64 {
+            skies
+                .iter()
+                .map(|env| bend_error(env, roughness, ndv, t, SEARCH_SAMPLES))
+                .sum()
         };
-        println!("dominant direction verdict: {verdict}");
+        let phi = (5.0_f64.sqrt() - 1.0) / 2.0;
+        print!("roughness \\ ndv ");
+        for ndv in NDV {
+            print!("{ndv:>7.2}");
+        }
+        println!();
+        let mut rows = Vec::new();
+        for step in 2..=20 {
+            let roughness = f64::from(step) * 0.05;
+            print!("{roughness:>12.2}    ");
+            for ndv in NDV {
+                let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+                for _ in 0..16 {
+                    let (a, b) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
+                    if total(roughness, ndv, a) < total(roughness, ndv, b) {
+                        hi = b;
+                    } else {
+                        lo = a;
+                    }
+                }
+                let t = 0.5 * (lo + hi);
+                print!("{t:>7.3}");
+                rows.push((roughness, ndv, t));
+            }
+            println!();
+        }
+        if std::env::var_os("LUDION_FIT_CURVES").is_some() {
+            // `E roughness ndv t err_sky0 err_sky1`: the error curves, for refining the form offline.
+            for &(roughness, ndv, _) in &rows {
+                for step in 0..=28 {
+                    let t = f64::from(step) * 0.025;
+                    let errs = skies.map(|env| bend_error(&env, roughness, ndv, t, SEARCH_SAMPLES));
+                    println!("E {roughness} {ndv} {t} {} {}", errs[0], errs[1]);
+                }
+            }
+        }
+        let (mut sq, mut fit_sq) = (0.0, 0.0);
+        for &(roughness, ndv, t) in &rows {
+            let alpha = roughness * roughness;
+            let shipped = f64::from(crate::lobe::dominant_lerp(alpha as f32, ndv as f32));
+            fit_sq += (shipped - t) * (shipped - t);
+            let s = 1.0 - alpha;
+            let frostbite = 1.0 - s * (s.sqrt() + alpha);
+            sq += (frostbite - t) * (frostbite - t);
+        }
+        let n = rows.len() as f64;
+        println!(
+            "rms t error: shipped {:.4}, Frostbite (1 - f) {:.4}",
+            (fit_sq / n).sqrt(),
+            (sq / n).sqrt()
+        );
     }
 
     /// Raw ambient occlusion against Lagarde's specular occlusion, for a cone (Jimenez's aperture around
     /// `n`) and a V-groove crease, against the visible fraction of the BRDF-weighted floor lobe. Prints
     /// the mean and max error per model for raw, Lagarde with `α` and Lagarde with perceptual roughness.
     ///
-    /// CONFIRMED if in both models raw's mean abs error is >= 0.05 and Lagarde(α)'s is <= 0.5x raw's;
-    /// REFUTED if raw's mean is < 0.03 in both or Lagarde(α) is no better than raw in both; otherwise
-    /// INCONCLUSIVE.
+    /// The record of a refutation (`Plan/reflections.md` W5, item 7): Lagarde(α) is no material gain
+    /// over raw AO (mean error 0.200 vs 0.236 for the cone, 0.195 vs 0.204 for the crease), so in both
+    /// models its mean stays above half of raw's. A cone-cone (GTSO, bent normal) form is what would
+    /// beat raw AO.
     #[test]
     fn specular_occlusion_form_against_visibility_models() {
         let deg = std::f64::consts::PI / 180.0;
@@ -1224,17 +1285,12 @@ pub(crate) mod tests {
             );
             means.push((raw[0] / n, by_alpha[0] / n));
         }
-        let confirmed = means.iter().all(|&(raw, l)| raw >= 0.05 && l <= 0.5 * raw);
-        let refuted =
-            means.iter().all(|&(raw, _)| raw < 0.03) || means.iter().all(|&(raw, l)| l >= raw);
-        let verdict = if confirmed {
-            "CONFIRMED"
-        } else if refuted {
-            "REFUTED"
-        } else {
-            "INCONCLUSIVE"
-        };
-        println!("specular occlusion verdict: {verdict}");
+        for (&(raw, lagarde), name) in means.iter().zip(["cone", "crease"]) {
+            assert!(
+                lagarde > 0.5 * raw,
+                "{name}: Lagarde(alpha) {lagarde:.4} is now under half of raw {raw:.4}"
+            );
+        }
     }
 
     /// Round-to-nearest binary16 for finite, normal-range values (the sky is neither zero nor huge).

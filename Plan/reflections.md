@@ -100,8 +100,9 @@ interiors**. Large open water is not a driver.
      `reflections` pass uses. They get no SSR.
    - Sprites, particles, text and ground markers get no specular reflections.
 7. **Specular occlusion is split by source.**
-   - GI sky visibility darkens **only** the sky fill: the remainder after probe coverage, plus the
-     sky-masked texels inside probes. Probes already contain their own occlusion.
+   - GI sky visibility darkens only the sky fill's remainder after probe coverage. A probe's sky
+     fraction already is the sky visibility from its capture point, so it is not darkened again.
+     Probes already contain their own occlusion.
    - SSAO and occlusion maps apply to every indirect-specular source.
    - SSR hits get no occlusion term.
 8. **The directional light becomes a disc area light for specular.**
@@ -182,6 +183,9 @@ interiors**. Large open water is not a driver.
       capture; the per-channel ambient ratio scales it too (emissive does not), so a clock that raises ambient N× brightens
       lantern-lit walls in reflections N× while the lanterns stay put, and moving a `DirectionalLight`
       or switching a lamp does not follow until a rebake.
+    - Known limit: the ratio is the 6-direction mean, so it is exact only when every ambient term
+      changes by the same per-channel factor; a sky-gradient change (zenith ≠ horizon) drifts
+      reflected Lambertian and metal content in hue and brightness (30c refines it).
     - Baked E is stored with the cube (a KTX2 key/value entry, bake version 5), not divided into the
       texels: a dark capture's tiny E would overflow fp16.
     - Amended 2026-10-22: E is computed with or without a `GiVolume` (the old "ratio 1 without one"
@@ -315,6 +319,13 @@ interiors**. Large open water is not a driver.
       env-less scenes with specular move too (dielectrics by under 1% of their highlight, rough metals most).
       The mesh pass binds the LUT at `@group(3) @binding(2)`. Render-only: no bake-version bump, the store
       keys move with the shader text.
+31. **Cube and probe lookups follow the lobe.**
+    - The sky cube, the probe cubes and the probe's sky sample are read along
+      `normalize(mix(R, n, dominant_lerp(α, ndv)))`, not the mirror ray. The bend is a four-coefficient
+      closed form (`lobe.rs`, WGSL twin in `lobe.wgsl`) fitted to the full-BRDF integral over a floor
+      (`fit_dominant_lerp`); Filament's and Frostbite's formulas were measured and rejected.
+    - SSR keeps tracing along R: it hits real geometry on the mirror ray. Render-only; the store keys move
+      with the shader text, no bake-version bump.
 
 ## Waves
 
@@ -398,6 +409,12 @@ interiors**. Large open water is not a driver.
   (`read_probes`) still shows T only.
 - Shipped items 3–4 (decision 30): the LUT's correlated visibility and multi-scatter energy on every
   specular site and the IBL diffuse.
+- Item 5: defect CONFIRMED vs SSR (near-wall S 0.22/0.50 at r 0.2/0.35); Lagarde's full and min forms
+  overshoot (near S 1.84/3.22; parity SSIM 0.92→0.66, 0.97→0.84, 0.98→0.91); not shipped.
+- Shipped item 6 (decision 31): the dominant direction.
+- Item 7 REFUTED: Lagarde's specular-occlusion form vs raw AO, mean error 0.200 vs 0.236 (cone) and
+  0.195 vs 0.204 (crease); not adopted (`ibl.rs` pins it). Item 8: decision 7's text amended. Item 9:
+  documented as decision 17's second known limit.
 - **Owed:** the M4/3090 blesses (`Plan/owed.md`).
 - **Exit:** 1–4 shipped with provisional goldens; 5–9 each verified and either fixed or recorded.
 
@@ -488,6 +505,9 @@ interiors**. Large open water is not a driver.
   a lamp switching off inside a box room, in shipped content.
 - **Compressed HDR probe storage (BC6H / ASTC-HDR):** probe-store size becomes a problem for the
   export bundle.
+- **Distance-based probe roughness (Lagarde):** a non-SSR oracle (a CPU ray-traced room) to choose the form.
+- **GTSO-style specular occlusion (cone–cone, bent normal):** a reviewed crease or contact look that
+  raw AO visibly fails.
 - **Specular from voxel cone tracing:** `global-illumination.md`'s existing trigger, unchanged.
 
 ## Risks

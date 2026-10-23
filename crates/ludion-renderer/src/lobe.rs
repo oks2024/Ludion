@@ -11,7 +11,7 @@
 //! construction. Mip 0 is the unfiltered mirror: below r ≈ 0.149 the lobe is under 1.2° on 0.45°
 //! texels, a mirror to the eye. The WGSL twin of `cube_lod` is `shaders/snippets/lobe.wgsl`.
 
-use ludion_core::math::{atan, log2, sqrt, tan};
+use ludion_core::math::{atan, log2, powf, sqrt, tan};
 
 /// Below this a roughness is a mirror as far as the log in [`cube_lod`] is concerned.
 #[cfg_attr(not(test), allow(dead_code))] // the CPU twin of lobe.wgsl; outside tests only the sync test reads it
@@ -50,6 +50,26 @@ pub(crate) fn cube_lod(roughness: f32, max_lod: f32) -> f32 {
     let r = roughness.clamp(0.0, 1.0);
     let x = (r * r).max(MIN_ALPHA);
     (max_lod + 0.5 + log2(x / sqrt(1.0 + x * x))).clamp(0.0, max_lod)
+}
+
+/// The share of the way from the mirror direction R to the normal at which the specular lobe's mean
+/// radiance comes from: the bend of `normalize(mix(R, n, t))`, for `alpha` = roughness² and `ndv`.
+///
+/// Fitted by `ibl.rs`'s `fit_dominant_lerp` (the error-minimising `t` per grid point is its oracle
+/// table; the form is then fitted on the relative error itself, roughness 0.3..1 × `ndv` 0.02..0.9,
+/// two skies): with `x = α·(1−ndv)`, `t = TM·u/(1+u)·(1 − C·α·(1−ndv)⁸)` and `u = K·x^P`, where
+/// `TM = 0.6654`, `K = 16.47`, `P = 1.664`, `C = 0.2635`. The first factor is the saturating rise with
+/// roughness and grazing; the second lowers the bend at the grazing end of the roughest lobes, where
+/// the floor clips it. Region mean error 0.009 on the fit skies. Filament's `α²` and Frostbite's
+/// `1 − s(√s+α)` miss that shape. A mirror (α → 0) and a head-on view (R = n) both give 0. The WGSL
+/// twin is `dominant_lerp`.
+#[cfg_attr(not(test), allow(dead_code))] // the CPU twin of lobe.wgsl; outside tests only the sync test reads it
+pub(crate) fn dominant_lerp(alpha: f32, ndv: f32) -> f32 {
+    let w = 1.0 - ndv;
+    let w2 = w * w;
+    let w4 = w2 * w2;
+    let u = 16.47 * powf((alpha * w).max(1e-9), 1.664);
+    0.6654 * u / (1.0 + u) * (1.0 - 0.2635 * alpha * w4 * w4)
 }
 
 /// The roughness mip `mip` of a chain with top lod `max_lod` is prefiltered at: the inverse of
@@ -342,6 +362,29 @@ mod tests {
                 (got[2 * k + 1] - level).abs() <= 1e-4,
                 "level {row:?}: gpu {} vs {level}",
                 got[2 * k + 1]
+            );
+        }
+        // The dominant-direction bend over a (roughness, ndv) grid.
+        let mut input = Vec::new();
+        for r in [0.0_f32, 0.2, 0.5, 0.8, 1.0] {
+            for ndv in [0.01, 0.1, 0.3, 0.6, 1.0] {
+                input.extend([r * r, ndv]);
+            }
+        }
+        let src = format!(
+            "{}\n@group(0) @binding(0) var<storage, read> inp: array<f32>;\n\
+             @group(0) @binding(1) var<storage, read_write> out: array<f32>;\n\
+             @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {{\n\
+             out[id.x] = dominant_lerp(inp[id.x * 2u], inp[id.x * 2u + 1u]);\n}}\n",
+            include_str!("shaders/snippets/lobe.wgsl"),
+        );
+        let got = run_f32_kernel(&gpu, &src, &input, input.len() / 2);
+        for (k, row) in input.chunks(2).enumerate() {
+            let want = dominant_lerp(row[0], row[1]);
+            assert!(
+                (got[k] - want).abs() <= 1e-5,
+                "dominant_lerp {row:?}: gpu {} vs {want}",
+                got[k]
             );
         }
     }

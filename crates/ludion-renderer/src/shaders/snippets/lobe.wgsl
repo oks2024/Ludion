@@ -6,6 +6,16 @@ fn specular_cube_lod(roughness: f32, max_lod: f32) -> f32 {
     return clamp(max_lod + 0.5 + log2(xc / sqrt(1.0 + xc * xc)), 0.0, max_lod);
 }
 
+// Twin of `lobe.rs::dominant_lerp`: how far from the mirror direction toward the normal the specular
+// lobe's mean radiance comes from; the lookup direction is `normalize(mix(r, n, dominant_lerp(..)))`.
+fn dominant_lerp(alpha: f32, ndv: f32) -> f32 {
+    let w = 1.0 - ndv;
+    let w2 = w * w;
+    let w4 = w2 * w2;
+    let u = 16.47 * pow(max(alpha * w, 1e-9), 1.664);
+    return 0.6654 * u / (1.0 + u) * (1.0 - 0.2635 * alpha * w4 * w4);
+}
+
 // Twin of `lobe.rs::MAX_HALF_ANGLE`: keeps `tan` finite in `ssr_pyramid_level`.
 const MAX_HALF_ANGLE: f32 = 1.55;
 

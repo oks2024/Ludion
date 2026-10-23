@@ -88,10 +88,12 @@ fn reflection_fill(pos: vec4<f32>) -> vec3<f32> {
     let v = normalize(reflections.cam_pos.xyz - world);
     let ndv = max(dot(n, v), 1e-4);
     let r = reflect(-v, n);
+    // The cube and probe lookups follow the lobe's dominant direction, not the mirror ray.
+    let rd = normalize(mix(r, n, dominant_lerp(roughness * roughness, ndv)));
     // The sky fill: zero with no `Environment`.
     var sky_fill = vec3<f32>(0.0);
     if (env_on) {
-        sky_fill = sky_specular(refl_sky_cube, refl_brdf_lut, refl_samp, r, ndv, roughness, spec.rgb, reflections.env.z)
+        sky_fill = sky_specular(refl_sky_cube, refl_brdf_lut, refl_samp, rd, ndv, roughness, spec.rgb, reflections.env.z)
             * reflections.env.y * spec.a;
         // Sky visibility darkens the sky fill only (decision 7).
         if (reflections.gi_origin.w > 0.5) {
@@ -127,14 +129,14 @@ fn reflection_fill(pos: vec4<f32>) -> vec3<f32> {
                 continue;
             }
             let contribution = w * (1.0 - coverage);
-            let dir = probe_lookup(probe, world, r);
+            let dir = probe_lookup(probe, world, rd);
             let sampled = textureSampleLevel(refl_probe_cubes, refl_samp, dir, i32(probe.center.w), lod);
             var em = vec3<f32>(0.0);
             if (probe.light.w > 0.5) {
                 em = textureSampleLevel(refl_probe_emissive, refl_samp, dir, i32(probe.center.w), lod).rgb;
             }
             let ratio = probe_ratio(probe.light.xyz, textureLoad(probe_live, vec2<i32>(i32(k), 0), 0).xyz);
-            let sky = textureSampleLevel(refl_sky_cube, refl_samp, r, sky_lod).rgb;
+            let sky = textureSampleLevel(refl_sky_cube, refl_samp, rd, sky_lod).rgb;
             radiance = radiance + contribution * probe_relit(sampled, em, ratio, sky, sky_k);
             coverage = coverage + contribution;
             taken = taken + 1u;
