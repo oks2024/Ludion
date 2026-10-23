@@ -224,6 +224,11 @@ pub mod pass {
     /// at a non-zero `bounce`, at least one marked light, and a machine whose
     /// [`Quality::gi_dynamic`](crate::Quality::gi_dynamic) is on.
     pub const GI_INJECT: &str = "gi_inject";
+    /// The probe relight (`Plan/reflections.md` decision 17): a **compute** pass evaluating the
+    /// diffuse irradiance at each ranked probe's capture point into the `probe_live` transient, one
+    /// texel per probe, which `reflections` reads last. Present only when
+    /// [`PostChain::probe_relight`](super::PostChain::probe_relight) is set — a scene with probes.
+    pub const PROBE_RELIGHT: &str = "probe_relight";
     /// Screen-space ambient occlusion from the prepass's depth and normals, into a half-resolution
     /// factor. [`PostChain::ssao`](super::PostChain::ssao) only.
     pub const SSAO: &str = "ssao";
@@ -565,6 +570,12 @@ pub struct PostChain {
     /// the same target. Only set when the scene has probes: a view never conjures its subject, so
     /// a probe-free scene draws the normal frame. Probes have no quality toggle, so `masked` keeps it.
     pub probe_view: bool,
+    /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
+    /// writing the `probe_live` transient (`MAX_PROBES`×1, `Rgba32Float`) that `reflections` reads
+    /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
+    /// what makes a probe-free frame byte-identical by construction rather than by care. Probes have
+    /// no quality toggle, so `masked` keeps it.
+    pub probe_relight: bool,
 }
 
 impl PostChain {
@@ -613,6 +624,7 @@ impl PostChain {
                 .filter(|_| scene.post.is_some_and(|post| post.ssr > 0.0)),
             probe_view: scene.debug_view == Some(crate::DebugView::ProbeIndex)
                 && !scene.probes.is_empty(),
+            probe_relight: !scene.probes.is_empty(),
         }
     }
 
@@ -653,6 +665,7 @@ impl PostChain {
             ssr: self.ssr.filter(|_| quality.ssr).map(|_| params.ssr_scale),
             ssr_view: self.ssr_view.filter(|_| self.ssr.is_some() && quality.ssr),
             probe_view: self.probe_view,
+            probe_relight: self.probe_relight,
             // Off removes the pass and its volume; on re-lays the lattice at this machine's coarser
             // probe spacing, which only ever removes probes (`gi_bake::scaled_probe_count`). The
             // spacing itself cancels out of that arithmetic, which is what lets a scene-free
@@ -881,6 +894,15 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             graph.transient("ssr_trace", TextureDesc::hdr_color(tw, th))
         })
     });
+    // The relight's per-probe irradiance table, written whole by one compute pass every frame it
+    // exists and read by `reflections`. A transient: nothing carries between frames. 32-bit so the
+    // live value compares exactly against the baked one.
+    let probe_live = chain.probe_relight.then(|| {
+        graph.transient(
+            "probe_live",
+            TextureDesc::rgba32_storage(crate::probe::MAX_PROBES as u32, 1),
+        )
+    });
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
     let output = graph.output("final", TextureDesc::present_target(width, height));
@@ -955,10 +977,21 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         declare_ssr_passes(&mut graph, ssr, scene, scene_normal, scene_depth);
     }
     // Reads in the shader's binding order; additive into `scene`, after the opaque pass. The trace
-    // is the fourth read when SSR is on, and the edge that orders it before this pass.
+    // is the fourth read when SSR is on, and the edge that orders it before this pass; the relight
+    // table is the last read when the scene has probes. Like the injection, the relight reads
+    // nothing the graph owns.
     let mut reflections_reads = vec![scene_normal, scene_specular, scene_depth];
     if let Some(ssr) = &ssr {
         reflections_reads.push(ssr.trace);
+    }
+    if let Some(probe_live) = probe_live {
+        graph.add_external_compute_pass(
+            pass::PROBE_RELIGHT,
+            pass::PROBE_RELIGHT,
+            vec![],
+            probe_live,
+        );
+        reflections_reads.push(probe_live);
     }
     graph.add_external_pass(
         pass::REFLECTIONS,
@@ -1270,6 +1303,7 @@ pub(crate) fn build_probe_capture_graph(face: u32, chain: PostChain) -> (RenderG
             && !chain.debug_lines,
         "a probe face schedules none of the screen-space chains: {chain:?}"
     );
+    debug_assert!(!chain.probe_relight, "a face scene carries no probes");
     let mut graph = RenderGraph::new();
     let scene = graph.transient("scene", TextureDesc::hdr_color(face, face));
     let scene_depth = graph.transient("scene_depth", TextureDesc::sampled_depth(face, face));
@@ -1499,6 +1533,7 @@ mod tests {
                 ssr_view: None,
                 // Content like `ui`: masking keeps it.
                 probe_view: bits & 1 != 0,
+                probe_relight: bits & 1 != 0,
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -2287,6 +2322,42 @@ mod tests {
         assert_eq!(reads, ["scene_normal", "scene_depth"]);
         assert_eq!(writes, graph_pass(&plain, "composite").unwrap().1);
         assert!(schedule(&graph).is_ok());
+    }
+
+    /// A scene with probes relights them in a compute pass that `reflections` reads last; a
+    /// probe-free chain declares neither the pass nor the table.
+    #[test]
+    fn a_probe_chain_relights_before_reflections_and_a_probe_free_one_does_not() {
+        let size = FrameSize::native(1920, 1080);
+        let chain = PostChain {
+            probe_relight: true,
+            ssr: Some(0.5),
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(size, chain);
+        let relight = graph
+            .passes()
+            .iter()
+            .find(|p| p.name == "probe_relight")
+            .unwrap();
+        assert!(relight.reads().is_empty());
+        let table = relight.storage_target().unwrap();
+        assert_eq!(graph.resources()[table.index()].name, "probe_live");
+        let (reads, _) = graph_pass(&graph, "reflections").unwrap();
+        assert_eq!(reads.last().map(String::as_str), Some("probe_live"));
+        let order = pass_names(&graph);
+        let at = |name: &str| order.iter().position(|p| *p == name).unwrap();
+        assert!(at("probe_relight") < at("reflections"));
+        assert!(schedule(&graph).is_ok());
+
+        let (plain, _) = build_frame_graph(size, PostChain::default());
+        assert!(graph_pass(&plain, "probe_relight").is_none());
+        assert!(
+            plain
+                .resources()
+                .iter()
+                .all(|resource| resource.name != "probe_live")
+        );
     }
 
     /// `for_scene` sets the probe view only for a scene with probes; without them the graph is the

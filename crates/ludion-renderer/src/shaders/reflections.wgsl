@@ -45,7 +45,7 @@ struct ProbeList {
 // One bit-mask per cluster cell, in the lights' cell order.
 @group(0) @binding(11) var<storage, read> probe_mask: array<u32>;
 // The live irradiance at each ranked probe's capture point, in `xyz` (`probe_relight.wgsl`).
-@group(0) @binding(12) var<storage, read> probe_live: array<vec4<f32>>;
+@group(0) @binding(12) var probe_live: texture_2d<f32>;
 
 struct Reflections {
     inv_view_proj: mat4x4<f32>,
@@ -174,7 +174,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let contribution = w * (1.0 - coverage);
             let dir = probe_lookup(probe, world, r);
             let sampled = textureSampleLevel(refl_probe_cubes, refl_samp, dir, i32(probe.center.w), lod);
-            let ratio = probe_ratio(probe.light.xyz, probe_live[k].xyz);
+            let ratio = probe_ratio(probe.light.xyz, textureLoad(probe_live, vec2<i32>(i32(k), 0), 0).xyz);
             let sky = textureSampleLevel(refl_sky_cube, refl_samp, r, sky_lod).rgb;
             radiance = radiance + contribution * probe_relit(sampled, ratio, sky, sky_k);
             coverage = coverage + contribution;

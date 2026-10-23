@@ -34,8 +34,8 @@ struct RelightParams {
 @group(0) @binding(4) var relight_bounce_r: texture_3d<f32>;
 @group(0) @binding(5) var relight_bounce_g: texture_3d<f32>;
 @group(0) @binding(6) var relight_bounce_b: texture_3d<f32>;
-// One vec4 per point: E in `xyz`.
-@group(0) @binding(7) var<storage, read_write> relight_out: array<vec4<f32>>;
+// One texel per point, along x: E in `xyz`.
+@group(0) @binding(7) var relight_out: texture_storage_2d<rgba32float, write>;
 
 @compute @workgroup_size(32)
 fn relight_main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -66,5 +66,5 @@ fn relight_main(@builtin(global_invocation_id) id: vec3<u32>) {
             e = e + relight.strengths.y * bounce;
         }
     }
-    relight_out[id.x] = vec4<f32>(e, 0.0);
+    textureStore(relight_out, vec2<i32>(i32(id.x), 0), vec4<f32>(e, 0.0));
 }

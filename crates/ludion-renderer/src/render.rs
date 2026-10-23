@@ -30,7 +30,8 @@ use crate::graph::{FrameSize, PostChain, build_frame_graph, build_probe_capture_
 use crate::ibl::{Ibl, ResolvedEnv};
 use crate::mesh::{self, MeshVertex};
 use crate::mipgen::{MipGen, mip_level_count};
-use crate::probe_capture::Probes;
+use crate::probe::{MAX_PROBES, probe_rank};
+use crate::probe_capture::{ProbeIrradiance, Probes};
 use crate::quality::{Quality, QualityParams};
 use crate::scene::{
     DebugSegment, FontDraw, GroundMarkerInstance, MapImage, MeshData, MeshInstance, MeshShape,
@@ -1252,16 +1253,50 @@ impl Renderer {
             .execute_into(&schedule, output, &recorder, dest)
             .expect("a probe face renders");
         measure.then(|| {
-            let out = self.probe_relight.irradiance(
+            self.probe_relight.measure(
                 &self.gpu,
                 &recorder.resolved_env,
                 &recorder.resolved_gi,
                 recorder.gi_strengths,
                 face_scene.ambient,
                 &[face_scene.camera.position],
-            );
-            crate::probe_relight::ProbeRelight::read(&self.gpu, &out, 1)[0]
+            )[0]
         })
+    }
+
+    /// The baked and the live diffuse irradiance at each of `scene`'s probes, in [`probe_rank`]
+    /// order (the order `reflections` indexes them): `baked` is the value stored with the capture,
+    /// `live` the relight kernel run over the probe's centre against this frame's environment and
+    /// GI volumes. A static scene has them bit-equal, which makes the relight ratio exactly 1.
+    /// Resolves (captures or loads) the probes first; empty for a probe-free scene.
+    pub fn read_probe_irradiance(&self, scene: &RenderScene) -> Vec<ProbeIrradiance> {
+        if scene.probes.is_empty() {
+            return Vec::new();
+        }
+        let recorder = self.prepare_frame(scene, FrameSize::native(64, 64), None);
+        let Some(cubes) = self.probes.cubes() else {
+            return Vec::new();
+        };
+        let held = &scene.probes[..scene.probes.len().min(MAX_PROBES)];
+        let mut order: Vec<usize> = (0..held.len()).collect();
+        order.sort_by(|&a, &b| probe_rank(&held[a], &held[b]));
+        let centres: Vec<Vec3> = order.iter().map(|&i| held[i].position).collect();
+        let live = self.probe_relight.measure(
+            &self.gpu,
+            &recorder.resolved_env,
+            &recorder.resolved_gi,
+            recorder.gi_strengths,
+            scene.ambient,
+            &centres,
+        );
+        order
+            .iter()
+            .zip(live)
+            .map(|(&i, live)| ProbeIrradiance {
+                baked: cubes.irradiance[i],
+                live,
+            })
+            .collect()
     }
 
     /// Uploads every per-frame resource and returns the recorder that will draw it. `size` rides
@@ -1473,24 +1508,22 @@ impl Renderer {
             lights_raw.header.grid,
             size.render,
         );
-        // The live irradiance at each ranked probe's capture point, the relight's numerator. Without
-        // probes a one-entry fallback is bound and never read.
-        let probe_live_buf = if probe_cubes.is_some() {
+        // The live irradiance at each ranked probe's capture point, the relight's numerator, written
+        // by the `probe_relight` graph pass. No cubes means an empty list, so the dispatch is empty.
+        let probe_relight = chain.probe_relight.then(|| {
             let centres: Vec<Vec3> = probe_list.probes[..probe_list.header[0] as usize]
                 .iter()
                 .map(|probe| Vec3::new(probe.center[0], probe.center[1], probe.center[2]))
                 .collect();
-            self.probe_relight.irradiance(
-                &self.gpu,
+            self.probe_relight.prepare(
+                device,
                 &resolved_env,
                 &resolved_gi,
                 gi_strengths,
                 scene.ambient,
                 &centres,
             )
-        } else {
-            init_buffer(device, wgpu::BufferUsages::STORAGE, &[0u8; 16])
-        };
+        });
         let probe_list_buf = init_buffer(
             device,
             wgpu::BufferUsages::UNIFORM,
@@ -1520,7 +1553,7 @@ impl Renderer {
             lights_bg,
             probe_list_buf,
             probe_mask_buf,
-            probe_live_buf,
+            probe_relight,
             probe_cube_view,
             sun_buf,
             sun: scene.sun,
@@ -2598,8 +2631,9 @@ struct FrameRecorder<'a> {
     /// array (`None`: the renderer's fallback is bound and the uniform's count is 0).
     probe_list_buf: wgpu::Buffer,
     probe_mask_buf: wgpu::Buffer,
-    /// The live irradiance at each ranked probe's centre (`probe_relight.rs`), one `vec4` each.
-    probe_live_buf: wgpu::Buffer,
+    /// The `probe_relight` pass's upload (`probe_relight.rs`); `Some` exactly when the graph
+    /// declares the pass.
+    probe_relight: Option<crate::probe_relight::RelightFrame>,
     probe_cube_view: Option<wgpu::TextureView>,
     /// The mesh group-2 sun uniform (real when the scene has a sun, zeroed otherwise). Also bound to
     /// the shadow pass's `ShadowView` layout — its first 64 bytes are `light_space`.
@@ -2704,6 +2738,7 @@ impl PassRecorder for FrameRecorder<'_> {
             // estimate dithered with it this pass names (`box_blur.wgsl`).
             pass::SSAO_BLUR | pass::SHAFTS_BLUR => self.record_box_blur(pass),
             pass::GI_INJECT => self.record_gi_inject(pass),
+            pass::PROBE_RELIGHT => self.record_probe_relight(pass),
             pass::SCENE => self.record_scene(pass),
             pass::REFLECTIONS => self.record_reflections(pass),
             pass::HIZ_SEED | pass::HIZ_REDUCE => self.record_hiz(pass),
@@ -3064,6 +3099,28 @@ impl FrameRecorder<'_> {
         self.r.gi_inject.dispatch(&mut compute, frame, &bind);
     }
 
+    /// The probe relight: a compute pass writing the per-probe irradiance table `reflections` reads.
+    /// Bound and recorded like [`record_gi_inject`](FrameRecorder::record_gi_inject); the graph
+    /// declares the pass exactly when [`FrameRecorder::probe_relight`] is `Some`.
+    fn record_probe_relight(&self, pass: &mut RecordedPass<'_>) {
+        let frame = self
+            .probe_relight
+            .as_ref()
+            .expect("the graph schedules probe_relight exactly when this frame uploaded for it");
+        let out = pass
+            .storage
+            .expect("the probe_relight pass declares a storage texture");
+        let bind = self.r.probe_relight.bind_group(
+            pass.device,
+            frame,
+            &self.resolved_env,
+            &self.resolved_gi,
+            out,
+        );
+        let mut compute = pass.begin_compute();
+        self.r.probe_relight.dispatch(&mut compute, frame, &bind);
+    }
+
     /// The opaque scene pass: meshes (depth-written) into `scene`, `scene_normal` and `scene_specular`.
     fn record_scene(&self, pass: &mut RecordedPass<'_>) {
         // The depth attachment is a graph resource (`scene_depth`), resolved and handed over by the
@@ -3207,8 +3264,10 @@ impl FrameRecorder<'_> {
     /// order), then the sky cube, BRDF LUT and probe volume, and the probe cubes, list and masks. It adds the
     /// indirect specular: SSR over probes over the sky.
     fn record_reflections(&self, pass: &mut RecordedPass<'_>) {
-        // The trace is the fourth read, present only when the graph declared the SSR chain.
-        let ssr = pass.inputs.len() == 4;
+        // The trace is the fourth read, present only when the graph declared the SSR chain; the
+        // relight table is always the last read, present only with probes.
+        let relit = self.probe_relight.is_some();
+        let ssr = pass.inputs.len() == 4 + usize::from(relit);
         let mut env = self.resolved_env.params;
         env[3] = self.gi_strengths.sky_visibility;
         let uniform = shader_gen::Reflections {
@@ -3263,12 +3322,11 @@ impl FrameRecorder<'_> {
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::REFL_SSR_BINDING,
-                    resource: wgpu::BindingResource::TextureView(
-                        pass.inputs
-                            .get(3)
-                            .copied()
-                            .unwrap_or(&self.r.fallback_hdr.view),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(if ssr {
+                        pass.inputs[3]
+                    } else {
+                        &self.r.fallback_hdr.view
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::REFL_PROBE_CUBES_BINDING,
@@ -3288,7 +3346,11 @@ impl FrameRecorder<'_> {
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::PROBE_LIVE_BINDING,
-                    resource: self.probe_live_buf.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(if relit {
+                        pass.inputs[pass.inputs.len() - 1]
+                    } else {
+                        self.r.probe_relight.fallback()
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::REFLECTIONS_BINDING,

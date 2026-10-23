@@ -151,6 +151,15 @@ pub struct ProbeReadback {
     pub levels: Vec<Vec<f32>>,
 }
 
+/// One probe's baked and live diffuse irradiance as `Renderer::read_probe_irradiance` returns them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProbeIrradiance {
+    /// E stored with the capture, measured at the capture point.
+    pub baked: [f32; 3],
+    /// E the relight kernel evaluates for the current frame at the same point.
+    pub live: [f32; 3],
+}
+
 fn f16_texels(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(2)

@@ -131,6 +131,8 @@ pub enum TextureFormat {
     /// 32-bit float, one channel — a depth pyramid's format. Renderable on the WebGPU floor but
     /// unfilterable: read it with `textureLoad`.
     R32Float,
+    /// 32-bit float RGBA, unfilterable: read with `textureLoad`; a compute pass's exact-f32 output.
+    Rgba32Float,
     /// 32-bit float depth — the scene pass's depth attachment, and (once a pass samples it) a shadow
     /// map. A depth format is never a color attachment and never read back for presentation; it is
     /// attached with [`TextureUsage::RenderAttachment`] and, when a later pass samples it,
@@ -145,6 +147,7 @@ impl TextureFormat {
             TextureFormat::Rgba8UnormSrgb => 4,
             TextureFormat::Rgba16Float => 8,
             TextureFormat::R32Float => 4,
+            TextureFormat::Rgba32Float => 16,
             TextureFormat::Depth32Float => 4,
         }
     }
@@ -155,6 +158,7 @@ impl TextureFormat {
             TextureFormat::Rgba8UnormSrgb => "rgba8unorm_srgb",
             TextureFormat::Rgba16Float => "rgba16float",
             TextureFormat::R32Float => "r32float",
+            TextureFormat::Rgba32Float => "rgba32float",
             TextureFormat::Depth32Float => "depth32_float",
         }
     }
@@ -165,6 +169,7 @@ impl TextureFormat {
             TextureFormat::Rgba8UnormSrgb => wgpu::TextureFormat::Rgba8UnormSrgb,
             TextureFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
             TextureFormat::R32Float => wgpu::TextureFormat::R32Float,
+            TextureFormat::Rgba32Float => wgpu::TextureFormat::Rgba32Float,
             TextureFormat::Depth32Float => wgpu::TextureFormat::Depth32Float,
         }
     }
@@ -308,6 +313,32 @@ impl TextureDesc {
             depth_slices: Some(depth),
             mip_levels: 1,
             format: TextureFormat::Rgba16Float,
+            usages: vec![TextureUsage::TextureBinding, TextureUsage::StorageBinding],
+        }
+    }
+
+    /// A 32-bit float RGBA **2D** texture a compute pass writes as a storage texture and a later
+    /// pass reads with `textureLoad` (see [`TextureFormat::Rgba32Float`]) — a per-index table of exact
+    /// f32 results, one texel each.
+    ///
+    /// It carries [`StorageBinding`](TextureUsage::StorageBinding) (the compute write) and
+    /// [`TextureBinding`](TextureUsage::TextureBinding) (the downstream read), and never
+    /// [`RenderAttachment`](TextureUsage::RenderAttachment).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_render_graph::{TextureDesc, TextureFormat, TextureUsage};
+    ///
+    /// let table = TextureDesc::rgba32_storage(32, 1);
+    /// assert_eq!(table.format, TextureFormat::Rgba32Float);
+    /// assert!(table.usages.contains(&TextureUsage::StorageBinding));
+    /// ```
+    pub fn rgba32_storage(width: u32, height: u32) -> Self {
+        TextureDesc {
+            extent: Extent2d { width, height },
+            depth_slices: None,
+            mip_levels: 1,
+            format: TextureFormat::Rgba32Float,
             usages: vec![TextureUsage::TextureBinding, TextureUsage::StorageBinding],
         }
     }

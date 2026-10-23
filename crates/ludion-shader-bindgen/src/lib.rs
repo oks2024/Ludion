@@ -99,9 +99,9 @@ pub const RENDERER_SHADERS: &[&str] = &[
 ];
 
 /// WGSL global names of `texture_2d<f32>` bindings that are **not** filterable (an `R32Float`
-/// source read with `textureLoad`). WGSL cannot express it, so reflection takes it from this list;
-/// binding names are workspace-unique, so a name is a safe key.
-pub const UNFILTERABLE_TEXTURES: &[&str] = &["hiz_src", "trace_hiz"];
+/// or `Rgba32Float` source read with `textureLoad`). WGSL cannot express it, so reflection takes
+/// it from this list; binding names are workspace-unique, so a name is a safe key.
+pub const UNFILTERABLE_TEXTURES: &[&str] = &["hiz_src", "trace_hiz", "probe_live"];
 
 /// The render graph's reflected shaders (files under `crates/ludion-render-graph/src/shaders/`).
 pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl"];

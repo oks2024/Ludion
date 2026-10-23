@@ -2247,10 +2247,10 @@ pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_r
             wgpu::BindGroupLayoutEntry {
                 binding: PROBE_LIVE_BINDING,
                 visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(16),
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
                 count: None,
             },

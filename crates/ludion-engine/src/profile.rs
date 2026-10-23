@@ -1075,11 +1075,12 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// The frame graph's fixed pass names — the full universe
 /// [`build_frame_graph`](ludion_renderer::build_frame_graph) can ever produce (`shadow` only for a
 /// scene with a sun, `overlay` only for a scene with UI, `resolve` only above a render scale of 1, `upscale` only below it,
-/// `gi_inject` only for a scene with a bouncing `GiVolume` and a light marked dynamic).
+/// `gi_inject` only for a scene with a bouncing `GiVolume` and a light marked dynamic,
+/// `probe_relight` only for a scene with probes).
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 34] = [
+const KNOWN_PASS_NAMES: [&str; 35] = [
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::PREPASS,
     ludion_renderer::graph::pass::SSAO,
@@ -1095,6 +1096,7 @@ const KNOWN_PASS_NAMES: [&str; 34] = [
     ludion_renderer::graph::pass::SSR_TRACE,
     ludion_renderer::graph::pass::SSR_DEBUG,
     ludion_renderer::graph::pass::PROBE_DEBUG,
+    ludion_renderer::graph::pass::PROBE_RELIGHT,
     ludion_renderer::graph::pass::SHAFTS,
     ludion_renderer::graph::pass::SHAFTS_BLUR,
     ludion_renderer::graph::pass::DOF_COC,
@@ -3218,6 +3220,7 @@ entities:
             ssr: Some(0.5),
             ssr_view: Some(DebugView::SsrConfidence),
             probe_view: true,
+            probe_relight: true,
         };
         let sizes = [
             FrameSize::native(1280, 720),

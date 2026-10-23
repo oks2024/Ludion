@@ -414,6 +414,86 @@ entities:
     }
 
     #[test]
+    fn needs_gpu_a_static_scene_relights_its_probes_by_exactly_one() {
+        let dir = project("static-relight");
+        let mut engine = engine(
+            &dir,
+            "format: 1
+entities:
+  - name: environment
+    components:
+      Environment:
+        sun_disc_size: 5.0
+        sun_disc_intensity: 8.0
+        ibl_intensity: 1.2
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 10.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.8
+          - -0.5
+        intensity: 1.0
+  - name: gi
+    components:
+      GiVolume:
+        cell_size: 0.5
+        probe_spacing: 1.0
+        sky_visibility: 0.8
+        bounce: 0.6
+  - name: floor
+    components:
+      Transform:
+        scale:
+          - 10.0
+          - 1.0
+          - 10.0
+      Mesh:
+        shape: cube
+  - name: wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - -4.0
+        scale:
+          - 8.0
+          - 4.0
+          - 1.0
+      Mesh:
+        shape: cube
+  - name: probe
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - 0.0
+      ReflectionProbe: {}
+",
+        );
+        if no_gpu(&mut engine) {
+            return;
+        }
+        let scene = engine.extract_render_scene(64, 64).unwrap();
+        let renderer = engine.renderer().unwrap();
+        assert!(scene.gi.is_some(), "the GiVolume bakes");
+        assert!(scene.environment.is_some_and(|env| env.sun_disc_size > 0.0));
+        assert_eq!(scene.probes.len(), 1);
+        let irradiance = renderer.read_probe_irradiance(&scene);
+        assert_eq!(irradiance.len(), 1);
+        assert!(irradiance[0].baked.iter().any(|&e| e > 0.0));
+        assert_eq!(irradiance[0].live, irradiance[0].baked);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn needs_gpu_bake_then_a_store_host_hits() {
         let dir = project("gpu");
         let mut a = engine(&dir, scene());

@@ -1,7 +1,8 @@
 //! The probe relight kernel (`shaders/probe_relight.wgsl`, `Plan/reflections.md` decision 17): the
 //! normal-free diffuse irradiance E at a set of world points. A capture bakes E at its capture point
-//! (stored with the cube), and every frame the same kernel reads E at the ranked probes' centres;
-//! the `reflections` pass scales the captured geometry radiance by their ratio.
+//! (stored with the cube, measured by [`ProbeRelight::measure`]), and every frame the
+//! `probe_relight` graph pass writes E at the ranked probes' centres into the `probe_live`
+//! transient; the `reflections` pass scales the captured geometry radiance by their ratio.
 
 use ludion_core::math::glam::Vec3;
 use ludion_render_graph::Gpu;
@@ -15,10 +16,17 @@ use crate::shader_gen::{self, RelightParams};
 
 const WORKGROUP: u32 = shader_gen::PROBE_RELIGHT_RELIGHT_MAIN_WORKGROUP_SIZE[0];
 
-/// The relight compute pipeline and its sampler.
+/// The relight compute pipeline, its sampler and the table a relight-free frame binds.
 pub(crate) struct ProbeRelight {
     pipeline: wgpu::ComputePipeline,
     sampler: wgpu::Sampler,
+    fallback: wgpu::TextureView,
+}
+
+/// One frame's relight upload: the params uniform and the point count.
+pub(crate) struct RelightFrame {
+    params: wgpu::Buffer,
+    count: u32,
 }
 
 impl ProbeRelight {
@@ -48,23 +56,42 @@ impl ProbeRelight {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        ProbeRelight { pipeline, sampler }
+        let fallback = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("probe relight fallback"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        ProbeRelight {
+            pipeline,
+            sampler,
+            fallback,
+        }
     }
 
-    /// Dispatches the kernel over `points` (at most [`MAX_PROBES`]) and returns the output buffer,
-    /// one `vec4` per point with E in `xyz`. The inputs are the frame's resolved environment and GI
-    /// volumes, so the composition follows `mesh.wgsl`'s ambient term. Submits its own encoder.
-    pub(crate) fn irradiance(
+    /// Uploads the params for a dispatch over `points` (at most [`MAX_PROBES`]). The inputs are the
+    /// frame's resolved environment and GI volumes, so the composition follows `mesh.wgsl`'s ambient
+    /// term.
+    pub(crate) fn prepare(
         &self,
-        gpu: &Gpu,
+        device: &wgpu::Device,
         env: &ResolvedEnv,
         gi: &ResolvedGi,
         strengths: GiStrengths,
         ambient: [f32; 3],
         points: &[Vec3],
-    ) -> wgpu::Buffer {
+    ) -> RelightFrame {
         debug_assert!(points.len() <= MAX_PROBES);
-        let device = gpu.device();
         let mut params: RelightParams = bytemuck::Zeroable::zeroed();
         for (slot, p) in params.points.iter_mut().zip(points) {
             *slot = [p.x, p.y, p.z, 0.0];
@@ -79,18 +106,28 @@ impl ProbeRelight {
         params.gi_scale = gi.scale;
         params.strengths = [strengths.sky_visibility, strengths.bounce, 0.0, 0.0];
         params.ambient = [ambient[0], ambient[1], ambient[2], 0.0];
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("probe relight params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let out = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("probe relight out"),
-            size: (points.len().max(1) * 16) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        RelightFrame {
+            params: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("probe relight params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }),
+            count: points.len() as u32,
+        }
+    }
+
+    /// The bind group for one dispatch, over `frame`'s params and the table `out`. Split from
+    /// [`dispatch`](ProbeRelight::dispatch) because a `RecordedPass` lends its encoder mutably: the
+    /// group is built before the compute pass is opened.
+    pub(crate) fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        frame: &RelightFrame,
+        env: &ResolvedEnv,
+        gi: &ResolvedGi,
+        out: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("probe relight"),
             layout: &self
                 .pipeline
@@ -98,7 +135,7 @@ impl ProbeRelight {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: shader_gen::RELIGHT_BINDING,
-                    resource: uniform.as_entire_binding(),
+                    resource: frame.params.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::RELIGHT_IRRADIANCE_BINDING,
@@ -126,9 +163,69 @@ impl ProbeRelight {
                 },
                 wgpu::BindGroupEntry {
                     binding: shader_gen::RELIGHT_OUT_BINDING,
-                    resource: out.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(out),
                 },
             ],
+        })
+    }
+
+    /// Issues the dispatch into an already-opened compute pass; nothing for an empty point list.
+    pub(crate) fn dispatch(
+        &self,
+        pass: &mut wgpu::ComputePass<'_>,
+        frame: &RelightFrame,
+        bind_group: &wgpu::BindGroup,
+    ) {
+        if frame.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(shader_gen::RELIGHT_GROUP, bind_group, &[]);
+        pass.dispatch_workgroups(frame.count.div_ceil(WORKGROUP), 1, 1);
+    }
+
+    /// The 1×1 table a frame with no relight binds to `reflections`; its probe list is empty, so
+    /// nothing reads it.
+    pub(crate) fn fallback(&self) -> &wgpu::TextureView {
+        &self.fallback
+    }
+
+    /// One-shot relight over `points`, read back synchronously: E per point. The capture-time
+    /// measurement and the tests' seam; it runs the same kernel into a scratch table in its own
+    /// submit.
+    pub(crate) fn measure(
+        &self,
+        gpu: &Gpu,
+        env: &ResolvedEnv,
+        gi: &ResolvedGi,
+        strengths: GiStrengths,
+        ambient: [f32; 3],
+        points: &[Vec3],
+    ) -> Vec<[f32; 3]> {
+        let device = gpu.device();
+        let scratch = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("probe relight scratch"),
+            size: wgpu::Extent3d {
+                width: MAX_PROBES as u32,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = scratch.create_view(&wgpu::TextureViewDescriptor::default());
+        let frame = self.prepare(device, env, gi, strengths, ambient, points);
+        let bind = self.bind_group(device, &frame, env, gi, &view);
+        let row = (MAX_PROBES * 16) as u64;
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("probe relight readback"),
+            size: row,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
         });
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -137,28 +234,24 @@ impl ProbeRelight {
                 label: Some("probe relight"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(shader_gen::RELIGHT_GROUP, &bind_group, &[]);
-            pass.dispatch_workgroups((points.len() as u32).div_ceil(WORKGROUP), 1, 1);
+            self.dispatch(&mut pass, &frame, &bind);
         }
-        gpu.queue().submit(Some(encoder.finish()));
-        out
-    }
-
-    /// The first `n` irradiances of a buffer [`irradiance`](ProbeRelight::irradiance) returned,
-    /// read back synchronously.
-    pub(crate) fn read(gpu: &Gpu, buffer: &wgpu::Buffer, n: usize) -> Vec<[f32; 3]> {
-        let device = gpu.device();
-        let size = (n * 16) as u64;
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("probe relight readback"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+        encoder.copy_texture_to_buffer(
+            scratch.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row as u32),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width: MAX_PROBES as u32,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
         gpu.queue().submit(Some(encoder.finish()));
         let (tx, rx) = std::sync::mpsc::channel();
         staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
@@ -170,7 +263,11 @@ impl ProbeRelight {
         rx.recv().unwrap().expect("the buffer maps");
         let mapped = staging.slice(..).get_mapped_range().expect("mapped range");
         let floats: &[f32] = bytemuck::cast_slice(&mapped);
-        let out = floats.chunks_exact(4).map(|c| [c[0], c[1], c[2]]).collect();
+        let out = floats
+            .chunks_exact(4)
+            .take(points.len())
+            .map(|c| [c[0], c[1], c[2]])
+            .collect();
         drop(mapped);
         staging.unmap();
         out
@@ -213,8 +310,8 @@ mod tests {
         let gi = gi.resolve(gpu, None);
         let relight = ProbeRelight::new(gpu);
         let ambient = [0.05, 0.1, 0.2];
-        let out = relight.irradiance(gpu, &env, &gi, NO_GI, ambient, &[Vec3::new(1.0, 2.0, 3.0)]);
-        assert_eq!(ProbeRelight::read(gpu, &out, 1), vec![ambient]);
+        let out = relight.measure(gpu, &env, &gi, NO_GI, ambient, &[Vec3::new(1.0, 2.0, 3.0)]);
+        assert_eq!(out, vec![ambient]);
     }
 
     #[test]
@@ -229,8 +326,7 @@ mod tests {
         let gi = gi.resolve(gpu, None);
         let relight = ProbeRelight::new(gpu);
         let ambient = [0.05, 0.1, 0.2];
-        let out = relight.irradiance(gpu, &env, &gi, NO_GI, ambient, &[Vec3::ZERO]);
-        let got = ProbeRelight::read(gpu, &out, 1)[0];
+        let got = relight.measure(gpu, &env, &gi, NO_GI, ambient, &[Vec3::ZERO])[0];
 
         // Each axis direction is the centre of a cube face: the mean of its four centre texels.
         let mip0 = &read_rgba16_mips(gpu, env.irradiance.texture())[0];
@@ -267,7 +363,7 @@ mod tests {
         let relight = ProbeRelight::new(gpu);
         let ambient = [0.01, 0.02, 0.03];
         let point = Vec3::new(4.0, 5.0, 6.0);
-        let alone = relight.irradiance(gpu, &env, &gi, NO_GI, ambient, &[point]);
+        let alone = relight.measure(gpu, &env, &gi, NO_GI, ambient, &[point]);
         let batch: Vec<Vec3> = (0..MAX_PROBES)
             .map(|i| {
                 if i == 17 {
@@ -277,11 +373,7 @@ mod tests {
                 }
             })
             .collect();
-        let many = relight.irradiance(gpu, &env, &gi, NO_GI, ambient, &batch);
-        let (alone, many) = (
-            ProbeRelight::read(gpu, &alone, 1),
-            ProbeRelight::read(gpu, &many, MAX_PROBES),
-        );
+        let many = relight.measure(gpu, &env, &gi, NO_GI, ambient, &batch);
         assert_eq!(alone[0], many[17]);
     }
 }
