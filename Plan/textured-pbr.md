@@ -40,6 +40,7 @@ that is a *different* trigger (voxel texturing — recorded deferred below), not
    diffable; textures are referenced binary assets that arrive **only** through `ludion import`.
    Rejected: any texture-authoring surface (a texture the agent can't read/edit/diff fights every
    pillar and duplicates the voxel/palette path).
+   *Revisited 2026-10-23 by `Plan/procedural-textures.md`: a text recipe is diffable source with generated, drift-gated maps, which removes this fence's reason.*
 2. **Full five-map glTF metallic-roughness set, in one arc:** `baseColorTexture`,
    `metallicRoughnessTexture` (G = roughness, B = metallic, packed), `normalTexture`,
    `occlusionTexture`, `emissiveTexture`. Chosen over an incremental base-color-first split on user
@@ -114,6 +115,7 @@ that is a *different* trigger (voxel texturing — recorded deferred below), not
 - **No texture-authoring surface / no `texture.*` wire commands / no editor texture UI.** Textures
   arrive only through `ludion import`; a texture reference is a path set at import time. Scalar
   material edits keep riding `component.set`; the parity gate stays clean.
+  *Revisited 2026-10-23 by `Plan/procedural-textures.md`: a text recipe is diffable source with generated, drift-gated maps, which removes this fence's reason.*
 - **The atlas/sprite-sheet pipeline (deferred since Phase 8) stays deferred.** Mesh textures are
   per-material standalone images, unrelated to sprite-atlas packing. This arc does not fire it.
 - **`.mesh.yaml` may reference textures** (it is the format import writes, so the fields exist) but
