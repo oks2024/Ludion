@@ -87,8 +87,8 @@ Referenced as `path: std:<name>`. Params list their defaults.
 
 | name | input | params | outputs |
 | --- | --- | --- | --- |
-| `cobbles` | — | `scale` 6, `gap` 0.04, `bevel` 0.3, `jitter` 0.85 | `height`, `mask` (1 on a stone), `stone_id` (random gray per stone) |
-| `planks` | — | `columns` 2, `rows` 6 (even if `stagger` > 0), `gap` 0.08, `stagger` 0.5, `grain_scale` 14 | `boards`, `board_id`, `grain`, `height` |
+| `cobbles` | — | `scale` 6, `gap` 0.04, `bevel` 0.3, `jitter` 0.85, `round` 0 (1 = rounded, facet-free), `round_radius` 0.01 (tile units) | `height`, `mask` (1 on a stone), `stone_id` (random gray per stone) |
+| `planks` | — | `columns` 2, `rows` 6 (even if `stagger` > 0), `gap` 0.008 (joint width in tile units; 0 = one board), `bevel` 0.03 (tile units), `stagger` 0.5, `stagger_jitter` 0, `grain_scale` 14 | `boards`, `board_id`, `grain`, `height` |
 | `edge_wear` | `height` gray (default 0.5) | `amount` 0.9, `radius` 0.01, `breakup_scale` 8, `breakup` 0.7 | `edges`, `mask` (the one to use) |
 | `cavity_grime` | `height` gray (default 0.5) | `amount` 0.9, `radius` 0.03, `breakup_scale` 6 | `cavities`, `occlusion`, `mask` |
 | `rust_spots` | — | `coverage` 0.25, `scale` 4, `breakup` 0.06 | `mask`, `pits` |

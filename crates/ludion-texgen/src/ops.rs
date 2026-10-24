@@ -187,6 +187,14 @@ pub struct TileSpec {
     pub rotation: f32,
     /// Shift of odd rows, in cell widths.
     pub offset: f32,
+    /// Random extra shift of each row, in cell widths.
+    pub offset_jitter: f32,
+    /// Tile units shaved off every instance edge-to-edge.
+    pub gap: f32,
+    /// Random scale of the pattern lookup per instance, in `[1 - j, 1 + j]`.
+    pub pattern_scale_jitter: f32,
+    /// Random offset of the pattern lookup per instance, in `[0, j)` on each axis.
+    pub pattern_offset_jitter: f32,
     /// Probability an instance is kept.
     pub density: f32,
     /// How overlaps combine.
@@ -1234,6 +1242,10 @@ fn tile_sampler(r: &mut Reader<'_>) -> Read<Op> {
     let value_jitter = r.ranged("value_jitter", Some(0.0), 0.0, 1.0);
     let rotation = r.float("rotation", Some(0.0));
     let offset = r.ranged("offset", Some(0.0), 0.0, 1.0);
+    let offset_jitter = r.ranged("offset_jitter", Some(0.0), 0.0, 1.0);
+    let gap = r.ranged("gap", Some(0.0), 0.0, 0.5);
+    let pattern_scale_jitter = r.ranged("pattern_scale_jitter", Some(0.0), 0.0, 1.0);
+    let pattern_offset_jitter = r.ranged("pattern_offset_jitter", Some(0.0), 0.0, 1.0);
     let density = r.ranged("density", Some(1.0), 0.0, 1.0);
     let combine = r.word("combine", Some("max"), &["max", "add"]);
     let seed = r.int("seed", Some(0), 0, STEP_SEED_MAX);
@@ -1262,6 +1274,10 @@ fn tile_sampler(r: &mut Reader<'_>) -> Read<Op> {
         value_jitter: value_jitter?,
         rotation: rotation?,
         offset,
+        offset_jitter: offset_jitter?,
+        gap: gap?,
+        pattern_scale_jitter: pattern_scale_jitter?,
+        pattern_offset_jitter: pattern_offset_jitter?,
         density: density?,
         combine: [Combine::Max, Combine::Add][combine?],
         seed: seed?,

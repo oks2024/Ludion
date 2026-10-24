@@ -74,6 +74,31 @@ fn scatter_tiles_with_every_jitter() {
     assert_seamless("tile_sampler", &height(&single(step), 128));
 }
 
+#[test]
+fn scatter_tiles_with_the_layout_fields() {
+    let steps = "  ramp:
+    op: noise
+    type: gradient
+    scale: 2
+  n:
+    op: tile_sampler
+    columns: 3
+    rows: 4
+    pattern: ramp
+    scale: 1.2
+    gap: 0.02
+    offset: 0.5
+    offset_jitter: 0.7
+    pattern_scale_jitter: 0.4
+    pattern_offset_jitter: 0.8
+    rotation_jitter: 0.5
+    position_jitter: 0.3
+    seed: 5
+";
+    let source = recipe(steps, "  base_color: n\n  roughness: n\n  height: n\n");
+    assert_seamless("tile_sampler layout", &height(&source, 128));
+}
+
 const REGIONS: &str = "  cells:
     op: noise
     type: cellular

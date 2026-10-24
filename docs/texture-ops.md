@@ -102,6 +102,10 @@ The finest octave (`scale × lacunarity^(octaves-1)`) may not exceed 65536 cells
 | `tile_sampler.scale_jitter` / `position_jitter` / `rotation_jitter` / `value_jitter` | number | 0 | 0..1 each |
 | `tile_sampler.rotation` | number | 0 | degrees |
 | `tile_sampler.offset` | number | 0 | 0..1 cell widths, shifts odd rows |
+| `tile_sampler.offset_jitter` | number | 0 | 0..1 cell widths, random extra shift of each row |
+| `tile_sampler.gap` | number | 0 | 0..0.5 tile units shaved off every instance edge-to-edge, uniform on both axes |
+| `tile_sampler.pattern_scale_jitter` | number | 0 | 0..1, per-instance scale of the `pattern` lookup in `[1 - j, 1 + j]` |
+| `tile_sampler.pattern_offset_jitter` | number | 0 | 0..1, per-instance offset of the `pattern` lookup in `[0, j)` on each axis |
 | `tile_sampler.density` | number | 1.0 | 0..1 chance an instance is kept |
 | `tile_sampler.combine` | `max` \| `add` | `max` | how overlaps combine |
 | `flood_fill.threshold` | number | 0.5 | 0..1 |
@@ -151,7 +155,7 @@ The finest octave (`scale × lacunarity^(octaves-1)`) may not exceed 65536 cells
   halves. Feed both the same height or the shading disagrees with the normal.
 - `distance` and `flood_fill` threshold the input; a soft gradient gives a thin or empty region —
   `levels` it first.
-- `tile_sampler` with `offset` > 0 and an odd `rows` would not tile; it is refused.
+- `tile_sampler` with `offset` > 0 and an odd `rows` would not tile; it is refused; `offset_jitter` needs no even `rows`.
 
 ## Next
 

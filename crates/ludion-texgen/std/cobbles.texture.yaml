@@ -4,6 +4,8 @@
 #         gap    cellular edge distance below which the joint is open
 #         bevel  cellular edge distance at which a stone reaches full height; above gap
 #         jitter how far the stone centers wander from a grid, 0..1
+#         round  0 keeps the faceted crest, 1 a rounded facet-free stone
+#         round_radius blur radius of the rounded profile, in tile units
 # Output  height   stones domed from the joints, 0 in the joint
 #         mask     1 on a stone, 0 in a joint
 #         stone_id a random gray per stone, 0 in a joint
@@ -15,6 +17,8 @@ params:
   gap: 0.04
   bevel: 0.3
   jitter: 0.85
+  round: 0
+  round_radius: 0.01
 steps:
   cells:
     op: noise
@@ -27,7 +31,7 @@ steps:
     input: cells
     in_low: $gap
     in_high: $bevel
-  height:
+  faceted:
     op: curve
     input: ramp
     points:
@@ -42,6 +46,21 @@ steps:
     input: ramp
     in_low: 0.0
     in_high: 0.02
+  softened:
+    op: blur
+    input: faceted
+    radius: $round_radius
+  rounded:
+    op: blend
+    a: softened
+    b: mask
+    mode: multiply
+  height:
+    op: blend
+    a: faceted
+    b: rounded
+    mode: mix
+    opacity: $round
   stone_id:
     op: flood_fill
     input: mask

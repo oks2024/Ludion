@@ -159,6 +159,8 @@ Wave 0 (the spike) — **Go**, 2026-10-24:
 
 Wave 1 — in progress.
 
+- **Layout ops.** `tile_sampler` gains `offset_jitter`, `gap` and per-instance pattern scale and offset jitters; `std:planks` is rebuilt on them (uniform joints in tile units, `bevel`, `stagger_jitter`, `gap: 0` is one board) and `std:cobbles` gains an opt-in `round` profile.
+
 ## Spike log (W0)
 
 Four reference materials, authored only through the feedback loop (`build --preview` at 512²: the map sheet, step thumbnails, 2×2 tiling views, the rendered preview and the validators), in `examples/textures/`. No op or macro was added; every gap was worked around from the existing library.
