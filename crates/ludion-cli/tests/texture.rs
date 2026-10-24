@@ -352,6 +352,35 @@ fn seeds_report_is_deterministic_and_build_seed_takes_the_same_path() {
 }
 
 #[test]
+fn seed_override_refuses_the_committed_folder() {
+    let dir = scratch("seed-committed");
+    let recipe = dir.join("t.texture.yaml");
+    std::fs::copy(example(), &recipe).unwrap();
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let committed = dir.join("t");
+    for out in [committed.clone(), dir.join("sub").join("..").join("t")] {
+        let output = run_ludion(&[
+            "texture",
+            "build",
+            recipe.to_str().unwrap(),
+            "--seed",
+            "2",
+            "--size",
+            "64",
+            "--out",
+            out.to_str().unwrap(),
+        ]);
+        assert!(!output.status.success(), "{}", out.display());
+        let text = stderr(&output);
+        assert!(
+            text.contains("committed set") && text.contains("--out"),
+            "{text}"
+        );
+    }
+    assert!(!committed.exists(), "nothing may be written");
+}
+
+#[test]
 fn seed_override_needs_out_and_bad_seed_lists_name_the_forms() {
     let recipe = example();
     let recipe = recipe.to_str().unwrap();

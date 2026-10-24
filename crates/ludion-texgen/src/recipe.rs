@@ -337,7 +337,12 @@ impl Recipe {
                 let path = format!("/steps/{}/{field}", pointer_token(&doc));
                 match reference(&format!("step `{doc}`"), &field, to, path) {
                     Ok(i) => inputs.push(i),
-                    Err(d) => diags.push(d),
+                    // A layer's maps share its coats: one bad coat reference reports once.
+                    Err(d) => {
+                        if !diags.iter().any(|e| e.code == d.code && e.path == d.path) {
+                            diags.push(d);
+                        }
+                    }
                 }
             }
             steps.push(Step { name, op, inputs });
@@ -355,13 +360,23 @@ impl Recipe {
         }
         let order = topological_order(&steps).map_err(|cycle| {
             let names: Vec<&str> = cycle.iter().map(|i| steps[*i].document_name()).collect();
+            let expanded: Vec<&str> = cycle.iter().map(|i| steps[*i].name.as_str()).collect();
+            let help = if expanded == names {
+                "break the cycle by pointing one of these steps at an earlier step".to_string()
+            } else {
+                format!(
+                    "break the cycle by pointing one of these steps at an earlier step; between \
+                     the layer's maps it runs {}",
+                    expanded.join(" → ")
+                )
+            };
             vec![
                 Diagnostic::new(
                     code::TEXTURE_GRAPH,
                     format!("the steps form a cycle: {}", names.join(" → ")),
                 )
                 .with_path(format!("/steps/{}", pointer_token(names[0])))
-                .with_help("break the cycle by pointing one of these steps at an earlier step"),
+                .with_help(help),
             ]
         })?;
         Ok(Instance {

@@ -90,8 +90,8 @@ The finest octave (`scale × lacunarity^(octaves-1) × stretch`) may not exceed 
 | `warp.amount` | number | req | tile units |
 | `warp.angle` | number | 0 | degrees, gray `by` only |
 | `blur.radius` | number | req | 0..1 tile units |
-| `blur.angle` | number | none | degrees as `warp.angle`; absent = blur in all directions |
-| `blur.spread` | `both` \| `forward` | `both` | `forward` smears content toward `angle` in a one-sided trail; needs `angle` |
+| `blur.angle` | number | none | degrees as `warp.angle`; absent = blur in all directions; the line blur takes at most 64 taps a side, so at large `radius × size` they space out and a sharp source can show steps |
+| `blur.spread` | `both` \| `forward` | `both` | `forward` smears content toward `angle` in a one-sided trail; needs `angle`; the 64-tap cap above applies |
 | `normal_from_height.depth` | number | 0.05 | > 0; world height of value 1 in tile units |
 
 ### Hard generators

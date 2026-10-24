@@ -281,6 +281,28 @@ fn default_out(recipe: &Path) -> PathBuf {
     recipe.with_file_name(stem)
 }
 
+/// A path as it is on disk now: the path itself, or the existing ancestor plus the rest.
+fn canonical_or_parent(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = at.canonicalize() {
+            return rest.iter().rev().fold(real, |p, part| p.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                at = if parent.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    parent
+                };
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// Reads and loads a recipe from disk, with the root seed replaced when `seed` is given.
 fn load_recipe(recipe: &Path, seed: Option<u64>) -> Result<ludion_texgen::Loaded, Vec<Diagnostic>> {
     let text = std::fs::read_to_string(recipe).map_err(|e| {
@@ -562,6 +584,22 @@ pub fn run_build(
         Ok(rules) => rules,
         Err(diagnostics) => return fail(recipe, &diagnostics, json),
     };
+    if let (Some(seed), Some(out)) = (seed, out)
+        && canonical_or_parent(out) == canonical_or_parent(&default_out(recipe))
+    {
+        let diagnostic = Diagnostic::new(
+            code::SCENE_IO,
+            format!(
+                "`--seed {seed}` would overwrite the committed set in `{}`",
+                path_text(out)
+            ),
+        )
+        .with_help(
+            "a set built from another seed is not the committed one; pass another `--out DIR`, \
+                 or set `seed:` in the recipe to commit it",
+        );
+        return fail(recipe, &[diagnostic], json);
+    }
     let built = match evaluate_recipe(recipe, size, seed, preview.is_some()) {
         Ok(built) => built,
         Err(diagnostics) => return fail(recipe, &diagnostics, json),

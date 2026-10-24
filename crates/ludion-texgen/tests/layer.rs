@@ -364,3 +364,77 @@ fn missing_mask_is_l1283() {
     );
     assert_eq!(at(&d), ("L1283", "/steps/s/layers/0/mask"));
 }
+
+fn all_errors(steps: &str, outputs: &str) -> Vec<Diagnostic> {
+    load(
+        &recipe(&format!("{SOURCES}{steps}"), outputs),
+        &MemResolver::default(),
+    )
+    .expect_err("the recipe should be rejected")
+}
+
+const THREE_MAPS_OUT: &str =
+    "  base_color: s.base_color\n  roughness: s.roughness\n  metallic: s.metallic\n  height: h0\n";
+
+#[test]
+fn bad_mask_name_reports_once_for_a_three_map_layer() {
+    let steps = "  s:
+    op: layer
+    base:
+      base_color: base_c
+      roughness: rough0
+      metallic: 0
+    layers:
+      - mask: nope
+        base_color: metal_c
+        roughness: 0.3
+        metallic: 1
+";
+    let errors = all_errors(steps, THREE_MAPS_OUT);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(at(&errors[0]), ("L1285", "/steps/s/layers/0/mask"));
+}
+
+#[test]
+fn color_mask_reports_once_for_a_three_map_layer() {
+    let steps = "  s:
+    op: layer
+    base:
+      base_color: base_c
+      roughness: rough0
+      metallic: 0
+    layers:
+      - mask: base_c
+        base_color: metal_c
+        roughness: 0.3
+        metallic: 1
+";
+    let errors = all_errors(steps, THREE_MAPS_OUT);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(at(&errors[0]), ("L1284", "/steps/s/layers/0/mask"));
+}
+
+#[test]
+fn cycle_between_maps_of_a_layer_names_the_expanded_steps() {
+    let steps = "  s:
+    op: layer
+    base:
+      base_color: base_c
+      roughness: 0.5
+    layers:
+      - mask: mask1
+        base_color: s.roughness
+        roughness: s.base_color
+";
+    let d = err(
+        steps,
+        "  base_color: s.base_color\n  roughness: s.roughness\n  height: h0\n",
+    );
+    assert_eq!(d.code.as_str(), "L1285");
+    assert!(d.path.as_deref().unwrap().starts_with("/steps/s"));
+    let help = d.help.unwrap();
+    assert!(
+        help.contains("s.base_color") && help.contains("s.roughness"),
+        "{help}"
+    );
+}

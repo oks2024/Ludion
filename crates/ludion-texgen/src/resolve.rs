@@ -548,6 +548,13 @@ fn infer(
                 };
                 let mut width = slot(base, &mut next);
                 let mut report = |field: String, what: &str, help: &str| {
+                    let path = at(field);
+                    // Every map of a layer step checks the same coats: one report per coat.
+                    if diags.iter().any(|d| {
+                        d.code == code::TEXTURE_DATA && d.path.as_deref() == Some(path.as_str())
+                    }) {
+                        return;
+                    }
                     diags.push(
                         Diagnostic::new(
                             code::TEXTURE_DATA,
@@ -556,7 +563,7 @@ fn infer(
                                 step.document_name()
                             ),
                         )
-                        .with_path(at(field))
+                        .with_path(path)
                         .with_help(help.to_string()),
                     );
                 };
