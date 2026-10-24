@@ -126,6 +126,7 @@ export const CRATES = {
   'crates/ludion-sim': 'sim',
   'crates/ludion-spatial': 'sim',
   'crates/ludion-sprite': 'sim',
+  'crates/ludion-texgen': 'sim',
   'crates/ludion-testkit': 'permissive',
   'crates/ludion-window': 'permissive',
   'games/breakout': 'sim',

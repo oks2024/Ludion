@@ -1,0 +1,410 @@
+//! Resolving sub-recipes: the [`Resolver`] seam, the filesystem resolver, and [`load`].
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use ludion_core::codes::code;
+use ludion_core::diagnostics::{Diagnostic, pointer_token};
+use ludion_core::suggest::nearest;
+
+use crate::hash::mix;
+use crate::ops::{Op, ParamValue};
+use crate::recipe::{Instance, OutputKey, Recipe, parse};
+
+/// A recipe document a [`Resolver`] found.
+#[derive(Clone, Debug)]
+pub struct Source {
+    /// The lexically normalized path: the cycle key, and the `from` of references inside it.
+    pub id: String,
+    /// The document text.
+    pub text: String,
+}
+
+/// Finds the document a `recipe` op's `path` names.
+pub trait Resolver {
+    /// Reads `reference`, relative to the document `from` (`None` for the root's own references).
+    ///
+    /// # Errors
+    /// The reason the reference cannot be read, as one line.
+    fn read(&self, reference: &str, from: Option<&str>) -> Result<Source, String>;
+}
+
+/// Resolves references against a base directory, relative to the referencing file.
+#[derive(Clone, Debug)]
+pub struct FsResolver {
+    base: PathBuf,
+}
+
+impl FsResolver {
+    /// A resolver for a root document that lives in `base`.
+    pub fn new(base: impl Into<PathBuf>) -> Self {
+        FsResolver { base: base.into() }
+    }
+}
+
+/// Joins `reference` onto the directory of `from` and folds `.` and `..` lexically.
+pub fn normalize(reference: &str, from: Option<&str>) -> String {
+    let reference = reference.replace('\\', "/");
+    let dir = from.and_then(|f| f.rsplit_once('/')).map_or("", |(d, _)| d);
+    let mut parts: Vec<&str> = Vec::new();
+    for part in dir.split('/').chain(reference.split('/')) {
+        match part {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|p| *p != "..") => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
+impl Resolver for FsResolver {
+    fn read(&self, reference: &str, from: Option<&str>) -> Result<Source, String> {
+        if reference.starts_with("std:") {
+            return Err("the embedded stdlib (std:) is not available in this build".into());
+        }
+        let id = normalize(reference, from);
+        let text = std::fs::read_to_string(self.base.join(&id))
+            .map_err(|e| format!("cannot read recipe `{id}`: {e}"))?;
+        Ok(Source { id, text })
+    }
+}
+
+/// A sub-recipe a `recipe` step evaluates, and which of its steps the step yields.
+#[derive(Clone, Debug)]
+pub struct Child {
+    /// The loaded sub-recipe.
+    pub node: Loaded,
+    /// Index of the sub-recipe step the `recipe` step yields.
+    pub output: usize,
+}
+
+/// A recipe and everything it references, validated and typed: evaluating it cannot fail.
+#[derive(Clone, Debug)]
+pub struct Loaded {
+    /// The document's id; `<root>` for the root.
+    pub id: String,
+    /// The seed this recipe evaluates with.
+    pub seed: u64,
+    /// The validated steps.
+    pub instance: Instance,
+    /// Channels (1 gray, 3 color) of each step's image.
+    pub channels: Vec<usize>,
+    /// Loaded sub-recipes by the index of the `recipe` step.
+    pub children: BTreeMap<usize, Child>,
+}
+
+fn tag(id: Option<&str>, mut d: Diagnostic) -> Diagnostic {
+    if let Some(id) = id {
+        d.message = format!("in `{id}`: {}", d.message);
+    }
+    d
+}
+
+/// Parses the root recipe and every sub-recipe it references, once per use.
+///
+/// # Errors
+/// Every diagnostic of every document; one raised inside a sub-recipe starts ``in `<id>`: ``.
+pub fn load(root: &str, resolver: &dyn Resolver) -> Result<Loaded, Vec<Diagnostic>> {
+    let recipe = parse(root)?;
+    node(
+        resolver,
+        None,
+        &recipe,
+        recipe.defaults(),
+        recipe.seed,
+        &mut Vec::new(),
+    )
+}
+
+fn node(
+    resolver: &dyn Resolver,
+    id: Option<&str>,
+    recipe: &Recipe,
+    bindings: BTreeMap<String, ParamValue>,
+    seed: u64,
+    stack: &mut Vec<String>,
+) -> Result<Loaded, Vec<Diagnostic>> {
+    let instance = recipe
+        .instantiate(&bindings)
+        .map_err(|ds| ds.into_iter().map(|d| tag(id, d)).collect::<Vec<_>>())?;
+    if let Some(id) = id {
+        stack.push(id.to_string());
+    }
+    let mut diags = Vec::new();
+    let mut children = BTreeMap::new();
+    for &i in &instance.order {
+        let step = &instance.steps[i];
+        let Op::Recipe {
+            path,
+            output,
+            params,
+            seed: op_seed,
+        } = &step.op
+        else {
+            continue;
+        };
+        let at = |field: &str| format!("/steps/{}/{field}", pointer_token(&step.name));
+        let src = match resolver.read(path, id) {
+            Ok(src) => src,
+            Err(reason) => {
+                diags.push(tag(
+                    id,
+                    Diagnostic::new(
+                        code::TEXTURE_GRAPH,
+                        format!("step `{}` cannot load `{path}`: {reason}", step.name),
+                    )
+                    .with_path(at("path"))
+                    .with_help(
+                        "check the path is relative to this recipe, or a `std:<name>` recipe",
+                    ),
+                ));
+                continue;
+            }
+        };
+        if let Some(pos) = stack.iter().position(|s| *s == src.id) {
+            let mut chain: Vec<&str> = stack[pos..].iter().map(String::as_str).collect();
+            chain.push(&src.id);
+            diags.push(tag(
+                id,
+                Diagnostic::new(
+                    code::TEXTURE_GRAPH,
+                    format!(
+                        "recipe `{}` references itself: {}",
+                        src.id,
+                        chain.join(" → ")
+                    ),
+                )
+                .with_path(at("path"))
+                .with_help("remove one reference in the chain"),
+            ));
+            continue;
+        }
+        let child = match parse(&src.text) {
+            Ok(child) => child,
+            Err(ds) => {
+                diags.extend(ds.into_iter().map(|d| tag(Some(&src.id), d)));
+                continue;
+            }
+        };
+        let mut child_bindings = child.defaults();
+        let mut bound_ok = true;
+        for (name, value) in params {
+            let params_at = format!("params/{}", pointer_token(name));
+            match child.params.iter().find(|(n, _)| n == name) {
+                None => {
+                    bound_ok = false;
+                    let known: Vec<&str> = child.params.iter().map(|(n, _)| n.as_str()).collect();
+                    let help = match nearest(name, known.iter().copied()) {
+                        Some(near) => format!("did you mean `{near}`?"),
+                        None if known.is_empty() => {
+                            "that recipe declares no parameters".to_string()
+                        }
+                        None => format!("its parameters are: {}", known.join(", ")),
+                    };
+                    diags.push(tag(
+                        id,
+                        Diagnostic::new(
+                            code::TEXTURE_STRUCTURE,
+                            format!("`{}` has no parameter `{name}`", src.id),
+                        )
+                        .with_path(at(&params_at))
+                        .with_help(help),
+                    ));
+                }
+                Some((_, default))
+                    if std::mem::discriminant(default) != std::mem::discriminant(value) =>
+                {
+                    bound_ok = false;
+                    diags.push(tag(
+                        id,
+                        Diagnostic::new(
+                            code::TEXTURE_DATA,
+                            format!("parameter `{name}` of `{}` has the wrong type", src.id),
+                        )
+                        .with_path(at(&params_at))
+                        .with_help("bind a number to a numeric parameter and a `#rrggbb` color to a color one"),
+                    ));
+                }
+                Some(_) => {
+                    child_bindings.insert(name.clone(), *value);
+                }
+            }
+        }
+        if !bound_ok {
+            continue;
+        }
+        let child_seed = mix(mix(seed, child.seed), u64::from(*op_seed));
+        let loaded = match node(
+            resolver,
+            Some(&src.id),
+            &child,
+            child_bindings,
+            child_seed,
+            stack,
+        ) {
+            Ok(loaded) => loaded,
+            Err(ds) => {
+                diags.extend(ds);
+                continue;
+            }
+        };
+        match loaded.instance.steps.iter().position(|s| s.name == *output) {
+            Some(index) => {
+                children.insert(
+                    i,
+                    Child {
+                        node: loaded,
+                        output: index,
+                    },
+                );
+            }
+            None => {
+                let names: Vec<&str> = loaded
+                    .instance
+                    .steps
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect();
+                let help = match nearest(output, names.iter().copied()) {
+                    Some(near) => format!("did you mean `{near}`?"),
+                    None => format!("its steps are: {}", names.join(", ")),
+                };
+                diags.push(tag(
+                    id,
+                    Diagnostic::new(
+                        code::TEXTURE_GRAPH,
+                        format!("`{}` has no step `{output}`", src.id),
+                    )
+                    .with_path(at("output"))
+                    .with_help(help),
+                ));
+            }
+        }
+    }
+    if id.is_some() {
+        stack.pop();
+    }
+    if !diags.is_empty() {
+        return Err(diags);
+    }
+    let channels = infer(&instance, &children)
+        .map_err(|ds| ds.into_iter().map(|d| tag(id, d)).collect::<Vec<_>>())?;
+    Ok(Loaded {
+        id: id.unwrap_or("<root>").to_string(),
+        seed,
+        instance,
+        channels,
+        children,
+    })
+}
+
+/// Infers each step's channel count and checks every slot's gray/color requirement.
+fn infer(
+    instance: &Instance,
+    children: &BTreeMap<usize, Child>,
+) -> Result<Vec<usize>, Vec<Diagnostic>> {
+    let mut diags = Vec::new();
+    let mut channels = vec![1usize; instance.steps.len()];
+    for &i in &instance.order {
+        let step = &instance.steps[i];
+        let ch = |k: usize| channels[step.inputs[k]];
+        let mut need = |field: &str, want: usize, found: usize| {
+            if found == want {
+                return;
+            }
+            let (want_s, found_s) = if want == 1 {
+                ("gray", "color")
+            } else {
+                ("color", "gray")
+            };
+            let help = if want == 1 {
+                "turn it gray with a `grayscale` step"
+            } else {
+                "turn it into color with a `colorize` step"
+            };
+            diags.push(
+                Diagnostic::new(
+                    code::TEXTURE_DATA,
+                    format!(
+                        "step `{}` needs a {want_s} `{field}`, but that step is {found_s}",
+                        step.name
+                    ),
+                )
+                .with_path(format!("/steps/{}/{field}", pointer_token(&step.name)))
+                .with_help(help),
+            );
+        };
+        channels[i] = match &step.op {
+            Op::Constant(c) => match c {
+                crate::ops::Const::Gray(_) => 1,
+                crate::ops::Const::Color(_) => 3,
+            },
+            Op::Gradient { .. } | Op::Noise(_) => 1,
+            Op::Blend { mask, .. } => {
+                if mask.is_some() {
+                    need("mask", 1, ch(2));
+                }
+                ch(0).max(ch(1))
+            }
+            Op::Levels { .. }
+            | Op::Curve { .. }
+            | Op::Clamp { .. }
+            | Op::Remap { .. }
+            | Op::Warp { .. }
+            | Op::Blur { .. } => ch(0),
+            Op::Colorize { .. } => {
+                need("input", 1, ch(0));
+                3
+            }
+            Op::Grayscale { .. } => {
+                need("input", 3, ch(0));
+                1
+            }
+            Op::NormalFromHeight { .. } => {
+                need("input", 1, ch(0));
+                3
+            }
+            Op::Recipe { .. } => children.get(&i).map_or(1, |c| c.node.channels[c.output]),
+        };
+    }
+    for (key, i) in &instance.outputs {
+        let found = channels[*i];
+        let ok = if key.is_gray() {
+            found == 1
+        } else if *key == OutputKey::Normal {
+            found == 3
+        } else {
+            true
+        };
+        if !ok {
+            let (want, got, help) = if key.is_gray() {
+                ("gray", "color", "turn it gray with a `grayscale` step")
+            } else {
+                (
+                    "color",
+                    "gray",
+                    "build the normal with `normal_from_height`",
+                )
+            };
+            diags.push(
+                Diagnostic::new(
+                    code::TEXTURE_DATA,
+                    format!(
+                        "output `{}` must be {want}, but step `{}` is {got}",
+                        key.name(),
+                        instance.steps[*i].name
+                    ),
+                )
+                .with_path(format!("/outputs/{}", key.name()))
+                .with_help(help),
+            );
+        }
+    }
+    if diags.is_empty() {
+        Ok(channels)
+    } else {
+        Err(diags)
+    }
+}

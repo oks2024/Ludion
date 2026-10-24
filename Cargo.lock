@@ -1978,6 +1978,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ludion-texgen"
+version = "0.1.0"
+dependencies = [
+ "ludion-assets",
+ "ludion-core",
+ "ludion-scene",
+ "png",
+ "serde_json",
+]
+
+[[package]]
 name = "ludion-window"
 version = "0.1.0"
 dependencies = [

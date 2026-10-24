@@ -1392,6 +1392,18 @@ pub mod code {
     pub const DIRECTIONAL_LIGHT_INVALID_ANGULAR_RADIUS: DiagnosticCode =
         DiagnosticCode::new("L1282");
 
+    /// `L1283` — a `kind: texture` recipe's structure is wrong: a missing or wrong-typed key, an
+    /// unknown op, field or output name (with a nearest match). Raised by `ludion-texgen`.
+    pub const TEXTURE_STRUCTURE: DiagnosticCode = DiagnosticCode::new("L1283");
+    /// `L1284` — a structurally sound `kind: texture` recipe holds a value that does not hang
+    /// together: out of range, a bad hex colour, unsorted stops or points, a gray/color mismatch,
+    /// an undefined or wrong-typed `$param`, a bad size. Raised by `ludion-texgen`.
+    pub const TEXTURE_DATA: DiagnosticCode = DiagnosticCode::new("L1284");
+    /// `L1285` — a `kind: texture` recipe's step graph cannot be resolved: an unknown step
+    /// reference, a cycle, an unresolvable or cyclic sub-recipe, or an unavailable `std:` recipe.
+    /// Raised by `ludion-texgen`.
+    pub const TEXTURE_GRAPH: DiagnosticCode = DiagnosticCode::new("L1285");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7007,6 +7019,77 @@ any real light: the moon and the sun are both about 0.27.
 
 Fix: use a finite angular radius in `[0, 45]` degrees, e.g. `0.27`.",
     },
+    CodeEntry {
+        code: code::TEXTURE_STRUCTURE,
+        severity: Severity::Error,
+        title: "texture recipe structure is invalid",
+        explanation: "\
+A `kind: texture` recipe — named steps forming a graph that evaluates to a tileable PBR map set —
+does not have the shape this engine reads.
+
+  format: 1
+  kind: texture
+  seed: 7
+  params:
+    scale: 6
+  steps:
+    cells:
+      op: noise
+      type: cellular
+      scale: $scale
+  outputs:
+    base_color: cells
+    roughness: cells
+    height: cells
+
+This code covers: a missing `steps` or `outputs`; a top-level key a recipe does not have; a step
+that is not a mapping or has no `op`; an unknown `op`; a field the op does not have; a missing
+required field; a wrong-typed field; an unknown `outputs` key; an `outputs` entry missing
+(`base_color`, `roughness` and `height` are required); a sub-recipe `params` name the op does not
+bind.
+
+The JSON Pointer names the offending key (`/steps/cells/scale`); an unknown name carries a
+nearest-match suggestion.
+
+Fix: correct the named key. Values that parse but are out of range are `L1284`; step references and
+cycles are `L1285`.",
+    },
+    CodeEntry {
+        code: code::TEXTURE_DATA,
+        severity: Severity::Error,
+        title: "texture recipe data is inconsistent",
+        explanation: "\
+A `kind: texture` recipe parsed structurally, but a value cannot be evaluated.
+
+This code covers: a number out of its range (a noise `scale` below 1, an `opacity` outside
+`[0, 1]`, a `gamma` of 0, a `scale` whose finest octave exceeds 65536 cells); a non-finite number; a
+colour that is not `\"#rrggbb\"`; `stops` or `points` unsorted or fewer than two; a gray image where
+a color one is needed or the reverse; an `outputs` entry whose image has the wrong channel count
+(`roughness`, `metallic`, `occlusion` and `height` are gray, `normal` is color); a `$param` that
+is undefined or whose type does not match the slot it fills; a `remap` with `from_low == from_high`;
+a build size outside 8..=8192.
+
+The JSON Pointer names the offending value (`/steps/tint/stops/1/at`, `/outputs/roughness`).
+
+Fix: correct the named value, e.g. `scale: 6` instead of `scale: 0`.",
+    },
+    CodeEntry {
+        code: code::TEXTURE_GRAPH,
+        severity: Severity::Error,
+        title: "texture recipe step graph cannot be resolved",
+        explanation: "\
+A `kind: texture` recipe's steps do not form a graph that can be evaluated.
+
+This code covers: an `input`, `a`, `b`, `mask` or `by` slot (or an `outputs` entry) naming a step
+that does not exist, with a nearest match; a cycle among steps — the message names it, `a → b → a`;
+a `recipe` op whose `path` cannot be read, or whose file chain refers back to itself; a `recipe`
+op whose `output` is not a step of the sub-recipe; a `std:` reference when the embedded stdlib is
+not available.
+
+A diagnostic raised inside a sub-recipe starts its message with the sub-recipe's id.
+
+Fix: correct the named reference, or break the cycle by removing one of its edges.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9659,6 +9742,9 @@ mod tests {
         code::REFLECTION_PROBE_UNKNOWN,
         code::REFLECTION_PROBE_NOT_BUNDLED,
         code::DIRECTIONAL_LIGHT_INVALID_ANGULAR_RADIUS,
+        code::TEXTURE_STRUCTURE,
+        code::TEXTURE_DATA,
+        code::TEXTURE_GRAPH,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
