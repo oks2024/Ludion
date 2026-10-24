@@ -1,0 +1,59 @@
+# Rust spots: scattered, irregular patches with a pitted interior.
+#
+# Params  coverage how much of the tile is rusted, 0 (none) to about 0.6 (most)
+#         scale    noise cells per tile of the patches
+#         breakup  how far a second noise tears the patch edges, in tile units
+# Output  mask  1 inside a patch, 0 outside
+#         pits  noise inside the patches, 0 outside
+format: 1
+kind: texture
+seed: 41
+params:
+  coverage: 0.25
+  scale: 4
+  breakup: 0.06
+steps:
+  patches:
+    op: noise
+    type: gradient
+    scale: $scale
+    octaves: 4
+  tear:
+    op: noise
+    type: value
+    scale: 9
+    octaves: 2
+    seed: 1
+  torn:
+    op: warp
+    input: patches
+    by: tear
+    amount: $breakup
+  lift:
+    op: constant
+    value: $coverage
+  raised:
+    op: blend
+    a: torn
+    b: lift
+    mode: add
+  mask:
+    op: levels
+    input: raised
+    in_low: 0.62
+    in_high: 0.68
+  fine:
+    op: noise
+    type: value
+    scale: 24
+    octaves: 2
+    seed: 2
+  pits:
+    op: blend
+    a: fine
+    b: mask
+    mode: multiply
+outputs:
+  base_color: mask
+  roughness: pits
+  height: pits

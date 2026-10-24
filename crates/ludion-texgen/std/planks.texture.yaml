@@ -1,0 +1,72 @@
+# Planks: boards in staggered rows with a gap between them and a wood-like grain.
+#
+# Params  columns     boards across the tile
+#         rows        board rows down the tile; must be even when stagger is above 0
+#         gap         board edge distance, 0..1 of a half board, below which the joint is open
+#         stagger     shift of odd rows in board widths, 0..1
+#         grain_scale grain lines per tile
+# Output  boards   0 at a board's edge rising to 1 at its center, 0 in the joints
+#         board_id a random gray per board, 0 in a joint
+#         grain    grain lines along the boards, varied from board to board
+#         height   boards with their grain, 0 in the joints
+format: 1
+kind: texture
+seed: 31
+params:
+  columns: 2
+  rows: 6
+  gap: 0.08
+  stagger: 0.5
+  grain_scale: 14
+steps:
+  boards:
+    op: tile_sampler
+    columns: $columns
+    rows: $rows
+    shape: pyramid
+    offset: $stagger
+  board_id:
+    op: flood_fill
+    input: boards
+    threshold: $gap
+    output: random
+  sway:
+    op: noise
+    type: value
+    scale: 5
+    octaves: 3
+  lines:
+    op: gradient
+    axis: v
+    shape: triangle
+    repeat: $grain_scale
+  swayed:
+    op: warp
+    input: lines
+    by: sway
+    amount: 0.05
+    angle: 90
+  grain:
+    op: blend
+    a: swayed
+    b: board_id
+    mode: add
+    opacity: 0.3
+  tone:
+    op: levels
+    input: grain
+    out_low: 0.55
+  profile:
+    op: levels
+    input: boards
+    in_low: $gap
+    in_high: 0.5
+  height:
+    op: blend
+    a: profile
+    b: tone
+    mode: multiply
+outputs:
+  base_color: board_id
+  roughness: grain
+  height: height

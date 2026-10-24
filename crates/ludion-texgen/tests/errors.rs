@@ -324,3 +324,111 @@ fn flood_fill_needs_a_gray_input() {
         ("L1284", Some("/steps/n/input"))
     );
 }
+
+const CHILD: &str = "format: 1
+kind: texture
+steps:
+  src:
+    op: input
+    type: gray
+  tint:
+    op: input
+    type: color
+    default: \"#808080\"
+  body:
+    op: blur
+    input: src
+    radius: 0.01
+outputs:
+  base_color: body
+  roughness: body
+  height: body
+";
+
+/// A recipe with a gradient noise `n` and one `recipe` step `use` reading `body`.
+fn consumer(path: &str, inputs: &str) -> String {
+    recipe(
+        &format!(
+            "{}  use:\n    op: recipe\n    path: {path}\n    output: body\n    inputs:\n{inputs}",
+            noise("")
+        ),
+        "  base_color: use\n  roughness: use\n  height: use\n",
+    )
+}
+
+fn child_error(path: &str, inputs: &str) -> ludion_core::diagnostics::Diagnostic {
+    first_error(
+        &consumer(path, inputs),
+        &MemResolver::with(&[("child.texture.yaml", CHILD)]),
+    )
+}
+
+#[test]
+fn unknown_std_name_suggests_nearest() {
+    let d = child_error("std:edge_wer", "      height: n\n");
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1285", Some("/steps/use/path"))
+    );
+    assert!(d.message.contains("std:edge_wear"), "{}", d.message);
+}
+
+#[test]
+fn binding_to_a_missing_step_is_l1285() {
+    let d = child_error("child.texture.yaml", "      src: nope\n");
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1285", Some("/steps/use/inputs/src"))
+    );
+}
+
+#[test]
+fn binding_an_unknown_input_suggests_nearest() {
+    let d = child_error("child.texture.yaml", "      sr: n\n");
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1285", Some("/steps/use/inputs/sr"))
+    );
+    assert!(d.help.unwrap().contains("src"));
+}
+
+#[test]
+fn binding_a_non_input_step_is_l1285() {
+    let d = child_error("child.texture.yaml", "      body: n\n");
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1285", Some("/steps/use/inputs/body"))
+    );
+    assert!(d.message.contains("not an `input` step"), "{}", d.message);
+}
+
+#[test]
+fn a_color_bound_to_a_gray_input_is_l1284() {
+    let steps = format!(
+        "{}  c:\n    op: constant\n    value: \"#102030\"\n  use:\n    op: recipe\n    path: child.texture.yaml\n    output: body\n    inputs:\n      src: c\n",
+        noise("")
+    );
+    let d = first_error(
+        &recipe(
+            &steps,
+            "  base_color: use\n  roughness: use\n  height: use\n",
+        ),
+        &MemResolver::with(&[("child.texture.yaml", CHILD)]),
+    );
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1284", Some("/steps/use/inputs/src"))
+    );
+}
+
+#[test]
+fn an_input_default_of_the_wrong_kind_is_l1284() {
+    let d = err(
+        "  n:\n    op: input\n    type: gray\n    default: \"#808080\"\n",
+        OUT,
+    );
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1284", Some("/steps/n/default"))
+    );
+}

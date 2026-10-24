@@ -1,0 +1,52 @@
+# Edge wear: a mask of worn, exposed edges read from a height.
+#
+# Input   height        gray, default 0.5 (a flat height has no edges, so the mask is empty)
+# Params  amount        strength of the wear where it is full, 0..1
+#         radius        curvature blur radius in tile units; wider reads broader edges
+#         breakup_scale noise cells per tile of the breakup
+#         breakup       how much the noise breaks the wear up, 0 (clean) to 1 (patchy)
+# Output  edges         the convex edges before the breakup
+#         mask          the broken-up wear, 1 where worn; the one to use
+format: 1
+kind: texture
+seed: 11
+params:
+  amount: 0.9
+  radius: 0.01
+  breakup_scale: 8
+  breakup: 0.7
+steps:
+  height:
+    op: input
+    type: gray
+    default: 0.5
+  curved:
+    op: curvature
+    input: height
+    radius: $radius
+    strength: 4
+  crests:
+    op: levels
+    input: curved
+    in_low: 0.5
+    in_high: 0.75
+    out_high: $amount
+  edges:
+    op: blur
+    input: crests
+    radius: 0.002
+  noise:
+    op: noise
+    type: gradient
+    scale: $breakup_scale
+    octaves: 4
+  mask:
+    op: blend
+    a: edges
+    b: noise
+    mode: multiply
+    opacity: $breakup
+outputs:
+  base_color: mask
+  roughness: mask
+  height: mask

@@ -46,7 +46,7 @@ pub fn evaluate(recipe: &Loaded, size: u32, observe: &mut dyn FnMut(&str, &Image
     let mut targets: Vec<usize> = recipe.instance.outputs.iter().map(|(_, i)| *i).collect();
     targets.sort_unstable();
     targets.dedup();
-    let images = eval_node(recipe, size, &targets, Some(observe));
+    let images = eval_node(recipe, size, &targets, &[], Some(observe));
     let get = |key: OutputKey| {
         let step = recipe.instance.outputs.iter().find(|(k, _)| *k == key)?.1;
         let at = targets.iter().position(|t| *t == step)?;
@@ -84,6 +84,7 @@ fn eval_node(
     node: &Loaded,
     size: u32,
     targets: &[usize],
+    bound: &[(usize, &Image)],
     mut observe: Option<Observer<'_>>,
 ) -> Vec<Image> {
     let steps = &node.instance.steps;
@@ -110,7 +111,7 @@ fn eval_node(
                 .iter()
                 .map(|d| slots[*d].as_ref().expect("inputs outlive their consumers"))
                 .collect();
-            compute(node, i, size, &inputs)
+            compute(node, i, size, &inputs, bound)
         };
         if let Some(observe) = observe.as_mut() {
             observe(&step.name, &image);
@@ -129,7 +130,13 @@ fn eval_node(
         .collect()
 }
 
-fn compute(node: &Loaded, index: usize, size: u32, inputs: &[&Image]) -> Image {
+fn compute(
+    node: &Loaded,
+    index: usize,
+    size: u32,
+    inputs: &[&Image],
+    bound: &[(usize, &Image)],
+) -> Image {
     match &node.instance.steps[index].op {
         Op::Constant(value) => adjust::constant(size, value),
         Op::Gradient {
@@ -199,9 +206,19 @@ fn compute(node: &Loaded, index: usize, size: u32, inputs: &[&Image]) -> Image {
             radius, strength, ..
         } => filter::curvature(inputs[0], *radius, *strength),
         Op::Image { .. } => picture::resample(&node.pictures[&index], size),
+        Op::Input { default, .. } => match bound.iter().find(|(i, _)| *i == index) {
+            Some((_, image)) => (*image).clone(),
+            None => adjust::constant(size, default),
+        },
         Op::Recipe { .. } => {
             let child = &node.children[&index];
-            eval_node(&child.node, size, &[child.output], None).remove(0)
+            let bound: Vec<(usize, &Image)> = child
+                .inputs
+                .iter()
+                .copied()
+                .zip(inputs.iter().copied())
+                .collect();
+            eval_node(&child.node, size, &[child.output], &bound, None).remove(0)
         }
     }
 }

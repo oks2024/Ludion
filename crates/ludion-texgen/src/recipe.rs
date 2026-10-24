@@ -303,7 +303,7 @@ impl Recipe {
             let mut inputs = Vec::new();
             for (field, to) in op.inputs() {
                 let path = format!("/steps/{}/{field}", pointer_token(name));
-                match reference(&format!("step `{name}`"), field, to, path) {
+                match reference(&format!("step `{name}`"), &field, to, path) {
                     Ok(i) => inputs.push(i),
                     Err(d) => diags.push(d),
                 }

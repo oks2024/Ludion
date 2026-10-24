@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use ludion_core::diagnostics::Diagnostic;
+use ludion_texgen::Image;
 use ludion_texgen::resolve::normalize;
 use ludion_texgen::{Resolver, Source};
 
@@ -34,9 +35,6 @@ impl MemResolver {
 
 impl Resolver for MemResolver {
     fn read(&self, reference: &str, from: Option<&str>) -> Result<Source, String> {
-        if reference.starts_with("std:") {
-            return Err("the embedded stdlib (std:) is not available in this build".into());
-        }
         let id = normalize(reference, from);
         self.documents
             .get(&id)
@@ -86,4 +84,27 @@ pub fn pattern_png(side: u32) -> Vec<u8> {
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header().unwrap().write_image_data(&raw).unwrap();
     out
+}
+
+/// The step across the wrap seam is no bigger than the steps inside the tile.
+pub fn assert_seamless(label: &str, image: &Image) {
+    let n = image.size as i64;
+    let at = |x: i64, y: i64| image.texel(x, y)[0];
+    let (mut interior, mut seam) = (0.0f32, 0.0f32);
+    for y in 0..n {
+        for x in 0..n - 1 {
+            interior = interior.max((at(x + 1, y) - at(x, y)).abs());
+        }
+        seam = seam.max((at(0, y) - at(n - 1, y)).abs());
+    }
+    for x in 0..n {
+        for y in 0..n - 1 {
+            interior = interior.max((at(x, y + 1) - at(x, y)).abs());
+        }
+        seam = seam.max((at(x, 0) - at(x, n - 1)).abs());
+    }
+    assert!(
+        seam <= interior * 1.5,
+        "{label}: seam step {seam} exceeds 1.5x the interior step {interior}"
+    );
 }

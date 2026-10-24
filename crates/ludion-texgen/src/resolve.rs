@@ -11,6 +11,7 @@ use crate::hash::mix;
 use crate::ops::{FillOutput, Op, ParamValue};
 use crate::picture::{Picture, decode};
 use crate::recipe::{Instance, OutputKey, Recipe, parse};
+use crate::stdlib;
 
 /// A recipe document a [`Resolver`] found.
 #[derive(Clone, Debug)]
@@ -69,9 +70,6 @@ pub fn normalize(reference: &str, from: Option<&str>) -> String {
 
 impl Resolver for FsResolver {
     fn read(&self, reference: &str, from: Option<&str>) -> Result<Source, String> {
-        if reference.starts_with("std:") {
-            return Err("the embedded stdlib (std:) is not available in this build".into());
-        }
         let id = normalize(reference, from);
         let text = std::fs::read_to_string(self.base.join(&id))
             .map_err(|e| format!("cannot read recipe `{id}`: {e}"))?;
@@ -96,6 +94,8 @@ pub struct Child {
     pub node: Loaded,
     /// Index of the sub-recipe step the `recipe` step yields.
     pub output: usize,
+    /// Index of the sub-recipe `input` step each binding feeds, in the step's `inputs` order.
+    pub inputs: Vec<usize>,
 }
 
 /// A recipe and everything it references, validated and typed: evaluating it cannot fail.
@@ -159,7 +159,12 @@ fn node(
         let step = &instance.steps[i];
         if let Op::Image { path, srgb } = &step.op {
             let at = format!("/steps/{}/path", pointer_token(&step.name));
-            match resolver.read_bytes(path, id) {
+            let read = if id.is_some_and(stdlib::is_std) {
+                Err("a stdlib recipe cannot load an image".to_string())
+            } else {
+                resolver.read_bytes(path, id)
+            };
+            match read {
                 Err(reason) => diags.push(tag(
                     id,
                     Diagnostic::new(
@@ -193,13 +198,14 @@ fn node(
             path,
             output,
             params,
+            inputs,
             seed: op_seed,
         } = &step.op
         else {
             continue;
         };
         let at = |field: &str| format!("/steps/{}/{field}", pointer_token(&step.name));
-        let src = match resolver.read(path, id) {
+        let src = match source(resolver, id, path) {
             Ok(src) => src,
             Err(reason) => {
                 diags.push(tag(
@@ -303,6 +309,20 @@ fn node(
                 continue;
             }
         };
+        let bound = match bind_inputs(&loaded, inputs) {
+            Ok(bound) => bound,
+            Err(failures) => {
+                diags.extend(failures.into_iter().map(|(field, message, help)| {
+                    tag(
+                        id,
+                        Diagnostic::new(code::TEXTURE_GRAPH, message)
+                            .with_path(at(&field))
+                            .with_help(help),
+                    )
+                }));
+                continue;
+            }
+        };
         match loaded.instance.steps.iter().position(|s| s.name == *output) {
             Some(index) => {
                 children.insert(
@@ -310,6 +330,7 @@ fn node(
                     Child {
                         node: loaded,
                         output: index,
+                        inputs: bound,
                     },
                 );
             }
@@ -352,6 +373,81 @@ fn node(
         children,
         pictures,
     })
+}
+
+/// Reads the document `path` names: an embedded `std:` recipe, or whatever the resolver finds.
+fn source(resolver: &dyn Resolver, from: Option<&str>, path: &str) -> Result<Source, String> {
+    stdlib::std_policy(from, path)?;
+    let Some(name) = path.strip_prefix("std:") else {
+        return resolver.read(path, from);
+    };
+    match stdlib::get(name) {
+        Some(text) => Ok(Source {
+            id: path.to_string(),
+            text: text.to_string(),
+        }),
+        None => {
+            let hint = match nearest(name, stdlib::names()) {
+                Some(near) => format!("did you mean `std:{near}`?"),
+                None => format!(
+                    "the stdlib has: {}",
+                    stdlib::names().collect::<Vec<_>>().join(", ")
+                ),
+            };
+            Err(format!("no `std:{name}` in the embedded stdlib; {hint}"))
+        }
+    }
+}
+
+/// Maps each binding of a `recipe` step to the `input` step of `child` it feeds. A failure is
+/// `(field pointer tail, message, help)`.
+fn bind_inputs(
+    child: &Loaded,
+    bindings: &[(String, String)],
+) -> Result<Vec<usize>, Vec<(String, String, String)>> {
+    let steps = &child.instance.steps;
+    let declared: Vec<&str> = steps
+        .iter()
+        .filter(|s| matches!(s.op, Op::Input { .. }))
+        .map(|s| s.name.as_str())
+        .collect();
+    let mut bound = Vec::new();
+    let mut failures = Vec::new();
+    for (key, _) in bindings {
+        let field = format!("inputs/{}", pointer_token(key));
+        match steps.iter().position(|s| s.name == *key) {
+            None => {
+                let help = match nearest(key, declared.iter().copied()) {
+                    Some(near) => format!("did you mean `{near}`?"),
+                    None if declared.is_empty() => "that recipe declares no inputs".to_string(),
+                    None => format!("its inputs are: {}", declared.join(", ")),
+                };
+                failures.push((
+                    field,
+                    format!("`{}` has no step `{key}` to bind", child.id),
+                    help,
+                ));
+            }
+            Some(index) if !matches!(steps[index].op, Op::Input { .. }) => {
+                let help = if declared.is_empty() {
+                    "that recipe declares no inputs".to_string()
+                } else {
+                    format!("its inputs are: {}", declared.join(", "))
+                };
+                failures.push((
+                    field,
+                    format!("`{key}` of `{}` is not an `input` step", child.id),
+                    help,
+                ));
+            }
+            Some(index) => bound.push(index),
+        }
+    }
+    if failures.is_empty() {
+        Ok(bound)
+    } else {
+        Err(failures)
+    }
 }
 
 /// Infers each step's channel count and checks every slot's gray/color requirement.
@@ -436,7 +532,36 @@ fn infer(
                 need("input", 1, ch(0));
                 3
             }
-            Op::Recipe { .. } => children.get(&i).map_or(1, |c| c.node.channels[c.output]),
+            Op::Input { channels, .. } => *channels,
+            Op::Recipe { inputs, .. } => children.get(&i).map_or(1, |c| {
+                for (k, (key, _)) in inputs.iter().enumerate() {
+                    let want = c.node.channels[c.inputs[k]];
+                    let found = ch(k);
+                    if want != found {
+                        let (want_s, found_s, help) = if want == 1 {
+                            ("gray", "color", "turn it gray with a `grayscale` step")
+                        } else {
+                            ("color", "gray", "turn it into color with a `colorize` step")
+                        };
+                        diags.push(
+                            Diagnostic::new(
+                                code::TEXTURE_DATA,
+                                format!(
+                                    "input `{key}` of `{}` is {want_s}, but step `{}` is {found_s}",
+                                    c.node.id, inputs[k].1
+                                ),
+                            )
+                            .with_path(format!(
+                                "/steps/{}/inputs/{}",
+                                pointer_token(&step.name),
+                                pointer_token(key)
+                            ))
+                            .with_help(help),
+                        );
+                    }
+                }
+                c.node.channels[c.output]
+            }),
         };
     }
     for (key, i) in &instance.outputs {

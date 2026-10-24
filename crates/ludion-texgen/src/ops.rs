@@ -41,6 +41,7 @@ pub const OP_NAMES: &[&str] = &[
     "ambient_occlusion",
     "curvature",
     "image",
+    "input",
     "recipe",
 ];
 
@@ -368,7 +369,14 @@ pub enum Op {
         /// Whether a color file is sRGB-encoded.
         srgb: bool,
     },
-    /// A step of another recipe, with its parameters bound.
+    /// An image the recipe receives from the step that binds it, or `default` when unbound.
+    Input {
+        /// Channels of the image: 1 gray, 3 color.
+        channels: usize,
+        /// The value of an unbound input.
+        default: Const,
+    },
+    /// A step of another recipe, with its parameters and inputs bound.
     Recipe {
         /// Path relative to the referencing file, or `std:<name>`.
         path: String,
@@ -376,34 +384,43 @@ pub enum Op {
         output: String,
         /// Bound parameters, in document order.
         params: Vec<(String, ParamValue)>,
+        /// `(input step of the sub-recipe, step of this recipe)`, in document order.
+        inputs: Vec<(String, String)>,
         /// Seed offset for the sub-recipe.
         seed: u32,
     },
 }
 
 impl Op {
-    /// The step references this op reads, as `(field, step name)` in evaluation-argument order.
-    pub fn inputs(&self) -> Vec<(&'static str, &str)> {
+    /// The step references this op reads, as `(field pointer, step name)` in evaluation-argument
+    /// order.
+    pub fn inputs(&self) -> Vec<(String, &str)> {
         match self {
             Op::Constant(_)
             | Op::Gradient { .. }
             | Op::Noise(_)
             | Op::Image { .. }
-            | Op::Recipe { .. } => vec![],
+            | Op::Input { .. } => vec![],
+            Op::Recipe { inputs, .. } => inputs
+                .iter()
+                .map(|(key, step)| (format!("inputs/{}", pointer_token(key)), step.as_str()))
+                .collect(),
             Op::TileSampler(spec) => spec
                 .pattern
                 .as_deref()
-                .map(|p| ("pattern", p))
+                .map(|p| ("pattern".to_string(), p))
                 .into_iter()
                 .collect(),
             Op::Blend { a, b, mask, .. } => {
-                let mut v = vec![("a", a.as_str()), ("b", b.as_str())];
+                let mut v = vec![("a".to_string(), a.as_str()), ("b".to_string(), b.as_str())];
                 if let Some(m) = mask {
-                    v.push(("mask", m.as_str()));
+                    v.push(("mask".to_string(), m.as_str()));
                 }
                 v
             }
-            Op::Warp { input, by, .. } => vec![("input", input), ("by", by)],
+            Op::Warp { input, by, .. } => {
+                vec![("input".to_string(), input), ("by".to_string(), by)]
+            }
             Op::Levels { input, .. }
             | Op::Curve { input, .. }
             | Op::Clamp { input, .. }
@@ -415,7 +432,7 @@ impl Op {
             | Op::FloodFill { input, .. }
             | Op::Distance { input, .. }
             | Op::AmbientOcclusion { input, .. }
-            | Op::Curvature { input, .. } => vec![("input", input)],
+            | Op::Curvature { input, .. } => vec![("input".to_string(), input)],
         }
     }
 }
@@ -1146,6 +1163,7 @@ fn build(r: &mut Reader<'_>, op: &str) -> Read<Op> {
                 srgb: color? == 0,
             })
         }
+        "input" => input_op(r),
         "recipe" => recipe_op(r),
         _ => unreachable!("op name checked against OP_NAMES"),
     }
@@ -1250,17 +1268,92 @@ fn tile_sampler(r: &mut Reader<'_>) -> Read<Op> {
     }))
 }
 
+fn input_op(r: &mut Reader<'_>) -> Read<Op> {
+    let kind = r.word("type", None, &["gray", "color"]);
+    let channels = if kind? == 0 { 1 } else { 3 };
+    let default = if r.body.contains_key("default") {
+        let value = r.constant("default")?;
+        let found = match value {
+            Const::Gray(_) => 1,
+            Const::Color(_) => 3,
+        };
+        if found != channels {
+            let (want, help) = if channels == 1 {
+                ("a number", "write `default: 0.5`, or `type: color`")
+            } else {
+                (
+                    "a `#rrggbb` color",
+                    "write `default: \"#808080\"`, or `type: gray`",
+                )
+            };
+            return Err(r.data(
+                "default",
+                format!(
+                    "a {} input needs {want} as its `default`",
+                    if channels == 1 { "gray" } else { "color" }
+                ),
+                help.into(),
+            ));
+        }
+        value
+    } else {
+        r.known.push("default");
+        if channels == 1 {
+            Const::Gray(0.0)
+        } else {
+            Const::Color([0.0; 3])
+        }
+    };
+    Ok(Op::Input { channels, default })
+}
+
 fn recipe_op(r: &mut Reader<'_>) -> Read<Op> {
     let path = r.string("path");
     let output = r.string("output");
     let seed = r.int("seed", Some(0), 0, STEP_SEED_MAX);
     let params = recipe_params(r);
+    let inputs = recipe_inputs(r);
     Ok(Op::Recipe {
         path: path?,
         output: output?,
         params: params?,
+        inputs: inputs?,
         seed: seed?,
     })
+}
+
+fn recipe_inputs(r: &mut Reader<'_>) -> Read<Vec<(String, String)>> {
+    let Some(value) = r.get("inputs") else {
+        return Ok(Vec::new());
+    };
+    let Value::Object(map) = value else {
+        let message = format!("`inputs` must be a mapping, found {}", value_phrase(value));
+        return Err(r.structure(
+            "inputs",
+            message,
+            "write `inputs:` as `<input step of the recipe>: <step of this recipe>` pairs".into(),
+        ));
+    };
+    let mut out = Vec::new();
+    let mut failed = false;
+    for (key, v) in map {
+        match v {
+            Value::String(step) => out.push((key.clone(), step.clone())),
+            other => {
+                failed = true;
+                let message = format!(
+                    "input `{key}` must name a step, found {}",
+                    value_phrase(other)
+                );
+                r.structure(
+                    &format!("inputs/{}", pointer_token(key)),
+                    message,
+                    format!("write `{key}: <step name>`"),
+                );
+            }
+        }
+    }
+    if failed { Err(Failed) } else { Ok(out) }
 }
 
 fn recipe_params(r: &mut Reader<'_>) -> Read<Vec<(String, ParamValue)>> {

@@ -125,6 +125,8 @@ steps:
     op: recipe
     path: sub/bricks.texture.yaml
     output: height
+    inputs:
+      seedling: slid
     params:
       scale: 3
       mortar: $tint
@@ -262,6 +264,10 @@ params:
   scale: 4
   mortar: \"#101010\"
 steps:
+  seedling:
+    op: input
+    type: gray
+    default: 0.25
   rows:
     op: gradient
     axis: v
@@ -271,12 +277,18 @@ steps:
     op: recipe
     path: inner.texture.yaml
     output: n
-  height:
+  rowed:
     op: blend
     a: rows
     b: inner
     mode: mix
     opacity: 0.4
+  height:
+    op: blend
+    a: rowed
+    b: seedling
+    mode: add
+    opacity: 0.3
 outputs:
   base_color: height
   roughness: height
@@ -321,18 +333,18 @@ fn hashes(size: u32) -> [u64; 6] {
 const PINNED_64: [u64; 6] = [
     0x917ab525416d7237,
     0x83b337890a9fff8e,
-    0xddcae2a51b3e19ed,
-    0x19e7c3461387f679,
+    0xc9e5de0f16f6bad6,
+    0x54db4ab665eeef4f,
     0x82e8bd780c579d21,
-    0x8a369b955759952e,
+    0x50cf0355a70dc8f6,
 ];
 const PINNED_128: [u64; 6] = [
     0x1ae1ab0dd124bc6f,
     0xc1193c34f638e6ce,
-    0x07a93e5573935d80,
-    0x29026ad47936e570,
+    0xb5451a5db403aae3,
+    0xa63a1731776522da,
     0xa8cd0c1ec1434a8a,
-    0xb22b2b73eafa28bb,
+    0xeba9146009c28185,
 ];
 
 fn check(size: u32, pinned: [u64; 6]) {
