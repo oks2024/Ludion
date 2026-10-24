@@ -372,7 +372,7 @@ fn shade(
     let to_camera = camera.cam_pos.xyz - world_pos;
     let v = normalize(to_camera);
     let ndv = max(dot(n, v), 1e-4);
-    // Before the light loop: its non-uniform bound forbids implicit derivatives.
+    // One fetch, shared by every specular lobe below.
     let dfg = textureSampleLevel(env_brdf_lut, env_samp, vec2<f32>(ndv, roughness), 0.0).rg;
     let energy = dfg_energy(dfg, f0);
 

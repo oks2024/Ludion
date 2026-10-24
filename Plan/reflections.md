@@ -171,8 +171,8 @@ interiors**. Large open water is not a driver.
       that sees emissive (or hit-flash) surfaces also stores that part E, a second layer from the
       capture's fourth scene target, prefiltered through the same chain. The resolve is
       `T · ratio + E · (1 − ratio) + a · sky_cube(r) · k`, equal to `lit · ratio + E + …`: emission
-      never follows the ambient. The sky cube is the live sky specular cube along the reflection ray
-      and `k` = `ibl_intensity` with an `Environment`, 0 without one.
+      never follows the ambient. The sky cube is the live sky specular cube along the fitted dominant direction
+      (decision 31) and `k` = `ibl_intensity` with an `Environment`, 0 without one.
     - `ratio` = live E / baked E per channel (1 where baked E ≤ 1e-6), E being the normal-free
       diffuse irradiance at the probe's capture point, one value per cube axis (+X −X +Y −Y +Z −Z),
       each composed like `mesh.wgsl`'s ambient term with `diffuse = 1` and no occlusion:
@@ -187,6 +187,11 @@ interiors**. Large open water is not a driver.
       capture; the per-channel ambient ratio scales it too (emissive does not), so a clock that raises ambient N× brightens
       lantern-lit walls in reflections N× while the lanterns stay put, and moving a `DirectionalLight`
       or switching a lamp does not follow until a rebake.
+    - Known limit: only the opaque mesh pass writes the emissive target; transparents add into the
+      lit target alone. A transparent emissive (glass sign, particles) lands in T, so it still fades
+      with the ambient ratio; an opaque emissive seen through a transparent keeps its full E while
+      its T is attenuated, so at ratio < 1 it reflects brighter than captured and at ratio > 1 can
+      fall to the `max(…, 0)` clamp.
     - Known limit: the ratio is exact for Lambertian content facing the capture point; metals and
       surfaces facing away still drift under a sky-gradient change (zenith ≠ horizon).
     - Baked E is stored with the cube (a KTX2 key/value entry, bake version 6), not divided into the
