@@ -272,3 +272,55 @@ fn build_size_is_checked() {
         ("L1284", Some("/size"))
     );
 }
+
+#[test]
+fn odd_rows_with_an_offset_is_data() {
+    let d = err(
+        "  n:\n    op: tile_sampler\n    columns: 4\n    rows: 3\n    offset: 0.5\n",
+        OUT,
+    );
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1284", Some("/steps/n/offset"))
+    );
+}
+
+#[test]
+fn unknown_shape_suggests_nearest() {
+    let d = err(
+        "  n:\n    op: tile_sampler\n    columns: 4\n    rows: 4\n    shape: dsic\n",
+        OUT,
+    );
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1283", Some("/steps/n/shape"))
+    );
+    assert!(d.help.unwrap().contains("disc"));
+}
+
+#[test]
+fn image_files_report_missing_and_undecodable() {
+    let step = |path: &str| format!("  n:\n    op: image\n    path: {path}\n");
+    let d = err(&step("nope.png"), OUT);
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1285", Some("/steps/n/path"))
+    );
+    let resolver = MemResolver::default().with_image("bad.png", b"not a png".to_vec());
+    let d = first_error(&recipe(&step("bad.png"), OUT), &resolver);
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1284", Some("/steps/n/path"))
+    );
+}
+
+#[test]
+fn flood_fill_needs_a_gray_input() {
+    let steps =
+        "  c:\n    op: constant\n    value: \"#ff0000\"\n  n:\n    op: flood_fill\n    input: c\n";
+    let d = err(steps, OUT);
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1284", Some("/steps/n/input"))
+    );
+}

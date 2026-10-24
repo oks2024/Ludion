@@ -35,6 +35,12 @@ pub const OP_NAMES: &[&str] = &[
     "warp",
     "blur",
     "normal_from_height",
+    "tile_sampler",
+    "flood_fill",
+    "distance",
+    "ambient_occlusion",
+    "curvature",
+    "image",
     "recipe",
 ];
 
@@ -131,6 +137,72 @@ pub enum BlendMode {
     Max,
     /// `|a - b|`.
     Difference,
+}
+
+/// The shape a `tile_sampler` stamps when it has no `pattern`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StampShape {
+    /// A filled square.
+    Box,
+    /// A filled disc.
+    Disc,
+    /// A smooth bump, `(1 - r²)²`.
+    Bell,
+    /// A square pyramid, falling linearly to the edge.
+    Pyramid,
+}
+
+/// How overlapping `tile_sampler` instances combine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Combine {
+    /// The largest contribution.
+    Max,
+    /// The sum of contributions.
+    Add,
+}
+
+/// A `tile_sampler` op's parameters.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TileSpec {
+    /// Cells across the tile.
+    pub columns: u32,
+    /// Cells down the tile.
+    pub rows: u32,
+    /// Stamp shape when there is no pattern.
+    pub shape: StampShape,
+    /// Optional gray step used as the stamp.
+    pub pattern: Option<String>,
+    /// Instance size relative to its cell.
+    pub scale: f32,
+    /// Random shrink of an instance, in `[0, 1]`.
+    pub scale_jitter: f32,
+    /// Random shift of an instance within its cell, in `[0, 1]`.
+    pub position_jitter: f32,
+    /// Random turn of an instance, in `[0, 1]` of a full turn.
+    pub rotation_jitter: f32,
+    /// Random darkening of an instance, in `[0, 1]`.
+    pub value_jitter: f32,
+    /// Base rotation in degrees.
+    pub rotation: f32,
+    /// Shift of odd rows, in cell widths.
+    pub offset: f32,
+    /// Probability an instance is kept.
+    pub density: f32,
+    /// How overlaps combine.
+    pub combine: Combine,
+    /// Seed offset mixed into the recipe seed.
+    pub seed: u32,
+}
+
+/// What a `flood_fill` writes into each component.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FillOutput {
+    /// One random gray per component.
+    Random,
+    /// A linear ramp across the component's bounding box.
+    Gradient,
+    /// A color: position in the bounding box, then a random blue.
+    Uv,
 }
 
 /// One op with every field validated and every `$param` substituted.
@@ -243,6 +315,59 @@ pub enum Op {
         /// World height of value 1 in tile units.
         depth: f32,
     },
+    /// Instances of a stamp scattered on a jittered grid.
+    TileSampler(TileSpec),
+    /// A value per connected region of a thresholded input.
+    FloodFill {
+        /// Gray input step.
+        input: String,
+        /// Texels at or above it are inside.
+        threshold: f32,
+        /// What each region is filled with.
+        output: FillOutput,
+        /// Gradient direction in degrees.
+        angle: f32,
+        /// Random turn of the gradient direction, in `[0, 1]` of a full turn.
+        angle_jitter: f32,
+        /// Seed offset mixed into the recipe seed.
+        seed: u32,
+    },
+    /// Distance to the nearest inside texel.
+    Distance {
+        /// Gray input step.
+        input: String,
+        /// Texels at or above it are inside.
+        threshold: f32,
+        /// Distance, in tile units, that maps to 1.
+        max: f32,
+    },
+    /// Horizon-based occlusion of a height.
+    AmbientOcclusion {
+        /// Gray height input step.
+        input: String,
+        /// Search radius in tile units.
+        radius: f32,
+        /// World height of value 1 in tile units.
+        depth: f32,
+        /// Blend toward full occlusion, in `[0, 1]`.
+        strength: f32,
+    },
+    /// Convexity of a height: bright on crests, dark in cavities.
+    Curvature {
+        /// Gray height input step.
+        input: String,
+        /// Blur radius in tile units.
+        radius: f32,
+        /// Gain of the height-minus-blur difference.
+        strength: f32,
+    },
+    /// A PNG file, resampled to the build size.
+    Image {
+        /// Path relative to the referencing recipe.
+        path: String,
+        /// Whether a color file is sRGB-encoded.
+        srgb: bool,
+    },
     /// A step of another recipe, with its parameters bound.
     Recipe {
         /// Path relative to the referencing file, or `std:<name>`.
@@ -260,7 +385,17 @@ impl Op {
     /// The step references this op reads, as `(field, step name)` in evaluation-argument order.
     pub fn inputs(&self) -> Vec<(&'static str, &str)> {
         match self {
-            Op::Constant(_) | Op::Gradient { .. } | Op::Noise(_) | Op::Recipe { .. } => vec![],
+            Op::Constant(_)
+            | Op::Gradient { .. }
+            | Op::Noise(_)
+            | Op::Image { .. }
+            | Op::Recipe { .. } => vec![],
+            Op::TileSampler(spec) => spec
+                .pattern
+                .as_deref()
+                .map(|p| ("pattern", p))
+                .into_iter()
+                .collect(),
             Op::Blend { a, b, mask, .. } => {
                 let mut v = vec![("a", a.as_str()), ("b", b.as_str())];
                 if let Some(m) = mask {
@@ -276,7 +411,11 @@ impl Op {
             | Op::Colorize { input, .. }
             | Op::Grayscale { input }
             | Op::Blur { input, .. }
-            | Op::NormalFromHeight { input, .. } => vec![("input", input)],
+            | Op::NormalFromHeight { input, .. }
+            | Op::FloodFill { input, .. }
+            | Op::Distance { input, .. }
+            | Op::AmbientOcclusion { input, .. }
+            | Op::Curvature { input, .. } => vec![("input", input)],
         }
     }
 }
@@ -294,7 +433,7 @@ pub fn parse_hex(text: &str) -> Option<[f32; 3]> {
     Some([channel(0)?, channel(1)?, channel(2)?])
 }
 
-fn srgb_to_linear(c: f32) -> f32 {
+pub(crate) fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
         c / 12.92
     } else {
@@ -948,6 +1087,65 @@ fn build(r: &mut Reader<'_>, op: &str) -> Read<Op> {
                 depth: depth?,
             })
         }
+        "tile_sampler" => tile_sampler(r),
+        "flood_fill" => {
+            let input = r.step("input");
+            let threshold = r.ranged("threshold", Some(0.5), 0.0, 1.0);
+            let output = r.word("output", Some("random"), &["random", "gradient", "uv"]);
+            let angle = r.float("angle", Some(0.0));
+            let angle_jitter = r.ranged("angle_jitter", Some(0.0), 0.0, 1.0);
+            let seed = r.int("seed", Some(0), 0, STEP_SEED_MAX);
+            Ok(Op::FloodFill {
+                input: input?,
+                threshold: threshold?,
+                output: [FillOutput::Random, FillOutput::Gradient, FillOutput::Uv][output?],
+                angle: angle?,
+                angle_jitter: angle_jitter?,
+                seed: seed?,
+            })
+        }
+        "distance" => {
+            let input = r.step("input");
+            let threshold = r.ranged("threshold", Some(0.5), 0.0, 1.0);
+            let max = r.positive("max", Some(0.1));
+            Ok(Op::Distance {
+                input: input?,
+                threshold: threshold?,
+                max: max?,
+            })
+        }
+        "ambient_occlusion" => {
+            let input = r.step("input");
+            let radius = r.number("radius", Some(0.05));
+            let depth = r.positive("depth", Some(0.05));
+            let strength = r.ranged("strength", Some(1.0), 0.0, 1.0);
+            let radius = open_below(r, "radius", radius?, 0.5)?;
+            Ok(Op::AmbientOcclusion {
+                input: input?,
+                radius,
+                depth: depth?,
+                strength: strength?,
+            })
+        }
+        "curvature" => {
+            let input = r.step("input");
+            let radius = r.number("radius", Some(0.01));
+            let strength = r.positive("strength", Some(4.0));
+            let radius = open_below(r, "radius", radius?, 0.25)?;
+            Ok(Op::Curvature {
+                input: input?,
+                radius,
+                strength: strength?,
+            })
+        }
+        "image" => {
+            let path = r.string("path");
+            let color = r.word("color", Some("srgb"), &["srgb", "linear"]);
+            Ok(Op::Image {
+                path: path?,
+                srgb: color? == 0,
+            })
+        }
         "recipe" => recipe_op(r),
         _ => unreachable!("op name checked against OP_NAMES"),
     }
@@ -991,6 +1189,64 @@ fn noise(r: &mut Reader<'_>) -> Read<Op> {
         seed: seed?,
         ret: ret?,
         jitter: jitter?,
+    }))
+}
+
+/// `x` in `(0, hi]`, as `f32`.
+fn open_below(r: &mut Reader<'_>, field: &str, x: f64, hi: f64) -> Read<f32> {
+    if x > 0.0 && x <= hi {
+        return Ok(x as f32);
+    }
+    Err(r.data(
+        field,
+        format!("`{field}` must be above 0 and at most {hi}, found {x}"),
+        format!("use a value in (0, {hi}]"),
+    ))
+}
+
+fn tile_sampler(r: &mut Reader<'_>) -> Read<Op> {
+    let columns = r.int("columns", None, 1, 1024);
+    let rows = r.int("rows", None, 1, 1024);
+    let shape = r.word("shape", Some("box"), &["box", "disc", "bell", "pyramid"]);
+    let pattern = r.opt_step("pattern");
+    let scale = r.ranged("scale", Some(1.0), 0.0, 4.0);
+    let scale_jitter = r.ranged("scale_jitter", Some(0.0), 0.0, 1.0);
+    let position_jitter = r.ranged("position_jitter", Some(0.0), 0.0, 1.0);
+    let rotation_jitter = r.ranged("rotation_jitter", Some(0.0), 0.0, 1.0);
+    let value_jitter = r.ranged("value_jitter", Some(0.0), 0.0, 1.0);
+    let rotation = r.float("rotation", Some(0.0));
+    let offset = r.ranged("offset", Some(0.0), 0.0, 1.0);
+    let density = r.ranged("density", Some(1.0), 0.0, 1.0);
+    let combine = r.word("combine", Some("max"), &["max", "add"]);
+    let seed = r.int("seed", Some(0), 0, STEP_SEED_MAX);
+    let (columns, rows, offset) = (columns?, rows?, offset?);
+    if offset > 0.0 && rows % 2 != 0 {
+        return Err(r.data(
+            "offset",
+            format!("`offset` shifts odd rows, which only tiles with an even `rows`; found {rows}"),
+            "make `rows` even, or set `offset: 0`".into(),
+        ));
+    }
+    Ok(Op::TileSampler(TileSpec {
+        columns,
+        rows,
+        shape: [
+            StampShape::Box,
+            StampShape::Disc,
+            StampShape::Bell,
+            StampShape::Pyramid,
+        ][shape?],
+        pattern: pattern?,
+        scale: scale?,
+        scale_jitter: scale_jitter?,
+        position_jitter: position_jitter?,
+        rotation_jitter: rotation_jitter?,
+        value_jitter: value_jitter?,
+        rotation: rotation?,
+        offset,
+        density: density?,
+        combine: [Combine::Max, Combine::Add][combine?],
+        seed: seed?,
     }))
 }
 

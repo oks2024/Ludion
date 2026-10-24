@@ -1,9 +1,11 @@
-//! Neighbourhood ops: warp, blur and height-to-normal, all wrapping around the tile.
+//! Neighbourhood ops: warp, blur, height-to-normal, occlusion and curvature, all wrapping around
+//! the tile.
 
 use ludion_core::math::{cos, sin, sqrt};
 use ludion_core::par;
 
 use crate::image::Image;
+use crate::noise::GRADIENTS;
 
 /// Displaces `input` by `by`, in tile units.
 ///
@@ -57,7 +59,11 @@ fn transpose(input: &Image) -> Image {
 
 /// Three separable box passes per axis, `radius` in tile units; zero radius is the identity.
 pub fn blur(input: &Image, radius: f32) -> Image {
-    let r = (radius * input.size as f32).round() as usize;
+    blur_px(input, (radius * input.size as f32).round() as usize)
+}
+
+/// [`blur`] with the radius in texels.
+pub fn blur_px(input: &Image, r: usize) -> Image {
     if r == 0 {
         return input.clone();
     }
@@ -68,18 +74,64 @@ pub fn blur(input: &Image, radius: f32) -> Image {
     image
 }
 
-/// A glTF +Y-up tangent-space normal map from a gray height, central differences with wrap.
+/// A glTF +Y-up tangent-space normal map from a gray height, 3×3 Sobel slopes with wrap.
 pub fn normal_from_height(input: &Image, depth: f32) -> Image {
-    let scale = input.size as f32 * 0.5 * depth;
+    let scale = input.size as f32 / 8.0 * depth;
+    let h = |x: i64, y: i64| input.texel(x, y)[0];
     Image::generate(input.size, 3, |x, y, t| {
         let (xi, yi) = (i64::from(x), i64::from(y));
-        let dhdx = (input.texel(xi + 1, yi)[0] - input.texel(xi - 1, yi)[0]) * scale;
-        let dhdrow = (input.texel(xi, yi + 1)[0] - input.texel(xi, yi - 1)[0]) * scale;
+        let column = |dx: i64| h(xi + dx, yi - 1) + 2.0 * h(xi + dx, yi) + h(xi + dx, yi + 1);
+        let row = |dy: i64| h(xi - 1, yi + dy) + 2.0 * h(xi, yi + dy) + h(xi + 1, yi + dy);
+        let dhdx = (column(1) - column(-1)) * scale;
+        let dhdrow = (row(1) - row(-1)) * scale;
         let (nx, ny, nz) = (-dhdx, dhdrow, 1.0f32);
         let inv = 1.0 / sqrt(nx * nx + ny * ny + nz * nz);
         t[0] = nx * inv * 0.5 + 0.5;
         t[1] = ny * inv * 0.5 + 0.5;
         t[2] = nz * inv * 0.5 + 0.5;
+    })
+}
+
+/// Horizon-based occlusion of a gray height: 1 where open, toward `1 - strength` in pits.
+///
+/// Eight directions each look up to `radius` (tile units) out, at up to 16 samples, and take the
+/// steepest rise over the centre texel; `depth` is the world height of value 1, as in
+/// [`normal_from_height`].
+pub fn ambient_occlusion(input: &Image, radius: f32, depth: f32, strength: f32) -> Image {
+    let size = input.size as f32;
+    let reach = radius * size;
+    if reach < 1.0 {
+        return Image::filled(input.size, 1, 1.0);
+    }
+    let samples = (reach.ceil() as usize).clamp(1, 16);
+    Image::generate(input.size, 1, |x, y, t| {
+        let centre = input.channel(x, y, 0);
+        let (u, v) = ((x as f32 + 0.5) / size, (y as f32 + 0.5) / size);
+        let mut total = 0.0f32;
+        for (dx, dy) in GRADIENTS {
+            let mut rise = 0.0f32;
+            let mut at = [0.0f32];
+            for k in 1..=samples {
+                let step = reach * k as f32 / samples as f32;
+                input.sample(u + step * dx / size, v + step * dy / size, &mut at);
+                rise = rise.max((at[0] - centre) * depth * size / step);
+            }
+            total += rise / sqrt(1.0 + rise * rise);
+        }
+        t[0] = 1.0 - strength * (total / GRADIENTS.len() as f32);
+    })
+}
+
+/// Convexity of a gray height: `0.5 + strength * (height - blur)`, clamped. Crests read above 0.5
+/// and cavities below; `radius` is the blur radius in tile units, at least one texel.
+pub fn curvature(input: &Image, radius: f32, strength: f32) -> Image {
+    let soft = blur_px(
+        input,
+        ((radius * input.size as f32).round() as usize).max(1),
+    );
+    Image::generate(input.size, 1, |x, y, t| {
+        let diff = input.channel(x, y, 0) - soft.channel(x, y, 0);
+        t[0] = (0.5 + strength * diff).clamp(0.0, 1.0);
     })
 }
 
@@ -131,5 +183,71 @@ mod tests {
         let image = dot(16);
         let out = warp(&image, &Image::filled(16, 1, 0.5), 0.3, 40.0);
         assert_eq!(out, image);
+    }
+
+    fn roll(image: &Image, dx: i64, dy: i64) -> Image {
+        Image::generate(image.size, image.channels, |x, y, t| {
+            t.copy_from_slice(image.texel(i64::from(x) - dx, i64::from(y) - dy));
+        })
+    }
+
+    fn max_diff(a: &Image, b: &Image) -> f32 {
+        a.data
+            .iter()
+            .zip(&b.data)
+            .map(|(p, q)| (p - q).abs())
+            .fold(0.0, f32::max)
+    }
+
+    /// A smooth bump (positive height) centred at (32, 32) on a 64² tile.
+    fn bump(sign: f32) -> Image {
+        Image::generate(64, 1, |x, y, t| {
+            let (dx, dy) = (x as f32 - 32.0, y as f32 - 32.0);
+            t[0] = 0.5 + sign * 0.4 / (1.0 + (dx * dx + dy * dy) / 40.0);
+        })
+    }
+
+    #[test]
+    fn flat_height_is_fully_open_and_flat_curvature() {
+        let flat = Image::filled(32, 1, 0.3);
+        assert!(
+            ambient_occlusion(&flat, 0.1, 0.1, 1.0)
+                .data
+                .iter()
+                .all(|v| *v == 1.0)
+        );
+        assert!(curvature(&flat, 0.05, 4.0).data.iter().all(|v| *v == 0.5));
+    }
+
+    #[test]
+    fn a_pit_is_occluded_at_its_centre() {
+        let pit = bump(-1.0);
+        let ao = ambient_occlusion(&pit, 0.15, 0.2, 1.0);
+        assert!(ao.texel(32, 32)[0] < 0.9, "{}", ao.texel(32, 32)[0]);
+        assert!(ao.texel(0, 0)[0] > ao.texel(32, 32)[0]);
+    }
+
+    #[test]
+    fn a_crest_is_convex_and_its_foot_concave() {
+        let ridge = Image::generate(64, 1, |x, _, t| {
+            let d = (x as f32 - 32.0).abs();
+            t[0] = (1.0 - d / 8.0).max(0.0);
+        });
+        let c = curvature(&ridge, 0.06, 4.0);
+        assert!(c.texel(32, 5)[0] > 0.5, "{}", c.texel(32, 5)[0]);
+        assert!(c.texel(24, 5)[0] < 0.5, "{}", c.texel(24, 5)[0]);
+    }
+
+    #[test]
+    fn occlusion_and_curvature_commute_with_rolling() {
+        let height = Image::generate(32, 1, |x, y, t| {
+            t[0] = ((x * 7 + y * 13) % 11) as f32 / 11.0;
+        });
+        let rolled = roll(&height, 5, 9);
+        let ao = ambient_occlusion(&height, 0.1, 0.1, 1.0);
+        let ao_rolled = ambient_occlusion(&rolled, 0.1, 0.1, 1.0);
+        assert!(max_diff(&roll(&ao, 5, 9), &ao_rolled) < 1e-4);
+        let cv = curvature(&height, 0.05, 4.0);
+        assert!(max_diff(&roll(&cv, 5, 9), &curvature(&rolled, 0.05, 4.0)) < 1e-6);
     }
 }

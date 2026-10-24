@@ -1,13 +1,16 @@
 //! Evaluating a loaded recipe into the map images.
 
 use crate::adjust;
+use crate::fill;
 use crate::filter;
 use crate::hash::mix;
 use crate::image::Image;
 use crate::noise::Sampler;
 use crate::ops::Op;
+use crate::picture;
 use crate::recipe::OutputKey;
 use crate::resolve::Loaded;
+use crate::scatter;
 
 /// Receives each top-level step's name and image as it completes.
 pub type Observer<'a> = &'a mut dyn FnMut(&str, &Image);
@@ -164,6 +167,38 @@ fn compute(node: &Loaded, index: usize, size: u32, inputs: &[&Image]) -> Image {
         Op::Warp { amount, angle, .. } => filter::warp(inputs[0], inputs[1], *amount, *angle),
         Op::Blur { radius, .. } => filter::blur(inputs[0], *radius),
         Op::NormalFromHeight { depth, .. } => filter::normal_from_height(inputs[0], *depth),
+        Op::TileSampler(spec) => scatter::render(
+            spec,
+            inputs.first().copied(),
+            size,
+            mix(node.seed, u64::from(spec.seed)),
+        ),
+        Op::FloodFill {
+            threshold,
+            output,
+            angle,
+            angle_jitter,
+            seed,
+            ..
+        } => fill::flood_fill(
+            inputs[0],
+            *threshold,
+            *output,
+            *angle,
+            *angle_jitter,
+            mix(node.seed, u64::from(*seed)),
+        ),
+        Op::Distance { threshold, max, .. } => fill::distance(inputs[0], *threshold, *max),
+        Op::AmbientOcclusion {
+            radius,
+            depth,
+            strength,
+            ..
+        } => filter::ambient_occlusion(inputs[0], *radius, *depth, *strength),
+        Op::Curvature {
+            radius, strength, ..
+        } => filter::curvature(inputs[0], *radius, *strength),
+        Op::Image { .. } => picture::resample(&node.pictures[&index], size),
         Op::Recipe { .. } => {
             let child = &node.children[&index];
             eval_node(&child.node, size, &[child.output], None).remove(0)

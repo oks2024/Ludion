@@ -8,7 +8,7 @@ use crate::image::Image;
 use crate::ops::{CellReturn, NoiseKind, NoiseSpec};
 
 /// The eight fixed unit gradients; no trigonometry, so no libm.
-const GRADIENTS: [(f32, f32); 8] = [
+pub(crate) const GRADIENTS: [(f32, f32); 8] = [
     (1.0, 0.0),
     (-1.0, 0.0),
     (0.0, 1.0),

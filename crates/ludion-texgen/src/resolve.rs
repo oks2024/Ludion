@@ -8,7 +8,8 @@ use ludion_core::diagnostics::{Diagnostic, pointer_token};
 use ludion_core::suggest::nearest;
 
 use crate::hash::mix;
-use crate::ops::{Op, ParamValue};
+use crate::ops::{FillOutput, Op, ParamValue};
+use crate::picture::{Picture, decode};
 use crate::recipe::{Instance, OutputKey, Recipe, parse};
 
 /// A recipe document a [`Resolver`] found.
@@ -20,13 +21,20 @@ pub struct Source {
     pub text: String,
 }
 
-/// Finds the document a `recipe` op's `path` names.
+/// Finds the documents and image files a recipe's paths name.
 pub trait Resolver {
     /// Reads `reference`, relative to the document `from` (`None` for the root's own references).
     ///
     /// # Errors
     /// The reason the reference cannot be read, as one line.
     fn read(&self, reference: &str, from: Option<&str>) -> Result<Source, String>;
+
+    /// Reads the bytes of the image file `reference` names, relative to the document `from`;
+    /// returns the normalized id with them.
+    ///
+    /// # Errors
+    /// The reason the file cannot be read, as one line.
+    fn read_bytes(&self, reference: &str, from: Option<&str>) -> Result<(String, Vec<u8>), String>;
 }
 
 /// Resolves references against a base directory, relative to the referencing file.
@@ -69,6 +77,16 @@ impl Resolver for FsResolver {
             .map_err(|e| format!("cannot read recipe `{id}`: {e}"))?;
         Ok(Source { id, text })
     }
+
+    fn read_bytes(&self, reference: &str, from: Option<&str>) -> Result<(String, Vec<u8>), String> {
+        if reference.starts_with("std:") {
+            return Err("an image cannot come from std:".into());
+        }
+        let id = normalize(reference, from);
+        let bytes = std::fs::read(self.base.join(&id))
+            .map_err(|e| format!("cannot read image `{id}`: {e}"))?;
+        Ok((id, bytes))
+    }
 }
 
 /// A sub-recipe a `recipe` step evaluates, and which of its steps the step yields.
@@ -93,6 +111,8 @@ pub struct Loaded {
     pub channels: Vec<usize>,
     /// Loaded sub-recipes by the index of the `recipe` step.
     pub children: BTreeMap<usize, Child>,
+    /// Decoded files by the index of the `image` step.
+    pub pictures: BTreeMap<usize, Picture>,
 }
 
 fn tag(id: Option<&str>, mut d: Diagnostic) -> Diagnostic {
@@ -134,8 +154,41 @@ fn node(
     }
     let mut diags = Vec::new();
     let mut children = BTreeMap::new();
+    let mut pictures = BTreeMap::new();
     for &i in &instance.order {
         let step = &instance.steps[i];
+        if let Op::Image { path, srgb } = &step.op {
+            let at = format!("/steps/{}/path", pointer_token(&step.name));
+            match resolver.read_bytes(path, id) {
+                Err(reason) => diags.push(tag(
+                    id,
+                    Diagnostic::new(
+                        code::TEXTURE_GRAPH,
+                        format!("step `{}` cannot load `{path}`: {reason}", step.name),
+                    )
+                    .with_path(at)
+                    .with_help("check the path is relative to this recipe and the file exists"),
+                )),
+                Ok((file, bytes)) => match decode(&bytes, *srgb) {
+                    Ok(picture) => {
+                        pictures.insert(i, picture);
+                    }
+                    Err(reason) => diags.push(tag(
+                        id,
+                        Diagnostic::new(
+                            code::TEXTURE_DATA,
+                            format!(
+                                "step `{}`: `{file}` is not a usable PNG: {reason}",
+                                step.name
+                            ),
+                        )
+                        .with_path(at)
+                        .with_help("use a PNG at most 8192 pixels on a side"),
+                    )),
+                },
+            }
+            continue;
+        }
         let Op::Recipe {
             path,
             output,
@@ -289,7 +342,7 @@ fn node(
     if !diags.is_empty() {
         return Err(diags);
     }
-    let channels = infer(&instance, &children)
+    let channels = infer(&instance, &children, &pictures)
         .map_err(|ds| ds.into_iter().map(|d| tag(id, d)).collect::<Vec<_>>())?;
     Ok(Loaded {
         id: id.unwrap_or("<root>").to_string(),
@@ -297,6 +350,7 @@ fn node(
         instance,
         channels,
         children,
+        pictures,
     })
 }
 
@@ -304,6 +358,7 @@ fn node(
 fn infer(
     instance: &Instance,
     children: &BTreeMap<usize, Child>,
+    pictures: &BTreeMap<usize, Picture>,
 ) -> Result<Vec<usize>, Vec<Diagnostic>> {
     let mut diags = Vec::new();
     let mut channels = vec![1usize; instance.steps.len()];
@@ -342,6 +397,21 @@ fn infer(
                 crate::ops::Const::Color(_) => 3,
             },
             Op::Gradient { .. } | Op::Noise(_) => 1,
+            Op::TileSampler(spec) => {
+                if spec.pattern.is_some() {
+                    need("pattern", 1, ch(0));
+                }
+                1
+            }
+            Op::FloodFill { output, .. } => {
+                need("input", 1, ch(0));
+                if *output == FillOutput::Uv { 3 } else { 1 }
+            }
+            Op::Distance { .. } | Op::AmbientOcclusion { .. } | Op::Curvature { .. } => {
+                need("input", 1, ch(0));
+                1
+            }
+            Op::Image { .. } => pictures.get(&i).map_or(1, |p| p.channels),
             Op::Blend { mask, .. } => {
                 if mask.is_some() {
                     need("mask", 1, ch(2));

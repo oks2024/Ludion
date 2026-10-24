@@ -49,13 +49,16 @@
 pub mod adjust;
 pub mod encode;
 pub mod eval;
+pub mod fill;
 pub mod filter;
 pub mod hash;
 pub mod image;
 pub mod noise;
 pub mod ops;
+pub mod picture;
 pub mod recipe;
 pub mod resolve;
+pub mod scatter;
 
 pub use crate::encode::{MapSet, encode};
 pub use crate::eval::{Maps, evaluate};

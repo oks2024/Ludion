@@ -150,18 +150,109 @@ steps:
     a: low
     b: relief
     mode: max
+  stamps:
+    op: tile_sampler
+    columns: 5
+    rows: 6
+    shape: bell
+    scale: 1.3
+    scale_jitter: 0.3
+    position_jitter: 0.5
+    rotation_jitter: 0.6
+    value_jitter: 0.4
+    offset: 0.5
+    density: 0.8
+    combine: add
+    seed: 3
+  blobs:
+    op: noise
+    type: value
+    scale: 3
+    octaves: 2
+    seed: 5
+  parts:
+    op: flood_fill
+    input: blobs
+    threshold: 0.5
+    output: gradient
+    angle: 30
+    angle_jitter: 0.5
+    seed: 2
+  regions:
+    op: flood_fill
+    input: blobs
+    threshold: 0.45
+    output: uv
+  edge:
+    op: distance
+    input: blobs
+    threshold: 0.5
+    max: 0.15
+  pic:
+    op: image
+    path: tex/pattern.png
+  ao:
+    op: ambient_occlusion
+    input: high
+    radius: 0.06
+    depth: 0.08
+    strength: 0.9
+  crv:
+    op: curvature
+    input: high
+    radius: 0.02
+  detail:
+    op: blend
+    a: stamps
+    b: edge
+    mode: max
+  detail2:
+    op: blend
+    a: detail
+    b: parts
+    mode: add
+    opacity: 0.3
+  detail3:
+    op: blend
+    a: detail2
+    b: crv
+    mode: overlay
+    opacity: 0.5
+  height_all:
+    op: blend
+    a: high
+    b: detail3
+    mode: add
+    opacity: 0.25
+  occl:
+    op: blend
+    a: low
+    b: ao
+    mode: multiply
+  patina:
+    op: blend
+    a: albedo
+    b: pic
+    mode: overlay
+    opacity: 0.5
+  color_all:
+    op: blend
+    a: patina
+    b: regions
+    mode: screen
+    opacity: 0.2
   nrm:
     op: normal_from_height
-    input: high
+    input: height_all
     depth: 0.08
 outputs:
-  base_color: albedo
+  base_color: color_all
   roughness: soft
   metallic: flat
   normal: nrm
-  occlusion: low
+  occlusion: occl
   emissive: tone
-  height: high
+  height: height_all
 ";
 
 const BRICKS: &str = "format: 1
@@ -210,6 +301,7 @@ fn resolver() -> MemResolver {
         ("sub/bricks.texture.yaml", BRICKS),
         ("sub/inner.texture.yaml", INNER),
     ])
+    .with_image("tex/pattern.png", common::pattern_png(8))
 }
 
 fn hashes(size: u32) -> [u64; 6] {
@@ -227,20 +319,20 @@ fn hashes(size: u32) -> [u64; 6] {
 
 /// A change here is a reviewed re-pin: it re-textures every committed set built from the changed op.
 const PINNED_64: [u64; 6] = [
-    0x7099d73beebb4a5d,
+    0x917ab525416d7237,
     0x83b337890a9fff8e,
-    0x6c2338e43f463f6e,
-    0xddd4cb779acb745f,
+    0xddcae2a51b3e19ed,
+    0x19e7c3461387f679,
     0x82e8bd780c579d21,
-    0x7ddfc8be0c23cf19,
+    0x8a369b955759952e,
 ];
 const PINNED_128: [u64; 6] = [
-    0x7f21197f3734f7b8,
+    0x1ae1ab0dd124bc6f,
     0xc1193c34f638e6ce,
-    0x9b289587ed972a2c,
-    0xb7c31384ed55cab4,
+    0x07a93e5573935d80,
+    0x29026ad47936e570,
     0xa8cd0c1ec1434a8a,
-    0x559c2d7dcaaa1e5b,
+    0xb22b2b73eafa28bb,
 ];
 
 fn check(size: u32, pinned: [u64; 6]) {
