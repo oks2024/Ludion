@@ -1,0 +1,283 @@
+# Realistic cobblestone: rounded stones, dirty mortar joints, worn crests and grime in the cavities.
+# Build:  ludion texture build examples/textures/cobble.texture.yaml --size 512
+# Check:  ludion texture check examples/textures/cobble.texture.yaml
+format: 1
+kind: texture
+seed: 3
+steps:
+  raw_layout:
+    op: recipe
+    path: std:cobbles
+    output: height
+    params:
+      scale: 5
+      gap: 0.05
+      bevel: 0.75
+      jitter: 0.9
+  raw_stone_id:
+    op: recipe
+    path: std:cobbles
+    output: stone_id
+    params:
+      scale: 5
+      gap: 0.05
+      bevel: 0.75
+      jitter: 0.9
+  raw_mask:
+    op: recipe
+    path: std:cobbles
+    output: mask
+    params:
+      scale: 5
+      gap: 0.05
+      bevel: 0.75
+      jitter: 0.9
+  wobble:
+    op: noise
+    type: gradient
+    scale: 7
+    octaves: 4
+    seed: 9
+  layout:
+    op: warp
+    input: raw_layout
+    by: wobble
+    amount: 0.07
+  stone_id:
+    op: warp
+    input: raw_stone_id
+    by: wobble
+    amount: 0.07
+  mask:
+    op: warp
+    input: raw_mask
+    by: wobble
+    amount: 0.07
+  tilt:
+    op: flood_fill
+    input: mask
+    threshold: 0.5
+    output: gradient
+    angle: 20
+    angle_jitter: 1
+    seed: 4
+  roughcut:
+    op: noise
+    type: gradient
+    scale: 10
+    octaves: 5
+  pits:
+    op: noise
+    type: value
+    scale: 48
+    octaves: 3
+    seed: 3
+  soft_layout:
+    op: blur
+    input: layout
+    radius: 0.008
+  relief0:
+    op: blend
+    a: soft_layout
+    b: roughcut
+    mode: add
+    opacity: 0.22
+  tilted:
+    op: blend
+    a: relief0
+    b: tilt
+    mode: add
+    opacity: 0.12
+  relief:
+    op: blend
+    a: tilted
+    b: pits
+    mode: add
+    opacity: 0.06
+  cool_stone:
+    op: colorize
+    input: stone_id
+    stops:
+      - at: 0.0
+        color: "#383b3e"
+      - at: 0.5
+        color: "#5e6266"
+      - at: 1.0
+        color: "#8a8e92"
+  warm_stone:
+    op: colorize
+    input: stone_id
+    stops:
+      - at: 0.0
+        color: "#463a30"
+      - at: 0.5
+        color: "#7a6850"
+      - at: 1.0
+        color: "#9f8c72"
+  hue_pick:
+    op: curve
+    input: stone_id
+    points:
+      - x: 0.0
+        y: 0.0
+      - x: 0.2
+        y: 1.0
+      - x: 0.45
+        y: 0.1
+      - x: 0.7
+        y: 0.9
+      - x: 1.0
+        y: 0.0
+  tone:
+    op: blend
+    a: cool_stone
+    b: warm_stone
+    mask: hue_pick
+  mottle:
+    op: noise
+    type: gradient
+    scale: 14
+    octaves: 4
+    seed: 5
+  speckle:
+    op: noise
+    type: value
+    scale: 64
+    octaves: 3
+    seed: 6
+  patches:
+    op: noise
+    type: gradient
+    scale: 3
+    octaves: 3
+    seed: 7
+  stone_a:
+    op: blend
+    a: tone
+    b: mottle
+    mode: overlay
+    opacity: 0.5
+  stone_b:
+    op: blend
+    a: stone_a
+    b: speckle
+    mode: overlay
+    opacity: 0.3
+  stone_color:
+    op: blend
+    a: stone_b
+    b: patches
+    mode: overlay
+    opacity: 0.35
+  soil:
+    op: constant
+    value: "#3a2e22"
+  joint_color:
+    op: blend
+    a: soil
+    b: mottle
+    mode: overlay
+    opacity: 0.5
+  colored:
+    op: blend
+    a: joint_color
+    b: stone_color
+    mask: mask
+  wear:
+    op: recipe
+    path: std:edge_wear
+    output: mask
+    seed: 2
+    inputs:
+      height: relief
+    params:
+      amount: 0.7
+      radius: 0.012
+  worn:
+    op: blend
+    a: colored
+    b: tone
+    mode: screen
+    mask: wear
+    opacity: 0.18
+  grime:
+    op: recipe
+    path: std:cavity_grime
+    output: mask
+    seed: 3
+    inputs:
+      height: relief
+    params:
+      amount: 0.9
+      radius: 0.05
+  base_zone0:
+    op: levels
+    input: soft_layout
+    in_low: 0.3
+    in_high: 0.9
+    out_low: 1.0
+    out_high: 0.0
+  base_zone:
+    op: blend
+    a: base_zone0
+    b: patches
+    mode: multiply
+    opacity: 0.7
+  dirt:
+    op: constant
+    value: "#33281c"
+  grimed:
+    op: blend
+    a: worn
+    b: dirt
+    mask: grime
+    opacity: 0.75
+  base:
+    op: blend
+    a: grimed
+    b: soil
+    mask: base_zone
+    opacity: 0.55
+  rough_sides:
+    op: levels
+    input: roughcut
+    out_low: 0.78
+    out_high: 0.98
+  rough_tops:
+    op: levels
+    input: roughcut
+    out_low: 0.5
+    out_high: 0.72
+  top_mask:
+    op: levels
+    input: soft_layout
+    in_low: 0.6
+    in_high: 0.95
+  rough_stone:
+    op: blend
+    a: rough_sides
+    b: rough_tops
+    mask: top_mask
+  rough_joint:
+    op: constant
+    value: 0.97
+  rough:
+    op: blend
+    a: rough_joint
+    b: rough_stone
+    mask: mask
+  shaded:
+    op: ambient_occlusion
+    input: relief
+    radius: 0.05
+    depth: 0.08
+  bumps:
+    op: normal_from_height
+    input: relief
+    depth: 0.08
+outputs:
+  base_color: base
+  roughness: rough
+  normal: bumps
+  occlusion: shaded
+  height: relief

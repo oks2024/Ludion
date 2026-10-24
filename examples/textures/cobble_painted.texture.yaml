@@ -1,0 +1,190 @@
+# Hand-painted cobblestone: the cobble layout restyled with flat value bands, painted edge highlights,
+# an ink outline in the joints, soft colour drift and a low-detail normal.
+# Build:  ludion texture build examples/textures/cobble_painted.texture.yaml --size 512
+# Check:  ludion texture check examples/textures/cobble_painted.texture.yaml
+format: 1
+kind: texture
+seed: 5
+steps:
+  raw_layout:
+    op: recipe
+    path: std:cobbles
+    output: height
+    params:
+      scale: 4
+      gap: 0.06
+      bevel: 0.6
+      jitter: 0.9
+  raw_stone_id:
+    op: recipe
+    path: std:cobbles
+    output: stone_id
+    params:
+      scale: 4
+      gap: 0.06
+      bevel: 0.6
+      jitter: 0.9
+  raw_mask:
+    op: recipe
+    path: std:cobbles
+    output: mask
+    params:
+      scale: 4
+      gap: 0.06
+      bevel: 0.6
+      jitter: 0.9
+  wobble:
+    op: noise
+    type: gradient
+    scale: 4
+    octaves: 2
+    seed: 9
+  layout:
+    op: warp
+    input: raw_layout
+    by: wobble
+    amount: 0.05
+  stone_id:
+    op: warp
+    input: raw_stone_id
+    by: wobble
+    amount: 0.05
+  mask:
+    op: warp
+    input: raw_mask
+    by: wobble
+    amount: 0.05
+  soft_layout:
+    op: blur
+    input: layout
+    radius: 0.01
+  bands:
+    op: curve
+    input: soft_layout
+    points:
+      - x: 0.0
+        y: 0.0
+      - x: 0.3
+        y: 0.0
+      - x: 0.32
+        y: 0.45
+      - x: 0.6
+        y: 0.45
+      - x: 0.62
+        y: 1.0
+      - x: 1.0
+        y: 1.0
+  band_tone:
+    op: levels
+    input: bands
+    out_low: 0.3
+    out_high: 0.62
+  stone_flat:
+    op: colorize
+    input: stone_id
+    stops:
+      - at: 0.0
+        color: "#4f5a78"
+      - at: 0.35
+        color: "#6f7a8c"
+      - at: 0.7
+        color: "#8c9088"
+      - at: 1.0
+        color: "#a89a78"
+  drift:
+    op: noise
+    type: value
+    scale: 3
+    octaves: 2
+    seed: 12
+  drifted:
+    op: blend
+    a: stone_flat
+    b: drift
+    mode: overlay
+    opacity: 0.3
+  banded:
+    op: blend
+    a: drifted
+    b: band_tone
+    mode: overlay
+    opacity: 0.9
+  rim:
+    op: curve
+    input: soft_layout
+    points:
+      - x: 0.0
+        y: 0.0
+      - x: 0.3
+        y: 0.0
+      - x: 0.38
+        y: 1.0
+      - x: 0.48
+        y: 1.0
+      - x: 0.56
+        y: 0.0
+      - x: 1.0
+        y: 0.0
+  rim_noise:
+    op: noise
+    type: value
+    scale: 9
+    octaves: 2
+    seed: 14
+  rim_broken:
+    op: blend
+    a: rim
+    b: rim_noise
+    mode: multiply
+    opacity: 0.7
+  wear_flat:
+    op: levels
+    input: rim_broken
+    in_low: 0.35
+    in_high: 0.42
+  light:
+    op: constant
+    value: "#f2e6c8"
+  painted:
+    op: blend
+    a: banded
+    b: light
+    mask: wear_flat
+    opacity: 0.8
+  ink:
+    op: constant
+    value: "#241a2e"
+  inked:
+    op: blend
+    a: ink
+    b: painted
+    mask: mask
+  rough_base:
+    op: constant
+    value: 0.82
+  rough_var:
+    op: blend
+    a: rough_base
+    b: drift
+    mode: add
+    opacity: 0.08
+  coarse_relief:
+    op: blur
+    input: layout
+    radius: 0.012
+  bumps:
+    op: normal_from_height
+    input: coarse_relief
+    depth: 0.03
+  shaded:
+    op: ambient_occlusion
+    input: coarse_relief
+    radius: 0.04
+    depth: 0.04
+    strength: 0.6
+outputs:
+  base_color: inked
+  roughness: rough_var
+  normal: bumps
+  occlusion: shaded
+  height: coarse_relief

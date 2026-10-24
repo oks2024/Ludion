@@ -1,0 +1,252 @@
+# Painted iron plates: riveted panels, paint chipped from the edges down to bare metal, rust where it is chipped.
+# Build:  ludion texture build examples/textures/painted_iron.texture.yaml --size 512
+# Check:  ludion texture check examples/textures/painted_iron.texture.yaml
+format: 1
+kind: texture
+seed: 9
+steps:
+  panels:
+    op: tile_sampler
+    columns: 2
+    rows: 2
+    shape: box
+    scale: 0.96
+  panel_face:
+    op: blur
+    input: panels
+    radius: 0.004
+  rivets:
+    op: tile_sampler
+    columns: 4
+    rows: 4
+    shape: bell
+    scale: 0.13
+  hammered:
+    op: noise
+    type: gradient
+    scale: 16
+    octaves: 4
+    seed: 1
+  plate:
+    op: blend
+    a: panel_face
+    b: rivets
+    mode: add
+    opacity: 0.25
+  relief:
+    op: blend
+    a: plate
+    b: hammered
+    mode: add
+    opacity: 0.05
+  wear:
+    op: recipe
+    path: std:edge_wear
+    output: mask
+    seed: 2
+    inputs:
+      height: relief
+    params:
+      amount: 1
+      radius: 0.01
+      breakup_scale: 10
+      breakup: 0.8
+  chip_noise:
+    op: noise
+    type: gradient
+    scale: 9
+    octaves: 5
+    gain: 0.6
+    seed: 4
+  chip_scatter:
+    op: levels
+    input: chip_noise
+    in_low: 0.57
+    in_high: 0.6
+  wear_full:
+    op: levels
+    input: wear
+    in_low: 0.0
+    in_high: 0.25
+  wear_zone0:
+    op: blur
+    input: wear_full
+    radius: 0.012
+  wear_zone:
+    op: levels
+    input: wear_zone0
+    in_low: 0.02
+    in_high: 0.25
+  field_zone:
+    op: levels
+    input: paint_fade
+    in_low: 0.58
+    in_high: 0.7
+    out_high: 0.6
+  zone:
+    op: blend
+    a: wear_zone
+    b: field_zone
+    mode: max
+  edge_chips:
+    op: blend
+    a: zone
+    b: chip_scatter
+    mode: multiply
+  chips0:
+    op: levels
+    input: edge_chips
+    in_low: 0.02
+    in_high: 0.06
+  chips:
+    op: blur
+    input: chips0
+    radius: 0.0015
+  rust_patches:
+    op: recipe
+    path: std:rust_spots
+    output: mask
+    seed: 6
+    params:
+      coverage: 0.18
+      scale: 5
+  rust_pits:
+    op: recipe
+    path: std:rust_spots
+    output: pits
+    seed: 6
+    params:
+      coverage: 0.18
+      scale: 5
+  rust_near:
+    op: blur
+    input: chips
+    radius: 0.03
+  rust_grow:
+    op: levels
+    input: rust_near
+    in_low: 0.04
+    in_high: 0.14
+  rust_mask0:
+    op: blend
+    a: rust_grow
+    b: rust_patches
+    mode: multiply
+  rust_mask:
+    op: levels
+    input: rust_mask0
+    in_low: 0.12
+    in_high: 0.4
+  grime:
+    op: recipe
+    path: std:cavity_grime
+    output: mask
+    seed: 3
+    inputs:
+      height: relief
+    params:
+      amount: 0.8
+      radius: 0.02
+  paint_color:
+    op: constant
+    value: "#2c5a52"
+  paint_fade:
+    op: noise
+    type: gradient
+    scale: 6
+    octaves: 4
+    seed: 8
+  paint_varied:
+    op: blend
+    a: paint_color
+    b: paint_fade
+    mode: overlay
+    opacity: 0.35
+  steel:
+    op: constant
+    value: "#b9bcc0"
+  rust_tone:
+    op: colorize
+    input: rust_pits
+    stops:
+      - at: 0.0
+        color: "#2f160a"
+      - at: 0.5
+        color: "#6b3118"
+      - at: 1.0
+        color: "#8f4a22"
+  metal_layer:
+    op: blend
+    a: steel
+    b: rust_tone
+    mask: rust_mask
+  with_chips:
+    op: blend
+    a: paint_varied
+    b: metal_layer
+    mask: chips
+  dirt:
+    op: constant
+    value: "#14110d"
+  base:
+    op: blend
+    a: with_chips
+    b: dirt
+    mask: grime
+    opacity: 0.65
+  metal_chips:
+    op: blend
+    a: chips0
+    b: rust_final
+    mode: subtract
+  metallic:
+    op: levels
+    input: metal_chips
+    in_low: 0.0
+    in_high: 1.0
+  rough_base:
+    op: constant
+    value: 0.42
+  rough_paint:
+    op: blend
+    a: rough_base
+    b: paint_fade
+    mode: add
+    opacity: 0.16
+  rough_metal:
+    op: constant
+    value: 0.32
+  rough_rust:
+    op: constant
+    value: 0.88
+  rust_final:
+    op: blend
+    a: rust_mask
+    b: chips
+    mode: multiply
+  rough_chip:
+    op: blend
+    a: rough_paint
+    b: rough_metal
+    mask: chips
+  rough:
+    op: blend
+    a: rough_chip
+    b: rough_rust
+    mask: rust_final
+  shaded:
+    op: ambient_occlusion
+    input: relief
+    radius: 0.03
+    depth: 0.05
+  bumps:
+    op: normal_from_height
+    input: relief
+    depth: 0.05
+outputs:
+  base_color: base
+  roughness: rough
+  metallic: metallic
+  normal: bumps
+  occlusion: shaded
+  height: relief

@@ -1,0 +1,362 @@
+# Realistic oak boards: fibres and growth rings that differ per board, knots, dark streaks, worn board ends.
+# Build:  ludion texture build examples/textures/oak_planks.texture.yaml --size 512
+# Check:  ludion texture check examples/textures/oak_planks.texture.yaml
+format: 1
+kind: texture
+seed: 4
+steps:
+  rows:
+    op: tile_sampler
+    columns: 1
+    rows: 6
+    shape: box
+    scale: 1.0
+    value_jitter: 1.0
+    seed: 8
+  raw_boards:
+    op: tile_sampler
+    columns: 1
+    rows: 6
+    shape: box
+    scale: 0.97
+  boards:
+    op: warp
+    input: raw_boards
+    by: rows
+    amount: 0.9
+    angle: 0
+  board_id:
+    op: flood_fill
+    input: boards
+    threshold: 0.5
+    output: random
+  face:
+    op: levels
+    input: boards
+    in_low: 0.0
+    in_high: 0.001
+  sway:
+    op: noise
+    type: gradient
+    scale: 3
+    octaves: 2
+    seed: 1
+  knots:
+    op: tile_sampler
+    columns: 2
+    rows: 6
+    shape: bell
+    scale: 0.5
+    position_jitter: 0.5
+    density: 0.3
+    seed: 3
+  knot_bend:
+    op: levels
+    input: knots
+    out_low: 0.5
+    out_high: 1.0
+  knot_dark:
+    op: levels
+    input: knots
+    in_low: 0.35
+    in_high: 0.9
+  ring_wide:
+    op: gradient
+    axis: v
+    shape: triangle
+    repeat: 26
+  ring_fine:
+    op: gradient
+    axis: v
+    shape: triangle
+    repeat: 52
+  ring_pick:
+    op: levels
+    input: board_id
+    in_low: 0.45
+    in_high: 0.55
+  rings_mix:
+    op: blend
+    a: ring_wide
+    b: ring_fine
+    mask: ring_pick
+  rings_wavy:
+    op: warp
+    input: rings_mix
+    by: sway
+    amount: 0.1
+    angle: 90
+  rings_knotted:
+    op: warp
+    input: rings_wavy
+    by: knot_bend
+    amount: 0.07
+    angle: 90
+  rings:
+    op: warp
+    input: rings_knotted
+    by: board_id
+    amount: 0.9
+    angle: 90
+  fibre_lines:
+    op: gradient
+    axis: v
+    shape: triangle
+    repeat: 190
+  fibre_wander:
+    op: noise
+    type: gradient
+    scale: 40
+    octaves: 2
+    seed: 2
+  fibres_wavy:
+    op: warp
+    input: fibre_lines
+    by: fibre_wander
+    amount: 0.01
+    angle: 90
+  fibres_knotted:
+    op: warp
+    input: fibres_wavy
+    by: knot_bend
+    amount: 0.06
+    angle: 90
+  fibres:
+    op: warp
+    input: fibres_knotted
+    by: board_id
+    amount: 0.7
+    angle: 90
+  streak_lines:
+    op: gradient
+    axis: v
+    shape: triangle
+    repeat: 23
+  streak_sparse:
+    op: noise
+    type: value
+    scale: 4
+    octaves: 2
+    seed: 11
+  streak_where:
+    op: levels
+    input: streak_sparse
+    in_low: 0.35
+    in_high: 0.5
+  streak_thin:
+    op: levels
+    input: streak_lines
+    in_low: 0.7
+    in_high: 0.85
+  streaks0:
+    op: blend
+    a: streak_thin
+    b: streak_where
+    mode: multiply
+  streaks:
+    op: warp
+    input: streaks0
+    by: board_id
+    amount: 0.8
+    angle: 90
+  patchy:
+    op: noise
+    type: value
+    scale: 5
+    octaves: 3
+    seed: 6
+  figure:
+    op: blend
+    a: rings
+    b: fibres
+    mode: overlay
+    opacity: 0.4
+  grain:
+    op: blend
+    a: figure
+    b: patchy
+    mode: add
+    opacity: 0.35
+  board_tone:
+    op: colorize
+    input: board_id
+    stops:
+      - at: 0.0
+        color: "#4e331c"
+      - at: 0.5
+        color: "#9a6e40"
+      - at: 1.0
+        color: "#d0a870"
+  wood:
+    op: colorize
+    input: grain
+    stops:
+      - at: 0.0
+        color: "#6c4626"
+      - at: 0.5
+        color: "#946534"
+      - at: 1.0
+        color: "#ad8048"
+  tinted:
+    op: blend
+    a: wood
+    b: board_tone
+    mode: overlay
+    opacity: 0.9
+  dark:
+    op: constant
+    value: "#2c1b0d"
+  streaked:
+    op: blend
+    a: tinted
+    b: dark
+    mask: streaks
+    opacity: 0.55
+  knotted:
+    op: blend
+    a: streaked
+    b: dark
+    mask: knot_dark
+    opacity: 0.8
+  gap_color:
+    op: constant
+    value: "#3b2a1a"
+  softface:
+    op: blur
+    input: face
+    radius: 0.003
+  colored:
+    op: blend
+    a: gap_color
+    b: knotted
+    mask: softface
+  gap_distance:
+    op: levels
+    input: face
+    in_low: 0.0
+    in_high: 1.0
+    out_low: 1.0
+    out_high: 0.0
+  edge_dist:
+    op: distance
+    input: gap_distance
+    threshold: 0.5
+    max: 0.07
+  ends:
+    op: levels
+    input: edge_dist
+    in_low: 0.0
+    in_high: 0.8
+    out_low: 1.0
+    out_high: 0.0
+  end_noise:
+    op: noise
+    type: gradient
+    scale: 12
+    octaves: 3
+    seed: 13
+  end_wear:
+    op: blend
+    a: ends
+    b: end_noise
+    mode: multiply
+    opacity: 0.6
+  darkened:
+    op: blend
+    a: colored
+    b: dark
+    mask: end_wear
+    opacity: 0.5
+  bevel:
+    op: blur
+    input: face
+    radius: 0.006
+  fibre_relief:
+    op: blend
+    a: bevel
+    b: fibres
+    mode: add
+    opacity: 0.03
+  relief:
+    op: blend
+    a: fibre_relief
+    b: rings
+    mode: add
+    opacity: 0.02
+  wear:
+    op: recipe
+    path: std:edge_wear
+    output: mask
+    seed: 2
+    inputs:
+      height: relief
+    params:
+      amount: 0.6
+      radius: 0.008
+  worn:
+    op: blend
+    a: darkened
+    b: wood
+    mode: screen
+    mask: wear
+    opacity: 0.2
+  grime:
+    op: recipe
+    path: std:cavity_grime
+    output: mask
+    seed: 3
+    inputs:
+      height: relief
+    params:
+      amount: 0.9
+      radius: 0.02
+  dirt:
+    op: constant
+    value: "#2a1b0e"
+  base:
+    op: blend
+    a: worn
+    b: dirt
+    mask: grime
+    opacity: 0.55
+  rough_grain:
+    op: levels
+    input: fibres
+    out_low: 0.5
+    out_high: 0.72
+  rough_along:
+    op: blend
+    a: rough_grain
+    b: patchy
+    mode: add
+    opacity: 0.25
+  rough_ends:
+    op: blend
+    a: rough_along
+    b: end_wear
+    mode: add
+    opacity: 0.2
+  rough_dirty:
+    op: blend
+    a: rough_ends
+    b: grime
+    mode: add
+    opacity: 0.25
+  rough:
+    op: clamp
+    input: rough_dirty
+  shaded:
+    op: ambient_occlusion
+    input: relief
+    radius: 0.02
+    depth: 0.05
+  bumps:
+    op: normal_from_height
+    input: relief
+    depth: 0.05
+outputs:
+  base_color: base
+  roughness: rough
+  normal: bumps
+  occlusion: shaded
+  height: relief

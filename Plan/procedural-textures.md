@@ -125,3 +125,40 @@ Wave 0 (the spike), in progress:
 - **`std:` library.** `op: input` and `inputs:` bindings let a sub-recipe receive images; five embedded macros (`edge_wear`, `cavity_grime`, `cobbles`, `planks`, `rust_spots`), `std:` references resolved from the binary.
 - **`ludion texture` verb.** `build`, `check` (the drift gate, `L1286`) and `vendor`; nine validators (seven PBR, two repetition) with a rules TOML (`L1287`–`L1289`); `kind: texture` is checked by the verb; `examples/textures/tiles.texture.yaml` is the worked example. Docs: `ludion docs texture-recipes`, `ludion docs texture-ops`, `ludion devdocs ludion-texgen`.
 - **Feedback loop.** `build --preview` writes the map sheet, step thumbnails, 2×2 tiling views and a Ludion-rendered preview (a generated scene with sphere, rounded cube and panel) into an ignored `.ludion/texture/<stem>/`; the `bench40` recipe measures speed: warm-run budget met on the M5, cold shader compile excluded, the M4 measurement owed.
+
+## Spike log (W0)
+
+Four reference materials, authored only through the feedback loop (`build --preview` at 512²: the map sheet, step thumbnails, 2×2 tiling views, the rendered preview and the validators), in `examples/textures/`. No op or macro was added; every gap was worked around from the existing library.
+
+| material | iterations | stop | build @512 (M5, warm) |
+| --- | --- | --- | --- |
+| `cobble` | 10, plus a four-seed scan | judged competent after a realism round: per-stone cool/warm hue and value, multi-scale albedo breakup, dark soil in the joints with grime creeping up the stone bases, smooth worn tops over rough sides, rounded profiles | ~265 ms (43 steps) |
+| `oak_planks` | 8 | judged competent after a realism round: per-board tint, ring spacing and grain offset, knots that bend the grain, sparse dark streaks, softer gaps, darkened board edges, roughness varying along the grain; `repetition_peak` warns (see below) | ~260 ms (60 steps) |
+| `painted_iron` | 8 | judged competent: riveted panels, paint chipped from the edges, rust in the chips, bare metal metallic 1, paint 0 | ~215 ms (44 steps) |
+| `cobble_painted` | 6 | the same `std:cobbles` layout reads as hand-painted: flat value bands, painted rim highlights, an ink outline, soft colour drift, a low-detail normal | ~150 ms (27 steps) |
+
+The hardest things:
+
+- **`cobble`** — the stones were faceted polygons with flat plateaus. A larger `bevel` plus a shared `warp` of the height, mask and id (the same `by` on all three so they stay aligned) rounded them; a per-stone `flood_fill` gradient added the tilt that makes them read as separate stones. A joint exactly on the wrap seam fails `seam_base_color`, and only the recipe seed moves it.
+- **`oak_planks`** — `std:planks`' pyramid profile shades as diamonds on boards much wider than tall, and its rows repeat every two rows, which scored a 0.83 repetition peak. The recipe builds its own boards (`tile_sampler` box), shifts each row by a per-row random through `warp`, and offsets the grain per board by warping with `board_id`.
+- **`painted_iron`** — the chip mask. Cellular blobs read as polka dots; a thresholded fbm masked by an edge zone and a field zone reads as chipped paint. Rust and bare metal must live only inside the chips, and `std:rust_spots` `coverage` has to be low or it fills the plate.
+- **`cobble_painted`** — `overlay` brightens to white against a 0..1 band image, so the bands are remapped around 0.5 first; `edge_wear` is too broad on a soft height, so the rim highlight is a `curve` on the blurred height instead.
+
+Missing ops and features:
+
+| op / feature | needed by | workaround | cost | added |
+| --- | --- | --- | --- | --- |
+| Anisotropic (stretched) noise, for wood fibres | `oak_planks` | a high-repeat `gradient` warped by a mid-scale noise | M | no |
+| Per-row random offset in `tile_sampler` (staggered boards that do not repeat) | `oak_planks` | a per-row random image warped along `u` | S | no |
+| Uniform gap width on a non-square grid (`tile_sampler` `scale` is relative to the cell) | `oak_planks` | accept a wider end gap, soften it with `blur` | S | no |
+| Rounded layout from `std:cobbles` (a profile with no facets) | `cobble`, `cobble_painted` | a larger `bevel` and a shared `warp` | S | no |
+| A thin rim or outline from a height (a band, not `edge_wear`'s broad crests) | `cobble_painted` | a `curve` peaking over the band | S | no |
+| Posterize / quantize | `cobble_painted` | a stepped `curve` | S | no |
+| Seam-safe seed choice, or a validator-guided seed search | `cobble`, `cobble_painted`, `painted_iron` | scan the recipe seed by hand | S | no |
+| Directional (anisotropic) blur or smear, for rust streaking below chips and board-end darkening | `painted_iron`, `oak_planks` | not done for the streaks; the end darkening uses the isotropic `distance` and also darkens the long edges | M | no |
+| Per-instance scale of a pattern (ring spacing per board) | `oak_planks` | two ring sets mixed by a per-board mask | S | no |
+| Layer helper (colour, roughness and metallic from one mask in one step) | all four | repeated `blend` with `mask`, 30–50 steps per material | M | no |
+
+`repetition_peak` is a false positive for directional patterns: a long-grain board floor is invariant along the grain, so its autocorrelation has a strong off-centre peak at the row pitch (0.80 on `oak_planks`). It warns and does not fail; a per-recipe bound in a rules file is the fix if the warning matters.
+
+Derived param values (arithmetic) were not needed: no recipe wanted a value computed from another.

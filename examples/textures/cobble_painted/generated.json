@@ -1,0 +1,12 @@
+{
+  "generated_by": "ludion texture build",
+  "recipe": "../cobble_painted.texture.yaml",
+  "size": 512,
+  "maps": [
+    "base_color.png",
+    "metallic_roughness.png",
+    "normal.png",
+    "occlusion.png",
+    "height.png"
+  ]
+}
