@@ -60,6 +60,7 @@ pub mod recipe;
 pub mod resolve;
 pub mod scatter;
 pub mod stdlib;
+pub mod validate;
 
 pub use crate::encode::{MapSet, encode};
 pub use crate::eval::{Maps, evaluate};
@@ -73,26 +74,35 @@ use ludion_core::diagnostics::Diagnostic;
 /// The smallest and largest build size.
 pub const SIZE_RANGE: std::ops::RangeInclusive<u32> = 8..=8192;
 
+/// Checks that `size` lies in [`SIZE_RANGE`].
+///
+/// # Errors
+/// `L1284` naming the range.
+pub fn check_size(size: u32) -> Result<(), Vec<Diagnostic>> {
+    if SIZE_RANGE.contains(&size) {
+        return Ok(());
+    }
+    Err(vec![
+        Diagnostic::new(
+            code::TEXTURE_DATA,
+            format!(
+                "size {size} is outside {}..={}",
+                SIZE_RANGE.start(),
+                SIZE_RANGE.end()
+            ),
+        )
+        .with_path("/size")
+        .with_help("build at a size such as 512 or 1024"),
+    ])
+}
+
 /// Loads `root`, evaluates it at `size`×`size` and encodes the maps.
 ///
 /// # Errors
 /// Every diagnostic of the recipe and its sub-recipes, or `L1284` for a `size` outside
 /// [`SIZE_RANGE`].
 pub fn build(root: &str, resolver: &dyn Resolver, size: u32) -> Result<MapSet, Vec<Diagnostic>> {
-    if !SIZE_RANGE.contains(&size) {
-        return Err(vec![
-            Diagnostic::new(
-                code::TEXTURE_DATA,
-                format!(
-                    "size {size} is outside {}..={}",
-                    SIZE_RANGE.start(),
-                    SIZE_RANGE.end()
-                ),
-            )
-            .with_path("/size")
-            .with_help("build at a size such as 512 or 1024"),
-        ]);
-    }
+    check_size(size)?;
     let loaded = load(root, resolver)?;
     let maps = evaluate(&loaded, size, &mut |_, _| {});
     encode(&maps)

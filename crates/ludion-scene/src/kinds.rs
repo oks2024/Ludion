@@ -49,6 +49,15 @@ pub const KINDS: &[KindEntry] = &[
         model_sheet: false,
     },
     KindEntry {
+        name: "texture",
+        noun: "a procedural texture recipe",
+        check: KindCheck::Elsewhere(
+            "`ludion texture check <file>` validates it and drift-checks its map set",
+        ),
+        doc_store: false,
+        model_sheet: false,
+    },
+    KindEntry {
         name: "voxel",
         noun: "a voxel model",
         check: KindCheck::Here(|s| crate::check_voxel(s).map(drop)),

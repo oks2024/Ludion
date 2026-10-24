@@ -1,0 +1,74 @@
+# Cobblestone tiles: the embedded cobbles layout, grain on the relief, worn edges lightened.
+# Build:  ludion texture build examples/textures/tiles.texture.yaml --size 256
+# Check:  ludion texture check examples/textures/tiles.texture.yaml
+format: 1
+kind: texture
+seed: 5
+steps:
+  layout_height:
+    op: recipe
+    path: std:cobbles
+    output: height
+  stone_id:
+    op: recipe
+    path: std:cobbles
+    output: stone_id
+  grain:
+    op: noise
+    type: gradient
+    scale: 24
+    octaves: 4
+  relief:
+    op: blend
+    a: layout_height
+    b: grain
+    mode: add
+    opacity: 0.1
+  tone:
+    op: colorize
+    input: stone_id
+    stops:
+      - at: 0.0
+        color: "#2b2a28"
+      - at: 0.5
+        color: "#6b665e"
+      - at: 1.0
+        color: "#9a9486"
+  grained:
+    op: blend
+    a: tone
+    b: grain
+    mode: overlay
+    opacity: 0.4
+  wear:
+    op: recipe
+    path: std:edge_wear
+    output: mask
+    inputs:
+      height: relief
+    params:
+      amount: 0.6
+  worn:
+    op: blend
+    a: grained
+    b: wear
+    mode: screen
+    opacity: 0.35
+  rough:
+    op: levels
+    input: grain
+    out_low: 0.55
+    out_high: 0.9
+  shaded:
+    op: ambient_occlusion
+    input: relief
+  bumps:
+    op: normal_from_height
+    input: relief
+    depth: 0.06
+outputs:
+  base_color: worn
+  roughness: rough
+  normal: bumps
+  occlusion: shaded
+  height: relief

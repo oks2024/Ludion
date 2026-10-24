@@ -68,6 +68,8 @@ ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
 # every path, reads every input and writes both committed files.
 ludion-sprite = { path = "../ludion-sprite", version = "0.1.0" }
 ludion-testkit = { path = "../ludion-testkit", version = "0.1.0" }
+# `ludion texture`'s recipe evaluator and validators; only the CLI links it.
+ludion-texgen = { path = "../ludion-texgen", version = "0.1.0" }
 # `serve --window`'s native viewer (Phase 6 Wave 5); see `ludion-window`'s own doc comment for the
 # peer-client rationale and the main-thread requirement `serve.rs` follows.
 ludion-window = { path = "../ludion-window", version = "0.1.0" }

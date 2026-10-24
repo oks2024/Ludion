@@ -1403,6 +1403,19 @@ pub mod code {
     /// reference, a cycle, an unresolvable or cyclic sub-recipe, or an unavailable `std:` recipe.
     /// Raised by `ludion-texgen`.
     pub const TEXTURE_GRAPH: DiagnosticCode = DiagnosticCode::new("L1285");
+    /// `L1286` — a `kind: texture` recipe's committed map set differs from what the recipe builds:
+    /// a map's bytes changed, one is missing or stray, or the set was never built. Raised by
+    /// `ludion texture check`.
+    pub const TEXTURE_DRIFT: DiagnosticCode = DiagnosticCode::new("L1286");
+    /// `L1287` — a built texture map set has a validator outside its bounds at level `warn`.
+    /// Raised by `ludion texture build` and `check`.
+    pub const TEXTURE_CHECK_WARNING: DiagnosticCode = DiagnosticCode::new("L1287");
+    /// `L1288` — a built texture map set has a validator outside its bounds at level `error`.
+    /// Raised by `ludion texture build` and `check`.
+    pub const TEXTURE_CHECK_FAILED: DiagnosticCode = DiagnosticCode::new("L1288");
+    /// `L1289` — a texture rules file cannot be used: unreadable, invalid TOML, a wrong-typed
+    /// value or an unknown validator name. Raised by `ludion texture`.
+    pub const TEXTURE_RULES_INVALID: DiagnosticCode = DiagnosticCode::new("L1289");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -7090,6 +7103,59 @@ A diagnostic raised inside a sub-recipe starts its message with the sub-recipe's
 
 Fix: correct the named reference, or break the cycle by removing one of its edges.",
     },
+    CodeEntry {
+        code: code::TEXTURE_DRIFT,
+        severity: Severity::Error,
+        title: "committed texture maps differ from their recipe",
+        explanation: "\
+A `kind: texture` recipe's map set is generated, write-only output. `ludion texture check` rebuilds
+the recipe at the size recorded in the set's `generated.json` and byte-compares every map. This code
+reports a map whose bytes differ, a map that is missing, a stray `.png` the recipe does not produce,
+or a set with no readable `generated.json` (never built).
+
+Each message names the file. An op-library or recipe change shows up here as a reviewed diff, never
+as silent re-texturing.
+
+Fix: run `ludion texture build <recipe>` (with the same `--size`) and commit the result. Never edit
+the maps by hand.",
+    },
+    CodeEntry {
+        code: code::TEXTURE_CHECK_WARNING,
+        severity: Severity::Warning,
+        title: "texture validator outside its bounds",
+        explanation: "\
+A built map set measures outside the bounds of a validator whose level is `warn`. The message names
+the validator, the measured value and the bounds. The engine's defaults cover albedo range, metallic
+ambiguity, mirror-smooth roughness, normal validity, height range and seam continuity; a rules file
+(`--rules`) overrides any bound or level.
+
+Fix: adjust the recipe so the value lands inside the bounds, or relax the validator in the rules
+file when the departure is intended.",
+    },
+    CodeEntry {
+        code: code::TEXTURE_CHECK_FAILED,
+        severity: Severity::Error,
+        title: "texture validator failed",
+        explanation: "\
+A built map set measures outside the bounds of a validator whose level is `error`. The maps are
+still written so they can be inspected, but the command exits non-zero. The message names the
+validator, the measured value and the bounds.
+
+Fix: adjust the recipe so the value lands inside the bounds, or lower the validator to `warn` or
+widen its bounds in the rules file when the departure is intended.",
+    },
+    CodeEntry {
+        code: code::TEXTURE_RULES_INVALID,
+        severity: Severity::Error,
+        title: "texture rules file cannot be used",
+        explanation: "\
+The rules file given to `ludion texture build` or `check --rules` could not be read, is not valid
+TOML, holds a wrong-typed value, or names a validator that does not exist. The shape is
+`<validator> = { min = .., max = .., level = \"warn\" | \"error\" }` for the project base and
+`[textures.\"<recipe file name>\"]` tables for per-recipe overrides.
+
+Fix: correct the named key; an unknown validator name comes with the nearest valid one.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9745,6 +9811,10 @@ mod tests {
         code::TEXTURE_STRUCTURE,
         code::TEXTURE_DATA,
         code::TEXTURE_GRAPH,
+        code::TEXTURE_DRIFT,
+        code::TEXTURE_CHECK_WARNING,
+        code::TEXTURE_CHECK_FAILED,
+        code::TEXTURE_RULES_INVALID,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -9992,6 +10062,7 @@ mod tests {
             code::REFLECTION_PROBE_EQUAL_RANK,
             code::REFLECTION_PROBE_SHADOWED,
             code::REFLECTION_PROBE_NOT_STORED,
+            code::TEXTURE_CHECK_WARNING,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

@@ -30,7 +30,7 @@ fn q16(v: f32) -> u16 {
     (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16
 }
 
-fn srgb(v: f32) -> f32 {
+pub(crate) fn srgb(v: f32) -> f32 {
     let v = v.clamp(0.0, 1.0);
     if v <= 0.003_130_8 {
         v * 12.92

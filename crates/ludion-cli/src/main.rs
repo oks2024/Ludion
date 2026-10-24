@@ -36,6 +36,8 @@
 //! `ludion sculpt new` (scaffold an implicit-surface sculpt model),
 //! `ludion mesh <pick|apply>` (edit a mesh's texture maps: name the surface point under a pixel of a
 //! model sheet, and derive — or drift-check — the tree a `kind: mesh-edit` document owns), and
+//! `ludion texture <build|check|vendor>` (build a `kind: texture` recipe into its committed PBR map
+//! set, drift-check that set, or copy an embedded `std:` recipe out to edit), and
 //! `ludion gen <nodes|check|run|status|fetch>` (drive a ComfyUI server: list its installed node
 //! classes, validate a `kind: generation` recipe offline and against `/object_info`, submit a run
 //! and follow it to a folder of candidates, and check on or complete a `--no-wait` one).
@@ -69,6 +71,7 @@ mod serve;
 mod sim_hash;
 mod sync;
 mod test;
+mod texture;
 mod voxel;
 
 use std::path::PathBuf;
@@ -1071,6 +1074,14 @@ enum Command {
         #[arg(long, hide = true)]
         render_size: Option<String>,
     },
+    /// Procedural textures: build a `kind: texture` recipe into its PBR map set and provenance
+    /// sidecar (`build`), validate it and byte-compare the committed set (`check`), or copy an
+    /// embedded `std:` recipe out to edit (`vendor`). Maps are generated, write-only output.
+    Texture {
+        /// Which texture verb to run.
+        #[command(subcommand)]
+        command: TextureCommand,
+    },
     /// Drive a ComfyUI server: list its installed node classes (`nodes`), validate a
     /// `kind: generation` recipe (`check`), submit one and follow it to a folder of candidates
     /// (`run`), check on or complete a `--no-wait` run (`status`/`fetch`), compose its candidates
@@ -1411,6 +1422,59 @@ enum SculptCommand {
         /// one-entry stub — how a new model joins an existing set's colour language.
         #[arg(long, value_name = "MODEL")]
         palette_from: Option<PathBuf>,
+    },
+}
+
+/// The `ludion texture` verbs. Each takes `--json` (exactly one compact JSON object on one stdout
+/// line; diagnostics always render to stderr).
+#[derive(Debug, Subcommand)]
+enum TextureCommand {
+    /// Evaluate a recipe and write its map set: `base_color.png`, `metallic_roughness.png`,
+    /// `normal.png`, `occlusion.png`, `emissive.png` (only when authored), a 16-bit `height.png`
+    /// and a `generated.json` sidecar, then run the PBR plausibility validators. Maps are written
+    /// even when a validator fails at level `error` (the exit code is non-zero) so they can be
+    /// inspected.
+    Build {
+        /// The recipe (`<name>.texture.yaml`).
+        recipe: PathBuf,
+        /// Texels per side of every map (8..=8192).
+        #[arg(long, default_value_t = texture::DEFAULT_SIZE)]
+        size: u32,
+        /// The directory to write. Defaults to `<recipe dir>/<name>/`.
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+        /// A TOML file overriding validator bounds and levels: `<validator> = { min, max, level }`,
+        /// with `[textures."<recipe file>"]` tables for per-recipe overrides.
+        #[arg(long, value_name = "TOML")]
+        rules: Option<PathBuf>,
+        /// Print one JSON report object (timings per step, per-map statistics, validators).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Rebuild a recipe at the size its `generated.json` records and byte-compare the committed
+    /// set (`L1286` per differing, missing or stray file), then run the validators. Writes nothing.
+    Check {
+        /// The recipe (`<name>.texture.yaml`).
+        recipe: PathBuf,
+        /// The directory holding the set. Defaults to `<recipe dir>/<name>/`.
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+        /// A TOML file overriding validator bounds and levels, as for `build`.
+        #[arg(long, value_name = "TOML")]
+        rules: Option<PathBuf>,
+        /// Print one JSON report object.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Copy an embedded `std:` recipe out of the binary so it can be edited. Never overwrites.
+    Vendor {
+        /// The recipe, `std:cobbles` or `cobbles`.
+        name: String,
+        /// Where to write it. Defaults to `./<name>.texture.yaml`.
+        dest: Option<PathBuf>,
+        /// Print one JSON object.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -2156,6 +2220,24 @@ fn main() -> std::process::ExitCode {
                 check,
                 validate,
             } => voxel::run_from_json(input.as_deref(), out.as_deref(), check.as_deref(), validate),
+        },
+        Command::Texture { command } => match command {
+            TextureCommand::Build {
+                recipe,
+                size,
+                out,
+                rules,
+                json,
+            } => texture::run_build(&recipe, size, out.as_deref(), rules.as_deref(), json),
+            TextureCommand::Check {
+                recipe,
+                out,
+                rules,
+                json,
+            } => texture::run_check(&recipe, out.as_deref(), rules.as_deref(), json),
+            TextureCommand::Vendor { name, dest, json } => {
+                texture::run_vendor(&name, dest.as_deref(), json)
+            }
         },
         Command::Sculpt { command } => match command {
             SculptCommand::New {

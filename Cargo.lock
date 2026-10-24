@@ -1667,6 +1667,7 @@ dependencies = [
  "ludion-spatial",
  "ludion-sprite",
  "ludion-testkit",
+ "ludion-texgen",
  "ludion-window",
  "png",
  "serde",
