@@ -149,6 +149,54 @@ pub fn grayscale(input: &Image) -> Image {
     })
 }
 
+/// Snaps every channel to `steps` evenly spaced levels in `[0, 1]`.
+pub fn posterize(input: &Image, steps: u32) -> Image {
+    let levels = steps as f32;
+    map(input, |v| {
+        (v.clamp(0.0, 1.0) * levels).floor().min(levels - 1.0) / (levels - 1.0)
+    })
+}
+
+/// Rotates hue by `hue` degrees and scales saturation (clamped at 1) and value, on the stored
+/// values.
+pub fn hsv_shift(input: &Image, hue: f32, saturation: f32, value: f32) -> Image {
+    let turn = hue / 60.0;
+    Image::generate(input.size, 3, |x, y, t| {
+        let (r, g, b) = (
+            input.channel(x, y, 0),
+            input.channel(x, y, 1),
+            input.channel(x, y, 2),
+        );
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let chroma = max - min;
+        let mut h = if chroma == 0.0 {
+            0.0
+        } else if max == r {
+            ((g - b) / chroma).rem_euclid(6.0)
+        } else if max == g {
+            (b - r) / chroma + 2.0
+        } else {
+            (r - g) / chroma + 4.0
+        };
+        h = (h + turn).rem_euclid(6.0);
+        let s = if max == 0.0 { 0.0 } else { chroma / max };
+        let s = (s * saturation).min(1.0);
+        let v = max * value;
+        let c = v * s;
+        let m = v - c;
+        let q = c * (1.0 - (h.rem_euclid(2.0) - 1.0).abs());
+        let (cr, cg, cb) = match h as u32 {
+            0 => (c, q, 0.0),
+            1 => (q, c, 0.0),
+            2 => (0.0, c, q),
+            3 => (0.0, q, c),
+            4 => (q, 0.0, c),
+            _ => (c, 0.0, q),
+        };
+        t.copy_from_slice(&[cr + m, cg + m, cb + m]);
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +240,60 @@ mod tests {
         let m = remap(&r, 0.0, 1.0, 1.0, 3.0);
         assert_eq!(m.data[0], 1.0 + r.data[0] * 2.0);
         assert!(clamp(&m, 0.0, 2.0).data.iter().all(|v| *v <= 2.0));
+    }
+
+    #[test]
+    fn posterize_snaps_to_even_levels() {
+        let out = posterize(&ramp(64), 4);
+        let mut seen: Vec<f32> = out.data[..64].to_vec();
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]));
+        seen.dedup();
+        assert_eq!(seen, vec![0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]);
+        let wide = Image::generate(4, 1, |x, _, t| t[0] = [1.5, -0.2, 0.5, 0.0][x as usize]);
+        let out = posterize(&wide, 4);
+        assert_eq!(&out.data[..2], &[1.0, 0.0]);
+        let color = Image::filled(4, 3, 0.4);
+        assert_eq!(posterize(&color, 3).channels, 3);
+    }
+
+    fn rgb(c: [f32; 3]) -> Image {
+        Image::generate(2, 3, |_, _, t| t.copy_from_slice(&c))
+    }
+
+    #[test]
+    fn hsv_shift_identity_and_hue_turns() {
+        let stops = [(0.0, [0.1, 0.4, 0.2]), (1.0, [0.9, 0.3, 0.6])];
+        let colors = colorize(&ramp(16), &stops);
+        let same = hsv_shift(&colors, 0.0, 1.0, 1.0);
+        assert!(
+            colors
+                .data
+                .iter()
+                .zip(&same.data)
+                .all(|(a, b)| (a - b).abs() < 1e-6)
+        );
+        let full = hsv_shift(&colors, 360.0, 1.0, 1.0);
+        assert!(
+            colors
+                .data
+                .iter()
+                .zip(&full.data)
+                .all(|(a, b)| (a - b).abs() < 1e-5)
+        );
+        let green = hsv_shift(&rgb([1.0, 0.0, 0.0]), 120.0, 1.0, 1.0);
+        for (got, want) in green.data[..3].iter().zip([0.0, 1.0, 0.0]) {
+            assert!((got - want).abs() < 1e-6, "{:?}", &green.data[..3]);
+        }
+    }
+
+    #[test]
+    fn hsv_shift_scales_saturation_and_value() {
+        let gray = hsv_shift(&rgb([0.8, 0.2, 0.4]), 0.0, 0.0, 1.0);
+        assert!(gray.data[..3].iter().all(|v| (v - 0.8).abs() < 1e-6));
+        let dark = hsv_shift(&rgb([0.8, 0.2, 0.4]), 0.0, 1.0, 0.5);
+        for (got, want) in dark.data[..3].iter().zip([0.4, 0.1, 0.2]) {
+            assert!((got - want).abs() < 1e-6, "{:?}", &dark.data[..3]);
+        }
     }
 
     #[test]

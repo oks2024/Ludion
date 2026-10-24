@@ -171,8 +171,25 @@ fn compute(
         } => adjust::remap(inputs[0], *from_low, *from_high, *to_low, *to_high),
         Op::Colorize { stops, .. } => adjust::colorize(inputs[0], stops),
         Op::Grayscale { .. } => adjust::grayscale(inputs[0]),
+        Op::Posterize { steps, .. } => adjust::posterize(inputs[0], *steps),
+        Op::HsvShift {
+            hue,
+            saturation,
+            value,
+            ..
+        } => adjust::hsv_shift(inputs[0], *hue, *saturation, *value),
         Op::Warp { amount, angle, .. } => filter::warp(inputs[0], inputs[1], *amount, *angle),
-        Op::Blur { radius, .. } => filter::blur(inputs[0], *radius),
+        Op::Blur {
+            radius,
+            angle: None,
+            ..
+        } => filter::blur(inputs[0], *radius),
+        Op::Blur {
+            radius,
+            angle: Some(angle),
+            spread,
+            ..
+        } => filter::blur_along(inputs[0], *radius, *angle, *spread),
         Op::NormalFromHeight { depth, .. } => filter::normal_from_height(inputs[0], *depth),
         Op::TileSampler(spec) => scatter::render(
             spec,
@@ -196,6 +213,13 @@ fn compute(
             mix(node.seed, u64::from(*seed)),
         ),
         Op::Distance { threshold, max, .. } => fill::distance(inputs[0], *threshold, *max),
+        Op::Band {
+            level,
+            width,
+            side,
+            softness,
+            ..
+        } => fill::band(inputs[0], *level, *width, *side, *softness),
         Op::AmbientOcclusion {
             radius,
             depth,

@@ -41,8 +41,10 @@ units (the tile is 0..1 on both axes) and wraps. **Gray** = one channel, **color
 | `noise.seed` | int | 0 | 0..4294967295, mixed into the recipe seed |
 | `noise.return` | `f1` \| `f2` \| `f2_minus_f1` | `f1` | cellular only; `f2_minus_f1` is bright on cell borders |
 | `noise.jitter` | number | 1.0 | 0..1, cellular only: feature-point wander |
+| `noise.stretch` | int | 1 | 1..256; features run this many times longer along `stretch_axis`, the cross axis gets `scale × stretch` cells |
+| `noise.stretch_axis` | `u` \| `v` | `u` | the axis stretched features run along |
 
-The finest octave (`scale × lacunarity^(octaves-1)`) may not exceed 65536 cells (`L1284`).
+The finest octave (`scale × lacunarity^(octaves-1) × stretch`) may not exceed 65536 cells (`L1284`).
 
 ### Adjust
 
@@ -55,6 +57,8 @@ The finest octave (`scale × lacunarity^(octaves-1)`) may not exceed 65536 cells
 | `remap` | `input` | linear, unclamped |
 | `colorize` | gray `input` | color through a stop gradient |
 | `grayscale` | color `input` | gray by Rec.709 luminance |
+| `posterize` | `input` | per channel, snapped down to `steps` evenly spaced levels in 0..1 |
+| `hsv_shift` | color `input` | color with hue rotated and saturation and value scaled, on the stored (linear) values |
 
 | op.field | type | default | range |
 | --- | --- | --- | --- |
@@ -68,13 +72,17 @@ The finest octave (`scale × lacunarity^(octaves-1)`) may not exceed 65536 cells
 | `remap.from_low` / `from_high` | number | req | must differ |
 | `remap.to_low` / `to_high` | number | req | |
 | `colorize.stops` | list of `{at, color}` | req | ≥ 2, `at` 0..1 non-decreasing |
+| `posterize.steps` | int | req | 2..256 |
+| `hsv_shift.hue` | number | 0 | degrees, any finite value, wraps |
+| `hsv_shift.saturation` | number | 1.0 | ≥ 0 multiplier; the result clamps at 1 |
+| `hsv_shift.value` | number | 1.0 | ≥ 0 multiplier |
 
 ### Filters
 
 | op | slots | produces |
 | --- | --- | --- |
 | `warp` | `input`, `by` | `input` displaced by `by`; a gray `by` moves along `angle` by `(by−0.5)×amount`, a color `by` uses its R and G; neutral gray is identity |
-| `blur` | `input` | wrap-around gaussian-like blur |
+| `blur` | `input` | wrap-around gaussian-like blur; with `angle`, a line blur along that direction |
 | `normal_from_height` | gray `input` | color tangent-space normal (Sobel), +Y image-up (glTF) |
 
 | op.field | type | default | range |
@@ -82,6 +90,8 @@ The finest octave (`scale × lacunarity^(octaves-1)`) may not exceed 65536 cells
 | `warp.amount` | number | req | tile units |
 | `warp.angle` | number | 0 | degrees, gray `by` only |
 | `blur.radius` | number | req | 0..1 tile units |
+| `blur.angle` | number | none | degrees as `warp.angle`; absent = blur in all directions |
+| `blur.spread` | `both` \| `forward` | `both` | `forward` smears content toward `angle` in a one-sided trail; needs `angle` |
 | `normal_from_height.depth` | number | 0.05 | > 0; world height of value 1 in tile units |
 
 ### Hard generators
@@ -91,6 +101,7 @@ The finest octave (`scale × lacunarity^(octaves-1)`) may not exceed 65536 cells
 | `tile_sampler` | optional gray `pattern` | gray; shapes (or the pattern) stamped on a `columns × rows` grid with wrap-around |
 | `flood_fill` | gray `input` | gray per connected region of `input ≥ threshold` (across seams); color for `uv` |
 | `distance` | gray `input` | gray exact distance to the nearest texel at or above `threshold` |
+| `band` | gray height `input` | gray; 1 on a line of constant tile-unit width along the `level` contour |
 | `ambient_occlusion` | gray height `input` | gray; 1 open, darker in recesses (horizon search, 8 directions) |
 | `curvature` | gray height `input` | gray; 0.5 flat, bright on crests, dark in cavities |
 
@@ -113,6 +124,10 @@ The finest octave (`scale × lacunarity^(octaves-1)`) may not exceed 65536 cells
 | `flood_fill.angle` / `angle_jitter` | number | 0 / 0 | degrees / 0..1 turn; `gradient` only |
 | `distance.threshold` | number | 0.5 | 0..1 |
 | `distance.max` | number | 0.1 | > 0; distance that maps to 1 |
+| `band.level` | number | 0.5 | 0..1; texels at or above it are inside |
+| `band.width` | number | req | (0, 0.5] tile units; `both` lights half each side |
+| `band.side` | `both` \| `inside` \| `outside` | `both` | which side of the contour is lit |
+| `band.softness` | number | 0.5 | 0..1 share of the width that falls off to 0 |
 | `ambient_occlusion.radius` | number | 0.05 | (0, 0.5] tile units |
 | `ambient_occlusion.depth` | number | 0.05 | > 0 |
 | `ambient_occlusion.strength` | number | 1.0 | 0..1 |
@@ -155,6 +170,7 @@ The finest octave (`scale × lacunarity^(octaves-1)`) may not exceed 65536 cells
   halves. Feed both the same height or the shading disagrees with the normal.
 - `distance` and `flood_fill` threshold the input; a soft gradient gives a thin or empty region —
   `levels` it first.
+- `noise` stretches only along `u` or `v` (the lattice must stay periodic); for diagonal fibres `warp` a stretched noise.
 - `tile_sampler` with `offset` > 0 and an odd `rows` would not tile; it is refused; `offset_jitter` needs no even `rows`.
 
 ## Next

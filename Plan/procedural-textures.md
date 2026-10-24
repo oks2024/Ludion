@@ -160,6 +160,7 @@ Wave 0 (the spike) — **Go**, 2026-10-24:
 Wave 1 — in progress.
 
 - **Layout ops.** `tile_sampler` gains `offset_jitter`, `gap` and per-instance pattern scale and offset jitters; `std:planks` is rebuilt on them (uniform joints in tile units, `bevel`, `stagger_jitter`, `gap: 0` is one board) and `std:cobbles` gains an opt-in `round` profile.
+- **Tone and filter ops.** `posterize`, `band` (a constant-width line along a height's contour), `hsv_shift`, noise `stretch`/`stretch_axis` and a directional `blur` (`angle`, `spread: forward`); every new field defaults to byte-identical output.
 
 ## Spike log (W0)
 

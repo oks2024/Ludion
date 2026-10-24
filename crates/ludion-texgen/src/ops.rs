@@ -32,12 +32,15 @@ pub const OP_NAMES: &[&str] = &[
     "remap",
     "colorize",
     "grayscale",
+    "posterize",
+    "hsv_shift",
     "warp",
     "blur",
     "normal_from_height",
     "tile_sampler",
     "flood_fill",
     "distance",
+    "band",
     "ambient_occlusion",
     "curvature",
     "image",
@@ -115,6 +118,10 @@ pub struct NoiseSpec {
     pub ret: CellReturn,
     /// Cellular feature-point jitter in `[0, 1]`.
     pub jitter: f32,
+    /// How many times longer features run along `stretch_axis` than across it.
+    pub stretch: u32,
+    /// The axis stretched features run along.
+    pub stretch_axis: Axis,
 }
 
 /// How a `blend` combines `a` and `b`.
@@ -214,6 +221,26 @@ pub enum FillOutput {
     Uv,
 }
 
+/// Which side of a `band`'s contour is lit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BandSide {
+    /// Both sides, centred on the contour.
+    Both,
+    /// Only the side at or above `level`.
+    Inside,
+    /// Only the side below `level`.
+    Outside,
+}
+
+/// Which way a directional `blur` spreads along its `angle`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spread {
+    /// Symmetrically, both ways.
+    Both,
+    /// A one-sided trail toward `angle`.
+    Forward,
+}
+
 /// One op with every field validated and every `$param` substituted.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
@@ -299,6 +326,24 @@ pub enum Op {
         /// Color input step.
         input: String,
     },
+    /// Snaps each channel to a fixed number of levels.
+    Posterize {
+        /// Input step.
+        input: String,
+        /// Levels per channel.
+        steps: u32,
+    },
+    /// Shifts a color's hue and scales its saturation and value.
+    HsvShift {
+        /// Color input step.
+        input: String,
+        /// Hue rotation in degrees.
+        hue: f32,
+        /// Saturation multiplier.
+        saturation: f32,
+        /// Value multiplier.
+        value: f32,
+    },
     /// Displaces the input by another image.
     Warp {
         /// Input step.
@@ -316,6 +361,10 @@ pub enum Op {
         input: String,
         /// Radius in tile units.
         radius: f32,
+        /// Direction in degrees of a line blur; none blurs in all directions.
+        angle: Option<f32>,
+        /// Whether a line blur reaches both ways or trails toward `angle`.
+        spread: Spread,
     },
     /// A tangent-space normal map from a height.
     NormalFromHeight {
@@ -349,6 +398,19 @@ pub enum Op {
         threshold: f32,
         /// Distance, in tile units, that maps to 1.
         max: f32,
+    },
+    /// A line of constant width along a height's iso-contour.
+    Band {
+        /// Gray height input step.
+        input: String,
+        /// Contour value; texels at or above it are inside.
+        level: f32,
+        /// Band width in tile units.
+        width: f32,
+        /// Which side of the contour is lit.
+        side: BandSide,
+        /// Share of the band that falls off, in `[0, 1]`.
+        softness: f32,
     },
     /// Horizon-based occlusion of a height.
     AmbientOcclusion {
@@ -435,6 +497,9 @@ impl Op {
             | Op::Remap { input, .. }
             | Op::Colorize { input, .. }
             | Op::Grayscale { input }
+            | Op::Posterize { input, .. }
+            | Op::HsvShift { input, .. }
+            | Op::Band { input, .. }
             | Op::Blur { input, .. }
             | Op::NormalFromHeight { input, .. }
             | Op::FloodFill { input, .. }
@@ -711,6 +776,29 @@ impl<'a> Reader<'a> {
             self.known.push(field);
             Ok(None)
         }
+    }
+
+    /// An optional finite number as `f32`.
+    pub(crate) fn opt_float(&mut self, field: &'static str) -> Read<Option<f32>> {
+        if self.body.contains_key(field) {
+            self.float(field, None).map(Some)
+        } else {
+            self.known.push(field);
+            Ok(None)
+        }
+    }
+
+    /// A number at or above zero.
+    pub(crate) fn non_negative(&mut self, field: &'static str, default: Option<f64>) -> Read<f32> {
+        let x = self.number(field, default)?;
+        if x < 0.0 {
+            return Err(self.data(
+                field,
+                format!("`{field}` must be at least 0, found {x}"),
+                "use a non-negative value".into(),
+            ));
+        }
+        Ok(x as f32)
     }
 
     /// A color: `#rrggbb` or a color `$param`, linear.
@@ -1084,6 +1172,26 @@ fn build(r: &mut Reader<'_>, op: &str) -> Read<Op> {
             let input = r.step("input");
             Ok(Op::Grayscale { input: input? })
         }
+        "posterize" => {
+            let input = r.step("input");
+            let steps = r.int("steps", None, 2, 256);
+            Ok(Op::Posterize {
+                input: input?,
+                steps: steps?,
+            })
+        }
+        "hsv_shift" => {
+            let input = r.step("input");
+            let hue = r.float("hue", Some(0.0));
+            let saturation = r.non_negative("saturation", Some(1.0));
+            let value = r.non_negative("value", Some(1.0));
+            Ok(Op::HsvShift {
+                input: input?,
+                hue: hue?,
+                saturation: saturation?,
+                value: value?,
+            })
+        }
         "warp" => {
             let input = r.step("input");
             let by = r.step("by");
@@ -1099,9 +1207,21 @@ fn build(r: &mut Reader<'_>, op: &str) -> Read<Op> {
         "blur" => {
             let input = r.step("input");
             let radius = r.ranged("radius", None, 0.0, 1.0);
+            let angle = r.opt_float("angle");
+            let spread = r.word("spread", Some("both"), &["both", "forward"]);
+            let (angle, spread) = (angle?, [Spread::Both, Spread::Forward][spread?]);
+            if spread == Spread::Forward && angle.is_none() {
+                return Err(r.data(
+                    "spread",
+                    "`spread: forward` needs an `angle`".into(),
+                    "add `angle: <degrees>` or use `spread: both`".into(),
+                ));
+            }
             Ok(Op::Blur {
                 input: input?,
                 radius: radius?,
+                angle,
+                spread,
             })
         }
         "normal_from_height" => {
@@ -1137,6 +1257,28 @@ fn build(r: &mut Reader<'_>, op: &str) -> Read<Op> {
                 input: input?,
                 threshold: threshold?,
                 max: max?,
+            })
+        }
+        "band" => {
+            let input = r.step("input");
+            let level = r.ranged("level", Some(0.5), 0.0, 1.0);
+            let width = r.ranged("width", None, 0.0, 0.5);
+            let side = r.word("side", Some("both"), &["both", "inside", "outside"]);
+            let softness = r.ranged("softness", Some(0.5), 0.0, 1.0);
+            let width = width?;
+            if width <= 0.0 {
+                return Err(r.data(
+                    "width",
+                    "`width` must be above 0".into(),
+                    "use a width in (0, 0.5] tile units".into(),
+                ));
+            }
+            Ok(Op::Band {
+                input: input?,
+                level: level?,
+                width,
+                side: [BandSide::Both, BandSide::Inside, BandSide::Outside][side?],
+                softness: softness?,
             })
         }
         "ambient_occlusion" => {
@@ -1184,6 +1326,8 @@ fn noise(r: &mut Reader<'_>) -> Read<Op> {
     let lacunarity = r.int("lacunarity", Some(2), 2, 65536);
     let gain = r.float("gain", Some(0.5));
     let seed = r.int("seed", Some(0), 0, STEP_SEED_MAX);
+    let stretch = r.int("stretch", Some(1), 1, 256);
+    let stretch_axis = r.word("stretch_axis", Some("u"), &["u", "v"]);
     let kind = [NoiseKind::Value, NoiseKind::Gradient, NoiseKind::Cellular][kind?];
     let (mut ret, mut jitter) = (Ok(CellReturn::F1), Ok(1.0));
     if kind == NoiseKind::Cellular {
@@ -1193,17 +1337,19 @@ fn noise(r: &mut Reader<'_>) -> Read<Op> {
         jitter = r.ranged("jitter", Some(1.0), 0.0, 1.0);
     }
     let (scale, octaves, lacunarity) = (scale?, octaves?, lacunarity?);
+    let (stretch, stretch_axis) = (stretch?, [Axis::U, Axis::V][stretch_axis?]);
     let mut finest = u64::from(scale);
     for _ in 1..octaves {
         finest = finest.saturating_mul(u64::from(lacunarity));
     }
+    finest = finest.saturating_mul(u64::from(stretch));
     if finest > 65536 {
         return Err(r.data(
             "octaves",
             format!(
                 "the finest octave would have {finest} lattice cells per tile; the limit is 65536"
             ),
-            "lower `scale`, `lacunarity` or `octaves`".into(),
+            "lower `scale`, `lacunarity`, `octaves` or `stretch`".into(),
         ));
     }
     Ok(Op::Noise(NoiseSpec {
@@ -1215,6 +1361,8 @@ fn noise(r: &mut Reader<'_>) -> Read<Op> {
         seed: seed?,
         ret: ret?,
         jitter: jitter?,
+        stretch,
+        stretch_axis,
     }))
 }
 

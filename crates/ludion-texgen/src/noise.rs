@@ -5,7 +5,7 @@
 
 use crate::hash::{fold32, hash2, mix, unit};
 use crate::image::Image;
-use crate::ops::{CellReturn, NoiseKind, NoiseSpec};
+use crate::ops::{Axis, CellReturn, NoiseKind, NoiseSpec};
 
 /// The eight fixed unit gradients; no trigonometry, so no libm.
 pub(crate) const GRADIENTS: [(f32, f32); 8] = [
@@ -20,7 +20,8 @@ pub(crate) const GRADIENTS: [(f32, f32); 8] = [
 ];
 
 struct Octave {
-    period: u32,
+    /// Lattice cells per tile along `u` and along `v`.
+    period: (u32, u32),
     seed: u32,
     amplitude: f32,
 }
@@ -36,7 +37,11 @@ impl<'a> Sampler<'a> {
     /// Binds `spec` to `step_seed` (already `mix(recipe_seed, op.seed)`).
     pub fn new(spec: &'a NoiseSpec, step_seed: u64) -> Self {
         let mut octaves = Vec::new();
-        let (mut period, mut amplitude, mut total) = (spec.scale, 1.0f32, 0.0f32);
+        let mut period = match spec.stretch_axis {
+            Axis::U => (spec.scale, spec.scale.saturating_mul(spec.stretch)),
+            Axis::V => (spec.scale.saturating_mul(spec.stretch), spec.scale),
+        };
+        let (mut amplitude, mut total) = (1.0f32, 0.0f32);
         for i in 0..spec.octaves {
             octaves.push(Octave {
                 period,
@@ -45,7 +50,10 @@ impl<'a> Sampler<'a> {
             });
             total += amplitude;
             amplitude *= spec.gain;
-            period = period.saturating_mul(spec.lacunarity);
+            period = (
+                period.0.saturating_mul(spec.lacunarity),
+                period.1.saturating_mul(spec.lacunarity),
+            );
         }
         Sampler {
             spec,
@@ -97,11 +105,11 @@ fn wrap(c: i64, period: u32) -> u32 {
 }
 
 fn value(o: &Octave, u: f32, v: f32) -> f32 {
-    let ((cx, fx), (cy, fy)) = (cell(u, o.period), cell(v, o.period));
+    let ((cx, fx), (cy, fy)) = (cell(u, o.period.0), cell(v, o.period.1));
     let corner = |dx: i64, dy: i64| {
         unit(hash2(
-            wrap(cx + dx, o.period),
-            wrap(cy + dy, o.period),
+            wrap(cx + dx, o.period.0),
+            wrap(cy + dy, o.period.1),
             o.seed,
         ))
     };
@@ -112,9 +120,9 @@ fn value(o: &Octave, u: f32, v: f32) -> f32 {
 }
 
 fn gradient(o: &Octave, u: f32, v: f32) -> f32 {
-    let ((cx, fx), (cy, fy)) = (cell(u, o.period), cell(v, o.period));
+    let ((cx, fx), (cy, fy)) = (cell(u, o.period.0), cell(v, o.period.1));
     let corner = |dx: i64, dy: i64| {
-        let h = hash2(wrap(cx + dx, o.period), wrap(cy + dy, o.period), o.seed);
+        let h = hash2(wrap(cx + dx, o.period.0), wrap(cy + dy, o.period.1), o.seed);
         let (gx, gy) = GRADIENTS[(h >> 29) as usize];
         gx * (fx - dx as f32) + gy * (fy - dy as f32)
     };
@@ -126,11 +134,11 @@ fn gradient(o: &Octave, u: f32, v: f32) -> f32 {
 }
 
 fn cellular(spec: &NoiseSpec, o: &Octave, u: f32, v: f32) -> f32 {
-    let ((cx, fx), (cy, fy)) = (cell(u, o.period), cell(v, o.period));
+    let ((cx, fx), (cy, fy)) = (cell(u, o.period.0), cell(v, o.period.1));
     let (mut f1, mut f2) = (f32::MAX, f32::MAX);
     for dy in -1..=1i64 {
         for dx in -1..=1i64 {
-            let (hx, hy) = (wrap(cx + dx, o.period), wrap(cy + dy, o.period));
+            let (hx, hy) = (wrap(cx + dx, o.period.0), wrap(cy + dy, o.period.1));
             let px = 0.5 + spec.jitter * (unit(hash2(hx, hy, o.seed)) - 0.5);
             let py = 0.5 + spec.jitter * (unit(hash2(hx, hy, o.seed ^ 0x9E37_79B9)) - 0.5);
             let (ox, oy) = (dx as f32 + px - fx, dy as f32 + py - fy);
@@ -166,6 +174,8 @@ mod tests {
             seed: 0,
             ret: CellReturn::F1,
             jitter: 1.0,
+            stretch: 1,
+            stretch_axis: Axis::U,
         }
     }
 
@@ -180,6 +190,53 @@ mod tests {
                 .fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
             assert!(lo >= 0.0 && hi <= 1.0, "{kind:?} range {lo}..{hi}");
             assert!(hi - lo > 0.2, "{kind:?} is flat: {lo}..{hi}");
+        }
+    }
+
+    fn mean_steps(image: &Image) -> (f32, f32) {
+        let n = image.size as i64;
+        let (mut along_u, mut along_v) = (0.0, 0.0);
+        for y in 0..n {
+            for x in 0..n {
+                let here = image.texel(x, y)[0];
+                along_u += (image.texel(x + 1, y)[0] - here).abs();
+                along_v += (image.texel(x, y + 1)[0] - here).abs();
+            }
+        }
+        let count = (n * n) as f32;
+        (along_u / count, along_v / count)
+    }
+
+    #[test]
+    fn stretch_lengthens_features_along_its_axis() {
+        for kind in [NoiseKind::Value, NoiseKind::Gradient, NoiseKind::Cellular] {
+            for axis in [Axis::U, Axis::V] {
+                let s = NoiseSpec {
+                    stretch: 8,
+                    stretch_axis: axis,
+                    ..spec(kind)
+                };
+                let (du, dv) = mean_steps(&Sampler::new(&s, 7).render(64));
+                let (along, across) = if axis == Axis::U { (du, dv) } else { (dv, du) };
+                assert!(
+                    along < across / 3.0,
+                    "{kind:?} {axis:?}: along {along} across {across}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unit_stretch_is_the_plain_lattice() {
+        for kind in [NoiseKind::Value, NoiseKind::Gradient, NoiseKind::Cellular] {
+            let plain = Sampler::new(&spec(kind), 3).render(32);
+            for axis in [Axis::U, Axis::V] {
+                let s = NoiseSpec {
+                    stretch_axis: axis,
+                    ..spec(kind)
+                };
+                assert_eq!(Sampler::new(&s, 3).render(32), plain, "{kind:?} {axis:?}");
+            }
         }
     }
 

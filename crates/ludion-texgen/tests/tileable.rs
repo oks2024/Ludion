@@ -139,3 +139,52 @@ fn occlusion_and_curvature_tile() {
         assert_seamless(op, &height(&source, 128));
     }
 }
+
+const FBM: &str = "  h:
+    op: noise
+    type: gradient
+    scale: 3
+    octaves: 4
+";
+
+#[test]
+fn tone_and_filter_ops_tile() {
+    let mut cases: Vec<(String, String)> = vec![(
+        "posterize".into(),
+        format!("{FBM}  n:\n    op: posterize\n    input: h\n    steps: 5\n"),
+    )];
+    for side in ["both", "inside", "outside"] {
+        cases.push((
+            format!("band {side}"),
+            format!("{FBM}  n:\n    op: band\n    input: h\n    width: 0.02\n    side: {side}\n"),
+        ));
+    }
+    cases.push((
+        "hsv_shift".into(),
+        format!(
+            "{FBM}  c:\n    op: colorize\n    input: h\n    stops:\n      - at: 0.0\n        color: \"#204080\"\n      - at: 1.0\n        color: \"#e0c040\"\n  s:\n    op: hsv_shift\n    input: c\n    hue: 90\n    saturation: 1.5\n  n:\n    op: grayscale\n    input: s\n"
+        ),
+    ));
+    for kind in ["value", "gradient", "cellular"] {
+        for axis in ["u", "v"] {
+            cases.push((
+                format!("stretch {kind} {axis}"),
+                format!(
+                    "  n:\n    op: noise\n    type: {kind}\n    scale: 3\n    octaves: 2\n    stretch: 6\n    stretch_axis: {axis}\n"
+                ),
+            ));
+        }
+    }
+    for spread in ["both", "forward"] {
+        cases.push((
+            format!("blur {spread}"),
+            format!(
+                "  c:\n    op: noise\n    type: cellular\n    scale: 5\n  n:\n    op: blur\n    input: c\n    radius: 0.06\n    angle: 37\n    spread: {spread}\n"
+            ),
+        ));
+    }
+    for (label, steps) in cases {
+        let source = recipe(&steps, "  base_color: n\n  roughness: n\n  height: n\n");
+        assert_seamless(&label, &height(&source, 128));
+    }
+}

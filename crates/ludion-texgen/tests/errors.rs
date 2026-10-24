@@ -432,3 +432,39 @@ fn an_input_default_of_the_wrong_kind_is_l1284() {
         ("L1284", Some("/steps/n/default"))
     );
 }
+
+#[test]
+fn forward_blur_without_an_angle_is_data() {
+    let steps = format!(
+        "{}  b:\n    op: blur\n    input: n\n    radius: 0.05\n    spread: forward\n",
+        noise("")
+    );
+    let d = err(&steps, "  base_color: b\n  roughness: b\n  height: b\n");
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1284", Some("/steps/b/spread"))
+    );
+}
+
+#[test]
+fn hsv_shift_needs_a_color_input() {
+    let steps = format!("{}  h:\n    op: hsv_shift\n    input: n\n", noise(""));
+    let d = err(&steps, "  base_color: h\n  roughness: n\n  height: n\n");
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1284", Some("/steps/h/input"))
+    );
+}
+
+#[test]
+fn posterize_needs_two_levels() {
+    let steps = format!(
+        "{}  p:\n    op: posterize\n    input: n\n    steps: 1\n",
+        noise("")
+    );
+    let d = err(&steps, "  base_color: p\n  roughness: p\n  height: p\n");
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1284", Some("/steps/p/steps"))
+    );
+}

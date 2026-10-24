@@ -6,6 +6,7 @@ use ludion_core::par;
 
 use crate::image::Image;
 use crate::noise::GRADIENTS;
+use crate::ops::Spread;
 
 /// Displaces `input` by `by`, in tile units.
 ///
@@ -72,6 +73,44 @@ pub fn blur_px(input: &Image, r: usize) -> Image {
         image = transpose(&box_rows(&transpose(&box_rows(&image, r)), r));
     }
     image
+}
+
+/// A blur along one direction: triangle-weighted taps over `radius` tile units, both ways or a
+/// trail toward `angle` degrees (as [`warp`]'s `angle`). The tile wraps.
+pub fn blur_along(input: &Image, radius: f32, angle: f32, spread: Spread) -> Image {
+    let size = input.size as f32;
+    let n = ((radius * size).ceil() as i64).clamp(1, 64);
+    if radius <= 0.0 {
+        return input.clone();
+    }
+    let radians = angle.to_radians();
+    let (dir_x, dir_y) = (cos(radians), sin(radians));
+    let first = if spread == Spread::Both { -n } else { 0 };
+    let taps: Vec<(f32, f32)> = (first..=n)
+        .map(|k| {
+            let weight = 1.0 - k.abs() as f32 / (n + 1) as f32;
+            (radius * k as f32 / n as f32, weight)
+        })
+        .collect();
+    let total: f32 = taps.iter().map(|(_, w)| w).sum();
+    Image::generate(input.size, input.channels, |x, y, t| {
+        let (u, v) = ((x as f32 + 0.5) / size, (y as f32 + 0.5) / size);
+        let mut tap = [0.0f32; 3];
+        t.fill(0.0);
+        for &(offset, weight) in &taps {
+            input.sample(
+                u - offset * dir_x,
+                v - offset * dir_y,
+                &mut tap[..input.channels],
+            );
+            for (out, value) in t.iter_mut().zip(tap) {
+                *out += weight * value;
+            }
+        }
+        for out in t.iter_mut() {
+            *out /= total;
+        }
+    })
 }
 
 /// A glTF +Y-up tangent-space normal map from a gray height, 3×3 Sobel slopes with wrap.
@@ -160,6 +199,45 @@ mod tests {
         let sum: f32 = out.data.iter().sum();
         assert!((sum - 1.0).abs() < 1e-4, "{sum}");
         assert!(out.texel(15, 15)[0] > 0.0, "energy wraps across the seam");
+    }
+
+    fn dot_at(size: u32, px: u32, py: u32) -> Image {
+        Image::generate(size, 1, |x, y, t| {
+            t[0] = if x == px && y == py { 1.0 } else { 0.0 }
+        })
+    }
+
+    #[test]
+    fn line_blur_spreads_along_its_angle_only() {
+        let image = dot_at(32, 8, 8);
+        let out = blur_along(&image, 3.0 / 32.0, 0.0, Spread::Both);
+        assert!(out.texel(10, 8)[0] > 0.0 && out.texel(6, 8)[0] > 0.0);
+        assert_eq!(out.texel(8, 9)[0], 0.0);
+        assert_eq!(out.texel(8, 7)[0], 0.0);
+        let sum: f32 = out.data.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-4, "{sum}");
+    }
+
+    #[test]
+    fn forward_blur_trails_toward_the_angle_and_wraps() {
+        let image = dot_at(32, 8, 8);
+        let down = blur_along(&image, 4.0 / 32.0, 90.0, Spread::Forward);
+        assert!(down.texel(8, 11)[0] > 0.0);
+        assert_eq!(down.texel(8, 5)[0], 0.0);
+        let sum: f32 = down.data.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-4, "{sum}");
+        let across = blur_along(&dot_at(32, 31, 4), 4.0 / 32.0, 0.0, Spread::Forward);
+        assert!(across.texel(1, 4)[0] > 0.0);
+    }
+
+    #[test]
+    fn line_blur_commutes_with_rolling() {
+        let height = Image::generate(32, 1, |x, y, t| {
+            t[0] = ((x * 7 + y * 13) % 11) as f32 / 11.0;
+        });
+        let a = blur_along(&height, 0.1, 30.0, Spread::Both);
+        let b = blur_along(&roll(&height, 5, 9), 0.1, 30.0, Spread::Both);
+        assert!(max_diff(&roll(&a, 5, 9), &b) < 1e-5);
     }
 
     #[test]

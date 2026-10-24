@@ -7,7 +7,7 @@ use ludion_core::par;
 
 use crate::hash::{fold32, hash2, lowbias32, unit};
 use crate::image::Image;
-use crate::ops::FillOutput;
+use crate::ops::{BandSide, FillOutput};
 
 /// One connected region of inside texels.
 struct Region {
@@ -169,22 +169,69 @@ fn transpose(data: &[f64], n: usize) -> Vec<f64> {
     out
 }
 
-/// Distance in tile units from each texel centre to the nearest texel `>= threshold`, periodic,
-/// divided by `max` and clamped to `[0, 1]`. An input with no such texel is all 1.
-pub fn distance(input: &Image, threshold: f32, max: f32) -> Image {
+/// Squared periodic texel distance to the nearest texel with `target(value)`, indexed
+/// `[x * n + y]`; `FAR` where there is none.
+fn squared_texel_distances(input: &Image, target: impl Fn(f32) -> bool) -> Vec<f64> {
     let n = input.size as usize;
     let mut grid: Vec<f64> = input
         .data
         .iter()
-        .map(|v| if *v >= threshold { 0.0 } else { FAR })
+        .map(|v| if target(*v) { 0.0 } else { FAR })
         .collect();
     edt_rows(&mut grid, n);
     let mut columns = transpose(&grid, n);
     edt_rows(&mut columns, n);
+    columns
+}
+
+/// Distance in tile units from each texel centre to the nearest texel `>= threshold`, periodic,
+/// divided by `max` and clamped to `[0, 1]`. An input with no such texel is all 1.
+pub fn distance(input: &Image, threshold: f32, max: f32) -> Image {
+    let n = input.size as usize;
+    let columns = squared_texel_distances(input, |v| v >= threshold);
     let (size, max) = (n as f64, f64::from(max));
     Image::generate(input.size, 1, |x, y, t| {
         let d2 = columns[x as usize * n + y as usize];
         t[0] = (sqrt(d2) / size / max).clamp(0.0, 1.0) as f32;
+    })
+}
+
+/// A line of constant `width` (tile units) along the `level` contour of a gray height: 1 on the
+/// contour, falling to 0 at the band's edge over the last `softness` share of it.
+///
+/// Texels at or above `level` are inside. A texel's distance is measured to the nearest texel on
+/// the other side, less half a texel since the contour lies between them. `both` lights
+/// `width / 2` each way; `inside` and `outside` light `width` on their own side only. An input
+/// wholly on one side has no contour and gives 0.
+pub fn band(input: &Image, level: f32, width: f32, side: BandSide, softness: f32) -> Image {
+    let n = input.size as usize;
+    let size = n as f64;
+    let to_outside = squared_texel_distances(input, |v| v < level);
+    let to_inside = squared_texel_distances(input, |v| v >= level);
+    let reach = f64::from(match side {
+        BandSide::Both => width / 2.0,
+        BandSide::Inside | BandSide::Outside => width,
+    });
+    let softness = f64::from(softness);
+    Image::generate(input.size, 1, |x, y, t| {
+        let at = x as usize * n + y as usize;
+        let inside = input.data[y as usize * n + x as usize] >= level;
+        if inside && side == BandSide::Outside || !inside && side == BandSide::Inside {
+            return;
+        }
+        let d2 = if inside {
+            to_outside[at]
+        } else {
+            to_inside[at]
+        };
+        let edge = (sqrt(d2) / size - 0.5 / size).max(0.0);
+        t[0] = if softness > 0.0 {
+            ((reach - edge) / (reach * softness)).clamp(0.0, 1.0)
+        } else if edge < reach {
+            1.0
+        } else {
+            0.0
+        } as f32;
     })
 }
 
@@ -290,6 +337,86 @@ mod tests {
                 let got = f64::from(out.texel(x, y)[0]);
                 assert!((got - want).abs() < 1e-6, "({x}, {y}): {got} vs {want}");
             }
+        }
+    }
+
+    fn disc(size: u32) -> Image {
+        let (c, r) = (f64::from(size) / 2.0, f64::from(size) / 4.0);
+        mask(size, move |x, y| {
+            let (dx, dy) = (x as f64 + 0.5 - c, y as f64 + 0.5 - c);
+            dx * dx + dy * dy < r * r
+        })
+    }
+
+    #[test]
+    fn band_lights_a_ring_on_the_contour() {
+        let out = band(&disc(64), 0.5, 4.0 / 64.0, BandSide::Both, 0.5);
+        assert!(out.texel(32 + 16, 32)[0] > 0.9, "{}", out.texel(48, 32)[0]);
+        assert_eq!(out.texel(32, 32)[0], 0.0);
+        assert_eq!(out.texel(32 + 26, 32)[0], 0.0);
+    }
+
+    #[test]
+    fn band_sides_split_at_the_contour() {
+        let m = disc(64);
+        let inside = band(&m, 0.5, 4.0 / 64.0, BandSide::Inside, 0.5);
+        let outside = band(&m, 0.5, 4.0 / 64.0, BandSide::Outside, 0.5);
+        let lit = |image: &Image| {
+            let mut seen = Vec::new();
+            for y in 0..64 {
+                for x in 0..64 {
+                    if image.texel(x, y)[0] > 0.0 {
+                        seen.push(m.texel(x, y)[0] >= 0.5);
+                    }
+                }
+            }
+            seen
+        };
+        let (a, b) = (lit(&inside), lit(&outside));
+        assert!(!a.is_empty() && a.iter().all(|s| *s));
+        assert!(!b.is_empty() && b.iter().all(|s| !*s));
+    }
+
+    #[test]
+    fn band_width_is_in_tile_units() {
+        let run = |size: u32| {
+            let out = band(&disc(size), 0.5, 4.0 / 64.0, BandSide::Both, 0.0);
+            let row = (0..size)
+                .filter(|x| out.texel(i64::from(*x), i64::from(size / 2))[0] > 0.0)
+                .count();
+            row as f32 / size as f32
+        };
+        // Two ring crossings on a row through the centre: the left and right edges of the disc.
+        assert!(
+            (run(64) - run(128)).abs() <= 2.0 / 64.0,
+            "{} {}",
+            run(64),
+            run(128)
+        );
+    }
+
+    #[test]
+    fn band_commutes_with_rolling() {
+        let height = Image::generate(32, 1, |x, y, t| {
+            t[0] = ((x * 7 + y * 13) % 11) as f32 / 11.0;
+        });
+        let rolled = Image::generate(32, 1, |x, y, t| {
+            t.copy_from_slice(height.texel(i64::from(x) - 5, i64::from(y) - 9));
+        });
+        let a = band(&height, 0.5, 0.1, BandSide::Both, 0.5);
+        let b = band(&rolled, 0.5, 0.1, BandSide::Both, 0.5);
+        for y in 0..32 {
+            for x in 0..32 {
+                assert_eq!(a.texel(x, y)[0], b.texel(x + 5, y + 9)[0]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_flat_input_has_no_band() {
+        for v in [0.0, 1.0] {
+            let out = band(&Image::filled(16, 1, v), 0.5, 0.2, BandSide::Both, 0.5);
+            assert!(out.data.iter().all(|v| *v == 0.0));
         }
     }
 

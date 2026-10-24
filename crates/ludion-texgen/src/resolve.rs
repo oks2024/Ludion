@@ -503,7 +503,10 @@ fn infer(
                 need("input", 1, ch(0));
                 if *output == FillOutput::Uv { 3 } else { 1 }
             }
-            Op::Distance { .. } | Op::AmbientOcclusion { .. } | Op::Curvature { .. } => {
+            Op::Distance { .. }
+            | Op::Band { .. }
+            | Op::AmbientOcclusion { .. }
+            | Op::Curvature { .. } => {
                 need("input", 1, ch(0));
                 1
             }
@@ -518,6 +521,7 @@ fn infer(
             | Op::Curve { .. }
             | Op::Clamp { .. }
             | Op::Remap { .. }
+            | Op::Posterize { .. }
             | Op::Warp { .. }
             | Op::Blur { .. } => ch(0),
             Op::Colorize { .. } => {
@@ -527,6 +531,10 @@ fn infer(
             Op::Grayscale { .. } => {
                 need("input", 3, ch(0));
                 1
+            }
+            Op::HsvShift { .. } => {
+                need("input", 3, ch(0));
+                3
             }
             Op::NormalFromHeight { .. } => {
                 need("input", 1, ch(0));

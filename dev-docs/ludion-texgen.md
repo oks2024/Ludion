@@ -19,7 +19,8 @@ user-facing format, ops and validators are `ludion docs texture-recipes` and `lu
 - `src/eval.rs` — `evaluate` (only steps the outputs reach; images drop after their last consumer;
   an observer sees each top-level step) and `compute`, the op → image dispatch.
 - `src/noise.rs`, `adjust.rs`, `filter.rs`, `scatter.rs`, `fill.rs` — the op kernels: noise;
-  blend/levels/curve/colorize; blur/warp/normal/AO/curvature; `tile_sampler`; `flood_fill`/`distance`.
+  blend/levels/curve/colorize/posterize/hsv_shift; blur (and the line blur)/warp/normal/AO/curvature;
+  `tile_sampler`; `flood_fill`/`distance`/`band`.
 - `src/image.rs`, `picture.rs`, `hash.rs` — the `Image` (interleaved `f32`, wrap-around sampling),
   PNG decode for the `image` op, the integer hash the lattices use.
 - `src/encode.rs` — quantize, sRGB-encode base color and emissive, write PNGs (`MapSet`); `to_rgba8`
