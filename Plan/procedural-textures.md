@@ -163,6 +163,7 @@ Wave 0 (the spike) — **Go**, 2026-10-24:
 
 Wave 1 — in progress.
 
+- **Reference materials re-authored.** The four `examples/textures/` recipes are rewritten on `layer`, `std:planks`, `band`, `posterize`, directional `blur` and stretched noise; iterations fell from 10/8/8/6 to 2/4/3/2, rust streaks and end-only plank darkening now exist, and the `## Wave 1 log` records the numbers and the ops still missing.
 - **Layout ops.** `tile_sampler` gains `offset_jitter`, `gap` and per-instance pattern scale and offset jitters; `std:planks` is rebuilt on them (uniform joints in tile units, `bevel`, `stagger_jitter`, `gap: 0` is one board) and `std:cobbles` gains an opt-in `round` profile.
 - **Tone and filter ops.** `posterize`, `band` (a constant-width line along a height's contour), `hsv_shift`, noise `stretch`/`stretch_axis` and a directional `blur` (`angle`, `spread: forward`); every new field defaults to byte-identical output.
 - **The `layer` step.** `op: layer` makes `<step>.<map>` steps from a `base:` and a bottom-to-top `layers:` list (decision 21); each map is bit-identical to the `blend` chain it replaces, and the equivalence test pins that. Sub-recipes reach a map through `output: s.roughness`.
@@ -204,3 +205,32 @@ Missing ops and features:
 `repetition_peak` is a false positive for directional patterns: a long-grain board floor is invariant along the grain, so its autocorrelation has a strong off-centre peak at the row pitch (0.80 on `oak_planks`). It warned and did not fail; the metric now takes the minimum over the image and its u/v residuals, which removes the false positive (0.27 after).
 
 Derived param values (arithmetic) were not needed: no recipe wanted a value computed from another.
+
+## Wave 1 log
+
+The four reference recipes rewritten against the Wave 1 library (`layer`, `std:planks` params, `band`, `posterize`, `hsv_shift`, noise `stretch`, directional `blur`, `texture seeds`), old recipes used only for look and palette. Steps are the evaluated count from `build --json` (layer and sub-recipe steps included); iterations are `build --preview` rounds to the stop; build ms at 512² on the M5, warm.
+
+| material | steps W0 → W1 | recipe lines | iterations W0 → W1 | build ms | `repetition_peak` |
+| --- | --- | --- | --- | --- | --- |
+| `cobble` | 43 → 38 | 283 → 271 | 10 → 2 | 265 → 262 | 0.178 → 0.179 |
+| `oak_planks` | 60 → 45 | 362 → 309 | 8 → 4 | 260 → 183 | 0.273 → 0.197 |
+| `painted_iron` | 44 → 43 | 252 → 261 | 8 → 3 | 215 → 217 | 0.149 → 0.142 |
+| `cobble_painted` | 27 → 26 | 190 → 173 | 6 → 2 | 150 → 152 | 0.102 → 0.090 |
+
+The gain is mostly in iterations and in what the recipe can say, not in step count: a `layer` replaces the blend chains, but it expands to the same one-image steps, so the evaluated count barely moves. Authored recipe steps fell 43 → 37, 60 → 44, 44 → 41, 27 → 25.
+
+- **`cobble`** — `round: 1` with `round_radius: 0.02` gives facet-free stones with no extra `bevel` or shared warp tuning; worn crests, grime and the joint soil are one `layer`. Better than W0: the stones no longer show polygon creases. Ops: `layer`, `hsv_shift`, `std:cobbles` `round`. `std:cobbles` keeps `round_radius` 0.01: 0.02 reads smoother, 0.01 still reads clean, and the default only moves with a better crease metric, which this work did not need.
+- **`oak_planks`** — `std:planks` (one column, `stagger_jitter: 1`) replaces the hand-built boards; `noise` `stretch` makes the fibres; end darkening is a `blur` along the boards, so it darkens board ends and joints and no longer the long edges. Better than W0: long-edge darkening gone, random end joints, stronger per-board tint. The seed moved 4 → 5 through `texture seeds` (seed 4 broke `seam_height`). Ops: `layer`, `stretch`, directional `blur`, `hsv_shift`, `std:planks`.
+- **`painted_iron`** — chips, rust and grime are one `layer`; rust now runs in streaks below the chips (a forward `blur` at 90° masked by a stretched noise). Better than W0: streaks, which W0 skipped. A sharper chip mask feeds the metallic layer, since a blurred one breached `metallic_ambiguous`. Ops: `layer`, directional `blur` (`spread: forward`), `stretch`.
+- **`cobble_painted`** — value bands are `posterize`, the rim highlight and the ink outline are `band`, painted result is one `layer`. Same look as W0 with fewer hand-tuned curves. Ops: `posterize`, `band`, `layer`.
+
+Missing ops and features still open:
+
+| op / feature | needed by | workaround | cost |
+| --- | --- | --- | --- |
+| `layer` blend modes (`overlay`, `screen`, `add`) | `cobble`, `oak_planks` | a `hsv_shift` colour as the layer value, mixed | S |
+| `blend` with a literal colour in `a` | all four | a `constant` step | S |
+| Stone/board id exposed to a sub-recipe's masks without one `recipe` step per output | `cobble`, `oak_planks` | one `recipe` step per output (three per material) | M |
+| Diagonal fibres | `oak_planks` | `warp` a stretched noise (not needed here) | S |
+
+Derived param values (arithmetic) were not needed again.

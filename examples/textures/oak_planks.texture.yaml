@@ -3,38 +3,37 @@
 # Check:  ludion texture check examples/textures/oak_planks.texture.yaml
 format: 1
 kind: texture
-seed: 4
+seed: 5
 steps:
-  rows:
-    op: tile_sampler
-    columns: 1
-    rows: 6
-    shape: box
-    scale: 1.0
-    value_jitter: 1.0
-    seed: 8
-  raw_boards:
-    op: tile_sampler
-    columns: 1
-    rows: 6
-    shape: box
-    scale: 0.97
   boards:
-    op: warp
-    input: raw_boards
-    by: rows
-    amount: 0.9
-    angle: 0
+    op: recipe
+    path: std:planks
+    output: boards
+    params:
+      columns: 1
+      rows: 6
+      gap: 0.008
+      bevel: 0.012
+      stagger: 0
+      stagger_jitter: 1
   board_id:
-    op: flood_fill
-    input: boards
-    threshold: 0.5
-    output: random
-  face:
+    op: recipe
+    path: std:planks
+    output: board_id
+    params:
+      columns: 1
+      rows: 6
+      gap: 0.008
+      bevel: 0.012
+      stagger: 0
+      stagger_jitter: 1
+  joints:
     op: levels
     input: boards
     in_low: 0.0
     in_high: 0.001
+    out_low: 1.0
+    out_high: 0.0
   sway:
     op: noise
     type: gradient
@@ -98,26 +97,17 @@ steps:
     by: board_id
     amount: 0.9
     angle: 90
-  fibre_lines:
-    op: gradient
-    axis: v
-    shape: triangle
-    repeat: 190
-  fibre_wander:
+  fibre_noise:
     op: noise
-    type: gradient
-    scale: 40
+    type: value
+    scale: 6
     octaves: 2
+    stretch: 24
+    stretch_axis: u
     seed: 2
-  fibres_wavy:
-    op: warp
-    input: fibre_lines
-    by: fibre_wander
-    amount: 0.01
-    angle: 90
   fibres_knotted:
     op: warp
-    input: fibres_wavy
+    input: fibre_noise
     by: knot_bend
     amount: 0.06
     angle: 90
@@ -182,11 +172,11 @@ steps:
     input: board_id
     stops:
       - at: 0.0
-        color: "#4e331c"
+        color: "#3a2412"
       - at: 0.5
         color: "#9a6e40"
       - at: 1.0
-        color: "#d0a870"
+        color: "#e2bc84"
   wood:
     op: colorize
     input: grain
@@ -203,52 +193,24 @@ steps:
     b: board_tone
     mode: overlay
     opacity: 0.9
-  dark:
-    op: constant
-    value: "#2c1b0d"
-  streaked:
-    op: blend
-    a: tinted
-    b: dark
-    mask: streaks
-    opacity: 0.55
-  knotted:
-    op: blend
-    a: streaked
-    b: dark
-    mask: knot_dark
-    opacity: 0.8
-  gap_color:
-    op: constant
-    value: "#3b2a1a"
-  softface:
+  bright_wood:
+    op: hsv_shift
+    input: wood
+    saturation: 0.85
+    value: 1.3
+  joint_soft:
     op: blur
-    input: face
+    input: joints
     radius: 0.003
-  colored:
-    op: blend
-    a: gap_color
-    b: knotted
-    mask: softface
-  gap_distance:
+  end_blur:
+    op: blur
+    input: joints
+    radius: 0.04
+    angle: 0
+  end_zone:
     op: levels
-    input: face
-    in_low: 0.0
-    in_high: 1.0
-    out_low: 1.0
-    out_high: 0.0
-  edge_dist:
-    op: distance
-    input: gap_distance
-    threshold: 0.5
-    max: 0.07
-  ends:
-    op: levels
-    input: edge_dist
-    in_low: 0.0
-    in_high: 0.8
-    out_low: 1.0
-    out_high: 0.0
+    input: end_blur
+    in_high: 0.15
   end_noise:
     op: noise
     type: gradient
@@ -257,23 +219,13 @@ steps:
     seed: 13
   end_wear:
     op: blend
-    a: ends
+    a: end_zone
     b: end_noise
     mode: multiply
     opacity: 0.6
-  darkened:
-    op: blend
-    a: colored
-    b: dark
-    mask: end_wear
-    opacity: 0.5
-  bevel:
-    op: blur
-    input: face
-    radius: 0.006
   fibre_relief:
     op: blend
-    a: bevel
+    a: boards
     b: fibres
     mode: add
     opacity: 0.03
@@ -293,13 +245,6 @@ steps:
     params:
       amount: 0.6
       radius: 0.008
-  worn:
-    op: blend
-    a: darkened
-    b: wood
-    mode: screen
-    mask: wear
-    opacity: 0.2
   grime:
     op: recipe
     path: std:cavity_grime
@@ -310,15 +255,6 @@ steps:
     params:
       amount: 0.9
       radius: 0.02
-  dirt:
-    op: constant
-    value: "#2a1b0e"
-  base:
-    op: blend
-    a: worn
-    b: dirt
-    mask: grime
-    opacity: 0.55
   rough_grain:
     op: levels
     input: fibres
@@ -330,21 +266,32 @@ steps:
     b: patchy
     mode: add
     opacity: 0.25
-  rough_ends:
-    op: blend
-    a: rough_along
-    b: end_wear
-    mode: add
-    opacity: 0.2
-  rough_dirty:
-    op: blend
-    a: rough_ends
-    b: grime
-    mode: add
-    opacity: 0.25
-  rough:
-    op: clamp
-    input: rough_dirty
+  surface:
+    op: layer
+    base:
+      base_color: tinted
+      roughness: rough_along
+    layers:
+      - mask: streaks
+        opacity: 0.55
+        base_color: "#2c1b0d"
+      - mask: knot_dark
+        opacity: 0.8
+        base_color: "#2c1b0d"
+      - mask: end_wear
+        opacity: 0.5
+        base_color: "#2c1b0d"
+        roughness: 0.9
+      - mask: wear
+        opacity: 0.2
+        base_color: bright_wood
+      - mask: grime
+        opacity: 0.55
+        base_color: "#2a1b0e"
+        roughness: 0.9
+      - mask: joint_soft
+        base_color: "#3b2a1a"
+        roughness: 0.95
   shaded:
     op: ambient_occlusion
     input: relief
@@ -355,8 +302,8 @@ steps:
     input: relief
     depth: 0.05
 outputs:
-  base_color: base
-  roughness: rough
+  base_color: surface.base_color
+  roughness: surface.roughness
   normal: bumps
   occlusion: shaded
   height: relief

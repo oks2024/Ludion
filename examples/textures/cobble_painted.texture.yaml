@@ -59,26 +59,14 @@ steps:
     input: layout
     radius: 0.01
   bands:
-    op: curve
+    op: posterize
     input: soft_layout
-    points:
-      - x: 0.0
-        y: 0.0
-      - x: 0.3
-        y: 0.0
-      - x: 0.32
-        y: 0.45
-      - x: 0.6
-        y: 0.45
-      - x: 0.62
-        y: 1.0
-      - x: 1.0
-        y: 1.0
+    steps: 4
   band_tone:
     op: levels
     input: bands
-    out_low: 0.3
-    out_high: 0.62
+    out_low: 0.2
+    out_high: 0.55
   stone_flat:
     op: colorize
     input: stone_id
@@ -110,21 +98,12 @@ steps:
     mode: overlay
     opacity: 0.9
   rim:
-    op: curve
+    op: band
     input: soft_layout
-    points:
-      - x: 0.0
-        y: 0.0
-      - x: 0.3
-        y: 0.0
-      - x: 0.38
-        y: 1.0
-      - x: 0.48
-        y: 1.0
-      - x: 0.56
-        y: 0.0
-      - x: 1.0
-        y: 0.0
+    level: 0.4
+    width: 0.03
+    side: inside
+    softness: 0.4
   rim_noise:
     op: noise
     type: value
@@ -137,28 +116,18 @@ steps:
     b: rim_noise
     mode: multiply
     opacity: 0.7
-  wear_flat:
+  outline:
+    op: band
+    input: soft_layout
+    level: 0.1
+    width: 0.03
+    side: both
+    softness: 0.3
+  joint:
     op: levels
-    input: rim_broken
-    in_low: 0.35
-    in_high: 0.42
-  light:
-    op: constant
-    value: "#f2e6c8"
-  painted:
-    op: blend
-    a: banded
-    b: light
-    mask: wear_flat
-    opacity: 0.8
-  ink:
-    op: constant
-    value: "#241a2e"
-  inked:
-    op: blend
-    a: ink
-    b: painted
-    mask: mask
+    input: mask
+    out_low: 1.0
+    out_high: 0.0
   rough_base:
     op: constant
     value: 0.82
@@ -168,6 +137,20 @@ steps:
     b: drift
     mode: add
     opacity: 0.08
+  painted:
+    op: layer
+    base:
+      base_color: banded
+      roughness: rough_var
+    layers:
+      - mask: rim_broken
+        opacity: 0.8
+        base_color: "#f2e6c8"
+      - mask: outline
+        base_color: "#241a2e"
+      - mask: joint
+        base_color: "#241a2e"
+        roughness: 0.9
   coarse_relief:
     op: blur
     input: layout
@@ -183,8 +166,8 @@ steps:
     depth: 0.04
     strength: 0.6
 outputs:
-  base_color: inked
-  roughness: rough_var
+  base_color: painted.base_color
+  roughness: painted.roughness
   normal: bumps
   occlusion: shaded
   height: coarse_relief

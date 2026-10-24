@@ -156,7 +156,7 @@ steps:
     scale: 6
     octaves: 4
     seed: 8
-  paint_varied:
+  paint:
     op: blend
     a: paint_color
     b: paint_fade
@@ -175,35 +175,43 @@ steps:
         color: "#6b3118"
       - at: 1.0
         color: "#8f4a22"
-  metal_layer:
+  rust_final:
     op: blend
-    a: steel
-    b: rust_tone
-    mask: rust_mask
-  with_chips:
-    op: blend
-    a: paint_varied
-    b: metal_layer
-    mask: chips
-  dirt:
-    op: constant
-    value: "#14110d"
-  base:
-    op: blend
-    a: with_chips
-    b: dirt
-    mask: grime
-    opacity: 0.65
-  metal_chips:
-    op: blend
-    a: chips0
-    b: rust_final
-    mode: subtract
-  metallic:
+    a: rust_mask
+    b: chips0
+    mode: multiply
+  streak_trail:
+    op: blur
+    input: chips
+    radius: 0.14
+    angle: 90
+    spread: forward
+  streak_fibre:
+    op: noise
+    type: value
+    scale: 3
+    octaves: 2
+    stretch: 20
+    stretch_axis: v
+    seed: 12
+  streak_shape:
     op: levels
-    input: metal_chips
-    in_low: 0.0
-    in_high: 1.0
+    input: streak_trail
+    in_low: 0.05
+    in_high: 0.4
+  streak_noise:
+    op: levels
+    input: streak_fibre
+    in_low: 0.3
+    in_high: 0.6
+  streak_mask:
+    op: blend
+    a: streak_shape
+    b: streak_noise
+    mode: multiply
+  stain:
+    op: constant
+    value: "#6b3a1c"
   rough_base:
     op: constant
     value: 0.42
@@ -213,27 +221,28 @@ steps:
     b: paint_fade
     mode: add
     opacity: 0.16
-  rough_metal:
-    op: constant
-    value: 0.32
-  rough_rust:
-    op: constant
-    value: 0.88
-  rust_final:
-    op: blend
-    a: rust_mask
-    b: chips
-    mode: multiply
-  rough_chip:
-    op: blend
-    a: rough_paint
-    b: rough_metal
-    mask: chips
-  rough:
-    op: blend
-    a: rough_chip
-    b: rough_rust
-    mask: rust_final
+  surface:
+    op: layer
+    base:
+      base_color: paint
+      roughness: rough_paint
+      metallic: 0
+    layers:
+      - mask: streak_mask
+        opacity: 0.5
+        base_color: stain
+        roughness: 0.7
+      - mask: chips0
+        base_color: steel
+        roughness: 0.32
+        metallic: 1
+      - mask: rust_final
+        base_color: rust_tone
+        roughness: 0.88
+        metallic: 0
+      - mask: grime
+        opacity: 0.65
+        base_color: "#14110d"
   shaded:
     op: ambient_occlusion
     input: relief
@@ -244,9 +253,9 @@ steps:
     input: relief
     depth: 0.05
 outputs:
-  base_color: base
-  roughness: rough
-  metallic: metallic
+  base_color: surface.base_color
+  roughness: surface.roughness
+  metallic: surface.metallic
   normal: bumps
   occlusion: shaded
   height: relief
