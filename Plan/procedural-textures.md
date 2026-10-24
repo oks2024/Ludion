@@ -1,6 +1,6 @@
 # Plan: Procedural textures — a text recipe that produces a PBR map set
 
-> **Status:** Wave 0 (the spike) passed its verdict, Go, 2026-10-24; Wave 1 (the op library) mechanized 2026-10-24; what follows waits on the user's next design round. Decided 2026-10-23. Later waves are recorded with
+> **Status:** Wave 0 (the spike) passed its verdict, Go, 2026-10-24; Wave 1 (the op library) mechanized 2026-10-24. Wave 1 is this plan's last wave: it closes when the owed M4 speed measurement passes. Adoption by a consumer is planned separately (decided 2026-10-24); library additions it needs are listed under `## Ops added for consumers`. Decided 2026-10-23. Later waves are recorded with
 > triggers.
 
 ## Why
@@ -168,6 +168,11 @@ Wave 1 (the op library) — mechanized 2026-10-24; the pinned-M4 speed measureme
 - **Tone and filter ops.** `posterize`, `band` (a constant-width line along a height's contour), `hsv_shift`, noise `stretch`/`stretch_axis` and a directional `blur` (`angle`, `spread: forward`); every new field defaults to byte-identical output.
 - **The `layer` step.** `op: layer` makes `<step>.<map>` steps from a `base:` and a bottom-to-top `layers:` list (decision 21); each map is bit-identical to the `blend` chain it replaces, and the equivalence test pins that. Sub-recipes reach a map through `output: s.roughness`.
 - **Seeds and validators.** `ludion texture seeds` (validators per seed, first clean seed, report-only) and `build --seed` (needs `--out`); `repetition_peak` takes the minimum over the image and its u/v residuals, so directional patterns no longer read as grids (`oak_planks` 0.80 → 0.27).
+
+## Ops added for consumers
+
+Ops and stdlib macros added after Wave 1 for a consumer's adoption, one line each: the op, what it
+makes, the material that needed it. None yet.
 
 ## Spike log (W0)
 

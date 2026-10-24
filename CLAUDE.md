@@ -18,8 +18,8 @@ The name: a *ludion* is a Cartesian diver — a sealed figure that responds inst
 - `Plan/sprite-engine.md` — W1–W4 mechanized; close rides the external game's git-dependency switch and the human verdicts.
 - `Plan/projectile-patterns.md` — W1–W4 mechanized (`kind: pattern`, `Volley`, `PatternPlayer`, vigil's ranged fire as volleys); exit rides the shmup's first boss pattern and the sittings.
 - `Plan/particles-engine-and-editor.md` — W1–W4 shipped; sittings owed.
-- `Plan/physics.md` — W1–W4 mechanized (`ludion-physics` over pinned rapier3d); cross-arch verified on the M4 — nothing owed.
-- `Plan/physics-collision-layers.md` — W1–W2 mechanized (`physics.layers` collision groups); W3 closed as not needed; the M4 trace half verified — nothing owed.
+- `Plan/physics.md`, `Plan/physics-collision-layers.md` — mechanized (`ludion-physics` over pinned rapier3d, `physics.layers`); M4-verified, nothing owed.
+- `Plan/procedural-textures.md` — W0–W1 mechanized (`kind: texture`, `ludion-texgen`, `ludion texture`); M4 speed owed.
 - `Plan/ios-target.md` — D1–D5, M1, M2 done (`ludion export`, vigil running in the iOS simulator); M3–M5 (device) wait on the user's word.
 - `Plan/mesh-modeling.md` — W1–W3 mechanized (`kind: sculpt`, `ludion-sculpt`); **paused** (resume on the user's word; nothing in vigil waits on it).
 - `Plan/asset-pipeline-blender.md` — phase 1 verdict 2026-10-02: Blender for the environment, characters stay voxel; kits in `games/vigil/art/town`, the loop in a private playbook.
