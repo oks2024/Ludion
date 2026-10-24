@@ -224,6 +224,8 @@ The gain is mostly in iterations and in what the recipe can say, not in step cou
 - **`painted_iron`** — chips, rust and grime are one `layer`; rust now runs in streaks below the chips (a forward `blur` at 90° masked by a stretched noise). Better than W0: streaks, which W0 skipped. A sharper chip mask feeds the metallic layer, since a blurred one breached `metallic_ambiguous`. Ops: `layer`, directional `blur` (`spread: forward`), `stretch`.
 - **`cobble_painted`** — value bands are `posterize`, the rim highlight and the ink outline are `band`, painted result is one `layer`. Same look as W0 with fewer hand-tuned curves. Ops: `posterize`, `band`, `layer`.
 
+- The reference game's kit-piece wood: vendored (56 steps) → referenced `std:planks` (29 steps); iterations 3 → 3, base mean 0.072 → 0.080.
+
 Missing ops and features still open:
 
 | op / feature | needed by | workaround | cost |
