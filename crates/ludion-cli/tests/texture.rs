@@ -228,6 +228,15 @@ fn needs_gpu_preview_renders_the_three_shapes() {
     assert!(w > 0 && h > 0);
     let first = &rgba[..4];
     assert!(rgba.chunks(4).any(|p| p != first), "preview.png is uniform");
+    // The sky is a vertical gradient, so each row is measured against its own left edge.
+    let row = w as usize * 4;
+    let differs = |p: &[u8], sky: &[u8]| p.iter().zip(sky).any(|(a, b)| a.abs_diff(*b) > 12);
+    let covered = rgba
+        .chunks(row)
+        .map(|r| r.chunks(4).filter(|p| differs(p, &r[..4])).count())
+        .sum::<usize>() as f64
+        / (w * h) as f64;
+    assert!(covered >= 0.3, "the shapes cover {covered:.2} of the frame");
 }
 
 #[test]

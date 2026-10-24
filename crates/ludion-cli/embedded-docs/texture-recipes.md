@@ -15,10 +15,19 @@ maps to a mesh is `ludion docs materials`.
    prints the validator lines. `--json` prints one report (`steps` timings, per-map `maps` min/mean/max,
    `validators`, `written`). `--out <dir>` redirects; `--rules <toml>` sets validator bounds.
 3. Read the diagnostics and validators, correct the recipe, rebuild.
-4. Commit the recipe **and** the `<name>/` set. `ludion texture check <file>` rebuilds at the size in
+4. To judge the material without a human, add `--preview`: it writes a feedback folder,
+   `<recipe dir>/.ludion/texture/<stem>/` (ignored by both VCSs; `--preview-out <dir>` moves it,
+   `--no-render` skips the GPU render). Read it in this order:
+   `maps.png` (every map in one sheet), `steps.png` (a thumbnail per named step, to find the step
+   that went wrong), `tiling_base_color.png` and `tiling_height.png` (2×2 tiling, where seams and
+   repetition show) and `preview.png` (a sphere, a rounded cube and a panel wearing the built set
+   under the procedural sky and a key light, full quality). With no GPU adapter the render is
+   skipped, not failed. `--json` gains a `feedback` object: the artifact paths, `preview_skipped`
+   with the reason when there is no `preview.png`, and `ms` timings.
+5. Commit the recipe **and** the `<name>/` set. `ludion texture check <file>` rebuilds at the size in
    `generated.json` and byte-compares the committed set (`L1286` per differing, missing or stray file);
    it writes nothing, so it is the drift gate.
-5. To customize an embedded macro: `ludion texture vendor std:cobbles [dest]` copies it out (never
+6. To customize an embedded macro: `ludion texture vendor std:cobbles [dest]` copies it out (never
    overwrites); reference the copy by path.
 
 ## Format
@@ -102,6 +111,8 @@ way, and an `error` makes the exit code non-zero.
 | `height_range` | height max − min | min 0.05 | warn |
 | `seam_base_color` | wrap-edge difference ÷ interior neighbour difference of base color | max 1.5 | warn |
 | `seam_height` | same, of height | max 1.5 | warn |
+| `repetition_peak` | largest off-centre local maximum of the base color luminance autocorrelation at 64² (how strongly it reads as a grid) | max 0.6 | warn |
+| `repetition_lowfreq` | variance share of the 4×4 block means of base color (low-frequency energy) | max 0.5 | warn |
 
 A rules TOML (`--rules`) overrides `min`, `max` and `level` field by field: top-level tables for the
 project, `[textures."<recipe file>"]` for one recipe.

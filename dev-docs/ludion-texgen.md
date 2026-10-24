@@ -22,10 +22,13 @@ user-facing format, ops and validators are `ludion docs texture-recipes` and `lu
   blend/levels/curve/colorize; blur/warp/normal/AO/curvature; `tile_sampler`; `flood_fill`/`distance`.
 - `src/image.rs`, `picture.rs`, `hash.rs` — the `Image` (interleaved `f32`, wrap-around sampling),
   PNG decode for the `image` op, the integer hash the lattices use.
-- `src/encode.rs` — quantize, sRGB-encode base color and emissive, write PNGs (`MapSet`).
-- `src/validate.rs` — `measure` over the f32 maps and the default bounds (`NAMES`, `default_rule`).
+- `src/encode.rs` — quantize, sRGB-encode base color and emissive, write PNGs (`MapSet`); `to_rgba8`
+  is the quantizer the CLI's sheets reuse. `Image::downsample` (`image.rs`) makes the step thumbnails.
+- `src/validate.rs` — `measure` over the f32 maps and the default bounds (the 9 `NAMES`, `default_rule`).
 - `src/stdlib.rs` + `std/*.texture.yaml` — the embedded `std:` recipes; each header comment lists
   its inputs, params and outputs.
+- Outside the crate: `ludion-cli`'s `texture_feedback.rs` (sheets, thumbnails, tiling views) and
+  `texture_preview.rs` (the lit preview: a generated scene rendered in place).
 - `tests/` — `determinism.rs` (pinned hashes), `tileable.rs` (seam measures), `errors.rs`
   (one case per error class), `stdlib.rs` (every macro builds standalone).
 

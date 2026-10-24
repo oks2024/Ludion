@@ -1,9 +1,10 @@
 //! The rendered preview `ludion texture build --preview` writes: a sphere, a rounded cube and a
-//! panel wearing the built map set, lit by a day sky and one key light, rendered as one merged model.
+//! panel wearing the built map set, lit by a day sky and one key light.
 //!
-//! The three shapes are merged into one `preview.mesh.yaml` in the feedback folder that references
-//! the maps by relative path, so the preview exercises the same loader a game does. One document
-//! renders in place; a lineup would stage copies of the mesh without its textures.
+//! A generated scene rendered in place, not a model sheet: the sheet fits the model's bounding
+//! sphere and always adds a ground plane, which leaves a wide row covering a third of the frame.
+//! The scene resolves each shape's mesh next to itself, so the three `*.mesh.yaml` files reference
+//! the maps by relative path and load through the same path a game's do.
 
 use std::f64::consts::PI;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use std::path::{Path, PathBuf};
 use ludion_core::atomic::write_atomic;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::f64::{cos, sin};
-use ludion_engine::{ModelSheetRequest, ModelView};
+use ludion_engine::{DebugCategories, FrameSize, QualitySetting, RenderScale};
 use ludion_scene::{MeshDocument, MeshTextures, TextureRef, emit_mesh};
 
 const WIDTH: u32 = 1536;
@@ -20,8 +21,9 @@ const SPHERE_SEGMENTS: (usize, usize) = (48, 24);
 const CUBE_GRID: usize = 12;
 const CUBE_BEVEL: f64 = 0.15;
 
-/// A day sky and one key light from up-left of the iso camera.
-const RIG: &str = "\
+/// A day sky over a neutral ground, one key light, and a fixed three-quarter camera that frames
+/// the row of shapes: sphere, rounded cube (turned so two faces read) and a panel facing the camera.
+const SCENE: &str = "\
 format: 1
 entities:
   - name: environment
@@ -35,6 +37,10 @@ entities:
           - 0.7
           - 0.8
           - 0.9
+        sky_ground:
+          - 0.18
+          - 0.18
+          - 0.2
         ibl_intensity: 1.0
   - name: key
     components:
@@ -53,6 +59,93 @@ entities:
           - 0.96
           - 0.9
         intensity: 2.5
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.1
+          - 2.0
+          - 3.65
+        rotation:
+          - -22.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 30.0
+        near: 0.1
+        far: 100.0
+  - name: sphere
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 0.6
+          - 0.0
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape:
+          asset: sphere.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 1.0
+        emissive: EMISSIVE
+  - name: rounded-cube
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.6
+          - 0.0
+        rotation:
+          - 0.0
+          - 30.0
+          - 0.0
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape:
+          asset: rounded_cube.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 1.0
+        emissive: EMISSIVE
+  - name: panel
+    components:
+      Transform:
+        translation:
+          - 1.65
+          - 0.0
+          - 0.0
+        scale:
+          - 0.7
+          - 0.7
+          - 0.7
+      Mesh:
+        shape:
+          asset: panel.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 1.0
+        metallic: 1.0
+        emissive: EMISSIVE
 ";
 
 /// What the preview needs to know about the built map set.
@@ -117,26 +210,6 @@ impl Geometry {
         } else {
             self.indices.extend([a, b, c]);
         }
-    }
-
-    /// Moves every vertex by `by`.
-    fn translated(mut self, by: [f64; 3]) -> Geometry {
-        for p in self.positions.chunks_mut(3) {
-            for (c, d) in p.iter_mut().zip(by) {
-                *c += d;
-            }
-        }
-        self
-    }
-
-    /// Appends `other`, offsetting its indices past this geometry's vertices.
-    fn append(&mut self, other: Geometry) {
-        let offset = (self.positions.len() / 3) as u32;
-        self.positions.extend(other.positions);
-        self.normals.extend(other.normals);
-        self.uvs.extend(other.uvs);
-        self.indices
-            .extend(other.indices.iter().map(|i| i + offset));
     }
 
     fn quad(&mut self, a: u32, b: u32, c: u32, d: u32) {
@@ -240,8 +313,7 @@ pub enum Outcome {
     NoAdapter(String),
 }
 
-/// Writes `preview.mesh.yaml` (sphere, rounded cube and panel side by side on y = 0) and the rig
-/// into `dir` and renders `preview.png` there.
+/// Writes the three shape meshes and `preview.yaml` into `dir` and renders `preview.png` there.
 ///
 /// `recipe` is the recipe path relative to `dir`; `refs` spell the maps relative to `dir`.
 ///
@@ -254,22 +326,30 @@ pub fn render(dir: &Path, recipe: &str, refs: &MapRefs) -> Result<Outcome, Vec<D
             format!("could not write `{}`: {e}", what.display()),
         )]
     };
-    let mut shapes = sphere().translated([-1.4, 0.5, 0.0]);
-    shapes.append(rounded_cube().translated([0.0, 0.5, 0.0]));
-    shapes.append(panel().translated([1.6, 0.0, 0.0]));
-    let model = dir.join("preview.mesh.yaml");
-    let text = emit_mesh(&document("preview", shapes, refs, recipe));
-    write_atomic(&model, text.as_bytes()).map_err(|e| io(&model, &e))?;
-    let rig = dir.join("rig.yaml");
-    write_atomic(&rig, RIG.as_bytes()).map_err(|e| io(&rig, &e))?;
+    for (name, geometry) in [
+        ("sphere", sphere()),
+        ("rounded_cube", rounded_cube()),
+        ("panel", panel()),
+    ] {
+        let path = dir.join(format!("{name}.mesh.yaml"));
+        let text = emit_mesh(&document(name, geometry, refs, recipe));
+        write_atomic(&path, text.as_bytes()).map_err(|e| io(&path, &e))?;
+    }
+    let scene = dir.join("preview.yaml");
+    write_atomic(&scene, scene_text(refs).as_bytes()).map_err(|e| io(&scene, &e))?;
 
-    let models = [model.as_path()];
-    let sheet = ludion_engine::render_model_sheet(&ModelSheetRequest {
-        views: &[ModelView::Iso],
-        rig: Some(&rig),
-        ..ModelSheetRequest::new(&models, WIDTH, HEIGHT)
-    });
-    match sheet {
+    let rendered = ludion_engine::render_scene_with_registry(
+        &crate::check_scene::builtin_registry(),
+        &scene,
+        FrameSize::scaled(WIDTH, HEIGHT, RenderScale::NATIVE),
+        &QualitySetting::default(),
+        false,
+        &[],
+        0,
+        &DebugCategories::default(),
+        None,
+    );
+    match rendered {
         Ok(outcome) => {
             let out = dir.join("preview.png");
             outcome.image.write_png(&out).map_err(|d| vec![d])?;
@@ -280,6 +360,15 @@ pub fn render(dir: &Path, recipe: &str, refs: &MapRefs) -> Result<Outcome, Vec<D
         }
         Err(diagnostics) => Err(diagnostics),
     }
+}
+
+fn scene_text(refs: &MapRefs) -> String {
+    let emissive = if refs.emissive.is_some() {
+        "1.0"
+    } else {
+        "0.0"
+    };
+    SCENE.replace("EMISSIVE", emissive)
 }
 
 #[cfg(test)]
