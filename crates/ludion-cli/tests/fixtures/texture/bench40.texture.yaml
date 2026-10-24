@@ -1,0 +1,228 @@
+# A ~40-step recipe the speed fixture builds: both layouts, the std macros, two ambient
+# occlusions, a tile sampler, a warp and blurs. Not a material to look at.
+format: 1
+kind: texture
+seed: 40
+steps:
+  cob_h:
+    op: recipe
+    path: std:cobbles
+    output: height
+  cob_id:
+    op: recipe
+    path: std:cobbles
+    output: stone_id
+  plk_h:
+    op: recipe
+    path: std:planks
+    output: height
+  plk_id:
+    op: recipe
+    path: std:planks
+    output: board_id
+  zone:
+    op: noise
+    type: cellular
+    scale: 3
+  zone_soft:
+    op: blur
+    input: zone
+    radius: 0.02
+  height_mix:
+    op: blend
+    a: cob_h
+    b: plk_h
+    mode: mix
+    opacity: 0.5
+  grain:
+    op: noise
+    type: gradient
+    scale: 32
+    octaves: 4
+  grain2:
+    op: noise
+    type: gradient
+    scale: 9
+    octaves: 3
+  warp_by:
+    op: noise
+    type: gradient
+    scale: 5
+    octaves: 2
+  warped:
+    op: warp
+    input: height_mix
+    by: warp_by
+    amount: 0.04
+  relief:
+    op: blend
+    a: warped
+    b: grain
+    mode: add
+    opacity: 0.08
+  relief_soft:
+    op: blur
+    input: relief
+    radius: 0.004
+  ao_big:
+    op: ambient_occlusion
+    input: relief_soft
+    radius: 0.08
+  ao_fine:
+    op: ambient_occlusion
+    input: relief
+    radius: 0.02
+  ao:
+    op: blend
+    a: ao_big
+    b: ao_fine
+    mode: multiply
+    opacity: 1.0
+  wear:
+    op: recipe
+    path: std:edge_wear
+    output: mask
+    inputs:
+      height: relief_soft
+  grime:
+    op: recipe
+    path: std:cavity_grime
+    output: mask
+    inputs:
+      height: relief_soft
+  rust:
+    op: recipe
+    path: std:rust_spots
+    output: mask
+  chips:
+    op: tile_sampler
+    columns: 12
+    rows: 12
+    shape: disc
+    scale: 0.5
+    scale_jitter: 0.6
+    position_jitter: 0.8
+    rotation_jitter: 0.5
+    value_jitter: 0.7
+    density: 0.6
+  chips_soft:
+    op: blur
+    input: chips
+    radius: 0.003
+  stones_tone:
+    op: colorize
+    input: cob_id
+    stops:
+      - at: 0.0
+        color: "#2b2a28"
+      - at: 1.0
+        color: "#9a9486"
+  boards_tone:
+    op: colorize
+    input: plk_id
+    stops:
+      - at: 0.0
+        color: "#4a2f1a"
+      - at: 1.0
+        color: "#a9794a"
+  base_mix:
+    op: blend
+    a: stones_tone
+    b: boards_tone
+    mode: mix
+    opacity: 0.5
+  grained:
+    op: blend
+    a: base_mix
+    b: grain2
+    mode: overlay
+    opacity: 0.35
+  worn_tint:
+    op: colorize
+    input: wear
+    stops:
+      - at: 0.0
+        color: "#000000"
+      - at: 1.0
+        color: "#d8d2c4"
+  worn:
+    op: blend
+    a: grained
+    b: worn_tint
+    mode: screen
+    opacity: 0.3
+  grime_tint:
+    op: colorize
+    input: grime
+    stops:
+      - at: 0.0
+        color: "#ffffff"
+      - at: 1.0
+        color: "#1c1a16"
+  dirty:
+    op: blend
+    a: worn
+    b: grime_tint
+    mode: multiply
+    opacity: 0.7
+  rust_tint:
+    op: colorize
+    input: rust
+    stops:
+      - at: 0.0
+        color: "#ffffff"
+      - at: 1.0
+        color: "#8a4a24"
+  rusty:
+    op: blend
+    a: dirty
+    b: rust_tint
+    mode: multiply
+    opacity: 0.5
+  chips_tint:
+    op: colorize
+    input: chips_soft
+    stops:
+      - at: 0.0
+        color: "#ffffff"
+      - at: 1.0
+        color: "#bdb6a6"
+  base:
+    op: blend
+    a: rusty
+    b: chips_tint
+    mode: multiply
+    opacity: 0.4
+  rough_a:
+    op: blend
+    a: grain
+    b: zone_soft
+    mode: add
+    opacity: 0.3
+  rough:
+    op: levels
+    input: rough_a
+    out_low: 0.45
+    out_high: 0.9
+  rough_ao:
+    op: blend
+    a: rough
+    b: grime
+    mode: add
+    opacity: 0.1
+  height_out:
+    op: blend
+    a: relief_soft
+    b: chips_soft
+    mode: add
+    opacity: 0.05
+  normal:
+    op: normal_from_height
+    input: height_out
+    depth: 0.06
+outputs:
+  base_color: base
+  roughness: rough_ao
+  normal: normal
+  occlusion: ao
+  height: height_out

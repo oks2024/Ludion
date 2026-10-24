@@ -68,6 +68,34 @@ impl Image {
         }
     }
 
+    /// An area average down to `size` texels a side; a clone when `size` is not smaller.
+    ///
+    /// Output texel `x` averages source columns `x*s/t .. (x+1)*s/t` (at least one), rows likewise,
+    /// summed sequentially in `f64`.
+    pub fn downsample(&self, size: u32) -> Image {
+        if size >= self.size {
+            return self.clone();
+        }
+        let (s, t) = (self.size as usize, size as usize);
+        let bounds = |i: usize| {
+            let lo = i * s / t;
+            (lo, ((i + 1) * s / t).max(lo + 1))
+        };
+        Image::generate(size, self.channels, |x, y, texel| {
+            let ((x0, x1), (y0, y1)) = (bounds(x as usize), bounds(y as usize));
+            let count = ((x1 - x0) * (y1 - y0)) as f64;
+            for (c, out) in texel.iter_mut().enumerate() {
+                let mut sum = 0.0f64;
+                for sy in y0..y1 {
+                    for sx in x0..x1 {
+                        sum += f64::from(self.data[(sy * s + sx) * self.channels + c]);
+                    }
+                }
+                *out = (sum / count) as f32;
+            }
+        })
+    }
+
     /// Sample `c` of the texel at `(x, y)`, broadcasting a gray image across color channels.
     pub fn channel(&self, x: u32, y: u32, c: usize) -> f32 {
         let at = (y as usize * self.size as usize + x as usize) * self.channels;
@@ -92,6 +120,14 @@ mod tests {
         let image = Image::generate(4, 1, |x, y, t| t[0] = (y * 4 + x) as f32);
         assert_eq!(image.texel(-1, -1)[0], 15.0);
         assert_eq!(image.texel(4, 5)[0], 4.0);
+    }
+
+    #[test]
+    fn downsample_averages_blocks_exactly() {
+        let image = Image::generate(4, 1, |x, y, t| t[0] = (y * 4 + x) as f32);
+        let small = image.downsample(2);
+        assert_eq!(small.data, vec![2.5, 4.5, 10.5, 12.5]);
+        assert_eq!(image.downsample(8), image);
     }
 
     #[test]

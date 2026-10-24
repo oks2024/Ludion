@@ -100,13 +100,134 @@ fn json_reports_steps_maps_and_validators() {
     assert_eq!(report["size"], 64);
     assert!(!report["steps"].as_array().unwrap().is_empty());
     assert!(report["maps"]["height"]["path"].is_string());
-    assert_eq!(report["validators"].as_array().unwrap().len(), 7);
+    assert_eq!(report["validators"].as_array().unwrap().len(), 9);
     assert!(report["written"].as_array().unwrap().len() >= 6);
 
     let output = run_ludion(&["texture", "check", text(&recipe), "--json"]);
     let report = json(&output);
     assert_eq!(report["ok"], true);
     assert_eq!(report["drift"].as_array().unwrap().len(), 0);
+}
+
+fn bench40() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/texture/bench40.texture.yaml")
+}
+
+#[test]
+fn preview_without_render_writes_the_sheets() {
+    let dir = scratch("preview");
+    let recipe = dir.join("tiles.texture.yaml");
+    std::fs::copy(example(), &recipe).unwrap();
+    let output = run_ludion(&[
+        "texture",
+        "build",
+        text(&recipe),
+        "--size",
+        "64",
+        "--preview",
+        "--no-render",
+        "--json",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report = json(&output);
+    let feedback = &report["feedback"];
+    let default_dir = dir.join(".ludion/texture/tiles");
+    assert_eq!(
+        feedback["dir"],
+        default_dir.to_str().unwrap().replace('\\', "/")
+    );
+    assert!(feedback["preview"].is_null());
+    assert_eq!(feedback["preview_skipped"], "--no-render");
+    for file in [
+        "maps.png",
+        "steps.png",
+        "tiling_base_color.png",
+        "tiling_height.png",
+    ] {
+        assert!(default_dir.join(file).is_file(), "{file}");
+    }
+    assert!(feedback["tiling"]["height"].is_string());
+    assert!(feedback["ms"]["sheets"].is_number());
+    assert!(!default_dir.join("preview.png").exists());
+    let output = run_ludion(&["texture", "check", text(&recipe)]);
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[test]
+fn preview_flags_need_preview_and_out_overrides_the_folder() {
+    let (recipe, _) = built("preview-flags");
+    assert!(
+        !run_ludion(&["texture", "build", text(&recipe), "--no-render"])
+            .status
+            .success()
+    );
+    let out = recipe.parent().unwrap().join("elsewhere");
+    let output = run_ludion(&[
+        "texture",
+        "build",
+        text(&recipe),
+        "--size",
+        "64",
+        "--preview",
+        "--no-render",
+        "--preview-out",
+        text(&out),
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(out.join("maps.png").is_file());
+}
+
+#[test]
+fn the_forty_step_fixture_builds_with_feedback() {
+    let dir = scratch("bench40");
+    let recipe = dir.join("bench40.texture.yaml");
+    std::fs::copy(bench40(), &recipe).unwrap();
+    let output = run_ludion(&[
+        "texture",
+        "build",
+        text(&recipe),
+        "--size",
+        "64",
+        "--preview",
+        "--no-render",
+        "--json",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report = json(&output);
+    assert!(report["steps"].as_array().unwrap().len() >= 35);
+    assert!(dir.join(".ludion/texture/bench40/steps.png").is_file());
+}
+
+#[test]
+fn needs_gpu_preview_renders_the_three_shapes() {
+    let dir = scratch("preview-render");
+    let recipe = dir.join("tiles.texture.yaml");
+    std::fs::copy(example(), &recipe).unwrap();
+    let output = run_ludion(&[
+        "texture",
+        "build",
+        text(&recipe),
+        "--size",
+        "64",
+        "--preview",
+        "--json",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report = json(&output);
+    if report["feedback"]["preview_skipped"].is_string()
+        && ludion_core::require_gpu::skip_no_adapter(true)
+    {
+        return;
+    }
+    let preview = dir.join(".ludion/texture/tiles/preview.png");
+    let (w, h, rgba) = ludion_assets::decode_png(
+        &std::fs::read(&preview).expect("preview.png"),
+        "preview.png",
+    )
+    .unwrap();
+    assert!(w > 0 && h > 0);
+    let first = &rgba[..4];
+    assert!(rgba.chunks(4).any(|p| p != first), "preview.png is uniform");
 }
 
 #[test]

@@ -15,11 +15,13 @@ use ludion_core::atomic::write_atomic;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, Severity};
 use ludion_texgen::validate::{self, Level, Rule};
-use ludion_texgen::{FsResolver, MapSet, Maps};
+use ludion_texgen::{FsResolver, Image, MapSet, Maps};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::diagnostic;
+use crate::texture_feedback;
+use crate::texture_preview;
 
 /// The default build size.
 pub const DEFAULT_SIZE: u32 = 1024;
@@ -157,7 +159,9 @@ fn level_text(level: Level) -> &'static str {
 /// The map a validator is about, as the `/outputs/<map>` pointer names it.
 fn output_of(validator: &str) -> &'static str {
     match validator {
-        "albedo_out_of_range" | "seam_base_color" => "base_color",
+        "albedo_out_of_range" | "seam_base_color" | "repetition_peak" | "repetition_lowfreq" => {
+            "base_color"
+        }
         "metallic_ambiguous" => "metallic",
         "roughness_mirror" => "roughness",
         "normal_invalid" => "normal",
@@ -236,7 +240,22 @@ struct Built {
     maps: Maps,
     set: MapSet,
     steps: Vec<StepTime>,
+    /// Top-level step images downsampled for the contact sheet; empty unless asked for.
+    thumbs: Vec<(String, Image)>,
+    thumbnail_ms: f64,
     total_ms: f64,
+}
+
+/// The side step thumbnails are downsampled to while the recipe evaluates.
+const THUMB_SIDE: u32 = 128;
+
+/// What `--preview` asks for beyond the build.
+#[derive(Clone, Copy)]
+pub struct Preview<'a> {
+    /// The feedback folder; defaults to `<recipe dir>/.ludion/texture/<name>/`.
+    pub dir: Option<&'a Path>,
+    /// Whether to render the lit preview (needs a GPU adapter).
+    pub render: bool,
 }
 
 fn io_error(message: String) -> Diagnostic {
@@ -261,7 +280,7 @@ fn default_out(recipe: &Path) -> PathBuf {
     recipe.with_file_name(stem)
 }
 
-fn evaluate_recipe(recipe: &Path, size: u32) -> Result<Built, Vec<Diagnostic>> {
+fn evaluate_recipe(recipe: &Path, size: u32, thumbs: bool) -> Result<Built, Vec<Diagnostic>> {
     ludion_texgen::check_size(size)?;
     let text = std::fs::read_to_string(recipe).map_err(|e| {
         vec![io_error(format!(
@@ -277,13 +296,19 @@ fn evaluate_recipe(recipe: &Path, size: u32) -> Result<Built, Vec<Diagnostic>> {
     let start = Stopwatch::start();
     let mut last = Duration::ZERO;
     let mut steps = Vec::new();
-    let maps = ludion_texgen::evaluate(&loaded, size, &mut |name, _| {
+    let mut collected = Vec::new();
+    let mut thumbnail_time = Duration::ZERO;
+    let maps = ludion_texgen::evaluate(&loaded, size, &mut |name, image| {
         let now = start.elapsed();
         steps.push(StepTime {
             name: name.to_string(),
             ms: (now - last).as_secs_f64() * 1000.0,
         });
-        last = now;
+        if thumbs {
+            collected.push((name.to_string(), image.downsample(THUMB_SIDE)));
+            thumbnail_time += start.elapsed() - now;
+        }
+        last = start.elapsed();
     });
     let set = ludion_texgen::encode(&maps)
         .map_err(|reason| vec![Diagnostic::new(code::TEXTURE_DATA, reason).with_path("/size")])?;
@@ -291,6 +316,8 @@ fn evaluate_recipe(recipe: &Path, size: u32) -> Result<Built, Vec<Diagnostic>> {
         maps,
         set,
         steps,
+        thumbs: collected,
+        thumbnail_ms: thumbnail_time.as_secs_f64() * 1000.0,
         total_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
 }
@@ -311,7 +338,7 @@ fn set_files(set: &MapSet) -> Vec<(&'static str, &[u8])> {
 }
 
 /// `to` spelled relative to the directory `from`, with forward slashes.
-fn relative(from: &Path, to: &Path) -> String {
+pub(crate) fn relative(from: &Path, to: &Path) -> String {
     fn parts(path: &Path) -> Vec<String> {
         let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
         let mut out: Vec<String> = Vec::new();
@@ -423,19 +450,103 @@ fn load_rules(rules: Option<&Path>) -> Result<Rules, Vec<Diagnostic>> {
 
 // --- build --------------------------------------------------------------------------------------
 
-/// Runs `ludion texture build <recipe> [--size N] [--out DIR] [--rules TOML] [--json]`.
+/// What a `--preview` run wrote, for the report.
+struct Feedback {
+    dir: PathBuf,
+    sheets: texture_feedback::Sheets,
+    preview: Option<PathBuf>,
+    skipped: Option<String>,
+    sheets_ms: f64,
+    render_ms: f64,
+}
+
+fn write_feedback(
+    recipe: &Path,
+    out_dir: &Path,
+    built: &Built,
+    preview: Preview<'_>,
+) -> Result<Feedback, Vec<Diagnostic>> {
+    let dir = preview.dir.map_or_else(
+        || {
+            let stem = default_out(recipe)
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            recipe
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .join(".ludion/texture")
+                .join(stem)
+        },
+        Path::to_path_buf,
+    );
+    let timer = Stopwatch::start();
+    let sheets = texture_feedback::write_sheets(&dir, &built.maps, &built.thumbs)
+        .map_err(|e| vec![io_error(e)])?;
+    let sheets_ms = timer.elapsed().as_secs_f64() * 1000.0;
+
+    let (mut rendered, mut skipped, mut render_ms) = (None, None, 0.0);
+    if preview.render {
+        let at = |name: &str| relative(&dir, &out_dir.join(name));
+        let refs = texture_preview::MapRefs {
+            base_color: at("base_color.png"),
+            metallic_roughness: at("metallic_roughness.png"),
+            normal: at("normal.png"),
+            occlusion: at("occlusion.png"),
+            emissive: built.set.emissive.as_ref().map(|_| at("emissive.png")),
+        };
+        let timer = Stopwatch::start();
+        match texture_preview::render(&dir, &relative(&dir, recipe), &refs)? {
+            texture_preview::Outcome::Rendered(path) => rendered = Some(path),
+            texture_preview::Outcome::NoAdapter(reason) => skipped = Some(reason),
+        }
+        render_ms = timer.elapsed().as_secs_f64() * 1000.0;
+    } else {
+        skipped = Some("--no-render".to_string());
+    }
+    Ok(Feedback {
+        dir,
+        sheets,
+        preview: rendered,
+        skipped,
+        sheets_ms,
+        render_ms,
+    })
+}
+
+fn feedback_json(f: &Feedback, thumbnail_ms: f64) -> Value {
+    let mut object = json!({
+        "dir": path_text(&f.dir),
+        "maps": path_text(&f.sheets.maps),
+        "steps": path_text(&f.sheets.steps),
+        "tiling": {
+            "base_color": path_text(&f.sheets.tiling_base_color),
+            "height": path_text(&f.sheets.tiling_height),
+        },
+        "preview": f.preview.as_deref().map(path_text),
+        "ms": { "thumbnails": thumbnail_ms, "sheets": f.sheets_ms, "render": f.render_ms },
+    });
+    if let Some(reason) = &f.skipped {
+        object["preview_skipped"] = json!(reason);
+    }
+    object
+}
+
+/// Runs `ludion texture build <recipe> [--size N] [--out DIR] [--rules TOML] [--preview ...]
+/// [--json]`.
 pub fn run_build(
     recipe: &Path,
     size: u32,
     out: Option<&Path>,
     rules: Option<&Path>,
+    preview: Option<Preview<'_>>,
     json: bool,
 ) -> ExitCode {
     let rules = match load_rules(rules) {
         Ok(rules) => rules,
         Err(diagnostics) => return fail(recipe, &diagnostics, json),
     };
-    let built = match evaluate_recipe(recipe, size) {
+    let built = match evaluate_recipe(recipe, size, preview.is_some()) {
         Ok(built) => built,
         Err(diagnostics) => return fail(recipe, &diagnostics, json),
     };
@@ -445,11 +556,16 @@ pub fn run_build(
     if let Err(error) = write_set(&out_dir, &built.set, &sidecar, &mut written) {
         return fail(recipe, &[io_error(error)], json);
     }
+    let feedback = match preview.map(|p| write_feedback(recipe, &out_dir, &built, p)) {
+        Some(Ok(feedback)) => Some(feedback),
+        Some(Err(diagnostics)) => return fail(recipe, &diagnostics, json),
+        None => None,
+    };
     let (verdicts, diagnostics) = validate_maps(&built.maps, &rules, &recipe_file(recipe));
     let ok = !has_error(&diagnostics);
 
     if json {
-        let fields = json!({
+        let mut fields = json!({
             "recipe": path_text(recipe),
             "out_dir": path_text(&out_dir),
             "size": size,
@@ -459,6 +575,9 @@ pub fn run_build(
             "validators": verdicts,
             "written": written.iter().map(|p| path_text(p)).collect::<Vec<_>>(),
         });
+        if let Some(f) = &feedback {
+            fields["feedback"] = feedback_json(f, built.thumbnail_ms);
+        }
         print_json(&Value::Object(diagnostic::json_envelope(
             ok,
             fields,
@@ -483,6 +602,26 @@ pub fn run_build(
     }
     for verdict in &verdicts {
         println!("{}", verdict_line(verdict));
+    }
+    if let Some(f) = &feedback {
+        println!("feedback: {}", path_text(&f.dir));
+        for path in [
+            &f.sheets.maps,
+            &f.sheets.steps,
+            &f.sheets.tiling_base_color,
+            &f.sheets.tiling_height,
+        ] {
+            println!("  {}", path_text(path));
+        }
+        match (&f.preview, &f.skipped) {
+            (Some(path), _) => println!("  {}", path_text(path)),
+            (None, Some(why)) => println!("  preview skipped ({why})"),
+            (None, None) => {}
+        }
+        println!(
+            "  ms: thumbnails {:.0}, sheets {:.0}, render {:.0}",
+            built.thumbnail_ms, f.sheets_ms, f.render_ms
+        );
     }
     diagnostic::report(recipe, &diagnostics)
 }
@@ -543,7 +682,7 @@ pub fn run_check(recipe: &Path, out: Option<&Path>, rules: Option<&Path>, json: 
         }
     };
     let size = recorded.size;
-    let built = match evaluate_recipe(recipe, size) {
+    let built = match evaluate_recipe(recipe, size, false) {
         Ok(built) => built,
         Err(diagnostics) => return fail(recipe, &diagnostics, json),
     };

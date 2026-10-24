@@ -20,7 +20,7 @@
 /// a handedness sign from the bitangent accumulator; a vertex touched by no non-degenerate
 /// triangle, or whose accumulated tangent collapses under Gram–Schmidt, falls back to an axis
 /// orthogonal to its normal.
-pub(crate) fn compute_tangents(
+pub fn compute_tangents(
     positions: &[f64],
     normals: &[f64],
     uvs: &[f64],

@@ -82,6 +82,21 @@ fn color_png(image: &Image, to_srgb: bool) -> Result<Vec<u8>, String> {
     })
 }
 
+/// Raw RGBA8 of `image` for display: gray is broadcast, color goes through sRGB when `srgb` is set.
+pub fn to_rgba8(image: &Image, srgb: bool) -> Vec<u8> {
+    let c = |v: f32| q8(if srgb { self::srgb(v) } else { v });
+    let mut out = Vec::with_capacity(image.data.len() / image.channels * 4);
+    for t in image.data.chunks(image.channels) {
+        if image.channels == 1 {
+            let g = q8(t[0]);
+            out.extend_from_slice(&[g, g, g, 255]);
+        } else {
+            out.extend_from_slice(&[c(t[0]), c(t[1]), c(t[2]), 255]);
+        }
+    }
+    out
+}
+
 /// Encodes every map: quantize, convert base color and emissive to sRGB, write PNG.
 ///
 /// # Errors
@@ -135,6 +150,15 @@ mod tests {
         assert_eq!(q8(2.0), 255);
         assert_eq!(q8(0.5), 128);
         assert_eq!(q16(1.0), 65535);
+    }
+
+    #[test]
+    fn to_rgba8_broadcasts_gray_and_converts_color() {
+        let gray = Image::filled(2, 1, 0.5);
+        assert_eq!(&to_rgba8(&gray, true)[..4], &[128, 128, 128, 255]);
+        let color = Image::filled(2, 3, 0.2158605);
+        assert_eq!(&to_rgba8(&color, true)[..4], &[128, 128, 128, 255]);
+        assert_eq!(&to_rgba8(&color, false)[..4], &[55, 55, 55, 255]);
     }
 
     #[test]

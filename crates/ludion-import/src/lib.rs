@@ -112,7 +112,8 @@ use diagnostics::{
 use document::check_structure;
 use skin::{SkinBinding, bind_skin, map_weights};
 use sources::{Buffers, resolve_image};
-use tangents::{compute_tangents, faceted_normals};
+pub use tangents::compute_tangents;
+use tangents::faceted_normals;
 
 /// The prefab file written at the root of the output tree.
 pub const PREFAB_FILE: &str = "model.prefab.yaml";

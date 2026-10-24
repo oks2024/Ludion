@@ -60,7 +60,7 @@ pub struct MapStat {
 }
 
 /// Every validator name, in report order.
-pub const NAMES: [&str; 7] = [
+pub const NAMES: [&str; 9] = [
     "albedo_out_of_range",
     "metallic_ambiguous",
     "roughness_mirror",
@@ -68,6 +68,8 @@ pub const NAMES: [&str; 7] = [
     "height_range",
     "seam_base_color",
     "seam_height",
+    "repetition_peak",
+    "repetition_lowfreq",
 ];
 
 /// The engine's default bounds for the validator `name`, or `None` for an unknown name.
@@ -79,6 +81,8 @@ pub fn default_rule(name: &str) -> Option<Rule> {
         "normal_invalid" => (None, Some(0.0), Level::Error),
         "height_range" => (Some(0.05), None, Level::Warn),
         "seam_base_color" | "seam_height" => (None, Some(1.5), Level::Warn),
+        "repetition_peak" => (None, Some(0.6), Level::Warn),
+        "repetition_lowfreq" => (None, Some(0.5), Level::Warn),
         _ => return None,
     };
     Some(Rule { min, max, level })
@@ -123,6 +127,89 @@ fn seam(image: &Image) -> f32 {
     (wrap / inner) as f32
 }
 
+/// The side of the base-color luminance image the repetition measures run on.
+const REPETITION_SIDE: u32 = 64;
+
+/// The mean-removed luminance of `image` at `min(size, 64)` and its variance; `None` when flat.
+fn centred_luminance(image: &Image) -> Option<(Vec<f64>, usize, f64)> {
+    let small = image.downsample(REPETITION_SIDE);
+    let r = small.size as usize;
+    let values: Vec<f64> = small
+        .data
+        .chunks(small.channels)
+        .map(|t| f64::from(luminance(t)))
+        .collect();
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let centred: Vec<f64> = values.iter().map(|v| v - mean).collect();
+    let v0 = centred.iter().map(|v| v * v).sum::<f64>() / centred.len() as f64;
+    (v0 > 0.0).then_some((centred, r, v0))
+}
+
+/// The largest circular autocorrelation among the local maxima away from zero offset: near 1 when
+/// the same features repeat across the tile, 0 when the correlation only falls off.
+fn repetition_peak(base_color: &Image) -> f32 {
+    let Some((l, r, v0)) = centred_luminance(base_color) else {
+        return 0.0;
+    };
+    let norm = (r * r) as f64 * v0;
+    let mut a = vec![0.0f64; r * r];
+    for dy in 0..r {
+        for dx in 0..r {
+            let mut sum = 0.0f64;
+            for y in 0..r {
+                let row = y * r;
+                let shifted = ((y + dy) % r) * r;
+                for x in 0..r {
+                    sum += l[row + x] * l[shifted + (x + dx) % r];
+                }
+            }
+            a[dy * r + dx] = sum / norm;
+        }
+    }
+    let far = (r / 16).max(1);
+    let toroidal = |d: usize| d.min(r - d);
+    let mut peak = 0.0f64;
+    for dy in 0..r {
+        for dx in 0..r {
+            if toroidal(dx).max(toroidal(dy)) < far {
+                continue;
+            }
+            let v = a[dy * r + dx];
+            let is_max = (0..9).filter(|k| *k != 4).all(|k| {
+                let (nx, ny) = ((dx + r + k % 3 - 1) % r, (dy + r + k / 3 - 1) % r);
+                v >= a[ny * r + nx]
+            });
+            if is_max {
+                peak = peak.max(v);
+            }
+        }
+    }
+    peak as f32
+}
+
+/// The variance of the 4x4 block means over the pixel variance: high when one tile-scale blotch
+/// dominates the image.
+fn repetition_lowfreq(base_color: &Image) -> f32 {
+    let Some((l, r, v0)) = centred_luminance(base_color) else {
+        return 0.0;
+    };
+    let bounds = |i: usize| (i * r / 4, (i + 1) * r / 4);
+    let mut means = [0.0f64; 16];
+    for (b, mean) in means.iter_mut().enumerate() {
+        let ((x0, x1), (y0, y1)) = (bounds(b % 4), bounds(b / 4));
+        let mut sum = 0.0f64;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                sum += l[y * r + x];
+            }
+        }
+        *mean = sum / ((x1 - x0) * (y1 - y0)) as f64;
+    }
+    let grand = means.iter().sum::<f64>() / 16.0;
+    let var = means.iter().map(|m| (m - grand) * (m - grand)).sum::<f64>() / 16.0;
+    (var / v0).clamp(0.0, 1.0) as f32
+}
+
 /// Measures `maps` against every validator, in [`NAMES`] order.
 pub fn measure(maps: &Maps) -> Vec<Measure> {
     let (lo, hi) = ALBEDO_RANGE;
@@ -146,6 +233,8 @@ pub fn measure(maps: &Maps) -> Vec<Measure> {
         hmax - hmin,
         seam(&maps.base_color),
         seam(&maps.height),
+        repetition_peak(&maps.base_color),
+        repetition_lowfreq(&maps.base_color),
     ];
     NAMES
         .iter()
@@ -260,6 +349,66 @@ outputs:
         let maps = crate::evaluate(&loaded, 64, &mut |_, _| {});
         let seam = value(&measure(&maps), "seam_height");
         assert!((0.5..1.5).contains(&seam), "seam {seam}");
+    }
+
+    fn lattice(dots: u32) -> Image {
+        Image::generate(64, 3, |x, y, t| {
+            let cell = 64 / dots;
+            let (cx, cy) = (x % cell, y % cell);
+            let on = cx < cell / 2 && cy < cell / 2;
+            t.fill(if on { 0.8 } else { 0.1 });
+        })
+    }
+
+    #[test]
+    fn a_lattice_of_repeated_features_peaks_and_flat_or_noise_does_not() {
+        let mut maps = flat(64, 0.2, 0.5, 0.0, 0.5);
+        maps.base_color = lattice(4);
+        assert!(value(&measure(&maps), "repetition_peak") > 0.9);
+
+        let flat_maps = flat(64, 0.2, 0.5, 0.0, 0.5);
+        let m = measure(&flat_maps);
+        assert_eq!(value(&m, "repetition_peak"), 0.0);
+        assert_eq!(value(&m, "repetition_lowfreq"), 0.0);
+    }
+
+    #[test]
+    fn gradient_noise_has_no_strong_peak_and_a_blob_has_low_frequency_energy() {
+        let recipe = "format: 1
+kind: texture
+steps:
+  n:
+    op: noise
+    type: gradient
+    scale: 16
+outputs:
+  base_color: n
+  roughness: n
+  height: n
+";
+        let loaded = crate::load(recipe, &crate::FsResolver::new(".")).unwrap();
+        let mut maps = crate::evaluate(&loaded, 64, &mut |_, _| {});
+        let m = measure(&maps);
+        assert!(
+            value(&m, "repetition_peak") < 0.6,
+            "{}",
+            value(&m, "repetition_peak")
+        );
+        assert!(
+            value(&m, "repetition_lowfreq") < 0.2,
+            "{}",
+            value(&m, "repetition_lowfreq")
+        );
+
+        maps.base_color = Image::generate(64, 3, |x, y, t| {
+            let (dx, dy) = (x as f32 - 31.5, y as f32 - 31.5);
+            t.fill(if dx * dx + dy * dy < 14.0 * 14.0 {
+                0.9
+            } else {
+                0.1
+            });
+        });
+        assert!(value(&measure(&maps), "repetition_lowfreq") > 0.5);
     }
 
     #[test]

@@ -72,6 +72,8 @@ mod sim_hash;
 mod sync;
 mod test;
 mod texture;
+mod texture_feedback;
+mod texture_preview;
 mod voxel;
 
 use std::path::PathBuf;
@@ -1447,6 +1449,15 @@ enum TextureCommand {
         /// with `[textures."<recipe file>"]` tables for per-recipe overrides.
         #[arg(long, value_name = "TOML")]
         rules: Option<PathBuf>,
+        /// Also write the feedback sheets and a rendered preview to an ignored folder.
+        #[arg(long)]
+        preview: bool,
+        /// The feedback folder. Defaults to `<recipe dir>/.ludion/texture/<name>/`.
+        #[arg(long, value_name = "DIR", requires = "preview")]
+        preview_out: Option<PathBuf>,
+        /// With `--preview`, skip the rendered `preview.png` (no GPU is touched).
+        #[arg(long, requires = "preview")]
+        no_render: bool,
         /// Print one JSON report object (timings per step, per-map statistics, validators).
         #[arg(long)]
         json: bool,
@@ -2227,8 +2238,24 @@ fn main() -> std::process::ExitCode {
                 size,
                 out,
                 rules,
+                preview,
+                preview_out,
+                no_render,
                 json,
-            } => texture::run_build(&recipe, size, out.as_deref(), rules.as_deref(), json),
+            } => {
+                let preview = preview.then_some(texture::Preview {
+                    dir: preview_out.as_deref(),
+                    render: !no_render,
+                });
+                texture::run_build(
+                    &recipe,
+                    size,
+                    out.as_deref(),
+                    rules.as_deref(),
+                    preview,
+                    json,
+                )
+            }
             TextureCommand::Check {
                 recipe,
                 out,
