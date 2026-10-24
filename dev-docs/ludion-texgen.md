@@ -14,7 +14,7 @@ user-facing format, ops and validators are `ludion docs texture-recipes` and `lu
 - `src/lib.rs` — module map, `build()` (load → evaluate → encode), `SIZE_RANGE` (8..=8192, `L1284`).
 - `src/recipe.rs` — parses one document (`parse`), `OutputKey`, binds params into an `Instance`.
 - `src/ops.rs` — `Op`, `OP_NAMES`, the field `Reader` (names, defaults, ranges) and every build arm.
-- `src/resolve.rs` — `load` through a `Resolver` (`FsResolver` or the embedded `stdlib`); `infer`
+- `src/resolve.rs` — `load` / `load_with_seed` (the root seed replaced) through a `Resolver` (`FsResolver` or the embedded `stdlib`); `infer`
   types every step gray or color; the DAG order and sub-recipe nesting live here.
 - `src/eval.rs` — `evaluate` (only steps the outputs reach; images drop after their last consumer;
   an observer sees each top-level step) and `compute`, the op → image dispatch.

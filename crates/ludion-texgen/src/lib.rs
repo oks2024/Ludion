@@ -66,7 +66,7 @@ pub use crate::encode::{MapSet, encode};
 pub use crate::eval::{Maps, evaluate};
 pub use crate::image::Image;
 pub use crate::recipe::{Recipe, parse};
-pub use crate::resolve::{FsResolver, Loaded, Resolver, Source, load};
+pub use crate::resolve::{FsResolver, Loaded, Resolver, Source, load, load_with_seed};
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;

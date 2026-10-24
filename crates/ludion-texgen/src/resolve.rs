@@ -128,12 +128,34 @@ fn tag(id: Option<&str>, mut d: Diagnostic) -> Diagnostic {
 /// Every diagnostic of every document; one raised inside a sub-recipe starts ``in `<id>`: ``.
 pub fn load(root: &str, resolver: &dyn Resolver) -> Result<Loaded, Vec<Diagnostic>> {
     let recipe = parse(root)?;
+    let seed = recipe.seed;
+    load_parsed(&recipe, resolver, seed)
+}
+
+/// [`load`] with the root seed replaced by `seed`; every op and sub-recipe seed derives from it as
+/// usual.
+///
+/// # Errors
+/// As [`load`].
+pub fn load_with_seed(
+    root: &str,
+    resolver: &dyn Resolver,
+    seed: u64,
+) -> Result<Loaded, Vec<Diagnostic>> {
+    load_parsed(&parse(root)?, resolver, seed)
+}
+
+fn load_parsed(
+    recipe: &Recipe,
+    resolver: &dyn Resolver,
+    seed: u64,
+) -> Result<Loaded, Vec<Diagnostic>> {
     node(
         resolver,
         None,
-        &recipe,
+        recipe,
         recipe.defaults(),
-        recipe.seed,
+        seed,
         &mut Vec::new(),
     )
 }

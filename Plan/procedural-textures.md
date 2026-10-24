@@ -166,6 +166,7 @@ Wave 1 — in progress.
 - **Layout ops.** `tile_sampler` gains `offset_jitter`, `gap` and per-instance pattern scale and offset jitters; `std:planks` is rebuilt on them (uniform joints in tile units, `bevel`, `stagger_jitter`, `gap: 0` is one board) and `std:cobbles` gains an opt-in `round` profile.
 - **Tone and filter ops.** `posterize`, `band` (a constant-width line along a height's contour), `hsv_shift`, noise `stretch`/`stretch_axis` and a directional `blur` (`angle`, `spread: forward`); every new field defaults to byte-identical output.
 - **The `layer` step.** `op: layer` makes `<step>.<map>` steps from a `base:` and a bottom-to-top `layers:` list (decision 21); each map is bit-identical to the `blend` chain it replaces, and the equivalence test pins that. Sub-recipes reach a map through `output: s.roughness`.
+- **Seeds and validators.** `ludion texture seeds` (validators per seed, first clean seed, report-only) and `build --seed` (needs `--out`); `repetition_peak` takes the minimum over the image and its u/v residuals, so directional patterns no longer read as grids (`oak_planks` 0.80 → 0.27).
 
 ## Spike log (W0)
 
@@ -200,6 +201,6 @@ Missing ops and features:
 | Per-instance scale of a pattern (ring spacing per board) | `oak_planks` | two ring sets mixed by a per-board mask | S | no |
 | Layer helper (colour, roughness and metallic from one mask in one step) | all four | repeated `blend` with `mask`, 30–50 steps per material | M | no |
 
-`repetition_peak` is a false positive for directional patterns: a long-grain board floor is invariant along the grain, so its autocorrelation has a strong off-centre peak at the row pitch (0.80 on `oak_planks`). It warns and does not fail; a per-recipe bound in a rules file is the fix if the warning matters.
+`repetition_peak` is a false positive for directional patterns: a long-grain board floor is invariant along the grain, so its autocorrelation has a strong off-centre peak at the row pitch (0.80 on `oak_planks`). It warned and did not fail; the metric now takes the minimum over the image and its u/v residuals, which removes the false positive (0.27 after).
 
 Derived param values (arithmetic) were not needed: no recipe wanted a value computed from another.

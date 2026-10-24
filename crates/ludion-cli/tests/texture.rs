@@ -1,4 +1,4 @@
-//! Integration tests for `ludion texture build | check | vendor`, driven against the built binary.
+//! Integration tests for `ludion texture build | check | seeds | vendor`, driven against the built binary.
 //! CPU only: no verb opens a device.
 //!
 //! The texgen crate pins the output bytes; these cover the CLI surface — the committed example is
@@ -301,4 +301,100 @@ fn check_scene_points_a_texture_recipe_at_texture_check() {
     let report = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(report.contains("L0031"), "{report}");
     assert!(report.contains("ludion texture check"), "{report}");
+}
+
+#[test]
+fn seeds_report_is_deterministic_and_build_seed_takes_the_same_path() {
+    let recipe = example();
+    let args = [
+        "texture",
+        "seeds",
+        recipe.to_str().unwrap(),
+        "--seeds",
+        "0..4",
+        "--size",
+        "64",
+        "--json",
+    ];
+    let (first, second) = (run_ludion(&args), run_ludion(&args));
+    assert!(first.status.success(), "{}", stderr(&first));
+    assert_eq!(first.stdout, second.stdout);
+    let report = json(&first);
+    let entries = report["seeds"].as_array().unwrap();
+    let order: Vec<u64> = entries
+        .iter()
+        .map(|e| e["seed"].as_u64().unwrap())
+        .collect();
+    assert_eq!(order, [0, 1, 2, 3]);
+    assert_eq!(report["recipe_seed"], 5);
+    let first_clean = entries
+        .iter()
+        .find(|e| e["clean"] == true)
+        .map(|e| e["seed"].clone());
+    assert_eq!(report["first_clean"], first_clean.unwrap_or(Value::Null));
+
+    let out = scratch("seed-build");
+    let build = run_ludion(&[
+        "texture",
+        "build",
+        example().to_str().unwrap(),
+        "--seed",
+        "2",
+        "--size",
+        "64",
+        "--out",
+        out.to_str().unwrap(),
+        "--json",
+    ]);
+    let built = json(&build);
+    assert_eq!(built["seed"], 2);
+    assert_eq!(built["validators"], entries[2]["validators"]);
+}
+
+#[test]
+fn seed_override_needs_out_and_bad_seed_lists_name_the_forms() {
+    let recipe = example();
+    let recipe = recipe.to_str().unwrap();
+    let no_out = run_ludion(&["texture", "build", recipe, "--seed", "1"]);
+    assert!(!no_out.status.success());
+    assert!(stderr(&no_out).contains("--out"), "{}", stderr(&no_out));
+    for bad in ["5..5", "a,b", "1,1"] {
+        let output = run_ludion(&["texture", "seeds", recipe, "--seeds", bad]);
+        assert!(!output.status.success(), "{bad}");
+        assert!(
+            stderr(&output).contains("A..B"),
+            "{bad}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn seeds_with_no_clean_seed_warn_l1287_and_exit_zero() {
+    let dir = scratch("seeds-rules");
+    let rules = dir.join("rules.toml");
+    std::fs::write(&rules, "seam_height = { max = 0.0 }\n").unwrap();
+    let output = run_ludion(&[
+        "texture",
+        "seeds",
+        example().to_str().unwrap(),
+        "--seeds",
+        "0..3",
+        "--size",
+        "64",
+        "--rules",
+        rules.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("L1287"), "{}", stderr(&output));
+    let report = json(&output);
+    assert_eq!(report["first_clean"], Value::Null);
+    assert!(
+        report["seeds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["clean"] == false)
+    );
 }

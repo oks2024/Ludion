@@ -145,12 +145,41 @@ fn centred_luminance(image: &Image) -> Option<(Vec<f64>, usize, f64)> {
     (v0 > 0.0).then_some((centred, r, v0))
 }
 
-/// The largest circular autocorrelation among the local maxima away from zero offset: near 1 when
-/// the same features repeat across the tile, 0 when the correlation only falls off.
+/// The smallest of the image's and its two axis-residuals' autocorrelation peaks. A pattern that
+/// is a function of one coordinate (grain, board rows) vanishes once that axis' profile is
+/// removed; a 2-D lattice keeps a periodic residual in both. Axis-aligned only.
 fn repetition_peak(base_color: &Image) -> f32 {
     let Some((l, r, v0)) = centred_luminance(base_color) else {
         return 0.0;
     };
+    let full = peak(&l, r, v0);
+    let residual_peak = |res: Vec<f64>| {
+        let vr = res.iter().map(|v| v * v).sum::<f64>() / res.len() as f64;
+        if vr <= 1e-6 * v0 {
+            0.0
+        } else {
+            peak(&res, r, vr)
+        }
+    };
+    let rows = residual_peak(
+        (0..r * r)
+            .map(|i| {
+                let row = &l[i / r * r..][..r];
+                l[i] - row.iter().sum::<f64>() / r as f64
+            })
+            .collect(),
+    );
+    let cols = residual_peak(
+        (0..r * r)
+            .map(|i| l[i] - (0..r).map(|y| l[y * r + i % r]).sum::<f64>() / r as f64)
+            .collect(),
+    );
+    (full.min(rows).min(cols)) as f32
+}
+
+/// The largest circular autocorrelation among the local maxima away from zero offset: near 1 when
+/// the same features repeat across the tile, 0 when the correlation only falls off.
+fn peak(l: &[f64], r: usize, v0: f64) -> f64 {
     let norm = (r * r) as f64 * v0;
     let mut a = vec![0.0f64; r * r];
     for dy in 0..r {
@@ -168,7 +197,7 @@ fn repetition_peak(base_color: &Image) -> f32 {
     }
     let far = (r / 16).max(1);
     let toroidal = |d: usize| d.min(r - d);
-    let mut peak = 0.0f64;
+    let mut best = 0.0f64;
     for dy in 0..r {
         for dx in 0..r {
             if toroidal(dx).max(toroidal(dy)) < far {
@@ -180,11 +209,11 @@ fn repetition_peak(base_color: &Image) -> f32 {
                 v >= a[ny * r + nx]
             });
             if is_max {
-                peak = peak.max(v);
+                best = best.max(v);
             }
         }
     }
-    peak as f32
+    best
 }
 
 /// The variance of the 4x4 block means over the pixel variance: high when one tile-scale blotch
@@ -370,6 +399,39 @@ outputs:
         let m = measure(&flat_maps);
         assert_eq!(value(&m, "repetition_peak"), 0.0);
         assert_eq!(value(&m, "repetition_lowfreq"), 0.0);
+    }
+
+    fn peak_of(image: Image) -> f32 {
+        let mut maps = flat(64, 0.2, 0.5, 0.0, 0.5);
+        maps.base_color = image;
+        value(&measure(&maps), "repetition_peak")
+    }
+
+    #[test]
+    fn stripes_along_one_axis_are_not_a_grid() {
+        let band = |v: u32| if (v / 8).is_multiple_of(2) { 0.8 } else { 0.1 };
+        let horizontal = Image::generate(64, 3, |_, y, t| t.fill(band(y % 16)));
+        let vertical = Image::generate(64, 3, |x, _, t| t.fill(band(x % 16)));
+        assert!(peak_of(horizontal) < 0.2);
+        assert!(peak_of(vertical) < 0.2);
+    }
+
+    #[test]
+    fn a_board_floor_with_grain_along_the_boards_stays_low() {
+        let boards = Image::generate(64, 3, |_, y, t| {
+            let base = if (y / 8).is_multiple_of(2) { 0.7 } else { 0.3 };
+            t.fill(base + 0.05 * ludion_core::math::sin(y as f32 * 1.7));
+        });
+        assert!(peak_of(boards) < 0.6);
+    }
+
+    #[test]
+    fn a_grout_grid_is_still_a_grid() {
+        let grout = Image::generate(64, 3, |x, y, t| {
+            let line = x % 16 < 2 || y % 16 < 2;
+            t.fill(if line { 0.1 } else { 0.7 });
+        });
+        assert!(peak_of(grout) > 0.6);
     }
 
     #[test]

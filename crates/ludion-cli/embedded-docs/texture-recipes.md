@@ -14,7 +14,10 @@ maps to a mesh is `ludion docs materials`.
 2. `ludion texture build <file> --size 256` — writes the set to `<name>/` beside the recipe and
    prints the validator lines. `--json` prints one report (`steps` timings, per-map `maps` min/mean/max,
    `validators`, `written`). `--out <dir>` redirects; `--rules <toml>` sets validator bounds.
-3. Read the diagnostics and validators, correct the recipe, rebuild.
+3. Read the diagnostics and validators, correct the recipe, rebuild. A seam or repetition breach
+   that only the seed moves: `ludion texture seeds <file> [--seeds 0..16]` reports each seed's
+   validators and the first clean one; `build --seed N --out <dir> --preview` previews it; then set
+   `seed:` in the recipe.
 4. To judge the material without a human, add `--preview`: it writes a feedback folder,
    `<recipe dir>/.ludion/texture/<stem>/` (ignored by both VCSs; `--preview-out <dir>` moves it,
    `--no-render` skips the GPU render). Read it in this order:
@@ -145,7 +148,7 @@ way, and an `error` makes the exit code non-zero.
 | `height_range` | height max − min | min 0.05 | warn |
 | `seam_base_color` | wrap-edge difference ÷ interior neighbour difference of base color | max 1.5 | warn |
 | `seam_height` | same, of height | max 1.5 | warn |
-| `repetition_peak` | largest off-centre local maximum of the base color luminance autocorrelation at 64² (how strongly it reads as a grid) | max 0.6 | warn |
+| `repetition_peak` | largest off-centre local maximum of the base color luminance autocorrelation at 64², the smallest of the image's and its two axis-residuals' (a pattern invariant along u or v — grain, board rows — does not count) | max 0.6 | warn |
 | `repetition_lowfreq` | variance share of the 4×4 block means of base color (low-frequency energy) | max 0.5 | warn |
 
 A rules TOML (`--rules`) overrides `min`, `max` and `level` field by field: top-level tables for the

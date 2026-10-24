@@ -36,8 +36,9 @@
 //! `ludion sculpt new` (scaffold an implicit-surface sculpt model),
 //! `ludion mesh <pick|apply>` (edit a mesh's texture maps: name the surface point under a pixel of a
 //! model sheet, and derive — or drift-check — the tree a `kind: mesh-edit` document owns), and
-//! `ludion texture <build|check|vendor>` (build a `kind: texture` recipe into its committed PBR map
-//! set, drift-check that set, or copy an embedded `std:` recipe out to edit), and
+//! `ludion texture <build|check|seeds|vendor>` (build a `kind: texture` recipe into its committed PBR
+//! map set, drift-check that set, report which root seeds pass the validators, or copy an embedded
+//! `std:` recipe out to edit), and
 //! `ludion gen <nodes|check|run|status|fetch>` (drive a ComfyUI server: list its installed node
 //! classes, validate a `kind: generation` recipe offline and against `/object_info`, submit a run
 //! and follow it to a folder of candidates, and check on or complete a `--no-wait` one).
@@ -1449,6 +1450,10 @@ enum TextureCommand {
         /// with `[textures."<recipe file>"]` tables for per-recipe overrides.
         #[arg(long, value_name = "TOML")]
         rules: Option<PathBuf>,
+        /// Build with this root seed instead of the recipe's `seed:` (to preview a candidate from
+        /// `texture seeds`). Needs `--out`: a set built from another seed is not the committed one.
+        #[arg(long, value_name = "N", requires = "out")]
+        seed: Option<u64>,
         /// Also write the feedback sheets and a rendered preview to an ignored folder.
         #[arg(long)]
         preview: bool,
@@ -1474,6 +1479,25 @@ enum TextureCommand {
         #[arg(long, value_name = "TOML")]
         rules: Option<PathBuf>,
         /// Print one JSON report object.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Evaluate a recipe once per root seed and report each seed's validators and the first seed
+    /// that passes them all. Report-only: it writes nothing; set `seed:` in the recipe yourself,
+    /// and preview a candidate with `build --seed N --out DIR`.
+    Seeds {
+        /// The recipe (`<name>.texture.yaml`).
+        recipe: PathBuf,
+        /// The seeds to try: a half-open range `A..B` or a comma list `3,7,11` (at most 256).
+        #[arg(long, default_value = "0..16", value_parser = texture::parse_seeds)]
+        seeds: texture::SeedList,
+        /// Texels per side. Defaults to the size the committed `generated.json` records, else 1024.
+        #[arg(long)]
+        size: Option<u32>,
+        /// A TOML file overriding validator bounds and levels, as for `build`.
+        #[arg(long, value_name = "TOML")]
+        rules: Option<PathBuf>,
+        /// Print one JSON report object (no timings, so two runs are byte-identical).
         #[arg(long)]
         json: bool,
     },
@@ -2238,6 +2262,7 @@ fn main() -> std::process::ExitCode {
                 size,
                 out,
                 rules,
+                seed,
                 preview,
                 preview_out,
                 no_render,
@@ -2253,6 +2278,7 @@ fn main() -> std::process::ExitCode {
                     out.as_deref(),
                     rules.as_deref(),
                     preview,
+                    seed,
                     json,
                 )
             }
@@ -2262,6 +2288,13 @@ fn main() -> std::process::ExitCode {
                 rules,
                 json,
             } => texture::run_check(&recipe, out.as_deref(), rules.as_deref(), json),
+            TextureCommand::Seeds {
+                recipe,
+                seeds,
+                size,
+                rules,
+                json,
+            } => texture::run_seeds(&recipe, &seeds.0, size, rules.as_deref(), json),
             TextureCommand::Vendor { name, dest, json } => {
                 texture::run_vendor(&name, dest.as_deref(), json)
             }

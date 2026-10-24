@@ -1,10 +1,11 @@
-//! Implementation of `ludion texture build | check | vendor`.
+//! Implementation of `ludion texture build | check | seeds | vendor`.
 //!
 //! `build` evaluates a `kind: texture` recipe (`ludion-texgen`) into its committed, write-only map
 //! set plus a `generated.json` provenance sidecar; `check` rebuilds at the recorded size and
 //! byte-compares (the drift gate `mesh apply --check` established); `vendor` copies an embedded
-//! `std:` recipe next to the project so it can be edited. Both `build` and `check` run the
-//! engine's PBR plausibility validators, with bounds a rules TOML may override.
+//! `std:` recipe next to the project so it can be edited; `seeds` evaluates a recipe once per seed
+//! and reports each seed's validators and the first clean one, writing nothing. `build`, `check` and
+//! `seeds` run the engine's PBR plausibility validators, with bounds a rules TOML may override.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -280,8 +281,8 @@ fn default_out(recipe: &Path) -> PathBuf {
     recipe.with_file_name(stem)
 }
 
-fn evaluate_recipe(recipe: &Path, size: u32, thumbs: bool) -> Result<Built, Vec<Diagnostic>> {
-    ludion_texgen::check_size(size)?;
+/// Reads and loads a recipe from disk, with the root seed replaced when `seed` is given.
+fn load_recipe(recipe: &Path, seed: Option<u64>) -> Result<ludion_texgen::Loaded, Vec<Diagnostic>> {
     let text = std::fs::read_to_string(recipe).map_err(|e| {
         vec![io_error(format!(
             "could not read `{}`: {e}",
@@ -292,7 +293,21 @@ fn evaluate_recipe(recipe: &Path, size: u32, thumbs: bool) -> Result<Built, Vec<
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let loaded = ludion_texgen::load(&text, &FsResolver::new(base))?;
+    let resolver = FsResolver::new(base);
+    match seed {
+        None => ludion_texgen::load(&text, &resolver),
+        Some(seed) => ludion_texgen::load_with_seed(&text, &resolver, seed),
+    }
+}
+
+fn evaluate_recipe(
+    recipe: &Path,
+    size: u32,
+    seed: Option<u64>,
+    thumbs: bool,
+) -> Result<Built, Vec<Diagnostic>> {
+    ludion_texgen::check_size(size)?;
+    let loaded = load_recipe(recipe, seed)?;
     let start = Stopwatch::start();
     let mut last = Duration::ZERO;
     let mut steps = Vec::new();
@@ -532,21 +547,22 @@ fn feedback_json(f: &Feedback, thumbnail_ms: f64) -> Value {
     object
 }
 
-/// Runs `ludion texture build <recipe> [--size N] [--out DIR] [--rules TOML] [--preview ...]
-/// [--json]`.
+/// Runs `ludion texture build <recipe> [--size N] [--out DIR] [--seed N] [--rules TOML]
+/// [--preview ...] [--json]`.
 pub fn run_build(
     recipe: &Path,
     size: u32,
     out: Option<&Path>,
     rules: Option<&Path>,
     preview: Option<Preview<'_>>,
+    seed: Option<u64>,
     json: bool,
 ) -> ExitCode {
     let rules = match load_rules(rules) {
         Ok(rules) => rules,
         Err(diagnostics) => return fail(recipe, &diagnostics, json),
     };
-    let built = match evaluate_recipe(recipe, size, preview.is_some()) {
+    let built = match evaluate_recipe(recipe, size, seed, preview.is_some()) {
         Ok(built) => built,
         Err(diagnostics) => return fail(recipe, &diagnostics, json),
     };
@@ -575,6 +591,9 @@ pub fn run_build(
             "validators": verdicts,
             "written": written.iter().map(|p| path_text(p)).collect::<Vec<_>>(),
         });
+        if let Some(seed) = seed {
+            fields["seed"] = json!(seed);
+        }
         if let Some(f) = &feedback {
             fields["feedback"] = feedback_json(f, built.thumbnail_ms);
         }
@@ -659,6 +678,13 @@ fn drift(path: &Path, why: &str) -> Diagnostic {
         .with_help("run `ludion texture build <recipe>` (same --size) and commit the result; never edit the maps by hand")
 }
 
+/// The sidecar a built set records, or why it cannot be read.
+fn recorded(out_dir: &Path) -> Result<Sidecar, String> {
+    std::fs::read_to_string(out_dir.join(SIDECAR))
+        .map_err(|e| e.to_string())
+        .and_then(|text| serde_json::from_str::<Sidecar>(&text).map_err(|e| e.to_string()))
+}
+
 /// Runs `ludion texture check <recipe> [--out DIR] [--rules TOML] [--json]`.
 pub fn run_check(recipe: &Path, out: Option<&Path>, rules: Option<&Path>, json: bool) -> ExitCode {
     let rules = match load_rules(rules) {
@@ -667,9 +693,7 @@ pub fn run_check(recipe: &Path, out: Option<&Path>, rules: Option<&Path>, json: 
     };
     let out_dir = out.map_or_else(|| default_out(recipe), Path::to_path_buf);
     let sidecar_path = out_dir.join(SIDECAR);
-    let recorded = std::fs::read_to_string(&sidecar_path)
-        .map_err(|e| e.to_string())
-        .and_then(|text| serde_json::from_str::<Sidecar>(&text).map_err(|e| e.to_string()));
+    let recorded = recorded(&out_dir);
     let recorded = match recorded {
         Ok(recorded) => recorded,
         Err(why) => {
@@ -682,7 +706,7 @@ pub fn run_check(recipe: &Path, out: Option<&Path>, rules: Option<&Path>, json: 
         }
     };
     let size = recorded.size;
-    let built = match evaluate_recipe(recipe, size, false) {
+    let built = match evaluate_recipe(recipe, size, None, false) {
         Ok(built) => built,
         Err(diagnostics) => return fail(recipe, &diagnostics, json),
     };
@@ -756,6 +780,169 @@ pub fn run_check(recipe: &Path, out: Option<&Path>, rules: Option<&Path>, json: 
     }
     for verdict in &verdicts {
         println!("{}", verdict_line(verdict));
+    }
+    diagnostic::report(recipe, &diagnostics)
+}
+
+// --- seeds --------------------------------------------------------------------------------------
+
+/// The most seeds one `seeds` run evaluates.
+const MAX_SEEDS: usize = 256;
+
+/// A validated, ordered list of root seeds.
+#[derive(Clone, Debug)]
+pub struct SeedList(pub Vec<u64>);
+
+/// Parses `--seeds`: a half-open range `A..B` or a comma list `3,7,11`.
+pub fn parse_seeds(text: &str) -> Result<SeedList, String> {
+    let forms = "use a half-open range `A..B` (A < B) or a comma list `3,7,11`";
+    let number = |t: &str| {
+        t.trim()
+            .parse::<u64>()
+            .map_err(|_| format!("`{t}` is not a seed number; {forms}"))
+    };
+    let seeds: Vec<u64> = if let Some((a, b)) = text.split_once("..") {
+        let (a, b) = (number(a)?, number(b)?);
+        if a >= b {
+            return Err(format!("the range `{text}` is empty; {forms}"));
+        }
+        if b - a > MAX_SEEDS as u64 {
+            return Err(format!(
+                "the range `{text}` holds more than {MAX_SEEDS} seeds"
+            ));
+        }
+        (a..b).collect()
+    } else {
+        text.split(',').map(number).collect::<Result<_, _>>()?
+    };
+    if seeds.len() > MAX_SEEDS {
+        return Err(format!("more than {MAX_SEEDS} seeds; {forms}"));
+    }
+    let mut sorted = seeds.clone();
+    sorted.sort_unstable();
+    if let Some(pair) = sorted.windows(2).find(|w| w[0] == w[1]) {
+        return Err(format!("seed {} appears twice; {forms}", pair[0]));
+    }
+    Ok(SeedList(seeds))
+}
+
+fn failing_text(verdicts: &[&Verdict]) -> String {
+    let parts: Vec<String> = verdicts
+        .iter()
+        .map(|v| {
+            let bound = match (v.min, v.max) {
+                (_, Some(max)) if v.value > max => format!("at most {max}"),
+                (Some(min), _) => format!("at least {min}"),
+                _ => String::new(),
+            };
+            format!("{} {:.4} ({bound})", v.name, v.value)
+        })
+        .collect();
+    format!(
+        "{} outside bounds \u{2014} {}",
+        verdicts.len(),
+        parts.join(", ")
+    )
+}
+
+/// Runs `ludion texture seeds <recipe> [--seeds LIST] [--size N] [--rules TOML] [--json]`.
+pub fn run_seeds(
+    recipe: &Path,
+    seeds: &[u64],
+    size: Option<u32>,
+    rules: Option<&Path>,
+    json: bool,
+) -> ExitCode {
+    let rules = match load_rules(rules) {
+        Ok(rules) => rules,
+        Err(diagnostics) => return fail(recipe, &diagnostics, json),
+    };
+    let size = size
+        .or_else(|| recorded(&default_out(recipe)).ok().map(|s| s.size))
+        .unwrap_or(DEFAULT_SIZE);
+    if let Err(diagnostics) = ludion_texgen::check_size(size) {
+        return fail(recipe, &diagnostics, json);
+    }
+    let recipe_seed = match std::fs::read_to_string(recipe) {
+        Ok(text) => match ludion_texgen::parse(&text) {
+            Ok(parsed) => parsed.seed,
+            Err(diagnostics) => return fail(recipe, &diagnostics, json),
+        },
+        Err(e) => {
+            let read = io_error(format!("could not read `{}`: {e}", recipe.display()));
+            return fail(recipe, &[read], json);
+        }
+    };
+    let file = recipe_file(recipe);
+    let mut results = Vec::new();
+    for &seed in seeds {
+        let loaded = match load_recipe(recipe, Some(seed)) {
+            Ok(loaded) => loaded,
+            Err(diagnostics) => return fail(recipe, &diagnostics, json),
+        };
+        let maps = ludion_texgen::evaluate(&loaded, size, &mut |_, _| {});
+        results.push((seed, validate_maps(&maps, &rules, &file).0));
+    }
+    let first_clean = results
+        .iter()
+        .find(|(_, verdicts)| verdicts.iter().all(|v| v.pass))
+        .map(|(seed, _)| *seed);
+    let mut diagnostics = Vec::new();
+    if first_clean.is_none() {
+        let list = seeds
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        diagnostics.push(
+            Diagnostic::new(
+                code::TEXTURE_CHECK_WARNING,
+                format!("no seed in {list} passes every validator"),
+            )
+            .with_help("try a wider `--seeds` range, or relax a bound with `--rules`"),
+        );
+    }
+    if json {
+        let entries: Vec<Value> = results
+            .iter()
+            .map(|(seed, verdicts)| {
+                let failing: Vec<&str> = verdicts
+                    .iter()
+                    .filter(|v| !v.pass)
+                    .map(|v| v.name)
+                    .collect();
+                json!({
+                    "seed": seed,
+                    "clean": failing.is_empty(),
+                    "failing": failing,
+                    "validators": verdicts,
+                })
+            })
+            .collect();
+        let fields = json!({
+            "recipe": path_text(recipe),
+            "size": size,
+            "recipe_seed": recipe_seed,
+            "first_clean": first_clean,
+            "seeds": entries,
+        });
+        print_json(&Value::Object(diagnostic::json_envelope(
+            true,
+            fields,
+            &diagnostics,
+        )));
+    } else {
+        for (seed, verdicts) in &results {
+            let failing: Vec<&Verdict> = verdicts.iter().filter(|v| !v.pass).collect();
+            if failing.is_empty() {
+                println!("seed {seed}: clean");
+            } else {
+                println!("seed {seed}: {}", failing_text(&failing));
+            }
+        }
+        if let Some(seed) = first_clean {
+            println!("first clean seed: {seed} (recipe seed: {recipe_seed})");
+        }
     }
     diagnostic::report(recipe, &diagnostics)
 }
