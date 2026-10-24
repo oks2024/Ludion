@@ -1,7 +1,7 @@
 # Plan: Procedural textures — a text recipe that produces a PBR map set
 
-> **Status:** Wave 0 (the spike) in progress: the core, the hard generators, the `std:` library and the `ludion texture` verb ship; the feedback loop, reference materials and the kit piece remain. Decided 2026-10-23. Waves 1+ are recorded with
-> triggers and wait on the spike's verdict.
+> **Status:** Wave 0 (the spike) passed its verdict, Go, 2026-10-24; Wave 1 (the op library) is in progress. Decided 2026-10-23. Later waves are recorded with
+> triggers.
 
 ## Why
 
@@ -61,6 +61,12 @@ plan (the `Plan/cooked-assets.md` Wave 0 precedent).
 19. **Revisits `Plan/textured-pbr.md` decision 1 and its "no texture-authoring surface" fence.**
     A text recipe is diffable source with generated, drift-gated maps, which removes the fence's
     reason; both places carry an amendment line.
+20. **W0 verdict: Go (2026-10-24).** Wave 1 builds the op library that the spike's missing-ops log
+    names and re-authors the reference materials to measure the gain. Seed variants and adopting
+    texture sets in the reference game's kits stay deferred under their triggers.
+21. **A `layer` step.** One mask drives several output maps (colour, roughness, metallic, height)
+    in one step. It extends the declarative format; there is still no expression language and no
+    node graph. Its exact shape is settled in Wave 1 and recorded here.
 
 ## Waves
 
@@ -87,9 +93,32 @@ plan (the `Plan/cooked-assets.md` Wave 0 precedent).
 - **One of three:** one targeted follow-up wave driven by the missing-ops log, then judge again.
 - **None:** park. The crate is deleted; nothing outside it depends on it.
 
+### Wave 1 — the op library
+
+Driven by the Wave 0 missing-ops log and the kit piece's findings.
+
+- **Layout:** a per-row random offset in `tile_sampler`; a uniform gap width on non-square cells;
+  per-instance pattern scale; layout params exposed on `std:planks` and `std:cobbles`; a rounded
+  (facet-free) cobble profile.
+- **Tone and filter:** posterize; a band/rim mask from a height; hue/saturation shift (palette
+  re-hue); anisotropic (stretched) noise; directional blur/smear.
+- **The `layer` step** (decision 21).
+- **Seeds and validators:** a seam-safe seed search guided by the validators; a `repetition_peak`
+  that does not flag directional patterns (the long-grain false positive).
+- **Re-authoring:** rebuild the four reference materials and the kit piece's wood with the new
+  ops, logging steps and iterations before and after.
+
+Also met on the kit piece: no recipe params for layout (the recipe was vendored instead of
+referenced), no way to re-hue a palette without editing colour stops, and a constant board that
+needed `constant` stand-ins for `board_id` and `face`, so the board and gap ops were bypassed by hand.
+
+**Exit:** every op shipped with a test and a `texture-ops` entry; the re-authored materials' drift
+checks are green; the before/after log is in Status. Nothing in the Exit waits on a human.
+
 ### Later waves — deferred, with triggers
 
-Recorded so the decision is made from analysis, not under pressure. None starts before a Go.
+Recorded so the decision is made from analysis, not under pressure. Wave 0 passed; these still
+wait on their own triggers.
 
 - **Seed variants** — one recipe, N seeded outputs. Trigger: the periodicity validator or the
   user's eye reports visible repetition on a kit piece.
@@ -118,13 +147,17 @@ and any runtime procedural generation in a game binary.
 
 ## Status
 
-Wave 0 (the spike), in progress:
+Wave 0 (the spike) — **Go**, 2026-10-24:
 
 - **Core crate.** `ludion-texgen` parses a `kind: texture` recipe and evaluates its step DAG on the CPU into the PBR map set as PNG bytes; thirteen ops (noise, gradient, constant, blend, levels, curve, clamp, remap, colorize, grayscale, warp, blur, normal), diagnostics `L1283`–`L1285`, pinned output hashes at two sizes.
 - **Hard generators.** `tile_sampler`, `flood_fill`, `distance`, `ambient_occlusion`, `curvature` and the `image` op; `normal_from_height` uses a Sobel filter.
 - **`std:` library.** `op: input` and `inputs:` bindings let a sub-recipe receive images; five embedded macros (`edge_wear`, `cavity_grime`, `cobbles`, `planks`, `rust_spots`), `std:` references resolved from the binary.
 - **`ludion texture` verb.** `build`, `check` (the drift gate, `L1286`) and `vendor`; nine validators (seven PBR, two repetition) with a rules TOML (`L1287`–`L1289`); `kind: texture` is checked by the verb; `examples/textures/tiles.texture.yaml` is the worked example. Docs: `ludion docs texture-recipes`, `ludion docs texture-ops`, `ludion devdocs ludion-texgen`.
 - **Feedback loop.** `build --preview` writes the map sheet, step thumbnails, 2×2 tiling views and a Ludion-rendered preview (a generated scene with sphere, rounded cube and panel) into an ignored `.ludion/texture/<stem>/`; the `bench40` recipe measures speed: warm-run budget met on the M5, cold shader compile excluded, the M4 measurement owed.
+- **Reference materials.** `examples/textures/`: cobble, oak planks, painted iron and the hand-painted cobble restyle, each under the drift gate; the spike log below records the iterations and the missing ops.
+- **Kit piece.** The reference game's crate rebuilt from a generated set beside its node-material twin; details private.
+
+Wave 1 — in progress.
 
 ## Spike log (W0)
 
