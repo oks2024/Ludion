@@ -137,6 +137,30 @@ pub fn ratio(baked: Vec3, live: Vec3) -> Vec3 {
 }
 
 #[cfg(test)]
+/// The ambient-cube rows (+X −X +Y −Y +Z −Z = 0..5) a unit direction `n` weights: the signed axis
+/// per component, zero counting as positive. The WGSL twin is `probe_axis_rows`.
+pub fn axis_rows(n: Vec3) -> [usize; 3] {
+    [
+        if n.x >= 0.0 { 0 } else { 1 },
+        if n.y >= 0.0 { 2 } else { 3 },
+        if n.z >= 0.0 { 4 } else { 5 },
+    ]
+}
+
+#[cfg(test)]
+/// The relight ratio along the facing `n`: ambient-cube weights `n * n` over the per-axis baked and
+/// live irradiance, then [`ratio`]. Both sums spell the same operations, so equal bits give exactly
+/// 1. The WGSL twin is `probe_axis_ratio`.
+pub fn axis_ratio(baked: [Vec3; 6], live: [Vec3; 6], n: Vec3) -> Vec3 {
+    let [rx, ry, rz] = axis_rows(n);
+    let w = n * n;
+    ratio(
+        w.x * baked[rx] + w.y * baked[ry] + w.z * baked[rz],
+        w.x * live[rx] + w.y * live[ry] + w.z * live[rz],
+    )
+}
+
+#[cfg(test)]
 /// A prefiltered probe sample relit: the geometry radiance (rgb) scaled by `ratio` except its
 /// emissive part `em`, the sky fraction (alpha) replaced by the live sky `sky` times `k`. The WGSL
 /// twin is `probe_relit`.
@@ -352,5 +376,103 @@ mod tests {
         assert_eq!(mixed, rgb);
         let mixed = relit(rgb.extend(0.5), Vec3::ZERO, Vec3::ONE, sky, 1.0);
         assert!((mixed - (rgb + sky * 0.5)).length() < 1e-6);
+    }
+
+    #[test]
+    fn axis_ratio_is_exactly_one_when_live_equals_baked() {
+        let e: [Vec3; 6] =
+            std::array::from_fn(|i| Vec3::new(0.3 + i as f32, 0.07 * (i + 1) as f32, 1.9));
+        for n in [Vec3::new(0.3, -0.5, 0.2).normalize(), Vec3::X, -Vec3::Z] {
+            assert_eq!(axis_ratio(e, e, n), Vec3::ONE);
+        }
+    }
+
+    #[test]
+    fn axis_ratio_along_an_axis_reads_that_row_only() {
+        let baked = [Vec3::ONE; 6];
+        let mut live = [Vec3::splat(100.0); 6];
+        live[2] = Vec3::new(2.0, 3.0, 4.0);
+        assert_eq!(axis_rows(Vec3::Y), [0, 2, 4]);
+        assert_eq!(axis_rows(-Vec3::Y), [0, 3, 4]);
+        assert_eq!(axis_ratio(baked, live, Vec3::Y), Vec3::new(2.0, 3.0, 4.0));
+    }
+
+    #[test]
+    fn the_ambient_cube_weights_sum_to_one() {
+        for n in [
+            Vec3::new(1.0, 2.0, -3.0).normalize(),
+            Vec3::new(-0.2, 0.9, 0.4).normalize(),
+        ] {
+            let w = n * n;
+            assert!((w.x + w.y + w.z - 1.0).abs() < 1e-6);
+        }
+    }
+
+    /// The WGSL `probe_axis_rows` + `probe_axis_ratio` and [`axis_rows`] + [`axis_ratio`] are one
+    /// formula in two languages.
+    #[test]
+    fn needs_gpu_the_axis_ratio_snippet_matches_its_rust_twin() {
+        let gpu = match ludion_render_graph::Gpu::request() {
+            Ok(gpu) => gpu,
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+                eprintln!("SKIPPED the axis ratio snippet test: no GPU adapter");
+                return;
+            }
+            Err(d) => panic!("gpu request failed: {d:?}"),
+        };
+        // A small LCG keeps the inputs fixed without a dependency.
+        let mut state = 0x2545_f491_u32;
+        let mut next = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let mut dirs = Vec::new();
+        let mut input = Vec::new();
+        for _ in 0..50 {
+            let n =
+                Vec3::new(next() * 2.0 - 1.0, next() * 2.0 - 1.0, next() * 2.0 - 1.0).normalize();
+            dirs.push(n);
+            input.extend([n.x, n.y, n.z]);
+            for _ in 0..12 {
+                input.extend([
+                    0.05 + next() * 4.0,
+                    0.05 + next() * 4.0,
+                    0.05 + next() * 4.0,
+                ]);
+            }
+        }
+        let src = format!(
+            "{}\n@group(0) @binding(0) var<storage, read> inp: array<f32>;\n\
+             @group(0) @binding(1) var<storage, read_write> out: array<f32>;\n\
+             fn row(base: u32, i: u32) -> vec3<f32> {{\n\
+             let at = base + i * 3u;\n return vec3<f32>(inp[at], inp[at + 1u], inp[at + 2u]);\n}}\n\
+             @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {{\n\
+             if (id.x >= 50u) {{ return; }}\n\
+             let b = id.x * 39u;\n\
+             let n = vec3<f32>(inp[b], inp[b + 1u], inp[b + 2u]);\n\
+             let r = probe_axis_rows(n);\n\
+             let q = probe_axis_ratio(row(b + 3u, r.x), row(b + 3u, r.y), row(b + 3u, r.z),\n\
+             row(b + 21u, r.x), row(b + 21u, r.y), row(b + 21u, r.z), n * n);\n\
+             out[id.x * 3u] = q.x; out[id.x * 3u + 1u] = q.y; out[id.x * 3u + 2u] = q.z;\n}}\n",
+            include_str!("shaders/snippets/probes.wgsl"),
+        );
+        let got = crate::lobe::run_f32_kernel(&gpu, &src, &input, dirs.len() * 3);
+        for (k, (&n, row)) in dirs.iter().zip(input.chunks(39)).enumerate() {
+            let e = |at: usize| -> [Vec3; 6] {
+                std::array::from_fn(|i| Vec3::from_slice(&row[at + i * 3..at + i * 3 + 3]))
+            };
+            let want = axis_ratio(e(3), e(21), n);
+            for c in 0..3 {
+                let g = got[k * 3 + c];
+                assert!(
+                    (g - want[c]).abs() <= 1e-6 * want[c].abs().max(1.0),
+                    "k {k} direction {n:?} channel {c}: gpu {g} vs {} (rows {:?}, baked {:?}, live {:?})",
+                    want[c],
+                    axis_rows(n),
+                    e(3),
+                    e(21)
+                );
+            }
+        }
     }
 }

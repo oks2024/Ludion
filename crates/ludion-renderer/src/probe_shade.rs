@@ -6,7 +6,7 @@ use ludion_core::math::glam::Vec3;
 
 use crate::cluster::probe_masks;
 use crate::probe::{MAX_PROBES, ProbeData, ProbeVolume, probe_rank};
-use crate::probe_capture::ProbeCubes;
+use crate::probe_capture::{AxisIrradiance, ProbeCubes};
 use crate::scene::RenderScene;
 use crate::shader_gen::{ProbeList, ShadeProbe};
 
@@ -32,7 +32,7 @@ pub(crate) fn build_probe_list(
         list.probes[k] = shade_probe(
             &held[i],
             cubes.slots[i],
-            cubes.irradiance[i],
+            &cubes.irradiance[i],
             cubes.emissive_slots[i],
         );
     }
@@ -42,7 +42,7 @@ pub(crate) fn build_probe_list(
     (list, masks)
 }
 
-fn shade_probe(probe: &ProbeData, slot: u32, baked: [f32; 3], emissive: bool) -> ShadeProbe {
+fn shade_probe(probe: &ProbeData, slot: u32, baked: &AxisIrradiance, emissive: bool) -> ShadeProbe {
     let column = |axis: Vec3| {
         let v = probe.rotation * axis;
         [v.x, v.y, v.z, 0.0]
@@ -62,8 +62,8 @@ fn shade_probe(probe: &ProbeData, slot: u32, baked: [f32; 3], emissive: bool) ->
         axis_y: column(Vec3::Y),
         axis_z: column(Vec3::Z),
         extent,
-        params: [kind, probe.blend, 0.0, 0.0],
-        light: [baked[0], baked[1], baked[2], f32::from(emissive)],
+        params: [kind, probe.blend, f32::from(emissive), 0.0],
+        baked: baked.map(|e| [e[0], e[1], e[2], 0.0]),
     }
 }
 
@@ -413,6 +413,114 @@ mod tests {
             1,
             "the ambient recaptured the probe"
         );
+    }
+
+    /// An open Lambertian floor under a dim sky gradient, one probe above it: the relight's ratio
+    /// along the floor's facing (+Y) is the floor's own change when the sky's zenith moves, which the
+    /// old mean-of-six-axes ratio is not.
+    #[test]
+    fn needs_gpu_a_zenith_change_relights_a_floor_exactly() {
+        use crate::ibl::tests::sky_gradient;
+        use crate::probe::{axis_ratio, ratio};
+        let Some(r) = renderer_or_skip("a zenith change relights a floor") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = room_scene();
+        scene.post = scene.post.map(|post| PostData {
+            exposure: 4.0,
+            ..post
+        });
+        let mut env = EnvironmentData {
+            sky_zenith: [0.015, 0.028, 0.075],
+            sky_horizon: [0.07, 0.1, 0.17],
+            sky_ground: [0.008, 0.01, 0.018],
+            ..test_env()
+        };
+        scene.environment = Some(env);
+        scene.ambient = [0.0; 3];
+        scene.meshes.truncate(1);
+        scene.meshes[0].color = [1.0, 1.0, 1.0, 1.0];
+        scene.meshes[0].material = [1.0, 0.0, 0.0];
+        scene.probes = vec![room_probe()];
+        scene.probe_world = Some(ProbeWorld::new(scene.clone()));
+        let centre = Vec3::ZERO;
+
+        let before_e = r.read_probe_irradiance(&scene)[0];
+        assert_eq!(
+            before_e.live, before_e.baked,
+            "a fresh capture is its own baseline"
+        );
+        let before = r.render(&scene, size).expect("baseline");
+        env.sky_zenith = [0.12, 0.05, 0.02];
+        scene.environment = Some(env);
+        let after_e = r.read_probe_irradiance(&scene)[0];
+        let after = r.render(&scene, size).expect("moved zenith");
+        assert_eq!(
+            r.probe_resolve().resolve,
+            1,
+            "the zenith recaptured the probe"
+        );
+        assert_eq!(
+            after_e.baked, before_e.baked,
+            "the bake follows the capture"
+        );
+
+        let v = |e: &crate::AxisIrradiance| e.map(Vec3::from_array);
+        let (baked, live) = (v(&after_e.baked), v(&after_e.live));
+        let facing = axis_ratio(baked, live, Vec3::Y);
+        let truth = {
+            let lin = |img: &RenderedImage| view_pixel(img, &scene, centre).map(srgb_to_linear);
+            let (b, a) = (lin(&before), lin(&after));
+            Vec3::new(a[0] / b[0], a[1] / b[1], a[2] / b[2])
+        };
+        let mean = |e: [Vec3; 6]| e.iter().sum::<Vec3>() / 6.0;
+        let old = ratio(mean(baked), mean(live));
+        eprintln!(
+            "floor truth {truth:?}, per-axis {facing:?}, old mean {old:?}, pixels {:?} -> {:?}",
+            view_pixel(&before, &scene, centre),
+            view_pixel(&after, &scene, centre)
+        );
+        let miss = |got: Vec3| ((got - truth) / truth).abs();
+        assert!(
+            miss(facing).max_element() < 0.02,
+            "the per-axis ratio missed the floor: {facing:?} vs {truth:?}"
+        );
+        assert!(
+            miss(old).x.max(miss(old).z) > 0.2,
+            "the old mean ratio no longer misses the floor: {old:?} vs {truth:?}"
+        );
+
+        // Metals still drift: a mirror along a 45 degrees up ray sees the sky's own change, which no
+        // facing's ratio follows (decision 17's limit).
+        let ray = [0.0, 0.5_f32.sqrt(), 0.5_f32.sqrt()];
+        let (sky_b, sky_a) = (
+            sky_gradient(
+                &EnvironmentData {
+                    sky_zenith: [0.015, 0.028, 0.075],
+                    ..env
+                },
+                ray,
+            ),
+            sky_gradient(&env, ray),
+        );
+        let sky_change = Vec3::from_array(sky_a) / Vec3::from_array(sky_b);
+        for n in [
+            Vec3::Y,
+            -Vec3::Y,
+            Vec3::X,
+            -Vec3::X,
+            Vec3::Z,
+            -Vec3::Z,
+            Vec3::new(0.0, 1.0, 1.0).normalize(),
+        ] {
+            let got = axis_ratio(baked, live, n);
+            let off = ((got - sky_change) / sky_change).abs().max_element();
+            assert!(
+                off > 0.05,
+                "facing {n:?} follows a metal's sky change: {got:?} vs {sky_change:?}"
+            );
+        }
     }
 
     fn srgb_to_linear(byte: u8) -> f32 {

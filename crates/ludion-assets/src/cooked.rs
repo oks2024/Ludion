@@ -384,7 +384,7 @@ pub fn read_ktx2(
 /// Bytes per texel of a probe cube: `R16G16B16A16_SFLOAT`.
 const PROBE_TEXEL_BYTES: u64 = 8;
 const PROBE_ALIGN: usize = 16;
-/// The key/value entry that carries a probe's baked irradiance: three little-endian `f32`.
+/// The key/value entry that carries a probe's baked irradiance, one `[f32; 3]` per cube axis (+X −X +Y −Y +Z −Z): 18 little-endian `f32`.
 const PROBE_IRRADIANCE_KEY: &[u8] = b"LudionProbeIrradiance\0";
 
 fn probe_level_bytes(face: u32, level: u32) -> u64 {
@@ -399,25 +399,25 @@ pub struct ProbeCube {
     pub levels: Vec<Vec<u8>>,
     /// The emissive part of the same cube, same layout; `None` for a probe that sees no emissive.
     pub emissive: Option<Vec<Vec<u8>>>,
-    /// The probe's baked diffuse irradiance.
-    pub irradiance: [f32; 3],
+    /// The probe's baked diffuse irradiance, per cube axis (+X −X +Y −Y +Z −Z).
+    pub irradiance: [[f32; 3]; 6],
 }
 
 /// Serialises a prefiltered probe cube as a KTX2 file: `R16G16B16A16_SFLOAT`, six faces,
 /// no supercompression. `levels[l]` holds mip `l`'s six faces back to back (+X, −X, +Y, −Y, +Z, −Z),
 /// each `edge × edge` texels with tight rows, `edge = max(face >> l, 1)`. With `emissive` (same
 /// layout) the file is a two-layer cube array, each level holding the lit layer's faces then the
-/// emissive layer's; without it, no layers. `irradiance` is the probe's baked diffuse irradiance,
-/// stored as one key/value entry.
+/// emissive layer's; without it, no layers. `irradiance` is the probe's baked diffuse irradiance per cube
+/// axis, stored as one key/value entry.
 ///
 /// # Example
 /// ```
 /// use ludion_assets::cooked::{ProbeCube, read_probe_cube, write_probe_cube};
 /// let levels = vec![vec![7u8; 6 * 2 * 2 * 8], vec![9u8; 6 * 8]];
-/// let bytes = write_probe_cube(2, &levels, None, [0.5, 1.0, 2.0]);
+/// let bytes = write_probe_cube(2, &levels, None, [[0.5, 1.0, 2.0]; 6]);
 /// assert_eq!(
 ///     read_probe_cube(&bytes, 2, 2)?,
-///     ProbeCube { levels, emissive: None, irradiance: [0.5, 1.0, 2.0] }
+///     ProbeCube { levels, emissive: None, irradiance: [[0.5, 1.0, 2.0]; 6] }
 /// );
 /// # Ok::<(), ludion_assets::cooked::Ktx2Error>(())
 /// ```
@@ -425,7 +425,7 @@ pub fn write_probe_cube(
     face: u32,
     levels: &[Vec<u8>],
     emissive: Option<&[Vec<u8>]>,
-    irradiance: [f32; 3],
+    irradiance: [[f32; 3]; 6],
 ) -> Vec<u8> {
     let joined: Vec<Vec<u8>> = match emissive {
         Some(emissive) => levels
@@ -443,9 +443,9 @@ pub fn write_probe_cube(
     // The key/value block sits right after the descriptor (both are 4-aligned): the entry's byte
     // length, the key, the value, then padding to 4.
     let mut kvd = Vec::new();
-    kvd.extend_from_slice(&((PROBE_IRRADIANCE_KEY.len() + 12) as u32).to_le_bytes());
+    kvd.extend_from_slice(&((PROBE_IRRADIANCE_KEY.len() + 72) as u32).to_le_bytes());
     kvd.extend_from_slice(PROBE_IRRADIANCE_KEY);
-    for c in irradiance {
+    for c in irradiance.iter().flatten() {
         kvd.extend_from_slice(&c.to_le_bytes());
     }
     kvd.resize(kvd.len().next_multiple_of(4), 0);
@@ -607,15 +607,17 @@ pub fn read_probe_cube(bytes: &[u8], face: u32, level_count: u32) -> Result<Prob
 }
 
 /// The irradiance value of the key/value block `kvd`, if its first entry is the probe's.
-fn probe_irradiance(kvd: &[u8]) -> Option<[f32; 3]> {
+fn probe_irradiance(kvd: &[u8]) -> Option<[[f32; 3]; 6]> {
     let length = u32::from_le_bytes(kvd.get(..4)?.try_into().ok()?) as usize;
     let entry = kvd.get(4..4usize.checked_add(length)?)?;
     let value = entry.strip_prefix(PROBE_IRRADIANCE_KEY)?;
-    if value.len() != 12 {
+    if value.len() != 72 {
         return None;
     }
     let c = |i: usize| f32::from_le_bytes(value[i * 4..i * 4 + 4].try_into().expect("4 bytes"));
-    Some([c(0), c(1), c(2)])
+    Some(std::array::from_fn(|a| {
+        [c(a * 3), c(a * 3 + 1), c(a * 3 + 2)]
+    }))
 }
 
 #[cfg(test)]
@@ -718,13 +720,13 @@ mod tests {
     #[test]
     fn a_probe_cube_round_trips() {
         let levels = probe_levels(8, 4);
-        let bytes = write_probe_cube(8, &levels, None, [0.25, 3.0, 1e-7]);
+        let bytes = write_probe_cube(8, &levels, None, [[0.25, 3.0, 1e-7]; 6]);
         assert_eq!(
             read_probe_cube(&bytes, 8, 4).unwrap(),
             ProbeCube {
                 levels,
                 emissive: None,
-                irradiance: [0.25, 3.0, 1e-7]
+                irradiance: [[0.25, 3.0, 1e-7]; 6]
             }
         );
     }
@@ -733,20 +735,20 @@ mod tests {
     fn a_two_layer_probe_cube_round_trips_its_emissive_layer() {
         let levels = probe_levels(8, 4);
         let emissive: Vec<Vec<u8>> = levels.iter().map(|l| vec![200; l.len()]).collect();
-        let bytes = write_probe_cube(8, &levels, Some(&emissive), [1.0, 2.0, 3.0]);
+        let bytes = write_probe_cube(8, &levels, Some(&emissive), [[1.0, 2.0, 3.0]; 6]);
         assert_eq!(
             read_probe_cube(&bytes, 8, 4).unwrap(),
             ProbeCube {
                 levels,
                 emissive: Some(emissive),
-                irradiance: [1.0, 2.0, 3.0]
+                irradiance: [[1.0, 2.0, 3.0]; 6]
             }
         );
     }
 
     #[test]
     fn a_probe_cube_with_three_layers_is_refused() {
-        let mut bytes = write_probe_cube(8, &probe_levels(8, 4), None, [1.0; 3]);
+        let mut bytes = write_probe_cube(8, &probe_levels(8, 4), None, [[1.0; 3]; 6]);
         // Header: layerCount at byte 32.
         bytes[32..36].copy_from_slice(&3u32.to_le_bytes());
         assert!(matches!(
@@ -757,7 +759,7 @@ mod tests {
 
     #[test]
     fn a_probe_cube_without_its_irradiance_is_an_error() {
-        let mut bytes = write_probe_cube(8, &probe_levels(8, 4), None, [1.0; 3]);
+        let mut bytes = write_probe_cube(8, &probe_levels(8, 4), None, [[1.0; 3]; 6]);
         // Header index: kvd offset at byte 56, kvd length at 60.
         bytes[60..64].copy_from_slice(&0u32.to_le_bytes());
         assert!(read_probe_cube(&bytes, 8, 4).is_err());
@@ -769,7 +771,7 @@ mod tests {
 
     #[test]
     fn a_truncated_probe_cube_is_an_error_not_a_panic() {
-        let bytes = write_probe_cube(8, &probe_levels(8, 4), None, [1.0; 3]);
+        let bytes = write_probe_cube(8, &probe_levels(8, 4), None, [[1.0; 3]; 6]);
         for cut in [0, 5, 12, 16, 60, 100, 200, bytes.len() / 2, bytes.len() - 1] {
             assert!(
                 read_probe_cube(&bytes[..cut], 8, 4).is_err(),
@@ -780,7 +782,7 @@ mod tests {
 
     #[test]
     fn a_probe_cube_of_another_shape_is_refused() {
-        let bytes = write_probe_cube(8, &probe_levels(8, 4), None, [1.0; 3]);
+        let bytes = write_probe_cube(8, &probe_levels(8, 4), None, [[1.0; 3]; 6]);
         assert!(read_probe_cube(&bytes, 16, 4).is_err());
         assert!(read_probe_cube(&bytes, 8, 3).is_err());
         assert!(read_probe_cube(&bytes, 8, 5).is_err());

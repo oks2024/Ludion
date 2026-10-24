@@ -513,7 +513,7 @@ pub struct ProbeList {
     pub grid: [f32; 4],
     pub probes: [ShadeProbe; 32],
 }
-const _: () = assert!(core::mem::size_of::<ProbeList>() == 3616);
+const _: () = assert!(core::mem::size_of::<ProbeList>() == 6176);
 const _: () = assert!(core::mem::offset_of!(ProbeList, header) == 0);
 const _: () = assert!(core::mem::offset_of!(ProbeList, grid) == 16);
 const _: () = assert!(core::mem::offset_of!(ProbeList, probes) == 32);
@@ -583,16 +583,16 @@ pub struct ShadeProbe {
     pub axis_z: [f32; 4],
     pub extent: [f32; 4],
     pub params: [f32; 4],
-    pub light: [f32; 4],
+    pub baked: [[f32; 4]; 6],
 }
-const _: () = assert!(core::mem::size_of::<ShadeProbe>() == 112);
+const _: () = assert!(core::mem::size_of::<ShadeProbe>() == 192);
 const _: () = assert!(core::mem::offset_of!(ShadeProbe, center) == 0);
 const _: () = assert!(core::mem::offset_of!(ShadeProbe, axis_x) == 16);
 const _: () = assert!(core::mem::offset_of!(ShadeProbe, axis_y) == 32);
 const _: () = assert!(core::mem::offset_of!(ShadeProbe, axis_z) == 48);
 const _: () = assert!(core::mem::offset_of!(ShadeProbe, extent) == 64);
 const _: () = assert!(core::mem::offset_of!(ShadeProbe, params) == 80);
-const _: () = assert!(core::mem::offset_of!(ShadeProbe, light) == 96);
+const _: () = assert!(core::mem::offset_of!(ShadeProbe, baked) == 96);
 
 /// WGSL `struct ShadowView`.
 ///
@@ -2238,7 +2238,7 @@ pub fn create_pdbg_normal_pdbg_depth_pdbg_probe_list_probe_mask_bgl(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(3616),
+                    min_binding_size: wgpu::BufferSize::new(6176),
                 },
                 count: None,
             },
@@ -2380,7 +2380,7 @@ pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_r
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(3616),
+                    min_binding_size: wgpu::BufferSize::new(6176),
                 },
                 count: None,
             },

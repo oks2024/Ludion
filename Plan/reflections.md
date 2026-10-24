@@ -174,19 +174,22 @@ interiors**. Large open water is not a driver.
       never follows the ambient. The sky cube is the live sky specular cube along the reflection ray
       and `k` = `ibl_intensity` with an `Environment`, 0 without one.
     - `ratio` = live E / baked E per channel (1 where baked E ≤ 1e-6), E being the normal-free
-      diffuse irradiance at the probe's capture point, composed like `mesh.wgsl`'s ambient term with
-      `diffuse = 1` and no occlusion: `k · mean(irradiance cube at ±X ±Y ±Z) + ambient`, times
+      diffuse irradiance at the probe's capture point, one value per cube axis (+X −X +Y −Y +Z −Z),
+      each composed like `mesh.wgsl`'s ambient term with `diffuse = 1` and no occlusion:
+      `k · irradiance cube along the axis + ambient`, times
       `mix(1, sky visibility DC, sky_visibility)` with a `GiVolume`, plus `bounce · bounce DC` at
       `bounce > 0`. One kernel (`probe_relight.wgsl`) computes both: baked at capture, live per
-      frame, so a static scene's ratio is x / x = 1 exactly.
+      frame, so a static scene's ratio is x / x = 1 exactly. Each probe texel resolves the ratio
+      with Valve ambient-cube weights `n · n` over the three axes of its facing `n = −normalize(dir)`,
+      `dir` being the lookup's hit relative to the capture point: a surface the probe sees roughly
+      faces back toward it.
     - Known limit: direct light on the captured geometry (sun/moon, point and spot lights) is frozen at
       capture; the per-channel ambient ratio scales it too (emissive does not), so a clock that raises ambient N× brightens
       lantern-lit walls in reflections N× while the lanterns stay put, and moving a `DirectionalLight`
       or switching a lamp does not follow until a rebake.
-    - Known limit: the ratio is the 6-direction mean, so it is exact only when every ambient term
-      changes by the same per-channel factor; a sky-gradient change (zenith ≠ horizon) drifts
-      reflected Lambertian and metal content in hue and brightness (30c refines it).
-    - Baked E is stored with the cube (a KTX2 key/value entry, bake version 5), not divided into the
+    - Known limit: the ratio is exact for Lambertian content facing the capture point; metals and
+      surfaces facing away still drift under a sky-gradient change (zenith ≠ horizon).
+    - Baked E is stored with the cube (a KTX2 key/value entry, bake version 6), not divided into the
       texels: a dark capture's tiny E would overflow fp16.
     - Amended 2026-10-22: E is computed with or without a `GiVolume` (the old "ratio 1 without one"
       would freeze the ambient and `ibl_intensity` the clock moves). The dynamic injection is
@@ -415,6 +418,9 @@ interiors**. Large open water is not a driver.
 - Item 7 REFUTED: Lagarde's specular-occlusion form vs raw AO, mean error 0.200 vs 0.236 (cone) and
   0.195 vs 0.204 (crease); not adopted (`ibl.rs` pins it). Item 8: decision 7's text amended. Item 9:
   documented as decision 17's second known limit.
+- Shipped item 9(b): the relight ratio is per cube axis, resolved along the surface's facing; an open
+  floor under a moved zenith relights to within 0.5% of its own change where the mean ratio missed
+  by 50% in red (decision 17).
 - **Owed:** the M4/3090 blesses (`Plan/owed.md`).
 - **Exit:** 1–4 shipped with provisional goldens; 5–9 each verified and either fixed or recorded.
 

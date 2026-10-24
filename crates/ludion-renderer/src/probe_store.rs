@@ -21,8 +21,8 @@ use crate::scene::{MeshTexture, RenderScene};
 /// Bump whenever the capture or the prefilter produces different bytes for the same input; every
 /// stored entry is then orphaned. 4: the capture holds geometry only (sky rgb 0) and the entry
 /// carries the baked irradiance the live relight divides by. 5: an emissive layer the relight leaves
-/// unscaled.
-pub(crate) const PROBE_BAKE_VERSION: u32 = 5;
+/// unscaled. 6: the baked irradiance is per axis.
+pub(crate) const PROBE_BAKE_VERSION: u32 = 6;
 
 const TEXEL_BYTES: u32 = 8;
 
@@ -185,7 +185,7 @@ pub(crate) fn write_entry(
     face: u32,
     levels: &[Vec<u8>],
     emissive: Option<&[Vec<u8>]>,
-    irradiance: [f32; 3],
+    irradiance: [[f32; 3]; 6],
 ) {
     let path = entry_path(dir, key);
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));

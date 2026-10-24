@@ -42,10 +42,11 @@ struct ProbeList {
 @group(0) @binding(10) var<uniform> probe_list: ProbeList;
 // One bit-mask per cluster cell, in the lights' cell order.
 @group(0) @binding(11) var<storage, read> probe_mask: array<u32>;
-// The live irradiance at each ranked probe's capture point, in `xyz` (`probe_relight.wgsl`).
+// The live irradiance at each ranked probe's capture point, in `xyz`: column = the probe's rank, row =
+// the cube axis (+X -X +Y -Y +Z -Z) (`probe_relight.wgsl`).
 @group(0) @binding(12) var probe_live: texture_2d<f32>;
 // The emissive part of each flagged probe's capture, prefiltered into the same slots (the cube array
-// above as a fallback when no probe sees emissive; a probe sets `light.w` to sample it).
+// above as a fallback when no probe sees emissive; a probe sets `params.z` to sample it).
 @group(0) @binding(13) var refl_probe_emissive: texture_cube_array<f32>;
 
 struct Reflections {
@@ -132,10 +133,19 @@ fn reflection_fill(pos: vec4<f32>) -> vec3<f32> {
             let dir = probe_lookup(probe, world, rd);
             let sampled = textureSampleLevel(refl_probe_cubes, refl_samp, dir, i32(probe.center.w), lod);
             var em = vec3<f32>(0.0);
-            if (probe.light.w > 0.5) {
+            if (probe.params.z > 0.5) {
                 em = textureSampleLevel(refl_probe_emissive, refl_samp, dir, i32(probe.center.w), lod).rgb;
             }
-            let ratio = probe_ratio(probe.light.xyz, textureLoad(probe_live, vec2<i32>(i32(k), 0), 0).xyz);
+            // The surface the lookup hits roughly faces back toward the capture point.
+            let facing = select(vec3<f32>(0.0, 1.0, 0.0), -normalize(dir), dot(dir, dir) > 1e-12);
+            let rows = probe_axis_rows(facing);
+            let ratio = probe_axis_ratio(
+                probe.baked[rows.x].xyz, probe.baked[rows.y].xyz, probe.baked[rows.z].xyz,
+                textureLoad(probe_live, vec2<i32>(i32(k), i32(rows.x)), 0).xyz,
+                textureLoad(probe_live, vec2<i32>(i32(k), i32(rows.y)), 0).xyz,
+                textureLoad(probe_live, vec2<i32>(i32(k), i32(rows.z)), 0).xyz,
+                facing * facing,
+            );
             let sky = textureSampleLevel(refl_sky_cube, refl_samp, rd, sky_lod).rgb;
             radiance = radiance + contribution * probe_relit(sampled, em, ratio, sky, sky_k);
             coverage = coverage + contribution;

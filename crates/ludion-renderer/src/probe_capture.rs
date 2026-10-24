@@ -83,7 +83,7 @@ pub(crate) struct ProbeCubes {
     /// Probe index → slot. The identity today; the table is what lets residency change addressing.
     pub(crate) slots: Vec<u32>,
     /// Probe index → the diffuse irradiance baked at its capture point (`probe_relight.wgsl`).
-    pub(crate) irradiance: Vec<[f32; 3]>,
+    pub(crate) irradiance: Vec<AxisIrradiance>,
     /// The emissive part of each flagged probe's capture, prefiltered into the same slots: allocated
     /// only when some probe sees emissive. The relight leaves it unscaled (decision 17).
     pub(crate) emissive: Option<(wgpu::Texture, wgpu::TextureView)>,
@@ -157,13 +157,16 @@ pub struct ProbeReadback {
     pub levels: Vec<Vec<f32>>,
 }
 
+/// A point's diffuse irradiance per cube axis, in face order (+X −X +Y −Y +Z −Z).
+pub type AxisIrradiance = [[f32; 3]; 6];
+
 /// One probe's baked and live diffuse irradiance as `Renderer::read_probe_irradiance` returns them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProbeIrradiance {
     /// E stored with the capture, measured at the capture point.
-    pub baked: [f32; 3],
+    pub baked: AxisIrradiance,
     /// E the relight kernel evaluates for the current frame at the same point.
-    pub live: [f32; 3],
+    pub live: AxisIrradiance,
 }
 
 fn f16_texels(bytes: &[u8]) -> Vec<f32> {
@@ -407,7 +410,7 @@ impl Probes {
                 });
                 continue;
             }
-            let mut baked = [0.0; 3];
+            let mut baked = [[0.0; 3]; 6];
             r.observed_phase(observer, FramePhase::ProbeBake, || {
                 for face in 0..6 {
                     let derived = face_scene(capture_world(scene), probe.position, face);

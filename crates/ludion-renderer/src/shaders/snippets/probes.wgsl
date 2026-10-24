@@ -1,7 +1,7 @@
 // Reflection-probe shading, binding-free: a probe's weight at a point and its parallax-corrected
 // cube lookup, plus the relight of its captured radiance. The `reflections` pass composes it; the
 // functions take their inputs as arguments, so any pass could call them. Twins of `probe.rs`'s `probe_weight`,
-// `probe_lookup`, `ratio` and `relit`, in the same operation order.
+// `probe_lookup`, `axis_rows`, `axis_ratio`, `ratio` and `relit`, in the same operation order.
 //
 // Every member is a `vec4` so the struct has a 16-byte stride in a uniform array.
 struct ShadeProbe {
@@ -13,11 +13,12 @@ struct ShadeProbe {
     axis_z: vec4<f32>,
     // A box: xyz = half-extents. A sphere: x = radius.
     extent: vec4<f32>,
-    // x = 0 for a box, 1 for a sphere; y = the outward blend distance.
+    // x = 0 for a box, 1 for a sphere; y = the outward blend distance; z = 1 when the probe has an
+    // emissive cube to sample, else 0.
     params: vec4<f32>,
-    // xyz = the irradiance baked with the capture (the relight's denominator); w = 1 when the probe
-    // has an emissive cube to sample, else 0.
-    light: vec4<f32>,
+    // xyz = the irradiance baked with the capture per cube axis (+X -X +Y -Y +Z -Z), the relight's
+    // denominator.
+    baked: array<vec4<f32>, 6>,
 };
 
 const MAX_SHADE_PROBES: u32 = 32u;
@@ -73,9 +74,24 @@ fn probe_lookup(probe: ShadeProbe, p: vec3<f32>, r: vec3<f32>) -> vec3<f32> {
     return probe.axis_x.xyz * local.x + probe.axis_y.xyz * local.y + probe.axis_z.xyz * local.z;
 }
 
+// The ambient-cube rows (+X -X +Y -Y +Z -Z = 0..5) a unit direction `n` weights; the weights are `n * n`.
+fn probe_axis_rows(n: vec3<f32>) -> vec3<u32> {
+    return vec3<u32>(select(1u, 0u, n.x >= 0.0), select(3u, 2u, n.y >= 0.0), select(5u, 4u, n.z >= 0.0));
+}
+
 // The live-to-baked irradiance ratio, per channel; 1 where the baked value is too small to divide by.
 fn probe_ratio(baked: vec3<f32>, live: vec3<f32>) -> vec3<f32> {
     return select(vec3<f32>(1.0), live / baked, baked > vec3<f32>(1e-6));
+}
+
+// The ratio along a facing with ambient-cube weights `w` (`n * n`) over the baked rows `b*` and the
+// live rows `l*`. Both sums spell the same operations, so equal bits give exactly 1.
+fn probe_axis_ratio(
+    bx: vec3<f32>, by: vec3<f32>, bz: vec3<f32>,
+    lx: vec3<f32>, ly: vec3<f32>, lz: vec3<f32>,
+    w: vec3<f32>,
+) -> vec3<f32> {
+    return probe_ratio(w.x * bx + w.y * by + w.z * bz, w.x * lx + w.y * ly + w.z * lz);
 }
 
 // A prefiltered probe sample relit: its geometry radiance (rgb) is the capture `T` with the emissive

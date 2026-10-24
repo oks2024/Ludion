@@ -488,7 +488,7 @@ entities:
         assert_eq!(scene.probes.len(), 1);
         let irradiance = renderer.read_probe_irradiance(&scene);
         assert_eq!(irradiance.len(), 1);
-        assert!(irradiance[0].baked.iter().any(|&e| e > 0.0));
+        assert!(irradiance[0].baked.iter().flatten().any(|&e| e > 0.0));
         assert_eq!(irradiance[0].live, irradiance[0].baked);
         let _ = std::fs::remove_dir_all(&dir);
     }

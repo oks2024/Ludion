@@ -1,5 +1,5 @@
 //! The probe relight kernel (`shaders/probe_relight.wgsl`, `Plan/reflections.md` decision 17): the
-//! normal-free diffuse irradiance E at a set of world points. A capture bakes E at its capture point
+//! normal-free diffuse irradiance E, per cube axis, at a set of world points. A capture bakes E at its capture point
 //! (stored with the cube, measured by [`ProbeRelight::measure`]), and every frame the
 //! `probe_relight` graph pass writes E at the ranked probes' centres into the `probe_live`
 //! transient; the `reflections` pass scales the captured geometry radiance by their ratio.
@@ -11,6 +11,7 @@ use wgpu::util::DeviceExt;
 use crate::gi_bake::ResolvedGi;
 use crate::ibl::ResolvedEnv;
 use crate::probe::MAX_PROBES;
+use crate::probe_capture::AxisIrradiance;
 use crate::render::GiStrengths;
 use crate::shader_gen::{self, RelightParams};
 
@@ -190,7 +191,7 @@ impl ProbeRelight {
         &self.fallback
     }
 
-    /// One-shot relight over `points`, read back synchronously: E per point. The capture-time
+    /// One-shot relight over `points`, read back synchronously: E per point and cube axis. The capture-time
     /// measurement and the tests' seam; it runs the same kernel into a scratch table in its own
     /// submit.
     pub(crate) fn measure(
@@ -201,13 +202,13 @@ impl ProbeRelight {
         strengths: GiStrengths,
         ambient: [f32; 3],
         points: &[Vec3],
-    ) -> Vec<[f32; 3]> {
+    ) -> Vec<AxisIrradiance> {
         let device = gpu.device();
         let scratch = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("probe relight scratch"),
             size: wgpu::Extent3d {
                 width: MAX_PROBES as u32,
-                height: 1,
+                height: 6,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -223,7 +224,7 @@ impl ProbeRelight {
         let row = (MAX_PROBES * 16) as u64;
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("probe relight readback"),
-            size: row,
+            size: row * 6,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -243,12 +244,12 @@ impl ProbeRelight {
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(row as u32),
-                    rows_per_image: Some(1),
+                    rows_per_image: Some(6),
                 },
             },
             wgpu::Extent3d {
                 width: MAX_PROBES as u32,
-                height: 1,
+                height: 6,
                 depth_or_array_layers: 1,
             },
         );
@@ -263,10 +264,12 @@ impl ProbeRelight {
         rx.recv().unwrap().expect("the buffer maps");
         let mapped = staging.slice(..).get_mapped_range().expect("mapped range");
         let floats: &[f32] = bytemuck::cast_slice(&mapped);
-        let out = floats
-            .chunks_exact(4)
-            .take(points.len())
-            .map(|c| [c[0], c[1], c[2]])
+        let texel = |axis: usize, point: usize| {
+            let at = (axis * MAX_PROBES + point) * 4;
+            [floats[at], floats[at + 1], floats[at + 2]]
+        };
+        let out = (0..points.len())
+            .map(|point| std::array::from_fn(|axis| texel(axis, point)))
             .collect();
         drop(mapped);
         staging.unmap();
@@ -311,11 +314,11 @@ mod tests {
         let relight = ProbeRelight::new(gpu);
         let ambient = [0.05, 0.1, 0.2];
         let out = relight.measure(gpu, &env, &gi, NO_GI, ambient, &[Vec3::new(1.0, 2.0, 3.0)]);
-        assert_eq!(out, vec![ambient]);
+        assert_eq!(out, vec![[ambient; 6]]);
     }
 
     #[test]
-    fn needs_gpu_with_an_environment_e_is_k_times_the_axis_mean_plus_ambient() {
+    fn needs_gpu_with_an_environment_each_axis_is_k_times_its_irradiance_plus_ambient() {
         let Some((r, ibl, gi)) = setup("relight environment") else {
             return;
         };
@@ -331,24 +334,24 @@ mod tests {
         // Each axis direction is the centre of a cube face: the mean of its four centre texels.
         let mip0 = &read_rgba16_mips(gpu, env.irradiance.texture())[0];
         let edge = env.irradiance.texture().width() as usize;
-        let mut sum = [0.0_f32; 3];
-        for face in 0..6 {
+        for (face, axis) in got.iter().enumerate() {
+            let mut irr = [0.0_f32; 3];
             for (x, y) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
                 let at = ((face * edge + (edge / 2).wrapping_add_signed(y)) * edge
                     + (edge / 2).wrapping_add_signed(x))
                     * 4;
                 for c in 0..3 {
-                    sum[c] += mip0[at + c] / 4.0;
+                    irr[c] += mip0[at + c] / 4.0;
                 }
             }
-        }
-        for c in 0..3 {
-            let want = sum[c] / 6.0 * 0.9 + ambient[c];
-            assert!(
-                (got[c] - want).abs() < 1e-4,
-                "channel {c}: {} vs {want}",
-                got[c]
-            );
+            for c in 0..3 {
+                let want = irr[c] * 0.9 + ambient[c];
+                assert!(
+                    (axis[c] - want).abs() < 1e-3 * want.max(1.0),
+                    "axis {face} channel {c}: {} vs {want}",
+                    axis[c]
+                );
+            }
         }
     }
 
@@ -374,6 +377,6 @@ mod tests {
             })
             .collect();
         let many = relight.measure(gpu, &env, &gi, NO_GI, ambient, &batch);
-        assert_eq!(alone[0], many[17]);
+        assert_eq!(alone[0], many[17], "all six axes");
     }
 }

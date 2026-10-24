@@ -77,7 +77,9 @@ pub use gi_bake::GiReadback;
 pub use graph::{FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json};
 pub use ludion_font::GlyphQuad;
 pub use probe::{MAX_PROBES, ProbeData, ProbeVolume, probe_rank};
-pub use probe_capture::{ProbeIrradiance, ProbeReadback, ProbeResolve, ResolvedProbe};
+pub use probe_capture::{
+    AxisIrradiance, ProbeIrradiance, ProbeReadback, ProbeResolve, ResolvedProbe,
+};
 pub use quality::{Quality, QualityParams};
 pub use render::{GpuUploads, Renderer, is_renderer_shader};
 pub use scene::{

@@ -577,7 +577,7 @@ pub struct PostChain {
     /// a probe-free scene draws the normal frame. Probes have no quality toggle, so `masked` keeps it.
     pub probe_view: bool,
     /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
-    /// writing the `probe_live` transient (`MAX_PROBES`×1, `Rgba32Float`) that `reflections` reads
+    /// writing the `probe_live` transient (`MAX_PROBES`×6, `Rgba32Float`: one row per cube axis) that `reflections` reads
     /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
     /// what makes a probe-free frame byte-identical by construction rather than by care. Probes have
     /// no quality toggle, so `masked` keeps it.
@@ -900,13 +900,13 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             graph.transient("ssr_trace", TextureDesc::hdr_color(tw, th))
         })
     });
-    // The relight's per-probe irradiance table, written whole by one compute pass every frame it
+    // The relight's per-probe, per-axis irradiance table, written whole by one compute pass every frame it
     // exists and read by `reflections`. A transient: nothing carries between frames. 32-bit so the
     // live value compares exactly against the baked one.
     let probe_live = chain.probe_relight.then(|| {
         graph.transient(
             "probe_live",
-            TextureDesc::rgba32_storage(crate::probe::MAX_PROBES as u32, 1),
+            TextureDesc::rgba32_storage(crate::probe::MAX_PROBES as u32, 6),
         )
     });
     // Declared before any post-composite resource so the output's handle (and hence the minimal

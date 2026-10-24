@@ -31,7 +31,7 @@ use crate::ibl::{Ibl, ResolvedEnv};
 use crate::mesh::{self, MeshVertex};
 use crate::mipgen::{MipGen, mip_level_count};
 use crate::probe::{MAX_PROBES, probe_rank};
-use crate::probe_capture::{ProbeIrradiance, Probes};
+use crate::probe_capture::{AxisIrradiance, ProbeIrradiance, Probes};
 use crate::quality::{Quality, QualityParams};
 use crate::scene::{
     DebugSegment, FontDraw, GroundMarkerInstance, MapImage, MeshData, MeshInstance, MeshShape,
@@ -1261,7 +1261,7 @@ impl Renderer {
         measure: bool,
         dest: wgpu::TexelCopyTextureInfo<'_>,
         emissive_dest: wgpu::TexelCopyTextureInfo<'_>,
-    ) -> Option<[f32; 3]> {
+    ) -> Option<AxisIrradiance> {
         let size = FrameSize::native(face_size, face_size);
         let chain = PostChain::for_scene(face_scene).masked(&self.quality, &self.quality_params);
         let (graph, output, emissive) = build_probe_capture_graph(face_size, chain);

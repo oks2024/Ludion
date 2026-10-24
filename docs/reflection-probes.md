@@ -89,8 +89,9 @@ onto the volume from there. `Transform.scale` is ignored — size the shape, nev
   as the ambient moves. Direct light on the captured geometry (sun, moon, point and
   spot lights) is frozen at capture and only scaled by that ambient ratio, so moving a
   `DirectionalLight` or switching a lamp does not follow in probe reflections until a rebake.
-  The ambient ratio is one mean over six directions, so a sky-gradient change (a zenith unlike the
-  horizon) shifts the hue and brightness of reflected lit surfaces a little.
+  The ambient ratio is exact for lit surfaces facing the probe's capture point, so a sky-gradient
+  change (a zenith unlike the horizon) leaves them right; metals and surfaces facing away still
+  shift in hue and brightness a little.
 - **`shape`, `blend` and `priority` never recapture** — they only change how the cube is projected
   and weighted. Moving the probe recaptures it. What it sees (geometry, lights, `Environment`, the
   textures) is the world at the last load, so an in-session edit waits for a reload; the quality

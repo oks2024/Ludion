@@ -862,7 +862,7 @@ pub(crate) mod tests {
     }
 
     /// Rust twin of `ibl.wgsl`'s `sky_gradient`.
-    fn sky_gradient(env: &EnvironmentData, dir: [f32; 3]) -> [f32; 3] {
+    pub(crate) fn sky_gradient(env: &EnvironmentData, dir: [f32; 3]) -> [f32; 3] {
         let t = dir[1];
         let (far, k) = if t >= 0.0 {
             (env.sky_zenith, t.clamp(0.0, 1.0).sqrt())
