@@ -18,6 +18,7 @@ ludion-ecs           → core                            [schemars, serde, serde
 ludion-scene         → core, ecs                       [ryu, saphyr-parser, serde_json]
 ludion-assets        → core                            [png, xxhash-rust, ktx2; watch†: notify, crossbeam-channel]
 ludion-cook          → core, assets                    [intel_tex_2, ctt-astcenc, ktx2]  (encoders confined here)
+ludion-texgen        → core, scene                     [png, serde_json]
 ludion-font          → core, scene                     []
 ludion-sim           → core, ecs                       [serde, serde_json, xxhash-rust]
 ludion-spatial       → core, ecs                       [schemars, serde, serde_json]

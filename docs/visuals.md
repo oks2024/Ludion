@@ -13,6 +13,8 @@ components you place and the systems that drive them are `ludion docs components
 - `ludion docs materials` — `roughness`/`metallic`/`emissive`, and which surface authors them
   (voxel and sculpt palettes included).
 - `ludion docs mesh-editing` — painting a mesh's emissive map with a verified, replayable region op.
+- `ludion docs texture-recipes` — procedural tileable PBR maps from a `kind: texture` recipe, the `std:` library, `ludion texture`.
+- `ludion docs texture-ops` — every texture op with its fields, defaults and ranges.
 - `ludion docs lighting` — the `DirectionalLight` sun and its shadow map, and point-light density.
 - `ludion docs environment` — the `Environment` sky, image-based lighting, and `Fade` occlusion.
 - `ludion docs global-illumination` — the baked `GiVolume` sky-visibility volume and its dump instruments.

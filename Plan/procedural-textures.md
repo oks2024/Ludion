@@ -1,6 +1,6 @@
 # Plan: Procedural textures — a text recipe that produces a PBR map set
 
-> **Status:** Wave 0 (the spike) not started. Decided 2026-10-23. Waves 1+ are recorded with
+> **Status:** Wave 0 (the spike) in progress: the core, the hard generators, the `std:` library and the `ludion texture` verb ship; the feedback loop, reference materials and the kit piece remain. Decided 2026-10-23. Waves 1+ are recorded with
 > triggers and wait on the spike's verdict.
 
 ## Why
@@ -118,4 +118,9 @@ and any runtime procedural generation in a game binary.
 
 ## Status
 
-Not started.
+Wave 0 (the spike), in progress:
+
+- **Core crate.** `ludion-texgen` parses a `kind: texture` recipe and evaluates its step DAG on the CPU into the PBR map set as PNG bytes; thirteen ops (noise, gradient, constant, blend, levels, curve, clamp, remap, colorize, grayscale, warp, blur, normal), diagnostics `L1283`–`L1285`, pinned output hashes at two sizes.
+- **Hard generators.** `tile_sampler`, `flood_fill`, `distance`, `ambient_occlusion`, `curvature` and the `image` op; `normal_from_height` uses a Sobel filter.
+- **`std:` library.** `op: input` and `inputs:` bindings let a sub-recipe receive images; five embedded macros (`edge_wear`, `cavity_grime`, `cobbles`, `planks`, `rust_spots`), `std:` references resolved from the binary.
+- **`ludion texture` verb.** `build`, `check` (the drift gate, `L1286`) and `vendor`; seven PBR validators with a rules TOML (`L1287`–`L1289`); `kind: texture` is checked by the verb; `examples/textures/tiles.texture.yaml` is the worked example. Docs: `ludion docs texture-recipes`, `ludion docs texture-ops`, `ludion devdocs ludion-texgen`.
