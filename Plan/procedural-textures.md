@@ -1,6 +1,6 @@
 # Plan: Procedural textures — a text recipe that produces a PBR map set
 
-> **Status:** Wave 0 (the spike) passed its verdict, Go, 2026-10-24; Wave 1 (the op library) is in progress. Decided 2026-10-23. Later waves are recorded with
+> **Status:** Wave 0 (the spike) passed its verdict, Go, 2026-10-24; Wave 1 (the op library) mechanized 2026-10-24; what follows waits on the user's next design round. Decided 2026-10-23. Later waves are recorded with
 > triggers.
 
 ## Why
@@ -161,7 +161,7 @@ Wave 0 (the spike) — **Go**, 2026-10-24:
 - **Reference materials.** `examples/textures/`: cobble, oak planks, painted iron and the hand-painted cobble restyle, each under the drift gate; the spike log below records the iterations and the missing ops.
 - **Kit piece.** The reference game's crate rebuilt from a generated set beside its node-material twin; details private.
 
-Wave 1 — in progress.
+Wave 1 (the op library) — mechanized 2026-10-24; the pinned-M4 speed measurement is owed (`Plan/owed.md`):
 
 - **Reference materials re-authored.** The four `examples/textures/` recipes are rewritten on `layer`, `std:planks`, `band`, `posterize`, directional `blur` and stretched noise; iterations fell from 10/8/8/6 to 2/4/3/2, rust streaks and end-only plank darkening now exist, and the `## Wave 1 log` records the numbers and the ops still missing.
 - **Layout ops.** `tile_sampler` gains `offset_jitter`, `gap` and per-instance pattern scale and offset jitters; `std:planks` is rebuilt on them (uniform joints in tile units, `bevel`, `stagger_jitter`, `gap: 0` is one board) and `std:cobbles` gains an opt-in `round` profile.
