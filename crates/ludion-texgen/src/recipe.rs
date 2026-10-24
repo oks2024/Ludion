@@ -7,7 +7,7 @@ use ludion_core::diagnostics::{Diagnostic, pointer_token, value_phrase};
 use ludion_core::suggest::nearest;
 use serde_json::{Map, Value, json};
 
-use crate::ops::{Op, ParamValue, Scope, parse_hex, parse_op};
+use crate::ops::{Op, ParamValue, Scope, parse_hex, parse_step};
 
 /// The map an `outputs` entry feeds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +89,17 @@ pub struct Step {
     pub op: Op,
     /// Indices of the steps the op reads, in [`Op::inputs`] order.
     pub inputs: Vec<usize>,
+}
+
+impl Step {
+    /// The authored step this one came from: a `layer` step's `surface.roughness` is `surface`.
+    pub fn document_name(&self) -> &str {
+        document_name(&self.name)
+    }
+}
+
+fn document_name(name: &str) -> &str {
+    name.split('.').next().unwrap_or(name)
 }
 
 /// A recipe with parameters bound: typed ops, resolved references, an evaluation order.
@@ -191,6 +202,14 @@ fn read_steps(
         return out;
     };
     for (name, body) in map {
+        if name.contains('.') {
+            diags.push(structure(
+                format!("step name `{name}` contains a `.`"),
+                format!("/steps/{}", pointer_token(name)),
+                "rename it — `.` separates a layer step from its maps".into(),
+            ));
+            continue;
+        }
         match body {
             Value::Object(b) => out.push((name.clone(), b.clone())),
             other => diags.push(structure(
@@ -269,25 +288,38 @@ impl Recipe {
     /// `L1283`/`L1284` for an op body, `L1285` for an unknown step reference or a cycle.
     pub fn instantiate(&self, bindings: &Scope) -> Result<Instance, Vec<Diagnostic>> {
         let mut diags = Vec::new();
-        let mut ops = Vec::new();
+        let mut flat: Vec<(String, Op)> = Vec::new();
         for (name, body) in &self.steps {
-            ops.push(parse_op(name, body, bindings, &mut diags));
+            if let Some(expanded) = parse_step(name, body, bindings, &mut diags) {
+                flat.extend(expanded);
+            }
         }
         if !diags.is_empty() {
             return Err(diags);
         }
-        let index: BTreeMap<&str, usize> = self
-            .steps
+        let index: BTreeMap<String, usize> = flat
             .iter()
             .enumerate()
-            .map(|(i, (n, _))| (n.as_str(), i))
+            .map(|(i, (n, _))| (n.clone(), i))
             .collect();
-        let names: Vec<&str> = self.steps.iter().map(|(n, _)| n.as_str()).collect();
+        let names: Vec<String> = flat.iter().map(|(n, _)| n.clone()).collect();
         let reference = |from: &str, field: &str, to: &str, path: String| {
             index.get(to).copied().ok_or_else(|| {
-                let help = match nearest(to, names.iter().copied()) {
-                    Some(near) => format!("did you mean `{near}`?"),
-                    None => format!("steps are: {}", names.join(", ")),
+                let maps: Vec<&str> = names
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|n| n.strip_prefix(to).is_some_and(|rest| rest.starts_with('.')))
+                    .collect();
+                let help = if !maps.is_empty() {
+                    format!(
+                        "`{to}` is a layer step; name one of its maps: {}",
+                        maps.join(", ")
+                    )
+                } else {
+                    match nearest(to, names.iter().map(String::as_str)) {
+                        Some(near) => format!("did you mean `{near}`?"),
+                        None => format!("steps are: {}", names.join(", ")),
+                    }
                 };
                 Diagnostic::new(
                     code::TEXTURE_GRAPH,
@@ -298,21 +330,17 @@ impl Recipe {
             })
         };
         let mut steps = Vec::new();
-        for ((name, _), op) in self.steps.iter().zip(ops) {
-            let op = op.expect("an op that failed to parse left a diagnostic");
+        for (name, op) in flat {
+            let doc = document_name(&name).to_string();
             let mut inputs = Vec::new();
             for (field, to) in op.inputs() {
-                let path = format!("/steps/{}/{field}", pointer_token(name));
-                match reference(&format!("step `{name}`"), &field, to, path) {
+                let path = format!("/steps/{}/{field}", pointer_token(&doc));
+                match reference(&format!("step `{doc}`"), &field, to, path) {
                     Ok(i) => inputs.push(i),
                     Err(d) => diags.push(d),
                 }
             }
-            steps.push(Step {
-                name: name.clone(),
-                op,
-                inputs,
-            });
+            steps.push(Step { name, op, inputs });
         }
         let mut outputs = Vec::new();
         for (key, to) in &self.outputs {
@@ -326,7 +354,7 @@ impl Recipe {
             return Err(diags);
         }
         let order = topological_order(&steps).map_err(|cycle| {
-            let names: Vec<&str> = cycle.iter().map(|i| steps[*i].name.as_str()).collect();
+            let names: Vec<&str> = cycle.iter().map(|i| steps[*i].document_name()).collect();
             vec![
                 Diagnostic::new(
                     code::TEXTURE_GRAPH,

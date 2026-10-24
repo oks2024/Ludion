@@ -6,7 +6,7 @@ use crate::filter;
 use crate::hash::mix;
 use crate::image::Image;
 use crate::noise::Sampler;
-use crate::ops::Op;
+use crate::ops::{BlendMode, Op, Slot};
 use crate::picture;
 use crate::recipe::OutputKey;
 use crate::resolve::Loaded;
@@ -130,6 +130,14 @@ fn eval_node(
         .collect()
 }
 
+/// A `layer` slot's image: the next input for a step, a fresh constant for a literal.
+fn layer_slot<'a>(next: &mut impl Iterator<Item = &'a Image>, slot: &Slot, size: u32) -> Image {
+    match slot {
+        Slot::Step(_) => next.next().expect("a step slot has an input").clone(),
+        Slot::Const(c) => adjust::constant(size, c),
+    }
+}
+
 fn compute(
     node: &Loaded,
     index: usize,
@@ -152,6 +160,16 @@ fn compute(
             *mode,
             *opacity,
         ),
+        Op::Layer { base, coats, .. } => {
+            let mut next = inputs.iter().copied();
+            let mut out = layer_slot(&mut next, base, size);
+            for coat in coats {
+                let mask = next.next().expect("a coat has a mask input");
+                let value = layer_slot(&mut next, &coat.value, size);
+                out = adjust::blend(&out, &value, Some(mask), BlendMode::Mix, coat.opacity);
+            }
+            out
+        }
         Op::Levels {
             in_low,
             in_high,

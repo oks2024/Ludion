@@ -33,6 +33,9 @@ user-facing format, ops and validators are `ludion docs texture-recipes` and `lu
 - `tests/` — `determinism.rs` (pinned hashes), `tileable.rs` (seam measures), `errors.rs`
   (one case per error class), `stdlib.rs` (every macro builds standalone).
 
+`ops.rs` `parse_step` expands `op: layer` into one `Op::Layer` per map, named `<step>.<map>`;
+`Step::document_name` (`recipe.rs`) recovers the authored name so no pointer holds a `.`.
+
 ## Dataflow
 
 Recipe text → `parse` → `load` (sub-recipes through the `Resolver`; the crate opens no file itself —

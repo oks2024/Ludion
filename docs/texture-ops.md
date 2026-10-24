@@ -142,6 +142,7 @@ The finest octave (`scale × lacunarity^(octaves-1) × stretch`) may not exceed 
 | `image` | — | one PNG resampled to the build size; gray stays gray, anything else color |
 | `input` | — | an image the parent step binds; `default` when the recipe is built alone |
 | `recipe` | `inputs:` bindings | one step of another recipe |
+| `layer` | the maps in `base:`, a mask per layer | one step per map, `<step>.<map>`; see Layers in `ludion docs texture-recipes` |
 
 | op.field | type | default | range |
 | --- | --- | --- | --- |
@@ -154,6 +155,11 @@ The finest octave (`scale × lacunarity^(octaves-1) × stretch`) may not exceed 
 | `recipe.params` | map | none | number, `#rrggbb`, or `$param` of this recipe |
 | `recipe.inputs` | map | none | `<input step of the sub-recipe>: <step of this recipe>`; channels must match (`L1284`) |
 | `recipe.seed` | int | 0 | offset for the sub-recipe |
+| `layer.base` | map of `<map>: <value>` | req | maps `base_color` `roughness` `metallic` `height` `emissive`, ≥ 1; a value is a step, a number, `#rrggbb` or `$param` |
+| `layer.layers` | list | req | ≥ 1, bottom to top |
+| `layers[].mask` | step | req | gray |
+| `layers[].opacity` | number | 1.0 | 0..1 |
+| `layers[].<map>` | step, number, `#rrggbb` or `$param` | none | ≥ 1 per layer; the map must be in `base`; gray maps take gray values (`L1284`) |
 
 ## Rules
 

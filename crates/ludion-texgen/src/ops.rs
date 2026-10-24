@@ -8,6 +8,8 @@ use ludion_core::math::powf;
 use ludion_core::suggest::nearest;
 use serde_json::{Map, Value};
 
+use crate::recipe::OutputKey;
+
 /// A recipe parameter's value: a number or a color (linear RGB).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ParamValue {
@@ -26,6 +28,7 @@ pub const OP_NAMES: &[&str] = &[
     "gradient",
     "noise",
     "blend",
+    "layer",
     "levels",
     "curve",
     "clamp",
@@ -241,6 +244,37 @@ pub enum Spread {
     Forward,
 }
 
+/// The maps a `layer` step can produce, in the order its `<step>.<map>` steps are made.
+pub(crate) const LAYER_MAPS: [OutputKey; 5] = [
+    OutputKey::BaseColor,
+    OutputKey::Roughness,
+    OutputKey::Metallic,
+    OutputKey::Height,
+    OutputKey::Emissive,
+];
+
+/// A `layer` value: a step, or a literal as a `constant` takes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Slot {
+    /// A step to read.
+    Step(String),
+    /// A literal, evaluated as a `constant`.
+    Const(Const),
+}
+
+/// One layer's contribution to one map.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Coat {
+    /// Position in the step's `layers` list, for pointers.
+    pub index: usize,
+    /// Gray mask step.
+    pub mask: String,
+    /// Strength in `[0, 1]`.
+    pub opacity: f32,
+    /// What this layer puts down.
+    pub value: Slot,
+}
+
 /// One op with every field validated and every `$param` substituted.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
@@ -269,6 +303,15 @@ pub enum Op {
         mode: BlendMode,
         /// Overall strength.
         opacity: f32,
+    },
+    /// One map of a `layer` step: `base` mixed with each coat through its mask, bottom to top.
+    Layer {
+        /// The map this step is.
+        map: OutputKey,
+        /// The bottom value.
+        base: Slot,
+        /// The layers that set this map.
+        coats: Vec<Coat>,
     },
     /// Input range, gamma and output range.
     Levels {
@@ -485,6 +528,19 @@ impl Op {
                 let mut v = vec![("a".to_string(), a.as_str()), ("b".to_string(), b.as_str())];
                 if let Some(m) = mask {
                     v.push(("mask".to_string(), m.as_str()));
+                }
+                v
+            }
+            Op::Layer { map, base, coats } => {
+                let mut v = Vec::new();
+                if let Slot::Step(s) = base {
+                    v.push((format!("base/{}", map.name()), s.as_str()));
+                }
+                for coat in coats {
+                    v.push((format!("layers/{}/mask", coat.index), coat.mask.as_str()));
+                    if let Slot::Step(s) = &coat.value {
+                        v.push((format!("layers/{}/{}", coat.index, map.name()), s.as_str()));
+                    }
                 }
                 v
             }
@@ -828,6 +884,31 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// An optional step name, number or color: what a `layer` slot takes.
+    pub(crate) fn opt_slot(&mut self, field: &'static str) -> Read<Option<Slot>> {
+        match self.body.get(field) {
+            None => {
+                self.known.push(field);
+                Ok(None)
+            }
+            Some(Value::String(s)) if !s.starts_with('$') && parse_hex(s).is_none() => {
+                self.known.push(field);
+                Ok(Some(Slot::Step(s.clone())))
+            }
+            Some(Value::Number(_) | Value::String(_)) => {
+                self.constant(field).map(|c| Some(Slot::Const(c)))
+            }
+            Some(other) => {
+                self.known.push(field);
+                let message = format!(
+                    "`{field}` must be a step name, a number or `#rrggbb`, found {}",
+                    value_phrase(other)
+                );
+                Err(self.structure(field, message, format!("write `{field}: <step>`")))
+            }
+        }
+    }
+
     /// A non-empty block list of mappings; entries come back with their index.
     pub(crate) fn mappings(
         &mut self,
@@ -914,8 +995,22 @@ impl<'a> Reader<'a> {
 
 const STEP_SEED_MAX: i64 = u32::MAX as i64;
 
+/// Reads one step's body as `(step name, op)` pairs: one for an ordinary op, one per map for a
+/// `layer`. `None` when a diagnostic was recorded.
+pub(crate) fn parse_step(
+    name: &str,
+    body: &Map<String, Value>,
+    scope: &Scope,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<Vec<(String, Op)>> {
+    if body.get("op").and_then(Value::as_str) == Some("layer") {
+        return layer_step(name, body, scope, diags);
+    }
+    parse_op(name, body, scope, diags).map(|op| vec![(name.to_string(), op)])
+}
+
 /// Reads one step's body as an op; `None` when a diagnostic was recorded.
-pub(crate) fn parse_op(
+fn parse_op(
     name: &str,
     body: &Map<String, Value>,
     scope: &Scope,
@@ -1315,8 +1410,165 @@ fn build(r: &mut Reader<'_>, op: &str) -> Read<Op> {
         }
         "input" => input_op(r),
         "recipe" => recipe_op(r),
-        _ => unreachable!("op name checked against OP_NAMES"),
+        _ => unreachable!("op name checked against OP_NAMES; `layer` goes through `layer_step`"),
     }
+}
+
+fn layer_step(
+    name: &str,
+    body: &Map<String, Value>,
+    scope: &Scope,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<Vec<(String, Op)>> {
+    let before = diags.len();
+    let base = format!("/steps/{}", pointer_token(name));
+    let label = format!("step `{name}` (op `layer`)");
+    let mut r = Reader::new(base, label, body, scope, diags);
+    r.known.push("op");
+    let maps = layer_maps(&mut r, name);
+    r.finish();
+    if diags.len() > before {
+        None
+    } else {
+        maps.ok()
+    }
+}
+
+fn layer_maps(r: &mut Reader<'_>, name: &str) -> Read<Vec<(String, Op)>> {
+    let Ok(base) = layer_base(r, name) else {
+        r.known.push("layers");
+        return Err(Failed);
+    };
+    let layers = r.mappings("layers", 1, "- mask: <step>")?;
+    let mut coats: Vec<Vec<Coat>> = vec![Vec::new(); base.len()];
+    let mut failed = false;
+    for (index, map) in layers {
+        let set = r.entry("layers", index, map, |l| {
+            let mask = l.step("mask");
+            let opacity = l.ranged("opacity", Some(1.0), 0.0, 1.0);
+            let mut set = Vec::new();
+            let mut bad = false;
+            for key in LAYER_MAPS {
+                match l.opt_slot(key.name()) {
+                    Ok(Some(value)) if base.iter().any(|(k, _)| *k == key) => {
+                        set.push((key, value));
+                    }
+                    Ok(Some(_)) => {
+                        bad = true;
+                        let message = format!(
+                            "`{}` is not a map of `{name}`, which makes only {}",
+                            key.name(),
+                            map_list(&base)
+                        );
+                        let help = format!("add `{}: <value>` under `base:`", key.name());
+                        l.structure(key.name(), message, help);
+                    }
+                    Ok(None) => {}
+                    Err(Failed) => bad = true,
+                }
+            }
+            if set.is_empty() && !bad {
+                let d =
+                    Diagnostic::new(code::TEXTURE_STRUCTURE, format!("{} sets no map", l.label))
+                        .with_path(l.base.clone())
+                        .with_help(format!("set at least one of: {}", map_list(&base)));
+                l.diags.push(d);
+                bad = true;
+            }
+            match (mask, opacity) {
+                (Ok(mask), Ok(opacity)) if !bad => Ok((mask, opacity, set)),
+                _ => Err(Failed),
+            }
+        });
+        match set {
+            Ok((mask, opacity, set)) => {
+                for (key, value) in set {
+                    let at = base.iter().position(|(k, _)| *k == key).expect("checked");
+                    coats[at].push(Coat {
+                        index,
+                        mask: mask.clone(),
+                        opacity,
+                        value,
+                    });
+                }
+            }
+            Err(Failed) => failed = true,
+        }
+    }
+    if failed {
+        return Err(Failed);
+    }
+    Ok(base
+        .into_iter()
+        .zip(coats)
+        .map(|((map, base), coats)| {
+            (
+                format!("{name}.{}", map.name()),
+                Op::Layer { map, base, coats },
+            )
+        })
+        .collect())
+}
+
+fn map_list(base: &[(OutputKey, Slot)]) -> String {
+    base.iter()
+        .map(|(k, _)| k.name())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The `base:` mapping of a `layer` step: the maps it makes and their bottom values.
+fn layer_base(r: &mut Reader<'_>, name: &str) -> Read<Vec<(OutputKey, Slot)>> {
+    let Some(value) = r.get("base") else {
+        return Err(r.missing("base", "{base_color: <step, number or \"#rrggbb\">}"));
+    };
+    let Value::Object(map) = value else {
+        let message = format!("`base` must be a mapping, found {}", value_phrase(value));
+        return Err(r.structure(
+            "base",
+            message,
+            "write `base:` as `<map>: <value>` lines".into(),
+        ));
+    };
+    let mut out = Vec::new();
+    let mut failed = false;
+    let mut b = Reader::new(
+        format!("{}/base", r.base),
+        format!("`base` of step `{name}`"),
+        map,
+        r.scope,
+        &mut *r.diags,
+    );
+    for derived in ["normal", "occlusion"] {
+        if map.contains_key(derived) {
+            b.known.push(derived);
+            failed = true;
+            let message = format!("`{derived}` cannot be a layer map; it derives from the height");
+            let help = if derived == "normal" {
+                "derive it with `normal_from_height` and name that step in `outputs:`"
+            } else {
+                "derive it with `ambient_occlusion` and name that step in `outputs:`"
+            };
+            b.structure(derived, message, help.into());
+        }
+    }
+    for key in LAYER_MAPS {
+        match b.opt_slot(key.name()) {
+            Ok(Some(slot)) => out.push((key, slot)),
+            Ok(None) => {}
+            Err(Failed) => failed = true,
+        }
+    }
+    b.finish();
+    if out.is_empty() && !failed {
+        let message = format!("`base` of step `{name}` makes no map");
+        let help = format!(
+            "add at least one of: {}",
+            LAYER_MAPS.map(OutputKey::name).join(", ")
+        );
+        return Err(r.structure("base", message, help));
+    }
+    if failed { Err(Failed) } else { Ok(out) }
 }
 
 fn noise(r: &mut Reader<'_>) -> Read<Op> {

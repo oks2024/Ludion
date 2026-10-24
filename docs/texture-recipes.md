@@ -58,6 +58,40 @@ Pick the size at build time (`--size`, 8..8192, default 1024).
 | `occlusion` | gray | no | 1 |
 | `emissive` | gray or color | no | no `emissive.png` is written |
 
+### Layers
+
+`op: layer` replaces the `blend` + `mask` chain a map needs for each of several maps. It is one
+step that makes `<step>.<map>` steps (`surface.base_color`, `surface.roughness`, ...), each an
+ordinary one-image step you name in `outputs:` or any slot.
+
+```yaml
+surface:
+  op: layer
+  base:                      # the maps this step makes, and their bottom value
+    base_color: paint
+    roughness: rough_paint
+    metallic: 0
+  layers:                    # bottom to top; a layer sets any of the base maps
+    - mask: chips
+      base_color: metal      # a step, a number, "#rrggbb" or $param
+      roughness: 0.32
+      metallic: 1
+    - mask: grime
+      opacity: 0.65
+      base_color: "#14110d"
+outputs:
+  base_color: surface.base_color
+  roughness: surface.roughness
+  metallic: surface.metallic
+```
+
+Per map the result is exactly the chain `blend(prev, value, mask, mix, opacity)` from `base` through
+each layer that sets that map (a literal is a `constant`), so it is bit-identical to the chain it
+replaces: the example above stands in for about ten `blend`/`constant` steps (one chain per map,
+plus a constant per literal). `normal` and `occlusion`
+are not layer maps: derive them from the height and name that step in `outputs:`. Step names may not
+contain `.`. A map nothing reads is not evaluated.
+
 ### Sub-recipes
 
 `op: recipe` with `path` (relative to the referencing file, or `std:<name>`), `output` (the step to
@@ -145,6 +179,7 @@ An unknown validator name or unreadable file is `L1289`.
   same `seed` repeats the same pattern; pass a different `seed:` on each `recipe` step.
 - A flat `height` fails `height_range` and gives a flat normal; `levels` a noise up before using it
   as relief.
+- `outputs: base_color: surface` on a layer step is `L1285`: name `surface.base_color`.
 - Feed `edge_wear`/`cavity_grime` a real height through `inputs:`; unbound they see a flat 0.5 and
   return an empty mask.
 

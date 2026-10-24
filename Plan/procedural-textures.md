@@ -65,8 +65,12 @@ plan (the `Plan/cooked-assets.md` Wave 0 precedent).
     names and re-authors the reference materials to measure the gain. Seed variants and adopting
     texture sets in the reference game's kits stay deferred under their triggers.
 21. **A `layer` step.** One mask drives several output maps (colour, roughness, metallic, height)
-    in one step. It extends the declarative format; there is still no expression language and no
-    node graph. Its exact shape is settled in Wave 1 and recorded here.
+    in one step. The maps are `base_color`, `roughness`, `metallic`, `height`, `emissive`; each is
+    a separate one-image step `<step>.<map>`, and `outputs:` is the only place that names maps for
+    the set. Per map the semantics are a `blend` mix chain (`base`, then each layer's value
+    through its mask and `opacity`), bit-identical to it; a slot takes a step, a number,
+    `#rrggbb` or `$param`. It extends the declarative format with no new code, no expression
+    language and no node graph.
 
 ## Waves
 
@@ -161,6 +165,7 @@ Wave 1 — in progress.
 
 - **Layout ops.** `tile_sampler` gains `offset_jitter`, `gap` and per-instance pattern scale and offset jitters; `std:planks` is rebuilt on them (uniform joints in tile units, `bevel`, `stagger_jitter`, `gap: 0` is one board) and `std:cobbles` gains an opt-in `round` profile.
 - **Tone and filter ops.** `posterize`, `band` (a constant-width line along a height's contour), `hsv_shift`, noise `stretch`/`stretch_axis` and a directional `blur` (`angle`, `spread: forward`); every new field defaults to byte-identical output.
+- **The `layer` step.** `op: layer` makes `<step>.<map>` steps from a `base:` and a bottom-to-top `layers:` list (decision 21); each map is bit-identical to the `blend` chain it replaces, and the equivalence test pins that. Sub-recipes reach a map through `output: s.roughness`.
 
 ## Spike log (W0)
 

@@ -8,7 +8,7 @@ use ludion_core::diagnostics::{Diagnostic, pointer_token};
 use ludion_core::suggest::nearest;
 
 use crate::hash::mix;
-use crate::ops::{FillOutput, Op, ParamValue};
+use crate::ops::{Const, FillOutput, Op, ParamValue, Slot};
 use crate::picture::{Picture, decode};
 use crate::recipe::{Instance, OutputKey, Recipe, parse};
 use crate::stdlib;
@@ -483,7 +483,10 @@ fn infer(
                         step.name
                     ),
                 )
-                .with_path(format!("/steps/{}/{field}", pointer_token(&step.name)))
+                .with_path(format!(
+                    "/steps/{}/{field}",
+                    pointer_token(step.document_name())
+                ))
                 .with_help(help),
             );
         };
@@ -511,6 +514,58 @@ fn infer(
                 1
             }
             Op::Image { .. } => pictures.get(&i).map_or(1, |p| p.channels),
+            Op::Layer { map, base, coats } => {
+                let mut next = step.inputs.iter();
+                let slot = |slot: &Slot, next: &mut std::slice::Iter<'_, usize>| match slot {
+                    Slot::Step(_) => channels[*next.next().expect("a step slot has an input")],
+                    Slot::Const(Const::Gray(_)) => 1,
+                    Slot::Const(Const::Color(_)) => 3,
+                };
+                let at = |field: String| {
+                    format!("/steps/{}/{field}", pointer_token(step.document_name()))
+                };
+                let mut width = slot(base, &mut next);
+                let mut report = |field: String, what: &str, help: &str| {
+                    diags.push(
+                        Diagnostic::new(
+                            code::TEXTURE_DATA,
+                            format!(
+                                "step `{}` needs a gray {what}, but it is color",
+                                step.document_name()
+                            ),
+                        )
+                        .with_path(at(field))
+                        .with_help(help.to_string()),
+                    );
+                };
+                if map.is_gray() && width != 1 {
+                    report(
+                        format!("base/{}", map.name()),
+                        map.name(),
+                        "use a gray step or a number",
+                    );
+                }
+                for coat in coats {
+                    let mask = channels[*next.next().expect("a coat has a mask input")];
+                    if mask != 1 {
+                        report(
+                            format!("layers/{}/mask", coat.index),
+                            "mask",
+                            "turn it gray with a `grayscale` step",
+                        );
+                    }
+                    let found = slot(&coat.value, &mut next);
+                    if map.is_gray() && found != 1 {
+                        report(
+                            format!("layers/{}/{}", coat.index, map.name()),
+                            map.name(),
+                            "use a gray step or a number",
+                        );
+                    }
+                    width = width.max(found);
+                }
+                width
+            }
             Op::Blend { mask, .. } => {
                 if mask.is_some() {
                     need("mask", 1, ch(2));
