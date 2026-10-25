@@ -628,7 +628,7 @@ async function heavyLane() {
   // so a scoped run over root crates alone needs neither the build nor the sync.
   if (!inScope('bins')) {
     out.push(outOfScope('bins'));
-    return [...out, ...[...DRIFT_GATES, 'check-docs'].map(outOfScope), ...await cargoChain(Promise.resolve(outOfScope('import-sync')))];
+    return [...out, ...[...DRIFT_GATES, 'vigil-textures', 'check-docs'].map(outOfScope), ...await cargoChain(Promise.resolve(outOfScope('import-sync')))];
   }
   const bins = await runStep(binsStep);
   out.push(bins);
@@ -639,7 +639,7 @@ async function heavyLane() {
     ? runStep({ ...importSyncStep, env: { LUDION_BIN: copied.ludion } })
     : Promise.resolve(skipped('import-sync', 'bins failed'));
   const [binResults, cargoResults] = await Promise.all([
-    copied ? binLane(copied, syncDone) : [...DRIFT_GATES, 'check-docs'].map((n) => skipped(n, 'bins failed')),
+    copied ? binLane(copied, syncDone) : [...DRIFT_GATES, 'vigil-textures', 'check-docs'].map((n) => skipped(n, 'bins failed')),
     cargoChain(syncDone),
   ]);
   return [...out, ...binResults, ...cargoResults];
@@ -667,6 +667,8 @@ async function binLane(copied, syncDone) {
   for (const name of DRIFT_GATES) {
     out.push(inScope('drift') ? await runStep({ name, cmd: 'node', args: [`scripts/${name}.mjs`], env, log: `${name}.log` }) : outOfScope(name));
   }
+  // Vigil is Lore-only: its texture-set gate is skipped with the game, and is not in DRIFT_GATES (ci.yml mirrors those).
+  out.push(!hasVigil ? vigilAbsent('vigil-textures') : (inScope('drift') || scope.packages.some((p) => ['ludion-texgen', 'ludion-cli'].includes(p))) ? await runStep({ name: 'vigil-textures', cmd: 'node', args: ['scripts/vigil-texture-drift.mjs'], env, log: 'vigil-textures.log' }) : outOfScope('vigil-textures'));
   out.push(inScope('check-docs') ? await runStep({ name: 'check-docs', cmd: copied.helloPaddle, args: checkDocsArgs, log: 'smoke-check-docs.log' }) : outOfScope('check-docs'));
   return out;
 }
@@ -834,7 +836,7 @@ function printHistory() {
 }
 
 // ── reporting ───────────────────────────────────────────────────────────────
-const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
+const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
 const YELLOW = '\x1b[33m'; const GREEN = '\x1b[32m'; const RED = '\x1b[31m'; const DIM = '\x1b[2m'; const BOLD = '\x1b[1m'; const RST = '\x1b[0m';
 
 function line(r) {
@@ -968,7 +970,7 @@ async function main() {
     const vigilLane = (step) => (hasVigil ? single(step) : Promise.resolve([vigilAbsent(step.name)]));
     const gate = (step, lane = single) => (inScope(step.name) ? lane(step) : Promise.resolve([outOfScope(step.name)]));
     lanes.push(gate(fmtStep), gate(vigilFmtStep, vigilLane), gate(voxelKitStep), gate(vigilNodeStep, vigilLane), gate(vigilLabStep, vigilLane), gate(commitWrapperStep), gate(gateScriptsStep), gate(pinRitualStep), gate(physicsFeaturesStep));
-    lanes.push(inScope('heavy') ? heavyLane() : Promise.resolve(['shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'check-docs', 'clippy', 'test', 'doctest', ...VIGIL_CARGO_STEPS, 'mobile'].map(outOfScope)));
+    lanes.push(inScope('heavy') ? heavyLane() : Promise.resolve(['shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test', 'doctest', ...VIGIL_CARGO_STEPS, 'mobile'].map(outOfScope)));
     lanes.push(inScope('tauri') ? tauriLane() : Promise.resolve(['tauri-fmt', 'tauri-clippy', 'tauri-test'].map(outOfScope)));
     // detached workspace, own target/ and lock
     lanes.push(inScope('fuzz') ? runChainAll([fuzzFmtStep, fuzzClippyStep]) : Promise.resolve(['fuzz-fmt', 'fuzz-clippy'].map(outOfScope)));
