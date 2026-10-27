@@ -39,9 +39,8 @@ node scripts/check.mjs --no-gpu   # the hosted no-gpu profile, for a machine wit
 node scripts/check.mjs --fix      # re-mirror docs, regenerate generated sources, cargo fmt
 ```
 
-Run it after a change and before opening a PR; iterate against its inline errors. The CI workflows
-in `.github/workflows/` run these gates: `push.yml` a fast subset on every push, `ci.yml` the full
-set on demand.
+Run it after a change and before opening a PR; iterate against its inline errors. The CI workflow
+`.github/workflows/ci.yml` runs the full set on demand; nothing runs on push.
 
 ## Render and golden changes
 

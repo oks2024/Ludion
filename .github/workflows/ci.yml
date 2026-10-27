@@ -1,9 +1,8 @@
 name: CI
 
 # The full gate set, run on demand on Linux, Windows and macOS (the editor host skips Linux).
-# `push.yml` is the per-push subset (fmt, clippy, nextest `no-gpu` on one Linux runner); the
-# private CI runs everything on every revision, including the Lore-only game's lanes (its own Cargo
-# workspace: fmt, clippy, tests, the probe campaign and the hash soak).
+# Nothing runs on push: the private CI runs everything on every revision, including the Lore-only
+# game's lanes (its own Cargo workspace: fmt, clippy, tests, the probe campaign and the hash soak).
 on:
   workflow_dispatch:
 

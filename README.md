@@ -77,9 +77,7 @@ gates) still run and can fail on other GPUs; blessing elsewhere is refused (`L22
 
 ## Continuous integration
 
-- `.github/workflows/push.yml` runs on every push and pull request on one Linux runner: fmt, clippy
-  and the `no-gpu` nextest profile (no fps gates).
-- `.github/workflows/ci.yml` is the full gate set, run on demand on Linux, Windows and macOS, with
+- `.github/workflows/ci.yml` is the full gate set, run on demand (nothing runs on push) on Linux, Windows and macOS, with
   the soak behind an input.
 - Pinned-GPU goldens and performance budgets run on private hardware only.
 
