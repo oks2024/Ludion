@@ -1,0 +1,30 @@
+# Screen-space reflection budget — pinned RTX 3090, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each ceiling is roughly twice the median measured by
+# `ludion profile --scene … --frames 120` in `--release` on the pinned RTX 3090, so a failure means a
+# real, reproducible slowdown — never machine noise. All values are milliseconds. Re-calibrate
+# deliberately (a re-bless event) if a cost becomes intended and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/mirror-floor.yaml`, the
+# reflections arc's SSR scene (`Plan/reflections.md` Wave 2): a near-mirror floor under the full
+# preset, so the Hi-Z and colour pyramids, the trace and the blend all run at `ssr_scale` 0.5.
+# Checked with:
+#
+#   ludion profile --scene examples/gallery/mirror-floor.yaml --frames 120 --check budgets/pinned-rtx3090-mirror-floor.toml
+#
+# Measured 2026-10-27 over three runs (every pass reads the same value on all three): the `ssr`
+# group 0.4332 / 0.4352 / 0.4332 — `ssr_trace` 0.2406, `ssr_blend` 0.086, the two ten-level pyramids
+# the rest — `reflections` 0.0512 and the opaque `scene` 0.1137. `examples/gallery/ssr-probe-metal.yaml`,
+# SSR over two probe volumes, reads lower (`ssr` 0.386, `reflections` 0.0573) and is not a separate
+# file: this scene is the expensive register.
+
+# The SSR chain as one effect: every `hiz_*` and `ssr_*` pass the run measured.
+[post_groups]
+ssr = 0.87   # 0.4332 measured
+
+[passes]
+scene = 0.23         # 0.1137 measured
+reflections = 0.11   # 0.0512 measured
+
+# Deliberately absent: `composite`, `transparents` and the `bloom` group (gated on `lights.yaml` and
+# the stress scenes), `frame_total_ms` (the CLI links no game systems) and `[systems]`.

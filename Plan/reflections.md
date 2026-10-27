@@ -505,6 +505,19 @@ interiors**. Large open water is not a driver.
   measured, not fixed. Owed: the parity floors on both pinned boxes (Windows fails with a message naming it
   until then) and the re-blessed provisional probe-rooms golden, in `Plan/owed.md`.
 
+- Reference box (2026-10-27): the RTX 3090 half of W1–W5's owed items. Windows goldens blessed: the new
+  `mirror-floor`, `probe-rooms` and `ssr-probe-metal`; `material-park`, `night-sky` and `post-full` (W5's
+  lookup table); every other specular golden at ±1 LSB (29 gallery scenes in all, the voxel contact sheets,
+  both import exit gates); sprite and text goldens byte-identical. Parity floors calibrated in
+  `budgets/reflection-parity-windows.toml`, each band 0.0015–0.008 above the M5's. The Wave 2 Exit's pass
+  time at 1080p: the `ssr` group 0.433 ms (`ssr_trace` 0.241, `ssr_blend` 0.086), `reflections` 0.051,
+  gated by the new `budgets/pinned-rtx3090-mirror-floor.toml`. The opaque/transparent split re-cut the
+  stress budgets (particles and sprites now cost `transparents`) and moved `lights.yaml`'s `scene`
+  0.061 → 0.082 ms, the MRT targets' bandwidth. A cold probe capture costs 11–14 ms per probe at full,
+  about 9 at `low`, ~4% of the load, so decision 22's trigger is not met. The fp16 sum (One+One over a
+  ceiling-bright surface) reads the ceiling on the 3090 (`needs_gpu_a_reflection_over_a_bright_surface_reads_the_ceiling`).
+  Owed: the M4 twins (`Plan/owed.md`).
+
 ## Deferred, with triggers
 
 - **Temporal SSR:** decision 12's trigger.

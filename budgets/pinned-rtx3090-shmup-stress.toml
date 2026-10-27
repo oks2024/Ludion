@@ -62,11 +62,15 @@ frame_total_ms = 16.6
 # above; the ceiling is 0.85, the ~2x posture.
 extract_ms = 0.85
 
-# Bullets draw inside `scene` as sprites — one atlas region, 2,975 alpha quads plus the 480-cell
-# backdrop, three batched draws. Measured 0.0594 on every one of the four runs (the timestamp ring
-# quantizes to the same value at this cost); the ceiling is 0.12.
+# Bullets draw inside `transparents` as sprites (`scene` is the opaque mesh pass since
+# `Plan/reflections.md` W1) — one atlas region, 2,975 alpha quads plus the 480-cell backdrop, three
+# batched draws. Measured 0.0594 under `scene` on every one of the 2026-09-12 runs; `transparents`
+# 0.0573 / 0.0573 / 0.0568 / 0.0563 on 2026-10-27; the ceiling is 0.12. `scene` now draws no mesh
+# (0.0092) and `reflections` is the sky's full-screen resolve (0.0266): flat floors, not 2x.
 [passes]
-scene = 0.12
+scene = 0.03          # 0.0092 measured
+reflections = 0.06    # 0.0266 measured
+transparents = 0.12   # 0.057 measured (median of four)
 
 # The volley path's three sim lines. `play_patterns` (four players, one ring due each frame) and
 # `advance_volleys` (119 live volleys, one reap a frame) sit under 0.01 ms, so they take the flat

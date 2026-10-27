@@ -1,0 +1,40 @@
+# Reflection parity floors - `tests/reflection_parity.rs` in ludion-engine (`Plan/reflections.md`
+# decision 27), the windows set. Per floor-roughness band, the SSIM between the SSR-only and the
+# probe-only render of `tests/fixtures/reflection-parity-room.yaml`, over the pixels where SSR is
+# fully confident. The test fails when a band's SSIM drops below its `ssim_floor`.
+#
+# Rule (the `image-stats-*.toml` rule): the measurement is a pure function of one machine's
+# deterministic render, so each floor sits a flat `margin` below it, never a noise multiple. A
+# measurement above floor + 2 x margin means the floor can be tightened by hand; it never fails.
+# `[seam]` is the sky-to-probe step on `reflection-parity-seam.yaml` (SSIM, and the mean luma
+# difference relative to the sky fill): measured and recorded here, never checked.
+#
+# Recalibrate (after a deliberate renderer change, with the reason in the commit):
+#   LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity
+# Floors are the measured value minus the margin, written by LUDION_BLESS=1; the commit records the machine.
+
+margin = 0.02
+
+[bands."0.05"]
+ssim_floor = 0.8741   # measured 0.8941
+[seam."0.05"]
+ssim = 0.9799
+mean_rel_luma = 0.0275
+
+[bands."0.2"]
+ssim_floor = 0.9023   # measured 0.9223
+[seam."0.2"]
+ssim = 0.9874
+mean_rel_luma = 0.0613
+
+[bands."0.35"]
+ssim_floor = 0.9571   # measured 0.9771
+[seam."0.35"]
+ssim = 0.9934
+mean_rel_luma = 0.0501
+
+[bands."0.55"]
+ssim_floor = 0.9643   # measured 0.9843
+[seam."0.55"]
+ssim = 0.9977
+mean_rel_luma = 0.0285

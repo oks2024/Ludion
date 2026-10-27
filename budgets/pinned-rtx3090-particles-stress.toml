@@ -17,7 +17,7 @@
 # It is a separate file beside `budgets/pinned-rtx3090.toml` (3 lights), `-post-full` (the post
 # roster), `-lights-stress` (500 lights) and `-gi-inject-stress` for the reason those are separate
 # from each other: every section of a budget is checked against every run, and this scene's
-# `scene` pass medians 0.96 ms against `lights.yaml`'s 0.061 — 16x. `ci/teamcity/README.md`'s
+# particle pass (`transparents`) medians 0.90 ms against `lights.yaml`'s 0.001. `ci/teamcity/README.md`'s
 # `budgets-windows` configuration runs every file its platform has; a scene a configuration forgets
 # to profile is a tripwire disarmed by omission.
 
@@ -43,10 +43,15 @@ extract_ms = 2.5   # 1.129 measured (median of four, 8 threads)
 
 # The particle pass itself: ~22,000 sorted, alpha-and-additive quads at 1080p — fill-bound on the
 # large soft alpha particles, which is the scene's expensive register (HDR embers under no bloom are
-# the cheap one). Measured 0.9595 ms on every one of four 2026-09-07 runs and 0.972 on the four of
-# 2026-10-10 (the timestamp ring quantizes to nearly the same value at this cost); the ceiling is 2.0.
+# the cheap one). Particles draw in `transparents` since `scene` became the opaque pass
+# (`Plan/reflections.md` W1); they measured 0.972 under `scene` on the four 2026-10-10 runs.
+# Measured 2026-10-27 over four runs: `transparents` 0.9196 / 0.9196 / 0.8735 / 0.853, median
+# 0.8965, ceiling 1.8. `scene` is the opaque meshes alone (0.0655 / 0.0655 / 0.0625 / 0.0614, median
+# 0.064, ceiling 0.13) and `reflections` the sky's full-screen resolve (median 0.0251, ceiling 0.05).
 [passes]
-scene = 2.0   # 0.972 measured (four runs)
+scene = 0.13          # 0.064 measured (median of four)
+reflections = 0.05    # 0.0251 measured (median of four)
+transparents = 1.8    # 0.8965 measured (median of four)
 
 # Deliberately absent: `composite` and the `bloom` group (pure functions of the output extent and
 # already gated on `lights.yaml`), `frame_total_ms` (the CLI links no game systems — 0.001 ms of loop

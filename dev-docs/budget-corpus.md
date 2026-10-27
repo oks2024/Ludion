@@ -24,7 +24,8 @@ description: Catalogue of budgets/ files: calibration scene, gated keys and meas
 - `budgets/pinned-rtx3090-particles-stress.toml` / `budgets/pinned-apple-m4-particles-stress.toml`
   — the particles arc's, calibrated on `examples/gallery/particles-stress.yaml` (~24,000 live
   particles over a score of endless emitters, alpha and additive mixed, no post/sun), gating
-  `[passes] scene` and `extract_ms` — the first ceiling in the corpus on that metric, checked
+  `[passes]` (`transparents` — the particle pass since the opaque/transparent split — `scene` and
+  `reflections`) and `extract_ms` — the first ceiling in the corpus on that metric, checked
   wherever a report carries an `extract` sequential entry (the offline `ludion profile --scene`
   driver and a live `--attach` capture both do). The RTX 3090 file exists (measured
   2026-09-07: extract 2.446 ms median, `scene` 0.9595 — the reading on which the particles plan's
@@ -37,7 +38,8 @@ description: Catalogue of budgets/ files: calibration scene, gated keys and meas
 - `budgets/pinned-rtx3090-sprite-stress.toml` / `budgets/pinned-apple-m4-sprite-stress.toml` — the sprite arc's, calibrated on
   `games/shmup-stress/scenes/steady-drawn.yaml` (2,975 atlas-sprite bullets over 40 regions of one
   atlas, 357 additive, on a 480-cell scrolling `Tilemap` — 3,456 quads, unlit, no post/sun), gating
-  `frame_total_ms` (the 60 fps deadline, vigil's E6 posture), `extract_ms` and `[passes] scene`. It
+  `frame_total_ms` (the 60 fps deadline, vigil's E6 posture), `extract_ms` and `[passes]` (sprites
+  draw in `transparents`; `scene` and `reflections` take flat floors). It
   lives in `budgets/` with the engine's own files but is checked **in-process by the game binary**
   like vigil's, since the CLI driver links none of the systems that build the field. Measured
   2026-09-12 on the RTX 3090: extract 1.694 ms against the same field drawn as flat quads at 0.852,
@@ -54,6 +56,11 @@ description: Catalogue of budgets/ files: calibration scene, gated keys and meas
   `[passes] gi_inject` and `scene` plus `cluster_build_ms`. Its own file because `gi_inject` costs
   nothing on a scene that never schedules it. Both twins exist; each file's header records its
   four-run medians. Run it alongside the other `profile --check` steps (`ci/teamcity/README.md`).
+- `budgets/pinned-rtx3090-mirror-floor.toml` — the reflections arc's, calibrated on
+  `examples/gallery/mirror-floor.yaml` (a near-mirror floor at the full preset, `Plan/reflections.md`
+  Wave 2), gating `[post_groups] ssr` (both pyramids, the trace and the blend), `[passes] scene` and
+  `reflections`. Measured on the RTX 3090 2026-10-27: `ssr` 0.4332 ms, `reflections` 0.0512. The M4
+  twin is owed (`Plan/owed.md`).
 - `budgets/image-stats-windows.toml` / `budgets/image-stats-macos.toml` — a different instrument:
   not timing ceilings but per-golden defect ceilings (`banding_score`, `edge_aliasing`,
   `clipped_low`, `clipped_high`), checked with `ludion image-stats --check`. Per-OS because the two
@@ -66,8 +73,9 @@ description: Catalogue of budgets/ files: calibration scene, gated keys and meas
   fully confident. The rule is `image-stats`' (the value is a pure function of one machine's render, so
   each floor sits a flat `margin` = 0.02 below the measurement); per-OS because GPU float differs.
   The sky-to-probe seam is recorded beside the bands, never checked. Re-calibrate with
-  `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity`; macOS was calibrated on
-  an unpinned M5, and a pinned OS with no file fails the test until it is calibrated.
+  `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity`; Windows was calibrated
+  on the RTX 3090 (2026-10-27), macOS on an unpinned M5 (the M4 re-calibration is owed), and a pinned
+  OS with no file fails the test until it is calibrated.
 - `games/vigil/budgets/pinned-rtx3090.toml` / `pinned-apple-m4.toml` — vigil's own E6 gate (vigil is the private reference game: its files exist only in the Lore tree, absent from a public clone) over
   `scenes/budget-horde.yaml` (the generated 3x-scale, 500-enemy/300-projectile/200-pickup horde),
   checked **in-process**, from `games/vigil/`: `cargo run --release -p vigil -- --scene scenes/budget-horde.yaml

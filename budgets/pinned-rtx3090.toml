@@ -42,8 +42,16 @@ frame_total_ms = 0.5
 # price of deleting the 16-light cap, named in the plan's Risks and paid here honestly; the ceiling
 # moved with it (0.06 -> 0.075), keeping the deliberate 1.2x headroom rather than this file's stated
 # ~2x — a standing posture since wave 2. One modest regression fires it.
+#
+# `scene` moved 0.0614 -> 0.0819 (four runs, all 0.0819) when it became the opaque MRT pass
+# (`Plan/reflections.md` W1): every opaque fragment now also writes normal + roughness (`Rgba16Float`)
+# and F0 + specular occlusion (`Rgba8UnormSrgb`), 12 more bytes per pixel, ~0.027 ms of this card's
+# bandwidth at 1080p. The ceiling keeps the 1.2x posture (0.075 -> 0.1). `reflections` is the
+# full-screen pass that resolves the sky's specular every frame: measured 0.0256 all four runs,
+# ceiling ~2x. `transparents` (~0.001 ms here, nothing transparent in the scene) is not gated.
 [passes]
-scene           = 0.075
+scene           = 0.1
+reflections     = 0.05
 composite       = 0.08
 
 # Ceiling on the bloom chain as one effect, summing whichever of its eleven passes the run measured
