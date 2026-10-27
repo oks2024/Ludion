@@ -18,12 +18,13 @@ use crate::physics;
 use crate::yaml::{self, Node, NodeValue};
 use crate::{FORMAT_VERSION, Scene, SceneEntity};
 
-const SCENE_KEYS: [&str; 6] = [
+const SCENE_KEYS: [&str; 7] = [
     "format",
     "name",
     "generated_from",
     "seed",
     "physics",
+    "preload",
     "entities",
 ];
 const ENTITY_KEYS: [&str; 4] = ["name", "presentation", "components", "prefab"];
@@ -99,6 +100,35 @@ pub(crate) fn parse(source: &str) -> Result<Scene, Vec<Diagnostic>> {
             "physics" => {
                 scene.physics = physics::parse_physics(&entry.node, &mut diagnostics);
             }
+            "preload" => match &entry.node.value {
+                NodeValue::Sequence(items) => {
+                    for (index, item) in items.iter().enumerate() {
+                        if let Some(path) = envelope::expect_string(
+                            item,
+                            &format!("/preload/{index}"),
+                            "a preload entry",
+                            code::SCENE_TYPE_MISMATCH,
+                            &mut diagnostics,
+                        ) {
+                            scene.preload.push(path);
+                        }
+                    }
+                }
+                other => diagnostics.push(
+                    Diagnostic::new(
+                        code::SCENE_TYPE_MISMATCH,
+                        format!(
+                            "`preload` must be a sequence, found {} (line {})",
+                            other.type_phrase(),
+                            entry.node.line
+                        ),
+                    )
+                    .with_path("/preload")
+                    .with_help(
+                        "list the prefab paths a system will spawn, one per `- ` item:\n  preload:\n    - \"prefabs/enemy.prefab.yaml\"",
+                    ),
+                ),
+            },
             "entities" => match &entry.node.value {
                 NodeValue::Sequence(items) => {
                     let mut positions = Vec::new();

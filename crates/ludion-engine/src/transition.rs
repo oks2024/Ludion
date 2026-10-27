@@ -359,10 +359,10 @@ pub(crate) fn perform(
     //     driver is never touched — so the sim runs on in the current district.
     let mut reads = engine.load_reads();
     let Instantiated {
+        source,
         scene,
         mut world,
         placements: prefab_placements,
-        ..
     } = instantiate_named_world(
         target_text,
         engine.registry(),
@@ -370,6 +370,12 @@ pub(crate) fn perform(
         &mut |path| reads.resolve(path),
     )
     .map_err(|diagnostics| target_unresolved(&switch.scene_path, diagnostics))?;
+
+    // (c′′) Ready the target's `preload:` prefabs into its library, still before anything on
+    //      the session changes: a bad entry fails the switch like a bad scene.
+    let prefab_library = engine
+        .prepare_prefab_library(&source, scene.physics.clone(), frame, reads)
+        .map_err(|diagnostics| target_unresolved(&switch.scene_path, diagnostics))?;
 
     // (c′) Re-apply what the target scene kept from an earlier visit, over the freshly authored world.
     //      Switching into the scene you are leaving is the one case the session map cannot answer —
@@ -535,7 +541,7 @@ pub(crate) fn perform(
         scene_name: scene.name.clone(),
         scene_physics: scene.physics.clone(),
         docs,
-        prefab_reads: reads.reads,
+        prefab_library: Some(prefab_library),
         prefab_placements,
         kind: Rebuild::Switch {
             authored: crate::engine::authored_names(&scene),

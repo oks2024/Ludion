@@ -106,6 +106,7 @@ pub(crate) fn expand(
             generated_from: scene.generated_from.clone(),
             seed: scene.seed,
             physics: scene.physics.clone(),
+            preload: scene.preload.clone(),
             entities: level.entities,
         },
         instances: level.instances,

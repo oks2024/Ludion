@@ -2182,15 +2182,71 @@ impl Engine {
     /// [`install_path_library`](Engine::install_path_library) mold. `asset.reload` refreshes the
     /// prefabs it holds through [`reload_prefab`](Engine::reload_prefab).
     pub(crate) fn install_prefab_library(&mut self) {
-        let library = crate::prefab::PrefabLibrary::new(
-            self.project_root.clone(),
-            Arc::clone(&self.registry),
+        let library = self.new_prefab_library(
             self.scene_physics.clone(),
             self.driver.frame(),
-            self.replay_prefab_text.clone(),
             self.replay_prefab_epoch,
         );
         self.driver.world_mut().insert_resource(library);
+    }
+
+    fn new_prefab_library(
+        &self,
+        physics: Option<ScenePhysics>,
+        frame: FrameIndex,
+        epoch: u32,
+    ) -> crate::prefab::PrefabLibrary {
+        crate::prefab::PrefabLibrary::new(
+            self.project_root.clone(),
+            Arc::clone(&self.registry),
+            physics,
+            frame,
+            self.replay_prefab_text.clone(),
+            epoch,
+        )
+    }
+
+    /// The library for a world about to be committed, with every `source.preload` entry readied
+    /// (read through `reads`, so a replay resolves them from the recording) and the load's own
+    /// prefab reads seeded. `frame` is the frame the new driver will run next.
+    ///
+    /// # Errors
+    /// Every entry's diagnostics — an unreadable path at `/preload/{i}`, an invalid prefab with its
+    /// own located diagnostics.
+    pub(crate) fn prepare_prefab_library(
+        &self,
+        source: &Scene,
+        physics: Option<ScenePhysics>,
+        frame: FrameIndex,
+        mut reads: crate::prefab::LoadReads,
+    ) -> Result<crate::prefab::PrefabLibrary, Vec<Diagnostic>> {
+        let mut diagnostics = Vec::new();
+        let mut keys = Vec::new();
+        for (index, path) in source.preload.iter().enumerate() {
+            match reads.resolve(path) {
+                Ok(_) => match crate::prefab::prefab_key(path) {
+                    Ok(key) => keys.push(key),
+                    Err(found) => diagnostics.extend(found),
+                },
+                Err(mut error) => {
+                    error.message = format!("the scene preloads `{path}`: {}", error.message);
+                    diagnostics.push(error.with_path(format!("/preload/{index}")));
+                }
+            }
+        }
+        // Under replay the epoch the commit is about to enter is the next one.
+        let mut library = self.new_prefab_library(physics, frame, self.replay_prefab_next_epoch);
+        library.seed(reads.reads);
+        for key in keys {
+            if let Err(found) = library.ready(&key) {
+                diagnostics.extend(found);
+            }
+        }
+        if diagnostics.is_empty() {
+            Ok(library)
+        } else {
+            Err(diagnostics)
+        }
     }
 
     /// Installs the replay's recorded prefab texts and rebuilds the library over them, so a replay
@@ -3126,6 +3182,8 @@ impl Engine {
                 ..SimConfig::default()
             },
         );
+        let prefab_library =
+            self.prepare_prefab_library(&source, scene.physics.clone(), driver.frame(), reads)?;
         self.commit_world(PreparedWorld {
             driver,
             seed,
@@ -3133,7 +3191,7 @@ impl Engine {
             scene_name: scene.name.clone(),
             scene_physics: scene.physics.clone(),
             docs,
-            prefab_reads: reads.reads,
+            prefab_library: Some(prefab_library),
             prefab_placements,
             kind: Rebuild::Load {
                 authored: authored_names(&scene),
@@ -4035,6 +4093,7 @@ impl Engine {
             generated_from,
             seed,
             physics: self.scene_physics.clone(),
+            preload: authored.map_or_else(Vec::new, |scene| scene.preload.clone()),
             entities,
         };
         if let Some(cycle) = ludion_scene::hierarchy_cycles(&scene, &self.registry).first() {
@@ -4970,8 +5029,9 @@ pub(crate) struct PreparedWorld {
     pub(crate) scene_name: Option<String>,
     pub(crate) scene_physics: Option<ScenePhysics>,
     pub(crate) docs: PreparedDocs,
-    /// The `(key, text)` of every prefab the load expanded, seeded into the new world's library.
-    pub(crate) prefab_reads: Vec<(String, String)>,
+    /// The new world's library, seeded with the prefab texts the load read and with its `preload:`
+    /// entries readied; `None` on a restore, which installs an empty one.
+    pub(crate) prefab_library: Option<crate::prefab::PrefabLibrary>,
     /// Each top-level instance's root and the placement its entry gave it; empty on a restore, which
     /// has no document behind it.
     pub(crate) prefab_placements: Vec<Placed>,
@@ -5025,7 +5085,7 @@ impl Engine {
             scene_name: restored.scene_name,
             scene_physics: restored.scene_physics,
             docs,
-            prefab_reads: Vec::new(),
+            prefab_library: None,
             prefab_placements: Vec::new(),
             kind: Rebuild::Restore {
                 doc_reloads: restored.doc_reloads,
@@ -5053,7 +5113,7 @@ impl Engine {
             scene_name,
             scene_physics,
             docs,
-            prefab_reads,
+            prefab_library,
             prefab_placements,
             mut kind,
         } = prepared;
@@ -5130,13 +5190,17 @@ impl Engine {
             self.replay_prefab_epoch = self.replay_prefab_next_epoch;
             self.replay_prefab_next_epoch += 1;
         }
-        self.install_prefab_library();
+        match prefab_library {
+            Some(library) => {
+                self.driver.world_mut().insert_resource(library);
+            }
+            None => self.install_prefab_library(),
+        }
         if let Some(library) = self
             .driver
             .world_mut()
             .resource_mut::<crate::prefab::PrefabLibrary>()
         {
-            library.seed(prefab_reads);
             for (root, placement) in prefab_placements {
                 library.place(root, placement);
             }

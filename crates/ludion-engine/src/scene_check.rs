@@ -557,7 +557,7 @@ pub fn scene_audio_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagno
 }
 
 /// Every engine pass over an expanded scene, in one list: atlas, font, collider layer, parented
-/// body, physics, skin bone, audio and reflection probe diagnostics, errors and warnings together
+/// body, physics, preload, skin bone, audio and reflection probe diagnostics, errors and warnings together
 /// (`severity` tells them apart). `ludion check-scene`, a game's `--check-scene` and `scene.check` all run exactly
 /// this, so no client answers "is this scene valid" differently.
 ///
@@ -582,6 +582,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_layer_diagnostics(scene));
     diagnostics.extend(scene_hierarchy_body_diagnostics(scene));
     diagnostics.extend(scene_physics_diagnostics(scene));
+    diagnostics.extend(scene_preload_diagnostics(project_root, scene));
     diagnostics.extend(crate::skin_bone::scene_skin_bone_diagnostics(
         project_root,
         scene,
@@ -589,6 +590,22 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_audio_diagnostics(project_root, scene));
     diagnostics.extend(crate::probe_check::scene_probe_diagnostics(scene));
     diagnostics
+}
+
+/// `L1230` at `/preload/{i}` for each preload entry whose prefab text cannot be read. Existence
+/// only: the full prefab passes need the registry's spawn path and run at load.
+fn scene_preload_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnostic> {
+    let mut found = Vec::new();
+    for (index, path) in scene.preload.iter().enumerate() {
+        let read = crate::prefab::prefab_key(path)
+            .map_err(|mut found| found.swap_remove(0))
+            .and_then(|key| crate::prefab::read_prefab_text(project_root, &key));
+        if let Err(mut error) = read {
+            error.message = format!("the scene preloads `{path}`: {}", error.message);
+            found.push(error.with_path(format!("/preload/{index}")));
+        }
+    }
+    found
 }
 
 /// A string field of a text component with the pointer suffix it reports under.

@@ -390,6 +390,7 @@ pub(crate) fn scope(
         generated_from: None,
         seed: None,
         physics: None,
+        preload: Vec::new(),
         entities,
     };
     if let Some(cycle) = ludion_scene::hierarchy_cycles(&scene, registry).first() {
@@ -887,6 +888,7 @@ impl<'a> Collapser<'a> {
             generated_from: None,
             seed: None,
             physics: None,
+            preload: Vec::new(),
             entities,
         };
         let expanded =
@@ -1097,6 +1099,7 @@ impl<'a> Collapser<'a> {
             generated_from: None,
             seed: None,
             physics: None,
+            preload: Vec::new(),
             entities,
         };
         let expanded = expand_scene_with(registry, &candidate, &mut |path| self.resolve(path))
@@ -1523,6 +1526,7 @@ impl<'a> Collapser<'a> {
             generated_from: None,
             seed: None,
             physics: None,
+            preload: Vec::new(),
             entities: groups
                 .iter()
                 .map(|&(slot, group)| {
@@ -1570,6 +1574,7 @@ impl<'a> Collapser<'a> {
             generated_from: None,
             seed: None,
             physics: None,
+            preload: Vec::new(),
             entities: output,
         };
         expand_scene_with(self.live.registry, &whole, &mut |path| {

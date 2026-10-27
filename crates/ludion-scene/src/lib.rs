@@ -242,6 +242,9 @@ pub struct Scene {
     /// `sleep_after_ticks` resolves it against this block's value (else the pinned default) at
     /// body-creation time, in the solver, never by rewriting the authored component.
     pub physics: Option<ScenePhysics>,
+    /// Prefab paths (content-root relative) the engine readies at every load of this scene, so a
+    /// later `spawn_prefab` of one reads no file. No meaning beyond that; document order is kept.
+    pub preload: Vec<String>,
     /// The entities, in document order (entity order is data and is preserved by the emitter).
     pub entities: Vec<SceneEntity>,
 }

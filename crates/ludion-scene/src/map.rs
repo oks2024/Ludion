@@ -1227,8 +1227,14 @@ pub fn generate_traced(
         for (key, present) in [
             ("physics", scene.physics.is_some()),
             ("seed", scene.seed.is_some()),
+            ("preload", !scene.preload.is_empty()),
         ] {
             if present {
+                let help = if key == "preload" {
+                    "maps cannot declare `preload`; put it on a hand-authored scene".to_string()
+                } else {
+                    format!("declare `{key}` on the map instead")
+                };
                 diagnostics.push(
                     Diagnostic::new(
                         code::MAP_DOCUMENT_STRUCTURE,
@@ -1237,7 +1243,7 @@ pub fn generate_traced(
                         ),
                     )
                     .with_path(pointer.clone())
-                    .with_help(format!("declare `{key}` on the map instead")),
+                    .with_help(help),
                 );
             }
         }
@@ -1331,6 +1337,7 @@ pub fn generate_traced(
             generated_from: map.source.clone(),
             seed: map.seed,
             physics: map.physics.clone(),
+            preload: Vec::new(),
             entities,
         },
         pointers,

@@ -34,7 +34,7 @@ use crate::{Scene, SceneEntity, emit as scene_emit, envelope, parse as scene_par
 pub const PREFAB_FORMAT_VERSION: u64 = 1;
 
 const PREFAB_KEYS: [&str; 5] = ["format", "kind", "name", "generated_from", "entities"];
-const SCENE_ONLY_KEYS: [&str; 2] = ["seed", "physics"];
+const SCENE_ONLY_KEYS: [&str; 3] = ["seed", "physics", "preload"];
 
 /// A parsed `kind: prefab` document.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -333,7 +333,7 @@ pub(crate) fn parse(source: &str) -> Result<PrefabDocument, Vec<Diagnostic>> {
                 )
                 .with_path(format!("/{scene_only}"))
                 .with_help(
-                    "a prefab carries no seed/physics: the scene that spawns it does; remove the key",
+                    "a prefab carries no seed/physics/preload: the scene that spawns it does; remove the key",
                 ),
             ),
             unknown => diagnostics.push(envelope::unknown_key(

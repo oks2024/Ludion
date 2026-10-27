@@ -83,7 +83,7 @@ Block style only, as in a scene: a non-empty `[1, 2]` or `{x: 1}` is `L1005`; on
 | a part carrying a scene singleton: `Camera`, `DirectionalLight`, `Environment`, `PostProcess`, `GiVolume` | `L1229` |
 | the file cannot be read (or the world has no prefab library) | `L1230` |
 
-Everything else is the scene's own validation — `L1014` for a bad component value, `L1221`/`L1222` for a rigid or static collider under a `Parent`. A prefab has no `physics:` block, so the passes that need the running scene — collider layers against its `physics.layers` (`L1186`/`L1187`), atlas references, skin bones — run at the **first spawn**, not in `check-scene`.
+Everything else is the scene's own validation — `L1014` for a bad component value, `L1221`/`L1222` for a rigid or static collider under a `Parent`. A prefab has no `physics:` block, so the passes that need the running scene — collider layers against its `physics.layers` (`L1186`/`L1187`), atlas references, skin bones — run at the **first spawn**, not in `check-scene`. A scene's top-level `preload:` list runs them at load instead (path existence is checked by `check-scene`), so the first spawn pays nothing and a bad prefab fails the load.
 
 ## Spawning
 

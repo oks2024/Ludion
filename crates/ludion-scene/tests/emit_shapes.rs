@@ -210,6 +210,7 @@ fn emit_component(registry: &Registry, name: &str, value: Value) -> String {
         generated_from: None,
         seed: None,
         physics: None,
+        preload: Vec::new(),
         entities: vec![SceneEntity {
             presentation: false,
             name: None,

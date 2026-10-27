@@ -10,7 +10,7 @@ mod common;
 use common::registry;
 use ludion_scene::{
     InstanceEntry, InstanceTransform, Scene, SceneEntity, SceneLayer, ScenePhysics,
-    ScenePhysicsSpace, emit, parse, validate,
+    ScenePhysicsSpace, emit, parse, parse_prefab, validate,
 };
 use proptest::prelude::*;
 use serde_json::{Value, json};
@@ -208,22 +208,26 @@ fn scene() -> impl Strategy<Value = Scene> {
         proptest::option::of(any::<String>()),
         proptest::option::of(any::<u64>()),
         scene_physics(),
+        proptest::collection::vec(any::<String>(), 0..3),
         proptest::collection::vec(prop_oneof![3 => entity(), 1 => instance_entity()], 0..5),
     )
-        .prop_map(|(name, generated_from, seed, physics, mut entities)| {
-            for (index, entity) in entities.iter_mut().enumerate() {
-                if entity.instance.is_some() {
-                    entity.name = Some(format!("inst-{index}"));
+        .prop_map(
+            |(name, generated_from, seed, physics, preload, mut entities)| {
+                for (index, entity) in entities.iter_mut().enumerate() {
+                    if entity.instance.is_some() {
+                        entity.name = Some(format!("inst-{index}"));
+                    }
                 }
-            }
-            Scene {
-                name,
-                generated_from,
-                seed,
-                physics,
-                entities,
-            }
-        })
+                Scene {
+                    name,
+                    generated_from,
+                    seed,
+                    physics,
+                    preload,
+                    entities,
+                }
+            },
+        )
 }
 
 /// A component value at its type's precision: an `f32` field is written as its shortest f32
@@ -360,6 +364,7 @@ proptest! {
             generated_from: None,
             seed: None,
             physics: None,
+            preload: Vec::new(),
             entities: vec![SceneEntity {
                 presentation: false,
                 name: None,
@@ -384,6 +389,7 @@ proptest! {
             generated_from: None,
             seed: None,
             physics: None,
+            preload: Vec::new(),
             entities: vec![],
         };
         let parsed = parse(&emit(&s, &registry)).expect("canonical output must parse");
@@ -463,6 +469,7 @@ fn generated_from_round_trips_between_name_and_seed() {
         generated_from: Some("plaza.map.yaml".into()),
         seed: Some(3),
         physics: None,
+        preload: Vec::new(),
         entities: vec![],
     };
     let text = emit(&scene, &registry);
@@ -602,5 +609,45 @@ fn control_char_key_round_trips_byte_for_byte() {
         emit(&reparsed, &registry),
         canonical,
         "emit must be idempotent"
+    );
+}
+
+/// `preload` emits between `physics` and `entities` in document order, an empty list emits
+/// nothing, and the list survives a parse→emit round trip.
+#[test]
+fn preload_round_trips_between_physics_and_entities() {
+    let registry = registry();
+    let scene = Scene {
+        seed: Some(3),
+        preload: vec!["prefabs/b.yaml".into(), "prefabs/a.yaml".into()],
+        ..Scene::default()
+    };
+    let text = emit(&scene, &registry);
+    assert_eq!(
+        text,
+        "format: 1\nseed: 3\npreload:\n  - prefabs/b.yaml\n  - prefabs/a.yaml\nentities: []\n"
+    );
+    assert_eq!(parse(&text).unwrap(), scene);
+    let empty = emit(&Scene::default(), &registry);
+    assert_eq!(empty, "format: 1\nentities: []\n");
+}
+
+#[test]
+fn preload_type_errors_are_located() {
+    let whole = parse("format: 1\npreload: 3\nentities: []\n").unwrap_err();
+    assert!(whole.iter().any(|d| d.path.as_deref() == Some("/preload")));
+    let item = parse("format: 1\npreload:\n  - a.yaml\n  - 3\nentities: []\n").unwrap_err();
+    assert!(
+        item.iter().any(|d| d.path.as_deref() == Some("/preload/1")),
+        "{item:?}"
+    );
+}
+
+#[test]
+fn a_prefab_document_refuses_preload() {
+    let errors = parse_prefab("format: 1\npreload:\n  - a.yaml\nentities: []\n").unwrap_err();
+    assert!(
+        errors.iter().any(|d| d.path.as_deref() == Some("/preload")),
+        "{errors:?}"
     );
 }
