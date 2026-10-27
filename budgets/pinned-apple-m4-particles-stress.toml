@@ -40,10 +40,15 @@
 extract_ms = 2.5   # 1.213 measured (median of four)
 
 # The particle pass itself: ~22,000 sorted, alpha-and-additive quads at 1080p — fill-bound on the
-# large soft alpha particles. Measured 2.9568 / 2.9396 / 2.9514 / 2.9525 over the four runs above,
-# median **2.952** — the smeared Metal reading (see the header); the ceiling is 6.0.
+# large soft alpha particles. Particles draw in `transparents` since `scene` became the opaque pass
+# (`Plan/reflections.md` W1); they measured 2.952 under `scene` on the 2026-09-15 runs. Measured
+# 2026-10-26 over four runs: `transparents` 3.166 / 3.167 / 3.154 / 3.164, median 3.165, the smeared
+# Metal reading (see the header). `scene` is the opaque meshes alone (0.410–0.412, median 0.411) and
+# `reflections` the sky's full-screen resolve (0.473–0.474, median 0.474).
 [passes]
-scene = 6.0   # 2.952 measured (median of four; Metal per-pass smear, not a frame time)
+scene = 0.85          # 0.411 measured (median of four)
+reflections = 0.95    # 0.474 measured (median of four)
+transparents = 6.3    # 3.165 measured (median of four; Metal per-pass smear, not a frame time)
 
 # Deliberately absent: `composite` and the `bloom` group (pure functions of the output extent and
 # already gated on `lights.yaml`), `frame_total_ms` (the CLI links no game systems — 0.0002 ms of

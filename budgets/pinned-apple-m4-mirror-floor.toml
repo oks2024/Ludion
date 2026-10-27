@@ -1,0 +1,39 @@
+# Screen-space reflection budget — pinned Apple M4 (Metal), 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each ceiling is roughly twice the median measured by
+# `ludion profile --scene … --frames 120` in `--release` on the pinned Apple M4, so a failure means a
+# real, reproducible slowdown — never machine noise. All values are milliseconds. Re-calibrate
+# deliberately (a re-bless event) if a cost becomes intended and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/mirror-floor.yaml`, the
+# reflections arc's SSR scene (`Plan/reflections.md` Wave 2): a near-mirror floor under the full
+# preset, so the Hi-Z and colour pyramids, the trace and the blend all run at `ssr_scale` 0.5.
+# Checked with:
+#
+#   ludion profile --scene examples/gallery/mirror-floor.yaml --frames 120 --check budgets/pinned-apple-m4-mirror-floor.toml
+#
+# The Apple M4 twin of `budgets/pinned-rtx3090-mirror-floor.toml`: measured on this box, never
+# derived from the Windows file.
+#
+# **METAL PER-PASS TIMESTAMPS OVERCOUNT — these are instrument readings, not frame time.** On this
+# tile-based GPU each pass timestamp captures the overlapping window, so the twenty-odd passes of the
+# SSR chain each read 0.67–1.58 ms (the tiny ten-level pyramid tails excepted) and their sum is far
+# above the frame's real cost. The readings reproduce to ~0.5% run to run, so a 2x ceiling is still a
+# sharp tripwire for a regression in this scene against itself; it is not comparable to the RTX 3090
+# twin's absolute 0.433.
+#
+# Measured 2026-10-26 over three runs: the `ssr` group 14.906 / 14.951 / 14.894 — `ssr_trace`
+# 1.036 / 1.034 / 1.041, `ssr_blend` 1.578 / 1.567 / 1.580 — `reflections` 0.883 / 0.883 / 0.882
+# and the opaque `scene` 0.671 on all three.
+
+# The SSR chain as one effect: every `hiz_*` and `ssr_*` pass the run measured.
+[post_groups]
+ssr = 30.0   # 14.906 measured (median of three)
+
+[passes]
+scene = 1.35         # 0.671 measured
+reflections = 1.8    # 0.883 measured
+
+# Deliberately absent: `composite` (Metal reads it as 0.0, gated by a placeholder in
+# `budgets/pinned-apple-m4.toml`), `transparents` and the `bloom` group (gated on `lights.yaml` and the
+# stress scenes), `frame_total_ms` (the CLI links no game systems) and `[systems]`.

@@ -53,11 +53,17 @@ frame_total_ms = 16.6
 # Measured median 0.7868 over the four runs above; the ceiling is 1.6, the ~2x posture.
 extract_ms = 1.6
 
-# The sprite pass itself — sprites draw inside `scene`; there is no separate sprite pass to name.
-# 3,456 unlit premultiplied quads at 1080p, alpha and additive mixed, batched by `(layer, texture)`
-# into three draws. Measured 0.328 (the smeared Metal reading, see the header); the ceiling is 0.65.
+# The sprite pass itself — sprites draw inside `transparents` (`scene` is the opaque mesh pass since
+# `Plan/reflections.md` W1). 3,456 unlit premultiplied quads at 1080p, alpha and additive mixed,
+# batched by `(layer, texture)` into three draws. Measured 0.328 under `scene` on the 2026-09-15 runs,
+# and `transparents` 0.4435 / 0.4444 / 0.4448 / 0.4437 on 2026-10-26 (the smeared Metal reading, see
+# the header); the ceiling is 0.9. `reflections` is the sky's full-screen resolve (0.0845–0.085).
+# `scene` now draws no mesh and Metal reads the empty pass as 0.0, so its line is a small placeholder
+# in the posture `budgets/pinned-apple-m4.toml` gives `composite`, not a 2x ceiling.
 [passes]
-scene = 0.65
+scene = 0.1           # 0.0 measured (an empty pass; placeholder)
+reflections = 0.17    # 0.085 measured (median of four)
+transparents = 0.9    # 0.444 measured (median of four)
 
 # Deliberately absent: `composite` and the `bloom` group (pure functions of the output extent and
 # already gated on `lights.yaml`); `[systems]`, because this scene's sim systems are

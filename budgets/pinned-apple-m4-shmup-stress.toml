@@ -57,11 +57,16 @@ frame_total_ms = 16.6
 # above; the ceiling is 0.30, the ~2x posture.
 extract_ms = 0.30
 
-# Bullets draw inside `scene` as sprites — one atlas region, 2,975 alpha quads plus the 480-cell
-# backdrop, three batched draws. Measured 0.326 (the smeared Metal reading, see the header); the
-# ceiling is 0.65.
+# Bullets draw inside `transparents` as sprites (`scene` is the opaque mesh pass since
+# `Plan/reflections.md` W1) — one atlas region, 2,975 alpha quads plus the 480-cell backdrop, three
+# batched draws. Measured 0.326 under `scene` on the 2026-09-15 runs; `transparents` 0.4365 / 0.4359 /
+# 0.4381 / 0.4408 on 2026-10-26 (the smeared Metal reading, see the header); the ceiling is 0.9.
+# `reflections` is the sky's full-screen resolve (0.0825–0.0842). `scene` now draws no mesh and Metal
+# reads the empty pass as 0.0: a small placeholder, as in `budgets/pinned-apple-m4-sprite-stress.toml`.
 [passes]
-scene = 0.65
+scene = 0.1           # 0.0 measured (an empty pass; placeholder)
+reflections = 0.17    # 0.0835 measured (median of four)
+transparents = 0.9    # 0.4373 measured (median of four)
 
 # The volley path's three sim lines. `play_patterns` (four players, one ring due each frame) and
 # `advance_volleys` (119 live volleys, one reap a frame) sit under 0.01 ms, so they take the flat

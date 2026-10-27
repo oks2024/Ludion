@@ -11,30 +11,30 @@
 #
 # Recalibrate (after a deliberate renderer change, with the reason in the commit):
 #   LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity
-# Calibrated on an unpinned Apple M5, 2026-10-22 (`Plan/owed.md`: pinned confirmation owed).
+# Floors are the measured value minus the margin, written by LUDION_BLESS=1; the commit records the machine.
 
 margin = 0.02
 
 [bands."0.05"]
-ssim_floor = 0.8670   # measured 0.8870
+ssim_floor = 0.8669   # measured 0.8869
 [seam."0.05"]
-ssim = 0.9803
-mean_rel_luma = 0.0272
+ssim = 0.9799
+mean_rel_luma = 0.0274
 
 [bands."0.2"]
-ssim_floor = 0.8993   # measured 0.9193
+ssim_floor = 0.9022   # measured 0.9222
 [seam."0.2"]
-ssim = 0.9858
-mean_rel_luma = 0.0704
+ssim = 0.9874
+mean_rel_luma = 0.0613
 
 [bands."0.35"]
-ssim_floor = 0.9495   # measured 0.9695
+ssim_floor = 0.9570   # measured 0.9770
 [seam."0.35"]
-ssim = 0.9912
-mean_rel_luma = 0.0745
+ssim = 0.9935
+mean_rel_luma = 0.0501
 
 [bands."0.55"]
-ssim_floor = 0.9628   # measured 0.9828
+ssim_floor = 0.9644   # measured 0.9844
 [seam."0.55"]
-ssim = 0.9971
-mean_rel_luma = 0.0417
+ssim = 0.9977
+mean_rel_luma = 0.0286

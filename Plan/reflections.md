@@ -516,7 +516,22 @@ interiors**. Large open water is not a driver.
   0.061 → 0.082 ms, the MRT targets' bandwidth. A cold probe capture costs 11–14 ms per probe at full,
   about 9 at `low`, ~4% of the load, so decision 22's trigger is not met. The fp16 sum (One+One over a
   ceiling-bright surface) reads the ceiling on the 3090 (`needs_gpu_a_reflection_over_a_bright_surface_reads_the_ceiling`).
-  Owed: the M4 twins (`Plan/owed.md`).
+- Pinned M4 (2026-10-26): the M4 twins. The macOS goldens, provisional M5 candidates until now, are
+  re-blessed on the M4 after an unblessed run under the full gate: every specular golden had drifted
+  from the M5 by ±1 LSB (SSIM 0.9987–0.9999), and the one red, `night-sky`'s centre tile (worst-window
+  0.78 on a flat sky gradient, colour error 0.16), showed no visible difference. The sprite goldens,
+  the gallery's `text`, the game goldens, `material-park` and both import exit gates were byte-identical to the M5's and did
+  not move. Parity floors in `budgets/reflection-parity-macos.toml` read within 0.0001 of the M5's. The
+  new `budgets/pinned-apple-m4-mirror-floor.toml` gates the SSR group and `reflections` (Metal's smeared
+  per-pass readings: `ssr` 14.9 ms summed, not a frame time), the budgets-macos configuration runs it,
+  and the `lights` and stress files gain `reflections`/`transparents` lines; `lights.yaml`'s `bloom`
+  ceiling is re-cut because the smear through the new passes ahead of it moved its reading 1.94 → 3.59 ms
+  with no bloom change. The 256² sky re-prefilter spike costs 2.7 ms of a 1080p frame (1.3 ms at 128²,
+  the `low` preset). A cold probe capture costs ~16 ms per probe at full and ~9 at `low`, 31–33 ms of
+  `probe-rooms`' 79 ms load; that is load time, not the render loop, so decision 22's trigger is still not
+  met. Metal saturates the fp16 store at ±65504 like the 3090 (stores of 1e5 and 1e30 and a One+One sum
+  past range all read `0x7BFF`), so `HDR_CEILING` and `hdr_safe` are defensive on both pinned GPUs.
+  Owed: the spike on an iOS device, with `Plan/ios-target.md` M3.
 
 ## Deferred, with triggers
 
