@@ -1,0 +1,18 @@
+[package]
+name = "ludion-camera"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Camera rigs for the Ludion game engine: the CameraRig component and the pure per-tick pipeline (track on a path, springs, look-ahead, vertical anchor, timed blends, seeded trauma shake)."
+keywords = ["ludion", "camera", "rig", "game-engine"]
+categories = ["game-engines", "graphics"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true

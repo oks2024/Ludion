@@ -1658,6 +1658,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ludion-camera"
+version = "0.1.0"
+dependencies = [
+ "ludion-core",
+ "ludion-ecs",
+ "ludion-scene",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ludion-cli"
 version = "0.1.0"
 dependencies = [

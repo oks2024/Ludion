@@ -20,6 +20,7 @@ ludion-assets        → core                            [png, xxhash-rust, ktx2
 ludion-cook          → core, assets                    [intel_tex_2, ctt-astcenc, ktx2]  (encoders confined here)
 ludion-texgen        → core, scene                     [png, serde_json]
 ludion-font          → core, scene                     []
+ludion-camera        → core, ecs, scene                [schemars, serde, serde_json]
 ludion-sim           → core, ecs                       [serde, serde_json, xxhash-rust]
 ludion-spatial       → core, ecs                       [schemars, serde, serde_json]
 ludion-protocol      → core                            [schemars, serde, serde_json, xxhash-rust, zstd]

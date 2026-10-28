@@ -103,6 +103,7 @@ export const CRATES = {
   'crates/ludion': 'strict',
   'crates/ludion-assets': 'strict',
   'crates/ludion-audio': 'permissive',
+  'crates/ludion-camera': 'sim',
   'crates/ludion-cli': 'strict',
   'crates/ludion-cli/templates': 'sim',
   'crates/ludion-client': 'permissive',
