@@ -17,6 +17,8 @@ use crate::world::PhysicsWorld;
 const DEPENETRATION_PASSES: usize = 4;
 /// A displacement shorter than this is not worth a cast.
 const MIN_MOVE: f32 = 1e-5;
+/// Height differences under this are float rounding of the ground ray, not motion.
+const REST_NOISE: f32 = 1e-6;
 /// The least a hit normal may oppose the motion for the skin back-off along the motion to stay
 /// bounded.
 const MIN_OPPOSING: f32 = 0.2;
@@ -166,6 +168,7 @@ struct Solver<'a> {
     radius: f32,
     skin: f32,
     snap: f32,
+    step_height: f32,
     max_slides: u32,
     cos_limit: f32,
 }
@@ -187,6 +190,7 @@ impl<'a> Solver<'a> {
             radius: motor.radius,
             skin: motor.skin_width,
             snap: motor.snap_distance,
+            step_height: motor.step_height,
             max_slides: motor.max_slides,
             cos_limit: cos(motor.slope_limit_deg.to_radians()),
         }
@@ -324,6 +328,7 @@ impl<'a> Solver<'a> {
     ) -> Outcome {
         let (mut feet, mut stuck) = self.depenetrate(start);
         let mut ceiling = None;
+        let mut stepped: Option<f32> = None;
         let mut walls: Vec<(f32, SurfaceHit)> = Vec::new();
         if !stuck {
             let mut planes: Vec<[f32; 3]> = Vec::new();
@@ -338,6 +343,7 @@ impl<'a> Solver<'a> {
                     break;
                 }
                 let direction = scale(remaining, 1.0 / length);
+                let from = feet;
                 let Some(hit) = self.cast(feet, direction, length + self.skin, true) else {
                     feet = add(feet, remaining);
                     break;
@@ -360,6 +366,18 @@ impl<'a> Solver<'a> {
                 let mut next = match class {
                     Class::Ground => self.slide_ground(leftover, normal),
                     Class::Wall => {
+                        if was_grounded
+                            && let Some((pose, climb)) = self.step_up(
+                                from,
+                                [remaining[0], 0.0, remaining[2]],
+                                &hit,
+                                displacement[1],
+                            )
+                        {
+                            feet = pose;
+                            stepped = Some(stepped.unwrap_or(0.0) + climb);
+                            break;
+                        }
                         if !walls.iter().any(|(_, wall)| wall.entity == hit.entity) {
                             walls.push((travel, surface));
                         }
@@ -409,13 +427,74 @@ impl<'a> Solver<'a> {
             ground,
             ceiling,
             walls: walls.into_iter().map(|(_, wall)| wall).collect(),
-            stepped: None,
+            stepped,
             platform: PlatformCarry::default(),
             moved: sub(feet, start),
             stuck,
             height: self.height,
         };
         Outcome { feet, report }
+    }
+
+    /// Climbs the obstacle `hit` blocking `horizontal` from `from`: up by the step height, forward,
+    /// then down onto walkable ground. Returns the landing pose and the net climb, or `None` when
+    /// the obstacle rises above the step height, the headroom or the way forward is blocked, or
+    /// the landing is not walkable. A capsule landing on the step's edge counts as standing on the
+    /// face past it ([`rim_support`](Self::rim_support)).
+    fn step_up(
+        &self,
+        from: [f32; 3],
+        horizontal: [f32; 3],
+        hit: &QueryHit,
+        displacement_y: f32,
+    ) -> Option<([f32; 3], f32)> {
+        let length = len(horizontal);
+        if self.step_height <= 0.0 || length < MIN_MOVE {
+            return None;
+        }
+        // The obstruction's top, from the floor the capsule stands on (a skin below its feet).
+        if hit.point[1] - (from[1] - self.skin) > self.step_height {
+            return None;
+        }
+        let up = [0.0, 1.0, 0.0];
+        if self
+            .cast(from, up, self.step_height + self.skin, false)
+            .is_some()
+        {
+            return None;
+        }
+        let raised = add(from, scale(up, self.step_height));
+        let direction = scale(horizontal, 1.0 / length);
+        if self
+            .cast(raised, direction, length + self.skin, true)
+            .is_some()
+        {
+            return None;
+        }
+        let over = add(raised, horizontal);
+        let snap = if displacement_y <= 0.0 {
+            self.snap
+        } else {
+            0.0
+        };
+        let land = self.cast(
+            over,
+            [0.0, -1.0, 0.0],
+            self.step_height + self.skin + snap,
+            false,
+        )?;
+        let normal = self.refine(over, land.entity, land.normal);
+        if normal[1] < self.cos_limit && self.rim_support(land.point, over, land.entity).is_none() {
+            return None;
+        }
+        let pose = [
+            over[0],
+            over[1] - (land.distance - self.skin).max(0.0),
+            over[2],
+        ];
+        let climb = pose[1] - from[1];
+        let (settled, _) = self.depenetrate(pose);
+        (climb > 0.0 && climb <= self.step_height && settled == pose).then_some((pose, climb))
     }
 
     /// The leftover after hitting walkable ground: downward motion is spent, and the horizontal
@@ -430,6 +509,47 @@ impl<'a> Solver<'a> {
         } else {
             on_plane
         }
+    }
+
+    /// The height that rests the capsule at `feet` a skin above the walkable plane under its axis,
+    /// within a skin up and `reach` down of where it is, or `None` when the axis is not over
+    /// `entity`'s walkable surface (a rim or an edge). It is read from the ray's plane height, not
+    /// from a swept cast: a cast's time of impact is only good to about a tenth of a millimetre,
+    /// which a per-tick snap would ratchet into a visible sink, and a height computed from the
+    /// plane is the same bits however the capsule got there.
+    fn plane_rest(&self, feet: [f32; 3], entity: EntityId, reach: f32) -> Option<f32> {
+        let origin = [feet[0], feet[1] + self.radius, feet[2]];
+        let under = self
+            .physics
+            .probe_down(origin, self.radius + reach, &self.filter)
+            .filter(|under| under.entity == entity && under.normal[1] >= self.cos_limit)?;
+        let up = normalize(under.normal)[1];
+        let rest = under.point[1] + (self.radius + self.skin) / up - self.radius;
+        // The ray's height is rounded off a sum with the origin: below a micrometre it is noise,
+        // and following it would flip the last bits of a rested capsule every tick.
+        let rest = rest.clamp(feet[1] - reach, feet[1] + self.skin);
+        Some(if (rest - feet[1]).abs() < REST_NOISE {
+            feet[1]
+        } else {
+            rest
+        })
+    }
+
+    /// The walkable face `entity` presents past the contact `point` of a capsule whose axis is at
+    /// `axis`: a short ray down just beyond the contact, away from the axis, raised by a skin. A
+    /// capsule resting on an edge touches only the edge, and its cast normal there is tilted off
+    /// the face it stands on; this finds the face. Returns that face's normal.
+    fn rim_support(&self, point: [f32; 3], axis: [f32; 3], entity: EntityId) -> Option<[f32; 3]> {
+        let away = normalize([point[0] - axis[0], 0.0, point[2] - axis[2]]);
+        let origin = [
+            point[0] + away[0] * 1e-3,
+            point[1] + self.skin,
+            point[2] + away[2] * 1e-3,
+        ];
+        self.physics
+            .probe_down(origin, 2.0 * self.skin, &self.filter)
+            .filter(|under| under.entity == entity && under.normal[1] >= self.cos_limit)
+            .map(|under| normalize(under.normal))
     }
 
     /// Casts down from `feet` for the support, snapping onto it when allowed. Returns the support
@@ -466,11 +586,17 @@ impl<'a> Solver<'a> {
                 normal = normalize(under.normal);
                 rim = true;
                 walkable = true;
+            } else if let Some(face) = self.rim_support(hit.point, *feet, hit.entity) {
+                normal = face;
+                rim = true;
+                walkable = true;
             }
         }
         let grounded = walkable && hit.distance <= reach;
         if grounded && snap_allowed {
-            feet[1] -= (hit.distance - self.skin).max(0.0);
+            feet[1] = self
+                .plane_rest(*feet, hit.entity, reach)
+                .unwrap_or_else(|| feet[1] - (hit.distance - self.skin).max(0.0));
         }
         if !rim {
             normal = self.refine(*feet, hit.entity, normal);

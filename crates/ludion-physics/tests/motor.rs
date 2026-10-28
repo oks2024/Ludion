@@ -14,8 +14,8 @@ use ludion_core::par::with_threads;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, MotorError, MoveReport, PhysicsSpace, PhysicsWorld,
-    SlideConstraint, install, move_character, move_character_with,
+    CharacterMotor, CharacterMotorState, ColliderMeshes, MotorError, MoveReport, PhysicsSpace,
+    PhysicsWorld, SlideConstraint, TriangleMesh, install, move_character, move_character_with,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -660,9 +660,10 @@ fn determinism_run() -> (Vec<String>, Vec<[f32; 3]>) {
         |world| {
             floor(world);
             slope(world, 25.0, 3.0, 3.0);
+            wall(world, [-2.0, 0.1, 0.0], [0.5, 0.1, 6.0]);
             wall(world, [6.5, 1.0, 0.0], [0.5, 2.0, 6.0]);
             wall(world, [3.0, 1.0, 3.5], [6.0, 2.0, 0.5]);
-            hero(world, [-3.0, 1.0, 0.0])
+            hero(world, [-3.5, 0.0, 0.0])
         },
         |frame| {
             if frame < 70 {
@@ -700,4 +701,203 @@ fn the_report_sequence_is_identical_at_one_and_eight_threads() {
             .collect::<Vec<_>>()
     );
     assert!(one.0.iter().any(|r| r.contains("walls: [")));
+    assert!(one.0.iter().any(|r| r.contains("stepped: Some")));
+}
+
+/// A static box spanning `x ∈ [from, to]` whose top is at `top`, wide enough to walk the length of.
+fn block(world: &mut World, from: f32, to: f32, top: f32) -> EntityId {
+    wall(
+        world,
+        [(from + to) / 2.0, top / 2.0, 0.0],
+        [(to - from) / 2.0, top / 2.0, 5.0],
+    )
+}
+
+fn run_east(_: u64) -> Vec<[f32; 3]> {
+    vec![[0.06, -0.05, 0.0]]
+}
+
+#[test]
+fn a_step_just_under_the_step_height_is_climbed_and_the_walk_continues() {
+    let mut rig = Rig::new(
+        |world| {
+            floor(world);
+            block(world, 1.5, 6.0, 0.24);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        run_east,
+    );
+    let mut xs = vec![rig.feet()[0]];
+    for _ in 0..40 {
+        rig.run(1);
+        xs.push(rig.feet()[0]);
+    }
+    let reports = rig.reports();
+    let first = reports
+        .iter()
+        .position(|r| r.stepped.is_some())
+        .expect("a step-up");
+    // The climb tick travels no more than the commanded move plus a skin, and the hero never
+    // leaves the ground afterwards.
+    assert!(
+        xs[first + 2] - xs[first + 1] <= 0.06 + SKIN,
+        "{:?}",
+        &xs[first..first + 4]
+    );
+    assert!(reports[first..].iter().all(|r| r.grounded));
+    let last = reports.last().unwrap();
+    assert!(last.walls.is_empty(), "{last:?}");
+    assert!(
+        (rig.feet()[1] - (0.24 + SKIN)).abs() < 2e-3,
+        "{:?}",
+        rig.feet()
+    );
+    assert!(rig.feet()[0] > 2.0, "{:?}", rig.feet());
+}
+
+#[test]
+fn a_step_just_over_the_step_height_blocks() {
+    let mut rig = Rig::new(
+        |world| {
+            floor(world);
+            block(world, 1.5, 6.0, 0.26);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        run_east,
+    );
+    rig.run(40);
+    let reports = rig.reports();
+    assert!(reports.iter().all(|r| r.stepped.is_none()));
+    assert!(reports.last().unwrap().walls.len() == 1);
+    assert!(rig.feet()[0] < 1.5 - RADIUS + 0.01, "{:?}", rig.feet());
+}
+
+#[test]
+fn a_step_under_a_slab_without_headroom_is_refused() {
+    let mut rig = Rig::new(
+        |world| {
+            floor(world);
+            block(world, 1.5, 6.0, 0.2);
+            // The slab's underside is 0.5 over the step top: less than the capsule height.
+            wall(world, [3.75, 0.7 + 0.5, 0.0], [2.25, 0.5, 5.0]);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        run_east,
+    );
+    rig.run(40);
+    assert!(rig.reports().iter().all(|r| r.stepped.is_none()));
+    assert!(rig.feet()[0] < 1.5, "{:?}", rig.feet());
+}
+
+#[test]
+fn an_airborne_capsule_does_not_step_onto_a_lip() {
+    let mut rig = Rig::new(
+        |world| {
+            floor(world);
+            block(world, 1.5, 6.0, 0.1);
+            hero(world, [0.0, 0.05, 0.0])
+        },
+        |_| vec![[0.1, 0.0, 0.0]],
+    );
+    rig.run(30);
+    let reports = rig.reports();
+    // The rounded bottom may ride up the lip's edge and land on it, but never as a step.
+    assert!(reports.iter().all(|r| r.stepped.is_none()));
+    assert!(
+        reports[..10].iter().all(|r| !r.grounded),
+        "{:?}",
+        &reports[..10]
+    );
+}
+
+fn strip(y: f32, x0: f32, x1: f32, quads: u32) -> TriangleMesh {
+    let mut vertices = Vec::new();
+    for i in 0..=quads {
+        let x = x0 + (x1 - x0) * i as f32 / quads as f32;
+        vertices.push([x, y, -2.0]);
+        vertices.push([x, y, 2.0]);
+    }
+    let mut triangles = Vec::new();
+    for i in 0..quads {
+        let a = i * 2;
+        triangles.push([a, a + 2, a + 1]);
+        triangles.push([a + 1, a + 2, a + 3]);
+    }
+    TriangleMesh {
+        vertices,
+        triangles,
+        hash: 1,
+    }
+}
+
+fn mesh_floor(world: &mut World, x0: f32, x1: f32, quads: u32) {
+    world.insert_resource(ColliderMeshes::new(Box::new(move |_| {
+        Ok(strip(0.0, x0, x1, quads))
+    })));
+    let entity = world.spawn();
+    world.insert(entity, TestPose::at([0.0; 3])).unwrap();
+    world
+        .insert(
+            entity,
+            Collider {
+                shape: Shape::Mesh {
+                    path: "strip".into(),
+                },
+                body: Body::new_static(),
+                layer: None,
+                sensor: false,
+            },
+        )
+        .unwrap();
+}
+
+fn assert_seamless(rig: &mut Rig, ticks: u64) {
+    let mut ys = Vec::new();
+    for _ in 0..ticks {
+        rig.run(1);
+        ys.push(rig.feet()[1]);
+    }
+    let reports = rig.reports();
+    for (i, report) in reports.iter().enumerate().skip(3) {
+        assert!(
+            report.grounded && report.walls.is_empty(),
+            "tick {i}: {report:?}"
+        );
+        assert!(report.stepped.is_none(), "tick {i}: {report:?}");
+        let dy = (ys[i + 1] - ys[i]).abs();
+        assert!(dy < 1e-4, "tick {i}: dy {dy}");
+    }
+}
+
+#[test]
+fn running_across_twenty_coplanar_triangles_never_bumps() {
+    let mut rig = Rig::new(
+        |world| {
+            mesh_floor(world, -1.0, 5.0, 10);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        |_| vec![[0.05, -0.05, 0.0]],
+    );
+    assert_seamless(&mut rig, 80);
+    assert!(rig.feet()[0] > 3.9, "{:?}", rig.feet());
+}
+
+#[test]
+fn running_from_a_mesh_floor_onto_a_box_floor_never_bumps() {
+    let mut rig = Rig::new(
+        |world| {
+            mesh_floor(world, -4.0, 0.0, 4);
+            spawn_box(
+                world,
+                [3.0, -0.5, 0.0],
+                [3.0, 0.5, 5.0],
+                FLAT,
+                Body::new_static(),
+            );
+            hero(world, [-2.0, 0.0, 0.0])
+        },
+        |_| vec![[0.05, -0.05, 0.0]],
+    );
+    assert_seamless(&mut rig, 80);
+    assert!(rig.feet()[0] > 1.5, "{:?}", rig.feet());
 }
