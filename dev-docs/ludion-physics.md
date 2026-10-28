@@ -108,6 +108,13 @@ The engine's convention is **Euler XYZ degrees, intrinsic** (the product `qx · 
 with the transcendentals on pure-Rust libm, never glam's own, whose platform C library differs in
 the last bit across OS and arch; render (`extract`) builds every model matrix from the same pair.
 
+## The character motor
+
+`src/motor/` — `component` (`CharacterMotor`, its state), `mover` (`move_character`, the solver),
+`sweep` (capsule casts), `carry` (platform pose math), `surface` (`SurfaceVelocity`), `resize`
+(resize, fits, teleport). The behaviour
+is `ludion docs motor`; the carry-after-slide order is load-bearing and explained there.
+
 ## Shapes and layers
 
 The shape table, `aabb`/heightfield layout, mesh colliders and `CollisionLayers`: `ludion devdocs physics-shapes`.

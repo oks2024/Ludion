@@ -24,12 +24,12 @@ The name: a *ludion* is a Cartesian diver — a sealed figure that responds inst
 - `Plan/mesh-modeling.md` — W1–W3 mechanized (`kind: sculpt`, `ludion-sculpt`); **paused** (resume on the user's word; nothing in vigil waits on it).
 - `Plan/asset-pipeline-blender.md` — phase 1 verdict 2026-10-02: Blender for the environment, characters stay voxel; kits in `games/vigil/art/town`, the loop in a private playbook.
 - `Plan/skeletal-animation.md` — W1–W3 mechanized (glTF skins import, joint tree, GPU bone palette, SkinBone parts drive bones); the goblin glb rides its Blender brief; W4 not started.
-- `Plan/animation-clips.md` — W1–W3 mechanized (clips, characters, crossfade, events, editor preview); sitting owed. `Plan/character-controller.md` — W1 mechanized (mesh colliders, paths, followers, debug draw); W2+ not started.
+- `Plan/animation-clips.md` — W1–W3 mechanized (clips, characters, crossfade, events, editor preview); sitting owed. `Plan/character-controller.md` — W1–W2 mechanized (colliders, paths, followers, the motor, the course); W3+ not started.
 - `Plan/comfy-generation.md` — W1–W4 mechanized (`kind: generation` recipes, `ludion-gen`, `ludion gen`); checkpoint 2 owed.
 - `Plan/mesh-texture-editing.md` — W1–W2 mechanized (`kind: mesh-edit` op lists, `ludion-mesh-edit`, `ludion mesh pick`/`apply`); checkpoint 2 passed, the fill kept; Wave 3 waits on the user's word.
 - `Plan/font-assets.md` — W1–W3 mechanized (`layout()`, TTF bake, `font` field, SDF); W4 breakout on Inter, external adoption.
 - `Plan/textured-pbr.md` — W1–W4 mechanized; the exit gate's human look owed.
-- `Plan/reflections.md` — W1–W4 mechanized (the `reflections` blend site; opt-in Hi-Z SSR; `ReflectionProbe`, content-addressed store, live relight; SSR↔probe parity gate); both pinned boxes done; the spike on an iOS device rides `Plan/ios-target.md` M3.
+- `Plan/reflections.md` — W1–W4 mechanized (the `reflections` blend site; opt-in Hi-Z SSR; `ReflectionProbe`, content-addressed store, live relight; SSR↔probe parity gate); the spike on an iOS device rides `Plan/ios-target.md` M3.
 - `Plan/spot-light.md` — W1–W3 mechanized (`SpotLight`); look owed.
 - `Plan/editor-stage-camera.md` — W1–W4 mechanized (`render.view`, a free editor camera); the live smoke owed.
 - `Plan/transform-hierarchy-and-prefabs.md` — W0–W4 mechanized (`Parent`-local `Transform`, `kind: prefab`, `prefab.*`); live smoke and Exit owed.
@@ -63,7 +63,7 @@ Full detail in `engine-architecture.md`; headlines:
 - **Scene/data model:** custom ECS (freeze-listed, milestone-minimal) + strict-subset YAML 1.2 scenes with a canonical writer; JSON on the wire; TOML for the project manifest. JSON Schema generated from the component registry validates file and wire payloads.
 - **Editor:** Tauri + React, out-of-process protocol client; TS protocol types generated from JSON Schema in CI. The human viewport and the agent screenshot query are the same frame-streaming endpoint.
 - **Scripting/hot reload:** game crates are bins; `ludion dev` does recompile + restart-with-state-snapshot (`engine.snapshot`/`engine.restore`). No dylib reload.
-- **CLI (bin `ludion`; `--help` and `ludion devdocs ludion-cli` have the detail):** `new`, `check-scene`, `render`, `test`, `profile`, `dump-graph`, `explain`, `replay`, `sim-hash`, `serve` (hosts a scene over the wire), `dev`, `docs` / `devdocs`, `image-stats`; the pipeline verbs `import` (glTF → canonical text; PNG → `kind: sprite`), `generate-map` / `map-check`, `generate-atlas`, `gen` (ComfyUI recipes → runs → sheet → accept), `bake-probes` (reflection probes → the ignored store), `sync` (a project's `[[import]]` tables → ignored derived trees); the write-side verbs `voxel`, `sculpt`, `mesh` (`pick`, `apply`); `export` (an Xcode project for `ios`/`ios-sim`, `--run` on the simulator).
+- **CLI (bin `ludion`; `--help` and `ludion devdocs ludion-cli` have the detail):** `new`, `check-scene`, `render`, `test`, `profile`, `dump-graph`, `explain`, `replay`, `sim-hash`, `trace`, `serve` (hosts a scene over the wire), `dev`, `docs` / `devdocs`, `image-stats`; the pipeline verbs `import` (glTF → canonical text; PNG → `kind: sprite`), `generate-map` / `map-check`, `generate-atlas`, `gen` (ComfyUI recipes → runs → sheet → accept), `bake-probes` (reflection probes → the ignored store), `sync` (a project's `[[import]]` tables → ignored derived trees); the write-side verbs `voxel`, `sculpt`, `mesh` (`pick`, `apply`); `export` (an Xcode project for `ios`/`ios-sim`, `--run` on the simulator).
 
 ## Deferred — do not build yet
 

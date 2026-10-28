@@ -106,7 +106,7 @@ picture. Three entry points print the same lines: `ludion trace --scene <FILE> [
 {"channel":"sensors","tick":15,"sensor":"zone","other":"hero","phase":"entered"}
 ```
 
-- `motor`: one line per `CharacterMotor` entity per tick, ascending by entity. The report fields
+- `motor` (fields: `ludion docs motor`): one line per `CharacterMotor` entity per tick, ascending by entity. The report fields
   appear only when game code called `move_character` on it during that tick; otherwise the line is
   `channel`, `tick`, `entity`, `feet`. `sensors`: one line per enter or exit (`phase` `exited` adds
   `cause`: `separated`, `despawned`, `removed`). Within a tick, motor lines precede sensor lines.

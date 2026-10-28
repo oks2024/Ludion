@@ -4,7 +4,7 @@ description: Rigid bodies — the scene physics block, RigidBody, forces, contac
 
 # Rigid-body physics (`ludion-physics`)
 
-**Scope:** Authoring 3D shapes and rigid bodies, the scene `physics:` block, forces, contact events and solver queries. The 2D tier (colliders, spatial index, `move_and_slide`) is `ludion docs collision`; which pairs never meet is `ludion docs collision-layers`; a jointed pair is `ludion docs physics-joints`; slowing or freezing the step is `ludion docs physics-time-scale`; trigger volumes are `ludion docs physics-sensors`.
+**Scope:** Authoring 3D shapes and rigid bodies, the scene `physics:` block, forces, contact events and solver queries. The 2D tier (colliders, spatial index, `move_and_slide`) is `ludion docs collision`; which pairs never meet is `ludion docs collision-layers`; a jointed pair is `ludion docs physics-joints`; slowing or freezing the step is `ludion docs physics-time-scale`; trigger volumes are `ludion docs physics-sensors`; a character capsule is `ludion docs motor`.
 
 A 3D shape (`sphere`, `box`, `capsule`, `cylinder`, `convex`, `heightfield`, `compound`) or `body: rigid` of any shape belongs to `ludion-physics`;
 everything else stays in the 2D index (`ludion docs collision`); an entity is claimed by exactly one tier.

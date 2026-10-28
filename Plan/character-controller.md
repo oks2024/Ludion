@@ -1,6 +1,8 @@
 # Plan: Character controller and camera rigs — a 3D motor, paths and configurable cameras
 
-> Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). W1 mechanized; W2+ not started.**
+> Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). W1–W2 mechanized; W3+ not started.**
+> W2 holds the motor (`CharacterMotor`, `move_character`, `MoveReport`), `SurfaceVelocity`, resize and
+> teleport, platform carry, the numeric trace and the course (`ludion docs motor`, `games/character-course`).
 > W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
 > teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
 > external platformer's first engine request drove its last additions, and its second shipped sensor
@@ -92,6 +94,13 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
    - moving-platform riding (the ground entity's per-tick translation and yaw, with no `Parent`
      propagation);
    - a ceiling bump reported to the moveset.
+
+   Amendments from the external platformer's request (shipped in W2): `resize_character` and
+   `fits_character` (growth is headroom-tested; `fits_character` returns `Result`); `SurfaceVelocity`
+   for conveyors; `teleport_character`; the report gains `stepped`, `platform` (incl. `yaw` and
+   `surface`), `moved`, `stuck` and `height`; a platform's yaw also turns the rider. Settled: the carry
+   is applied after the slide and ground probe (casts see the support at its last-step pose); no carry
+   from `rigid` supports; the engine defaults are human scale (the 1 m preset is authored).
 7. **`move_and_slide` stays, split by domain.** `move_and_slide` serves planar games without a physics
    world (vigil moves hundreds of enemies through it), and the motor serves 3D. Each crate's docs point
    to the other. **Why:** these are different domains, not two ways to do one task, so each domain
@@ -257,7 +266,10 @@ CharacterMotor:
    off.
 5. Docs: the collider topic (mesh shape), a path topic, and the debug-draw topic.
 
-### W2 — The motor and the course
+### W2 — The motor and the course (mechanized)
+
+The course lives in `games/character-course`, not `examples/` (decision 21 amended: a motor needs a
+game crate, and the tooling knows `games/*`).
 
 1. `CharacterMotor`, `move_character` and `MoveReport` in `ludion-physics` (decisions 4 to 6).
 2. **Scenario tests** (headless, scripted input), each asserting a `MoveReport` sequence:

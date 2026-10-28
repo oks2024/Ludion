@@ -132,7 +132,7 @@ Before the first rebuild (or in a world with no colliders) every query returns e
 - `spatial::raycast(world, origin, dir, body_filter) -> Option<RayHit>` — the nearest in-plane
   hit (`RayHit { entity, t, point }`, hit point = `origin + t * dir`). Line of sight,
   projectile-vs-wall.
-- `spatial::move_and_slide::<Transform>(world, entity, delta) -> [f32; 2]` — the resolved delta for
+- `spatial::move_and_slide::<Transform>(world, entity, delta) -> [f32; 2]` (3D characters with a physics world: `ludion docs motor`) — the resolved delta for
   a kinematic move swept against **static** colliders only (never kinematic or rigid bodies — mover-vs-mover
   response is your logic, built on `k_nearest`). Axis-separated: sliding along a wall keeps the
   tangential component and cancels the normal one; a corner resolves to zero. Exact contact (a

@@ -95,7 +95,7 @@ The reference game that drove many engine arcs is private; its design and plans 
 ## Deferred and not started
 
 - [Build graph, file size and `par`](build-graph-and-par.md) — planned, not started.
-- [Character controller and camera rigs](character-controller.md) — W1 mechanized; W2+ not started.
+- [Character controller and camera rigs](character-controller.md) — W1–W2 mechanized; W3+ not started.
 - [Console strategy](console-strategy.md) — evaluated, not scheduled.
 - [Document-kind abstraction](document-kinds.md) — planned, not started.
 - [Editor systems panel](editor-systems-panel.md) — evaluated, not scheduled.
