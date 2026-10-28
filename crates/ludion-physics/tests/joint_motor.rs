@@ -71,6 +71,7 @@ fn motor_world(gravity: [f32; 3]) -> (World, Schedule, EntityId) {
                 shape: small_sphere(),
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -134,6 +135,7 @@ fn shaped_link(
                     ..RigidBody::default()
                 }),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -594,6 +596,7 @@ fn build_chain(world: &mut World) -> (EntityId, EntityId) {
                 shape: small_sphere(),
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");

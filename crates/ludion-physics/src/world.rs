@@ -946,7 +946,7 @@ impl PhysicsWorld {
     /// let at_origin = Transform { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0] };
     /// world.insert(ball, at_origin).unwrap();
     /// let body = Body::Rigid(RigidBody::default());
-    /// let collider = Collider { shape: Shape::Sphere { radius: 0.5 }, body, layer: None };
+    /// let collider = Collider { shape: Shape::Sphere { radius: 0.5 }, body, layer: None, sensor: false };
     /// world.insert(ball, collider).unwrap();
     ///
     /// let mut schedule = Schedule::new();
@@ -1000,7 +1000,7 @@ impl PhysicsWorld {
     /// let at_origin = Transform { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0] };
     /// world.insert(ball, at_origin).unwrap();
     /// let body = Body::Rigid(RigidBody::default());
-    /// let collider = Collider { shape: Shape::Sphere { radius: 0.5 }, body, layer: None };
+    /// let collider = Collider { shape: Shape::Sphere { radius: 0.5 }, body, layer: None, sensor: false };
     /// world.insert(ball, collider).unwrap();
     ///
     /// let mut schedule = Schedule::new();
@@ -1074,7 +1074,7 @@ impl PhysicsWorld {
     /// world.insert(ground, at(0.0)).unwrap();
     /// let dead = ContactMaterial { restitution: 0.0, ..ContactMaterial::default() };
     /// let shape = Shape::Box { half_extents: [5.0, 0.5, 5.0] };
-    /// world.insert(ground, Collider { shape, body: Body::Static(dead), layer: None }).unwrap();
+    /// world.insert(ground, Collider { shape, body: Body::Static(dead), layer: None, sensor: false }).unwrap();
     ///
     /// let ball = world.spawn();
     /// world.insert(ball, at(3.0)).unwrap();
@@ -1084,7 +1084,7 @@ impl PhysicsWorld {
     ///     ..RigidBody::default()
     /// };
     /// let shape = Shape::Sphere { radius: 0.5 };
-    /// world.insert(ball, Collider { shape, body: Body::Rigid(bouncy), layer: None }).unwrap();
+    /// world.insert(ball, Collider { shape, body: Body::Rigid(bouncy), layer: None, sensor: false }).unwrap();
     ///
     /// let mut schedule = Schedule::new();
     /// install::<Transform>(&mut schedule, PhysicsSettings::new(PhysicsSpace::Free));
@@ -1512,6 +1512,35 @@ impl PhysicsWorld {
                 return;
             }
         }
+        if collider.sensor {
+            let refusal = if matches!(collider.body, Body::Rigid(_)) {
+                Some((
+                    code::COLLIDER_SENSOR_ON_RIGID,
+                    "a sensor cannot be a rigid body: it detects overlaps and never collides",
+                ))
+            } else if matches!(
+                collider.shape,
+                Shape::Mesh { .. } | Shape::Heightfield { .. }
+            ) {
+                Some((
+                    code::COLLIDER_SENSOR_NO_INTERIOR,
+                    "a mesh or heightfield sensor has no interior, so it could only fire on a surface crossing",
+                ))
+            } else {
+                None
+            };
+            if let Some((refused, reason)) = refusal {
+                self.reject(
+                    entity,
+                    collider,
+                    mesh_hash,
+                    refused,
+                    reason.to_string(),
+                    Vec::new(),
+                );
+                return;
+            }
+        }
         let groups = match self.groups_for(collider) {
             Ok(groups) => groups,
             Err(reason) => {
@@ -1576,11 +1605,14 @@ impl PhysicsWorld {
             collider_builder = collider_builder.mass(tunables.mass);
         }
         let material = collider.body.material();
-        let collider_builder = collider_builder
+        let mut collider_builder = collider_builder
             .friction(material.friction)
             .restitution(material.restitution)
             .friction_combine_rule(rapier_rule(material.friction_combine))
             .restitution_combine_rule(rapier_rule(material.restitution_combine));
+        if collider.sensor {
+            collider_builder = collider_builder.sensor(true);
+        }
         let (body_handle, collider_handle) = self.rapier.insert(body, collider_builder);
         self.fresh_colliders.push(collider_handle);
         if let Some(tunables) = tunables {
@@ -2184,6 +2216,9 @@ impl PhysicsWorld {
             if Some(entity) == filter.exclude {
                 return true;
             }
+            if !filter.include_sensors && self.entry(entity).is_some_and(|e| e.source.sensor) {
+                return true;
+            }
             if filter.ignored_layers.is_empty() {
                 return false;
             }
@@ -2646,6 +2681,7 @@ mod tests {
             shape: Shape::Sphere { radius: 0.5 },
             body: Body::Rigid(Default::default()),
             layer: layer.map(str::to_string),
+            sensor: false,
         }
     }
 
@@ -2762,6 +2798,7 @@ mod tests {
             },
             body: Body::new_static(),
             layer: Some("x".to_string()),
+            sensor: false,
         };
         world.create(
             entity,

@@ -18,6 +18,7 @@ fn static_body(shape: Shape) -> Collider {
         shape,
         body: Body::new_static(),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -26,6 +27,7 @@ fn rigid(shape: Shape, body: RigidBody) -> Collider {
         shape,
         body: Body::Rigid(body),
         layer: None,
+        sensor: false,
     }
 }
 

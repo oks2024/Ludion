@@ -123,7 +123,7 @@ impl PhysicsWorld {
     /// let ball = world.spawn();
     /// world.insert(ball, at_origin).unwrap();
     /// let body = Body::Rigid(RigidBody { mass: 1.0, ..RigidBody::default() });
-    /// let collider = Collider { shape: Shape::Sphere { radius: 0.5 }, body, layer: None };
+    /// let collider = Collider { shape: Shape::Sphere { radius: 0.5 }, body, layer: None, sensor: false };
     /// world.insert(ball, collider).unwrap();
     /// let director = world.spawn();
     /// world.insert(director, Beats { hit_stop: 3, slow_mo: 4 }).unwrap();

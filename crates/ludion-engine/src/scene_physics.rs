@@ -535,6 +535,7 @@ mod tests {
                     },
                     body: Body::Rigid(RigidBody::default()),
                     layer: None,
+                    sensor: false,
                 },
             )
             .expect("a fresh entity accepts a collider");
@@ -643,6 +644,7 @@ mod tests {
                         },
                         body,
                         layer: None,
+                        sensor: false,
                     },
                 )
                 .unwrap();
@@ -680,6 +682,7 @@ mod tests {
             },
             body,
             layer: None,
+            sensor: false,
         };
         let scaled = world.spawn();
         world
@@ -735,6 +738,7 @@ mod tests {
                     shape,
                     body,
                     layer: None,
+                    sensor: false,
                 },
             )
             .unwrap();
@@ -806,6 +810,7 @@ mod tests {
                     shape: Shape::Sphere { radius: 0.5 },
                     body: Body::Rigid(RigidBody::default()),
                     layer: Some("dumy".to_string()),
+                    sensor: false,
                 },
             )
             .expect("a fresh entity accepts a collider");
@@ -850,6 +855,7 @@ mod tests {
             },
             body: Body::Rigid(RigidBody::default()),
             layer: None,
+            sensor: false,
         };
         let mut entities = Vec::new();
         for _ in 0..2 {
@@ -913,6 +919,7 @@ mod tests {
                     shape: Shape::Sphere { radius: 0.1 },
                     body: Body::new_static(),
                     layer: None,
+                    sensor: false,
                 },
             )
             .expect("a fresh entity accepts a collider");
@@ -928,6 +935,7 @@ mod tests {
                     shape: Shape::Sphere { radius: 0.1 },
                     body: Body::Rigid(RigidBody::default()),
                     layer: None,
+                    sensor: false,
                 },
             )
             .expect("a fresh entity accepts a collider");

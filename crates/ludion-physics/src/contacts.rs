@@ -100,13 +100,13 @@ pub enum ContactPhase {
 /// world.insert(floor, pose_at(-0.5)).unwrap();
 /// let slab = Shape::Box { half_extents: [5.0, 0.5, 5.0] };
 /// world
-///     .insert(floor, Collider { shape: slab, body: Body::new_static(), layer: None })
+///     .insert(floor, Collider { shape: slab, body: Body::new_static(), layer: None, sensor: false })
 ///     .unwrap();
 /// let ball = world.spawn();
 /// world.insert(ball, pose_at(1.0)).unwrap();
 /// let body = Body::Rigid(RigidBody { mass: 1.0, ..RigidBody::default() });
 /// world
-///     .insert(ball, Collider { shape: Shape::Sphere { radius: 0.5 }, body, layer: None })
+///     .insert(ball, Collider { shape: Shape::Sphere { radius: 0.5 }, body, layer: None, sensor: false })
 ///     .unwrap();
 ///
 /// let mut schedule = Schedule::new();

@@ -58,6 +58,7 @@ fn spawn(world: &mut World, refs: &mut Vec<Ref>, xz: [f32; 2], shape: Shape, bod
                 shape: shape.clone(),
                 body,
                 layer: None,
+                sensor: false,
             },
         )
         .unwrap();
@@ -649,6 +650,7 @@ fn move_and_slide_at_matches_move_and_slide_across_blocked_and_unblocked_cases()
                     shape: mover_shape,
                     body: Body::new_kinematic(),
                     layer: None,
+                    sensor: false,
                 },
             )
             .unwrap();

@@ -171,6 +171,36 @@ fn sprite_crossfade(
     })
 }
 
+/// Every `L1293` a checked scene reports: a `sensor: true` collider the 3D solver does not claim,
+/// where the flag would silently do nothing.
+pub fn scene_sensor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (index, entity) in scene.entities.iter().enumerate() {
+        let Some((_, value)) = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "Collider")
+        else {
+            continue;
+        };
+        let Ok(collider) = serde_json::from_value::<ludion_spatial::Collider>(value.clone()) else {
+            continue;
+        };
+        if collider.sensor && !ludion_physics::claims(&collider) {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::COLLIDER_SENSOR_UNCLAIMED,
+                    "collider `sensor` is ignored: the 3D solver does not claim this collider"
+                        .to_string(),
+                )
+                .with_path(format!("/entities/{index}/components/Collider/sensor"))
+                .with_help("give the collider a 3D shape (`sphere`, `box`, ...), or drop `sensor`"),
+            );
+        }
+    }
+    diagnostics
+}
+
 /// Every `L1186`/`L1187` a checked scene's collider `layer` fields report: a layer the scene's
 /// `physics.layers` does not declare (with the nearest declared name), and a layer on a collider
 /// the 3D solver never claims, where it would silently do nothing.
@@ -580,6 +610,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     let mut diagnostics = scene_atlas_diagnostics(project_root, scene);
     diagnostics.extend(scene_font_diagnostics(project_root, scene));
     diagnostics.extend(scene_layer_diagnostics(scene));
+    diagnostics.extend(scene_sensor_diagnostics(scene));
     diagnostics.extend(scene_hierarchy_body_diagnostics(scene));
     diagnostics.extend(scene_physics_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
@@ -678,6 +709,46 @@ mod tests {
         let scene = ludion_scene::check(&source, &crate::builtin_registry())
             .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"));
         scene_layer_diagnostics(&scene)
+    }
+
+    fn sensor_diagnostics(shape: &str, body: &str) -> Vec<Diagnostic> {
+        let source = format!(
+            "format: 1
+seed: 1
+entities:
+  - name: zone
+    components:
+      Collider:
+        shape:
+          {shape}
+        body: {body}
+        sensor: true
+"
+        );
+        let scene = ludion_scene::check(&source, &crate::builtin_registry())
+            .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"));
+        scene_sensor_diagnostics(&scene)
+    }
+
+    #[test]
+    fn a_sensor_on_an_unclaimed_collider_is_l1293_and_a_3d_one_is_clean() {
+        let found = sensor_diagnostics(
+            "circle:
+            radius: 0.5",
+            "static",
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code.as_str(), "L1293");
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/Collider/sensor")
+        );
+        let clean = sensor_diagnostics(
+            "sphere:
+            radius: 0.5",
+            "static",
+        );
+        assert!(clean.is_empty(), "{clean:?}");
     }
 
     fn parented_collider(shape: &str, body: &str) -> Vec<Diagnostic> {

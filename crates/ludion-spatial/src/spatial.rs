@@ -1079,6 +1079,7 @@ mod tests {
                     shape,
                     body,
                     layer: None,
+                    sensor: false,
                 },
             )
             .unwrap();

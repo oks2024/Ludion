@@ -18,6 +18,7 @@ fn floor_collider() -> Collider {
         },
         body: Body::new_static(),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -31,6 +32,7 @@ fn ball_collider(sleep_after_ticks: u32) -> Collider {
             ..RigidBody::default()
         }),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -415,6 +417,7 @@ fn boxed_start(rotation: [f32; 4], y: f32) -> ContactEvent {
                 },
                 body: Body::Rigid(RigidBody::default()),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -490,6 +493,7 @@ fn heightfield_start(ground_first: bool) -> ContactEvent {
                 },
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -505,6 +509,7 @@ fn heightfield_start(ground_first: bool) -> ContactEvent {
                 },
                 body: Body::Rigid(RigidBody::default()),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");

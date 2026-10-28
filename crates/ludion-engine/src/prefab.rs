@@ -29,7 +29,7 @@ use crate::hierarchy::level_trs;
 use crate::instantiate::EngineHooks;
 use crate::scene_check::{
     prefab_singleton_diagnostics, scene_atlas_diagnostics, scene_hierarchy_body_diagnostics,
-    scene_layer_diagnostics,
+    scene_layer_diagnostics, scene_sensor_diagnostics,
 };
 use crate::skin_bone::{BonePose, apply_bone_poses, spawn_poses};
 
@@ -446,6 +446,7 @@ impl PrefabLibrary {
         diagnostics.extend(scene_hierarchy_body_diagnostics(&body));
         body.physics = self.physics.clone();
         diagnostics.extend(scene_layer_diagnostics(&body));
+        diagnostics.extend(scene_sensor_diagnostics(&body));
         diagnostics.extend(scene_atlas_diagnostics(&self.root, &body));
         let poses = match spawn_poses(&self.root, &body) {
             Ok(poses) => poses,

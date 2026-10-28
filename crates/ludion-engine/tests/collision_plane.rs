@@ -25,6 +25,7 @@ fn spawn(world: &mut World, translation: [f32; 3], body: Body) -> EntityId {
                 shape: Shape::Circle { radius: 1.0 },
                 body,
                 layer: None,
+                sensor: false,
             },
         )
         .unwrap();
@@ -78,6 +79,7 @@ fn move_and_slide_slides_along_y_on_the_xy_plane() {
                 },
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .unwrap();

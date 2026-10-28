@@ -223,6 +223,7 @@ pub fn switch_to_ragdoll(
                 ..RigidBody::default()
             }),
             layer: None,
+            sensor: false,
         };
         debug_assert!(
             Collider::validate_semantics(

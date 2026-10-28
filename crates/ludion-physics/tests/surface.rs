@@ -45,6 +45,7 @@ fn fixed(shape: Shape) -> Collider {
         shape,
         body: Body::new_static(),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -53,6 +54,7 @@ fn rigid(shape: Shape) -> Collider {
         shape,
         body: Body::Rigid(RigidBody::default()),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -63,6 +65,7 @@ fn a_two_dimensional_static_or_kinematic_collider_stays_in_the_spatial_tier() {
             shape: Shape::Circle { radius: 0.5 },
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         },
         Collider {
             shape: Shape::Aabb {
@@ -70,11 +73,13 @@ fn a_two_dimensional_static_or_kinematic_collider_stays_in_the_spatial_tier() {
             },
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         },
         Collider {
             shape: Shape::Circle { radius: 0.5 },
             body: Body::new_kinematic(),
             layer: None,
+            sensor: false,
         },
         Collider {
             shape: Shape::Aabb {
@@ -82,6 +87,7 @@ fn a_two_dimensional_static_or_kinematic_collider_stays_in_the_spatial_tier() {
             },
             body: Body::new_kinematic(),
             layer: None,
+            sensor: false,
         },
     ] {
         let described = format!("{collider:?}");
@@ -128,6 +134,7 @@ fn the_world_appears_only_on_the_tick_that_claims_something() {
                 shape: Shape::Circle { radius: 0.5 },
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -525,6 +532,7 @@ fn a_bodys_own_locks_survive_alongside_the_planes() {
             ..RigidBody::default()
         }),
         layer: None,
+        sensor: false,
     };
     let (world, entity) = world_with(collider, Some(Plane::Xz), PhysicsSpace::Planar);
     assert_eq!(
@@ -552,6 +560,7 @@ fn a_static_body_never_moves_and_a_rigid_one_falls() {
                 },
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -589,6 +598,7 @@ fn a_kinematic_body_follows_the_ecs_pose() {
                 shape: Shape::Sphere { radius: 0.5 },
                 body: Body::new_kinematic(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -641,6 +651,7 @@ fn a_body_without_its_own_sleep_ticks_falls_back_to_the_settings_value() {
                     ..RigidBody::default()
                 }),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -658,6 +669,7 @@ fn a_body_without_its_own_sleep_ticks_falls_back_to_the_settings_value() {
                     ..RigidBody::default()
                 }),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");

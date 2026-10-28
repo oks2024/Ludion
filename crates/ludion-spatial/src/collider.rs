@@ -547,6 +547,11 @@ pub struct Collider {
     /// `default` layer, and the field is omitted from the saved text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
+    /// Detects overlaps without ever colliding or pushing (default `false`, omitted from the
+    /// saved text). Queries skip a sensor unless the filter opts in. `static` or `kinematic` only,
+    /// and a volume shape only (not `mesh` or `heightfield`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sensor: bool,
 }
 
 impl Collider {
@@ -584,6 +589,8 @@ impl SemanticValidate for Collider {
     /// `ludion-physics`'s parry builder still rejects gets no body, and is not retried until its
     /// `Collider` changes; this validator cannot see parry's own tolerance. Defensive: runs on a
     /// schema-clean value and adds nothing to a shape mismatch (that is `L1014`'s job).
+    /// A `sensor: true` on a `rigid` body is `L1291` and on a `mesh` or `heightfield` is
+    /// `L1292`, both at `/sensor`.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         if let Some(shape) = value.get("shape") {
@@ -607,6 +614,32 @@ impl SemanticValidate for Collider {
                         "set `body: static` (or `kinematic`), or give the rigid body a `convex` \
                          shape or a `compound` of convex parts",
                     ),
+                );
+            }
+        }
+        if value.get("sensor") == Some(&Value::Bool(true)) {
+            if value.pointer("/body/rigid").is_some() {
+                out.push(
+                    Diagnostic::new(
+                        code::COLLIDER_SENSOR_ON_RIGID,
+                        "a sensor cannot be a rigid body: it detects overlaps and never collides"
+                            .to_string(),
+                    )
+                    .with_path("/sensor".to_string())
+                    .with_help("use `body: kinematic` and move it, or drop `sensor`"),
+                );
+            }
+            if value.pointer("/shape/mesh").is_some()
+                || value.pointer("/shape/heightfield").is_some()
+            {
+                out.push(
+                    Diagnostic::new(
+                        code::COLLIDER_SENSOR_NO_INTERIOR,
+                        "a mesh or heightfield sensor has no interior, so it could only fire on a surface crossing"
+                            .to_string(),
+                    )
+                    .with_path("/sensor".to_string())
+                    .with_help("use a `box`, `sphere`, `capsule`, `cylinder`, `convex` or `compound` shape"),
                 );
             }
         }
@@ -1001,6 +1034,10 @@ fn is_half(value: &f32) -> bool {
     *value == 0.5
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn is_zero(value: &f32) -> bool {
     *value == 0.0
 }
@@ -1037,6 +1074,7 @@ mod tests {
             shape: Shape::Circle { radius: 1.25 },
             body: Body::new_kinematic(),
             layer: None,
+            sensor: false,
         };
         let json = serde_json::to_value(&collider).unwrap();
         assert_eq!(
@@ -1054,6 +1092,7 @@ mod tests {
             },
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         };
         let json = serde_json::to_value(&collider).unwrap();
         assert_eq!(
@@ -1088,6 +1127,7 @@ mod tests {
             shape: Shape::Sphere { radius: 1.0 },
             body: Body::Rigid(RigidBody::default()),
             layer: None,
+            sensor: false,
         };
         let json = serde_json::to_value(&collider).unwrap();
         assert_eq!(
@@ -1402,6 +1442,7 @@ mod tests {
                     ..RigidBody::default()
                 }),
                 layer: None,
+                sensor: false,
             };
             let json = serde_json::to_value(&collider).unwrap();
             assert_eq!(
@@ -1528,6 +1569,74 @@ mod tests {
             "L1211",
             "/body",
         );
+    }
+
+    #[test]
+    fn a_rigid_sensor_is_l1291() {
+        only(
+            json!({ "shape": { "sphere": { "radius": 1.0 } }, "body": { "rigid": {} }, "sensor": true }),
+            "L1291",
+            "/sensor",
+        );
+    }
+
+    #[test]
+    fn the_l1292_message_has_no_double_spaces() {
+        let found = Collider::validate_semantics(
+            &json!({ "shape": { "heightfield": { "rows": 2, "cols": 2, "heights": [0.0, 0.0, 0.0, 0.0] } }, "sensor": true }),
+        );
+        assert_eq!(
+            found[0].message,
+            "a mesh or heightfield sensor has no interior, so it could only fire on a surface crossing"
+        );
+    }
+
+    #[test]
+    fn a_heightfield_or_mesh_sensor_is_l1292() {
+        only(
+            json!({
+                "shape": { "heightfield": { "rows": 2, "cols": 2, "heights": [0.0, 0.0, 0.0, 0.0] } },
+                "sensor": true
+            }),
+            "L1292",
+            "/sensor",
+        );
+        only(
+            json!({ "shape": { "mesh": { "path": "a.mesh.yaml" } }, "body": "kinematic", "sensor": true }),
+            "L1292",
+            "/sensor",
+        );
+    }
+
+    #[test]
+    fn a_volume_sensor_is_clean() {
+        for value in [
+            json!({ "shape": { "box": { "half_extents": [1.0, 1.0, 1.0] } }, "sensor": true }),
+            json!({
+                "shape": { "convex": { "points": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] } },
+                "body": "kinematic",
+                "sensor": true
+            }),
+            json!({
+                "shape": { "compound": { "parts": [{ "shape": { "sphere": { "radius": 1.0 } } }] } },
+                "sensor": true
+            }),
+        ] {
+            assert!(Collider::validate_semantics(&value).is_empty(), "{value}");
+        }
+    }
+
+    #[test]
+    fn sensor_serializes_only_when_true() {
+        let off = serde_json::to_value(Collider::default()).unwrap();
+        assert!(off.get("sensor").is_none());
+        let on = Collider {
+            sensor: true,
+            ..Collider::default()
+        };
+        let value = serde_json::to_value(&on).unwrap();
+        assert_eq!(value["sensor"], json!(true));
+        assert_eq!(serde_json::from_value::<Collider>(value).unwrap(), on);
     }
 
     #[test]

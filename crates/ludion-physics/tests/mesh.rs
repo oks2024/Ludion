@@ -57,6 +57,7 @@ fn mesh_collider(path: &str, body: Body) -> Collider {
         shape: Shape::Mesh { path: path.into() },
         body,
         layer: None,
+        sensor: false,
     }
 }
 
@@ -111,6 +112,7 @@ fn floor_and_box(world: &mut World) -> (EntityId, EntityId) {
             },
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         },
         [50.0, 0.0, 0.0],
     );

@@ -43,6 +43,7 @@ fn rigid(shape: Shape, sleep_after_ticks: Option<u32>, gravity_scale: f32) -> Co
             ..RigidBody::default()
         }),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -51,6 +52,7 @@ fn fixed(shape: Shape) -> Collider {
         shape,
         body: Body::new_static(),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -390,6 +392,7 @@ fn rider_after_a_platform_jump(teleported: bool) -> (f32, f32) {
             },
             body: Body::new_kinematic(),
             layer: None,
+            sensor: false,
         },
     );
     let rider = spawn(

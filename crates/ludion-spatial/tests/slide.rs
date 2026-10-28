@@ -39,6 +39,7 @@ fn spawn(world: &mut World, xz: [f32; 2], shape: Shape, body: Body) -> EntityId 
                 shape,
                 body,
                 layer: None,
+                sensor: false,
             },
         )
         .unwrap();
@@ -194,6 +195,7 @@ fn entity_without_a_position_returns_the_delta_unchanged() {
                 shape: MOVER,
                 body: Body::new_kinematic(),
                 layer: None,
+                sensor: false,
             },
         )
         .unwrap();

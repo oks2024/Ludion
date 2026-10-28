@@ -49,6 +49,7 @@ fn rigid(shape: Shape, body: RigidBody) -> Collider {
         shape,
         body: Body::Rigid(body),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -115,6 +116,7 @@ fn hinged_bob() -> (World, EntityId) {
             shape: Shape::Sphere { radius: 0.1 },
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         },
     );
     let bob = spawn_body(&mut world, [1.0, 0.0, 0.0], rigid(sphere(), scaled(1.0)));
@@ -241,6 +243,7 @@ fn a_scale_only_edit_wakes_a_sleeping_body() {
             },
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         },
     );
     let ball = spawn_body(
@@ -301,6 +304,7 @@ fn floor(world: &mut World) {
             },
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         },
     );
 }
@@ -353,6 +357,7 @@ fn a_friction_edit_lets_a_resting_box_slide() {
         shape: Shape::Box { half_extents },
         body: Body::new_static(),
         layer: None,
+        sensor: false,
     };
     world.insert(ramp, slab).expect("a collider");
     let crate_body = RigidBody {
@@ -569,6 +574,7 @@ fn a_moved_static_body_follows_its_transform() {
                 },
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .unwrap();

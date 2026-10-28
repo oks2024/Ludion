@@ -14,6 +14,7 @@ fn box_collider(half_extents: [f32; 3], body: Body) -> Collider {
         shape: Shape::Box { half_extents },
         body,
         layer: None,
+        sensor: false,
     }
 }
 
@@ -195,6 +196,7 @@ fn the_2d_index_files_a_parented_collider_at_its_world_position() {
             },
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         },
     );
     world.insert(child, Parent(parent)).unwrap();

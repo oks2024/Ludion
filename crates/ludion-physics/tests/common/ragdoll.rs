@@ -19,6 +19,7 @@ pub fn collider(shape: Shape, body: Body) -> Collider {
         shape,
         body,
         layer: None,
+        sensor: false,
     }
 }
 

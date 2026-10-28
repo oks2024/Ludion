@@ -25,6 +25,7 @@ fn spawn(world: &mut World, shape: Shape, body: Body, at: [f32; 3]) -> EntityId 
                 shape,
                 body,
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");

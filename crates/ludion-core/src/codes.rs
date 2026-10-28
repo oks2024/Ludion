@@ -1421,6 +1421,20 @@ pub mod code {
     /// `[1, 1, 1]`; collision ignores scale. Raised once per entity by `ludion-engine`.
     pub const COLLIDER_SCALE_IGNORED: DiagnosticCode = DiagnosticCode::new("L1290");
 
+    /// `L1291` — a `Collider` with `sensor: true` sits on a `body: rigid`. A sensor detects
+    /// overlaps and never collides, so it cannot be simulated. Raised by `ludion-spatial`'s
+    /// collider validation and by `ludion-physics` at runtime.
+    pub const COLLIDER_SENSOR_ON_RIGID: DiagnosticCode = DiagnosticCode::new("L1291");
+
+    /// `L1292` — a `Collider` with `sensor: true` has a `mesh` or `heightfield` shape. Neither has
+    /// an interior, so the sensor would fire only on a surface crossing. Raised by
+    /// `ludion-spatial`'s collider validation and by `ludion-physics` at runtime.
+    pub const COLLIDER_SENSOR_NO_INTERIOR: DiagnosticCode = DiagnosticCode::new("L1292");
+
+    /// `L1293` — a `Collider` with `sensor: true` has a 2D `circle` or `aabb` shape the physics
+    /// solver does not claim. Raised by `ludion-engine`'s `check-scene`.
+    pub const COLLIDER_SENSOR_UNCLAIMED: DiagnosticCode = DiagnosticCode::new("L1293");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7173,6 +7187,46 @@ sees differs from the shape that renders. Raised once per entity.
 
 Fix: bake the scale into the mesh or the collider's shape, and set the scale to `[1, 1, 1]`.",
     },
+    CodeEntry {
+        code: code::COLLIDER_SENSOR_ON_RIGID,
+        severity: Severity::Error,
+        title: "a sensor collider on a rigid body",
+        explanation: "A `Collider` with `sensor: true` sits on a `body: rigid`.
+
+A sensor detects overlaps and never collides or pushes, so it has no rigid-body behaviour to
+simulate. It belongs on a `static` body, or on a `kinematic` one that something moves.
+
+Raised at document time by `check-scene`, and at runtime by `ludion-physics` for a `Collider` that
+game code inserts directly. The body is not created.
+
+Fix: set `body: static` (or `kinematic`, and move it), or drop `sensor`.",
+    },
+    CodeEntry {
+        code: code::COLLIDER_SENSOR_NO_INTERIOR,
+        severity: Severity::Error,
+        title: "a sensor collider with no interior",
+        explanation: "A `Collider` with `sensor: true` has a `mesh` or `heightfield` shape.
+
+A triangle mesh and a heightfield are surfaces without an interior, so a sensor on one would fire
+only at the moment something crosses the surface, never while something is inside it.
+
+Raised at document time by `check-scene`, and at runtime by `ludion-physics` for a `Collider` that
+game code inserts directly. The body is not created.
+
+Fix: use a volume shape (`box`, `sphere`, `capsule`, `cylinder`, `convex` or `compound`), or drop
+`sensor`.",
+    },
+    CodeEntry {
+        code: code::COLLIDER_SENSOR_UNCLAIMED,
+        severity: Severity::Error,
+        title: "a sensor on a collider the solver does not claim",
+        explanation: "A `Collider` with `sensor: true` has a 2D `circle` or `aabb` shape on a body the
+physics solver does not own. Sensors exist only in the physics tier, so the flag would do nothing.
+
+Raised at document time by `check-scene`, at `/entities/<i>/components/Collider/sensor`.
+
+Fix: give the collider a 3D shape (`sphere`, `box`, ...), or drop `sensor`.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9833,6 +9887,9 @@ mod tests {
         code::TEXTURE_CHECK_FAILED,
         code::TEXTURE_RULES_INVALID,
         code::COLLIDER_SCALE_IGNORED,
+        code::COLLIDER_SENSOR_ON_RIGID,
+        code::COLLIDER_SENSOR_NO_INTERIOR,
+        code::COLLIDER_SENSOR_UNCLAIMED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

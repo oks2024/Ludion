@@ -1,0 +1,17 @@
+format: 1
+seed: 1
+entities:
+  - name: zone
+    components:
+      Collider:
+        shape:
+          heightfield:
+            rows: 2
+            cols: 2
+            heights:
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.0
+        body: static
+        sensor: true

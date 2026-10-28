@@ -108,6 +108,7 @@ fn spawn(world: &mut World, rng: &mut DeterministicRng, shape: Shape, body: Body
                 shape,
                 body,
                 layer: None,
+                sensor: false,
             },
         )
         .unwrap();
@@ -211,6 +212,7 @@ fn e6_mix_fits_the_spatial_sub_budget() {
                     shape: Shape::Aabb { half_extents },
                     body: Body::new_static(),
                     layer: None,
+                    sensor: false,
                 },
             )
             .unwrap();

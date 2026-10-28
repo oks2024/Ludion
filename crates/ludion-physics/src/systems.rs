@@ -231,16 +231,17 @@ pub fn install<P: PhysicsPose>(schedule: &mut Schedule, settings: impl Into<Phys
 /// use ludion_physics::claims;
 /// use ludion_spatial::{Body, Collider, RigidBody, Shape};
 ///
-/// let wall = Collider { shape: Shape::Aabb { half_extents: [1.0, 1.0] }, body: Body::new_static(), layer: None };
+/// let wall = Collider { shape: Shape::Aabb { half_extents: [1.0, 1.0] }, body: Body::new_static(), layer: None, sensor: false };
 /// assert!(!claims(&wall)); // the 2D index owns it
 ///
-/// let crate_ = Collider { shape: Shape::Box { half_extents: [0.5; 3] }, body: Body::new_static(), layer: None };
+/// let crate_ = Collider { shape: Shape::Box { half_extents: [0.5; 3] }, body: Body::new_static(), layer: None, sensor: false };
 /// assert!(claims(&crate_)); // a 3D shape is never in the 2D index
 ///
 /// let puck = Collider {
 ///     shape: Shape::Circle { radius: 0.5 },
 ///     body: Body::Rigid(RigidBody::default()),
 ///     layer: None,
+///     sensor: false,
 /// };
 /// assert!(claims(&puck)); // a rigid body is never in the 2D index
 /// ```

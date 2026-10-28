@@ -83,6 +83,7 @@ fn build(world: &mut World) {
                 },
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -107,6 +108,7 @@ fn build(world: &mut World) {
                         ..RigidBody::default()
                     }),
                     layer: None,
+                    sensor: false,
                 },
             )
             .expect("a fresh entity accepts a collider");

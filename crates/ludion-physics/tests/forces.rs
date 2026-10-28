@@ -23,6 +23,7 @@ fn rigid(shape: Shape, body: RigidBody) -> Collider {
         shape,
         body: Body::Rigid(body),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -248,6 +249,7 @@ fn every_hull_the_validator_accepts_builds() {
             shape: shape.clone(),
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         };
         let json = serde_json::to_value(&collider).unwrap();
         assert!(
@@ -290,6 +292,7 @@ fn every_hull_the_validator_accepts_builds() {
             shape: shape.clone(),
             body: Body::new_static(),
             layer: None,
+            sensor: false,
         };
         let json = serde_json::to_value(&collider).unwrap();
         assert!(
@@ -308,6 +311,7 @@ fn every_hull_the_validator_accepts_builds() {
         shape: accepted_grid.clone(),
         body: Body::new_static(),
         layer: None,
+        sensor: false,
     };
     let json = serde_json::to_value(&collider).unwrap();
     assert!(Collider::validate_semantics(&json).is_empty());
@@ -323,6 +327,7 @@ fn every_hull_the_validator_accepts_builds() {
         shape: rejected_grid,
         body: Body::new_static(),
         layer: None,
+        sensor: false,
     };
     let json = serde_json::to_value(&collider).unwrap();
     assert!(!Collider::validate_semantics(&json).is_empty());

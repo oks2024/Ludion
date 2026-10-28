@@ -1,0 +1,11 @@
+format: 1
+seed: 1
+entities:
+  - name: zone
+    components:
+      Collider:
+        shape:
+          circle:
+            radius: 0.5
+        body: static
+        sensor: true

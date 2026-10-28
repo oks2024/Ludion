@@ -188,6 +188,45 @@ fn a_layer_on_an_unclaimed_collider_is_l1187() {
     );
 }
 
+/// A sensor on a rigid body is `L1291`.
+#[test]
+fn a_rigid_sensor_is_l1291() {
+    let output = run_check_scene_args("sensor-rigid.yaml", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1291"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("/entities/0/components/Collider/sensor"),
+        "stderr was: {stderr}"
+    );
+}
+
+/// A sensor on a heightfield (or mesh) is `L1292`.
+#[test]
+fn a_heightfield_sensor_is_l1292() {
+    let output = run_check_scene_args("sensor-heightfield.yaml", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1292"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("/entities/0/components/Collider/sensor"),
+        "stderr was: {stderr}"
+    );
+}
+
+/// A sensor on a 2D collider the solver does not claim is `L1293`.
+#[test]
+fn a_sensor_on_an_unclaimed_collider_is_l1293() {
+    let output = run_check_scene_args("sensor-unclaimed.yaml", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1293"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("/entities/0/components/Collider/sensor"),
+        "stderr was: {stderr}"
+    );
+}
+
 /// A `SkinBone` naming a bone that is not a joint of its skin's mesh document is `L1195`, with the
 /// pointer at `bone` and the nearest joint name.
 #[test]

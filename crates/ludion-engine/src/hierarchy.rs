@@ -930,6 +930,7 @@ mod tests {
             shape: ludion_spatial::Shape::Sphere { radius: 0.5 },
             body: Body::Rigid(Default::default()),
             layer: None,
+            sensor: false,
         };
         let wall = Collider {
             body: Body::new_static(),

@@ -163,6 +163,7 @@ fn spawn_bullet(
                 },
                 body: Body::new_kinematic(),
                 layer: None,
+                sensor: false,
             },
         );
     }

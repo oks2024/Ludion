@@ -21,6 +21,7 @@ fn box_collider(body: Body) -> Collider {
         },
         body,
         layer: None,
+        sensor: false,
     }
 }
 
@@ -374,6 +375,7 @@ fn build_falling_scene(world: &mut World) {
                 },
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -405,6 +407,7 @@ fn build_falling_scene(world: &mut World) {
                         ..RigidBody::default()
                     }),
                     layer: None,
+                    sensor: false,
                 },
             )
             .expect("a fresh entity accepts a collider");
@@ -743,6 +746,7 @@ fn spawn_terrain(world: &mut World, at: [f32; 3]) -> EntityId {
                 },
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");
@@ -878,6 +882,7 @@ fn the_request_three_by_three_slope_hits_at_its_centre_vertex() {
                 },
                 body: Body::new_static(),
                 layer: None,
+                sensor: false,
             },
         )
         .expect("a fresh entity accepts a collider");

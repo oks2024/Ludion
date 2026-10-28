@@ -46,6 +46,7 @@ fn ball(restitution: f32, restitution_combine: CombineRule) -> Collider {
         shape: sphere(),
         body: Body::Rigid(body),
         layer: None,
+        sensor: false,
     }
 }
 
@@ -102,6 +103,7 @@ fn floor(world: &mut World, body: Body) -> EntityId {
             },
             body,
             layer: None,
+            sensor: false,
         },
     )
 }
@@ -135,6 +137,7 @@ fn hinged_bob(anchor_body: Body) -> (World, EntityId, EntityId) {
             shape: Shape::Sphere { radius: 0.1 },
             body: anchor_body,
             layer: None,
+            sensor: false,
         },
     );
     let bob = spawn_body(&mut world, [1.0, 0.0, 0.0], ball(0.0, CombineRule::Average));
@@ -278,6 +281,7 @@ fn a_static_material_edit_applies_in_place_and_wakes_the_resting_body() {
             shape: sphere(),
             body: Body::Rigid(body),
             layer: None,
+            sensor: false,
         },
     );
     let mut schedule = physics_schedule();

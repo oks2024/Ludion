@@ -52,6 +52,7 @@ fn collider(shape: Shape, body: Body, layer: Option<&str>) -> Collider {
         shape,
         body,
         layer: layer.map(str::to_string),
+        sensor: false,
     }
 }
 

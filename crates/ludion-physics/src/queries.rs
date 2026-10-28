@@ -135,8 +135,9 @@ fn check_direction(direction: [f32; 3]) -> Result<[f32; 3], PhysicsError> {
     })
 }
 
-/// What a query leaves out: one entity (typically the caller's own body) and any number of
-/// collision layers, by name.
+/// What a query leaves out: one entity (typically the caller's own body), any number of
+/// collision layers by name, and sensor colliders unless [`include_sensors`](QueryFilter::include_sensors)
+/// is called.
 ///
 /// The filter only drops hits after they are collected, so result order is unchanged. An ignored
 /// name must be `default` (always valid) or a layer the scene's `physics.layers` declares;
@@ -166,10 +167,11 @@ fn check_direction(direction: [f32; 3]) -> Result<[f32; 3], PhysicsError> {
 pub struct QueryFilter {
     pub(crate) exclude: Option<EntityId>,
     pub(crate) ignored_layers: Vec<String>,
+    pub(crate) include_sensors: bool,
 }
 
 impl QueryFilter {
-    /// A filter that drops nothing.
+    /// A filter that drops only sensor colliders (see [`include_sensors`](QueryFilter::include_sensors)).
     pub fn new() -> Self {
         Self::default()
     }
@@ -185,12 +187,18 @@ impl QueryFilter {
         self.ignored_layers.push(name.into());
         self
     }
+
+    /// Keeps hits on sensor colliders, which every query drops by default.
+    pub fn include_sensors(mut self) -> Self {
+        self.include_sensors = true;
+        self
+    }
 }
 
 impl PhysicsWorld {
     /// Casts a ray from `origin` along `direction` (need not be unit length; normalized here) up
     /// to `max_distance` world units, returning every hit sorted `(distance, entity)` ascending —
-    /// never rapier's BVH traversal order. `filter` drops excluded entities and ignored layers
+    /// never rapier's BVH traversal order. `filter` drops excluded entities, ignored layers and sensors
     /// ([`QueryFilter`]).
     ///
     /// Reads the state as of the last completed step (see the crate's `# Queries` docs): a body
@@ -245,8 +253,8 @@ impl PhysicsWorld {
 
     /// Sweeps `shape` (authored the same way a `Collider` is, laid out on the world's plane if it
     /// has one) from `translation`/`rotation` along `direction` up to `max_distance` world units,
-    /// returning every hit sorted `(distance, entity)` ascending. `filter` drops excluded entities
-    /// and ignored layers ([`QueryFilter`]).
+    /// returning every hit sorted `(distance, entity)` ascending. `filter` drops excluded entities,
+    /// ignored layers and sensors ([`QueryFilter`]).
     ///
     /// Candidates come from the swept axis-aligned bounding box of the start and end poses, each
     /// then given one exact cast — never rapier's first-hit `cast_shape`, which would pick among
@@ -334,7 +342,7 @@ impl PhysicsWorld {
     }
 
     /// Every entity whose collider overlaps `shape` at `translation`/`rotation`, sorted by entity
-    /// ascending. `filter` drops excluded entities and ignored layers ([`QueryFilter`]).
+    /// ascending. `filter` drops excluded entities, ignored layers and sensors ([`QueryFilter`]).
     ///
     /// Reads the state as of the last completed step, same as
     /// [`ray_cast`](PhysicsWorld::ray_cast). `translation` must be finite and `rotation` finite and
