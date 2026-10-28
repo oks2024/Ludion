@@ -1,7 +1,9 @@
 # Plan: Character controller and camera rigs — a 3D motor, paths and configurable cameras
 
-> Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). Nothing built.**
-> The driver is the next test game, a 3D platformer in the style of Crash Bandicoot. Its GDD and name
+> Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). W1 mechanized; W2+ not started.**
+> W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
+> teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
+> external platformer's first engine request drove its last additions. The driver is the next test game, a 3D platformer in the style of Crash Bandicoot. Its GDD and name
 > come first, and its gameplay gets its own plan. This plan is the engine half of "player feel": the
 > character motor, level collision from meshes, paths, and the camera rigs. Everything here must stay
 > **genre-agnostic**. The platformer drives it but must not be the only thing it fits. It runs beside
@@ -105,13 +107,18 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
 9. **`kind: path`: a generic spline document.**
    - It stores centripetal Catmull-Rom (plus `linear`) through control points, open or closed, with
      arc-length parameterization and a pure sampler.
-   - It is hand-authored, or emitted by a bpy script from a Blender curve. An emitted path is
-     `generated_from` and drift-gated.
+   - It is hand-authored, or emitted by a bpy script from a Blender curve. An emitted path carries
+     `generated_from`, a provenance key the editor reads; the engine has no drift gate for it (it cannot
+     run Blender).
    - It has three consumers: the track rig, `PathFollower` and game patrols.
    - **Why:** points on the curve are readable and editable as text (North Star), and centripetal
      avoids cusps. Blender's off-curve handles buy nothing for a camera or platform.
 10. **`PathFollower`: an engine component and system.**
-    - Its fields are the path, speed, mode (`loop`, `ping_pong`, `once`) and phase.
+    - Its fields are the path, speed, mode (`loop`, `ping_pong`, `once`), phase and `orient` (`none`,
+      `yaw` or `frame`, written in the parent's frame).
+    - It reads out each tick's motion (`s`, direction, delta, velocity, teleported), unhashed.
+    - An open-loop wrap, or a posed move beyond the follower's travel plus a slack, is a teleport: the
+      kinematic body snaps with zero velocity and launches no rider.
     - It moves kinematic bodies and runs **before** game systems, so a rider's motor sees this tick's
       platform delta.
     - A game may drive the parameter itself.
@@ -144,8 +151,9 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
     `overlap` query on a zone volume. **Why:** trigger conditions differ per game, and a zone
     component can be promoted later on repetition.
 14. **The track rig projects the target onto one path.**
-    - It uses a windowed nearest-point search around last tick's parameter, so loops and switchbacks
-      don't jump.
+    - It uses the sampler's windowed `nearest_s` around last tick's parameter, so loops and switchbacks
+      don't jump. `nearest_s`, `nearest_s_global` and `frame_at` are pure queries in W1's sampler in
+      `ludion-scene`, shared with game patrols and lane locks.
     - The camera sits at the path point plus an offset in the path's frame, looking at the target.
     - Behind, in-front (boulder chase) and side views are all offsets.
 15. **The game writes the orbit delta.** `CameraRig` has yaw and pitch input fields that the game fills
@@ -156,8 +164,10 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
     snapshot. **Why:** a second, genre-different consumer is the proof that the rig is generic.
 17. **World-space debug draw.**
     - A render-only resource, cleared each tick and **never hashed, saved or recorded**.
-    - Game Rust calls `debug_draw(world).line(..)`, `.capsule(..)`, `.path(..)` and similar under a
-      named category, and the motor, rig and paths emit their own categories.
+    - Game Rust calls `debug_draw(world).line(..)`, `.capsule(..)`, `.path(..)`, `.axes(..)` and
+      similar under a named category, and the motor, rig and paths emit their own categories.
+    - The `colliders` category is drawn host-side at extraction from the live physics world, so it costs
+      nothing when off.
     - The categories are toggled by a host-state wire method, `render.debug` (the 31st, shaped like
       `render.view`), and on the CLI by `render --debug-draw <categories>`.
     - **Why:** a single screenshot then explains itself, and an agent debugging a moveset draws its own
@@ -229,12 +239,17 @@ CharacterMotor:
 1. `Collider.shape: { mesh }` in `ludion-spatial`'s shape set and `ludion-physics`'s builder.
    - Static and kinematic bodies only, with the `rigid` diagnostic.
    - The internal-edge fix.
-   - Asset-cache dependency edges, so reloading the mesh rebuilds the collider.
+   - A load, restore or switch rebuilds an edited mesh by content hash; `asset.reload` does not, for
+     replay safety.
 2. `kind: path` in `ludion-scene`: the reader, the canonical writer, validation (at least two points,
-   finite values, no coincident neighbors), the centripetal sampler and the arc-length table.
+   finite values, no coincident neighbors), the centripetal sampler and the arc-length table, plus
+   the continuous `tangent_at`, `frame_at` (a no-roll frame) and `nearest_s` / `nearest_s_global`
+   projections.
 3. `PathFollower`: the component and a system registered before game systems. Its test asserts a
-   rider sees the same tick's delta.
-4. Debug draw: the resource, the game API, the categories, the renderer pass, `render.debug`,
+   rider sees the same tick's delta. It also carries the motion readout, wrap teleports and `orient`
+   (decision 10).
+4. Debug draw: the resource, the game API (with `axes`), the categories (with host-side `colliders`),
+   the renderer pass, `render.debug`,
    `render --debug-draw`, and the schema snapshot. A hash-neutrality test runs with debug draw on and
    off.
 5. Docs: the collider topic (mesh shape), a path topic, and the debug-draw topic.
