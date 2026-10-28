@@ -184,7 +184,11 @@ pub use contacts::{ContactEvent, ContactPhase};
 pub use impulse::{Blast, BlastHit, Falloff, ImpulseMiss};
 pub use joints::JointBroken;
 pub use meshes::{ColliderMeshes, MeshLoader, TriangleMesh};
-pub use motor::{CharacterMotor, CharacterMotorState, PlatformPose, height_in_force};
+pub use motor::{
+    CharacterMotor, CharacterMotorState, GroundHit, MotorError, MoveReport, PlatformCarry,
+    PlatformPose, SlideConstraint, SurfaceHit, height_in_force, move_character,
+    move_character_with,
+};
 pub use pose::PhysicsPose;
 pub use queries::{QueryFilter, QueryHit};
 pub use sensors::{ExitCause, SensorEvent, SensorPhase};

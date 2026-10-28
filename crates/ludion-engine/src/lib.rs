@@ -62,6 +62,7 @@ mod load_observer;
 pub mod manifest;
 mod mesh_asset;
 pub mod model_sheet;
+mod motor;
 pub mod particles;
 mod path_follow;
 pub mod patterns;
@@ -150,6 +151,7 @@ pub use model_sheet::{
     ModelSweepOutcome, ModelView, PhaseGap, PhaseReport, PhaseStray, SheetOutcome, TrueSizeFraming,
     fit_distance_for_aspect, model_camera, parse_crossfade, render_model_sheet,
 };
+pub use motor::{move_character, move_character_with};
 pub use path_follow::{
     FollowerMotion, PathFollower, PathMode, PathOrient, path_follow, path_follower_motion,
 };

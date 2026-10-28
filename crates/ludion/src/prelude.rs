@@ -154,9 +154,10 @@ pub use ludion_engine::{
     Transform, TurnSpec, UiList, UiListItem, UiRect, UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT,
     Volley, VolleyCenter, VolleyShape, WorldPose, advance_volleys, animation_events,
     builtin_registry, bullet_age, bullet_is_alive, bullet_position, check_path, crossfade,
-    debug_draw, load_assembly, path_follow, path_follower_motion, play_patterns, reparent,
-    report_diagnostic, report_full_diagnostic, revert_prefab, set_speed, spawn_prefab,
-    switch_to_ragdoll, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
+    debug_draw, load_assembly, move_character, move_character_with, path_follow,
+    path_follower_motion, play_patterns, reparent, report_diagnostic, report_full_diagnostic,
+    revert_prefab, set_speed, spawn_prefab, switch_to_ragdoll, unpack_prefab,
+    validate_pattern_docs, volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;
@@ -174,8 +175,9 @@ pub use single::SingleExt;
 
 pub use ludion_physics::{
     Blast, BlastHit, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase, ExitCause,
-    Falloff, JointBroken, PhysicsError, PhysicsWorld, PlatformPose, QueryFilter, QueryHit,
-    SensorEvent, SensorPhase, height_in_force, teleport_kinematic,
+    Falloff, GroundHit, JointBroken, MotorError, MoveReport, PhysicsError, PhysicsWorld,
+    PlatformCarry, PlatformPose, QueryFilter, QueryHit, SensorEvent, SensorPhase, SlideConstraint,
+    SurfaceHit, height_in_force, teleport_kinematic,
 };
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,

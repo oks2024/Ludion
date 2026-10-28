@@ -429,6 +429,7 @@ fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsS
     let mut physics =
         physics_taken.unwrap_or_else(|| PhysicsWorld::new(ctx.time.rate()).with_plane(plane));
     physics.apply_settings(settings);
+    physics.last_write_frame = Some(ctx.frame.as_u64());
     for (entity, code, reason) in motor_rejections {
         physics.queue_rejection(ShapeRejection {
             entity,

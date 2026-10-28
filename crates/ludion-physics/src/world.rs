@@ -11,7 +11,7 @@ use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 use ludion_core::ids::EntityId;
 use ludion_core::math::euler_xyz_degrees_to_quat;
 use ludion_core::suggest::nearest;
-use ludion_core::time::TickRate;
+use ludion_core::time::{FrameIndex, TickRate};
 use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, Joint, JointKind, JointMotor, Plane,
     RigidBody, Shape, Velocity,
@@ -32,6 +32,7 @@ use crate::joints::{
     desired_motor, motor_off_target,
 };
 use crate::meshes::TriangleMesh;
+use crate::motor::MoveReport;
 use crate::queries::QueryFilter;
 use crate::sensors::SensorEvent;
 use crate::systems::{CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, PhysicsSettings};
@@ -311,6 +312,7 @@ struct SnapshotRef<'a> {
     sensing: &'a [(EntityId, EntityId)],
     sensor_events: &'a [SensorEvent],
     despawned: &'a [EntityId],
+    last_write_frame: Option<u64>,
 }
 
 /// The snapshot as read — the same fields in the same order, so the two encode identically.
@@ -330,6 +332,7 @@ struct SnapshotOwned {
     sensing: Vec<(EntityId, EntityId)>,
     sensor_events: Vec<SensorEvent>,
     despawned: Vec<EntityId>,
+    last_write_frame: Option<u64>,
 }
 
 /// One step's solver timings (milliseconds, from rapier's profiler timers) and body counts, as
@@ -500,6 +503,12 @@ pub struct PhysicsWorld {
     /// Entities the write system found despawned, sorted, kept until a non-frozen step has judged
     /// the exits they cause. Rides the snapshot, since a frozen step keeps it across ticks.
     pub(crate) despawned: Vec<EntityId>,
+    /// The frame the write pass last ran in, which stamps a motor's report with the frame of the
+    /// tick it was called in. Rides the snapshot.
+    pub(crate) last_write_frame: Option<u64>,
+    /// Each motor's last `move_character` report and the frame it ran in. Never hashed or
+    /// snapshotted: a restore empties it.
+    pub(crate) move_reports: StableMap<EntityId, (FrameIndex, MoveReport)>,
     /// Feature edges of each mesh content hash, for the wireframe read. A host read cache: no sim
     /// path reads it, and it is not part of the snapshot.
     pub(crate) wire_edges: Mutex<BTreeMap<u64, Arc<[[u32; 2]]>>>,
@@ -558,6 +567,8 @@ impl PhysicsWorld {
             occupants: Vec::new(),
             sensor_events: Vec::new(),
             despawned: Vec::new(),
+            last_write_frame: None,
+            move_reports: StableMap::new(),
             wire_edges: Mutex::default(),
         }
     }
@@ -1192,6 +1203,7 @@ impl PhysicsWorld {
             sensing: &self.sensing,
             sensor_events: &self.sensor_events,
             despawned: &self.despawned,
+            last_write_frame: self.last_write_frame,
         })
         .map_err(|why| PhysicsError::Encode(why.to_string()))
     }
@@ -1237,6 +1249,8 @@ impl PhysicsWorld {
             sensing: snapshot.sensing,
             sensor_events: snapshot.sensor_events,
             despawned: snapshot.despawned,
+            last_write_frame: snapshot.last_write_frame,
+            move_reports: StableMap::new(),
             wire_edges: Mutex::default(),
         };
         world.rapier.integration_parameters.dt = seconds_per_tick(tick_rate);
@@ -1480,6 +1494,7 @@ impl PhysicsWorld {
                     kept.push(entry);
                 } else {
                     retired.push(entry.entity);
+                    self.move_reports.remove(&entry.entity);
                     self.rapier.remove_body(entry.body);
                 }
             }
@@ -2281,6 +2296,50 @@ impl PhysicsWorld {
                 .unwrap_or(DEFAULT_LAYER);
             filter.ignored_layers.iter().any(|name| name == layer)
         })
+    }
+
+    /// `entity`'s authored shape and current world pose, for casting a body on its own.
+    pub(crate) fn shape_and_pose(&self, entity: EntityId) -> Option<(Shape, [f32; 3], [f32; 4])> {
+        let entry = self.entry(entity)?;
+        let pose = self.rapier.colliders.get(entry.collider)?.position();
+        Some((
+            entry.source.shape.clone(),
+            from_vector(pose.translation),
+            from_rotation(pose.rotation),
+        ))
+    }
+
+    /// The layer names a collider on `layer` ignores (`None` is `default`), ascending by layer index.
+    pub(crate) fn ignored_by(&self, layer: Option<&str>) -> Vec<String> {
+        let Some(table) = &self.layers else {
+            return Vec::new();
+        };
+        let Some(index) = table.index_of(layer.unwrap_or(DEFAULT_LAYER)) else {
+            return Vec::new();
+        };
+        let mask = table.ignores_mask(index);
+        table
+            .names()
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| mask & (1 << bit) != 0)
+            .map(|(_, name)| name.clone())
+            .collect()
+    }
+
+    /// Whether `entity`'s body is rigid, which a motor pushes rather than walks around.
+    pub(crate) fn is_rigid(&self, entity: EntityId) -> bool {
+        self.entry(entity)
+            .is_some_and(|entry| entry.kind == BodyKind::Rigid)
+    }
+
+    /// The last `move_character` call's report for `entity` and the frame it ran in, overwritten
+    /// by every call. Never hashed or snapshotted: a restore empties it, and a retired entity's
+    /// entry is dropped.
+    pub fn last_move_report(&self, entity: EntityId) -> Option<(FrameIndex, &MoveReport)> {
+        self.move_reports
+            .get(&entity)
+            .map(|(frame, report)| (*frame, report))
     }
 
     /// The table row for `entity`, if it has one.
