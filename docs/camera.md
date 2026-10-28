@@ -126,3 +126,4 @@ On each of `L1304`–`L1309` the rig **holds its pose**. `target: null` and `pat
 - `ludion docs path` — authoring the rail; `ludion docs game-clock` — holds
 - `ludion docs lane`, `ludion docs motor` — the character the camera follows and the stick it reads
 - `ludion docs debug-draw` — seeing the rig
+- `games/character-course` — the course as the in-game proof: behind and side rigs, zone sensors, a snap and a shake on respawn, `camera_relative`

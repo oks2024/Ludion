@@ -21,9 +21,12 @@
 //!
 //! The controller is the pattern a game builds on the motor: [`controller`] turns input into a
 //! horizontal velocity, integrates gravity into [`RunnerState::velocity_y`], and hands one
-//! displacement a tick to `move_character` (the stick goes through `lane_relative`, blended by the
-//! lane's weight); crouching is `resize_character`, and a fall or a crush
-//! respawns with `teleport_character`. Every tunable is scene data on [`Runner`]. The motor's
+//! displacement a tick to `move_character` (the stick goes through `camera_relative` and `lane_relative`,
+//! blended by the lane's weight); crouching is `resize_character`, and a fall or a crush
+//! respawns with `teleport_character`. The camera is the engine's `CameraRig`: a rail behind the hero
+//! on the main lane, a [`CameraZone`] sensor that blends to a side-on rig along the lane section and
+//! back, a snap and a trauma pulse on respawn; the stick is `camera_relative`
+//! (`ludion docs camera`). Every tunable is scene data on [`Runner`]. The motor's
 //! dimensions come from the hero's `CharacterMotor`, never from a constant here.
 
 use ludion::prelude::*;
@@ -50,6 +53,8 @@ pub struct Runner {
     pub kill_y: f32,
     /// Where a respawn puts the feet.
     pub spawn: [f32; 3],
+    /// The camera trauma a respawn adds (`0..=1`).
+    pub respawn_trauma: f32,
 }
 
 impl Default for Runner {
@@ -62,6 +67,7 @@ impl Default for Runner {
             crouch_height: 0.6,
             kill_y: -6.0,
             spawn: [0.0, 0.0, 0.0],
+            respawn_trauma: 0.6,
         }
     }
 }
@@ -140,22 +146,15 @@ pub struct Checkpoint {
     pub feet: [f32; 3],
 }
 
-/// Marks the camera that trails the hero: translation is the hero's feet plus `offset`. The
-/// rotation stays as authored.
+/// A sensor that switches the camera to `rig` when the hero enters it; the rig blends over its own
+/// `blend_in`.
 #[derive(
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Default,
+    serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug, PartialEq, Default,
 )]
 #[serde(default)]
-pub struct FollowCam {
-    /// The camera's position relative to the hero's feet, metres.
-    pub offset: [f32; 3],
+pub struct CameraZone {
+    /// The configuration the camera's `CameraRig` takes.
+    pub rig: RigConfig,
 }
 
 // --- Systems ------------------------------------------------------------------------------------
@@ -168,11 +167,16 @@ pub fn spin(world: &mut World, ctx: &SystemCtx) {
     }
 }
 
-/// Screen-right in world space: the follow camera never yaws.
-const SCREEN_RIGHT: [f32; 3] = [1.0, 0.0, 0.0];
+/// The entity carrying the scene's [`CameraRig`].
+fn camera_entity(world: &mut World) -> Option<EntityId> {
+    world
+        .query_ids::<(&CameraRig,)>()
+        .next()
+        .map(|(entity, _)| entity)
+}
 
-/// Applies the [`LaneSwitch`] and [`Checkpoint`] sensors the hero entered in the last physics step.
-/// Runs before [`controller`] so the tick's move sees the new lane state.
+/// Applies the [`LaneSwitch`], [`Checkpoint`] and [`CameraZone`] sensors the hero entered in the last
+/// physics step. Runs before [`controller`] so the tick's move sees the new lane state.
 pub fn triggers(world: &mut World, _ctx: &SystemCtx) {
     let Some(hero) = world
         .query_ids::<(&Runner,)>()
@@ -200,6 +204,12 @@ pub fn triggers(world: &mut World, _ctx: &SystemCtx) {
             && let Ok(Some(state)) = world.get_mut::<RunnerState>(hero)
         {
             state.checkpoint = Some(checkpoint.feet);
+        }
+        if let Ok(Some(zone)) = world.get::<CameraZone>(sensor).map(|z| z.cloned())
+            && let Some(camera) = camera_entity(world)
+            && let Ok(Some(rig)) = world.get_mut::<CameraRig>(camera)
+        {
+            rig.rig = zone.rig;
         }
     }
 }
@@ -250,6 +260,10 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
     let jump_released =
         input.was_released(Key::Space) || input.gamepad().was_released(GamepadButton::South);
     let crouch_held = input.is_held(Key::C) || input.gamepad().is_held(GamepadButton::East);
+    // The yaw the rig posed last tick: the stick is relative to what the player sees.
+    let yaw = camera_entity(world)
+        .and_then(|camera| world.get::<CameraRig>(camera).ok().flatten())
+        .map_or(0.0, CameraRig::yaw_deg);
 
     if crouch_held && !state.crouching {
         if resize_character(world, hero, runner.crouch_height).is_ok() {
@@ -271,10 +285,12 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
     state.velocity_y -= runner.gravity * ctx.dt;
 
     // The free direction blended toward the lane's by the lane's weight.
-    let free = [intent[0], 0.0, intent[1]];
+    let stick = [intent[0], -intent[1]];
+    let free = camera_relative_yaw(stick, yaw);
     let direction = match lane_frame(world, hero) {
         Some(frame) => {
-            let lane = lane_relative([intent[0], -intent[1]], &frame, SCREEN_RIGHT).direction;
+            let screen_right = camera_relative_yaw([1.0, 0.0], yaw);
+            let lane = lane_relative(stick, &frame, screen_right).direction;
             std::array::from_fn(|i| free[i] + (lane[i] - free[i]) * frame.weight)
         }
         None => free,
@@ -285,7 +301,9 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
         direction[2] * runner.run_speed * ctx.dt,
     ];
     let mut respawn = false;
+    let mut grounded_after = grounded;
     if let Ok(report) = move_character(world, hero, displacement) {
+        grounded_after = report.grounded;
         if report.ceiling.is_some() && state.velocity_y > 0.0 {
             state.velocity_y = 0.0;
         }
@@ -311,27 +329,20 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
             .ok()
             .flatten()
             .is_some_and(|motor_state| motor_state.height.is_some_and(|h| h < motor.height));
+        if let Some(camera) = camera_entity(world)
+            && let Ok(Some(rig)) = world.get_mut::<CameraRig>(camera)
+        {
+            snap_rig(rig);
+            add_trauma(rig, runner.respawn_trauma);
+        }
+    }
+    if let Some(camera) = camera_entity(world)
+        && let Ok(Some(rig)) = world.get_mut::<CameraRig>(camera)
+    {
+        rig.grounded = grounded_after;
     }
     if let Ok(Some(slot)) = world.get_mut::<RunnerState>(hero) {
         *slot = state;
-    }
-}
-
-/// Puts every [`FollowCam`] camera at the hero's feet plus its offset.
-pub fn follow_camera(world: &mut World, _ctx: &SystemCtx) {
-    let Some(feet) = world
-        .query::<(&Runner, &Transform)>()
-        .next()
-        .map(|(_, pose)| pose.translation)
-    else {
-        return;
-    };
-    for (cam, transform) in world.query::<(&FollowCam, &mut Transform)>() {
-        transform.translation = [
-            feet[0] + cam.offset[0],
-            feet[1] + cam.offset[1],
-            feet[2] + cam.offset[2],
-        ];
     }
 }
 
@@ -347,7 +358,7 @@ pub fn register(registry: &mut Registry) -> Result<(), Diagnostic> {
     registry.register::<Spin>("Spin")?;
     registry.register::<LaneSwitch>("LaneSwitch")?;
     registry.register::<Checkpoint>("Checkpoint")?;
-    registry.register::<FollowCam>("FollowCam")
+    registry.register::<CameraZone>("CameraZone")
 }
 
 /// This game's full component registry: the built-ins plus this game's components.
@@ -361,14 +372,13 @@ pub fn registry() -> Registry {
 }
 
 /// Describes the engine that hosts this game. Registration order is execution order: turntables
-/// turn → the hero moves → the camera follows. The engine runs `path_follow` before these and the
-/// physics step after them.
+/// turn → sensors apply → the hero moves. The engine runs `path_follow` before these, then the
+/// physics step, then `camera_rig`, which poses the camera for the tick.
 pub fn game() -> EngineBuilder {
     Engine::builder()
         .components(register)
         .system("spin", spin)
         .system("triggers", triggers)
         .system("controller", controller)
-        .system("follow_camera", follow_camera)
         .default_scene("scenes/main.yaml")
 }

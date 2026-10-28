@@ -1,4 +1,4 @@
-"""The character course: static greybox geometry, the two moving-part paths and the lane path.
+"""The character course: static greybox geometry, the two moving-part paths, the lane path and the camera rail.
 
     blender -b --factory-startup --python build.py -- course.glb
 
@@ -6,7 +6,7 @@ Geometry is authored in Ludion axes (x along the lane, y up, z across) and conve
 Blender's (x, -z, y); the glTF export's +Y-up conversion then returns it unchanged. Every solid is a
 prism over an (x, y) profile, so each face is written by hand and the output never depends on a
 bmesh operator's face order. The `collision` object is the same solids with no bevels. Next to the
-glb it writes `../paths/platform.path.yaml`, `../paths/press.path.yaml` and `../paths/lane.path.yaml` (every coordinate on a
+glb it writes `../paths/platform.path.yaml`, `../paths/press.path.yaml` and `../paths/lane.path.yaml` and `../paths/camera-behind.path.yaml` (every coordinate on a
 1/64 grid, so Python's `repr` equals the canonical writer's shortest round trip).
 """
 import bpy
@@ -139,6 +139,8 @@ write_path("press", [(19.0, 2.25, -4.0), (19.0, 0.625, -4.0)])
 write_path("lane", [(27.0, TOP, -0.25), (32.5, TOP, -0.25), (33.0, TOP, -0.25), (35.0, 2.0, 1.0),
                     (37.0, HIGH, -0.25), (41.0, HIGH, -0.25), (43.5, TOP, -0.25), (44.0, TOP, -0.25),
                     (52.0, TOP, -0.25)], "catmull_rom")
+# the behind camera's rail: straight and level over the main lane, so its frame is constant
+write_path("camera-behind", [(-8.0, TOP, 0.0), (56.0, TOP, 0.0)])
 
 for image in bpy.data.images:
     assert image.file_format == "PNG", image.name

@@ -1,0 +1,13 @@
+format: 1
+kind: path
+name: camera-behind
+generated_from: blender/build.py
+interpolation: linear
+closed: false
+points:
+  - - -8.0
+    - 1.328125
+    - 0.0
+  - - 56.0
+    - 1.328125
+    - 0.0

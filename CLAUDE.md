@@ -24,7 +24,7 @@ The name: a *ludion* is a Cartesian diver — a sealed figure that responds inst
 - `Plan/mesh-modeling.md` — W1–W3 mechanized (`kind: sculpt`, `ludion-sculpt`); **paused** (resume on the user's word; nothing in vigil waits on it).
 - `Plan/asset-pipeline-blender.md` — phase 1 verdict 2026-10-02: Blender for the environment, characters stay voxel; kits in `games/vigil/art/town`, the loop in a private playbook.
 - `Plan/skeletal-animation.md` — W1–W3 mechanized (glTF skins import, joint tree, GPU bone palette, SkinBone parts drive bones); the goblin glb rides its Blender brief; W4 not started.
-- `Plan/animation-clips.md` — W1–W3 mechanized (clips, characters, crossfade, events, editor preview); sitting owed. `Plan/character-controller.md` — W1–W2 mechanized (colliders, paths, followers, the motor, the course); W3+ not started.
+- `Plan/animation-clips.md` — W1–W3 mechanized (clips, characters, crossfade, events, editor preview); sitting owed. `Plan/character-controller.md` — motor, lane and track camera rig mechanized; chase/follow and W4+ not started.
 - `Plan/comfy-generation.md` — W1–W4 mechanized (`kind: generation` recipes, `ludion-gen`, `ludion gen`); checkpoint 2 owed.
 - `Plan/mesh-texture-editing.md` — W1–W2 mechanized (`kind: mesh-edit` op lists, `ludion-mesh-edit`, `ludion mesh pick`/`apply`); checkpoint 2 passed, the fill kept; Wave 3 waits on the user's word.
 - `Plan/font-assets.md` — W1–W3 mechanized (`layout()`, TTF bake, `font` field, SDF); W4 breakout on Inter, external adoption.

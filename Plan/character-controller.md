@@ -1,9 +1,11 @@
 # Plan: Character controller and camera rigs — a 3D motor, paths and configurable cameras
 
-> Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). W1–W2 mechanized; W3+ not started.**
+> Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). W1–W2 mechanized; W3's track subset mechanized; the rest of W3+ not started.**
 > W2 holds the motor (`CharacterMotor`, `move_character`, `MoveReport`), `SurfaceVelocity`, resize and
 > teleport, platform carry, the numeric trace and the course (`ludion docs motor`, `games/character-course`). The fourth external request added
-> the lane constraint (`LaneConstraint`, `ludion docs lane`): a lateral hold to a `kind: path` corridor.
+> the lane constraint (`LaneConstraint`, `ludion docs lane`): a lateral hold to a `kind: path` corridor, and the fifth the
+> track camera rig (`CameraRig`, `ludion-camera`, `ludion docs camera`), proved on the course's behind and side rigs. `chase`, `follow`,
+> `manual`, occlusion, decisions 15–16 and the vigil migration remain open.
 > W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
 > teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
 > external platformer's first engine request drove its last additions, and its second shipped sensor
@@ -143,6 +145,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
     - **Why:** the user asked for cameras that are changeable and configurable across genres. The rig is
       sim state because camera yaw feeds camera-relative input. Render may interpolate presentation
       only.
+    - **Amended:** `RigConfig` is embeddable, so a game's zone component carries one and copies it into
+      `CameraRig::rig` (the course's `CameraZone`).
 12. **The rig is a staged pipeline with a `manual` mode.**
     - A *mode* computes a desired pose. v1 modes are `chase` (orbit, recentering behind motion, pitch
       limits), `track`, `follow` (fixed offset and angle) and `manual` (the game writes the desired
@@ -157,6 +161,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
       - trauma shake (deterministic, seeded).
     - Every mode exposes its target (entity or point) and offsets as fields.
     - An engine helper `camera_relative(stick, &rig)` maps input to world directions.
+    - **Amended:** the game-written `grounded` hint steers the vertical anchor; `camera_relative` reads the
+      yaw posed on the previous tick (the rig runs after game systems).
     - **Why:** a game shouldn't recode the common case, and shouldn't recode everything because the rig
       is too stiff. `manual` gives arbitrary Rust control and still gets the shared stages, without a
       mode registry.
@@ -164,12 +170,16 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
     blend from the current pose (the `crossfade` shape). *When* to switch is game Rust, for example an
     typically on a sensor's `Entered`/`Exited` event (`sensor_events`). **Why:** trigger conditions differ per game, and a zone
     component can be promoted later on repetition.
+    - **Amended:** a write that differs from `state.last_applied` blends from a frozen pose over the incoming
+      `blend_in`; `snap_rig` cuts, and so does the empty `last_applied` of a load or switch. The course's trigger is a
+      sensor `Entered` event.
 14. **The track rig projects the target onto one path.**
     - It uses the sampler's windowed `nearest_s` around last tick's parameter, so loops and switchbacks
       don't jump. `nearest_s`, `nearest_s_global` and `frame_at` are pure queries in W1's sampler in
       `ludion-scene`, shared with game patrols and lane locks.
     - The camera sits at the path point plus an offset in the path's frame, looking at the target.
     - Behind, in-front (boulder chase) and side views are all offsets.
+    - **Amended:** shipped as written; the rail's height is authored in the path (the rig adds the offset only).
 15. **The game writes the orbit delta.** `CameraRig` has yaw and pitch input fields that the game fills
     from the stick, mouse, touch or AI. The rig never reads `InputState`. **Why:** there are no action
     maps, so input mapping is the game's (phase-13). Hard-wiring the stick is the stiffness to avoid.
@@ -306,6 +316,9 @@ game crate, and the tooling knows `games/*`).
 5. Docs: the motor topic, and the `move_and_slide` ↔ motor pointers (decision 7).
 
 ### W3 — Camera rigs and vigil
+
+Items 1, 2 and 5 are mechanized for the track subset (`ludion-camera`, `ludion docs camera`); item 3 as the course's
+behind/side rigs, zones, snap and respawn trauma (`games/character-course`, `tests/camera.rs`); a chase section is open.
 
 1. `ludion-camera`: `CameraRig`, the staged pipeline, the `chase`, `track`, `follow` and `manual`
    modes, the shared stages (decision 12), blend (decision 13), and `camera_relative`.

@@ -6,15 +6,17 @@
 use ludion_sim::Key;
 
 /// How many ticks the route runs.
-pub const FRAMES: u64 = 680;
+pub const FRAMES: u64 = 740;
 
 /// `(frame, key, down)`: the key transitions of the route, in order.
-pub const ROUTE: [(u64, Key, bool); 8] = [
-    (2, Key::Right, true),
+pub const ROUTE: [(u64, Key, bool); 10] = [
+    (2, Key::Up, true),
     (104, Key::C, true),
     (166, Key::Space, true),
     (172, Key::C, false),
     (190, Key::Space, false),
+    (334, Key::Up, false),
+    (334, Key::Right, true),
     (514, Key::Space, true),
     (538, Key::Space, false),
     (655, Key::Right, false),
