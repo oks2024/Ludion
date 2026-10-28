@@ -394,7 +394,8 @@ pub fn scene_camera_rig_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 Diagnostic::new(
                     code::CAMERA_RIG_DUPLICATE,
                     format!(
-                        "entities {earlier} and {index} both carry a `CameraRig`; only the first                          runs"
+                        "entities {earlier} and {index} both carry a `CameraRig`; only the first \
+                         runs"
                     ),
                 )
                 .with_path(format!("{at}/CameraRig"))
@@ -405,7 +406,8 @@ pub fn scene_camera_rig_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
             diagnostics.push(
                 Diagnostic::new(
                     code::CAMERA_RIG_PARENTED,
-                    "this `CameraRig` has a `Parent`; a rig writes a world-space pose, so the                      camera must be a root entity",
+                    "this `CameraRig` has a `Parent`; a rig writes a world-space pose, so the \
+                     camera must be a root entity",
                 )
                 .with_path(format!("{at}/Parent"))
                 .with_help("make the camera a root"),
@@ -1220,6 +1222,7 @@ entities:
             Some("/entities/1/components/CameraRig")
         );
         assert!(found[0].message.contains("0 and 1"), "{}", found[0].message);
+        assert!(!found[0].message.contains("  "), "{}", found[0].message);
     }
 
     #[test]
@@ -1239,6 +1242,7 @@ entities:
         let found = scene_camera_rig_diagnostics(&scene);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].code, code::CAMERA_RIG_PARENTED);
+        assert!(!found[0].message.contains("  "), "{}", found[0].message);
         assert_eq!(
             found[0].path.as_deref(),
             Some("/entities/0/components/Parent")

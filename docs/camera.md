@@ -79,7 +79,7 @@ The target is projected onto the rail (the nearest point within `search_window` 
 - A write to `rig` that differs from `state.last_applied` starts a blend over the **incoming** `blend_in`, from the frozen current pose. A write mid-blend starts from the blended pose, not the old source.
 - `snap_rig(&mut rig)` cuts on the next tick: a global path search, springs, look-ahead and anchor at rest, any blend dropped. Use it for respawns and teleports.
 - **Implicit snap = an empty `state.last_applied`.** A scene load and `scene.switch` start without it and so snap; `engine.restore` carries the state and resumes bit-exact (a restore mid-blend included).
-- A game switches rigs by copying a `RigConfig` (a zone's, embedded in its own component) into `CameraRig::rig`; `trauma` and `shake` are untouched by the switch.
+- A game switches rigs by copying a `RigConfig` (a zone's, embedded in its own component) into `CameraRig::rig`; `trauma` and `shake` are untouched by the switch. A component embedding one should validate it: `impl SemanticValidate` delegating to `RigConfig::validate_semantics` (pointers relative to the config, `L1304`) and register it with `register_validated`; `ludion_camera::invalid_config` is the same check for Rust-built values.
 
 ```rust
 let rig = world.get_mut::<CameraRig>(camera)?.unwrap();
@@ -119,6 +119,8 @@ On each of `L1304`–`L1309` the rig **holds its pose**. `target: null` and `pat
 
 - One rig per world, on a root camera.
 - A game defining its own `CameraRig` type must name it explicitly (`use crate::…::CameraRig`): the prelude glob exports the engine's one, and vigil does exactly this.
+- Rig state saved in scene text resumes on load; a blend stamped later than the game clock (a mid-blend save reloaded at frame 0) is stale, so the rig snaps rather than freezing.
+- A snap tick does not advance trauma decay or the shake clock (one tick).
 - Gate a rig's pose by `WorldHash` and the camera `Transform`, never by a shaken image on an unpinned GPU.
 
 ## Next

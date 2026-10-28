@@ -285,6 +285,10 @@ pub struct Pose {
 pub struct Blend {
     /// The pose the camera had when the new configuration took over.
     pub from: Pose,
+    /// The signed yaw arc in degrees chosen when the blend began; keeps the turn continuous when the
+    /// live yaw drifts across the ±180° seam. Absent: the shortest arc each tick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yaw_span: Option<f32>,
     /// The gameplay frame the blend began at.
     #[serde(default = "frame_zero")]
     #[schemars(with = "u64")]

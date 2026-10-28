@@ -60,17 +60,21 @@ pub(crate) fn ease(curve: BlendCurve, t: f32) -> f32 {
     }
 }
 
-/// `from` at `w = 0`, `to` at `w = 1`: the eye by lerp, the yaw along the shortest arc, the field of
-/// view by lerp when both set one (else `to`'s).
-pub(crate) fn lerp_pose(from: &Pose, to: &Pose, w: f32) -> Pose {
+/// `from` at `w = 0`, `to` at `w = 1`: the eye by lerp, the yaw along the arc chosen at blend start
+/// (`span`, degrees; the shortest arc to `to` when `None`), the field of view by lerp when both set
+/// one (else `to`'s). The live yaw is unwrapped to the turn nearest `from + span`, so a live yaw
+/// drifting across the ±180° seam never flips the arc.
+pub(crate) fn lerp_pose(from: &Pose, to: &Pose, span: Option<f32>, w: f32) -> Pose {
     let lerp = |a: f32, b: f32| a + (b - a) * w;
+    let chosen = from.yaw_deg + span.unwrap_or_else(|| wrap180(to.yaw_deg - from.yaw_deg));
+    let end = chosen + wrap180(to.yaw_deg - chosen);
     Pose {
         eye: [
             lerp(from.eye[0], to.eye[0]),
             lerp(from.eye[1], to.eye[1]),
             lerp(from.eye[2], to.eye[2]),
         ],
-        yaw_deg: wrap180(from.yaw_deg + wrap180(to.yaw_deg - from.yaw_deg) * w),
+        yaw_deg: wrap180(from.yaw_deg + (end - from.yaw_deg) * w),
         pitch_deg: lerp(from.pitch_deg, to.pitch_deg),
         fov_y_deg: match (from.fov_y_deg, to.fov_y_deg) {
             (Some(a), Some(b)) => Some(lerp(a, b)),
@@ -150,11 +154,11 @@ mod tests {
     #[test]
     fn lerp_pose_takes_the_short_way_round_the_seam() {
         let (a, b) = (pose(170.0, None), pose(-170.0, None));
-        assert_eq!(lerp_pose(&a, &b, 0.0).yaw_deg, 170.0);
-        assert_eq!(lerp_pose(&a, &b, 0.5).yaw_deg, 180.0);
-        let mid = lerp_pose(&pose(0.0, Some(40.0)), &pose(0.0, Some(60.0)), 0.5);
+        assert_eq!(lerp_pose(&a, &b, None, 0.0).yaw_deg, 170.0);
+        assert_eq!(lerp_pose(&a, &b, None, 0.5).yaw_deg, 180.0);
+        let mid = lerp_pose(&pose(0.0, Some(40.0)), &pose(0.0, Some(60.0)), None, 0.5);
         assert_eq!(mid.fov_y_deg, Some(50.0));
-        let start = lerp_pose(&pose(0.0, None), &pose(0.0, Some(60.0)), 0.0);
+        let start = lerp_pose(&pose(0.0, None), &pose(0.0, Some(60.0)), None, 0.0);
         assert_eq!(start.fov_y_deg, Some(60.0));
     }
 

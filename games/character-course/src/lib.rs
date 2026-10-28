@@ -157,6 +157,20 @@ pub struct CameraZone {
     pub rig: RigConfig,
 }
 
+impl SemanticValidate for CameraZone {
+    /// Delegates `rig` to the engine's range rules (`L1304`), pointers under `/rig`.
+    fn validate_semantics(value: &serde_json::Value) -> Vec<Diagnostic> {
+        let rig = value.get("rig").cloned().unwrap_or_default();
+        RigConfig::validate_semantics(&rig)
+            .into_iter()
+            .map(|mut diagnostic| {
+                diagnostic.path = diagnostic.path.map(|path| format!("/rig{path}"));
+                diagnostic
+            })
+            .collect()
+    }
+}
+
 // --- Systems ------------------------------------------------------------------------------------
 
 /// Turns every [`Spin`] entity about +Y. Runs before [`controller`] so a rider is carried by this
@@ -358,7 +372,7 @@ pub fn register(registry: &mut Registry) -> Result<(), Diagnostic> {
     registry.register::<Spin>("Spin")?;
     registry.register::<LaneSwitch>("LaneSwitch")?;
     registry.register::<Checkpoint>("Checkpoint")?;
-    registry.register::<CameraZone>("CameraZone")
+    registry.register_validated::<CameraZone>("CameraZone")
 }
 
 /// This game's full component registry: the built-ins plus this game's components.

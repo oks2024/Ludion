@@ -312,6 +312,69 @@ fn a_config_write_blends_from_the_previous_pose_to_the_new_one() {
     assert!(near(rig.state.eye, [6.0, 1.5, -20.0], 1e-3));
 }
 
+fn wrapped(degrees: f32) -> f32 {
+    degrees - 360.0 * ((degrees + 180.0) / 360.0).floor()
+}
+
+#[test]
+fn a_half_turn_blend_keeps_its_arc_when_the_live_yaw_crosses_the_seam() {
+    let path = straight();
+    let cut = |offset| RigConfig {
+        springs: Springs {
+            position_half_life: 0.0,
+            rotation_half_life: 0.0,
+        },
+        ..blended_cfg(offset, 1.0)
+    };
+    // The target drifts across x = 0, which flips the front rig's live yaw between ±180.
+    let target = |k: u64| [-0.5 + k as f32 / 60.0, 1.0, -20.0];
+    let mut rig = rig_with(cut([0.0, 2.2, 4.5]));
+    tick(&mut rig, &path, target(0), 0);
+    rig.rig = cut([0.0, 2.0, -5.0]);
+    let mut last = rig.state.pose.as_ref().unwrap().yaw_deg;
+    let mut ticks = 0;
+    let mut frame = 1;
+    loop {
+        tick(&mut rig, &path, target(frame), frame);
+        let yaw = rig.state.pose.as_ref().unwrap().yaw_deg;
+        assert!(
+            wrapped(yaw - last).abs() < 10.0,
+            "tick {ticks}: yaw jumped {last} -> {yaw}"
+        );
+        last = yaw;
+        if rig.state.blend.is_none() {
+            break;
+        }
+        frame += 1;
+        ticks += 1;
+        assert!(ticks < 80, "the blend must end");
+    }
+    assert_eq!(
+        last, rig.state.yaw_deg,
+        "the blend ends on the rig pose itself"
+    );
+}
+
+#[test]
+fn a_blend_stamped_in_the_future_snaps_instead_of_freezing() {
+    let path = straight();
+    let target = [0.0, 1.0, -20.0];
+    let mut rig = rig_with(blended_cfg([0.0, 2.2, 4.5], 1.0));
+    tick(&mut rig, &path, target, 0);
+    rig.rig = blended_cfg([6.0, 1.5, 0.0], 1.0);
+    for frame in 100..110 {
+        tick(&mut rig, &path, target, frame);
+    }
+    assert!(rig.state.blend.is_some());
+
+    // A scene saved mid-blend and reloaded: the game clock restarts below the blend's stamp.
+    let mut reloaded: CameraRig =
+        serde_json::from_value(serde_json::to_value(&rig).unwrap()).unwrap();
+    let out = tick(&mut reloaded, &path, target, 0);
+    assert!(reloaded.state.blend.is_none(), "the stale blend is dropped");
+    assert!(near(out.translation, [6.0, 1.5, -20.0], 1e-3), "{out:?}");
+}
+
 #[test]
 fn a_write_mid_blend_starts_from_the_blended_pose() {
     let path = straight();

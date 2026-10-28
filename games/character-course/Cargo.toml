@@ -22,6 +22,8 @@ ludion = { path = "../../crates/ludion" }
 # The component derives are the game's own dependencies — the facade does not re-export them.
 serde = { workspace = true }
 schemars = { workspace = true }
+# `CameraZone`'s semantic validator takes a JSON value.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # The golden-image harness (with the game's registry seam) — a game's test-only dependency.
@@ -35,4 +37,3 @@ ludion-core = { path = "../../crates/ludion-core" }
 # The committed course meshes and paths are drift-tested against `course.glb` and the canonical writers.
 ludion-import = { path = "../../crates/ludion-import" }
 ludion-scene = { path = "../../crates/ludion-scene" }
-serde_json = { workspace = true }

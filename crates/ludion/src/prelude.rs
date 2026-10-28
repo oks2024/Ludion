@@ -167,7 +167,9 @@ pub use ludion_engine::{
 
 pub use ludion_engine::ui::UiNav;
 
-pub use ludion_ecs::{Component, Parent, Phase, Registry, Schedule, SystemCtx, World};
+pub use ludion_ecs::{
+    Component, Parent, Phase, Registry, Schedule, SemanticValidate, SystemCtx, World,
+};
 
 pub use ludion_sim::{
     GamepadAxis, GamepadButton, GamepadState, InputEvent, InputState, Key, MouseButton, MouseState,

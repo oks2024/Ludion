@@ -75,7 +75,12 @@ pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
     let target = input.target?;
     let sampler = input.path?;
 
-    let snapped = rig.state.snap || rig.state.last_applied.is_none();
+    let stale_blend = rig
+        .state
+        .blend
+        .as_ref()
+        .is_some_and(|blend| blend.started > input.game_frame);
+    let snapped = rig.state.snap || rig.state.last_applied.is_none() || stale_blend;
     if snapped {
         snap(rig, target, sampler);
     } else if rig.state.last_applied.as_ref() != Some(&rig.rig) {
@@ -145,8 +150,10 @@ fn switch(rig: &mut CameraRig, target: [f32; 3], sampler: &PathSampler, input: &
     from.fov_y_deg = from.fov_y_deg.or(input.camera_fov_y_deg);
     rest_on_desired(rig, target, sampler);
     let blend_in = &rig.rig.blend_in;
+    let yaw_span = Some(wrap180(rig.state.yaw_deg - from.yaw_deg));
     rig.state.blend = (blend_in.seconds > 0.0).then_some(Blend {
         from,
+        yaw_span,
         started: input.game_frame,
         seconds: blend_in.seconds,
         curve: blend_in.curve,
@@ -251,7 +258,7 @@ fn blended_pose(rig: &mut CameraRig, input: &RigInput) -> Pose {
         .saturating_sub(blend.started.as_u64());
     let t = frames as f32 * input.dt / blend.seconds;
     if t < 1.0 {
-        lerp_pose(&blend.from, &live, ease(blend.curve, t))
+        lerp_pose(&blend.from, &live, blend.yaw_span, ease(blend.curve, t))
     } else {
         state.blend = None;
         live

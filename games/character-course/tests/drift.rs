@@ -17,3 +17,19 @@ fn committed_scenes_respell_nothing_on_save() {
         character_course::game(),
     );
 }
+
+#[test]
+fn a_camera_zone_with_a_negative_half_life_is_l1304() {
+    let registry = character_course::registry();
+    let zone = registry.get("CameraZone").expect("registered");
+    let found = zone.validate_semantics(&serde_json::json!({
+        "rig": {"springs": {"position_half_life": -1.0}}
+    }));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].code.as_str(), "L1304");
+    assert_eq!(
+        found[0].path.as_deref(),
+        Some("/rig/springs/position_half_life")
+    );
+    assert!(zone.validate_semantics(&serde_json::json!({})).is_empty());
+}
