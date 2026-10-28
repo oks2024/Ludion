@@ -1,4 +1,4 @@
-"""The character course: static greybox geometry and the two moving-part paths.
+"""The character course: static greybox geometry, the two moving-part paths and the lane path.
 
     blender -b --factory-startup --python build.py -- course.glb
 
@@ -6,7 +6,7 @@ Geometry is authored in Ludion axes (x along the lane, y up, z across) and conve
 Blender's (x, -z, y); the glTF export's +Y-up conversion then returns it unchanged. Every solid is a
 prism over an (x, y) profile, so each face is written by hand and the output never depends on a
 bmesh operator's face order. The `collision` object is the same solids with no bevels. Next to the
-glb it writes `../paths/platform.path.yaml` and `../paths/press.path.yaml` (every coordinate on a
+glb it writes `../paths/platform.path.yaml`, `../paths/press.path.yaml` and `../paths/lane.path.yaml` (every coordinate on a
 1/64 grid, so Python's `repr` equals the canonical writer's shortest round trip).
 """
 import bpy
@@ -33,6 +33,9 @@ RAMP_TOP = 1.328125      # 3 m run at 20 degrees above the step, on the 1/64 gri
 TOP = RAMP_TOP           # the lane's raised level
 CLEAR = 0.75             # tunnel headroom: a 0.9 m capsule is blocked, a 0.6 m crouch fits
 
+HIGH = TOP + 1.09375     # the lane section's upper level, on the 1/64 grid
+Z_SECTION = 4.0          # the lane section is z in [-4, 4]
+
 solids = {"floor": [], "walls": []}
 
 
@@ -53,6 +56,13 @@ box("floor", -2.0, 4.0, BOTTOM, 0.0, Z_LANE, 5.5)
 box("floor", -2.0, 4.0, BOTTOM, 0.0, -5.5, -Z_LANE)
 box("floor", 16.5, 19.0, BOTTOM, TOP, -Z_LANE, Z_LANE)
 box("floor", 25.0, 29.0, BOTTOM, TOP, -Z_LANE, Z_LANE)
+# the lane section past the end pad: flat, a ramp up, a raised run, a pit, a raised run, a drop, the
+# belt gap (a scene entity), the exit pad
+prism("floor", [(29.0, BOTTOM), (38.5, BOTTOM), (38.5, HIGH), (36.0, HIGH), (33.0, TOP), (29.0, TOP)],
+      -Z_SECTION, Z_SECTION)
+prism("floor", [(40.0, BOTTOM), (45.0, BOTTOM), (45.0, TOP), (42.0, TOP), (42.0, HIGH), (40.0, HIGH)],
+      -Z_SECTION, Z_SECTION)
+box("floor", 48.0, 52.0, BOTTOM, TOP, -Z_SECTION, Z_SECTION)
 # the tunnel over x in [11.5, 14.5]: a ceiling slab and two walls
 box("walls", 11.5, 14.5, TOP + CLEAR, TOP + CLEAR + 0.25, -Z_LANE, Z_LANE)
 box("walls", 11.5, 14.5, TOP, TOP + CLEAR + 0.25, -Z_LANE, -Z_LANE + 0.25)
@@ -113,9 +123,9 @@ build_mesh("collision", solids["floor"] + solids["walls"], GREY)
 
 
 # --- the moving parts' paths (the bodies themselves are scene entities) -------------------------
-def write_path(name, points):
+def write_path(name, points, interpolation="linear"):
     lines = ["format: 1", "kind: path", f"name: {name}", "generated_from: blender/build.py",
-             "interpolation: linear", "closed: false", "points:"]
+             f"interpolation: {interpolation}", "closed: false", "points:"]
     for point in points:
         for i, c in enumerate(point):
             lines.append(("  - - " if i == 0 else "    - ") + repr(float(c)))
@@ -125,6 +135,10 @@ def write_path(name, points):
 
 write_path("platform", [(5.0, -0.125, -4.0), (7.0, -0.125, -4.0)])
 write_path("press", [(19.0, 2.25, -4.0), (19.0, 0.625, -4.0)])
+# the lane: straight entry and exit (both neighbours collinear), an S-bend over the ramp
+write_path("lane", [(27.0, TOP, -0.25), (32.5, TOP, -0.25), (33.0, TOP, -0.25), (35.0, 2.0, 1.0),
+                    (37.0, HIGH, -0.25), (41.0, HIGH, -0.25), (43.5, TOP, -0.25), (44.0, TOP, -0.25),
+                    (52.0, TOP, -0.25)], "catmull_rom")
 
 for image in bpy.data.images:
     assert image.file_format == "PNG", image.name

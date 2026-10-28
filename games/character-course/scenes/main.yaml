@@ -284,6 +284,8 @@ entities:
           - 0.0
           - 0.0
       RunnerState: {}
+      LaneConstraint:
+        path: paths/lane.path.yaml
   - name: hero-body
     components:
       Parent:
@@ -306,3 +308,101 @@ entities:
           - 0.2
           - 1.0
         roughness: 0.5
+  - name: lane-enter
+    components:
+      Transform:
+        translation:
+          - 29.5
+          - 2.328125
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.25
+              - 1.0
+              - 4.0
+        body: static
+        sensor: true
+      LaneSwitch:
+        engage: true
+  - name: lane-checkpoint
+    components:
+      Transform:
+        translation:
+          - 37.0
+          - 3.421875
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.25
+              - 1.0
+              - 4.0
+        body: static
+        sensor: true
+      Checkpoint:
+        feet:
+          - 37.0
+          - 2.421875
+          - -0.25
+  - name: lane-exit
+    components:
+      Transform:
+        translation:
+          - 49.5
+          - 2.328125
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.25
+              - 1.0
+              - 4.0
+        body: static
+        sensor: true
+      LaneSwitch: {}
+  - name: lane-belt
+    components:
+      Transform:
+        translation:
+          - 46.5
+          - 1.078125
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 1.5
+              - 0.25
+              - 4.0
+        body: static
+      SurfaceVelocity:
+        velocity:
+          - 1.5
+          - 0.0
+          - 0.0
+  - name: lane-belt-mesh
+    components:
+      Parent:
+        index: 19
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 3.0
+          - 0.5
+          - 8.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.7
+          - 0.1
+          - 1.0
+        roughness: 0.9

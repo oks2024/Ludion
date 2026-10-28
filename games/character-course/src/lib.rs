@@ -6,7 +6,10 @@
 //!
 //! The course (`scenes/main.yaml`, geometry from `scenes/blender/build.py`) runs along +X. The
 //! scripted route is the main lane: a spawn pad, a 0.24 m step, a 20° ramp, a low tunnel that only a
-//! crouch clears, a 1.5 m pit to jump, a conveyor, an end pad. Beside it, off the lane, are a 0.4 m
+//! crouch clears, a 1.5 m pit to jump, a conveyor, an end pad. Past the end pad a side-on lane section
+//! (`scenes/paths/lane.path.yaml`) curves up a ramp, crosses a pit, drops to a belt and ends on an exit
+//! pad: a [`LaneSwitch`] sensor engages the hero's `LaneConstraint`, a [`Checkpoint`] sensor inside
+//! makes the pit's respawn land on the lane, and a second switch releases it. Beside it, off the lane, are a 0.4 m
 //! step, a 55° slope the motor refuses, a path platform over a pit, a turntable and a press.
 //!
 //! **Play it** (`Left`/`Right`/`Up`/`Down` or `A`/`D`/`W`/`S`, the left stick; `Space` or the south
@@ -18,7 +21,8 @@
 //!
 //! The controller is the pattern a game builds on the motor: [`controller`] turns input into a
 //! horizontal velocity, integrates gravity into [`RunnerState::velocity_y`], and hands one
-//! displacement a tick to `move_character`; crouching is `resize_character`, and a fall or a crush
+//! displacement a tick to `move_character` (the stick goes through `lane_relative`, blended by the
+//! lane's weight); crouching is `resize_character`, and a fall or a crush
 //! respawns with `teleport_character`. Every tunable is scene data on [`Runner`]. The motor's
 //! dimensions come from the hero's `CharacterMotor`, never from a constant here.
 
@@ -79,6 +83,9 @@ pub struct RunnerState {
     pub velocity_y: f32,
     /// Whether the capsule is at the crouch height.
     pub crouching: bool,
+    /// Where a respawn puts the feet once a [`Checkpoint`] was reached; `None` means
+    /// [`Runner::spawn`].
+    pub checkpoint: Option<[f32; 3]>,
 }
 
 /// A platform turning about +Y at a constant rate (the turntable).
@@ -96,6 +103,41 @@ pub struct RunnerState {
 pub struct Spin {
     /// Degrees per second about +Y.
     pub deg_per_s: f32,
+}
+
+/// A sensor that engages (`engage: true`) or releases the hero's `LaneConstraint` when the hero
+/// enters it.
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Default,
+)]
+#[serde(default)]
+pub struct LaneSwitch {
+    /// Whether entering the sensor engages the lane (`false` releases it).
+    pub engage: bool,
+}
+
+/// A sensor that makes `feet` the hero's respawn point when the hero enters it.
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Default,
+)]
+#[serde(default)]
+pub struct Checkpoint {
+    /// The feet position a respawn uses.
+    pub feet: [f32; 3],
 }
 
 /// Marks the camera that trails the hero: translation is the hero's feet plus `offset`. The
@@ -123,6 +165,42 @@ pub struct FollowCam {
 pub fn spin(world: &mut World, ctx: &SystemCtx) {
     for (spin, transform) in world.query::<(&Spin, &mut Transform)>() {
         transform.rotation[1] = (transform.rotation[1] + spin.deg_per_s * ctx.game_dt) % 360.0;
+    }
+}
+
+/// Screen-right in world space: the follow camera never yaws.
+const SCREEN_RIGHT: [f32; 3] = [1.0, 0.0, 0.0];
+
+/// Applies the [`LaneSwitch`] and [`Checkpoint`] sensors the hero entered in the last physics step.
+/// Runs before [`controller`] so the tick's move sees the new lane state.
+pub fn triggers(world: &mut World, _ctx: &SystemCtx) {
+    let Some(hero) = world
+        .query_ids::<(&Runner,)>()
+        .next()
+        .map(|(entity, _)| entity)
+    else {
+        return;
+    };
+    let entered: Vec<EntityId> = match world.resource::<PhysicsWorld>() {
+        Some(physics) => physics
+            .sensor_events()
+            .iter()
+            .filter(|event| event.other == hero && event.phase == SensorPhase::Entered)
+            .map(|event| event.sensor)
+            .collect(),
+        None => return,
+    };
+    for sensor in entered {
+        if let Ok(Some(switch)) = world.get::<LaneSwitch>(sensor).map(|s| s.copied())
+            && let Ok(Some(lane)) = world.get_mut::<LaneConstraint>(hero)
+        {
+            lane.engaged = switch.engage;
+        }
+        if let Ok(Some(checkpoint)) = world.get::<Checkpoint>(sensor).map(|c| c.copied())
+            && let Ok(Some(state)) = world.get_mut::<RunnerState>(hero)
+        {
+            state.checkpoint = Some(checkpoint.feet);
+        }
     }
 }
 
@@ -192,10 +270,19 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
     }
     state.velocity_y -= runner.gravity * ctx.dt;
 
+    // The free direction blended toward the lane's by the lane's weight.
+    let free = [intent[0], 0.0, intent[1]];
+    let direction = match lane_frame(world, hero) {
+        Some(frame) => {
+            let lane = lane_relative([intent[0], -intent[1]], &frame, SCREEN_RIGHT).direction;
+            std::array::from_fn(|i| free[i] + (lane[i] - free[i]) * frame.weight)
+        }
+        None => free,
+    };
     let displacement = [
-        intent[0] * runner.run_speed * ctx.dt,
+        direction[0] * runner.run_speed * ctx.dt,
         state.velocity_y * ctx.dt,
-        intent[1] * runner.run_speed * ctx.dt,
+        direction[2] * runner.run_speed * ctx.dt,
     ];
     let mut respawn = false;
     if let Ok(report) = move_character(world, hero, displacement) {
@@ -212,8 +299,13 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
         .ok()
         .flatten()
         .is_some_and(|pose| pose.translation[1] < runner.kill_y);
-    if (respawn || below) && teleport_character(world, hero, runner.spawn, 0.0).is_ok() {
+    let feet = state.checkpoint.unwrap_or(runner.spawn);
+    if (respawn || below) && teleport_character(world, hero, feet, 0.0).is_ok() {
         state.velocity_y = 0.0;
+        // A lane re-acquires its place over the whole path.
+        if let Ok(Some(lane)) = world.get_mut::<LaneConstraint>(hero) {
+            lane.s = None;
+        }
         state.crouching = world
             .get::<CharacterMotorState>(hero)
             .ok()
@@ -253,6 +345,8 @@ pub fn register(registry: &mut Registry) -> Result<(), Diagnostic> {
     registry.register::<Runner>("Runner")?;
     registry.register::<RunnerState>("RunnerState")?;
     registry.register::<Spin>("Spin")?;
+    registry.register::<LaneSwitch>("LaneSwitch")?;
+    registry.register::<Checkpoint>("Checkpoint")?;
     registry.register::<FollowCam>("FollowCam")
 }
 
@@ -273,6 +367,7 @@ pub fn game() -> EngineBuilder {
     Engine::builder()
         .components(register)
         .system("spin", spin)
+        .system("triggers", triggers)
         .system("controller", controller)
         .system("follow_camera", follow_camera)
         .default_scene("scenes/main.yaml")

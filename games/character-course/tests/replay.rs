@@ -64,7 +64,7 @@ fn recorded_session_replays_to_identical_worldhash_trace() {
         ludion_engine::drive_hashes(&mut engine, session_commands()).expect("the session runs");
     engine.stop_recording().expect("recording flushes");
 
-    // The session was a real run: the hero ended past the conveyor.
+    // The session was a real run: the hero ended past the lane section's exit.
     let x = engine
         .world_mut()
         .query::<(&character_course::Runner, &Transform)>()
@@ -72,7 +72,7 @@ fn recorded_session_replays_to_identical_worldhash_trace() {
         .map(|(_, pose)| pose.translation[0])
         .expect("the hero exists");
     assert!(
-        x >= 25.0,
+        x >= 50.0,
         "the recorded session must clear the course, hero at x = {x}"
     );
 

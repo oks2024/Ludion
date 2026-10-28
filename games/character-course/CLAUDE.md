@@ -5,11 +5,15 @@ A greybox obstacle course for the character motor and the reference run/jump/cro
 
 ## Project layout
 
-- `src/lib.rs` — `Runner` (tunables, scene data), `RunnerState` (hashed), `Spin`, `FollowCam`; the
-  systems `spin` → `controller` → `follow_camera`; `game()`, `registry()`.
+- `src/lib.rs` — `Runner` (tunables, scene data), `RunnerState` (hashed), `Spin`, `FollowCam`, and the
+  lane section's `LaneSwitch` (a sensor that engages or releases the hero's `LaneConstraint`) and
+  `Checkpoint` (a sensor that sets the respawn feet); the systems `spin` → `triggers` → `controller`
+  → `follow_camera`; `game()`, `registry()`.
 - `scenes/main.yaml` — the course: collision mesh entity, render meshes, the conveyor, path platform,
-  turntable and press (kinematic scene entities), the hero, lights, camera.
-- `scenes/blender/build.py` — the source of the static geometry and of `scenes/paths/*.path.yaml`;
+  turntable and press (kinematic scene entities), the lane section's sensors and belt past the end
+  pad (x 29..52: ramp, pit, drop, belt), the hero, lights, camera.
+- `scenes/blender/build.py` — the source of the static geometry and of `scenes/paths/*.path.yaml` (the two moving-part paths and `lane.path.yaml`, the lane the hero
+  is held to);
   `course.glb` is its committed export, `scenes/meshes/*` the import of that glb. Never hand-edit
   any of them.
 - `tests/route.rs` (the scripted route as a numeric trace, run twice), `tests/replay.rs` (`run.lrp`),
