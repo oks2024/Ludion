@@ -27,8 +27,6 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use ludion_core::codes::code;
-use ludion_core::diagnostics::Diagnostic;
 use ludion_protocol::Command;
 use ludion_protocol::command::{InputInjectParams, SimStepParams};
 use ludion_sim::InputScript;
@@ -48,7 +46,7 @@ pub fn run(
     record_path: Option<&Path>,
 ) -> ExitCode {
     let input = match script_path {
-        Some(path) => match load_script(path) {
+        Some(path) => match ludion_engine::load_input_script(path) {
             Ok(script) => script,
             Err(diagnostic) => {
                 eprintln!("{diagnostic}");
@@ -106,29 +104,4 @@ pub fn run(
             ExitCode::FAILURE
         }
     }
-}
-
-/// Reads and parses a JSON input script (`L4002` on IO failure, `L4003` on parse failure).
-fn load_script(path: &Path) -> Result<InputScript, Diagnostic> {
-    let source = std::fs::read_to_string(path).map_err(|error| {
-        Diagnostic::new(
-            code::INPUT_SCRIPT_IO,
-            format!("could not read `{}`: {error}", path.display()),
-        )
-        .with_help("check the path (relative to the current directory) and permissions")
-    })?;
-    serde_json::from_str(&source).map_err(|error| {
-        Diagnostic::new(
-            code::INPUT_SCRIPT_INVALID,
-            format!(
-                "could not parse `{}` as an input script: {error}",
-                path.display()
-            ),
-        )
-        .with_help(
-            "an input script is a JSON array of records like \
-             {\"frame\": 10, \"event\": {\"kind\": \"key_down\", \"key\": \"W\"}} \
-             (see `ludion explain L4003`)",
-        )
-    })
 }

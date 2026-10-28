@@ -75,6 +75,7 @@ mod test;
 mod texture;
 mod texture_feedback;
 mod texture_preview;
+mod trace;
 mod voxel;
 
 use std::path::PathBuf;
@@ -280,6 +281,28 @@ enum Command {
         /// Record the session to this replay file (`ludion replay` re-drives it).
         #[arg(long)]
         record: Option<PathBuf>,
+    },
+    /// Drive a scene with an input script and print a per-tick JSON Lines trace on stdout.
+    ///
+    /// Channel `motor` writes one line per `CharacterMotor` entity per tick: the tick, the entity,
+    /// its feet and the tick's `MoveReport` (`grounded`, `landed`, `ground`, `walls`, …). Channel
+    /// `sensors` writes one line per sensor enter/exit of the tick. `tick` is the frame the tick ran
+    /// as. This command runs no game systems, so a motor reports only when a game moves it: use the
+    /// game binary's `--trace` for that. Two runs of the same scene and script print identical bytes
+    /// within one build; compare two runs, never a committed trace.
+    Trace {
+        /// Path to the scene file (strict-subset YAML).
+        #[arg(long)]
+        scene: PathBuf,
+        /// Optional JSON input script, the format `sim-hash --script` reads.
+        #[arg(long)]
+        script: Option<PathBuf>,
+        /// How many fixed ticks to trace.
+        #[arg(long)]
+        frames: u64,
+        /// Comma-separated channels to print: `motor`, `sensors`. Default: both.
+        #[arg(long, value_delimiter = ',', default_values = ["motor", "sensors"])]
+        channels: Vec<ludion_engine::TraceChannel>,
     },
     /// Re-drive a fresh engine through a recorded session and print the `WorldHash` it reproduces.
     Replay {
@@ -1941,6 +1964,12 @@ fn main() -> std::process::ExitCode {
             frames,
             record,
         } => sim_hash::run(&scene, script.as_deref(), frames, record.as_deref()),
+        Command::Trace {
+            scene,
+            script,
+            frames,
+            channels,
+        } => trace::run(&scene, script.as_deref(), frames, &channels),
         Command::Replay { file, hashes } => replay::run(&file, hashes),
         Command::Render {
             scene,

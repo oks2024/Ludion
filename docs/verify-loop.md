@@ -92,6 +92,30 @@ worst frame and p99 (`ludion docs running`).
 
 **Explain any code.** `ludion explain L2203` prints the full what/why/fix for any `L####` diagnostic.
 
+## Numeric trace
+
+A per-tick JSON Lines record of a scene driven by an input script, for asserting on motion without a
+picture. Three entry points print the same lines: `ludion trace --scene <FILE> [--script <FILE>]
+--frames <N> [--channels motor,sensors]` (built-ins only, no game systems), `cargo run -p <game> --
+--trace <N> [--scene …] [--script …] [--channels …]` (the game's systems run, so its motors move), and
+`ludion_engine::trace_with(builder, scene, &script, frames, &channels)` in a `cargo test`, with
+`write_jsonl` to print. The script is `ludion sim-hash --script`'s format (`ludion docs systems`).
+
+```
+{"channel":"motor","tick":41,"entity":"hero","feet":[2.05,0.0,0.0],"moved":[0.05,0.0,0.0],"grounded":true,"landed":false,"ground":{"entity":"floor","point":[2.05,0.0,0.0],"normal":[0.0,1.0,0.0],"walkable":true,"distance":0.0},"ceiling":null,"walls":[],"stepped":null,"platform":{"entity":null,"translation":[0.0,0.0,0.0],"yaw":0.0,"surface":[0.0,0.0,0.0]},"stuck":false,"height":0.9}
+{"channel":"sensors","tick":15,"sensor":"zone","other":"hero","phase":"entered"}
+```
+
+- `motor`: one line per `CharacterMotor` entity per tick, ascending by entity. The report fields
+  appear only when game code called `move_character` on it during that tick; otherwise the line is
+  `channel`, `tick`, `entity`, `feet`. `sensors`: one line per enter or exit (`phase` `exited` adds
+  `cause`: `separated`, `despawned`, `removed`). Within a tick, motor lines precede sensor lines.
+- `tick` is the frame the tick ran as; an input addressed to frame `N` applies at the start of tick
+  `N`. A sensor line is tick `N`'s own physics step (`ludion docs physics-sensors` for the one-tick
+  latency a game system sees). Entities print as their `name`, else `e<index>v<generation>`.
+- Floats are shortest round-trip, so two runs of one build are byte-identical. Compare two runs;
+  never commit a trace as a golden.
+
 ## Gotchas
 
 - **Goldens are pinned-GPU bit-exact locally, SSIM-gated elsewhere.** Goldens are blessed **per

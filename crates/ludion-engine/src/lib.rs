@@ -92,6 +92,7 @@ mod skin_bone;
 mod snapshot;
 mod sprite_sheet;
 pub mod sweep;
+mod trace;
 pub mod transition;
 pub mod ui;
 mod voxel_mesh;
@@ -210,6 +211,10 @@ pub use sprite_sheet::{
 pub use sweep::{
     FrameCell, FrameStripOutcome, MAX_SWEEP_CELLS, SweepCell, SweepOutcome, render_frame_strip,
     render_sweep_sheet,
+};
+pub use trace::{
+    GroundRecord, MotorRecord, PlatformRecord, ReportRecord, SensorRecord, SurfaceRecord,
+    TraceChannel, TraceRecord, load_input_script, trace, trace_with, write_jsonl,
 };
 pub use transition::{RESIDUE_MAX_RECORDS_PER_SCENE, RESIDUE_MAX_SCENES, SceneSwitch, SwitchTo};
 pub use voxel_mesh::{VoxelMeshStats, voxel_mesh_stats};

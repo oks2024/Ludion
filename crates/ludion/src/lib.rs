@@ -81,7 +81,7 @@
 //! (`default-features = false`) and hosts through [`launch`] alone.
 //!
 //! - **`wire`** — the WebSocket listener a viewer or agent attaches to: [`run`], [`host_scene`],
-//!   [`HostOptions`], the argv modes (`--profile`, `--check-docs`, `--replay-frames`,
+//!   [`HostOptions`], the argv modes (`--profile`, `--trace`, `--check-docs`, `--replay-frames`,
 //!   `--replay-verify`), and `ludion-server` (tokio) in the tree. Off, the embedding core hosts the
 //!   same engine with no listener.
 //! - **`window`** (implies `wire`) — the game's own window `run --window` opens, with the engine
@@ -153,7 +153,7 @@ pub(crate) struct RunArgs {
     #[arg(
         long,
         value_name = "FILE",
-        conflicts_with_all = ["record", "check_scene", "render_out", "profile", "check_docs", "replay_frames", "replay_verify", "profile_replay"]
+        conflicts_with_all = ["record", "check_scene", "render_out", "profile", "trace", "check_docs", "replay_frames", "replay_verify", "profile_replay"]
     )]
     restore: Option<PathBuf>,
     /// Open the game's own window, presenting each rendered frame into it in process while the
@@ -166,6 +166,19 @@ pub(crate) struct RunArgs {
     /// `--release` for numbers comparable to a budget.
     #[arg(long, value_name = "FRAMES")]
     profile: Option<u64>,
+    /// Instead of hosting, trace this game's scene: drive N ticks with the game's own systems
+    /// running (so a `CharacterMotor` moves) and print a per-tick JSON Lines trace to stdout, then
+    /// exit. Channel `motor` is one line per motor entity per tick with its feet and `MoveReport`;
+    /// `sensors` is one line per sensor enter/exit. Two runs print identical bytes; compare two
+    /// runs, never a committed trace. `ludion docs verify-loop` has the record shapes.
+    #[arg(long, value_name = "FRAMES", conflicts_with_all = ["window", "profile"])]
+    trace: Option<u64>,
+    /// With `--trace`, a JSON input script (the `ludion sim-hash --script` format) to drive the run.
+    #[arg(long, value_name = "FILE", requires = "trace")]
+    script: Option<PathBuf>,
+    /// With `--trace`, the comma-separated channels to print: `motor`, `sensors`. Default: both.
+    #[arg(long, value_delimiter = ',', requires = "trace")]
+    channels: Vec<ludion_engine::TraceChannel>,
     /// With `--profile` or `--profile-replay`, also check the report against a TOML budget file (an
     /// optional `frame_total_ms` and `frame_total_max_ms`, a `[systems]` and a `[systems_max]` table
     /// of per-system median and worst-frame ceilings, a `[passes]` table, and `load_total_ms`, all in
@@ -177,7 +190,7 @@ pub(crate) struct RunArgs {
     /// Instead of hosting, validate this game's registered data-doc kinds (`EngineBuilder::doc_kind`)
     /// against the resolved scene's content root and exit — no server, no GPU. CI-able as a plain
     /// `cargo run -p <game> -- --check-docs` (Phase 15 / E4, `Plan/phase-15-data-docs.md` decision 7).
-    #[arg(long, conflicts_with = "profile")]
+    #[arg(long, conflicts_with_all = ["profile", "trace"])]
     check_docs: bool,
     /// Instead of hosting, validate `--scene` against **this game's** component registry — the
     /// built-ins plus everything the builder registers — and exit: every diagnostic rustc-style on
@@ -187,7 +200,7 @@ pub(crate) struct RunArgs {
     #[arg(
         long,
         requires = "scene",
-        conflicts_with_all = ["addr", "window", "profile", "check_docs", "replay_frames", "replay_verify", "render_out"]
+        conflicts_with_all = ["addr", "window", "profile", "trace", "check_docs", "replay_frames", "replay_verify", "render_out"]
     )]
     check_scene: bool,
     /// Instead of hosting, render `--scene` through this game's own engine and write the frame to
@@ -198,7 +211,7 @@ pub(crate) struct RunArgs {
         long,
         value_name = "PNG",
         requires = "scene",
-        conflicts_with_all = ["addr", "window", "profile", "check_docs", "replay_frames", "replay_verify"]
+        conflicts_with_all = ["addr", "window", "profile", "trace", "check_docs", "replay_frames", "replay_verify"]
     )]
     render_out: Option<PathBuf>,
     /// With `--render-out`, tick this game's own schedule this many frames before extracting, so the
@@ -232,7 +245,7 @@ pub(crate) struct RunArgs {
     #[arg(
         long,
         value_name = "FILE",
-        conflicts_with_all = ["profile", "check_docs", "window", "record"]
+        conflicts_with_all = ["profile", "trace", "check_docs", "window", "record"]
     )]
     replay_frames: Option<PathBuf>,
     /// With `--replay-frames`, the directory the numbered PNGs are written into (created if absent).
@@ -264,7 +277,7 @@ pub(crate) struct RunArgs {
     #[arg(
         long,
         value_name = "FILE",
-        conflicts_with_all = ["profile", "check_docs", "window", "record", "replay_frames", "profile_replay"]
+        conflicts_with_all = ["profile", "trace", "check_docs", "window", "record", "replay_frames", "profile_replay"]
     )]
     replay_verify: Option<PathBuf>,
     /// Instead of hosting, time this game's committed replay (`.lrp`) tick by tick through the game's
@@ -277,7 +290,7 @@ pub(crate) struct RunArgs {
     #[arg(
         long,
         value_name = "FILE",
-        conflicts_with_all = ["profile", "check_docs", "window", "record", "replay_frames", "replay_verify", "check_scene", "render_out"]
+        conflicts_with_all = ["profile", "trace", "check_docs", "window", "record", "replay_frames", "replay_verify", "check_scene", "render_out"]
     )]
     profile_replay: Option<PathBuf>,
     /// Sim worker threads for deterministic parallelism (results are thread-count invariant).
@@ -315,7 +328,7 @@ pub(crate) struct RunArgs {
         long,
         value_name = "store|rebake",
         value_parser = ["store", "rebake"],
-        conflicts_with_all = ["check_scene", "render_out", "check_docs", "replay_frames", "replay_verify", "profile_replay", "profile", "bake_probes"]
+        conflicts_with_all = ["check_scene", "render_out", "check_docs", "replay_frames", "replay_verify", "profile_replay", "profile", "trace", "bake_probes"]
     )]
     probes: Option<String>,
     /// Instead of hosting, capture **this game's** scene's reflection probes into the probe store and
@@ -325,7 +338,7 @@ pub(crate) struct RunArgs {
     /// bake at the quality the game will run. Needs a GPU; a scene with no probe prints an empty list.
     #[arg(
         long,
-        conflicts_with_all = ["addr", "window", "profile", "profile_replay", "check_docs", "check_scene", "replay_frames", "replay_verify", "render_out", "textures", "probes"]
+        conflicts_with_all = ["addr", "window", "profile", "trace", "profile_replay", "check_docs", "check_scene", "replay_frames", "replay_verify", "render_out", "textures", "probes"]
     )]
     bake_probes: bool,
     /// With `--bake-probes`, recapture only the probe with this `Name`, replacing its stored entry.
@@ -365,6 +378,9 @@ pub(crate) struct RunArgs {
 /// `.lrp` tick by tick through the same builder and prints one [`ludion_engine::ProfileReport`]
 /// whose entries carry the worst frame and p99 beside the median, over
 /// [`ludion_engine::profile_replay`] — sim only, no GPU section.
+/// `--trace <FRAMES>` (optionally with `--script <FILE>` and `--channels motor,sensors`) drives the
+/// scene with the game's systems running and prints the per-tick JSON Lines of
+/// [`ludion_engine::trace`], the numeric trace `ludion docs verify-loop` describes.
 /// The replay modes still take their content root from the scene *argument* — `--scene`'s parent,
 /// else the builder's default scene's parent — so a replay is verified, rendered and profiled
 /// against the same data-docs hosting would load, wherever the `.lrp` file itself is stored.
@@ -531,6 +547,7 @@ impl RunArgs {
             replay_frames: self.replay_frames.as_ref().map(content),
             profile_replay: self.profile_replay.as_ref().map(content),
             profile_check: self.profile_check.as_ref().map(content),
+            script: self.script.as_ref().map(content),
             frames_out: self.frames_out.as_ref().map(save),
             render_out: self.render_out.as_ref().map(save),
             record: self.record.as_ref().map(save),
@@ -542,7 +559,7 @@ impl RunArgs {
 
 /// Resolves this machine's settings and runs whichever of `run`'s modes that are not hosting the
 /// arguments name (`--replay-frames`, `--replay-verify`, `--profile-replay`, `--check-scene`,
-/// `--render-out`, `--profile`, `--check-docs`), against `roots`. `Ok` is the process's answer — a mode ran, or a
+/// `--render-out`, `--profile`, `--trace`, `--check-docs`), against `roots`. `Ok` is the process's answer — a mode ran, or a
 /// malformed setting refused to start; `Err` hands the builder and the resolved scene back to host.
 /// Shared by [`run`], which passes empty roots, and the embedded boot thread, which passes its own.
 // The `Err` is the builder handed back to host, once per process; boxing it would only add a move.
@@ -666,6 +683,17 @@ pub(crate) fn run_short_circuit(
                 .as_deref()
                 .and_then(TextureSource::from_name)
                 .unwrap_or_default(),
+        ));
+    }
+
+    // `--trace` is `--profile`'s sibling: the game's own systems run, and the per-tick records print.
+    if let Some(frames) = args.trace {
+        return Ok(run_trace(
+            builder,
+            &scene,
+            frames,
+            args.script.as_deref(),
+            &args.channels,
         ));
     }
 
@@ -1414,6 +1442,45 @@ fn run_profile(
     match check {
         Some(budget_path) => check_budget_report(&report, budget_path),
         None => ExitCode::SUCCESS,
+    }
+}
+
+/// Runs `--trace`: the game's engine (its systems running) driven by the optional input script,
+/// the [`ludion_engine::trace`] records printed as JSON Lines. No channel named means both.
+#[cfg(feature = "wire")]
+fn run_trace(
+    builder: EngineBuilder,
+    scene: &Path,
+    frames: u64,
+    script: Option<&Path>,
+    channels: &[ludion_engine::TraceChannel],
+) -> ExitCode {
+    let script = match script.map(ludion_engine::load_input_script).transpose() {
+        Ok(script) => script.unwrap_or_default(),
+        Err(diagnostic) => {
+            eprintln!("{diagnostic}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let channels = if channels.is_empty() {
+        &ludion_engine::TraceChannel::ALL[..]
+    } else {
+        channels
+    };
+    let records = match ludion_engine::trace_with(builder, scene, &script, frames, channels) {
+        Ok(records) => records,
+        Err(diagnostic) => {
+            eprintln!("{diagnostic}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut stdout = std::io::stdout().lock();
+    match ludion_engine::write_jsonl(&records, &mut stdout).and_then(|()| stdout.flush()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("could not write the trace to stdout: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -2197,6 +2264,31 @@ mod host_diagnostic_tests {
             assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
         }
         assert!(RunArgs::try_parse_from(["game", "--check-docs", "--probes", "rebake"]).is_err());
+    }
+
+    #[test]
+    fn trace_takes_its_script_and_channels_and_refuses_other_modes() {
+        let parsed = RunArgs::try_parse_from([
+            "game",
+            "--trace",
+            "30",
+            "--script",
+            "in.json",
+            "--channels",
+            "motor,sensors",
+        ])
+        .unwrap();
+        assert_eq!(parsed.trace, Some(30));
+        assert_eq!(parsed.channels.len(), 2);
+        assert!(RunArgs::try_parse_from(["game", "--script", "in.json"]).is_err());
+        assert!(RunArgs::try_parse_from(["game", "--trace", "5", "--channels", "bogus"]).is_err());
+        for other in [["--profile", "5"], ["--check-docs", ""], ["--window", ""]] {
+            let mut args = vec!["game", "--trace", "5", other[0]];
+            if !other[1].is_empty() {
+                args.push(other[1]);
+            }
+            assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
+        }
     }
 
     #[test]
