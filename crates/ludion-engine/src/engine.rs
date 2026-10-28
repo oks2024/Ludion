@@ -1488,6 +1488,7 @@ impl Engine {
         scene_physics::report_scaled_colliders(self.driver.world_mut());
         let path_follow_installed = self.path_follow_installed();
         crate::path_follow::report_uninstalled(self.driver.world_mut(), path_follow_installed);
+        crate::lane::report_without_motor(self.driver.world_mut());
         let (physics_installed, game_systems) =
             self.driver
                 .system_names()

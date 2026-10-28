@@ -155,7 +155,7 @@ pub use ludion_engine::{
     TileAppearance, Tilemap, TimelineEntry, Transform, TurnSpec, UiList, UiListItem, UiRect,
     UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, Volley, VolleyCenter, VolleyShape, WorldPose,
     advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
-    bullet_position, check_path, crossfade, debug_draw, fits_character, lane_relative,
+    bullet_position, check_path, crossfade, debug_draw, fits_character, lane_frame, lane_relative,
     load_assembly, move_character, move_character_with, path_follow, path_follower_motion,
     play_patterns, reparent, report_diagnostic, report_full_diagnostic, resize_character,
     revert_prefab, set_speed, spawn_prefab, switch_to_ragdoll, teleport_character, unpack_prefab,

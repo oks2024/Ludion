@@ -255,6 +255,8 @@ pub(crate) struct PathLibrary {
     /// Keyed by `PathFollower.path`; `Err` holds the loader's diagnostics for a path that failed
     /// to load.
     paths: BTreeMap<String, Result<Loaded, Vec<Diagnostic>>>,
+    /// The near-vertical spans of each path a lane asked about; see `lane_spans`.
+    spans: BTreeMap<String, Vec<(f32, f32)>>,
 }
 
 impl PathLibrary {
@@ -263,6 +265,7 @@ impl PathLibrary {
         PathLibrary {
             root,
             paths: BTreeMap::new(),
+            spans: BTreeMap::new(),
         }
     }
 
@@ -290,22 +293,27 @@ impl PathLibrary {
 
     /// The shared sampler of the path `rel`, loading it on first use; `Err` with the loader's
     /// diagnostics. The `Arc` outlives the library borrow, so a caller can go on to use the world.
-    #[allow(
-        dead_code,
-        reason = "the lane maths are exercised by tests and by callers outside this module"
-    )]
     pub(crate) fn sampler(&mut self, rel: &str) -> Result<Arc<PathSampler>, Vec<Diagnostic>> {
         self.loaded(rel)
             .map(|loaded| Arc::clone(&loaded.sampler))
             .map_err(<[Diagnostic]>::to_vec)
     }
 
+    /// The near-vertical spans of the loaded path `rel`, scanned the first time a lane asks (a
+    /// follower never pays for the scan); empty for a path that is not loaded.
+    pub(crate) fn lane_spans(&mut self, rel: &str) -> &[(f32, f32)] {
+        if !self.spans.contains_key(rel) {
+            let spans = self
+                .cached(rel)
+                .map(|sampler| crate::lane::vertical_spans(&sampler))
+                .unwrap_or_default();
+            self.spans.insert(rel.to_string(), spans);
+        }
+        &self.spans[rel]
+    }
+
     /// The sampler of `rel` when it is already loaded, without loading: for a reader that holds
     /// only `&World`.
-    #[allow(
-        dead_code,
-        reason = "the lane maths are exercised by tests and by callers outside this module"
-    )]
     pub(crate) fn cached(&self, rel: &str) -> Option<Arc<PathSampler>> {
         self.paths
             .get(rel)?

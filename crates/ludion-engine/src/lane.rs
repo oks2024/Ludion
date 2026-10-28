@@ -11,28 +11,29 @@
 //! The lane frame's `forward` is horizontal and `lateral = forward × up` points to its right, both
 //! taken from the path's no-roll frame, so a climbing path still gives a flat lane.
 
+use std::sync::Arc;
+
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
+use ludion_core::ids::EntityId;
 use ludion_core::number::engine_number;
-use ludion_ecs::SemanticValidate;
-use ludion_physics::LaneFrame;
-use ludion_scene::PathSampler;
+use ludion_ecs::{SemanticValidate, World};
+use ludion_physics::{
+    CharacterMotor, LaneEnd, LaneFrame, LaneReport, MotorError, MoveConstraint, MoveReport,
+    PhysicsWorld,
+};
+use ludion_scene::{PathMetric, PathSampler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::components::Transform;
+use crate::path_follow::PathLibrary;
+
 /// A path span whose horizontal tangent length is under this is near-vertical (≈ 87°): the lane
 /// frame there uses the path's carried `right`.
-#[allow(
-    dead_code,
-    reason = "the lane maths are exercised by tests and by callers outside this module"
-)]
 pub(crate) const LANE_VERTICAL_HORIZONTAL: f64 = 0.05;
 /// Evenly spaced samples (`+ 1` ends) [`vertical_spans`] reads.
-#[allow(
-    dead_code,
-    reason = "the lane maths are exercised by tests and by callers outside this module"
-)]
 const VERTICAL_SAMPLES: usize = 256;
 /// `cos 80°`: below this a screen-right is too close to perpendicular to the lane for the stick's
 /// left/right to mean along or against it.
@@ -153,10 +154,6 @@ impl LaneConstraint {
 
 /// The first field of `lane` that breaks a range rule, with the rule, in declaration order. The
 /// runtime check for a lane built in Rust (`L1300`); the document validator reports every field.
-#[allow(
-    dead_code,
-    reason = "the lane maths are exercised by tests and by callers outside this module"
-)]
 pub(crate) fn invalid_field(lane: &LaneConstraint) -> Option<(&'static str, &'static str)> {
     const NOT_NEGATIVE: &str = "must be a finite number, not negative";
     const FINITE: &str = "must be a finite number";
@@ -230,10 +227,6 @@ impl SemanticValidate for LaneConstraint {
 }
 
 /// The `L1301` diagnostic for a lane whose `path` failed to load, carrying the loader's `causes`.
-#[allow(
-    dead_code,
-    reason = "the lane maths are exercised by tests and by callers outside this module"
-)]
 pub(crate) fn path_unloaded(path: &str, causes: &[Diagnostic]) -> Diagnostic {
     let why = causes
         .iter()
@@ -249,10 +242,6 @@ pub(crate) fn path_unloaded(path: &str, causes: &[Diagnostic]) -> Diagnostic {
 }
 
 /// The `L1303` warning for a lane `path` with near-vertical `spans` (from [`vertical_spans`]).
-#[allow(
-    dead_code,
-    reason = "the lane maths are exercised by tests and by callers outside this module"
-)]
 pub(crate) fn path_vertical(path: &str, spans: &[(f32, f32)]) -> Diagnostic {
     let ranges = spans
         .iter()
@@ -268,10 +257,6 @@ pub(crate) fn path_vertical(path: &str, spans: &[(f32, f32)]) -> Diagnostic {
 }
 
 /// The smooth weight for a linear `blend`: `b²(3 − 2b)`.
-#[allow(
-    dead_code,
-    reason = "the lane maths are exercised by tests and by callers outside this module"
-)]
 pub(crate) fn smoothstep(blend: f32) -> f32 {
     blend * blend * (3.0 - 2.0 * blend)
 }
@@ -279,10 +264,6 @@ pub(crate) fn smoothstep(blend: f32) -> f32 {
 /// `blend` moved one gameplay tick of `dt` seconds toward 1 (`engaged`, over `engage_time`) or 0
 /// (over `disengage_time`), clamped to `[0, 1]`. A time of `0` is instant when `dt > 0`; a `dt` of
 /// `0` never moves it.
-#[allow(
-    dead_code,
-    reason = "the lane maths are exercised by tests and by callers outside this module"
-)]
 pub(crate) fn advance_blend(
     blend: f32,
     engaged: bool,
@@ -310,6 +291,11 @@ pub(crate) fn advance_blend(
     moved.clamp(0.0, 1.0)
 }
 
+/// The horizontal direction of travel for a path frame's `right`: `right` turned a quarter.
+fn horizontal_forward(right: [f64; 3]) -> [f64; 3] {
+    [right[2], 0.0, -right[0]]
+}
+
 /// The lane frame `s` metres along `sampler`, `offset` metres to the right of the path, carrying
 /// `weight`.
 ///
@@ -317,10 +303,6 @@ pub(crate) fn advance_blend(
 /// wherever the path is, and carried across a vertical run. A closed path wraps `s`. Beyond an open
 /// end the frame is the end's, its point continued straight along `forward` by the overshoot
 /// (`ends: extend`); `ends: stop` never passes an out-of-range `s`.
-#[allow(
-    dead_code,
-    reason = "the lane maths are exercised by tests and by callers outside this module"
-)]
 pub(crate) fn frame_at(sampler: &PathSampler, s: f64, offset: f32, weight: f32) -> LaneFrame {
     let length = sampler.length();
     let (at, overshoot) = if sampler.closed() {
@@ -331,7 +313,7 @@ pub(crate) fn frame_at(sampler: &PathSampler, s: f64, offset: f32, weight: f32) 
     };
     let frame = sampler.frame_at(at);
     let right = frame.right;
-    let forward = [right[2], 0.0, -right[0]];
+    let forward = horizontal_forward(right);
     let offset = f64::from(offset);
     #[allow(clippy::cast_possible_truncation)]
     let narrow = |v: [f64; 3]| [v[0] as f32, v[1] as f32, v[2] as f32];
@@ -355,10 +337,6 @@ pub(crate) fn frame_at(sampler: &PathSampler, s: f64, offset: f32, weight: f32) 
 /// The path ranges `(s_first, s_last)` whose horizontal tangent length is under
 /// [`LANE_VERTICAL_HORIZONTAL`]: [`VERTICAL_SAMPLES`] `+ 1` evenly spaced samples, consecutive
 /// near-vertical ones merged into one range.
-#[allow(
-    dead_code,
-    reason = "the lane maths are exercised by tests and by callers outside this module"
-)]
 pub(crate) fn vertical_spans(sampler: &PathSampler) -> Vec<(f32, f32)> {
     let length = sampler.length();
     let mut spans = Vec::new();
@@ -385,6 +363,344 @@ pub(crate) fn vertical_spans(sampler: &PathSampler) -> Vec<(f32, f32)> {
         .map(|(first, last)| (first as f32, last as f32))
         .collect();
     narrowed
+}
+
+/// Metres an open lane's `s` may fall short of an end and still count as at it: the stop clamp lands
+/// within float rounding of the end, not exactly on it.
+const AT_END_EPS: f64 = 1e-3;
+
+/// The lane fields the hook and the report read, copied out of the component for one call.
+struct Pull {
+    sampler: Arc<PathSampler>,
+    offset: f32,
+    ends: LaneEnds,
+    search_window: f32,
+    pull_speed: f32,
+    weight: f32,
+    dt: f32,
+}
+
+impl Pull {
+    /// The nearest `s` to `p` within the search window grown by `travel`, with `ends: extend`
+    /// continuing an open lane straight past either end.
+    fn refind(&self, p: [f32; 3], hint: f64, travel: f32) -> f64 {
+        let q = p.map(f64::from);
+        let window = f64::from(self.search_window + travel);
+        let s = self.sampler.nearest_s(q, hint, window, PathMetric::Full);
+        if self.sampler.closed() || self.ends != LaneEnds::Extend {
+            return s;
+        }
+        let end = self.sampler.length();
+        let beyond = |at: f64| {
+            let frame = self.sampler.frame_at(at);
+            let forward = horizontal_forward(frame.right);
+            (0..3)
+                .map(|i| (q[i] - frame.position[i]) * forward[i])
+                .sum::<f64>()
+        };
+        if s <= 0.0 {
+            let along = beyond(0.0);
+            if along < 0.0 {
+                return along;
+            }
+        } else if s >= end {
+            let along = beyond(end);
+            if along > 0.0 {
+                return end + along;
+            }
+        }
+        s
+    }
+
+    fn frame(&self, s: f64) -> LaneFrame {
+        frame_at(&self.sampler, s, self.offset, self.weight)
+    }
+}
+
+/// The `MoveConstraint` that holds the motor to the lane for one `move_character` call.
+struct LaneHook {
+    pull: Pull,
+    /// The lane position the feet are at: the call's start, then wherever the correction found it.
+    s: f64,
+    /// Where the feet were when the call began; the tick's travel is measured from it.
+    anchor: [f32; 3],
+    blocked: bool,
+}
+
+impl LaneHook {
+    fn travel(&self, feet: [f32; 3]) -> f32 {
+        norm(sub(feet, self.anchor))
+    }
+}
+
+impl MoveConstraint for LaneHook {
+    fn project(&mut self, feet: [f32; 3], step: [f32; 3]) -> [f32; 3] {
+        let frame = self.pull.frame(self.s);
+        let w = self.pull.weight;
+        let across = dot(step, frame.lateral);
+        let mut out = [
+            step[0] - w * across * frame.lateral[0],
+            step[1],
+            step[2] - w * across * frame.lateral[2],
+        ];
+        if !self.pull.sampler.closed() && self.pull.ends == LaneEnds::Stop {
+            #[allow(clippy::cast_possible_truncation)]
+            let (end, here) = (
+                self.pull.sampler.length() as f32,
+                self.s as f32 + dot(sub(feet, frame.point), frame.forward),
+            );
+            let along = dot(out, frame.forward);
+            let held = along.clamp(-here, end - here);
+            for (component, forward) in out.iter_mut().zip(frame.forward) {
+                *component -= w * (along - held) * forward;
+            }
+        }
+        out
+    }
+
+    fn correction(&mut self, feet: [f32; 3]) -> [f32; 3] {
+        self.s = self.pull.refind(feet, self.s, self.travel(feet));
+        let frame = self.pull.frame(self.s);
+        let error = dot(sub(feet, frame.point), frame.lateral);
+        let cap = self.pull.weight * self.pull.pull_speed * self.pull.dt;
+        if error == 0.0 || cap == 0.0 {
+            return [0.0; 3];
+        }
+        let pull = -error.signum() * error.abs().min(cap);
+        frame.lateral.map(|c| c * pull)
+    }
+
+    fn corrected(&mut self, _applied: [f32; 3], blocked: bool) {
+        self.blocked = blocked;
+    }
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn norm(v: [f32; 3]) -> f32 {
+    dot(v, v).sqrt()
+}
+
+/// A lane read from the world with its path loaded.
+struct Resolved {
+    lane: LaneConstraint,
+    sampler: Arc<PathSampler>,
+}
+
+/// Reads `entity`'s lane and loads its path; `None` when the lane is inert (absent, no path, fully
+/// off, a field out of range, or a path that fails to load — the last two reported once).
+fn resolve(world: &mut World, entity: EntityId) -> Option<Resolved> {
+    let lane = world.get::<LaneConstraint>(entity).ok().flatten()?.clone();
+    if lane.path.is_empty() || (lane.blend == 0.0 && !lane.engaged) {
+        return None;
+    }
+    if let Some((field, rule)) = invalid_field(&lane) {
+        let diagnostic = Diagnostic::new(
+            code::LANE_CONSTRAINT_INVALID,
+            format!("{entity} has a `LaneConstraint` `{field}` that {rule}, so the lane stays off"),
+        )
+        .with_path(format!("/{field}"))
+        .with_help(format!("give `{field}` a value in its range"));
+        crate::diagnostics::report_full(
+            world,
+            format!("{entity}/LaneConstraint/{field}"),
+            diagnostic,
+        );
+        return None;
+    }
+    let loaded = world.resource_mut::<PathLibrary>().map(|library| {
+        library.sampler(&lane.path).map(|sampler| {
+            let spans = library.lane_spans(&lane.path).to_vec();
+            (sampler, spans)
+        })
+    })?;
+    match loaded {
+        Ok((sampler, spans)) => {
+            if !spans.is_empty() {
+                let diagnostic = path_vertical(&lane.path, &spans);
+                crate::diagnostics::report_full(
+                    world,
+                    format!("{entity}/LaneConstraint/vertical"),
+                    diagnostic,
+                );
+            }
+            Some(Resolved { lane, sampler })
+        }
+        Err(causes) => {
+            let diagnostic = causes
+                .iter()
+                .cloned()
+                .fold(path_unloaded(&lane.path, &causes), Diagnostic::with_related);
+            crate::diagnostics::report_full(
+                world,
+                format!("{entity}/LaneConstraint/path"),
+                diagnostic,
+            );
+            None
+        }
+    }
+}
+
+/// Moves `entity` under its [`LaneConstraint`]: `None` when the lane is inert, so the caller takes
+/// the unconstrained path. Otherwise the motor runs with a hook that projects every horizontal step
+/// onto the lane and pulls the feet back to its centre line, the lane's `s` and `blend` are
+/// written back and `MoveReport.lane` describes the call.
+pub(crate) fn move_on_lane(
+    world: &mut World,
+    entity: EntityId,
+    displacement: [f32; 3],
+) -> Option<Result<MoveReport, MotorError>> {
+    let Resolved { lane, sampler } = resolve(world, entity)?;
+    let dt = world
+        .resource::<PhysicsWorld>()
+        .map(|physics| physics.gameplay_dt(world))?;
+    let feet = world.get::<Transform>(entity).ok().flatten()?.translation;
+    let blend = advance_blend(
+        lane.blend,
+        lane.engaged,
+        lane.engage_time,
+        lane.disengage_time,
+        dt,
+    );
+    let pull = Pull {
+        sampler,
+        offset: lane.offset,
+        ends: lane.ends,
+        search_window: lane.search_window,
+        pull_speed: lane.pull_speed,
+        weight: smoothstep(blend),
+        dt,
+    };
+    let s0 = match lane.s.filter(|_| lane.blend > 0.0) {
+        Some(s) => f64::from(s),
+        None => pull
+            .sampler
+            .nearest_s_global(feet.map(f64::from), PathMetric::Full),
+    };
+    let mut hook = LaneHook {
+        pull,
+        s: s0,
+        anchor: feet,
+        blocked: false,
+    };
+    let result = crate::motor::move_character_with(world, entity, displacement, Some(&mut hook));
+    Some(result.map(|mut report| {
+        report.lane = Some(settle(world, entity, &lane, &hook, s0, blend));
+        report
+    }))
+}
+
+/// Writes the lane's `s` and `blend` back after a successful call and describes the call.
+fn settle(
+    world: &mut World,
+    entity: EntityId,
+    lane: &LaneConstraint,
+    hook: &LaneHook,
+    s0: f64,
+    blend: f32,
+) -> LaneReport {
+    let pull = &hook.pull;
+    let end = world
+        .get::<Transform>(entity)
+        .ok()
+        .flatten()
+        .map_or(hook.anchor, |pose| pose.translation);
+    let s1 = pull.refind(end, hook.s, hook.travel(end));
+    if let Ok(Some(stored)) = world.get_mut::<LaneConstraint>(entity) {
+        #[allow(clippy::cast_possible_truncation)]
+        let narrowed = s1 as f32;
+        stored.s = Some(narrowed);
+        stored.blend = blend;
+    }
+    let sampler = &pull.sampler;
+    let path_length = sampler.length();
+    let mut ds = s1 - s0;
+    if sampler.closed() {
+        ds = ds.rem_euclid(path_length);
+        if ds > path_length / 2.0 {
+            ds -= path_length;
+        }
+    }
+    let at_end = if sampler.closed() {
+        None
+    } else if s1 <= AT_END_EPS {
+        Some(LaneEnd::Start)
+    } else if s1 >= path_length - AT_END_EPS {
+        Some(LaneEnd::End)
+    } else {
+        None
+    };
+    let frame = pull.frame(s1);
+    #[allow(clippy::cast_possible_truncation)]
+    let ds = ds as f32;
+    LaneReport {
+        s: frame.s,
+        ds,
+        weight: pull.weight,
+        engaged: lane.engaged,
+        easing: 0.0 < blend && blend < 1.0,
+        lateral_error: dot(sub(end, frame.point), frame.lateral),
+        pull_blocked: hook.blocked,
+        frame,
+        at_end,
+    }
+}
+
+/// The lane frame of `entity` as the last `move_character` left it, for a game system that reads
+/// the lane before it moves (a stick turned into [`lane_relative`] input). `None` without a
+/// `LaneConstraint`, with no path, before the lane has found its place (`s` is `null`), when the
+/// lane is fully off, or before a move has loaded the path.
+///
+/// # Example
+/// ```
+/// use ludion_ecs::World;
+/// use ludion_engine::lane_frame;
+///
+/// let mut world = World::new();
+/// let entity = world.spawn();
+/// assert_eq!(lane_frame(&world, entity), None);
+/// ```
+pub fn lane_frame(world: &World, entity: EntityId) -> Option<LaneFrame> {
+    let lane = world.get::<LaneConstraint>(entity).ok().flatten()?;
+    if lane.path.is_empty() || (lane.blend == 0.0 && !lane.engaged) {
+        return None;
+    }
+    let s = lane.s?;
+    let sampler = world.resource::<PathLibrary>()?.cached(&lane.path)?;
+    Some(frame_at(
+        &sampler,
+        f64::from(s),
+        lane.offset,
+        smoothstep(lane.blend),
+    ))
+}
+
+/// Reports `L1302` once per [`LaneConstraint`] entity that has no `CharacterMotor`.
+pub(crate) fn report_without_motor(world: &mut World) {
+    let ids: Vec<EntityId> = world
+        .query_ids::<(&LaneConstraint,)>()
+        .map(|(id, _)| id)
+        .collect();
+    for id in ids {
+        if world.has::<CharacterMotor>(id) {
+            continue;
+        }
+        crate::diagnostics::report(
+            world,
+            code::LANE_WITHOUT_MOTOR,
+            id.to_string(),
+            format!(
+                "{id} has a `LaneConstraint` but no `CharacterMotor`, so nothing reads the lane: \
+                 add a `CharacterMotor` to the entity"
+            ),
+        );
+    }
 }
 
 /// A stick read against a lane: see [`lane_relative`].
@@ -645,6 +961,77 @@ mod tests {
         assert_eq!(steep.along, 0.5);
         let steep = lane_relative([0.5, 0.0], &frame, [-cos, 0.0, sin]);
         assert_eq!(steep.along, 0.5);
+    }
+
+    fn hook(path: PathSampler, ends: LaneEnds, weight: f32, s: f64) -> LaneHook {
+        LaneHook {
+            pull: Pull {
+                sampler: Arc::new(path),
+                offset: 0.0,
+                ends,
+                search_window: 2.0,
+                pull_speed: 4.0,
+                weight,
+                dt: 1.0 / 60.0,
+            },
+            s,
+            anchor: [s as f32, 0.0, 0.0],
+            blocked: false,
+        }
+    }
+
+    #[test]
+    fn the_projection_removes_the_lateral_part_by_weight() {
+        let mut full = hook(straight(), LaneEnds::Extend, 1.0, 4.0);
+        assert_eq!(
+            full.project([4.0, 0.0, 0.0], [0.3, -0.1, 0.2]),
+            [0.3, -0.1, 0.0]
+        );
+        let mut half = hook(straight(), LaneEnds::Extend, 0.5, 4.0);
+        assert_eq!(
+            half.project([4.0, 0.0, 0.0], [0.3, -0.1, 0.2]),
+            [0.3, -0.1, 0.1]
+        );
+        let mut off = hook(straight(), LaneEnds::Extend, 0.0, 4.0);
+        assert_eq!(
+            off.project([4.0, 0.0, 0.0], [0.3, -0.1, 0.2]),
+            [0.3, -0.1, 0.2]
+        );
+    }
+
+    #[test]
+    fn a_stop_lane_clamps_the_step_at_both_ends() {
+        let mut stop = hook(straight(), LaneEnds::Stop, 1.0, 9.9);
+        let out = stop.project([9.9, 0.0, 0.0], [0.5, 0.0, 0.0]);
+        assert!((out[0] - 0.1).abs() < 1e-5, "{out:?}");
+        let mut start = hook(straight(), LaneEnds::Stop, 1.0, 0.1);
+        let out = start.project([0.1, 0.0, 0.0], [-0.5, 0.0, 0.0]);
+        assert!((out[0] + 0.1).abs() < 1e-5, "{out:?}");
+        let mut extend = hook(straight(), LaneEnds::Extend, 1.0, 9.9);
+        assert_eq!(extend.project([9.9, 0.0, 0.0], [0.5, 0.0, 0.0])[0], 0.5);
+    }
+
+    #[test]
+    fn the_correction_is_capped_by_weight_and_speed() {
+        let mut pull = hook(straight(), LaneEnds::Extend, 1.0, 4.0);
+        let cap = 4.0 / 60.0;
+        let out = pull.correction([4.0, 0.0, 1.0]);
+        assert!((out[2] + cap).abs() < 1e-6, "{out:?}");
+        let out = pull.correction([4.0, 0.0, -0.01]);
+        assert!((out[2] - 0.01).abs() < 1e-6, "{out:?}");
+        assert_eq!(pull.correction([4.0, 0.0, 0.0]), [0.0; 3]);
+        let mut off = hook(straight(), LaneEnds::Extend, 0.0, 4.0);
+        assert_eq!(off.correction([4.0, 0.0, 1.0]), [0.0; 3]);
+    }
+
+    #[test]
+    fn refind_continues_an_extend_lane_past_either_end() {
+        let pull = hook(straight(), LaneEnds::Extend, 1.0, 9.0).pull;
+        assert!((pull.refind([12.5, 0.0, 0.7], 9.0, 4.0) - 12.5).abs() < 1e-9);
+        assert!((pull.refind([-1.5, 0.0, 0.0], 1.0, 4.0) + 1.5).abs() < 1e-9);
+        assert!((pull.refind([5.0, 0.0, 0.7], 4.0, 4.0) - 5.0).abs() < 1e-9);
+        let stop = hook(straight(), LaneEnds::Stop, 1.0, 9.0).pull;
+        assert_eq!(stop.refind([12.5, 0.0, 0.0], 9.0, 4.0), 10.0);
     }
 
     #[test]

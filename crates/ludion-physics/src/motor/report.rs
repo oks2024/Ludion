@@ -77,7 +77,6 @@ pub enum LaneEnd {
 
 /// What a `LaneConstraint` did to one `move_character` call.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct LaneReport {
     /// Metres along the path after the move.
     pub s: f32,
@@ -95,7 +94,7 @@ pub struct LaneReport {
     pub pull_blocked: bool,
     /// The frame at the final `s`.
     pub frame: LaneFrame,
-    /// The end of an open path the character is held at, when `ends` is `stop`.
+    /// The end of an open path `s` is at or beyond, in either `ends` mode.
     pub at_end: Option<LaneEnd>,
 }
 

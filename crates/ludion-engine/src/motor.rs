@@ -46,6 +46,11 @@ const CEILING_CROSS: f32 = 0.05;
 /// }
 /// ```
 ///
+/// An entity with an engaged (or still easing) `LaneConstraint` is held to its lane: horizontal
+/// motion is projected onto the lane and a capped pull returns the feet to its centre line, eased by
+/// the lane's `blend`; `MoveReport.lane` describes it. With no lane the call is the unconstrained
+/// move, bit for bit.
+///
 /// After a successful call it draws the `motor` debug category: the capsule (green grounded, orange
 /// airborne, red stuck), the ground, wall and ceiling contact normals, the platform carry and the
 /// ground probe. The drawing is never hashed.
@@ -54,11 +59,15 @@ pub fn move_character(
     entity: EntityId,
     displacement: [f32; 3],
 ) -> Result<MoveReport, MotorError> {
+    if let Some(result) = crate::lane::move_on_lane(world, entity, displacement) {
+        return result;
+    }
     move_character_with(world, entity, displacement, None)
 }
 
 /// [`move_character`] with a [`MoveConstraint`] shaping every horizontal displacement and adding
-/// its correction.
+/// its correction. The explicit constraint is the only one: a `LaneConstraint` on the entity is
+/// ignored here.
 pub fn move_character_with(
     world: &mut World,
     entity: EntityId,

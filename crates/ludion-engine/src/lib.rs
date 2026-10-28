@@ -143,7 +143,7 @@ pub use hierarchy::{
     world_pose_transform, world_transform,
 };
 pub use instantiate::EngineHooks;
-pub use lane::{LaneConstraint, LaneEnds, LaneInput, lane_relative};
+pub use lane::{LaneConstraint, LaneEnds, LaneInput, lane_frame, lane_relative};
 pub use ludion_scene::{
     PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler, check_path,
 };
