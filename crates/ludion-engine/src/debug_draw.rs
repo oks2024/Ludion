@@ -29,6 +29,9 @@ pub(crate) const HIERARCHY: &str = "hierarchy";
 /// The category [`segments`] draws from the world's reflection probes.
 pub(crate) const PROBES: &str = "probes";
 
+/// The category [`segments`] draws from the live `PhysicsWorld`'s colliders.
+pub(crate) const COLLIDERS: &str = "colliders";
+
 /// The category name that stands for every category in [`DebugCategories`]; no system may draw under it.
 const ALL: &str = "all";
 
@@ -338,7 +341,7 @@ impl DebugCategories {
 ///
 /// The `hierarchy` category is drawn here from the live world rather than by a system, so it is
 /// always current, even paused, and costs nothing unless enabled. It sorts among the categories;
-/// `probes` is drawn the same way.
+/// `probes` and `colliders` (every physics body's wireframe) are drawn the same way.
 pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegment> {
     if *filter == DebugCategories::None {
         return Vec::new();
@@ -364,11 +367,18 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
             .or_default()
             .extend(crate::extract::probe_debug_lines(world));
     }
+    if filter.enables(COLLIDERS) {
+        categories
+            .entry(COLLIDERS)
+            .or_default()
+            .extend(crate::scene_physics::collider_debug_lines(world));
+    }
     categories.into_values().flatten().collect()
 }
 
 /// The categories the world has drawn: what [`DebugDraw::drawn`] lists plus `hierarchy` when any
-/// entity has a `Parent` and `probes` when any has a `ReflectionProbe`, sorted.
+/// entity has a `Parent`, `probes` when any has a `ReflectionProbe` and `colliders` when the
+/// physics world holds a body, sorted.
 pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = world
         .resource::<DebugDraw>()
@@ -378,6 +388,9 @@ pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     }
     if crate::extract::any_probe(world) {
         names.push(PROBES);
+    }
+    if crate::scene_physics::any_body(world) {
+        names.push(COLLIDERS);
     }
     names.sort_unstable();
     names.dedup();
@@ -823,5 +836,117 @@ mod tests {
             lines(&mut engine).is_empty(),
             "a tick that drew nothing clears it"
         );
+    }
+
+    /// A static unit box and a rigid sphere above it, in a free-space physics world.
+    fn physics_engine() -> crate::Engine {
+        let root = std::env::temp_dir().join(format!(
+            "ludion-debug-draw-colliders-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut engine = crate::Engine::builder()
+            .project_root(&root)
+            .build()
+            .unwrap();
+        engine
+            .load_inline_scene(
+                "format: 1\nphysics:\n  space: free\nentities:\n  - name: floor\n    components:\n      \
+                 Transform: {}\n      Collider:\n        shape:\n          box:\n            \
+                 half_extents:\n              - 0.5\n              - 0.5\n              - 0.5\n        \
+                 body: static\n  - name: ball\n    components:\n      Transform:\n        translation:\n          \
+                 - 0.0\n          - 5.0\n          - 0.0\n      Collider:\n        shape:\n          \
+                 sphere:\n            radius: 0.5\n        body:\n          rigid:\n            mass: 1.0\n      \
+                 Velocity: {}\n",
+            )
+            .unwrap();
+        engine
+    }
+
+    /// Per-tick world hashes and the final snapshot of a mesh floor with a falling rigid sphere,
+    /// extracting a render scene after every tick when `categories` enables something.
+    fn run_mesh_scene(categories: DebugCategories) -> (Vec<u64>, Vec<u8>, usize) {
+        let root = std::env::temp_dir().join(format!(
+            "ludion-debug-draw-colliders-mesh-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let floor = ludion_scene::MeshDocument {
+            positions: vec![
+                -5.0, 0.0, -5.0, 5.0, 0.0, -5.0, -5.0, 0.0, 5.0, 5.0, 0.0, 5.0,
+            ],
+            indices: vec![0, 2, 1, 1, 2, 3],
+            ..ludion_scene::MeshDocument::default()
+        };
+        std::fs::write(
+            root.join("floor.mesh.yaml"),
+            ludion_scene::emit_mesh(&floor),
+        )
+        .unwrap();
+        let mut engine = crate::Engine::builder()
+            .project_root(&root)
+            .build()
+            .unwrap();
+        engine.set_debug_draw(categories);
+        engine
+            .load_inline_scene(
+                "format: 1\nphysics:\n  space: free\nentities:\n  - name: floor\n    components:\n      \
+                 Transform: {}\n      Collider:\n        shape:\n          mesh:\n            path: floor.mesh.yaml\n        \
+                 body: static\n  - name: ball\n    components:\n      Transform:\n        translation:\n          \
+                 - 0.0\n          - 2.0\n          - 0.0\n      Collider:\n        shape:\n          \
+                 sphere:\n            radius: 0.5\n        body:\n          rigid:\n            mass: 1.0\n      \
+                 Velocity: {}\n",
+            )
+            .unwrap();
+        let mut hashes = Vec::new();
+        let mut drawn = 0;
+        for _ in 0..30 {
+            engine.advance_live();
+            drawn += lines(&mut engine).len();
+            hashes.push(engine.world_hash().unwrap().as_u64());
+        }
+        let snapshot = match engine
+            .execute(ludion_protocol::Command::EngineSnapshot)
+            .unwrap()
+            .body
+        {
+            ludion_protocol::ResponseBody::Snapshot { snapshot } => {
+                serde_json::to_vec(&snapshot).unwrap()
+            }
+            other => panic!("expected a snapshot, got {other:?}"),
+        };
+        (hashes, snapshot, drawn)
+    }
+
+    #[test]
+    fn extracting_the_colliders_category_never_perturbs_the_hash_or_snapshot() {
+        let (hashes, snapshot, drawn) = run_mesh_scene(DebugCategories::parse("colliders"));
+        let (plain_hashes, plain_snapshot, plain_drawn) = run_mesh_scene(DebugCategories::None);
+        assert!(drawn > 0, "the colliders category drew nothing");
+        assert_eq!(plain_drawn, 0);
+        assert_eq!(hashes, plain_hashes, "per-tick hashes");
+        assert_eq!(snapshot, plain_snapshot, "snapshot bytes");
+    }
+
+    #[test]
+    fn the_colliders_category_draws_every_body_in_its_kind_colour() {
+        let mut engine = physics_engine();
+        engine.set_debug_draw(DebugCategories::parse("colliders"));
+        assert!(
+            engine.debug_draw_drawn().is_empty(),
+            "no PhysicsWorld before the first tick"
+        );
+        engine.advance_live();
+        let drawn = lines(&mut engine);
+        let grey = [0.55, 0.55, 0.55, 1.0];
+        assert_eq!(drawn.iter().filter(|s| s.color == grey).count(), 12);
+        assert!(
+            drawn.iter().any(|s| s.color == [1.0, 0.45, 0.05, 1.0]),
+            "the rigid sphere draws orange"
+        );
+        assert_eq!(engine.debug_draw_drawn(), ["colliders"]);
+
+        engine.set_debug_draw(DebugCategories::parse("path"));
+        assert!(lines(&mut engine).is_empty());
     }
 }

@@ -311,3 +311,74 @@ fn render_debug_draws_probes_and_takes_the_probe_index_view() {
     assert_eq!(engine.frame(), frame);
     assert_eq!(engine.world_hash().unwrap(), hash);
 }
+
+const PHYSICS_SCENE: &str = "\
+format: 1
+seed: 7
+physics:
+  space: free
+entities:
+  - name: floor
+    components:
+      Transform: {}
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 4.0
+              - 0.5
+              - 4.0
+        body: static
+  - name: ball
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 0.0
+      Collider:
+        shape:
+          sphere:
+            radius: 0.5
+        body:
+          rigid:
+            mass: 1.0
+      Velocity: {}
+";
+
+#[test]
+fn toggling_the_colliders_category_never_perturbs_the_hash_snapshot_or_recording() {
+    let root = fixture_root();
+    let run = |categories: &DebugCategories| {
+        let sink = SharedSink::default();
+        let mut engine = game(&root).build().expect("the game builds");
+        engine.set_debug_draw(categories.clone());
+        engine
+            .load_inline_scene(PHYSICS_SCENE)
+            .expect("the scene loads");
+        engine.set_recording(sink.clone()).unwrap();
+        let hashes = (0..TICKS)
+            .map(|_| {
+                engine
+                    .execute(Command::SimStep(SimStepParams {
+                        ticks: 1,
+                        hash: false,
+                    }))
+                    .unwrap();
+                engine.world_hash().unwrap().as_u64()
+            })
+            .collect::<Vec<_>>();
+        let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+            ResponseBody::Snapshot { snapshot } => serde_json::to_vec(&snapshot).unwrap(),
+            other => panic!("expected a snapshot, got {other:?}"),
+        };
+        engine.stop_recording().unwrap();
+        let recording = sink.0.lock().unwrap().clone();
+        (hashes, snapshot, recording)
+    };
+    let drawn = run(&DebugCategories::parse("colliders"));
+    let plain = run(&DebugCategories::None);
+    assert_eq!(drawn.0, plain.0, "per-tick hashes");
+    assert_eq!(drawn.1, plain.1, "snapshot bytes");
+    assert_eq!(drawn.2, plain.2, "recording bytes");
+}

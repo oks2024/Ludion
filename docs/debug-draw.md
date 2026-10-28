@@ -27,8 +27,20 @@ radius)` (three great circles), `capsule(a, b, radius)` (`a == b` is a sphere). 
 ## Categories
 
 A category is a name a system draws under and a host enables: `motor`, `camera`, `ai`. The engine
-emits `path` — every `PathFollower`'s route, and an oriented follower's axes — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap. `DebugCategories::parse("path,motor")` builds a
+emits `path` — every `PathFollower`'s route, and an oriented follower's axes — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap — and `colliders` — every body in the physics world as a wireframe in its world pose (below). `DebugCategories::parse("path,motor")` builds a
 filter; `all` enables every category, an empty list none (the default).
+
+### `colliders`
+
+Host-side, like `hierarchy`: drawn from the live physics world, current even paused, free unless
+enabled. Boxes, spheres, capsules and cylinders draw parry outlines; a `mesh`, `convex` or
+`heightfield` draws its triangle edges **minus the coplanar internal ones** (a flat floor reads as its
+outline); a `compound` draws each part in its part pose. Colour by body kind (linear RGBA): static grey
+`[0.55, 0.55, 0.55]`, kinematic cyan `[0, 0.85, 0.85]`, rigid orange `[1, 0.45, 0.05]`, a sleeping rigid
+body at half that. Budget: at most 200,000 segments a frame, bodies in creation order, no distance
+cull (a level under 50k triangles is far below it). Non-`rigid` `circle`/`aabb` colliders live in the
+2D spatial index, not the physics world, so they are **not drawn**; a `rigid` one is. Typical use:
+`ludion render --scene S --out o.png --frames 2 --debug-draw colliders`.
 
 ## What a frame shows
 
@@ -48,7 +60,7 @@ filter; `all` enables every category, an empty list none (the default).
 ## From the command line
 
 - `ludion render --scene S --out o.png --debug-draw path` — the built-in host, which runs **no game
-  systems**, so it shows the engine's own categories (`path`, `hierarchy`). Combine with `--frames N` to see a
+  systems**, so it shows the engine's own categories (`path`, `hierarchy`, `probes`, `colliders`). Combine with `--frames N` to see a
   follower after N ticks. Not valid with a `--frames a,b,c` strip, `--model`, `--sprite`, `--atlas` or
   `--sweep`.
 - `<game> --scene S --render-out o.png --frames N --debug-draw motor` — the game's binary, which

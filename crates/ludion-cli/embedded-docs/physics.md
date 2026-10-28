@@ -194,6 +194,7 @@ its `Collider` changes, reported once per entity. Rapier mapping: `ludion devdoc
 ## Next
 
 - `ludion docs collision` — the 2D tier: colliders, the spatial index, `move_and_slide`.
+- `ludion docs debug-draw` — the `colliders` category: every body as a wireframe, coloured by kind.
 - `ludion docs collision-layers` — which pairs never meet, and query filters.
 - `ludion docs physics-joints` — the `Joint` and `JointMotor` components.
 - `ludion docs physics-time-scale` — `scale_time`, `freeze`, hit-stop.

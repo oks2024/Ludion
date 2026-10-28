@@ -9,14 +9,53 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, Schedule, World};
 use ludion_physics::{
-    CollisionLayers, MIRROR, PhysicsSettings, PhysicsSpace, PhysicsWorld, STEP, WRITE,
+    CollisionLayers, MIRROR, PhysicsSettings, PhysicsSpace, PhysicsWorld, STEP, WRITE, WireBody,
 };
+use ludion_renderer::DebugSegment;
 use ludion_scene::{ScenePhysics, ScenePhysicsSpace};
 use ludion_sim::{SimConfig, SimDriver};
 use ludion_spatial::{Body, Collider, Joint};
 use serde_json::Value;
 
 use crate::components::{Name, Transform};
+
+/// The most segments the `colliders` debug category draws in one frame; bodies are drawn in the
+/// physics table's creation order and drawing stops at the cap.
+pub(crate) const MAX_COLLIDER_SEGMENTS: usize = 200_000;
+
+const STATIC_COLOR: [f32; 4] = [0.55, 0.55, 0.55, 1.0];
+const KINEMATIC_COLOR: [f32; 4] = [0.0, 0.85, 0.85, 1.0];
+const RIGID_COLOR: [f32; 4] = [1.0, 0.45, 0.05, 1.0];
+const SLEEPING_RIGID_COLOR: [f32; 4] = [0.5, 0.225, 0.025, 1.0];
+
+/// Whether the world holds at least one physics body.
+pub(crate) fn any_body(world: &World) -> bool {
+    world
+        .resource::<PhysicsWorld>()
+        .is_some_and(|physics| physics.body_count() > 0)
+}
+
+/// Every physics body's collider as coloured wireframe segments (`colliders` debug category), up to
+/// [`MAX_COLLIDER_SEGMENTS`].
+pub(crate) fn collider_debug_lines(world: &World) -> Vec<DebugSegment> {
+    let mut lines = Vec::new();
+    let Some(physics) = world.resource::<PhysicsWorld>() else {
+        return lines;
+    };
+    physics.collider_wireframe(&mut |body, a, b| {
+        if lines.len() >= MAX_COLLIDER_SEGMENTS {
+            return;
+        }
+        let color = match body {
+            WireBody::Static => STATIC_COLOR,
+            WireBody::Kinematic => KINEMATIC_COLOR,
+            WireBody::Rigid { sleeping: false } => RIGID_COLOR,
+            WireBody::Rigid { sleeping: true } => SLEEPING_RIGID_COLOR,
+        };
+        lines.push(DebugSegment { a, b, color });
+    });
+    lines
+}
 
 /// Maps a scene's `physics:` block onto the solver tunables `ludion-physics` reads: the pinned
 /// defaults, with the block's present fields overriding them.

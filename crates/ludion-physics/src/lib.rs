@@ -167,6 +167,7 @@ mod pose;
 mod queries;
 mod systems;
 mod time_scale;
+mod wireframe;
 mod world;
 
 pub use contacts::{ContactEvent, ContactPhase};
@@ -181,6 +182,7 @@ pub use systems::{
     PhysicsSettings, PhysicsSpace, STEP, WRITE, claims, install, teleport_kinematic,
 };
 pub use time_scale::MIN_TIME_SCALE;
+pub use wireframe::{WireBody, feature_edges};
 pub use world::{
     DEFAULT_GRAVITY, MotorMismatch, PhysicsError, PhysicsWorld, ShapeKind, ShapeRejection,
     StepBreakdown,

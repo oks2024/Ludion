@@ -2,7 +2,8 @@
 //! [`Collider`]/[`Velocity`] surface onto it.
 
 use core::fmt;
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use ludion_core::codes::code;
 use ludion_core::collections::StableMap;
@@ -161,7 +162,7 @@ pub struct MotorMismatch {
 
 /// Whether the solver moves a body, and who owns its pose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-enum BodyKind {
+pub(crate) enum BodyKind {
     /// Never moves.
     Fixed,
     /// The ECS owns the pose; it is pushed in every tick and never written back.
@@ -188,11 +189,11 @@ struct Mirrored {
 
 /// One row of the creation-order handle table.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct BodyEntry {
+pub(crate) struct BodyEntry {
     entity: EntityId,
-    kind: BodyKind,
-    body: RigidBodyHandle,
-    collider: ColliderHandle,
+    pub(crate) kind: BodyKind,
+    pub(crate) body: RigidBodyHandle,
+    pub(crate) collider: ColliderHandle,
     mirrored: Option<Mirrored>,
     /// The `Collider` this body was built from — compared with `PartialEq` against the entity's
     /// current one every tick to detect a live edit (shape, body kind, mass, lock or layer) that
@@ -206,7 +207,7 @@ struct BodyEntry {
     /// The [`TriangleMesh::hash`] a `mesh` body was built from, `None` for every other shape. A
     /// restore compares it against the freshly installed library, so an edited mesh document is
     /// rebuilt into its body while an unchanged one is left alone.
-    mesh_hash: Option<u64>,
+    pub(crate) mesh_hash: Option<u64>,
 }
 
 /// What the write system resolved for one collider's mesh: `Ok(None)` for a shape that is not a
@@ -400,7 +401,7 @@ pub struct StepBreakdown {
 /// writes gravity into the solver every tick, so it is never set any other way.
 pub struct PhysicsWorld {
     pub(crate) rapier: RapierWorld,
-    table: Vec<BodyEntry>,
+    pub(crate) table: Vec<BodyEntry>,
     rows: StableMap<EntityId, usize>,
     pub(crate) plane: Option<Plane>,
     tick_rate: TickRate,
@@ -480,6 +481,9 @@ pub struct PhysicsWorld {
     pub(crate) frozen: bool,
     /// See [`last_step_dt`](PhysicsWorld::last_step_dt). Rides the snapshot.
     pub(crate) last_step_dt: f32,
+    /// Feature edges of each mesh content hash, for the wireframe read. A host read cache: no sim
+    /// path reads it, and it is not part of the snapshot.
+    pub(crate) wire_edges: Mutex<BTreeMap<u64, Arc<[[u32; 2]]>>>,
 }
 
 impl PhysicsWorld {
@@ -531,6 +535,7 @@ impl PhysicsWorld {
             time_scale: 1.0,
             frozen: false,
             last_step_dt: seconds_per_tick(tick_rate),
+            wire_edges: Mutex::default(),
         }
     }
 
@@ -1186,6 +1191,7 @@ impl PhysicsWorld {
             time_scale: 1.0,
             frozen: false,
             last_step_dt: snapshot.last_step_dt,
+            wire_edges: Mutex::default(),
         };
         world.rapier.integration_parameters.dt = seconds_per_tick(tick_rate);
         world.reindex();
