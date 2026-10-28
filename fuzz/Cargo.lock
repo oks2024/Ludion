@@ -726,6 +726,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ludion-camera"
+version = "0.1.0"
+dependencies = [
+ "ludion-core",
+ "ludion-ecs",
+ "ludion-scene",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ludion-core"
 version = "0.1.0"
 dependencies = [
@@ -753,6 +765,7 @@ dependencies = [
  "base64",
  "crossbeam-channel",
  "ludion-assets",
+ "ludion-camera",
  "ludion-core",
  "ludion-ecs",
  "ludion-font",
