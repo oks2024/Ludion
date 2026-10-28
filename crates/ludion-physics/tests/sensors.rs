@@ -561,6 +561,25 @@ fn a_visitor_despawned_inside_exits_as_despawned_naming_the_dead_id() {
 }
 
 #[test]
+fn a_despawned_occupant_replaced_in_its_slot_the_same_tick_exits_and_the_newcomer_enters() {
+    let (mut rig, zone, crowd) = occupied(1);
+    let old = crowd[0];
+    rig.world.despawn(old).expect("a live entity");
+    // The despawn freed the slot just before, so the spawn takes it back with a new generation.
+    let new = kinematic_sphere(&mut rig.world, [0.0; 3]);
+    assert_eq!(new.index(), old.index());
+    assert_ne!(new, old);
+    assert_eq!(
+        rig.tick(),
+        vec![
+            event(zone, old, exited(ExitCause::Despawned)),
+            event(zone, new, ENTERED)
+        ]
+    );
+    assert_eq!(physics(&rig.world).sensor_occupants(zone), vec![new]);
+}
+
+#[test]
 fn a_despawned_sensor_exits_each_of_its_occupants_sorted() {
     let (mut rig, zone, crowd) = occupied(3);
     rig.world.despawn(zone).expect("a live entity");
