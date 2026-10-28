@@ -728,11 +728,14 @@ fn a_step_just_under_the_step_height_is_climbed_and_the_walk_continues() {
         run_east,
     );
     let mut xs = vec![rig.feet()[0]];
+    let mut ys = vec![rig.feet()[1]];
     for _ in 0..40 {
         rig.run(1);
         xs.push(rig.feet()[0]);
+        ys.push(rig.feet()[1]);
     }
     let reports = rig.reports();
+    assert_stepped_means_rose(&reports, &ys);
     let first = reports
         .iter()
         .position(|r| r.stepped.is_some())
@@ -849,6 +852,199 @@ fn mesh_floor(world: &mut World, x0: f32, x1: f32, quads: u32) {
             },
         )
         .unwrap();
+}
+
+/// One trimesh holding a floor, a vertical riser at `x = 1.5` and a top at height `top`.
+fn mesh_stairs(world: &mut World, top: f32) {
+    world.insert_resource(ColliderMeshes::new(Box::new(move |_| {
+        let floor = strip(0.0, -2.0, 1.5, 1);
+        let upper = strip(top, 1.5, 6.0, 1);
+        let mut vertices = floor.vertices;
+        let mut triangles = floor.triangles;
+        let base = vertices.len() as u32;
+        vertices.extend(upper.vertices);
+        triangles.extend(upper.triangles.iter().map(|t| t.map(|i| i + base)));
+        let base = vertices.len() as u32;
+        vertices.extend([
+            [1.5, 0.0, -2.0],
+            [1.5, 0.0, 2.0],
+            [1.5, top, -2.0],
+            [1.5, top, 2.0],
+        ]);
+        triangles.push([base, base + 2, base + 1]);
+        triangles.push([base + 1, base + 2, base + 3]);
+        Ok(TriangleMesh {
+            vertices,
+            triangles,
+            hash: 2,
+        })
+    })));
+    let entity = world.spawn();
+    world.insert(entity, TestPose::at([0.0; 3])).unwrap();
+    world
+        .insert(
+            entity,
+            Collider {
+                shape: Shape::Mesh {
+                    path: "stairs".into(),
+                },
+                body: Body::new_static(),
+                layer: None,
+                sensor: false,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_mesh_step_just_under_the_step_height_is_climbed() {
+    let mut rig = Rig::new(
+        |world| {
+            mesh_stairs(world, 0.24);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        run_east,
+    );
+    let mut ys = vec![rig.feet()[1]];
+    for _ in 0..40 {
+        rig.run(1);
+        ys.push(rig.feet()[1]);
+    }
+    let reports = rig.reports();
+    assert!(reports.iter().any(|r| r.stepped.is_some()));
+    assert_stepped_means_rose(&reports, &ys);
+    assert!(reports.last().unwrap().walls.is_empty());
+    assert!(
+        (rig.feet()[1] - (0.24 + SKIN)).abs() < 2e-3,
+        "{:?}",
+        rig.feet()
+    );
+    assert!(rig.feet()[0] > 2.0, "{:?}", rig.feet());
+}
+
+#[test]
+fn a_mesh_step_of_two_tenths_is_climbed() {
+    let mut rig = Rig::new(
+        |world| {
+            mesh_stairs(world, 0.2);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        run_east,
+    );
+    rig.run(40);
+    assert!(
+        (rig.feet()[1] - (0.2 + SKIN)).abs() < 2e-3,
+        "{:?}",
+        rig.feet()
+    );
+    assert!(rig.feet()[0] > 2.0, "{:?}", rig.feet());
+}
+
+#[test]
+fn a_mesh_step_just_over_the_step_height_blocks() {
+    let mut rig = Rig::new(
+        |world| {
+            mesh_stairs(world, 0.26);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        run_east,
+    );
+    rig.run(40);
+    let reports = rig.reports();
+    assert!(reports.iter().all(|r| r.stepped.is_none()));
+    assert!(reports.last().unwrap().walls.len() == 1);
+    assert!(rig.feet()[0] < 1.5 - RADIUS + 0.01, "{:?}", rig.feet());
+}
+
+#[test]
+fn a_mesh_step_under_a_slab_without_headroom_is_refused() {
+    let mut rig = Rig::new(
+        |world| {
+            mesh_stairs(world, 0.2);
+            wall(world, [3.75, 0.7 + 0.5, 0.0], [2.25, 0.5, 5.0]);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        run_east,
+    );
+    rig.run(40);
+    assert!(rig.reports().iter().all(|r| r.stepped.is_none()));
+    assert!(rig.feet()[0] < 1.5, "{:?}", rig.feet());
+}
+
+/// One trimesh: a floor, a 0.1 riser at `x = 1.5`, a landing, then a 20 degree ramp from `x = 3`.
+fn mesh_step_then_ramp(world: &mut World) {
+    world.insert_resource(ColliderMeshes::new(Box::new(move |_| {
+        let top = 3.0 + 3.0;
+        let rise = 0.1 + 3.0 * ludion_core::math::tan(20f32.to_radians());
+        let profile = [[-2.0, 0.0], [1.5, 0.0], [1.5, 0.1], [3.0, 0.1], [top, rise]];
+        let mut vertices = Vec::new();
+        for [x, y] in profile {
+            vertices.push([x, y, -2.0]);
+            vertices.push([x, y, 2.0]);
+        }
+        let mut triangles = Vec::new();
+        for i in 0..profile.len() as u32 - 1 {
+            let a = i * 2;
+            triangles.push([a, a + 2, a + 1]);
+            triangles.push([a + 1, a + 2, a + 3]);
+        }
+        Ok(TriangleMesh {
+            vertices,
+            triangles,
+            hash: 3,
+        })
+    })));
+    let entity = world.spawn();
+    world.insert(entity, TestPose::at([0.0; 3])).unwrap();
+    world
+        .insert(
+            entity,
+            Collider {
+                shape: Shape::Mesh {
+                    path: "step-ramp".into(),
+                },
+                body: Body::new_static(),
+                layer: None,
+                sensor: false,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_mesh_step_then_a_ramp_is_walked_to_the_top() {
+    let mut rig = Rig::new(
+        |world| {
+            mesh_step_then_ramp(world);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        run_east,
+    );
+    for _ in 0..150 {
+        rig.run(1);
+        if rig.feet()[0] > 5.5 {
+            break;
+        }
+    }
+    assert!(rig.feet()[0] > 5.5, "{:?}", rig.feet());
+    assert!(rig.feet()[1] > 1.0, "{:?}", rig.feet());
+    assert!(rig.reports().last().unwrap().grounded);
+}
+
+/// `ys[t]` is the feet height after `t` ticks and `reports[i]` is tick `i + 1`'s: a reported
+/// climb must have been a real rise.
+fn assert_stepped_means_rose(reports: &[MoveReport], ys: &[f32]) {
+    for (i, report) in reports.iter().enumerate() {
+        if let Some(c) = report.stepped {
+            assert!(
+                ys[i + 2] - ys[i + 1] >= c - 1e-4,
+                "tick {}: stepped {c}, feet {} -> {}",
+                i + 1,
+                ys[i + 1],
+                ys[i + 2]
+            );
+        }
+    }
 }
 
 fn assert_seamless(rig: &mut Rig, ticks: u64) {

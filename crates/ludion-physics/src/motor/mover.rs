@@ -421,8 +421,16 @@ impl<'a> Solver<'a> {
     }
 
     /// `entity`'s surface normal at the capsule's pose, from a contact query a margin deep inside
-    /// a wider capsule; `fallback` (a cast's normal) when it is not within reach.
-    fn refine(&self, feet: [f32; 3], entity: EntityId, fallback: [f32; 3]) -> [f32; 3] {
+    /// a wider capsule; `fallback` (a cast's normal) when it is not within reach. A mesh reports its
+    /// deepest contact, which may be another face of the same collider than the one the cast hit
+    /// at `point`: a contact far from `point` is not the surface in question.
+    fn refine(
+        &self,
+        feet: [f32; 3],
+        entity: EntityId,
+        point: [f32; 3],
+        fallback: [f32; 3],
+    ) -> [f32; 3] {
         let margin = 2.0 * self.skin + 1e-3;
         let wide = Capsule {
             radius: self.radius + margin,
@@ -431,7 +439,9 @@ impl<'a> Solver<'a> {
         self.physics
             .capsule_contacts(wide, self.center(feet), margin / 2.0, &self.filter)
             .into_iter()
-            .find(|contact| contact.entity == entity)
+            .find(|contact| {
+                contact.entity == entity && len(sub(contact.point, point)) <= self.radius / 4.0
+            })
             .map_or_else(|| normalize(fallback), |contact| normalize(contact.normal))
     }
 
@@ -474,6 +484,7 @@ impl<'a> Solver<'a> {
         carry: Option<&CarryPlan>,
     ) -> Outcome {
         let (mut feet, mut stuck) = self.depenetrate(start);
+        let rise_from = feet[1];
         let mut slide = Slide::default();
         if !stuck {
             self.slide(
@@ -490,6 +501,9 @@ impl<'a> Solver<'a> {
         }
 
         let (ground, grounded) = self.probe(&mut feet, displacement[1], was_grounded);
+        // A snap back down undoes a climb: only the rise that survived the tick is a step.
+        let rise = feet[1] - rise_from;
+        slide.stepped = slide.stepped.map(|c| c.min(rise)).filter(|c| *c > 0.0);
         // The support's motion acts on the feet as they are now, after the slide and probe.
         let carry = carry.map(|carry| {
             let (translation, yaw) = rigid_carry(
@@ -588,7 +602,7 @@ impl<'a> Solver<'a> {
             *feet = add(*feet, scale(direction, advance));
             slide.travel += advance;
             let leftover = scale(direction, length - advance);
-            let normal = self.refine(*feet, hit.entity, hit.normal);
+            let normal = self.refine(*feet, hit.entity, hit.point, hit.normal);
             let surface = SurfaceHit {
                 entity: hit.entity,
                 point: hit.point,
@@ -698,7 +712,7 @@ impl<'a> Solver<'a> {
             self.step_height + self.skin + snap,
             false,
         )?;
-        let normal = self.refine(over, land.entity, land.normal);
+        let normal = self.refine(over, land.entity, land.point, land.normal);
         if normal[1] < self.cos_limit && self.rim_support(land.point, over, land.entity).is_none() {
             return None;
         }
@@ -727,11 +741,12 @@ impl<'a> Solver<'a> {
     }
 
     /// The height that rests the capsule at `feet` a skin above the walkable plane under its axis,
-    /// within a skin up and `reach` down of where it is, or `None` when the axis is not over
-    /// `entity`'s walkable surface (a rim or an edge). It is read from the ray's plane height, not
-    /// from a swept cast: a cast's time of impact is only good to about a tenth of a millimetre,
-    /// which a per-tick snap would ratchet into a visible sink, and a height computed from the
-    /// plane is the same bits however the capsule got there.
+    /// within a skin up and `reach` down of where it is, or `None` when the ray down the axis does
+    /// not first meet a walkable face of `entity`. The face may lie below the capsule's own contact
+    /// (an edge of the same collider), so the caller bounds the result by the cast. It is read from the ray's plane height,
+    /// not from a swept cast: a cast's time of impact is only good to about a tenth of a
+    /// millimetre, which a per-tick snap would ratchet into a visible sink, and a height computed
+    /// from the plane is the same bits however the capsule got there.
     fn plane_rest(&self, feet: [f32; 3], entity: EntityId, reach: f32) -> Option<f32> {
         let origin = [feet[0], feet[1] + self.radius, feet[2]];
         let under = self
@@ -805,12 +820,16 @@ impl<'a> Solver<'a> {
         }
         let grounded = walkable && hit.distance <= reach;
         if grounded && snap_allowed {
+            let cast_rest = feet[1] - (hit.distance - self.skin).max(0.0);
+            // A plane under the axis lower than the cast contact belongs to a lower face of the
+            // same collider (a mesh's floor below its own step): resting there sinks the capsule.
             feet[1] = self
                 .plane_rest(*feet, hit.entity, reach)
-                .unwrap_or_else(|| feet[1] - (hit.distance - self.skin).max(0.0));
+                .filter(|rest| *rest >= cast_rest - self.skin / 2.0)
+                .unwrap_or(cast_rest);
         }
         if !rim {
-            normal = self.refine(*feet, hit.entity, normal);
+            normal = self.refine(*feet, hit.entity, hit.point, normal);
         }
         (
             Some(GroundHit {

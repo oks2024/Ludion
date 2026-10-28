@@ -26,6 +26,8 @@ pub(crate) struct Contact {
     pub dist: f32,
     /// World-space normal pointing out of the obstacle.
     pub normal: [f32; 3],
+    /// World-space point on the obstacle.
+    pub point: [f32; 3],
 }
 
 /// The capsule a motor sweeps: its centre, the cylinder half-length and the radius.
@@ -116,6 +118,7 @@ impl PhysicsWorld {
                 entity,
                 dist: contact.dist,
                 normal,
+                point: from_vector(pose * contact.point1),
             });
         }
         contacts.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist).then(a.entity.cmp(&b.entity)));
