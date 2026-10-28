@@ -64,7 +64,7 @@ camera on the target's +Z side), pitch degrees looking down, `--fov` the vertica
 angle or distance is read off the scene camera, so `--look-at` alone reproduces its view. It expands into
 echoed `--set` overrides (an explicit `--set` wins) and needs no JSON pointers; in Git Bash a remaining
 `--set /…` needs `MSYS_NO_PATHCONV=1`. A follow camera builds its `Transform` from `ludion::math::Orbit` and
-writes `PostProcess.focus_distance = orbit.distance`.
+writes `PostProcess.focus_distance = orbit.distance`. A `CameraRig` on the camera writes its `Transform` instead (`ludion docs camera`).
 
 **Calibrating a `PointLight`** — the falloff math, the gallery scenes' reference `intensity`/`range`
 values — is `ludion docs lighting --section "Point lights: place as many as the look needs"`.
@@ -99,7 +99,7 @@ prevents.)
 
 - `ludion docs components-ui` — `UiRect`/`UiText`/`UiList`/`Text`: the screen-space and world-text components.
 - `ludion docs components-fx` — `Sprite`/`Tilemap`/`ParticleEmitter`/`Volley`/`PatternPlayer`/`PathFollower`/`Animation`/`AudioEmitter`: content and effect components.
-- `ludion docs motor` — `CharacterMotor`/`SurfaceVelocity`; `ludion docs lane` — `LaneConstraint`.
+- `ludion docs motor` — `CharacterMotor`/`SurfaceVelocity`; `ludion docs lane` — `LaneConstraint`; `ludion docs camera` — `CameraRig`.
 - `ludion docs systems` — the system contract, input, and the determinism rules.
 - `ludion docs scene-format` — the strict-YAML scene document.
 - `ludion docs materials` — the three material scalars.

@@ -26,8 +26,8 @@ radius)` (three great circles), `capsule(a, b, radius)` (`a == b` is a sphere). 
 
 ## Categories
 
-A category is a name a system draws under and a host enables: `motor` (the character motor's own: `ludion docs motor`), `lane` (its lane constraint: `ludion docs lane`), `camera`, `ai`. The engine
-emits `path` — every `PathFollower`'s route, and an oriented follower's axes — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap — and `colliders` — every body in the physics world as a wireframe in its world pose (below). `DebugCategories::parse("path,motor")` builds a
+A category is a name a system draws under and a host enables: `motor` (the character motor's own: `ludion docs motor`), `lane` (its lane constraint: `ludion docs lane`), `ai`. The engine
+emits `camera` (the `CameraRig`: `ludion docs camera`), `path` — every `PathFollower`'s route, and an oriented follower's axes — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap — and `colliders` — every body in the physics world as a wireframe in its world pose (below). `DebugCategories::parse("path,motor")` builds a
 filter; `all` enables every category, an empty list none (the default).
 
 ### `colliders`
@@ -60,7 +60,7 @@ cull (a level under 50k triangles is far below it). Non-`rigid` `circle`/`aabb` 
 ## From the command line
 
 - `ludion render --scene S --out o.png --debug-draw path` — the built-in host, which runs **no game
-  systems**, so it shows the engine's own categories (`path`, `hierarchy`, `probes`, `colliders`). Combine with `--frames N` to see a
+  systems**, so it shows the engine's own categories (`path`, `camera`, `hierarchy`, `probes`, `colliders`). Combine with `--frames N` to see a
   follower after N ticks. Not valid with a `--frames a,b,c` strip, `--model`, `--sprite`, `--atlas` or
   `--sweep`.
 - `<game> --scene S --render-out o.png --frames N --debug-draw motor` — the game's binary, which

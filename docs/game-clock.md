@@ -7,7 +7,7 @@ description: Freezing gameplay time while the sim keeps ticking — GameClock, S
 **Scope:** Freezing gameplay time on demand while the sim keeps ticking — `GameClock`, the two
 clocks on `SystemCtx`, and which evaluators read which. Registering systems and the sim's own
 `frame`/`time`/`dt` is `ludion docs systems`; the components that read gameplay time are
-`ludion docs patterns`, `ludion docs particles`, `ludion docs sprite-animation`; carrying a hold
+`ludion docs patterns`, `ludion docs particles`, `ludion docs sprite-animation`, `ludion docs camera`; carrying a hold
 across a district switch is `ludion docs scene-transitions`.
 
 ## The loop

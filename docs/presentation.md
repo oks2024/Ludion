@@ -50,7 +50,7 @@ Crossing the boundary is `L0028`, in every direction:
 | presentation system | `resource_mut`/`insert_resource` on a resource | panic `L0028` | only the outboxes `Diagnostics` and `AudioQueue` are writable; `DebugDraw` panics |
 
 - Randomness: `DeterministicRng::derived(seed, frame, entity)`, never the master `DeterministicRng`.
-- **Stays sim:** a camera the sim unprojects through (the external game's grab, a twin-stick game's aim) and anything with a `Collider`. Making it presentation turns every sim read of it into `L0028`.
+- **Stays sim:** a camera the sim unprojects through (the external game's grab, a twin-stick game's aim; a `CameraRig` camera is sim, `ludion docs camera`) and anything with a `Collider`. Making it presentation turns every sim read of it into `L0028`.
 - A sim entity's entity-reference field (`Parent`, `Joint` ends) may not name a presentation entity: `L1036` in a scene, `L1018` at `scene.save`. A presentation entity may name a sim one (a popup parented to the ball).
 - Snapshot/replay: presentation state is snapshotted and restored, replayed, and never verified. Keyframe checks and `bisect` compare sim state only, so changing presentation code never invalidates a recording.
 
