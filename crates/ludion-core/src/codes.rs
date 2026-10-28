@@ -1453,6 +1453,13 @@ pub mod code {
     /// must be a root entity. Raised by `check-scene` and once at runtime by `ludion-engine`.
     pub const CHARACTER_MOTOR_PARENTED: DiagnosticCode = DiagnosticCode::new("L1297");
 
+    /// `L1298` — a `SurfaceVelocity` has a non-finite component. Raised by the component's validator.
+    pub const SURFACE_VELOCITY_INVALID: DiagnosticCode = DiagnosticCode::new("L1298");
+
+    /// `L1299` — a `SurfaceVelocity` entity has no `Collider`, or a rigid one, so nothing is ever
+    /// carried by it. Raised by `check-scene`.
+    pub const SURFACE_VELOCITY_NO_SURFACE: DiagnosticCode = DiagnosticCode::new("L1299");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7289,6 +7296,28 @@ Fix: add `physics: { space: free }` to the scene.",
 
 Fix: remove the `Parent`, or move the motor to a root entity and follow the mover from game code.",
     },
+    CodeEntry {
+        code: code::SURFACE_VELOCITY_INVALID,
+        severity: Severity::Error,
+        title: "a surface velocity is not a finite vector",
+        explanation: "A `SurfaceVelocity` has a `velocity` component that is NaN, infinite, or a number outside `f32`
+range (such as `1e39`). A character motor standing on the collider would add it to its carry every
+tick; at runtime the motor skips a non-finite surface velocity.
+
+From a scene or a wire write it is a validation error at `/velocity/0`, `/velocity/1` or `/velocity/2`.
+
+Fix: give each component a finite number of metres per second, in the collider's local frame.",
+    },
+    CodeEntry {
+        code: code::SURFACE_VELOCITY_NO_SURFACE,
+        severity: Severity::Error,
+        title: "a surface velocity on an entity with no carrying collider",
+        explanation: "A `SurfaceVelocity` entity has no `Collider`, or its `Collider` is `body: rigid`. A character
+motor only reads the surface velocity of ground it can be carried by: a `static` or `kinematic`
+collider. A rigid support is never carried, so the velocity would do nothing.
+
+Fix: put the `SurfaceVelocity` on the belt's `static` or `kinematic` collider.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9956,6 +9985,8 @@ mod tests {
         code::CHARACTER_MOTOR_WITH_COLLIDER,
         code::CHARACTER_MOTOR_NO_PHYSICS_SCENE,
         code::CHARACTER_MOTOR_PARENTED,
+        code::SURFACE_VELOCITY_INVALID,
+        code::SURFACE_VELOCITY_NO_SURFACE,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

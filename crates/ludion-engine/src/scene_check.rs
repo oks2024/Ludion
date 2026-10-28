@@ -280,18 +280,42 @@ fn unknown_layer(name: &str, declared: &[&str], pointer: String, owner: &str) ->
     .with_help(help)
 }
 
-/// Every `L1295`/`L1296`/`L1297` a checked scene's character motors report: a `Collider` beside the
-/// motor (the motor owns its capsule), a scene with no `physics:` block (the body is never built),
-/// and a `Parent` (a motor writes world-space feet). The field rules (`L1294`) and the layer
-/// (`L1186`) are reported elsewhere.
+/// Whether `entity` has a `Collider` that is not `body: rigid`, which is what a motor is carried by.
+fn carries_surface(entity: &ludion_scene::SceneEntity) -> bool {
+    entity
+        .components
+        .iter()
+        .find(|(name, _)| name == "Collider")
+        .and_then(|(_, value)| {
+            serde_json::from_value::<ludion_spatial::Collider>(value.clone()).ok()
+        })
+        .is_some_and(|collider| !matches!(collider.body, ludion_spatial::Body::Rigid(_)))
+}
+
+/// Every `L1295`/`L1296`/`L1297`/`L1299` a checked scene's character motors and belts report: a
+/// `Collider` beside the motor (the motor owns its capsule), a scene with no `physics:` block (the
+/// body is never built), a `Parent` (a motor writes world-space feet), and a `SurfaceVelocity` on
+/// an entity with no `static` or `kinematic` collider to carry from. The field rules (`L1294`,
+/// `L1298`) and the layer (`L1186`) are reported elsewhere.
 pub fn scene_motor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for (index, entity) in scene.entities.iter().enumerate() {
         let has = |wanted: &str| entity.components.iter().any(|(name, _)| name == wanted);
+        let at = format!("/entities/{index}/components");
+        if has("SurfaceVelocity") && !carries_surface(entity) {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SURFACE_VELOCITY_NO_SURFACE,
+                    "this `SurfaceVelocity` has no `static` or `kinematic` `Collider` beside it to \
+                     carry a character; a rigid support is never carried",
+                )
+                .with_path(format!("{at}/SurfaceVelocity"))
+                .with_help("put it on the belt's `static` or `kinematic` collider"),
+            );
+        }
         if !has("CharacterMotor") {
             continue;
         }
-        let at = format!("/entities/{index}/components");
         if has("Collider") {
             diagnostics.push(
                 Diagnostic::new(
@@ -1016,6 +1040,40 @@ entities:
             found[0].path.as_deref(),
             Some("/entities/0/components/Parent")
         );
+    }
+
+    #[test]
+    fn a_surface_velocity_needs_a_static_or_kinematic_collider() {
+        const BOX: &str = "      Collider:\n        shape:\n          box:\n            half_extents:\n              - 1.0\n              - 0.1\n              - 1.0\n";
+        for (body, clean) in [
+            (" static", true),
+            (" kinematic", true),
+            ("\n          rigid:\n            mass: 1.0", false),
+        ] {
+            let scene = motor_scene(
+                LAYERS,
+                &format!(
+                    "      SurfaceVelocity:\n        velocity:\n          - 1.5\n          - 0.0\n          - 0.0\n{BOX}        body:{body}\n"
+                ),
+            );
+            let found = scene_motor_diagnostics(&scene);
+            assert_eq!(found.is_empty(), clean, "{body}: {found:?}");
+            if !clean {
+                assert_eq!(found[0].code, code::SURFACE_VELOCITY_NO_SURFACE);
+                assert_eq!(
+                    found[0].path.as_deref(),
+                    Some("/entities/0/components/SurfaceVelocity")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_surface_velocity_without_a_collider_is_l1299() {
+        let scene = motor_scene(LAYERS, "      SurfaceVelocity: {}\n");
+        let found = scene_motor_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::SURFACE_VELOCITY_NO_SURFACE);
     }
 
     #[test]

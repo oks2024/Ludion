@@ -166,6 +166,8 @@ fn check_direction(direction: [f32; 3]) -> Result<[f32; 3], PhysicsError> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct QueryFilter {
     pub(crate) exclude: Option<EntityId>,
+    /// A second dropped entity: a motor's carry sweep also skips its platform.
+    pub(crate) exclude_also: Option<EntityId>,
     pub(crate) ignored_layers: Vec<String>,
     pub(crate) include_sensors: bool,
 }
@@ -179,6 +181,12 @@ impl QueryFilter {
     /// Drops `entity`'s hit, replacing any earlier excluded entity.
     pub fn exclude(mut self, entity: EntityId) -> Self {
         self.exclude = Some(entity);
+        self
+    }
+
+    /// Drops `entity`'s hit as well as the [`exclude`](QueryFilter::exclude)d one.
+    pub(crate) fn exclude_also(mut self, entity: EntityId) -> Self {
+        self.exclude_also = Some(entity);
         self
     }
 

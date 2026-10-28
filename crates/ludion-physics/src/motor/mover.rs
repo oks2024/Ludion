@@ -6,8 +6,10 @@ use ludion_core::math::{cos, sqrt};
 use ludion_core::time::FrameIndex;
 use ludion_ecs::World;
 
-use super::component::{CharacterMotor, CharacterMotorState, check, height_in_force};
+use super::carry::{rigid_carry, rotate, rotate_yaw};
+use super::component::{CharacterMotor, CharacterMotorState, PlatformPose, check, height_in_force};
 use super::report::{GroundHit, MotorError, MoveReport, PlatformCarry, SurfaceHit};
+use super::surface::SurfaceVelocity;
 use super::sweep::{Capsule, Contact};
 use crate::pose::PhysicsPose;
 use crate::queries::{QueryFilter, QueryHit};
@@ -29,6 +31,9 @@ const MIN_OPPOSING: f32 = 0.2;
 /// about to cast, for the initial displacement and again for each slide iteration's remainder; the
 /// return value replaces it. A constraint that needs the tick's `dt` reads
 /// [`PhysicsWorld::tick_rate`].
+///
+/// It projects the motor's *input* only: the platform carry is the world's motion, not the
+/// character's, so it is never run through a constraint.
 pub trait SlideConstraint {
     /// The step to cast instead of `step`, from `feet`.
     fn project(&mut self, feet: [f32; 3], step: [f32; 3]) -> [f32; 3];
@@ -44,6 +49,33 @@ pub trait SlideConstraint {
 /// wall-class hit on one does not stop the slide, and depenetration ignores it, unless the prop
 /// itself cannot move on (a non-rigid collider is in its way): then it blocks like a static one.
 /// Only the first prop is tested, so a row of crates against a wall can still squeeze.
+///
+/// # Platform carry
+///
+/// A motor that ended its last call grounded on a non-rigid support (the `static` or `kinematic`
+/// collider, or another motor, in [`CharacterMotorState::ground`]) is carried once per tick, on
+/// its first call of the tick: the support's translation and yaw about its pivot since the motor
+/// last called, applied to the feet where the move left them (so a rider who walked on a turning
+/// platform turns about the right point),
+/// plus the support's [`SurfaceVelocity`] over the tick's gameplay time (nothing
+/// while a `GameClock` hold froze it). The yaw turns the rider too. The carry is swept like a
+/// move: it stops at walls and ceilings (reported in `walls`/`ceiling`), never steps up, ignores
+/// the support's own collider and is not shaped by a [`SlideConstraint`]. It is reported in
+/// [`MoveReport::platform`] with its intended values even when blocked, whenever it ran, and
+/// `moved` includes it. A game's takeoff momentum is `(translation + surface) / dt`.
+///
+/// **The carry is applied after the displacement's slide and ground probe, not before.** Casts
+/// see colliders as of the last step, so the support's collider sits where the motor left it a
+/// tick ago. Depenetrating, sliding and probing in that frame keeps the rider's relation to its
+/// support exact; carrying first would put a rider on a descending platform inside the stale
+/// collider, and depenetration would push it back up every tick.
+///
+/// **A rigid support is never carried.** Its collider is already at this tick's pose after the
+/// step, so the stale-frame argument above does not hold and carrying would double-count the
+/// platform's motion; `ground.entity` still names it. Dynamic bodies get no surface velocity.
+///
+/// Platforms move before the motor is called — a `PathFollower` already does; a platform moved
+/// after the motor is carried next tick.
 ///
 /// Casts see colliders as of the last step, and skip sensors ([`QueryFilter::include_sensors`] is
 /// never set). The motor's own capsule and the layers its `layer` ignores are excluded.
@@ -107,38 +139,48 @@ pub fn move_character_with<P: PhysicsPose>(
             reason: format!("{pointer}: {reason}"),
         });
     }
-    let physics = world
-        .resource::<PhysicsWorld>()
-        .ok_or(MotorError::NoPhysicsWorld)?;
-    let solver = Solver::new(physics, entity, &checked);
-    let outcome = solver.solve(feet, displacement, was_grounded, constraint);
-    let frame = physics
-        .last_write_frame
-        .map_or(FrameIndex::ZERO, |frame| FrameIndex::new(frame + 1));
+    let (outcome, tick, platform_now) = {
+        let physics = world
+            .resource::<PhysicsWorld>()
+            .ok_or(MotorError::NoPhysicsWorld)?;
+        let tick = physics.last_write_frame.map_or(0, |frame| frame + 1);
+        let carry = plan_carry::<P>(world, physics, state, tick);
+        let solver = Solver::new(physics, entity, &checked);
+        let outcome = solver.solve(feet, displacement, was_grounded, constraint, carry.as_ref());
+        let platform_now = outcome
+            .report
+            .ground
+            .filter(|_| outcome.report.grounded)
+            .filter(|hit| !physics.is_rigid(hit.entity))
+            .and_then(|hit| world_pose::<P>(world, hit.entity))
+            .map(|(translation, rotation)| PlatformPose {
+                translation,
+                rotation,
+            });
+        (outcome, tick, platform_now)
+    };
+    let frame = FrameIndex::new(tick);
 
     if let Ok(Some(pose)) = world.get_mut::<P>(entity) {
         pose.set_translation(outcome.feet);
+        let yaw = outcome.report.platform.yaw;
+        if yaw != 0.0 {
+            pose.set_rotation_quat(rotate_yaw(pose.rotation_quat(), yaw));
+        }
     }
     let ground_entity = outcome.report.ground.filter(|_| outcome.report.grounded);
-    if world
-        .get::<CharacterMotorState>(entity)
-        .ok()
-        .flatten()
-        .is_some()
-    {
-        if let Ok(Some(state)) = world.get_mut::<CharacterMotorState>(entity) {
-            state.grounded = outcome.report.grounded;
-            state.ground = ground_entity.map(|hit| hit.entity);
-        }
+    let record = |state: &mut CharacterMotorState| {
+        state.grounded = outcome.report.grounded;
+        state.ground = ground_entity.map(|hit| hit.entity);
+        state.platform = platform_now;
+        state.carry_tick = Some(tick);
+    };
+    if let Ok(Some(state)) = world.get_mut::<CharacterMotorState>(entity) {
+        record(state);
     } else {
-        let _ = world.insert(
-            entity,
-            CharacterMotorState {
-                grounded: outcome.report.grounded,
-                ground: ground_entity.map(|hit| hit.entity),
-                ..CharacterMotorState::default()
-            },
-        );
+        let mut state = CharacterMotorState::default();
+        record(&mut state);
+        let _ = world.insert(entity, state);
     }
     if let Some(physics) = world.resource_mut::<PhysicsWorld>() {
         physics
@@ -146,6 +188,52 @@ pub fn move_character_with<P: PhysicsPose>(
             .insert(entity, (frame, outcome.report.clone()));
     }
     Ok(outcome.report)
+}
+
+/// `entity`'s world pose from the game's pose component `P`, `None` when it has none.
+fn world_pose<P: PhysicsPose>(world: &World, entity: EntityId) -> Option<([f32; 3], [f32; 4])> {
+    let pose = world.get::<P>(entity).ok().flatten()?;
+    Some(
+        P::derived_world_pose(world, entity)
+            .unwrap_or_else(|| (pose.translation(), pose.rotation_quat())),
+    )
+}
+
+/// The carry a motor is due this call: it stood on a non-rigid support at the end of its last
+/// call, has not been carried this tick, and the support still has a pose. The carry is that
+/// support's motion since, applied rigidly to the feet, plus its surface velocity over the tick's
+/// gameplay time. The poses are kept, not the translation: the feet they act on are the ones
+/// after the slide and probe.
+fn plan_carry<P: PhysicsPose>(
+    world: &World,
+    physics: &PhysicsWorld,
+    state: Option<&CharacterMotorState>,
+    tick: u64,
+) -> Option<CarryPlan> {
+    let state = state.filter(|state| state.grounded && state.carry_tick != Some(tick))?;
+    let (ground, stored) = (state.ground?, state.platform?);
+    if physics.is_rigid(ground) {
+        return None;
+    }
+    let (translation, rotation) = world_pose::<P>(world, ground)?;
+    let surface = world
+        .get::<SurfaceVelocity>(ground)
+        .ok()
+        .flatten()
+        .map(|belt| belt.velocity)
+        .filter(|velocity| velocity.iter().all(|c| c.is_finite()))
+        .map_or([0.0; 3], |velocity| {
+            scale(rotate(rotation, velocity), physics.gameplay_dt(world))
+        });
+    Some(CarryPlan {
+        entity: ground,
+        from: stored,
+        to: PlatformPose {
+            translation,
+            rotation,
+        },
+        surface,
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -158,6 +246,25 @@ enum Class {
 struct Outcome {
     feet: [f32; 3],
     report: MoveReport,
+}
+
+/// What a slide loop has recorded so far, across the displacement and the carry.
+#[derive(Default)]
+struct Slide {
+    ceiling: Option<SurfaceHit>,
+    stepped: Option<f32>,
+    /// Each wall with the distance travelled when it was hit, for ordering.
+    walls: Vec<(f32, SurfaceHit)>,
+    travel: f32,
+}
+
+/// The platform carry decided at the start of a call: the support, its pose then and now, and its
+/// surface displacement.
+struct CarryPlan {
+    entity: EntityId,
+    from: PlatformPose,
+    to: PlatformPose,
+    surface: [f32; 3],
 }
 
 struct Solver<'a> {
@@ -319,107 +426,65 @@ impl<'a> Solver<'a> {
         (best.1, best.0 > self.skin)
     }
 
+    /// One move: depenetrate, slide along what the displacement hits, probe the ground, then sweep
+    /// the platform `carry` through the same slide loop with its platform excluded (a rider moves
+    /// rigidly with its support, whose collider casts see a tick late), without a step-up or a
+    /// constraint, and without a second probe.
     fn solve(
         &self,
         start: [f32; 3],
         displacement: [f32; 3],
         was_grounded: bool,
         mut constraint: Option<&mut dyn SlideConstraint>,
+        carry: Option<&CarryPlan>,
     ) -> Outcome {
         let (mut feet, mut stuck) = self.depenetrate(start);
-        let mut ceiling = None;
-        let mut stepped: Option<f32> = None;
-        let mut walls: Vec<(f32, SurfaceHit)> = Vec::new();
+        let mut slide = Slide::default();
         if !stuck {
-            let mut planes: Vec<[f32; 3]> = Vec::new();
-            let mut remaining = displacement;
-            let mut travel = 0.0;
-            for _ in 0..self.max_slides {
-                if let Some(constraint) = constraint.as_mut() {
-                    remaining = constraint.project(feet, remaining);
-                }
-                let length = len(remaining);
-                if length.is_nan() || length < MIN_MOVE || !length.is_finite() {
-                    break;
-                }
-                let direction = scale(remaining, 1.0 / length);
-                let from = feet;
-                let Some(hit) = self.cast(feet, direction, length + self.skin, true) else {
-                    feet = add(feet, remaining);
-                    break;
-                };
-                // Stop a full skin short of the surface *along its normal*, so a grazing approach does not
-                // end closer than the depenetration pass would then push it back out.
-                let opposing = -dot(normalize(hit.normal), direction);
-                let backoff = self.skin / opposing.max(MIN_OPPOSING);
-                let advance = (hit.distance - backoff).clamp(0.0, length);
-                feet = add(feet, scale(direction, advance));
-                travel += advance;
-                let leftover = scale(direction, length - advance);
-                let normal = self.refine(feet, hit.entity, hit.normal);
-                let surface = SurfaceHit {
-                    entity: hit.entity,
-                    point: hit.point,
-                    normal,
-                };
-                let class = self.classify(normal);
-                let mut next = match class {
-                    Class::Ground => self.slide_ground(leftover, normal),
-                    Class::Wall => {
-                        if was_grounded
-                            && let Some((pose, climb)) = self.step_up(
-                                from,
-                                [remaining[0], 0.0, remaining[2]],
-                                &hit,
-                                displacement[1],
-                            )
-                        {
-                            feet = pose;
-                            stepped = Some(stepped.unwrap_or(0.0) + climb);
-                            break;
-                        }
-                        if !walls.iter().any(|(_, wall)| wall.entity == hit.entity) {
-                            walls.push((travel, surface));
-                        }
-                        slide_wall(leftover, normal)
-                    }
-                    Class::Ceiling => {
-                        if ceiling.is_none() {
-                            ceiling = Some(surface);
-                        }
-                        [leftover[0], leftover[1].min(0.0), leftover[2]]
-                    }
-                };
-                if !planes.iter().any(|plane| dot(*plane, normal) > 0.9999) {
-                    planes.push(normal);
-                }
-                if planes.len() >= 3 {
-                    break;
-                }
-                if planes.len() == 2
-                    && planes
-                        .iter()
-                        .any(|plane| dot(next, *plane) < -MIN_MOVE * 10.0)
-                {
-                    let crease = cross(planes[0], planes[1]);
-                    let crease_len = len(crease);
-                    next = if crease_len < 1e-4 {
-                        [0.0; 3]
-                    } else {
-                        let along = scale(crease, 1.0 / crease_len);
-                        scale(along, dot(leftover, along))
-                    };
-                }
-                remaining = next;
-            }
-        }
-        if !stuck {
+            self.slide(
+                &mut slide,
+                &mut feet,
+                displacement,
+                was_grounded,
+                true,
+                &mut constraint,
+            );
             let (settled, still_stuck) = self.depenetrate(feet);
             feet = settled;
             stuck = still_stuck;
         }
 
         let (ground, grounded) = self.probe(&mut feet, displacement[1], was_grounded);
+        // The support's motion acts on the feet as they are now, after the slide and probe.
+        let carry = carry.map(|carry| {
+            let (translation, yaw) = rigid_carry(
+                feet,
+                carry.from.translation,
+                carry.from.rotation,
+                carry.to.translation,
+                carry.to.rotation,
+            );
+            (carry, translation, yaw)
+        });
+        if let Some((carry, translation, _)) = &carry
+            && !stuck
+        {
+            let swept = self.without(carry.entity);
+            swept.slide(
+                &mut slide,
+                &mut feet,
+                add(*translation, carry.surface),
+                was_grounded,
+                false,
+                &mut None,
+            );
+        }
+        let Slide {
+            ceiling,
+            stepped,
+            mut walls,
+            ..
+        } = slide;
         walls.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.entity.cmp(&b.1.entity)));
         let report = MoveReport {
             grounded,
@@ -428,12 +493,127 @@ impl<'a> Solver<'a> {
             ceiling,
             walls: walls.into_iter().map(|(_, wall)| wall).collect(),
             stepped,
-            platform: PlatformCarry::default(),
+            platform: carry.map_or_else(PlatformCarry::default, |(carry, translation, yaw)| {
+                PlatformCarry {
+                    entity: Some(carry.entity),
+                    translation,
+                    yaw,
+                    surface: carry.surface,
+                }
+            }),
             moved: sub(feet, start),
             stuck,
             height: self.height,
         };
         Outcome { feet, report }
+    }
+
+    /// This solver with `entity`'s collider ignored as well.
+    fn without(&self, entity: EntityId) -> Solver<'a> {
+        Solver {
+            filter: self.filter.clone().exclude_also(entity),
+            capsule: self.capsule,
+            ..*self
+        }
+    }
+
+    /// Collide-and-slide `displacement` from `feet` for up to `max_slides` iterations, recording
+    /// what it hit into `slide`. A wall-class hit climbs a step when `allow_step` and the motor
+    /// `was_grounded`.
+    fn slide(
+        &self,
+        slide: &mut Slide,
+        feet: &mut [f32; 3],
+        displacement: [f32; 3],
+        was_grounded: bool,
+        allow_step: bool,
+        constraint: &mut Option<&mut dyn SlideConstraint>,
+    ) {
+        let mut planes: Vec<[f32; 3]> = Vec::new();
+        let mut remaining = displacement;
+        for _ in 0..self.max_slides {
+            if let Some(constraint) = constraint.as_mut() {
+                remaining = constraint.project(*feet, remaining);
+            }
+            let length = len(remaining);
+            if length.is_nan() || length < MIN_MOVE || !length.is_finite() {
+                break;
+            }
+            let direction = scale(remaining, 1.0 / length);
+            let from = *feet;
+            let Some(hit) = self.cast(*feet, direction, length + self.skin, true) else {
+                *feet = add(*feet, remaining);
+                break;
+            };
+            // Stop a full skin short of the surface *along its normal*, so a grazing approach does not
+            // end closer than the depenetration pass would then push it back out.
+            let opposing = -dot(normalize(hit.normal), direction);
+            let backoff = self.skin / opposing.max(MIN_OPPOSING);
+            let advance = (hit.distance - backoff).clamp(0.0, length);
+            *feet = add(*feet, scale(direction, advance));
+            slide.travel += advance;
+            let leftover = scale(direction, length - advance);
+            let normal = self.refine(*feet, hit.entity, hit.normal);
+            let surface = SurfaceHit {
+                entity: hit.entity,
+                point: hit.point,
+                normal,
+            };
+            let class = self.classify(normal);
+            let mut next = match class {
+                Class::Ground => self.slide_ground(leftover, normal),
+                Class::Wall => {
+                    if allow_step
+                        && was_grounded
+                        && let Some((pose, climb)) = self.step_up(
+                            from,
+                            [remaining[0], 0.0, remaining[2]],
+                            &hit,
+                            displacement[1],
+                        )
+                    {
+                        *feet = pose;
+                        slide.stepped = Some(slide.stepped.unwrap_or(0.0) + climb);
+                        break;
+                    }
+                    if !slide
+                        .walls
+                        .iter()
+                        .any(|(_, wall)| wall.entity == hit.entity)
+                    {
+                        slide.walls.push((slide.travel, surface));
+                    }
+                    slide_wall(leftover, normal)
+                }
+                Class::Ceiling => {
+                    if slide.ceiling.is_none() {
+                        slide.ceiling = Some(surface);
+                    }
+                    [leftover[0], leftover[1].min(0.0), leftover[2]]
+                }
+            };
+            if !planes.iter().any(|plane| dot(*plane, normal) > 0.9999) {
+                planes.push(normal);
+            }
+            if planes.len() >= 3 {
+                break;
+            }
+            if planes.len() == 2
+                && planes
+                    .iter()
+                    .any(|plane| dot(next, *plane) < -MIN_MOVE * 10.0)
+            {
+                let crease = cross(planes[0], planes[1]);
+                let crease_len = len(crease);
+                next = if crease_len < 1e-4 {
+                    [0.0; 3]
+                } else {
+                    let along = scale(crease, 1.0 / crease_len);
+                    scale(along, dot(leftover, along))
+                };
+            }
+            remaining = next;
+        }
     }
 
     /// Climbs the obstacle `hit` blocking `horizontal` from `from`: up by the step height, forward,

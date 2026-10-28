@@ -11,7 +11,8 @@ use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 use ludion_core::ids::EntityId;
 use ludion_core::math::euler_xyz_degrees_to_quat;
 use ludion_core::suggest::nearest;
-use ludion_core::time::{FrameIndex, TickRate};
+use ludion_core::time::{FrameIndex, GameClock, TickRate};
+use ludion_ecs::World;
 use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, Joint, JointKind, JointMotor, Plane,
     RigidBody, Shape, Velocity,
@@ -313,6 +314,7 @@ struct SnapshotRef<'a> {
     sensor_events: &'a [SensorEvent],
     despawned: &'a [EntityId],
     last_write_frame: Option<u64>,
+    last_write_held: Option<u64>,
 }
 
 /// The snapshot as read — the same fields in the same order, so the two encode identically.
@@ -333,6 +335,8 @@ struct SnapshotOwned {
     sensor_events: Vec<SensorEvent>,
     despawned: Vec<EntityId>,
     last_write_frame: Option<u64>,
+    #[serde(default)]
+    last_write_held: Option<u64>,
 }
 
 /// One step's solver timings (milliseconds, from rapier's profiler timers) and body counts, as
@@ -506,6 +510,9 @@ pub struct PhysicsWorld {
     /// The frame the write pass last ran in, which stamps a motor's report with the frame of the
     /// tick it was called in. Rides the snapshot.
     pub(crate) last_write_frame: Option<u64>,
+    /// The `GameClock` frames held at that write pass, so a motor can tell whether gameplay time
+    /// advanced into its tick. Rides the snapshot.
+    pub(crate) last_write_held: Option<u64>,
     /// Each motor's last `move_character` report and the frame it ran in. Never hashed or
     /// snapshotted: a restore empties it.
     pub(crate) move_reports: StableMap<EntityId, (FrameIndex, MoveReport)>,
@@ -568,6 +575,7 @@ impl PhysicsWorld {
             sensor_events: Vec::new(),
             despawned: Vec::new(),
             last_write_frame: None,
+            last_write_held: None,
             move_reports: StableMap::new(),
             wire_edges: Mutex::default(),
         }
@@ -611,6 +619,20 @@ impl PhysicsWorld {
     /// The tick rate the integration timestep was built from.
     pub fn tick_rate(&self) -> TickRate {
         self.tick_rate
+    }
+
+    /// The seconds gameplay time advanced into the tick a motor is being moved in: one tick when
+    /// the previous frame was not held, `0` when it was (the clock a `PathFollower` reads).
+    pub(crate) fn gameplay_dt(&self, world: &World) -> f32 {
+        let held_now = world.resource::<GameClock>().map(|clock| clock.held());
+        if held_now
+            .zip(self.last_write_held)
+            .is_some_and(|(now, last)| now > last)
+        {
+            0.0
+        } else {
+            seconds_per_tick(self.tick_rate)
+        }
     }
 
     /// Applies a scene's `physics:` block: gravity, the solver and stabilization iteration counts,
@@ -1204,6 +1226,7 @@ impl PhysicsWorld {
             sensor_events: &self.sensor_events,
             despawned: &self.despawned,
             last_write_frame: self.last_write_frame,
+            last_write_held: self.last_write_held,
         })
         .map_err(|why| PhysicsError::Encode(why.to_string()))
     }
@@ -1250,6 +1273,7 @@ impl PhysicsWorld {
             sensor_events: snapshot.sensor_events,
             despawned: snapshot.despawned,
             last_write_frame: snapshot.last_write_frame,
+            last_write_held: snapshot.last_write_held,
             move_reports: StableMap::new(),
             wire_edges: Mutex::default(),
         };
@@ -2281,7 +2305,7 @@ impl PhysicsWorld {
             }
         }
         Ok(move |entity: EntityId| {
-            if Some(entity) == filter.exclude {
+            if Some(entity) == filter.exclude || Some(entity) == filter.exclude_also {
                 return true;
             }
             if !filter.include_sensors && self.entry(entity).is_some_and(|e| e.source.sensor) {

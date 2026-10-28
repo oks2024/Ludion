@@ -31,7 +31,10 @@ pub struct SurfaceHit {
     pub normal: [f32; 3],
 }
 
-/// What moving ground did to the motor this tick. Always zero until platform carry fills it.
+/// What moving ground did to the motor this tick. Default (no `entity`) when no carry ran: the
+/// motor was airborne, rode a rigid support, or this was not its first call of the tick. A static
+/// floor reports its entity with zeros. The values are the intended carry, even when a wall
+/// blocked it; a game's takeoff momentum is `(translation + surface) / dt`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlatformCarry {
     /// The platform that carried the motor.
@@ -40,7 +43,8 @@ pub struct PlatformCarry {
     pub translation: [f32; 3],
     /// The yaw the carry applied, in radians about +Y.
     pub yaw: f32,
-    /// The platform's surface velocity the carry added, in metres per second.
+    /// The displacement the platform's surface velocity added this tick, in metres: its
+    /// `SurfaceVelocity` turned by the platform's rotation, times the gameplay `dt`.
     pub surface: [f32; 3],
 }
 

@@ -177,7 +177,7 @@ pub use ludion_physics::{
     Blast, BlastHit, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase, ExitCause,
     Falloff, GroundHit, JointBroken, MotorError, MoveReport, PhysicsError, PhysicsWorld,
     PlatformCarry, PlatformPose, QueryFilter, QueryHit, SensorEvent, SensorPhase, SlideConstraint,
-    SurfaceHit, height_in_force, teleport_kinematic,
+    SurfaceHit, SurfaceVelocity, height_in_force, teleport_kinematic,
 };
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,

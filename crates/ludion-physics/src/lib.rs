@@ -186,7 +186,7 @@ pub use joints::JointBroken;
 pub use meshes::{ColliderMeshes, MeshLoader, TriangleMesh};
 pub use motor::{
     CharacterMotor, CharacterMotorState, GroundHit, MotorError, MoveReport, PlatformCarry,
-    PlatformPose, SlideConstraint, SurfaceHit, height_in_force, move_character,
+    PlatformPose, SlideConstraint, SurfaceHit, SurfaceVelocity, height_in_force, move_character,
     move_character_with,
 };
 pub use pose::PhysicsPose;

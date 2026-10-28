@@ -4417,6 +4417,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register::<ludion_physics::CharacterMotorState>("CharacterMotorState")
         .expect("unique");
+    // The belt velocity a grounded motor is carried by, appended after the motor pair.
+    registry
+        .register_validated::<ludion_physics::SurfaceVelocity>("SurfaceVelocity")
+        .expect("unique");
     registry
 }
 
@@ -4890,12 +4894,13 @@ mod tests {
                 "ReflectionProbe",
                 "CharacterMotor",
                 "CharacterMotorState",
+                "SurfaceVelocity",
             ]
         );
         assert_eq!(
             registry.len(),
-            37,
-            "appending the motor pair grows the registry by exactly two"
+            38,
+            "appending the surface velocity grows the registry by exactly one"
         );
     }
 
@@ -5748,6 +5753,7 @@ mod tests {
         clean::<SpotLight>("SpotLight");
         clean::<ReflectionProbe>("ReflectionProbe");
         clean::<ludion_physics::CharacterMotor>("CharacterMotor");
+        clean::<ludion_physics::SurfaceVelocity>("SurfaceVelocity");
         clean::<DirectionalLight>("DirectionalLight");
         clean::<Sprite>("Sprite");
         clean::<Mesh>("Mesh");

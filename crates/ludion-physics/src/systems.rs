@@ -7,6 +7,7 @@ use std::sync::Arc;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
+use ludion_core::time::GameClock;
 use ludion_ecs::{Parent, Schedule, SystemCtx, World};
 use ludion_spatial::{Body, Collider, Joint, JointMotor, Plane, Shape, Velocity};
 
@@ -430,6 +431,7 @@ fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsS
         physics_taken.unwrap_or_else(|| PhysicsWorld::new(ctx.time.rate()).with_plane(plane));
     physics.apply_settings(settings);
     physics.last_write_frame = Some(ctx.frame.as_u64());
+    physics.last_write_held = world.resource::<GameClock>().map(|clock| clock.held());
     for (entity, code, reason) in motor_rejections {
         physics.queue_rejection(ShapeRejection {
             entity,
