@@ -375,3 +375,71 @@ fn a_static_body_follows_a_pose_write() {
     assert!(at(&mut world, 0.0).is_empty(), "the old place is empty");
     assert_eq!(at(&mut world, 10.0).len(), 1, "the collider follows");
 }
+
+/// A kinematic platform with a rigid box resting on it, settled; the platform then rises 3 m in one
+/// tick, `teleported` or not. Returns the rider's peak vertical speed over the next few ticks and
+/// its final height.
+fn rider_after_a_platform_jump(teleported: bool) -> (f32, f32) {
+    let mut world = World::new();
+    let platform = spawn(
+        &mut world,
+        [0.0; 3],
+        Collider {
+            shape: Shape::Box {
+                half_extents: [8.0, 0.25, 8.0],
+            },
+            body: Body::new_kinematic(),
+            layer: None,
+        },
+    );
+    let rider = spawn(
+        &mut world,
+        [0.0, 0.75, 0.0],
+        rigid(
+            Shape::Box {
+                half_extents: [0.5; 3],
+            },
+            Some(100_000),
+            1.0,
+        ),
+    );
+    let mut schedule = schedule_with([0.0, -9.81, 0.0]);
+    run(&mut world, &mut schedule, 0..60);
+
+    teleport(&mut world, platform, [0.0, 3.0, 0.0]);
+    if teleported {
+        ludion_physics::teleport_kinematic(&mut world, platform);
+    }
+    let mut peak = 0.0_f32;
+    for frame in 60..64 {
+        tick(&mut world, &mut schedule, frame);
+        peak = peak.max(velocity_of(&world, rider).linear[1].abs());
+    }
+    (peak, pose_of(&world, rider).translation[1])
+}
+
+/// A driven kinematic body hands its rider the jump's implied speed through the contact; a teleported one has none to hand over, so the rider is left behind.
+#[test]
+fn a_teleported_kinematic_platform_launches_no_rider() {
+    let (peak, height) = rider_after_a_platform_jump(true);
+    assert!(peak < 1.0, "the rider is not launched, peak {peak} m/s");
+    assert!(height < 1.0, "the rider is left behind, at {height}");
+
+    let (driven_peak, _) = rider_after_a_platform_jump(false);
+    assert!(
+        driven_peak > 5.0,
+        "without the call the jump launches the rider ({driven_peak} m/s), so the test bites"
+    );
+}
+
+#[test]
+fn teleport_kinematic_without_a_physics_world_records_nothing() {
+    let mut world = World::new();
+    let entity = world.spawn();
+    ludion_physics::teleport_kinematic(&mut world, entity);
+    assert!(
+        world
+            .resource::<ludion_physics::KinematicTeleports>()
+            .is_none()
+    );
+}

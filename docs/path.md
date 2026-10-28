@@ -69,8 +69,9 @@ interior corner the outgoing segment's, at an open end the last segment's.
 
 `frame_at` is a no-roll frame: `right` is horizontal and `up` leans toward +Y (the reference up is
 fixed; a loop-de-loop is not supported). Where the tangent is vertical, `right` carries over from the
-nearest non-vertical stretch, so it never flips inside a lift. `rotation()` has local −Z facing travel
-(as a camera does), +Y on `up`, +X on `right`.
+nearest non-vertical stretch, so it does not flip through a vertical run (a Catmull-Rom S-bend whose
+tangent swings past vertical does flip `right`, inherent to a +Y no-roll frame). `rotation()` has
+local −Z facing travel (as a camera does), +Y on `up`, +X on `right`.
 
 `nearest_s(p, hint, window_metres, metric)` searches `window_metres` of arc length either side of
 `hint` (open clamps, closed wraps; a window of at least half the length is global). Pass the
@@ -91,7 +92,19 @@ advanced, so a `GameClock` hold freezes platforms. `loop` wraps (an open path ju
 `ping_pong` runs `0 → L → 0` with `phase` counting to `2L`, `once` clamps to `[0, L]`.
 
 To drive the position yourself, set `speed: 0` and write `phase`; it poses on the next tick. The pose
-is in world space: points are scene coordinates.
+is in the parent's frame: points are scene coordinates for a root.
+
+**Motion.** `path_follower_motion(world, entity) -> Option<FollowerMotion>` reads what this tick did:
+`s`, `direction` (`-1` towards the start; flips on a ping-pong return), `delta` (the translation
+written minus the one replaced), `velocity` (`delta / game_dt`, zero on a held tick and on a
+teleport) and `teleported`. It is recomputed before any game system, never hashed or snapshotted,
+and `None` for a non-follower, a follower that posed nothing, or straight after a restore.
+
+**Teleports.** A tick that wraps an open `loop` path, or moves further than `|speed|·dt + 0.5 m`, is a
+teleport (the slack keeps a game-driven `phase` at `speed: 0` carrying its riders). A `kinematic`
+follower is then snapped to the new pose with zero velocity instead of driven, so riders are left
+behind, not launched. For a smaller deliberate jump call `teleport_kinematic(world, entity)` after
+writing the pose.
 
 ## Rules
 

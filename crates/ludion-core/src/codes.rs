@@ -1417,6 +1417,10 @@ pub mod code {
     /// value or an unknown validator name. Raised by `ludion texture`.
     pub const TEXTURE_RULES_INVALID: DiagnosticCode = DiagnosticCode::new("L1289");
 
+    /// `L1290` — a solver-owned collider whose world scale (own times its ancestors') is not
+    /// `[1, 1, 1]`; collision ignores scale. Raised once per entity by `ludion-engine`.
+    pub const COLLIDER_SCALE_IGNORED: DiagnosticCode = DiagnosticCode::new("L1290");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7158,6 +7162,17 @@ TOML, holds a wrong-typed value, or names a validator that does not exist. The s
 
 Fix: correct the named key; an unknown validator name comes with the nearest valid one.",
     },
+    CodeEntry {
+        code: code::COLLIDER_SCALE_IGNORED,
+        severity: Severity::Warning,
+        title: "a collider's entity is scaled",
+        explanation: "\
+A collider the physics solver owns sits on an entity whose world scale (its own `Transform.scale`
+times its ancestors') is not `[1, 1, 1]`. Collision ignores `Transform.scale`, so the shape the solver
+sees differs from the shape that renders. Raised once per entity.
+
+Fix: bake the scale into the mesh or the collider's shape, and set the scale to `[1, 1, 1]`.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9817,6 +9832,7 @@ mod tests {
         code::TEXTURE_CHECK_WARNING,
         code::TEXTURE_CHECK_FAILED,
         code::TEXTURE_RULES_INVALID,
+        code::COLLIDER_SCALE_IGNORED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -10065,6 +10081,7 @@ mod tests {
             code::REFLECTION_PROBE_SHADOWED,
             code::REFLECTION_PROBE_NOT_STORED,
             code::TEXTURE_CHECK_WARNING,
+            code::COLLIDER_SCALE_IGNORED,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

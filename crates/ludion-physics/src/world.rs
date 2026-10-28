@@ -324,6 +324,54 @@ struct SnapshotOwned {
     last_step_dt: f32,
 }
 
+/// One step's solver timings (milliseconds, from rapier's profiler timers) and body counts, as
+/// returned by [`PhysicsWorld::step_breakdown`]. The stage timers overlap: `collision_detection_ms`
+/// contains the broad and narrow phases, `solver_ms` contains the velocity timers, and
+/// `substeps` is the solver iteration count, which doubles as the substep count in the pinned build.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StepBreakdown {
+    /// The whole `PhysicsPipeline::step`.
+    pub step_ms: f64,
+    /// Propagating user changes into the solver sets.
+    pub user_changes_ms: f64,
+    /// Broad plus narrow phase.
+    pub collision_detection_ms: f64,
+    /// The broad phase alone.
+    pub broad_phase_ms: f64,
+    /// The narrow phase alone.
+    pub narrow_phase_ms: f64,
+    /// The closing broad-phase update that keeps scene queries valid.
+    pub final_broad_phase_ms: f64,
+    /// Island construction and sleeping.
+    pub island_construction_ms: f64,
+    /// Solver contact-graph maintenance.
+    pub constraints_collection_ms: f64,
+    /// Kinematic and dynamic updates.
+    pub update_ms: f64,
+    /// Constraint resolution and position update.
+    pub solver_ms: f64,
+    /// Assembling the velocity constraints.
+    pub velocity_assembly_ms: f64,
+    /// Resolving the velocity constraints.
+    pub velocity_resolution_ms: f64,
+    /// Updating body velocities.
+    pub velocity_update_ms: f64,
+    /// Writing forces back to user-visible data.
+    pub velocity_writeback_ms: f64,
+    /// Continuous collision detection.
+    pub ccd_ms: f64,
+    /// Rigid bodies in the world.
+    pub bodies: usize,
+    /// Bodies awake after the step.
+    pub awake_bodies: usize,
+    /// Contact pairs with an active contact after the step.
+    pub contact_pairs: usize,
+    /// Impulse joints in the world.
+    pub impulse_joints: usize,
+    /// The solver iteration count (also the substep count).
+    pub substeps: u32,
+}
+
 /// The solver state for one world: the rigid-body, collider, joint, island, broad-phase and
 /// narrow-phase sets, the integration parameters built from the session's [`TickRate`], and the
 /// creation-order handle table that binds them to ECS entities.
@@ -623,6 +671,56 @@ impl PhysicsWorld {
     /// [`apply_settings`](PhysicsWorld::apply_settings).
     pub fn solver_iterations(&self) -> u32 {
         self.rapier.integration_parameters.num_solver_iterations as u32
+    }
+
+    /// The last step's per-stage solver timings and body counts, read off rapier's own profiler
+    /// timers; `None` unless the crate is built with the `profiler` feature. Measurement only: the
+    /// timers never feed the simulation.
+    ///
+    /// ```no_run
+    /// # use ludion_physics::PhysicsWorld;
+    /// # fn show(world: &PhysicsWorld) {
+    /// if let Some(step) = world.step_breakdown() {
+    ///     println!("solver {:.3} ms of {:.3} ms", step.solver_ms, step.step_ms);
+    /// }
+    /// # }
+    /// ```
+    pub fn step_breakdown(&self) -> Option<StepBreakdown> {
+        #[cfg(feature = "profiler")]
+        {
+            let counters = &self.rapier.physics_pipeline.counters;
+            let (stages, cd, solver) = (&counters.stages, &counters.cd, &counters.solver);
+            Some(StepBreakdown {
+                step_ms: counters.step_time.time_ms(),
+                user_changes_ms: stages.user_changes.time_ms(),
+                collision_detection_ms: stages.collision_detection_time.time_ms(),
+                broad_phase_ms: cd.broad_phase_time.time_ms(),
+                narrow_phase_ms: cd.narrow_phase_time.time_ms(),
+                final_broad_phase_ms: cd.final_broad_phase_time.time_ms(),
+                island_construction_ms: stages.island_construction_time.time_ms(),
+                constraints_collection_ms: stages.island_constraints_collection_time.time_ms(),
+                update_ms: stages.update_time.time_ms(),
+                solver_ms: stages.solver_time.time_ms(),
+                velocity_assembly_ms: solver.velocity_assembly_time.time_ms(),
+                velocity_resolution_ms: solver.velocity_resolution_time.time_ms(),
+                velocity_update_ms: solver.velocity_update_time.time_ms(),
+                velocity_writeback_ms: solver.velocity_writeback_time.time_ms(),
+                ccd_ms: stages.ccd_time.time_ms(),
+                bodies: self.rapier.bodies.len(),
+                awake_bodies: self.rapier.islands.num_active_bodies(),
+                contact_pairs: self
+                    .rapier
+                    .contact_pairs()
+                    .filter(|pair| pair.has_any_active_contact())
+                    .count(),
+                impulse_joints: self.rapier.impulse_joints.len(),
+                substeps: self.solver_iterations(),
+            })
+        }
+        #[cfg(not(feature = "profiler"))]
+        {
+            None
+        }
     }
 
     /// `rapier`'s internal stabilization iteration count, as applied by the last
@@ -1724,6 +1822,27 @@ impl PhysicsWorld {
                 }
             }
         }
+    }
+
+    /// Snaps a kinematic body to this pose with zero velocity — a teleport, not a move — and wakes what
+    /// touches it, so a sleeper left at the old pose falls instead of hanging. No-op for any other body.
+    pub(crate) fn snap_kinematic(
+        &mut self,
+        entity: EntityId,
+        translation: [f32; 3],
+        rotation: [f32; 4],
+    ) {
+        let Some(entry) = self.entry(entity) else {
+            return;
+        };
+        if entry.kind != BodyKind::Kinematic {
+            return;
+        }
+        let handle = entry.body;
+        if let Some(body) = self.rapier.bodies.get_mut(handle) {
+            body.set_position(to_pose(translation, rotation), true);
+        }
+        self.wake_touching(entity);
     }
 
     /// Reads every rigid body's resolved pose and velocity in table order, records them as the new

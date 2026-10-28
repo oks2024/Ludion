@@ -12,7 +12,8 @@ use ludion_core::time::GameClock;
 use ludion_ecs::{SemanticValidate, SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
-    Egress, EgressChannels, Engine, EngineBuilder, Name, PathFollower, PathMode, Transform,
+    Egress, EgressChannels, Engine, EngineBuilder, FollowerMotion, Name, PathFollower, PathMode,
+    Transform, path_follower_motion,
 };
 use ludion_protocol::command::{SimStepParams, StreamSubscribeParams, SubscribeMode};
 use ludion_protocol::event::{Event, LogEvent};
@@ -637,4 +638,330 @@ fn a_non_finite_speed_built_in_rust_holds_the_follower_and_reports_l1269_once() 
     advance(&mut engine, 6);
     assert_eq!(x_of(&engine, "platform").to_bits(), x.to_bits());
     assert_eq!(phase_of(&engine).to_bits(), phase.to_bits());
+}
+
+// --- Motion readout and teleports (`path_follower_motion`) ---------------------------------------
+
+/// A four-metre square, closed: its wrap is seamless.
+const RING: &str = "\
+format: 1
+kind: path
+name: ring
+interpolation: linear
+closed: true
+points:
+  - - 0.0
+    - 0.0
+    - 0.0
+  - - 4.0
+    - 0.0
+    - 0.0
+  - - 4.0
+    - 0.0
+    - 4.0
+  - - 0.0
+    - 0.0
+    - 4.0
+";
+
+/// A ten-metre vertical run, open.
+const RISE: &str = "\
+format: 1
+kind: path
+name: rise
+interpolation: linear
+closed: false
+points:
+  - - 0.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 10.0
+    - 0.0
+";
+
+type Tick = (u64, Option<FollowerMotion>, [f32; 3]);
+
+/// `(frame, the follower's motion, its translation)` as a game system saw it each tick.
+#[derive(Default)]
+struct Moves(Vec<Tick>);
+
+fn record_motion(world: &mut World, ctx: &SystemCtx) {
+    let follower = world
+        .entities()
+        .find(|&id| world.has::<PathFollower>(id))
+        .expect("the scene has a follower");
+    let motion = path_follower_motion(world, follower);
+    let translation = world
+        .get::<Transform>(follower)
+        .unwrap()
+        .unwrap()
+        .translation;
+    if world.resource::<Moves>().is_none() {
+        world.insert_resource(Moves::default());
+    }
+    world
+        .resource_mut::<Moves>()
+        .unwrap()
+        .0
+        .push((ctx.frame.as_u64(), motion, translation));
+}
+
+fn extra_paths(tag: &str) -> PathBuf {
+    let root = fixture_root(tag);
+    std::fs::write(root.join("ring.path.yaml"), RING).unwrap();
+    std::fs::write(root.join("rise.path.yaml"), RISE).unwrap();
+    root
+}
+
+/// The follower's recorded ticks of `scene` over `ticks`, under `builder` plus `record_motion`.
+fn moves(
+    tag: &str,
+    builder: impl FnOnce(EngineBuilder) -> EngineBuilder,
+    scene: &str,
+    ticks: u64,
+) -> Vec<Tick> {
+    let root = extra_paths(tag);
+    let mut engine = builder(game(&root).system("record_motion", record_motion))
+        .build()
+        .expect("the game builds");
+    engine.load_inline_scene(scene).expect("the scene loads");
+    advance(&mut engine, ticks);
+    engine.world().resource::<Moves>().expect("ran").0.clone()
+}
+
+#[test]
+fn motion_delta_equals_the_translation_written() {
+    let ticks = moves(
+        "delta",
+        |b| b,
+        &scene("lift.path.yaml", METRE_PER_TICK, "once", 0.0),
+        6,
+    );
+    let mut old = [3.0, 0.0, 0.0];
+    for (frame, motion, translation) in &ticks {
+        let motion = motion.expect("a posed follower reports its motion");
+        let expected = [
+            translation[0] - old[0],
+            translation[1] - old[1],
+            translation[2] - old[2],
+        ];
+        assert_eq!(
+            motion.delta.map(f32::to_bits),
+            expected.map(f32::to_bits),
+            "frame {frame}"
+        );
+        old = *translation;
+    }
+    // The authored (3, 0, 0) is off the path: the first tick snaps to the start, honestly a jump.
+    assert!(ticks[0].1.unwrap().teleported);
+    let travelling = ticks[2].1.unwrap();
+    assert!(!travelling.teleported, "{travelling:?}");
+    assert!(
+        (travelling.velocity[0] - METRE_PER_TICK).abs() < 0.01,
+        "{travelling:?}"
+    );
+    assert!((travelling.s - 3.0).abs() < 1e-3, "{travelling:?}");
+}
+
+#[test]
+fn ping_pong_direction_flips_at_the_end() {
+    let ticks = moves(
+        "direction",
+        |b| b,
+        &scene("lift.path.yaml", METRE_PER_TICK, "ping_pong", 0.0),
+        25,
+    );
+    let direction = |tick: usize| ticks[tick - 1].1.unwrap().direction;
+    assert_eq!(direction(5), 1.0);
+    assert_eq!(direction(15), -1.0, "the return leg runs towards the start");
+    assert_eq!(direction(25), 1.0);
+    let backwards = moves(
+        "direction-back",
+        |b| b,
+        &scene("lift.path.yaml", -METRE_PER_TICK, "once", 8.0),
+        2,
+    );
+    assert_eq!(backwards[0].1.unwrap().direction, -1.0);
+}
+
+#[test]
+fn a_held_tick_has_zero_velocity() {
+    let ticks = moves(
+        "held",
+        |b| b.system("freeze", freeze),
+        &scene("lift.path.yaml", METRE_PER_TICK, "loop", 0.0),
+        9,
+    );
+    let held: Vec<_> = ticks
+        .iter()
+        .skip(1)
+        .filter(|(_, motion, _)| motion.unwrap().delta == [0.0; 3])
+        .collect();
+    assert!(!held.is_empty(), "the freeze held some ticks: {ticks:?}");
+    for (frame, motion, _) in held {
+        assert_eq!(motion.unwrap().velocity, [0.0; 3], "frame {frame}");
+    }
+}
+
+/// A kinematic lift on the vertical `rise` path running backwards over the top of its path, with a
+/// crate resting on it: the wrap carries the platform ten metres up through the crate in one tick.
+const LIFT_AND_CRATE: &str = "format: 1
+physics:
+  space: free
+entities:
+  - name: lift
+    components:
+      Transform: {}
+      PathFollower:
+        path: rise.path.yaml
+        speed: -0.6
+        mode: loop
+        phase: 0.5
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 3.0
+              - 0.25
+              - 3.0
+        body: kinematic
+  - name: crate
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.3
+          - 0.0
+      Velocity: {}
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.5
+              - 0.5
+        body:
+          rigid:
+            mass: 1.0
+            sleep_after_ticks: 100000
+";
+
+#[derive(Default)]
+struct CrateSpeeds(Vec<(u64, f32)>);
+
+fn watch_crate(world: &mut World, ctx: &SystemCtx) {
+    let id = world
+        .entities()
+        .find(|&id| matches!(world.get::<Name>(id), Ok(Some(n)) if n.0 == "crate"))
+        .unwrap();
+    let v = world
+        .get::<ludion_spatial::Velocity>(id)
+        .unwrap()
+        .unwrap()
+        .linear;
+    let speed = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if world.resource::<CrateSpeeds>().is_none() {
+        world.insert_resource(CrateSpeeds::default());
+    }
+    world
+        .resource_mut::<CrateSpeeds>()
+        .unwrap()
+        .0
+        .push((ctx.frame.as_u64(), speed));
+}
+
+#[test]
+fn an_open_loop_wrap_is_a_teleport_and_launches_no_rider() {
+    let ticks = moves(
+        "wrap",
+        |b| b,
+        &scene("lift.path.yaml", METRE_PER_TICK, "loop", 0.0),
+        15,
+    );
+    let wraps: Vec<_> = ticks
+        .iter()
+        .skip(1)
+        .filter(|(_, motion, _)| motion.unwrap().teleported)
+        .collect();
+    assert_eq!(wraps.len(), 1, "one wrap in fifteen metres: {wraps:?}");
+    assert_eq!(wraps[0].1.unwrap().velocity, [0.0; 3]);
+
+    let root = extra_paths("wrap-rider");
+    let mut engine = game(&root)
+        .system("record_motion", record_motion)
+        .system("watch_crate", watch_crate)
+        .build()
+        .expect("the game builds");
+    engine
+        .load_inline_scene(LIFT_AND_CRATE)
+        .expect("the scene loads");
+    advance(&mut engine, 70);
+    let world = engine.world();
+    let wrap = world
+        .resource::<Moves>()
+        .unwrap()
+        .0
+        .iter()
+        .skip(1)
+        .find(|(_, motion, _)| motion.unwrap().teleported)
+        .expect("the lift wraps")
+        .0;
+    let peak = world
+        .resource::<CrateSpeeds>()
+        .unwrap()
+        .0
+        .iter()
+        .filter(|(frame, _)| (wrap + 1..=wrap + 4).contains(frame))
+        .map(|(_, speed)| *speed)
+        .fold(0.0_f32, f32::max);
+    assert!(
+        peak < 2.0,
+        "the crate is left behind, not launched: {peak} m/s"
+    );
+}
+
+#[test]
+fn a_closed_loop_wrap_is_not_a_teleport() {
+    let ticks = moves(
+        "ring",
+        |b| b,
+        &scene("ring.path.yaml", METRE_PER_TICK, "loop", 0.0),
+        30,
+    );
+    // Tick 1 poses the off-path authored transform; from then on a 16 m ring wraps seamlessly.
+    for (frame, motion, _) in ticks.iter().skip(1) {
+        assert!(!motion.unwrap().teleported, "frame {frame}");
+    }
+}
+
+#[test]
+fn a_game_written_phase_jump_is_a_teleport() {
+    let ticks = moves(
+        "jump",
+        |b| b.system("drive", drive),
+        &scene("lift.path.yaml", 0.0, "once", 1.0),
+        6,
+    );
+    let jumps: Vec<_> = ticks
+        .iter()
+        .skip(1)
+        .filter(|(_, motion, _)| motion.unwrap().teleported)
+        .map(|(frame, ..)| *frame)
+        .collect();
+    assert_eq!(jumps, [3], "only the tick that poses the written phase");
+}
+
+#[test]
+fn a_world_without_followers_reports_no_motion() {
+    let root = extra_paths("none");
+    let mut engine = game(&root).build().expect("the game builds");
+    engine.load_inline_scene(EMPTY_SCENE).expect("loads");
+    advance(&mut engine, 3);
+    let world = engine.world();
+    assert!(
+        world
+            .entities()
+            .all(|id| path_follower_motion(world, id).is_none())
+    );
 }

@@ -8,6 +8,11 @@
 //! built (scene load, restore, district switch, and the bare `render`/`sweep` hosts), so a game
 //! that never uses one pays nothing and its `engine.describe`, profile and hashes are unchanged.
 //!
+//! A tick that wraps an open `loop` path, or moves a follower further than its speed allows, is a
+//! **teleport**: a `kinematic` body is snapped to the new pose with zero velocity
+//! ([`teleport_kinematic`](ludion_physics::teleport_kinematic)) instead of driving its riders at the
+//! implied speed. [`path_follower_motion`] reads what the tick did; see [`FollowerMotion`].
+//!
 //! A follower spawned at runtime into a world that had none at load has no system to move it:
 //! [`report_uninstalled`] reports `L1216` once per entity rather than leaving it silently still.
 //!
@@ -45,6 +50,13 @@ const DEBUG_COLOR: [f32; 4] = [1.0, 0.8, 0.1, 1.0];
 const DEBUG_CROSS: f32 = 0.25;
 /// Equal-arc-length spans in a path's debug polyline.
 const DEBUG_SPANS: usize = 64;
+
+/// Metres a follower may move beyond `|speed|·dt` in one tick before the tick counts as a teleport.
+/// The chord of an arc is never longer than the arc, so travel, ping-pong turns and closed wraps stay
+/// under `|speed|·dt`; the slack absorbs the arc-length table's error and a game that drives `phase`
+/// itself at `speed: 0` (up to 30 m/s at 60 Hz), which must keep carrying its riders. A smaller
+/// deliberate jump is the game's to flag with `teleport_kinematic`.
+const TELEPORT_SLACK: f32 = 0.5;
 
 /// A path loaded once: its sampler and the debug polyline sampled from it.
 struct Loaded {
@@ -86,6 +98,8 @@ pub enum PathMode {
 /// The pose is in the parent's frame — the path's points are scene coordinates for a root and local
 /// to the `Parent` otherwise. A game drives the position
 /// itself by writing `phase` with `speed: 0`; the write poses on the next tick.
+/// [`path_follower_motion`] reads what the tick did, and a wrap or jump is a teleport for a
+/// kinematic body.
 ///
 /// # Example
 /// ```
@@ -154,6 +168,47 @@ impl Default for PathFollower {
             phase: 0.0,
         }
     }
+}
+
+/// What a follower's last [`path_follow`] tick did, as [`path_follower_motion`] returns it. Derived
+/// by the engine every tick, before any game system runs; never hashed or snapshotted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FollowerMotion {
+    /// Metres along the path the follower is posed at (a ping-pong's return leg is folded back).
+    pub s: f32,
+    /// `-1.0` when the follower runs towards the start of the path, else `1.0`; flips on a
+    /// ping-pong's return leg.
+    pub direction: f32,
+    /// The translation written this tick minus the one it replaced, in the parent's frame.
+    pub delta: [f32; 3],
+    /// `delta` per gameplay second: zero on a held tick and on a teleport.
+    pub velocity: [f32; 3],
+    /// Whether the tick wrapped an open `loop` path or jumped beyond what `speed` allows.
+    pub teleported: bool,
+}
+
+/// The per-follower [`FollowerMotion`]s of the last [`path_follow`] run, replaced every run. A
+/// resource, so a restore drops it and it is absent until the next tick.
+#[derive(Default)]
+pub(crate) struct FollowerMotions(BTreeMap<EntityId, FollowerMotion>);
+
+/// What the last [`path_follow`] tick did to `entity`, or `None` when it posed nothing: not a
+/// follower, an empty `path`, a path that failed to load, a non-finite `speed` or `phase`, no
+/// `Transform`, or no tick has run since the world was built or restored.
+///
+/// Recomputed every tick before any game system, so a system reads this tick's motion.
+///
+/// # Example
+/// ```
+/// use ludion_ecs::World;
+/// use ludion_engine::path_follower_motion;
+///
+/// let mut world = World::new();
+/// let entity = world.spawn();
+/// assert_eq!(path_follower_motion(&world, entity), None);
+/// ```
+pub fn path_follower_motion(world: &World, entity: EntityId) -> Option<FollowerMotion> {
+    world.resource::<FollowerMotions>()?.0.get(&entity).copied()
 }
 
 /// The samplers [`path_follow`] reads, loaded lazily from `root`. Engine configuration installed at
@@ -265,10 +320,13 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         .map(|(id, (follower,))| (id, follower.clone()))
         .collect();
     if followers.is_empty() {
+        world.insert_resource(FollowerMotions::default());
         return;
     }
     let advance = ctx.game_advanced().then_some(f64::from(ctx.game_dt));
+    let mut motions = FollowerMotions::default();
     let Some(library) = world.resource_mut::<PathLibrary>() else {
+        world.insert_resource(FollowerMotions::default());
         return;
     };
     let mut poses = Vec::with_capacity(followers.len());
@@ -281,18 +339,53 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         }
         match library.loaded(&follower.path) {
             Ok(loaded) => {
-                let (phase, position) = pose(&loaded.sampler, &follower, advance);
-                poses.push((id, phase, position, Arc::clone(&loaded.polyline)));
+                let posed = pose(&loaded.sampler, &follower, advance);
+                poses.push((id, follower.speed, posed, Arc::clone(&loaded.polyline)));
             }
             Err(causes) => failures.push((id, follower.path, causes.to_vec())),
         }
     }
-    for (id, phase, position, polyline) in poses {
+    for (id, speed, posed, polyline) in poses {
+        let Pose {
+            phase,
+            position,
+            s,
+            wrapped,
+            direction,
+        } = posed;
         if let Ok(Some(follower)) = world.get_mut::<PathFollower>(id) {
             follower.phase = phase;
         }
+        let mut teleported = false;
         if let Ok(Some(transform)) = world.get_mut::<Transform>(id) {
+            let old = transform.translation;
             transform.translation = position;
+            let delta = [
+                position[0] - old[0],
+                position[1] - old[1],
+                position[2] - old[2],
+            ];
+            #[allow(clippy::cast_possible_truncation)]
+            let allowed = speed.abs() * advance.map_or(0.0, |dt| dt as f32) + TELEPORT_SLACK;
+            teleported = wrapped || norm(delta) > allowed;
+            #[allow(clippy::cast_possible_truncation)]
+            let velocity = match advance {
+                Some(dt) if !teleported => delta.map(|d| (f64::from(d) / dt) as f32),
+                _ => [0.0; 3],
+            };
+            motions.0.insert(
+                id,
+                FollowerMotion {
+                    s,
+                    direction,
+                    delta,
+                    velocity,
+                    teleported,
+                },
+            );
+        }
+        if teleported {
+            ludion_physics::teleport_kinematic(world, id);
         }
         // A path lives in its parent's frame, so a parented follower's debug geometry is drawn
         // through the parent's world affine.
@@ -317,6 +410,7 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
             .path(&polyline, DEBUG_COLOR)
             .cross(position, DEBUG_CROSS, DEBUG_COLOR);
     }
+    world.insert_resource(motions);
     for (id, field) in non_finite {
         let diagnostic = Diagnostic::new(
             code::PATH_FOLLOWER_INVALID,
@@ -349,17 +443,31 @@ fn non_finite_field(follower: &PathFollower) -> Option<&'static str> {
     }
 }
 
-/// The follower's normalised `phase` and world position after moving by `advance` seconds of
-/// gameplay time (`None` when the gameplay clock held).
+/// A follower posed for one tick.
+struct Pose {
+    /// The normalised phase that gets stored.
+    phase: f32,
+    position: [f32; 3],
+    /// Metres along the path, a ping-pong's return leg folded back.
+    s: f32,
+    /// An open `loop` path was wrapped (or the phase was outside `[0, length)`).
+    wrapped: bool,
+    direction: f32,
+}
+
+/// The follower's normalised `phase` and position after moving by `advance` seconds of gameplay
+/// time (`None` when the gameplay clock held).
 ///
 /// The pose is read from the `f32` phase that gets stored, so what a reader recomputes from the
 /// component equals what was written.
-fn pose(sampler: &PathSampler, follower: &PathFollower, advance: Option<f64>) -> (f32, [f32; 3]) {
+fn pose(sampler: &PathSampler, follower: &PathFollower, advance: Option<f64>) -> Pose {
     let length = sampler.length();
     let mut phase = f64::from(follower.phase);
     if let Some(dt) = advance {
         phase += f64::from(follower.speed) * dt;
     }
+    let wrapped =
+        follower.mode == PathMode::Loop && !sampler.closed() && phase.rem_euclid(length) != phase;
     let normalised = match follower.mode {
         PathMode::Loop => phase.rem_euclid(length),
         PathMode::PingPong => phase.rem_euclid(2.0 * length),
@@ -368,12 +476,26 @@ fn pose(sampler: &PathSampler, follower: &PathFollower, advance: Option<f64>) ->
     #[allow(clippy::cast_possible_truncation)]
     let stored = normalised as f32;
     let phase = f64::from(stored);
-    let s = match follower.mode {
-        PathMode::PingPong if phase > length => 2.0 * length - phase,
-        _ => phase,
+    let returning = follower.mode == PathMode::PingPong && phase > length;
+    let s = if returning {
+        2.0 * length - phase
+    } else {
+        phase
     };
     let at = sampler.point_at(s);
     #[allow(clippy::cast_possible_truncation)]
     let position = [at[0] as f32, at[1] as f32, at[2] as f32];
-    (stored, position)
+    let backwards = (follower.speed < 0.0) != returning;
+    Pose {
+        phase: stored,
+        position,
+        #[allow(clippy::cast_possible_truncation)]
+        s: s as f32,
+        wrapped,
+        direction: if backwards { -1.0 } else { 1.0 },
+    }
+}
+
+fn norm(v: [f32; 3]) -> f32 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }

@@ -1,6 +1,7 @@
 //! The system triple and the one verb that registers it.
 
 use std::any::TypeId;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ludion_core::codes::code;
@@ -266,6 +267,40 @@ fn resolve_mesh(meshes: Option<&mut ColliderMeshes>, collider: &Collider) -> Mes
     }
 }
 
+/// The kinematic bodies a game asked to teleport this tick, drained by [`WRITE`] every run; never
+/// hashed or snapshotted. Filled by [`teleport_kinematic`].
+#[derive(Debug, Default)]
+pub struct KinematicTeleports(BTreeSet<EntityId>);
+
+/// Teleports a kinematic body: the next physics write places it at its pose component with zero
+/// velocity, instead of driving it there over the tick.
+///
+/// A driven kinematic body carries what rests on it (and flings it when it jumps far in one tick);
+/// a teleport leaves riders behind, not launched. A no-op in a world without a [`PhysicsWorld`], and
+/// a rigid or static body ignores it (a rigid body's pose write already is a teleport). Call it
+/// from a system registered before [`install`], after writing the pose.
+///
+/// # Example
+/// ```
+/// use ludion_ecs::World;
+/// use ludion_physics::{KinematicTeleports, teleport_kinematic};
+///
+/// let mut world = World::new();
+/// let entity = world.spawn();
+/// teleport_kinematic(&mut world, entity); // no physics world: nothing is recorded
+/// assert!(world.resource::<KinematicTeleports>().is_none());
+/// ```
+pub fn teleport_kinematic(world: &mut World, entity: EntityId) {
+    if world.resource::<PhysicsWorld>().is_none() {
+        return;
+    }
+    if let Some(KinematicTeleports(entities)) = world.resource_mut::<KinematicTeleports>() {
+        entities.insert(entity);
+    } else {
+        world.insert_resource(KinematicTeleports(BTreeSet::from([entity])));
+    }
+}
+
 /// Reconciles the body set with the colliders physics [`claims`] and pushes this tick's authored
 /// state in.
 ///
@@ -273,6 +308,11 @@ fn resolve_mesh(meshes: Option<&mut ColliderMeshes>, collider: &Collider) -> Mes
 /// a pure function of world content and independent of spawn order — so the creation-order handle
 /// table is reproducible from the scene alone.
 fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsSettings) {
+    // First, before any early return, so the record never outlives the tick it was made in.
+    let teleports = world
+        .remove_resource::<KinematicTeleports>()
+        .map(|KinematicTeleports(entities)| entities)
+        .unwrap_or_default();
     // Taken out before the query so the staleness check below can read it: `query_ids` borrows
     // `world` mutably, and a `PhysicsWorld` still living in `world`'s resources would not be
     // readable at the same time.
@@ -363,11 +403,17 @@ fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsS
         if let Some(collider) = source {
             if physics.retune_in_place(entity, collider, mesh_hash_of(&mesh)) {
                 physics.push(entity, translation, rotation, velocity);
+                if teleports.contains(&entity) {
+                    physics.snap_kinematic(entity, translation, rotation);
+                }
             } else {
                 physics.rebuild(entity, collider, translation, rotation, velocity, mesh);
             }
         } else if physics.has_body(entity) {
             physics.push(entity, translation, rotation, velocity);
+            if teleports.contains(&entity) {
+                physics.snap_kinematic(entity, translation, rotation);
+            }
         } else if let Ok(Some(collider)) = world.get::<Collider>(entity) {
             physics.create(entity, collider, translation, rotation, velocity, mesh);
         }

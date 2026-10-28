@@ -9,6 +9,10 @@ description = "Deterministic rigid-body dynamics for the Ludion game engine: a r
 keywords = ["ludion", "physics", "rapier", "determinism", "game-engine"]
 categories = ["game-engines", "simulation"]
 
+[features]
+# Measurement only: rapier's stage timers back `PhysicsWorld::step_breakdown`; they never feed the sim.
+profiler = ["rapier3d/profiler"]
+
 [dependencies]
 ludion-core = { path = "../ludion-core", version = "0.1.0" }
 ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }

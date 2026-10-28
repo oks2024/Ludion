@@ -177,12 +177,13 @@ pub use pose::PhysicsPose;
 pub use queries::{QueryFilter, QueryHit};
 pub use systems::{
     CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, DEFAULT_SOLVER_ITERATIONS,
-    DEFAULT_STABILIZATION_ITERATIONS, MAX_COLLISION_LAYERS, MIRROR, PhysicsSettings, PhysicsSpace,
-    STEP, WRITE, claims, install,
+    DEFAULT_STABILIZATION_ITERATIONS, KinematicTeleports, MAX_COLLISION_LAYERS, MIRROR,
+    PhysicsSettings, PhysicsSpace, STEP, WRITE, claims, install, teleport_kinematic,
 };
 pub use time_scale::MIN_TIME_SCALE;
 pub use world::{
     DEFAULT_GRAVITY, MotorMismatch, PhysicsError, PhysicsWorld, ShapeKind, ShapeRejection,
+    StepBreakdown,
 };
 
 /// The pinned `rapier3d` version (`[workspace.dependencies]` in the root `Cargo.toml`): reading

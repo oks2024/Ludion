@@ -226,6 +226,43 @@ pub(crate) fn report_parented_bodies(world: &mut World) {
     }
 }
 
+/// Reports `L1290` once per solver-owned collider whose world scale (its own times its ancestors') is
+/// not `[1, 1, 1]`: collision ignores `Transform.scale`, so the solver sees an unscaled shape.
+pub(crate) fn report_scaled_colliders(world: &mut World) {
+    const UNIT: [f32; 3] = [1.0; 3];
+    let ids: Vec<(EntityId, [f32; 3])> = world
+        .query_ids::<(&Collider, &Transform)>()
+        .filter(|(_, (collider, _))| ludion_physics::claims(collider))
+        .map(|(id, (_, transform))| (id, transform.scale))
+        .collect();
+    for (id, own) in ids {
+        let key = latch_key(world, id);
+        if crate::diagnostics::is_latched(world, code::COLLIDER_SCALE_IGNORED, &key) {
+            continue;
+        }
+        let scale = if own != UNIT {
+            own
+        } else if world.has::<Parent>(id) {
+            match crate::hierarchy::world_transform(world, id) {
+                Some(pose) if pose.trs.scale != UNIT => pose.trs.scale,
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+        let named = entity_label(world, id);
+        crate::diagnostics::report(
+            world,
+            code::COLLIDER_SCALE_IGNORED,
+            key,
+            format!(
+                "{named} is a collider with a world scale of {scale:?}; scale is not applied to \
+                 collision; bake it into the mesh or shape"
+            ),
+        );
+    }
+}
+
 /// The inputs of the last [`report_unrun_colliders`] scan: collider rows, physics step installed,
 /// game systems present, `SpatialIndex` present.
 struct UnrunScan((usize, bool, bool, bool));
@@ -590,6 +627,60 @@ mod tests {
                 code::HIERARCHY_STATIC_COLLIDER,
                 code::HIERARCHY_KINEMATIC_SHEAR
             ],
+            "{reported:?}"
+        );
+    }
+
+    #[test]
+    fn scaled_colliders_report_once_each() {
+        let mut world = World::new();
+        world.insert_resource(Diagnostics::default());
+        let collider = |body: Body| Collider {
+            shape: Shape::Box {
+                half_extents: [0.5; 3],
+            },
+            body,
+            layer: None,
+        };
+        let scaled = world.spawn();
+        world
+            .insert(
+                scaled,
+                Transform {
+                    scale: [2.0, 1.0, 1.0],
+                    ..Transform::default()
+                },
+            )
+            .unwrap();
+        world.insert(scaled, collider(Body::new_static())).unwrap();
+        let parent = world.spawn();
+        world
+            .insert(
+                parent,
+                Transform {
+                    scale: [3.0; 3],
+                    ..Transform::default()
+                },
+            )
+            .unwrap();
+        let child = world.spawn();
+        world.insert(child, Transform::default()).unwrap();
+        world
+            .insert(child, collider(Body::new_kinematic()))
+            .unwrap();
+        world.insert(child, Parent(parent)).unwrap();
+        let unit = world.spawn();
+        world.insert(unit, Transform::default()).unwrap();
+        world.insert(unit, collider(Body::new_static())).unwrap();
+
+        for _ in 0..2 {
+            report_scaled_colliders(&mut world);
+        }
+        let reported = world.resource_mut::<Diagnostics>().unwrap().take();
+        let codes: Vec<_> = reported.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            [code::COLLIDER_SCALE_IGNORED, code::COLLIDER_SCALE_IGNORED],
             "{reported:?}"
         );
     }

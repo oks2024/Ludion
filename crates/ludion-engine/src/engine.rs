@@ -1485,6 +1485,7 @@ impl Engine {
         crate::diagnostics::report_unregistered(self.driver.world_mut(), &self.registry);
         crate::hierarchy::report_hierarchy_faults(self.driver.world_mut());
         scene_physics::report_parented_bodies(self.driver.world_mut());
+        scene_physics::report_scaled_colliders(self.driver.world_mut());
         let path_follow_installed = self.path_follow_installed();
         crate::path_follow::report_uninstalled(self.driver.world_mut(), path_follow_installed);
         let (physics_installed, game_systems) =

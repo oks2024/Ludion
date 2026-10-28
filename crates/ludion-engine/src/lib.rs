@@ -150,7 +150,7 @@ pub use model_sheet::{
     ModelSweepOutcome, ModelView, PhaseGap, PhaseReport, PhaseStray, SheetOutcome, TrueSizeFraming,
     fit_distance_for_aspect, model_camera, parse_crossfade, render_model_sheet,
 };
-pub use path_follow::{PathFollower, PathMode, path_follow};
+pub use path_follow::{FollowerMotion, PathFollower, PathMode, path_follow, path_follower_motion};
 pub use patterns::{
     BulletKind, MotionSegment, PatternDoc, PatternPlayer, RampSpec, TimelineEntry, TurnSpec,
     VOLLEY_MAX_BULLETS, VOLLEY_SALT, Volley, VolleyCenter, VolleyShape, advance_volleys,

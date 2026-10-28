@@ -56,7 +56,7 @@ is reported once at runtime.
 
 Every `RigidBody` field but `mass` defaults (`body: { rigid: {} }` is a valid 1 kg box). A rigid or static solver body cannot sit under a `Parent` (`L1221`/`L1222`); a kinematic one can, and is posed from its world pose (`ludion docs hierarchy`).
 Level geometry is authored with 3D shapes (`box`, `heightfield`, `convex`, `mesh`), not `aabb`: an `aabb`
-only reaches the solver when its body is `rigid`.
+only reaches the solver when its body is `rigid`. Collision ignores `Transform.scale` (own or inherited): a scaled solver collider raises `L1290`; bake the scale into the shape.
 
 **Live edits.** A live `Collider` edit reaches the solver by one of two routes:
 
@@ -139,7 +139,7 @@ No occlusion is offered: a wall between the centre and a body does not shield it
 anything resting on it. The solver sees the new pose at this tick's step, so queries and blasts made before
 it still read the old one: do not blast a body on the tick you teleport it. Contacts follow the step: `Stopped`
 out of contact, `Started` into it. A jointed figure is moved by writing every body the same tick by the same
-rigid transform; a lone moved body is pulled back by its joint. A `static` body follows its pose too: moving it re-poses the solver body and wakes what rests on it. A kinematic body's pose write is a velocity (the pose delta over one tick): snapping a moving platform back launches whatever touches it.
+rigid transform; a lone moved body is pulled back by its joint. A `static` body follows its pose too: moving it re-poses the solver body and wakes what rests on it. A kinematic body's pose write is a velocity (the pose delta over one tick): snapping a moving platform back launches whatever touches it. `teleport_kinematic(world, entity)` makes the next write a teleport instead: the body is placed at its pose with zero velocity and riders are left behind (a path follower's wrap or jump does this itself).
 
 **Contact events.** `contact_events() -> &[ContactEvent]` names which collider pairs started or
 stopped touching on the last step: the pair (`a < b` by `EntityId`), the phase, and — on a start
