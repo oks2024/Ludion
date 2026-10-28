@@ -39,21 +39,29 @@ Past the end of an open path, `ends: extend` continues the lane straight along t
 
 ## Switching, teleporting
 
-- A lane that was fully off acquires `s` by the nearest point over the **whole** path when it engages, then pulls in capped and eased. A big offset is not a snap.
+- A lane that was fully off acquires `s` by the nearest point over the **whole** path when it engages, then pulls in capped and eased. A big offset is not a snap. Engaging from `blend` 0 always runs this global acquire; a game that knows better writes `s` once `blend > 0` (a written `s` at `blend` 0 is replaced).
 - Changing the path at runtime must also null `s`: `LaneConstraint::set_path(path)` does both. A write to `path` alone leaves the old `s` in place.
 - After `teleport_character` (or any `Transform` write that moves the feet far), set `s` to `None` so the lane finds the global nearest again.
 - `move_character_with` (an explicit `MoveConstraint`) **bypasses the lane**: one constraint per call.
 
 ## Frame and stick
 
-`lane_frame(world, entity) -> Option<LaneFrame>` reads the frame at the lane's current `s` — `point`, `tangent`, `forward` (horizontal), `lateral = forward x up` (the lane's right), `weight` — for a game system that decides its step before it moves; `None` when the lane is off or has not found its place. `lane_relative(stick, &frame, screen_right)` turns a `[x, y]` stick into a direction along the lane: the stick's horizontal axis runs the lane whichever way the camera sees it. Below `cos 80°` between the screen's right and the lane it falls back to `+forward`.
+`lane_frame(world, entity) -> Option<LaneFrame>` reads the frame at the lane's current `s` — `point`, `tangent`, `forward` (horizontal), `lateral = forward x up` (the lane's right), `weight` — for a game system that decides its step before it moves; `None` when the lane is off or has not found its place (it reads the path itself, so it never waits on a move). `lane_relative(stick, &frame, screen_right)` turns a `[x, y]` stick into a direction along the lane: the stick's horizontal axis runs the lane whichever way the camera sees it. Below `cos 80°` between the screen's right and the lane it falls back to `+forward`.
 
 ```rust
-let Some(frame) = lane_frame(world, hero) else { return };
-let input = lane_relative(stick, &frame, camera_right);
-let step = input.direction.map(|c| c * speed * dt);   // input.along / input.across are the signed parts
+let free = [stick[0], 0.0, stick[1]];
+let direction = match lane_frame(world, hero) {
+    Some(frame) => {
+        let lane = lane_relative(stick, &frame, camera_right).direction;   // .along / .across are the signed parts
+        std::array::from_fn(|i| free[i] + (lane[i] - free[i]) * frame.weight)
+    }
+    None => free,
+};
+let step = direction.map(|c| c * speed * dt);
 move_character(world, hero, [step[0], vertical, step[2]])?;
 ```
+
+`None` is normal before the lane has found its place, so a game must still move then, or the lane never engages.
 
 ## The report
 
@@ -90,7 +98,7 @@ A `motor` trace line for a lane call carries `"lane":{"s","ds","weight","lateral
 | L1300 | a `LaneConstraint` field is out of range (a time, `pull_speed` or `search_window` negative or not finite, `offset`/`s` not finite, `blend` outside 0..1): check-scene, and once per entity at runtime for a lane built in Rust |
 | L1301 | the `path` fails to load (runtime, once per entity; the lane stays inert) |
 | L1302 | a `LaneConstraint` entity has no `CharacterMotor` (check-scene, runtime) |
-| L1303 | warning: the path has a near-vertical span (horizontal tangent under 0.05), where the lane frame is carried from the neighbouring stretch (once per path) |
+| L1303 | warning: the path has a near-vertical span (horizontal tangent under 0.05), where the lane frame is carried from the neighbouring stretch (scanned once per path, reported once per entity) |
 
 `ludion explain L1300` prints the fix.
 

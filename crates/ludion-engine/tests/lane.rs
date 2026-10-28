@@ -18,7 +18,10 @@ use ludion_engine::{
     teleport_character, trace, write_jsonl,
 };
 use ludion_physics::{LaneEnd, LaneReport, MoveReport, PhysicsWorld};
-use ludion_protocol::command::{SimStepParams, StreamSubscribeParams, SubscribeMode};
+use ludion_protocol::ResponseBody;
+use ludion_protocol::command::{
+    EngineRestoreParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
+};
 use ludion_protocol::event::{Event, LogEvent};
 use ludion_protocol::frame::FrameFormat;
 use ludion_protocol::{Channel, Command};
@@ -804,6 +807,125 @@ fn a_lane_run_hashes_the_same_twice_and_at_one_and_eight_threads() {
     });
     assert_eq!(one, eight);
     assert_eq!(one, first);
+}
+
+/// The follow walk as a system that needs no resource, so it survives an `engine.restore` (which
+/// rebuilds the world and drops `Plan` and `Log`).
+fn follow_system(world: &mut World, _ctx: &SystemCtx) {
+    let hero = hero(world);
+    let d = follow(world, 0, hero);
+    let _ = move_character(world, hero, d);
+}
+
+fn restorable_bend(tag: &str) -> Engine {
+    let mut engine = Engine::builder()
+        .project_root(fixture_root(
+            tag,
+            &[("lane.path.yaml", path_yaml(&U_BEND, "catmull_rom", false))],
+        ))
+        .system("follow", follow_system)
+        .build()
+        .expect("the game builds");
+    engine.load_inline_scene(&bend_scene()).expect("loads");
+    engine
+}
+
+fn blend_of(engine: &Engine) -> f32 {
+    let world = engine.world();
+    world
+        .get::<LaneConstraint>(hero(world))
+        .unwrap()
+        .unwrap()
+        .blend
+}
+
+#[test]
+fn a_snapshot_restore_mid_lane_resumes_the_same_hashes() {
+    const TICKS: usize = 200;
+    let mut engine = restorable_bend("restore-ref");
+    let mut reference = Vec::new();
+    let mut forwards = Vec::new();
+    for _ in 0..TICKS {
+        engine.advance_live();
+        reference.push(engine.world_hash().unwrap().as_u64());
+        let world = engine.world();
+        forwards.push(lane_frame(world, hero(world)).map(|frame| frame.forward));
+    }
+    // The first tick has no physics world, so no move: the lane finds its place from the second.
+    let first = forwards
+        .iter()
+        .flatten()
+        .next()
+        .copied()
+        .expect("the lane finds its place");
+    let on_the_bend = (40..TICKS)
+        .find(|&t| forwards[t].is_some_and(|f| (0..3).any(|i| (f[i] - first[i]).abs() > 0.1)))
+        .expect("the hero reaches the bend");
+
+    for at in [5, on_the_bend] {
+        let mut before = restorable_bend(&format!("restore-a-{at}"));
+        for _ in 0..at {
+            before.advance_live();
+        }
+        let blend = blend_of(&before);
+        if at == 5 {
+            assert!(0.0 < blend && blend < 1.0, "tick 5 is mid-ease: {blend}");
+        } else {
+            assert_eq!(blend, 1.0, "tick {at} is on the bend at full blend");
+        }
+        let snapshot = match before.execute(Command::EngineSnapshot).unwrap().body {
+            ResponseBody::Snapshot { snapshot } => snapshot,
+            other => panic!("expected a snapshot, got {other:?}"),
+        };
+
+        let mut resumed = restorable_bend(&format!("restore-b-{at}"));
+        match resumed
+            .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+            .unwrap()
+            .body
+        {
+            ResponseBody::Restored { .. } => {}
+            other => panic!("expected a restore, got {other:?}"),
+        }
+        let world = resumed.world();
+        assert!(
+            lane_frame(world, hero(world)).is_some(),
+            "tick {at}: the frame is readable before any move"
+        );
+        assert_eq!(resumed.world_hash().unwrap().as_u64(), reference[at - 1]);
+        for (i, expected) in reference[at..].iter().enumerate() {
+            resumed.advance_live();
+            assert_eq!(
+                resumed.world_hash().unwrap().as_u64(),
+                *expected,
+                "tick {} after a restore at {at}",
+                at + i + 1
+            );
+        }
+    }
+}
+
+#[test]
+fn lane_frame_reads_an_authored_place_before_any_move() {
+    let engine = engine_for(
+        "authored",
+        &[("lane.path.yaml", straight(10.0))],
+        &scene(&format!(
+            "{}{}",
+            floor(),
+            hero_entity(
+                [1.0, 0.0, 0.0],
+                &lane_block(
+                    "lane.path.yaml",
+                    "        engaged: true\n        s: 1.0\n        blend: 1.0\n"
+                )
+            )
+        )),
+        level(),
+    );
+    let world = engine.world();
+    let frame = lane_frame(world, hero(world)).expect("an authored lane has a frame");
+    assert_eq!(frame.s, 1.0);
 }
 
 // ---- 12: debug draw and trace ----

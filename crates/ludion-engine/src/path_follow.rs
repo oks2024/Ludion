@@ -24,8 +24,10 @@
 //! posture; a path that fails to load raises `L1215` once per entity and the entity stays put.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use crate::lane::CentreLine;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -257,6 +259,8 @@ pub(crate) struct PathLibrary {
     paths: BTreeMap<String, Result<Loaded, Vec<Diagnostic>>>,
     /// The near-vertical spans of each path a lane asked about; see `lane_spans`.
     spans: BTreeMap<String, Vec<(f32, f32)>>,
+    /// The lane centre line of each path a lane drew; see `lane_centre`.
+    centres: BTreeMap<String, CentreLine>,
 }
 
 impl PathLibrary {
@@ -266,23 +270,14 @@ impl PathLibrary {
             root,
             paths: BTreeMap::new(),
             spans: BTreeMap::new(),
+            centres: BTreeMap::new(),
         }
     }
 
     /// The path `rel`, loading it on first use; `Err` with the loader's diagnostics.
     fn loaded(&mut self, rel: &str) -> Result<&Loaded, &[Diagnostic]> {
         if !self.paths.contains_key(rel) {
-            let loaded = ludion_assets::load_bytes(&self.root, rel)
-                .map_err(|d| vec![d])
-                .and_then(|bytes| {
-                    let text = std::str::from_utf8(&bytes.bytes).map_err(|_| {
-                        vec![Diagnostic::new(
-                            code::PATH_DOCUMENT_STRUCTURE,
-                            format!("path asset `{rel}` is not valid UTF-8 text"),
-                        )]
-                    })?;
-                    ludion_scene::check_path(text).map(|doc| Loaded::new(PathSampler::new(&doc)))
-                });
+            let loaded = load(&self.root, rel).map(Loaded::new);
             self.paths.insert(rel.to_string(), loaded);
         }
         match &self.paths[rel] {
@@ -304,7 +299,7 @@ impl PathLibrary {
     pub(crate) fn lane_spans(&mut self, rel: &str) -> &[(f32, f32)] {
         if !self.spans.contains_key(rel) {
             let spans = self
-                .cached(rel)
+                .loaded_sampler(rel)
                 .map(|sampler| crate::lane::vertical_spans(&sampler))
                 .unwrap_or_default();
             self.spans.insert(rel.to_string(), spans);
@@ -312,15 +307,49 @@ impl PathLibrary {
         &self.spans[rel]
     }
 
-    /// The sampler of `rel` when it is already loaded, without loading: for a reader that holds
-    /// only `&World`.
-    pub(crate) fn cached(&self, rel: &str) -> Option<Arc<PathSampler>> {
+    /// The `(position, right)` samples of the loaded path `rel`'s lane centre line, sampled the
+    /// first time a lane draws; empty for a path that is not loaded.
+    pub(crate) fn lane_centre(&mut self, rel: &str) -> CentreLine {
+        if !self.centres.contains_key(rel) {
+            let centre = self
+                .loaded_sampler(rel)
+                .map(|sampler| crate::lane::centre_line(&sampler))
+                .unwrap_or_default();
+            self.centres.insert(rel.to_string(), centre.into());
+        }
+        Arc::clone(&self.centres[rel])
+    }
+
+    /// The sampler of `rel` when it is already loaded; `None` for a path not loaded or failed.
+    fn loaded_sampler(&self, rel: &str) -> Option<Arc<PathSampler>> {
         self.paths
             .get(rel)?
             .as_ref()
             .ok()
             .map(|loaded| Arc::clone(&loaded.sampler))
     }
+
+    /// The sampler of `rel` for a reader that holds only `&World`: the loaded one, or on a miss one
+    /// loaded now and not cached. `None` for a path that failed to load; the diagnostics are left to
+    /// the first `&mut` caller.
+    pub(crate) fn peek(&self, rel: &str) -> Option<Arc<PathSampler>> {
+        match self.paths.get(rel) {
+            Some(loaded) => loaded.as_ref().ok().map(|l| Arc::clone(&l.sampler)),
+            None => load(&self.root, rel).ok().map(Arc::new),
+        }
+    }
+}
+
+/// Reads and checks the path asset `rel` under `root`.
+fn load(root: &Path, rel: &str) -> Result<PathSampler, Vec<Diagnostic>> {
+    let bytes = ludion_assets::load_bytes(root, rel).map_err(|d| vec![d])?;
+    let text = std::str::from_utf8(&bytes.bytes).map_err(|_| {
+        vec![Diagnostic::new(
+            code::PATH_DOCUMENT_STRUCTURE,
+            format!("path asset `{rel}` is not valid UTF-8 text"),
+        )]
+    })?;
+    ludion_scene::check_path(text).map(|doc| PathSampler::new(&doc))
 }
 
 /// Whether `world` holds at least one [`PathFollower`] — the key the engine installs

@@ -386,6 +386,27 @@ pub(crate) fn vertical_spans(sampler: &PathSampler) -> Vec<(f32, f32)> {
     narrowed
 }
 
+/// A path's lane centre line, shared: `(position, right)` per sample.
+pub(crate) type CentreLine = Arc<[([f32; 3], [f32; 3])]>;
+
+/// The `(position, right)` of `sampler` at the samples a lane draws its centre line through: every
+/// [`LANE_DRAW_STEP`] metres, capped at 256 segments.
+pub(crate) fn centre_line(sampler: &PathSampler) -> Vec<([f32; 3], [f32; 3])> {
+    let length = sampler.length();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let segments = ((length / f64::from(LANE_DRAW_STEP)).ceil() as usize).clamp(1, 256);
+    #[allow(clippy::cast_possible_truncation)]
+    let narrow = |v: [f64; 3]| [v[0] as f32, v[1] as f32, v[2] as f32];
+    (0..=segments)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let s = length * i as f64 / segments as f64;
+            let frame = sampler.frame_at(s);
+            (narrow(frame.position), narrow(frame.right))
+        })
+        .collect()
+}
+
 /// Metres an open lane's `s` may fall short of an end and still count as at it: the stop clamp lands
 /// within float rounding of the end, not exactly on it.
 const AT_END_EPS: f64 = 1e-3;
@@ -393,6 +414,8 @@ const AT_END_EPS: f64 = 1e-3;
 /// The lane fields the hook and the report read, copied out of the component for one call.
 struct Pull {
     sampler: Arc<PathSampler>,
+    /// The path's centre line, from [`centre_line`]; drawn without sampling.
+    centre: CentreLine,
     offset: f32,
     ends: LaneEnds,
     search_window: f32,
@@ -512,6 +535,7 @@ fn norm(v: [f32; 3]) -> f32 {
 struct Resolved {
     lane: LaneConstraint,
     sampler: Arc<PathSampler>,
+    centre: CentreLine,
 }
 
 /// Reads `entity`'s lane and loads its path; `None` when the lane is inert (absent, no path, fully
@@ -538,11 +562,12 @@ fn resolve(world: &mut World, entity: EntityId) -> Option<Resolved> {
     let loaded = world.resource_mut::<PathLibrary>().map(|library| {
         library.sampler(&lane.path).map(|sampler| {
             let spans = library.lane_spans(&lane.path).to_vec();
-            (sampler, spans)
+            let centre = library.lane_centre(&lane.path);
+            (sampler, spans, centre)
         })
     })?;
     match loaded {
-        Ok((sampler, spans)) => {
+        Ok((sampler, spans, centre)) => {
             if !spans.is_empty() {
                 let diagnostic = path_vertical(&lane.path, &spans);
                 crate::diagnostics::report_full(
@@ -551,7 +576,11 @@ fn resolve(world: &mut World, entity: EntityId) -> Option<Resolved> {
                     diagnostic,
                 );
             }
-            Some(Resolved { lane, sampler })
+            Some(Resolved {
+                lane,
+                sampler,
+                centre,
+            })
         }
         Err(causes) => {
             let diagnostic = causes
@@ -577,7 +606,11 @@ pub(crate) fn move_on_lane(
     entity: EntityId,
     displacement: [f32; 3],
 ) -> Option<Result<MoveReport, MotorError>> {
-    let Resolved { lane, sampler } = resolve(world, entity)?;
+    let Resolved {
+        lane,
+        sampler,
+        centre,
+    } = resolve(world, entity)?;
     let dt = world
         .resource::<PhysicsWorld>()
         .map(|physics| physics.gameplay_dt(world))?;
@@ -591,6 +624,7 @@ pub(crate) fn move_on_lane(
     );
     let pull = Pull {
         sampler,
+        centre,
         offset: lane.offset,
         ends: lane.ends,
         search_window: lane.search_window,
@@ -633,15 +667,10 @@ fn draw(world: &mut World, entity: EntityId, pull: &Pull, report: &LaneReport) {
     else {
         return;
     };
-    let length = pull.sampler.length();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let segments = ((length / f64::from(LANE_DRAW_STEP)).ceil() as usize).clamp(1, 256);
-    let points: Vec<[f32; 3]> = (0..=segments)
-        .map(|i| {
-            #[allow(clippy::cast_precision_loss)]
-            let s = length * i as f64 / segments as f64;
-            frame_at(&pull.sampler, s, pull.offset, pull.weight).point
-        })
+    let points: Vec<[f32; 3]> = pull
+        .centre
+        .iter()
+        .map(|(position, right)| [0, 1, 2].map(|axis| position[axis] + pull.offset * right[axis]))
         .collect();
     let mut path_colour = LANE_PATH;
     path_colour[3] = report.weight;
@@ -722,7 +751,8 @@ fn settle(
 /// The lane frame of `entity` as the last `move_character` left it, for a game system that reads
 /// the lane before it moves (a stick turned into [`lane_relative`] input). `None` without a
 /// `LaneConstraint`, with no path, before the lane has found its place (`s` is `null`), when the
-/// lane is fully off, or before a move has loaded the path.
+/// lane is fully off. A path no move has loaded yet is read uncached, so the answer depends only on
+/// the world and the project's files, never on what ran before.
 ///
 /// # Example
 /// ```
@@ -739,7 +769,7 @@ pub fn lane_frame(world: &World, entity: EntityId) -> Option<LaneFrame> {
         return None;
     }
     let s = lane.s?;
-    let sampler = world.resource::<PathLibrary>()?.cached(&lane.path)?;
+    let sampler = world.resource::<PathLibrary>()?.peek(&lane.path)?;
     Some(frame_at(
         &sampler,
         f64::from(s),
@@ -868,6 +898,7 @@ mod tests {
             .unwrap();
         let sampler = Arc::new(straight());
         let pull = Pull {
+            centre: centre_line(&sampler).into(),
             sampler,
             offset: 0.0,
             ends: LaneEnds::Extend,
@@ -904,6 +935,18 @@ mod tests {
         assert_eq!(drawn.len(), 40 + 3 + 1 + 1 + 1);
         let line = drawn.iter().find(|s| s.color == error).unwrap();
         assert_eq!((line.a, line.b), (feet, frame.point));
+    }
+
+    #[test]
+    fn the_centre_line_samples_position_and_right_every_quarter_metre() {
+        let path = straight();
+        let centre = centre_line(&path);
+        assert_eq!(centre.len(), 41);
+        let right = path.frame_at(0.0).right.map(|c| c as f32);
+        for (i, (position, r)) in centre.iter().enumerate() {
+            close(*position, [0.25 * i as f32, 0.0, 0.0]);
+            close(*r, right);
+        }
     }
 
     #[test]
@@ -1095,6 +1138,7 @@ mod tests {
     fn hook(path: PathSampler, ends: LaneEnds, weight: f32, s: f64) -> LaneHook {
         LaneHook {
             pull: Pull {
+                centre: centre_line(&path).into(),
                 sampler: Arc::new(path),
                 offset: 0.0,
                 ends,
