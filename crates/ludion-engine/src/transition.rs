@@ -510,8 +510,10 @@ pub(crate) fn perform(
 
     // (g) Build the continued driver (the `SimDriver::restore` mold — carries the RNG, frame,
     //     run-state, and speed, unlike `scene.load`'s `SimDriver::new`, which would reset them).
-    let schedule =
-        engine.build_schedule(scene.physics.as_ref(), crate::path_follow::present(&world));
+    let schedule = engine.build_schedule(
+        scene.physics.as_ref(),
+        crate::engine::EngineSystems::of(&world),
+    );
     let driver = SimDriver::restore(
         world,
         schedule,

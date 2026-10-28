@@ -39,6 +39,7 @@ mod base64;
 pub mod bisect;
 mod bounds;
 pub mod builder;
+mod camera_rig;
 mod character;
 mod collapse;
 mod collider_mesh;
@@ -147,6 +148,10 @@ pub use lane::{
     LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH,
     LaneConstraint, LaneEnds, LaneInput, lane_error_colour, lane_frame, lane_relative,
 };
+pub use ludion_camera::{
+    BlendCurve, BlendIn, CameraRig, LookAhead, RigConfig, RigMode, RigState, ShakeConfig, Springs,
+    TrackRig, VerticalAnchor, add_trauma, camera_relative, camera_relative_yaw, snap_rig,
+};
 pub use ludion_scene::{
     PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler, check_path,
 };
@@ -205,9 +210,9 @@ pub use replay::{
 pub use residue_store::ResidueStore;
 pub use scene_check::{
     expand_scene, font_table_faults, prefab_singleton_diagnostics, scene_atlas_diagnostics,
-    scene_audio_diagnostics, scene_engine_diagnostics, scene_font_diagnostics,
-    scene_hierarchy_body_diagnostics, scene_layer_diagnostics, scene_motor_diagnostics,
-    scene_physics_diagnostics, scene_sensor_diagnostics,
+    scene_audio_diagnostics, scene_camera_rig_diagnostics, scene_engine_diagnostics,
+    scene_font_diagnostics, scene_hierarchy_body_diagnostics, scene_layer_diagnostics,
+    scene_motor_diagnostics, scene_physics_diagnostics, scene_sensor_diagnostics,
 };
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use shutdown::Shutdown;

@@ -118,6 +118,26 @@ pub enum GiRebakeMode {
 /// keyframe.
 pub const KEYFRAME_INTERVAL: u64 = 300;
 
+/// The engine-owned systems a world is scheduled with: each installs only when the world holds
+/// the component it serves, so a world without one keeps its schedule, describe and hashes.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct EngineSystems {
+    /// The world holds a `PathFollower`.
+    pub(crate) path_follow: bool,
+    /// The world holds a `CameraRig`.
+    pub(crate) camera_rig: bool,
+}
+
+impl EngineSystems {
+    /// The systems `world` needs.
+    pub(crate) fn of(world: &World) -> Self {
+        Self {
+            path_follow: crate::path_follow::present(world),
+            camera_rig: crate::camera_rig::present(world),
+        }
+    }
+}
+
 /// One registered game system: its name, its runnable body, and the metadata an editor
 /// Systems panel introspects — where the function is *defined* (`fn_path`) and where it was *wired*
 /// into the schedule (`registered_at`). Run in registration order; the [`Engine`] rebuilds a fresh
@@ -738,7 +758,7 @@ impl Engine {
         };
         // Install the game schedule into the initial (empty) world so an engine that is driven before
         // any `scene.load` still runs its systems.
-        let schedule = engine.build_schedule(None, false);
+        let schedule = engine.build_schedule(None, EngineSystems::default());
         engine.driver = SimDriver::new(World::new(), schedule, SimConfig::default());
         engine.install_audio_queue();
         engine.install_presentation_rules();
@@ -758,11 +778,12 @@ impl Engine {
         engine
     }
 
-    /// Builds a fresh [`Schedule`]: [`path_follow`](crate::path_follow) first when `path_follow` is
-    /// set (the world being scheduled holds a `PathFollower`), so a rider reads this tick's platform
+    /// Builds a fresh [`Schedule`]: [`path_follow`](crate::path_follow) first when `systems.path_follow`
+    /// is set (the world being scheduled holds a `PathFollower`), so a rider reads this tick's platform
     /// pose; then the registered [`systems`](Engine::systems), in registration order; then the
-    /// physics triple when `physics` is `Some` — always last, after every game system
-    /// (`Plan/physics.md` W2). Called at every world reset — construction, `scene.load`,
+    /// physics triple when `physics` is `Some` — after every game system (`Plan/physics.md` W2) —
+    /// then [`camera_rig`](crate::camera_rig) when `systems.camera_rig` is set, so the camera reads
+    /// this tick's settled target pose. Called at every world reset — construction, `scene.load`,
     /// `engine.restore`, `scene.switch` — so the game schedule is reinstated instead of dropped (the
     /// bug this fixes: the old code hard-coded `Schedule::new()` on load and restore, silently
     /// discarding any configured schedule).
@@ -773,14 +794,15 @@ impl Engine {
     pub(crate) fn build_schedule(
         &self,
         physics: Option<&ScenePhysics>,
-        path_follow: bool,
+        systems: EngineSystems,
     ) -> Schedule {
         let mut schedule = Schedule::new();
-        crate::path_follow::install(&mut schedule, path_follow);
+        crate::path_follow::install(&mut schedule, systems.path_follow);
         for spec in self.systems.iter().filter(|s| s.phase == Phase::Sim) {
             schedule.add_system_shared(spec.name, spec.run.clone());
         }
         scene_physics::install(&mut schedule, physics);
+        crate::camera_rig::install(&mut schedule, systems.camera_rig);
         for spec in self
             .systems
             .iter()
@@ -1488,6 +1510,8 @@ impl Engine {
         scene_physics::report_scaled_colliders(self.driver.world_mut());
         let path_follow_installed = self.path_follow_installed();
         crate::path_follow::report_uninstalled(self.driver.world_mut(), path_follow_installed);
+        let camera_rig_installed = self.camera_rig_installed();
+        crate::camera_rig::report_uninstalled(self.driver.world_mut(), camera_rig_installed);
         crate::lane::report_without_motor(self.driver.world_mut());
         let (physics_installed, game_systems) =
             self.driver
@@ -1496,7 +1520,8 @@ impl Engine {
                     ludion_physics::STEP => (true, game),
                     ludion_physics::WRITE
                     | ludion_physics::MIRROR
-                    | crate::path_follow::SYSTEM_NAME => (physics, game),
+                    | crate::path_follow::SYSTEM_NAME
+                    | crate::camera_rig::SYSTEM_NAME => (physics, game),
                     _ => (physics, true),
                 });
         scene_physics::report_unrun_colliders(
@@ -2330,6 +2355,13 @@ impl Engine {
         self.driver
             .system_names()
             .any(|name| name == crate::path_follow::SYSTEM_NAME)
+    }
+
+    /// Whether the live schedule runs [`camera_rig`](crate::camera_rig).
+    fn camera_rig_installed(&self) -> bool {
+        self.driver
+            .system_names()
+            .any(|name| name == crate::camera_rig::SYSTEM_NAME)
     }
 
     /// Takes the current world's diagnostics latch, for [`install_diagnostics`](Engine::install_diagnostics)
@@ -3174,8 +3206,7 @@ impl Engine {
         let count = world.entity_count() as u32;
         // Loading a scene resets the world, but the systems must survive it (they are engine
         // configuration, not world state), so the schedule is rebuilt from the persistent list.
-        let schedule =
-            self.build_schedule(scene.physics.as_ref(), crate::path_follow::present(&world));
+        let schedule = self.build_schedule(scene.physics.as_ref(), EngineSystems::of(&world));
         let driver = SimDriver::new(
             world,
             schedule,
@@ -3912,6 +3943,12 @@ impl Engine {
         if self.scene_physics.is_some() {
             systems.extend(scene_physics::describe_entries(
                 self.systems.len() + path_follow,
+            ));
+        }
+        if self.camera_rig_installed() {
+            let physics = if self.scene_physics.is_some() { 3 } else { 0 };
+            systems.push(crate::camera_rig::describe_entry(
+                self.systems.len() + path_follow + physics,
             ));
         }
         if path_follow == 1 {

@@ -27,6 +27,7 @@ mod shake;
 mod spring;
 mod step;
 mod track;
+mod validate;
 
 pub use relative::{camera_relative, camera_relative_yaw};
 pub use rig::{
@@ -34,3 +35,4 @@ pub use rig::{
     ShakeConfig, Springs, TrackRig, VerticalAnchor, add_trauma, snap_rig,
 };
 pub use step::{RigInput, RigOutput, step_rig};
+pub use validate::invalid_field;

@@ -1757,6 +1757,7 @@ dependencies = [
  "base64 0.13.1",
  "crossbeam-channel",
  "ludion-assets",
+ "ludion-camera",
  "ludion-cook",
  "ludion-core",
  "ludion-ecs",

@@ -1477,6 +1477,36 @@ pub mod code {
     /// the tangent. A warning, raised when a lane first loads the path.
     pub const LANE_PATH_VERTICAL: DiagnosticCode = DiagnosticCode::new("L1303");
 
+    /// `L1304` — a `CameraRig` field is out of range: a half-life, slack, distance, decay or limit is
+    /// negative or not finite, a window, speed, frequency or exponent is not positive, an offset is
+    /// not finite, `fov_y_deg` is outside (0, 180) or `trauma` is outside [0, 1]. Raised by the
+    /// component's validator and, for a rig built in Rust, once per entity at runtime.
+    pub const CAMERA_RIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1304");
+
+    /// `L1305` — a `CameraRig` `target` names an entity that no longer exists. A warning raised once
+    /// per rig at runtime; the camera holds its last pose.
+    pub const CAMERA_RIG_TARGET_MISSING: DiagnosticCode = DiagnosticCode::new("L1305");
+
+    /// `L1306` — the `kind: path` document named by a rig's track `path` failed to load. Raised once
+    /// per rig at runtime; the camera holds its last pose.
+    pub const CAMERA_RIG_PATH_UNLOADED: DiagnosticCode = DiagnosticCode::new("L1306");
+
+    /// `L1307` — a `CameraRig` entity has no `Camera`, so there is no camera to pose. Raised by
+    /// `check-scene` and once per entity at runtime.
+    pub const CAMERA_RIG_WITHOUT_CAMERA: DiagnosticCode = DiagnosticCode::new("L1307");
+
+    /// `L1308` — more than one entity carries a `CameraRig`. Raised by `check-scene` and once at
+    /// runtime; only the lowest entity id runs.
+    pub const CAMERA_RIG_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L1308");
+
+    /// `L1309` — a `CameraRig` entity has a `Parent`. A rig writes a world-space pose, so the camera
+    /// must be a root entity. Raised by `check-scene` and once per entity at runtime.
+    pub const CAMERA_RIG_PARENTED: DiagnosticCode = DiagnosticCode::new("L1309");
+
+    /// `L1310` — a `CameraRig` exists in a world whose `camera_rig` system was not installed (the
+    /// rig was spawned after the engine was built without one). Raised once at runtime.
+    pub const CAMERA_RIG_NOT_INSTALLED: DiagnosticCode = DiagnosticCode::new("L1310");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7382,6 +7412,81 @@ sideways direction carried over from the path's previous stretch.
 Fix: tilt the span so it keeps some horizontal travel, or shorten it; a lane is meant for paths that
 run along the ground, not for ladders or shafts.",
     },
+    CodeEntry {
+        code: code::CAMERA_RIG_INVALID,
+        severity: Severity::Error,
+        title: "a camera rig field is out of range",
+        explanation: "A `CameraRig` field is out of range. A half-life, `look_ahead.distance`, `up_slack`, `down_slack`,
+`blend_in.seconds`, `decay_per_second`, `max_offset` or `max_angle_deg` is negative or not finite;
+`search_window`, `full_speed`, `frequency` or `exponent` is not a positive finite number; `offset` or
+`focus_offset` is not finite; `fov_y_deg` is outside (0, 180); `trauma` is outside [0, 1]. The pointer
+names the field. A rig built in Rust with such a value is reported once per entity at runtime and
+holds, so the camera stays where it was.
+
+Fix: give the field a value in the range above (units are in the field's name: seconds, metres,
+degrees).",
+    },
+    CodeEntry {
+        code: code::CAMERA_RIG_TARGET_MISSING,
+        severity: Severity::Warning,
+        title: "a camera rig target no longer exists",
+        explanation: "The entity named by `CameraRig.rig.target` has been despawned, or never existed. The rig reports
+this once and holds its last pose until the target is set again. A `target` of null is not an
+error: a game may assign it later.
+
+Fix: point `target` at a live entity, or set it to null while there is nothing to follow.",
+    },
+    CodeEntry {
+        code: code::CAMERA_RIG_PATH_UNLOADED,
+        severity: Severity::Error,
+        title: "a camera rig track path failed to load",
+        explanation: "The `kind: path` document named by the rig's track `path` could not be loaded, so the rig has no
+track. It is reported once per rig and the camera holds its last pose. The cause (missing file, wrong
+kind, malformed document) follows in the diagnostic. An empty `path` is not an error: the rig is inert.
+
+Fix: point `path` at an existing `kind: path` document, relative to the content root, and check it
+with `ludion check-scene`.",
+    },
+    CodeEntry {
+        code: code::CAMERA_RIG_WITHOUT_CAMERA,
+        severity: Severity::Error,
+        title: "a camera rig on an entity with no camera",
+        explanation: "An entity carries a `CameraRig` but no `Camera`, so there is nothing to pose. `ludion check-scene`
+reports it at `/entities/<i>/components/CameraRig`; a rig on an entity spawned by game code is reported
+once at runtime and holds.
+
+Fix: put the rig on the camera entity.",
+    },
+    CodeEntry {
+        code: code::CAMERA_RIG_DUPLICATE,
+        severity: Severity::Error,
+        title: "more than one camera rig",
+        explanation: "More than one entity carries a `CameraRig`. A scene has one camera, so one rig. `ludion
+check-scene` names both entities; at runtime only the rig on the lowest entity id runs and the rest
+are ignored.
+
+Fix: keep one rig, on the camera entity.",
+    },
+    CodeEntry {
+        code: code::CAMERA_RIG_PARENTED,
+        severity: Severity::Error,
+        title: "a camera rig on an entity with a parent",
+        explanation: "A `CameraRig` entity has a `Parent`. The rig computes a world-space pose and writes it as the
+camera's `Transform`, which would be read as local to the parent. At runtime the rig is reported once
+and holds.
+
+Fix: make the camera a root entity.",
+    },
+    CodeEntry {
+        code: code::CAMERA_RIG_NOT_INSTALLED,
+        severity: Severity::Error,
+        title: "a camera rig exists but its system is not installed",
+        explanation: "A `CameraRig` entity exists in a world whose schedule has no `camera_rig` system. The system is
+installed when the world holds a rig at build, restore or scene switch; a rig spawned afterwards by
+game code is never advanced.
+
+Fix: author the rig in the scene so the engine installs the system, instead of spawning it at runtime.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -10055,6 +10160,13 @@ mod tests {
         code::LANE_PATH_UNLOADED,
         code::LANE_WITHOUT_MOTOR,
         code::LANE_PATH_VERTICAL,
+        code::CAMERA_RIG_INVALID,
+        code::CAMERA_RIG_TARGET_MISSING,
+        code::CAMERA_RIG_PATH_UNLOADED,
+        code::CAMERA_RIG_WITHOUT_CAMERA,
+        code::CAMERA_RIG_DUPLICATE,
+        code::CAMERA_RIG_PARENTED,
+        code::CAMERA_RIG_NOT_INSTALLED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -10305,6 +10417,7 @@ mod tests {
             code::TEXTURE_CHECK_WARNING,
             code::COLLIDER_SCALE_IGNORED,
             code::LANE_PATH_VERTICAL,
+            code::CAMERA_RIG_TARGET_MISSING,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

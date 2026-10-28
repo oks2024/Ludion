@@ -26,7 +26,7 @@ ludion-spatial       → core, ecs                       [schemars, serde, serde
 ludion-protocol      → core                            [schemars, serde, serde_json, xxhash-rust, zstd]
 ludion-render-graph  → core                            [wgpu, pollster, png, serde_json]
 ludion-renderer      → core, render-graph, assets, font [wgpu, bytemuck]
-ludion-engine        → core, ecs, scene, sculpt, assets, font, sim, spatial, renderer, protocol
+ludion-engine        → core, ecs, scene, sculpt, assets, font, sim, spatial, camera, renderer, protocol
                                                        [crossbeam-channel, schemars, serde, serde_json]
 ludion-server        → core, engine, assets†, protocol [tokio, tokio-tungstenite, futures-util,
                                                         crossbeam-channel, serde_json]

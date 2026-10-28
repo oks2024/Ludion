@@ -772,9 +772,11 @@ pub(crate) fn restore_into(
 
     // Rebuilt so a restored engine keeps running its systems — restore resets the world, but the
     // schedule is engine configuration that must survive it (the same fix as `scene.load`). Built
-    // once the world holds its components: `path_follow` installs on a world with a follower.
-    let schedule =
-        engine.build_schedule(scene_physics.as_ref(), crate::path_follow::present(&world));
+    // once the world holds its components: `path_follow` and `camera_rig` install on a world with a follower or a rig.
+    let schedule = engine.build_schedule(
+        scene_physics.as_ref(),
+        crate::engine::EngineSystems::of(&world),
+    );
     let driver = ludion_sim::SimDriver::restore(
         world,
         schedule,

@@ -365,6 +365,56 @@ pub fn scene_motor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// Every `L1307`/`L1308`/`L1309` a checked scene's camera rigs report: a `CameraRig` on an
+/// entity with no `Camera`, a second rig (the pointer is at the second, the message names both
+/// entities) and a rig on an entity with a `Parent`. The field rules (`L1304`) are reported
+/// elsewhere.
+pub fn scene_camera_rig_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut first: Option<usize> = None;
+    for (index, entity) in scene.entities.iter().enumerate() {
+        let has = |wanted: &str| entity.components.iter().any(|(name, _)| name == wanted);
+        if !has("CameraRig") {
+            continue;
+        }
+        let at = format!("/entities/{index}/components");
+        if !has("Camera") {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::CAMERA_RIG_WITHOUT_CAMERA,
+                    "this `CameraRig` has no `Camera` beside it, so there is nothing to pose",
+                )
+                .with_path(format!("{at}/CameraRig"))
+                .with_help("put the rig on the camera entity"),
+            );
+        }
+        match first {
+            None => first = Some(index),
+            Some(earlier) => diagnostics.push(
+                Diagnostic::new(
+                    code::CAMERA_RIG_DUPLICATE,
+                    format!(
+                        "entities {earlier} and {index} both carry a `CameraRig`; only the first                          runs"
+                    ),
+                )
+                .with_path(format!("{at}/CameraRig"))
+                .with_help("keep one rig, on the camera entity"),
+            ),
+        }
+        if has("Parent") {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::CAMERA_RIG_PARENTED,
+                    "this `CameraRig` has a `Parent`; a rig writes a world-space pose, so the                      camera must be a root entity",
+                )
+                .with_path(format!("{at}/Parent"))
+                .with_help("make the camera a root"),
+            );
+        }
+    }
+    diagnostics
+}
+
 /// Every `L1261` a checked scene's solver colliders report when the scene has no `physics:` block:
 /// the solver is never installed, so a 3D shape or a rigid body would silently do nothing. The
 /// claim rule is [`ludion_physics::claims`].
@@ -716,6 +766,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_hierarchy_body_diagnostics(scene));
     diagnostics.extend(scene_physics_diagnostics(scene));
     diagnostics.extend(scene_motor_diagnostics(scene));
+    diagnostics.extend(scene_camera_rig_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
     diagnostics.extend(crate::skin_bone::scene_skin_bone_diagnostics(
         project_root,
@@ -1104,6 +1155,94 @@ entities:
             "      LaneConstraint: {}\n      CharacterMotor: {}\n",
         );
         assert!(scene_motor_diagnostics(&scene).is_empty());
+    }
+
+    fn rig_scene(entities: &str) -> Scene {
+        let source = format!(
+            "format: 1
+seed: 1
+entities:
+{entities}"
+        );
+        ludion_scene::check(&source, &crate::builtin_registry())
+            .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"))
+    }
+
+    #[test]
+    fn a_rig_on_a_camera_root_is_clean() {
+        let scene = rig_scene(
+            "  - name: cam
+    components:
+      Camera: {}
+      CameraRig: {}
+  - name: hero
+    components: {}
+",
+        );
+        assert!(scene_camera_rig_diagnostics(&scene).is_empty());
+    }
+
+    #[test]
+    fn a_rig_without_a_camera_is_l1307() {
+        let scene = rig_scene(
+            "  - name: cam
+    components:
+      CameraRig: {}
+",
+        );
+        let found = scene_camera_rig_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CAMERA_RIG_WITHOUT_CAMERA);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/CameraRig")
+        );
+    }
+
+    #[test]
+    fn a_second_rig_is_l1308_naming_both_entities() {
+        let scene = rig_scene(
+            "  - name: a
+    components:
+      Camera: {}
+      CameraRig: {}
+  - name: b
+    components:
+      Camera: {}
+      CameraRig: {}
+",
+        );
+        let found = scene_camera_rig_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CAMERA_RIG_DUPLICATE);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/1/components/CameraRig")
+        );
+        assert!(found[0].message.contains("0 and 1"), "{}", found[0].message);
+    }
+
+    #[test]
+    fn a_parented_rig_is_l1309() {
+        let scene = rig_scene(
+            "  - name: cam
+    components:
+      Camera: {}
+      CameraRig: {}
+      Parent:
+        index: 1
+        generation: 0
+  - name: base
+    components: {}
+",
+        );
+        let found = scene_camera_rig_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CAMERA_RIG_PARENTED);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/Parent")
+        );
     }
 
     #[test]

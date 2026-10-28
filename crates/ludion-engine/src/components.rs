@@ -4426,6 +4426,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<LaneConstraint>("LaneConstraint")
         .expect("unique");
+    // The camera rig, appended after the lane.
+    registry
+        .register_validated::<ludion_camera::CameraRig>("CameraRig")
+        .expect("unique");
     registry
 }
 
@@ -4901,12 +4905,13 @@ mod tests {
                 "CharacterMotorState",
                 "SurfaceVelocity",
                 "LaneConstraint",
+                "CameraRig",
             ]
         );
         assert_eq!(
             registry.len(),
-            39,
-            "appending the lane constraint grows the registry by exactly one"
+            40,
+            "appending the camera rig grows the registry by exactly one"
         );
     }
 
@@ -5761,6 +5766,7 @@ mod tests {
         clean::<ludion_physics::CharacterMotor>("CharacterMotor");
         clean::<ludion_physics::SurfaceVelocity>("SurfaceVelocity");
         clean::<LaneConstraint>("LaneConstraint");
+        clean::<ludion_camera::CameraRig>("CameraRig");
         clean::<DirectionalLight>("DirectionalLight");
         clean::<Sprite>("Sprite");
         clean::<Mesh>("Mesh");

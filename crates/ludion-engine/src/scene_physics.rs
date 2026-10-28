@@ -121,6 +121,7 @@ pub(crate) fn bare_driver(
     let mut schedule = Schedule::new();
     crate::path_follow::install(&mut schedule, crate::path_follow::present(&world));
     install(&mut schedule, scene.physics.as_ref());
+    crate::camera_rig::install(&mut schedule, crate::camera_rig::present(&world));
     SimDriver::new(
         world,
         schedule,
