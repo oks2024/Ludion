@@ -329,6 +329,15 @@ impl PathLibrary {
             .map(|loaded| Arc::clone(&loaded.sampler))
     }
 
+    /// The debug polyline of the loaded path `rel`; `None` for a path not loaded or failed.
+    pub(crate) fn polyline(&self, rel: &str) -> Option<Arc<[[f32; 3]]>> {
+        self.paths
+            .get(rel)?
+            .as_ref()
+            .ok()
+            .map(|loaded| Arc::clone(&loaded.polyline))
+    }
+
     /// The sampler of `rel` for a reader that holds only `&World`: the loaded one, or on a miss one
     /// loaded now and not cached. `None` for a path that failed to load; the diagnostics are left to
     /// the first `&mut` caller.

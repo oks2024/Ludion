@@ -1,0 +1,241 @@
+# Feature: CameraRig — a scene camera that rides a rail (a `kind: path` track) after a target. The
+# hero cube follows `paths/camera-route.path.yaml`; the camera, on `paths/camera-track.path.yaml`,
+# keeps its offset behind and above the hero, projected onto the rail. Bare, this scene shows
+# the authored pose, set near where the rig snaps on its first tick; the game half is
+# `crates/ludion-testkit/tests/common/mod.rs`, which at tick 60 swaps to a side-on rig (a timed
+# blend), cuts back with `snap_rig` at 180 and pulses trauma at 220 (`ludion docs camera`).
+# Run `--debug-draw camera` to see the rail, the search window, the eyes, the focus and the anchor.
+format: 1
+name: "camera-rig - a rail camera follows a hero cube, with blends, a snap and a shake"
+seed: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.2
+          - 4.5
+        rotation:
+          - -31.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 55.0
+      CameraRig:
+        target:
+          index: 3
+          generation: 0
+        rig:
+          mode:
+            track:
+              path: paths/camera-track.path.yaml
+              offset:
+                - 0.0
+                - 2.2
+                - 4.5
+  - name: sun
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.5
+          - -0.8
+          - -0.35
+        color:
+          - 1.0
+          - 0.96
+          - 0.86
+        intensity: 2.6
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - -15.0
+        scale:
+          - 60.0
+          - 1.0
+          - 70.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.42
+          - 0.46
+          - 0.4
+          - 1.0
+        roughness: 0.9
+  - name: hero
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.95
+          - 0.55
+          - 0.12
+          - 1.0
+        roughness: 0.5
+      PathFollower:
+        path: paths/camera-route.path.yaml
+        speed: 4.0
+        mode: once
+  - name: landmark-1
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 0.75
+          - -4.0
+        scale:
+          - 1.4
+          - 1.5
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.78
+          - 0.3
+          - 0.26
+          - 1.0
+        roughness: 0.7
+  - name: landmark-2
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 1.25
+          - -6.0
+        scale:
+          - 1.4
+          - 2.5
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.5
+          - 0.8
+          - 1.0
+        roughness: 0.7
+  - name: landmark-3
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 1.75
+          - -12.0
+        scale:
+          - 1.4
+          - 3.5
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.75
+          - 0.3
+          - 1.0
+        roughness: 0.7
+  - name: landmark-4
+    components:
+      Transform:
+        translation:
+          - 9.0
+          - 0.75
+          - -14.0
+        scale:
+          - 1.4
+          - 1.5
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.7
+          - 0.45
+          - 1.0
+        roughness: 0.7
+  - name: landmark-5
+    components:
+      Transform:
+        translation:
+          - -7.0
+          - 1.25
+          - -20.0
+        scale:
+          - 1.4
+          - 2.5
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.78
+          - 0.3
+          - 0.26
+          - 1.0
+        roughness: 0.7
+  - name: landmark-6
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 1.75
+          - -22.0
+        scale:
+          - 1.4
+          - 3.5
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.5
+          - 0.8
+          - 1.0
+        roughness: 0.7
+  - name: landmark-7
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.75
+          - -28.0
+        scale:
+          - 1.4
+          - 1.5
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.75
+          - 0.3
+          - 1.0
+        roughness: 0.7
+  - name: landmark-8
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 1.25
+          - -32.0
+        scale:
+          - 1.4
+          - 2.5
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.7
+          - 0.45
+          - 1.0
+        roughness: 0.7

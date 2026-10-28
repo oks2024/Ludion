@@ -14,8 +14,8 @@ use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
-    Camera, CameraRig, Egress, EgressChannels, Engine, Name, RigMode, Transform, add_trauma,
-    snap_rig,
+    Camera, CameraRig, DebugCategories, Egress, EgressChannels, Engine, Name, RigMode, Transform,
+    add_trauma, snap_rig,
 };
 use ludion_protocol::command::{
     EngineRestoreParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
@@ -485,6 +485,50 @@ fn a_snapshot_restore_mid_blend_with_trauma_resumes_the_same_hashes() {
             i + 1
         );
     }
+}
+
+// ---- debug draw ----
+
+/// Per-tick hashes, the categories drawn and the snapshot bytes of a run through a blend and a
+/// trauma pulse.
+fn draw_run(tag: &str, categories: DebugCategories) -> (Vec<u64>, Vec<&'static str>, Vec<u8>) {
+    let mut engine = restorable(tag);
+    engine.set_debug_draw(categories);
+    let mut hashes = Vec::new();
+    for _ in 0..120 {
+        engine.advance_live();
+        hashes.push(engine.world_hash().unwrap().as_u64());
+    }
+    let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => serde_json::to_vec(&snapshot).unwrap(),
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    (hashes, engine.debug_draw_drawn(), snapshot)
+}
+
+#[test]
+fn the_camera_category_never_perturbs_the_hash_or_snapshot() {
+    let (hashes, drawn, snapshot) = draw_run("draw-on", DebugCategories::parse("camera"));
+    let (plain_hashes, plain_drawn, plain_snapshot) = draw_run("draw-off", DebugCategories::None);
+    assert!(
+        drawn.contains(&"camera"),
+        "the camera category drew nothing"
+    );
+    assert_eq!(
+        drawn, plain_drawn,
+        "the pen records whatever the host filter"
+    );
+    assert_eq!(hashes, plain_hashes, "per-tick hashes");
+    assert_eq!(snapshot, plain_snapshot, "snapshot bytes");
+}
+
+#[test]
+fn a_held_rig_draws_nothing() {
+    let scene = "format: 1\nseed: 3\nentities:\n  - name: cam\n    components:\n      Transform: {}\n      Camera: {}\n      CameraRig:\n        target: null\n        rig:\n          mode:\n            track:\n              path: track.path.yaml\n";
+    let (files, _) = track_scene();
+    let mut engine = engine_for("draw-held", &files, scene, &[]);
+    advance(&mut engine, 6);
+    assert!(!engine.debug_draw_drawn().contains(&"camera"));
 }
 
 // ---- install-when-present, drift ----

@@ -1,11 +1,22 @@
-//! The `character-cycle` gallery scene's game half, shared by `character_cycle.rs` (the CPU proofs),
-//! `gallery.rs` (the driven golden) and `examples/character_cycle.rs` (the runnable host). The engine plays clips; this system chooses
-//! them: the mannequin idles, runs, jumps, runs, spins, runs and returns to idle, crossfading each
-//! switch and leaving the one-shots on their `end` events (`ludion docs character-animation`).
+//! The gallery scenes' game halves, shared by their CPU proofs (`character_cycle.rs`,
+//! `camera_rig.rs`), `gallery.rs` (the driven goldens) and `examples/` (the runnable hosts).
+//!
+//! **character-cycle** — the engine plays clips; this system chooses them: the mannequin idles, runs,
+//! jumps, runs, spins, runs and returns to idle, crossfading each switch and leaving the one-shots on
+//! their `end` events (`ludion docs character-animation`).
+//!
+//! **camera-rig** — [`drive_rig`] swaps the rail camera to a side-on rig at [`SWITCH_TICK`] (a timed
+//! blend), cuts back with `snap_rig` at [`SNAP_TICK`] and pulses trauma at [`SHAKE_TICK`]
+//! (`ludion docs camera`).
+
+#![allow(dead_code)]
 
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{Animation, AnimationEvents, Engine, EngineBuilder, Mesh, Sprite};
-use ludion_engine::{animation_events, crossfade};
+use ludion_engine::{
+    BlendIn, CameraRig, RigConfig, RigMode, TrackRig, add_trauma, animation_events, crossfade,
+    snap_rig,
+};
 
 /// Ticks the mannequin idles before its first run.
 pub const IDLE_TICKS: u64 = 60;
@@ -74,4 +85,63 @@ pub fn cycle_builder() -> EngineBuilder {
         .query::<(&Animation, &Sprite)>()
         .system("cycle_character", cycle_character)
         .query::<(&mut Animation,)>()
+}
+
+/// The tick the rail camera blends to the side-on rig.
+pub const SWITCH_TICK: u64 = 60;
+/// The tick the camera cuts back to the behind rig.
+pub const SNAP_TICK: u64 = 180;
+/// The tick of the trauma pulse.
+pub const SHAKE_TICK: u64 = 220;
+
+/// The track rig with the eye `offset` and a one-second blend in.
+fn rig_at(offset: [f32; 3]) -> RigConfig {
+    RigConfig {
+        mode: RigMode::Track(TrackRig {
+            path: "paths/camera-track.path.yaml".into(),
+            offset,
+            ..TrackRig::default()
+        }),
+        blend_in: BlendIn {
+            seconds: 1.0,
+            ..BlendIn::default()
+        },
+        ..RigConfig::default()
+    }
+}
+
+/// The side-on rig: the eye five metres to the rail's right.
+pub fn side_rig() -> RigConfig {
+    rig_at([5.0, 1.5, 0.0])
+}
+
+/// The scene's authored rig: behind and above the hero.
+pub fn behind_rig() -> RigConfig {
+    rig_at([0.0, 2.2, 4.5])
+}
+
+/// Writes the rig on `SWITCH_TICK` (a blend), `SNAP_TICK` (a cut) and `SHAKE_TICK` (trauma), keyed
+/// on `ctx.game_frame`. Game systems run before `camera_rig`, so a write at tick N is seen at N.
+pub fn drive_rig(world: &mut World, ctx: &SystemCtx) {
+    let tick = ctx.game_frame.as_u64();
+    if ![SWITCH_TICK, SNAP_TICK, SHAKE_TICK].contains(&tick) {
+        return;
+    }
+    for (_, (rig,)) in world.query_ids::<(&mut CameraRig,)>() {
+        match tick {
+            SWITCH_TICK => rig.rig = side_rig(),
+            SNAP_TICK => {
+                rig.rig = behind_rig();
+                snap_rig(rig);
+            }
+            _ => add_trauma(rig, 0.8),
+        }
+    }
+}
+
+/// The camera-rig scene's engine.
+pub fn rig_builder() -> EngineBuilder {
+    Engine::builder()
+        .system("drive_rig", drive_rig)
+        .query::<(&mut CameraRig,)>()
 }

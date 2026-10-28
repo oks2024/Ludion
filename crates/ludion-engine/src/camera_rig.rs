@@ -14,18 +14,45 @@
 //! (`L1307`) or with a `Parent` (`L1309`), carries an out-of-range field (`L1304`), names a
 //! despawned target (`L1305`) or a track path that fails to load (`L1306`). With several rigs only
 //! the lowest entity id runs (`L1308`). A `target` of `None` or an empty `path` is inert, not a fault.
+//!
+//! The `camera` debug-draw category shows the track, the search window, the projection, the desired
+//! and actual eye, the focus, the anchor, the look-ahead and a running blend; a held rig draws nothing.
 
-use ludion_camera::{CameraRig, RigInput, RigMode, invalid_field, step_rig};
+use ludion_camera::{CameraRig, RigInput, RigMode, invalid_field, rig_focus, step_rig, track_eye};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, Schedule, SystemCtx, World};
+use ludion_scene::PathSampler;
 use serde_json::Value;
 
 use crate::components::{Camera, Projection, Transform};
+use crate::debug_draw::debug_draw;
 use crate::path_follow::PathLibrary;
 
 pub(crate) const SYSTEM_NAME: &str = "camera_rig";
+const CATEGORY: &str = "camera";
+/// The track's polyline (linear RGBA).
+const TRACK: [f32; 4] = [0.2, 0.6, 1.0, 1.0];
+/// The search window around the projection, brighter than [`TRACK`].
+const WINDOW: [f32; 4] = [0.6, 0.9, 1.0, 1.0];
+/// The target's projection onto the track.
+const PROJECTED: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+/// The desired eye and its line to the actual eye.
+const DESIRED: [f32; 4] = [1.0, 0.8, 0.2, 1.0];
+/// The actual (posed, shaken) eye.
+const EYE: [f32; 4] = [0.2, 0.9, 0.6, 1.0];
+/// The focus and the eye-to-focus line.
+const FOCUS: [f32; 4] = [1.0, 0.3, 0.6, 1.0];
+/// The vertical anchor line and cross.
+const ANCHOR: [f32; 4] = [0.7, 0.4, 1.0, 1.0];
+/// The look-ahead ray.
+const LOOK_AHEAD: [f32; 4] = [0.6, 1.0, 0.2, 1.0];
+/// A running blend's source eye and its line to the actual eye.
+const BLEND: [f32; 4] = [1.0, 0.5, 0.1, 1.0];
+const CROSS: f32 = 0.2;
+/// Spans of the search-window polyline.
+const WINDOW_SPANS: usize = 8;
 
 /// Whether `world` holds at least one [`CameraRig`] — the key the engine installs [`camera_rig`] on.
 pub(crate) fn present(world: &World) -> bool {
@@ -209,6 +236,9 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
             camera_fov_y_deg,
         },
     );
+    if let Some(output) = &output {
+        draw(world, &rig, &sampler, target_position, output.translation);
+    }
     if let Ok(Some(stored)) = world.get_mut::<CameraRig>(entity) {
         *stored = rig;
     }
@@ -227,4 +257,71 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
     {
         *fov_y_deg = fov;
     }
+}
+
+/// Draws one tick's `camera` primitives (the module docs name the category): the track, the search
+/// window around the projection, the projected point, the desired and actual eye, the focus, the
+/// anchored height, the look-ahead and, while one runs, the blend's source eye.
+fn draw(
+    world: &mut World,
+    rig: &CameraRig,
+    sampler: &PathSampler,
+    target: [f32; 3],
+    eye: [f32; 3],
+) {
+    let RigMode::Track(track) = &rig.rig.mode;
+    let state = &rig.state;
+    let Some(param) = state.param else {
+        return;
+    };
+    let polyline = world
+        .resource::<PathLibrary>()
+        .and_then(|library| library.polyline(&track.path));
+    let window = window_points(sampler, param, track.search_window);
+    #[allow(clippy::cast_possible_truncation)]
+    let projected = sampler.point_at(f64::from(param)).map(|c| c as f32);
+    let desired = track_eye(track, sampler, param);
+    let focus = rig_focus(&rig.rig, target, state.anchor_y, state.look_ahead);
+    let anchored = [target[0], state.anchor_y, target[2]];
+    let mut pen = debug_draw(world, CATEGORY);
+    if let Some(polyline) = &polyline {
+        pen.path(polyline, TRACK);
+    }
+    pen.path(&window, WINDOW)
+        .cross(projected, CROSS, PROJECTED)
+        .cross(desired, CROSS, DESIRED)
+        .cross(eye, CROSS, EYE)
+        .line(desired, eye, DESIRED)
+        .cross(focus, CROSS, FOCUS)
+        .line(eye, focus, FOCUS)
+        .line(target, anchored, ANCHOR)
+        .cross(anchored, CROSS * 0.5, ANCHOR)
+        .ray(
+            anchored,
+            [state.look_ahead[0], 0.0, state.look_ahead[1]],
+            LOOK_AHEAD,
+        );
+    if let Some(blend) = &state.blend {
+        pen.cross(blend.from.eye, CROSS, BLEND)
+            .line(blend.from.eye, eye, BLEND);
+    }
+}
+
+/// [`WINDOW_SPANS`] spans of the path over `[param − window, param + window]`, clamped to the path on
+/// an open one (`point_at` wraps a closed one).
+fn window_points(sampler: &PathSampler, param: f32, window: f32) -> Vec<[f32; 3]> {
+    let (param, window) = (f64::from(param), f64::from(window));
+    let (mut from, mut to) = (param - window, param + window);
+    if !sampler.closed() {
+        from = from.max(0.0);
+        to = to.min(sampler.length());
+    }
+    (0..=WINDOW_SPANS)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let at = sampler.point_at(from + (to - from) * i as f64 / WINDOW_SPANS as f64);
+            #[allow(clippy::cast_possible_truncation)]
+            at.map(|c| c as f32)
+        })
+        .collect()
 }

@@ -58,7 +58,7 @@ fn copy_tree(src: &Path, dst: &Path) {
 }
 
 /// Copies every `*.yaml`/`*.yml` scene and the `assets/` + `characters/` + `clips/` + `fonts/` + `meshes/` +
-/// `sculpts/` + `sprites/` + `voxels/` directories from the real gallery into `dir` — a
+/// `paths/` + `sculpts/` + `sprites/` + `voxels/` directories from the real gallery into `dir` — a
 /// throwaway project directory a test can freely bless without touching tracked files.
 fn copy_gallery_into(dir: &Path) -> usize {
     std::fs::create_dir_all(dir).unwrap();
@@ -69,6 +69,7 @@ fn copy_gallery_into(dir: &Path) -> usize {
         "clips",
         "fonts",
         "meshes",
+        "paths",
         "sculpts",
         "sprites",
         "voxels",

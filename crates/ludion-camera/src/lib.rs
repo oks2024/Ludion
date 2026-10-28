@@ -35,4 +35,5 @@ pub use rig::{
     ShakeConfig, Springs, TrackRig, VerticalAnchor, add_trauma, snap_rig,
 };
 pub use step::{RigInput, RigOutput, step_rig};
+pub use track::{rig_focus, track_eye};
 pub use validate::invalid_field;
