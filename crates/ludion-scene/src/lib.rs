@@ -188,7 +188,9 @@ pub use mesh_edit::{
 pub use overrides::{AppliedOverride, SceneOverride, apply_overrides, parse_sweep};
 pub use palette::{PALETTE_FORMAT_VERSION, PaletteDocument};
 pub use part::{PART_FORMAT_VERSION, PartDocument};
-pub use path::{PATH_FORMAT_VERSION, PathDocument, PathInterpolation, PathSampler};
+pub use path::{
+    PATH_FORMAT_VERSION, PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler,
+};
 pub use physics::{ScenePhysics, ScenePhysicsSpace, validate_physics};
 pub use physics_layers::{DEFAULT_LAYER, LayerMatrix, MAX_LAYERS, SceneLayer};
 pub use prefab::{PREFAB_FORMAT_VERSION, PrefabDocument};
@@ -2282,7 +2284,7 @@ pub fn parse_path(source: &str) -> Result<PathDocument, Vec<Diagnostic>> {
 }
 
 /// Validates data-consistency invariants of `doc`: enough points, finite f32-range components and no
-/// coincident neighbours (`L1214`).
+/// coincident neighbours, and a relative, non-blank `generated_from` (`L1214`).
 pub fn validate_path(doc: &PathDocument) -> Vec<Diagnostic> {
     path::validate(doc)
 }
@@ -2302,7 +2304,8 @@ pub fn check_path(source: &str) -> Result<PathDocument, Vec<Diagnostic>> {
 }
 
 /// Writes `doc` in canonical form (stable field order, LF endings, ryu shortest-round-trip floats;
-/// `interpolation` and `closed` always spelled). Byte-idempotent.
+/// `generated_from` after `name` when present; `interpolation` and `closed` always spelled).
+/// Byte-idempotent.
 ///
 /// # Example
 /// ```

@@ -22,6 +22,7 @@ the engine's `PathFollower` that rides an entity along it. Component defaults li
 format: 1
 kind: path
 name: lift                   # optional
+generated_from: generation/blender/level/build.py   # optional
 interpolation: catmull_rom   # or linear (default catmull_rom)
 closed: false                # default false
 points:
@@ -38,26 +39,44 @@ Points are block-of-block (`- - x`, then the other two components aligned under 
 cusps, and it passes through every point; an open path extends its ends by reflection. `linear` is
 straight segments. Canonical text always spells `interpolation` and `closed`.
 
+`generated_from` is provenance: the content-root-relative script that emitted the file. Editors treat the
+file as generated; the engine runs no drift gate, so re-run your script and diff.
+
 | Code | Raised for |
 |---|---|
-| `L1213` | empty/non-mapping root, envelope, wrong type, unknown key or `interpolation`, a point that is not three numbers |
-| `L1214` | fewer than 2 points (3 when `closed`), a non-finite or out-of-f32 component, coincident neighbours (the last and first too when closed) |
+| `L1213` | empty/non-mapping root, envelope, wrong type (`generated_from` included), unknown key or `interpolation`, a point that is not three numbers |
+| `L1214` | fewer than 2 points (3 when `closed`), a non-finite or out-of-f32 component, coincident neighbours (the last and first too when closed), a blank, absolute or `..` `generated_from` |
 | `L1269` | a `PathFollower` `speed` or `phase` that is not a finite `f32` (a follower's, not a path document's) |
 
 ## Sampling from game code
 
-`PathSampler` (in the prelude, with `check_path` and `PathDocument`) is a pure function of a
+`PathSampler` (in the prelude, with `check_path`, `PathDocument`, `PathFrame` and `PathMetric`) is a pure function of a
 validated document — `+ − × ÷` and `sqrt` only, so it is bit-identical on every machine:
 
 ```rust
 let doc = check_path(&std::fs::read_to_string("paths/lift.path.yaml")?)?;
 let sampler = PathSampler::new(&doc);
-let here = sampler.point_at(2.5);   // metres of arc length; open clamps to [0, length], closed wraps
-let facing = sampler.tangent_at(2.5); // unit direction of the table chord
+let here = sampler.point_at(2.5);     // metres of arc length; open clamps to [0, length], closed wraps
+let facing = sampler.tangent_at(2.5); // unit curve derivative, continuous on catmull_rom
+let frame = sampler.frame_at(2.5);    // PathFrame { position, tangent, right, up }
+let q = frame.rotation();             // [x, y, z, w], w >= 0
+let s = sampler.nearest_s(player, last_s, 4.0, PathMetric::Full);
 ```
 
 Arc length comes from a 16-samples-per-segment table, so `length()` of a `catmull_rom` path is a
-close approximation (exact for `linear`) and `tangent_at` is piecewise constant.
+close approximation (exact for `linear`). A `linear` tangent is its segment's direction: at an
+interior corner the outgoing segment's, at an open end the last segment's.
+
+`frame_at` is a no-roll frame: `right` is horizontal and `up` leans toward +Y (the reference up is
+fixed; a loop-de-loop is not supported). Where the tangent is vertical, `right` carries over from the
+nearest non-vertical stretch, so it never flips inside a lift. `rotation()` has local −Z facing travel
+(as a camera does), +Y on `up`, +X on `right`.
+
+`nearest_s(p, hint, window_metres, metric)` searches `window_metres` of arc length either side of
+`hint` (open clamps, closed wraps; a window of at least half the length is global). Pass the
+previous result as `hint` and a window shorter than any hairpin, or a switchback hands back the wrong
+leg. `nearest_s_global` ignores the window. `PathMetric::Horizontal` measures in XZ and uses height
+only to break ties, for legs that cross at different heights. Ties go to the smaller `s`.
 
 ## `PathFollower`
 

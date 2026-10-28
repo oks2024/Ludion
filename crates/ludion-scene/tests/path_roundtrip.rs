@@ -237,3 +237,50 @@ fn coincident_neighbours_are_l1214() {
         "/points/0"
     ));
 }
+
+#[test]
+fn generated_from_round_trips_after_name() {
+    let source = CANONICAL.replace(
+        "name: lift\n",
+        "name: lift\ngenerated_from: generation/blender/level/build.py\n",
+    );
+    let doc = check_path(&source).expect("valid");
+    assert_eq!(
+        doc.generated_from.as_deref(),
+        Some("generation/blender/level/build.py")
+    );
+    assert_eq!(emit_path(&doc), source);
+    let reordered = source.replace(
+        "name: lift\ngenerated_from: generation/blender/level/build.py\n",
+        "generated_from: generation/blender/level/build.py\nname: lift\n",
+    );
+    assert_eq!(emit_path(&check_path(&reordered).expect("valid")), source);
+    assert!(!emit_path(&check_path(CANONICAL).expect("valid")).contains("generated_from"));
+}
+
+#[test]
+fn a_wrong_typed_generated_from_is_l1213() {
+    let source = CANONICAL.replace("name: lift\n", "name: lift\ngenerated_from:\n  - a\n");
+    assert!(has(&structure_errors(&source), "L1213", "/generated_from"));
+}
+
+#[test]
+fn a_blank_absolute_or_climbing_generated_from_is_l1214() {
+    for bad in [
+        "\"  \"",
+        "/abs/build.py",
+        "\\share\\build.py",
+        "C:/build.py",
+        "a/../../b.py",
+        "..",
+    ] {
+        let source = CANONICAL.replace(
+            "name: lift\n",
+            &format!("name: lift\ngenerated_from: {bad}\n"),
+        );
+        assert!(
+            has(&data_errors(&source), "L1214", "/generated_from"),
+            "{bad} should be refused"
+        );
+    }
+}

@@ -140,7 +140,9 @@ pub use hierarchy::{
     world_pose_transform, world_transform,
 };
 pub use instantiate::EngineHooks;
-pub use ludion_scene::{PathDocument, PathInterpolation, PathSampler, check_path};
+pub use ludion_scene::{
+    PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler, check_path,
+};
 pub use ludion_sim::WorldHash;
 pub use model_sheet::{
     ClipCrossfade, ClipOutcome, CrossfadeSpec, DEFAULT_CROSSFADE_PHASES, MAX_LINEUP_MODELS,

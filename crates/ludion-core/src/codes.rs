@@ -6423,8 +6423,8 @@ A `kind: path` document does not have the shape the format requires. One of:
 
   - the file is empty, or its root is not a mapping;
   - `format` is missing or is not the supported version, or `kind` is missing or not `path`;
-  - `points` is missing, or a key has the wrong type (`name` a string, `interpolation` one of
-    `catmull_rom` or `linear`, `closed` a boolean, `points` a sequence);
+  - `points` is missing, or a key has the wrong type (`name` and `generated_from` strings,
+    `interpolation` one of `catmull_rom` or `linear`, `closed` a boolean, `points` a sequence);
   - a point is not a sequence of exactly three numbers;
   - a key is not part of the format (the diagnostic suggests the nearest valid key).
 
@@ -6444,9 +6444,11 @@ A well-shaped `kind: path` document holds values that cannot make a curve. One o
   - fewer than 2 points, or fewer than 3 when `closed: true`;
   - a point component that is not finite, or is outside the f32 range;
   - two neighbouring points at exactly the same position, including the last and the first when the
-    path is closed (a zero-length segment has no direction).
+    path is closed (a zero-length segment has no direction);
+  - a `generated_from` that is blank, absolute, or climbs out of the content root with `..`.
 
-The JSON Pointer names the count (`/points`) or the offending point (`/points/<i>`).
+The JSON Pointer names the count (`/points`), the offending point (`/points/<i>`) or
+`/generated_from`.
 
 Fix: add points until the minimum is met, move the coincident point apart or delete it, and keep
 every component a finite number. The document's shape problems are the separate `L1213`.",
