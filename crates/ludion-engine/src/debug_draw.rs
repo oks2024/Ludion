@@ -45,6 +45,12 @@ pub struct DebugDraw {
 }
 
 impl DebugDraw {
+    /// The segments drawn so far this tick under `category`.
+    #[cfg(test)]
+    pub(crate) fn pending(&self, category: &str) -> &[DebugSegment] {
+        self.pending.get(category).map_or(&[], Vec::as_slice)
+    }
+
     /// Ends the tick: what was drawn becomes what is shown, and the next tick starts empty.
     pub fn end_tick(&mut self) {
         self.last = std::mem::take(&mut self.pending);

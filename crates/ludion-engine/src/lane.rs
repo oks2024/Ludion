@@ -28,7 +28,28 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::components::Transform;
+use crate::debug_draw::debug_draw;
 use crate::path_follow::PathLibrary;
+
+const CATEGORY: &str = "lane";
+/// The lane's path polyline (linear RGBA); its alpha is replaced by the lane's weight.
+pub const LANE_PATH: [f32; 4] = [0.2, 0.6, 1.0, 1.0];
+/// The cross at the lane frame's point.
+pub const LANE_ANCHOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+/// The lane's forward ray from the frame's point.
+pub const LANE_FORWARD: [f32; 4] = [0.6, 1.0, 0.2, 1.0];
+/// The lane's lateral (right) ray from the frame's point.
+pub const LANE_LATERAL: [f32; 4] = [1.0, 0.3, 0.6, 1.0];
+/// The capsule-to-anchor line with no lateral error.
+pub const LANE_ON: [f32; 4] = [0.2, 0.9, 0.6, 1.0];
+/// The capsule-to-anchor line at [`LANE_ERROR_FULL`] metres of lateral error or more.
+pub const LANE_OFF: [f32; 4] = [1.0, 0.2, 0.1, 1.0];
+/// Lateral error, in metres, at which the error line is fully [`LANE_OFF`].
+pub const LANE_ERROR_FULL: f32 = 0.5;
+/// Metres between the polyline's samples (capped at 256 segments).
+const LANE_DRAW_STEP: f32 = 0.25;
+const LANE_ANCHOR_CROSS: f32 = 0.1;
+const LANE_RAY_LENGTH: f32 = 0.5;
 
 /// A path span whose horizontal tangent length is under this is near-vertical (≈ 87°): the lane
 /// frame there uses the path's carried `right`.
@@ -591,9 +612,55 @@ pub(crate) fn move_on_lane(
     };
     let result = crate::motor::move_character_with(world, entity, displacement, Some(&mut hook));
     Some(result.map(|mut report| {
-        report.lane = Some(settle(world, entity, &lane, &hook, s0, blend));
+        let lane_report = settle(world, entity, &lane, &hook, s0, blend);
+        if let Some(physics) = world.resource_mut::<PhysicsWorld>() {
+            physics.attach_lane_report(entity, lane_report);
+        }
+        draw(world, entity, &hook.pull, &lane_report);
+        report.lane = Some(lane_report);
         report
     }))
+}
+
+/// Draws one lane call's `lane` primitives: the path polyline (alpha = the weight), the frame's
+/// anchor cross and forward and lateral rays, and the capsule-to-anchor line coloured by the error.
+fn draw(world: &mut World, entity: EntityId, pull: &Pull, report: &LaneReport) {
+    let Some(feet) = world
+        .get::<Transform>(entity)
+        .ok()
+        .flatten()
+        .map(|pose| pose.translation)
+    else {
+        return;
+    };
+    let length = pull.sampler.length();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let segments = ((length / f64::from(LANE_DRAW_STEP)).ceil() as usize).clamp(1, 256);
+    let points: Vec<[f32; 3]> = (0..=segments)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let s = length * i as f64 / segments as f64;
+            frame_at(&pull.sampler, s, pull.offset, pull.weight).point
+        })
+        .collect();
+    let mut path_colour = LANE_PATH;
+    path_colour[3] = report.weight;
+    let frame = &report.frame;
+    let scaled = |v: [f32; 3]| v.map(|c| c * LANE_RAY_LENGTH);
+    let mut pen = debug_draw(world, CATEGORY);
+    pen.path(&points, path_colour)
+        .cross(frame.point, LANE_ANCHOR_CROSS, LANE_ANCHOR)
+        .line(feet, frame.point, lane_error_colour(report.lateral_error))
+        .ray(frame.point, scaled(frame.forward), LANE_FORWARD)
+        .ray(frame.point, scaled(frame.lateral), LANE_LATERAL);
+}
+
+/// The colour of the capsule-to-lane line for a signed lateral `error`: [`LANE_ON`] on the centre
+/// line, [`LANE_OFF`] from [`LANE_ERROR_FULL`] metres out, a linear mix between.
+pub fn lane_error_colour(error: f32) -> [f32; 4] {
+    let t = (error.abs() / LANE_ERROR_FULL).min(1.0);
+    let mix = |i: usize| LANE_ON[i] * (1.0 - t) + LANE_OFF[i] * t;
+    [mix(0), mix(1), mix(2), 1.0]
 }
 
 /// Writes the lane's `s` and `blend` back after a successful call and describes the call.
@@ -782,6 +849,68 @@ mod tests {
         for (x, y) in a.iter().zip(b) {
             assert!((x - y).abs() < 1e-5, "{a:?} != {b:?}");
         }
+    }
+
+    #[test]
+    fn a_lane_call_draws_its_path_anchor_axes_and_error_line() {
+        let mut world = World::new();
+        world.insert_resource(crate::debug_draw::DebugDraw::default());
+        let entity = world.spawn();
+        let feet = [4.0, 0.0, 0.4];
+        world
+            .insert(
+                entity,
+                Transform {
+                    translation: feet,
+                    ..Transform::default()
+                },
+            )
+            .unwrap();
+        let sampler = Arc::new(straight());
+        let pull = Pull {
+            sampler,
+            offset: 0.0,
+            ends: LaneEnds::Extend,
+            search_window: 2.0,
+            pull_speed: 4.0,
+            weight: 0.5,
+            dt: 1.0 / 60.0,
+        };
+        let frame = pull.frame(4.0);
+        let report = LaneReport {
+            s: 4.0,
+            ds: 0.0,
+            weight: 0.5,
+            engaged: true,
+            easing: true,
+            lateral_error: 0.4,
+            pull_blocked: false,
+            frame,
+            at_end: None,
+        };
+        draw(&mut world, entity, &pull, &report);
+        let drawn = world
+            .resource::<crate::debug_draw::DebugDraw>()
+            .unwrap()
+            .pending(CATEGORY);
+        let colour = |c: [f32; 4]| drawn.iter().filter(|s| s.color == c).count();
+        let faded = [LANE_PATH[0], LANE_PATH[1], LANE_PATH[2], 0.5];
+        assert_eq!(colour(faded), 40, "10 m every 0.25 m, alpha = the weight");
+        assert_eq!(colour(LANE_ANCHOR), 3);
+        assert_eq!(colour(LANE_FORWARD), 1);
+        assert_eq!(colour(LANE_LATERAL), 1);
+        let error = lane_error_colour(0.4);
+        assert_eq!(colour(error), 1);
+        assert_eq!(drawn.len(), 40 + 3 + 1 + 1 + 1);
+        let line = drawn.iter().find(|s| s.color == error).unwrap();
+        assert_eq!((line.a, line.b), (feet, frame.point));
+    }
+
+    #[test]
+    fn the_error_colour_runs_from_on_to_off() {
+        assert_eq!(lane_error_colour(0.0), LANE_ON);
+        assert_eq!(lane_error_colour(-LANE_ERROR_FULL), LANE_OFF);
+        assert_eq!(lane_error_colour(9.0), LANE_OFF);
     }
 
     #[test]

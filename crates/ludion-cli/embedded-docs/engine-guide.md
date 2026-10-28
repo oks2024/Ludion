@@ -24,7 +24,7 @@ report `L0008` from a game project.
 - `ludion docs scene-format` — the strict-YAML scene document and its canonical form.
 - `ludion docs tilemaps` — the `Tilemap` glyph grid, read by the renderer and your logic.
 - `ludion docs collision` — 2D colliders, the spatial index, move-and-slide.
-- `ludion docs physics` — rigid bodies; `collision-layers`, `physics-joints`, `physics-sensors`, `physics-time-scale`, `motor` beside it.
+- `ludion docs physics` — rigid bodies; `collision-layers`, `physics-joints`, `physics-sensors`, `physics-time-scale`, `motor`, `lane` beside it.
 - `ludion docs hierarchy` — parent/child transforms; `prefabs`, `prefab-instances` beside it.
 - `ludion docs visuals` — how a scene looks: eight topics, from materials to the imaging chain.
 - `ludion docs screen-ui` — `UiRect`/`UiText`: the reference canvas, anchors, and draw order.

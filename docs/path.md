@@ -5,7 +5,7 @@ description: The kind: path document, PathSampler, and PathFollower moving platf
 # Paths and path followers
 
 **Scope:** a spline authored as text (`kind: path`), sampling it by arc length from game code, and
-the engine's `PathFollower` that rides an entity along it. Component defaults live in
+the engine's `PathFollower` that rides an entity along it (a character motor's lane is `ludion docs lane`). Component defaults live in
 `ludion docs components-fx`; gameplay time is `ludion docs game-clock`.
 
 ## The loop

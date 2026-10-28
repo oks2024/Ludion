@@ -131,6 +131,24 @@ pub struct ReportRecord {
     pub stuck: bool,
     /// The capsule height the move used.
     pub height: f32,
+    /// What the lane did; absent when the call was not held to a lane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lane: Option<LaneRecord>,
+}
+
+/// A `LaneReport` as one trace line carries it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LaneRecord {
+    /// Metres along the path after the move.
+    pub s: f32,
+    /// The change in `s` over the move, in metres.
+    pub ds: f32,
+    /// The blend weight the move used, `0..=1`.
+    pub weight: f32,
+    /// Signed metres from the lane centre line to the feet along the lane's lateral.
+    pub lateral_error: f32,
+    /// Whether a wall stopped the pull toward the lane.
+    pub pull_blocked: bool,
 }
 
 /// The support under the feet.
@@ -231,6 +249,13 @@ fn report_record(world: &World, report: &MoveReport) -> ReportRecord {
         },
         stuck: report.stuck,
         height: report.height,
+        lane: report.lane.as_ref().map(|lane| LaneRecord {
+            s: lane.s,
+            ds: lane.ds,
+            weight: lane.weight,
+            lateral_error: lane.lateral_error,
+            pull_blocked: lane.pull_blocked,
+        }),
     }
 }
 

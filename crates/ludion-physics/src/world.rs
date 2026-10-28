@@ -33,7 +33,7 @@ use crate::joints::{
     desired_motor, motor_off_target,
 };
 use crate::meshes::TriangleMesh;
-use crate::motor::MoveReport;
+use crate::motor::{LaneReport, MoveReport};
 use crate::queries::QueryFilter;
 use crate::sensors::SensorEvent;
 use crate::systems::{CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, PhysicsSettings};
@@ -2364,6 +2364,14 @@ impl PhysicsWorld {
         self.move_reports
             .get(&entity)
             .map(|(frame, report)| (*frame, report))
+    }
+
+    /// Fills the lane of `entity`'s stored report: the engine's `move_character` knows it only after
+    /// the motor call has stored the report. A no-op without a stored report; never hashed.
+    pub fn attach_lane_report(&mut self, entity: EntityId, lane: LaneReport) {
+        if let Some((_, report)) = self.move_reports.get_mut(&entity) {
+            report.lane = Some(lane);
+        }
     }
 
     /// The table row for `entity`, if it has one.

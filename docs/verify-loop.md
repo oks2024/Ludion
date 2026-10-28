@@ -108,7 +108,7 @@ picture. Three entry points print the same lines: `ludion trace --scene <FILE> [
 
 - `motor` (fields: `ludion docs motor`): one line per `CharacterMotor` entity per tick, ascending by entity. The report fields
   appear only when game code called `move_character` on it during that tick; otherwise the line is
-  `channel`, `tick`, `entity`, `feet`. `sensors`: one line per enter or exit (`phase` `exited` adds
+  `channel`, `tick`, `entity`, `feet`. A call held to a lane (`ludion docs lane`) adds a last `lane` object: `s`, `ds`, `weight`, `lateral_error`, `pull_blocked`. `sensors`: one line per enter or exit (`phase` `exited` adds
   `cause`: `separated`, `despawned`, `removed`). Within a tick, motor lines precede sensor lines.
 - `tick` is the frame the tick ran as; an input addressed to frame `N` applies at the start of tick
   `N`. A sensor line is tick `N`'s own physics step (`ludion docs physics-sensors` for the one-tick

@@ -49,7 +49,8 @@ const CEILING_CROSS: f32 = 0.05;
 /// An entity with an engaged (or still easing) `LaneConstraint` is held to its lane: horizontal
 /// motion is projected onto the lane and a capped pull returns the feet to its centre line, eased by
 /// the lane's `blend`; `MoveReport.lane` describes it. With no lane the call is the unconstrained
-/// move, bit for bit.
+/// move, bit for bit. A lane call also draws the `lane` debug category: the path polyline (alpha is
+/// the weight), the frame's anchor and axes, and an error-coloured line from the feet to the anchor.
 ///
 /// After a successful call it draws the `motor` debug category: the capsule (green grounded, orange
 /// airborne, red stuck), the ground, wall and ceiling contact normals, the platform carry and the

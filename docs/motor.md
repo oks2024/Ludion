@@ -4,7 +4,7 @@ description: The 3D character motor — CharacterMotor capsule, move_character, 
 
 # Character motor
 
-**Scope:** a walking, jumping or crouching 3D character against a physics world: the `CharacterMotor` capsule, `move_character`, the `MoveReport` it returns, platform carry and conveyors, resize and teleport, the `motor` debug draw. The 2D tier's `move_and_slide` is `ludion docs collision`; the bodies the motor walks on and pushes are `ludion docs physics`; trigger volumes are `ludion docs physics-sensors`; paths a platform follows are `ludion docs path`.
+**Scope:** a walking, jumping or crouching 3D character against a physics world: the `CharacterMotor` capsule, `move_character`, the `MoveReport` it returns, platform carry and conveyors, resize and teleport, the `motor` debug draw. Holding a motor to a path corridor is `ludion docs lane`. The 2D tier's `move_and_slide` is `ludion docs collision`; the bodies the motor walks on and pushes are `ludion docs physics`; trigger volumes are `ludion docs physics-sensors`; paths a platform follows are `ludion docs path`.
 
 The motor moves the character; the **moveset owns gravity, velocity and jump** — pass `move_character` the displacement you want this tick and read the report.
 
@@ -121,5 +121,5 @@ Category `motor` (`DebugCategories::parse("motor")`), drawn only by `ludion_engi
 ## Next
 
 - `ludion docs physics` — the bodies the motor pushes; `ludion docs physics-sensors` — triggers
-- `ludion docs collision` — the 2D `move_and_slide`; `ludion docs path` — moving platforms
+- `ludion docs lane` — a path corridor for the motor; `ludion docs collision` — the 2D `move_and_slide`; `ludion docs path` — moving platforms
 - `ludion docs debug-draw`, `ludion docs verify-loop` — seeing and tracing a move

@@ -26,7 +26,7 @@ radius)` (three great circles), `capsule(a, b, radius)` (`a == b` is a sphere). 
 
 ## Categories
 
-A category is a name a system draws under and a host enables: `motor` (the character motor's own: `ludion docs motor`), `camera`, `ai`. The engine
+A category is a name a system draws under and a host enables: `motor` (the character motor's own: `ludion docs motor`), `lane` (its lane constraint: `ludion docs lane`), `camera`, `ai`. The engine
 emits `path` — every `PathFollower`'s route, and an oriented follower's axes — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap — and `colliders` — every body in the physics world as a wireframe in its world pose (below). `DebugCategories::parse("path,motor")` builds a
 filter; `all` enables every category, an empty list none (the default).
 

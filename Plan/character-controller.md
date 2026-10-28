@@ -2,7 +2,8 @@
 
 > Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). W1–W2 mechanized; W3+ not started.**
 > W2 holds the motor (`CharacterMotor`, `move_character`, `MoveReport`), `SurfaceVelocity`, resize and
-> teleport, platform carry, the numeric trace and the course (`ludion docs motor`, `games/character-course`).
+> teleport, platform carry, the numeric trace and the course (`ludion docs motor`, `games/character-course`). The fourth external request added
+> the lane constraint (`LaneConstraint`, `ludion docs lane`): a lateral hold to a `kind: path` corridor.
 > W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
 > teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
 > external platformer's first engine request drove its last additions, and its second shipped sensor
@@ -79,6 +80,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
    - Game Rust calls `move_character(world, entity, displacement) -> MoveReport`.
    - The report carries grounded, ground normal and entity, ceiling hit, wall hits, and the platform
      delta applied.
+   - `MoveReport.lane: Option<LaneReport>` describes a call held to a lane; the signature is unchanged
+     and the lane eases on the gameplay `dt` from `PhysicsWorld::gameplay_dt`.
    - Gravity and velocity are the moveset's, not the motor's.
    - **Why:** the moveset needs the report in the same tick (landed means switch state). A function
      keeps ordering in game Rust, the `move_and_slide` and `crossfade` idiom.
@@ -93,7 +96,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
    - step-up;
    - moving-platform riding (the ground entity's per-tick translation and yaw, with no `Parent`
      propagation);
-   - a ceiling bump reported to the moveset.
+   - a ceiling bump reported to the moveset;
+   - a lane constraint (lateral projection + eased pull): a constraint over both modes, not a mode.
 
    Amendments from the external platformer's request (shipped in W2): `resize_character` and
    `fits_character` (growth is headroom-tested; `fits_character` returns `Result`); `SurfaceVelocity`
@@ -120,7 +124,7 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
    - It is hand-authored, or emitted by a bpy script from a Blender curve. An emitted path carries
      `generated_from`, a provenance key the editor reads; the engine has no drift gate for it (it cannot
      run Blender).
-   - It has three consumers: the track rig, `PathFollower` and game patrols.
+   - It has four consumers: the track rig, `PathFollower`, game patrols and motor lanes.
    - **Why:** points on the curve are readable and editable as text (North Star), and centripetal
      avoids cusps. Blender's off-curve handles buy nothing for a camera or platform.
 10. **`PathFollower`: an engine component and system.**
@@ -186,7 +190,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
     - scripted-input scenario tests (a stick and button sequence asserted against a `MoveReport`
       sequence);
     - a per-tick numeric motor, rig and path trace as JSON from the CLI;
-    - debug draw;
+    - debug draw (the `lane` category beside `motor`; the motor trace line carries a `lane` object
+      on a lane call);
     - the course's hash trace, `.lrp` and golden.
 19. **Editor scope:**
     - a path overlay with control-point dragging (canonical `kind: path` edits);
@@ -211,6 +216,16 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
       not scheduled.
 23. **Queries skip sensors unless the filter opts in** (`QueryFilter::include_sensors`) — the motor
     never stands on, steps onto or snaps to a sensor, and `MoveReport` never lists one.
+24. **The lane constraint.** The motor honours an optional `LaneConstraint` that holds the capsule
+    laterally to a `kind: path` lane by projecting every applied horizontal displacement and adding a
+    capped pull; it eases on and off over gameplay time with a reversible smoothstep. Game code writes
+    `engaged`, the motor eases (the pattern of decision 13). Vertical motion is free.
+    - It lives in `ludion-engine`: `ludion-physics` stays free of `ludion-scene`, so the engine's
+      `move_character` resolves the path and hands the motor a `MoveConstraint`.
+    - One constraint per call: `move_character_with` bypasses the lane. A path change needs `s: null`
+      (`set_path` does both), so no unhashed state hides.
+    - **Why:** the lateral removal must live inside collide-and-slide, which only the motor owns, and
+      2.5D, rails and lane runners all share it.
 
 ## The formats (sketch; exact key names settle in the wave that builds them)
 
@@ -332,6 +347,9 @@ collapsed.
 
 ## Non-goals
 
+- **A full 3D lock** (vertical constrained too: the hero glued to the curve, as in rail grinding with no
+  ground under it). **Trigger:** a game asks. Express it as a `constrain: lateral | full` field added
+  later; the lane ships `lateral` only, and a rail with collision is already served by it.
 - **Per-triangle surface tags** (ice, footsteps, kill surfaces). **Trigger:** a moveset or audio need.
   Kill zones are sensor volumes.
 - **Motor modes beyond ground and air** (swimming, ladders, ledge grab, wall jump). **Trigger:** a GDD

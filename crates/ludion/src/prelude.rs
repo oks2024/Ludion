@@ -145,7 +145,8 @@ pub use ludion_engine::{
     AudioQueue, BulletKind, Camera, CategoryGains, ClipAnchor, ClipEvent, DebugCategories,
     DebugPen, Diagnostics, DirectionalLight, DocStore, EmitShape, Engine, EngineBuilder,
     Environment, Fade, FollowerMotion, FontLibrary, GiDynamic, GroundMarker, GroundMarkerShape,
-    Keep, LaneConstraint, LaneEnds, LaneInput, MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING,
+    Keep, LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH,
+    LaneConstraint, LaneEnds, LaneInput, MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING,
     MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE, MOTOR_STUCK, MOTOR_WALL, Mesh, MeshGrid,
     MeshSource, MotionSegment, Name, PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter,
     PathDocument, PathFollower, PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient,
@@ -155,11 +156,11 @@ pub use ludion_engine::{
     TileAppearance, Tilemap, TimelineEntry, Transform, TurnSpec, UiList, UiListItem, UiRect,
     UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, Volley, VolleyCenter, VolleyShape, WorldPose,
     advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
-    bullet_position, check_path, crossfade, debug_draw, fits_character, lane_frame, lane_relative,
-    load_assembly, move_character, move_character_with, path_follow, path_follower_motion,
-    play_patterns, reparent, report_diagnostic, report_full_diagnostic, resize_character,
-    revert_prefab, set_speed, spawn_prefab, switch_to_ragdoll, teleport_character, unpack_prefab,
-    validate_pattern_docs, volley_hits, world_transform,
+    bullet_position, check_path, crossfade, debug_draw, fits_character, lane_error_colour,
+    lane_frame, lane_relative, load_assembly, move_character, move_character_with, path_follow,
+    path_follower_motion, play_patterns, reparent, report_diagnostic, report_full_diagnostic,
+    resize_character, revert_prefab, set_speed, spawn_prefab, switch_to_ragdoll,
+    teleport_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;

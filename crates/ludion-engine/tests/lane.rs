@@ -13,15 +13,17 @@ use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
-    Egress, EgressChannels, Engine, LaneConstraint, Name, Transform, lane_frame, lane_relative,
-    move_character, teleport_character,
+    DebugCategories, Egress, EgressChannels, Engine, LaneConstraint, LaneRecord, Name,
+    TraceChannel, TraceRecord, Transform, lane_frame, lane_relative, move_character,
+    teleport_character, trace, write_jsonl,
 };
-use ludion_physics::{LaneEnd, LaneReport, MoveReport};
+use ludion_physics::{LaneEnd, LaneReport, MoveReport, PhysicsWorld};
 use ludion_protocol::command::{SimStepParams, StreamSubscribeParams, SubscribeMode};
 use ludion_protocol::event::{Event, LogEvent};
 use ludion_protocol::frame::FrameFormat;
 use ludion_protocol::{Channel, Command};
 use ludion_scene::{PathMetric, PathSampler, check_path};
+use ludion_sim::InputScript;
 
 const DT: f32 = 1.0 / 60.0;
 /// Metres a tick at 4 m/s.
@@ -802,6 +804,126 @@ fn a_lane_run_hashes_the_same_twice_and_at_one_and_eight_threads() {
     });
     assert_eq!(one, eight);
     assert_eq!(one, first);
+}
+
+// ---- 12: debug draw and trace ----
+
+/// Per-tick hashes, the categories drawn and the snapshot bytes of the U-bend run.
+fn bend_draw_run(tag: &str, categories: DebugCategories) -> (Vec<u64>, Vec<&'static str>, Vec<u8>) {
+    let mut engine = engine_for(
+        tag,
+        &[("lane.path.yaml", path_yaml(&U_BEND, "catmull_rom", false))],
+        &bend_scene(),
+        follow,
+    );
+    engine.set_debug_draw(categories);
+    let mut hashes = Vec::new();
+    for _ in 0..120 {
+        engine.advance_live();
+        hashes.push(engine.world_hash().unwrap().as_u64());
+    }
+    let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ludion_protocol::ResponseBody::Snapshot { snapshot } => {
+            serde_json::to_vec(&snapshot).unwrap()
+        }
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    (hashes, engine.debug_draw_drawn(), snapshot)
+}
+
+#[test]
+fn the_lane_category_never_perturbs_the_hash_or_snapshot() {
+    let (hashes, drawn, snapshot) = bend_draw_run("draw-on", DebugCategories::parse("lane"));
+    let (plain_hashes, plain_drawn, plain_snapshot) =
+        bend_draw_run("draw-off", DebugCategories::None);
+    assert!(drawn.contains(&"lane"), "the lane category drew nothing");
+    assert_eq!(
+        drawn, plain_drawn,
+        "the pen records whatever the host filter"
+    );
+    assert_eq!(hashes, plain_hashes, "per-tick hashes");
+    assert_eq!(snapshot, plain_snapshot, "snapshot bytes");
+}
+
+#[test]
+fn an_inert_lane_draws_nothing() {
+    let scene = scene(&format!(
+        "{}{}",
+        floor(),
+        hero_entity([5.0, 0.0, 0.0], &lane_block("lane.path.yaml", ""))
+    ));
+    let engine = run(
+        "draw-inert",
+        &[("lane.path.yaml", straight(40.0))],
+        &scene,
+        level(),
+        6,
+    );
+    assert!(!engine.debug_draw_drawn().contains(&"lane"));
+}
+
+#[test]
+fn the_motor_trace_carries_the_lane_fields() {
+    let mut engine = engine_for(
+        "trace-lane",
+        &[("lane.path.yaml", path_yaml(&U_BEND, "catmull_rom", false))],
+        &bend_scene(),
+        follow,
+    );
+    let records = trace(&mut engine, &InputScript::new(), 60, &[TraceChannel::Motor]).unwrap();
+    let lanes_traced: Vec<&LaneRecord> = records
+        .iter()
+        .filter_map(|record| match record {
+            TraceRecord::Motor(motor) => motor.report.as_ref()?.lane.as_ref(),
+            TraceRecord::Sensors(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        lanes_traced.len(),
+        59,
+        "every tick but the first (no physics world yet) ran on the lane"
+    );
+    let last = *lanes_traced.last().unwrap();
+    let sample = log(&engine).last().unwrap().report.lane.unwrap();
+    assert_eq!(
+        (
+            last.s,
+            last.ds,
+            last.weight,
+            last.lateral_error,
+            last.pull_blocked
+        ),
+        (
+            sample.s,
+            sample.ds,
+            sample.weight,
+            sample.lateral_error,
+            sample.pull_blocked
+        )
+    );
+    let hero = hero(engine.world());
+    let physics = engine.world().resource::<PhysicsWorld>().unwrap();
+    let stored = physics.last_move_report(hero).unwrap().1.lane.unwrap();
+    assert_eq!(
+        stored, sample,
+        "the physics world's report carries the lane"
+    );
+    let mut text = Vec::new();
+    write_jsonl(&records, &mut text).unwrap();
+    assert!(
+        String::from_utf8(text)
+            .unwrap()
+            .contains("\"lane\":{\"s\":")
+    );
+
+    let scene = scene(&format!("{}{}", floor(), hero_entity([0.0; 3], "")));
+    let mut engine = engine_for("trace-free", &[], &scene, level());
+    let records = trace(&mut engine, &InputScript::new(), 5, &[TraceChannel::Motor]).unwrap();
+    let mut text = Vec::new();
+    write_jsonl(&records, &mut text).unwrap();
+    let text = String::from_utf8(text).unwrap();
+    assert!(text.contains("\"stuck\""), "the moves were reported");
+    assert!(!text.contains("\"lane\""));
 }
 
 // ---- 13: diagnostics ----

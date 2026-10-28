@@ -143,7 +143,10 @@ pub use hierarchy::{
     world_pose_transform, world_transform,
 };
 pub use instantiate::EngineHooks;
-pub use lane::{LaneConstraint, LaneEnds, LaneInput, lane_frame, lane_relative};
+pub use lane::{
+    LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH,
+    LaneConstraint, LaneEnds, LaneInput, lane_error_colour, lane_frame, lane_relative,
+};
 pub use ludion_scene::{
     PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler, check_path,
 };
@@ -219,8 +222,8 @@ pub use sweep::{
     render_sweep_sheet,
 };
 pub use trace::{
-    GroundRecord, MotorRecord, PlatformRecord, ReportRecord, SensorRecord, SurfaceRecord,
-    TraceChannel, TraceRecord, load_input_script, trace, trace_with, write_jsonl,
+    GroundRecord, LaneRecord, MotorRecord, PlatformRecord, ReportRecord, SensorRecord,
+    SurfaceRecord, TraceChannel, TraceRecord, load_input_script, trace, trace_with, write_jsonl,
 };
 pub use transition::{RESIDUE_MAX_RECORDS_PER_SCENE, RESIDUE_MAX_SCENES, SceneSwitch, SwitchTo};
 pub use voxel_mesh::{VoxelMeshStats, voxel_mesh_stats};
