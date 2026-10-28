@@ -623,7 +623,7 @@ impl PhysicsWorld {
 
     /// The seconds gameplay time advanced into the tick a motor is being moved in: one tick when
     /// the previous frame was not held, `0` when it was (the clock a `PathFollower` reads).
-    pub(crate) fn gameplay_dt(&self, world: &World) -> f32 {
+    pub fn gameplay_dt(&self, world: &World) -> f32 {
         let held_now = world.resource::<GameClock>().map(|clock| clock.held());
         if held_now
             .zip(self.last_write_held)

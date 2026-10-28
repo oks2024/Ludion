@@ -14,8 +14,8 @@ use ludion_core::par::with_threads;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, ColliderMeshes, MotorError, MoveReport, PhysicsSpace,
-    PhysicsWorld, SlideConstraint, TriangleMesh, install, move_character, move_character_with,
+    CharacterMotor, CharacterMotorState, ColliderMeshes, MotorError, MoveConstraint, MoveReport,
+    PhysicsSpace, PhysicsWorld, TriangleMesh, install, move_character, move_character_with,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -98,7 +98,7 @@ fn hero(world: &mut World, feet: [f32; 3]) -> EntityId {
 
 struct ZeroX;
 
-impl SlideConstraint for ZeroX {
+impl MoveConstraint for ZeroX {
     fn project(&mut self, _feet: [f32; 3], step: [f32; 3]) -> [f32; 3] {
         [0.0, step[1], step[2]]
     }

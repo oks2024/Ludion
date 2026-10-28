@@ -5,7 +5,7 @@
 use ludion_core::ids::EntityId;
 use ludion_ecs::World;
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, MotorError, MoveReport, ResizeReport, SlideConstraint,
+    CharacterMotor, CharacterMotorState, MotorError, MoveConstraint, MoveReport, ResizeReport,
     ground_probe_reach,
 };
 
@@ -57,12 +57,13 @@ pub fn move_character(
     move_character_with(world, entity, displacement, None)
 }
 
-/// [`move_character`] with a [`SlideConstraint`] reshaping the displacement before each cast.
+/// [`move_character`] with a [`MoveConstraint`] shaping every horizontal displacement and adding
+/// its correction.
 pub fn move_character_with(
     world: &mut World,
     entity: EntityId,
     displacement: [f32; 3],
-    constraint: Option<&mut dyn SlideConstraint>,
+    constraint: Option<&mut dyn MoveConstraint>,
 ) -> Result<MoveReport, MotorError> {
     let was_grounded = world
         .get::<CharacterMotorState>(entity)

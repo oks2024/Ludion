@@ -177,9 +177,9 @@ pub use single::SingleExt;
 
 pub use ludion_physics::{
     Blast, BlastHit, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase, ExitCause,
-    Falloff, GroundHit, JointBroken, MotorError, MoveReport, PhysicsError, PhysicsWorld,
-    PlatformCarry, PlatformPose, QueryFilter, QueryHit, ResizeReport, SensorEvent, SensorPhase,
-    SlideConstraint, SurfaceHit, SurfaceVelocity, height_in_force, teleport_kinematic,
+    Falloff, GroundHit, JointBroken, MotorError, MoveConstraint, MoveReport, PhysicsError,
+    PhysicsWorld, PlatformCarry, PlatformPose, QueryFilter, QueryHit, ResizeReport, SensorEvent,
+    SensorPhase, SurfaceHit, SurfaceVelocity, height_in_force, teleport_kinematic,
 };
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,

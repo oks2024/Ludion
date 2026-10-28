@@ -50,7 +50,7 @@ The defaults are human scale; a 1 m platformer character overrides the first fiv
 
 **`stepped` is the per-tick climb.** A slow walk spreads one step over two or three ticks, each reporting its share; a moveset summing climbs must sum across ticks. It is `Some` only when the feet actually rose that tick.
 
-**Props.** A free (dynamic) prop is pushed by the capsule; a pinned prop blocks like a wall; nothing pushes the character. `move_character_with(…, Some(&mut constraint))` takes a `SlideConstraint` whose `project(feet, step)` reshapes the input displacement before every cast (a lane, a rail, a plane lock). It never shapes the carry.
+**Props.** A free (dynamic) prop is pushed by the capsule; a pinned prop blocks like a wall; nothing pushes the character. `move_character_with(…, Some(&mut constraint))` takes a `MoveConstraint` whose `project(feet, step)` reshapes every applied horizontal displacement, the platform carry included (a lane, a rail, a plane lock); it may also return a capped `correction`, swept along its own axis and reported through `corrected`. Vertical motion and depenetration are never shaped.
 
 ### Platform carry
 

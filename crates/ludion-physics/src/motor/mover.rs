@@ -27,18 +27,44 @@ const MIN_OPPOSING: f32 = 0.2;
 /// Two wall normals of one entity closer than this are one wall: coplanar triangles of a mesh.
 const WALL_SAME_PLANE: f32 = 0.999;
 
-/// Reshapes a move before the motor casts it: a game's lane, rail or plane lock.
+/// Reshapes the horizontal motion the motor applies: a game's lane, rail or plane lock.
 ///
-/// The motor calls [`project`](SlideConstraint::project) with the feet and the displacement it is
-/// about to cast, for the initial displacement and again for each slide iteration's remainder; the
-/// return value replaces it. A constraint that needs the tick's `dt` reads
-/// [`PhysicsWorld::tick_rate`].
+/// [`project`](MoveConstraint::project) runs with the feet and the displacement the motor is about
+/// to cast: the requested move and each slide iteration's remainder, and both platform carry passes.
+/// Only its x and z are taken; vertical motion, depenetration and the ground probe are the motor's.
+/// A constraint that needs the tick's `dt` reads [`PhysicsWorld::gameplay_dt`].
 ///
-/// It projects the motor's *input* only: the platform carry is the world's motion, not the
-/// character's, so it is never run through a constraint.
-pub trait SlideConstraint {
+/// [`correction`](MoveConstraint::correction) is an optional capped pull (a lane's return to its
+/// line), asked once per call after the requested move, only when that move is not stuck. It is a
+/// separate pass because a pull folded into the displacement is projected away by the slide loop
+/// after the first floor hit; the pass is locked to the pull's own axis so a pull into an angled
+/// wall stops instead of creeping along it. [`corrected`](MoveConstraint::corrected) reports what
+/// the pass achieved.
+pub trait MoveConstraint {
     /// The step to cast instead of `step`, from `feet`.
     fn project(&mut self, feet: [f32; 3], step: [f32; 3]) -> [f32; 3];
+
+    /// A horizontal displacement to sweep from `feet`, the pose the requested move left. Its y is
+    /// dropped; a length under the motor's minimum move means none.
+    fn correction(&mut self, _feet: [f32; 3]) -> [f32; 3] {
+        [0.0; 3]
+    }
+
+    /// Called once after a correction was swept: the net feet change, and whether the travel along
+    /// the correction fell short of its length (a wall or ceiling clipped it).
+    fn corrected(&mut self, _applied: [f32; 3], _blocked: bool) {}
+}
+
+/// Keeps only the component of a step along `axis`, never backwards: the correction pass.
+struct AxisLock {
+    axis: [f32; 3],
+}
+
+impl MoveConstraint for AxisLock {
+    fn project(&mut self, _feet: [f32; 3], step: [f32; 3]) -> [f32; 3] {
+        let along = dot(step, self.axis).max(0.0);
+        [self.axis[0] * along, step[1], self.axis[2] * along]
+    }
 }
 
 /// Moves `entity`'s feet by `displacement` through the world: depenetrates, slides along what it
@@ -61,8 +87,8 @@ pub trait SlideConstraint {
 /// platform turns about the right point),
 /// plus the support's [`SurfaceVelocity`] over the tick's gameplay time (nothing
 /// while a `GameClock` hold froze it). The yaw turns the rider too. The carry is swept like a
-/// move: it stops at walls and ceilings (reported in `walls`/`ceiling`), never steps up and is not
-/// shaped by a [`SlideConstraint`]. The surface displacement is swept against the support's own
+/// move: it stops at walls and ceilings (reported in `walls`/`ceiling`), never steps up and is
+/// shaped by a [`MoveConstraint`]. The surface displacement is swept against the support's own
 /// collider too (a belt's end stop holds the rider); the rigid part ignores it. It is reported in
 /// [`MoveReport::platform`] with its intended values even when blocked, whenever it ran, and
 /// `moved` includes it. A game's takeoff momentum is `(translation + surface) / dt`.
@@ -111,13 +137,14 @@ pub fn move_character<P: PhysicsPose>(
     move_character_with::<P>(world, entity, displacement, None)
 }
 
-/// [`move_character`] with a [`SlideConstraint`] reshaping the displacement before each cast.
+/// [`move_character`] with a [`MoveConstraint`] shaping every horizontal displacement and adding
+/// its correction.
 /// The same ordering rule applies: call it before [`install`](crate::install)'s systems.
 pub fn move_character_with<P: PhysicsPose>(
     world: &mut World,
     entity: EntityId,
     displacement: [f32; 3],
-    constraint: Option<&mut dyn SlideConstraint>,
+    constraint: Option<&mut dyn MoveConstraint>,
 ) -> Result<MoveReport, MotorError> {
     let motor = world
         .get::<CharacterMotor>(entity)
@@ -490,17 +517,18 @@ impl<'a> Solver<'a> {
         (if stuck { feet } else { best.1 }, stuck)
     }
 
-    /// One move: depenetrate, slide along what the displacement hits, probe the ground, then sweep
-    /// the platform `carry` through the same slide loop, without a step-up or a constraint and
-    /// without a second probe: first the surface displacement against everything (the support's
-    /// end stop holds), then the rigid part with the support excluded (a rider moves rigidly with
-    /// its support, whose collider casts see a tick late). A stuck move applies no carry.
+    /// One move: depenetrate, slide along what the displacement hits, sweep the constraint's
+    /// correction, probe the ground, then sweep the platform `carry` through the same slide loop,
+    /// shaped by the constraint, without a step-up and without a second probe: first the surface
+    /// displacement against everything (the support's end stop holds), then the rigid part with the
+    /// support excluded (a rider moves rigidly with its support, whose collider casts see a tick
+    /// late). A stuck move applies no carry.
     fn solve(
         &self,
         start: [f32; 3],
         displacement: [f32; 3],
         was_grounded: bool,
-        mut constraint: Option<&mut dyn SlideConstraint>,
+        mut constraint: Option<&mut dyn MoveConstraint>,
         carry: Option<&CarryPlan>,
     ) -> Outcome {
         let (mut feet, mut stuck) = self.depenetrate(start);
@@ -515,6 +543,16 @@ impl<'a> Solver<'a> {
                 true,
                 &mut constraint,
             );
+            let pull = constraint.as_mut().map(|c| c.correction(feet));
+            if let Some(pull) = pull
+                .map(|p| [p[0], 0.0, p[2]])
+                .filter(|p| len(*p) >= MIN_MOVE)
+            {
+                let (applied, blocked) = self.correct(&mut slide, &mut feet, pull, was_grounded);
+                if let Some(constraint) = constraint.as_mut() {
+                    constraint.corrected(applied, blocked);
+                }
+            }
             let (settled, still_stuck) = self.depenetrate(feet);
             feet = settled;
             stuck = still_stuck;
@@ -536,7 +574,7 @@ impl<'a> Solver<'a> {
                 carry.surface,
                 was_grounded,
                 false,
-                &mut None,
+                &mut constraint,
             );
             let (translation, yaw) = rigid_carry(
                 feet,
@@ -551,7 +589,7 @@ impl<'a> Solver<'a> {
                 translation,
                 was_grounded,
                 false,
-                &mut None,
+                &mut constraint,
             );
             (carry, translation, yaw)
         });
@@ -588,6 +626,31 @@ impl<'a> Solver<'a> {
         }
     }
 
+    /// Sweeps a constraint's `correction` along its own axis, without a step-up. Returns the net
+    /// feet change and whether the travel along the axis fell short of the correction.
+    fn correct(
+        &self,
+        slide: &mut Slide,
+        feet: &mut [f32; 3],
+        correction: [f32; 3],
+        was_grounded: bool,
+    ) -> ([f32; 3], bool) {
+        let length = len(correction);
+        let axis = scale(correction, 1.0 / length);
+        let before = *feet;
+        let mut lock = AxisLock { axis };
+        self.slide(
+            slide,
+            feet,
+            correction,
+            was_grounded,
+            false,
+            &mut Some(&mut lock),
+        );
+        let applied = sub(*feet, before);
+        (applied, dot(applied, axis) < length - MIN_MOVE)
+    }
+
     /// This solver with `entity`'s collider ignored as well.
     fn without(&self, entity: EntityId) -> Solver<'a> {
         Solver {
@@ -607,13 +670,14 @@ impl<'a> Solver<'a> {
         displacement: [f32; 3],
         was_grounded: bool,
         allow_step: bool,
-        constraint: &mut Option<&mut dyn SlideConstraint>,
+        constraint: &mut Option<&mut dyn MoveConstraint>,
     ) {
         let mut planes: Vec<[f32; 3]> = Vec::new();
         let mut remaining = displacement;
         for _ in 0..self.max_slides {
             if let Some(constraint) = constraint.as_mut() {
-                remaining = constraint.project(*feet, remaining);
+                let shaped = constraint.project(*feet, remaining);
+                remaining = [shaped[0], remaining[1], shaped[2]];
             }
             let length = len(remaining);
             if length.is_nan() || length < MIN_MOVE || !length.is_finite() {

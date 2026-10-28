@@ -185,8 +185,8 @@ pub use impulse::{Blast, BlastHit, Falloff, ImpulseMiss};
 pub use joints::JointBroken;
 pub use meshes::{ColliderMeshes, MeshLoader, TriangleMesh};
 pub use motor::{
-    CharacterMotor, CharacterMotorState, GroundHit, MotorError, MoveReport, PlatformCarry,
-    PlatformPose, ResizeReport, SlideConstraint, SurfaceHit, SurfaceVelocity, fits_character,
+    CharacterMotor, CharacterMotorState, GroundHit, MotorError, MoveConstraint, MoveReport,
+    PlatformCarry, PlatformPose, ResizeReport, SurfaceHit, SurfaceVelocity, fits_character,
     ground_probe_reach, height_in_force, move_character, move_character_with, resize_character,
     teleport_character,
 };
