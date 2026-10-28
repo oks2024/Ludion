@@ -618,6 +618,7 @@ impl<'a> Solver<'a> {
             moved: sub(feet, start),
             stuck,
             height: self.height,
+            lane: None,
         };
         Outcome {
             feet,

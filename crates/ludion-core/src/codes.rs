@@ -1460,6 +1460,23 @@ pub mod code {
     /// carried by it. Raised by `check-scene`.
     pub const SURFACE_VELOCITY_NO_SURFACE: DiagnosticCode = DiagnosticCode::new("L1299");
 
+    /// `L1300` — a `LaneConstraint` field is out of range: a time, `pull_speed` or `search_window`
+    /// is negative or not finite, `offset` or `s` is not finite, or `blend` is outside [0, 1].
+    /// Raised by the component's validator and, for a lane built in Rust, once per entity at runtime.
+    pub const LANE_CONSTRAINT_INVALID: DiagnosticCode = DiagnosticCode::new("L1300");
+
+    /// `L1301` — the `kind: path` document named by `LaneConstraint.path` failed to load. Raised
+    /// once per entity at runtime; the lane stays inert.
+    pub const LANE_PATH_UNLOADED: DiagnosticCode = DiagnosticCode::new("L1301");
+
+    /// `L1302` — a `LaneConstraint` entity has no `CharacterMotor`, so nothing reads the lane.
+    /// Raised by `check-scene` and once per entity at runtime.
+    pub const LANE_WITHOUT_MOTOR: DiagnosticCode = DiagnosticCode::new("L1302");
+
+    /// `L1303` — a lane path has a near-vertical span, where the horizontal frame is undefined from
+    /// the tangent. A warning, raised when a lane first loads the path.
+    pub const LANE_PATH_VERTICAL: DiagnosticCode = DiagnosticCode::new("L1303");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7318,6 +7335,53 @@ collider. A rigid support is never carried, so the velocity would do nothing.
 
 Fix: put the `SurfaceVelocity` on the belt's `static` or `kinematic` collider.",
     },
+    CodeEntry {
+        code: code::LANE_CONSTRAINT_INVALID,
+        severity: Severity::Error,
+        title: "a lane constraint field is out of range",
+        explanation: "A `LaneConstraint` field is out of range: `engage_time`, `disengage_time`, `pull_speed` or
+`search_window` is negative or not finite, `offset` or `s` is not finite, or `blend` is not finite or
+lies outside [0, 1]. The pointer names the field. A lane built in Rust with such a value is reported
+once per entity at runtime and left inert, so the character moves freely.
+
+Fix: give the times, `pull_speed` and `search_window` finite non-negative numbers, `offset` a finite
+number of metres, and `blend` a number from 0 to 1 (leave `s` null to let the lane find its own place).",
+    },
+    CodeEntry {
+        code: code::LANE_PATH_UNLOADED,
+        severity: Severity::Error,
+        title: "a lane constraint path failed to load",
+        explanation: "The `kind: path` document named by `LaneConstraint.path` could not be loaded, so the lane has no
+centreline. It is reported once per entity and the lane stays inert: the character moves freely, as
+if `engaged` were false. The cause (missing file, wrong kind, malformed document) follows in the
+diagnostic.
+
+Fix: point `path` at an existing `kind: path` document, relative to the content root, and check it
+with `ludion check-scene`.",
+    },
+    CodeEntry {
+        code: code::LANE_WITHOUT_MOTOR,
+        severity: Severity::Error,
+        title: "a lane constraint on an entity with no character motor",
+        explanation: "An entity carries a `LaneConstraint` but no `CharacterMotor`. A lane shapes the displacement that
+`move_character` applies, so without a motor nothing ever reads it. `ludion check-scene` reports it
+at `/entities/<i>/components/LaneConstraint`; a lane on an entity spawned by game code is reported
+once at runtime.
+
+Fix: add a `CharacterMotor` to the entity, or remove the `LaneConstraint`.",
+    },
+    CodeEntry {
+        code: code::LANE_PATH_VERTICAL,
+        severity: Severity::Warning,
+        title: "a lane path has a near-vertical span",
+        explanation: "A lane's path has a span whose horizontal tangent is almost zero (under about 87 degrees from
+the horizontal plane), so \"forward\" and \"sideways\" are not defined there from the tangent alone. The
+message names the arc-length range. The lane keeps working: across such a span its frame uses the
+sideways direction carried over from the path's previous stretch.
+
+Fix: tilt the span so it keeps some horizontal travel, or shorten it; a lane is meant for paths that
+run along the ground, not for ladders or shafts.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9987,6 +10051,10 @@ mod tests {
         code::CHARACTER_MOTOR_PARENTED,
         code::SURFACE_VELOCITY_INVALID,
         code::SURFACE_VELOCITY_NO_SURFACE,
+        code::LANE_CONSTRAINT_INVALID,
+        code::LANE_PATH_UNLOADED,
+        code::LANE_WITHOUT_MOTOR,
+        code::LANE_PATH_VERTICAL,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -10236,6 +10304,7 @@ mod tests {
             code::REFLECTION_PROBE_NOT_STORED,
             code::TEXTURE_CHECK_WARNING,
             code::COLLIDER_SCALE_IGNORED,
+            code::LANE_PATH_VERTICAL,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

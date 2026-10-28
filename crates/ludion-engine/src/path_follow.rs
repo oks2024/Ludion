@@ -67,12 +67,13 @@ const TELEPORT_SLACK: f32 = 0.5;
 
 /// A path loaded once: its sampler and the debug polyline sampled from it.
 struct Loaded {
-    sampler: PathSampler,
+    sampler: Arc<PathSampler>,
     polyline: Arc<[[f32; 3]]>,
 }
 
 impl Loaded {
     fn new(sampler: PathSampler) -> Self {
+        let sampler = Arc::new(sampler);
         let length = sampler.length();
         let polyline = (0..=DEBUG_SPANS)
             .map(|i| {
@@ -285,6 +286,32 @@ impl PathLibrary {
             Ok(loaded) => Ok(loaded),
             Err(causes) => Err(causes),
         }
+    }
+
+    /// The shared sampler of the path `rel`, loading it on first use; `Err` with the loader's
+    /// diagnostics. The `Arc` outlives the library borrow, so a caller can go on to use the world.
+    #[allow(
+        dead_code,
+        reason = "the lane maths are exercised by tests and by callers outside this module"
+    )]
+    pub(crate) fn sampler(&mut self, rel: &str) -> Result<Arc<PathSampler>, Vec<Diagnostic>> {
+        self.loaded(rel)
+            .map(|loaded| Arc::clone(&loaded.sampler))
+            .map_err(<[Diagnostic]>::to_vec)
+    }
+
+    /// The sampler of `rel` when it is already loaded, without loading: for a reader that holds
+    /// only `&World`.
+    #[allow(
+        dead_code,
+        reason = "the lane maths are exercised by tests and by callers outside this module"
+    )]
+    pub(crate) fn cached(&self, rel: &str) -> Option<Arc<PathSampler>> {
+        self.paths
+            .get(rel)?
+            .as_ref()
+            .ok()
+            .map(|loaded| Arc::clone(&loaded.sampler))
     }
 }
 

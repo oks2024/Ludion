@@ -292,11 +292,12 @@ fn carries_surface(entity: &ludion_scene::SceneEntity) -> bool {
         .is_some_and(|collider| !matches!(collider.body, ludion_spatial::Body::Rigid(_)))
 }
 
-/// Every `L1295`/`L1296`/`L1297`/`L1299` a checked scene's character motors and belts report: a
-/// `Collider` beside the motor (the motor owns its capsule), a scene with no `physics:` block (the
-/// body is never built), a `Parent` (a motor writes world-space feet), and a `SurfaceVelocity` on
-/// an entity with no `static` or `kinematic` collider to carry from. The field rules (`L1294`,
-/// `L1298`) and the layer (`L1186`) are reported elsewhere.
+/// Every `L1295`/`L1296`/`L1297`/`L1299`/`L1302` a checked scene's character motors, belts and
+/// lanes report: a `Collider` beside the motor (the motor owns its capsule), a scene with no
+/// `physics:` block (the body is never built), a `Parent` (a motor writes world-space feet), a
+/// `SurfaceVelocity` on an entity with no `static` or `kinematic` collider to carry from, and a
+/// `LaneConstraint` on an entity with no motor. The field rules (`L1294`, `L1298`, `L1300`) and the
+/// layer (`L1186`) are reported elsewhere.
 pub fn scene_motor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for (index, entity) in scene.entities.iter().enumerate() {
@@ -314,6 +315,17 @@ pub fn scene_motor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
             );
         }
         if !has("CharacterMotor") {
+            if has("LaneConstraint") {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::LANE_WITHOUT_MOTOR,
+                        "this `LaneConstraint` has no `CharacterMotor` beside it; nothing reads \
+                         the lane",
+                    )
+                    .with_path(format!("{at}/LaneConstraint"))
+                    .with_help("add a `CharacterMotor` to this entity, or remove the lane"),
+                );
+            }
             continue;
         }
         if has("Collider") {
@@ -1074,6 +1086,24 @@ entities:
         let found = scene_motor_diagnostics(&scene);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].code, code::SURFACE_VELOCITY_NO_SURFACE);
+    }
+
+    #[test]
+    fn a_lane_needs_a_motor_beside_it() {
+        let scene = motor_scene(LAYERS, "      LaneConstraint: {}\n");
+        let found = scene_motor_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::LANE_WITHOUT_MOTOR);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/LaneConstraint")
+        );
+
+        let scene = motor_scene(
+            LAYERS,
+            "      LaneConstraint: {}\n      CharacterMotor: {}\n",
+        );
+        assert!(scene_motor_diagnostics(&scene).is_empty());
     }
 
     #[test]

@@ -31,6 +31,7 @@ use ludion_ecs::{Parent, Registry, SemanticValidate, World};
 use ludion_physics::PhysicsPose;
 use ludion_spatial::{Collider, GroundPosition, Joint, JointMotor, Plane, Velocity};
 
+use crate::lane::LaneConstraint;
 use crate::path_follow::PathFollower;
 use crate::patterns::{PatternPlayer, Volley};
 use crate::prefab::PrefabInstance;
@@ -4421,6 +4422,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<ludion_physics::SurfaceVelocity>("SurfaceVelocity")
         .expect("unique");
+    // The lane a motor is held to, appended after the belt velocity.
+    registry
+        .register_validated::<LaneConstraint>("LaneConstraint")
+        .expect("unique");
     registry
 }
 
@@ -4895,12 +4900,13 @@ mod tests {
                 "CharacterMotor",
                 "CharacterMotorState",
                 "SurfaceVelocity",
+                "LaneConstraint",
             ]
         );
         assert_eq!(
             registry.len(),
-            38,
-            "appending the surface velocity grows the registry by exactly one"
+            39,
+            "appending the lane constraint grows the registry by exactly one"
         );
     }
 
@@ -5754,6 +5760,7 @@ mod tests {
         clean::<ReflectionProbe>("ReflectionProbe");
         clean::<ludion_physics::CharacterMotor>("CharacterMotor");
         clean::<ludion_physics::SurfaceVelocity>("SurfaceVelocity");
+        clean::<LaneConstraint>("LaneConstraint");
         clean::<DirectionalLight>("DirectionalLight");
         clean::<Sprite>("Sprite");
         clean::<Mesh>("Mesh");

@@ -49,6 +49,56 @@ pub struct PlatformCarry {
     pub surface: [f32; 3],
 }
 
+/// The lane's frame at the character's `s`: the centreline pose the lane constrains against.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LaneFrame {
+    /// Metres along the path the frame is evaluated at.
+    pub s: f32,
+    /// The lane point at `s`: the path point moved `offset` metres along `lateral`.
+    pub point: [f32; 3],
+    /// The path's unit tangent at `s` (not horizontal on a slope).
+    pub tangent: [f32; 3],
+    /// The horizontal unit direction of travel at `s`.
+    pub forward: [f32; 3],
+    /// The horizontal unit direction to the right of `forward` (`lateral = forward × up`).
+    pub lateral: [f32; 3],
+    /// The lane's blend weight at the call, `0..=1` (the eased, not the raw, blend).
+    pub weight: f32,
+}
+
+/// Which end of an open lane path the character is at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaneEnd {
+    /// `s` is at the start of the path (`0`).
+    Start,
+    /// `s` is at the end of the path (its length).
+    End,
+}
+
+/// What a `LaneConstraint` did to one `move_character` call.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LaneReport {
+    /// Metres along the path after the move.
+    pub s: f32,
+    /// The change in `s` over the move, in metres.
+    pub ds: f32,
+    /// The blend weight the move used, `0..=1`.
+    pub weight: f32,
+    /// Whether the lane is engaged (the component's flag at the call).
+    pub engaged: bool,
+    /// Whether the weight is still moving toward its target.
+    pub easing: bool,
+    /// Signed metres from the lane centre line to the feet along `lateral`, after the move.
+    pub lateral_error: f32,
+    /// Whether a wall stopped the pull toward the lane.
+    pub pull_blocked: bool,
+    /// The frame at the final `s`.
+    pub frame: LaneFrame,
+    /// The end of an open path the character is held at, when `ends` is `stop`.
+    pub at_end: Option<LaneEnd>,
+}
+
 /// What one `move_character` call did.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -73,6 +123,9 @@ pub struct MoveReport {
     pub stuck: bool,
     /// The capsule height the move used.
     pub height: f32,
+    /// Present when the entity has a `LaneConstraint` that is engaged or still easing; filled by
+    /// the engine's `move_character`.
+    pub lane: Option<LaneReport>,
 }
 
 /// What one `resize_character` call did.
