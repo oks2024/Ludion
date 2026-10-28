@@ -13,7 +13,7 @@ use ludion_ecs::{SemanticValidate, SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
     Egress, EgressChannels, Engine, EngineBuilder, FollowerMotion, Name, PathFollower, PathMode,
-    Transform, path_follower_motion,
+    PathOrient, Transform, path_follower_motion,
 };
 use ludion_protocol::command::{SimStepParams, StreamSubscribeParams, SubscribeMode};
 use ludion_protocol::event::{Event, LogEvent};
@@ -964,4 +964,229 @@ fn a_world_without_followers_reports_no_motion() {
             .entities()
             .all(|id| path_follower_motion(world, id).is_none())
     );
+}
+
+/// A one-follower scene on `path` with `orient` (`None`: the key is omitted) and an authored rotation.
+fn oriented_scene(path: &str, speed: f32, mode: &str, phase: f32, orient: Option<&str>) -> String {
+    let orient = orient.map_or(String::new(), |o| format!("        orient: {o}\n"));
+    format!(
+        "\
+format: 1
+entities:
+  - name: platform
+    components:
+      Transform:
+        rotation:
+          - 0.0
+          - 45.0
+          - 0.0
+      PathFollower:
+        path: {path}
+        speed: {speed}
+        mode: {mode}
+        phase: {phase}
+{orient}"
+    )
+}
+
+/// An engine on `scene` over the `LIFT` root plus `extra` `(file, text)` paths, `ticks` in.
+fn oriented_engine(tag: &str, extra: &[(&str, &str)], scene: &str, ticks: u64) -> Engine {
+    let root = fixture_root(tag);
+    for (file, text) in extra {
+        std::fs::write(root.join(file), text).unwrap();
+    }
+    let mut engine = game(&root).build().expect("the game builds");
+    engine.load_inline_scene(scene).expect("the scene loads");
+    advance(&mut engine, ticks);
+    engine
+}
+
+fn rotation_of(engine: &Engine, name: &str) -> [f32; 3] {
+    let world = engine.world();
+    let id = world
+        .entities()
+        .find(|&id| matches!(world.get::<Name>(id), Ok(Some(n)) if n.0 == name))
+        .expect("the entity exists");
+    world.get::<Transform>(id).unwrap().unwrap().rotation
+}
+
+fn near(got: [f32; 3], want: [f32; 3]) -> bool {
+    got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-4)
+}
+
+#[test]
+fn orient_yaw_faces_travel_and_flips_on_ping_pong() {
+    let out = oriented_engine(
+        "yaw-out",
+        &[],
+        &oriented_scene(
+            "lift.path.yaml",
+            METRE_PER_TICK,
+            "ping_pong",
+            0.0,
+            Some("yaw"),
+        ),
+        2,
+    );
+    let rotation = rotation_of(&out, "platform");
+    assert!(near(rotation, [0.0, -90.0, 0.0]), "{rotation:?}");
+    let back = oriented_engine(
+        "yaw-back",
+        &[],
+        &oriented_scene(
+            "lift.path.yaml",
+            METRE_PER_TICK,
+            "ping_pong",
+            0.0,
+            Some("yaw"),
+        ),
+        12,
+    );
+    let rotation = rotation_of(&back, "platform");
+    assert!(near(rotation, [0.0, 90.0, 0.0]), "{rotation:?}");
+    let reversed = oriented_engine(
+        "yaw-neg",
+        &[],
+        &oriented_scene("lift.path.yaml", -METRE_PER_TICK, "loop", 5.0, Some("yaw")),
+        2,
+    );
+    let rotation = rotation_of(&reversed, "platform");
+    assert!(near(rotation, [0.0, 90.0, 0.0]), "{rotation:?}");
+}
+
+#[test]
+fn orient_yaw_keeps_the_last_yaw_on_a_vertical_stretch() {
+    const CLIMB: &str = "format: 1
+kind: path
+name: climb
+interpolation: linear
+closed: false
+points:
+  - - 0.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - -4.0
+  - - 0.0
+    - 4.0
+    - -4.0
+";
+    let scene = oriented_scene("climb.path.yaml", METRE_PER_TICK, "once", 0.0, Some("yaw"));
+    let extra = [("climb.path.yaml", CLIMB)];
+    let flat = oriented_engine("climb-flat", &extra, &scene, 3);
+    assert_eq!(rotation_of(&flat, "platform"), [0.0, 0.0, 0.0]);
+    let rising = oriented_engine("climb-up", &extra, &scene, 7);
+    let world = rising.world();
+    let id = world
+        .entities()
+        .find(|&id| world.has::<PathFollower>(id))
+        .unwrap();
+    assert!(world.get::<Transform>(id).unwrap().unwrap().translation[1] > 1.0);
+    assert_eq!(
+        rotation_of(&rising, "platform").map(f32::to_bits),
+        rotation_of(&flat, "platform").map(f32::to_bits)
+    );
+}
+
+#[test]
+fn orient_frame_faces_travel() {
+    const SLOPE: &str = "format: 1
+kind: path
+name: slope
+interpolation: linear
+closed: false
+points:
+  - - 0.0
+    - 0.0
+    - 0.0
+  - - 10.0
+    - 10.0
+    - 0.0
+";
+    let scene = oriented_scene(
+        "slope.path.yaml",
+        METRE_PER_TICK,
+        "ping_pong",
+        0.0,
+        Some("frame"),
+    );
+    let extra = [("slope.path.yaml", SLOPE)];
+    let t = std::f32::consts::FRAC_1_SQRT_2;
+    for (ticks, sign) in [(3, 1.0), (16, -1.0)] {
+        let engine = oriented_engine("frame", &extra, &scene, ticks);
+        let quat = ludion_core::math::euler_xyz_degrees_to_quat(rotation_of(&engine, "platform"));
+        let forward = ludion_core::math::quat_rotate(quat, [0.0, 0.0, -1.0]);
+        let dot = sign * (forward[0] * t + forward[1] * t);
+        assert!(dot > 1.0 - 1e-5, "{ticks} ticks: {forward:?}");
+        let right = ludion_core::math::quat_rotate(quat, [1.0, 0.0, 0.0]);
+        assert!(right[1].abs() < 1e-5, "no roll: {right:?}");
+    }
+}
+
+#[test]
+fn orient_none_leaves_rotation_and_hash_unchanged() {
+    let mut omitted = oriented_engine(
+        "none-a",
+        &[],
+        &oriented_scene("lift.path.yaml", 2.0, "loop", 0.0, None),
+        10,
+    );
+    let mut none = oriented_engine(
+        "none-b",
+        &[],
+        &oriented_scene("lift.path.yaml", 2.0, "loop", 0.0, Some("none")),
+        10,
+    );
+    for engine in [&omitted, &none] {
+        assert_eq!(
+            rotation_of(engine, "platform").map(f32::to_bits),
+            [0.0f32, 45.0, 0.0].map(f32::to_bits)
+        );
+    }
+    assert_eq!(omitted.world_hash(), none.world_hash());
+    let value = serde_json::to_value(PathFollower::default()).unwrap();
+    assert!(value.get("orient").is_none(), "{value}");
+}
+
+#[test]
+fn orient_is_written_in_the_parents_frame() {
+    let scene = "\
+format: 1
+entities:
+  - name: carrier
+    components:
+      Transform:
+        rotation:
+          - 0.0
+          - 90.0
+          - 0.0
+  - name: platform
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      Transform: {}
+      PathFollower:
+        path: lift.path.yaml
+        speed: 60.0
+        mode: loop
+        orient: yaw
+";
+    let engine = oriented_engine("parented", &[], scene, 2);
+    let rotation = rotation_of(&engine, "platform");
+    assert!(near(rotation, [0.0, -90.0, 0.0]), "{rotation:?}");
+}
+
+#[test]
+fn the_orient_names_are_snake_case() {
+    for (text, orient) in [
+        ("none", PathOrient::None),
+        ("yaw", PathOrient::Yaw),
+        ("frame", PathOrient::Frame),
+    ] {
+        let follower: PathFollower =
+            serde_json::from_value(serde_json::json!({ "orient": text })).unwrap();
+        assert_eq!(follower.orient, orient);
+    }
 }

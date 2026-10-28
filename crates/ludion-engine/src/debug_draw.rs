@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ludion_core::math::glam::Vec3;
-use ludion_core::math::sin_cos;
+use ludion_core::math::{quat_rotate, sin_cos};
 use ludion_ecs::World;
 use ludion_renderer::DebugSegment;
 
@@ -123,6 +123,20 @@ impl DebugPen<'_> {
         let p = Vec3::from(p);
         for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
             self.push(p - axis * size, p + axis * size, color);
+        }
+        self
+    }
+
+    /// Three lines from `origin` along the rotated +X (red), +Y (green) and +Z (blue) axes, each
+    /// `size` long. `rotation` is a unit quaternion `[x, y, z, w]`; the colours are fixed.
+    pub fn axes(&mut self, origin: [f32; 3], rotation: [f32; 4], size: f32) -> &mut Self {
+        let o = Vec3::from(origin);
+        for (axis, color) in [
+            ([size, 0.0, 0.0], [1.0, 0.0, 0.0, 1.0]),
+            ([0.0, size, 0.0], [0.0, 1.0, 0.0, 1.0]),
+            ([0.0, 0.0, size], [0.0, 0.0, 1.0, 1.0]),
+        ] {
+            self.push(o, o + Vec3::from(quat_rotate(rotation, axis)), color);
         }
         self
     }
@@ -415,6 +429,12 @@ mod tests {
         );
         assert_eq!(
             count(&mut world(), |p| {
+                p.axes([0.0; 3], [0.0, 0.0, 0.0, 1.0], 1.0);
+            }),
+            3
+        );
+        assert_eq!(
+            count(&mut world(), |p| {
                 p.aabb([0.0; 3], [1.0; 3], RED);
             }),
             12
@@ -653,6 +673,31 @@ mod tests {
     }
 
     #[test]
+    fn axes_point_along_the_rotated_axes_in_rgb() {
+        let mut world = world();
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        // 90 degrees about +Y: X maps to -Z, Z maps to +X.
+        debug_draw(&mut world, "t").axes([1.0, 2.0, 3.0], [0.0, half, 0.0, half], 2.0);
+        let segments = &world.resource::<DebugDraw>().unwrap().pending["t"];
+        let colors: Vec<_> = segments.iter().map(|s| s.color).collect();
+        assert_eq!(
+            colors,
+            [
+                [1.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0]
+            ]
+        );
+        let ends = [[1.0, 2.0, 1.0], [1.0, 4.0, 3.0], [3.0, 2.0, 3.0]];
+        for (segment, end) in segments.iter().zip(ends) {
+            assert_eq!(segment.a, [1.0, 2.0, 3.0]);
+            for (got, want) in segment.b.iter().zip(end) {
+                assert!((got - want).abs() < 1e-5, "{:?} vs {end:?}", segment.b);
+            }
+        }
+    }
+
+    #[test]
     fn a_pen_over_a_world_without_the_resource_is_a_no_op() {
         let mut world = World::new();
         debug_draw(&mut world, "t").sphere([0.0; 3], 1.0, RED);
@@ -699,6 +744,19 @@ mod tests {
         engine
     }
 
+    /// A ring follower with `orient` set (`None`: the key is omitted), no probe.
+    fn oriented_engine(orient: Option<&str>) -> crate::Engine {
+        let mut engine = engine(0);
+        let orient = orient.map_or(String::new(), |o| format!("        orient: {o}\n"));
+        engine
+            .load_inline_scene(&format!(
+                "format: 1\nentities:\n  - components:\n      Transform: {{}}\n      PathFollower:\n        \
+                 path: ring.path.yaml\n{orient}"
+            ))
+            .unwrap();
+        engine
+    }
+
     fn lines(engine: &mut crate::Engine) -> Vec<DebugSegment> {
         engine.extract_render_scene(64, 64).unwrap().debug_lines
     }
@@ -726,6 +784,26 @@ mod tests {
             "a toggle reaches the next extract"
         );
         assert_eq!(engine.debug_draw_drawn(), ["path", "probe"]);
+    }
+
+    #[test]
+    fn an_oriented_follower_draws_its_axes_under_path() {
+        let path_lines = |orient| {
+            let mut engine = oriented_engine(orient);
+            engine.set_debug_draw(DebugCategories::parse("path"));
+            engine.advance_live();
+            lines(&mut engine)
+        };
+        let plain = path_lines(None);
+        let oriented = path_lines(Some("yaw"));
+        assert_eq!(oriented.len(), plain.len() + 3);
+        for color in [
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+        ] {
+            assert_eq!(oriented.iter().filter(|s| s.color == color).count(), 1);
+        }
     }
 
     #[test]

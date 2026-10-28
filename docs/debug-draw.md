@@ -20,14 +20,14 @@ fn draw_motor(world: &mut World, _ctx: &SystemCtx) {
 
 `debug_draw(world, category)` returns a chainable `DebugPen`. Points are world space, colors linear
 RGBA. Primitives: `line(a, b)`, `ray(origin, dir)` (its length is the ray's), `path(points)` (a
-polyline), `cross(p, size)` (three axis lines, `2 * size` long), `aabb(min, max)`, `sphere(center,
+polyline), `cross(p, size)` (three axis lines, `2 * size` long), `axes(origin, rotation, size)` (rotated +X red, +Y green, +Z blue, `size` long, `rotation` a unit `[x, y, z, w]`), `aabb(min, max)`, `sphere(center,
 radius)` (three great circles), `capsule(a, b, radius)` (`a == b` is a sphere). Categories are
 `&'static str`; `"all"` is reserved for the host's filter.
 
 ## Categories
 
 A category is a name a system draws under and a host enables: `motor`, `camera`, `ai`. The engine
-emits `path` — every `PathFollower`'s route — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap. `DebugCategories::parse("path,motor")` builds a
+emits `path` — every `PathFollower`'s route, and an oriented follower's axes — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap. `DebugCategories::parse("path,motor")` builds a
 filter; `all` enables every category, an empty list none (the default).
 
 ## What a frame shows

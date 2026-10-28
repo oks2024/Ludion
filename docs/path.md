@@ -83,16 +83,25 @@ only to break ties, for legs that cross at different heights. Ties go to the sma
 
 `path` (content-root-relative; `""` is inert), `speed` (metres per gameplay second, negative runs
 backwards, `1.0`), `mode` (`loop` | `ping_pong` | `once`, `loop`), `phase` (metres along the path,
-the authored start offset, rewritten every tick).
+the authored start offset, rewritten every tick), `orient` (`none` | `yaw` | `frame`, `none`).
 
 The engine's `path_follow` system runs **before** every game system and writes
-`Transform.translation` (rotation and scale untouched) every tick, so a system that rides the
+`Transform.translation` (scale untouched, rotation too unless `orient` is set) every tick, so a system that rides the
 platform reads *this* tick's pose. `phase` advances by `speed · game_dt` only when gameplay time
 advanced, so a `GameClock` hold freezes platforms. `loop` wraps (an open path jumps end → start),
 `ping_pong` runs `0 → L → 0` with `phase` counting to `2L`, `once` clamps to `[0, L]`.
 
 To drive the position yourself, set `speed: 0` and write `phase`; it poses on the next tick. The pose
 is in the parent's frame: points are scene coordinates for a root.
+
+**Orientation.** `orient: yaw` turns the follower about +Y to face the horizontal travel direction;
+`frame` uses the path's no-roll frame (`frame_at`). Local **−Z faces travel** and +Y is
+up, as for cameras and glTF; a ping-pong return leg or a negative `speed` faces backwards. The rotation is
+written as Euler degrees into `Transform.rotation`, in the parent's frame like the translation. On a
+vertical stretch `yaw` writes nothing and the previous rotation stays (a path that *starts* vertical keeps
+the authored rotation until it first moves horizontally). `orient` is omitted from a serialized follower
+while `none`, so only scenes that set it change hash. An oriented follower also draws its axes (X red, Y
+green, Z blue) under `path`.
 
 **Motion.** `path_follower_motion(world, entity) -> Option<FollowerMotion>` reads what this tick did:
 `s`, `direction` (`-1` towards the start; flips on a ping-pong return), `delta` (the translation

@@ -8,6 +8,8 @@
 //! built (scene load, restore, district switch, and the bare `render`/`sweep` hosts), so a game
 //! that never uses one pays nothing and its `engine.describe`, profile and hashes are unchanged.
 //!
+//! A follower with an [`orient`](PathFollower::orient) also writes `Transform.rotation`, facing travel.
+//!
 //! A tick that wraps an open `loop` path, or moves a follower further than its speed allows, is a
 //! **teleport**: a `kinematic` body is snapped to the new pose with zero velocity
 //! ([`teleport_kinematic`](ludion_physics::teleport_kinematic)) instead of driving its riders at the
@@ -28,16 +30,17 @@ use std::sync::Arc;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
+use ludion_core::math::{euler_xyz_degrees_to_quat, quat_mul};
 use ludion_core::number::engine_number;
 use ludion_ecs::{Parent, Schedule, SemanticValidate, SystemCtx, World};
-use ludion_scene::PathSampler;
+use ludion_scene::{PathFrame, PathSampler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::components::Transform;
 use crate::debug_draw::debug_draw;
-use crate::hierarchy::world_affine;
+use crate::hierarchy::{world_affine, world_transform};
 
 /// The schedule name of the engine-installed system.
 pub(crate) const SYSTEM_NAME: &str = "path_follow";
@@ -48,6 +51,10 @@ const DEBUG_CATEGORY: &str = "path";
 const DEBUG_COLOR: [f32; 4] = [1.0, 0.8, 0.1, 1.0];
 /// Half-length of the follower's debug cross, in metres.
 const DEBUG_CROSS: f32 = 0.25;
+/// Length of each axis of an oriented follower's debug frame, in metres.
+const DEBUG_AXES: f32 = 0.5;
+/// Horizontal travel below this (per unit tangent) is vertical: `yaw` keeps its rotation.
+const ORIENT_VERTICAL_EPS: f64 = 1e-6;
 /// Equal-arc-length spans in a path's debug polyline.
 const DEBUG_SPANS: usize = 64;
 
@@ -92,8 +99,29 @@ pub enum PathMode {
     Once,
 }
 
+/// How a [`PathFollower`] turns to face its travel. Rotation is written into `Transform.rotation`
+/// in the parent's frame, as Euler XYZ degrees; local −Z faces travel, as a camera's does.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PathOrient {
+    /// Rotation is untouched.
+    #[default]
+    None,
+    /// Rotation about +Y only, facing the horizontal travel direction. A vertical stretch keeps the
+    /// last yaw (the rotation is not written).
+    Yaw,
+    /// The path's no-roll frame: −Z faces travel, +Y is up.
+    Frame,
+}
+
+impl PathOrient {
+    fn is_none(&self) -> bool {
+        *self == PathOrient::None
+    }
+}
+
 /// Moves an entity along a `kind: path` document: [`path_follow`] writes its `Transform.translation`
-/// every tick (rotation and scale are untouched), advancing `phase` by `speed` on gameplay time.
+/// every tick (scale is untouched, and so is rotation unless `orient` is set), advancing `phase` by `speed` on gameplay time.
 ///
 /// The pose is in the parent's frame — the path's points are scene coordinates for a root and local
 /// to the `Parent` otherwise. A game drives the position
@@ -103,7 +131,7 @@ pub enum PathMode {
 ///
 /// # Example
 /// ```
-/// use ludion_engine::{PathFollower, PathMode};
+/// use ludion_engine::{PathFollower, PathMode, PathOrient};
 ///
 /// let lift: PathFollower = serde_json::from_value(serde_json::json!({
 ///     "path": "paths/lift.path.yaml",
@@ -113,6 +141,7 @@ pub enum PathMode {
 /// .unwrap();
 /// assert_eq!(lift.mode, PathMode::PingPong);
 /// assert_eq!(lift.phase, 0.0);
+/// assert_eq!(lift.orient, PathOrient::None);
 /// ```
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct PathFollower {
@@ -125,6 +154,10 @@ pub struct PathFollower {
     /// What happens at the end of the path (default `loop`).
     #[serde(default)]
     pub mode: PathMode,
+    /// Whether and how the follower turns to face its travel (default `none`: rotation untouched).
+    /// Omitted from a serialized follower while `none`, so existing scenes and hashes are unchanged.
+    #[serde(default, skip_serializing_if = "PathOrient::is_none")]
+    pub orient: PathOrient,
     /// Metres along the path (default `0.0`): the start offset as authored, rewritten every tick.
     #[serde(default)]
     pub phase: f32,
@@ -165,6 +198,7 @@ impl Default for PathFollower {
             path: String::new(),
             speed: 1.0,
             mode: PathMode::Loop,
+            orient: PathOrient::None,
             phase: 0.0,
         }
     }
@@ -340,12 +374,25 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         match library.loaded(&follower.path) {
             Ok(loaded) => {
                 let posed = pose(&loaded.sampler, &follower, advance);
-                poses.push((id, follower.speed, posed, Arc::clone(&loaded.polyline)));
+                let rotation = orient(
+                    &loaded.sampler,
+                    follower.orient,
+                    f64::from(posed.s),
+                    posed.direction,
+                );
+                poses.push((
+                    id,
+                    follower.speed,
+                    follower.orient,
+                    rotation,
+                    posed,
+                    Arc::clone(&loaded.polyline),
+                ));
             }
             Err(causes) => failures.push((id, follower.path, causes.to_vec())),
         }
     }
-    for (id, speed, posed, polyline) in poses {
+    for (id, speed, orientation, rotation, posed, polyline) in poses {
         let Pose {
             phase,
             position,
@@ -360,6 +407,9 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         if let Ok(Some(transform)) = world.get_mut::<Transform>(id) {
             let old = transform.translation;
             transform.translation = position;
+            if let Some(euler) = rotation {
+                transform.rotation = euler;
+            }
             let delta = [
                 position[0] - old[0],
                 position[1] - old[1],
@@ -389,11 +439,19 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         }
         // A path lives in its parent's frame, so a parented follower's debug geometry is drawn
         // through the parent's world affine.
-        let frame = world
+        let parent = world
             .has::<Parent>(id)
             .then(|| world.get::<Parent>(id).ok().flatten().copied())
+            .flatten();
+        let frame = parent.and_then(|Parent(parent)| world_affine(world, parent));
+        let parent_rotation = parent
+            .and_then(|Parent(parent)| world_transform(world, parent))
+            .map(|pose| pose.trs.rotation);
+        let current = world
+            .get::<Transform>(id)
+            .ok()
             .flatten()
-            .and_then(|Parent(parent)| world_affine(world, parent));
+            .map(|t| t.rotation);
         let (polyline, position) = match frame {
             Some(frame) => (
                 Arc::from(
@@ -406,9 +464,17 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
             ),
             None => (polyline, position),
         };
-        debug_draw(world, DEBUG_CATEGORY)
-            .path(&polyline, DEBUG_COLOR)
+        let mut pen = debug_draw(world, DEBUG_CATEGORY);
+        pen.path(&polyline, DEBUG_COLOR)
             .cross(position, DEBUG_CROSS, DEBUG_COLOR);
+        if let (false, Some(euler)) = (orientation.is_none(), current) {
+            let local = euler_xyz_degrees_to_quat(euler);
+            pen.axes(
+                position,
+                parent_rotation.map_or(local, |parent| quat_mul(parent, local)),
+                DEBUG_AXES,
+            );
+        }
     }
     world.insert_resource(motions);
     for (id, field) in non_finite {
@@ -494,6 +560,43 @@ fn pose(sampler: &PathSampler, follower: &PathFollower, advance: Option<f64>) ->
         wrapped,
         direction: if backwards { -1.0 } else { 1.0 },
     }
+}
+
+/// The Euler XYZ degrees to write for a follower posed at `s` (`None`: leave the rotation alone).
+fn orient(sampler: &PathSampler, orient: PathOrient, s: f64, direction: f32) -> Option<[f32; 3]> {
+    let facing = f64::from(direction);
+    let quat = match orient {
+        PathOrient::None => return None,
+        PathOrient::Yaw => {
+            let t = sampler.tangent_at(s);
+            let (dx, dz) = (facing * t[0], facing * t[2]);
+            if (dx * dx + dz * dz).sqrt() < ORIENT_VERTICAL_EPS {
+                return None;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            return Some([
+                0.0,
+                ludion_core::math::f64::atan2(-dx, -dz).to_degrees() as f32,
+                0.0,
+            ]);
+        }
+        PathOrient::Frame => {
+            let frame = sampler.frame_at(s);
+            if direction < 0.0 {
+                PathFrame {
+                    tangent: frame.tangent.map(|c| -c),
+                    right: frame.right.map(|c| -c),
+                    ..frame
+                }
+                .rotation()
+            } else {
+                frame.rotation()
+            }
+        }
+    };
+    let euler = ludion_core::math::f64::quat_to_euler_xyz_degrees(quat);
+    #[allow(clippy::cast_possible_truncation)]
+    Some(euler.map(|e| e as f32))
 }
 
 fn norm(v: [f32; 3]) -> f32 {
