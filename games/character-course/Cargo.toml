@@ -1,0 +1,38 @@
+[package]
+name = "character-course"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "character-course"
+path = "src/main.rs"
+
+[lib]
+# A library alongside the binary so tests can drive the game's components, systems, and registry
+# directly. The binary (src/main.rs) is a three-line `ludion::run` wrapper over `game()`.
+name = "character_course"
+path = "src/lib.rs"
+
+[dependencies]
+# The one dependency a game needs: `use ludion::prelude::*` and `ludion::run`.
+ludion = { path = "../../crates/ludion" }
+# The component derives are the game's own dependencies — the facade does not re-export them.
+serde = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+# The golden-image harness (with the game's registry seam) — a game's test-only dependency.
+ludion-testkit = { path = "../../crates/ludion-testkit" }
+# `drive_hashes` / `replay_hashes_with`, `trace_with` and `TraceChannel` for the route and replay tests.
+ludion-engine = { path = "../../crates/ludion-engine" }
+# `InputScript` and the input events the route test scripts.
+ludion-sim = { path = "../../crates/ludion-sim" }
+# `Diagnostic` — the `L2003` no-GPU skip in the golden test.
+ludion-core = { path = "../../crates/ludion-core" }
+# The committed course meshes and paths are drift-tested against `course.glb` and the canonical writers.
+ludion-import = { path = "../../crates/ludion-import" }
+ludion-scene = { path = "../../crates/ludion-scene" }
+serde_json = { workspace = true }

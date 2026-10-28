@@ -1,0 +1,4 @@
+# Ludion project manifest: this project's identity and its default scene.
+
+name = "character-course"
+default_scene = "scenes/main.yaml"

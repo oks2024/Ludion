@@ -1,0 +1,13 @@
+format: 1
+kind: path
+name: platform
+generated_from: blender/build.py
+interpolation: linear
+closed: false
+points:
+  - - 5.0
+    - -0.125
+    - -4.0
+  - - 7.0
+    - -0.125
+    - -4.0

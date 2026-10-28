@@ -1,0 +1,308 @@
+format: 1
+name: character-course
+seed: 0
+physics:
+  space: free
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 13.5
+          - 19.0
+          - 15.0
+        rotation:
+          - -52.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 60.0
+      FollowCam:
+        offset:
+          - -5.0
+          - 6.0
+          - 7.0
+  - name: sun
+    components:
+      DirectionalLight:
+        direction:
+          - -0.4
+          - -0.85
+          - -0.35
+        color:
+          - 1.0
+          - 0.96
+          - 0.88
+        intensity: 2.4
+        shadow_extent: 28.0
+  - name: fill
+    components:
+      Transform:
+        translation:
+          - 13.5
+          - 9.0
+          - 0.0
+      PointLight:
+        color:
+          - 0.55
+          - 0.65
+          - 1.0
+        intensity: 1.2
+        range: 40.0
+  - name: course-floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape:
+          asset: meshes/floor.mesh.yaml
+        color:
+          - 0.3
+          - 0.34
+          - 0.4
+          - 1.0
+        roughness: 0.9
+  - name: course-walls
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape:
+          asset: meshes/walls.mesh.yaml
+        color:
+          - 0.55
+          - 0.42
+          - 0.3
+          - 1.0
+        roughness: 0.9
+  - name: course-collision
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Collider:
+        shape:
+          mesh:
+            path: meshes/collision.mesh.yaml
+        body: static
+  - name: conveyor
+    components:
+      Transform:
+        translation:
+          - 22.0
+          - 1.078125
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 3.0
+              - 0.25
+              - 1.5
+        body: static
+      SurfaceVelocity:
+        velocity:
+          - 1.5
+          - 0.0
+          - 0.0
+  - name: conveyor-mesh
+    components:
+      Parent:
+        index: 6
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 6.0
+          - 0.5
+          - 3.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.7
+          - 0.1
+          - 1.0
+        roughness: 0.9
+  - name: platform
+    components:
+      Transform:
+        translation:
+          - 5.0
+          - -0.125
+          - -4.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 1.0
+              - 0.125
+              - 1.0
+        body: kinematic
+      PathFollower:
+        path: paths/platform.path.yaml
+        speed: 1.0
+        mode: ping_pong
+  - name: platform-mesh
+    components:
+      Parent:
+        index: 8
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 2.0
+          - 0.25
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.7
+          - 0.8
+          - 1.0
+        roughness: 0.9
+  - name: turntable
+    components:
+      Transform:
+        translation:
+          - 13.5
+          - -0.125
+          - -4.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 1.5
+              - 0.125
+              - 1.5
+        body: kinematic
+      Spin:
+        deg_per_s: 30.0
+  - name: turntable-mesh
+    components:
+      Parent:
+        index: 10
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 3.0
+          - 0.25
+          - 3.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.3
+          - 0.5
+          - 1.0
+        roughness: 0.9
+  - name: press
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 2.25
+          - -4.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 1.0
+              - 0.25
+              - 1.5
+        body: kinematic
+      PathFollower:
+        path: paths/press.path.yaml
+        speed: 0.8
+        mode: ping_pong
+  - name: press-mesh
+    components:
+      Parent:
+        index: 12
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 2.0
+          - 0.5
+          - 3.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.2
+          - 0.2
+          - 1.0
+        roughness: 0.9
+  - name: hero
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.0
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        slope_limit_deg: 45.0
+        step_height: 0.25
+        snap_distance: 0.2
+        skin_width: 0.01
+      Runner:
+        run_speed: 5.0
+        jump_speed: 7.0
+        gravity: 22.0
+        jump_cut: 0.5
+        crouch_height: 0.6
+        kill_y: -6.0
+        spawn:
+          - 1.0
+          - 0.0
+          - 0.0
+      RunnerState: {}
+  - name: hero-body
+    components:
+      Parent:
+        index: 14
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.45
+          - 0.0
+        scale:
+          - 0.56
+          - 0.9
+          - 0.56
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.85
+          - 0.2
+          - 1.0
+        roughness: 0.5

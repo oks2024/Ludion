@@ -130,6 +130,7 @@ export const CRATES = {
   'crates/ludion-testkit': 'permissive',
   'crates/ludion-window': 'permissive',
   'games/breakout': 'sim',
+  'games/character-course': 'sim',
   'games/hello-paddle': 'sim',
   'games/shmup-stress': 'sim',
   'games/sokoban': 'sim',
