@@ -357,6 +357,18 @@ test('map-drift flags an unverified script scene and a silent generator', () => 
   }
 });
 
+test('map-drift ignores a path with generated_from: provenance only', () => {
+  const root = scratchTree({
+    'games/s/lift.path.yaml': 'format: 1\nkind: path\ngenerated_from: generation/build.py\n',
+  });
+  try {
+    const errors = mapGate({ root, ludion: () => fail('unused') }).errors;
+    assert.ok(!errors.some((e) => e.includes('lift.path.yaml')), errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('map-drift runs a marked generator unasked and fails a verified scene without generated_from', () => {
   const root = scratchTree({});
   try {

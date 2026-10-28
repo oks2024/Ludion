@@ -43,6 +43,7 @@ const EXCLUDED_SUFFIXES = [
   '.mesh.yaml', // names its mesh-edit, gated by scripts/mesh-edit-drift.mjs
   '.anim.yaml', // names its glTF, gated by the clip drift test in crates/ludion-cli/tests/import.rs
   '.map.yaml', // a source, not a scene
+  '.path.yaml', // provenance only: a bpy script is not an engine derive, so nothing to gate
 ];
 
 const isScene = (name) => {

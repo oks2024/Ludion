@@ -278,7 +278,9 @@ pub struct KinematicTeleports(BTreeSet<EntityId>);
 /// A driven kinematic body carries what rests on it (and flings it when it jumps far in one tick);
 /// a teleport leaves riders behind, not launched. A no-op in a world without a [`PhysicsWorld`], and
 /// a rigid or static body ignores it (a rigid body's pose write already is a teleport). Call it
-/// from a system registered before [`install`], after writing the pose.
+/// from a system registered before [`install`], after writing the pose. A call from a system
+/// scheduled after the physics write (presentation, say) only takes effect next tick, and a
+/// snapshot does not carry it.
 ///
 /// # Example
 /// ```

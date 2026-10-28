@@ -211,7 +211,9 @@ pub struct FollowerMotion {
     /// Metres along the path the follower is posed at (a ping-pong's return leg is folded back).
     pub s: f32,
     /// `-1.0` when the follower runs towards the start of the path, else `1.0`; flips on a
-    /// ping-pong's return leg.
+    /// ping-pong's return leg. At `speed` 0 it follows the sign of this tick's change in `s` (a
+    /// game-driven `phase`), keeping the last direction when `s` held, on a teleport and on the
+    /// first tick after a restore (`1.0`).
     pub direction: f32,
     /// The translation written this tick minus the one it replaced, in the parent's frame.
     pub delta: [f32; 3],
@@ -358,6 +360,10 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         return;
     }
     let advance = ctx.game_advanced().then_some(f64::from(ctx.game_dt));
+    let previous = world
+        .resource::<FollowerMotions>()
+        .map(|m| m.0.clone())
+        .unwrap_or_default();
     let mut motions = FollowerMotions::default();
     let Some(library) = world.resource_mut::<PathLibrary>() else {
         world.insert_resource(FollowerMotions::default());
@@ -374,17 +380,18 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         match library.loaded(&follower.path) {
             Ok(loaded) => {
                 let posed = pose(&loaded.sampler, &follower, advance);
-                let rotation = orient(
-                    &loaded.sampler,
-                    follower.orient,
-                    f64::from(posed.s),
-                    posed.direction,
-                );
+                // Both facings, because a held follower's direction is only known once the
+                // tick's teleport verdict is.
+                let s = f64::from(posed.s);
+                let rotations = [
+                    orient(&loaded.sampler, follower.orient, s, 1.0),
+                    orient(&loaded.sampler, follower.orient, s, -1.0),
+                ];
                 poses.push((
                     id,
                     follower.speed,
                     follower.orient,
-                    rotation,
+                    rotations,
                     posed,
                     Arc::clone(&loaded.polyline),
                 ));
@@ -392,13 +399,13 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
             Err(causes) => failures.push((id, follower.path, causes.to_vec())),
         }
     }
-    for (id, speed, orientation, rotation, posed, polyline) in poses {
+    for (id, speed, orientation, rotations, posed, polyline) in poses {
         let Pose {
             phase,
             position,
             s,
             wrapped,
-            direction,
+            mut direction,
         } = posed;
         if let Ok(Some(follower)) = world.get_mut::<PathFollower>(id) {
             follower.phase = phase;
@@ -407,9 +414,6 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         if let Ok(Some(transform)) = world.get_mut::<Transform>(id) {
             let old = transform.translation;
             transform.translation = position;
-            if let Some(euler) = rotation {
-                transform.rotation = euler;
-            }
             let delta = [
                 position[0] - old[0],
                 position[1] - old[1],
@@ -418,6 +422,19 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
             #[allow(clippy::cast_possible_truncation)]
             let allowed = speed.abs() * advance.map_or(0.0, |dt| dt as f32) + TELEPORT_SLACK;
             teleported = wrapped || norm(delta) > allowed;
+            if speed == 0.0 {
+                // A game-driven phase: travel is whichever way `s` moved, else as last tick.
+                let last = previous.get(&id);
+                let kept = last.map_or(1.0, |m| m.direction);
+                direction = match last {
+                    Some(m) if !teleported && s > m.s => 1.0,
+                    Some(m) if !teleported && s < m.s => -1.0,
+                    _ => kept,
+                };
+            }
+            if let Some(euler) = rotations[usize::from(direction < 0.0)] {
+                transform.rotation = euler;
+            }
             #[allow(clippy::cast_possible_truncation)]
             let velocity = match advance {
                 Some(dt) if !teleported => delta.map(|d| (f64::from(d) / dt) as f32),

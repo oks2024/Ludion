@@ -39,8 +39,9 @@ Points are block-of-block (`- - x`, then the other two components aligned under 
 cusps, and it passes through every point; an open path extends its ends by reflection. `linear` is
 straight segments. Canonical text always spells `interpolation` and `closed`.
 
-`generated_from` is provenance: the content-root-relative script that emitted the file. Editors treat the
-file as generated; the engine runs no drift gate, so re-run your script and diff.
+`generated_from` is provenance: the content-root-relative script that emitted the file (unlike other kinds'
+`generated_from`, which resolves against the document's directory). Editors treat the file as generated;
+the engine and the map-drift gate run no drift check, so re-run your script and diff.
 
 | Code | Raised for |
 |---|---|
@@ -104,7 +105,8 @@ while `none`, so only scenes that set it change hash. An oriented follower also 
 green, Z blue) under `path`.
 
 **Motion.** `path_follower_motion(world, entity) -> Option<FollowerMotion>` reads what this tick did:
-`s`, `direction` (`-1` towards the start; flips on a ping-pong return), `delta` (the translation
+`s`, `direction` (the sign of travel, `-1` towards the start; flips on a ping-pong return; with `speed` 0,
+the sign of the phase change, kept when it held), `delta` (the translation
 written minus the one replaced), `velocity` (`delta / game_dt`, zero on a held tick and on a
 teleport) and `teleported`. It is recomputed before any game system, never hashed or snapshotted,
 and `None` for a non-follower, a follower that posed nothing, or straight after a restore.

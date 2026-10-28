@@ -236,6 +236,16 @@ fn validate_entry(path: &Path, stem: &str, entry: &ManifestEntry) -> Result<(), 
             return refuse(field, "0".into(), "a render extent must be greater than 0");
         }
     }
+    // Categories are free-form (a game names its own), so only a blank name is wrong.
+    if let Some(names) = &entry.debug_draw
+        && names.iter().any(|name| name.trim().is_empty())
+    {
+        return refuse(
+            "debug_draw",
+            format!("{names:?}"),
+            "a debug-draw category name must not be blank",
+        );
+    }
     Ok(())
 }
 
@@ -411,6 +421,7 @@ mod tests {
             ("over", r#"{"a": {"ssim_threshold": 1.5}}"#),
             ("width", r#"{"a": {"width": 0}}"#),
             ("height", r#"{"a": {"height": 0}}"#),
+            ("blank", r#"{"a": {"debug_draw": ["path", " "]}}"#),
         ] {
             let Err(error) = discover_with_manifest(tag, &["a"], manifest) else {
                 panic!("{manifest} must be refused");

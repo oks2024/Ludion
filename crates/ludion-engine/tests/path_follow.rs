@@ -785,6 +785,55 @@ fn ping_pong_direction_flips_at_the_end() {
     assert_eq!(backwards[0].1.unwrap().direction, -1.0);
 }
 
+/// Writes the follower's `phase` a quarter metre down on frames 1..=4, then leaves it alone.
+fn slide_down(world: &mut World, ctx: &SystemCtx) {
+    if !(1..=4).contains(&ctx.frame.as_u64()) {
+        return;
+    }
+    let follower = world
+        .entities()
+        .find(|&id| world.has::<PathFollower>(id))
+        .unwrap();
+    world
+        .get_mut::<PathFollower>(follower)
+        .unwrap()
+        .unwrap()
+        .phase -= 0.25;
+}
+
+#[test]
+fn a_game_driven_phase_sets_direction_from_its_change() {
+    let root = extra_paths("driven-direction");
+    let mut engine = game(&root)
+        .system("record_motion", record_motion)
+        .system("slide_down", slide_down)
+        .build()
+        .expect("the game builds");
+    let scene = scene("lift.path.yaml", 0.0, "once", 8.0).replace(
+        "        mode: once\n",
+        "        mode: once\n        orient: yaw\n",
+    );
+    engine.load_inline_scene(&scene).expect("the scene loads");
+    advance(&mut engine, 8);
+    let ticks = engine.world().resource::<Moves>().expect("ran").0.clone();
+    let direction = |tick: usize| ticks[tick].1.unwrap().direction;
+    assert_eq!(direction(0), 1.0, "no previous tick: the default");
+    assert!((1..5).any(|tick| direction(tick) == -1.0), "{ticks:?}");
+    assert_eq!(direction(ticks.len() - 1), -1.0, "held: keeps the last");
+    let follower = engine
+        .world()
+        .entities()
+        .find(|&id| engine.world().has::<PathFollower>(id))
+        .unwrap();
+    let yaw = engine
+        .world()
+        .get::<Transform>(follower)
+        .unwrap()
+        .unwrap()
+        .rotation[1];
+    assert!(close(yaw, 90.0), "faces the start of the path: {yaw}");
+}
+
 #[test]
 fn a_held_tick_has_zero_velocity() {
     let ticks = moves(
