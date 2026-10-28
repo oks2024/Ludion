@@ -74,7 +74,17 @@ pub struct MoveReport {
     pub height: f32,
 }
 
-/// Why `move_character` did nothing.
+/// What one `resize_character` call did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ResizeReport {
+    /// The capsule height in force after the call.
+    pub height: f32,
+    /// The lowest-id collider that kept a growth from fitting; the height is unchanged then.
+    pub blocked_by: Option<EntityId>,
+}
+
+/// Why a motor function did nothing.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum MotorError {
@@ -92,6 +102,22 @@ pub enum MotorError {
         entity: EntityId,
         /// The field and the range it broke.
         reason: String,
+    },
+    /// The requested capsule height is out of range for the motor.
+    InvalidHeight {
+        /// The entity carrying the motor.
+        entity: EntityId,
+        /// The requested height.
+        height: f32,
+        /// The rule it broke.
+        reason: String,
+    },
+    /// The teleport target has a non-finite component.
+    NonFiniteTeleport {
+        /// The requested feet position.
+        feet: [f32; 3],
+        /// The requested yaw.
+        yaw: f32,
     },
 }
 
@@ -116,6 +142,20 @@ impl fmt::Display for MotorError {
             MotorError::InvalidMotor { entity, reason } => {
                 write!(f, "the CharacterMotor on {entity:?} is invalid: {reason}")
             }
+            MotorError::InvalidHeight {
+                entity,
+                height,
+                reason,
+            } => write!(
+                f,
+                "height {height} is not valid for the CharacterMotor on {entity:?}: {reason}; \
+                 keep the radius and pick a height that is finite, at least 2 × radius + 0.001 \
+                 and above step_height"
+            ),
+            MotorError::NonFiniteTeleport { feet, yaw } => write!(
+                f,
+                "the teleport target (feet {feet:?}, yaw {yaw}) is not finite"
+            ),
         }
     }
 }

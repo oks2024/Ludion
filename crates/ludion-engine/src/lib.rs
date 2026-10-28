@@ -152,7 +152,11 @@ pub use model_sheet::{
     ModelSweepOutcome, ModelView, PhaseGap, PhaseReport, PhaseStray, SheetOutcome, TrueSizeFraming,
     fit_distance_for_aspect, model_camera, parse_crossfade, render_model_sheet,
 };
-pub use motor::{move_character, move_character_with};
+pub use motor::{
+    MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
+    MOTOR_STUCK, MOTOR_WALL, fits_character, move_character, move_character_with, resize_character,
+    teleport_character,
+};
 pub use path_follow::{
     FollowerMotion, PathFollower, PathMode, PathOrient, path_follow, path_follower_motion,
 };

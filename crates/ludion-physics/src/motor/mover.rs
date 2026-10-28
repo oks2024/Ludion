@@ -80,6 +80,8 @@ pub trait SlideConstraint {
 /// Casts see colliders as of the last step, and skip sensors ([`QueryFilter::include_sensors`] is
 /// never set). The motor's own capsule and the layers its `layer` ignores are excluded.
 ///
+/// This function draws nothing: the engine's wrapper draws the `motor` debug category.
+///
 /// Call it from a system registered **before** [`install`](crate::install)'s: the report is
 /// stamped with the frame the physics write pass runs in next. The physics world does not exist
 /// until the first write pass, so the first tick of a world returns [`MotorError::NoPhysicsWorld`].
@@ -190,6 +192,43 @@ pub fn move_character_with<P: PhysicsPose>(
     Ok(outcome.report)
 }
 
+/// How far below the feet `move_character`'s ground probe looks: `snap_distance + skin_width` when
+/// the motor `was_grounded` and is not moving up, else `2 * skin_width`. The debug draw reads the
+/// same rule the mover applies.
+pub fn ground_probe_reach(
+    motor: &CharacterMotor,
+    was_grounded: bool,
+    displacement: [f32; 3],
+) -> f32 {
+    probe_reach(
+        motor.snap_distance,
+        motor.skin_width,
+        was_grounded && displacement[1] <= 0.0,
+    )
+}
+
+fn probe_reach(snap: f32, skin: f32, snap_allowed: bool) -> f32 {
+    if snap_allowed {
+        snap + skin
+    } else {
+        2.0 * skin
+    }
+}
+
+/// The query filter a motor's casts and overlaps use: the motor's own capsule excluded and the
+/// layers its `layer` ignores dropped. Sensors are skipped by the query default.
+pub(crate) fn motor_filter(
+    physics: &PhysicsWorld,
+    entity: EntityId,
+    motor: &CharacterMotor,
+) -> QueryFilter {
+    let mut filter = QueryFilter::new().exclude(entity);
+    for name in physics.ignored_by(motor.layer.as_deref()) {
+        filter = filter.ignore_layer(name);
+    }
+    filter
+}
+
 /// `entity`'s world pose from the game's pose component `P`, `None` when it has none.
 fn world_pose<P: PhysicsPose>(world: &World, entity: EntityId) -> Option<([f32; 3], [f32; 4])> {
     let pose = world.get::<P>(entity).ok().flatten()?;
@@ -282,13 +321,9 @@ struct Solver<'a> {
 
 impl<'a> Solver<'a> {
     fn new(physics: &'a PhysicsWorld, entity: EntityId, motor: &CharacterMotor) -> Self {
-        let mut filter = QueryFilter::new().exclude(entity);
-        for name in physics.ignored_by(motor.layer.as_deref()) {
-            filter = filter.ignore_layer(name);
-        }
         Solver {
             physics,
-            filter,
+            filter: motor_filter(physics, entity, motor),
             capsule: Capsule {
                 half_height: motor.half_height_for(motor.height),
                 radius: motor.radius,
@@ -741,11 +776,7 @@ impl<'a> Solver<'a> {
         was_grounded: bool,
     ) -> (Option<GroundHit>, bool) {
         let snap_allowed = was_grounded && displacement_y <= 0.0;
-        let reach = if snap_allowed {
-            self.snap + self.skin
-        } else {
-            2.0 * self.skin
-        };
+        let reach = probe_reach(self.snap, self.skin, snap_allowed);
         let Some(hit) = self.cast(*feet, [0.0, -1.0, 0.0], reach, false) else {
             return (None, false);
         };

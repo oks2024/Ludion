@@ -4,7 +4,7 @@
 
 use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Engine, EngineBuilder, move_character};
+use ludion_engine::{Engine, EngineBuilder, Transform, move_character};
 use ludion_physics::{CharacterMotor, CharacterMotorState};
 use ludion_protocol::command::EngineRestoreParams;
 use ludion_protocol::{Command, ResponseBody};
@@ -170,4 +170,33 @@ fn the_trace_is_the_same_at_one_and_eight_threads() {
             })
     });
     assert_eq!(one, eight);
+}
+
+/// The bare physics function: the same walk, nothing drawn.
+fn walk_bare(world: &mut World, _ctx: &SystemCtx) {
+    let hero = world
+        .query_ids::<(&CharacterMotor,)>()
+        .next()
+        .map(|(entity, _)| entity)
+        .expect("the scene has a motor");
+    let _ = ludion_physics::move_character::<Transform>(world, hero, [0.05, -0.1, 0.02]);
+}
+
+#[test]
+fn the_motor_debug_draw_is_hash_neutral() {
+    let mut drawn = game("drawn").build().expect("boots");
+    drawn.load_inline_scene(SCENE).unwrap();
+    let mut bare = Engine::builder()
+        .project_root(fresh_dir("bare"))
+        .system("walk", walk_bare)
+        .build()
+        .expect("boots");
+    bare.load_inline_scene(SCENE).unwrap();
+
+    assert_eq!(
+        advance_trace(&mut drawn, TICKS),
+        advance_trace(&mut bare, TICKS)
+    );
+    assert!(drawn.debug_draw_drawn().contains(&"motor"));
+    assert!(!bare.debug_draw_drawn().contains(&"motor"));
 }
