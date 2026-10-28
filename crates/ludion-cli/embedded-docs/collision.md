@@ -52,7 +52,7 @@ variants — `sphere`, `box` (3-vector `half_extents`), `capsule` and `cylinder`
 tunables: `mass`, `friction`, `restitution`, `friction_combine`, `restitution_combine`, `linear_damping`, `angular_damping`,
 `gravity_scale`, `lock`, `sleep_after_ticks` — which of them a live edit applies in place: `ludion docs physics`). This crate's own index and queries stay 2D-only: `spatial::rebuild` skips
 any collider whose shape is 3D or whose body is `rigid`, so a physics scene indexes nothing for
-those entities rather than indexing a lie. `ludion-physics` owns the dynamics half — `ludion docs physics`.
+those entities rather than indexing a lie. `ludion-physics` owns the dynamics half — `ludion docs physics`. A `sensor: true` collider is a trigger volume — `ludion docs physics-sensors`.
 
 **Contact material.** `static` and `kinematic` take an optional map with the same four fields: `body: { static: { restitution: 0.3, friction_combine: min } }`. Defaults are friction `0.5`, restitution `0`, both rules `average`; the bare `static` / `kinematic` stays the written form at the defaults. Rules are `average`, `min`, `multiply`, `max`. A contact's value comes from both colliders; when their rules differ the stronger wins, `max` over `multiply` over `min` over `average`. A bouncy part over a dead ground: `restitution: 0.8, restitution_combine: max` on the part, the ground untouched. A live edit applies in place (`ludion docs physics`).
 

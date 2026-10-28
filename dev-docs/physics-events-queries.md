@@ -58,6 +58,14 @@ not carrier order, so the list is sorted by `joint` (carrier) before `step` retu
 `ContactEvent` contract, even though a break, unlike a contact transition, never repeats for the same
 carrier.
 
+## Sensors, mapped
+
+`collect_sensors` (`sensors.rs`) runs last in `step`, after `collect_broken_joints`. For each table entry with `source.sensor` (creation order) it calls `query_pipeline().intersect_shape` with the sensor collider's own pose and shape, keeping candidates that are not the sensor itself, not sensors (the explicit sensor–sensor filter: rapier would report them), and pass `collision_groups().test`. Rapier's intersection graph is not used: its narrow phase runs before kinematic bodies move, so it would judge a kinematic at last tick's pose; the step's closing broad-phase update leaves the query pipeline at the post-step poses. The pairs `(sensor, other)` are sorted and deduped, then merge-diffed in one pass against `sensing`, the previous baseline, into `sensor_events` (cleared at the top of `step`); `occupants` is `sensing`'s second column, rebuilt on every collect and on restore so `sensor_occupants` can return a slice.
+
+A baseline pair absent from the new set gets its cause from `exit_cause`: `Despawned` if either id is in `despawned`; else `Removed` if either row is gone from the table, the sensor flag no longer holds on the sensor, the other became a sensor, or the collision groups no longer test; else `Separated`. `despawned` is fed by the write system (`note_despawned`, entities the ECS no longer holds) and cleared at the end of a non-frozen step, so a frozen step keeps it for the step that judges the exit. A sensor toggle is a collider rebuild, which is why it reads `Removed`.
+
+`query_drops` drops sensor hits in `ray_cast`, `shape_cast` and `overlap` unless `QueryFilter::include_sensors` is set; it checks the table row's `source.sensor`.
+
 ## Queries, mapped
 
 All three (`queries.rs`) read `rapier.query_pipeline()` against the state as of the last step; none

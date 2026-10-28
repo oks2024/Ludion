@@ -185,6 +185,47 @@ fn a_resting_rigid_body_reads_as_sleeping() {
     );
 }
 
+#[test]
+fn a_sensor_reads_as_occupied_once_a_body_is_inside() {
+    let mut world = World::new();
+    let zone = world.spawn();
+    world
+        .insert(zone, TestPose::at([0.0; 3]))
+        .expect("a fresh entity accepts a pose");
+    world
+        .insert(
+            zone,
+            Collider {
+                shape: cube_box(),
+                body: Body::new_static(),
+                layer: None,
+                sensor: true,
+            },
+        )
+        .expect("a fresh entity accepts a collider");
+    let mut schedule = schedule();
+    tick(&mut world, &mut schedule, 0);
+    let tags = |world: &World| -> Vec<WireBody> { segments(world).iter().map(|s| s.0).collect() };
+    let empty = tags(&world);
+    assert!(!empty.is_empty());
+    assert!(
+        empty
+            .iter()
+            .all(|b| *b == WireBody::Sensor { occupied: false })
+    );
+
+    spawn(
+        &mut world,
+        Shape::Sphere { radius: 0.1 },
+        Body::new_kinematic(),
+        [0.0; 3],
+    );
+    tick(&mut world, &mut schedule, 1);
+    let occupied = tags(&world);
+    assert!(occupied.contains(&WireBody::Sensor { occupied: true }));
+    assert!(!occupied.contains(&WireBody::Sensor { occupied: false }));
+}
+
 /// A flat 2×2-quad grid over `x, z ∈ [-1, 1]` at height 0.
 fn flat_grid() -> TriangleMesh {
     let mut vertices = Vec::new();

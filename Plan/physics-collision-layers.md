@@ -200,7 +200,6 @@ scene is unchanged. `node scripts/check.mjs` is green at each wave's end.
   keeps the gap loud.
 - **Multi-layer membership, solver-only groups** (detect but do not resolve), and per-pair
   `ignores` overrides on a collider. Each is a second way until a slice needs it.
-- **Sensors.** `Plan/physics.md` ruled "no sensors"; a trigger volume stays an `overlap` query.
 - **The mesh-figure document** (the external game's other forecast request, a reusable part list with joints and
   layers). It is its own plan when the external game's second scene needs the dummy.
 
@@ -232,6 +231,8 @@ Rulings of 2026-09-25:
    for it. No other consumer needs it; the trap stays a documented known limit (§W3).
 
 ## Status
+
+**Sensors shipped** (reversing the earlier non-goal): a sensor sits on one layer and follows the same table; see `docs/physics-sensors.md`.
 
 **W1 shipped** in Lore revs 854–856: the data half and validation (`physics.layers`, `Collider.layer`,
 `L1033`, `L1186`, `L1187`), the check verbs (`check-scene --bounds [--json]` matrix), and the solver

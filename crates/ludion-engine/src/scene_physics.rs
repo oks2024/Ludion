@@ -27,6 +27,8 @@ const STATIC_COLOR: [f32; 4] = [0.55, 0.55, 0.55, 1.0];
 const KINEMATIC_COLOR: [f32; 4] = [0.0, 0.85, 0.85, 1.0];
 const RIGID_COLOR: [f32; 4] = [1.0, 0.45, 0.05, 1.0];
 const SLEEPING_RIGID_COLOR: [f32; 4] = [0.5, 0.225, 0.025, 1.0];
+const SENSOR_COLOR: [f32; 4] = [0.1, 0.5, 0.2, 1.0];
+const OCCUPIED_SENSOR_COLOR: [f32; 4] = [0.2, 1.0, 0.35, 1.0];
 
 /// Whether the world holds at least one physics body.
 pub(crate) fn any_body(world: &World) -> bool {
@@ -51,6 +53,8 @@ pub(crate) fn collider_debug_lines(world: &World) -> Vec<DebugSegment> {
             WireBody::Kinematic => KINEMATIC_COLOR,
             WireBody::Rigid { sleeping: false } => RIGID_COLOR,
             WireBody::Rigid { sleeping: true } => SLEEPING_RIGID_COLOR,
+            WireBody::Sensor { occupied: false } => SENSOR_COLOR,
+            WireBody::Sensor { occupied: true } => OCCUPIED_SENSOR_COLOR,
         };
         lines.push(DebugSegment { a, b, color });
     });

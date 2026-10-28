@@ -34,7 +34,7 @@ A scaled step (`scale < 1.0`) also retunes each attached joint: rapier's lock-ro
 structures (gravity, integration parameters, islands, broad phase, narrow phase, bodies, colliders,
 impulse joints, multibody joints) plus the creation-order handle table, the joint table, and the
 plane, plus the last step's touching set, contact events and windows, blast hits, fresh colliders
-and `last_step_dt`. The step pipeline and CCD workspace carry nothing across a step and are rebuilt. Bytes rather
+and `last_step_dt`. The sensor baseline (`sensing`), `sensor_events` and `despawned` ride too (`occupants` is rebuilt from `sensing`); a frozen step clears the events but keeps the baseline and `despawned`. The step pipeline and CCD workspace carry nothing across a step and are rebuilt. Bytes rather
 than a structured value because the narrow phase's 128-bit solver masks do not fit in a JSON number;
 base64-wrapping is the caller's job. A bincode major bump is a snapshot-format event. The timestep
 comes from the `TickRate` argument, not the bytes, so a session restores at the rate it runs at.

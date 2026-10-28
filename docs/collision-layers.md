@@ -46,6 +46,7 @@ entities:
   so `dummy` ignoring `sling` also keeps `sling` out of `dummy`. Ignoring itself (`dummy: [dummy]`)
   makes a figure's own parts pass through each other.
 - A collider with no `layer:` is on the implicit `default`; at most **31** layers can be declared.
+- A sensor sits on one layer and follows the same table and pair rule (`ludion docs physics-sensors`).
 - `L1033` — the block is malformed: a duplicate, empty or `default` name, more than 31 layers, an
   `ignores` entry naming no declared layer (the message gives the nearest name) or repeated.
 - `L1186` — a collider's `layer` is not declared. `check-scene` reports it; at runtime the collider
@@ -68,3 +69,4 @@ entities:
 
 - `ludion docs physics` — `Collider`, the `physics:` block, contact events and queries.
 - `ludion docs physics-joints` — the `Joint` component.
+- `ludion docs physics-sensors` — trigger volumes, filtered by the same table.

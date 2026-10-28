@@ -4,7 +4,7 @@ description: Rigid bodies — the scene physics block, RigidBody, forces, contac
 
 # Rigid-body physics (`ludion-physics`)
 
-**Scope:** Authoring 3D shapes and rigid bodies, the scene `physics:` block, forces, contact events and solver queries. The 2D tier (colliders, spatial index, `move_and_slide`) is `ludion docs collision`; which pairs never meet is `ludion docs collision-layers`; a jointed pair is `ludion docs physics-joints`; slowing or freezing the step is `ludion docs physics-time-scale`.
+**Scope:** Authoring 3D shapes and rigid bodies, the scene `physics:` block, forces, contact events and solver queries. The 2D tier (colliders, spatial index, `move_and_slide`) is `ludion docs collision`; which pairs never meet is `ludion docs collision-layers`; a jointed pair is `ludion docs physics-joints`; slowing or freezing the step is `ludion docs physics-time-scale`; trigger volumes are `ludion docs physics-sensors`.
 
 A 3D shape (`sphere`, `box`, `capsule`, `cylinder`, `convex`, `heightfield`, `compound`) or `body: rigid` of any shape belongs to `ludion-physics`;
 everything else stays in the 2D index (`ludion docs collision`); an entity is claimed by exactly one tier.
@@ -148,7 +148,7 @@ only — the pair's summed normal-impulse magnitude over its first base tick of 
 pointing from `a` towards `b` (named like a `QueryHit`'s), both at the poses before the step moved the bodies. Both come from one solver contact of the pair, picked by
 normal impulse descending, then depth descending, then the smaller point, then the smaller normal — never the solver's own order — so a
 resting start with no impulse yet gets a deterministic point too. A pair starts the step it touches: one inside the prediction margin with a gap still open has not started. Both are
-`[0.0; 3]` on a stop. Sorted `(a, b)` ascending, one step's events: a system reading it this tick sees tick `N - 1`'s (the triple runs after every game system). So an event can name an entity a system despawned after that step: check it is alive before reading its components. Not hashed; rides the snapshot. A spark at every touch:
+`[0.0; 3]` on a stop. Sorted `(a, b)` ascending, one step's events: a system reading it this tick sees tick `N - 1`'s (the triple runs after every game system). Not hashed; rides the snapshot. A spark at every touch:
 
 ```rust
 fn sparks(world: &mut World, _ctx: &SystemCtx) {
@@ -168,13 +168,15 @@ fn sparks(world: &mut World, _ctx: &SystemCtx) {
 }
 ```
 
+**Events name ids that may be gone.** A contact, sensor (`ExitCause::Despawned`, `ludion docs physics-sensors`) or joint-break event is read a tick after its step, so it can name an entity a system despawned since: check it is alive before reading its components.
+
 **Time scale.** `scale_time`, `freeze` and `last_step_dt` slow or stop the step alone (a hit-stop, slow motion); an impact's impulse survives it: `ludion docs physics-time-scale`.
 
 **Queries.** `ray_cast`, `shape_cast` and `overlap` are pure reads against the solver, reading the
 state as of the **last completed step** — an entity created, moved, teleported or despawned this
 tick is visible only after the step that follows. The two casts return every hit sorted
 `(distance, entity)` ascending; `overlap` returns every hit entity sorted ascending. Each takes a `&QueryFilter` (your own body, ignored
-layers — `ludion docs collision-layers`) and
+layers — `ludion docs collision-layers`; sensors are skipped unless the filter calls `include_sensors()`) and
 reports errors rather than an empty result: a non-finite or negative input, a `rotation` that is not
 a unit quaternion, or a query shape the solver cannot build, is
 `Err(PhysicsError::QueryInput | QueryShape)`. Filtering by body kind (`static`/`kinematic`/`rigid`)

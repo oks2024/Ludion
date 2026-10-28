@@ -28,6 +28,11 @@ pub enum WireBody {
         /// Whether the solver has put the body to sleep.
         sleeping: bool,
     },
+    /// A sensor collider, whatever its body kind.
+    Sensor {
+        /// Whether any non-sensor entity is inside it as of the last step.
+        occupied: bool,
+    },
 }
 
 /// The edges of a triangle mesh worth drawing: every edge except those shared by exactly two
@@ -157,6 +162,9 @@ impl PhysicsWorld {
                 continue;
             };
             let body = match entry.kind {
+                _ if entry.source.sensor => WireBody::Sensor {
+                    occupied: !self.sensor_occupants(entry.entity).is_empty(),
+                },
                 BodyKind::Fixed => WireBody::Static,
                 BodyKind::Kinematic => WireBody::Kinematic,
                 BodyKind::Rigid => WireBody::Rigid {

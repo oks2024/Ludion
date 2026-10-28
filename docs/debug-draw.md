@@ -37,7 +37,7 @@ enabled. Boxes, spheres, capsules and cylinders draw parry outlines; a `mesh`, `
 `heightfield` draws its triangle edges **minus the coplanar internal ones** (a flat floor reads as its
 outline); a `compound` draws each part in its part pose. Colour by body kind (linear RGBA): static grey
 `[0.55, 0.55, 0.55]`, kinematic cyan `[0, 0.85, 0.85]`, rigid orange `[1, 0.45, 0.05]`, a sleeping rigid
-body at half that. Budget: at most 200,000 segments a frame, bodies in creation order, no distance
+body at half that. A sensor draws green whatever its body kind (`[0.1, 0.5, 0.2]`), brighter while occupied (`[0.2, 1, 0.35]`). Budget: at most 200,000 segments a frame, bodies in creation order, no distance
 cull (a level under 50k triangles is far below it). Non-`rigid` `circle`/`aabb` colliders live in the
 2D spatial index, not the physics world, so they are **not drawn**; a `rigid` one is. Typical use:
 `ludion render --scene S --out o.png --frames 2 --debug-draw colliders`.

@@ -3,7 +3,8 @@
 > Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). W1 mechanized; W2+ not started.**
 > W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
 > teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
-> external platformer's first engine request drove its last additions. The driver is the next test game, a 3D platformer in the style of Crash Bandicoot. Its GDD and name
+> external platformer's first engine request drove its last additions, and its second shipped sensor
+> colliders with enter/exit events (`docs physics-sensors`). The driver is the next test game, a 3D platformer in the style of Crash Bandicoot. Its GDD and name
 > come first, and its gameplay gets its own plan. This plan is the engine half of "player feel": the
 > character motor, level collision from meshes, paths, and the camera rigs. Everything here must stay
 > **genre-agnostic**. The platformer drives it but must not be the only thing it fits. It runs beside
@@ -30,7 +31,7 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
   - **Queries:** `ray_cast`, `shape_cast` (every hit, sorted, with normals) and `overlap` take a
     `QueryFilter` (`.exclude(entity)`, `.ignore_layer(name)`) and see the state of the last completed
     step.
-  - **Other:** there are no sensors. Rapier's `KinematicCharacterController` is not wrapped.
+  - **Other:** sensor colliders shipped with enter/exit events (`docs/physics-sensors.md`). Rapier's `KinematicCharacterController` is not wrapped.
 - **Collider shapes** (`crates/ludion-spatial/src/collider.rs`):
   - 2D: `circle`, `aabb`.
   - 3D: `sphere`, `box`, `capsule`, `cylinder`, hand-pointed `convex`, `heightfield`, `compound`.
@@ -148,7 +149,7 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
       mode registry.
 13. **Game code switches rigs; the engine blends.** Writing a new rig configuration starts a timed
     blend from the current pose (the `crossfade` shape). *When* to switch is game Rust, for example an
-    `overlap` query on a zone volume. **Why:** trigger conditions differ per game, and a zone
+    typically on a sensor's `Entered`/`Exited` event (`sensor_events`). **Why:** trigger conditions differ per game, and a zone
     component can be promoted later on repetition.
 14. **The track rig projects the target onto one path.**
     - It uses the sampler's windowed `nearest_s` around last tick's parameter, so loops and switchbacks
@@ -199,6 +200,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
     - This plan runs parallel to animation-clips; only W5 waits for that plan's W2.
     - The reference controller reads gamepad and keyboard. Touch comes free through the mapper and is
       not scheduled.
+23. **Queries skip sensors unless the filter opts in** (`QueryFilter::include_sensors`) — the motor
+    never stands on, steps onto or snaps to a sensor, and `MoveReport` never lists one.
 
 ## The formats (sketch; exact key names settle in the wave that builds them)
 
@@ -318,7 +321,7 @@ collapsed.
 ## Non-goals
 
 - **Per-triangle surface tags** (ice, footsteps, kill surfaces). **Trigger:** a moveset or audio need.
-  Kill zones are `overlap` volumes meanwhile.
+  Kill zones are sensor volumes.
 - **Motor modes beyond ground and air** (swimming, ladders, ledge grab, wall jump). **Trigger:** a GDD
   asks. New modes extend `MoveReport`.
 - **Dynamic bodies pushing the character.** **Trigger:** a moveset needs knockback from physics.

@@ -741,7 +741,7 @@ Rulings made while building, each reversible by the user:
 - **The `scene_physics` snapshot field is additive**, on the `profile`/`physics` precedent: absent
   restores as absence, `SNAPSHOT_FORMAT` stays 1.
 - **Contacts are diffed from the post-step contact graph**, not rapier's own event handler (its
-  Started fires pre-solve, with no impulse); always on, no sensors; the list is not hashed and rides
+  Started fires pre-solve, with no impulse); always on; sensors exist and never produce contacts (sensor events are a separate stream); the list is not hashed and rides
   the snapshot blob, so a restored session sees exactly what the uninterrupted run saw.
 - **Queries return every hit, sorted, and a bad input is a `Result` error**, never an empty result —
   the solver's own iteration order is never observed.
