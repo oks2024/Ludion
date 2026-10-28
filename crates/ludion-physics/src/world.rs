@@ -33,6 +33,7 @@ use crate::joints::{
 };
 use crate::meshes::TriangleMesh;
 use crate::queries::QueryFilter;
+use crate::sensors::SensorEvent;
 use crate::systems::{CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, PhysicsSettings};
 
 /// Gravity applied to every rigid body when nothing else is asked for: one standard gravity down
@@ -190,7 +191,7 @@ struct Mirrored {
 /// One row of the creation-order handle table.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct BodyEntry {
-    entity: EntityId,
+    pub(crate) entity: EntityId,
     pub(crate) kind: BodyKind,
     pub(crate) body: RigidBodyHandle,
     pub(crate) collider: ColliderHandle,
@@ -203,7 +204,7 @@ pub(crate) struct BodyEntry {
     /// compare against on the very next tick; encoded through [`source_as_json`] rather than
     /// derived straight into bincode (see its doc for why).
     #[serde(with = "source_as_json")]
-    source: Collider,
+    pub(crate) source: Collider,
     /// The [`TriangleMesh::hash`] a `mesh` body was built from, `None` for every other shape. A
     /// restore compares it against the freshly installed library, so an edited mesh document is
     /// rebuilt into its body while an unchanged one is left alone.
@@ -307,6 +308,9 @@ struct SnapshotRef<'a> {
     blast_hits: &'a [BlastHit],
     fresh_colliders: &'a [ColliderHandle],
     last_step_dt: f32,
+    sensing: &'a [(EntityId, EntityId)],
+    sensor_events: &'a [SensorEvent],
+    despawned: &'a [EntityId],
 }
 
 /// The snapshot as read — the same fields in the same order, so the two encode identically.
@@ -323,6 +327,9 @@ struct SnapshotOwned {
     blast_hits: Vec<BlastHit>,
     fresh_colliders: Vec<ColliderHandle>,
     last_step_dt: f32,
+    sensing: Vec<(EntityId, EntityId)>,
+    sensor_events: Vec<SensorEvent>,
+    despawned: Vec<EntityId>,
 }
 
 /// One step's solver timings (milliseconds, from rapier's profiler timers) and body counts, as
@@ -388,7 +395,7 @@ pub struct StepBreakdown {
 /// whose order reaches an output iterates a rapier set unsorted, and the table is never rebuilt by
 /// walking one — it rides in the snapshot instead. Two walks do visit rapier's own order, because
 /// their result does not depend on it: `record_detection_poses` (one independent write per
-/// collider) and `collect_contacts` (it sorts the pairs by entity before using them). The
+/// collider) and `collect_contacts` and `collect_sensors` (both sort the pairs by entity before using them). The
 /// entity→row map beside it is a lookup accelerator only; nothing that reaches the world hash
 /// iterates it.
 ///
@@ -402,7 +409,7 @@ pub struct StepBreakdown {
 pub struct PhysicsWorld {
     pub(crate) rapier: RapierWorld,
     pub(crate) table: Vec<BodyEntry>,
-    rows: StableMap<EntityId, usize>,
+    pub(crate) rows: StableMap<EntityId, usize>,
     pub(crate) plane: Option<Plane>,
     tick_rate: TickRate,
     sleep_after_ticks: u32,
@@ -481,6 +488,18 @@ pub struct PhysicsWorld {
     pub(crate) frozen: bool,
     /// See [`last_step_dt`](PhysicsWorld::last_step_dt). Rides the snapshot.
     pub(crate) last_step_dt: f32,
+    /// The `(sensor, other)` pairs overlapping as of the last non-frozen step, sorted ascending —
+    /// the baseline `collect_sensors` diffs against. Rides the snapshot, the `touching` precedent.
+    pub(crate) sensing: Vec<(EntityId, EntityId)>,
+    /// `sensing`'s second column, so `sensor_occupants` can hand out a slice. Derived: rebuilt
+    /// after every collect and on restore, never snapshotted.
+    pub(crate) occupants: Vec<EntityId>,
+    /// This step's sensor transitions. See [`sensor_events`](PhysicsWorld::sensor_events). Rides
+    /// the snapshot.
+    pub(crate) sensor_events: Vec<SensorEvent>,
+    /// Entities the write system found despawned, sorted, kept until a non-frozen step has judged
+    /// the exits they cause. Rides the snapshot, since a frozen step keeps it across ticks.
+    pub(crate) despawned: Vec<EntityId>,
     /// Feature edges of each mesh content hash, for the wireframe read. A host read cache: no sim
     /// path reads it, and it is not part of the snapshot.
     pub(crate) wire_edges: Mutex<BTreeMap<u64, Arc<[[u32; 2]]>>>,
@@ -535,6 +554,10 @@ impl PhysicsWorld {
             time_scale: 1.0,
             frozen: false,
             last_step_dt: seconds_per_tick(tick_rate),
+            sensing: Vec::new(),
+            occupants: Vec::new(),
+            sensor_events: Vec::new(),
+            despawned: Vec::new(),
             wire_edges: Mutex::default(),
         }
     }
@@ -1115,7 +1138,8 @@ impl PhysicsWorld {
     /// A bincode major bump changes the encoding, so it is a snapshot-format event rather than an
     /// ordinary dependency update. The last step's contact events and touching set ride in the
     /// blob too, since tick `N + 1` reads what tick `N`'s step produced; so do the blast hits, the
-    /// colliders a frozen step left out of the next blast, and the last step's timestep.
+    /// colliders a frozen step left out of the next blast, and the last step's timestep. The sensor
+    /// overlap baseline, the last step's sensor events and the not-yet-judged despawns ride too.
     ///
     /// A world holding queued impulse calls refuses with [`PhysicsError::Encode`]: the queue is
     /// not state a restore could carry, so a snapshot taken between a call and the write system
@@ -1150,6 +1174,9 @@ impl PhysicsWorld {
             blast_hits: &self.blast_hits,
             fresh_colliders: &self.fresh_colliders,
             last_step_dt: self.last_step_dt,
+            sensing: &self.sensing,
+            sensor_events: &self.sensor_events,
+            despawned: &self.despawned,
         })
         .map_err(|why| PhysicsError::Encode(why.to_string()))
     }
@@ -1191,6 +1218,10 @@ impl PhysicsWorld {
             time_scale: 1.0,
             frozen: false,
             last_step_dt: snapshot.last_step_dt,
+            occupants: snapshot.sensing.iter().map(|pair| pair.1).collect(),
+            sensing: snapshot.sensing,
+            sensor_events: snapshot.sensor_events,
+            despawned: snapshot.despawned,
             wire_edges: Mutex::default(),
         };
         world.rapier.integration_parameters.dt = seconds_per_tick(tick_rate);
@@ -1205,6 +1236,7 @@ impl PhysicsWorld {
     /// [`contact_events`](PhysicsWorld::contact_events). The scale and the freeze reset here.
     pub(crate) fn step(&mut self) {
         self.contacts.clear();
+        self.sensor_events.clear();
         self.joint_events.clear();
         let scale = std::mem::replace(&mut self.time_scale, 1.0);
         if std::mem::take(&mut self.frozen) {
@@ -1226,6 +1258,8 @@ impl PhysicsWorld {
         self.fresh_colliders.clear();
         self.collect_contacts(scale);
         self.collect_broken_joints();
+        self.collect_sensors();
+        self.despawned.clear();
     }
 
     /// Fills `detection_poses` with the pose each collider will have when the step's collision
@@ -1409,8 +1443,10 @@ impl PhysicsWorld {
 
     /// Drops the bodies of every entity not in `live` (which is ascending, the join's own order),
     /// walking the table in creation order — and drops any rejected-shape entry for an entity that
-    /// has left too, so a despawned entity's dead shape does not sit in the map forever.
-    pub(crate) fn retire(&mut self, live: &[EntityId]) {
+    /// has left too, so a despawned entity's dead shape does not sit in the map forever. Returns the
+    /// entities whose bodies it removed, in table order.
+    pub(crate) fn retire(&mut self, live: &[EntityId]) -> Vec<EntityId> {
+        let mut retired = Vec::new();
         let table_dirty = self
             .table
             .iter()
@@ -1420,7 +1456,7 @@ impl PhysicsWorld {
             .keys()
             .any(|entity| live.binary_search(entity).is_err());
         if !table_dirty && !rejected_dirty {
-            return;
+            return retired;
         }
         if table_dirty {
             let mut kept = Vec::with_capacity(self.table.len());
@@ -1428,6 +1464,7 @@ impl PhysicsWorld {
                 if live.binary_search(&entry.entity).is_ok() {
                     kept.push(entry);
                 } else {
+                    retired.push(entry.entity);
                     self.rapier.remove_body(entry.body);
                 }
             }
@@ -1440,6 +1477,7 @@ impl PhysicsWorld {
                 .filter(|(entity, _)| live.binary_search(entity).is_ok())
                 .collect();
         }
+        retired
     }
 
     /// Whether `entity` already has a body — the cheap guard that keeps the write system from

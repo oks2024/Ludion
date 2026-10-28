@@ -165,6 +165,7 @@ mod joints;
 mod meshes;
 mod pose;
 mod queries;
+mod sensors;
 mod systems;
 mod time_scale;
 mod wireframe;
@@ -176,6 +177,7 @@ pub use joints::JointBroken;
 pub use meshes::{ColliderMeshes, MeshLoader, TriangleMesh};
 pub use pose::PhysicsPose;
 pub use queries::{QueryFilter, QueryHit};
+pub use sensors::{ExitCause, SensorEvent, SensorPhase};
 pub use systems::{
     CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, DEFAULT_SOLVER_ITERATIONS,
     DEFAULT_STABILIZATION_ITERATIONS, KinematicTeleports, MAX_COLLISION_LAYERS, MIRROR,

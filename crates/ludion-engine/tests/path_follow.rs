@@ -15,6 +15,7 @@ use ludion_engine::{
     Egress, EgressChannels, Engine, EngineBuilder, FollowerMotion, Name, PathFollower, PathMode,
     PathOrient, Transform, path_follower_motion,
 };
+use ludion_physics::{ExitCause, PhysicsWorld, SensorEvent, SensorPhase};
 use ludion_protocol::command::{SimStepParams, StreamSubscribeParams, SubscribeMode};
 use ludion_protocol::event::{Event, LogEvent};
 use ludion_protocol::frame::FrameFormat;
@@ -1238,4 +1239,98 @@ fn the_orient_names_are_snake_case() {
             serde_json::from_value(serde_json::json!({ "orient": text })).unwrap();
         assert_eq!(follower.orient, orient);
     }
+}
+
+/// A kinematic sensor box riding `lift` at half a metre per tick, past a static capsule at x = 5.
+const SENSOR_RIDE: &str = "format: 1
+physics:
+  space: free
+entities:
+  - name: probe
+    components:
+      Transform: {}
+      PathFollower:
+        path: lift.path.yaml
+        speed: 30.0
+        mode: once
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.5
+              - 0.5
+        body: kinematic
+        sensor: true
+  - name: post
+    components:
+      Transform:
+        translation:
+          - 5.0
+          - 0.0
+          - 0.0
+      Collider:
+        shape:
+          capsule:
+            half_height: 0.5
+            radius: 0.25
+        body: static
+";
+
+#[derive(Default)]
+struct SensorLog(Vec<(u64, SensorEvent)>);
+
+fn watch_sensors(world: &mut World, ctx: &SystemCtx) {
+    let events = world
+        .resource::<PhysicsWorld>()
+        .map(|physics| physics.sensor_events().to_vec())
+        .unwrap_or_default();
+    if world.resource::<SensorLog>().is_none() {
+        world.insert_resource(SensorLog::default());
+    }
+    let log = world.resource_mut::<SensorLog>().unwrap();
+    log.0
+        .extend(events.into_iter().map(|event| (ctx.frame.as_u64(), event)));
+}
+
+#[test]
+fn a_kinematic_path_follower_sensor_enters_then_exits_a_static_body() {
+    let root = fixture_root("sensor-ride");
+    let mut engine = game(&root)
+        .system("watch_sensors", watch_sensors)
+        .build()
+        .expect("the game builds");
+    engine
+        .load_inline_scene(SENSOR_RIDE)
+        .expect("the scene loads");
+    advance(&mut engine, 30);
+    let world = engine.world();
+    let named = |wanted: &str| {
+        world
+            .entities()
+            .find(|&id| matches!(world.get::<Name>(id), Ok(Some(n)) if n.0 == wanted))
+            .expect("the scene names it")
+    };
+    let (probe, post) = (named("probe"), named("post"));
+    let log = &world.resource::<SensorLog>().expect("the watcher ran").0;
+    let phases: Vec<_> = log.iter().map(|(_, event)| *event).collect();
+    assert_eq!(
+        phases,
+        vec![
+            SensorEvent {
+                sensor: probe,
+                other: post,
+                phase: SensorPhase::Entered,
+            },
+            SensorEvent {
+                sensor: probe,
+                other: post,
+                phase: SensorPhase::Exited {
+                    cause: ExitCause::Separated,
+                },
+            },
+        ],
+        "{log:?}"
+    );
+    assert!(log[0].0 < log[1].0);
 }

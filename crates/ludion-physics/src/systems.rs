@@ -390,7 +390,12 @@ fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsS
     physics.apply_settings(settings);
 
     let present: Vec<EntityId> = live.iter().map(|(entity, ..)| *entity).collect();
-    physics.retire(&present);
+    let gone: Vec<EntityId> = physics
+        .retire(&present)
+        .into_iter()
+        .filter(|entity| !world.is_alive(*entity))
+        .collect();
+    physics.note_despawned(&gone);
 
     let mut cursor = 0;
     for (entity, translation, rotation, source, mesh) in &live {
