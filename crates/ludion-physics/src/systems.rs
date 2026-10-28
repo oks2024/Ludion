@@ -12,7 +12,8 @@ use ludion_spatial::{Body, Collider, Joint, JointMotor, Plane, Shape, Velocity};
 
 use crate::PhysicsPose;
 use crate::meshes::ColliderMeshes;
-use crate::world::{DEFAULT_GRAVITY, MeshInput, PhysicsWorld, mesh_hash_of};
+use crate::motor::{CharacterMotor, CharacterMotorState, check, height_in_force, motor_invalid};
+use crate::world::{DEFAULT_GRAVITY, MeshInput, PhysicsWorld, ShapeRejection, mesh_hash_of};
 
 /// The registration name of the system that pushes authored state into the solver.
 pub const WRITE: &str = "physics_write";
@@ -344,6 +345,23 @@ fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsS
     if let Some(meshes) = meshes {
         world.insert_resource(meshes);
     }
+    // A motor owns its entity's capsule: a `Collider` beside it is dropped, so the motor row below is
+    // the only one. Reported (not retried per tick) through the rejection queue once a world exists.
+    let motor_rows = motor_rows::<P>(world);
+    let mut motor_rejections = Vec::new();
+    if !motor_rows.is_empty() {
+        live.retain(|(entity, ..)| {
+            let doubled = motor_rows.iter().any(|row| row.entity == *entity);
+            if doubled {
+                motor_rejections.push((
+                    *entity,
+                    code::CHARACTER_MOTOR_WITH_COLLIDER,
+                    "the entity carries a Collider beside its CharacterMotor; the motor owns its capsule".to_string(),
+                ));
+            }
+            !doubled
+        });
+    }
     // A pose relative to a parent is replaced by its world pose, and only a kinematic body may have
     // one: a rigid or static body under a parent is dropped from `live`, so `retire` below removes any
     // body it had. `entity_indices_with` records no query access, and a world with no `Parent` skips
@@ -365,9 +383,32 @@ fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsS
             true
         });
     }
+    // Motor rows join after the parent pass: a motor writes world-space feet, so it is never
+    // re-derived from a parent. A row is built from the motor's synthesized collider, which stays
+    // `Some` until the body exists.
+    for row in motor_rows {
+        match row.collider {
+            Err(reason) => {
+                motor_rejections.push((row.entity, code::CHARACTER_MOTOR_INVALID, reason))
+            }
+            Ok(collider) => {
+                let stale = physics_taken.as_ref().is_none_or(|physics| {
+                    !physics.has_body(row.entity) || physics.is_stale(row.entity, &collider, None)
+                });
+                live.push((
+                    row.entity,
+                    row.centre,
+                    [0.0, 0.0, 0.0, 1.0],
+                    stale.then_some(collider),
+                    Ok(None),
+                ));
+            }
+        }
+    }
+    live.sort_by_key(|(entity, ..)| *entity);
     // Nothing claimed and no world yet: allocate nothing. A 2D game that registers this verb pays
     // the query and no more, and the resource only ever exists for a scene that has physics in it.
-    if live.is_empty() && physics_taken.is_none() {
+    if live.is_empty() && physics_taken.is_none() && motor_rejections.is_empty() {
         return;
     }
     // A sorted side list rather than a map: both walks are ascending, so one cursor joins them.
@@ -388,6 +429,14 @@ fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsS
     let mut physics =
         physics_taken.unwrap_or_else(|| PhysicsWorld::new(ctx.time.rate()).with_plane(plane));
     physics.apply_settings(settings);
+    for (entity, code, reason) in motor_rejections {
+        physics.queue_rejection(ShapeRejection {
+            entity,
+            code,
+            reason,
+            related: Vec::new(),
+        });
+    }
 
     let present: Vec<EntityId> = live.iter().map(|(entity, ..)| *entity).collect();
     let gone: Vec<EntityId> = physics
@@ -440,6 +489,40 @@ fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsS
     physics.apply_queued_impulses();
 
     world.insert_resource(physics);
+}
+
+/// One motor entity this tick: the body-centre pose it writes, and the synthesized `Collider` its
+/// body is built from — or the `L1294` reason the motor cannot have one.
+struct MotorRow {
+    entity: EntityId,
+    centre: [f32; 3],
+    collider: Result<Collider, String>,
+}
+
+/// Every `CharacterMotor` with a pose, ascending by entity. The pose is the **feet**; the body
+/// centre sits half the height in force above it.
+fn motor_rows<P: PhysicsPose>(world: &mut World) -> Vec<MotorRow> {
+    let motors: Vec<(EntityId, CharacterMotor, [f32; 3])> = world
+        .query_ids::<(&CharacterMotor, &P)>()
+        .map(|(entity, (motor, pose))| (entity, motor.clone(), pose.translation()))
+        .collect();
+    motors
+        .into_iter()
+        .map(|(entity, motor, feet)| {
+            let state = world.get::<CharacterMotorState>(entity).ok().flatten();
+            let height = height_in_force(&motor, state);
+            let overridden = CharacterMotor { height, ..motor };
+            let collider = match check(&overridden) {
+                Ok(()) => Ok(overridden.solver_collider(height)),
+                Err((pointer, reason)) => Err(motor_invalid(&reason, pointer).message),
+            };
+            MotorRow {
+                entity,
+                centre: [feet[0], feet[1] + height / 2.0, feet[2]],
+                collider,
+            }
+        })
+        .collect()
 }
 
 /// Advances the solver by one fixed timestep. A world with no [`PhysicsWorld`] resource has

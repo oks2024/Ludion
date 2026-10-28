@@ -784,6 +784,21 @@ impl PhysicsWorld {
         std::mem::take(&mut self.pending_rejections)
     }
 
+    /// Queues a [`ShapeRejection`] for a fault found before any shape is built (a character motor
+    /// refused by the write pass), for the same once-per-`(code, entity)` reporting as `create`'s.
+    pub(crate) fn queue_rejection(&mut self, rejection: ShapeRejection) {
+        // The write pass repeats a standing fault every tick; a host that never drains the queue
+        // must not see it grow.
+        if self
+            .pending_rejections
+            .iter()
+            .any(|p| p.entity == rejection.entity && p.code == rejection.code)
+        {
+            return;
+        }
+        self.pending_rejections.push(rejection);
+    }
+
     /// This step's joint breaks, sorted ascending by carrier. See [`JointBroken`] for the full
     /// contract.
     pub fn joint_events(&self) -> &[JointBroken] {

@@ -9,7 +9,8 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, Schedule, World};
 use ludion_physics::{
-    CollisionLayers, MIRROR, PhysicsSettings, PhysicsSpace, PhysicsWorld, STEP, WRITE, WireBody,
+    CharacterMotor, CollisionLayers, MIRROR, PhysicsSettings, PhysicsSpace, PhysicsWorld, STEP,
+    WRITE, WireBody,
 };
 use ludion_renderer::DebugSegment;
 use ludion_scene::{ScenePhysics, ScenePhysicsSpace};
@@ -202,17 +203,30 @@ pub(crate) fn report_rejections(world: &mut World) {
     let rejections = physics.take_rejections();
     for rejection in rejections {
         let named = entity_label(world, rejection.entity);
-        let retried_on = if rejection.code == code::COLLIDER_LAYER_UNKNOWN {
-            "its Collider or the scene's physics.layers changes"
-        } else if rejection.code == code::COLLIDER_MESH_UNAVAILABLE {
-            "its Collider or the mesh document changes (picked up at the next load or restore)"
+        let message = if rejection.code == code::CHARACTER_MOTOR_WITH_COLLIDER {
+            format!(
+                "{named}: {}; the motor's capsule is kept and the Collider ignored until the \
+                 Collider is removed",
+                rejection.reason
+            )
+        } else if rejection.code == code::CHARACTER_MOTOR_INVALID {
+            format!(
+                "{named}: {}; it gets no body until its CharacterMotor changes",
+                rejection.reason
+            )
         } else {
-            "its Collider changes"
+            let retried_on = if rejection.code == code::COLLIDER_LAYER_UNKNOWN {
+                "its Collider or the scene's physics.layers changes"
+            } else if rejection.code == code::COLLIDER_MESH_UNAVAILABLE {
+                "its Collider or the mesh document changes (picked up at the next load or restore)"
+            } else {
+                "its Collider changes"
+            };
+            format!(
+                "{named}: {}; it gets no rigid body until {retried_on}",
+                rejection.reason
+            )
         };
-        let message = format!(
-            "{named}: {}; it gets no rigid body until {retried_on}",
-            rejection.reason
-        );
         let diagnostic = rejection.related.into_iter().fold(
             Diagnostic::new(rejection.code, message),
             Diagnostic::with_related,
@@ -232,6 +246,26 @@ pub(crate) fn report_parented_bodies(world: &mut World) {
         .filter(|(_, (collider, _))| ludion_physics::claims(collider))
         .map(|(id, _)| id)
         .collect();
+    let motors: Vec<EntityId> = world
+        .query_ids::<(&CharacterMotor, &Parent)>()
+        .map(|(id, _)| id)
+        .collect();
+    for id in motors {
+        let key = latch_key(world, id);
+        if crate::diagnostics::is_latched(world, code::CHARACTER_MOTOR_PARENTED, &key) {
+            continue;
+        }
+        let named = entity_label(world, id);
+        crate::diagnostics::report(
+            world,
+            code::CHARACTER_MOTOR_PARENTED,
+            key,
+            format!(
+                "{named} is a character motor under a Parent; a motor writes world-space feet, \
+                 so it must be a root entity"
+            ),
+        );
+    }
     for id in ids {
         let Ok(Some(collider)) = world.get::<Collider>(id) else {
             continue;
@@ -306,9 +340,9 @@ pub(crate) fn report_scaled_colliders(world: &mut World) {
     }
 }
 
-/// The inputs of the last [`report_unrun_colliders`] scan: collider rows, physics step installed,
-/// game systems present, `SpatialIndex` present.
-struct UnrunScan((usize, bool, bool, bool));
+/// The inputs of the last [`report_unrun_colliders`] scan: collider rows, character motor rows,
+/// physics step installed, game systems present, `SpatialIndex` present.
+struct UnrunScan((usize, usize, bool, bool, bool));
 
 /// Reports a collider nothing will run once, per cause: a solver collider in a world whose schedule
 /// has no physics step (`L1261`), and a 2D collider in a world with game systems that never built a
@@ -324,6 +358,7 @@ pub(crate) fn report_unrun_colliders(
 ) {
     let key = (
         world.component_count::<Collider>(),
+        world.component_count::<CharacterMotor>(),
         physics_installed,
         game_systems,
         world.resource::<ludion_spatial::SpatialIndex>().is_some(),
@@ -351,6 +386,26 @@ pub(crate) fn report_unrun_colliders(
                 format!(
                     "{named} has a 3D shape or a rigid body, but this world has no physics step, so \
                      nothing simulates it: add `physics: {{ space: free }}` to the scene"
+                ),
+            );
+        }
+    }
+    if !physics_installed
+        && !crate::diagnostics::is_latched(world, code::CHARACTER_MOTOR_NO_PHYSICS_SCENE, "world")
+    {
+        let motor = world
+            .query_ids::<(&CharacterMotor,)>()
+            .next()
+            .map(|(id, _)| id);
+        if let Some(id) = motor {
+            let named = entity_label(world, id);
+            crate::diagnostics::report(
+                world,
+                code::CHARACTER_MOTOR_NO_PHYSICS_SCENE,
+                "world",
+                format!(
+                    "{named} is a character motor, but this world has no physics step, so its \
+                     capsule body is never built: add `physics: {{ space: free }}` to the scene"
                 ),
             );
         }

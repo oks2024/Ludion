@@ -216,6 +216,20 @@ pub fn scene_layer_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     };
     let mut diagnostics = Vec::new();
     for (index, entity) in scene.entities.iter().enumerate() {
+        if let Some((_, value)) = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "CharacterMotor")
+            && let Some(name) = value.get("layer").and_then(serde_json::Value::as_str)
+            && !declared.contains(&name)
+        {
+            diagnostics.push(unknown_layer(
+                name,
+                &declared,
+                format!("/entities/{index}/components/CharacterMotor/layer"),
+                "character motor",
+            ));
+        }
         let Some((_, value)) = entity
             .components
             .iter()
@@ -246,17 +260,69 @@ pub fn scene_layer_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 ),
             );
         } else if !declared.contains(&name) {
-            let help = match suggest::nearest(name, declared.iter().copied()) {
-                Some(candidate) => format!("nearest match is `{candidate}`"),
-                None => "declare it under `physics.layers`".to_string(),
-            };
+            diagnostics.push(unknown_layer(name, &declared, pointer, "collider"));
+        }
+    }
+    diagnostics
+}
+
+/// The `L1186` for a layer `name` the scene does not declare, with the nearest declared name.
+fn unknown_layer(name: &str, declared: &[&str], pointer: String, owner: &str) -> Diagnostic {
+    let help = match suggest::nearest(name, declared.iter().copied()) {
+        Some(candidate) => format!("nearest match is `{candidate}`"),
+        None => "declare it under `physics.layers`".to_string(),
+    };
+    Diagnostic::new(
+        code::COLLIDER_LAYER_UNKNOWN,
+        format!("{owner} layer `{name}` is not declared under `physics.layers`"),
+    )
+    .with_path(pointer)
+    .with_help(help)
+}
+
+/// Every `L1295`/`L1296`/`L1297` a checked scene's character motors report: a `Collider` beside the
+/// motor (the motor owns its capsule), a scene with no `physics:` block (the body is never built),
+/// and a `Parent` (a motor writes world-space feet). The field rules (`L1294`) and the layer
+/// (`L1186`) are reported elsewhere.
+pub fn scene_motor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (index, entity) in scene.entities.iter().enumerate() {
+        let has = |wanted: &str| entity.components.iter().any(|(name, _)| name == wanted);
+        if !has("CharacterMotor") {
+            continue;
+        }
+        let at = format!("/entities/{index}/components");
+        if has("Collider") {
             diagnostics.push(
                 Diagnostic::new(
-                    code::COLLIDER_LAYER_UNKNOWN,
-                    format!("collider layer `{name}` is not declared under `physics.layers`"),
+                    code::CHARACTER_MOTOR_WITH_COLLIDER,
+                    "this entity carries a `Collider` beside its `CharacterMotor`; the motor owns \
+                     its capsule and the `Collider` would be ignored",
                 )
-                .with_path(pointer)
-                .with_help(help),
+                .with_path(format!("{at}/Collider"))
+                .with_help("remove the `Collider`; the motor owns its capsule"),
+            );
+        }
+        if scene.physics.is_none() {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::CHARACTER_MOTOR_NO_PHYSICS_SCENE,
+                    "this character motor belongs to the physics solver, but the scene has no \
+                     `physics:` block to install it",
+                )
+                .with_path(format!("{at}/CharacterMotor"))
+                .with_help("add `physics: { space: free }` to the scene"),
+            );
+        }
+        if has("Parent") {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::CHARACTER_MOTOR_PARENTED,
+                    "this character motor has a `Parent`; a motor writes world-space feet, so it \
+                     must be a root entity",
+                )
+                .with_path(format!("{at}/Parent"))
+                .with_help("remove the `Parent` and follow the mover from game code"),
             );
         }
     }
@@ -613,6 +679,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_sensor_diagnostics(scene));
     diagnostics.extend(scene_hierarchy_body_diagnostics(scene));
     diagnostics.extend(scene_physics_diagnostics(scene));
+    diagnostics.extend(scene_motor_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
     diagnostics.extend(crate::skin_bone::scene_skin_bone_diagnostics(
         project_root,
@@ -879,6 +946,76 @@ entities:
             Some("/entities/0/components/Collider/layer")
         );
         assert_eq!(found[0].help.as_deref(), Some("nearest match is `dummy`"));
+    }
+
+    fn motor_scene(physics: &str, components: &str) -> Scene {
+        let source = format!(
+            "format: 1\nseed: 1\n{physics}entities:\n  - name: hero\n    components:\n{components}  - name: base\n    components: {{}}\n"
+        );
+        ludion_scene::check(&source, &crate::builtin_registry())
+            .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"))
+    }
+
+    #[test]
+    fn a_motor_layer_typo_names_the_nearest_declared_layer() {
+        let scene = motor_scene(LAYERS, "      CharacterMotor:\n        layer: dummi\n");
+        let found = scene_layer_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::COLLIDER_LAYER_UNKNOWN);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/CharacterMotor/layer")
+        );
+        assert_eq!(found[0].help.as_deref(), Some("nearest match is `dummy`"));
+    }
+
+    #[test]
+    fn a_clean_motor_scene_reports_nothing() {
+        let scene = motor_scene(LAYERS, "      CharacterMotor:\n        layer: dummy\n");
+        assert!(scene_layer_diagnostics(&scene).is_empty());
+        assert!(scene_motor_diagnostics(&scene).is_empty());
+    }
+
+    #[test]
+    fn a_motor_beside_a_collider_is_l1295() {
+        let scene = motor_scene(
+            LAYERS,
+            "      CharacterMotor: {}\n      Collider:\n        shape:\n          sphere:\n            radius: 0.5\n",
+        );
+        let found = scene_motor_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CHARACTER_MOTOR_WITH_COLLIDER);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/Collider")
+        );
+    }
+
+    #[test]
+    fn a_motor_without_a_physics_block_is_l1296() {
+        let scene = motor_scene("", "      CharacterMotor: {}\n");
+        let found = scene_motor_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CHARACTER_MOTOR_NO_PHYSICS_SCENE);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/CharacterMotor")
+        );
+    }
+
+    #[test]
+    fn a_parented_motor_is_l1297() {
+        let scene = motor_scene(
+            LAYERS,
+            "      CharacterMotor: {}\n      Parent:\n        index: 1\n        generation: 0\n",
+        );
+        let found = scene_motor_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CHARACTER_MOTOR_PARENTED);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/Parent")
+        );
     }
 
     #[test]

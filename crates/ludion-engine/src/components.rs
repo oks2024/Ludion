@@ -4409,6 +4409,14 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<ReflectionProbe>("ReflectionProbe")
         .expect("unique");
+    // The character motor's authored component and its engine-written state (`ludion-physics`),
+    // appended after `ReflectionProbe` per the append-only order above.
+    registry
+        .register_validated::<ludion_physics::CharacterMotor>("CharacterMotor")
+        .expect("unique");
+    registry
+        .register::<ludion_physics::CharacterMotorState>("CharacterMotorState")
+        .expect("unique");
     registry
 }
 
@@ -4880,12 +4888,14 @@ mod tests {
                 "MeshGrid",
                 "SpotLight",
                 "ReflectionProbe",
+                "CharacterMotor",
+                "CharacterMotorState",
             ]
         );
         assert_eq!(
             registry.len(),
-            35,
-            "appending ReflectionProbe grows the registry by exactly one"
+            37,
+            "appending the motor pair grows the registry by exactly two"
         );
     }
 
@@ -5737,6 +5747,7 @@ mod tests {
         clean::<PointLight>("PointLight");
         clean::<SpotLight>("SpotLight");
         clean::<ReflectionProbe>("ReflectionProbe");
+        clean::<ludion_physics::CharacterMotor>("CharacterMotor");
         clean::<DirectionalLight>("DirectionalLight");
         clean::<Sprite>("Sprite");
         clean::<Mesh>("Mesh");

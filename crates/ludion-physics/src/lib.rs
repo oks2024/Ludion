@@ -151,6 +151,14 @@
 //! [`PhysicsWorld::take_motor_mismatches`]. See `Plan/physics.md` for the full design and
 //! `ludion devdocs ludion-physics` for the kind → locked-axes mapping.
 //!
+//! # Character motor
+//!
+//! A [`CharacterMotor`] owns one kinematic capsule body, built by the write pass from the motor's
+//! `radius` and `height` (or [`CharacterMotorState::height`]): the entity's translation is the
+//! character's **feet**, the body centre sits half the height above it, and the capsule never
+//! rotates. The capsule's dimensions live in the motor alone; an entity with a `Collider` as well
+//! keeps only the motor's (`L1295`), and an invalid motor gets no body (`L1294`).
+//!
 //! # What is not here
 //!
 //! `ludion-spatial`'s 2D index and its four queries are untouched by this crate and answer a
@@ -163,6 +171,7 @@ mod contacts;
 mod impulse;
 mod joints;
 mod meshes;
+mod motor;
 mod pose;
 mod queries;
 mod sensors;
@@ -175,6 +184,7 @@ pub use contacts::{ContactEvent, ContactPhase};
 pub use impulse::{Blast, BlastHit, Falloff, ImpulseMiss};
 pub use joints::JointBroken;
 pub use meshes::{ColliderMeshes, MeshLoader, TriangleMesh};
+pub use motor::{CharacterMotor, CharacterMotorState, PlatformPose, height_in_force};
 pub use pose::PhysicsPose;
 pub use queries::{QueryFilter, QueryHit};
 pub use sensors::{ExitCause, SensorEvent, SensorPhase};

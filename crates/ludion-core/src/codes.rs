@@ -1435,6 +1435,24 @@ pub mod code {
     /// solver does not claim. Raised by `ludion-engine`'s `check-scene`.
     pub const COLLIDER_SENSOR_UNCLAIMED: DiagnosticCode = DiagnosticCode::new("L1293");
 
+    /// `L1294` — a `CharacterMotor` field is out of range: a length is not finite and positive, the
+    /// slope limit is outside (0, 90), the step is not below the height, the capsule is shorter than
+    /// two radii, or `max_slides` is outside 1..=16. Raised by the component's validator and, for a
+    /// motor built in Rust, by `ludion-physics` at runtime.
+    pub const CHARACTER_MOTOR_INVALID: DiagnosticCode = DiagnosticCode::new("L1294");
+
+    /// `L1295` — an entity carries both a `CharacterMotor` and a `Collider`. The motor owns its
+    /// capsule, so the `Collider` is ignored. Raised by `check-scene` and by `ludion-physics`.
+    pub const CHARACTER_MOTOR_WITH_COLLIDER: DiagnosticCode = DiagnosticCode::new("L1295");
+
+    /// `L1296` — a `CharacterMotor` exists in a world with no `physics:` block, so its capsule body
+    /// is never built. Raised by `check-scene` and once at runtime by `ludion-engine`.
+    pub const CHARACTER_MOTOR_NO_PHYSICS_SCENE: DiagnosticCode = DiagnosticCode::new("L1296");
+
+    /// `L1297` — a `CharacterMotor` entity has a `Parent`. A motor writes world-space feet, so it
+    /// must be a root entity. Raised by `check-scene` and once at runtime by `ludion-engine`.
+    pub const CHARACTER_MOTOR_PARENTED: DiagnosticCode = DiagnosticCode::new("L1297");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7227,6 +7245,50 @@ Raised at document time by `check-scene`, at `/entities/<i>/components/Collider/
 
 Fix: give the collider a 3D shape (`sphere`, `box`, ...), or drop `sensor`.",
     },
+    CodeEntry {
+        code: code::CHARACTER_MOTOR_INVALID,
+        severity: Severity::Error,
+        title: "a character motor field is out of range",
+        explanation: "A `CharacterMotor` field is outside what the capsule and the sweeps can use: `radius`, `height` and
+`step_height` must be finite and above 0; `snap_distance` and `skin_width` finite and at least 0;
+`slope_limit_deg` strictly between 0 and 90; `step_height` below `height`; `height` at least
+`2 * radius` plus a millimetre; `max_slides` from 1 to 16.
+
+From a scene or a wire write it is a validation error at the field's JSON Pointer
+(`/entities/<i>/components/CharacterMotor/<field>`). A motor built in Rust gets no body and is
+reported once per entity.
+
+Fix: use the pointer the message names; the defaults (radius 0.35, height 1.6) are a safe start.",
+    },
+    CodeEntry {
+        code: code::CHARACTER_MOTOR_WITH_COLLIDER,
+        severity: Severity::Error,
+        title: "a character motor and a collider on one entity",
+        explanation: "An entity carries a `CharacterMotor` and a `Collider`. The motor owns one kinematic capsule body sized by
+its `radius` and `height`; a second collider on the same entity would be a second source of truth for
+the body, so the motor wins and the `Collider` is ignored.
+
+Fix: remove the `Collider`; the motor owns its capsule.",
+    },
+    CodeEntry {
+        code: code::CHARACTER_MOTOR_NO_PHYSICS_SCENE,
+        severity: Severity::Error,
+        title: "a character motor in a world with no physics block",
+        explanation: "A `CharacterMotor` exists, but the scene has no `physics:` block, so the physics solver is not installed
+and the motor's capsule body is never built. `ludion check-scene` reports it at the motor; a motor
+spawned by game code is reported once at runtime.
+
+Fix: add `physics: { space: free }` to the scene.",
+    },
+    CodeEntry {
+        code: code::CHARACTER_MOTOR_PARENTED,
+        severity: Severity::Error,
+        title: "a character motor under a parent",
+        explanation: "A `CharacterMotor` entity has a `Parent`. The motor writes world-space feet positions straight into its
+`Transform`, which a parent would reinterpret as local, so the character would jump.
+
+Fix: remove the `Parent`, or move the motor to a root entity and follow the mover from game code.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9890,6 +9952,10 @@ mod tests {
         code::COLLIDER_SENSOR_ON_RIGID,
         code::COLLIDER_SENSOR_NO_INTERIOR,
         code::COLLIDER_SENSOR_UNCLAIMED,
+        code::CHARACTER_MOTOR_INVALID,
+        code::CHARACTER_MOTOR_WITH_COLLIDER,
+        code::CHARACTER_MOTOR_NO_PHYSICS_SCENE,
+        code::CHARACTER_MOTOR_PARENTED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
