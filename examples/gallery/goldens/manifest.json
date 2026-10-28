@@ -1,4 +1,5 @@
 {
+  "collider-wireframes": { "frames": 2, "debug_draw": ["colliders"] },
   "ragdoll-skinned": { "frames": 150 },
   "sprite-flipbook": { "frames": 23 },
   "sprite-uv-scroll": { "frames": 30 }

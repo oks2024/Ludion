@@ -17,10 +17,12 @@
 //! something other than the suite default:
 //!
 //! ```json
-//! { "breakout-mock": { "ssim_threshold": 0.97 }, "sprite-flipbook": { "frames": 23 } }
+//! { "breakout-mock": { "ssim_threshold": 0.97 }, "sprite-flipbook": { "frames": 23 },
+//!   "collider-wireframes": { "frames": 2, "debug_draw": ["colliders"] } }
 //! ```
 //!
-//! Every field (`width`, `height`, `ssim_threshold`, `frames`) is optional and falls back to the
+//! Every field (`width`, `height`, `ssim_threshold`, `frames`, `debug_draw` — a list of debug-draw
+//! category names, as `ludion render --debug-draw` takes) is optional and falls back to the
 //! suite default (`frames` defaults to `0`, the scene at rest) when absent or when the manifest
 //! itself is absent. The manifest is strict (`L2208`): no other fields, `ssim_threshold` in
 //! `(0, 1]`, `width`/`height` above 0, and every key must be the stem of a scene in `<dir>`.
@@ -44,6 +46,7 @@ struct ManifestEntry {
     height: Option<u32>,
     ssim_threshold: Option<f64>,
     frames: Option<u64>,
+    debug_draw: Option<Vec<String>>,
 }
 
 /// Suite-wide defaults, overridable per scene by the manifest.
@@ -166,6 +169,9 @@ pub fn discover(
             .and_then(|o| o.ssim_threshold)
             .unwrap_or(defaults.ssim_threshold);
         test.frames = overrides.and_then(|o| o.frames).unwrap_or(0);
+        if let Some(names) = overrides.and_then(|o| o.debug_draw.clone()) {
+            test.debug_draw = ludion_engine::DebugCategories::from_names(names);
+        }
         tests.push(DiscoveredTest { name: stem, test });
     }
     Ok(tests)
@@ -193,7 +199,7 @@ fn load_manifest(dir: &Path) -> Result<BTreeMap<String, ManifestEntry>, Diagnost
             )
             .with_help(
                 "a manifest is a JSON object mapping scene stems to optional \
-                 {\"width\":.., \"height\":.., \"ssim_threshold\":.., \"frames\":..} overrides, \
+                 {\"width\":.., \"height\":.., \"ssim_threshold\":.., \"frames\":.., \"debug_draw\":[..]} overrides, \
                  and no other fields; fix the JSON, or delete the file to use the suite defaults",
             )
         })?;
@@ -456,6 +462,25 @@ mod tests {
         assert_eq!(tests[0].test.frames, 23);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn manifest_applies_a_debug_draw_override() {
+        let tests = verifiable(discover_with_manifest(
+            "debug_draw",
+            &["scene", "plain"],
+            r#"{"scene": {"debug_draw": ["colliders"]}}"#,
+        ))
+        .expect("the manifest is valid");
+        let drawn = |stem: &str| {
+            let found = tests.iter().find(|t| t.name == stem).unwrap();
+            found.test.debug_draw.clone()
+        };
+        assert_eq!(
+            drawn("scene"),
+            ludion_engine::DebugCategories::parse("colliders")
+        );
+        assert_eq!(drawn("plain"), ludion_engine::DebugCategories::None);
     }
 
     #[test]

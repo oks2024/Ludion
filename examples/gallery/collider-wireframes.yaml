@@ -1,0 +1,111 @@
+# Feature: the `colliders` debug-draw category — every physics body as a wireframe in its world pose.
+# A stepped mesh floor (the outline and the block's edges only; the coplanar triangulation is
+# skipped), a kinematic box (cyan), a rigid sphere (orange) and a static cylinder with no visible
+# mesh (grey) — the collision-only case the category exists for. Rendered with `debug_draw:
+# ["colliders"]` after 2 ticks, since bodies exist only once physics has ticked (goldens/manifest.json).
+format: 1
+name: "collider-wireframes - debug draw: colliders over a stepped mesh floor"
+physics:
+  space: free
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 9.0
+        rotation:
+          - -35.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: sun
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.45
+          - -0.75
+          - -0.5
+        color:
+          - 1.0
+          - 0.96
+          - 0.86
+        intensity: 1.1
+  - name: floor
+    components:
+      Transform: {}
+      Mesh:
+        shape:
+          asset: meshes/collider-steps.mesh.yaml
+        color:
+          - 0.16
+          - 0.19
+          - 0.23
+          - 1.0
+      Collider:
+        shape:
+          mesh:
+            path: meshes/collider-steps.mesh.yaml
+        body: static
+  - name: box
+    components:
+      Transform:
+        translation:
+          - 1.8
+          - 0.5
+          - 0.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.12
+          - 0.25
+          - 0.4
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.5
+              - 0.5
+        body: kinematic
+  - name: ball
+    components:
+      Transform:
+        translation:
+          - 0.8
+          - 0.9
+          - -1.2
+      Mesh:
+        shape: sphere
+        color:
+          - 0.4
+          - 0.2
+          - 0.15
+          - 1.0
+      Collider:
+        shape:
+          sphere:
+            radius: 0.5
+        body:
+          rigid:
+            mass: 1.0
+      Velocity: {}
+  - name: post
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 0.5
+          - 1.0
+      Collider:
+        shape:
+          cylinder:
+            half_height: 0.5
+            radius: 0.5
+        body: static

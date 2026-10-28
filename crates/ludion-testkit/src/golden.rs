@@ -87,6 +87,11 @@ pub struct GoldenTest {
     /// burst lands on a committed golden mid-clip instead of at rest. The schedule ticked is the
     /// built-in one, or the game's own when [`with_builder`](GoldenTest::with_builder) is set.
     pub frames: u64,
+    /// The debug-draw categories drawn into the render, exactly `ludion render --debug-draw`. `None`
+    /// (the default) draws nothing — every golden that existed before this field did. A category a
+    /// system draws needs `frames` of at least 1; host-drawn ones (`colliders`, `hierarchy`) need the
+    /// world they read to exist.
+    pub debug_draw: ludion_engine::DebugCategories,
     /// The registry the scene is validated against — built-in by default, a game's own via
     /// [`with_registry`](GoldenTest::with_registry).
     registry: fn() -> Registry,
@@ -112,9 +117,17 @@ impl GoldenTest {
             time: None,
             strip: None,
             frames: 0,
+            debug_draw: ludion_engine::DebugCategories::None,
             registry: ludion_engine::builtin_registry,
             builder: None,
         }
+    }
+
+    /// Draws `categories` into the render. See [`debug_draw`](GoldenTest::debug_draw).
+    #[must_use]
+    pub fn with_debug_draw(mut self, categories: ludion_engine::DebugCategories) -> Self {
+        self.debug_draw = categories;
+        self
     }
 
     /// Validates the scene against `registry` (built-ins plus a game's own components) instead of the
@@ -384,7 +397,7 @@ impl GoldenTest {
                     // A golden is blessed at full quality — see the note on the built-in arm below.
                     &ludion_engine::QualitySetting::full(),
                     self.frames,
-                    &ludion_engine::DebugCategories::None,
+                    &self.debug_draw,
                 )?;
                 let decoded = image::decode_png(&outcome.png).map_err(|d| vec![d])?;
                 return Ok((decoded, outcome.adapter));
@@ -402,7 +415,7 @@ impl GoldenTest {
                     false,
                     &[],
                     self.frames,
-                    &ludion_engine::DebugCategories::None,
+                    &self.debug_draw,
                     None,
                 )?;
                 (outcome.image, outcome.adapter)
