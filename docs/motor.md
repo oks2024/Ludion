@@ -28,7 +28,7 @@ The worked example is `games/character-course`: its `src/lib.rs` controller is t
 | `slope_limit_deg` | 50 | 45 | in (0, 90) |
 | `step_height` | 0.3 | 0.25 | > 0 and < `height` |
 | `snap_distance` (ground snap below the feet) | 0.25 | 0.2 | ≥ 0 |
-| `skin_width` (gap kept to what it touches) | 0.01 | 0.01 | ≥ 0 |
+| `skin_width` (gap kept to what it touches) | 0.01 | 0.01 | > 0 |
 | `layer` (from `physics.layers`; omitted = `default`) | none | none | a declared name (L1186) |
 | `max_slides` | 4 | 4 | 1..=16 |
 
@@ -42,7 +42,7 @@ The defaults are human scale; a 1 m platformer character overrides the first fiv
 
 `move_character` runs these in order, then writes the feet (and the rider's yaw) to the pose and the state:
 
-1. **Depenetration** pushes the capsule out of overlap; if it cannot get clear in four passes the report has `stuck: true` (crushed); the slide and the platform carry are skipped, but the ground probe still runs and can snap the feet.
+1. **Depenetration** pushes the capsule out of overlap, moving the feet at most `radius` per call. When no clear pose is within that, or four passes do not clear it, the feet stay put and the report has `stuck: true` (crushed; a press never pops the rider through, the game decides): the slide and the platform carry are skipped, `platform` is the default, the grounded/ground/platform record is kept so the next tick carries from where it left off, and the ground probe still runs and can snap the feet.
 2. **Collide-and-slide** up to `max_slides` iterations: surfaces within `slope_limit_deg` are walkable; steeper ones are walls for horizontal motion, and creases are handled by sliding along both. Upward motion into a ceiling is removed and reported in `ceiling`.
 3. **Step-up**, only when grounded before the call: a wall-class face is climbed (up `step_height`, forward, down) if it lands on walkable ground within `step_height` with headroom for the capsule. An airborne capsule never steps.
 4. **Ground probe and snap**: the probe looks `snap_distance + skin_width` below the feet when the motor was grounded before and `displacement.y <= 0`, else `2 * skin_width`. A capsule resting on a ledge rim is grounded by the walkable face under its feet, not the edge's interpolated normal, so rested poses stay bit-stable.
@@ -54,7 +54,7 @@ The defaults are human scale; a 1 m platformer character overrides the first fiv
 
 ### Platform carry
 
-A motor that ended its last call grounded on a `static` or `kinematic` support (or another motor) is carried **once per tick, on its first call**: the support's translation and its yaw about its own pivot since the stored pose (read through the derived world pose, so parented platforms work), plus its `SurfaceVelocity` times the gameplay `dt` (zero while a clock hold freezes it). The yaw also turns the rider. The carry is swept like a move with the support's collider excluded: it stops at walls and ceilings and never steps.
+A motor that ended its last call grounded on a `static` or `kinematic` support (or another motor) is carried **once per tick, on its first call**: the support's translation and its yaw about its own pivot since the stored pose (read through the derived world pose, so parented platforms work), plus its `SurfaceVelocity` times the gameplay `dt` (zero while a clock hold freezes it). The yaw also turns the rider. The carry is swept like a move: it stops at walls and ceilings and never steps. The surface displacement is swept first against everything, the support's own collider included (a belt's end stop holds the rider); the rigid part follows with the support excluded.
 
 **Why after the slide.** Casts see colliders as of the last step, so the support sits at its previous pose. Sliding and probing in that frame keeps the rider's relation to its support exact; carrying first would put a rider on a descending platform inside the stale collider and depenetration would push it up every tick.
 
@@ -66,9 +66,9 @@ A motor that ended its last call grounded on a `static` or `kinematic` support (
 | --- | --- |
 | `grounded`, `landed` | walk or fall; `landed` = began airborne, ended grounded (the thud, the double-jump reset) |
 | `ground` (entity, point, normal, `walkable`, `distance`) | what it stands on; a steep floor is reported with `walkable: false` |
-| `ceiling`, `walls` | head bump (zero vertical speed); wall contact, sorted by travel distance then entity |
+| `ceiling`, `walls` | head bump (zero vertical speed); one wall per entity and plane, sorted by travel distance then entity |
 | `stepped` | the climb of this tick (above) |
-| `platform` (entity, translation, yaw, surface) | what carried it; default (no entity) when no carry ran |
+| `platform` (entity, translation, yaw, surface) | what carried it; default (no entity) when no carry ran or the move was stuck |
 | `moved`, `height` | the feet's total movement incl. depenetration and carry; the capsule height used |
 | `stuck` | crushed: no clear pose |
 

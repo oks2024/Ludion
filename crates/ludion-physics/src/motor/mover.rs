@@ -24,6 +24,8 @@ const REST_NOISE: f32 = 1e-6;
 /// The least a hit normal may oppose the motion for the skin back-off along the motion to stay
 /// bounded.
 const MIN_OPPOSING: f32 = 0.2;
+/// Two wall normals of one entity closer than this are one wall: coplanar triangles of a mesh.
+const WALL_SAME_PLANE: f32 = 0.999;
 
 /// Reshapes a move before the motor casts it: a game's lane, rail or plane lock.
 ///
@@ -59,10 +61,14 @@ pub trait SlideConstraint {
 /// platform turns about the right point),
 /// plus the support's [`SurfaceVelocity`] over the tick's gameplay time (nothing
 /// while a `GameClock` hold froze it). The yaw turns the rider too. The carry is swept like a
-/// move: it stops at walls and ceilings (reported in `walls`/`ceiling`), never steps up, ignores
-/// the support's own collider and is not shaped by a [`SlideConstraint`]. It is reported in
+/// move: it stops at walls and ceilings (reported in `walls`/`ceiling`), never steps up and is not
+/// shaped by a [`SlideConstraint`]. The surface displacement is swept against the support's own
+/// collider too (a belt's end stop holds the rider); the rigid part ignores it. It is reported in
 /// [`MoveReport::platform`] with its intended values even when blocked, whenever it ran, and
 /// `moved` includes it. A game's takeoff momentum is `(translation + surface) / dt`.
+///
+/// **On a stuck tick the carry is not applied**: `platform` is the default, and the grounded,
+/// ground and platform record is kept, so the next tick carries from where it left off.
 ///
 /// **The carry is applied after the displacement's slide and ground probe, not before.** Casts
 /// see colliders as of the last step, so the support's collider sits where the motor left it a
@@ -172,6 +178,10 @@ pub fn move_character_with<P: PhysicsPose>(
     }
     let ground_entity = outcome.report.ground.filter(|_| outcome.report.grounded);
     let record = |state: &mut CharacterMotorState| {
+        if outcome.carry_skipped {
+            state.carry_tick = Some(tick);
+            return;
+        }
         state.grounded = outcome.report.grounded;
         state.ground = ground_entity.map(|hit| hit.entity);
         state.platform = platform_now;
@@ -285,6 +295,8 @@ enum Class {
 struct Outcome {
     feet: [f32; 3],
     report: MoveReport,
+    /// A carry was planned but the move was stuck, so it was not applied.
+    carry_skipped: bool,
 }
 
 /// What a slide loop has recorded so far, across the displacement and the carry.
@@ -447,7 +459,9 @@ impl<'a> Solver<'a> {
 
     /// Pushes the capsule out of what it is closer to than half the skin, back to a full skin of
     /// clearance; returns the least-penetrating pose found and whether even that one overlaps by
-    /// more than the skin.
+    /// more than the skin. The feet never move more than a radius: when no clear pose lies within
+    /// it the feet stay put and the call is stuck, so a closing press cannot eject its rider
+    /// through itself.
     fn depenetrate(&self, feet: [f32; 3]) -> ([f32; 3], bool) {
         let mut current = feet;
         let mut best = (f32::INFINITY, feet);
@@ -466,15 +480,21 @@ impl<'a> Solver<'a> {
             if pass == DEPENETRATION_PASSES {
                 break;
             }
-            current = add(current, scale(deepest.normal, self.skin - deepest.dist));
+            let next = add(current, scale(deepest.normal, self.skin - deepest.dist));
+            if len(sub(next, feet)) > self.radius {
+                break;
+            }
+            current = next;
         }
-        (best.1, best.0 > self.skin)
+        let stuck = best.0 > self.skin;
+        (if stuck { feet } else { best.1 }, stuck)
     }
 
     /// One move: depenetrate, slide along what the displacement hits, probe the ground, then sweep
-    /// the platform `carry` through the same slide loop with its platform excluded (a rider moves
-    /// rigidly with its support, whose collider casts see a tick late), without a step-up or a
-    /// constraint, and without a second probe.
+    /// the platform `carry` through the same slide loop, without a step-up or a constraint and
+    /// without a second probe: first the surface displacement against everything (the support's
+    /// end stop holds), then the rigid part with the support excluded (a rider moves rigidly with
+    /// its support, whose collider casts see a tick late). A stuck move applies no carry.
     fn solve(
         &self,
         start: [f32; 3],
@@ -504,8 +524,20 @@ impl<'a> Solver<'a> {
         // A snap back down undoes a climb: only the rise that survived the tick is a step.
         let rise = feet[1] - rise_from;
         slide.stepped = slide.stepped.map(|c| c.min(rise)).filter(|c| *c > 0.0);
-        // The support's motion acts on the feet as they are now, after the slide and probe.
-        let carry = carry.map(|carry| {
+        // A stuck tick carries nothing: the support's record is kept for the next one.
+        let carry_skipped = stuck && carry.is_some();
+        let carry = carry.filter(|_| !stuck).map(|carry| {
+            // The belt's displacement meets the support's own collider (the rider still sits in its
+            // stale frame, so an end stop holds); the rigid part acts on the feet as they are after
+            // it, and ignores the support.
+            self.slide(
+                &mut slide,
+                &mut feet,
+                carry.surface,
+                was_grounded,
+                false,
+                &mut None,
+            );
             let (translation, yaw) = rigid_carry(
                 feet,
                 carry.from.translation,
@@ -513,28 +545,23 @@ impl<'a> Solver<'a> {
                 carry.to.translation,
                 carry.to.rotation,
             );
-            (carry, translation, yaw)
-        });
-        if let Some((carry, translation, _)) = &carry
-            && !stuck
-        {
-            let swept = self.without(carry.entity);
-            swept.slide(
+            self.without(carry.entity).slide(
                 &mut slide,
                 &mut feet,
-                add(*translation, carry.surface),
+                translation,
                 was_grounded,
                 false,
                 &mut None,
             );
-        }
+            (carry, translation, yaw)
+        });
         let Slide {
             ceiling,
             stepped,
             mut walls,
             ..
         } = slide;
-        walls.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.entity.cmp(&b.1.entity)));
+        walls.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.entity.cmp(&b.1.entity)));
         let report = MoveReport {
             grounded,
             landed: grounded && !was_grounded,
@@ -554,7 +581,11 @@ impl<'a> Solver<'a> {
             stuck,
             height: self.height,
         };
-        Outcome { feet, report }
+        Outcome {
+            feet,
+            report,
+            carry_skipped,
+        }
     }
 
     /// This solver with `entity`'s collider ignored as well.
@@ -625,11 +656,9 @@ impl<'a> Solver<'a> {
                         slide.stepped = Some(slide.stepped.unwrap_or(0.0) + climb);
                         break;
                     }
-                    if !slide
-                        .walls
-                        .iter()
-                        .any(|(_, wall)| wall.entity == hit.entity)
-                    {
+                    if !slide.walls.iter().any(|(_, wall)| {
+                        wall.entity == hit.entity && dot(wall.normal, normal) > WALL_SAME_PLANE
+                    }) {
                         slide.walls.push((slide.travel, surface));
                     }
                     slide_wall(leftover, normal)
@@ -722,8 +751,9 @@ impl<'a> Solver<'a> {
             over[2],
         ];
         let climb = pose[1] - from[1];
-        let (settled, _) = self.depenetrate(pose);
-        (climb > 0.0 && climb <= self.step_height && settled == pose).then_some((pose, climb))
+        let (settled, stuck) = self.depenetrate(pose);
+        (climb > 0.0 && climb <= self.step_height && !stuck && settled == pose)
+            .then_some((pose, climb))
     }
 
     /// The leftover after hitting walkable ground: downward motion is spent, and the horizontal
@@ -807,7 +837,7 @@ impl<'a> Solver<'a> {
             if let Some(under) = self
                 .physics
                 .probe_down(origin, length, &self.filter)
-                .filter(|under| under.normal[1] >= self.cos_limit)
+                .filter(|under| under.entity == hit.entity && under.normal[1] >= self.cos_limit)
             {
                 normal = normalize(under.normal);
                 rim = true;

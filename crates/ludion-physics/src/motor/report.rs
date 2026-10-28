@@ -32,7 +32,8 @@ pub struct SurfaceHit {
 }
 
 /// What moving ground did to the motor this tick. Default (no `entity`) when no carry ran: the
-/// motor was airborne, rode a rigid support, or this was not its first call of the tick. A static
+/// motor was airborne, rode a rigid support, this was not its first call of the tick, or the move
+/// was stuck (the carry was not applied). A static
 /// floor reports its entity with zeros. The values are the intended carry, even when a wall
 /// blocked it; a game's takeoff momentum is `(translation + surface) / dt`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -60,7 +61,7 @@ pub struct MoveReport {
     pub ground: Option<GroundHit>,
     /// The first ceiling an upward motion hit.
     pub ceiling: Option<SurfaceHit>,
-    /// The walls the slide hit, one per entity, in order of travel.
+    /// The walls the slide hit, one per entity and plane, in order of travel, then entity.
     pub walls: Vec<SurfaceHit>,
     /// The height climbed by a step-up, when one happened.
     pub stepped: Option<f32>,

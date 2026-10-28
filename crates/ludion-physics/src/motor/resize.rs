@@ -193,9 +193,10 @@ pub fn fits_character<P: PhysicsPose>(
     if height <= current {
         return Ok(true);
     }
-    Ok(world
+    let physics = world
         .resource::<PhysicsWorld>()
-        .is_none_or(|physics| headroom(physics, entity, &motor, feet, height).is_none()))
+        .ok_or(MotorError::NoPhysicsWorld)?;
+    Ok(headroom(physics, entity, &motor, feet, height).is_none())
 }
 
 /// Places `entity`'s feet at `feet` facing `yaw` (radians about +Y) without driving the capsule: no

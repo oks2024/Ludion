@@ -7257,7 +7257,7 @@ Fix: give the collider a 3D shape (`sphere`, `box`, ...), or drop `sensor`.",
         severity: Severity::Error,
         title: "a character motor field is out of range",
         explanation: "A `CharacterMotor` field is outside what the capsule and the sweeps can use: `radius`, `height` and
-`step_height` must be finite and above 0; `snap_distance` and `skin_width` finite and at least 0;
+`step_height` must be finite and above 0; `snap_distance` finite and at least 0; `skin_width` finite and above 0;
 `slope_limit_deg` strictly between 0 and 90; `step_height` below `height`; `height` at least
 `2 * radius` plus a millimetre; `max_slides` from 1 to 16.
 

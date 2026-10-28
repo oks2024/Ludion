@@ -14,8 +14,8 @@ use ludion_core::par::with_threads;
 use ludion_core::time::GameClock;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, MoveReport, PhysicsSpace, SurfaceVelocity, install,
-    move_character,
+    CharacterMotor, CharacterMotorState, ColliderMeshes, MoveReport, PhysicsSpace, PlatformCarry,
+    SurfaceVelocity, TriangleMesh, install, move_character,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape};
 
@@ -415,6 +415,81 @@ fn a_conveyor_carries_a_still_rider_off_its_end() {
     assert!(on_floor > 20, "ended on the floor for {on_floor} ticks");
 }
 
+/// One static trimesh: a flat belt from `x = -1` to `3` and a vertical stop at `x = 2`.
+fn belt_with_end_stop(world: &mut World) -> Cast {
+    world.insert_resource(ColliderMeshes::new(Box::new(|_| {
+        Ok(TriangleMesh {
+            vertices: vec![
+                [-1.0, 0.0, -1.0],
+                [-1.0, 0.0, 1.0],
+                [3.0, 0.0, -1.0],
+                [3.0, 0.0, 1.0],
+                [2.0, 0.0, -1.0],
+                [2.0, 0.0, 1.0],
+                [2.0, 0.6, -1.0],
+                [2.0, 0.6, 1.0],
+            ],
+            triangles: vec![[0, 1, 2], [2, 1, 3], [4, 6, 5], [5, 6, 7]],
+            hash: 1,
+        })
+    })));
+    let belt = world.spawn();
+    world.insert(belt, TestPose::at([0.0; 3])).unwrap();
+    world
+        .insert(
+            belt,
+            Collider {
+                shape: Shape::Mesh {
+                    path: "belt".into(),
+                },
+                body: Body::new_static(),
+                layer: None,
+                sensor: false,
+            },
+        )
+        .unwrap();
+    world
+        .insert(
+            belt,
+            SurfaceVelocity {
+                velocity: [1.5, 0.0, 0.0],
+            },
+        )
+        .unwrap();
+    Cast {
+        hero: hero(world, [0.0, 0.3, 0.0]),
+        platform: belt,
+    }
+}
+
+#[test]
+fn a_belt_mesh_end_stop_holds_a_still_rider() {
+    let mut belt = None;
+    let mut rig = Rig::new(
+        |world| {
+            let cast = belt_with_end_stop(world);
+            belt = Some(cast.platform);
+            cast
+        },
+        None,
+    );
+    rig.ride(120, |frame, feet, _| {
+        assert!(
+            feet[0] <= 2.0 - RADIUS + 1e-3,
+            "frame {frame}: feet x {} past the stop",
+            feet[0]
+        );
+    });
+    let reports = rig.reports();
+    let (_, last) = reports.last().unwrap();
+    assert!(last.grounded, "{last:?}");
+    assert!(
+        last.walls.iter().any(|wall| Some(wall.entity) == belt),
+        "{:?}",
+        last.walls
+    );
+}
+
 fn rising(slope: f32) -> Option<Mover> {
     mover(move |f| ([0.0, -0.25 + slope * f as f32, 0.0], FLAT))
 }
@@ -469,15 +544,16 @@ fn a_descending_platform_never_flickers_the_rider_airborne() {
 #[test]
 fn a_closing_press_crushes_within_one_tick_of_the_gap_closing() {
     const START: f32 = 1.5;
+    let mut floor = None;
     let mut rig = Rig::new(
         |world| {
-            spawn_box(
+            floor = Some(spawn_box(
                 world,
                 [0.0, -0.5, 0.0],
                 [30.0, 0.5, 30.0],
                 FLAT,
                 Body::new_static(),
-            );
+            ));
             let press = spawn_box(
                 world,
                 [0.0, START + 0.25, 0.0],
@@ -493,16 +569,37 @@ fn a_closing_press_crushes_within_one_tick_of_the_gap_closing() {
         mover(|f| ([0.0, START + 0.25 - 0.02 * f as f32, 0.0], FLAT)),
     );
     let mut min_feet = f32::INFINITY;
-    rig.ride(100, |_, feet, _| {
+    let mut check = |frame: u64, feet: [f32; 3], _: f32| {
         assert!(feet.iter().all(|c| c.is_finite()), "{feet:?}");
+        // Never inside or above the press: its bottom, plus one tick of lag.
+        let bottom = START - 0.02 * frame as f32;
+        // Past the floor the kinematic press is inside the static floor.
+        assert!(
+            bottom < 0.0 || feet[1] <= bottom + 0.02 + 1e-3,
+            "frame {frame}: feet {} above the press at {bottom}",
+            feet[1]
+        );
         min_feet = min_feet.min(feet[1]);
-    });
+    };
+    // The press is still above the floor for the first 70 ticks, the rider crushed from the 31st.
+    rig.ride(70, &mut check);
+    let state = rig
+        .world
+        .get::<CharacterMotorState>(rig.hero)
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.ground, floor, "the support record survives the crush");
+    rig.ride(30, &mut check);
     assert!(min_feet >= -SKIN - 1e-4, "feet sank to {min_feet}");
     let gap_closed = (0..100u64)
         .find(|f| (START - 0.02 * *f as f32) < HEIGHT)
         .expect("the gap closes");
-    let stuck = rig
-        .reports()
+    let reports = rig.reports();
+    // A stuck tick carries nothing and keeps the support record for the next one.
+    for (frame, report) in reports.iter().filter(|(_, r)| r.stuck) {
+        assert_eq!(report.platform, PlatformCarry::default(), "frame {frame}");
+    }
+    let stuck = reports
         .iter()
         .find(|(_, r)| r.stuck)
         .map(|(frame, _)| *frame)

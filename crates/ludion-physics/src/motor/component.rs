@@ -191,11 +191,11 @@ pub(crate) fn check(motor: &CharacterMotor) -> Result<(), (&'static str, String)
             ),
         ));
     }
-    if !non_negative(motor.skin_width) {
+    if !positive(motor.skin_width) {
         return Err((
             "/skin_width",
             format!(
-                "`skin_width` is {}; it must be finite and >= 0",
+                "`skin_width` is {}; it must be finite and > 0",
                 motor.skin_width
             ),
         ));
@@ -211,9 +211,9 @@ pub(crate) fn check(motor: &CharacterMotor) -> Result<(), (&'static str, String)
 
 impl SemanticValidate for CharacterMotor {
     /// Rejects the first out-of-range field (`L1294`) at its pointer: lengths finite and positive,
-    /// `snap_distance` and `skin_width` finite and non-negative, `slope_limit_deg` in `(0, 90)`,
-    /// `step_height < height`, `height >= 2 * radius`, `max_slides` in `1..=16`. JSON Schema reaches
-    /// none of the cross-field rules. A value that does not deserialize is left to the schema.
+    /// `snap_distance` finite and non-negative, `skin_width` finite and positive, `slope_limit_deg`
+    /// in `(0, 90)`, `step_height < height`, `height >= 2 * radius`, `max_slides` in `1..=16`. JSON
+    /// Schema reaches none of the cross-field rules. A value that does not deserialize is left to the schema.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let Ok(motor) = serde_json::from_value::<CharacterMotor>(value.clone()) else {
             return Vec::new();
@@ -280,6 +280,7 @@ mod tests {
             ("step_height", json!(1.6), "/step_height"),
             ("snap_distance", json!(-0.1), "/snap_distance"),
             ("skin_width", json!(-0.01), "/skin_width"),
+            ("skin_width", json!(0.0), "/skin_width"),
             ("max_slides", json!(0), "/max_slides"),
             ("max_slides", json!(17), "/max_slides"),
         ] {

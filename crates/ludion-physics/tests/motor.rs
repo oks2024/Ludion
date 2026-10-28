@@ -380,22 +380,32 @@ fn rising_under_a_slab_reports_the_ceiling_and_removes_the_upward_motion() {
 
 #[test]
 fn a_ninety_degree_corner_and_a_ceiling_wedge_settle_without_jitter() {
+    let mut walls = Vec::new();
     let mut corner = Rig::new(
         |world| {
             floor(world);
-            wall(world, [2.5, 1.0, 0.0], [0.5, 2.0, 6.0]);
-            wall(world, [0.0, 1.0, 2.5], [6.0, 2.0, 0.5]);
+            walls.push(wall(world, [2.5, 1.0, 0.0], [0.5, 2.0, 6.0]));
+            walls.push(wall(world, [0.0, 1.0, 2.5], [6.0, 2.0, 0.5]));
             hero(world, [1.0, 0.0, 1.0])
         },
         |_| vec![[0.1, -0.05, 0.1]],
     );
     let mut positions = Vec::new();
-    for _ in 0..14 {
+    for _ in 0..40 {
         corner.run(1);
         positions.push(corner.feet());
     }
-    assert_eq!(positions[10..], [positions[10]; 4], "{positions:?}");
-    assert!(corner.reports().iter().all(|r| !r.stuck));
+    let reports = corner.reports();
+    let contact = reports
+        .iter()
+        .position(|r| {
+            walls
+                .iter()
+                .all(|w| r.walls.iter().any(|hit| hit.entity == *w))
+        })
+        .expect("both walls are reported");
+    assert_settled_within_two_ticks(&positions, contact, 10);
+    assert!(reports.iter().all(|r| !r.stuck));
 
     // A ceiling descending toward +x: its underside passes through (2, 1.2), 20 degrees down.
     let mut wedge = Rig::new(
@@ -414,17 +424,35 @@ fn a_ninety_degree_corner_and_a_ceiling_wedge_settle_without_jitter() {
         |_| vec![[0.1, -0.05, 0.0]],
     );
     let mut positions = Vec::new();
-    for _ in 0..40 {
+    for _ in 0..60 {
         wedge.run(1);
         positions.push(wedge.feet());
     }
+    let contact = wedge
+        .reports()
+        .iter()
+        .position(|r| r.ceiling.is_some())
+        .expect("the wedge is touched");
+    assert_settled_within_two_ticks(&positions, contact, 30);
+    assert!(positions[contact + 2][0] > 1.5, "walked into the wedge");
+}
+
+/// From two ticks after the first contact the horizontal pose is fixed and the height within
+/// cast rounding (10 ticks to spare); from `exact_from` on, the whole pose is bit-identical.
+fn assert_settled_within_two_ticks(positions: &[[f32; 3]], contact: usize, exact_from: usize) {
+    assert!(contact + 12 <= positions.len(), "contact at {contact}");
+    let settled = positions[contact + 2];
+    for (tick, pose) in positions.iter().enumerate().skip(contact + 2) {
+        assert!(
+            pose[0] == settled[0] && pose[2] == settled[2] && (pose[1] - settled[1]).abs() < 1e-5,
+            "tick {tick} (contact at {contact}): {pose:?} vs {settled:?}"
+        );
+    }
     assert_eq!(
-        positions[30..],
-        [positions[30]; 10],
-        "{:?}",
-        &positions[26..]
+        positions[exact_from..],
+        vec![positions[exact_from]; positions.len() - exact_from],
+        "{positions:?}"
     );
-    assert!(positions[30][0] > 1.5, "walked into the wedge");
 }
 
 fn box_pose(rig: &Rig, entity: EntityId) -> [f32; 3] {
@@ -894,6 +922,82 @@ fn mesh_stairs(world: &mut World, top: f32) {
             },
         )
         .unwrap();
+}
+
+/// One trimesh holding a floor and two perpendicular walls, at `x = 2.5` and `z = 2.5`.
+fn mesh_corner(world: &mut World) -> EntityId {
+    world.insert_resource(ColliderMeshes::new(Box::new(|_| {
+        let vertices = vec![
+            [-3.0, 0.0, -3.0],
+            [-3.0, 0.0, 3.0],
+            [3.0, 0.0, -3.0],
+            [3.0, 0.0, 3.0],
+            [2.5, 0.0, -3.0],
+            [2.5, 0.0, 3.0],
+            [2.5, 2.0, -3.0],
+            [2.5, 2.0, 3.0],
+            [-3.0, 0.0, 2.5],
+            [3.0, 0.0, 2.5],
+            [-3.0, 2.0, 2.5],
+            [3.0, 2.0, 2.5],
+        ];
+        let triangles = vec![
+            [0, 1, 2],
+            [2, 1, 3],
+            [4, 6, 5],
+            [5, 6, 7],
+            [8, 9, 10],
+            [10, 9, 11],
+        ];
+        Ok(TriangleMesh {
+            vertices,
+            triangles,
+            hash: 3,
+        })
+    })));
+    let entity = world.spawn();
+    world.insert(entity, TestPose::at([0.0; 3])).unwrap();
+    world
+        .insert(
+            entity,
+            Collider {
+                shape: Shape::Mesh {
+                    path: "corner".into(),
+                },
+                body: Body::new_static(),
+                layer: None,
+                sensor: false,
+            },
+        )
+        .unwrap();
+    entity
+}
+
+#[test]
+fn an_inside_corner_of_one_mesh_reports_both_walls() {
+    let mut mesh = None;
+    let mut rig = Rig::new(
+        |world| {
+            mesh = Some(mesh_corner(world));
+            hero(world, [1.0, 0.0, 1.0])
+        },
+        |_| vec![[0.1, -0.05, 0.1]],
+    );
+    let mut positions = Vec::new();
+    for _ in 0..40 {
+        rig.run(1);
+        positions.push(rig.feet());
+    }
+    let reports = rig.reports();
+    let contact = reports
+        .iter()
+        .position(|r| r.walls.len() == 2)
+        .expect("a report names two walls");
+    let walls = &reports[contact].walls;
+    assert!(walls.iter().all(|hit| Some(hit.entity) == mesh));
+    assert!(walls.iter().any(|hit| hit.normal[0] < -0.99));
+    assert!(walls.iter().any(|hit| hit.normal[2] < -0.99));
+    assert_settled_within_two_ticks(&positions, contact, contact + 2);
 }
 
 #[test]

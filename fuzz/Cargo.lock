@@ -823,6 +823,7 @@ dependencies = [
  "ludion-ecs",
  "ludion-spatial",
  "rapier3d",
+ "schemars",
  "serde",
  "serde_json",
 ]
