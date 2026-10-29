@@ -155,6 +155,7 @@ fn mesh_data(mesh: SculptMesh, hash: u64) -> MeshData {
         skin_joints: Vec::new(),
         textures: None,
         authored_material: true,
+        base_color_mean: [1.0; 4],
         indices: mesh.indices,
         hash,
     }

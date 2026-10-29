@@ -22,6 +22,13 @@ bounce only ever adds what already-visible light does after it hits a surface on
 merely `emissive` still lights only itself until `bounce` turns its glow into light on the wall
 beside it.
 
+What it voxelizes: cubes, planes, spheres, voxel models, and **asset meshes** (`shape: asset`) —
+each asset-mesh triangle fills the cells its surface overlaps, so a hollow building stays hollow and a
+wall casts a shell, not a solid. Skinned meshes, characters, sculpts, assemblies and `GiDynamic`
+instances contribute nothing. An asset mesh's albedo is its vertex colours times `Mesh.color` times
+the base-colour map's mean, white until a mean is stored; its emissive is the document's when it
+authors a material and `Mesh.emissive` otherwise. Texture maps themselves are not sampled.
+
 ## The loop
 
 ```yaml
@@ -147,8 +154,8 @@ profile` (`ludion docs running`), not in the rendered image.
 - **`L2104`** — `--dump-voxels` or `--dump-gi` was pointed at a scene that authors no `GiVolume`, so
   extraction built nothing to dump. Add a `GiVolume` entity (minimally just `cell_size:`); `--set`
   can tune a field on a `GiVolume` the scene already has, but it never creates the component.
-- **`L2105`** — `probe_spacing` lays more probes over the grid's world box than the bake will
-  allocate (4M total, or too many along one axis). Same shape as `L2103`; raise `probe_spacing`.
+- **`L2105`** — `probe_spacing` lays more probes over the grid's world box than the bake can bind
+  (about 2.1M probes, derived from the GPU's storage-buffer limit, or too many along one axis). Same shape as `L2103`; raise `probe_spacing`, or `cell_size` to shrink the grid.
 - **`--dump-gi` requires a GPU adapter; `--dump-voxels` does not.** The voxel grid is CPU data, so
   `--dump-voxels` alone (no `--out`) never touches a GPU. The probe volume exists only as a baked GPU
   texture, so `--dump-gi` bakes it (or hits the renderer's cache) and reads it back — `L2003`/`L2004`

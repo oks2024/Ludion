@@ -16,16 +16,23 @@ global-illumination`.
 - `allocate(bounds, cell_size)` — sizes and allocates the empty grid, snapped outward to the
   `cell_size` lattice; raises `L2103` in all three of its shapes (degenerate `cell_size`, non-finite
   bounds, over budget) before any allocation happens.
-- `rasterize` / `Solid::{Primitive, Voxel}` — per-instance fill: exact inverse-transform cube fill for
-  a primitive mesh, conservative plane/sphere fill, `deposit_voxels` for a voxel model. An asset mesh
-  (`Solid` has no variant for it) contributes nothing and does not stretch the grid's bounds — filling
-  its bounding box would mark a hollow imported building solid, worse than the model's absence.
+- `rasterize` / `Solid::{Cube, Box, Voxel, Mesh}` — per-instance fill: exact inverse-transform cube
+  fill for a primitive mesh, conservative plane/sphere fill, `deposit_voxels` for a voxel model, and
+  `deposit_triangles` for an asset mesh: every world-space triangle fills the cells it overlaps
+  (`triangle_box_overlap`, a separating-axis test with a `cell_size * 1e-4` inflation), never the
+  interior. An asset mesh's object box is its vertex extent, computed on a miss only and memoized per
+  mesh hash (`MeshBoxes`); `resolve` and `signature` run every frame and never walk vertices.
+- `probe_lattice` — sizes the irradiance lattice; its `L2105` ceiling is `ludion_renderer::max_gi_probes()`,
+  derived, not chosen: the bake's hit cache (64 B/probe, one storage binding) is the largest per-probe
+  buffer, so the engine's 128 MiB binding admits about 2.1M probes. The cell cap (`MAX_GI_CELLS`) is separate.
+- `SkipReport` — `voxelize`'s second product: counts (dynamic, skinned, non-finite, unsupported) and
+  the first entity index of each, built in `resolve` so a hit and a miss agree.
 - `write_cell` — the one site that writes occupancy/albedo/emissive; every fill path funnels through
   it, which is what makes the combine rule (below) a property of one function instead of an invariant
   scattered across several.
 - `signature(instances, cell_size)` — the cache key: `cell_size`, then per instance in ascending
   entity-slot order its model matrix, colour, emissive, and a source discriminant (primitive shape, or
-  a voxel/asset path's own content hash).
+  a voxel model's or asset mesh's own content hash).
 
 ## Dataflow
 
@@ -75,6 +82,11 @@ instead of re-hashing the grid's contents every frame.
   limit, so a grid that fits builds on every conformant GPU).
 
 ## Gotchas
+
+- **Thin cards still fill, and cutout holes are not honoured.** A single-sided leaf card or a plane
+  fills the cells its surface overlaps even at a `cell_size` far coarser than the card is thick, and
+  alpha-cutout holes (`Plan/clockout-0010` territory) do not open the shell. An asset mesh's albedo
+  uses `MeshData::base_color_mean` (white until a mean is stored), not the texture.
 
 - **The voxelizer, not the bake, is the cost centre.** On a `post-full`-scale scene at
   `cell_size 0.5` (grid 440×44×440 = 8.52M cells over a 220×22×220 box, measured on an RTX 3090), CPU

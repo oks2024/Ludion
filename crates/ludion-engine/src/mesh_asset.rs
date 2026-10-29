@@ -365,6 +365,7 @@ pub(crate) fn decode(doc: &MeshDocument, hash: u64) -> MeshData {
         skin_joints,
         textures: None,
         authored_material,
+        base_color_mean: [1.0; 4],
         indices,
         hash,
     }

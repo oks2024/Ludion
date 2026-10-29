@@ -161,6 +161,16 @@ Grid model: `WorldVoxelGrid { origin: Vec3, cell_size: f32, extent: [u32;3], occ
   lands in. Multiple model cells fall in one world cell ⇒ occupancy OR, albedo/emissive by the
   last-writer-ascending-instance rule.
 
+- **Asset mesh** (`PlacedMeshSource::Asset`, unskinned, not `GiDynamic`): a conservative surface shell —
+  every world-space triangle fills the cells it overlaps (triangle/box SAT, box inflated by
+  `cell_size * 1e-4`), the interior stays empty, the mesh stretches the grid bounds, and it enters the
+  signature by `MeshData::hash`. Albedo per triangle is `mean(vertex colours) × instance colour ×
+  MeshData::base_color_mean`; emissive is the vertex mean when the document authors a material, the
+  instance's otherwise. Skinned meshes, characters, sculpts and assemblies are skipped and counted in
+  the skip report.
+
+  *Amended 2026-10-29 (owner approval, Clockout 0013): asset meshes contribute their surface shell.*
+
 Albedo/emissive for a **primitive** come from the instance `color` and `material[2]` (the
 `[roughness, metallic, emissive]` lane) — the same channels the mesh path already carries.
 
@@ -174,6 +184,10 @@ Albedo/emissive for a **primitive** come from the instance `color` and `material
   (~tens of MB) — fine; the cap catches an authoring mistake (cell size far too small, or an
   unbounded scene) before it OOMs. The cap is not the streaming trigger (that is §10 of the GI plan);
   it is a guardrail.
+
+Not built: voxelizing only inside an authored `GiVolume` box (a `GiVolume.bounds` field), so a
+district's far geometry stops stretching the grid. Asset meshes now stretch the bounds, and the probe
+cap (`L2105`) derives from the device's storage-binding limit rather than a fixed count.
 
 ## 10. Hash-cache key vs "static" (risk 3)
 

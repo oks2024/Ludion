@@ -300,6 +300,69 @@ fn voxelizing_the_same_scene_twice_is_bit_identical() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// FNV-1a over a grid's raw bits — a stable fingerprint for pinning a grid value.
+fn grid_fingerprint(grid: &WorldVoxelGrid) -> u64 {
+    grid_bits(grid)
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, bit| {
+            (hash ^ u64::from(*bit)).wrapping_mul(0x0100_0000_01b3)
+        })
+}
+
+/// A scene with no asset mesh keeps the grid it had before asset meshes were voxelized: the pinned
+/// fingerprint is the value the primitive + voxel-model path produced beforehand.
+#[test]
+fn a_scene_without_asset_meshes_keeps_its_pinned_grid() {
+    let dir = project_with_voxel_model("pinned-grid");
+
+    let mut world = World::new();
+    author_gi_volume(&mut world, 0.5);
+    place(
+        &mut world,
+        Transform {
+            scale: [6.0, 1.0, 6.0],
+            ..Transform::default()
+        },
+        Mesh {
+            shape: MeshSource::Plane,
+            ..Mesh::default()
+        },
+    );
+    place(
+        &mut world,
+        Transform {
+            translation: [1.5, 0.5, -1.0],
+            ..Transform::default()
+        },
+        Mesh {
+            shape: MeshSource::Cube,
+            color: [0.2, 0.4, 0.8, 1.0],
+            emissive: 2.0,
+            ..Mesh::default()
+        },
+    );
+    place(
+        &mut world,
+        Transform {
+            translation: [-2.0, 0.0, 1.0],
+            ..Transform::default()
+        },
+        Mesh {
+            shape: MeshSource::Voxel("voxels/lamp.voxel.yaml".to_string()),
+            ..Mesh::default()
+        },
+    );
+
+    let grid = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
+    assert_eq!(
+        grid_fingerprint(&grid),
+        16_562_896_631_023_753_224,
+        "pinned grid fingerprint"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// One axis-aligned cube fills **exactly** the cells whose centers lie inside its world box — the
 /// analytic set, hand-computed, not re-derived by the code under test.
 ///
@@ -958,5 +1021,227 @@ fn a_marked_mesh_neither_occludes_nor_deposits() {
         grid_bits(&unmarked),
         grid_bits(&bounds_only),
         "control: the same cube, left unmarked, must actually change the grid"
+    );
+}
+
+/// The eight corners of a unit cube centred on the origin, then its twelve triangles — the last two
+/// (indices 30..36) are the top face, so dropping them leaves a box open at the top.
+const CUBE_CORNERS: [f64; 24] = [
+    -0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, 0.5, -0.5,
+    0.5, 0.5, 0.5, 0.5, -0.5, 0.5, 0.5,
+];
+const CUBE_TRIANGLES: [u32; 36] = [
+    0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5, 0, 1, 5, 0, 5, 4, 3, 7,
+    6, 3, 6, 2,
+];
+
+/// A `kind: mesh` document; `emissive` authors a per-vertex emissive list (and so a material).
+fn mesh_doc(positions: &[f64], indices: &[u32], emissive: Option<f64>) -> String {
+    let list = |values: Vec<String>| {
+        values
+            .iter()
+            .map(|v| format!("  - {v}\n"))
+            .collect::<String>()
+    };
+    let mut doc = format!(
+        "format: 1\nkind: mesh\npositions:\n{}indices:\n{}",
+        list(positions.iter().map(|v| format!("{v:?}")).collect()),
+        list(indices.iter().map(u32::to_string).collect()),
+    );
+    if let Some(value) = emissive {
+        doc.push_str(&format!(
+            "emissive:\n{}",
+            list(vec![format!("{value:?}"); positions.len() / 3])
+        ));
+    }
+    doc
+}
+
+/// A scratch project root holding the given `meshes/<name>.mesh.yaml` documents.
+fn project_with_meshes(tag: &str, docs: &[(&str, String)]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("ludion-voxelizer-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("meshes")).unwrap();
+    for (name, doc) in docs {
+        std::fs::write(dir.join(format!("meshes/{name}.mesh.yaml")), doc).unwrap();
+    }
+    dir
+}
+
+fn place_asset(world: &mut World, name: &str, translation: [f32; 3], scale: f32, mesh: Mesh) {
+    place(
+        world,
+        Transform {
+            translation,
+            scale: [scale; 3],
+            ..Transform::default()
+        },
+        Mesh {
+            shape: MeshSource::Asset(format!("meshes/{name}.mesh.yaml")),
+            ..mesh
+        },
+    );
+}
+
+/// Whether `cell` lies on the surface of an `n`-cell cube.
+fn on_surface(cell: (u32, u32, u32), n: u32) -> bool {
+    [cell.0, cell.1, cell.2]
+        .iter()
+        .any(|&c| c == 0 || c == n - 1)
+}
+
+/// A closed asset cube fills its surface shell — every boundary cell, no interior cell.
+#[test]
+fn a_closed_asset_cube_fills_a_shell_not_a_solid() {
+    let dir = project_with_meshes(
+        "shell",
+        &[("cube", mesh_doc(&CUBE_CORNERS, &CUBE_TRIANGLES, None))],
+    );
+    let mut world = World::new();
+    author_gi_volume(&mut world, 0.5);
+    place_asset(&mut world, "cube", [0.0; 3], 4.0, Mesh::default());
+
+    let grid = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
+    assert_eq!(grid.extent, [8, 8, 8]);
+    let mut expected = 0;
+    for z in 0..8 {
+        for y in 0..8 {
+            for x in 0..8 {
+                let filled = grid.occupancy[grid.index([x, y, z])];
+                assert_eq!(filled, on_surface((x, y, z), 8), "cell ({x}, {y}, {z})");
+                expected += u32::from(filled);
+            }
+        }
+    }
+    assert_eq!(expected, 8 * 8 * 8 - 6 * 6 * 6);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A box open at the top stays hollow: the interior is empty and so is the open face's interior.
+#[test]
+fn an_open_asset_box_stays_hollow() {
+    let dir = project_with_meshes(
+        "hollow",
+        &[("box", mesh_doc(&CUBE_CORNERS, &CUBE_TRIANGLES[..30], None))],
+    );
+    let mut world = World::new();
+    author_gi_volume(&mut world, 0.5);
+    place_asset(&mut world, "box", [0.0; 3], 4.0, Mesh::default());
+
+    let grid = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
+    for (x, y, z) in filled_cells(&grid) {
+        assert!(on_surface((x, y, z), 8), "({x}, {y}, {z}) is interior");
+        let top_interior = y == 7 && (1..7).contains(&x) && (1..7).contains(&z);
+        assert!(
+            !top_interior,
+            "the open top's interior ({x}, {y}, {z}) is filled"
+        );
+    }
+    assert!(grid.occupancy[grid.index([0, 0, 0])]);
+    assert!(grid.occupancy[grid.index([3, 0, 3])], "the floor is filled");
+    assert!(!grid.occupancy[grid.index([3, 7, 3])], "the lid is not");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Albedo is the vertex colour (white) times the instance colour; emissive is the document's when it
+/// authors a material and the component's when it does not.
+#[test]
+fn an_asset_mesh_deposits_instance_colour_and_the_render_paths_emissive() {
+    let dir = project_with_meshes(
+        "asset-channels",
+        &[
+            ("plain", mesh_doc(&CUBE_CORNERS, &CUBE_TRIANGLES, None)),
+            ("lit", mesh_doc(&CUBE_CORNERS, &CUBE_TRIANGLES, Some(5.0))),
+        ],
+    );
+    let mut world = World::new();
+    author_gi_volume(&mut world, 0.5);
+    let tinted = Mesh {
+        color: [0.5, 0.25, 0.125, 1.0],
+        emissive: 2.0,
+        ..Mesh::default()
+    };
+    place_asset(&mut world, "plain", [-4.0, 0.0, 0.0], 2.0, tinted.clone());
+    place_asset(&mut world, "lit", [4.0, 0.0, 0.0], 2.0, tinted);
+
+    let grid = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
+    let probe = |x: f32| {
+        let index = grid.index([
+            ((x - grid.origin.x) / grid.cell_size) as u32,
+            ((0.0 - grid.origin.y) / grid.cell_size) as u32,
+            ((0.0 - grid.origin.z) / grid.cell_size) as u32,
+        ]);
+        (grid.albedo[index], grid.emissive[index])
+    };
+    // The cube's -x face sits one unit from each centre.
+    assert_eq!(
+        probe(-5.0),
+        ([0.5, 0.25, 0.125, 1.0], 2.0),
+        "component emissive"
+    );
+    assert_eq!(
+        probe(3.0),
+        ([0.5, 0.25, 0.125, 1.0], 5.0),
+        "authored emissive"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The asset-mesh grid is bit-identical across runs and thread counts.
+#[test]
+fn an_asset_mesh_grid_is_bit_identical_across_runs_and_threads() {
+    let dir = project_with_meshes(
+        "asset-det",
+        &[("cube", mesh_doc(&CUBE_CORNERS, &CUBE_TRIANGLES, None))],
+    );
+    let mut world = World::new();
+    author_gi_volume(&mut world, 0.25);
+    place_asset(&mut world, "cube", [0.3, 0.1, -0.2], 3.0, Mesh::default());
+    place_asset(&mut world, "cube", [1.0, 0.5, 0.2], 2.0, Mesh::default());
+
+    let build = || grid_bits(&extract(&world, (320, 180), &dir).unwrap().voxel.unwrap());
+    let first = build();
+    assert_eq!(first, build());
+    let one = ludion_core::par::with_threads(1, build);
+    let eight = ludion_core::par::with_threads(8, build);
+    assert_eq!(one, first);
+    assert_eq!(eight, first);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A lattice past the derived probe cap but under the old four-million ceiling is `L2105` at the
+/// authored `probe_spacing` — refused before the renderer, where its hit cache would have failed the
+/// storage-binding limit as `L2010`. A 127-unit cube at unit cells and unit spacing is 128 cells per
+/// axis and 129 probes per axis, 2_146_689 in all.
+#[test]
+fn a_lattice_past_the_derived_probe_cap_is_l2105_not_a_gpu_error() {
+    let cap = ludion_renderer::max_gi_probes();
+    assert!(
+        cap < 129 * 129 * 129 && 129 * 129 * 129 < 4_000_000,
+        "cap {cap}"
+    );
+
+    let mut world = World::new();
+    place(
+        &mut world,
+        Transform {
+            scale: [127.0; 3],
+            ..Transform::default()
+        },
+        Mesh::default(),
+    );
+    author_gi_volume_with(&mut world, 1.0, 1.0);
+
+    let errors = extract(&world, (320, 180), Path::new(".")).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code.as_str(), "L2105");
+    assert_eq!(
+        errors[0].path.as_deref(),
+        Some("/entities/1/components/GiVolume/probe_spacing"),
+    );
+    assert!(
+        errors[0].message.contains(&cap.to_string()),
+        "the message names the limit: {}",
+        errors[0].message
     );
 }

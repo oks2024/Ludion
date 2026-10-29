@@ -390,6 +390,7 @@ pub(crate) fn mesh(doc: &VoxelDocument, hash: u64) -> MeshData {
         skin_joints: Vec::new(),
         textures: None,
         authored_material,
+        base_color_mean: [1.0; 4],
         indices,
         hash,
     }
@@ -472,6 +473,7 @@ mod tests {
             skin_joints: Vec::new(),
             textures: None,
             authored_material: false,
+            base_color_mean: [1.0; 4],
             indices,
             hash,
         }

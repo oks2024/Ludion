@@ -75,7 +75,7 @@ use std::cell::RefCell;
 use bytemuck::Zeroable;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_render_graph::Gpu;
+use ludion_render_graph::{Gpu, engine_limits};
 
 use crate::gi_bin::{BinBuild, build_bin};
 use crate::scene::{GiData, MAX_GI_TEXTURE_AXIS, PointLightData, SunData, WorldVoxelGrid};
@@ -826,12 +826,20 @@ fn inverse_span(span: f32) -> f32 {
     if span > 0.0 { 1.0 / span } else { 0.0 }
 }
 
+/// The largest probe lattice whose bake fits the device the engine requests: the hit cache is the
+/// largest per-probe buffer (64 B/probe, against 32 B/probe for the volumes), and it is bound as one
+/// storage buffer, so [`engine_limits`]'s `max_storage_buffer_binding_size` divided by the hit
+/// cache's bytes per probe is the cap. A lattice past it fails the bake's bind-group validation
+/// (`L2010`), so the engine refuses it earlier as `L2105`.
+pub fn max_gi_probes() -> u64 {
+    engine_limits().max_storage_buffer_binding_size / hit_cache_bytes([1, 1, 1])
+}
+
 /// How many bytes the hit cache takes for a `count`-shaped probe lattice: one `u32` per
 /// `(probe, k)`, `k < HIT_RAYS`.
 ///
 /// The numbers this bounds, stated where the allocation is: a district lattice of ~460 k probes
-/// costs ~30 MB, and the `MAX_GI_PROBES` cap of 4 M probes would cost 256 MB — a number to state,
-/// not to reach (the same guardrail's doc comment carries this line).
+/// costs ~30 MB, and [`max_gi_probes`] probes fill one storage binding exactly.
 fn hit_cache_bytes(count: [u32; 3]) -> u64 {
     u64::from(count[0])
         * u64::from(count[1])
@@ -1980,8 +1988,8 @@ mod tests {
         }
     }
 
-    /// The hit cache's memory line, as arithmetic rather than prose — the numbers the `MAX_GI_PROBES`
-    /// guardrail comment states, so neither can rot alone.
+    /// The hit cache's memory line, as arithmetic rather than prose — the numbers the probe
+    /// guardrail states, so neither can rot alone.
     #[test]
     fn the_hit_cache_costs_what_the_guardrail_comment_says() {
         // A district lattice, ~460 k probes: ~30 MB.
@@ -1991,8 +1999,11 @@ mod tests {
             "a district's hit cache is ~30 MB, not {} MB",
             district / 1_000_000,
         );
-        // The `MAX_GI_PROBES` cap of 4 M probes: 256 MB, a number to state and not to reach.
-        assert_eq!(hit_cache_bytes([4_000_000, 1, 1]), 256_000_000);
+        // The derived cap fills one storage binding at most, and one probe more does not fit.
+        let limit = engine_limits().max_storage_buffer_binding_size;
+        let cap = u32::try_from(max_gi_probes()).unwrap();
+        assert!(hit_cache_bytes([cap, 1, 1]) <= limit);
+        assert!(hit_cache_bytes([cap + 1, 1, 1]) > limit);
     }
 
     /// **The bin oracle (`Plan/gi-wave3-dynamic-injection.md` §11 T8, static half).** The same scene

@@ -22,7 +22,8 @@ radiance — is `ludion devdocs renderer-gi-bounce`. The CPU voxel grid the bake
 - `crates/ludion-renderer/src/shaders/mesh.wgsl` — `sh_l1` (the shared SH-L1 reconstruction) and
   `gi_sky_visibility(world_pos, n)`, called from `fs_main`.
 - `crates/ludion-renderer/src/scene.rs` — `GiData`, the plain-data extract carries alongside
-  `RenderScene.voxel`; `MAX_GI_PROBES`, `MAX_GI_TEXTURE_AXIS`.
+  `RenderScene.voxel`; `MAX_GI_TEXTURE_AXIS`. `gi_bake.rs` owns `max_gi_probes()`, the probe cap
+  derived from the device's storage-binding limit (the 64 B/probe hit cache is the largest buffer).
 
 ## Dataflow
 

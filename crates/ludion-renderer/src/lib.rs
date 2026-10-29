@@ -74,7 +74,7 @@ pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
 pub use debug_view::{DebugView, PROBE_VIEW_PALETTE};
 pub use frame_observer::{FrameObserver, FramePhase};
-pub use gi_bake::GiReadback;
+pub use gi_bake::{GiReadback, max_gi_probes};
 pub use graph::{FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json};
 pub use ludion_font::GlyphQuad;
 pub use probe::{MAX_PROBES, ProbeData, ProbeVolume, probe_rank};

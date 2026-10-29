@@ -37,9 +37,20 @@
 //!   modulated by the instance color (the same product the mesh shader forms) and whichever
 //!   emissive the *render* path would use for that instance: the palette's when the document
 //!   authors a material, the `Mesh` component's when it does not ([`deposit_voxels`]).
-//! - **Asset mesh** — contributes nothing, and does not stretch the grid's bounds either. Its
-//!   triangles are not rasterized, and filling its bounding box instead would mark a hollow
-//!   imported building solid, which is a worse answer than its absence.
+//! - **Asset mesh** — a conservative **surface shell** ([`deposit_triangles`]): each triangle, in
+//!   world space, fills every cell its surface overlaps (triangle/box separating-axis test); the
+//!   interior is never filled, so a hollow imported building stays hollow. The box is inflated by
+//!   `cell_size * 1e-4`, so a surface lying exactly on a cell face fills both neighbours instead of
+//!   flickering on rounding. Asset meshes stretch the grid's bounds. Albedo per triangle is
+//!   `mean(three vertex colours) × instance colour × MeshData::base_color_mean` — the mean of the
+//!   base-colour map's source pixels, white until a mean is stored (the grid must not depend on the
+//!   render-only textures axis, and a cooked texture is never decoded on the CPU). Emissive follows
+//!   the render path's selection: the mean of the three vertices' authored emissive when the
+//!   document authors a material, the `Mesh` component's otherwise; the emissive map is not
+//!   sampled. A skinned asset mesh and a `Character` are skipped (the grid is a static baseline);
+//!   sculpts, assemblies and assembly parts are skipped too — wiring them to the shell rasterizer is
+//!   a follow-up. [`voxelize`] returns what it skipped as a [`SkipReport`] (counts by reason, the
+//!   first entity index of each), the same on a cache hit and a miss.
 //!
 //! Primitives take their albedo from the instance color and their emissive from the `Mesh`
 //! component's `material[2]` — the same two channels the mesh path carries to the shader.
@@ -53,9 +64,12 @@
 //! a grid ([`SceneAssets::voxelization`]). A hit hands back the same `Arc` and touches no cell.
 //!
 //! The signature covers the inputs [`resolve`] gathers, so it moves if and only if the grid would:
-//! a source [`resolve`] discards (an asset mesh, an instance whose transform is not finite)
-//! contributes nothing to the grid and nothing to the signature. Voxel models enter it by their
-//! document's content hash, so a hot-reloaded model invalidates while an unchanged one does not.
+//! a source [`resolve`] discards (a skipped source, an instance whose transform is not finite)
+//! contributes nothing to the grid and nothing to the signature. Voxel models and asset meshes enter
+//! it by their document's content hash, so a hot-reloaded model invalidates while an unchanged one
+//! does not. One conservatism: an asset mesh whose *transformed vertex box* is not finite is skipped
+//! on a miss, where the box is first computed — never per frame — but keeps its signature entry, so
+//! it costs a needless rebuild and never a stale grid.
 //! Adding a source the rasterizer reads means adding it here too — the two are one contract.
 //!
 //! The documented consequence: any instance a system animates misses every frame and pays the full
@@ -78,7 +92,7 @@ use ludion_core::codes::code;
 use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{Mat4, Vec3};
-use ludion_renderer::{MAX_GI_TEXTURE_AXIS, MeshShape, WorldVoxelGrid};
+use ludion_renderer::{MAX_GI_TEXTURE_AXIS, MeshData, MeshShape, WorldVoxelGrid, max_gi_probes};
 
 use crate::bounds::{Aabb, transformed_box, union};
 use crate::extract::{PlacedMesh, PlacedMeshSource, SceneAssets, mesh_error};
@@ -94,19 +108,60 @@ use crate::voxel_mesh::{VoxelStaticGrid, grid_box};
 /// entity that stretched the bounds around empty space.
 pub(crate) const MAX_GI_CELLS: u64 = 32_000_000;
 
-/// The ceiling on an irradiance probe lattice's probe count, above which [`probe_lattice`] reports
-/// `L2105` instead of handing the renderer a volume to allocate.
-///
-/// A guardrail, not a resolution policy: the cap bounds probe *count* — the thing an authoring typo
-/// gets wrong — not a fixed byte total, and the byte cost is per volume. Each `Rgba16Float` probe
-/// volume costs 8 bytes per probe; the shipped layout is four of them (sky visibility, plus
-/// one-bounce indirect's three colour channels when `bounce` is authored), so 32 B/probe, ~128 MB at
-/// the cap. **Plus the bounce bake's hit cache**, which is a buffer rather than a volume: one `u32`
-/// per probe for each of the first 16 rays, 64 B/probe — ~30 MB at a district's ~460 k probes, and
-/// 256 MB at this cap, a number to state rather than to reach. A shipped district's box at the
-/// default one-unit spacing is a few hundred thousand probes, so this leaves an order of magnitude
-/// of headroom; everything it rejects is a `probe_spacing` typed an order of magnitude too small.
-pub(crate) const MAX_GI_PROBES: u64 = 4_000_000;
+// The ceiling on an irradiance probe lattice's probe count is [`max_gi_probes`], above which
+// [`probe_lattice`] reports `L2105` instead of handing the renderer a volume to allocate.
+//
+// Derived, not chosen: the bounce bake's hit cache is one `u32` per probe for each of the first 16
+// rays, 64 B/probe, bound as a single storage buffer — twice the 32 B/probe of the four
+// `Rgba16Float` volumes (sky visibility, plus one-bounce indirect's three colour channels when
+// `bounce` is authored) — so the device's storage-binding limit is the binding constraint, about
+// 2.1 M probes at the 128 MiB the engine requests. A district at the default one-unit spacing is a few
+// hundred thousand probes; everything this rejects is a `probe_spacing` typed an order of magnitude
+// too small, or a scene whose far geometry stretched the grid.
+
+/// What [`voxelize`] dropped, by reason — the input to a diagnostic that tells an author why a mesh
+/// they placed does not occlude. Counts rather than a list: a horde marks thousands of bodies
+/// `GiDynamic` and this is built every frame, hit or miss.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SkipReport {
+    /// Instances carrying `GiDynamic`.
+    pub dynamic: SkipCount,
+    /// Skinned asset meshes and characters.
+    pub skinned: SkipCount,
+    /// Instances whose model matrix is not finite.
+    pub non_finite: SkipCount,
+    /// Sources the voxelizer does not rasterize: sculpts, assemblies and assembly parts, and an
+    /// asset mesh with no triangles.
+    pub unsupported: SkipCount,
+}
+
+/// How many instances one skip reason dropped, and the entity index of the first (for a pointer).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SkipCount {
+    /// Instances dropped for this reason.
+    pub count: u32,
+    /// The extract-walk index of the first one dropped.
+    pub first: Option<usize>,
+}
+
+impl SkipCount {
+    fn note(&mut self, index: usize) {
+        self.count += 1;
+        self.first.get_or_insert(index);
+    }
+}
+
+/// [`voxelize`]'s answer: the grid, and what was left out of it.
+pub(crate) struct Voxelized {
+    /// The grid, or `None` when the scene places no geometry the voxelizer rasterizes.
+    pub grid: Option<Arc<WorldVoxelGrid>>,
+    /// What was dropped, by reason. Identical on a cache hit and a miss.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by tests; no runtime consumer yet")
+    )]
+    pub skipped: SkipReport,
+}
 
 /// Builds the world-space voxelization of `meshes` at `cell_size` world units per cell, or hands
 /// back the one `assets` already holds for this instance set (see the module doc's signature
@@ -126,30 +181,45 @@ pub(crate) fn voxelize(
     meshes: &[PlacedMesh<'_>],
     cell_size: f32,
     assets: &mut dyn SceneAssets,
-) -> Result<Option<Arc<WorldVoxelGrid>>, Vec<Diagnostic>> {
-    let instances = resolve(meshes, assets)?;
+) -> Result<Voxelized, Vec<Diagnostic>> {
+    let (instances, skipped) = resolve(meshes, assets)?;
     let signature = signature(&instances, cell_size);
     if let Some(cached) = assets.voxelization(signature) {
-        return Ok(cached);
+        return Ok(Voxelized {
+            grid: cached,
+            skipped,
+        });
     }
     // A held session serves the grid it already has rather than paying the walk for a world whose
     // baseline the host has frozen. The signature above is still computed every frame — that
     // comparison *is* the staleness report, which is why it is never latched: a world that returns
     // to the held baseline hits the line above and is honestly not stale.
     if let Some(held) = assets.held_voxelization() {
-        return Ok(held);
+        return Ok(Voxelized {
+            grid: held,
+            skipped,
+        });
     }
 
-    let Some(bounds) = scene_bounds(&instances) else {
-        return Ok(assets.set_voxelization(signature, None));
+    // Object boxes of asset meshes walk every vertex, so they are computed here, on a miss, once
+    // per distinct mesh — never in `resolve` or `signature`, which run every frame.
+    let mut boxes = MeshBoxes::new();
+    let Some(bounds) = scene_bounds(&instances, &mut boxes) else {
+        return Ok(Voxelized {
+            grid: assets.set_voxelization(signature, None),
+            skipped,
+        });
     };
     let mut grid = allocate(bounds, cell_size)?;
     #[cfg(test)]
     RASTERIZATIONS.with(|count| count.set(count.get() + 1));
     for instance in &instances {
-        rasterize(&mut grid, instance);
+        rasterize(&mut grid, instance, &mut boxes);
     }
-    Ok(assets.set_voxelization(signature, Some(Arc::new(grid.sealed()))))
+    Ok(Voxelized {
+        grid: assets.set_voxelization(signature, Some(Arc::new(grid.sealed()))),
+        skipped,
+    })
 }
 
 // Test-only. Counts completed rasterizations — the proof a signature hit skips the whole per-cell
@@ -201,6 +271,10 @@ fn signature(instances: &[Instance], cell_size: f32) -> u64 {
                 bytes.push(2);
                 bytes.extend_from_slice(&grid.hash.to_le_bytes());
             }
+            Solid::Mesh { mesh } => {
+                bytes.push(3);
+                bytes.extend_from_slice(&mesh.hash.to_le_bytes());
+            }
         }
     }
     ludion_assets::content_hash(&bytes)
@@ -233,6 +307,11 @@ enum Solid {
         /// Maximum corner in object space.
         max: Vec3,
     },
+    /// An unskinned asset mesh, deposited as a conservative surface shell by [`deposit_triangles`].
+    Mesh {
+        /// The loaded mesh; its `hash` is the signature entry.
+        mesh: Arc<MeshData>,
+    },
     /// An authored voxel model, deposited one filled cell at a time.
     Voxel {
         /// The model's authored occupancy and per-cell palette channels.
@@ -243,29 +322,67 @@ enum Solid {
     },
 }
 
+/// Object-space boxes of asset meshes, one per mesh `hash`, built on a miss only.
+type MeshBoxes = StableMap<u64, (Vec3, Vec3)>;
+
 impl Solid {
     /// The object-space box this solid occupies — what the scene bounds are unioned from, and the
-    /// search region a conservative fill walks.
-    fn object_box(&self) -> (Vec3, Vec3) {
+    /// search region a conservative fill walks. An asset mesh's is its vertex extent, memoized in
+    /// `boxes`.
+    fn object_box(&self, boxes: &mut MeshBoxes) -> (Vec3, Vec3) {
         match self {
             Solid::Cube => (Vec3::splat(-0.5), Vec3::splat(0.5)),
             Solid::Box { min, max } => (*min, *max),
             Solid::Voxel { grid, .. } => grid_box(grid.extent),
+            Solid::Mesh { mesh } => {
+                if let Some(known) = boxes.as_inner().get(&mesh.hash) {
+                    return *known;
+                }
+                let computed = mesh_box(mesh);
+                boxes.insert(mesh.hash, computed);
+                computed
+            }
         }
     }
 }
 
+/// The vertex extent of `mesh` in object space.
+fn mesh_box(mesh: &MeshData) -> (Vec3, Vec3) {
+    let mut lo = Vec3::splat(f32::INFINITY);
+    let mut hi = Vec3::splat(f32::NEG_INFINITY);
+    for vertex in mesh.positions.chunks_exact(3) {
+        let p = Vec3::new(vertex[0], vertex[1], vertex[2]);
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    (lo, hi)
+}
+
+/// The instance's world box, or `None` when it is not finite — the one predicate [`scene_bounds`]
+/// and [`rasterize`] share, so an instance skipped by one is skipped by the other.
+fn world_box(instance: &Instance, boxes: &mut MeshBoxes) -> Option<Aabb> {
+    let (lo, hi) = instance.solid.object_box(boxes);
+    let world = transformed_box(instance.model, lo, hi);
+    (world.min.is_finite() && world.max.is_finite()).then_some(world)
+}
+
 /// Resolves each placed mesh into the geometry the rasterizer needs, keeping the ascending
-/// entity-slot order the combine rule depends on. Asset meshes and instances whose transform sends
-/// a corner to a non-finite coordinate are dropped: neither has a world box the grid can be sized
-/// from, and skipping them is what keeps the extent arithmetic finite (the `build_sun` posture — a
-/// degenerate input yields an omission, never a NaN).
+/// entity-slot order the combine rule depends on, and counts what it drops. Instances whose
+/// transform sends a corner to a non-finite coordinate are dropped: they have no world box the grid
+/// can be sized from, and skipping them is what keeps the extent arithmetic finite (the
+/// `build_sun` posture — a degenerate input yields an omission, never a NaN).
+///
+/// Runs every frame: an asset mesh is checked by its model matrix alone, never by walking its
+/// vertices. Its transformed box is checked on a miss, by [`world_box`].
 fn resolve(
     meshes: &[PlacedMesh<'_>],
     assets: &mut dyn SceneAssets,
-) -> Result<Vec<Instance>, Vec<Diagnostic>> {
+) -> Result<(Vec<Instance>, SkipReport), Vec<Diagnostic>> {
     let mut instances = Vec::with_capacity(meshes.len());
     let mut errors: Vec<Diagnostic> = Vec::new();
+    let mut skipped = SkipReport::default();
+    // One entry per distinct asset mesh, for the same reason as `voxels`.
+    let mut asset_meshes: StableMap<String, Arc<MeshData>> = StableMap::new();
     // One entry per distinct voxel document. A district places the same prop hundreds of times and
     // the one-shot loader holds no cache of its own, so without this every instance re-reads and
     // re-meshes the same file.
@@ -278,6 +395,7 @@ fn resolve(
         // hashed, is what makes both true at once — the excluded instance never enters `instances`,
         // so `signature` (which walks exactly this list) cannot see it move, recolor, or repaint.
         if mesh.dynamic {
+            skipped.dynamic.note(mesh.index);
             continue;
         }
         let solid = match mesh.source {
@@ -290,20 +408,53 @@ fn resolve(
                 min: Vec3::splat(-0.5),
                 max: Vec3::splat(0.5),
             },
-            // `MeshShape::Asset` never reaches `place`; an asset path arrives as the variant below.
-            // An assembly is skipped for the same reason an asset mesh is: the rasterizer takes one
-            // object-space solid per placement, and an assembly is many part grids posed inside one —
-            // no single solid describes it. Characters (the models assemblies exist for) carry
-            // `GiDynamic` and are excluded above anyway. A sculpt is a triangle surface with no
-            // authored occupancy grid, so it is skipped like an asset mesh — and so is one assembly
-            // part on its own entity (a ragdoll switch's part, or a hand-authored one): a triangle
-            // mesh with no authored occupancy grid of its own.
+            // `MeshShape::Asset` never reaches `place`; an asset path arrives as `Asset` below.
+            // An assembly is skipped because the rasterizer takes one object-space solid per
+            // placement, and an assembly is many part grids posed inside one — no single solid
+            // describes it. A sculpt and one assembly part on its own entity (a ragdoll switch's
+            // part, or a hand-authored one) are triangle surfaces the shell rasterizer could take,
+            // but are not wired to it.
             PlacedMeshSource::Primitive(MeshShape::Asset(_))
-            | PlacedMeshSource::Asset(_)
-            | PlacedMeshSource::Character(_)
             | PlacedMeshSource::Assembly(_)
             | PlacedMeshSource::AssemblyPart(_, _)
             | PlacedMeshSource::Sculpt(_) => {
+                skipped.unsupported.note(mesh.index);
+                continue;
+            }
+            // A skinned character is posed per frame; the grid is a static baseline.
+            PlacedMeshSource::Character(_) => {
+                skipped.skinned.note(mesh.index);
+                continue;
+            }
+            PlacedMeshSource::Asset(rel) => {
+                let data = match asset_mesh(rel, assets, &mut asset_meshes) {
+                    Ok(data) => data,
+                    Err(diagnostics) => {
+                        let pointer = mesh.site.shape_pointer(mesh.index, "asset");
+                        for diagnostic in diagnostics {
+                            errors.push(mesh_error(rel, "mesh asset", &pointer, diagnostic));
+                        }
+                        continue;
+                    }
+                };
+                if !data.skin_joints.is_empty() {
+                    skipped.skinned.note(mesh.index);
+                    continue;
+                }
+                if data.positions.is_empty() || data.indices.is_empty() {
+                    skipped.unsupported.note(mesh.index);
+                    continue;
+                }
+                if !mesh.model.to_cols_array().iter().all(|v| v.is_finite()) {
+                    skipped.non_finite.note(mesh.index);
+                    continue;
+                }
+                instances.push(Instance {
+                    model: mesh.model,
+                    color: mesh.color,
+                    emissive: mesh.material[2],
+                    solid: Solid::Mesh { mesh: data },
+                });
                 continue;
             }
             PlacedMeshSource::Voxel(rel) => match voxel_solid(rel, assets, &mut voxels) {
@@ -318,9 +469,10 @@ fn resolve(
             },
         };
 
-        let (lo, hi) = solid.object_box();
+        let (lo, hi) = solid.object_box(&mut MeshBoxes::new());
         let world = transformed_box(mesh.model, lo, hi);
         if !world.min.is_finite() || !world.max.is_finite() {
+            skipped.non_finite.note(mesh.index);
             continue;
         }
         instances.push(Instance {
@@ -332,10 +484,25 @@ fn resolve(
     }
 
     if errors.is_empty() {
-        Ok(instances)
+        Ok((instances, skipped))
     } else {
         Err(errors)
     }
+}
+
+/// The asset mesh at `rel`, memoized in `seen` so N instances of one prop cost one loader lookup.
+/// Errors are not memoized, like [`voxel_solid`]'s.
+fn asset_mesh(
+    rel: &str,
+    assets: &mut dyn SceneAssets,
+    seen: &mut StableMap<String, Arc<MeshData>>,
+) -> Result<Arc<MeshData>, Vec<Diagnostic>> {
+    if let Some(known) = seen.as_inner().get(rel) {
+        return Ok(Arc::clone(known));
+    }
+    let data = assets.mesh(rel)?;
+    seen.insert(rel.to_string(), Arc::clone(&data));
+    Ok(data)
 }
 
 /// The voxel model at `rel` as a [`Solid`]: its authored occupancy grid, and whether its document
@@ -373,11 +540,12 @@ fn voxel_solid(
 /// The union of every instance's transformed object box. A voxel model's box is `render.bounds`'
 /// own (both call `grid_box`); the other solids are the primitive boxes the query reports too. `None`
 /// for a scene with nothing to bound.
-fn scene_bounds(instances: &[Instance]) -> Option<Aabb> {
+fn scene_bounds(instances: &[Instance], boxes: &mut MeshBoxes) -> Option<Aabb> {
     let mut bounds: Option<Aabb> = None;
     for instance in instances {
-        let (lo, hi) = instance.solid.object_box();
-        bounds = Some(union(bounds, transformed_box(instance.model, lo, hi)));
+        if let Some(world) = world_box(instance, boxes) {
+            bounds = Some(union(bounds, world));
+        }
     }
     bounds
 }
@@ -624,7 +792,7 @@ pub(crate) struct ProbeLattice {
 /// has eight probes around it.
 ///
 /// # Errors
-/// `L2105` when the lattice would carry more than [`MAX_GI_PROBES`] probes in total, or more than
+/// `L2105` when the lattice would carry more than [`max_gi_probes`] probes in total, or more than
 /// [`MAX_GI_TEXTURE_AXIS`] on any one axis (the two constraints the probe volume's 3D texture is
 /// under). Both checked on the computed counts, before anything is allocated from them.
 pub(crate) fn probe_lattice(
@@ -642,7 +810,7 @@ pub(crate) fn probe_lattice(
     let counts: [f64; 3] = std::array::from_fn(|axis| axis_probes(box_span[axis], probe_spacing));
 
     let total = counts[0] * counts[1] * counts[2];
-    if total > MAX_GI_PROBES as f64 {
+    if total > max_gi_probes() as f64 {
         return Err(too_many_probes(box_span, probe_spacing, counts, total));
     }
     if let Some(axis) = breaching_axis(counts) {
@@ -699,8 +867,14 @@ fn too_many_probes(
         format!(
             "`GiVolume.probe_spacing` {probe_spacing} lays {} x {} x {} = {total} irradiance probes \
              over the {:.1} x {:.1} x {:.1} world-unit global-illumination grid, past the ceiling \
-             of {MAX_GI_PROBES}",
-            counts[0], counts[1], counts[2], box_span[0], box_span[1], box_span[2],
+             of {}",
+            counts[0],
+            counts[1],
+            counts[2],
+            box_span[0],
+            box_span[1],
+            box_span[2],
+            max_gi_probes(),
         ),
     );
     diagnostic = match fitting_probe_spacing(probe_spacing, total) {
@@ -735,8 +909,15 @@ fn too_many_probes_on_an_axis(
             "`GiVolume.probe_spacing` {probe_spacing} lays {} irradiance probes along {name} over \
              the {:.1} x {:.1} x {:.1} world-unit global-illumination grid, past the limit of \
              {MAX_GI_TEXTURE_AXIS} probes on a single volume axis (the whole lattice is {} x {} x \
-             {} probes, which is within the {MAX_GI_PROBES}-probe total)",
-            counts[axis], box_span[0], box_span[1], box_span[2], counts[0], counts[1], counts[2],
+             {} probes, which is within the {}-probe total)",
+            counts[axis],
+            box_span[0],
+            box_span[1],
+            box_span[2],
+            counts[0],
+            counts[1],
+            counts[2],
+            max_gi_probes(),
         ),
     );
     diagnostic = match fitting_axis_probe_spacing(box_span[axis], probe_spacing) {
@@ -774,13 +955,13 @@ fn fitting_axis_probe_spacing(box_span: f64, probe_spacing: f32) -> Option<(f32,
     None
 }
 
-/// The first repeated doubling of `probe_spacing` whose probe count fits under [`MAX_GI_PROBES`],
+/// The first repeated doubling of `probe_spacing` whose probe count fits under [`max_gi_probes`],
 /// with that count — [`fitting_cell_size`]'s rule for the lattice, and bounded the same way so a
 /// degenerate spacing returns `None` instead of looping.
 fn fitting_probe_spacing(probe_spacing: f32, total: f64) -> Option<(f32, f64)> {
     let (mut spacing, mut total) = (probe_spacing, total);
     for _ in 0..64 {
-        if total <= MAX_GI_PROBES as f64 {
+        if total <= max_gi_probes() as f64 {
             return Some((spacing, total));
         }
         spacing *= 2.0;
@@ -790,8 +971,12 @@ fn fitting_probe_spacing(probe_spacing: f32, total: f64) -> Option<(f32, f64)> {
 }
 
 /// Deposits one instance into the grid, per its solid's rule.
-fn rasterize(grid: &mut WorldVoxelGrid, instance: &Instance) {
+fn rasterize(grid: &mut WorldVoxelGrid, instance: &Instance, boxes: &mut MeshBoxes) {
+    if world_box(instance, boxes).is_none() {
+        return;
+    }
     match &instance.solid {
+        Solid::Mesh { mesh } => deposit_triangles(grid, instance, mesh),
         Solid::Cube => fill_cube(grid, instance),
         Solid::Box { min, max } => {
             let world = transformed_box(instance.model, *min, *max);
@@ -830,6 +1015,110 @@ fn fill_cube(grid: &mut WorldVoxelGrid, instance: &Instance) {
             }
         }
     }
+}
+
+/// Relative slack on every triangle/cell overlap test, in cell sizes: a surface lying exactly on a
+/// cell face fills both neighbours rather than flickering on rounding.
+const SHELL_INFLATION: f32 = 1e-4;
+
+/// Deposits an asset mesh as a conservative surface shell: every triangle, in world space, fills
+/// every cell its surface overlaps (triangle/box SAT); the interior is never filled.
+///
+/// Triangles are walked in index order and the cells of one triangle with `z` outer, `x` inner, all
+/// through [`write_cell`], so a later triangle overwrites an earlier one's albedo and emissive — the
+/// combine rule, unchanged. Albedo is `mean(three vertex colours) × instance colour ×
+/// MeshData::base_color_mean`; emissive is the mean of the three vertices' authored emissive when the
+/// document authors a material (`authored_material`, the render path's selection) and the
+/// instance's otherwise. A triangle with an out-of-range index is skipped.
+fn deposit_triangles(grid: &mut WorldVoxelGrid, instance: &Instance, mesh: &MeshData) {
+    let world: Vec<Vec3> = mesh
+        .positions
+        .chunks_exact(3)
+        .map(|p| instance.model.transform_point3(Vec3::new(p[0], p[1], p[2])))
+        .collect();
+    let slack = grid.cell_size * SHELL_INFLATION;
+    let half = Vec3::splat(grid.cell_size * 0.5 + slack);
+    let tint = modulate(instance.color, mesh.base_color_mean);
+    for triangle in mesh.indices.chunks_exact(3) {
+        let [i0, i1, i2] = [
+            triangle[0] as usize,
+            triangle[1] as usize,
+            triangle[2] as usize,
+        ];
+        let (Some(&a), Some(&b), Some(&c)) = (world.get(i0), world.get(i1), world.get(i2)) else {
+            continue;
+        };
+        let albedo = modulate(mean_color(mesh, [i0, i1, i2]), tint);
+        let emissive = if mesh.authored_material {
+            let sum: f32 = [i0, i1, i2]
+                .iter()
+                .map(|&v| mesh.materials[v * 3 + 2])
+                .sum();
+            sum / 3.0
+        } else {
+            instance.emissive
+        };
+        let aabb = Aabb {
+            min: a.min(b).min(c) - Vec3::splat(slack),
+            max: a.max(b).max(c) + Vec3::splat(slack),
+        };
+        let Some((lo, hi)) = cell_range(grid, aabb) else {
+            continue;
+        };
+        if lo == hi {
+            write_cell(grid, lo, albedo, emissive);
+            continue;
+        }
+        for z in lo[2]..=hi[2] {
+            for y in lo[1]..=hi[1] {
+                for x in lo[0]..=hi[0] {
+                    if triangle_box_overlap(cell_center(grid, [x, y, z]), half, [a, b, c]) {
+                        write_cell(grid, [x, y, z], albedo, emissive);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The mean RGBA of three vertices' colours.
+fn mean_color(mesh: &MeshData, vertices: [usize; 3]) -> [f32; 4] {
+    std::array::from_fn(|channel| {
+        let sum: f32 = vertices.iter().map(|&v| mesh.colors[v * 4 + channel]).sum();
+        sum / 3.0
+    })
+}
+
+/// Whether the triangle `tri` overlaps the box of half-extents `half` about `center` — the
+/// separating-axis test (Akenine-Möller): the three box axes, the triangle's plane, and the nine
+/// edge × axis cross products. Only multiply, add, abs, min and max, so it is exact across machines.
+/// A degenerate triangle yields zero-length axes, which separate nothing: it fills the cells its box
+/// touches.
+fn triangle_box_overlap(center: Vec3, half: Vec3, tri: [Vec3; 3]) -> bool {
+    let v = [tri[0] - center, tri[1] - center, tri[2] - center];
+    for axis in 0..3 {
+        let lo = v[0][axis].min(v[1][axis]).min(v[2][axis]);
+        let hi = v[0][axis].max(v[1][axis]).max(v[2][axis]);
+        if lo > half[axis] || hi < -half[axis] {
+            return false;
+        }
+    }
+    let edges = [v[1] - v[0], v[2] - v[1], v[0] - v[2]];
+    let normal = edges[0].cross(edges[1]);
+    if normal.dot(v[0]).abs() > half.dot(normal.abs()) {
+        return false;
+    }
+    for edge in edges {
+        for unit in [Vec3::X, Vec3::Y, Vec3::Z] {
+            let axis = unit.cross(edge);
+            let p = [axis.dot(v[0]), axis.dot(v[1]), axis.dot(v[2])];
+            let radius = half.dot(axis.abs());
+            if p[0].min(p[1]).min(p[2]) > radius || p[0].max(p[1]).max(p[2]) < -radius {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Fills every cell the world box `aabb` touches — the conservative rule, used for planes, spheres,
@@ -1092,10 +1381,10 @@ mod tests {
     /// too dense is one doubling away from fitting.
     #[test]
     fn fitting_probe_spacing_doubles_until_the_count_fits() {
-        let over = MAX_GI_PROBES as f64 * 8.0;
+        let over = max_gi_probes() as f64 * 8.0;
         let (spacing, total) = fitting_probe_spacing(1.0, over).expect("one doubling fits");
         assert_eq!(spacing, 2.0);
-        assert_eq!(total, MAX_GI_PROBES as f64);
+        assert_eq!(total, max_gi_probes() as f64);
     }
 
     /// A degenerate `probe_spacing` yields no suggestion instead of looping, `fitting_cell_size`'s
@@ -1138,7 +1427,7 @@ mod tests {
         assert_eq!(error.code.as_str(), "L2105");
     }
 
-    /// A long, thin grid: 4001 x 5 x 5 probes is 100_025, comfortably inside [`MAX_GI_PROBES`], so
+    /// A long, thin grid: 4001 x 5 x 5 probes is 100_025, comfortably inside [`max_gi_probes`], so
     /// only the axis check can fire — and it must, because 4001 probes on X is a 3D texture no
     /// conformant adapter is required to create. Reported before the volume is sized.
     #[test]
@@ -1169,5 +1458,152 @@ mod tests {
         let grid = empty_grid([2000, 2, 2], 2.0);
         let lattice = probe_lattice(&grid, 2.0).expect("the suggested spacing fits");
         assert_eq!(lattice.count, [2001, 3, 3]);
+    }
+
+    /// The overlap test against a unit box about the origin (half-extent 0.5).
+    fn overlaps(tri: [Vec3; 3]) -> bool {
+        triangle_box_overlap(Vec3::ZERO, Vec3::splat(0.5), tri)
+    }
+
+    /// A triangle through the box overlaps it; one whose bounding box touches the box but whose
+    /// surface passes the far side of a corner does not (the case an AABB-only fill gets wrong).
+    #[test]
+    fn a_triangle_overlaps_a_box_only_where_its_surface_does() {
+        let through = [
+            Vec3::new(-2.0, 0.0, 0.0),
+            Vec3::new(2.0, -1.0, 0.0),
+            Vec3::new(2.0, 1.0, 0.0),
+        ];
+        assert!(overlaps(through));
+
+        // Its AABB spans [0.4, 2] on x and y and covers the box corner at (0.5, 0.5), but the
+        // hypotenuse x + y = 2.5 stays well clear of the box.
+        let clear_of_corner = [
+            Vec3::new(2.0, 0.4, 0.0),
+            Vec3::new(0.4, 2.0, 0.0),
+            Vec3::new(2.0, 2.0, 0.0),
+        ];
+        assert!(!overlaps(clear_of_corner));
+        let grazing_corner = [
+            Vec3::new(0.5, 1.0, 0.0),
+            Vec3::new(1.0, 0.5, 0.0),
+            Vec3::new(0.5, 0.5, 0.0),
+        ];
+        assert!(
+            overlaps(grazing_corner),
+            "touching at a point is an overlap"
+        );
+        let past_corner = [
+            Vec3::new(0.2, 1.2, 0.0),
+            Vec3::new(1.2, 0.2, 0.0),
+            Vec3::new(1.2, 1.2, 0.0),
+        ];
+        assert!(
+            !overlaps(past_corner),
+            "x + y = 1.4 clears the corner sum of 1.0"
+        );
+    }
+
+    /// A triangle lying exactly on a box face overlaps it, and a sliver crossing the box does too.
+    #[test]
+    fn a_triangle_on_a_face_or_a_sliver_overlaps() {
+        let on_face = [
+            Vec3::new(0.5, -1.0, -1.0),
+            Vec3::new(0.5, 1.0, -1.0),
+            Vec3::new(0.5, 0.0, 1.0),
+        ];
+        assert!(overlaps(on_face));
+        let sliver = [
+            Vec3::new(-2.0, 0.0, 0.0),
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(2.0, 1e-6, 0.0),
+        ];
+        assert!(overlaps(sliver));
+        let degenerate = [Vec3::ZERO; 3];
+        assert!(overlaps(degenerate));
+    }
+
+    /// One triangle spanning a 2 x 2 cell patch, with distinct vertex colours and a non-white
+    /// `base_color_mean`: the deposited albedo is mean(vertex) x instance x mean.
+    #[test]
+    fn deposited_albedo_applies_the_base_colour_mean() {
+        let mut mesh = MeshData {
+            positions: vec![0.0, 0.5, 0.0, 1.0, 0.5, 0.0, 0.0, 0.5, 1.0],
+            normals: vec![0.0; 9],
+            colors: vec![
+                1.0, 0.0, 0.0, 1.0, //
+                0.0, 1.0, 0.0, 1.0, //
+                0.0, 0.0, 1.0, 1.0,
+            ],
+            materials: [1.0, 0.0, 0.0].repeat(3),
+            uvs: vec![0.0; 6],
+            tangents: [1.0, 0.0, 0.0, 1.0].repeat(3),
+            weights: [1.0, 0.0, 0.0, 0.0].repeat(3),
+            bone_indices: vec![0; 12],
+            skin_joints: Vec::new(),
+            textures: None,
+            authored_material: false,
+            base_color_mean: [1.0; 4],
+            indices: vec![0, 1, 2],
+            hash: 1,
+        };
+        let instance = |mesh: &MeshData| Instance {
+            model: Mat4::IDENTITY,
+            color: [0.5, 1.0, 1.0, 1.0],
+            emissive: 3.0,
+            solid: Solid::Mesh {
+                mesh: Arc::new(mesh.clone()),
+            },
+        };
+        let deposit = |mesh: &MeshData| {
+            let mut grid = empty_grid([2, 2, 2], 1.0);
+            deposit_triangles(&mut grid, &instance(mesh), mesh);
+            grid
+        };
+
+        let white = deposit(&mesh);
+        let third = 1.0_f32 / 3.0;
+        let cell = white.index([0, 0, 0]);
+        assert!(white.occupancy[cell]);
+        assert_eq!(white.albedo[cell], [0.5 * third * 1.0, third, third, 1.0]);
+        assert_eq!(
+            white.emissive[cell], 3.0,
+            "no authored material: the component's"
+        );
+
+        mesh.base_color_mean = [0.5, 0.25, 1.0, 1.0];
+        let tinted = deposit(&mesh);
+        assert_eq!(
+            tinted.albedo[cell],
+            [0.5 * third * 0.5, third * 0.25, third, 1.0]
+        );
+
+        mesh.authored_material = true;
+        mesh.materials = vec![1.0, 0.0, 3.0, 1.0, 0.0, 6.0, 1.0, 0.0, 0.0];
+        assert_eq!(deposit(&mesh).emissive[cell], 3.0, "mean of 3, 6, 0");
+    }
+
+    /// A lattice exactly at the derived cap passes; one that is over it is `L2105`.
+    #[test]
+    fn the_derived_probe_cap_is_the_edge_of_l2105() {
+        let cap = max_gi_probes();
+        // 127 cells of 1.0 at spacing 1.0 is 128 probes an axis: 128^3 = 2^21.
+        let at_cap = empty_grid([1, 1, 1], 127.0);
+        let lattice = probe_lattice(&at_cap, 1.0).expect("a lattice at the cap fits");
+        assert_eq!(lattice.count, [128, 128, 128]);
+        assert_eq!(
+            cap,
+            128 * 128 * 128,
+            "the engine's 128 MiB binding at 64 B/probe"
+        );
+
+        let over = empty_grid([1, 1, 1], 127.5);
+        let error = probe_lattice(&over, 1.0).expect_err("129 x 129 x 129 probes is over the cap");
+        assert_eq!(error.code.as_str(), "L2105");
+        assert!(
+            error.message.contains(&cap.to_string()),
+            "{}",
+            error.message
+        );
     }
 }

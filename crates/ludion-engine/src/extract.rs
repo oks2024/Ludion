@@ -1216,7 +1216,9 @@ fn extract_inner(
             assets.observe_begin(LoadPhase::Voxelize);
             let voxel = crate::voxelizer::voxelize(&placed.meshes, volume.cell_size, assets);
             assets.observe_end(LoadPhase::Voxelize);
-            let voxel = voxel.map_err(|diagnostics| gi_volume_errors(diagnostics, index))?;
+            let voxel = voxel
+                .map_err(|diagnostics| gi_volume_errors(diagnostics, index))?
+                .grid;
             let gi = match voxel.as_deref() {
                 None => None,
                 Some(grid) => Some(gi_data(grid, &volume).map_err(|diagnostic| {
@@ -5426,6 +5428,7 @@ mod tests {
                 skin_joints: Vec::new(),
                 textures: None,
                 authored_material: false,
+                base_color_mean: [1.0; 4],
                 indices: Vec::new(),
                 hash: 0,
             })
@@ -6124,6 +6127,182 @@ mod tests {
                 "and the hold survived the clear",
             );
             assert!(cache.gi_stale());
+        }
+
+        /// A scratch project holding `meshes/prop.mesh.yaml`, one triangle at height `y`, and the
+        /// gallery's skinned mannequin as `meshes/skin.mesh.yaml`.
+        fn project_with_a_prop(tag: &str, y: f32) -> std::path::PathBuf {
+            let dir = std::env::temp_dir()
+                .join(format!("ludion-voxel-cache-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("meshes")).unwrap();
+            write_prop(&dir, y);
+            let gallery = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/gallery/meshes/skin-mannequin.mesh.yaml");
+            std::fs::copy(gallery, dir.join("meshes/skin.mesh.yaml")).unwrap();
+            dir
+        }
+
+        fn write_prop(dir: &std::path::Path, y: f32) {
+            std::fs::write(
+                dir.join("meshes/prop.mesh.yaml"),
+                format!(
+                    "format: 1\nkind: mesh\npositions:\n  - 0.0\n  - {y:?}\n  - 0.0\n  - 3.0\n  - \
+                     {y:?}\n  - 0.0\n  - 0.0\n  - {y:?}\n  - 3.0\nindices:\n  - 0\n  - 1\n  - 2\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        fn place_mesh(world: &mut World, shape: MeshSource, dynamic: bool) {
+            let entity = world.spawn();
+            world.insert(entity, Transform::default()).unwrap();
+            world
+                .insert(
+                    entity,
+                    Mesh {
+                        shape,
+                        ..Mesh::default()
+                    },
+                )
+                .unwrap();
+            if dynamic {
+                world.insert(entity, GiDynamic::default()).unwrap();
+            }
+        }
+
+        fn world_with_a_prop() -> World {
+            let mut world = World::new();
+            let volume = world.spawn();
+            world
+                .insert(
+                    volume,
+                    GiVolume {
+                        cell_size: 0.5,
+                        ..GiVolume::default()
+                    },
+                )
+                .unwrap();
+            place_mesh(
+                &mut world,
+                MeshSource::Asset("meshes/prop.mesh.yaml".into()),
+                false,
+            );
+            world
+        }
+
+        fn voxelize_in(
+            world: &World,
+            dir: &std::path::Path,
+            cache: &mut AssetCache,
+        ) -> Arc<WorldVoxelGrid> {
+            extract_through(
+                world,
+                (320, 180),
+                dir,
+                cache,
+                tick_zero(),
+                QualityParams::FULL.particle_density,
+                None,
+                &mut Vec::new(),
+            )
+            .expect("the fixture world extracts")
+            .voxel
+            .expect("a GiVolume builds a grid")
+        }
+
+        /// An unchanged asset-mesh world rasterizes nothing on the next extract; rewriting the
+        /// mesh document and reloading it rebuilds once.
+        #[test]
+        fn an_asset_mesh_enters_the_signature_by_its_hash() {
+            let dir = project_with_a_prop("hash", 0.0);
+            let world = world_with_a_prop();
+            let mut cache = AssetCache::new();
+            let before = rasterization_count();
+
+            let first = voxelize_in(&world, &dir, &mut cache);
+            let again = voxelize_in(&world, &dir, &mut cache);
+            assert_eq!(rasterization_count() - before, 1, "an unchanged world hits");
+            assert!(Arc::ptr_eq(&first, &again));
+
+            write_prop(&dir, 2.0);
+            cache.reload(&dir, "meshes/prop.mesh.yaml").unwrap();
+            let edited = voxelize_in(&world, &dir, &mut cache);
+            assert_eq!(
+                rasterization_count() - before,
+                2,
+                "an edited mesh rebuilds once"
+            );
+            assert_ne!(edited.hash, first.hash);
+            voxelize_in(&world, &dir, &mut cache);
+            assert_eq!(rasterization_count() - before, 2);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// A moving `GiDynamic` mesh beside an asset mesh costs the asset-mesh grid no rebuild.
+        #[test]
+        fn moving_a_dynamic_mesh_beside_an_asset_mesh_rebuilds_nothing() {
+            let dir = project_with_a_prop("dynamic", 0.0);
+            let mut world = world_with_a_prop();
+            place_mesh(&mut world, MeshSource::Cube, true);
+            let mut cache = AssetCache::new();
+            let before = rasterization_count();
+            voxelize_in(&world, &dir, &mut cache);
+            let mover = world.entities().last().unwrap();
+            world
+                .insert(
+                    mover,
+                    Transform {
+                        translation: [5.0, 0.0, 0.0],
+                        ..Transform::default()
+                    },
+                )
+                .unwrap();
+            voxelize_in(&world, &dir, &mut cache);
+            assert_eq!(rasterization_count() - before, 1);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// The skip report counts each reason: dynamic, skinned, and unsupported sources, with the
+        /// entity index of the first; asset meshes it rasterizes are not counted.
+        #[test]
+        fn the_skip_report_counts_what_was_left_out() {
+            let dir = project_with_a_prop("skips", 0.0);
+            let mut world = World::new();
+            let camera = world.spawn();
+            world
+                .insert(camera, crate::components::Camera::default())
+                .unwrap();
+            place_mesh(
+                &mut world,
+                MeshSource::Asset("meshes/prop.mesh.yaml".into()),
+                false,
+            );
+            place_mesh(
+                &mut world,
+                MeshSource::Asset("meshes/skin.mesh.yaml".into()),
+                false,
+            );
+            place_mesh(&mut world, MeshSource::Cube, true);
+            place_mesh(&mut world, MeshSource::Cube, true);
+
+            let ids: Vec<_> = world.entities().collect();
+            let camera = single_camera(&world, &ids).unwrap().unwrap();
+            let camera = build_camera(&world, camera, (320, 180));
+            let placed = place_uncached(&world, &ids, &camera, &dir, tick_zero());
+            let mut cache = AssetCache::new();
+            let mut assets = CachedAssets {
+                root: &dir,
+                cache: &mut cache,
+            };
+            let voxelized = crate::voxelizer::voxelize(&placed.meshes, 0.5, &mut assets).unwrap();
+            assert!(voxelized.grid.is_some());
+            let report = voxelized.skipped;
+            assert_eq!((report.dynamic.count, report.dynamic.first), (2, Some(3)));
+            assert_eq!((report.skinned.count, report.skinned.first), (1, Some(2)));
+            assert_eq!(report.non_finite.count, 0);
+            assert_eq!(report.unsupported.count, 0);
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         /// Staleness belongs to the extract that computed it: a scene that stops authoring a

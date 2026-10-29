@@ -7059,6 +7059,7 @@ mod tests {
             skin_joints: Vec::new(),
             textures: None,
             authored_material: false,
+            base_color_mean: [1.0; 4],
             indices: vec![0, 1, 2],
             hash,
         }
@@ -7113,6 +7114,7 @@ mod tests {
             skin_joints: Vec::new(),
             textures: None,
             authored_material: true,
+            base_color_mean: [1.0; 4],
             indices: vec![0, 1, 2],
             hash: 0,
         };
@@ -7798,6 +7800,7 @@ mod tests {
             skin_joints: Vec::new(),
             textures: None,
             authored_material: false,
+            base_color_mean: [1.0; 4],
             indices: vec![],
             hash: 0xE0E0,
         };
@@ -8620,6 +8623,7 @@ mod tests {
             skin_joints: Vec::new(),
             textures: None,
             authored_material: false,
+            base_color_mean: [1.0; 4],
             indices: vec![0, 1, 2, 0, 2, 3],
             hash,
         }
@@ -10208,6 +10212,7 @@ mod tests {
                 occlusion_strength: 1.0,
             }),
             authored_material: false,
+            base_color_mean: [1.0; 4],
             indices: vec![0, 1, 2, 0, 2, 3],
             hash,
         }
