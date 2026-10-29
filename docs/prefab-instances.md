@@ -39,7 +39,7 @@ Block style only — a non-empty `[1, 2]` or `{x: 1}` is `L1005`.
 | Key | Meaning |
 |---|---|
 | `name` | required, unique in the document (`L1231`); the instance's identity for overrides and save |
-| `prefab` | path under the content root; `./` and backslashes are normalized, absolute is refused |
+| `prefab` | path; **every path resolves against the document it is written in** (a scene's directory is the content root), so a scene's `prefab:` entries and overrides are content-root-relative, while a prefab's asset fields, overrides and nested `prefab:` entries are relative to the prefab file. `./` and backslashes are normalized, `..` is allowed, absolute is refused |
 | `transform` | `translation` / `rotation` (degrees) / `scale`, composed onto the prefab's root parts; omitted = as authored |
 | `overrides` | part path → component → **partial** value: only the listed fields change, and a part may gain a component it lacked |
 | `removed` | part paths dropped from the instance |
@@ -80,7 +80,7 @@ A prefab edit reaches every instance **at the next load**. Live instances are no
 
 ## Imports
 
-`ludion import` of a glTF writes `model.prefab.yaml` with `generated_from` set, not a scene: instance it from a scene that sits in the import directory (mesh paths stay relative to `--out`). A generated prefab is never edited by hand and `prefab.apply` on it is `L1237` — change the source and import again. A glTF camera is `L1202`.
+`ludion import` of a glTF writes `model.prefab.yaml` with `generated_from` set, not a scene: it instances from any scene, since the asset paths inside a prefab resolve against the prefab file's directory. A generated prefab is never edited by hand and `prefab.apply` on it is `L1237` — change the source and import again. A glTF camera is `L1202`.
 
 ## Next
 

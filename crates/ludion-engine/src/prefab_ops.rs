@@ -100,6 +100,28 @@ fn label(world: &World, id: EntityId) -> String {
     }
 }
 
+/// Rewrites each asset path of `value` from its content-root form to one relative to the prefab
+/// `doc`; the first path that cannot be inverted is returned.
+fn relativize_assets(
+    info: &ludion_ecs::ComponentInfo,
+    value: &mut Value,
+    doc: &str,
+) -> Result<(), String> {
+    let mut failed = None;
+    info.for_each_asset_path(value, &mut |_, path| {
+        if path.is_empty() {
+            return;
+        }
+        match ludion_core::paths::relative_to(doc, path) {
+            Some(relative) => *path = relative,
+            None => {
+                failed.get_or_insert_with(|| path.clone());
+            }
+        }
+    });
+    failed.map_or(Ok(()), Err)
+}
+
 fn create_refusal(message: impl Into<String>, help: impl Into<String>) -> Vec<Diagnostic> {
     one(Diagnostic::new(code::PREFAB_CREATE, message).with_help(help))
 }
@@ -196,7 +218,17 @@ pub(crate) fn create(
                     ));
                 }
             }
-            let value = remap_entity_refs(world, id, info, value, &position).map_err(one)?;
+            let mut value = remap_entity_refs(world, id, info, value, &position).map_err(one)?;
+            if let Err(path) = relativize_assets(info, &mut value, &key) {
+                return Err(create_refusal(
+                    format!(
+                        "cannot create a prefab: {} has `{path}` in `{}`, which cannot be written relative to `{key}`",
+                        label(world, id),
+                        info.name()
+                    ),
+                    "asset paths in a prefab are relative to the prefab file; use a content-root path without `..`",
+                ));
+            }
             components.push((info.name().to_string(), value));
         }
         parts.push(SceneEntity {
@@ -645,11 +677,19 @@ pub(crate) fn apply(
         overrides.retain(|path, _| list.contains(path));
         removed.retain(|path| list.contains(path));
     }
-    for (path, components) in &overrides {
+    for (path, components) in &mut overrides {
         for (name, value) in components {
             let Some(info) = registry.get(name) else {
                 continue;
             };
+            if let Err(asset) = relativize_assets(info, value, &source) {
+                return Err(apply_refusal(
+                    format!(
+                        "part `{path}` overrides `{name}` with `{asset}`, which cannot be written relative to `{source}`"
+                    ),
+                    "asset paths in a prefab are relative to the prefab file; use a content-root path without `..`",
+                ));
+            }
             if info
                 .entity_refs()
                 .iter()

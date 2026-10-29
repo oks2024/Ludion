@@ -204,6 +204,42 @@ pub fn sibling(doc: &str, file: &str) -> String {
     normalize(&format!("{dir}{file}"))
 }
 
+/// The inverse of [`sibling`]: the spelling of `target` that `doc` resolves back to it, so
+/// `sibling(doc, &relative_to(doc, target)?) == normalize(target)`. `None` when `doc`'s directory
+/// holds a `..` that cannot be inverted lexically, or `target` is rooted.
+///
+/// ```
+/// use ludion_core::paths::relative_to;
+///
+/// assert_eq!(
+///     relative_to("level/render/model.prefab.yaml", "level/render/meshes/a.mesh.yaml").as_deref(),
+///     Some("meshes/a.mesh.yaml")
+/// );
+/// assert_eq!(relative_to("a/p.yaml", "b/x").as_deref(), Some("../b/x"));
+/// ```
+pub fn relative_to(doc: &str, target: &str) -> Option<String> {
+    let doc = normalize(doc);
+    let target = normalize(target);
+    if target.starts_with('/') || doc.starts_with('/') {
+        return None;
+    }
+    let doc_segments: Vec<&str> = doc.split('/').collect();
+    let doc_dir = &doc_segments[..doc_segments.len() - 1];
+    let target_segments: Vec<&str> = target.split('/').collect();
+    let common = doc_dir
+        .iter()
+        .zip(&target_segments[..target_segments.len() - 1])
+        .take_while(|(a, b)| a == b)
+        .count();
+    let rest = &doc_dir[common..];
+    if rest.contains(&"..") {
+        return None;
+    }
+    let mut out: Vec<&str> = vec![".."; rest.len()];
+    out.extend(&target_segments[common..]);
+    Some(out.join("/"))
+}
+
 /// Like [`relative_refusal`], for a path a document resolves against its own directory: an exact `..`
 /// segment is allowed; every other refusal stands, so `../nul.png` is still refused.
 ///
@@ -276,6 +312,36 @@ mod tests {
         ];
         for (text, expected) in cases {
             assert_eq!(sibling_refusal(text), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn relative_to_inverts_sibling() {
+        let cases = [
+            (
+                "level/render/model.prefab.yaml",
+                "level/render/meshes/a.mesh.yaml",
+                Some("meshes/a.mesh.yaml"),
+            ),
+            (
+                "prefabs/town/p.prefab.yaml",
+                "../assets/x.mesh.yaml",
+                Some("../../../assets/x.mesh.yaml"),
+            ),
+            ("p.prefab.yaml", "meshes/a.yaml", Some("meshes/a.yaml")),
+            ("a/p.yaml", "b/x", Some("../b/x")),
+            ("../a/p.yaml", "b/x", None),
+            ("a/p.yaml", "/abs/x", None),
+        ];
+        for (doc, target, expected) in cases {
+            assert_eq!(
+                relative_to(doc, target).as_deref(),
+                expected,
+                "{doc} {target}"
+            );
+            if let Some(relative) = relative_to(doc, target) {
+                assert_eq!(sibling(doc, &relative), normalize(target), "{doc} {target}");
+            }
         }
     }
 

@@ -8,8 +8,8 @@ use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, World};
 use ludion_engine::{
-    Engine, Name, PointLight, PrefabInstance, Transform, builtin_registry, revert_prefab,
-    spawn_prefab, unpack_prefab,
+    Engine, Mesh, MeshSource, Name, PointLight, PrefabInstance, Transform, builtin_registry,
+    revert_prefab, spawn_prefab, unpack_prefab,
 };
 
 const PAIR: &str = "\
@@ -1271,4 +1271,79 @@ entities: []
         assert_eq!(replay(&root), live, "a deleted file");
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+fn mesh_asset(world: &World, id: EntityId) -> Option<String> {
+    match world
+        .get::<Mesh>(id)
+        .unwrap()
+        .map(|mesh| mesh.shape.clone())
+    {
+        Some(MeshSource::Asset(path)) => Some(path),
+        _ => None,
+    }
+}
+
+fn mesh_of(path: &str) -> Mesh {
+    serde_json::from_value(serde_json::json!({ "shape": { "asset": path } })).unwrap()
+}
+
+#[test]
+fn create_writes_asset_paths_relative_to_the_prefab() {
+    let root = root("create-assets");
+    let mut engine = loaded(
+        &root,
+        "format: 1\nname: s\nentities:\n  - name: lamp\n    components:\n      Mesh:\n        shape:\n          asset: kits/meshes/l.mesh.yaml\n",
+    );
+    let lamp = index(engine.world_mut())["lamp"];
+    let key = engine
+        .create_prefab(&[lamp], "kits/lamp.prefab.yaml")
+        .expect("creates");
+    let text = std::fs::read_to_string(root.join(&key)).unwrap();
+    assert!(text.contains("meshes/l.mesh.yaml"), "{text}");
+    assert!(!text.contains("kits/meshes"), "{text}");
+
+    let parts = spawn_prefab(engine.world_mut(), &key, None, Some("lamp-1")).expect("spawns");
+    assert_eq!(
+        mesh_asset(engine.world_mut(), parts[0]).as_deref(),
+        Some("kits/meshes/l.mesh.yaml")
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn apply_writes_asset_paths_relative_to_the_prefab() {
+    let root = root("apply-assets");
+    std::fs::create_dir_all(root.join("kits")).unwrap();
+    std::fs::write(
+        root.join("kits/lamp.prefab.yaml"),
+        "format: 1\nkind: prefab\nentities:\n  - name: lamp\n    components:\n      Mesh:\n        shape:\n          asset: meshes/a.mesh.yaml\n",
+    )
+    .unwrap();
+    let scene = "format: 1\nname: s\nentities:\n  - name: l\n    prefab: kits/lamp.prefab.yaml\n";
+    let mut engine = loaded(&root, scene);
+    let ids = index(engine.world_mut());
+    engine
+        .world_mut()
+        .insert(ids["l/lamp"], mesh_of("other/m.mesh.yaml"))
+        .unwrap();
+    engine.apply_prefab(ids["l/lamp"], None).expect("applies");
+
+    let text = std::fs::read_to_string(root.join("kits/lamp.prefab.yaml")).unwrap();
+    assert!(text.contains("../other/m.mesh.yaml"), "{text}");
+
+    let mut again = loaded(&root, scene);
+    let lamp = index(again.world_mut())["l/lamp"];
+    assert_eq!(
+        mesh_asset(again.world_mut(), lamp).as_deref(),
+        Some("other/m.mesh.yaml")
+    );
+    assert_eq!(again.scene_text().unwrap(), canonical_scene(scene));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn canonical_scene(source: &str) -> String {
+    let registry = builtin_registry();
+    let doc = ludion_scene::parse(source).expect("the source parses");
+    ludion_scene::emit(&doc, &registry)
 }

@@ -334,7 +334,8 @@ fn atlas_reference_diagnostics(present: impl Fn(&str) -> bool, prefix: &str) -> 
 /// ```
 ///
 /// The `asset`/`voxel`/`assembly`/`sculpt`/`character` paths are rooted exactly like [`Sprite::texture`] —
-/// relative to the content root, the directory of the scene the engine was started with. `asset`
+/// relative to the content root, the directory of the scene the engine was started with (inside a
+/// `kind: prefab` they are relative to the prefab file, rebased at parse). `asset`
 /// names a `*.mesh.yaml` document (`ludion_scene::check_mesh`); `voxel` names a `*.voxel.yaml`
 /// document (`ludion_scene::check_voxel`), greedily meshed into per-quad-colored geometry; `assembly`
 /// names a `*.assembly.yaml` document (`ludion_scene::check_assembly`) plus the part files it
