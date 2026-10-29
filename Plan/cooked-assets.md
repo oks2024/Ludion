@@ -118,6 +118,10 @@ Engine gap map item: "PNG decoded to RGBA8 only; no BC/ASTC/KTX2 compression"; t
 9. **Encoders: `intel_tex_2` for BC7, `ctt-astcenc` for ASTC 4×4** (Wave 0 result). Presets
    `opaque_basic` and `Medium`; the cooker version constant pins both.
 
+10. **COOKER_VERSION 2: every cooked map carries its source pixels' sRGB mean in the KTX2 key/value
+    block** (the GI voxelizer's albedo, Clockout 0013). Every cooked store is orphaned; `ludion sync`
+    re-cooks.
+
 ## `ludion sync` changes
 
 `sync` already owns the derived import trees. It gains a **cook stage that runs after the import

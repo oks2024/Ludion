@@ -49,7 +49,7 @@ pub const ASTC_PRESET: &str = "medium";
 pub const ENCODER_VERSIONS: [(&str, &str); 2] =
     [("intel_tex_2", "0.5.0"), ("ctt-astcenc", "0.6.0")];
 /// The `COOKER_VERSION` [`ENCODER_VERSIONS`] were pinned at.
-pub const ENCODER_VERSIONS_FOR: u32 = 1;
+pub const ENCODER_VERSIONS_FOR: u32 = 2;
 
 /// Why a map could not be cooked.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -85,7 +85,8 @@ impl fmt::Display for CookError {
 impl std::error::Error for CookError {}
 
 /// Cooks `image` for `settings`: cap to `max_texture_size`, align level 0 to a multiple of 4, build
-/// the mip chain and encode every level.
+/// the mip chain and encode every level. The result's `mean` is `srgb_mean` of the source pixels,
+/// taken before any cap or resample.
 ///
 /// # Errors
 /// [`CookError::BadImage`] for an empty image or a wrong byte length; [`CookError::Encoder`] if
@@ -106,6 +107,7 @@ pub fn cook(image: &Image, settings: &CookSettings) -> Result<CompressedImage, C
         return Err(bad());
     }
     let srgb = settings.color_space == ColorSpace::Srgb;
+    let mean = ludion_assets::srgb_mean(&image.rgba);
 
     let mut level = mips::Level {
         width,
@@ -141,5 +143,6 @@ pub fn cook(image: &Image, settings: &CookSettings) -> Result<CompressedImage, C
         width: base_width,
         height: base_height,
         levels,
+        mean,
     })
 }

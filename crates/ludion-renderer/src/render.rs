@@ -1704,6 +1704,7 @@ impl Renderer {
                         hash: cooked.key,
                         filter_linear: false,
                         premultiplied_on_load: false,
+                        mean: [1.0; 4],
                     };
                     self.upload_mesh_texture(&white, srgb)
                 }),
@@ -7405,6 +7406,7 @@ mod tests {
                 hash: 0xABCD,
                 filter_linear: false,
                 premultiplied_on_load,
+                mean: [1.0; 4],
             })
         };
         let mut scene = RenderScene::empty((64, 64));
@@ -7702,6 +7704,7 @@ mod tests {
                 hash,
                 filter_linear: false,
                 premultiplied_on_load: false,
+                mean: [1.0; 4],
             })
         };
         let mesh = |hash: u64| {
@@ -10184,6 +10187,7 @@ mod tests {
                 hash: hash ^ 0x5EED,
                 filter_linear: true,
                 premultiplied_on_load: false,
+                mean: [1.0; 4],
             })),
             wrap: crate::scene::TextureWrap::Repeat,
         };
@@ -10292,6 +10296,7 @@ mod tests {
                     hash: source.hash,
                     filter_linear: true,
                     premultiplied_on_load: false,
+                    mean: [1.0; 4],
                 })),
                 wrap: crate::scene::TextureWrap::Clamp,
             };
@@ -10414,6 +10419,7 @@ mod tests {
                     width: 4,
                     height: 4,
                     levels: vec![vec![0; 16]],
+                    mean: [1.0; 4],
                 },
             })),
             wrap: crate::scene::TextureWrap::Repeat,
@@ -10454,6 +10460,7 @@ mod tests {
             width: 4,
             height: 4,
             levels: vec![vec![0; 16]],
+            mean: [1.0; 4],
         };
         assert!(matches!(
             upload_compressed_in(&renderer.gpu, &image, true),

@@ -43,8 +43,8 @@
 //!   `cell_size * 1e-4`, so a surface lying exactly on a cell face fills both neighbours instead of
 //!   flickering on rounding. Asset meshes stretch the grid's bounds. Albedo per triangle is
 //!   `mean(three vertex colours) × instance colour × MeshData::base_color_mean` — the mean of the
-//!   base-colour map's source pixels, white until a mean is stored (the grid must not depend on the
-//!   render-only textures axis, and a cooked texture is never decoded on the CPU). Emissive follows
+//!   base-colour map's source pixels, stored at decode and at cook (`ludion_assets::srgb_mean`) so
+//!   both texture axes voxelize alike; white without a map. Emissive follows
 //!   the render path's selection: the mean of the three vertices' authored emissive when the
 //!   document authors a material, the `Mesh` component's otherwise; the emissive map is not
 //!   sampled. A skinned asset mesh and a `Character` are skipped (the grid is a static baseline);

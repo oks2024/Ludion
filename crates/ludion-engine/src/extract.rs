@@ -318,6 +318,7 @@ pub(crate) fn load_texture(root: &Path, rel: &str) -> Result<Arc<TextureImage>, 
         // default the sprite pass has always bound.
         filter_linear: false,
         premultiplied_on_load: true,
+        mean: [1.0; 4],
     }))
 }
 
@@ -360,6 +361,7 @@ pub(crate) fn load_atlas_with_sources(
         // density the screen will not match, else nearest.
         filter_linear: doc.filter == AtlasFilter::Linear,
         premultiplied_on_load: false,
+        mean: [1.0; 4],
     });
     let sources = vec![(rel.to_string(), bytes.hash), (color, image.hash)];
     Ok((AtlasAsset { doc, texture }, sources))

@@ -171,6 +171,7 @@ pub(crate) fn validate(
 ///     width: 4,
 ///     height: 4,
 ///     levels: vec![vec![0; 16]],
+///     mean: [1.0; 4],
 /// };
 /// assert_eq!(check_compressed(&image, true), Ok(()));
 /// assert!(matches!(
@@ -196,6 +197,7 @@ mod tests {
             width,
             height,
             levels: Vec::new(),
+            mean: [1.0; 4],
         };
         image.levels = (0..levels)
             .map(|level| {

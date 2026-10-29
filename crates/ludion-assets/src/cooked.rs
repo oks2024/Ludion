@@ -22,7 +22,7 @@ use xxhash_rust::xxh3::xxh3_64;
 /// The cook format's version. Part of every [`cook_key`], so bumping it invalidates every cooked
 /// map. Bump it whenever an encoder, its preset, the mip filter or the file layout changes the
 /// output bytes (`ludion-cook`'s pin test enforces the encoder half).
-pub const COOKER_VERSION: u32 = 1;
+pub const COOKER_VERSION: u32 = 2;
 
 /// Which GPU family a map is cooked for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -97,7 +97,7 @@ pub enum CompressedFormat {
 }
 
 /// A decoded KTX2 file: a block-compressed texture with its whole mip chain.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct CompressedImage {
     /// The block format of every level.
     pub format: CompressedFormat,
@@ -109,7 +109,13 @@ pub struct CompressedImage {
     pub height: u32,
     /// Block bytes per level, level 0 first.
     pub levels: Vec<Vec<u8>>,
+    /// [`srgb_mean`](crate::srgb_mean) of the source pixels before any cap or resample; stored in
+    /// the file's key/value block.
+    pub mean: [f32; 4],
 }
+
+/// The key/value entry that carries a cooked map's [`CompressedImage::mean`]: four little-endian `f32`.
+pub const SRGB_MEAN_KEY: &[u8] = b"LudionSrgbMean\0";
 
 impl CompressedImage {
     /// A level's size in texels (each side halves, never below 1).
@@ -358,12 +364,20 @@ pub fn read_ktx2(
             max,
         });
     }
+    let mean = field(56)
+        .zip(field(60))
+        .and_then(|(offset, length)| {
+            bytes.get(offset as usize..(offset as usize).checked_add(length as usize)?)
+        })
+        .and_then(srgb_mean_entry)
+        .ok_or_else(|| Ktx2Error::Parse("no base-colour mean entry".to_string()))?;
     let mut image = CompressedImage {
         format: target.format(),
         srgb: color_space == ColorSpace::Srgb,
         width,
         height,
         levels: Vec::with_capacity(header.level_count as usize),
+        mean,
     };
     for (index, level) in reader.levels().enumerate() {
         let index = index as u32;
@@ -606,6 +620,19 @@ pub fn read_probe_cube(bytes: &[u8], face: u32, level_count: u32) -> Result<Prob
     })
 }
 
+/// The mean value of the key/value block `kvd`, if its first entry is [`SRGB_MEAN_KEY`]'s.
+fn srgb_mean_entry(kvd: &[u8]) -> Option<[f32; 4]> {
+    let length = u32::from_le_bytes(kvd.get(..4)?.try_into().ok()?) as usize;
+    let entry = kvd.get(4..4usize.checked_add(length)?)?;
+    let value = entry.strip_prefix(SRGB_MEAN_KEY)?;
+    if value.len() != 16 {
+        return None;
+    }
+    Some(std::array::from_fn(|i| {
+        f32::from_le_bytes(value[i * 4..i * 4 + 4].try_into().expect("4 bytes"))
+    }))
+}
+
 /// The irradiance value of the key/value block `kvd`, if its first entry is the probe's.
 fn probe_irradiance(kvd: &[u8]) -> Option<[[f32; 3]; 6]> {
     let length = u32::from_le_bytes(kvd.get(..4)?.try_into().ok()?) as usize;
@@ -635,7 +662,7 @@ mod tests {
         // Moving this value means the key record changed: every cooked store is orphaned.
         assert_eq!(
             cook_key(0x0123_4567_89ab_cdef, &BASE),
-            0xe361_0cdf_9753_66a3
+            0x01ce_6a01_0eac_3d42
         );
     }
 
@@ -705,6 +732,7 @@ mod tests {
             width: 8,
             height: 4,
             levels: vec![],
+            mean: [1.0; 4],
         };
         assert_eq!(image.blocks(0), (2, 1));
         assert_eq!(image.blocks(3), (1, 1));

@@ -6,10 +6,10 @@ description: The texture cook's encoders: BC7/ASTC 4x4, CPU mip chain, KTX2 writ
 **Scope:** turning a decoded RGBA8 map into a BC7 (desktop) or ASTC 4×4 (iOS) KTX2 file. The key, the shared types and the KTX2 *reader* the engine uses are `ludion-assets::cooked` (`ludion devdocs ludion-assets`); the plan is `Plan/cooked-assets.md`.
 
 ## Layout
-- `crates/ludion-cook/src/lib.rs` — `cook(&Image, &CookSettings) -> CompressedImage` (cap → align → chain → encode), the preset and `ENCODER_VERSIONS` constants.
+- `crates/ludion-cook/src/lib.rs` — `cook(&Image, &CookSettings) -> CompressedImage` (cap → align → chain → encode; stores `srgb_mean` of the pre-cap source pixels in `mean`), the preset and `ENCODER_VERSIONS` constants.
 - `src/mips.rs` — the 2×2 box chain, the cap, the bilinear align-up, edge-replication padding. sRGB colour averages in linear light (`ludion_assets::decode_srgb`/`encode_srgb`); alpha and linear maps average in bytes as `(a+b+c+d+2)/4`.
 - `src/encode.rs` — `intel_tex_2` BC7 (`opaque_basic`, or `alpha_basic` when any level-0 alpha < 255) and `ctt-astcenc` ASTC (`Medium`; `LdrSrgb`/`Ldr` profile; one single-threaded context per `cook` call).
-- `src/ktx2_write.rs` — `write_ktx2`: header, level index, DFD, levels smallest first, 16-byte aligned. Returns `Vec<u8>`; the crate does no file IO.
+- `src/ktx2_write.rs` — `write_ktx2`: header, level index, DFD, one key/value entry (`LudionSrgbMean`, the image's `mean`), levels smallest first, 16-byte aligned. Returns `Vec<u8>`; the crate does no file IO.
 - `tests/cook.rs`, `tests/cooker_version.rs` — round trips through `read_ktx2` and an independent decoder (`texture2ddecoder`), corruption, thread determinism, the encoder pin.
 
 ## Rules

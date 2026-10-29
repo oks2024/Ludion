@@ -842,13 +842,22 @@ impl MapImage {
     /// ```
     /// use std::sync::Arc;
     /// use ludion_renderer::{MapImage, TextureImage};
-    /// let image = TextureImage { width: 1, height: 1, rgba: vec![255; 4], hash: 9, filter_linear: false, premultiplied_on_load: false };
+    /// let image = TextureImage { width: 1, height: 1, rgba: vec![255; 4], hash: 9, filter_linear: false, premultiplied_on_load: false, mean: [1.0; 4] };
     /// assert_eq!(MapImage::Source(Arc::new(image)).identity(), 9);
     /// ```
     pub fn identity(&self) -> u64 {
         match self {
             MapImage::Source(image) => image.hash,
             MapImage::Cooked(cooked) => cooked.key,
+        }
+    }
+
+    /// The map's linear RGBA mean (`srgb_mean` of its source pixels), identical whichever axis
+    /// loaded it.
+    pub fn mean(&self) -> [f32; 4] {
+        match self {
+            MapImage::Source(image) => image.mean,
+            MapImage::Cooked(cooked) => cooked.image.mean,
         }
     }
 }
@@ -1033,7 +1042,7 @@ pub struct GiData {
 }
 
 /// A decoded texture the scene references, in packed top-to-bottom RGBA8.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct TextureImage {
     /// Width in pixels.
     pub width: u32,
@@ -1054,6 +1063,9 @@ pub struct TextureImage {
     /// premultiplied). One PNG read both ways has one `hash` and two byte streams, so the cache key
     /// carries this too.
     pub premultiplied_on_load: bool,
+    /// `srgb_mean` of these pixels for a mesh map, set at decode; white for sprite and atlas
+    /// textures, which never read it.
+    pub mean: [f32; 4],
 }
 
 /// A frozen [`RenderScene`] the reflection-probe captures read, so a capture does not depend on

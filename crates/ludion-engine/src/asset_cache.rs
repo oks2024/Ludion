@@ -2366,6 +2366,36 @@ parts:
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The base-colour mean is the source pixels' mean on both texture axes — a capped cook included —
+    /// so a cooked and an uncooked load voxelize the same grid.
+    #[test]
+    fn the_base_color_mean_is_bit_identical_cooked_and_from_the_png() {
+        for (test, cap) in [("mean-full", None), ("mean-capped", Some(4))] {
+            let dir = cook_project(test, cap);
+            store_both(&dir, cap);
+
+            let mut cooked = AssetCache::new();
+            cooked.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+            let from_cook = cooked.load_mesh(&dir, KIT_MESH).unwrap().base_color_mean;
+            cooked_image(&cooked, KIT_BASE, ColorSpace::Srgb);
+
+            let mut plain = AssetCache::new();
+            let from_png = plain.load_mesh(&dir, KIT_MESH).unwrap().base_color_mean;
+            assert!(matches!(
+                plain.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
+                Some(MapImage::Source(_))
+            ));
+
+            assert_ne!(from_png, [1.0; 4], "{test}");
+            assert_eq!(
+                from_cook.map(f32::to_bits),
+                from_png.map(f32::to_bits),
+                "{test}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     /// A map with no store file loads from its PNG and is reported missing; the other still hits.
     #[test]
     fn a_missing_cooked_file_falls_back_to_the_png() {

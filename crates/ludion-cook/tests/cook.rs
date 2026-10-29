@@ -224,3 +224,34 @@ fn bytes_are_identical_across_runs_and_threads() {
         );
     }
 }
+
+#[test]
+fn the_mean_is_the_source_pixels_mean_even_when_capped() {
+    let source = image(64, 48, true);
+    let want = ludion_assets::srgb_mean(&source.rgba).map(f32::to_bits);
+    let uncapped = cook(&source, &settings(CookTarget::Desktop, ColorSpace::Srgb)).unwrap();
+    assert_eq!(uncapped.mean.map(f32::to_bits), want);
+    let capped = cook(
+        &source,
+        &CookSettings {
+            max_texture_size: Some(16),
+            ..settings(CookTarget::Desktop, ColorSpace::Srgb)
+        },
+    )
+    .unwrap();
+    assert!(capped.width < source.width, "the cap must have resampled");
+    assert_eq!(capped.mean.map(f32::to_bits), want);
+}
+
+#[test]
+fn a_file_without_its_mean_entry_is_refused() {
+    let cooked = cook(
+        &image(16, 16, false),
+        &settings(CookTarget::Desktop, ColorSpace::Srgb),
+    )
+    .unwrap();
+    let mut bytes = write_ktx2(&cooked);
+    // Header index: kvd length at byte 60.
+    bytes[60..64].copy_from_slice(&0u32.to_le_bytes());
+    assert!(read_ktx2(&bytes, CookTarget::Desktop, ColorSpace::Srgb).is_err());
+}

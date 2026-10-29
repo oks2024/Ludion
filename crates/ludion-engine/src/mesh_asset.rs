@@ -81,6 +81,10 @@ pub(crate) fn assemble(
 ) -> Result<(MeshData, SourceFiles), Vec<Diagnostic>> {
     let mut data = decode(doc, doc_hash);
     let (textures, files, identities) = bind_textures(rel, doc, resolve)?;
+    data.base_color_mean = textures
+        .as_ref()
+        .and_then(|set| set.base_color.as_ref())
+        .map_or([1.0; 4], |map| map.image.mean());
     data.textures = textures;
     data.hash = fold_source_hashes(doc_hash, &identities);
     let sources = std::iter::once((rel.to_string(), doc_hash))
@@ -106,6 +110,7 @@ pub(crate) fn map_from_bytes(
     label: &str,
 ) -> Result<Arc<TextureImage>, Diagnostic> {
     let (width, height, rgba) = ludion_assets::decode_png(&bytes.bytes, label)?;
+    let mean = ludion_assets::srgb_mean(&rgba);
     Ok(Arc::new(TextureImage {
         width,
         height,
@@ -114,6 +119,7 @@ pub(crate) fn map_from_bytes(
         // A mesh map is sampled trilinear whatever this says; linear is the honest value.
         filter_linear: true,
         premultiplied_on_load: false,
+        mean,
     }))
 }
 
@@ -731,6 +737,31 @@ mod tests {
         assert!(errors[0].message.contains("textures/missing.png"));
         assert_eq!(errors[1].path.as_deref(), Some("/normal_texture"));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The base-colour map's linear mean reaches `MeshData`; a mesh with only a normal map stays white.
+    #[test]
+    fn load_stores_the_base_color_maps_mean() {
+        let keys = "base_color_texture:\n  path: ../textures/t.png\n";
+        let dir = project("mean", &textured_doc(keys), &[("t.png", png(128))]);
+        let data = load(&dir, "meshes/x.mesh.yaml").expect("a textured mesh loads");
+        let want = [
+            ludion_assets::decode_srgb(128),
+            ludion_assets::decode_srgb(20),
+            ludion_assets::decode_srgb(30),
+            1.0,
+        ];
+        assert_eq!(
+            data.base_color_mean.map(f32::to_bits),
+            want.map(f32::to_bits)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let keys = "normal_texture:\n  path: ../textures/n.png\n";
+        let dir = project("mean-normal", &textured_doc(keys), &[("n.png", png(128))]);
+        let data = load(&dir, "meshes/x.mesh.yaml").expect("a normal-mapped mesh loads");
+        assert_eq!(data.base_color_mean, [1.0; 4]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -86,7 +86,7 @@ instead of re-hashing the grid's contents every frame.
 - **Thin cards still fill, and cutout holes are not honoured.** A single-sided leaf card or a plane
   fills the cells its surface overlaps even at a `cell_size` far coarser than the card is thick, and
   alpha-cutout holes (`Plan/clockout-0010` territory) do not open the shell. An asset mesh's albedo
-  uses `MeshData::base_color_mean` (white until a mean is stored), not the texture.
+  uses `MeshData::base_color_mean` (the base-colour map's mean, white without one), not the texture.
 
 - **The voxelizer, not the bake, is the cost centre.** On a `post-full`-scale scene at
   `cell_size 0.5` (grid 440×44×440 = 8.52M cells over a 220×22×220 box, measured on an RTX 3090), CPU

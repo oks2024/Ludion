@@ -148,6 +148,46 @@ pub fn decode_srgb(byte: u8) -> f32 {
     }
 }
 
+/// The linear-light RGBA mean of tightly packed `Rgba8` pixels: R, G, B decoded through
+/// [`decode_srgb`], alpha as `byte / 255`. This is the GI voxelizer's albedo input for an asset mesh
+/// (the base-colour map's mean), computed at decode and at cook so both texture axes agree.
+///
+/// One pass fills a 256-bin histogram per channel, then each channel sums `count × value` in bin
+/// order, so the result does not depend on pixel order or thread count. An empty slice is white.
+///
+/// # Example
+/// ```
+/// let mean = ludion_assets::srgb_mean(&[0, 0, 0, 255, 255, 255, 255, 255]);
+/// assert_eq!(mean, [0.5, 0.5, 0.5, 1.0]);
+/// ```
+pub fn srgb_mean(rgba: &[u8]) -> [f32; 4] {
+    let mut bins = [[0u64; 256]; 4];
+    let mut texels = 0u64;
+    for texel in rgba.chunks_exact(4) {
+        for (channel, byte) in texel.iter().enumerate() {
+            bins[channel][usize::from(*byte)] += 1;
+        }
+        texels += 1;
+    }
+    if texels == 0 {
+        return [1.0; 4];
+    }
+    let mut mean = [0.0f32; 4];
+    for (channel, histogram) in bins.iter().enumerate() {
+        let mut sum = 0.0f64;
+        for (bin, count) in histogram.iter().enumerate() {
+            let value = if channel == 3 {
+                bin as f32 / 255.0
+            } else {
+                decode_srgb(bin as u8)
+            };
+            sum += *count as f64 * f64::from(value);
+        }
+        mean[channel] = (sum / texels as f64) as f32;
+    }
+    mean
+}
+
 /// A linear value in `[0, 1]` back to one sRGB-encoded byte — the exact inverse of [`decode_srgb`],
 /// rounded to nearest so an unchanged linear value round-trips to its own byte.
 ///
@@ -560,6 +600,27 @@ mod tests {
             writer.write_image_data(rgba).unwrap();
         }
         bytes
+    }
+
+    #[test]
+    fn srgb_mean_of_one_texel_decodes_each_channel() {
+        let mean = srgb_mean(&[255, 0, 128, 64]);
+        assert_eq!(mean, [1.0, 0.0, decode_srgb(128), 64.0 / 255.0]);
+    }
+
+    #[test]
+    fn srgb_mean_averages_in_linear_light() {
+        let mean = srgb_mean(&[0, 0, 0, 255, 255, 255, 255, 255]);
+        assert_eq!(mean, [0.5, 0.5, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn srgb_mean_ignores_pixel_order() {
+        let a = [10, 20, 30, 40, 200, 150, 100, 50, 7, 99, 250, 128];
+        let b = [7, 99, 250, 128, 10, 20, 30, 40, 200, 150, 100, 50];
+        let bits = |m: [f32; 4]| m.map(f32::to_bits);
+        assert_eq!(bits(srgb_mean(&a)), bits(srgb_mean(&b)));
+        assert_eq!(srgb_mean(&[]), [1.0; 4]);
     }
 
     #[test]

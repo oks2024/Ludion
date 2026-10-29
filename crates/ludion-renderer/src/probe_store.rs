@@ -321,6 +321,7 @@ mod tests {
                 hash,
                 filter_linear: false,
                 premultiplied_on_load: false,
+                mean: [1.0; 4],
             })),
             wrap: TextureWrap::Repeat,
         }
@@ -449,6 +450,7 @@ mod tests {
                             width: 4,
                             height: 4,
                             levels: vec![vec![0; 16]],
+                            mean: [1.0; 4],
                         },
                     }));
                 f.scene.mesh_assets[0] = Arc::new(mesh);
