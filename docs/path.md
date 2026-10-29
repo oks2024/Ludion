@@ -67,8 +67,8 @@ let s = sampler.nearest_s(player, last_s, 4.0, PathMetric::Full);
 `s` is true arc length on both interpolations: a `catmull_rom` path integrates the curve speed per
 table sub-interval (Gauss-Legendre) and inverts it with a fixed-count Newton, bit-identical
 everywhere. `point_at` therefore moves at unit speed and `s` may be differentiated. A `catmull_rom`
-`length()` is the true arc length (to quadrature precision, far below a millimetre; a closed follower wraps on it, a ping-pong turns on it). A
-`linear` tangent is its segment's direction: at an interior corner the outgoing segment's, at an
+`length()` is the true arc length (to quadrature precision, far below a millimetre; a closed
+follower wraps on it, a ping-pong turns on it). A `linear` tangent is its segment's direction: at an interior corner the outgoing segment's, at an
 open end the last segment's.
 
 `frame_at` is a no-roll frame: `right` is horizontal and `up` leans toward +Y (the reference up is

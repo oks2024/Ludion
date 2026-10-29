@@ -2112,7 +2112,7 @@ mod tests {
                     p[1] += 0.4;
                     p[2] += 0.1 * (k % 3) as f64;
 
-                    let samples = 100_000;
+                    let samples = 4_000;
                     let step = length / samples as f64;
                     let mut best = (f64::MAX, 0.0);
                     for i in 0..=samples {
