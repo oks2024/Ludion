@@ -134,14 +134,13 @@ pub(crate) fn bare_driver(
 
 /// The physics triple's `engine.describe` entries — `physics_write`, `physics_step`,
 /// `physics_mirror` — shaped like a game system's entry, but `registered_at: null` since there is
-/// no call site to attribute (the scene declared it, not a `.system(...)` call). Ordered at
-/// `order_base`, `order_base + 1`, `order_base + 2`; the caller passes `self.systems.len()` so
-/// physics always describes last, matching where [`install`] actually places it.
-pub(crate) fn describe_entries(order_base: usize) -> [Value; 3] {
+/// no call site to attribute (the scene declared it, not a `.system(...)` call). The `order` is a
+/// placeholder the caller overwrites with the system's index in the live schedule.
+pub(crate) fn describe_entries() -> [Value; 3] {
     [
         serde_json::json!({
             "name": WRITE,
-            "order": order_base,
+            "order": 0,
             "fn_path": "ludion_physics::install",
             "registered_at": Value::Null,
             "queries": [{
@@ -156,14 +155,14 @@ pub(crate) fn describe_entries(order_base: usize) -> [Value; 3] {
         }),
         serde_json::json!({
             "name": STEP,
-            "order": order_base + 1,
+            "order": 0,
             "fn_path": "ludion_physics::install",
             "registered_at": Value::Null,
             "queries": [],
         }),
         serde_json::json!({
             "name": MIRROR,
-            "order": order_base + 2,
+            "order": 0,
             "fn_path": "ludion_physics::install",
             "registered_at": Value::Null,
             "queries": [{

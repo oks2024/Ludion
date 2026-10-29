@@ -3918,42 +3918,41 @@ impl Engine {
         // jump-to-source needs it. `queries` is each declared `.query::<...>()` shape, its element
         // types resolved to registry component names (verified registered at build, so resolution
         // always hits) with their read/write access.
-        // `path_follow`, when installed, runs before every game system at order 0 and shifts them.
-        let path_follow = usize::from(self.path_follow_installed());
-        let mut systems: Vec<Value> = self
-            .systems
-            .iter()
+        // The live schedule is walked rather than reassembled, so the engine-owned systems
+        // (`path_follow`, the physics triple, `camera_rig`) and the game's presentation systems
+        // describe at the orders they actually run at.
+        let physics = scene_physics::describe_entries();
+        let systems: Vec<Value> = self
+            .driver
+            .system_names()
             .enumerate()
-            .map(|(order, spec)| {
-                serde_json::json!({
-                    "name": spec.name,
-                    "order": order + path_follow,
-                    "fn_path": spec.fn_path,
-                    "registered_at": {
-                        "file": spec.registered_at.file().replace('\\', "/"),
-                        "line": spec.registered_at.line(),
-                    },
-                    "queries": self.declared_queries_document(spec),
-                })
+            .map(|(order, name)| {
+                let mut entry = if let Some(spec) = self.systems.iter().find(|s| s.name == name) {
+                    serde_json::json!({
+                        "name": spec.name,
+                        "order": 0,
+                        "fn_path": spec.fn_path,
+                        "registered_at": {
+                            "file": spec.registered_at.file().replace('\\', "/"),
+                            "line": spec.registered_at.line(),
+                        },
+                        "queries": self.declared_queries_document(spec),
+                    })
+                } else if name == crate::path_follow::SYSTEM_NAME {
+                    crate::path_follow::describe_entry()
+                } else if name == crate::camera_rig::SYSTEM_NAME {
+                    crate::camera_rig::describe_entry()
+                } else {
+                    physics
+                        .iter()
+                        .find(|e| e["name"] == name)
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({ "name": name }))
+                };
+                entry["order"] = order.into();
+                entry
             })
             .collect();
-        // The physics triple always runs after every game system — a loaded scene's `physics:`
-        // block is the only opt-in there is, so it describes only when one is present, at the
-        // orders it actually runs at.
-        if self.scene_physics.is_some() {
-            systems.extend(scene_physics::describe_entries(
-                self.systems.len() + path_follow,
-            ));
-        }
-        if self.camera_rig_installed() {
-            let physics = if self.scene_physics.is_some() { 3 } else { 0 };
-            systems.push(crate::camera_rig::describe_entry(
-                self.systems.len() + path_follow + physics,
-            ));
-        }
-        if path_follow == 1 {
-            systems.insert(0, crate::path_follow::describe_entry());
-        }
         serde_json::json!({
             "engine_version": ENGINE_VERSION,
             "protocol_version": PROTOCOL_VERSION,

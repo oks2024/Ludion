@@ -592,6 +592,40 @@ fn describe_lists_camera_rig_after_the_physics_triple_only_when_a_rig_is_present
 }
 
 #[test]
+fn describe_orders_a_presentation_system_after_the_engine_systems_it_runs_behind() {
+    let (files, scene) = track_scene();
+    let scene = scene.replacen("seed: 3\n", "seed: 3\nphysics:\n  space: free\n", 1);
+    let mut engine = Engine::builder()
+        .project_root(fixture_root("describe-present", &files))
+        .presentation_system("present", noop)
+        .system("noop", noop)
+        .build()
+        .expect("the game builds");
+    engine.load_inline_scene(&scene).expect("the scene loads");
+    let systems = describe_systems(&mut engine);
+    let names: Vec<&str> = systems
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "path_follow",
+            "noop",
+            ludion_physics::WRITE,
+            ludion_physics::STEP,
+            ludion_physics::MIRROR,
+            "camera_rig",
+            "present"
+        ]
+    );
+    for (i, system) in systems.iter().enumerate() {
+        assert_eq!(system["order"], i, "{}", system["name"]);
+    }
+    assert!(systems[6]["registered_at"]["line"].is_u64());
+}
+
+#[test]
 fn an_empty_component_inserts_a_rig_and_serializes_into_its_own_schema() {
     let engine = Engine::builder().build().unwrap();
     let registry = engine.registry();

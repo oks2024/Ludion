@@ -67,11 +67,11 @@ pub(crate) fn install(schedule: &mut Schedule, present: bool) {
     }
 }
 
-/// The system's `engine.describe` entry at `order`, with no call site to attribute.
-pub(crate) fn describe_entry(order: usize) -> Value {
+/// The system's `engine.describe` entry, with no call site to attribute; the caller sets its `order`.
+pub(crate) fn describe_entry() -> Value {
     serde_json::json!({
         "name": SYSTEM_NAME,
-        "order": order,
+        "order": 0,
         "fn_path": "ludion_engine::camera_rig",
         "registered_at": Value::Null,
         "queries": [{

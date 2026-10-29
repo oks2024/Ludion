@@ -375,7 +375,7 @@ pub(crate) fn install(schedule: &mut Schedule, present: bool) {
     }
 }
 
-/// The system's `engine.describe` entry: first in the schedule, no call site to attribute.
+/// The system's `engine.describe` entry, with no call site to attribute; the caller sets its `order`.
 pub(crate) fn describe_entry() -> Value {
     serde_json::json!({
         "name": SYSTEM_NAME,
