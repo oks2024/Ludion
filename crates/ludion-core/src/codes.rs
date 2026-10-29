@@ -6784,10 +6784,12 @@ Fix: pass a part of a spawned or scene-loaded instance.",
         explanation: "Creating a prefab from live entities was refused: the path is not a relative `.prefab.yaml`
 path, `entities` is empty or lists an id twice, an id is dead, a part name is missing, duplicated or
 contains `/`, a part refers to an entity outside the set, the path names a generated prefab (one
-with `generated_from`, which is write-only), or the file could not be written.
+with `generated_from`, which is write-only), an asset path cannot be written relative to the prefab
+(it is absolute), or the file could not be written.
 
-Fix: pass a relative `*.prefab.yaml` path, give every entity a unique `Name` without `/`, and add the
-referenced entities to `entities` or remove the reference.",
+Fix: pass a relative `*.prefab.yaml` path, give every entity a unique `Name` without `/`, add the
+referenced entities to `entities` or remove the reference, and give asset paths relative to the
+content root.",
     },
     CodeEntry {
         code: code::PREFAB_APPLY,
@@ -6797,10 +6799,11 @@ referenced entities to `entities` or remove the reference.",
 changed part of the instance, an override carries an entity reference (the prefab's own positions
 cannot be derived from live ids), a part refers to an entity outside the instance, a removed part is
 still referred to by a surviving one, the prefab is generated (it has `generated_from` and is
-write-only: edit the source and re-import), or the prefab file could not be written.
+write-only: edit the source and re-import), an overridden asset path cannot be written relative to the
+prefab (it is absolute), or the prefab file could not be written.
 
-Fix: pass a path from the instance's changed parts, re-author the reference inside the prefab, or
-unpack the instance.",
+Fix: pass a path from the instance's changed parts, re-author the reference inside the prefab, give
+asset paths relative to the content root, or unpack the instance.",
     },
     CodeEntry {
         code: code::PREFAB_REVERT,

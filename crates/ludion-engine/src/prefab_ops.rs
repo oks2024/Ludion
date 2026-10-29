@@ -226,7 +226,7 @@ pub(crate) fn create(
                         label(world, id),
                         info.name()
                     ),
-                    "asset paths in a prefab are relative to the prefab file; use a content-root path without `..`",
+                    "the live value is an absolute path; use a path relative to the content root",
                 ));
             }
             components.push((info.name().to_string(), value));
@@ -687,7 +687,7 @@ pub(crate) fn apply(
                     format!(
                         "part `{path}` overrides `{name}` with `{asset}`, which cannot be written relative to `{source}`"
                     ),
-                    "asset paths in a prefab are relative to the prefab file; use a content-root path without `..`",
+                    "the override value is an absolute path; use a path relative to the content root",
                 ));
             }
             if info

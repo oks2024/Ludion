@@ -1342,6 +1342,31 @@ fn apply_writes_asset_paths_relative_to_the_prefab() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+fn a_lane_path_is_prefab_relative_on_disk_and_content_root_live() {
+    let root = root("lane-path");
+    let mut engine = loaded(
+        &root,
+        "format: 1\nname: s\nphysics:\n  space: free\nentities:\n  - name: lane\n    components:\n      CharacterMotor: {}\n      LaneConstraint:\n        path: kits/paths/c.path.yaml\n",
+    );
+    let lane = index(engine.world_mut())["lane"];
+    let key = engine
+        .create_prefab(&[lane], "kits/lane.prefab.yaml")
+        .expect("creates");
+    let text = std::fs::read_to_string(root.join(&key)).unwrap();
+    assert!(text.contains("paths/c.path.yaml"), "{text}");
+    assert!(!text.contains("kits/paths"), "{text}");
+
+    let parts = spawn_prefab(engine.world_mut(), &key, None, Some("lane-1")).expect("spawns");
+    let spawned = engine
+        .world_mut()
+        .get::<ludion_engine::LaneConstraint>(parts[0])
+        .unwrap()
+        .map(|lane| lane.path.clone());
+    assert_eq!(spawned.as_deref(), Some("kits/paths/c.path.yaml"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 fn canonical_scene(source: &str) -> String {
     let registry = builtin_registry();
     let doc = ludion_scene::parse(source).expect("the source parses");

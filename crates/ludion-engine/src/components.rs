@@ -7566,6 +7566,14 @@ entities:
             ("UiRect", vec!["/atlas".into(), "/texture".into()]),
             ("AudioEmitter", vec!["/sound".into()]),
             ("PathFollower", vec!["/path".into()]),
+            ("LaneConstraint", vec!["/path".into()]),
+            (
+                "CameraRig",
+                vec![
+                    "/rig/mode/track/path".into(),
+                    "/state/last_applied/mode/track/path".into(),
+                ],
+            ),
             ("PatternPlayer", vec!["/pattern".into()]),
             ("Volley", vec!["/pattern".into()]),
             (

@@ -121,6 +121,7 @@ impl Default for RigMode {
 #[serde(default)]
 pub struct TrackRig {
     /// Content-relative `kind: path` file; empty is inert (the rig holds its pose).
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
     pub path: String,
     /// The eye offset in the path frame, in metres: `+x` right, `+y` up, `+z` back (against the
     /// tangent).

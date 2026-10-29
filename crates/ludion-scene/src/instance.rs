@@ -74,7 +74,8 @@ impl InstanceTransform {
     }
 }
 
-/// Normalizes a prefab path: forward slashes, with empty and `.` segments dropped.
+/// Normalizes a prefab path the way the parse-time rebase does: forward slashes, empty and `.`
+/// segments dropped, `..` collapsed against the segment before it, so one file has one key.
 ///
 /// # Example
 /// ```
@@ -82,13 +83,16 @@ impl InstanceTransform {
 ///     ludion_scene::normalize_prefab_path(".\\props//lamp.prefab.yaml"),
 ///     "props/lamp.prefab.yaml"
 /// );
+/// assert_eq!(
+///     ludion_scene::normalize_prefab_path("props/../lamp.prefab.yaml"),
+///     "lamp.prefab.yaml"
+/// );
 /// ```
 pub fn normalize_prefab_path(path: &str) -> String {
-    path.replace('\\', "/")
-        .split('/')
-        .filter(|segment| !segment.is_empty() && *segment != ".")
-        .collect::<Vec<_>>()
-        .join("/")
+    match ludion_core::paths::normalize(path.trim_start_matches(['/', '\\'])).as_str() {
+        "." => String::new(),
+        normalized => normalized.to_owned(),
+    }
 }
 
 fn bad(

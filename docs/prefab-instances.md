@@ -39,7 +39,7 @@ Block style only — a non-empty `[1, 2]` or `{x: 1}` is `L1005`.
 | Key | Meaning |
 |---|---|
 | `name` | required, unique in the document (`L1231`); the instance's identity for overrides and save |
-| `prefab` | path; **every path resolves against the document it is written in** (a scene's directory is the content root), so a scene's `prefab:` entries and overrides are content-root-relative, while a prefab's asset fields, overrides and nested `prefab:` entries are relative to the prefab file. `./` and backslashes are normalized, `..` is allowed, absolute is refused |
+| `prefab` | path; **every path resolves against the document it is written in** (a scene's directory is the content root), so a scene's `prefab:` entries and overrides are content-root-relative, while a prefab's asset fields, overrides and nested `prefab:` entries are relative to the prefab file. `./` and backslashes are normalized, `..` is allowed and may climb above the content root, but such files are outside the project (an exported bundle will not carry them); absolute is refused |
 | `transform` | `translation` / `rotation` (degrees) / `scale`, composed onto the prefab's root parts; omitted = as authored |
 | `overrides` | part path → component → **partial** value: only the listed fields change, and a part may gain a component it lacked |
 | `removed` | part paths dropped from the instance |

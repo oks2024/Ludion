@@ -177,6 +177,14 @@ fn prefab_paths_normalize() {
     );
 }
 
+#[test]
+fn prefab_paths_collapse_parent_segments() {
+    assert_eq!(
+        normalize_prefab_path("a/../b.prefab.yaml"),
+        normalize_prefab_path("b.prefab.yaml")
+    );
+}
+
 fn parse_errors(body: &str) -> Vec<Diagnostic> {
     parse(&format!("format: 1\nentities:\n{body}")).expect_err("expected diagnostics")
 }

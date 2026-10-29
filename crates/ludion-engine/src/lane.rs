@@ -98,6 +98,7 @@ pub struct LaneConstraint {
     /// The `kind: path` document, relative to the content root (default `""` — inert). A raw write
     /// must also null `s`; [`set_path`](Self::set_path) does both.
     #[serde(default)]
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
     pub path: String,
     /// Whether the lane holds the character; `blend` eases toward 1 when set and toward 0 when
     /// not (default `false`).
