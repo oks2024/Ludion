@@ -78,6 +78,12 @@ fn chain(world: &World, entity: EntityId) -> (Vec<EntityId>, Option<HierarchyFau
     (up, fault)
 }
 
+/// The topmost ancestor of `entity` through `Parent`: the entity itself when it has none or its
+/// chain is faulty (a cycle, a dead or too-deep parent).
+pub(crate) fn hierarchy_root(world: &World, entity: EntityId) -> EntityId {
+    chain(world, entity).0[0]
+}
+
 /// `entity`'s own `Fade`, else its nearest ancestor's through `Parent`, else the default. An
 /// unparented entity costs one read and one presence check.
 pub(crate) fn inherited_fade(world: &World, entity: EntityId) -> Fade {

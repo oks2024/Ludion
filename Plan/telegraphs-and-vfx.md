@@ -225,6 +225,10 @@ pass/graph/extract-plumbing change.
 - **A general decal system** (arbitrary projected textures on arbitrary geometry) — the reference game's needs
   are all ground-anchored; no named consumer for the general case. Trigger: a concrete need for a
   telegraph/effect on non-flat or vertical geometry (e.g. a wall-mounted sigil).
+  - *Partial firing, 2026-10-28 (Clockout request 0006):* projecting onto non-flat geometry was the
+    recorded trigger. `DropShadow` shipped an analytic, untextured, straight-down darkening
+    footprint with a first-surface rule, and did not consume the trigger: textured decals,
+    arbitrary projection directions and vertical surfaces stay deferred.
 
 ## Risks / open questions
 

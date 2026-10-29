@@ -91,6 +91,7 @@ pub(crate) fn world_key(
         // the lists below are stripped from the face scene
         sprites: _,
         ground_markers: _,
+        drop_shadows: _,
         debug_lines: _,
         debug_view: _,
         particles: _,

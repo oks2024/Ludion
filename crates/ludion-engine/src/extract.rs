@@ -11,7 +11,7 @@
 
 use std::any::TypeId;
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -27,10 +27,11 @@ use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
 use ludion_ecs::World;
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
-    DebugSegment, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData, GroundMarkerInstance,
-    MeshData, MeshInstance, MeshShape, ParticleInstance, PointLightData, PostData, ProbeData,
-    ProbeVolume, QualityParams, RenderCamera, RenderScene, SkinJoint, SpotLightData,
-    SpriteInstance, SunData, TextRun, TextureImage, UiInstance, WorldVoxelGrid, aspect_ratio,
+    DebugSegment, DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
+    GroundMarkerInstance, MeshData, MeshInstance, MeshShape, ParticleInstance, PointLightData,
+    PostData, ProbeData, ProbeVolume, QualityParams, RenderCamera, RenderScene, SkinJoint,
+    SpotLightData, SpriteInstance, SunData, TextRun, TextureImage, UiInstance, WorldVoxelGrid,
+    aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -38,7 +39,7 @@ use crate::assembly_mesh::AssemblyData;
 use crate::asset_cache::{AssetCache, AssetRefs, SourceFiles};
 use crate::character::CharacterData;
 use crate::components::{
-    Animation, Camera, ClipAnchor, DirectionalLight, Environment, GiDynamic, GiVolume,
+    Animation, Camera, ClipAnchor, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume,
     GroundMarker, GroundMarkerShape, Mesh, MeshGrid, MeshSource, ParticleEmitter, PointLight,
     PostProcess, ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite, SpriteBlend,
     Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
@@ -982,6 +983,8 @@ fn extract_inner(
     }
 
     let mut meshes = Vec::with_capacity(placed.meshes.len());
+    // The owning entity of each `meshes` entry, parallel to it: a drop shadow's caster exclusion.
+    let mut mesh_owners: Vec<EntityId> = Vec::with_capacity(placed.meshes.len());
     // Every skinned instance's bone palette, in extract order; the renderer prepends its own
     // identity entry 0, so an instance's `bone_offset` into the combined buffer starts at 1. A joint
     // a `SkinBone` part names takes that part's world pose every frame; every other joint keeps its
@@ -1094,6 +1097,7 @@ fn extract_inner(
                         .enumerate()
                 {
                     let index = base + part;
+                    mesh_owners.push(mesh.id);
                     meshes.push(MeshInstance {
                         shape: MeshShape::Asset(index),
                         model: mesh.model * local,
@@ -1163,6 +1167,7 @@ fn extract_inner(
                 }
                 _ => 0,
             };
+            mesh_owners.push(mesh.id);
             meshes.push(MeshInstance {
                 shape,
                 model: mesh.model,
@@ -1232,6 +1237,7 @@ fn extract_inner(
         meshes,
         sprites,
         ground_markers: extract_ground_markers(world, &ids, &mut poses),
+        drop_shadows: extract_drop_shadows(world, &ids, &mut poses, &mesh_owners),
         debug_lines: Vec::new(),
         debug_view: None,
         particles: extract_particles(
@@ -1433,25 +1439,77 @@ fn extract_ground_markers(
         .filter_map(|&id| {
             let marker = get::<GroundMarker>(world, id)?;
             let pose = render_pose(world, poses, id);
-            // A negative scale has no meaningful footprint to draw; clamp to the existing
-            // zero-coverage behaviour (an invisible marker) rather than mirroring garbage geometry.
-            let scale = pose.scale()[0].max(0.0);
-            let shape = match marker.shape {
-                GroundMarkerShape::Disc { radius } => ludion_renderer::GroundMarkerShape::Disc {
-                    radius: radius * scale,
-                },
-                GroundMarkerShape::Segment { length, width } => {
-                    ludion_renderer::GroundMarkerShape::Segment {
-                        length: length * scale,
-                        width: width * scale,
-                    }
-                }
-            };
+            let shape = scaled_shape(marker.shape, pose.scale()[0]);
             let translation = Vec3::from(pose.translation()) + Vec3::Y * GROUND_MARKER_LIFT;
             Some(GroundMarkerInstance {
                 shape,
                 model: Mat4::from_rotation_translation(pose.quat(), translation),
                 color: marker.color,
+            })
+        })
+        .collect()
+}
+
+/// A component shape in final world units: every dimension times `scale`. A negative scale has no
+/// meaningful footprint, so it clamps to `0.0` (an invisible shape) rather than mirroring geometry.
+fn scaled_shape(shape: GroundMarkerShape, scale: f32) -> ludion_renderer::GroundMarkerShape {
+    let scale = scale.max(0.0);
+    match shape {
+        GroundMarkerShape::Disc { radius } => ludion_renderer::GroundMarkerShape::Disc {
+            radius: radius * scale,
+        },
+        GroundMarkerShape::Segment { length, width } => {
+            ludion_renderer::GroundMarkerShape::Segment {
+                length: length * scale,
+                width: width * scale,
+            }
+        }
+    }
+}
+
+/// Every [`DropShadow`] in the world, resolved into the renderer's [`DropShadowInstance`] in the
+/// ascending-`EntityId` walk order `ids` carries.
+///
+/// Baked here so the renderer interprets nothing: dimensions are final world units (times the
+/// uniform `Transform.scale.x`), the anchor is the entity's world position, and `yaw` is the
+/// rotation about world +Y alone (a pitch or roll never tilts the footprint). `exclude` lists the
+/// `meshes` indices owned by the caster set — the entity's hierarchy root and all that root's
+/// descendants — so the shadow never lands on the thing casting it. `mesh_owners` is parallel to
+/// the extracted `meshes`, which makes the list ascending by construction.
+///
+/// Like ground markers, drop shadows do not travel through [`place`] or `render.bounds`. The
+/// hierarchy's child map is built only when a shadow exists.
+fn extract_drop_shadows(
+    world: &World,
+    ids: &[EntityId],
+    poses: &mut WorldAffines,
+    mesh_owners: &[EntityId],
+) -> Vec<DropShadowInstance> {
+    let mut children = None;
+    ids.iter()
+        .filter_map(|&id| {
+            let shadow = get::<DropShadow>(world, id)?;
+            let pose = render_pose(world, poses, id);
+            let root = crate::hierarchy::hierarchy_root(world, id);
+            let children = children.get_or_insert_with(|| ludion_ecs::ChildMap::build(world));
+            let mut casters: BTreeSet<EntityId> = children.descendants(root).into_iter().collect();
+            casters.insert(root);
+            let exclude = mesh_owners
+                .iter()
+                .enumerate()
+                .filter(|(_, owner)| casters.contains(owner))
+                .map(|(index, _)| index as u32)
+                .collect();
+            let along_x = pose.quat() * Vec3::X;
+            Some(DropShadowInstance {
+                shape: scaled_shape(shadow.shape, pose.scale()[0]),
+                anchor: Vec3::from(pose.translation()),
+                yaw: ludion_core::math::atan2(-along_x.z, along_x.x),
+                opacity: shadow.opacity,
+                softness: shadow.softness,
+                max_distance: shadow.max_distance,
+                fade_distance: shadow.fade_distance,
+                exclude,
             })
         })
         .collect()

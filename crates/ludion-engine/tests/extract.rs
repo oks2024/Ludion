@@ -12,9 +12,9 @@ use ludion_core::time::{SimTime, TickRate};
 use ludion_ecs::World;
 use ludion_engine::components::{Anchor, UiList, UiListItem, UiRect, UiText};
 use ludion_engine::{
-    Camera, Environment, Fade, GiDynamic, GroundMarker, GroundMarkerShape, Mesh, MeshSource,
-    ParticleEmitter, PointLight, PostProcess, QualityParams, Sprite, TileAppearance, Tilemap,
-    Transform, extract, extract_at,
+    Camera, DropShadow, Environment, Fade, GiDynamic, GroundMarker, GroundMarkerShape, Mesh,
+    MeshSource, ParticleEmitter, PointLight, PostProcess, QualityParams, Sprite, TileAppearance,
+    Tilemap, Transform, extract, extract_at,
 };
 use ludion_renderer::{
     GROUND_MARKER_LIFT, GroundMarkerShape as RendererMarkerShape, MeshShape, RenderCamera,
@@ -2664,4 +2664,151 @@ fn world_text_carries_its_face_and_the_laid_out_extent() {
     let expected =
         ludion_font::layout(library.face(Some("body")), "Hello world", 2.0, 0.0).extent();
     assert_eq!(run.extent, expected);
+}
+
+// --- Clockout 0006: DropShadow through extract ---
+
+/// Spawns an entity with a `Transform`, an optional parent and an optional `Mesh`.
+fn shadow_entity(
+    world: &mut World,
+    parent: Option<ludion_core::ids::EntityId>,
+    transform: Transform,
+    mesh: bool,
+) -> ludion_core::ids::EntityId {
+    let e = world.spawn();
+    world.insert(e, transform).unwrap();
+    if mesh {
+        world.insert(e, Mesh::default()).unwrap();
+    }
+    if let Some(parent) = parent {
+        world.insert(e, ludion_ecs::Parent(parent)).unwrap();
+    }
+    e
+}
+
+/// A scene with no `DropShadow` extracts an empty list.
+#[test]
+fn a_scene_without_drop_shadows_extracts_none() {
+    let scene = extract(&scene_world(), (320, 180), Path::new(".")).unwrap();
+    assert!(scene.drop_shadows.is_empty());
+}
+
+/// The anchor is the entity's world position through the hierarchy, and the shape is multiplied by
+/// the composed uniform scale.
+#[test]
+fn a_drop_shadow_anchors_at_its_world_position_with_scaled_dimensions() {
+    let mut world = World::new();
+    let root = shadow_entity(
+        &mut world,
+        None,
+        Transform {
+            translation: [10.0, 2.0, -3.0],
+            scale: [2.0, 2.0, 2.0],
+            ..Transform::default()
+        },
+        false,
+    );
+    let soles = shadow_entity(
+        &mut world,
+        Some(root),
+        Transform {
+            translation: [1.0, -1.0, 0.0],
+            ..Transform::default()
+        },
+        false,
+    );
+    world
+        .insert(
+            soles,
+            DropShadow {
+                shape: GroundMarkerShape::Segment {
+                    length: 2.0,
+                    width: 0.5,
+                },
+                opacity: 0.3,
+                softness: 0.2,
+                max_distance: 9.0,
+                fade_distance: 3.0,
+            },
+        )
+        .unwrap();
+    let disc = shadow_entity(&mut world, None, Transform::default(), false);
+    world.insert(disc, DropShadow::default()).unwrap();
+
+    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    assert_eq!(scene.drop_shadows.len(), 2);
+    let shadow = &scene.drop_shadows[0];
+    assert!((shadow.anchor - Vec3::new(12.0, 0.0, -3.0)).length() < 1e-5);
+    assert_eq!(
+        shadow.shape,
+        RendererMarkerShape::Segment {
+            length: 4.0,
+            width: 1.0
+        }
+    );
+    assert_eq!(
+        (
+            shadow.opacity,
+            shadow.softness,
+            shadow.max_distance,
+            shadow.fade_distance
+        ),
+        (0.3, 0.2, 9.0, 3.0)
+    );
+    assert_eq!(
+        scene.drop_shadows[1].shape,
+        RendererMarkerShape::Disc { radius: 0.5 }
+    );
+}
+
+/// The segment yaw reads rotation about +Y only: a 45 degree yaw gives pi/4, and a pitch on top of
+/// it leaves that yaw alone.
+#[test]
+fn a_drop_shadow_segment_takes_only_the_yaw_of_its_rotation() {
+    let yaw_of = |rotation: [f32; 3]| {
+        let mut world = World::new();
+        let e = shadow_entity(
+            &mut world,
+            None,
+            Transform {
+                rotation,
+                ..Transform::default()
+            },
+            false,
+        );
+        world.insert(e, DropShadow::default()).unwrap();
+        extract(&world, (320, 180), Path::new("."))
+            .unwrap()
+            .drop_shadows[0]
+            .yaw
+    };
+    // A +Y rotation by +45 degrees carries +X toward -Z; `atan2(-z, x)` reads that back as +pi/4,
+    // the angle about +Y that maps +X onto the length axis.
+    let quarter = std::f32::consts::FRAC_PI_4;
+    assert!((yaw_of([0.0, 45.0, 0.0]) - quarter).abs() < 1e-4);
+    assert_eq!(yaw_of([0.0, 0.0, 0.0]), 0.0);
+    // Pitch about Z tilts +X off the ground plane but its ground projection still follows the yaw.
+    assert!((yaw_of([0.0, 45.0, 30.0]) - quarter).abs() < 1e-4);
+}
+
+/// `exclude` lists the meshes of the caster's whole tree (root, children, the shadow's own entity)
+/// and no unrelated mesh; an unparented caster excludes itself.
+#[test]
+fn a_drop_shadow_excludes_its_casters_hierarchy_but_not_other_meshes() {
+    let mut world = World::new();
+    let other = shadow_entity(&mut world, None, Transform::default(), true); // mesh 0
+    let root = shadow_entity(&mut world, None, Transform::default(), true); // mesh 1
+    let child = shadow_entity(&mut world, Some(root), Transform::default(), true); // mesh 2
+    let soles = shadow_entity(&mut world, Some(child), Transform::default(), false);
+    world.insert(soles, DropShadow::default()).unwrap();
+    let _ = other;
+
+    let solo = shadow_entity(&mut world, None, Transform::default(), true); // mesh 3
+    world.insert(solo, DropShadow::default()).unwrap();
+
+    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    assert_eq!(scene.meshes.len(), 4);
+    assert_eq!(scene.drop_shadows.len(), 2);
+    assert_eq!(scene.drop_shadows[0].exclude, [1, 2]);
+    assert_eq!(scene.drop_shadows[1].exclude, [3]);
 }

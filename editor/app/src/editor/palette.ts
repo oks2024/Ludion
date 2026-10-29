@@ -170,6 +170,17 @@ export const ARCHETYPES: readonly Archetype[] = [
       ReflectionProbe: { shape: { box: { extent: [4, 2, 4] } }, blend: 0.5, priority: 0 },
     },
   },
+  {
+    // drop-shadow: data only. Add it as a child at a character's soles; it projects straight down
+    // from its world position onto the first surface below.
+    id: 'drop-shadow',
+    label: 'Drop shadow',
+    name: 'Drop shadow',
+    components: {
+      Transform: { translation: [0, 0, 0] },
+      DropShadow: { shape: { type: 'disc', radius: 0.5 }, opacity: 0.6, softness: 0.5, max_distance: 20, fade_distance: 4 },
+    },
+  },
 ];
 
 /** Builds the `entity.spawn` command for an archetype (name param + default components). */

@@ -51,6 +51,7 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     out.particles.clear();
     out.texts.clear();
     out.ground_markers.clear();
+    out.drop_shadows.clear();
     out.ui.clear();
     out.debug_lines.clear();
     out.probes.clear();

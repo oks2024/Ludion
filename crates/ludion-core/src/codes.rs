@@ -1600,9 +1600,10 @@ pub mod code {
     /// voxelizer during extract, before any probe volume is allocated.
     pub const GI_VOLUME_PROBE_BUDGET_EXCEEDED: DiagnosticCode = DiagnosticCode::new("L2105");
 
-    /// `L2106` — a `GroundMarker` shape dimension (`radius`, `length`, `width`) is not a strictly
-    /// positive, finite number, so the marker has no footprint to draw. Raised by
-    /// `ludion-engine`'s `GroundMarker` semantic validator, at scene-check / `component.set` time.
+    /// `L2106` — a `GroundMarker` or `DropShadow` shape dimension (`radius`, `length`, `width`) is
+    /// not a strictly positive, finite number, so the marker has no footprint to draw. Raised by
+    /// `ludion-engine`'s `GroundMarker` and `DropShadow` semantic validators, at scene-check /
+    /// `component.set` time.
     pub const GROUND_MARKER_NON_POSITIVE_DIMENSION: DiagnosticCode = DiagnosticCode::new("L2106");
 
     /// `L2107` — a `ParticleEmitter` authors an effect that cannot be evaluated: a non-finite or
@@ -1625,6 +1626,12 @@ pub mod code {
     /// axis, or mesh model matrix), so extract skips it rather than handing the renderer NaN
     /// geometry. Raised by `ludion-engine`'s extract, once per offending component per session.
     pub const RENDER_PLACEMENT_NON_FINITE: DiagnosticCode = DiagnosticCode::new("L2109");
+
+    /// `L2110` — a `DropShadow` distance is unusable: `max_distance` is not a positive, finite
+    /// number, `fade_distance` is negative or non-finite, or `fade_distance` exceeds
+    /// `max_distance`. Raised by `ludion-engine`'s `DropShadow` semantic validator, at
+    /// scene-check / `component.set` time.
+    pub const DROP_SHADOW_INVALID_DISTANCE: DiagnosticCode = DiagnosticCode::new("L2110");
 
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
@@ -7873,8 +7880,9 @@ Removing the `GiVolume` component entirely turns global illumination off.",
         severity: Severity::Error,
         title: "GroundMarker shape dimension is not positive",
         explanation: "\
-A `GroundMarker` authors a shape whose `radius`, `length`, or `width` is zero, negative, or not a
-finite number. The message names the field and the value; the JSON Pointer points at it.
+A `GroundMarker` (or a `DropShadow`) authors a shape whose `radius`, `length`, or `width` is zero,
+negative, or not a finite number. The message names the field and the value; the JSON Pointer points
+at it.
 
 A ground marker is drawn from an analytic signed-distance function over its footprint, so every
 dimension is a real length in world units and there is no distance to evaluate against a degenerate
@@ -7966,6 +7974,28 @@ per session.
 
 Fix: guard the maths that wrote the transform (a division by zero, a normalise of a zero vector,
 an unclamped `sqrt`), then check the entity's `Transform` and its parents.",
+    },
+    CodeEntry {
+        code: code::DROP_SHADOW_INVALID_DISTANCE,
+        severity: Severity::Error,
+        title: "DropShadow distance is invalid",
+        explanation: "\
+A `DropShadow` authors a `max_distance` or `fade_distance` the shadow cannot be evaluated with. The
+message names the field and the value; the JSON Pointer points at it.
+
+`max_distance` is how far below the shadow's anchor a receiving surface may be and still be darkened:
+past it the shadow is gone. It must be a positive, finite number of metres. `fade_distance` is the
+length of the linear fade-out ending at `max_distance` (the shadow is full strength until
+`max_distance - fade_distance` below the anchor); it must be finite and not negative. It also cannot
+exceed `max_distance`, because the fade would then start above the anchor. A field left out is checked
+at its default (`max_distance: 20.0`, `fade_distance: 4.0`), so `fade_distance: 30` alone is refused.
+
+Fix: give `max_distance` a value greater than 0, and `fade_distance` a value between 0 and
+`max_distance`.
+
+    DropShadow:
+      max_distance: 20.0
+      fade_distance: 4.0",
     },
     CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
@@ -10210,6 +10240,7 @@ mod tests {
         code::PARTICLE_EMITTER_INVALID,
         code::VOLLEY_INVALID,
         code::RENDER_PLACEMENT_NON_FINITE,
+        code::DROP_SHADOW_INVALID_DISTANCE,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,

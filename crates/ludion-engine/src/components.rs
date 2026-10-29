@@ -2280,31 +2280,163 @@ impl SemanticValidate for GroundMarker {
     /// arrived under.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = value_color_diagnostics("GroundMarker", value, "color");
-        let Some(shape) = value.get("shape") else {
-            return out;
-        };
-        for field in ["radius", "length", "width"] {
-            if let Some(dimension) = shape.get(field).and_then(as_stored_f32)
-                && !ludion_core::number::positive_f32(dimension)
-            {
-                out.push(ground_marker_non_positive_dimension(field, dimension));
-            }
-        }
+        out.extend(shape_dimension_diagnostics(
+            value,
+            "ground marker",
+            "GroundMarker",
+        ));
         out
     }
 }
 
-/// `L2106` — a `GroundMarker` shape dimension is not strictly positive and finite.
-fn ground_marker_non_positive_dimension(field: &str, value: f64) -> Diagnostic {
-    Diagnostic::new(
-        code::GROUND_MARKER_NON_POSITIVE_DIMENSION,
-        format!(
-            "ground marker `{field}` {value} is not valid; every `GroundMarker` shape dimension \
-             must be a strictly positive, finite number as an f32 (at least ~1.4e-45)"
-        ),
-    )
-    .with_path(format!("/shape/{field}"))
-    .with_help("give the dimension a value greater than 0")
+/// `L2106` for every non-positive or non-finite dimension in a component's `shape`, by field name.
+fn shape_dimension_diagnostics(value: &Value, noun: &str, component: &str) -> Vec<Diagnostic> {
+    let Some(shape) = value.get("shape") else {
+        return Vec::new();
+    };
+    ["radius", "length", "width"]
+        .into_iter()
+        .filter_map(|field| {
+            let dimension = shape.get(field).and_then(as_stored_f32)?;
+            (!ludion_core::number::positive_f32(dimension)).then(|| {
+                Diagnostic::new(
+                    code::GROUND_MARKER_NON_POSITIVE_DIMENSION,
+                    format!(
+                        "{noun} `{field}` {dimension} is not valid; every `{component}` shape \
+                         dimension must be a strictly positive, finite number as an f32 (at least \
+                         ~1.4e-45)"
+                    ),
+                )
+                .with_path(format!("/shape/{field}"))
+                .with_help("give the dimension a value greater than 0")
+            })
+        })
+        .collect()
+}
+
+/// A projected, analytic drop shadow: a soft-edged footprint darkened onto whatever surface lies
+/// straight below the entity, so a character reads its height above the ground at a glance.
+///
+/// Not a light and not a decal: the renderer projects the footprint along world **−Y** from the
+/// entity's world position (through the `Parent` hierarchy) onto the first surface beneath it that
+/// is not part of the caster itself — the entity's hierarchy root and every descendant. Put the
+/// component on a child entity at the character's soles. The entity's rotation only yaws a
+/// [`GroundMarkerShape::Segment`] (its +X is the length axis); the shape's dimensions are
+/// multiplied by the uniform `Transform.scale.x`. Opacity fades linearly over the last
+/// `fade_distance` metres before `max_distance` below the anchor. Render-only: it never touches
+/// the sim, and a scene without one renders exactly as before.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct DropShadow {
+    /// The footprint (default a disc of radius `0.5`). Dimensions follow the `GroundMarker`
+    /// rules: strictly positive and finite (`L2106`).
+    #[serde(default = "drop_shadow_shape")]
+    pub shape: GroundMarkerShape,
+    /// Peak darkness in `[0, 1]` (default `0.6`).
+    #[serde(default = "drop_shadow_opacity")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub opacity: f32,
+    /// Edge falloff in `[0, 1]` (default `0.5`): `0` is a hard anti-aliased edge, `1` a wide
+    /// smudge.
+    #[serde(default = "drop_shadow_softness")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub softness: f32,
+    /// How far below the anchor, in metres, a surface may be and still receive the shadow
+    /// (default `20.0`). Positive and finite (`L2110`).
+    #[serde(default = "drop_shadow_max_distance")]
+    #[schemars(extend("x-ui-range" = [0.5, 50.0]))]
+    pub max_distance: f32,
+    /// Length in metres of the linear fade ending at `max_distance` (default `4.0`); `0` cuts
+    /// off sharply. Between `0` and `max_distance` (`L2110`).
+    #[serde(default = "drop_shadow_fade_distance")]
+    #[schemars(extend("x-ui-range" = [0.0, 20.0]))]
+    pub fade_distance: f32,
+}
+
+fn drop_shadow_shape() -> GroundMarkerShape {
+    GroundMarkerShape::Disc { radius: 0.5 }
+}
+
+fn drop_shadow_opacity() -> f32 {
+    0.6
+}
+
+fn drop_shadow_softness() -> f32 {
+    0.5
+}
+
+fn drop_shadow_max_distance() -> f32 {
+    20.0
+}
+
+fn drop_shadow_fade_distance() -> f32 {
+    4.0
+}
+
+impl Default for DropShadow {
+    fn default() -> Self {
+        DropShadow {
+            shape: drop_shadow_shape(),
+            opacity: drop_shadow_opacity(),
+            softness: drop_shadow_softness(),
+            max_distance: drop_shadow_max_distance(),
+            fade_distance: drop_shadow_fade_distance(),
+        }
+    }
+}
+
+impl SemanticValidate for DropShadow {
+    /// Rejects a shape dimension that is not strictly positive and finite (`L2106`, pointer
+    /// `/shape/<field>`) and an unusable distance pair (`L2110`): `max_distance` not positive and
+    /// finite, `fade_distance` negative or non-finite, or `fade_distance` above `max_distance`
+    /// (pointed at `/fade_distance`). An absent distance is read at its default, so a lone
+    /// `fade_distance: 30` is refused against the default `max_distance` of `20`.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = shape_dimension_diagnostics(value, "drop shadow", "DropShadow");
+        let distance = |field: &str, default: f32| {
+            value
+                .get(field)
+                .and_then(as_stored_f32)
+                .unwrap_or(f64::from(default))
+        };
+        let max = distance("max_distance", drop_shadow_max_distance());
+        let fade = distance("fade_distance", drop_shadow_fade_distance());
+        let invalid = |field: &str, value: f64, why: &str, help: &str| {
+            Diagnostic::new(
+                code::DROP_SHADOW_INVALID_DISTANCE,
+                format!("drop shadow `{field}` {value} is not valid; {why}"),
+            )
+            .with_path(format!("/{field}"))
+            .with_help(help)
+        };
+        let max_ok = ludion_core::number::positive_f32(max);
+        if !max_ok {
+            out.push(invalid(
+                "max_distance",
+                max,
+                "it must be a positive, finite number of metres",
+                "give `max_distance` a value greater than 0",
+            ));
+        }
+        let fade_f32 = fade as f32;
+        if !fade_f32.is_finite() || fade_f32 < 0.0 {
+            out.push(invalid(
+                "fade_distance",
+                fade,
+                "it must be a finite number of metres, not negative",
+                "give `fade_distance` a value between 0 and `max_distance`",
+            ));
+        } else if max_ok && fade_f32 > max as f32 {
+            out.push(invalid(
+                "fade_distance",
+                fade,
+                &format!("it cannot exceed `max_distance` ({max})"),
+                "lower `fade_distance` to at most `max_distance`, or raise `max_distance`",
+            ));
+        }
+        out
+    }
 }
 
 /// A camera's projection. The pose comes from the entity's [`Transform`] (the camera looks down its
@@ -4439,6 +4571,11 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<ludion_camera::CameraRig>("CameraRig")
         .expect("unique");
+    // The projected drop shadow, appended after the rig; validated for its cross-field distance
+    // rule and the shape dimensions inside the enum.
+    registry
+        .register_validated::<DropShadow>("DropShadow")
+        .expect("unique");
     registry
 }
 
@@ -4915,12 +5052,13 @@ mod tests {
                 "SurfaceVelocity",
                 "LaneConstraint",
                 "CameraRig",
+                "DropShadow",
             ]
         );
         assert_eq!(
             registry.len(),
-            40,
-            "appending the camera rig grows the registry by exactly one"
+            41,
+            "appending the drop shadow grows the registry by exactly one"
         );
     }
 
@@ -5781,6 +5919,7 @@ mod tests {
         clean::<Mesh>("Mesh");
         clean::<Text>("Text");
         clean::<GroundMarker>("GroundMarker");
+        clean::<DropShadow>("DropShadow");
         clean::<ParticleEmitter>("ParticleEmitter");
         clean::<Tilemap>("Tilemap");
     }
@@ -7301,6 +7440,131 @@ entities:
             }))
             .is_empty()
         );
+    }
+
+    // --- DropShadow, L2106, L2110 ---
+
+    /// An empty `DropShadow: {}` deserializes to the ruled defaults.
+    #[test]
+    fn empty_drop_shadow_is_the_default() {
+        let shadow: DropShadow = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(shadow, DropShadow::default());
+        assert_eq!(shadow.shape, GroundMarkerShape::Disc { radius: 0.5 });
+        assert_eq!(shadow.opacity, 0.6);
+        assert_eq!(shadow.softness, 0.5);
+        assert_eq!(shadow.max_distance, 20.0);
+        assert_eq!(shadow.fade_distance, 4.0);
+    }
+
+    /// A well-formed drop shadow of either shape survives the canonical writer idempotently.
+    #[test]
+    fn a_well_formed_drop_shadow_round_trips_through_the_canonical_writer() {
+        let registry = builtin_registry();
+        let source = concat!(
+            "format: 1\n",
+            "entities:\n",
+            "  - name: blob\n",
+            "    components:\n",
+            "      DropShadow:\n",
+            "        shape:\n",
+            "          type: disc\n",
+            "          radius: 0.75\n",
+            "        opacity: 0.4\n",
+            "  - name: streak\n",
+            "    components:\n",
+            "      DropShadow:\n",
+            "        shape:\n",
+            "          type: segment\n",
+            "          length: 2.0\n",
+            "          width: 0.5\n",
+            "        max_distance: 10.0\n",
+            "        fade_distance: 10.0\n",
+        );
+        let scene = ludion_scene::check(source, &registry).expect("a valid drop shadow scene");
+        let once = ludion_scene::emit(&scene, &registry);
+        let reparsed = ludion_scene::check(&once, &registry).expect("emitted scene re-parses");
+        assert_eq!(once, ludion_scene::emit(&reparsed, &registry));
+        assert!(
+            once.contains("type: disc") && once.contains("type: segment"),
+            "the canonical writer keeps the internally tagged shape: {once}"
+        );
+    }
+
+    /// Checks `body` (a `DropShadow` mapping's fields) and returns the `(code, path)` pairs raised.
+    fn drop_shadow_diagnostics(body: &str) -> Vec<(String, String)> {
+        let registry = builtin_registry();
+        let source = format!("format: 1\nentities:\n  - components:\n      DropShadow:\n{body}");
+        match ludion_scene::check(&source, &registry) {
+            Ok(_) => Vec::new(),
+            Err(diagnostics) => diagnostics
+                .iter()
+                .map(|d| {
+                    (
+                        d.code.as_str().to_string(),
+                        d.path.clone().unwrap_or_default(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn drop_shadow_pointer(field: &str) -> String {
+        format!("/entities/0/components/DropShadow/{field}")
+    }
+
+    /// A non-positive shape dimension is `L2106` at its own field, as for `GroundMarker`.
+    #[test]
+    fn a_non_positive_drop_shadow_dimension_is_l2106() {
+        for (shape, field) in [
+            ("type: disc\n          radius: 0.0", "radius"),
+            ("type: disc\n          radius: -1.0", "radius"),
+            (
+                "type: segment\n          length: 2.0\n          width: 0.0",
+                "width",
+            ),
+        ] {
+            let found = drop_shadow_diagnostics(&format!("        shape:\n          {shape}\n"));
+            assert!(
+                found.contains(&(
+                    "L2106".to_string(),
+                    drop_shadow_pointer(&format!("shape/{field}"))
+                )),
+                "{found:?}"
+            );
+        }
+    }
+
+    /// An out-of-range opacity or softness is the schema's ordinary `L1014`.
+    #[test]
+    fn drop_shadow_opacity_and_softness_are_bounded_by_the_schema() {
+        let found = drop_shadow_diagnostics("        opacity: 1.5\n");
+        assert!(
+            found.contains(&("L1014".to_string(), drop_shadow_pointer("opacity"))),
+            "{found:?}"
+        );
+        let found = drop_shadow_diagnostics("        softness: -0.1\n");
+        assert!(
+            found.contains(&("L1014".to_string(), drop_shadow_pointer("softness"))),
+            "{found:?}"
+        );
+    }
+
+    /// The distance rules are `L2110`, an absent field read at its default.
+    #[test]
+    fn drop_shadow_distances_are_l2110() {
+        let l2110 = |field: &str| ("L2110".to_string(), drop_shadow_pointer(field));
+        let found = drop_shadow_diagnostics("        max_distance: 0.0\n");
+        assert!(found.contains(&l2110("max_distance")), "{found:?}");
+        let found = drop_shadow_diagnostics("        fade_distance: -1.0\n");
+        assert!(found.contains(&l2110("fade_distance")), "{found:?}");
+        // Against the default max of 20.
+        let found = drop_shadow_diagnostics("        fade_distance: 30.0\n");
+        assert_eq!(found, [l2110("fade_distance")]);
+        let found =
+            drop_shadow_diagnostics("        max_distance: 20.0\n        fade_distance: 20.0\n");
+        assert!(found.is_empty(), "{found:?}");
+        let found = drop_shadow_diagnostics("        max_distance: 10.0\n");
+        assert!(found.is_empty(), "{found:?}");
     }
 
     // --- UiList, UiListItem, L1118 ---

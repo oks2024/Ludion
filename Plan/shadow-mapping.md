@@ -79,6 +79,18 @@ unshadowed; sprites/billboards/text stay Lambert and untouched.
    sunless scenes keep the exact 5/6-pass graph. `RenderScene.sun: Option<SunData>`.
 7. **Trigger bookkeeping**: shadow mapping leaves the textured-PBR trigger bundle; texture
    maps + IBL remain behind it (`roadmap-voxel-mesh-pbr.md` amended in Wave 5).
+8. **A drop shadow is a projection, not a light** (Clockout request 0006, approved 2026-10-28).
+   The `DropShadow` component and its conditional `drop_shadow` pass (plus its occlusion data) sit
+   beside the sun:
+   - It does not touch the shared `Lights` layout or the sun's mesh group 2, so decision 3 holds and
+     `mesh.wgsl` is unchanged.
+   - It follows decision 6's conditional-pass rule: no `DropShadow` means a byte-identical graph.
+   - It does not move decision 1's light-shadow trigger in either direction. Light shadows are
+     request 0007's scope.
+   - It is exempt from the `shadows` quality knob.
+
+   *Why:* a readability cue must not depend on the scene having a sun, on where the sun points, or
+   on the machine's quality.
 
 ## Waves
 

@@ -20,6 +20,7 @@ describe('palette archetypes', () => {
       'ui-list',
       'particles',
       'reflection-probe',
+      'drop-shadow',
     ]);
   });
 

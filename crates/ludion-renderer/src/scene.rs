@@ -268,6 +268,61 @@ pub struct GroundMarkerInstance {
     pub color: [f32; 4],
 }
 
+/// How far above a drop shadow's anchor the renderer starts looking for a receiving surface, in
+/// metres, so a caster standing exactly on a floor still shadows it.
+///
+/// Added by the renderer, not baked into [`DropShadowInstance::anchor`]; no scene authors it — the
+/// [`GROUND_MARKER_LIFT`] posture.
+pub const DROP_SHADOW_ANCHOR_TOLERANCE: f32 = 0.05;
+
+/// A projected drop shadow: an analytic footprint darkened onto the first surface straight below
+/// [`anchor`](DropShadowInstance::anchor), along world −Y.
+///
+/// `ludion-engine`'s extract resolves a `DropShadow` component plus its entity's world pose into
+/// this:
+/// - [`shape`](DropShadowInstance::shape) carries **final world-space** dimensions, the authored
+///   ones already multiplied by the entity's uniform `Transform.scale.x`.
+/// - [`anchor`](DropShadowInstance::anchor) is the entity's world position, without tolerance.
+/// - [`yaw`](DropShadowInstance::yaw) is the rotation about world +Y that maps +X onto a
+///   [`GroundMarkerShape::Segment`]'s length axis; only the entity's yaw, never pitch or roll.
+/// - [`opacity`](DropShadowInstance::opacity) and [`softness`](DropShadowInstance::softness) are
+///   in `[0, 1]`; a surface `depth` below the anchor is faded by [`drop_shadow_fade`].
+/// - [`exclude`](DropShadowInstance::exclude) lists, ascending, the indices into
+///   [`RenderScene::meshes`] of every instance owned by the caster (its hierarchy root and all
+///   descendants), which must not occlude or receive its own shadow.
+#[derive(Clone, PartialEq, Debug)]
+pub struct DropShadowInstance {
+    /// The footprint, in final world units.
+    pub shape: GroundMarkerShape,
+    /// The caster's world position.
+    pub anchor: Vec3,
+    /// Rotation about world +Y, radians.
+    pub yaw: f32,
+    /// Peak darkness, `[0, 1]`.
+    pub opacity: f32,
+    /// Edge falloff, `[0, 1]`.
+    pub softness: f32,
+    /// Receivers further than this below the anchor get no shadow (`> 0`).
+    pub max_distance: f32,
+    /// Length of the linear fade ending at `max_distance` (`0..=max_distance`).
+    pub fade_distance: f32,
+    /// Ascending indices into [`RenderScene::meshes`] belonging to the caster.
+    pub exclude: Vec<u32>,
+}
+
+/// The height fade of a drop shadow: `1` until `fade_distance` before `max_distance`, a linear
+/// ramp to `0` at `max_distance`, `0` beyond. `depth` is the anchor's height minus the receiver's
+/// (`>= 0`); the shadow shader mirrors this.
+pub fn drop_shadow_fade(depth: f32, max_distance: f32, fade_distance: f32) -> f32 {
+    if depth > max_distance {
+        0.0
+    } else if depth <= max_distance - fade_distance {
+        1.0
+    } else {
+        (max_distance - depth) / fade_distance
+    }
+}
+
 /// One world-space debug line: plain data for the renderer's debug pass.
 ///
 /// `ludion-engine` fills [`RenderScene::debug_lines`] from the categories the host enabled; the
@@ -1060,6 +1115,9 @@ pub struct RenderScene {
     /// the geometry standing on it and never paints over a character. Empty for a scene that authors
     /// none, which leaves the pass's recorded command stream exactly the pre-marker one.
     pub ground_markers: Vec<GroundMarkerInstance>,
+    /// Projected drop shadows, in ascending-`EntityId` extract order. Empty for a scene that
+    /// authors none, which draws no shadow pass and leaves the frame byte-identical.
+    pub drop_shadows: Vec<DropShadowInstance>,
     /// World-space debug lines from the categories the host enabled; empty by default.
     pub debug_lines: Vec<DebugSegment>,
     /// A full-screen debug view that replaces the finished picture, when the host asked for one and
@@ -1138,6 +1196,7 @@ impl RenderScene {
             meshes: Vec::new(),
             sprites: Vec::new(),
             ground_markers: Vec::new(),
+            drop_shadows: Vec::new(),
             debug_lines: Vec::new(),
             debug_view: None,
             particles: Vec::new(),
@@ -1176,4 +1235,24 @@ impl RenderCamera {
 pub fn aspect_ratio(viewport: (u32, u32)) -> f32 {
     let (w, h) = viewport;
     if h == 0 { 1.0 } else { w as f32 / h as f32 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drop_shadow_fade_is_full_then_ramps_then_gone() {
+        assert_eq!(drop_shadow_fade(0.0, 20.0, 4.0), 1.0);
+        assert_eq!(drop_shadow_fade(16.0, 20.0, 4.0), 1.0);
+        assert_eq!(drop_shadow_fade(18.0, 20.0, 4.0), 0.5);
+        assert_eq!(drop_shadow_fade(20.0, 20.0, 4.0), 0.0);
+        assert_eq!(drop_shadow_fade(25.0, 20.0, 4.0), 0.0);
+    }
+
+    #[test]
+    fn drop_shadow_fade_with_no_fade_cuts_off_at_max() {
+        assert_eq!(drop_shadow_fade(20.0, 20.0, 0.0), 1.0);
+        assert_eq!(drop_shadow_fade(20.01, 20.0, 0.0), 0.0);
+    }
 }
