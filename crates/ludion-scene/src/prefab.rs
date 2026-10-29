@@ -66,6 +66,41 @@ impl PrefabDocument {
         crate::expand(&self.to_scene(), registry, resolve)
     }
 
+    /// Rewrites every path in the document from relative-to-this-prefab to content-root form, in
+    /// place. `key` is the prefab's own content-root path. Covers the asset paths of the parts'
+    /// components, of every instance entry's `overrides`, and each nested entry's `prefab`; empty
+    /// paths (inert defaults) and unknown components are left alone.
+    ///
+    /// # Example
+    /// ```
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Model {
+    ///     #[schemars(with = "ludion_ecs::AssetPathSchema")]
+    ///     mesh: String,
+    /// }
+    ///
+    /// let mut registry = ludion_ecs::Registry::new();
+    /// registry.register::<Model>("Model").unwrap();
+    /// let source = "format: 1\nkind: prefab\nentities:\n  - name: body\n    components:\n      Model:\n        mesh: meshes/a.mesh.yaml\n";
+    /// let mut doc = ludion_scene::parse_prefab(source).unwrap();
+    /// doc.rebase("level/render/model.prefab.yaml", &registry);
+    /// assert_eq!(doc.entities[0].components[0].1["mesh"], "level/render/meshes/a.mesh.yaml");
+    /// ```
+    pub fn rebase(&mut self, key: &str, registry: &Registry) {
+        for entity in &mut self.entities {
+            rebase_components(&mut entity.components, key, registry);
+            if let Some(instance) = entity.instance.as_deref_mut() {
+                instance.prefab = ludion_core::paths::sibling(key, &instance.prefab);
+                for components in instance.overrides.values_mut() {
+                    rebase_components(components, key, registry);
+                }
+            }
+        }
+    }
+
     /// Writes an instance's collapsed edits into this prefab, so a fresh instance of it equals the
     /// edited one: `overrides` (instance part path to partial component values) merge onto the
     /// parts' components, and `removed` parts are deleted.
@@ -434,8 +469,82 @@ fn check_part_names(parts: &[(usize, SceneEntity)], diagnostics: &mut Vec<Diagno
 
 /// Validates the prefab body against `registry` exactly as a scene's entities are: the same codes,
 /// with entity references ranged over the prefab's own parts.
+///
+/// On top of that, every asset path (and nested `prefab:`) must be a relative path a prefab-local
+/// document may write: `L1311` otherwise, since [`PrefabDocument::rebase`] would resolve it against
+/// the prefab's directory.
 pub(crate) fn validate(doc: &PrefabDocument, registry: &Registry) -> Vec<Diagnostic> {
-    crate::validate::validate(&doc.to_scene(), registry)
+    let mut diagnostics = crate::validate::validate(&doc.to_scene(), registry);
+    for (index, entity) in doc.entities.iter().enumerate() {
+        let base = format!("/entities/{index}");
+        check_component_paths(
+            &entity.components,
+            &format!("{base}/components"),
+            registry,
+            &mut diagnostics,
+        );
+        let Some(instance) = entity.instance.as_deref() else {
+            continue;
+        };
+        check_path(
+            "prefab",
+            &instance.prefab,
+            format!("{base}/prefab"),
+            &mut diagnostics,
+        );
+        for (part, components) in &instance.overrides {
+            let overrides = format!("{base}/overrides/{}", yaml::pointer_token(part));
+            check_component_paths(components, &overrides, registry, &mut diagnostics);
+        }
+    }
+    diagnostics
+}
+
+fn rebase_components(components: &mut [(String, Value)], key: &str, registry: &Registry) {
+    for (name, value) in components {
+        if let Some(info) = registry.get(name) {
+            info.for_each_asset_path(value, &mut |_, path| {
+                if !path.is_empty() {
+                    *path = ludion_core::paths::sibling(key, path);
+                }
+            });
+        }
+    }
+}
+
+fn check_component_paths(
+    components: &[(String, Value)],
+    base: &str,
+    registry: &Registry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (name, value) in components {
+        let Some(info) = registry.get(name) else {
+            continue;
+        };
+        let mut value = value.clone();
+        info.for_each_asset_path(&mut value, &mut |pointer, path| {
+            if !path.is_empty() {
+                let at = format!("{base}/{}{pointer}", yaml::pointer_token(name));
+                check_path(name, path, at, diagnostics);
+            }
+        });
+    }
+}
+
+fn check_path(what: &str, path: &str, pointer: String, diagnostics: &mut Vec<Diagnostic>) {
+    if let Some(refusal) = ludion_core::paths::sibling_refusal(path) {
+        diagnostics.push(
+            Diagnostic::new(
+                code::PREFAB_ASSET_PATH,
+                format!("`{what}` path `{path}` {}", refusal.describe()),
+            )
+            .with_path(pointer)
+            .with_help(
+                "a path in a prefab is relative to the prefab file's directory; `..` may climb",
+            ),
+        );
+    }
 }
 
 /// Writes `doc` in canonical form: `format`, `kind`, `name`, `generated_from`, then the entities

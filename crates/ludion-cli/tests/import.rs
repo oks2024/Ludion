@@ -890,3 +890,62 @@ fn clip_report_flags_a_stale_clip() {
     let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(value["source"]["stale"], true, "{value}");
 }
+
+/// An imported prefab placed from a level elsewhere in the project resolves its mesh and texture
+/// paths against the prefab's own directory, with no override: `check-scene` accepts the level and a
+/// render-side extract reads every file; a renamed mesh is an `L1101` naming the resolved path.
+#[test]
+fn an_imported_prefab_placed_in_a_subdirectory_finds_its_assets() {
+    let dir = scratch("import_prefab_relative");
+    let copy = dir.join("scene.gltf");
+    std::fs::copy(textured_root().join("scene.gltf"), &copy).unwrap();
+    let out = dir.join("models/crate");
+    let output = run_ludion(&[
+        "import",
+        copy.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let wrapper = std::fs::read_to_string(textured_root().join("expected/scene.yaml")).unwrap();
+    let level = wrapper.replace(
+        "prefab: model.prefab.yaml",
+        "prefab: models/crate/model.prefab.yaml",
+    );
+    assert_ne!(level, wrapper);
+    let level_path = dir.join("level.yaml");
+    std::fs::write(&level_path, level).unwrap();
+
+    let check = run_ludion(&["check-scene", level_path.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(check.status.success(), "{stderr}");
+    assert!(!stderr.contains("L1101"), "{stderr}");
+
+    // `check-scene` does not read an instance's mesh files; a render-side extract does.
+    let load = || {
+        let mut engine = Engine::with_project_root(&dir);
+        engine
+            .load_inline_scene(&std::fs::read_to_string(&level_path).unwrap())
+            .expect("the level loads");
+        ludion_engine::extract(engine.world(), (320, 180), &dir)
+    };
+    load().unwrap_or_else(|errors| panic!("every asset resolves: {errors:?}"));
+
+    let mesh = out.join("meshes/tangent-cube.mesh.yaml");
+    std::fs::rename(&mesh, out.join("meshes/moved.mesh.yaml")).unwrap();
+    let errors = load().unwrap_err();
+    let found = errors
+        .iter()
+        .find(|d| d.code.as_str() == "L1101")
+        .unwrap_or_else(|| panic!("{errors:?}"));
+    assert!(
+        found
+            .message
+            .contains("models/crate/meshes/tangent-cube.mesh.yaml"),
+        "{found:?}"
+    );
+}

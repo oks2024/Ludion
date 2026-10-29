@@ -29,10 +29,23 @@ fn is_zero(value: &f32) -> bool {
     *value == 0.0
 }
 
+/// A component with a nested asset path, shaped like the engine's `Mesh.shape.asset`.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct Mesh {
+    shape: MeshShape,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct MeshShape {
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
+    asset: String,
+}
+
 fn registry() -> Registry {
     let mut registry = common::registry();
     registry.register::<ludion_ecs::Parent>("Parent").unwrap();
     registry.register::<Glow>("Glow").unwrap();
+    registry.register::<Mesh>("Mesh").unwrap();
     registry
 }
 
@@ -753,4 +766,146 @@ fn removing_the_sim_first_part_can_leave_a_presentation_root_l1036() {
     let strips = "format: 1\nentities:\n  - name: d\n    prefab: dressed.prefab.yaml\n    removed:\n      - post\n";
     let diagnostics = files.expand(strips).unwrap_err();
     assert!(has(&diagnostics, "L1036", "/entities/0"));
+}
+
+const SIGN: &str = "\
+format: 1
+kind: prefab
+entities:
+  - name: board
+    components:
+      Mesh:
+        shape:
+          asset: meshes/l.mesh.yaml
+      Sprite:
+        texture: ../tex/t.png
+        layer: 1
+        visible: true
+";
+
+#[test]
+fn a_prefabs_asset_paths_resolve_against_its_directory() {
+    let files = Files::new(&[("props/lamp.prefab.yaml", SIGN)]);
+    let source = "format: 1\nentities:\n  - name: lamp\n    prefab: props/lamp.prefab.yaml\n";
+    let expanded = files.expand(source).unwrap();
+    assert_eq!(
+        component(&expanded, 0, "Mesh")["shape"]["asset"],
+        "props/meshes/l.mesh.yaml"
+    );
+    assert_eq!(component(&expanded, 0, "Sprite")["texture"], "tex/t.png");
+}
+
+#[test]
+fn a_scene_override_of_a_prefab_path_stays_content_root() {
+    let files = Files::new(&[("props/lamp.prefab.yaml", SIGN)]);
+    let source = "format: 1\nentities:\n  - name: lamp\n    prefab: props/lamp.prefab.yaml\n    overrides:\n      board:\n        Mesh:\n          shape:\n            asset: level/x.mesh.yaml\n";
+    let expanded = files.expand(source).unwrap();
+    assert_eq!(
+        component(&expanded, 0, "Mesh")["shape"]["asset"],
+        "level/x.mesh.yaml"
+    );
+    assert_eq!(component(&expanded, 0, "Sprite")["texture"], "tex/t.png");
+}
+
+const OUTER: &str = "\
+format: 1
+kind: prefab
+entities:
+  - name: inner
+    prefab: ../b/inner.prefab.yaml
+    overrides:
+      leaf:
+        Mesh:
+          shape:
+            asset: own.mesh.yaml
+";
+
+const INNER: &str = "\
+format: 1
+kind: prefab
+entities:
+  - name: leaf
+    components:
+      Mesh:
+        shape:
+          asset: deep.mesh.yaml
+";
+
+#[test]
+fn a_nested_prefab_resolves_against_the_prefab_that_names_it() {
+    let asked = RefCell::new(Vec::new());
+    let scene = check(
+        "format: 1\nentities:\n  - name: o\n    prefab: a/outer.prefab.yaml\n",
+        &registry(),
+    )
+    .unwrap();
+    let expanded = expand(&scene, &registry(), &mut |path| {
+        asked.borrow_mut().push(path.to_owned());
+        match ludion_scene::normalize_prefab_path(path).as_str() {
+            "a/outer.prefab.yaml" => Ok(OUTER.to_owned()),
+            "b/inner.prefab.yaml" => Ok(INNER.to_owned()),
+            other => Err(Diagnostic::new(
+                code::PREFAB_UNRESOLVED,
+                format!("cannot read `{other}`"),
+            )),
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        *asked.borrow(),
+        ["a/outer.prefab.yaml", "b/inner.prefab.yaml"]
+    );
+    // The outer's override is written against `a/`; the inner's own path against `b/`, and the
+    // override wins.
+    assert_eq!(
+        component(&expanded, 0, "Mesh")["shape"]["asset"],
+        "a/own.mesh.yaml"
+    );
+    let inner_only = Files::new(&[("b/inner.prefab.yaml", INNER)])
+        .expand("format: 1\nentities:\n  - name: i\n    prefab: b/inner.prefab.yaml\n")
+        .unwrap();
+    assert_eq!(
+        component(&inner_only, 0, "Mesh")["shape"]["asset"],
+        "b/deep.mesh.yaml"
+    );
+}
+
+#[test]
+fn a_cycle_spelled_through_relative_paths_is_still_l1232() {
+    let x = "format: 1\nkind: prefab\nentities:\n  - name: y\n    prefab: ../b/y.prefab.yaml\n";
+    let y = "format: 1\nkind: prefab\nentities:\n  - name: x\n    prefab: ../a/x.prefab.yaml\n";
+    let files = Files::new(&[("a/x.prefab.yaml", x), ("b/y.prefab.yaml", y)]);
+    let diagnostics = files
+        .expand("format: 1\nentities:\n  - name: s\n    prefab: a/x.prefab.yaml\n")
+        .unwrap_err();
+    assert!(
+        diagnostics.iter().any(|d| d.code.as_str() == "L1232"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_malformed_path_in_a_prefab_is_l1311_naming_the_file() {
+    let bad = SIGN.replace("../tex/t.png", "/abs/t.png");
+    let diagnostics = ludion_scene::check_prefab(&bad, &registry()).unwrap_err();
+    assert!(has(
+        &diagnostics,
+        "L1311",
+        "/entities/0/components/Sprite/texture"
+    ));
+    assert!(ludion_scene::check_prefab(SIGN, &registry()).is_ok());
+
+    let nested = OUTER.replace("../b/inner", "/b/inner");
+    let diagnostics = ludion_scene::check_prefab(&nested, &registry()).unwrap_err();
+    assert!(has(&diagnostics, "L1311", "/entities/0/prefab"));
+
+    let files = Files::new(&[("props/lamp.prefab.yaml", Box::leak(bad.into_boxed_str()))]);
+    let source = "format: 1\nentities:\n  - name: lamp\n    prefab: props/lamp.prefab.yaml\n";
+    let diagnostics = files.expand(source).unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code.as_str() == "L1311" && d.message.contains("props/lamp.prefab.yaml")),
+        "{diagnostics:?}"
+    );
 }

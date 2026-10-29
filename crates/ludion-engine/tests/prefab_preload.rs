@@ -29,7 +29,7 @@ entities:
     components:
       Mesh:
         shape:
-          asset: \"{MESH_PATH}\"
+          asset: \"../{MESH_PATH}\"
   - name: part
     components:
       SkinBone:

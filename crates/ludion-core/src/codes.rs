@@ -1507,6 +1507,11 @@ pub mod code {
     /// rig was spawned after the engine was built without one). Raised once at runtime.
     pub const CAMERA_RIG_NOT_INSTALLED: DiagnosticCode = DiagnosticCode::new("L1310");
 
+    /// `L1311` — an asset path inside a `kind: prefab` document, or a nested `prefab:` entry, is not
+    /// a relative path (absolute, drive or scheme prefix, NUL, or a malformed `..` segment). Raised
+    /// by prefab validation.
+    pub const PREFAB_ASSET_PATH: DiagnosticCode = DiagnosticCode::new("L1311");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7487,6 +7492,18 @@ game code is never advanced.
 
 Fix: author the rig in the scene so the engine installs the system, instead of spawning it at runtime.",
     },
+    CodeEntry {
+        code: code::PREFAB_ASSET_PATH,
+        severity: Severity::Error,
+        title: "a path in a prefab is not a relative path",
+        explanation: "An asset path in a `kind: prefab` document (a part's component, an instance entry's override, or
+a nested `prefab:` entry) is absolute, carries a drive, scheme or stream prefix (`:`), contains a
+NUL byte, or has a malformed `..` segment. Every path in a prefab resolves against the directory of
+the prefab file itself, so `meshes/a.mesh.yaml` names a file beside the prefab and `../x.png` climbs
+one level; the engine rebases it to the content root when the prefab is read.
+
+Fix: write the path relative to the prefab file's directory; `..` may climb.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -10167,6 +10184,7 @@ mod tests {
         code::CAMERA_RIG_DUPLICATE,
         code::CAMERA_RIG_PARENTED,
         code::CAMERA_RIG_NOT_INSTALLED,
+        code::PREFAB_ASSET_PATH,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

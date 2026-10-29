@@ -299,9 +299,9 @@ kind: prefab
 name: outer
 entities:
   - name: left
-    prefab: prefabs/chain.prefab.yaml
+    prefab: chain.prefab.yaml
   - name: right
-    prefab: prefabs/chain.prefab.yaml
+    prefab: chain.prefab.yaml
     transform:
       translation:
         - 2.0

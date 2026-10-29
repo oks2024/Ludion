@@ -5,6 +5,10 @@
 //! `overrides`, and composes entity names `<instance>/<part path>`. Entity references name document
 //! positions throughout; a reference to an instance entry lands on its first surviving part.
 //!
+//! Every path resolves against the document it is written in: a prefab's asset paths, its nested
+//! `prefab:` entries and its own overrides are rebased to content-root form when the prefab is read
+//! ([`PrefabDocument::rebase`](crate::PrefabDocument::rebase)); the scene's own paths are unchanged.
+//!
 //! A diagnostic about an expanded prefab file keeps its `/entities/{i}/…` pointer into that file, has
 //! its message prefixed `` in `<prefab path>`: `` once (by the level that read the file), and carries
 //! one `related` diagnostic per enclosing instance, outermost last.
@@ -631,6 +635,8 @@ fn resolve_entry(
                 diagnostics.extend(attribute(&source, index, composed, unattributed(errors)));
                 return None;
             }
+            let mut doc = doc;
+            doc.rebase(&source, context.registry);
             let doc = Rc::new(doc);
             context
                 .parsed

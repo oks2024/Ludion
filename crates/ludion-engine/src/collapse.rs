@@ -509,18 +509,19 @@ pub(crate) fn leaf_pointers(component: &str, value: &Value) -> Vec<String> {
     out
 }
 
-/// The version a candidate document names a prefab by: `@{snapshot}/{key}`.
+/// The version a candidate document names a prefab by: `{key}@{snapshot}`. The version is a suffix
+/// so the key's directory stays the real one: a prefab resolves its nested paths against it.
 fn versioned(version: usize, key: &str) -> String {
-    format!("@{version}/{}", normalize_prefab_path(key))
+    format!("{}@{version}", normalize_prefab_path(key))
 }
 
-/// Splits `@{snapshot}/{rest}`.
+/// Splits `{rest}@{snapshot}`.
 fn split_version(path: &str) -> Option<(usize, &str)> {
-    let (version, rest) = path.strip_prefix('@')?.split_once('/')?;
+    let (rest, version) = path.rsplit_once('@')?;
     Some((version.parse().ok()?, rest))
 }
 
-/// `message` without the `@{snapshot}/` a versioned key carries in a candidate document.
+/// `message` without the `@{snapshot}` a versioned key carries in a candidate document.
 fn plain_key(message: &str) -> String {
     let mut plain = String::with_capacity(message.len());
     let mut rest = message;
@@ -528,8 +529,9 @@ fn plain_key(message: &str) -> String {
         plain.push_str(&rest[..at]);
         let after = &rest[at + 1..];
         let digits = after.bytes().take_while(u8::is_ascii_digit).count();
-        if digits > 0 && after[digits..].starts_with('/') {
-            rest = &after[digits + 1..];
+        let ends_key = !after[digits..].starts_with(|c: char| c.is_alphanumeric());
+        if digits > 0 && ends_key {
+            rest = &after[digits..];
         } else {
             plain.push('@');
             rest = after;
@@ -1809,7 +1811,46 @@ mod tests {
 
     use ludion_core::math::{Trs, euler_xyz_degrees_to_quat};
 
-    use super::{leaf_pointers, local_under_placement, override_pointers, placement_for};
+    use super::{
+        leaf_pointers, local_under_placement, override_pointers, placement_for, plain_key,
+        split_version, versioned,
+    };
+
+    #[test]
+    fn a_versioned_key_keeps_its_directory_and_reads_back() {
+        let key = versioned(3, "prefabs/town/a.prefab.yaml");
+        assert_eq!(key, "prefabs/town/a.prefab.yaml@3");
+        assert_eq!(split_version(&key), Some((3, "prefabs/town/a.prefab.yaml")));
+        assert_eq!(split_version("prefabs/a.prefab.yaml"), None);
+        // The suffix leaves the directory real, so a prefab-relative path resolves as on disk.
+        assert_eq!(
+            ludion_core::paths::sibling(&key, "../../../assets/x.mesh.yaml"),
+            "../assets/x.mesh.yaml"
+        );
+    }
+
+    #[test]
+    fn a_nested_entry_written_in_a_versioned_prefab_composes_to_the_real_key() {
+        // `namespace` appends the version to the raw relative path; the rebase then resolves it
+        // against the outer prefab's directory.
+        let nested = versioned(3, "b.prefab.yaml");
+        let rebased = ludion_core::paths::sibling("prefabs/a.prefab.yaml@3", &nested);
+        assert_eq!(rebased, "prefabs/b.prefab.yaml@3");
+        assert_eq!(split_version(&rebased), Some((3, "prefabs/b.prefab.yaml")));
+    }
+
+    #[test]
+    fn plain_key_strips_the_version_suffix_only() {
+        assert_eq!(
+            plain_key("in `prefabs/a.prefab.yaml@3`: bad; mail me@3b"),
+            "in `prefabs/a.prefab.yaml`: bad; mail me@3b"
+        );
+        assert_eq!(
+            plain_key("prefabs/a.prefab.yaml@12"),
+            "prefabs/a.prefab.yaml"
+        );
+        assert_eq!(plain_key("a@b"), "a@b");
+    }
 
     fn random_poses(count: usize, seed: u32) -> Vec<[Trs; 3]> {
         let mut state = seed;

@@ -483,7 +483,8 @@ impl PrefabLibrary {
                 })
                 .collect()
         };
-        let doc = ludion_scene::check_prefab(source, &self.registry).map_err(name_the_file)?;
+        let mut doc = ludion_scene::check_prefab(source, &self.registry).map_err(name_the_file)?;
+        doc.rebase(path, &self.registry);
         doc.expand(&self.registry, &mut |nested_path| {
             let key = prefab_key(nested_path).map_err(|mut found| found.swap_remove(0))?;
             deps.insert(key.clone());

@@ -17,6 +17,7 @@ pub struct Transform {
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
 pub struct Sprite {
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
     pub texture: String,
     pub layer: i32,
     pub visible: bool,
