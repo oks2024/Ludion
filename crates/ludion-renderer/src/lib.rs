@@ -59,6 +59,7 @@ mod probe_capture;
 mod probe_relight;
 mod probe_shade;
 mod probe_store;
+mod projector;
 mod quality;
 mod render;
 mod scene;
@@ -79,6 +80,10 @@ pub use ludion_font::GlyphQuad;
 pub use probe::{MAX_PROBES, ProbeData, ProbeVolume, probe_rank};
 pub use probe_capture::{
     AxisIrradiance, ProbeIrradiance, ProbeReadback, ProbeResolve, ResolvedProbe,
+};
+pub use projector::{
+    OCCLUSION_ATLAS_MAX, OCCLUSION_TILE, OcclusionAtlas, ProjectorBlend, ProjectorKind,
+    footprint_bound, occlusion_atlas, occlusion_bias, occlusion_view,
 };
 pub use quality::{Quality, QualityParams};
 pub use render::{GpuUploads, Renderer, is_renderer_shader};

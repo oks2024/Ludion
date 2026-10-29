@@ -168,7 +168,7 @@ fn all_repo_shaders_reflect_and_unify() {
     // specular + depth + trace group. Of
     // them exactly four are compute-only (gi_bake, gi_inject, probe_relight, the IBL prefilter trio): the emitter
     // skips their BGLs because compute pipelines keep auto-derived layouts.
-    assert_eq!(reflection.bind_groups.len(), 38);
+    assert_eq!(reflection.bind_groups.len(), 39);
     let mut compute_only: Vec<&str> = reflection
         .bind_groups
         .iter()

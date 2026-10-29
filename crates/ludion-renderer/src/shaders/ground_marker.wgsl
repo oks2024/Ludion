@@ -10,8 +10,9 @@
 //   segment(length, width) -> half_extent ((L - w)/2, 0),   corner radius w/2
 //
 // The `Camera` uniform (@group 0) is a shared snippet composed ahead of this file
-// (`shaders/snippets/camera.wgsl`). Markers are deliberately unlit — the authored colour is the
-// look, and an HDR value above 1 rides the bloom chain exactly like an emissive mesh.
+// (`shaders/snippets/camera.wgsl`), then `sd_rounded_box` (`shaders/snippets/rounded_box.wgsl`).
+// Markers are deliberately unlit — the authored colour is the look, and an HDR value above 1 rides
+// the bloom chain exactly like an emissive mesh.
 
 struct VsIn {
     // Columns of the instance's rigid local->world transform (rotation + lifted translation, no
@@ -58,12 +59,6 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
     out.color = in.color;
     out.shape = in.shape;
     return out;
-}
-
-// Signed distance to a rounded box centred on the origin: negative inside, zero on the outline.
-fn sd_rounded_box(p: vec2<f32>, half_extent: vec2<f32>, radius: f32) -> f32 {
-    let q = abs(p) - half_extent;
-    return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
 @fragment

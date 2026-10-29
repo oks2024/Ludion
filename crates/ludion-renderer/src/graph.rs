@@ -18,6 +18,9 @@
 //! - **scene** — opaque meshes (depth-tested, lit) into a full-resolution HDR (`Rgba16Float`)
 //!   target, and their normal+roughness and F0+specular-occlusion into two more.
 //! - **reflections** — a fullscreen additive pass over the opaque scene (the sky's indirect specular).
+//! - **drop_shadow_occlusion / projector** — present only with a drop shadow ([`PostChain::drop_shadow_atlas`]):
+//!   a depth-only atlas of straight-down tiles, one per caster, then the generic projector pass that
+//!   multiplies each shadow's footprint into `scene`, after `reflections` and before `transparents`.
 //! - **transparents** — the sky, ground markers, sprites/billboards (alpha, depth-tested), particles
 //!   and text, over the same target.
 //! - **bloom_threshold / bloom_down_1..5 / bloom_up_4..0** — a six-level bloom pyramid: a bright-pass
@@ -188,6 +191,14 @@ pub mod pass {
     /// A probe capture's last pass: the lit face into the capture target, with sky visibility in
     /// alpha. Reads `scene` and `scene_depth`.
     pub const PROBE_FACE: &str = "probe_face";
+    /// The depth-only drop-shadow occlusion pass: one straight-down orthographic depth tile per
+    /// caster in a single atlas, drawing every mesh except that caster's own. Present only when the
+    /// scene carries a drop shadow, at every quality (`Plan/shadow-mapping.md` decision 8).
+    pub const DROP_SHADOW_OCCLUSION: &str = "drop_shadow_occlusion";
+    /// The generic projector pass: one box volume per instance, the world position rebuilt from
+    /// `scene_depth`, the instance's analytic footprint evaluated and multiplied into `scene`. Today
+    /// its only client is the drop shadow, so it is present exactly when the occlusion atlas is.
+    pub const PROJECTOR: &str = "projector";
     /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
     /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.
     pub const TRANSPARENTS: &str = "transparents";
@@ -582,6 +593,14 @@ pub struct PostChain {
     /// what makes a probe-free frame byte-identical by construction rather than by care. Probes have
     /// no quality toggle, so `masked` keeps it.
     pub probe_relight: bool,
+    /// The edge of the drop-shadow occlusion atlas, or `None` when the scene carries no drop
+    /// shadow: the [`pass::DROP_SHADOW_OCCLUSION`] and [`pass::PROJECTOR`] passes are added between
+    /// `reflections` (and the SSR blend) and `transparents`, with the atlas as a transient. `None`
+    /// leaves the graph with neither, which is what makes a drop-shadow-free frame byte-identical by
+    /// construction. The atlas has no quality toggle, so `masked` keeps it.
+    ///
+    /// It carries the extent for the reason [`shadow_map`](PostChain::shadow_map) carries its edge.
+    pub drop_shadow_atlas: Option<u32>,
 }
 
 impl PostChain {
@@ -631,6 +650,8 @@ impl PostChain {
             probe_view: scene.debug_view == Some(crate::DebugView::ProbeIndex)
                 && !scene.probes.is_empty(),
             probe_relight: !scene.probes.is_empty(),
+            drop_shadow_atlas: crate::projector::occlusion_atlas(scene.drop_shadows.len())
+                .map(|atlas| atlas.edge),
         }
     }
 
@@ -909,6 +930,14 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             TextureDesc::rgba32_storage(crate::probe::MAX_PROBES as u32, 6),
         )
     });
+    // The drop-shadow occlusion atlas, appended after the last conditional resource and before
+    // `final` like every conditional chain, so no existing resource list moves.
+    let drop_shadow_atlas = chain.drop_shadow_atlas.map(|edge| {
+        graph.transient(
+            pass::DROP_SHADOW_OCCLUSION,
+            TextureDesc::sampled_depth(edge, edge),
+        )
+    });
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
     let output = graph.output("final", TextureDesc::present_target(width, height));
@@ -1017,6 +1046,24 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
                 scene_depth,
                 ssr.trace,
             ],
+            vec![scene],
+        );
+    }
+    // The occlusion tiles, then the projector that reads them: after the last writer of `scene`
+    // that lights it, before the transparents so a sprite or particle is not darkened by a shadow
+    // it floats over.
+    if let Some(atlas) = drop_shadow_atlas {
+        graph.add_external_pass_with_depth(
+            pass::DROP_SHADOW_OCCLUSION,
+            pass::DROP_SHADOW_OCCLUSION,
+            vec![],
+            vec![],
+            atlas,
+        );
+        graph.add_external_pass(
+            pass::PROJECTOR,
+            pass::PROJECTOR,
+            vec![scene_depth, scene_normal, atlas],
             vec![scene],
         );
     }
@@ -1325,7 +1372,8 @@ pub(crate) fn build_probe_capture_graph(
             && !chain.shafts
             && !chain.dof
             && !chain.ui
-            && !chain.debug_lines,
+            && !chain.debug_lines
+            && chain.drop_shadow_atlas.is_none(),
         "a probe face schedules none of the screen-space chains: {chain:?}"
     );
     debug_assert!(!chain.probe_relight, "a face scene carries no probes");
@@ -1579,6 +1627,8 @@ mod tests {
                 // Content like `ui`: masking keeps it.
                 probe_view: bits & 1 != 0,
                 probe_relight: bits & 1 != 0,
+                // Content too, like the probes: no quality switch removes a drop shadow.
+                drop_shadow_atlas: (bits & 1 != 0).then_some(128),
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -2193,6 +2243,126 @@ mod tests {
         );
         let hiz = ssaa.resources().iter().find(|r| r.name == "hiz").unwrap();
         assert_eq!((hiz.desc.extent.width, hiz.desc.extent.height), (960, 540));
+    }
+
+    /// A drop shadow adds a depth-only occlusion pass and the projector between `reflections` and
+    /// `transparents`; the atlas is the last resource before `final`, so no existing list moves.
+    #[test]
+    fn a_drop_shadow_adds_the_occlusion_atlas_and_the_projector() {
+        let chain = PostChain {
+            drop_shadow_atlas: Some(128),
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let resources = resource_names(&graph);
+        assert_eq!(
+            resources[resources.len() - 2..],
+            ["drop_shadow_occlusion", "final"],
+        );
+        assert_eq!(resources.len(), 17);
+        assert_eq!(
+            pass_names(&graph)[..5],
+            [
+                "scene",
+                "reflections",
+                "drop_shadow_occlusion",
+                "projector",
+                "transparents"
+            ],
+        );
+        let find = |name: &str| graph.passes().iter().find(|p| p.name == name).unwrap();
+        let name_of = |id: &ResourceId| graph.resources()[id.index()].name.as_str();
+        let projector = find("projector");
+        assert_eq!(
+            projector.reads().iter().map(name_of).collect::<Vec<_>>(),
+            ["scene_depth", "scene_normal", "drop_shadow_occlusion"],
+        );
+        assert_eq!(
+            projector
+                .color_targets()
+                .iter()
+                .map(name_of)
+                .collect::<Vec<_>>(),
+            ["scene"],
+        );
+        let occlusion = find("drop_shadow_occlusion");
+        assert!(occlusion.color_targets().is_empty(), "depth-only");
+        assert_eq!(
+            name_of(&occlusion.depth_target().unwrap()),
+            "drop_shadow_occlusion"
+        );
+        let atlas = graph
+            .resources()
+            .iter()
+            .find(|r| r.name == "drop_shadow_occlusion")
+            .unwrap();
+        assert_eq!(
+            (atlas.desc.extent.width, atlas.desc.extent.height),
+            (128, 128)
+        );
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// With SSR on, the projector still lands after the blend and before the transparents.
+    #[test]
+    fn the_projector_follows_the_ssr_blend() {
+        let chain = PostChain {
+            drop_shadow_atlas: Some(128),
+            ..ssr_chain()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let order = schedule(&graph).unwrap();
+        let names = order.order_names();
+        let pos = |n: &str| names.iter().position(|p| *p == n).unwrap();
+        assert!(pos("ssr_blend") < pos("drop_shadow_occlusion"));
+        assert!(pos("drop_shadow_occlusion") < pos("projector"));
+        assert!(pos("projector") < pos("transparents"));
+    }
+
+    /// `for_scene` derives the atlas from the drop shadows; a scene without any keeps the frozen
+    /// fifteen-pass graph.
+    #[test]
+    fn for_scene_sizes_the_atlas_from_the_drop_shadows() {
+        let mut scene = RenderScene::empty((1920, 1080));
+        let bare = PostChain::for_scene(&scene);
+        assert_eq!(bare.drop_shadow_atlas, None);
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), bare);
+        assert_eq!(pass_names(&graph).len(), 15);
+        scene.drop_shadows.push(crate::scene::DropShadowInstance {
+            shape: crate::scene::GroundMarkerShape::Disc { radius: 1.0 },
+            anchor: ludion_core::math::glam::Vec3::ZERO,
+            yaw: 0.0,
+            opacity: 0.5,
+            softness: 0.0,
+            max_distance: 5.0,
+            fade_distance: 1.0,
+            exclude: Vec::new(),
+        });
+        assert_eq!(PostChain::for_scene(&scene).drop_shadow_atlas, Some(128));
+    }
+
+    /// No quality switch reaches the atlas: a drop shadow is content, not an effect.
+    #[test]
+    fn masking_keeps_the_drop_shadow_atlas() {
+        let chain = PostChain {
+            drop_shadow_atlas: Some(256),
+            ..PostChain::default()
+        };
+        let low = chain.masked(
+            &Quality::preset("low").unwrap(),
+            &QualityParams::preset("low").unwrap(),
+        );
+        assert_eq!(low.drop_shadow_atlas, Some(256));
+        let no_shadows = Quality {
+            shadows: false,
+            ..Quality::FULL
+        };
+        assert_eq!(
+            chain
+                .masked(&no_shadows, &QualityParams::FULL)
+                .drop_shadow_atlas,
+            Some(256)
+        );
     }
 
     #[test]

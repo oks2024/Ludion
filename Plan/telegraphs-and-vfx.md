@@ -226,9 +226,10 @@ pass/graph/extract-plumbing change.
   are all ground-anchored; no named consumer for the general case. Trigger: a concrete need for a
   telegraph/effect on non-flat or vertical geometry (e.g. a wall-mounted sigil).
   - *Partial firing, 2026-10-28 (Clockout request 0006):* projecting onto non-flat geometry was the
-    recorded trigger. `DropShadow` shipped an analytic, untextured, straight-down darkening
-    footprint with a first-surface rule, and did not consume the trigger: textured decals,
-    arbitrary projection directions and vertical surfaces stay deferred.
+    recorded trigger. Request 0006 built the generic projector pass (analytic multiply only) that
+    general decals extend; `DropShadow` is its first client and did not consume the trigger. The
+    trigger fires through request 0012: textured decals, arbitrary projection directions and
+    vertical surfaces stay deferred until then.
 
 ## Risks / open questions
 
