@@ -366,6 +366,18 @@ fn world_box(instance: &Instance, boxes: &mut MeshBoxes) -> Option<Aabb> {
     (world.min.is_finite() && world.max.is_finite()).then_some(world)
 }
 
+/// What [`resolve`] would drop from `meshes`, without rasterizing anything — the dumps' diagnosis of
+/// an empty grid.
+///
+/// # Errors
+/// As [`voxelize`]: a mesh document that will not load.
+pub(crate) fn skip_report(
+    meshes: &[PlacedMesh<'_>],
+    assets: &mut dyn SceneAssets,
+) -> Result<SkipReport, Vec<Diagnostic>> {
+    resolve(meshes, assets).map(|(_, skipped)| skipped)
+}
+
 /// Resolves each placed mesh into the geometry the rasterizer needs, keeping the ascending
 /// entity-slot order the combine rule depends on, and counts what it drops. Instances whose
 /// transform sends a corner to a non-finite coordinate are dropped: they have no world box the grid

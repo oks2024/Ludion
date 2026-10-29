@@ -1633,6 +1633,11 @@ pub mod code {
     /// scene-check / `component.set` time.
     pub const DROP_SHADOW_INVALID_DISTANCE: DiagnosticCode = DiagnosticCode::new("L2110");
 
+    /// `L2111` — `ludion render --dump-voxels` or `--dump-gi` was asked to dump a scene whose
+    /// `GiVolume` resolves to no grid — every placed mesh was skipped, or none is placed. Raised by
+    /// `ludion-engine`'s voxel-sheet dump, before any GPU adapter is requested.
+    pub const GI_VOLUME_EMPTY: DiagnosticCode = DiagnosticCode::new("L2111");
+
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
     pub const RENDER_GOLDEN_MISSING: DiagnosticCode = DiagnosticCode::new("L2201");
@@ -7998,6 +8003,28 @@ Fix: give `max_distance` a value greater than 0, and `fade_distance` a value bet
       fade_distance: 4.0",
     },
     CodeEntry {
+        code: code::GI_VOLUME_EMPTY,
+        severity: Severity::Error,
+        title: "GiVolume covers no voxelizable geometry",
+        explanation: "\
+`ludion render --dump-voxels` or `--dump-gi` was asked to dump the scene's global-illumination grid
+or baked probe volume, and the scene does author a `GiVolume` — but nothing placed in it voxelizes,
+so extraction built no grid. The message counts what was skipped by reason and the help points at the
+first entity of each.
+
+What voxelizes: cubes, planes, spheres, voxel models and unskinned asset meshes. What is skipped:
+a mesh carrying `GiDynamic` (its light is injected per frame, so it never enters the static grid);
+skinned meshes and characters (their shape moves with the pose); an instance whose placement is not
+finite; and sculpts, assemblies and asset meshes with no triangles, which are not voxelized. When the
+message says the scene places no mesh, there is simply no geometry to fill the grid.
+
+This differs from `L2104`, which means the scene authors no `GiVolume` at all. Here the opt-in is
+present and the content is the problem.
+
+Fix: place static geometry inside the scene, or drop `GiDynamic` from a mesh that should occlude. A
+skinned mesh never voxelizes; give the scene static stand-in geometry if it should shape the bounce.",
+    },
+    CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
         severity: Severity::Error,
         title: "golden image is missing",
@@ -10241,6 +10268,7 @@ mod tests {
         code::VOLLEY_INVALID,
         code::RENDER_PLACEMENT_NON_FINITE,
         code::DROP_SHADOW_INVALID_DISTANCE,
+        code::GI_VOLUME_EMPTY,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,

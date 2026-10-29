@@ -1296,6 +1296,35 @@ fn extract_gi_volume(world: &World, ids: &[EntityId]) -> Option<(usize, GiVolume
         .find_map(|(index, &id)| get::<GiVolume>(world, id).map(|gi| (index, *gi)))
 }
 
+/// Why the scene's `GiVolume` may resolve to no grid: the volume's entity index and what the
+/// voxelizer would skip, or `None` when the scene authors no `GiVolume`. It re-walks placement over a
+/// fresh asset cache, so it is for error paths only (the voxel-sheet dumps), never a frame.
+///
+/// # Errors
+/// As [`crate::voxelizer::voxelize`]: a mesh document that will not load.
+pub(crate) fn gi_volume_skips(
+    world: &World,
+    camera: &RenderCamera,
+    project_root: &Path,
+    now: SimTime,
+) -> Result<Option<(usize, crate::voxelizer::SkipReport)>, Vec<Diagnostic>> {
+    let ids: Vec<EntityId> = world
+        .entities()
+        .chain(world.presentation_entities())
+        .collect();
+    let Some((index, _)) = extract_gi_volume(world, &ids) else {
+        return Ok(None);
+    };
+    let placed = place_uncached(world, &ids, camera, project_root, now);
+    let mut cache = AssetCache::new();
+    let mut assets = CachedAssets {
+        root: project_root,
+        cache: &mut cache,
+    };
+    let skipped = crate::voxelizer::skip_report(&placed.meshes, &mut assets)?;
+    Ok(Some((index, skipped)))
+}
+
 /// Points a voxelizer diagnostic that carries no path of its own at the authored
 /// `GiVolume.cell_size` — the sizing error's cause. A diagnostic that already names a site (a voxel
 /// document re-pointed at its `Mesh` component) keeps it.

@@ -66,9 +66,12 @@ impl Fixture {
         Fixture(dir)
     }
 
-    /// Writes `source` as `name` inside this fixture's directory and returns its path.
+    /// Writes `source` as `name` inside this fixture's directory (creating any parent directory)
+    /// and returns its path.
     fn scene(&self, name: &str, source: &str) -> PathBuf {
         let path = self.0.join(name);
+        std::fs::create_dir_all(path.parent().expect("fixture file has a parent"))
+            .expect("create fixture subdirectory");
         std::fs::write(&path, source).expect("write fixture scene");
         path
     }
@@ -471,6 +474,137 @@ fn needs_gpu_albedo_tints_the_bounce() {
         ratio_on > ratio_off * 1.03,
         "the floor's R/G ratio must rise measurably once the red wall's albedo rides the bounce: \
          off R/G={ratio_off:.4}, on R/G={ratio_on:.4}"
+    );
+}
+
+/// A closed unit cube as a `kind: mesh` document (eight corners, twelve triangles, no emissive).
+const UNIT_CUBE_MESH: &str = "format: 1
+kind: mesh
+positions:
+  - -0.5
+  - -0.5
+  - -0.5
+  - 0.5
+  - -0.5
+  - -0.5
+  - 0.5
+  - 0.5
+  - -0.5
+  - -0.5
+  - 0.5
+  - -0.5
+  - -0.5
+  - -0.5
+  - 0.5
+  - 0.5
+  - -0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - -0.5
+  - 0.5
+  - 0.5
+indices:
+  - 0
+  - 2
+  - 1
+  - 0
+  - 3
+  - 2
+  - 4
+  - 5
+  - 6
+  - 4
+  - 6
+  - 7
+  - 0
+  - 4
+  - 7
+  - 0
+  - 7
+  - 3
+  - 1
+  - 2
+  - 6
+  - 1
+  - 6
+  - 5
+  - 0
+  - 1
+  - 5
+  - 0
+  - 5
+  - 4
+  - 3
+  - 7
+  - 6
+  - 3
+  - 6
+  - 2
+";
+
+/// [`albedo_bounce_scene`] with the red wall an imported mesh (`meshes/wall.mesh.yaml`) instead of
+/// a primitive cube; the floor stays a primitive.
+fn imported_wall_scene(bounce: f64) -> String {
+    let mut y = Yaml::default();
+    header(
+        &mut y,
+        "gi bounce fixture: an imported wall tints the bounce",
+    );
+    camera_top_down(&mut y, 1.2, -1.9, 1.0, 10.0);
+    gi_volume(&mut y, 0.25, 0.5, bounce);
+
+    wall(
+        &mut y,
+        "floor",
+        [0.0, -0.25, 0.0],
+        [6.0, 0.5, 6.0],
+        [0.85, 0.85, 0.85],
+    );
+    entity(&mut y, "red-wall", |y| {
+        transform(y, [0.0, 1.5, -2.5], [0.0; 3], [6.0, 3.0, 0.5]);
+        y.push(3, "Mesh:");
+        y.push(4, "shape:");
+        y.push(5, "asset: meshes/wall.mesh.yaml");
+        y.vec(4, "color", &[0.95, 0.02, 0.02, 1.0]);
+    });
+    point_light(&mut y, [0.0, 0.4, -1.7], [1.0, 1.0, 1.0], 10.0, 6.0);
+
+    y.0
+}
+
+/// **Clockout request 0013's acceptance gate.** A lit imported wall bounces its colour onto a
+/// primitive floor: the floor's `R/G` ratio rises between `bounce: 0.0` and `bounce: 1.0`, exactly as
+/// T4 does for a primitive wall — a shell-voxelized asset mesh feeds the bounce as a primitive does.
+#[test]
+fn needs_gpu_an_imported_wall_bounces_its_colour() {
+    let fixture = Fixture::new("imported-wall");
+    fixture.scene("meshes/wall.mesh.yaml", UNIT_CUBE_MESH);
+
+    let render = |tag: &str, bounce: f64| {
+        let source = imported_wall_scene(bounce);
+        let path = fixture.scene(&format!("{tag}.yaml"), &source);
+        render_fixture("gi-imported-wall", &path, 160, 90)
+    };
+
+    let Some(off) = render("bounce-0", 0.0) else {
+        return;
+    };
+    let on = render("bounce-1", 1.0).expect("GPU present for the second render");
+
+    let (r_off, g_off, _) = mean_rgb(&off);
+    let (r_on, g_on, _) = mean_rgb(&on);
+    let ratio_off = r_off / g_off.max(1e-6);
+    let ratio_on = r_on / g_on.max(1e-6);
+
+    eprintln!(
+        "[gi-imported-wall] off R={r_off:.3} G={g_off:.3} R/G={ratio_off:.4} | on R={r_on:.3}          G={g_on:.3} R/G={ratio_on:.4}"
+    );
+
+    assert!(
+        ratio_on > ratio_off * 1.03,
+        "the floor's R/G ratio must rise once the imported red wall rides the bounce:          off R/G={ratio_off:.4}, on R/G={ratio_on:.4}"
     );
 }
 

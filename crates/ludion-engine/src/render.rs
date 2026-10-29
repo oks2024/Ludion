@@ -31,6 +31,7 @@ use ludion_renderer::{
     Renderer,
 };
 use ludion_scene::{AppliedOverride, SceneOverride};
+use ludion_sim::SimDriver;
 
 use crate::builder::EngineBuilder;
 use crate::builtin_registry;
@@ -356,42 +357,17 @@ pub(crate) fn expanded_world(
     Ok((expanded.scene, world))
 }
 
-/// The CPU half of the lockstep path: read → parse → override → validate → instantiate → tick →
-/// extract, with no GPU touched. Shared by [`render_scene_with_registry`], [`dump_scene_graph_json`],
-/// and `crate::voxel_sheet::render_voxel_sheet` so a scene that renders, a scene that dumps its
-/// graph, and a scene that dumps its GI grid all go through exactly one validation and extraction
-/// path.
-///
-/// Overrides land between parse and validation deliberately: the schema then rejects an ill-typed
-/// override with the `L1014` it would give the same value written into the file, rather than a
-/// second, weaker check here.
-///
-/// `frames` ticks the world that many times, over the empty built-in `Schedule` (no game systems
-/// are ever installed here), before [`extract_at`] snapshots it at the sim time that reaches.
-/// [`render_scene_with_registry`] threads its own caller's count through; `dump_scene_graph_json` and
-/// `crate::voxel_sheet::render_voxel_sheet` pass `0` and keep their static tick-0 frame.
-///
-/// Extraction uses [`size.output`](FrameSize::output), never the render extent: the camera's aspect
-/// is the same either way, but screen-space UI is authored in output pixels and drawn by the overlay
-/// pass after the resolve.
-///
-/// `particle_density` is the caller's own, exactly as `quality` is: only the path that renders
-/// pixels for a machine passes that machine's value, so `ludion render --quality low` draws the
-/// thinned population while the graph dump and the voxel sheets stay at
-/// [`QualityParams::FULL`]'s — an instrument compared across boxes must not move with one.
-///
-/// `debug` picks the debug-draw categories the extracted scene carries; anything but
-/// [`DebugCategories::None`] installs the [`DebugDraw`] resource the bare host's systems draw into,
-/// and the third element names the categories that drew anything on the last tick (empty for `None`).
-pub(crate) fn extract_scene_file(
+/// The world half of [`extract_scene_file`]: read → parse → override → validate → instantiate →
+/// tick, stopping before any extraction, so a caller that needs the world after extract (the GI
+/// dumps diagnosing an empty grid) keeps it. Errors are exactly [`extract_scene_file`]'s up to its
+/// extract step.
+pub(crate) fn scene_file_driver(
     registry: &Registry,
     path: &Path,
-    size: FrameSize,
     overrides: &[SceneOverride],
     frames: u64,
-    particle_density: f32,
     debug: &DebugCategories,
-) -> Result<ExtractedScene, Vec<Diagnostic>> {
+) -> Result<(SimDriver, Vec<AppliedOverride>), Vec<Diagnostic>> {
     let source = std::fs::read_to_string(path).map_err(|error| {
         vec![
             Diagnostic::new(
@@ -430,6 +406,47 @@ pub(crate) fn extract_scene_file(
         return Err(vec![d]);
     }
 
+    Ok((driver, applied_overrides))
+}
+
+/// The CPU half of the lockstep path: read → parse → override → validate → instantiate → tick →
+/// extract, with no GPU touched. Shared by [`render_scene_with_registry`], [`dump_scene_graph_json`],
+/// and `crate::voxel_sheet::render_voxel_sheet` so a scene that renders, a scene that dumps its
+/// graph, and a scene that dumps its GI grid all go through exactly one validation and extraction
+/// path.
+///
+/// Overrides land between parse and validation deliberately: the schema then rejects an ill-typed
+/// override with the `L1014` it would give the same value written into the file, rather than a
+/// second, weaker check here.
+///
+/// `frames` ticks the world that many times, over the empty built-in `Schedule` (no game systems
+/// are ever installed here), before [`extract_at`] snapshots it at the sim time that reaches.
+/// [`render_scene_with_registry`] threads its own caller's count through; `dump_scene_graph_json` and
+/// `crate::voxel_sheet::render_voxel_sheet` pass `0` and keep their static tick-0 frame.
+///
+/// Extraction uses [`size.output`](FrameSize::output), never the render extent: the camera's aspect
+/// is the same either way, but screen-space UI is authored in output pixels and drawn by the overlay
+/// pass after the resolve.
+///
+/// `particle_density` is the caller's own, exactly as `quality` is: only the path that renders
+/// pixels for a machine passes that machine's value, so `ludion render --quality low` draws the
+/// thinned population while the graph dump and the voxel sheets stay at
+/// [`QualityParams::FULL`]'s — an instrument compared across boxes must not move with one.
+///
+/// `debug` picks the debug-draw categories the extracted scene carries; anything but
+/// [`DebugCategories::None`] installs the [`DebugDraw`] resource the bare host's systems draw into,
+/// and the third element names the categories that drew anything on the last tick (empty for `None`).
+pub(crate) fn extract_scene_file(
+    registry: &Registry,
+    path: &Path,
+    size: FrameSize,
+    overrides: &[SceneOverride],
+    frames: u64,
+    particle_density: f32,
+    debug: &DebugCategories,
+) -> Result<ExtractedScene, Vec<Diagnostic>> {
+    let (driver, applied_overrides) = scene_file_driver(registry, path, overrides, frames, debug)?;
+    let project_root = path.parent().unwrap_or(Path::new("."));
     let mut render_scene = extract_at(
         driver.world(),
         size.output,

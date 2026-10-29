@@ -212,6 +212,69 @@ fn dump_voxels_without_a_gi_volume_is_a_readable_error() {
     );
 }
 
+/// A `GiVolume` whose only mesh is `GiDynamic` builds no grid: `L2111`, not `L2104`, and no PNG left
+/// behind.
+#[test]
+fn dump_voxels_of_an_empty_gi_volume_is_a_readable_error() {
+    let scene = out_path("gi_empty_volume.scene.yaml");
+    std::fs::write(
+        &scene,
+        concat!(
+            "format: 1
+",
+            "entities:
+",
+            "  - name: gi
+",
+            "    components:
+",
+            "      GiVolume:
+",
+            "        cell_size: 0.5
+",
+            "  - name: camera
+",
+            "    components:
+",
+            "      Transform: {}
+",
+            "      Camera: {}
+",
+            "  - name: crate
+",
+            "    components:
+",
+            "      Transform: {}
+",
+            "      Mesh:
+",
+            "        shape: cube
+",
+            "      GiDynamic: {}
+",
+        ),
+    )
+    .expect("scratch scene writes");
+    let voxels_out = out_path("gi_empty_voxels.png");
+    let _ = std::fs::remove_file(&voxels_out);
+
+    let output = run_ludion(&[
+        "render",
+        "--scene",
+        scene.to_str().unwrap(),
+        "--dump-voxels",
+        voxels_out.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success(), "expected a non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[L2111]"), "{stderr}");
+    assert!(stderr.contains("1 `GiDynamic`"), "{stderr}");
+    assert!(
+        !voxels_out.exists(),
+        "a failed dump must not leave a PNG behind"
+    );
+}
+
 /// `--set` cannot create a `GiVolume` the scene lacks — the same `L4008` an unresolvable pointer
 /// always gets, not a special-cased success, and no PNG is written.
 #[test]
@@ -355,6 +418,17 @@ fn gi_volume_missing_code_is_explainable() {
     assert!(
         output.status.success(),
         "`ludion explain L2104` failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// `L2111` — a `GiVolume` that covers nothing — has a working `ludion explain` entry.
+#[test]
+fn gi_volume_empty_code_is_explainable() {
+    let output = run_ludion(&["explain", "L2111"]);
+    assert!(
+        output.status.success(),
+        "`ludion explain L2111` failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

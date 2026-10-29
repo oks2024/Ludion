@@ -66,7 +66,9 @@ use ludion_renderer::{
 use ludion_scene::{AppliedOverride, SceneOverride};
 
 use crate::debug_draw::DebugCategories;
-use crate::render::extract_scene_file;
+use crate::extract::{extract_at, gi_volume_skips};
+use crate::render::scene_file_driver;
+use crate::voxelizer::SkipReport;
 
 /// The result of a voxel-sheet dump: the stitched image plus the dumped grid's own shape, for the
 /// CLI's summary line.
@@ -100,23 +102,31 @@ pub struct VoxelSheetOutcome {
 /// - `L2104` if the scene authors no `GiVolume` — extraction then builds no grid, and there is
 ///   nothing to dump. `--set` cannot create the component (it never conjures structure, by design);
 ///   author one in the scene, or `--set` a `cell_size` on a `GiVolume` the scene already has.
+/// - `L2111` if the scene authors a `GiVolume` but nothing placed in it voxelizes.
 pub fn render_voxel_sheet(
     registry: &Registry,
     path: &Path,
     size: FrameSize,
     overrides: &[SceneOverride],
 ) -> Result<VoxelSheetOutcome, Vec<Diagnostic>> {
-    let (render_scene, applied_overrides, _) = extract_scene_file(
-        registry,
-        path,
-        size,
-        overrides,
-        0,
+    let (driver, applied_overrides) =
+        scene_file_driver(registry, path, overrides, 0, &DebugCategories::None)?;
+    let project_root = path.parent().unwrap_or(Path::new("."));
+    let render_scene = extract_at(
+        driver.world(),
+        size.output,
+        project_root,
+        driver.time(),
         QualityParams::FULL.particle_density,
-        &DebugCategories::None,
     )?;
     let Some(grid) = render_scene.voxel.as_ref() else {
-        return Err(vec![no_gi_volume(path)]);
+        return Err(empty_grid(
+            path,
+            driver.world(),
+            &render_scene.camera,
+            project_root,
+            driver.time(),
+        ));
     };
     Ok(VoxelSheetOutcome {
         image: build_sheet(grid),
@@ -174,8 +184,9 @@ pub struct GiSheetOutcome {
 ///
 /// # Errors
 /// - As [`render_voxel_sheet`]'s CPU half.
-/// - `L2104` if the scene authors no `GiVolume` (extraction then builds no probe lattice to dump) —
-///   the same code and message [`render_voxel_sheet`] uses for its own missing-grid case.
+/// - `L2104` if the scene authors no `GiVolume` (extraction then builds no probe lattice to dump),
+///   `L2111` if it authors one but nothing placed in it voxelizes — the same codes and messages
+///   [`render_voxel_sheet`] uses for its own missing-grid case.
 /// - `L2003`/`L2004` if no GPU adapter/device is available.
 /// - `L2005` if the GPU readback fails.
 pub fn render_gi_sheet(
@@ -184,17 +195,24 @@ pub fn render_gi_sheet(
     size: FrameSize,
     overrides: &[SceneOverride],
 ) -> Result<GiSheetOutcome, Vec<Diagnostic>> {
-    let (render_scene, applied_overrides, _) = extract_scene_file(
-        registry,
-        path,
-        size,
-        overrides,
-        0,
+    let (driver, applied_overrides) =
+        scene_file_driver(registry, path, overrides, 0, &DebugCategories::None)?;
+    let project_root = path.parent().unwrap_or(Path::new("."));
+    let render_scene = extract_at(
+        driver.world(),
+        size.output,
+        project_root,
+        driver.time(),
         QualityParams::FULL.particle_density,
-        &DebugCategories::None,
     )?;
     let Some(gi) = render_scene.gi else {
-        return Err(vec![no_gi_volume(path)]);
+        return Err(empty_grid(
+            path,
+            driver.world(),
+            &render_scene.camera,
+            project_root,
+            driver.time(),
+        ));
     };
 
     let renderer = Renderer::new().map_err(|d| vec![d])?;
@@ -258,6 +276,80 @@ fn dynamic_absent_reason(gi: Option<&GiData>, any_marked: bool) -> &'static str 
     // defensive fallback that states the likeliest cause rather than panicking over it, never
     // expected to fire.
     "no GiDynamic lights"
+}
+
+/// Why extraction built no grid for a scene that reached the dump: `L2104` when it authors no
+/// `GiVolume`, otherwise `L2111` with what the voxelizer skipped. The diagnosis re-walks placement,
+/// which is fine on an error path.
+fn empty_grid(
+    path: &Path,
+    world: &ludion_ecs::World,
+    camera: &ludion_renderer::RenderCamera,
+    project_root: &Path,
+    now: ludion_core::time::SimTime,
+) -> Vec<Diagnostic> {
+    match gi_volume_skips(world, camera, project_root, now) {
+        Ok(None) => vec![no_gi_volume(path)],
+        Ok(Some((index, skipped))) => vec![gi_volume_empty(path, index, &skipped)],
+        Err(diagnostics) => diagnostics,
+    }
+}
+
+/// `L2111` — the scene's `GiVolume` covers no voxelizable geometry, so extraction built no grid to
+/// dump; the message counts what the voxelizer skipped, by reason, and the help points at the first
+/// entity of each.
+fn gi_volume_empty(path: &Path, index: usize, skipped: &SkipReport) -> Diagnostic {
+    let reasons = [
+        (
+            &skipped.dynamic,
+            "`GiDynamic`",
+            "drop `GiDynamic` from a mesh that should occlude",
+        ),
+        (
+            &skipped.skinned,
+            "skinned",
+            "a skinned mesh never voxelizes",
+        ),
+        (
+            &skipped.non_finite,
+            "non-finite",
+            "fix the non-finite transform",
+        ),
+        (
+            &skipped.unsupported,
+            "sculpt, assembly or empty mesh",
+            "sculpts and assemblies are not voxelized yet",
+        ),
+    ];
+    let counts: Vec<String> = reasons
+        .iter()
+        .filter(|(skip, ..)| skip.count > 0)
+        .map(|(skip, label, _)| format!("{} {label}", skip.count))
+        .collect();
+    let (detail, help) = if counts.is_empty() {
+        (
+            "the scene places no mesh".to_string(),
+            "place a cube, plane, sphere, voxel model or asset mesh inside the scene".to_string(),
+        )
+    } else {
+        let hints: Vec<String> = reasons
+            .iter()
+            .filter_map(|(skip, _, fix)| {
+                skip.first.map(|first| format!("/entities/{first}: {fix}"))
+            })
+            .collect();
+        (format!("skipped: {}", counts.join(", ")), hints.join("; "))
+    };
+    Diagnostic::new(
+        code::GI_VOLUME_EMPTY,
+        format!(
+            "`{}`'s `GiVolume` covers no voxelizable geometry, so extraction built no \
+             global-illumination grid to dump; {detail}",
+            path.display()
+        ),
+    )
+    .with_path(format!("/entities/{index}/components/GiVolume"))
+    .with_help(help)
 }
 
 /// `L2104` — the scene authors no `GiVolume`, so extraction built no grid to dump.

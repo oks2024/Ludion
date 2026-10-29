@@ -12,7 +12,8 @@
 > in the two commit messages: the acceptance sheet ran on a `post-full` copy rather than a district
 > (vigil components need the game registry, which the CLI cannot host — the districts' fill is
 > instead proven by the `vigil::golden` neutrality fixture's `voxel.is_some()` guard); `--dump-voxels`
-> gained `L2104` for the no-`GiVolume` case (the `L2102` no-camera shape); `VoxelBake` packs two 3D
+> gained `L2104` for the no-`GiVolume` case (the `L2102` no-camera shape; `L2111` splits off the
+> authored-but-empty case, naming what the voxelizer skipped); `VoxelBake` packs two 3D
 > textures (`Rgba32Float` albedo + `Rg32Float` emissive/occupancy) rather than folding emissive into
 > alpha, which would have dropped the grid's real alpha. **Two cost shapes recorded for W1's bake
 > design:** the voxelizer runs per-extract and the bake hash is proportional to grid size per frame

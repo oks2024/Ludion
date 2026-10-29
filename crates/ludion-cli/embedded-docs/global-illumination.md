@@ -26,8 +26,9 @@ What it voxelizes: cubes, planes, spheres, voxel models, and **asset meshes** (`
 each asset-mesh triangle fills the cells its surface overlaps, so a hollow building stays hollow and a
 wall casts a shell, not a solid. Skinned meshes, characters, sculpts, assemblies and `GiDynamic`
 instances contribute nothing. An asset mesh's albedo is its vertex colours times `Mesh.color` times
-the base-colour map's mean, white until a mean is stored; its emissive is the document's when it
-authors a material and `Mesh.emissive` otherwise. Texture maps themselves are not sampled.
+the base-colour map's mean in linear light (white when the mesh has no base-colour map); its
+emissive is the document's when it authors a material and `Mesh.emissive` otherwise. Texture maps
+themselves are not sampled.
 
 ## The loop
 
@@ -154,6 +155,11 @@ profile` (`ludion docs running`), not in the rendered image.
 - **`L2104`** — `--dump-voxels` or `--dump-gi` was pointed at a scene that authors no `GiVolume`, so
   extraction built nothing to dump. Add a `GiVolume` entity (minimally just `cell_size:`); `--set`
   can tune a field on a `GiVolume` the scene already has, but it never creates the component.
+- **`L2111`** — the scene authors a `GiVolume` but nothing placed in it voxelizes, so there is no grid
+  to dump. The message counts what was skipped (`GiDynamic` instances, skinned meshes, non-finite
+  transforms, sculpts, assemblies and empty meshes) and the help points at the first entity of each;
+  with none skipped, the scene places no mesh. Place static geometry, or drop `GiDynamic` from a mesh
+  that should occlude.
 - **`L2105`** — `probe_spacing` lays more probes over the grid's world box than the bake can bind
   (about 2.1M probes, derived from the GPU's storage-buffer limit, or too many along one axis). Same shape as `L2103`; raise `probe_spacing`, or `cell_size` to shrink the grid.
 - **`--dump-gi` requires a GPU adapter; `--dump-voxels` does not.** The voxel grid is CPU data, so

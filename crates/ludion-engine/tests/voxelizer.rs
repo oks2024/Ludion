@@ -1245,3 +1245,104 @@ fn a_lattice_past_the_derived_probe_cap_is_l2105_not_a_gpu_error() {
         errors[0].message
     );
 }
+
+/// Writes `entities` (already-indented YAML list items) as a scratch scene and returns its path.
+fn dump_scene(tag: &str, entities: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "ludion-voxelizer-dump-{tag}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("scene.yaml");
+    std::fs::write(&path, format!("format: 1\nentities:\n{entities}")).unwrap();
+    path
+}
+
+const DUMP_GI_AND_CAMERA: &str = concat!(
+    "  - name: gi
+",
+    "    components:
+",
+    "      GiVolume:
+",
+    "        cell_size: 0.5
+",
+    "  - name: camera
+",
+    "    components:
+",
+    "      Transform: {}
+",
+    "      Camera: {}
+",
+);
+
+/// A `GiVolume` whose only mesh carries `GiDynamic` resolves to no grid: the dump says so with
+/// `L2111` at the volume, counting the skip — not `L2104`, which means no volume was authored.
+#[test]
+fn a_gi_volume_with_only_dynamic_meshes_dumps_l2111() {
+    let scene = dump_scene(
+        "dynamic",
+        &format!(
+            "{DUMP_GI_AND_CAMERA}  - name: crate
+    components:
+      Transform: {{}}
+      Mesh:
+        shape: cube
+      GiDynamic: {{}}
+"
+        ),
+    );
+    let errors = ludion_engine::render_voxel_sheet(
+        &ludion_engine::builtin_registry(),
+        &scene,
+        ludion_engine::FrameSize::native(64, 64),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].code.as_str(), "L2111");
+    assert_eq!(
+        errors[0].path.as_deref(),
+        Some("/entities/0/components/GiVolume")
+    );
+    assert!(errors[0].message.contains("covers no voxelizable geometry"));
+    assert!(
+        errors[0].message.contains("no global-illumination grid"),
+        "{}",
+        errors[0].message
+    );
+    assert!(
+        errors[0].message.contains("1 `GiDynamic`"),
+        "{}",
+        errors[0].message
+    );
+    assert!(
+        errors[0]
+            .help
+            .as_deref()
+            .unwrap_or("")
+            .contains("/entities/2"),
+        "{errors:?}"
+    );
+}
+
+/// A `GiVolume` in a scene that places no mesh says so.
+#[test]
+fn a_gi_volume_with_no_mesh_dumps_l2111_naming_the_empty_scene() {
+    let scene = dump_scene("empty", DUMP_GI_AND_CAMERA);
+    let errors = ludion_engine::render_voxel_sheet(
+        &ludion_engine::builtin_registry(),
+        &scene,
+        ludion_engine::FrameSize::native(64, 64),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].code.as_str(), "L2111");
+    assert!(
+        errors[0].message.contains("places no mesh"),
+        "{}",
+        errors[0].message
+    );
+}

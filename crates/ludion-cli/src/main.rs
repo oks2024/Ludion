@@ -440,9 +440,10 @@ enum Command {
         /// (`Plan/gi-wave0-voxelizer.md` §11) — the debug instrument for "did the walls fill, did the
         /// torches register". Only valid with `--scene`, and not with `--sweep` (the dump reads one
         /// grid, not many renders). Needs no GPU: the scene must author a `GiVolume` for there to be
-        /// anything to dump (`L2104` otherwise — `--set` can tune a `cell_size` an existing
-        /// `GiVolume` has, but cannot create the component). When `--out` is omitted, the command
-        /// writes only this dump and never requests a GPU adapter at all.
+        /// anything to dump (`L2104` otherwise, `L2111` when it authors one but nothing in it
+        /// voxelizes — `--set` can tune a `cell_size` an existing `GiVolume` has, but cannot create
+        /// the component). When `--out` is omitted, the command writes only this dump and never
+        /// requests a GPU adapter at all.
         #[arg(long, conflicts_with_all = ["model", "sweep"])]
         dump_voxels: Option<PathBuf>,
         /// Render the scene's baked GI probe volume (if extraction built one) as one stitched,
@@ -453,12 +454,12 @@ enum Command {
         /// debug instrument for "are the interior probes actually darker than the doorway" and "is
         /// the bounce actually warming the room". Only valid with `--scene`, and not with `--sweep`
         /// (the dump reads one baked volume, not many renders). The scene must still author a
-        /// `GiVolume` for there to be anything to bake (`L2104` otherwise, checked before any
-        /// adapter is requested — `--set` can tune a field an existing `GiVolume` has, but cannot
-        /// create the component). **Unlike `--dump-voxels`, this DOES need a GPU adapter**: the
-        /// probe volume exists only as a baked GPU texture, so producing the sheet means baking it
-        /// (or hitting the renderer's own cache) and reading the result back — the one honest
-        /// difference from its sibling.
+        /// `GiVolume` for there to be anything to bake (`L2104` otherwise, `L2111` when it authors
+        /// one but nothing in it voxelizes, checked before any adapter is requested — `--set` can
+        /// tune a field an existing `GiVolume` has, but cannot create the component).
+        /// **Unlike `--dump-voxels`, this DOES need a GPU adapter**: the probe volume exists only as
+        /// a baked GPU texture, so producing the sheet means baking it (or hitting the renderer's
+        /// own cache) and reading the result back — the one honest difference from its sibling.
         #[arg(long, conflicts_with_all = ["model", "sweep"])]
         dump_gi: Option<PathBuf>,
         /// Writes each reflection probe of the `--scene` to `<DIR>`: `probe-<rank>-captured.png` (the

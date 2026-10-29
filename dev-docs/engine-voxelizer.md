@@ -26,7 +26,8 @@ global-illumination`.
   derived, not chosen: the bake's hit cache (64 B/probe, one storage binding) is the largest per-probe
   buffer, so the engine's 128 MiB binding admits about 2.1M probes. The cell cap (`MAX_GI_CELLS`) is separate.
 - `SkipReport` — `voxelize`'s second product: counts (dynamic, skinned, non-finite, unsupported) and
-  the first entity index of each, built in `resolve` so a hit and a miss agree.
+  the first entity index of each, built in `resolve` so a hit and a miss agree. The voxel-sheet dumps
+  read it (`skip_report`) to explain an empty grid as `L2111`.
 - `write_cell` — the one site that writes occupancy/albedo/emissive; every fill path funnels through
   it, which is what makes the combine rule (below) a property of one function instead of an invariant
   scattered across several.
