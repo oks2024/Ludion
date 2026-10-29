@@ -520,6 +520,33 @@ pub(crate) fn emit(doc: &PathDocument) -> String {
 /// Uniform local-t samples per segment in the arc-length table.
 const SUBDIV: usize = 16;
 
+/// Abscissae of the 8-point Gauss-Legendre rule on `[-1, 1]`, paired by index with [`GL_WEIGHTS`].
+const GL_NODES: [f64; 8] = [
+    -0.960_289_856_497_536_2,
+    -0.796_666_477_413_626_7,
+    -0.525_532_409_916_329,
+    -0.183_434_642_495_649_8,
+    0.183_434_642_495_649_8,
+    0.525_532_409_916_329,
+    0.796_666_477_413_626_7,
+    0.960_289_856_497_536_2,
+];
+
+/// Weights of the 8-point Gauss-Legendre rule, paired by index with [`GL_NODES`].
+const GL_WEIGHTS: [f64; 8] = [
+    0.101_228_536_290_376_3,
+    0.222_381_034_453_374_5,
+    0.313_706_645_877_887_3,
+    0.362_683_783_378_362,
+    0.362_683_783_378_362,
+    0.313_706_645_877_887_3,
+    0.222_381_034_453_374_5,
+    0.101_228_536_290_376_3,
+];
+
+/// Safeguarded Newton steps inverting arc length to a chord's curve parameter.
+const NEWTON_STEPS: usize = 8;
+
 fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
     let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
@@ -658,7 +685,8 @@ fn chord_param(p: [f64; 3], a: [f64; 3], b: [f64; 3], metric: PathMetric) -> f64
     }
 }
 
-/// One arc-length table sample: the curve position at `local_t` of `segment`, `s` metres along.
+/// One arc-length table sample: the curve position at `local_t` of `segment`, `s` metres along
+/// (the integrated arc length on Catmull-Rom, the exact segment sum on linear).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TableEntry {
     s: f64,
@@ -714,7 +742,7 @@ impl PathSampler {
                 let position = sampler.evaluate(segment, local_t);
                 if let Some(previous) = table.last() {
                     let previous: &TableEntry = previous;
-                    s += distance(previous.position, position);
+                    s += sampler.step_length(previous, segment, local_t, position);
                 }
                 table.push(TableEntry {
                     s,
@@ -727,7 +755,7 @@ impl PathSampler {
         let last = segments - 1;
         let position = sampler.evaluate(last, 1.0);
         if let Some(previous) = table.last() {
-            s += distance(previous.position, position);
+            s += sampler.step_length(previous, last, 1.0, position);
         }
         table.push(TableEntry {
             s,
@@ -821,14 +849,102 @@ impl PathSampler {
         self.nearest_in(p, 0.0, self.length, metric)
     }
 
-    /// The `(segment, local_t)` curve parameter `s` metres along the path.
+    /// The `(segment, local_t)` curve parameter `s` metres along the path. A linear path's table
+    /// chords are the segments, so it interpolates; a Catmull-Rom chord is inverted on the arc-length
+    /// integral so `s` stays exact inside it.
     fn curve_param(&self, s: f64) -> (usize, f64) {
         let (j, frac) = self.locate(s);
         let (a, b) = (&self.table[j], &self.table[j + 1]);
-        let u = a.u() * (1.0 - frac) + b.u() * frac;
-        let last_segment = self.segment_count() - 1;
-        let segment = (u.floor().max(0.0) as usize).min(last_segment);
-        (segment, u - segment as f64)
+        if self.interpolation == PathInterpolation::Linear {
+            let u = a.u() * (1.0 - frac) + b.u() * frac;
+            let last_segment = self.segment_count() - 1;
+            let segment = (u.floor().max(0.0) as usize).min(last_segment);
+            return (segment, u - segment as f64);
+        }
+        let segment = a.segment;
+        let t_lo = a.local_t;
+        let t_hi = if b.segment == a.segment {
+            b.local_t
+        } else {
+            1.0
+        };
+        if frac <= 0.0 {
+            return (segment, t_lo);
+        }
+        if frac >= 1.0 {
+            return (segment, t_hi);
+        }
+        let target = self.wrapped(s) - a.s;
+        let (mut lo, mut hi) = (t_lo, t_hi);
+        let mut t = t_lo + (t_hi - t_lo) * frac;
+        for _ in 0..NEWTON_STEPS {
+            let f = self.arc(segment, t_lo, t) - target;
+            if f > 0.0 {
+                hi = t;
+            } else {
+                lo = t;
+            }
+            let step = t - f / self.speed(segment, t);
+            t = if step >= lo && step <= hi {
+                step
+            } else {
+                0.5 * (lo + hi)
+            };
+        }
+        (segment, t)
+    }
+
+    /// The arc length from table entry `previous` to the point at `local_t` of `segment`.
+    fn step_length(
+        &self,
+        previous: &TableEntry,
+        segment: usize,
+        local_t: f64,
+        position: [f64; 3],
+    ) -> f64 {
+        match self.interpolation {
+            PathInterpolation::Linear => distance(previous.position, position),
+            PathInterpolation::CatmullRom => {
+                let to = if segment == previous.segment {
+                    local_t
+                } else {
+                    1.0
+                };
+                self.arc(previous.segment, previous.local_t, to)
+            }
+        }
+    }
+
+    /// The curve speed `|dC/dlocal_t|` at `local_t` of `segment`, in metres per unit of `local_t`.
+    fn speed(&self, segment: usize, local_t: f64) -> f64 {
+        let i = segment as isize;
+        let (p0, p1, p2, p3) = (
+            self.control(i - 1),
+            self.control(i),
+            self.control(i + 1),
+            self.control(i + 2),
+        );
+        let knot_span = distance(p1, p2).sqrt();
+        let d = catmull_rom_derivative(p0, p1, p2, p3, local_t);
+        dot(d, d).sqrt() * knot_span
+    }
+
+    /// The arc length of `segment` between `from` and `to` (`local_t`): four panels of 8-point
+    /// Gauss-Legendre.
+    fn arc(&self, segment: usize, from: f64, to: f64) -> f64 {
+        let panel = (to - from) / 4.0;
+        let mut total = 0.0;
+        for p in 0..4 {
+            let a = from + panel * p as f64;
+            let mid = a + 0.5 * panel;
+            let half = 0.5 * panel;
+            let mut sum = 0.0;
+            for (node, weight) in GL_NODES.iter().zip(GL_WEIGHTS) {
+                sum += weight * self.speed(segment, mid + half * node);
+            }
+            total += sum * half;
+        }
+        total
     }
 
     /// The unit curve derivative at `local_t` of `segment`; `None` if it vanishes.
@@ -1021,13 +1137,18 @@ impl PathSampler {
         }
     }
 
-    /// The table index `j` whose chord `[j, j + 1]` brackets `s`, and how far along it `s` sits.
-    fn locate(&self, s: f64) -> (usize, f64) {
-        let s = if self.closed {
+    /// `s` wrapped into `[0, length)` when closed, clamped to `[0, length]` when open.
+    fn wrapped(&self, s: f64) -> f64 {
+        if self.closed {
             s.rem_euclid(self.length)
         } else {
             s.clamp(0.0, self.length)
-        };
+        }
+    }
+
+    /// The table index `j` whose chord `[j, j + 1]` brackets `s`, and how far along it `s` sits.
+    fn locate(&self, s: f64) -> (usize, f64) {
+        let s = self.wrapped(s);
         let j = self
             .table
             .partition_point(|entry| entry.s <= s)
@@ -1160,6 +1281,174 @@ mod tests {
         distance(a, b) <= tol
     }
 
+    /// Every linear query at fixed probes, as `f64::to_bits`.
+    fn linear_fingerprint(closed: bool) -> Vec<u64> {
+        let sampler = PathSampler::new(&doc(PathInterpolation::Linear, closed, &ZIGZAG));
+        let first = distance(ZIGZAG[0], ZIGZAG[1]);
+        let length = sampler.length();
+        let mut bits = vec![length.to_bits()];
+        for s in [0.0, 1.7, first, 0.5 * length, 0.83 * length, length] {
+            bits.extend(sampler.point_at(s).map(f64::to_bits));
+            bits.extend(sampler.tangent_at(s).map(f64::to_bits));
+            bits.extend(sampler.frame_at(s).rotation().map(f64::to_bits));
+        }
+        for probe in [[1.0, 0.0, -2.0], [5.0, 3.0, 4.0]] {
+            bits.push(
+                sampler
+                    .nearest_s(probe, 3.0, 2.0, PathMetric::Full)
+                    .to_bits(),
+            );
+            bits.push(
+                sampler
+                    .nearest_s_global(probe, PathMetric::Horizontal)
+                    .to_bits(),
+            );
+        }
+        bits
+    }
+
+    #[test]
+    fn linear_queries_are_byte_identical() {
+        let open = linear_fingerprint(false);
+        let closed = linear_fingerprint(true);
+        assert_eq!(open, LINEAR_OPEN_BITS);
+        assert_eq!(closed, LINEAR_CLOSED_BITS);
+    }
+    const LINEAR_OPEN_BITS: [u64; 65] = [
+        0x4039_d823_c4b6_2a44,
+        0x0000_0000_0000_0000,
+        0x0000_0000_0000_0000,
+        0x0000_0000_0000_0000,
+        0x3fe1_b538_4c0c_28ba,
+        0x3fb1_b538_4c0c_28ba,
+        0xbfea_8fd4_7212_3d17,
+        0x3fa0_f54f_1a94_1ac9,
+        0xbfd2_88fa_c8ea_8875,
+        0x3f84_89c5_3928_b104,
+        0x3fee_9bcd_32f5_c311,
+        0x3fee_1a79_4e14_aba2,
+        0x3fbe_1a79_4e14_aba2,
+        0xbff6_93da_fa8f_80ba,
+        0x3fe1_b538_4c0c_28ba,
+        0x3fb1_b538_4c0c_28ba,
+        0xbfea_8fd4_7212_3d17,
+        0x3fa0_f54f_1a94_1ac9,
+        0xbfd2_88fa_c8ea_8875,
+        0x3f84_89c5_3928_b104,
+        0x3fee_9bcd_32f5_c311,
+        0x4010_0000_0000_0000,
+        0x3fe0_0000_0000_0000,
+        0xc018_0000_0000_0000,
+        0x3fdc_8ae0_f76a_7d36,
+        0x3fb3_0740_a4f1_a8cf,
+        0x3fec_8ae0_f76a_7d36,
+        0x3f81_7fd6_4e9e_5c58,
+        0xbfef_1f57_0ef2_173f,
+        0x3fa2_8839_41cc_460a,
+        0x3fcd_6355_de8e_d288,
+        0x401a_2836_85a8_74a8,
+        0x3fed_8af3_5ce0_9b8a,
+        0xbfed_7c97_a578_b588,
+        0x3fdc_8ae0_f76a_7d36,
+        0x3fb3_0740_a4f1_a8cf,
+        0x3fec_8ae0_f76a_7d36,
+        0x3f81_7fd6_4e9e_5c58,
+        0xbfef_1f57_0ef2_173f,
+        0x3fa2_8839_41cc_460a,
+        0x3fcd_6355_de8e_d288,
+        0x4000_7e9b_9494_077c,
+        0x4000_c023_a457_98da,
+        0x4012_7fb8_b750_ce4c,
+        0xbfed_9581_b5b9_2e4e,
+        0x3fb7_aace_2afa_8b72,
+        0xbfd7_aace_2afa_8b72,
+        0x3fa3_9e7a_7be5_9056,
+        0x3fe1_ebc0_57e5_6fb4,
+        0xbf9a_90c4_54f7_8eeb,
+        0x3fea_7842_8c11_695c,
+        0xc000_0000_0000_0000,
+        0x4004_0000_0000_0000,
+        0x4008_0000_0000_0000,
+        0xbfed_9581_b5b9_2e4e,
+        0x3fb7_aace_2afa_8b72,
+        0xbfd7_aace_2afa_8b72,
+        0x3fa3_9e7a_7be5_9056,
+        0x3fe1_ebc0_57e5_6fb4,
+        0xbf9a_90c4_54f7_8eeb,
+        0x3fea_7842_8c11_695c,
+        0x4001_b538_4c0c_28ba,
+        0x4001_cb03_a507_4b63,
+        0x3ff0_0000_0000_0000,
+        0x4032_618f_c2cb_0a48,
+    ];
+    const LINEAR_CLOSED_BITS: [u64; 65] = [
+        0x403e_3b55_cd2b_df3d,
+        0x0000_0000_0000_0000,
+        0x0000_0000_0000_0000,
+        0x0000_0000_0000_0000,
+        0x3fe1_b538_4c0c_28ba,
+        0x3fb1_b538_4c0c_28ba,
+        0xbfea_8fd4_7212_3d17,
+        0x3fa0_f54f_1a94_1ac9,
+        0xbfd2_88fa_c8ea_8875,
+        0x3f84_89c5_3928_b104,
+        0x3fee_9bcd_32f5_c311,
+        0x3fee_1a79_4e14_aba2,
+        0x3fbe_1a79_4e14_aba2,
+        0xbff6_93da_fa8f_80ba,
+        0x3fe1_b538_4c0c_28ba,
+        0x3fb1_b538_4c0c_28ba,
+        0xbfea_8fd4_7212_3d17,
+        0x3fa0_f54f_1a94_1ac9,
+        0xbfd2_88fa_c8ea_8875,
+        0x3f84_89c5_3928_b104,
+        0x3fee_9bcd_32f5_c311,
+        0x4010_0000_0000_0000,
+        0x3fe0_0000_0000_0000,
+        0xc018_0000_0000_0000,
+        0x3fdc_8ae0_f76a_7d36,
+        0x3fb3_0740_a4f1_a8cf,
+        0x3fec_8ae0_f76a_7d36,
+        0x3f81_7fd6_4e9e_5c58,
+        0xbfef_1f57_0ef2_173f,
+        0x3fa2_8839_41cc_460a,
+        0x3fcd_6355_de8e_d288,
+        0x4019_226e_7c1a_00a8,
+        0x3ff2_dd91_83e5_ff58,
+        0x3fec_a7af_26fb_f970,
+        0xbfe3_c036_50e0_0e03,
+        0x3fc3_c036_50e0_0e03,
+        0x3fe8_b043_e518_1184,
+        0x3f9a_3ab3_3a74_5b54,
+        0x3fee_1b05_f5bc_50dc,
+        0xbfb2_b188_f409_7cf8,
+        0x3fd5_1ef4_a104_6fa4,
+        0xbff4_e0aa_088f_b2e0,
+        0x4003_71a2_1a07_2f58,
+        0x400a_3977_97e3_42a0,
+        0xbfed_9581_b5b9_2e4e,
+        0x3fb7_aace_2afa_8b72,
+        0xbfd7_aace_2afa_8b72,
+        0x3fa3_9e7a_7be5_9056,
+        0x3fe1_ebc0_57e5_6fb4,
+        0xbf9a_90c4_54f7_8eeb,
+        0x3fea_7842_8c11_695c,
+        0x0000_0000_0000_0000,
+        0x0000_0000_0000_0000,
+        0x0000_0000_0000_0000,
+        0x3fe1_b538_4c0c_28ba,
+        0x3fb1_b538_4c0c_28ba,
+        0xbfea_8fd4_7212_3d17,
+        0x3fa0_f54f_1a94_1ac9,
+        0xbfd2_88fa_c8ea_8875,
+        0x3f84_89c5_3928_b104,
+        0x3fee_9bcd_32f5_c311,
+        0x4001_b538_4c0c_28ba,
+        0x4001_cb03_a507_4b63,
+        0x3ff0_0000_0000_0000,
+        0x4032_618f_c2cb_0a48,
+    ];
+
     #[test]
     fn open_endpoints_are_the_first_and_last_points() {
         for interpolation in [PathInterpolation::CatmullRom, PathInterpolation::Linear] {
@@ -1225,6 +1514,120 @@ mod tests {
                 assert!(sampler.table.windows(2).all(|w| w[0].s < w[1].s));
                 assert_eq!(sampler.table.last().map(|e| e.s), Some(sampler.length()));
             }
+        }
+    }
+
+    const UNEVEN: [[f64; 3]; 5] = [
+        [0.0, 0.0, 0.0],
+        [0.01, 0.0, 0.0],
+        [10.0, 0.0, 0.0],
+        [10.0, 0.0, 5.0],
+        [10.01, 0.0, 5.0],
+    ];
+
+    const MILD: [[f64; 3]; 5] = [
+        [0.0, 0.0, 0.0],
+        [0.5, 0.0, 0.0],
+        [10.0, 0.0, 0.0],
+        [10.0, 0.0, 5.0],
+        [10.5, 0.0, 5.0],
+    ];
+
+    /// Open and closed Catmull-Rom samplers over each point set, with the tolerance each can hold.
+    /// UNEVEN squeezes a right-angle turn into 1 cm beside 5 m segments, which the quadrature only
+    /// bounds loosely.
+    fn catmull_rom_samplers(tight: f64, loose: f64) -> Vec<(PathSampler, f64)> {
+        let mut samplers = Vec::new();
+        for (points, tolerance) in [
+            (&ZIGZAG[..], tight),
+            (&MILD[..], tight),
+            (&UNEVEN[..], loose),
+        ] {
+            for closed in [false, true] {
+                let sampler = PathSampler::new(&doc(PathInterpolation::CatmullRom, closed, points));
+                samplers.push((sampler, tolerance));
+            }
+        }
+        samplers
+    }
+
+    #[test]
+    fn gauss_legendre_is_exact_to_degree_15() {
+        assert!((GL_WEIGHTS.iter().sum::<f64>() - 2.0).abs() < 1e-15);
+        let integral: f64 = GL_NODES
+            .iter()
+            .zip(GL_WEIGHTS)
+            .map(|(x, w)| {
+                let (x2, x4) = (x * x, x * x * x * x);
+                w * x4 * x4 * x4 * x2
+            })
+            .sum();
+        assert!((integral - 2.0 / 15.0).abs() < 1e-15, "{integral}");
+    }
+
+    #[test]
+    fn catmull_rom_speed_is_unit_inside_and_across_chords() {
+        let h = 1e-5;
+        for (sampler, tolerance) in catmull_rom_samplers(1e-6, 1e-4) {
+            for pair in sampler.table.windows(2) {
+                let (a, b) = (pair[0].s, pair[1].s);
+                for s in [a + 1e-4, 0.5 * (a + b), b - 1e-4, b] {
+                    if !sampler.closed && (s - h < 0.0 || s + h > sampler.length) {
+                        continue;
+                    }
+                    let speed =
+                        distance(sampler.point_at(s + h), sampler.point_at(s - h)) / (2.0 * h);
+                    assert!((speed - 1.0).abs() < tolerance, "speed {speed} at s = {s}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn speed_is_continuous_across_chord_boundaries() {
+        let h = 1e-6;
+        for (sampler, tolerance) in catmull_rom_samplers(1e-5, 1e-3) {
+            for entry in &sampler.table[1..sampler.table.len() - 1] {
+                let s = entry.s;
+                let after = distance(sampler.point_at(s + h), sampler.point_at(s)) / h;
+                let before = distance(sampler.point_at(s), sampler.point_at(s - h)) / h;
+                assert!(
+                    (after - before).abs() < tolerance,
+                    "{before} vs {after} at s = {s}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn catmull_rom_length_is_the_dense_arc_length() {
+        for (sampler, tolerance) in catmull_rom_samplers(1e-7, 1e-6) {
+            let dense_steps = 200_000;
+            let mut dense = 0.0;
+            for segment in 0..sampler.segment_count() {
+                let mut previous = sampler.evaluate(segment, 0.0);
+                for k in 1..=dense_steps {
+                    let next = sampler.evaluate(segment, k as f64 / dense_steps as f64);
+                    dense += distance(previous, next);
+                    previous = next;
+                }
+            }
+            let relative = (sampler.length() - dense).abs() / dense;
+            assert!(
+                relative < tolerance,
+                "length {} vs dense {dense}",
+                sampler.length()
+            );
+            let chord_sum: f64 = sampler
+                .table
+                .windows(2)
+                .map(|pair| distance(pair[0].position, pair[1].position))
+                .sum();
+            assert!(
+                sampler.length() > chord_sum,
+                "{} <= {chord_sum}",
+                sampler.length()
+            );
         }
     }
 

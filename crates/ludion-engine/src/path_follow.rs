@@ -62,9 +62,9 @@ const DEBUG_SPANS: usize = 64;
 
 /// Metres a follower may move beyond `|speed|·dt` in one tick before the tick counts as a teleport.
 /// The chord of an arc is never longer than the arc, so travel, ping-pong turns and closed wraps stay
-/// under `|speed|·dt`; the slack absorbs the arc-length table's error and a game that drives `phase`
-/// itself at `speed: 0` (up to 30 m/s at 60 Hz), which must keep carrying its riders. A smaller
-/// deliberate jump is the game's to flag with `teleport_kinematic`.
+/// under `|speed|·dt`; the slack absorbs a game that drives `phase` itself at `speed: 0` (up to
+/// 30 m/s at 60 Hz), which must keep carrying its riders. A smaller deliberate jump is the game's to
+/// flag with `teleport_kinematic`.
 const TELEPORT_SLACK: f32 = 0.5;
 
 /// A path loaded once: its sampler and the debug polyline sampled from it.
