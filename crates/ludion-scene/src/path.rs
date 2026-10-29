@@ -544,8 +544,11 @@ const GL_WEIGHTS: [f64; 8] = [
     0.101_228_536_290_376_3,
 ];
 
+/// Gauss-Legendre panels per arc-length integral.
+const GL_PANELS: usize = 4;
+
 /// Safeguarded Newton steps inverting arc length to a chord's curve parameter.
-const NEWTON_STEPS: usize = 8;
+const NEWTON_STEPS: usize = 6;
 
 fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
     let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -660,13 +663,13 @@ impl PathFrame {
     }
 }
 
-/// The comparison key of a candidate point at arc length `s`: smaller is nearer, compared
-/// lexicographically so ties fall to the smaller `s`.
-fn distance_key(p: [f64; 3], q: [f64; 3], s: f64, metric: PathMetric) -> [f64; 3] {
+/// The comparison key of a candidate point `along` the path (any scalar increasing with arc length):
+/// smaller is nearer, compared lexicographically so ties fall to the smaller `along`.
+fn distance_key(p: [f64; 3], q: [f64; 3], along: f64, metric: PathMetric) -> [f64; 3] {
     let d = sub(q, p);
     match metric {
-        PathMetric::Full => [dot(d, d), 0.0, s],
-        PathMetric::Horizontal => [d[0] * d[0] + d[2] * d[2], d[1] * d[1], s],
+        PathMetric::Full => [dot(d, d), 0.0, along],
+        PathMetric::Horizontal => [d[0] * d[0] + d[2] * d[2], d[1] * d[1], along],
     }
 }
 
@@ -712,6 +715,9 @@ pub struct PathSampler {
     closed: bool,
     interpolation: PathInterpolation,
     table: Vec<TableEntry>,
+    /// Per segment (Catmull-Rom only), the coefficients `[d0, d1, d2]` of the speed vector
+    /// `dC/dlocal_t = d0 + d1·t + d2·t²`: a fixed-knot segment is an exact cubic.
+    derivatives: Vec<[[f64; 3]; 3]>,
     length: f64,
     carried_right: Vec<[f64; 3]>,
 }
@@ -725,6 +731,7 @@ impl PathSampler {
             closed: doc.closed,
             interpolation: doc.interpolation,
             table: Vec::new(),
+            derivatives: Vec::new(),
             length: 0.0,
             carried_right: Vec::new(),
         };
@@ -734,6 +741,11 @@ impl PathSampler {
             PathInterpolation::Linear => 1,
         };
         let segments = sampler.segment_count();
+        if sampler.interpolation == PathInterpolation::CatmullRom {
+            sampler.derivatives = (0..segments)
+                .map(|segment| sampler.derivative_coefficients(segment))
+                .collect();
+        }
         let mut table = Vec::with_capacity(segments * subdiv + 1);
         let mut s = 0.0;
         for segment in 0..segments {
@@ -791,6 +803,11 @@ impl PathSampler {
     /// it is the outgoing segment's, and at an open end the last segment's.
     pub fn tangent_at(&self, s: f64) -> [f64; 3] {
         let (segment, local_t) = self.curve_param(s);
+        self.tangent_from(segment, local_t, s)
+    }
+
+    /// The tangent at `s` given its already-inverted curve parameter.
+    fn tangent_from(&self, segment: usize, local_t: f64, s: f64) -> [f64; 3] {
         self.curve_tangent(segment, local_t).unwrap_or_else(|| {
             let (j, _) = self.locate(s);
             self.chord_tangent(j)
@@ -802,7 +819,8 @@ impl PathSampler {
     /// tangent is vertical (horizontal magnitude below 1e-6), `right` carries over from the nearest
     /// non-vertical stretch of the path, so it never flips inside a vertical run.
     pub fn frame_at(&self, s: f64) -> PathFrame {
-        let tangent = self.tangent_at(s);
+        let (segment, local_t) = self.curve_param(s);
+        let tangent = self.tangent_from(segment, local_t, s);
         let right = match horizontal_right(tangent) {
             Some(right) => right,
             None => {
@@ -814,7 +832,7 @@ impl PathSampler {
             }
         };
         PathFrame {
-            position: self.point_at(s),
+            position: self.evaluate(segment, local_t),
             tangent,
             right,
             up: cross(right, tangent),
@@ -876,7 +894,24 @@ impl PathSampler {
         }
         let target = self.wrapped(s) - a.s;
         let (mut lo, mut hi) = (t_lo, t_hi);
-        let mut t = t_lo + (t_hi - t_lo) * frac;
+        let h = t_hi - t_lo;
+        let mut t = {
+            // The inverse cubic Hermite of the chord: end slopes of the normalised arc length.
+            let chord = b.s - a.s;
+            let m0 = chord / (self.speed(segment, t_lo) * h);
+            let m1 = chord / (self.speed(segment, t_hi) * h);
+            let sigma2 = frac * frac;
+            let sigma3 = sigma2 * frac;
+            let tau = (sigma3 - 2.0 * sigma2 + frac) * m0
+                + (3.0 * sigma2 - 2.0 * sigma3)
+                + (sigma3 - sigma2) * m1;
+            let guess = t_lo + h * tau;
+            if guess > t_lo && guess < t_hi {
+                guess
+            } else {
+                t_lo + h * frac
+            }
+        };
         for _ in 0..NEWTON_STEPS {
             let f = self.arc(segment, t_lo, t) - target;
             if f > 0.0 {
@@ -917,6 +952,18 @@ impl PathSampler {
 
     /// The curve speed `|dC/dlocal_t|` at `local_t` of `segment`, in metres per unit of `local_t`.
     fn speed(&self, segment: usize, local_t: f64) -> f64 {
+        let [d0, d1, d2] = self.derivatives[segment];
+        let d = [
+            d0[0] + local_t * (d1[0] + local_t * d2[0]),
+            d0[1] + local_t * (d1[1] + local_t * d2[1]),
+            d0[2] + local_t * (d1[2] + local_t * d2[2]),
+        ];
+        dot(d, d).sqrt()
+    }
+
+    /// The monomial coefficients of `segment`'s speed vector, from its end derivatives (the cubic
+    /// Hermite form of the segment).
+    fn derivative_coefficients(&self, segment: usize) -> [[f64; 3]; 3] {
         let i = segment as isize;
         let (p0, p1, p2, p3) = (
             self.control(i - 1),
@@ -925,16 +972,20 @@ impl PathSampler {
             self.control(i + 2),
         );
         let knot_span = distance(p1, p2).sqrt();
-        let d = catmull_rom_derivative(p0, p1, p2, p3, local_t);
-        dot(d, d).sqrt() * knot_span
+        let m0 = scale(catmull_rom_derivative(p0, p1, p2, p3, 0.0), knot_span);
+        let m1 = scale(catmull_rom_derivative(p0, p1, p2, p3, 1.0), knot_span);
+        let delta = sub(p2, p1);
+        let d1 = scale(sub(sub(scale(delta, 3.0), scale(m0, 2.0)), m1), 2.0);
+        let d2 = scale(add(add(scale(delta, -2.0), m0), m1), 3.0);
+        [m0, d1, d2]
     }
 
-    /// The arc length of `segment` between `from` and `to` (`local_t`): four panels of 8-point
-    /// Gauss-Legendre.
+    /// The arc length of `segment` between `from` and `to` (`local_t`): [`GL_PANELS`] panels of
+    /// 8-point Gauss-Legendre over the speed polynomial.
     fn arc(&self, segment: usize, from: f64, to: f64) -> f64 {
-        let panel = (to - from) / 4.0;
+        let panel = (to - from) / GL_PANELS as f64;
         let mut total = 0.0;
-        for p in 0..4 {
+        for p in 0..GL_PANELS {
             let a = from + panel * p as f64;
             let mid = a + 0.5 * panel;
             let half = 0.5 * panel;
@@ -1089,8 +1140,14 @@ impl PathSampler {
         let bracket_lo = (self.table[chord].s + offset - span_before).max(lo);
         let bracket_hi = (self.table[chord + 1].s + offset + span_after).min(hi);
 
-        let key_at = |s: f64| distance_key(p, self.point_at(s), s, metric);
-        let (mut a, mut b) = (bracket_lo, bracket_hi);
+        // Refine over the unwrapped curve parameter, where a probe costs one `evaluate`.
+        let key_at = |u: f64| distance_key(p, self.evaluate_u(u), u, metric);
+        let (u_scan, u_lo, u_hi) = (
+            self.unwrapped_u(scan_s),
+            self.unwrapped_u(bracket_lo),
+            self.unwrapped_u(bracket_hi),
+        );
+        let (mut a, mut b) = (u_lo, u_hi);
         let mut x1 = b - GOLDEN * (b - a);
         let mut x2 = a + GOLDEN * (b - a);
         let (mut f1, mut f2) = (key_at(x1), key_at(x2));
@@ -1109,14 +1166,59 @@ impl PathSampler {
                 f2 = key_at(x2);
             }
         }
-        let mut winner = (key_at(scan_s), scan_s);
-        for candidate in [bracket_lo, (a + b) * 0.5, bracket_hi] {
-            let key = key_at(candidate);
+        let middle = (a + b) * 0.5;
+        let mut winner = (key_at(u_scan), scan_s);
+        for (u, candidate) in [
+            (u_lo, Some(bracket_lo)),
+            (middle, None),
+            (u_hi, Some(bracket_hi)),
+        ] {
+            let key = key_at(u);
             if key < winner.0 {
-                winner = (key, candidate);
+                winner = (key, candidate.unwrap_or_else(|| self.s_at_u(u)));
             }
         }
         self.wrap_s(winner.1)
+    }
+
+    /// The unwrapped curve parameter `segment + local_t` (plus whole loops on a closed path) at the
+    /// possibly unwrapped arc length `s`; increases with `s`.
+    fn unwrapped_u(&self, s: f64) -> f64 {
+        let (segment, local_t) = self.curve_param(s);
+        let u = segment as f64 + local_t;
+        if self.closed {
+            u + self.segment_count() as f64 * (s / self.length).floor()
+        } else {
+            u
+        }
+    }
+
+    /// Splits an unwrapped curve parameter into whole loops, a segment, and its `local_t`.
+    fn split_u(&self, u: f64) -> (f64, usize, f64) {
+        let segments = self.segment_count();
+        let loops = if self.closed {
+            (u / segments as f64).floor()
+        } else {
+            0.0
+        };
+        let u = u - loops * segments as f64;
+        let segment = (u.floor().max(0.0) as usize).min(segments - 1);
+        (loops, segment, (u - segment as f64).clamp(0.0, 1.0))
+    }
+
+    /// The curve point at an unwrapped curve parameter.
+    fn evaluate_u(&self, u: f64) -> [f64; 3] {
+        let (_, segment, local_t) = self.split_u(u);
+        self.evaluate(segment, local_t)
+    }
+
+    /// The unwrapped arc length at an unwrapped curve parameter: the nearest table entry below, plus
+    /// the integral from it.
+    fn s_at_u(&self, u: f64) -> f64 {
+        let (loops, segment, local_t) = self.split_u(u);
+        let sub = ((local_t * SUBDIV as f64).floor() as usize).min(SUBDIV - 1);
+        let entry = &self.table[segment * SUBDIV + sub];
+        entry.s + self.arc(segment, entry.local_t, local_t) + loops * self.length
     }
 
     /// Folds an unwrapped arc length into the path's range.
@@ -1217,7 +1319,7 @@ fn catmull_rom(p0: [f64; 3], p1: [f64; 3], p2: [f64; 3], p3: [f64; 3], local_t: 
 }
 
 /// The derivative of [`catmull_rom`] with respect to its knot parameter (product rule through the
-/// pyramid). Only the direction is meaningful: the constant `t2 − t1` factor to `local_t` is dropped.
+/// pyramid), magnitude included; a caller wanting `d/dlocal_t` multiplies by `t2 − t1`.
 fn catmull_rom_derivative(
     p0: [f64; 3],
     p1: [f64; 3],
@@ -1534,8 +1636,9 @@ mod tests {
     ];
 
     /// Open and closed Catmull-Rom samplers over each point set, with the tolerance each can hold.
-    /// UNEVEN squeezes a right-angle turn into 1 cm beside 5 m segments, which the quadrature only
-    /// bounds loosely.
+    /// UNEVEN squeezes a right-angle turn into 1 cm beside 5 m segments; only the finite-difference
+    /// speed test needs the loose value (its truncation error, not the Newton inversion or the
+    /// quadrature: 30 steps or 16 panels leave it unchanged).
     fn catmull_rom_samplers(tight: f64, loose: f64) -> Vec<(PathSampler, f64)> {
         let mut samplers = Vec::new();
         for (points, tolerance) in [
@@ -1586,7 +1689,7 @@ mod tests {
     #[test]
     fn speed_is_continuous_across_chord_boundaries() {
         let h = 1e-6;
-        for (sampler, tolerance) in catmull_rom_samplers(1e-5, 1e-3) {
+        for (sampler, tolerance) in catmull_rom_samplers(1e-5, 1e-5) {
             for entry in &sampler.table[1..sampler.table.len() - 1] {
                 let s = entry.s;
                 let after = distance(sampler.point_at(s + h), sampler.point_at(s)) / h;
@@ -1601,7 +1704,7 @@ mod tests {
 
     #[test]
     fn catmull_rom_length_is_the_dense_arc_length() {
-        for (sampler, tolerance) in catmull_rom_samplers(1e-7, 1e-6) {
+        for (sampler, tolerance) in catmull_rom_samplers(1e-7, 1e-7) {
             let dense_steps = 200_000;
             let mut dense = 0.0;
             for segment in 0..sampler.segment_count() {
@@ -1962,5 +2065,88 @@ mod tests {
         assert!((sampler.nearest_s(p, cross_b, 1.0, h) - cross_b).abs() < 1e-9);
         assert!((sampler.nearest_s_global([0.0, 0.0, 0.0], h) - cross_a).abs() < 1e-9);
         assert!((sampler.nearest_s_global([0.0, 3.0, 0.0], h) - cross_b).abs() < 1e-9);
+    }
+
+    #[test]
+    fn speed_polynomial_matches_the_pyramid() {
+        for points in [&ZIGZAG[..], &MILD[..], &UNEVEN[..]] {
+            for closed in [false, true] {
+                let sampler = PathSampler::new(&doc(PathInterpolation::CatmullRom, closed, points));
+                for segment in 0..sampler.segment_count() {
+                    let i = segment as isize;
+                    let (p0, p1, p2, p3) = (
+                        sampler.control(i - 1),
+                        sampler.control(i),
+                        sampler.control(i + 1),
+                        sampler.control(i + 2),
+                    );
+                    let knot_span = distance(p1, p2).sqrt();
+                    for k in 0..=32 {
+                        let t = k as f64 / 32.0;
+                        let d = catmull_rom_derivative(p0, p1, p2, p3, t);
+                        let expected = dot(d, d).sqrt() * knot_span;
+                        let got = sampler.speed(segment, t);
+                        assert!(
+                            (got - expected).abs() <= 1e-12 * expected,
+                            "segment {segment} t {t}: {got} vs {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nearest_s_matches_a_dense_search() {
+        let distance_to =
+            |sampler: &PathSampler, p: [f64; 3], s: f64| distance(p, sampler.point_at(s));
+        // The chord scan can pick the near-tied other branch of UNEVEN's 1 cm turn.
+        for (points, tolerance) in [(&ZIGZAG[..], 1e-9), (&UNEVEN[..], 1e-3)] {
+            for closed in [false, true] {
+                let sampler = PathSampler::new(&doc(PathInterpolation::CatmullRom, closed, points));
+                let length = sampler.length();
+                for k in 0..40 {
+                    let on = length * (k as f64 + 0.37) / 40.0;
+                    let mut p = sampler.point_at(on);
+                    p[0] += if k % 2 == 0 { 0.5 } else { -0.5 };
+                    p[1] += 0.4;
+                    p[2] += 0.1 * (k % 3) as f64;
+
+                    let samples = 100_000;
+                    let step = length / samples as f64;
+                    let mut best = (f64::MAX, 0.0);
+                    for i in 0..=samples {
+                        let s = step * i as f64;
+                        let d = distance_to(&sampler, p, s);
+                        if d < best.0 {
+                            best = (d, s);
+                        }
+                    }
+                    let (mut a, mut b) = (best.1 - step, best.1 + step);
+                    for _ in 0..60 {
+                        let (x1, x2) = (b - GOLDEN * (b - a), a + GOLDEN * (b - a));
+                        if distance_to(&sampler, p, x1) <= distance_to(&sampler, p, x2) {
+                            b = x2;
+                        } else {
+                            a = x1;
+                        }
+                    }
+                    let dense = distance_to(&sampler, p, 0.5 * (a + b)).min(best.0);
+
+                    let global = sampler.nearest_s_global(p, PathMetric::Full);
+                    let ours = distance_to(&sampler, p, global);
+                    assert!(
+                        (ours - dense).abs() < tolerance,
+                        "closed {closed} probe {k}: {ours} vs dense {dense}"
+                    );
+                    let windowed = sampler.nearest_s(p, global, 2.0, PathMetric::Full);
+                    // A minimum is flat in `s` to the square root of the epsilon, so compare distances.
+                    assert!(
+                        (distance_to(&sampler, p, windowed) - ours).abs() < tolerance,
+                        "closed {closed} probe {k}: {windowed} vs {global}"
+                    );
+                }
+            }
+        }
     }
 }
