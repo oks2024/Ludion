@@ -11699,6 +11699,45 @@ mod tests {
         );
     }
 
+    /// **A perturbed shading normal does not cut the blob.** A floor whose shading normal is tilted
+    /// (as a normal map or smooth vertex normals do) but whose geometry is flat takes the whole blob
+    /// of a caster standing on it, on both sides of the anchor along either axis.
+    #[test]
+    fn needs_gpu_a_drop_shadow_ignores_a_perturbed_shading_normal() {
+        let Some(renderer) = skip_or_renderer("a_drop_shadow_ignores_a_perturbed_shading_normal")
+        else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let size = FrameSize::native(w, h);
+        let tilt = 12.0_f32.to_radians();
+        for (normal_matrix, axis) in [
+            (Mat3::from_rotation_z(tilt), Vec3::X),
+            (Mat3::from_rotation_x(tilt), Vec3::Z),
+        ] {
+            let mut bare = drop_shadow_fixture(w, h, false);
+            bare.meshes[0].normal_matrix = normal_matrix;
+            let mut shadowed = bare.clone();
+            let mut shadow = fixture_drop_shadow(Vec::new());
+            shadow.anchor = Vec3::new(0.0, 0.01, 0.0);
+            shadowed.drop_shadows.push(shadow);
+            let lit = renderer.render(&bare, size).expect("a bare render");
+            let dark = renderer.render(&shadowed, size).expect("a shadowed render");
+            for offset in [-0.6_f32, 0.6] {
+                let (px, py) = pixel_of(&bare, axis * offset, w, h);
+                let (before, after) = (luma(&lit, px, py), luma(&dark, px, py));
+                assert!(
+                    before > 0,
+                    "the tilted floor is lit at {offset} along {axis:?}"
+                );
+                assert!(
+                    after * 10 < before * 8,
+                    "the floor at {offset} along {axis:?} must darken: {before} -> {after}",
+                );
+            }
+        }
+    }
+
     /// **A drop shadow at every quality**: the occlusion atlas and the projector are content, not
     /// effects, so the lowest preset still darkens the floor.
     #[test]

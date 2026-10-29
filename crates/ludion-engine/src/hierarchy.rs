@@ -79,7 +79,8 @@ fn chain(world: &World, entity: EntityId) -> (Vec<EntityId>, Option<HierarchyFau
 }
 
 /// The topmost ancestor of `entity` through `Parent`: the entity itself when it has none or its
-/// chain is faulty (a cycle, a dead or too-deep parent).
+/// chain is a cycle or too deep. A dead or presentation parent cuts the walk, so the result is the
+/// last valid ancestor below it.
 pub(crate) fn hierarchy_root(world: &World, entity: EntityId) -> EntityId {
     chain(world, entity).0[0]
 }

@@ -187,3 +187,9 @@ unshadowed; sprites/billboards/text stay Lambert and untouched.
   GPU `drop_shadow_occlusion` **0.004 ms**, `projector` **0.010 ms**; `scene` 0.104 ms both ways; the
   summed pass medians 0.253 ms with and 0.238 ms without. The occlusion pass draws every mesh per caster
   (seven casters here); a scene with hundreds of casters would be where to cull.
+- **Follow-up, not done**: the occlusion pass draws every mesh per caster; cull per caster to the tile's
+  footprint box, measured before the game adds many blob casters.
+- **Plane-test normal**: the `y_under` test reads a normal rebuilt from the depth buffer (two taps per
+  side, the side that extrapolates to the centre's depth), so normal maps and smooth normals no longer cut
+  a blob's rim; where an axis has no such side (a sliver or concave corner) it falls back to the shaded
+  normal. `needs_gpu_a_drop_shadow_ignores_a_perturbed_shading_normal` pins it.

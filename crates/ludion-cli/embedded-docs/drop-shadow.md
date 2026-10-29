@@ -43,8 +43,9 @@ DropShadow:            # every field optional; `DropShadow: {}` is the default b
 - **First surface only.** The shadow lands on the topmost opaque surface below the anchor, within
   `max_distance`. A surface is kept if its plane, extended to under the anchor, is at or below the
   anchor plus 5 cm: a ramp you stand on takes the whole blob, and a step top above you never does.
-  Never the floor under the platform you stand on, never the caster's own meshes (its hierarchy root
-  and every descendant).
+  Never the floor under the platform you stand on. The caster's own meshes (its hierarchy root and
+  every descendant) never block the shadow from the surface below, but a caster surface can still
+  receive it (the 5 cm self-receive band below).
 - **Facing weight.** The darkening is scaled by the surface normal's `y`: a wall stays clean, a slope
   is slightly weaker (the cosine of its tilt).
 - **Height fade.** Full strength until `fade_distance` before `max_distance`, then linear to zero.
@@ -62,8 +63,14 @@ DropShadow:            # every field optional; `DropShadow: {}` is the default b
   shrinks (a 0.4-wide body makes a 0.2 disc, hidden behind it). Keep the root unscaled and scale a
   mesh child.
 - **A black surface shows no blob.** The shadow multiplies what is lit; light the receiver.
-- **A 5 cm self-receive band.** Caster geometry within 5 cm under the anchor can darken itself:
-  anchor at the soles, not inside the body.
+- **A 5 cm self-receive band.** Any caster surface whose plane, extended to under the anchor, dips to
+  the anchor plus 5 cm, such as a steep inward-facing face low on the body, takes facing-weighted
+  darkening: anchor at the soles, not inside the body.
+- **The caster's root is the topmost hierarchy root.** A hero parented under a level, group or prefab
+  root drops every mesh under that root from the occlusion pass: a platform under it stops shielding
+  the floor and a second blob appears. Keep the character's root a scene root.
+- **Occlusion bias grows** as tiles shrink (many casters) and with the footprint's size, so a large
+  segment or a crowded scene can let a floor very close under a thin platform show the blob.
 - **An anchor above the soles** lets the blob climb onto surfaces higher than the feet.
 
 ## Try it

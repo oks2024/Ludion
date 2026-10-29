@@ -2391,7 +2391,9 @@ impl SemanticValidate for DropShadow {
     /// `/shape/<field>`) and an unusable distance pair (`L2110`): `max_distance` not positive and
     /// finite, `fade_distance` negative or non-finite, or `fade_distance` above `max_distance`
     /// (pointed at `/fade_distance`). An absent distance is read at its default, so a lone
-    /// `fade_distance: 30` is refused against the default `max_distance` of `20`.
+    /// `fade_distance: 30` is refused against the default `max_distance` of `20`. A lone
+    /// `max_distance` below the default `fade_distance` is pointed at `/max_distance` instead, the
+    /// field the author wrote.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = shape_dimension_diagnostics(value, "drop shadow", "DropShadow");
         let distance = |field: &str, default: f32| {
@@ -2428,6 +2430,19 @@ impl SemanticValidate for DropShadow {
                 "give `fade_distance` a value between 0 and `max_distance`",
             ));
         } else if max_ok && fade_f32 > max as f32 {
+            let fade_authored = value.get("fade_distance").and_then(as_stored_f32).is_some();
+            let max_authored = value.get("max_distance").and_then(as_stored_f32).is_some();
+            if !fade_authored && max_authored {
+                out.push(invalid(
+                    "max_distance",
+                    max,
+                    &format!("it is below the default `fade_distance` ({fade})"),
+                    &format!(
+                        "set `fade_distance` to at most `max_distance`, or raise `max_distance` to at least {fade}"
+                    ),
+                ));
+                return out;
+            }
             out.push(invalid(
                 "fade_distance",
                 fade,
@@ -7564,6 +7579,24 @@ entities:
             drop_shadow_diagnostics("        max_distance: 20.0\n        fade_distance: 20.0\n");
         assert!(found.is_empty(), "{found:?}");
         let found = drop_shadow_diagnostics("        max_distance: 10.0\n");
+        assert!(found.is_empty(), "{found:?}");
+        // A lone short max is the author's field to fix, against the default fade of 4.
+        let found = drop_shadow_diagnostics("        max_distance: 2.0\n");
+        assert_eq!(found, [l2110("max_distance")]);
+        let registry = builtin_registry();
+        let source =
+            "format: 1\nentities:\n  - components:\n      DropShadow:\n        max_distance: 2.0\n";
+        let help = ludion_scene::check(source, &registry)
+            .expect_err("a lone short max_distance is refused")[0]
+            .help
+            .clone()
+            .unwrap_or_default();
+        assert!(
+            help.contains("fade_distance") && help.contains("max_distance"),
+            "{help}"
+        );
+        let found =
+            drop_shadow_diagnostics("        max_distance: 2.0\n        fade_distance: 1.0\n");
         assert!(found.is_empty(), "{found:?}");
     }
 

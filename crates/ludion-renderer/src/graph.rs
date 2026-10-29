@@ -196,8 +196,9 @@ pub mod pass {
     /// scene carries a drop shadow, at every quality (`Plan/shadow-mapping.md` decision 8).
     pub const DROP_SHADOW_OCCLUSION: &str = "drop_shadow_occlusion";
     /// The generic projector pass: one box volume per instance, the world position rebuilt from
-    /// `scene_depth`, the instance's analytic footprint evaluated and multiplied into `scene`. Today
-    /// its only client is the drop shadow, so it is present exactly when the occlusion atlas is.
+    /// `scene_depth`, the instance's analytic footprint evaluated and multiplied into `scene`. It is
+    /// present exactly when the scene carries a drop shadow (each one a projector instance), so it
+    /// appears together with the occlusion atlas.
     pub const PROJECTOR: &str = "projector";
     /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
     /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.

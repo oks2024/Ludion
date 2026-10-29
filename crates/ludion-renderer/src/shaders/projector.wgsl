@@ -2,11 +2,12 @@
 // opaque scene drew. One box volume per instance is rasterized (back faces only, so every covered
 // pixel is shaded once and a camera inside the box still works); each covered pixel rebuilds its
 // world position from `scene_depth`, evaluates the instance, and multiplies the result into `scene`.
-// Decals (textured, alpha, additive, coat) extend this file: an instance already carries its `kind`
-// and `blend`, and its occlusion key is per instance.
+// An instance carries its `kind`, its `blend` and its own occlusion key, so a new kind is a new
+// branch over the same stages.
 //
 // Stages of the fragment, each a small function so a new kind reuses them:
-//   1. the world position of the pixel (`world_from_depth`);
+//   1. the world position of the pixel (`world_from_depth`), and the receiver's geometric normal
+//      rebuilt from the depth buffer (`geometric_normal`) for the plane test;
 //   2. the footprint's coverage in the instance's local XZ plane (`footprint_coverage`);
 //   3. the facing term from the opaque normal (`facing`);
 //   4. the height fade below the anchor (`drop_fade`);
@@ -54,6 +55,9 @@ struct ProjectorParams {
 const NO_OCCLUSION: u32 = 0xFFFFFFFFu;
 // The particle pass's soft-edge gaussian: `exp(-SOFT_FALLOFF)` is the value at the rim.
 const SOFT_FALLOFF: f32 = 4.0;
+// How far a side's extrapolated depth may miss the centre, as a share of the one-tap depth step,
+// before that axis counts as crossing a discontinuity on both sides.
+const EXTRAPOLATION_SLACK: f32 = 0.03;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -105,6 +109,57 @@ fn world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
     let ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
     let world = proj_params.inv_view_proj * vec4<f32>(ndc, 1.0);
     return world.xyz / world.w;
+}
+
+// The geometric world normal of the surface at `pixel`, rebuilt from the depth buffer: per screen
+// axis the neighbour on the pixel's own surface gives a world delta, and the two deltas cross. On a
+// plane device depth is affine in screen space, so the side whose two taps extrapolate to the
+// centre's depth is that surface (a silhouette pixel borrows from its own side). The shaded normal in
+// `proj_normal` carries normal maps and smooth vertex normals, which tilt the receiver's plane
+// test; this one follows the geometry. Oriented to `n.y >= 0`; `fallback` (the shaded normal) where
+// the cross degenerates or an axis has no side on the pixel's own surface (a sliver, a concave corner).
+fn geometric_normal(
+    pixel: vec2<i32>,
+    depth: f32,
+    world: vec3<f32>,
+    fallback: vec3<f32>,
+) -> vec3<f32> {
+    let size = vec2<i32>(textureDimensions(proj_depth));
+    let dims = vec2<f32>(size);
+    var delta: array<vec3<f32>, 2>;
+    var trusted = true;
+    for (var axis = 0; axis < 2; axis++) {
+        let step = select(vec2<i32>(0, 1), vec2<i32>(1, 0), axis == 0);
+        let top = size - vec2<i32>(1);
+        let lo = clamp(pixel - step, vec2<i32>(0), top);
+        let hi = clamp(pixel + step, vec2<i32>(0), top);
+        let lo2 = clamp(pixel - step * 2, vec2<i32>(0), top);
+        let hi2 = clamp(pixel + step * 2, vec2<i32>(0), top);
+        let d_lo = textureLoad(proj_depth, lo, 0);
+        let d_hi = textureLoad(proj_depth, hi, 0);
+        // A tap clamped at the border repeats another sample: that side cannot be judged and loses.
+        let e_lo = select(
+            abs(2.0 * d_lo - textureLoad(proj_depth, lo2, 0) - depth),
+            1e30,
+            all(lo == pixel) || all(lo2 == lo),
+        );
+        let e_hi = select(
+            abs(2.0 * d_hi - textureLoad(proj_depth, hi2, 0) - depth),
+            1e30,
+            all(hi == pixel) || all(hi2 == hi),
+        );
+        let forward = e_hi <= e_lo;
+        let other = select(lo, hi, forward);
+        let d_other = select(d_lo, d_hi, forward);
+        trusted = trusted && min(e_lo, e_hi) <= EXTRAPOLATION_SLACK * abs(d_other - depth) + 1e-6;
+        let w_other = world_from_depth((vec2<f32>(other) + 0.5) / dims, d_other);
+        delta[axis] = select(world - w_other, w_other - world, forward);
+    }
+    // Screen x then y (y runs down), so the cross points away from the surface for a front face.
+    var n = cross(delta[1], delta[0]);
+    n = select(n, -n, n.y < 0.0);
+    let len = length(n);
+    return select(fallback, n / max(len, 1e-12), trusted && len > 1e-12);
 }
 
 // The footprint's coverage at `world`: the rounded-box distance in the instance's yaw-rotated local
@@ -174,7 +229,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // never shadowed, which also keeps a caster standing on the anchor from darkening itself.
     // Geometry of the caster within the tolerance band under the anchor top can still darken:
     // there is no per-pixel entity id.
-    let y_under = world.y + dot(normal.xz, world.xz - p.top.xz) / max(normal.y, 1e-3);
+    // The plane comes from the depth buffer's geometry, not the shaded normal, so a normal map or
+    // smooth normals cannot cut the rim.
+    let plane = geometric_normal(pixel, depth, world, normal);
+    let y_under = world.y + dot(plane.xz, world.xz - p.top.xz) / max(plane.y, 1e-3);
     let kept = depth < 1.0 && y_under <= p.top.y && below <= p.look.y;
     let darkening = p.look.x * coverage * facing(normal) * fade * first;
     let shade = select(0.0, darkening, kept);
