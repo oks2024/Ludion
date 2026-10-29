@@ -181,6 +181,7 @@ pub enum Shape {
     Mesh {
         /// The mesh document, relative to the content root (the same path as `Mesh.shape: { asset }`).
         #[serde(default)]
+        #[schemars(with = "ludion_ecs::AssetPathSchema")]
         path: String,
     },
 }

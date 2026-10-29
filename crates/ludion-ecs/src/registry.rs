@@ -113,6 +113,8 @@ pub struct ComponentInfo {
     schema: Value,
     /// The entity-reference fields marked in `schema`, derived once at registration.
     entity_refs: Vec<EntityRefField>,
+    /// The asset-path field patterns marked in `schema`, derived once at registration.
+    asset_paths: Vec<String>,
     /// Whether the component may be authored as a scene `components:` block. `false` marks a
     /// *field-backed* built-in — one a scene document projects into from a dedicated field (e.g.
     /// `Name` from an entity's `name:`) — so declaring it as a component block is rejected, keeping
@@ -151,6 +153,20 @@ impl ComponentInfo {
     /// them and `scene.save` remaps them.
     pub fn entity_refs(&self) -> &[EntityRefField] {
         &self.entity_refs
+    }
+
+    /// The component's asset-path field patterns — JSON Pointer suffixes (with `*` for every map
+    /// value or list element) of fields whose schema carries the
+    /// [`ASSET_PATH_KEYWORD`](crate::ASSET_PATH_KEYWORD) marker (see
+    /// [`AssetPathSchema`](crate::AssetPathSchema)), sorted.
+    pub fn asset_paths(&self) -> &[String] {
+        &self.asset_paths
+    }
+
+    /// Hands each asset-path string present in `value` (this component's serialized value) to `f`
+    /// with its concrete JSON Pointer, for in-place rewriting; see [`crate::for_each_asset_path`].
+    pub fn for_each_asset_path(&self, value: &mut Value, f: &mut dyn FnMut(&str, &mut String)) {
+        crate::for_each_asset_path(&self.asset_paths, value, f);
     }
 
     /// Whether this component is **reserved** — a field-backed built-in that must not appear as a
@@ -331,12 +347,14 @@ impl Registry {
         let schema = serde_json::to_value(schemars::schema_for!(T))
             .expect("a schemars JSON Schema always serializes to a JSON value");
         let entity_refs = crate::entity_ref_fields(&schema);
+        let asset_paths = crate::asset_path_fields(&schema);
         let index = self.entries.len();
         self.entries.push(ComponentInfo {
             name: name.to_string(),
             type_id,
             schema,
             entity_refs,
+            asset_paths,
             reserved,
             serialize_fn: erased_serialize::<T>,
             serialize_erased_fn: erased_serialize_ref::<T>,

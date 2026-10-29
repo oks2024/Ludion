@@ -73,6 +73,7 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+mod asset_path;
 mod entity;
 mod entity_ref;
 mod hierarchy;
@@ -83,6 +84,7 @@ mod schedule;
 mod storage;
 mod world;
 
+pub use asset_path::{ASSET_PATH_KEYWORD, AssetPathSchema, asset_path_fields, for_each_asset_path};
 pub use entity::{AllocatorState, MAX_ENTITY_SLOTS, PRESENTATION_BASE, Phase, is_presentation};
 pub use entity_ref::{
     ENTITY_REF_KEYWORD, EntityRefField, EntityRefSchema, EntityRefSelfSchema, entity_ref_fields,

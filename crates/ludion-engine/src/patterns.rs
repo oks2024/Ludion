@@ -420,6 +420,7 @@ pub struct Volley {
     pub source: Option<EntityId>,
     /// The [`DocStore`] key of the [`PatternDoc`] holding [`bullet`](Volley::bullet).
     #[serde(default)]
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
     pub pattern: String,
     /// Which of that document's `bullets:` these are.
     #[serde(default)]
@@ -557,6 +558,7 @@ impl SemanticValidate for Volley {
 pub struct PatternPlayer {
     /// The [`DocStore`] key of the [`PatternDoc`] to play (default `""` — plays nothing).
     #[serde(default)]
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
     pub pattern: String,
     /// The frame playback started at; the timeline's `at` offsets are counted from it.
     #[serde(default = "frame_zero")]

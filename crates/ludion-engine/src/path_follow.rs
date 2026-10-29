@@ -150,6 +150,7 @@ impl PathOrient {
 pub struct PathFollower {
     /// The `kind: path` document, relative to the content root (default `""` — inert).
     #[serde(default)]
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
     pub path: String,
     /// Arc-length metres per gameplay second; negative runs backwards (default `1.0`).
     #[serde(default = "one")]

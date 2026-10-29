@@ -149,11 +149,13 @@ pub enum SpriteBlend {
 pub struct Sprite {
     /// Texture asset path (relative to the content root — the directory of the scene the engine was started with), or `None` for a plain white quad.
     #[serde(default)]
+    #[schemars(with = "Option<ludion_ecs::AssetPathSchema>")]
     pub texture: Option<String>,
     /// A `kind: atlas` document path (relative to the content root), or `None`. The region named by
     /// [`frame`](Sprite::frame) supplies the pixels and the UV rect. Mutually exclusive with
     /// [`texture`](Sprite::texture): a quad takes its pixels from exactly one place (`L1151`).
     #[serde(default)]
+    #[schemars(with = "Option<ludion_ecs::AssetPathSchema>")]
     pub atlas: Option<String>,
     /// The region name inside [`atlas`](Sprite::atlas). Required with `atlas` and meaningless
     /// without it (`L1151`).
@@ -354,23 +356,23 @@ pub enum MeshSource {
     /// A unit-radius sphere.
     Sphere,
     /// A mesh asset document at this content-root-relative path (`meshes/*.mesh.yaml`).
-    Asset(String),
+    Asset(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
     /// A voxel model document at this content-root-relative path (`voxels/*.voxel.yaml`), greedily
     /// meshed at load with per-quad palette colors.
-    Voxel(String),
+    Voxel(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
     /// A multi-part voxel assembly document at this content-root-relative path (`*.assembly.yaml`),
     /// whose part files are read relative to the assembly file's own directory. One entity draws the
     /// whole model: extract expands it into one instance per part, each at its rest offset inside the
     /// assembled grid.
-    Assembly(String),
+    Assembly(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
     /// A sculpt model document at this content-root-relative path (`sculpts/*.sculpt.yaml`): named
     /// primitive parts folded into one signed distance field, meshed at load into a smooth triangle
     /// surface with blended palette colors and materials.
-    Sculpt(String),
+    Sculpt(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
     /// A character document at this content-root-relative path (`*.character.yaml`): it names a
     /// skinned mesh and binds short clip names to animation clips. The entity draws the skinned mesh
     /// (a `SkinBone` part can name it), and `Animation.clip` names a key of the document's `clips:`.
-    Character(String),
+    Character(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
     /// One named part of an assembly document, drawn on its own entity rather than the whole model
     /// (`Plan/physics.md` W3's ragdoll authoring): `assembly` is the same content-root-relative path
     /// `Assembly` takes, `part` is one of its `parts:` entries' `name`. Extract meshes the same part
@@ -379,6 +381,7 @@ pub enum MeshSource {
     /// these entities; nothing stops a hand-authored one.
     AssemblyPart {
         /// The assembly document's path, exactly as `Assembly` takes it.
+        #[schemars(with = "ludion_ecs::AssetPathSchema")]
         assembly: String,
         /// The part's name, as authored in the assembly's `parts:`.
         part: String,
@@ -2461,12 +2464,14 @@ impl Default for Text {
 pub struct TileAppearance {
     /// Texture asset path (relative to the content root — the directory of the scene the engine was started with), or `None` for a plain colored quad.
     #[serde(default)]
+    #[schemars(with = "Option<ludion_ecs::AssetPathSchema>")]
     pub texture: Option<String>,
     /// A `kind: atlas` document path (relative to the content root), or `None`. The region named by
     /// [`frame`](TileAppearance::frame) supplies the pixels and the UV rect; the cell's world size
     /// stays [`Tilemap::cell_size`]. Mutually exclusive with
     /// [`texture`](TileAppearance::texture) (`L1151`).
     #[serde(default)]
+    #[schemars(with = "Option<ludion_ecs::AssetPathSchema>")]
     pub atlas: Option<String>,
     /// The region name inside [`atlas`](TileAppearance::atlas). Required with `atlas` and
     /// meaningless without it (`L1151`).
@@ -3075,6 +3080,7 @@ pub struct UiRect {
     /// Texture asset path (relative to the content root — the directory of the scene the engine was
     /// started with), or `None` for a plain colored quad (default `None`).
     #[serde(default)]
+    #[schemars(with = "Option<ludion_ecs::AssetPathSchema>")]
     pub texture: Option<String>,
     /// A `kind: atlas` document path (relative to the content root), or `None`. The region named by
     /// [`frame`](UiRect::frame) supplies the pixels and the UV sub-rect the rect samples — exactly
@@ -3082,6 +3088,7 @@ pub struct UiRect {
     /// loose PNG. Mutually exclusive with [`texture`](UiRect::texture): a quad takes its pixels from
     /// one place (`L1151`).
     #[serde(default)]
+    #[schemars(with = "Option<ludion_ecs::AssetPathSchema>")]
     pub atlas: Option<String>,
     /// The region name inside [`atlas`](UiRect::atlas). Required with `atlas` and meaningless without
     /// it (`L1151`).
@@ -3648,6 +3655,7 @@ pub struct AudioEmitter {
     /// `check-scene` refuses an empty `sound` with `L1101`, and at runtime the sink skips it with its
     /// usual once-per-path warning).
     #[serde(default)]
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
     pub sound: String,
     /// Linear gain at the listener's own position, before falloff (default `1.0`). The mix is
     /// soft-limited above 0.8; headroom keeps dynamics.
@@ -7531,5 +7539,87 @@ entities:
                 "`{component}`'s entity references changed — did the schema shape change?"
             );
         }
+    }
+
+    /// Every registered component's asset-path fields, pinned: a new path field is a deliberate
+    /// edit here, and a component not listed holds none.
+    #[test]
+    fn asset_path_fields_are_pinned() {
+        const SHAPES: [&str; 6] = [
+            "/shape/assembly",
+            "/shape/assembly_part/assembly",
+            "/shape/asset",
+            "/shape/character",
+            "/shape/sculpt",
+            "/shape/voxel",
+        ];
+        let legend: Vec<String> = SHAPES.iter().map(|s| format!("/legend/*{s}")).collect();
+        let pinned: Vec<(&str, Vec<String>)> = vec![
+            ("Sprite", vec!["/atlas".into(), "/texture".into()]),
+            ("Mesh", SHAPES.iter().map(|s| s.to_string()).collect()),
+            ("MeshGrid", legend),
+            (
+                "Tilemap",
+                vec!["/legend/*/atlas".into(), "/legend/*/texture".into()],
+            ),
+            ("UiRect", vec!["/atlas".into(), "/texture".into()]),
+            ("AudioEmitter", vec!["/sound".into()]),
+            ("PathFollower", vec!["/path".into()]),
+            ("PatternPlayer", vec!["/pattern".into()]),
+            ("Volley", vec!["/pattern".into()]),
+            (
+                "Collider",
+                vec![
+                    "/shape/compound/parts/*/shape/mesh/path".into(),
+                    "/shape/mesh/path".into(),
+                ],
+            ),
+        ];
+        let registry = builtin_registry();
+        for info in registry.iter() {
+            let expected = pinned
+                .iter()
+                .find(|(name, _)| *name == info.name())
+                .map_or(&[][..], |(_, fields)| fields.as_slice());
+            assert_eq!(
+                info.asset_paths(),
+                expected,
+                "`{}`'s asset-path fields changed — mark a new path field with \
+                 ludion_ecs::AssetPathSchema and update this table",
+                info.name()
+            );
+        }
+        for (name, _) in &pinned {
+            assert!(registry.get(name).is_some(), "`{name}` is not registered");
+        }
+    }
+
+    #[test]
+    fn the_asset_path_visitor_reaches_every_legend_entry() {
+        let registry = builtin_registry();
+        let info = registry.get("MeshGrid").expect("registered");
+        let mut value = serde_json::json!({
+            "legend": {
+                "a": {"shape": {"asset": "a.mesh.yaml"}},
+                "b": {"shape": {"voxel": "b.voxel.yaml"}}
+            }
+        });
+        let mut seen = Vec::new();
+        info.for_each_asset_path(&mut value, &mut |pointer, path| {
+            seen.push((pointer.to_string(), path.clone()));
+        });
+        assert_eq!(
+            seen,
+            [
+                (
+                    "/legend/a/shape/asset".to_string(),
+                    "a.mesh.yaml".to_string()
+                ),
+                (
+                    "/legend/b/shape/voxel".to_string(),
+                    "b.voxel.yaml".to_string()
+                ),
+            ]
+        );
     }
 }
