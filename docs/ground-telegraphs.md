@@ -60,3 +60,4 @@ white — an empty `GroundMarker: {}` draws something rather than nothing, the s
 - `ludion docs components` — declaring components, drift safety, and the built-in visual set.
 - `ludion docs materials` — the three material scalars, and why `GroundMarker` doesn't carry them.
 - `ludion docs post-processing` — the bloom chain a bright marker color feeds.
+- `ludion docs drop-shadow` — a marker is a telegraph; `DropShadow` is the depth cue, and a marker draws on top of one.

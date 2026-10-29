@@ -19,6 +19,7 @@ components you place and the systems that drive them are `ludion docs components
 - `ludion docs environment` — the `Environment` sky, image-based lighting, and `Fade` occlusion.
 - `ludion docs global-illumination` — the baked `GiVolume` sky-visibility volume and its dump instruments.
 - `ludion docs ground-telegraphs` — the `GroundMarker` disc/segment ground telegraph.
+- `ludion docs drop-shadow` — the `DropShadow` projected contact shadow under a character.
 - `ludion docs debug-draw` — world-space debug lines a system draws, and `--debug-draw` on the offline renders.
 - `ludion docs particles` — `ParticleEmitter`: the analytic particle effect, and firing a burst.
 - `ludion docs sprites` — the sprite layer's hub: document kinds, CLI verbs, components, six spokes.

@@ -9,7 +9,8 @@
 > work ran ahead of it. Texture maps and IBL stay behind the original trigger. **Human gate PASSED
 > 2026-07-17** — user looked at the sun-shadows result and confirmed shadows are working. **Open:**
 > the two macOS re-blesses (`sun-shadows.png` new, `ui-hud-1080.png` re-bless) queued for the next
-> mac session.
+> mac session. **Decision 8 (Clockout 0006) mechanized 2026-10-29:** the `DropShadow` component, the
+> `drop_shadow_occlusion` and `projector` passes and the `drop-shadow` gallery golden; the macOS twin is owed.
 
 ## Goal
 
@@ -165,3 +166,24 @@ unshadowed; sprites/billboards/text stay Lambert and untouched.
 - **Perf accounting**: `pass::SHADOW` added to `KNOWN_PASS_NAMES` in
   `crates/ludion-engine/src/profile.rs` (a `[passes] shadow` budget line on a sunless scene is now
   producible-but-unmeasured, not an L4006 — covered by `producible_but_unmeasured_pass_is_not_a_violation`).
+
+## Drop shadow outcomes (Clockout 0006)
+
+- **Gallery golden**: `examples/gallery/drop-shadow.yaml` → `examples/gallery/goldens/windows/drop-shadow.png`
+  (960×540), blessed with `cargo run -p ludion-cli -- test --dir examples/gallery --filter drop-shadow --bless`,
+  re-verified at **SSIM 1.0000**. No sun; three point lights. Each character is an unscaled root, a scaled
+  body child and a `DropShadow` child at the soles (the footprint takes the world scale). Cases: (a) a
+  two-level step, the disc cut at the lip and continuing on the lower floor; (b) a thin floating platform,
+  the blob on its top and the floor beneath clean; (c) a six-metre pit open toward the camera, the blob on
+  its floor; (d) a 15° ramp, the whole blob on the ramp; (e) a faded case (`max_distance 4`,
+  `fade_distance 2`, soles 3.4 m up), a faint blob; (f) a `GroundMarker` half over a blob, the marker on
+  top; (g) a yawed segment on the floor. `--quality low` shows every blob.
+- **Slope fix**: the first golden attempt read a ramp with its uphill half cut, because `kept` tested the
+  pixel's own height against the anchor. The projector now tests the receiver plane extended to under the
+  anchor (`y_under`), so a ramp the caster stands on takes the whole blob and a step top above it never does;
+  `needs_gpu_a_drop_shadow_wraps_a_slope_and_spares_a_step_above` pins both.
+- **Cost** (`cargo run --release -p ludion-cli -- profile --scene examples/gallery/drop-shadow.yaml --frames 120`,
+  1080p, full preset, RTX 3090; the scratch twin has the component removed from the seven children):
+  GPU `drop_shadow_occlusion` **0.004 ms**, `projector` **0.010 ms**; `scene` 0.104 ms both ways; the
+  summed pass medians 0.253 ms with and 0.238 ms without. The occlusion pass draws every mesh per caster
+  (seven casters here); a scene with hundreds of casters would be where to cull.

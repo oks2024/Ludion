@@ -11638,6 +11638,67 @@ mod tests {
         );
     }
 
+    /// **A ramp the caster stands on takes the whole shadow; a flat top above the anchor takes none.**
+    /// A 15° slab passes under the anchor: its surface 0.6 m uphill and 0.6 m downhill of the
+    /// anchor darkens alike, because the receiver's plane extended under the anchor sits at the
+    /// anchor's height. A block whose top is 0.3 m above the anchor stays byte-identical.
+    #[test]
+    fn needs_gpu_a_drop_shadow_wraps_a_slope_and_spares_a_step_above() {
+        let Some(renderer) =
+            skip_or_renderer("a_drop_shadow_wraps_a_slope_and_spares_a_step_above")
+        else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let size = FrameSize::native(w, h);
+        let angle = 15.0_f32.to_radians();
+        let surface = |x: f32| 0.5 + 0.05 / angle.cos() + angle.tan() * x;
+
+        let mut bare = drop_shadow_fixture(w, h, false);
+        let mut ramp = cube(
+            Vec3::new(0.0, 0.5, 0.0),
+            Vec3::new(6.0, 0.1, 4.0),
+            [0.8, 0.8, 0.8, 1.0],
+        );
+        ramp.model = Mat4::from_translation(Vec3::new(0.0, 0.5, 0.0))
+            * Mat4::from_rotation_z(angle)
+            * Mat4::from_scale(Vec3::new(6.0, 0.1, 4.0));
+        ramp.normal_matrix = Mat3::from_rotation_z(angle);
+        bare.meshes.push(ramp);
+        let mut shadowed = bare.clone();
+        let mut shadow = fixture_drop_shadow(Vec::new());
+        shadow.anchor = Vec3::new(0.0, surface(0.0) + 0.01, 0.0);
+        shadowed.drop_shadows.push(shadow);
+        let lit = renderer.render(&bare, size).expect("a bare render");
+        let dark = renderer.render(&shadowed, size).expect("a shadowed render");
+        for x in [-0.6_f32, 0.6] {
+            let (px, py) = pixel_of(&bare, Vec3::new(x, surface(x), 0.0), w, h);
+            let (before, after) = (luma(&lit, px, py), luma(&dark, px, py));
+            assert!(
+                after * 10 < before * 8,
+                "the ramp at x = {x} must darken: {before} -> {after}",
+            );
+        }
+
+        let mut bare = drop_shadow_fixture(w, h, false);
+        bare.meshes.push(cube(
+            Vec3::new(0.8, 1.15, 0.0),
+            Vec3::new(1.0, 0.3, 1.0),
+            [0.8, 0.8, 0.8, 1.0],
+        ));
+        let mut shadowed = bare.clone();
+        shadowed.drop_shadows.push(fixture_drop_shadow(Vec::new()));
+        let lit = renderer.render(&bare, size).expect("a bare render");
+        let dark = renderer.render(&shadowed, size).expect("a shadowed render");
+        let (px, py) = pixel_of(&bare, Vec3::new(0.8, 1.31, 0.0), w, h);
+        assert!(luma(&lit, px, py) > 0, "the block top is lit");
+        assert_eq!(
+            luma(&dark, px, py),
+            luma(&lit, px, py),
+            "a flat top above the anchor is never shadowed",
+        );
+    }
+
     /// **A drop shadow at every quality**: the occlusion atlas and the projector are content, not
     /// effects, so the lowest preset still darkens the floor.
     #[test]

@@ -48,6 +48,7 @@ defaults (from `crates/ludion-engine/src/components.rs`):
 | `ReflectionProbe` | `shape`, `blend`, `priority` — a captured reflection volume. See `ludion docs reflection-probes` |
 | `Residue` | *(no fields, authored `Residue: {}`)* — opt-in per-entity marker for state that stays with its **scene** rather than travelling with the player: the components are captured when a switch leaves the scene and re-applied when the run returns to it this session (identity is the entity's `name:`; an unnamed one respawns). Absent, the scene is rebuilt from its text on every visit, exactly as before the marker existed. The runnable pattern is `crates/ludion/examples/scene_residue.rs` |
 | `GroundMarker` | `shape` (`{ type: disc, radius: 1.0 }`) — `type: disc { radius }` or `type: segment { length, width }` (local +X is the segment's length axis); `color: [f32;4]` (`[1,1,1,1]`) — linear RGBA, HDR-capable (RGB `>=0`, alpha `0..=1`: `L1263`). An analytic, SDF-rendered ground telegraph, alpha-blended after opaque meshes and before sprites. Every shape dimension must be strictly positive and finite (`L2106`). See `ludion docs ground-telegraphs` |
+| `DropShadow` | `shape` (`{ type: disc, radius: 0.5 }`), `opacity` (`0.6`), `softness` (`0.5`), `max_distance` (`20.0`), `fade_distance` (`4.0`) — a projected contact shadow on the first surface straight below the entity, drawn after opaque meshes. Shape dimensions `> 0` (`L2106`), opacity and softness in `0..=1` (`L1014`), distances positive with `fade_distance <= max_distance` (`L2110`). See `ludion docs drop-shadow` |
 
 The screen-space UI primitives (`UiRect`, `UiText`, `UiList`) and world `Text` are
 `ludion docs components-ui`. The content and effect components (`Sprite`, `Tilemap`,
@@ -71,6 +72,8 @@ values — is `ludion docs lighting --section "Point lights: place as many as th
 
 **Ground telegraphs (`GroundMarker`)** — shape/color format, draw order, and the bloom interaction —
 is `ludion docs ground-telegraphs`.
+
+**Projected contact shadow (`DropShadow`)** — the first-surface rule, the footprint and the fade — is `ludion docs drop-shadow`.
 
 ## Keep components drift-safe
 
@@ -106,4 +109,5 @@ prevents.)
 - `ludion docs lighting` — the sun and its shadow map, `PointLight` calibration, and the `SpotLight` cone.
 - `ludion docs global-illumination` — the baked `GiVolume` sky-visibility volume.
 - `ludion docs ground-telegraphs` — the `GroundMarker` disc/segment ground telegraph.
+- `ludion docs drop-shadow` — the `DropShadow` projected contact shadow.
 - `ludion docs dev-loop` — the live reload loop.

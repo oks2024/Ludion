@@ -1,0 +1,495 @@
+# Feature: DropShadow — a projected contact shadow, the depth cue for a character in the air. Each
+# caster is a small body with a child at its soles holding the DropShadow; the footprint projects
+# straight down onto the first surface at or below the anchor, never the caster's own meshes.
+# Left to right, back row: (a) a two-level step, the disc cut at the lip and continuing on the
+# lower floor; (b) a thin floating platform, the blob on its top and none on the floor beneath;
+# (d) a gentle ramp; (c) a six-metre pit, the blob full strength on its floor. Front row: (e) a
+# faded case (max_distance 4, fade_distance 2, soles about 3.4 m up); (f) a GroundMarker
+# half-overlapping a blob, the marker reading on top; (g) a segment footprint on a yawed bar.
+# No DirectionalLight: the cue needs no sun. Every other field is a default, pinned here by
+# omission. Plan/shadow-mapping.md decision 8.
+format: 1
+name: "drop-shadow - DropShadow: first surface below, ledges, pit, slope, fade, marker, segment"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.5
+          - 8.5
+          - 13.0
+        rotation:
+          - -25.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 52.0
+  - name: key-left
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 9.0
+          - 8.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.97
+          - 0.92
+        intensity: 1.5
+        range: 28.0
+  - name: key-mid
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 10.0
+          - 8.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.97
+          - 0.92
+        intensity: 1.5
+        range: 28.0
+  - name: key-right
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 9.0
+          - 8.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.97
+          - 0.92
+        intensity: 1.5
+        range: 28.0
+  - name: pit-light
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 12.0
+          - -3.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.97
+          - 0.92
+        intensity: 1.5
+        range: 30.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 60.0
+          - 1.0
+          - 60.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.4
+          - 0.4
+          - 0.42
+          - 1.0
+        roughness: 0.8
+  - name: step-upper
+    components:
+      Transform:
+        translation:
+          - -7.4
+          - 0.3
+          - -3.0
+        scale:
+          - 2.6
+          - 0.6
+          - 2.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.4
+          - 0.42
+          - 1.0
+        roughness: 0.8
+  - name: step
+    components:
+      Transform:
+        translation:
+          - -6.25
+          - 0.6
+          - -3.0
+  - name: step-body
+    components:
+      Parent:
+        index: 7
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.0
+        scale:
+          - 0.4
+          - 1.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.42
+          - 0.2
+          - 1.0
+        roughness: 0.5
+  - name: step-shadow
+    components:
+      Parent:
+        index: 7
+        generation: 0
+      Transform: {}
+      DropShadow: {}
+  - name: float-platform
+    components:
+      Transform:
+        translation:
+          - -3.4
+          - 1.2
+          - -3.0
+        scale:
+          - 2.0
+          - 0.15
+          - 1.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.4
+          - 0.5
+          - 1.0
+        roughness: 0.8
+  - name: float
+    components:
+      Transform:
+        translation:
+          - -3.4
+          - 1.275
+          - -3.0
+  - name: float-body
+    components:
+      Parent:
+        index: 11
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.0
+        scale:
+          - 0.4
+          - 1.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.72
+          - 0.4
+          - 1.0
+        roughness: 0.5
+  - name: float-shadow
+    components:
+      Parent:
+        index: 11
+        generation: 0
+      Transform: {}
+      DropShadow: {}
+  - name: ramp
+    components:
+      Transform:
+        translation:
+          - 0.8
+          - 0.7
+          - -3.0
+        rotation:
+          - 0.0
+          - 0.0
+          - 15.0
+        scale:
+          - 3.4
+          - 0.3
+          - 2.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.4
+          - 0.42
+          - 1.0
+        roughness: 0.8
+  - name: ramp-walker
+    components:
+      Transform:
+        translation:
+          - 0.7612
+          - 0.8449
+          - -3.0
+  - name: ramp-walker-body
+    components:
+      Parent:
+        index: 15
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.0
+        scale:
+          - 0.4
+          - 1.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.25
+          - 0.5
+          - 0.85
+          - 1.0
+        roughness: 0.5
+  - name: ramp-walker-shadow
+    components:
+      Parent:
+        index: 15
+        generation: 0
+      Transform: {}
+      DropShadow: {}
+  - name: pit-wall-left
+    components:
+      Transform:
+        translation:
+          - 3.9
+          - 3.0
+          - -4.5
+        scale:
+          - 1.0
+          - 6.0
+          - 3.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.4
+          - 0.42
+          - 1.0
+        roughness: 0.8
+  - name: pit-wall-right
+    components:
+      Transform:
+        translation:
+          - 7.9
+          - 3.0
+          - -4.5
+        scale:
+          - 1.0
+          - 6.0
+          - 3.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.4
+          - 0.42
+          - 1.0
+        roughness: 0.8
+  - name: pit-wall-back
+    components:
+      Transform:
+        translation:
+          - 5.9
+          - 3.0
+          - -6.7
+        scale:
+          - 5.0
+          - 6.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.4
+          - 0.42
+          - 1.0
+        roughness: 0.8
+  - name: pit
+    components:
+      Transform:
+        translation:
+          - 5.9
+          - 7.0
+          - -4.5
+  - name: pit-body
+    components:
+      Parent:
+        index: 21
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.0
+        scale:
+          - 0.4
+          - 1.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.25
+          - 0.25
+          - 1.0
+        roughness: 0.5
+  - name: pit-shadow
+    components:
+      Parent:
+        index: 21
+        generation: 0
+      Transform: {}
+      DropShadow: {}
+  - name: fade
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 3.4
+          - 3.0
+  - name: fade-body
+    components:
+      Parent:
+        index: 24
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.4
+          - 0.0
+        scale:
+          - 0.8
+          - 0.8
+          - 0.8
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.42
+          - 0.2
+          - 1.0
+        roughness: 0.5
+  - name: fade-shadow
+    components:
+      Parent:
+        index: 24
+        generation: 0
+      Transform: {}
+      DropShadow:
+        max_distance: 4.0
+        fade_distance: 2.0
+  - name: marker
+    components:
+      Transform:
+        translation:
+          - -2.2
+          - 0.0
+          - 3.0
+  - name: marker-body
+    components:
+      Parent:
+        index: 27
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.0
+        scale:
+          - 0.4
+          - 1.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.72
+          - 0.4
+          - 1.0
+        roughness: 0.5
+  - name: marker-shadow
+    components:
+      Parent:
+        index: 27
+        generation: 0
+      Transform: {}
+      DropShadow: {}
+  - name: marker-disc
+    components:
+      Transform:
+        translation:
+          - -1.7
+          - 0.0
+          - 3.0
+      GroundMarker:
+        shape:
+          type: disc
+          radius: 0.8
+        color:
+          - 1.4
+          - 0.45
+          - 0.15
+          - 0.6
+  - name: bar
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 1.0
+          - 3.0
+        rotation:
+          - 0.0
+          - 45.0
+          - 0.0
+  - name: bar-body
+    components:
+      Parent:
+        index: 31
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.15
+          - 0.0
+        scale:
+          - 1.2
+          - 0.3
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.25
+          - 0.5
+          - 0.85
+          - 1.0
+        roughness: 0.5
+  - name: bar-shadow
+    components:
+      Parent:
+        index: 31
+        generation: 0
+      Transform: {}
+      DropShadow:
+        shape:
+          type: segment
+          length: 1.2
+          width: 0.5

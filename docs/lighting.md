@@ -95,7 +95,7 @@ rest (no error).
 cast into the shadow map nor sample it (a lit sprite takes the sun's light unshadowed, two-sided, with
 no IBL, beside its ambient and point lights);
 `PointLight`s and `SpotLight`s remain unshadowed — no cube-map/array-texture shadows, a recorded
-trigger revisited when the sun alone can't sell a scene. A mesh always casts and receives; there is no per-mesh opt-out.
+trigger revisited when the sun alone can't sell a scene. A mesh always casts and receives; there is no per-mesh opt-out. A `DropShadow` is not a light shadow: opaque meshes receive it whatever the light setup (`ludion docs drop-shadow`).
 
 ## Point lights: place as many as the look needs
 
@@ -187,3 +187,4 @@ A `SpotLight` is a point light with an axis: `color`, `intensity`, `range` as a 
 - `ludion docs materials` — the three material scalars.
 - `ludion docs post-processing` — the imaging chain.
 - `ludion docs components` — declaring components, and the built-in visual set.
+- `ludion docs drop-shadow` — the projected contact shadow under a character, no sun needed.

@@ -169,10 +169,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let fade = drop_fade(below, p.look.y, p.look.z);
     let first = select(first_surface(p, world), 1.0, p.ids.z == NO_OCCLUSION);
 
-    // The anchor plane: a pixel above the anchor top is never shadowed, which is also what keeps a
-    // caster standing on the anchor from darkening itself. Geometry of the caster within the
-    // tolerance band under the anchor top can still darken: there is no per-pixel entity id.
-    let kept = depth < 1.0 && world.y <= p.top.y && below <= p.look.y;
+    // The receiver's plane extended to under the anchor: a ramp the caster stands on reaches about
+    // the anchor's height and is kept whole; a flat top above the anchor stays above it and is
+    // never shadowed, which also keeps a caster standing on the anchor from darkening itself.
+    // Geometry of the caster within the tolerance band under the anchor top can still darken:
+    // there is no per-pixel entity id.
+    let y_under = world.y + dot(normal.xz, world.xz - p.top.xz) / max(normal.y, 1e-3);
+    let kept = depth < 1.0 && y_under <= p.top.y && below <= p.look.y;
     let darkening = p.look.x * coverage * facing(normal) * fade * first;
     let shade = select(0.0, darkening, kept);
     return vec4<f32>(vec3<f32>(1.0 - shade), 1.0);
