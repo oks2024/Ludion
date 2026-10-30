@@ -1,0 +1,581 @@
+# Feature: Decal — a projected box that paints textures onto the surfaces inside it. Back row, left to
+# right: (a) a two-level step under one unrotated hazard stripe: it paints both treads and fades out on
+# the riser (the default angle_fade [60, 80]); (b) the same stripe rotated onto a wall; (c) a flat swatch
+# half in a block's sun shadow, the shadowed half dark (an alpha decal is lit like its receiver);
+# (d) a coat puddle at roughness 0.05 beside an emissive cube, and a mirror-smooth metallic swatch,
+# inside a ReflectionProbe, so the SSR, probe and sky reflections show; (e) a multiply scorch at layer -1
+# over alpha paint at layer 0, the scorch darkening the paint (lit decals draw first, then multiply and
+# add, whatever the layer). Front row: (f) a thin HDR add line that blooms; (g) two overlapping swatches
+# on one layer, the earlier entity on top; (h) the skinned mannequin in a paint box, the floor painted
+# and the mannequin clean; (k) a GroundMarker disc reading on top of a ring decal; (i) a decal with
+# receivers: hierarchy, painting its crate and not the wall behind; (j) a DropShadow blob darkening
+# paint. Swatches omit roughness (the floor's 0.8 is inherited) and every other field is a default,
+# pinned here by omission. ludion docs decals.
+format: 1
+name: "decals - Decal: alpha, multiply, add, coat; angle fade, receivers, order"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.5
+          - 10.0
+          - 12.0
+        rotation:
+          - -38.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 62.0
+  - name: environment
+    components:
+      Environment:
+        ibl_intensity: 0.6
+      PostProcess:
+        ssr: 1.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 10.0
+          - 12.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - -0.7
+          - -0.65
+          - -0.05
+        intensity: 1.6
+  - name: fill-left
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 8.0
+          - 6.0
+      PointLight:
+        intensity: 1.5
+        range: 22.0
+  - name: fill-right
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 8.0
+          - 6.0
+      PointLight:
+        intensity: 1.5
+        range: 22.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 60.0
+          - 1.0
+          - 60.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.18
+          - 0.2
+          - 0.18
+          - 1.0
+        roughness: 0.8
+  - name: step-high
+    components:
+      Transform:
+        translation:
+          - -11.5
+          - 0.5
+          - -6.0
+        scale:
+          - 2.0
+          - 1.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.55
+          - 0.58
+          - 1.0
+        roughness: 0.8
+  - name: step-low
+    components:
+      Transform:
+        translation:
+          - -9.5
+          - 0.25
+          - -6.0
+        scale:
+          - 2.0
+          - 0.5
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.55
+          - 0.58
+          - 1.0
+        roughness: 0.8
+  - name: a-stripe
+    components:
+      Transform:
+        translation:
+          - -10.5
+          - 0.6
+          - -6.0
+      Decal:
+        size:
+          - 4.0
+          - 1.4
+          - 1.2
+        base_color_texture:
+          path: assets/decal-hazard-stripes.png
+          wrap: clamp
+  - name: wall
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 1.0
+          - -6.6
+        scale:
+          - 3.0
+          - 2.0
+          - 0.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.55
+          - 0.58
+          - 1.0
+        roughness: 0.8
+  - name: b-stripe
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 1.0
+          - -6.3
+        rotation:
+          - 90.0
+          - 0.0
+          - 0.0
+      Decal:
+        size:
+          - 2.4
+          - 0.6
+          - 1.2
+        base_color_texture:
+          path: assets/decal-hazard-stripes.png
+          wrap: clamp
+  - name: c-swatch
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.2
+          - -6.0
+      Decal:
+        size:
+          - 3.0
+          - 1.0
+          - 2.0
+        color:
+          - 0.15
+          - 0.45
+          - 0.85
+          - 1.0
+  - name: c-block
+    components:
+      Transform:
+        translation:
+          - 1.6
+          - 1.5
+          - -6.5
+        scale:
+          - 0.6
+          - 3.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.55
+          - 0.58
+          - 1.0
+        roughness: 0.8
+  - name: d-puddle
+    components:
+      Transform:
+        translation:
+          - 3.8
+          - 0.2
+          - -4.9
+      Decal:
+        size:
+          - 2.6
+          - 1.0
+          - 1.8
+        color:
+          - 0.4
+          - 0.2
+          - 0.6
+          - 1.0
+        roughness: 0.05
+        blend: coat
+  - name: d-emitter
+    components:
+      Transform:
+        translation:
+          - 3.8
+          - 0.6
+          - -6.7
+        scale:
+          - 1.2
+          - 1.4
+          - 0.8
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.6
+          - 0.2
+          - 1.0
+        roughness: 0.5
+        metallic: 0.0
+        emissive: 6.0
+  - name: d-mirror-swatch
+    components:
+      Transform:
+        translation:
+          - 7.6
+          - 0.2
+          - -5.2
+      Decal:
+        size:
+          - 2.0
+          - 1.0
+          - 2.0
+        color:
+          - 0.8
+          - 0.8
+          - 0.85
+          - 1.0
+        roughness: 0.05
+        metallic: 1.0
+  - name: d-probe
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 1.5
+          - -6.0
+      ReflectionProbe:
+        shape:
+          box:
+            extent:
+              - 4.5
+              - 2.0
+              - 3.0
+        blend: 0.25
+        priority: 0
+  - name: e-crate
+    components:
+      Transform:
+        translation:
+          - 11.0
+          - 0.6
+          - -7.2
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.5
+          - 0.3
+          - 1.0
+        roughness: 0.6
+  - name: e-paint
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.2
+          - -5.6
+      Decal:
+        size:
+          - 2.8
+          - 1.0
+          - 1.8
+        color:
+          - 0.9
+          - 0.55
+          - 0.1
+          - 1.0
+  - name: e-scorch
+    components:
+      Transform:
+        translation:
+          - 11.0
+          - 0.7
+          - -6.2
+      Decal:
+        size:
+          - 3.0
+          - 1.6
+          - 3.0
+        base_color_texture:
+          path: assets/decal-scorch.png
+          wrap: clamp
+        blend: multiply
+        layer: -1
+  - name: f-line
+    components:
+      Transform:
+        translation:
+          - -11.0
+          - 0.2
+          - 3.0
+      Decal:
+        size:
+          - 4.0
+          - 1.0
+          - 0.25
+        color:
+          - 4.0
+          - 1.4
+          - 0.3
+          - 1.0
+        blend: add
+  - name: g-red
+    components:
+      Transform:
+        translation:
+          - -6.4
+          - 0.2
+          - 3.0
+      Decal:
+        size:
+          - 2.0
+          - 1.0
+          - 2.0
+        color:
+          - 0.85
+          - 0.15
+          - 0.12
+          - 1.0
+  - name: g-blue
+    components:
+      Transform:
+        translation:
+          - -5.6
+          - 0.2
+          - 3.4
+      Decal:
+        size:
+          - 2.0
+          - 1.0
+          - 2.0
+        color:
+          - 0.12
+          - 0.25
+          - 0.85
+          - 1.0
+  - name: h-paint
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 1.0
+          - 3.0
+      Decal:
+        size:
+          - 3.2
+          - 2.5
+          - 3.2
+        color:
+          - 0.15
+          - 0.7
+          - 0.5
+          - 1.0
+  - name: mannequin
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 0.0
+          - 3.0
+        rotation:
+          - 0.0
+          - 15.0
+          - 0.0
+        scale:
+          - 1.6
+          - 1.6
+          - 1.6
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+        color:
+          - 0.6
+          - 0.45
+          - 0.35
+          - 1.0
+        roughness: 0.8
+      Animation:
+        clip: idle
+  - name: k-ring
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.2
+          - 3.0
+      Decal:
+        size:
+          - 2.6
+          - 1.0
+          - 2.6
+        base_color_texture:
+          path: assets/decal-ring.png
+          wrap: clamp
+        color:
+          - 0.2
+          - 0.8
+          - 0.9
+          - 1.0
+  - name: k-marker
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.0
+          - 3.0
+      GroundMarker:
+        shape:
+          type: disc
+          radius: 0.8
+        color:
+          - 1.4
+          - 0.45
+          - 0.15
+          - 0.6
+  - name: wall-i
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 1.0
+          - 0.9
+        scale:
+          - 4.0
+          - 2.0
+          - 0.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.55
+          - 0.58
+          - 1.0
+        roughness: 0.8
+  - name: i-crate
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 0.5
+          - 1.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.5
+          - 0.3
+          - 1.0
+        roughness: 0.6
+  - name: i-decal
+    components:
+      Parent:
+        index: 28
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.4
+          - 0.2
+        rotation:
+          - 90.0
+          - 0.0
+          - 0.0
+      Decal:
+        size:
+          - 2.2
+          - 2.4
+          - 2.2
+        base_color_texture:
+          path: assets/decal-hazard-stripes.png
+          wrap: clamp
+        receivers: hierarchy
+  - name: j-paint
+    components:
+      Transform:
+        translation:
+          - 12.5
+          - 0.2
+          - 3.0
+      Decal:
+        size:
+          - 2.8
+          - 1.0
+          - 2.8
+        color:
+          - 0.9
+          - 0.8
+          - 0.2
+          - 1.0
+  - name: j-caster
+    components:
+      Transform:
+        translation:
+          - 12.5
+          - 1.0
+          - 3.0
+  - name: j-body
+    components:
+      Parent:
+        index: 31
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.0
+        scale:
+          - 0.5
+          - 1.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.42
+          - 0.2
+          - 1.0
+        roughness: 0.5
+  - name: j-shadow
+    components:
+      Parent:
+        index: 31
+        generation: 0
+      Transform: {}
+      DropShadow: {}
