@@ -25,7 +25,11 @@
 //!   then the generic projector pass that paints each decal and multiplies each shadow's footprint
 //!   into `scene`, after `reflections` and before `transparents`.
 //! - **decal_receivers** — present only when a decal lists receiver meshes ([`PostChain::decal_receivers`]):
-//!   the listed meshes redrawn into an id target, depth-matched against `scene_depth`, read by the projector.
+//!   the listed meshes redrawn into an id target, depth-matched against `scene_depth`, read by both decal
+//!   passes. It sits right after `scene`.
+//! - **decals_lit** — present only with an `alpha` or `coat` decal ([`PostChain::lit_decals`]): the lit
+//!   decals shaded like a mesh into `scene`, after `scene` and before the reflections, so the reflections
+//!   see the painted colour. The projector then paints the `multiply`/`add` decals.
 //! - **transparents** — the sky, ground markers, sprites/billboards (alpha, depth-tested), particles
 //!   and text, over the same target.
 //! - **bloom_threshold / bloom_down_1..5 / bloom_up_4..0** — a six-level bloom pyramid: a bright-pass
@@ -156,7 +160,7 @@ use ludion_render_graph::{
 };
 
 use crate::quality::{Quality, QualityParams};
-use crate::scene::RenderScene;
+use crate::scene::{DecalBlend, RenderScene};
 
 /// The dispatch labels of the frame graph's passes. Shared between graph construction (as the
 /// external-pass labels) and the renderer's recorder (as the match arms), so the two never drift.
@@ -213,10 +217,16 @@ pub mod pass {
     /// present exactly when the scene carries a drop shadow (each one a projector instance) or a
     /// decal, so a drop shadow's occlusion atlas and a decal's receiver ids both feed it.
     pub const PROJECTOR: &str = "projector";
+    /// The lit decal pass: the `alpha` and `coat` decals shaded like a mesh into `scene`, right after
+    /// the opaque pass and before the probe relight and the reflections. Reads `[scene_depth,
+    /// scene_normal, decal_receivers?]` then everything the scene pass reads. Draw order across the
+    /// decal passes is "every lit decal, then every multiply/add decal, then every drop shadow",
+    /// `(layer, EntityId)` within each; present exactly when a scene carries a lit decal.
+    pub const DECALS_LIT: &str = "decals_lit";
     /// The decal receiver-id pass: redraws the meshes some decal lists, writing `mesh index + 1` into
     /// an `R32Float` target where the redraw's depth matches `scene_depth` (0 elsewhere), so the
     /// projector can honour a decal's `Exclude`/`Only` list per pixel. Present only when a decal's
-    /// receiver list names a mesh, and always before [`PROJECTOR`].
+    /// receiver list names a mesh, right after [`SCENE`] and so before [`DECALS_LIT`] and [`PROJECTOR`].
     pub const DECAL_RECEIVERS: &str = "decal_receivers";
     /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
     /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.
@@ -642,13 +652,17 @@ pub struct PostChain {
     ///
     /// It carries the extent for the reason [`shadow_map`](PostChain::shadow_map) carries its edge.
     pub local_shadow_atlas: Option<u32>,
-    /// The scene carries a projected decal: the [`pass::PROJECTOR`] is scheduled even without a drop
-    /// shadow. `false` leaves the graph with no decal work, which is what makes a decal-free frame
-    /// byte-identical by construction. A decal is content, so `masked` keeps it.
+    /// The scene carries a `multiply` or `add` decal: the [`pass::PROJECTOR`] is scheduled even without
+    /// a drop shadow. `false` leaves the graph with no such work, which is what makes a decal-free
+    /// frame byte-identical by construction. A decal is content, so `masked` keeps it.
     pub decals: bool,
-    /// Some decal's receiver list names a mesh: the [`pass::DECAL_RECEIVERS`] pass runs before the
-    /// projector and writes the `decal_receivers` transient (`R32Float`, the render extent) it reads.
-    /// Only ever set with [`decals`](PostChain::decals). Content too, so `masked` keeps it.
+    /// The scene carries an `alpha` or `coat` decal: the [`pass::DECALS_LIT`] pass is scheduled.
+    /// Content too, so `masked` keeps it.
+    pub lit_decals: bool,
+    /// Some decal's receiver list names a mesh: the [`pass::DECAL_RECEIVERS`] pass runs right after
+    /// `scene` and writes the `decal_receivers` transient (`R32Float`, the render extent) both decal
+    /// passes read. Only ever set with [`decals`](PostChain::decals) or
+    /// [`lit_decals`](PostChain::lit_decals). Content too, so `masked` keeps it.
     pub decal_receivers: bool,
 }
 
@@ -723,7 +737,14 @@ impl PostChain {
             drop_shadow_atlas: crate::projector::occlusion_atlas(scene.drop_shadows.len())
                 .map(|atlas| atlas.edge),
             local_shadow_atlas,
-            decals: !scene.decals.is_empty(),
+            decals: scene
+                .decals
+                .iter()
+                .any(|d| matches!(d.blend, DecalBlend::Multiply | DecalBlend::Add)),
+            lit_decals: scene
+                .decals
+                .iter()
+                .any(|d| matches!(d.blend, DecalBlend::Alpha | DecalBlend::Coat)),
             decal_receivers: !crate::projector::receiver_union(&scene.decals).is_empty(),
         }
     }
@@ -1150,6 +1171,8 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         scene_reads.push(gi_dynamic);
     }
     scene_reads.extend(local_shadow_atlas);
+    // The lit decals shade like the scene pass, so they read what it reads, after their own inputs.
+    let decals_lit_tail = chain.lit_decals.then(|| scene_reads.clone());
     graph.add_external_pass_with_depth(
         pass::SCENE,
         pass::SCENE,
@@ -1157,6 +1180,23 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         vec![scene, scene_normal, scene_specular],
         scene_depth,
     );
+    // Decal receiver ids are read from `scene_depth` alone. Both decal passes read them, so they sit
+    // right after the opaque pass.
+    if let Some(receivers) = decal_receivers {
+        graph.add_external_pass(
+            pass::DECAL_RECEIVERS,
+            pass::DECAL_RECEIVERS,
+            vec![scene_depth],
+            vec![receivers],
+        );
+    }
+    // The lit decals paint into `scene` before the relight and the reflections, so those see the paint.
+    if let Some(tail) = decals_lit_tail {
+        let mut lit_reads = vec![scene_depth, scene_normal];
+        lit_reads.extend(decal_receivers);
+        lit_reads.extend(tail);
+        graph.add_external_pass(pass::DECALS_LIT, pass::DECALS_LIT, lit_reads, vec![scene]);
+    }
     // Reads in the shader's binding order; additive into `scene`, after the opaque pass. The relight
     // table is the last read when the scene has probes. Like the injection, the relight reads nothing
     // the graph owns. With SSR on the pass also writes the fill into `refl_fill`, which `ssr_blend`
@@ -1211,15 +1251,6 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             vec![],
             vec![],
             atlas,
-        );
-    }
-    // Decal receiver ids are read from `scene_depth` alone, so they sit right before the projector.
-    if let Some(receivers) = decal_receivers {
-        graph.add_external_pass(
-            pass::DECAL_RECEIVERS,
-            pass::DECAL_RECEIVERS,
-            vec![scene_depth],
-            vec![receivers],
         );
     }
     // The recorder maps the inputs by the chain's flags: the atlas, then the receiver ids.
@@ -1548,6 +1579,7 @@ pub(crate) fn build_probe_capture_graph(
             && !chain.debug_lines
             && chain.drop_shadow_atlas.is_none()
             && !chain.decals
+            && !chain.lit_decals
             && !chain.decal_receivers
             && chain.local_shadow_atlas.is_none()
             && chain.sun_cascades.is_none(),
@@ -1810,6 +1842,7 @@ mod tests {
                 sun_cascades: None,
                 // Content like the drop shadows: masking keeps both.
                 decals: bits & 1 != 0,
+                lit_decals: bits & 1 != 0,
                 decal_receivers: bits & 1 != 0,
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
@@ -2690,7 +2723,7 @@ mod tests {
     #[test]
     fn a_decal_free_scene_keeps_the_frozen_graph() {
         let chain = PostChain::for_scene(&RenderScene::empty((1920, 1080)));
-        assert!(!chain.decals && !chain.decal_receivers);
+        assert!(!chain.decals && !chain.lit_decals && !chain.decal_receivers);
         let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
         let names = pass_names(&graph);
         assert_eq!(names.len(), 15);
@@ -2726,10 +2759,10 @@ mod tests {
         assert!(schedule(&graph).is_ok());
     }
 
-    /// A receiver list adds the id pass before the projector, the id target is the last resource
+    /// A receiver list adds the id pass right after `scene`, the id target is the last resource
     /// before `final`, and the projector reads it last.
     #[test]
-    fn receiver_lists_add_the_id_pass_before_the_projector() {
+    fn receiver_lists_add_the_id_pass_after_the_scene() {
         let chain = PostChain {
             decals: true,
             decal_receivers: true,
@@ -2745,8 +2778,8 @@ mod tests {
             pass_names(&graph)[..5],
             [
                 "scene",
-                "reflections",
                 "decal_receivers",
+                "reflections",
                 "projector",
                 "transparents"
             ],
@@ -2834,6 +2867,131 @@ mod tests {
             &QualityParams::preset("low").unwrap(),
         );
         assert!(low.decals && low.decal_receivers);
+    }
+
+    /// A lit-only scene: the lit pass sits after `scene` and before `reflections`, and no projector
+    /// is scheduled for it.
+    #[test]
+    fn a_lit_only_scene_schedules_decals_lit_between_scene_and_reflections() {
+        let chain = PostChain {
+            lit_decals: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let names = pass_names(&graph);
+        assert_eq!(names[..3], ["scene", "decals_lit", "reflections"]);
+        assert!(!names.contains(&"projector") && !names.contains(&"decal_receivers"));
+        assert_eq!(names.len(), 16);
+        let name_of = |id: &ResourceId| graph.resources()[id.index()].name.as_str();
+        let lit = graph
+            .passes()
+            .iter()
+            .find(|p| p.name == "decals_lit")
+            .unwrap();
+        assert_eq!(
+            lit.reads().iter().map(name_of).collect::<Vec<_>>(),
+            ["scene_depth", "scene_normal"],
+        );
+        assert_eq!(
+            lit.writes().iter().map(name_of).collect::<Vec<_>>(),
+            ["scene"]
+        );
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// Lit and multiply decals together schedule both passes, the lit one first, and the receiver
+    /// ids before both.
+    #[test]
+    fn lit_and_multiply_decals_schedule_both_passes_lit_first() {
+        let chain = PostChain {
+            decals: true,
+            lit_decals: true,
+            decal_receivers: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let order = schedule(&graph).unwrap();
+        let ordered = order.order_names();
+        let pos = |n: &str| ordered.iter().position(|p| *p == n).unwrap();
+        assert!(pos("scene") < pos("decal_receivers"));
+        assert!(pos("decal_receivers") < pos("decals_lit"));
+        assert!(pos("decals_lit") < pos("reflections"));
+        assert!(pos("reflections") < pos("projector"));
+        let name_of = |id: &ResourceId| graph.resources()[id.index()].name.as_str();
+        let lit = graph
+            .passes()
+            .iter()
+            .find(|p| p.name == "decals_lit")
+            .unwrap();
+        assert_eq!(
+            lit.reads().iter().map(name_of).collect::<Vec<_>>(),
+            ["scene_depth", "scene_normal", "decal_receivers"],
+        );
+    }
+
+    /// The lit pass reads the scene pass's tail, in the scene pass's order: the shadow map, then the
+    /// blurred AO.
+    #[test]
+    fn decals_lit_reads_the_shadow_map_and_the_ao_after_its_own_inputs() {
+        let chain = PostChain {
+            lit_decals: true,
+            shadow_map: Some(1024),
+            ssao: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let name_of = |id: &ResourceId| graph.resources()[id.index()].name.as_str();
+        let reads = |pass: &str| -> Vec<&str> {
+            let pass = graph.passes().iter().find(|p| p.name == pass).unwrap();
+            pass.reads().iter().map(name_of).collect()
+        };
+        let scene_reads = reads("scene");
+        assert_eq!(scene_reads.len(), 2);
+        let lit = reads("decals_lit");
+        assert_eq!(lit[..2], ["scene_depth", "scene_normal"]);
+        assert_eq!(lit[2..], scene_reads[..]);
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// The lit flag is content: `masked` at low keeps it, and the sun's shadow read goes (the lit
+    /// decal then shades without a shadow).
+    #[test]
+    fn masking_keeps_the_lit_flag_and_drops_the_shadow_read_at_low() {
+        let chain = PostChain {
+            lit_decals: true,
+            shadow_map: Some(1024),
+            ..PostChain::default()
+        };
+        let low = chain.masked(
+            &Quality::preset("low").unwrap(),
+            &QualityParams::preset("low").unwrap(),
+        );
+        assert!(low.lit_decals && low.shadow_map.is_none());
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), low);
+        let lit = graph
+            .passes()
+            .iter()
+            .find(|p| p.name == "decals_lit")
+            .unwrap();
+        assert_eq!(lit.reads().len(), 2);
+    }
+
+    /// `for_scene` derives `decals` from a multiply or add decal and `lit_decals` from an alpha or
+    /// coat one, separately.
+    #[test]
+    fn for_scene_derives_the_two_decal_flags_separately() {
+        use crate::scene::{DecalBlend, DecalReceivers};
+        let mut scene = RenderScene::empty((1920, 1080));
+        let mut lit = decal_instance(DecalReceivers::Exclude(Vec::new()));
+        lit.blend = DecalBlend::Coat;
+        scene.decals.push(lit);
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.lit_decals && !chain.decals);
+        scene
+            .decals
+            .push(decal_instance(DecalReceivers::Exclude(Vec::new())));
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.lit_decals && chain.decals);
     }
 
     /// `for_scene` derives `decals` from any decal and `decal_receivers` from a non-empty list.

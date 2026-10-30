@@ -23,7 +23,9 @@
 // (`rgb * c`) by the instance's blend. Its own entry points keep `fs_main`'s `fwidth` out of any
 // per-instance branch and leave the drop shadow's math untouched.
 //
-// `sd_rounded_box` comes from the shared `shaders/snippets/rounded_box.wgsl`.
+// `sd_rounded_box` comes from the shared `shaders/snippets/rounded_box.wgsl`; the decal instance, the
+// cube vertex, the angle fade and the gradient clamp from `shaders/snippets/decal.wgsl`. Lit decals
+// (`alpha`, `coat`) draw in `decal_lit.wgsl`, before the reflections.
 
 // The instance. `ids` = (kind, blend, occlusion tile index or 0xFFFFFFFF for none, 0).
 struct Projector {
@@ -42,25 +44,6 @@ struct Projector {
     tile: vec4<f32>,
     // World to the occlusion tile's orthographic clip space.
     occ_view: mat4x4<f32>,
-}
-
-// One decal. `ids` = (kind, blend, 0, 0).
-struct ProjectorDecal {
-    ids: vec4<u32>,
-    // Box space (the unit cube centred on the origin) to world, and back.
-    box_to_world: mat4x4<f32>,
-    world_to_box: mat4x4<f32>,
-    // Linear RGBA tint.
-    color: vec4<f32>,
-    // The sub-rectangle of the map the box covers: u0, v0, u1, v1.
-    uv_rect: vec4<f32>,
-    // x = opacity, y = cos(angle end), z = cos(angle start), w = -1 for a mirrored box, else 1.
-    look: vec4<f32>,
-    // xyz = the box's world +Y, normalized: the axis the angle fade measures a normal against.
-    axis: vec4<f32>,
-    // x = 0 receives everywhere but the list (exclude) or 1 only the list, y = the list's offset in
-    // `proj_receiver_ids`, z = its length.
-    receivers: vec4<u32>,
 }
 
 struct ProjectorParams {
@@ -95,29 +78,6 @@ const EXTRAPOLATION_SLACK: f32 = 0.03;
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) @interpolate(flat) instance: u32,
-}
-
-// Corner `vi` of a cube in [-1, 1]^3 drawn as 36 vertices: six faces of two triangles, wound
-// counter-clockwise seen from outside so the front-face cull keeps the back faces.
-fn cube_corner(vi: u32) -> vec3<f32> {
-    let face = vi / 6u;
-    let axis = face / 2u;
-    let sign = select(-1.0, 1.0, face % 2u == 0u);
-    var quad = array<u32, 6>(0u, 1u, 2u, 0u, 2u, 3u);
-    var uv = array<vec2<f32>, 4>(
-        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
-    );
-    let c = uv[quad[vi % 6u]];
-    // A face's tangent axes are the next two cyclically, so t1 x t2 = +axis; the negative face
-    // mirrors `u` to reverse the winding.
-    let u = c.x * sign;
-    let v = c.y;
-    if (axis == 0u) {
-        return vec3<f32>(sign, u, v);
-    } else if (axis == 1u) {
-        return vec3<f32>(v, sign, u);
-    }
-    return vec3<f32>(u, v, sign);
 }
 
 @vertex
@@ -272,11 +232,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(vec3<f32>(1.0 - shade), 1.0);
 }
 
-// A map gradient's longest length, as a share of the decal's uv-rect span. At a depth edge the
-// reconstructed world position jumps across the box, and an unclamped gradient would pick the
-// smallest mip of the whole map.
-const GRADIENT_CLAMP: f32 = 0.25;
-
 struct DecalVsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) @interpolate(flat) decal: u32,
@@ -296,10 +251,6 @@ fn vs_decal(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
     return out;
 }
 
-fn clamp_gradient(g: vec2<f32>, longest: f32) -> vec2<f32> {
-    return g * min(1.0, longest / max(length(g), 1e-12));
-}
-
 // Whether the listed mesh visible at `pixel` lets decal `d` paint. No listed mesh there (id 0) is
 // "not in the list": an exclude list receives, an only list does not.
 fn decal_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
@@ -317,16 +268,6 @@ fn decal_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
     }
     let listed = id != 0u && lo < d.receivers.z && proj_receiver_ids[d.receivers.y + lo] == wanted;
     return select(!listed, listed, d.receivers.x == 1u);
-}
-
-// The angle fade: 1 within `start` of the box's +Y, 0 beyond `end`, a smoothstep between. The CPU
-// bakes the cosines (`look.z` = cos(start) >= `look.y` = cos(end)); equal edges are a step, since
-// `smoothstep` with equal edges is undefined. A normal facing away from the box is below both.
-fn angle_weight(d: ProjectorDecal, normal: vec3<f32>) -> f32 {
-    let facing = dot(normal, d.axis.xyz);
-    let ramp = smoothstep(d.look.y, d.look.z, facing);
-    let step_weight = select(0.0, 1.0, facing >= d.look.y);
-    return select(ramp, step_weight, d.look.z <= d.look.y);
 }
 
 @fragment

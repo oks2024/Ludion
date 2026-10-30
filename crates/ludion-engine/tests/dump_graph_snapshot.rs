@@ -261,3 +261,28 @@ fn a_decal_scene_dumps_one_projector_and_nothing_else() {
     let plain = dump(gallery("spot-lights.yaml"), &QualitySetting::full());
     assert!(!scheduled_passes(&plain).contains(&"projector".to_string()));
 }
+
+/// A scene with an alpha decal schedules `decals_lit` once, between `scene` and `reflections`, with
+/// no projector (nothing multiplies or adds), and the same at the cheapest quality.
+#[test]
+fn a_lit_decal_scene_dumps_decals_lit_and_no_projector() {
+    for setting in [
+        QualitySetting::full(),
+        ludion_engine::resolve_startup_quality(Some("low"), None).unwrap(),
+    ] {
+        let json = ludion_engine::dump_scene_graph_json(
+            &fixture("decals-lit.yaml"),
+            FrameSize::native(64, 64),
+            &setting,
+        )
+        .expect("the scene validates and schedules");
+        let passes = scheduled_passes(&json);
+        let count = |name: &str| passes.iter().filter(|pass| *pass == name).count();
+        assert_eq!(count("decals_lit"), 1, "{passes:?}");
+        assert_eq!(count("projector"), 0);
+        assert_eq!(count("decal_receivers"), 0);
+        let position = |name: &str| passes.iter().position(|pass| pass == name).unwrap();
+        assert!(position("scene") < position("decals_lit"));
+        assert!(position("decals_lit") < position("reflections"));
+    }
+}

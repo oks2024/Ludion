@@ -67,6 +67,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "box_blur.wgsl",
     "composite.wgsl",
     "debug_line.wgsl",
+    "decal_lit.wgsl",
     "decal_receiver.wgsl",
     "dof.wgsl",
     "dof_coc.wgsl",
@@ -105,8 +106,13 @@ pub const RENDERER_SHADERS: &[&str] = &[
 /// WGSL global names of `texture_2d<f32>` bindings that are **not** filterable (an `R32Float`
 /// or `Rgba32Float` source read with `textureLoad`). WGSL cannot express it, so reflection takes
 /// it from this list; binding names are workspace-unique, so a name is a safe key.
-pub const UNFILTERABLE_TEXTURES: &[&str] =
-    &["hiz_src", "trace_hiz", "probe_live", "proj_receivers"];
+pub const UNFILTERABLE_TEXTURES: &[&str] = &[
+    "hiz_src",
+    "trace_hiz",
+    "probe_live",
+    "proj_receivers",
+    "lit_receivers",
+];
 
 /// The render graph's reflected shaders (files under `crates/ludion-render-graph/src/shaders/`).
 pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl"];
@@ -172,6 +178,19 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ),
     ("debug_line.wgsl", &["camera.wgsl"]),
     (
+        "decal_lit.wgsl",
+        &[
+            "camera.wgsl",
+            "cluster_grid.wgsl",
+            "lights.wgsl",
+            "hdr.wgsl",
+            "dfg.wgsl",
+            "gi_probe.wgsl",
+            "mesh_shading.wgsl",
+            "decal.wgsl",
+        ],
+    ),
+    (
         "decal_receiver.wgsl",
         &["camera.wgsl", "skin.wgsl", "bayer.wgsl"],
     ),
@@ -209,7 +228,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         ],
     ),
     ("probe_face.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
-    ("projector.wgsl", &["rounded_box.wgsl"]),
+    ("projector.wgsl", &["rounded_box.wgsl", "decal.wgsl"]),
     ("resolve.wgsl", &["fullscreen_vs.wgsl"]),
     (
         "shafts.wgsl",

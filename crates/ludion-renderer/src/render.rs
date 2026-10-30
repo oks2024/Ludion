@@ -35,8 +35,8 @@ use crate::mipgen::{MipGen, mip_level_count};
 use crate::probe::{MAX_PROBES, probe_rank};
 use crate::probe_capture::{AxisIrradiance, ProbeIrradiance, Probes};
 use crate::projector::{
-    DecalBatch, OcclusionAtlas, ProjectorBlend, kept_ranges, occlusion_atlas, occlusion_view,
-    only_ranges, pack_decals, projector_instance, receiver_union,
+    DecalBatch, DecalPass, MapKey, OcclusionAtlas, ProjectorBlend, kept_ranges, occlusion_atlas,
+    occlusion_view, only_ranges, pack_decals, projector_instance, receiver_union,
 };
 use crate::quality::{Quality, QualityParams};
 use crate::scene::{
@@ -768,6 +768,15 @@ impl Renderer {
             .as_ref()
             .expect("the projector shader has decal twins");
         &pair[blend as usize]
+    }
+
+    /// The lit decal pipeline of draw `draw`.
+    fn lit_pipeline(&self, draw: LitDraw) -> &wgpu::RenderPipeline {
+        let set = self.pipelines[ShaderId::DecalLit as usize]
+            .lit
+            .as_ref()
+            .expect("the lit decal shader has its three pipelines");
+        &set[draw as usize]
     }
 
     /// The reflections shader's two-target pipeline, which also writes the fill to `refl_fill`.
@@ -1624,7 +1633,7 @@ impl Renderer {
         } else {
             Vec::new()
         };
-        let decals = if chain.decals {
+        let decals = if chain.decals || chain.lit_decals {
             self.build_decal_frame(scene)
         } else {
             DecalFrame::default()
@@ -1731,34 +1740,47 @@ impl Renderer {
         }
     }
 
-    /// Packs the scene's decals and resolves each batch's base-colour map from the mesh-map cache
-    /// ([`Renderer::resolve_mesh_textures`] has uploaded every map a decal names).
+    /// Packs the scene's decals for both decal passes and resolves each batch's maps from the mesh-map
+    /// cache ([`Renderer::resolve_mesh_textures`] has uploaded every map a decal names).
     fn build_decal_frame(&self, scene: &RenderScene) -> DecalFrame {
-        let (instances, receiver_ids, batches) = pack_decals(&scene.decals);
         let cache = self.mesh_texture_cache.borrow();
-        let draws = batches
-            .into_iter()
-            .map(
-                |DecalBatch {
-                     blend,
-                     map,
-                     range,
-                     first,
-                 }| DecalDraw {
-                    blend,
-                    range,
-                    map: map.and_then(|(_, wrap)| {
-                        let map = scene.decals[first].maps.base_color.as_ref()?;
-                        let uploaded = cache.get(&mesh_texture_key(map, true))?;
-                        Some((uploaded.clone(), wrap))
-                    }),
-                },
-            )
-            .collect();
+        let resolve = |first: usize,
+                       pick: fn(&DecalMaps) -> &Option<MeshTexture>,
+                       srgb: bool,
+                       key: MapKey|
+         -> Option<(GpuTexture, TextureWrap)> {
+            let (_, wrap) = key?;
+            let map = pick(&scene.decals[first].maps).as_ref()?;
+            Some((cache.get(&mesh_texture_key(map, srgb))?.clone(), wrap))
+        };
+        let draws_of = |batches: Vec<DecalBatch>| -> Vec<DecalDraw> {
+            batches
+                .into_iter()
+                .map(|batch| DecalDraw {
+                    blend: batch.blend,
+                    range: batch.range,
+                    map: resolve(batch.first, |m| &m.base_color, true, batch.map),
+                    normal: resolve(batch.first, |m| &m.normal, false, batch.normal),
+                    metallic_roughness: resolve(
+                        batch.first,
+                        |m| &m.metallic_roughness,
+                        false,
+                        batch.metallic_roughness,
+                    ),
+                })
+                .collect()
+        };
+        let (instances, receiver_ids, batches) = pack_decals(&scene.decals, DecalPass::Projector);
+        let draws = draws_of(batches);
+        let (lit_instances, lit_receiver_ids, batches) = pack_decals(&scene.decals, DecalPass::Lit);
+        let lit_draws = draws_of(batches);
         DecalFrame {
             instances,
             receiver_ids,
             draws,
+            lit_instances,
+            lit_receiver_ids,
+            lit_draws,
             receivers: receiver_union(&scene.decals),
         }
     }
@@ -2789,23 +2811,31 @@ struct MeshDraw {
     sources: Vec<u32>,
 }
 
-/// The frame's decals as the projector consumes them: packed instances, the receiver lists, and the
-/// draws with their maps resolved.
+/// The frame's decals as the two decal passes consume them: packed instances, the receiver lists, and
+/// the draws with their maps resolved. The `lit_` fields are the lit pass's (`alpha`, `coat`), the
+/// others the projector's (`multiply`, `add`).
 #[derive(Default)]
 struct DecalFrame {
     instances: Vec<shader_gen::ProjectorDecal>,
     receiver_ids: Vec<u32>,
     draws: Vec<DecalDraw>,
+    lit_instances: Vec<shader_gen::ProjectorDecal>,
+    lit_receiver_ids: Vec<u32>,
+    lit_draws: Vec<DecalDraw>,
     /// The meshes the receiver-id pass redraws: the union of every decal's receiver list.
     receivers: Vec<u32>,
 }
 
-/// One decal draw: a run of consecutive decals with one blend and one base-colour map.
+/// One decal batch: a run of consecutive decals with one blend and one set of maps.
 struct DecalDraw {
     blend: ProjectorBlend,
     range: std::ops::Range<u32>,
     /// The cached base-colour map and its wrap, `None` for the white default.
     map: Option<(GpuTexture, TextureWrap)>,
+    /// The normal map, for a lit batch; `None` binds the default (the instance's flag says it is off).
+    normal: Option<(GpuTexture, TextureWrap)>,
+    /// The metallic-roughness map, for a lit batch; `None` binds white, exact as factors.
+    metallic_roughness: Option<(GpuTexture, TextureWrap)>,
 }
 
 struct MeshAssetDraw {
@@ -3130,6 +3160,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::SSR_BLEND => self.record_ssr_blend(pass),
             pass::DROP_SHADOW_OCCLUSION => self.record_drop_shadow_occlusion(pass),
             pass::DECAL_RECEIVERS => self.record_decal_receivers(pass),
+            pass::DECALS_LIT => self.record_decals_lit(pass),
             pass::PROJECTOR => self.record_projector(pass),
             pass::HIZ_SEED | pass::HIZ_REDUCE => self.record_hiz(pass),
             pass::SSR_COLOR_SEED | pass::SSR_COLOR_REDUCE => self.record_ssr_color(pass),
@@ -3524,6 +3555,80 @@ impl FrameRecorder<'_> {
         self.r.probe_relight.dispatch(&mut compute, frame, &bind);
     }
 
+    /// The mesh lighting's bind groups 2 and 3 — the sun with its shadows, and the environment with the
+    /// AO factor and the GI volumes — built from `inputs`, the conditional tail of the scene pass's
+    /// reads (shadow map?, AO?, dynamic GI?, local-light atlas?, in that order). The lit decal pass
+    /// shades with the same lighting, so it reads the same tail.
+    fn shading_groups(
+        &self,
+        device: &wgpu::Device,
+        inputs: &[&wgpu::TextureView],
+    ) -> (wgpu::BindGroup, wgpu::BindGroup) {
+        // The mesh group-2 sun bind group: the sun uniform + the shadow map + the comparison sampler.
+        // On a frame that drew one the scene pass reads the graph's `shadow_map`;
+        // otherwise it reads nothing, so the persistent 1×1 fallback depth texture keeps the static
+        // mesh pipeline layout satisfied (`Plan/shadow-mapping.md` constraint 6). The fallback is
+        // never *sampled* — `build_sun` zeroes `light_space` on exactly these frames, so the shader
+        // takes its fully-lit early-out.
+        //
+        // The inputs are conditional and the graph declares them in this order, so the slots are
+        // counted rather than fixed: shadow first when the frame has a map, then the blurred AO factor
+        // when the scene enables occlusion, then the injected GI volume, and last the local-light
+        // shadow atlas. A frame with no granted light (and every probe capture) binds the fallback.
+        let shadow_view = if self.has_shadow_map {
+            inputs[0]
+        } else {
+            &self.r.fallback_shadow.view
+        };
+        let local_atlas = if self.local_shadow.is_some() {
+            inputs[inputs.len() - 1]
+        } else {
+            &self.r.fallback_shadow.view
+        };
+        let sun_bg = self.r.sun_bind_group(
+            device,
+            &self.sun_buf,
+            shadow_view,
+            (local_atlas, &self.local_views_buf, &self.light_shadow_buf),
+        );
+
+        // Mesh group 3: the environment plus the AO factor it modulates. `ao` carries the flag, the
+        // reciprocal of the render extent — what turns a fragment's framebuffer position into the AO
+        // texture's UV, since the AO chain runs at a fraction of the *output* extent — and the
+        // fraction of the factor that also reaches direct light.
+        let (ao_view, ao_params) = if self.has_ao {
+            let (render_w, render_h) = self.size.render;
+            (
+                inputs[usize::from(self.has_shadow_map)],
+                [
+                    1.0,
+                    1.0 / render_w.max(1) as f32,
+                    1.0 / render_h.max(1) as f32,
+                    self.post.ssao_direct,
+                ],
+            )
+        } else {
+            (&self.r.fallback_hdr.view, [0.0; 4])
+        };
+
+        // The injected dynamic-bounce volume, the third and last conditional slot — counted after
+        // the two above under the same rule, because the graph declares the three in this order.
+        let gi_dyn = self
+            .gi_inject
+            .is_some()
+            .then(|| inputs[usize::from(self.has_shadow_map) + usize::from(self.has_ao)]);
+        let env_bg = self.r.env_bind_group(
+            device,
+            &self.resolved_env,
+            ao_params,
+            ao_view,
+            &self.resolved_gi,
+            gi_dyn,
+            self.gi_strengths,
+        );
+        (sun_bg, env_bg)
+    }
+
     /// The opaque scene pass: meshes (depth-written) into `scene`, `scene_normal` and `scene_specular`.
     fn record_scene(&self, pass: &mut RecordedPass<'_>) {
         // The depth attachment is a graph resource (`scene_depth`), resolved and handed over by the
@@ -3578,68 +3683,7 @@ impl FrameRecorder<'_> {
             multiview_mask: None,
         });
 
-        // The mesh group-2 sun bind group: the sun uniform + the shadow map + the comparison sampler.
-        // On a frame that drew one the scene pass reads the graph's `shadow_map`;
-        // otherwise it reads nothing, so the persistent 1×1 fallback depth texture keeps the static
-        // mesh pipeline layout satisfied (`Plan/shadow-mapping.md` constraint 6). The fallback is
-        // never *sampled* — `build_sun` zeroes `light_space` on exactly these frames, so the shader
-        // takes its fully-lit early-out.
-        //
-        // The inputs are conditional and the graph declares them in this order, so the slots are
-        // counted rather than fixed: shadow first when the frame has a map, then the blurred AO factor
-        // when the scene enables occlusion, then the injected GI volume, and last the local-light
-        // shadow atlas. A frame with no granted light (and every probe capture) binds the fallback.
-        let shadow_view = if self.has_shadow_map {
-            pass.inputs[0]
-        } else {
-            &self.r.fallback_shadow.view
-        };
-        let local_atlas = if self.local_shadow.is_some() {
-            pass.inputs[pass.inputs.len() - 1]
-        } else {
-            &self.r.fallback_shadow.view
-        };
-        let sun_bg = self.r.sun_bind_group(
-            pass.device,
-            &self.sun_buf,
-            shadow_view,
-            (local_atlas, &self.local_views_buf, &self.light_shadow_buf),
-        );
-
-        // Mesh group 3: the environment plus the AO factor it modulates. `ao` carries the flag, the
-        // reciprocal of the render extent — what turns a fragment's framebuffer position into the AO
-        // texture's UV, since the AO chain runs at a fraction of the *output* extent — and the
-        // fraction of the factor that also reaches direct light.
-        let (ao_view, ao_params) = if self.has_ao {
-            let (render_w, render_h) = self.size.render;
-            (
-                pass.inputs[usize::from(self.has_shadow_map)],
-                [
-                    1.0,
-                    1.0 / render_w.max(1) as f32,
-                    1.0 / render_h.max(1) as f32,
-                    self.post.ssao_direct,
-                ],
-            )
-        } else {
-            (&self.r.fallback_hdr.view, [0.0; 4])
-        };
-
-        // The injected dynamic-bounce volume, the third and last conditional slot — counted after
-        // the two above under the same rule, because the graph declares the three in this order.
-        let gi_dyn = self
-            .gi_inject
-            .is_some()
-            .then(|| pass.inputs[usize::from(self.has_shadow_map) + usize::from(self.has_ao)]);
-        let env_bg = self.r.env_bind_group(
-            pass.device,
-            &self.resolved_env,
-            ao_params,
-            ao_view,
-            &self.resolved_gi,
-            gi_dyn,
-            self.gi_strengths,
-        );
+        let (sun_bg, env_bg) = self.shading_groups(pass.device, pass.inputs);
 
         // Meshes.
         let mesh_pipeline = |mirrored| {
@@ -4277,6 +4321,139 @@ impl FrameRecorder<'_> {
             rp.set_pipeline(self.r.pipeline(ShaderId::Projector));
             rp.set_bind_group(1, &white_bg, &[]);
             rp.draw(0..36, 0..drop_instances.len() as u32);
+        }
+    }
+
+    /// The lit decal pass (present with an `alpha` or `coat` decal): one box volume per decal, shaded
+    /// with the mesh lighting into `scene`, between the opaque pass and the reflections. It reads
+    /// `[scene_depth, scene_normal, decal_receivers?]` and then the scene pass's own tail (shadow map?,
+    /// AO?, dynamic GI?, local-light atlas?), which `shading_groups` unpacks.
+    ///
+    /// The draw order is the lit decals' `(layer, EntityId)` order; the multiply and add decals and the
+    /// drop shadows draw after, in the projector. An `alpha` decal is one draw; a `coat` is two, the
+    /// tint and then the specular lobe. Every draw is its own instance, so a later decal blends over
+    /// an earlier one's result; the batches only choose the map bind group.
+    fn record_decals_lit(&self, pass: &mut RecordedPass<'_>) {
+        let has_receivers = !self.decals.receivers.is_empty();
+        let head = 2 + usize::from(has_receivers);
+        let receivers = if has_receivers {
+            pass.inputs[2]
+        } else {
+            &self.r.fallback_receivers.view
+        };
+        let (sun_bg, env_bg) = self.shading_groups(pass.device, &pass.inputs[head..]);
+        let decal_buf = init_buffer(
+            pass.device,
+            wgpu::BufferUsages::STORAGE,
+            &storage_bytes(&self.decals.lit_instances),
+        );
+        let receiver_ids_buf = init_buffer(
+            pass.device,
+            wgpu::BufferUsages::STORAGE,
+            &storage_bytes(&self.decals.lit_receiver_ids),
+        );
+        let uniform = shader_gen::LitParams {
+            inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
+        };
+        let uniform_buf = init_buffer(
+            pass.device,
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::bytes_of(&uniform),
+        );
+        let sampler_for = |wrap: TextureWrap| match wrap {
+            TextureWrap::Repeat => &self.r.material_sampler_repeat,
+            TextureWrap::Clamp => &self.r.material_sampler_clamp,
+            TextureWrap::Mirror => &self.r.material_sampler_mirror,
+        };
+        // A missing map binds a 1×1 white: exact as a factor for the base colour and the
+        // metallic-roughness, and never read for the normal, whose instance flag is off.
+        let map_of = |map: &Option<(GpuTexture, TextureWrap)>, fallback: &GpuTexture| match map {
+            Some((texture, wrap)) => (texture.view.clone(), sampler_for(*wrap)),
+            None => (fallback.view.clone(), sampler_for(TextureWrap::Clamp)),
+        };
+        let batch_bgs: Vec<wgpu::BindGroup> = self
+            .decals
+            .lit_draws
+            .iter()
+            .map(|draw| {
+                let (base, base_samp) = map_of(&draw.map, &self.r.white);
+                let white_linear = &self.r.material_defaults.white_linear;
+                let (normal, normal_samp) = map_of(&draw.normal, white_linear);
+                let (mr, mr_samp) = map_of(&draw.metallic_roughness, white_linear);
+                pass.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("lit decal bind group"),
+                    layout: self.r.layouts.get(LayoutId::DecalLit),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_DEPTH_BINDING,
+                            resource: wgpu::BindingResource::TextureView(pass.inputs[0]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_SURFACE_BINDING,
+                            resource: wgpu::BindingResource::TextureView(pass.inputs[1]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_RECEIVERS_BINDING,
+                            resource: wgpu::BindingResource::TextureView(receivers),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_PARAMS_BINDING,
+                            resource: uniform_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_DECALS_BINDING,
+                            resource: decal_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_RECEIVER_IDS_BINDING,
+                            resource: receiver_ids_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_BASE_MAP_BINDING,
+                            resource: wgpu::BindingResource::TextureView(&base),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_BASE_SAMP_BINDING,
+                            resource: wgpu::BindingResource::Sampler(base_samp),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_NORMAL_MAP_BINDING,
+                            resource: wgpu::BindingResource::TextureView(&normal),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_NORMAL_SAMP_BINDING,
+                            resource: wgpu::BindingResource::Sampler(normal_samp),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_MR_MAP_BINDING,
+                            resource: wgpu::BindingResource::TextureView(&mr),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_MR_SAMP_BINDING,
+                            resource: wgpu::BindingResource::Sampler(mr_samp),
+                        },
+                    ],
+                })
+            })
+            .collect();
+        // Load, never clear: the draws paint into the lit scene.
+        let mut rp = pass.begin();
+        rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
+        rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
+        rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);
+        rp.set_bind_group(ENV_GROUP, &env_bg, &[]);
+        for (draw, bind_group) in self.decals.lit_draws.iter().zip(&batch_bgs) {
+            rp.set_bind_group(shader_gen::LIT_DEPTH_GROUP, bind_group, &[]);
+            let stages: &[LitDraw] = match draw.blend {
+                ProjectorBlend::Coat => &[LitDraw::CoatBase, LitDraw::CoatSpec],
+                _ => &[LitDraw::Alpha],
+            };
+            for instance in draw.range.clone() {
+                for &stage in stages {
+                    rp.set_pipeline(self.r.lit_pipeline(stage));
+                    rp.draw(0..36, instance..instance + 1);
+                }
+            }
         }
     }
 
@@ -5682,6 +5859,7 @@ enum ShaderId {
     Projector,
     LocalShadowDebug,
     DecalReceiver,
+    DecalLit,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -5707,7 +5885,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 35;
+const SHADER_COUNT: usize = 36;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -6008,7 +6186,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::Projector,
         file_name: "projector.wgsl",
         body: include_str!("shaders/projector.wgsl"),
-        snippets: &[Snippet::RoundedBox],
+        snippets: &[Snippet::RoundedBox, Snippet::Decal],
         layouts: &[LayoutId::Projector, LayoutId::ProjectorMap],
     },
     ShaderDesc {
@@ -6025,6 +6203,30 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // The prepass's vertex stage and dither: the camera, the bone palette and the tile.
         snippets: &[Snippet::Camera, Snippet::Skin, Snippet::Bayer],
         layouts: &[LayoutId::CameraSkin, LayoutId::DecalReceiver],
+    },
+    ShaderDesc {
+        id: ShaderId::DecalLit,
+        file_name: "decal_lit.wgsl",
+        body: include_str!("shaders/decal_lit.wgsl"),
+        // The projector's box volume under the mesh lighting: the camera, the clustered lights, the
+        // mesh shading's own dependencies and the decal instance.
+        snippets: &[
+            Snippet::Camera,
+            Snippet::ClusterGrid,
+            Snippet::Lights,
+            Snippet::Hdr,
+            Snippet::Dfg,
+            Snippet::GiProbe,
+            Snippet::MeshShading,
+            Snippet::Decal,
+        ],
+        layouts: &[
+            LayoutId::Camera,
+            LayoutId::Lights,
+            LayoutId::Sun,
+            LayoutId::Env,
+            LayoutId::DecalLit,
+        ],
     },
 ];
 
@@ -6132,6 +6334,9 @@ enum Snippet {
     /// `sd_rounded_box`, the disc-and-capsule footprint distance, binding-free (ground_marker,
     /// projector).
     RoundedBox,
+    /// `ProjectorDecal`, the unit-cube vertex, the angle fade and the map gradient clamp,
+    /// binding-free (projector, decal_lit).
+    Decal,
 }
 
 impl Snippet {
@@ -6159,6 +6364,7 @@ impl Snippet {
             Snippet::Srgb => "srgb.wgsl",
             Snippet::Glyph => "glyph.wgsl",
             Snippet::RoundedBox => "rounded_box.wgsl",
+            Snippet::Decal => "decal.wgsl",
         }
     }
 
@@ -6185,6 +6391,7 @@ impl Snippet {
             Snippet::Srgb => include_str!("shaders/snippets/srgb.wgsl"),
             Snippet::Glyph => include_str!("shaders/snippets/glyph.wgsl"),
             Snippet::RoundedBox => include_str!("shaders/snippets/rounded_box.wgsl"),
+            Snippet::Decal => include_str!("shaders/snippets/decal.wgsl"),
         }
     }
 
@@ -6212,6 +6419,7 @@ impl Snippet {
             Snippet::Srgb,
             Snippet::Glyph,
             Snippet::RoundedBox,
+            Snippet::Decal,
         ]
         .into_iter()
         .find(|s| s.file_name() == name)
@@ -6282,10 +6490,13 @@ enum LayoutId {
     ProjectorMap,
     /// The receiver-id pass's group 1: `scene_depth`, the draw's mesh indices and its base offset.
     DecalReceiver,
+    /// The lit decal pass's group 4: the depth, the receiver surface and ids, the decals, and a
+    /// batch's three maps with their samplers.
+    DecalLit,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 38;
+const LAYOUT_COUNT: usize = 39;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -6451,6 +6662,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         id: LayoutId::DecalReceiver,
         create: shader_gen::create_recv_depth_recv_ids_recv_draw_bgl,
     },
+    LayoutDesc {
+        id: LayoutId::DecalLit,
+        create: shader_gen::create_lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_receiver_ids_lit_base_map_lit_base_samp_lit_normal_map_lit_normal_samp_lit_mr_map_lit_mr_samp_bgl,
+    },
 ];
 
 /// Every bind group layout, built once and indexed by [`LayoutId`].
@@ -6484,6 +6699,9 @@ struct ShaderPipelines {
     capture: Option<[wgpu::RenderPipeline; 2]>,
     /// The projector shader's decal twins `[multiply, add]` (entry `vs_decal`/`fs_decal`).
     decal: Option<[wgpu::RenderPipeline; 2]>,
+    /// The lit decal shader's pipelines `[alpha, coat_base, coat_spec]`: the surface blend, the tint
+    /// multiply and the specular add, all over the same box volume.
+    lit: Option<[wgpu::RenderPipeline; 3]>,
 }
 
 /// Builds the pipelines shader `id` feeds, from `src` and the layouts its registry row names. The
@@ -6523,6 +6741,7 @@ fn build_pipeline(
         split: None,
         capture: None,
         decal: None,
+        lit: None,
     };
     let main = match id {
         ShaderId::Mesh => {
@@ -6582,6 +6801,7 @@ fn build_pipeline(
                 )),
                 capture: None,
                 decal: None,
+                lit: None,
             };
         }
         ShaderId::SsrBlend => build_reflections_pipeline(device, label, src, &layout),
@@ -6599,6 +6819,24 @@ fn build_pipeline(
             build_fullscreen_pipeline(device, label, src, &layout, HDR_FORMAT, None)
         }
         ShaderId::ProbeFace => build_probe_face_pipeline(device, label, src, &layout),
+        ShaderId::DecalLit => {
+            let lit = [
+                ("fs_lit_alpha", LIT_ALPHA),
+                ("fs_lit_coat_base", PROJECTOR_MULTIPLY),
+                ("fs_lit_coat_spec", PROJECTOR_ADD),
+            ]
+            .map(|(fs, blend)| {
+                projector_pipeline(device, label, src, &layout, ("vs_lit", fs), blend)
+            });
+            return ShaderPipelines {
+                main: lit[0].clone(),
+                mirrored: None,
+                split: None,
+                capture: None,
+                decal: None,
+                lit: Some(lit),
+            };
+        }
         ShaderId::Projector => {
             return ShaderPipelines {
                 main: build_projector_pipeline(device, label, src, &layout),
@@ -6609,6 +6847,7 @@ fn build_pipeline(
                     [PROJECTOR_MULTIPLY, PROJECTOR_ADD]
                         .map(|blend| build_decal_pipeline(device, label, src, &layout, blend)),
                 ),
+                lit: None,
             };
         }
     };
@@ -6618,6 +6857,7 @@ fn build_pipeline(
         split: None,
         capture: None,
         decal: None,
+        lit: None,
     }
 }
 
@@ -7464,6 +7704,31 @@ const PROJECTOR_MULTIPLY: wgpu::BlendState = wgpu::BlendState {
     color: wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::Zero,
         dst_factor: wgpu::BlendFactor::Src,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
+/// The draws of a lit decal, in the order of [`ShaderPipelines::lit`].
+#[derive(Clone, Copy)]
+enum LitDraw {
+    /// The decal's shaded surface, blended by its coverage.
+    Alpha,
+    /// A coat's tint: the lit colour multiplied toward the decal's.
+    CoatBase,
+    /// A coat's specular lobe, added.
+    CoatSpec,
+}
+
+/// `dst * (1 - src.a) + src`, destination alpha untouched: a lit decal's premultiplied surface.
+const LIT_ALPHA: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
         operation: wgpu::BlendOperation::Add,
     },
     alpha: wgpu::BlendComponent {
@@ -14362,17 +14627,268 @@ mod tests {
         );
     }
 
-    /// **An alpha decal draws nothing yet**: the pass is scheduled and the frame is unchanged.
+    /// The decal fixture lit by a steep sun and the default ambient: a floor (mesh 0) under a wide
+    /// box, seen by `drop_shadow_fixture`'s camera.
+    fn lit_decal_fixture(w: u32, h: u32) -> RenderScene {
+        let mut scene = drop_shadow_fixture(w, h, false);
+        scene.sun = Some(test_sun(Vec3::new(0.3, -1.0, 0.2), Vec3::splat(2.0), 0.002));
+        scene
+    }
+
+    /// A lit decal of `blend` over a wide box, opaque, tinted `color`.
+    fn lit_decal(blend: crate::scene::DecalBlend, color: [f32; 3]) -> crate::scene::DecalInstance {
+        let mut decal = decal_instance(blend, Vec3::new(8.0, 2.0, 8.0));
+        decal.color = [color[0], color[1], color[2], 1.0];
+        decal
+    }
+
+    /// A 1×1 map of `rgba` keyed by `hash`.
+    fn one_texel_map(rgba: [u8; 4], hash: u64) -> crate::scene::MeshTexture {
+        crate::scene::MeshTexture {
+            image: MapImage::Source(Arc::new(TextureImage {
+                width: 1,
+                height: 1,
+                rgba: rgba.to_vec(),
+                hash,
+                filter_linear: true,
+                premultiplied_on_load: false,
+                mean: [0.5; 4],
+            })),
+            wrap: TextureWrap::Clamp,
+        }
+    }
+
+    fn assert_pixels_within(a: [u8; 4], b: [u8; 4], tolerance: u8, what: &str) {
+        for channel in 0..3 {
+            assert!(
+                a[channel].abs_diff(b[channel]) <= tolerance,
+                "{what}: {a:?} vs {b:?} (channel {channel})",
+            );
+        }
+    }
+
+    /// **An opaque alpha decal is a painted floor.** Paint of colour X over the floor, at the floor's
+    /// own roughness and metallic, shades like the same floor authored with albedo X.
     #[test]
-    fn needs_gpu_an_alpha_decal_changes_no_pixel() {
-        let Some(renderer) = skip_or_renderer("an_alpha_decal_changes_no_pixel") else {
+    fn needs_gpu_an_opaque_alpha_decal_matches_a_painted_mesh() {
+        let Some(renderer) = skip_or_renderer("an_opaque_alpha_decal_matches_a_painted_mesh")
+        else {
             return;
         };
         let (w, h) = (160u32, 120u32);
-        let scene = drop_shadow_fixture(w, h, false);
-        let alpha = decal_instance(crate::scene::DecalBlend::Alpha, Vec3::new(3.0, 1.0, 3.0));
-        let (bare, painted) = decal_pair(&renderer, &scene, (w, h), vec![alpha]);
-        assert_eq!(bare.rgba, painted.rgba);
+        let paint = [0.2, 0.5, 0.8];
+        let scene = lit_decal_fixture(w, h);
+        let mut decal = lit_decal(crate::scene::DecalBlend::Alpha, paint);
+        decal.roughness = Some(1.0);
+        let (bare, painted) = decal_pair(&renderer, &scene, (w, h), vec![decal]);
+        let mut authored = scene.clone();
+        authored.meshes[0].color = [paint[0], paint[1], paint[2], 1.0];
+        let reference = renderer
+            .render(&authored, FrameSize::native(w, h))
+            .expect("an authored render");
+        let (x, y) = pixel_of(&scene, Vec3::ZERO, w, h);
+        assert!(luma(&painted, x, y) > 30 && luma(&painted, x, y) != luma(&bare, x, y));
+        assert_pixels_within(
+            pixel(&painted, x, y),
+            pixel(&reference, x, y),
+            2,
+            "the paint at the box centre",
+        );
+    }
+
+    /// **Shadowed paint is dark, and low quality loses the shadow.** A cube between the sun and the
+    /// floor shadows part of the paint; at `Quality::LOW` the sun's shadow is gone, so the two spots
+    /// shade alike.
+    #[test]
+    fn needs_gpu_lit_paint_takes_the_suns_shadow_until_low_quality() {
+        let Some(mut renderer) =
+            skip_or_renderer("lit_paint_takes_the_suns_shadow_until_low_quality")
+        else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut scene = drop_shadow_fixture(w, h, false);
+        scene.sun = Some(test_sun(Vec3::new(1.0, -1.0, 0.0), Vec3::splat(3.0), 0.002));
+        scene.meshes.push(cube(
+            Vec3::new(-1.0, 1.5, 0.0),
+            Vec3::ONE,
+            [0.8, 0.8, 0.8, 1.0],
+        ));
+        let paint = lit_decal(crate::scene::DecalBlend::Alpha, [0.7, 0.7, 0.7]);
+        let (shadowed, lit) = (Vec3::new(0.5, 0.0, 0.0), Vec3::new(-3.5, 0.0, 0.0));
+        let (sx, sy) = pixel_of(&scene, shadowed, w, h);
+        let (lx, ly) = pixel_of(&scene, lit, w, h);
+        let (_, full) = decal_pair(&renderer, &scene, (w, h), vec![paint.clone()]);
+        assert!(
+            luma(&full, sx, sy) * 10 < luma(&full, lx, ly) * 8,
+            "the paint in the cube's shadow is dark: {} vs {}",
+            luma(&full, sx, sy),
+            luma(&full, lx, ly),
+        );
+        renderer.set_quality(Quality::LOW, QualityParams::LOW);
+        let (_, low) = decal_pair(&renderer, &scene, (w, h), vec![paint]);
+        assert!(
+            luma(&low, sx, sy).abs_diff(luma(&low, lx, ly)) <= 6,
+            "without the shadow the two spots shade alike: {} vs {}",
+            luma(&low, sx, sy),
+            luma(&low, lx, ly),
+        );
+    }
+
+    /// **A lamp lights the paint.**
+    #[test]
+    fn needs_gpu_a_point_light_brightens_lit_paint() {
+        let Some(renderer) = skip_or_renderer("a_point_light_brightens_lit_paint") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let dim = drop_shadow_fixture(w, h, false);
+        let mut lamp = dim.clone();
+        lamp.lights
+            .push(point_light(Vec3::new(0.0, 1.5, 0.0), 20.0, 8.0));
+        let paint = lit_decal(crate::scene::DecalBlend::Alpha, [0.7, 0.7, 0.7]);
+        let (_, without) = decal_pair(&renderer, &dim, (w, h), vec![paint.clone()]);
+        let (_, with) = decal_pair(&renderer, &lamp, (w, h), vec![paint]);
+        let (x, y) = pixel_of(&dim, Vec3::ZERO, w, h);
+        assert!(
+            luma(&with, x, y) > luma(&without, x, y) + 30,
+            "the lamp brightens the paint: {} -> {}",
+            luma(&without, x, y),
+            luma(&with, x, y),
+        );
+    }
+
+    /// **The normal map.** A flat map leaves sunlit paint where it was; a constant tilted map moves it.
+    #[test]
+    fn needs_gpu_a_normal_map_tilts_lit_paint_and_a_flat_one_does_not() {
+        let Some(renderer) =
+            skip_or_renderer("a_normal_map_tilts_lit_paint_and_a_flat_one_does_not")
+        else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let scene = lit_decal_fixture(w, h);
+        let plain = lit_decal(crate::scene::DecalBlend::Alpha, [0.7, 0.7, 0.7]);
+        let mut flat = plain.clone();
+        flat.maps.normal = Some(one_texel_map([128, 128, 255, 255], 0xF1A7));
+        let mut tilted = plain.clone();
+        tilted.maps.normal = Some(one_texel_map([220, 128, 200, 255], 0x7117));
+        let (_, base) = decal_pair(&renderer, &scene, (w, h), vec![plain]);
+        let (_, level) = decal_pair(&renderer, &scene, (w, h), vec![flat]);
+        let (_, tilt) = decal_pair(&renderer, &scene, (w, h), vec![tilted]);
+        let (x, y) = pixel_of(&scene, Vec3::ZERO, w, h);
+        assert_pixels_within(
+            pixel(&level, x, y),
+            pixel(&base, x, y),
+            1,
+            "a flat normal map",
+        );
+        assert!(
+            luma(&tilt, x, y).abs_diff(luma(&base, x, y)) > 10,
+            "a tilted map changes the shading: {} vs {}",
+            luma(&base, x, y),
+            luma(&tilt, x, y),
+        );
+    }
+
+    /// **The coat.** With no light a white coat is exactly the bare frame; a glossy coat at the sun's
+    /// mirror angle is brighter than the bare floor; a grey coat away from the highlight darkens it.
+    #[test]
+    fn needs_gpu_a_coat_adds_a_lobe_and_tints() {
+        let Some(renderer) = skip_or_renderer("a_coat_adds_a_lobe_and_tints") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut dark = drop_shadow_fixture(w, h, false);
+        dark.ambient = [0.0; 3];
+        let mut white = lit_decal(crate::scene::DecalBlend::Coat, [1.0, 1.0, 1.0]);
+        white.roughness = Some(0.5);
+        let (bare, coated) = decal_pair(&renderer, &dark, (w, h), vec![white]);
+        assert_eq!(
+            bare.rgba, coated.rgba,
+            "a white coat with no light is invisible"
+        );
+
+        // A 45 degree view whose mirror direction the sun travels along.
+        let mut scene = drop_shadow_fixture(w, h, false);
+        let position = Vec3::new(0.0, 6.0, 6.0);
+        scene.camera.view = Mat4::look_at_rh(position, Vec3::ZERO, Vec3::Y);
+        scene.camera.position = position;
+        scene.sun = Some(test_sun(Vec3::new(0.0, -1.0, 1.0), Vec3::splat(3.0), 0.002));
+        let mut glossy = lit_decal(crate::scene::DecalBlend::Coat, [1.0, 1.0, 1.0]);
+        glossy.roughness = Some(0.1);
+        let mut grey = lit_decal(crate::scene::DecalBlend::Coat, [0.5, 0.5, 0.5]);
+        grey.roughness = Some(1.0);
+        let (bare, shiny) = decal_pair(&renderer, &scene, (w, h), vec![glossy]);
+        let (_, tinted) = decal_pair(&renderer, &scene, (w, h), vec![grey]);
+        let (x, y) = pixel_of(&scene, Vec3::ZERO, w, h);
+        assert!(
+            luma(&shiny, x, y) > luma(&bare, x, y) + 20,
+            "the lobe brightens the highlight: {} -> {}",
+            luma(&bare, x, y),
+            luma(&shiny, x, y),
+        );
+        let (ax, ay) = pixel_of(&scene, Vec3::new(3.0, 0.0, 3.0), w, h);
+        assert!(
+            luma(&tinted, ax, ay) + 40 < luma(&bare, ax, ay),
+            "a grey coat darkens away from the highlight: {} -> {}",
+            luma(&bare, ax, ay),
+            luma(&tinted, ax, ay),
+        );
+    }
+
+    /// **Lit decals draw before multiply decals**, whatever their order in the list: a multiply
+    /// scorch listed first still darkens the paint listed after it.
+    #[test]
+    fn needs_gpu_a_multiply_decal_darkens_alpha_paint_listed_after_it() {
+        let Some(renderer) =
+            skip_or_renderer("a_multiply_decal_darkens_alpha_paint_listed_after_it")
+        else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let scene = lit_decal_fixture(w, h);
+        let scorch = lit_decal(crate::scene::DecalBlend::Multiply, [0.0, 0.0, 0.0]);
+        let paint = lit_decal(crate::scene::DecalBlend::Alpha, [0.9, 0.9, 0.9]);
+        let (_, painted) = decal_pair(&renderer, &scene, (w, h), vec![paint.clone()]);
+        let (_, only) = decal_pair(&renderer, &scene, (w, h), vec![scorch.clone()]);
+        let (_, both) = decal_pair(&renderer, &scene, (w, h), vec![scorch, paint]);
+        let (x, y) = pixel_of(&scene, Vec3::ZERO, w, h);
+        assert!(luma(&painted, x, y) > 3 * luma(&only, x, y));
+        assert!(
+            luma(&both, x, y).abs_diff(luma(&only, x, y)) <= 3,
+            "the scorch covers the paint: {} vs the scorch alone {}",
+            luma(&both, x, y),
+            luma(&only, x, y),
+        );
+    }
+
+    /// **Receivers**: alpha paint excluding the plate leaves it clean and paints the floor.
+    #[test]
+    fn needs_gpu_alpha_paint_skips_an_excluded_mesh() {
+        let Some(renderer) = skip_or_renderer("alpha_paint_skips_an_excluded_mesh") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut scene = drop_shadow_fixture(w, h, true);
+        scene.sun = Some(test_sun(Vec3::new(0.3, -1.0, 0.2), Vec3::splat(2.0), 0.002));
+        let mut paint = lit_decal(crate::scene::DecalBlend::Alpha, [0.9, 0.1, 0.1]);
+        paint.receivers = crate::scene::DecalReceivers::Exclude(vec![1]);
+        let (bare, painted) = decal_pair(&renderer, &scene, (w, h), vec![paint]);
+        let (px, py) = pixel_of(&scene, Vec3::new(1.0, 0.5, 0.0), w, h);
+        // Bloom from the painted floor reaches the plate by a level; a painted plate would be red.
+        assert_pixels_within(
+            pixel(&painted, px, py),
+            pixel(&bare, px, py),
+            2,
+            "the plate is clean",
+        );
+        let (fx, fy) = pixel_of(&scene, Vec3::new(-1.0, 0.0, 0.5), w, h);
+        assert_ne!(
+            pixel(&painted, fx, fy),
+            pixel(&bare, fx, fy),
+            "the floor is painted"
+        );
     }
 
     /// **A decal at every quality**: it is content, not an effect.

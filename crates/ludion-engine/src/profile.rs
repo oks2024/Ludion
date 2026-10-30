@@ -1163,11 +1163,12 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// `gi_inject` only for a scene with a bouncing `GiVolume` and a light marked dynamic,
 /// `probe_relight` only for a scene with probes, `local_shadow` (and `local_shadow_debug`) only for a scene with a shadowed spot or
 /// point light, `drop_shadow_occlusion` only for a scene with a drop shadow, `projector` for a drop
-/// shadow or a decal, `decal_receivers` only for a decal that lists receiver meshes).
+/// shadow or a `multiply`/`add` decal, `decals_lit` only for an `alpha` or `coat` decal, `decal_receivers`
+/// only for a decal that lists receiver meshes).
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 41] = [
+const KNOWN_PASS_NAMES: [&str; 42] = [
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
     ludion_renderer::graph::pass::PREPASS,
@@ -1186,6 +1187,7 @@ const KNOWN_PASS_NAMES: [&str; 41] = [
     ludion_renderer::graph::pass::SSR_DEBUG,
     ludion_renderer::graph::pass::DROP_SHADOW_OCCLUSION,
     ludion_renderer::graph::pass::DECAL_RECEIVERS,
+    ludion_renderer::graph::pass::DECALS_LIT,
     ludion_renderer::graph::pass::PROJECTOR,
     ludion_renderer::graph::pass::PROBE_DEBUG,
     ludion_renderer::graph::pass::LOCAL_SHADOW_DEBUG,
@@ -3488,6 +3490,7 @@ entities:
             drop_shadow_atlas: Some(256),
             local_shadow_atlas: Some(256),
             decals: true,
+            lit_decals: true,
             decal_receivers: true,
         };
         let sizes = [

@@ -166,10 +166,10 @@ fn all_repo_shaders_reflect_and_unify() {
     // trace group, the probe capture's face group, and the probe index view's
     // normal + depth group, and the probe relight kernel's, and the SSR blend's fill + normal +
     // specular + depth + trace group, and the local-shadow atlas debug view's, and the decal
-    // projector's map group and the receiver-id pass's draw group. Of
+    // projector's map group, the receiver-id pass's draw group and the lit decal pass's group. Of
     // them exactly four are compute-only (gi_bake, gi_inject, probe_relight, the IBL prefilter trio): the emitter
     // skips their BGLs because compute pipelines keep auto-derived layouts.
-    assert_eq!(reflection.bind_groups.len(), 42);
+    assert_eq!(reflection.bind_groups.len(), 43);
     let mut compute_only: Vec<&str> = reflection
         .bind_groups
         .iter()
@@ -191,13 +191,17 @@ fn all_repo_shaders_reflect_and_unify() {
         ]
     );
 
-    // The mesh sun group is a mesh-only @group(2): a uniform + a depth texture + a comparison sampler, then the local-light atlas
+    // The mesh sun group is a @group(2) of the mesh lighting: a uniform + a depth texture + a comparison sampler, then the local-light atlas
     // (a depth texture) and its two storage arrays.
     let sun_group = reflection
         .bind_group_named("sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow")
         .expect("mesh's group-2 sun layout");
     assert_eq!(sun_group.group, 2);
-    assert_eq!(sun_group.units, vec!["mesh.wgsl".to_string()]);
+    // The lit decal pass shades with the mesh lighting, so it binds the same group.
+    assert_eq!(
+        sun_group.units,
+        vec!["decal_lit.wgsl".to_string(), "mesh.wgsl".to_string()]
+    );
     let shadow_samp = reflection.binding_named("shadow_samp").unwrap();
     assert_eq!(shadow_samp.kind, BindingKind::Sampler { comparison: true });
 
