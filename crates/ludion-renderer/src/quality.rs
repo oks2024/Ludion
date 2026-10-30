@@ -473,9 +473,9 @@ mod tests {
                 "dof_params.taps",
                 3,
             ),
-            // Three, not two: the kernel's divisor is the square of its edge, so the count appears
-            // once as the loop's reach and twice as that product.
-            ("mesh.wgsl", include_str!("shaders/mesh.wgsl"), "sun.pcf", 3),
+            // Six: the sun's kernel and the local-light kernel each read the count once as the
+            // loop's reach and twice more as the square that normalizes it.
+            ("mesh.wgsl", include_str!("shaders/mesh.wgsl"), "sun.pcf", 6),
             // Four: the march's loop bound, the ray set's elevation denominator, the hit cache's
             // stride, and the estimator's own `1/N`.
             (

@@ -29,7 +29,7 @@ use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, 
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
 use crate::graph::{FrameSize, PostChain, build_frame_graph, build_probe_capture_graph, pass};
 use crate::ibl::{Ibl, ResolvedEnv};
-use crate::local_shadow::{LocalShadowPlan, plan_local_shadows};
+use crate::local_shadow::{LocalShadowPlan, LocalShadowView, UNSHADOWED, plan_local_shadows};
 use crate::mesh::{self, MeshVertex};
 use crate::mipgen::{MipGen, mip_level_count};
 use crate::probe::{MAX_PROBES, probe_rank};
@@ -1593,6 +1593,20 @@ impl Renderer {
         } else {
             Vec::new()
         };
+        let (local_views, light_shadow) = local_shadow_tables(
+            local_shadow.as_ref(),
+            scene.lights.len() + scene.spot_lights.len(),
+        );
+        let local_views_buf = init_buffer(
+            device,
+            wgpu::BufferUsages::STORAGE,
+            bytemuck::cast_slice(&local_views),
+        );
+        let light_shadow_buf = init_buffer(
+            device,
+            wgpu::BufferUsages::STORAGE,
+            bytemuck::cast_slice(&light_shadow),
+        );
         let ground_marker_draw = self.build_ground_marker_draw(scene, device);
         let debug_line_draw = self.build_debug_line_draw(scene, device);
         let sprite_draws = self.build_sprite_draws(scene, device, &textures);
@@ -1613,6 +1627,8 @@ impl Renderer {
             probe_cube_view,
             probe_emissive_view,
             sun_buf,
+            local_views_buf,
+            light_shadow_buf,
             sun: scene.sun,
             has_shadow_map: chain.shadow_map.is_some(),
             has_ao: chain.ssao,
@@ -2281,14 +2297,18 @@ impl Renderer {
     }
 
     /// The mesh group-2 sun bind group: the [`Sun`] uniform, the shadow map (`shadow_view` — the
-    /// graph's `shadow_map` on a sun frame, the 1×1 fallback otherwise), and the comparison sampler.
-    /// Rebuilt per scene pass because the shadow map view is a graph transient resolved at record time.
+    /// graph's `shadow_map` on a sun frame, the 1×1 fallback otherwise), and the comparison sampler,
+    /// then the local-light shadow atlas (`local_atlas`, likewise a graph transient or the fallback)
+    /// with its view and per-light arrays. Rebuilt per scene pass because both views are graph
+    /// transients resolved at record time.
     fn sun_bind_group(
         &self,
         device: &wgpu::Device,
         sun_buf: &wgpu::Buffer,
         shadow_view: &wgpu::TextureView,
+        local: (&wgpu::TextureView, &wgpu::Buffer, &wgpu::Buffer),
     ) -> wgpu::BindGroup {
+        let (local_atlas, local_views, light_shadow) = local;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sun bind group"),
             layout: self.layouts.get(LayoutId::Sun),
@@ -2304,6 +2324,18 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: shader_gen::SHADOW_SAMP_BINDING,
                     resource: wgpu::BindingResource::Sampler(&self.comparison_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::LOCAL_SHADOW_TEX_BINDING,
+                    resource: wgpu::BindingResource::TextureView(local_atlas),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::LOCAL_VIEWS_BINDING,
+                    resource: local_views.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::LIGHT_SHADOW_BINDING,
+                    resource: light_shadow.as_entire_binding(),
                 },
             ],
         })
@@ -2484,6 +2516,67 @@ fn build_sun(scene: &RenderScene, shadowed: bool, pcf: u32) -> Sun {
             ..Sun::zeroed()
         },
     }
+}
+
+/// One planned local shadow view as the mesh shader's [`shader_gen::LocalView`]. `views_of_light` is
+/// how many views the light has (1 for a spot, 6 for a cube), which the shader reads to pick a face.
+///
+/// The bias is authored in world units at the FULL atlas size and grows with the texel, as the sun's
+/// does. `params.y` is the world size of one tile texel per unit of distance, `2·tan(fov/2) / size`:
+/// the projection's `[1][1]` is `1 / tan(fov/2)`, and a unit-scaled view rotation leaves it as the
+/// length of `light_space`'s second row.
+fn local_view_gpu(
+    view: &LocalShadowView,
+    atlas_edge: u32,
+    views_of_light: u32,
+) -> shader_gen::LocalView {
+    let edge = atlas_edge as f32;
+    let rect = view.rect;
+    let tan_half_fov = 1.0 / view.light_space.row(1).truncate().length();
+    shader_gen::LocalView {
+        light_space: view.light_space.to_cols_array_2d(),
+        rect: [
+            rect.x as f32 / edge,
+            rect.y as f32 / edge,
+            rect.size as f32 / edge,
+            1.0 / edge,
+        ],
+        params: [
+            view.bias * (QualityParams::FULL.local_shadow_atlas_size as f32 / edge),
+            2.0 * tan_half_fov / rect.size as f32,
+            views_of_light as f32,
+            0.0,
+        ],
+    }
+}
+
+/// The mesh shader's two local-shadow arrays for a frame: every planned view, and per light-list entry
+/// the index of its first view (`UNSHADOWED` for none). Neither is ever empty, so the storage
+/// bindings are always valid and the shader never relies on out-of-bounds reads: a frame with no
+/// plan gets one zeroed view and `max(1, light_count)` unshadowed entries.
+fn local_shadow_tables(
+    plan: Option<&LocalShadowPlan>,
+    light_count: usize,
+) -> (Vec<shader_gen::LocalView>, Vec<u32>) {
+    let Some(plan) = plan else {
+        return (
+            vec![shader_gen::LocalView::zeroed()],
+            vec![UNSHADOWED; light_count.max(1)],
+        );
+    };
+    let views = plan
+        .views
+        .iter()
+        .map(|view| {
+            let of_light = plan.views.iter().filter(|v| v.light == view.light).count();
+            local_view_gpu(view, plan.stats.atlas_edge, of_light as u32)
+        })
+        .collect();
+    let mut first = plan.light_first_view.clone();
+    if first.is_empty() {
+        first.push(UNSHADOWED);
+    }
+    (views, first)
 }
 
 /// Appends one screen-space text run's glyph quads (6 vertices each) to `verts`, in pixel space with
@@ -2719,6 +2812,9 @@ struct FrameRecorder<'a> {
     /// The mesh group-2 sun uniform (real when the scene has a sun, zeroed otherwise). Also bound to
     /// the shadow pass's `ShadowView` layout — its first 64 bytes are `light_space`.
     sun_buf: wgpu::Buffer,
+    /// The mesh group-2 local-shadow storage arrays ([`local_shadow_tables`]); never empty.
+    local_views_buf: wgpu::Buffer,
+    light_shadow_buf: wgpu::Buffer,
     /// This frame's sun, or `None` for a sunless scene — the *content*. Its `light_space` and
     /// `direction` drive the light-shaft march and its colour tints the shafts in the composite.
     ///
@@ -3276,17 +3372,26 @@ impl FrameRecorder<'_> {
         // never *sampled* — `build_sun` zeroes `light_space` on exactly these frames, so the shader
         // takes its fully-lit early-out.
         //
-        // Both inputs are conditional and the graph declares them in this order, so the slots are
+        // The inputs are conditional and the graph declares them in this order, so the slots are
         // counted rather than fixed: shadow first when the frame has a map, then the blurred AO factor
-        // when the scene enables occlusion.
+        // when the scene enables occlusion, then the injected GI volume, and last the local-light
+        // shadow atlas. A frame with no granted light (and every probe capture) binds the fallback.
         let shadow_view = if self.has_shadow_map {
             pass.inputs[0]
         } else {
             &self.r.fallback_shadow.view
         };
-        let sun_bg = self
-            .r
-            .sun_bind_group(pass.device, &self.sun_buf, shadow_view);
+        let local_atlas = if self.local_shadow.is_some() {
+            pass.inputs[pass.inputs.len() - 1]
+        } else {
+            &self.r.fallback_shadow.view
+        };
+        let sun_bg = self.r.sun_bind_group(
+            pass.device,
+            &self.sun_buf,
+            shadow_view,
+            (local_atlas, &self.local_views_buf, &self.light_shadow_buf),
+        );
 
         // Mesh group 3: the environment plus the AO factor it modulates. `ao` carries the flag, the
         // reciprocal of the render extent — what turns a fragment's framebuffer position into the AO
@@ -5633,7 +5738,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Sun,
-        create: shader_gen::create_sun_shadow_tex_shadow_samp_bgl,
+        create: shader_gen::create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow_bgl,
     },
     LayoutDesc {
         id: LayoutId::Env,
@@ -11862,22 +11967,302 @@ mod tests {
         assert!(drawn > 0, "the granted tile holds the scene's depth");
     }
 
-    /// **Nothing samples the atlas yet, so opting a light in changes no pixel.**
+    /// A cube face's view in the mesh shader's terms: the rect in UV, the bias scaled up for a
+    /// smaller atlas, `2 / size` world texels per unit of distance, and the view count passed through.
     #[test]
-    fn needs_gpu_a_local_shadow_caster_leaves_the_frame_unchanged() {
-        let Some(renderer) = skip_or_renderer("a_local_shadow_caster_leaves_the_frame_unchanged")
+    fn local_view_gpu_scales_rect_bias_and_texel() {
+        let light = point_light(Vec3::new(1.0, 2.0, 3.0), 1.0, 10.0);
+        let mut scene = RenderScene::empty((16, 16));
+        scene.lights = vec![crate::scene::PointLightData {
+            shadow: Some(crate::scene::LocalShadowData {
+                bias: 0.05,
+                near: 0.1,
+            }),
+            ..light
+        }];
+        let plan = crate::local_shadow::plan_local_shadows(&scene, 2048);
+        let view = &plan.views[2];
+        let gpu = local_view_gpu(view, 2048, 6);
+        let size = view.rect.size as f32;
+        assert_eq!(gpu.rect[2], size / 2048.0);
+        assert_eq!(gpu.rect[3], 1.0 / 2048.0);
+        assert_eq!(gpu.params[0], 0.05 * 2.0);
+        assert!(
+            (gpu.params[1] - 2.0 / size).abs() < 1e-6,
+            "{}",
+            gpu.params[1]
+        );
+        assert_eq!(gpu.params[2], 6.0);
+    }
+
+    /// A top-down view of a large floor with no sun, no environment and no ambient, so the local
+    /// lights a test adds are the only light.
+    fn local_receive_scene(w: u32, h: u32) -> RenderScene {
+        let mut scene = RenderScene::empty((w, h));
+        scene.ambient = [0.0; 3];
+        let eye = Vec3::new(0.0, 30.0, 0.01);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::perspective_rh(
+                60.0_f32.to_radians(),
+                crate::scene::aspect_ratio((w, h)),
+                0.1,
+                1000.0,
+            ),
+            position: eye,
+        };
+        scene.meshes = vec![ground(80.0)];
+        // Bloom would spread a lit neighbour into a shadowed pixel and blur the comparisons.
+        scene.post = Some(crate::scene::PostData {
+            bloom_strength: 0.0,
+            ..crate::scene::PostData::default()
+        });
+        scene
+    }
+
+    /// `spot_light` with the shadow tunables the receive tests share.
+    fn casting_spot(position: Vec3, range: f32, cast: bool) -> crate::scene::SpotLightData {
+        let mut spot = spot_light(position, Vec3::NEG_Y, 6.0, range, 30.0, 45.0);
+        spot.shadow = cast.then_some(crate::scene::LocalShadowData {
+            bias: 0.02,
+            near: 0.1,
+        });
+        spot
+    }
+
+    /// The largest per-channel difference between two renders over a pixel rectangle.
+    fn max_channel_diff(
+        a: &RenderedImage,
+        b: &RenderedImage,
+        x: std::ops::Range<u32>,
+        y: std::ops::Range<u32>,
+    ) -> u8 {
+        let mut worst = 0;
+        for py in y {
+            for px in x.clone() {
+                let (p, q) = (rgb_at(a, px, py), rgb_at(b, px, py));
+                for c in 0..3 {
+                    worst = worst.max(p[c].abs_diff(q[c]));
+                }
+            }
+        }
+        worst
+    }
+
+    /// **A granted spot shadows what stands under it and nothing else.** The floor in a slab's
+    /// footprint is dark against the same frame with the opt-in off, the floor in the cone beyond it
+    /// and the slab's own lit top keep their light (no acne, no over-darkening).
+    #[test]
+    fn needs_gpu_a_granted_spot_shadows_the_floor_under_a_slab_and_not_its_top() {
+        let Some(renderer) = skip_or_renderer("a_granted_spot_shadows_the_floor_under_a_slab")
         else {
             return;
         };
-        let (w, h) = (160u32, 120u32);
+        let (w, h) = (192u32, 108u32);
         let size = FrameSize::native(w, h);
-        let plain = renderer
-            .render(&local_shadow_fixture(w, h, false), size)
-            .expect("a plain render");
-        let casting = renderer
-            .render(&local_shadow_fixture(w, h, true), size)
-            .expect("a casting render");
-        assert_eq!(plain.rgba, casting.rgba);
+        let mut scene = local_receive_scene(w, h);
+        scene.meshes.push(cube(
+            Vec3::new(0.0, 1.5, 0.0),
+            Vec3::new(8.0, 1.0, 8.0),
+            [0.8, 0.8, 0.8, 1.0],
+        ));
+        scene.spot_lights = vec![casting_spot(Vec3::new(0.0, 8.0, 0.0), 20.0, false)];
+        let plain = renderer.render(&scene, size).expect("an unshadowed render");
+        scene.spot_lights = vec![casting_spot(Vec3::new(0.0, 8.0, 0.0), 20.0, true)];
+        let shadowed = renderer.render(&scene, size).expect("a shadowed render");
+
+        let at = |p: Vec3| pixel_of(&scene, p, w, h);
+        let (sx, sy) = at(Vec3::new(4.7, 0.0, 0.0));
+        let (before, after) = (luma(&plain, sx, sy), luma(&shadowed, sx, sy));
+        assert!(before > 40, "the floor beside the slab is lit: {before}");
+        assert!(
+            after * 10 < before,
+            "the floor in the footprint must be dark: {before} -> {after}",
+        );
+        let (fx, fy) = at(Vec3::new(6.5, 0.0, 0.0));
+        assert!(
+            luma(&shadowed, fx, fy) * 100 >= luma(&plain, fx, fy) * 97,
+            "the floor in the cone outside the footprint stays lit",
+        );
+        let (tx, ty) = at(Vec3::new(0.0, 2.0, 0.0));
+        assert!(
+            luma(&shadowed, tx, ty) * 100 >= luma(&plain, tx, ty) * 97,
+            "the slab top must not shadow itself",
+        );
+    }
+
+    /// **A point light's six faces shadow a room's walls, and the seam between faces shows nothing.**
+    /// A light inside four tall walls leaves the floor beyond a wall dark, in all four directions;
+    /// the open floor inside the room, across the boundaries between the cube faces, renders as the
+    /// unshadowed frame does.
+    #[test]
+    fn needs_gpu_a_point_light_in_a_walled_room_lights_only_the_room() {
+        let Some(renderer) =
+            skip_or_renderer("a_point_light_in_a_walled_room_lights_only_the_room")
+        else {
+            return;
+        };
+        let (w, h) = (192u32, 108u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = local_receive_scene(w, h);
+        let wall = [0.7, 0.7, 0.7, 1.0];
+        for (pos, extent) in [
+            (Vec3::new(6.0, 3.0, 0.0), Vec3::new(0.4, 6.0, 12.4)),
+            (Vec3::new(-6.0, 3.0, 0.0), Vec3::new(0.4, 6.0, 12.4)),
+            (Vec3::new(0.0, 3.0, 6.0), Vec3::new(12.4, 6.0, 0.4)),
+            (Vec3::new(0.0, 3.0, -6.0), Vec3::new(12.4, 6.0, 0.4)),
+        ] {
+            scene.meshes.push(cube(pos, extent, wall));
+        }
+        let mut light = point_light(Vec3::new(0.0, 3.0, 0.0), 8.0, 16.0);
+        scene.lights = vec![light];
+        let plain = renderer.render(&scene, size).expect("an unshadowed render");
+        light.shadow = Some(crate::scene::LocalShadowData {
+            bias: 0.02,
+            near: 0.1,
+        });
+        scene.lights = vec![light];
+        let shadowed = renderer.render(&scene, size).expect("a shadowed render");
+
+        for outside in [
+            Vec3::new(9.0, 0.0, 0.0),
+            Vec3::new(-9.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 9.0),
+            Vec3::new(0.0, 0.0, -9.0),
+        ] {
+            let (x, y) = pixel_of(&scene, outside, w, h);
+            let (before, after) = (luma(&plain, x, y), luma(&shadowed, x, y));
+            assert!(
+                before > 15,
+                "the floor at {outside:?} is lit without shadows"
+            );
+            assert!(
+                after * 10 < before,
+                "the floor beyond a wall at {outside:?} must be dark: {before} -> {after}",
+            );
+        }
+        let (x0, y0) = pixel_of(&scene, Vec3::new(-4.5, 0.0, -4.5), w, h);
+        let (x1, y1) = pixel_of(&scene, Vec3::new(4.5, 0.0, 4.5), w, h);
+        assert!(
+            max_channel_diff(&plain, &shadowed, x0..x1, y0..y1) <= 3,
+            "the open floor crossing every cube-face boundary must match the unshadowed frame",
+        );
+    }
+
+    /// **Two granted spots in neighbouring atlas tiles do not read each other.** Each half of the
+    /// frame renders as it does with its own spot alone.
+    #[test]
+    fn needs_gpu_two_granted_spots_in_adjacent_tiles_do_not_bleed() {
+        let Some(renderer) = skip_or_renderer("two_granted_spots_in_adjacent_tiles_do_not_bleed")
+        else {
+            return;
+        };
+        let (w, h) = (192u32, 108u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = local_receive_scene(w, h);
+        for x in [-10.0_f32, 10.0] {
+            scene.meshes.push(cube(
+                Vec3::new(x, 1.0, 0.0),
+                Vec3::splat(2.0),
+                [0.8, 0.8, 0.8, 1.0],
+            ));
+        }
+        let left = casting_spot(Vec3::new(-10.0, 6.0, 0.0), 9.0, true);
+        let right = casting_spot(Vec3::new(10.0, 6.0, 0.0), 9.0, true);
+        scene.spot_lights = vec![left, right];
+        let both = renderer.render(&scene, size).expect("both spots");
+        scene.spot_lights = vec![left];
+        let left_alone = renderer.render(&scene, size).expect("the left spot");
+        scene.spot_lights = vec![right];
+        let right_alone = renderer.render(&scene, size).expect("the right spot");
+
+        assert!(
+            max_channel_diff(&both, &left_alone, 0..w / 2, 0..h) <= 1,
+            "the left half must not see the right tile",
+        );
+        assert!(
+            max_channel_diff(&both, &right_alone, w / 2..w, 0..h) <= 1,
+            "the right half must not see the left tile",
+        );
+    }
+
+    /// **An opted-in light that is not granted renders as an unshadowed one.** Sixteen nearer spots
+    /// take the whole budget; the seventeenth, over an occluder, then renders byte-identically to the
+    /// same scene with its opt-in off, while granted it would differ.
+    #[test]
+    fn needs_gpu_a_light_beyond_the_budget_renders_as_if_unshadowed() {
+        let Some(renderer) = skip_or_renderer("a_light_beyond_the_budget_renders_as_if_unshadowed")
+        else {
+            return;
+        };
+        let (w, h) = (192u32, 108u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = local_receive_scene(w, h);
+        scene.meshes.push(cube(
+            Vec3::new(25.0, 1.0, 0.0),
+            Vec3::splat(2.0),
+            [0.8, 0.8, 0.8, 1.0],
+        ));
+        let far = Vec3::new(25.0, 8.0, 0.0);
+        let render_with = |filler_casts: bool, far_casts: bool| {
+            let mut s = scene.clone();
+            s.spot_lights = (0..16)
+                .map(|i| {
+                    let angle = i as f32 * std::f32::consts::TAU / 16.0;
+                    let position = Vec3::new(angle.cos() * 4.0, 3.0, angle.sin() * 4.0);
+                    casting_spot(position, 4.0, filler_casts)
+                })
+                .collect();
+            s.spot_lights.push(casting_spot(far, 20.0, far_casts));
+            let plan = crate::local_shadow::plan_local_shadows(&s, 4096);
+            (renderer.render(&s, size).expect("a render"), plan)
+        };
+        let (off, _) = render_with(true, false);
+        let (starved, plan) = render_with(true, true);
+        assert_eq!(
+            plan.light_first_view[16],
+            crate::local_shadow::UNSHADOWED,
+            "the seventeenth light must lose the budget",
+        );
+        assert_eq!(starved.rgba, off.rgba, "an ungranted light must not shadow");
+        let (granted_off, _) = render_with(false, false);
+        let (granted, _) = render_with(false, true);
+        assert_ne!(
+            granted.rgba, granted_off.rgba,
+            "the same light, granted, must cast",
+        );
+    }
+
+    /// **A skinned caster shadows by its posed shape.** A flat skinned quad over the floor casts at
+    /// the rest pose's footprint, and a bent pose that moves the quad away moves the shadow with it.
+    #[test]
+    fn needs_gpu_a_skinned_caster_shadows_by_its_pose() {
+        let Some(renderer) = skip_or_renderer("a_skinned_caster_shadows_by_its_pose") else {
+            return;
+        };
+        let (w, h) = (192u32, 108u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = local_receive_scene(w, h);
+        scene
+            .mesh_assets
+            .push(Arc::new(skin_quad([1.0, 0.0, 0.0, 0.0], [0, 0, 0, 0], 1)));
+        let flat = Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0))
+            * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+            * Mat4::from_scale(Vec3::splat(1.5));
+        scene.meshes.push(skin_instance(flat, 1));
+        scene.spot_lights = vec![casting_spot(Vec3::new(0.0, 8.0, 0.0), 20.0, true)];
+
+        let (probe_x, probe_y) = pixel_of(&scene, Vec3::new(2.2, 0.0, 0.0), w, h);
+        scene.bone_palette = vec![Mat4::IDENTITY];
+        let rest = renderer.render(&scene, size).expect("the rest pose");
+        scene.bone_palette = vec![Mat4::from_translation(Vec3::new(8.0, 0.0, 0.0))];
+        let bent = renderer.render(&scene, size).expect("the bent pose");
+
+        let (resting, moved) = (luma(&rest, probe_x, probe_y), luma(&bent, probe_x, probe_y));
+        assert!(
+            resting * 3 < moved,
+            "the rest pose shadows (2.2, 0, 0) and the moved quad no longer does: {resting} vs {moved}",
+        );
     }
 
     /// **A drop shadow darkens the floor under its footprint and nothing outside it.** The pixel under

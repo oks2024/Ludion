@@ -190,9 +190,10 @@ fn all_repo_shaders_reflect_and_unify() {
         ]
     );
 
-    // The mesh sun group is a mesh-only @group(2): a uniform + a depth texture + a comparison sampler.
+    // The mesh sun group is a mesh-only @group(2): a uniform + a depth texture + a comparison sampler, then the local-light atlas
+    // (a depth texture) and its two storage arrays.
     let sun_group = reflection
-        .bind_group_named("sun_shadow_tex_shadow_samp")
+        .bind_group_named("sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow")
         .expect("mesh's group-2 sun layout");
     assert_eq!(sun_group.group, 2);
     assert_eq!(sun_group.units, vec!["mesh.wgsl".to_string()]);

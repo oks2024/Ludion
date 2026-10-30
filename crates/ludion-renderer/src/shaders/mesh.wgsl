@@ -44,6 +44,32 @@ struct Sun {
 @group(2) @binding(1) var shadow_tex: texture_depth_2d;
 @group(2) @binding(2) var shadow_samp: sampler_comparison;
 
+// Local-light shadows (Clockout 0007): the shadowed spot and point lights' views in one depth atlas.
+// They ride this mesh-only group beside the sun, not the shared lights group, so `Light` stays 48
+// bytes and the sprite/text shaders never see them (sprites do not receive). `light_shadow` holds
+// one entry per light-list index: the index of that light's first view in `local_views`, or
+// `0xFFFFFFFF` for a light with no shadow, which `local_shadow` answers with an exact 1.0 before
+// reading anything else. A frame with no shadowed light binds the 1×1 fallback depth texture and a
+// `light_shadow` of one `0xFFFFFFFF` entry per light (at least one), so nothing here is ever sampled.
+struct LocalView {
+    // World→light-clip, as the sun's: perspective, wgpu 0..1 depth.
+    light_space: mat4x4<f32>,
+    // xy = the tile's UV origin in the atlas, z = its UV edge, w = one atlas texel in UV.
+    rect: vec4<f32>,
+    // x = depth bias in world units, already scaled to the atlas size; y = world size of one tile
+    // texel per unit of distance from the light; z = how many views this light has (1 or 6).
+    params: vec4<f32>,
+};
+
+@group(2) @binding(3) var local_shadow_tex: texture_depth_2d;
+@group(2) @binding(4) var<storage, read> local_views: array<LocalView>;
+@group(2) @binding(5) var<storage, read> light_shadow: array<u32>;
+
+const UNSHADOWED: u32 = 0xFFFFFFFFu;
+// How far along the surface normal the receiver is pushed before projecting, in tile texels. It
+// takes the grazing-angle acne that the constant bias along the light vector cannot.
+const NORMAL_OFFSET_TEXELS: f32 = 1.0;
+
 // Image-based lighting environment — a mesh-only @group(3), sourced from the scene's `Environment`
 // (Environment/IBL). The textures are runtime-prefiltered from the analytic sky gradient (never an
 // image asset); this pass binds the diffuse irradiance cube, and the `reflections` pass binds the
@@ -298,6 +324,67 @@ fn sun_shadow(world_pos: vec3<f32>) -> f32 {
     return sum / f32(sun.pcf * sun.pcf);
 }
 
+// The shadow factor of the light at list index `index` for a fragment, 1.0 = lit. `l` is the unit
+// vector toward the light and `dist` the distance to it. An unshadowed light returns before any
+// other read, so multiplying by the result is bit-preserving for every light that has no view.
+//
+// The cube face is picked by the major axis of the light-to-fragment vector, ties resolved in the
+// order X, Y, Z — the table in `local_shadow.rs`. The bias is applied in world space BEFORE
+// projecting (perspective depth is non-linear, so an NDC bias would vary with distance): a step
+// toward the light plus a normal offset of a few texels. A cube fragment whose pushed position
+// leaves its face is clamped to the face's edge, so the seam between faces stays lit; a spot
+// fragment outside its frustum is lit. Every tap is clamped inside the tile so PCF never reads the
+// neighbouring tile.
+fn local_shadow(index: u32, world_pos: vec3<f32>, n: vec3<f32>, l: vec3<f32>, dist: f32) -> f32 {
+    let first = light_shadow[index];
+    if (first == UNSHADOWED) {
+        return 1.0;
+    }
+    var view_index = first;
+    let cube = local_views[first].params.z > 1.5;
+    if (cube) {
+        let a = abs(-l);
+        if (a.x >= a.y && a.x >= a.z) {
+            view_index = first + select(1u, 0u, -l.x > 0.0);
+        } else if (a.y >= a.z) {
+            view_index = first + select(3u, 2u, -l.y > 0.0);
+        } else {
+            view_index = first + select(5u, 4u, -l.z > 0.0);
+        }
+    }
+    let view = local_views[view_index];
+    let texel_world = dist * view.params.y;
+    let p = world_pos + l * view.params.x + n * (NORMAL_OFFSET_TEXELS * texel_world);
+    let clip = view.light_space * vec4<f32>(p, 1.0);
+    if (clip.w <= 0.0) {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    if (ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    if (!cube && (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0)) {
+        return 1.0;
+    }
+    let local = clamp(vec2<f32>(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+    let uv = view.rect.xy + local * view.rect.z;
+    let texel = view.rect.w;
+    let reach = i32(sun.pcf) / 2;
+    let margin = (f32(reach) + 0.5) * texel;
+    let lo = view.rect.xy + vec2<f32>(margin);
+    let hi = view.rect.xy + vec2<f32>(view.rect.z - margin);
+    var sum = 0.0;
+    for (var dy = -reach; dy <= reach; dy = dy + 1) {
+        for (var dx = -reach; dx <= reach; dx = dx + 1) {
+            let tap = clamp(uv + vec2<f32>(f32(dx), f32(dy)) * texel, lo, hi);
+            // `Level` variant for the same reason as the sun's: this runs in the light loop's
+            // non-uniform control flow.
+            sum = sum + textureSampleCompareLevel(local_shadow_tex, shadow_samp, tap, ndc.z);
+        }
+    }
+    return sum / f32(sun.pcf * sun.pcf);
+}
+
 // The sky-visibility read, through the shared probe snippet (`gi_probe.wgsl`): the ONE function that
 // reads the visibility volume is `sky_visibility_at`, and the mesh pass binds its inputs here.
 fn gi_sky_visibility(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
@@ -473,7 +560,8 @@ fn shade(
     // identity argument. ALU only: the non-uniform bound forbids an implicit-derivative sample here.
     let slice = cluster_slice(frag_pos, dot(to_camera, to_camera));
     for (var i: u32 = 0u; i < slice.y; i = i + 1u) {
-        let light = light_list[cluster_lights[slice.x + i]];
+        let light_index = cluster_lights[slice.x + i];
+        let light = light_list[light_index];
         let to_light = light.position.xyz - world_pos;
         let dist = length(to_light);
         let range = max(light.position.w, 1e-3);
@@ -484,7 +572,7 @@ fn shade(
         let ndh = max(dot(n, h), 0.0);
         let vdh = max(dot(v, h), 0.0);
         // Premultiplied convention: radiance IS the diffuse response at ndl = 1, ranged atten^2.
-        let radiance = light.color.rgb * spot_factor(light, l) * ndl * atten * atten * direct_ao;
+        let radiance = light.color.rgb * spot_factor(light, l) * local_shadow(light_index, world_pos, n, l, dist) * ndl * atten * atten * direct_ao;
         let d = distribution_ggx(ndh, alpha);
         let vis = visibility_smith(ndl, ndv, alpha);
         let f = fresnel_schlick(vdh, f0);

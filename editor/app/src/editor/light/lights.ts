@@ -119,7 +119,7 @@ export function offersGiDynamicToggle(component: string): boolean {
 
 /** Why a spot light's card has no toggle. Shown, not implied. */
 export const SPOT_FEEDS_NO_GI =
-  'A SpotLight feeds no GI and casts no shadows, so there is no GiDynamic marker to set here.';
+  'A SpotLight feeds no GI, so there is no GiDynamic marker to set here.';
 
 /** Why the sun's card has no toggle. Shown, not implied. */
 export const SUN_ALWAYS_BAKES =

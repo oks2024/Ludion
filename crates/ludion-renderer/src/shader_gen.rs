@@ -151,6 +151,11 @@ pub const TONEMAP_NEUTRAL: u32 = 2;
 /// Declared in `composite.wgsl`.
 pub const TONEMAP_NONE: u32 = 3;
 
+/// `UNSHADOWED`, hoisted from WGSL `const UNSHADOWED: u32`.
+///
+/// Declared in `mesh.wgsl`.
+pub const UNSHADOWED: u32 = 4294967295;
+
 /// WGSL `struct BloomThreshold`.
 ///
 /// Declared in `threshold.wgsl`.
@@ -453,6 +458,21 @@ const _: () = assert!(core::mem::offset_of!(LightHeader, ambient) == 0);
 const _: () = assert!(core::mem::offset_of!(LightHeader, grid) == 16);
 const _: () = assert!(core::mem::offset_of!(LightHeader, sun_direction) == 32);
 const _: () = assert!(core::mem::offset_of!(LightHeader, sun_color) == 48);
+
+/// WGSL `struct LocalView`.
+///
+/// Declared in `mesh.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct LocalView {
+    pub light_space: [[f32; 4]; 4],
+    pub rect: [f32; 4],
+    pub params: [f32; 4],
+}
+const _: () = assert!(core::mem::size_of::<LocalView>() == 96);
+const _: () = assert!(core::mem::offset_of!(LocalView, light_space) == 0);
+const _: () = assert!(core::mem::offset_of!(LocalView, rect) == 64);
+const _: () = assert!(core::mem::offset_of!(LocalView, params) == 80);
 
 /// WGSL `struct MeshMaterial`.
 ///
@@ -1451,6 +1471,18 @@ pub const SPRITE_SAMPLER_BINDING: u32 = 1;
 /// `shadow_samp` — `@group(2) @binding(2)`, in `mesh.wgsl`.
 pub const SHADOW_SAMP_GROUP: u32 = 2;
 pub const SHADOW_SAMP_BINDING: u32 = 2;
+
+/// `local_shadow_tex` — `@group(2) @binding(3)`, in `mesh.wgsl`.
+pub const LOCAL_SHADOW_TEX_GROUP: u32 = 2;
+pub const LOCAL_SHADOW_TEX_BINDING: u32 = 3;
+
+/// `local_views` — `@group(2) @binding(4)`, in `mesh.wgsl`.
+pub const LOCAL_VIEWS_GROUP: u32 = 2;
+pub const LOCAL_VIEWS_BINDING: u32 = 4;
+
+/// `light_shadow` — `@group(2) @binding(5)`, in `mesh.wgsl`.
+pub const LIGHT_SHADOW_GROUP: u32 = 2;
+pub const LIGHT_SHADOW_BINDING: u32 = 5;
 
 /// `irradiance_tex` — `@group(3) @binding(0)`, in `mesh.wgsl`.
 pub const IRRADIANCE_TEX_GROUP: u32 = 3;
@@ -2916,10 +2948,12 @@ pub fn create_ssr_src_ssr_samp_ssr_color_params_bgl(
     })
 }
 
-/// Bind group layout `sun_shadow_tex_shadow_samp` (@group 2), from `mesh.wgsl`.
-pub fn create_sun_shadow_tex_shadow_samp_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+/// Bind group layout `sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow` (@group 2), from `mesh.wgsl`.
+pub fn create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow_bgl(
+    device: &wgpu::Device,
+) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("sun_shadow_tex_shadow_samp"),
+        label: Some("sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: SUN_BINDING,
@@ -2945,6 +2979,36 @@ pub fn create_sun_shadow_tex_shadow_samp_bgl(device: &wgpu::Device) -> wgpu::Bin
                 binding: SHADOW_SAMP_BINDING,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: LOCAL_SHADOW_TEX_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: LOCAL_VIEWS_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(96),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: LIGHT_SHADOW_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(4),
+                },
                 count: None,
             },
         ],
