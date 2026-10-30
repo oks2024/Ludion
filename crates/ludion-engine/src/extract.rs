@@ -28,10 +28,10 @@ use ludion_ecs::World;
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
     DebugSegment, DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
-    GroundMarkerInstance, MeshData, MeshInstance, MeshShape, ParticleInstance, PointLightData,
-    PostData, ProbeData, ProbeVolume, QualityParams, RenderCamera, RenderScene, SkinJoint,
-    SpotLightData, SpriteInstance, SunData, TextRun, TextureImage, UiInstance, WorldVoxelGrid,
-    aspect_ratio,
+    GroundMarkerInstance, LocalShadowData, MeshData, MeshInstance, MeshShape, ParticleInstance,
+    PointLightData, PostData, ProbeData, ProbeVolume, QualityParams, RenderCamera, RenderScene,
+    SkinJoint, SpotLightData, SpriteInstance, SunData, TextRun, TextureImage, UiInstance,
+    WorldVoxelGrid, aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -1781,7 +1781,7 @@ fn bullet_texture(
 ///
 /// A range that is not finite and positive has no light to cast, so it yields `None`; colour and
 /// intensity clamp to non-negative (`f32::max` drops a NaN), so a Rust-built value that skipped
-/// validation never subtracts light.
+/// validation never subtracts light. A casting light carries its shadow tunables ([`local_shadow`]).
 fn point_light_data(light: &PointLight, position: Vec3, dynamic: bool) -> Option<PointLightData> {
     if !(light.range.is_finite() && light.range > 0.0) {
         return None;
@@ -1792,6 +1792,31 @@ fn point_light_data(light: &PointLight, position: Vec3, dynamic: bool) -> Option
         intensity: light.intensity.max(0.0),
         range: light.range,
         dynamic,
+        shadow: local_shadow(
+            light.cast_shadows,
+            light.shadow_bias,
+            light.shadow_near,
+            light.range,
+        ),
+    })
+}
+
+/// A casting light's [`LocalShadowData`], `None` when it doesn't cast. The bias clamps to
+/// non-negative (`f32::max` drops a NaN) and a near plane that is not finite and in `(0, range)`
+/// falls back to the default capped at half the range, so a Rust-built value that skipped
+/// validation (`L1312`) still gets a usable view.
+fn local_shadow(cast: bool, bias: f32, near: f32, range: f32) -> Option<LocalShadowData> {
+    if !cast {
+        return None;
+    }
+    let near = if near.is_finite() && near > 0.0 && near < range {
+        near
+    } else {
+        0.05_f32.min(range * 0.5)
+    };
+    Some(LocalShadowData {
+        bias: bias.max(0.0),
+        near,
     })
 }
 
@@ -1800,7 +1825,8 @@ fn point_light_data(light: &PointLight, position: Vec3, dynamic: bool) -> Option
 /// Like [`point_light_data`], an unusable range yields `None` and colour and intensity clamp to
 /// non-negative; a zero-length or non-finite direction has no axis, so it also yields `None`. The
 /// angles clamp into `[0, 89.9]` degrees with the inner never past the outer, so the cosines stay
-/// positive and ordered for a Rust-built value that skipped validation (`L1272`).
+/// positive and ordered for a Rust-built value that skipped validation (`L1272`). A casting light
+/// carries its shadow tunables ([`local_shadow`]).
 fn spot_light_data(light: &SpotLight, position: Vec3) -> Option<SpotLightData> {
     if !(light.range.is_finite() && light.range > 0.0) {
         return None;
@@ -1816,6 +1842,12 @@ fn spot_light_data(light: &SpotLight, position: Vec3) -> Option<SpotLightData> {
         range: light.range,
         cos_inner: ludion_core::math::cos(inner.to_radians()),
         cos_outer: ludion_core::math::cos(outer.to_radians()),
+        shadow: local_shadow(
+            light.cast_shadows,
+            light.shadow_bias,
+            light.shadow_near,
+            light.range,
+        ),
     })
 }
 
@@ -4887,6 +4919,7 @@ mod tests {
                 color,
                 intensity,
                 range: 10.0,
+                ..PointLight::default()
             };
             let data = point_light_data(&light, Vec3::ZERO, false).expect("a usable range");
             let radiance = data.color * data.intensity;
@@ -4905,6 +4938,57 @@ mod tests {
                 "range {range}"
             );
         }
+    }
+
+    /// Only a casting light carries shadow data: the authored bias and near pass through, and a
+    /// Rust-built bad near or NaN bias falls back instead of reaching the renderer.
+    #[test]
+    fn local_lights_carry_shadow_data_only_when_casting() {
+        let point_shadow =
+            |light: &PointLight| point_light_data(light, Vec3::ZERO, false).unwrap().shadow;
+        assert_eq!(point_shadow(&PointLight::default()), None);
+        let casting = PointLight {
+            cast_shadows: true,
+            shadow_bias: 0.1,
+            shadow_near: 0.2,
+            ..PointLight::default()
+        };
+        let want = Some(LocalShadowData {
+            bias: 0.1,
+            near: 0.2,
+        });
+        assert_eq!(point_shadow(&casting), want);
+        let spot = SpotLight {
+            cast_shadows: true,
+            shadow_bias: 0.1,
+            shadow_near: 0.2,
+            ..SpotLight::default()
+        };
+        assert_eq!(spot_light_data(&spot, Vec3::ZERO).unwrap().shadow, want);
+        let plain = spot_light_data(&SpotLight::default(), Vec3::ZERO).unwrap();
+        assert_eq!(plain.shadow, None);
+
+        for near in [-1.0, 0.0, 10.0, 12.0, f32::NAN] {
+            let bad = PointLight {
+                cast_shadows: true,
+                shadow_near: near,
+                ..PointLight::default()
+            };
+            assert_eq!(point_shadow(&bad).unwrap().near, 0.05, "near {near}");
+        }
+        let tiny = PointLight {
+            cast_shadows: true,
+            range: 0.04,
+            shadow_near: 1.0,
+            ..PointLight::default()
+        };
+        assert_eq!(point_shadow(&tiny).unwrap().near, 0.02);
+        let nan_bias = PointLight {
+            cast_shadows: true,
+            shadow_bias: f32::NAN,
+            ..PointLight::default()
+        };
+        assert_eq!(point_shadow(&nan_bias).unwrap().bias, 0.0);
     }
 
     /// With multiple suns, extract takes the lowest live `EntityId` (first in the pinned
@@ -5418,6 +5502,7 @@ mod tests {
                     intensity: 1.0,
                     range: 10.0,
                     dynamic: false,
+                    shadow: None,
                 },
             ));
         }

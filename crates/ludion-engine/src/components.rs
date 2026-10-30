@@ -466,6 +466,26 @@ pub struct PointLight {
     #[serde(default = "ten")]
     #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub range: f32,
+    /// Opts the light into a shadow map (default `false`); lights that don't opt in, or that lose
+    /// the per-frame caster budget, stay lit and unshadowed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cast_shadows: bool,
+    /// Depth bias in world units, as on `DirectionalLight`, validated `>= 0` (default `0.02`).
+    #[serde(
+        default = "local_shadow_bias_default",
+        skip_serializing_if = "is_local_shadow_bias_default"
+    )]
+    #[schemars(range(min = 0.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 0.5]))]
+    pub shadow_bias: f32,
+    /// The shadow view's near plane in metres from the light (default `0.05`); the far plane is
+    /// `range`. Finite, above 0 and below `range` (`L1312`).
+    #[serde(
+        default = "local_shadow_near_default",
+        skip_serializing_if = "is_local_shadow_near_default"
+    )]
+    #[schemars(extend("x-ui-range" = [0.01, 1.0]))]
+    pub shadow_near: f32,
 }
 
 impl Default for PointLight {
@@ -474,14 +494,23 @@ impl Default for PointLight {
             color: [1.0; 3],
             intensity: 1.0,
             range: 10.0,
+            cast_shadows: false,
+            shadow_bias: local_shadow_bias_default(),
+            shadow_near: local_shadow_near_default(),
         }
     }
 }
 
 impl SemanticValidate for PointLight {
-    /// `color` is an HDR colour (`L1263`); `intensity` and `range` ride their schemars bounds.
+    /// `color` is an HDR colour (`L1263`); `intensity` and `range` ride their schemars bounds. A
+    /// `shadow_near` that is non-finite, at most 0, or not below `range` is `L1312`.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
-        value_color_diagnostics("PointLight", value, "color")
+        let mut out = value_color_diagnostics("PointLight", value, "color");
+        out.extend(local_shadow_diagnostics(
+            value,
+            f64::from(PointLight::default().range),
+        ));
+        out
     }
 }
 
@@ -521,6 +550,26 @@ pub struct SpotLight {
     #[serde(default = "spot_outer_angle")]
     #[schemars(extend("x-ui-range" = [0.0, 89.0]))]
     pub outer_angle: f32,
+    /// Opts the light into a shadow map (default `false`); lights that don't opt in, or that lose
+    /// the per-frame caster budget, stay lit and unshadowed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cast_shadows: bool,
+    /// Depth bias in world units, as on `DirectionalLight`, validated `>= 0` (default `0.02`).
+    #[serde(
+        default = "local_shadow_bias_default",
+        skip_serializing_if = "is_local_shadow_bias_default"
+    )]
+    #[schemars(range(min = 0.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 0.5]))]
+    pub shadow_bias: f32,
+    /// The shadow view's near plane in metres from the light (default `0.05`); the far plane is
+    /// `range`. Finite, above 0 and below `range` (`L1312`).
+    #[serde(
+        default = "local_shadow_near_default",
+        skip_serializing_if = "is_local_shadow_near_default"
+    )]
+    #[schemars(extend("x-ui-range" = [0.01, 1.0]))]
+    pub shadow_near: f32,
 }
 
 impl Default for SpotLight {
@@ -532,6 +581,9 @@ impl Default for SpotLight {
             direction: [0.0, -1.0, 0.0],
             inner_angle: 20.0,
             outer_angle: 30.0,
+            cast_shadows: false,
+            shadow_bias: local_shadow_bias_default(),
+            shadow_near: local_shadow_near_default(),
         }
     }
 }
@@ -540,10 +592,15 @@ impl SemanticValidate for SpotLight {
     /// `color` is an HDR colour (`L1263`); `intensity` and `range` ride their schemars bounds. A
     /// zero-length or non-finite `direction`, an angle outside `[0, 90)` or non-finite, and an
     /// `inner_angle` above `outer_angle` are `L1272`. An absent angle compares as its default, so
-    /// `inner_angle: 40` alone is caught. A wrong *shape* is the schema's job (`L1014`) and is
-    /// passed through here.
+    /// `inner_angle: 40` alone is caught. A `shadow_near` that is non-finite, at most 0, or not
+    /// below `range` is `L1312`. A wrong *shape* is the schema's job (`L1014`) and is passed
+    /// through here.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = value_color_diagnostics("SpotLight", value, "color");
+        out.extend(local_shadow_diagnostics(
+            value,
+            f64::from(SpotLight::default().range),
+        ));
         if let Some(direction) = value.get("direction").and_then(Value::as_array) {
             let components: Vec<f64> = direction.iter().filter_map(as_stored_f32).collect();
             if components.len() == 3 {
@@ -612,6 +669,47 @@ fn spot_light_inverted_cone(inner: f64, outer: f64) -> Diagnostic {
     )
     .with_path("/inner_angle")
     .with_help("make `inner_angle` at most `outer_angle` (equal gives a hard edge)")
+}
+
+/// `L1312` for a `PointLight`/`SpotLight`: an authored `shadow_near` that is non-finite or `<= 0`,
+/// or a casting (or near-authoring) light whose near plane is not below its range. A non-casting
+/// light that authors no `shadow_near` is never refused.
+fn local_shadow_diagnostics(value: &Value, default_range: f64) -> Vec<Diagnostic> {
+    let authored_near = value.get("shadow_near").and_then(as_stored_f32);
+    if let Some(near) = authored_near
+        && (!near.is_finite() || near <= 0.0)
+    {
+        return vec![local_light_invalid_shadow_near(near, None)];
+    }
+    let casts = value
+        .get("cast_shadows")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if authored_near.is_some() || casts {
+        let near = authored_near.unwrap_or_else(|| f64::from(local_shadow_near_default()));
+        let range = value
+            .get("range")
+            .and_then(as_stored_f32)
+            .unwrap_or(default_range);
+        if range.is_finite() && range > 0.0 && near >= range {
+            return vec![local_light_invalid_shadow_near(near, Some(range))];
+        }
+    }
+    Vec::new()
+}
+
+/// `L1312` — a local light's `shadow_near` is unusable; `range` is set for the not-below-range case.
+fn local_light_invalid_shadow_near(near: f64, range: Option<f64>) -> Diagnostic {
+    let message = match range {
+        Some(range) => format!(
+            "the light's shadow_near {near} is not below its range {range}, so the shadow view \
+             would see nothing"
+        ),
+        None => format!("the light's shadow_near {near} is non-finite or not above 0"),
+    };
+    Diagnostic::new(code::LOCAL_LIGHT_INVALID_SHADOW, message)
+        .with_path("/shadow_near")
+        .with_help("use a finite `shadow_near` above 0 and below `range` (default 0.05)")
 }
 
 /// A reflection probe: a captured cube of the scene around the entity, projected onto a box or
@@ -4256,6 +4354,12 @@ fn two_hundred() -> f32 {
 fn shadow_bias_default() -> f32 {
     0.05
 }
+fn local_shadow_bias_default() -> f32 {
+    0.02
+}
+fn local_shadow_near_default() -> f32 {
+    0.05
+}
 fn probe_blend() -> f32 {
     0.5
 }
@@ -4346,6 +4450,14 @@ fn ssr_thickness_default() -> f32 {
 #[allow(clippy::float_cmp)]
 fn is_ssr_fade_default(value: &[f32; 2]) -> bool {
     *value == ssr_fade_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_local_shadow_bias_default(value: &f32) -> bool {
+    *value == local_shadow_bias_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_local_shadow_near_default(value: &f32) -> bool {
+    *value == local_shadow_near_default()
 }
 #[allow(clippy::float_cmp)]
 fn is_ssr_max_distance_default(value: &f32) -> bool {
@@ -5650,9 +5762,129 @@ mod tests {
             direction: [1.0, -0.5, 0.0],
             inner_angle: 5.0,
             outer_angle: 12.5,
+            cast_shadows: true,
+            shadow_bias: 0.1,
+            shadow_near: 0.2,
         };
         let json = serde_json::to_value(custom).unwrap();
         assert_eq!(serde_json::from_value::<SpotLight>(json).unwrap(), custom);
+        assert!(!spot.cast_shadows);
+        assert_eq!((spot.shadow_bias, spot.shadow_near), (0.02, 0.05));
+        // The hash-stability pin: a default-valued light serializes exactly its six old keys.
+        assert_eq!(
+            sorted_keys(&serde_json::to_value(SpotLight::default()).unwrap()),
+            [
+                "color",
+                "direction",
+                "inner_angle",
+                "intensity",
+                "outer_angle",
+                "range"
+            ]
+        );
+    }
+
+    fn sorted_keys(value: &Value) -> Vec<String> {
+        let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    /// An empty `PointLight: {}` is the default, a non-default one round-trips through serde, and a
+    /// default-valued light serializes only its three old keys.
+    #[test]
+    fn point_light_defaults_and_round_trips() {
+        let point: PointLight = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(point, PointLight::default());
+        assert!(!point.cast_shadows);
+        assert_eq!((point.shadow_bias, point.shadow_near), (0.02, 0.05));
+        let custom = PointLight {
+            color: [1.0, 0.8, 0.5],
+            intensity: 3.0,
+            range: 25.0,
+            cast_shadows: true,
+            shadow_bias: 0.1,
+            shadow_near: 0.2,
+        };
+        let json = serde_json::to_value(custom).unwrap();
+        assert_eq!(serde_json::from_value::<PointLight>(json).unwrap(), custom);
+        assert_eq!(
+            sorted_keys(&serde_json::to_value(PointLight::default()).unwrap()),
+            ["color", "intensity", "range"]
+        );
+    }
+
+    /// Both local lights round-trip through the canonical writer and a `World`: absent shadow fields
+    /// emit no new keys, authored ones emit byte-stably, and an old-shape value comes back
+    /// key-identical.
+    #[test]
+    fn local_light_shadow_fields_round_trip_through_the_writer_and_a_world() {
+        let registry = builtin_registry();
+        for component in ["PointLight", "SpotLight"] {
+            let old = format!(
+                "format: 1\nentities:\n  - components:\n      {component}:\n        range: 7.0\n"
+            );
+            let scene = ludion_scene::check(&old, &registry).expect("an old-shape light");
+            let text = ludion_scene::emit(&scene, &registry);
+            for key in ["cast_shadows", "shadow_bias", "shadow_near"] {
+                assert!(!text.contains(key), "{component} emitted {key}: {text}");
+            }
+
+            let authored = format!(
+                "format: 1\nentities:\n  - components:\n      {component}:\n        \
+                 cast_shadows: true\n        shadow_bias: 0.1\n        shadow_near: 0.2\n"
+            );
+            let scene = ludion_scene::check(&authored, &registry).expect("a casting light");
+            let once = ludion_scene::emit(&scene, &registry);
+            let reparsed = ludion_scene::check(&once, &registry).expect("emitted scene re-parses");
+            assert_eq!(once, ludion_scene::emit(&reparsed, &registry));
+            assert!(once.contains("cast_shadows: true"), "{once}");
+
+            let info = registry.get(component).unwrap();
+            let mut world = World::new();
+            let entity = world.spawn();
+            info.deserialize_insert(&serde_json::json!({ "range": 7.0 }), &mut world, entity)
+                .unwrap();
+            let back = info.serialize(&world, entity).unwrap().unwrap();
+            assert!(
+                !sorted_keys(&back)
+                    .iter()
+                    .any(|k| k.starts_with("shadow") || k == "cast_shadows"),
+                "{component} came back with {back}"
+            );
+        }
+    }
+
+    /// A bad `shadow_near` is `L1312` at `/shadow_near` on both local lights; a non-casting light
+    /// with a tiny range and no shadow fields stays legal.
+    #[test]
+    fn a_bad_local_light_shadow_near_is_l1312() {
+        for component in ["PointLight", "SpotLight"] {
+            for near in ["0.0", "-1.0", "12.0"] {
+                refused_with(
+                    component,
+                    &format!("        shadow_near: {near}\n"),
+                    "L1312",
+                    "/shadow_near",
+                );
+            }
+            refused_with(
+                component,
+                "        cast_shadows: true\n        range: 0.04\n",
+                "L1312",
+                "/shadow_near",
+            );
+            for clean in [
+                "        cast_shadows: true\n",
+                "        shadow_near: 0.5\n        range: 9.0\n",
+                "        range: 0.04\n",
+            ] {
+                assert!(
+                    refusals(component, clean).is_empty(),
+                    "{component} {clean:?}"
+                );
+            }
+        }
     }
 
     /// Each bad `SpotLight` cone shape is `L1272` at the offending field; `inner == outer` (a hard
@@ -5753,6 +5985,14 @@ mod tests {
             "/intensity",
         );
         refused_with("SpotLight", "        range: 0.0\n", "L1014", "/range");
+        for component in ["PointLight", "SpotLight"] {
+            refused_with(
+                component,
+                "        shadow_bias: -0.1\n",
+                "L1014",
+                "/shadow_bias",
+            );
+        }
         refused_with(
             "DirectionalLight",
             "        intensity: -1.0\n",

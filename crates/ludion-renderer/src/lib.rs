@@ -90,10 +90,10 @@ pub use render::{GpuUploads, Renderer, is_renderer_shader};
 pub use scene::{
     CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment, DropShadowInstance,
     EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, GroundMarkerShape,
-    MAX_GI_TEXTURE_AXIS, MapImage, MeshData, MeshInstance, MeshShape, MeshTexture, MeshTextures,
-    ParticleInstance, PointLightData, PostData, ProbeWorld, RenderCamera, RenderScene, SkinJoint,
-    SpotLightData, SpriteInstance, SunData, TextRun, TextureImage, TextureWrap, TonemapOperator,
-    UiInstance, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
+    LocalShadowData, MAX_GI_TEXTURE_AXIS, MapImage, MeshData, MeshInstance, MeshShape, MeshTexture,
+    MeshTextures, ParticleInstance, PointLightData, PostData, ProbeWorld, RenderCamera,
+    RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunData, TextRun, TextureImage,
+    TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
 };
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`

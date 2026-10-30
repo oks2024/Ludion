@@ -567,6 +567,7 @@ mod tests {
             intensity: 1.0,
             range,
             dynamic: false,
+            shadow: None,
         }
     }
 
@@ -926,6 +927,7 @@ mod tests {
             range,
             cos_inner: inner_deg.to_radians().cos(),
             cos_outer: outer_deg.to_radians().cos(),
+            shadow: None,
         }
     }
 

@@ -161,6 +161,9 @@ fn camera_node_stays_a_part_without_a_camera_and_point_light_maps() {
     let light = component(&import, 4, "PointLight").unwrap();
     assert_eq!(light["intensity"], 6.0);
     assert_eq!(light["range"], 20.0);
+    for key in ["cast_shadows", "shadow_bias", "shadow_near"] {
+        assert!(light.get(key).is_none(), "{key} is not emitted");
+    }
 }
 
 #[test]
@@ -336,6 +339,9 @@ fn a_spot_light_maps_to_spot_light_with_degrees_and_a_world_direction() {
     assert_eq!(light["color"], serde_json::json!([1.0, 0.5, 0.25]));
     assert_eq!(light["intensity"], 3.0);
     assert_eq!(light["range"], 15.0);
+    for key in ["cast_shadows", "shadow_bias", "shadow_near"] {
+        assert!(light.get(key).is_none(), "{key} is not emitted");
+    }
     let inner = light["inner_angle"].as_f64().unwrap();
     let outer = light["outer_angle"].as_f64().unwrap();
     assert!((inner - 0.25_f64.to_degrees()).abs() < 1e-4, "{inner}");

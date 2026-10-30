@@ -1286,6 +1286,7 @@ mod tests {
             intensity,
             range,
             dynamic: false,
+            shadow: None,
         }
     }
 

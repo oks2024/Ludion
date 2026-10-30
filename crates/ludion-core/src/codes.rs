@@ -1512,6 +1512,10 @@ pub mod code {
     /// by prefab validation.
     pub const PREFAB_ASSET_PATH: DiagnosticCode = DiagnosticCode::new("L1311");
 
+    /// `L1312` — a `PointLight`/`SpotLight` `shadow_near` is non-finite, ≤ 0, or not below `range`;
+    /// raised by the light's semantic validator; pointer `/shadow_near`.
+    pub const LOCAL_LIGHT_INVALID_SHADOW: DiagnosticCode = DiagnosticCode::new("L1312");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7519,6 +7523,20 @@ one level; the engine rebases it to the content root when the prefab is read.
 
 Fix: write the path relative to the prefab file's directory; `..` may climb.",
     },
+    CodeEntry {
+        code: code::LOCAL_LIGHT_INVALID_SHADOW,
+        severity: Severity::Error,
+        title: "local light shadow near plane is invalid",
+        explanation: "\
+A `PointLight` or `SpotLight` has a `shadow_near` that cannot form a shadow view (pointer
+`/shadow_near`). Either it is non-finite or not above 0, or it is not below the light's `range`
+(the shadow view's far plane), which leaves no depth span to render. The range check applies when
+the light casts shadows or authors a `shadow_near`; a non-casting light with a tiny `range` and no
+`shadow_near` is not refused.
+
+Fix: give `shadow_near` a finite value above 0 and below `range` (default 0.05), or lower it to fit
+a small `range`.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -10245,6 +10263,7 @@ mod tests {
         code::CAMERA_RIG_PARENTED,
         code::CAMERA_RIG_NOT_INSTALLED,
         code::PREFAB_ASSET_PATH,
+        code::LOCAL_LIGHT_INVALID_SHADOW,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

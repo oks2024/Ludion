@@ -10162,6 +10162,7 @@ mod tests {
                 intensity: 4.0,
                 range: 30.0,
                 dynamic: false,
+                shadow: None,
             }];
         }
         scene
@@ -14830,6 +14831,7 @@ mod tests {
             intensity,
             range,
             dynamic: false,
+            shadow: None,
         }
     }
 
@@ -15168,6 +15170,7 @@ mod tests {
                             intensity: 0.15 + rng.next_f32() * 0.35,
                             range: range_lo + rng.next_f32() * (range_hi - range_lo),
                             dynamic: false,
+                            shadow: None,
                         }
                     })
                     .collect();
@@ -15202,6 +15205,7 @@ mod tests {
                             range: range_lo + r() * (range_hi - range_lo) * 1.5,
                             cos_inner: f32::to_radians(inner).cos(),
                             cos_outer: f32::to_radians(outer).cos(),
+                            shadow: None,
                         }
                     })
                     .collect();
@@ -15250,6 +15254,7 @@ mod tests {
             range,
             cos_inner: inner_deg.to_radians().cos(),
             cos_outer: outer_deg.to_radians().cos(),
+            shadow: None,
         }
     }
 

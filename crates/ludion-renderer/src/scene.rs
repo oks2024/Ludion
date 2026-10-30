@@ -600,6 +600,18 @@ pub struct SpotLightData {
     pub cos_inner: f32,
     /// Cosine of the outer half-angle: exactly zero outside it.
     pub cos_outer: f32,
+    /// The light's shadow tunables; `None` is unshadowed.
+    pub shadow: Option<LocalShadowData>,
+}
+
+/// One local light's shadow tunables: a world-unit depth bias and the near plane; the far plane is
+/// the light's `range`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct LocalShadowData {
+    /// Depth bias in world units.
+    pub bias: f32,
+    /// Near plane of the shadow view, in metres from the light.
+    pub near: f32,
 }
 
 /// A dynamic point light: position, color, intensity, and a hard range cutoff.
@@ -620,6 +632,8 @@ pub struct PointLightData {
     /// Does not affect clustered forward in any way: a marked light still reaches every consumer of
     /// `RenderScene.lights` in the same content and order as an unmarked one.
     pub dynamic: bool,
+    /// The light's shadow tunables; `None` is unshadowed.
+    pub shadow: Option<LocalShadowData>,
 }
 
 /// How a text run samples a baked font's atlas: `texture` indexes [`RenderScene::textures`], and

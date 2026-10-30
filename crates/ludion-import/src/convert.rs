@@ -70,13 +70,14 @@ pub(crate) fn mesh_value(
     })
 }
 
-/// The `PointLight` component value. Emits `color`, `intensity`, and `range` — all three, since the
-/// engine serializes them all — so the scene round-trips.
+/// The `PointLight` component value. Emits `color`, `intensity`, and `range`, the fields glTF
+/// carries; the shadow fields stay at their omitted defaults (cast off), so the scene round-trips.
 pub(crate) fn point_light_value(color: [f32; 3], intensity: f32, range: f32) -> Value {
     json!({ "color": vec3(color), "intensity": f32_num(intensity), "range": f32_num(range) })
 }
 
-/// The `SpotLight` component value, every field emitted (the engine serializes them all).
+/// The `SpotLight` component value: the fields glTF carries, the shadow fields at their omitted
+/// defaults (cast off).
 /// `direction` is world-space; the angles are half-angles in degrees.
 pub(crate) fn spot_light_value(
     color: [f32; 3],

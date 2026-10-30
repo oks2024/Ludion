@@ -364,6 +364,7 @@ mod tests {
             intensity: 5.0,
             range: 8.0,
             dynamic: false,
+            shadow: None,
         }];
         scene.spot_lights = vec![SpotLightData {
             position: Vec3::new(0.0, 4.0, 0.0),
@@ -373,6 +374,7 @@ mod tests {
             range: 9.0,
             cos_inner: 0.9,
             cos_outer: 0.8,
+            shadow: None,
         }];
         scene.voxel = Some(Arc::new(
             WorldVoxelGrid {

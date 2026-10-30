@@ -553,6 +553,7 @@ mod tests {
             intensity: 2.0,
             range,
             dynamic,
+            shadow: None,
         }
     }
 

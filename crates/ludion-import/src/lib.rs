@@ -33,7 +33,7 @@
 //! | `TANGENT`, or a generated tangent frame| the mesh doc's `tangents`               |
 //! | skin (`JOINTS_0`/`WEIGHTS_0`, inverse binds) | the mesh doc's `joints`/`weights`/`bone_indices`; joint nodes folded, not entities |
 //! | animation (joint channels)             | `clips/<name>.anim.yaml`                |
-//! | `KHR_lights_punctual` point light      | `PointLight`                            |
+//! | `KHR_lights_punctual` point light      | `PointLight` (`cast_shadows: false`)    |
 //! | a *referenced* PNG image               | re-encoded `textures/<hash>.png`        |
 //!
 //! `Mesh.emissive` is a scalar HDR intensity on the surface's own color, not an independent tint
