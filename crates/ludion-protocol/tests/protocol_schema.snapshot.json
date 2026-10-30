@@ -537,7 +537,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nor the local-light shadow atlas.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, or the lit frame tinted by sun cascade.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -557,6 +557,11 @@
           {
             "const": "local_shadow_atlas",
             "description": "The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells\ndark blue, a red line on every cell border.",
+            "type": "string"
+          },
+          {
+            "const": "sun_cascades",
+            "description": "Each mesh fragment tinted by the sun cascade that shades it.",
             "type": "string"
           }
         ]
@@ -2728,7 +2733,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nor the local-light shadow atlas.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, or the lit frame tinted by sun cascade.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -2748,6 +2753,11 @@
           {
             "const": "local_shadow_atlas",
             "description": "The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells\ndark blue, a red line on every cell border.",
+            "type": "string"
+          },
+          {
+            "const": "sun_cascades",
+            "description": "Each mesh fragment tinted by the sun cascade that shades it.",
             "type": "string"
           }
         ]
@@ -4258,6 +4268,17 @@
             "$ref": "#/$defs/SimProfile",
             "description": "Sim-side timings: per-system medians and the whole-frame median."
           },
+          "sun_cascades": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SunCascadeProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sun cascade planning: how many cascades the sun authored and the frame fitted, and each\none's depth range, texel size and caster count. Filled by the **offline** driver and absent\nfor a live capture, for `cluster`'s reason: the live host fits inside a frame a profiler\nmust not make pay twice."
+          },
           "transport": {
             "anyOf": [
               {
@@ -4472,6 +4493,12 @@
             "description": "The SSR trace's extent as a fraction of the **output** extent, independent of `render_scale`.",
             "format": "float",
             "type": "number"
+          },
+          "sun_cascades": {
+            "description": "The most cascades a sun fits on this machine (`min(authored, this)`); a sun without\n`cascades` draws the anchored box.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -4487,6 +4514,7 @@
           "dof_taps",
           "shadow_map_size",
           "local_shadow_atlas_size",
+          "sun_cascades",
           "pcf",
           "gi_rays",
           "gi_probe_scale",
@@ -4497,7 +4525,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nor the local-light shadow atlas.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, or the lit frame tinted by sun cascade.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -4517,6 +4545,11 @@
           {
             "const": "local_shadow_atlas",
             "description": "The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells\ndark blue, a red line on every cell border.",
+            "type": "string"
+          },
+          {
+            "const": "sun_cascades",
+            "description": "Each mesh fragment tinted by the sun cascade that shades it.",
             "type": "string"
           }
         ]
@@ -5510,6 +5543,76 @@
         "minimum": 0,
         "type": "integer"
       },
+      "SunCascadeProfile": {
+        "description": "Sun cascade planning — what the sun asked for and what the frame fitted.\n\nNot measurements: the numbers are the shape of the frame's plan, reduced from the same fit and\nper-cascade cull the renderer runs, so two runs of the same frame produce identical numbers.\n`count < authored` means the quality capped the cascades; `count` 0 with `authored > 0` means\nshadows were masked or the camera was degenerate, so neither the cascades nor the anchored box\ndrew — the report's `quality.shadows` names the first cause.",
+        "properties": {
+          "authored": {
+            "description": "The cascade count the sun authors; 0 for a sun without `cascades` or a sunless scene.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cascades": {
+            "description": "One entry per fitted cascade, nearest first.",
+            "items": {
+              "$ref": "#/$defs/SunCascadeSliceProfile"
+            },
+            "type": "array"
+          },
+          "count": {
+            "description": "Cascades fitted this frame; 0 when none ran.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tile_edge": {
+            "description": "Edge of one cascade's shadow tile in texels; 0 when none ran.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "authored",
+          "count",
+          "tile_edge",
+          "cascades"
+        ],
+        "type": "object"
+      },
+      "SunCascadeSliceProfile": {
+        "description": "One fitted sun cascade.",
+        "properties": {
+          "casters": {
+            "description": "Instances the cascade's box keeps for the shadow pass.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "far": {
+            "description": "View depth, in metres, where the slice ends.",
+            "format": "double",
+            "type": "number"
+          },
+          "near": {
+            "description": "View depth, in metres, where the slice starts.",
+            "format": "double",
+            "type": "number"
+          },
+          "texel": {
+            "description": "World metres per shadow texel.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "near",
+          "far",
+          "texel",
+          "casters"
+        ],
+        "type": "object"
+      },
       "SystemTiming": {
         "description": "One system's median wall time across the measured frames.",
         "properties": {
@@ -6415,6 +6518,17 @@
             "$ref": "#/$defs/SimProfile",
             "description": "Sim-side timings: per-system medians and the whole-frame median."
           },
+          "sun_cascades": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SunCascadeProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sun cascade planning: how many cascades the sun authored and the frame fitted, and each\none's depth range, texel size and caster count. Filled by the **offline** driver and absent\nfor a live capture, for `cluster`'s reason: the live host fits inside a frame a profiler\nmust not make pay twice."
+          },
           "transport": {
             "anyOf": [
               {
@@ -6629,6 +6743,12 @@
             "description": "The SSR trace's extent as a fraction of the **output** extent, independent of `render_scale`.",
             "format": "float",
             "type": "number"
+          },
+          "sun_cascades": {
+            "description": "The most cascades a sun fits on this machine (`min(authored, this)`); a sun without\n`cascades` draws the anchored box.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -6644,6 +6764,7 @@
           "dof_taps",
           "shadow_map_size",
           "local_shadow_atlas_size",
+          "sun_cascades",
           "pcf",
           "gi_rays",
           "gi_probe_scale",
@@ -6654,7 +6775,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nor the local-light shadow atlas.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, or the lit frame tinted by sun cascade.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -6674,6 +6795,11 @@
           {
             "const": "local_shadow_atlas",
             "description": "The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells\ndark blue, a red line on every cell border.",
+            "type": "string"
+          },
+          {
+            "const": "sun_cascades",
+            "description": "Each mesh fragment tinted by the sun cascade that shades it.",
             "type": "string"
           }
         ]
@@ -6920,6 +7046,76 @@
         "format": "uint64",
         "minimum": 0,
         "type": "integer"
+      },
+      "SunCascadeProfile": {
+        "description": "Sun cascade planning — what the sun asked for and what the frame fitted.\n\nNot measurements: the numbers are the shape of the frame's plan, reduced from the same fit and\nper-cascade cull the renderer runs, so two runs of the same frame produce identical numbers.\n`count < authored` means the quality capped the cascades; `count` 0 with `authored > 0` means\nshadows were masked or the camera was degenerate, so neither the cascades nor the anchored box\ndrew — the report's `quality.shadows` names the first cause.",
+        "properties": {
+          "authored": {
+            "description": "The cascade count the sun authors; 0 for a sun without `cascades` or a sunless scene.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cascades": {
+            "description": "One entry per fitted cascade, nearest first.",
+            "items": {
+              "$ref": "#/$defs/SunCascadeSliceProfile"
+            },
+            "type": "array"
+          },
+          "count": {
+            "description": "Cascades fitted this frame; 0 when none ran.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tile_edge": {
+            "description": "Edge of one cascade's shadow tile in texels; 0 when none ran.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "authored",
+          "count",
+          "tile_edge",
+          "cascades"
+        ],
+        "type": "object"
+      },
+      "SunCascadeSliceProfile": {
+        "description": "One fitted sun cascade.",
+        "properties": {
+          "casters": {
+            "description": "Instances the cascade's box keeps for the shadow pass.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "far": {
+            "description": "View depth, in metres, where the slice ends.",
+            "format": "double",
+            "type": "number"
+          },
+          "near": {
+            "description": "View depth, in metres, where the slice starts.",
+            "format": "double",
+            "type": "number"
+          },
+          "texel": {
+            "description": "World metres per shadow texel.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "near",
+          "far",
+          "texel",
+          "casters"
+        ],
+        "type": "object"
       },
       "SystemTiming": {
         "description": "One system's median wall time across the measured frames.",

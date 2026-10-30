@@ -75,7 +75,7 @@ mod shader_gen;
 
 pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
-pub use debug_view::{DebugView, PROBE_VIEW_PALETTE};
+pub use debug_view::{DebugView, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE};
 pub use frame_observer::{FrameObserver, FramePhase};
 pub use gi_bake::{GiReadback, max_gi_probes};
 pub use graph::{FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json};
@@ -103,8 +103,8 @@ pub use scene::{
     drop_shadow_fade,
 };
 pub use sun_cascade::{
-    SUN_CASCADE_BIAS_TEXEL, SUN_CASCADE_LAMBDA, SunCascade, SunCascades, fit_sun_cascades,
-    sun_atlas_grid, sun_atlas_tile,
+    SUN_CASCADE_BIAS_TEXEL, SUN_CASCADE_LAMBDA, SunCascade, SunCascadeStat, SunCascadeStats,
+    SunCascades, fit_sun_cascades, sun_atlas_grid, sun_atlas_tile, sun_cascade_stats,
 };
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`

@@ -2349,6 +2349,7 @@ mod budget_quality_tests {
             transport: None,
             cluster: None,
             local_shadows: None,
+            sun_cascades: None,
             load: None,
             probes: None,
             samples: None,

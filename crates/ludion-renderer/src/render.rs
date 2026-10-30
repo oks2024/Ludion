@@ -23,7 +23,7 @@ use ludion_render_graph::{
 };
 
 use crate::compressed::{self, CompressedUploadError};
-use crate::cull::{Aabb, CullVolume, Frustum, cull, instance_bounds, visible_ranges};
+use crate::cull::{Aabb, cull, instance_bounds, visible_ranges};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
@@ -1626,14 +1626,7 @@ impl Renderer {
         };
         let sun_cascade_casters: Vec<Vec<u32>> =
             sun_cascades.as_ref().map_or_else(Vec::new, |fit| {
-                fit.cascades[..fit.count as usize]
-                    .iter()
-                    .map(|cascade| {
-                        let volume =
-                            CullVolume::Frustum(Frustum::from_view_proj(cascade.light_space));
-                        cull(&caster_bounds, &volume)
-                    })
-                    .collect()
+                crate::sun_cascade::sun_cascade_casters(fit, &caster_bounds)
             });
         let (local_views, light_shadow) = local_shadow_tables(
             local_shadow.as_ref(),
@@ -2570,7 +2563,9 @@ fn build_sun(scene: &RenderScene, shadowed: bool, pcf: u32, lanes: &SunCascadeLa
                 cascade_params: lanes.params,
                 view_depth: lanes.view_depth,
                 cascade_count: lanes.count,
-                cascade_pad0: 0,
+                cascade_view: u32::from(
+                    scene.debug_view == Some(crate::DebugView::SunCascades) && lanes.count > 0,
+                ),
                 cascade_pad1: 0,
                 cascade_pad2: 0,
             }
@@ -12587,6 +12582,24 @@ mod tests {
         assert_eq!(masked.cascade_count, 0);
     }
 
+    /// The `sun_cascades` view's flag is set only with the view asked, cascades fitted and a shadow map.
+    #[test]
+    fn build_sun_flags_the_cascade_view_only_with_fitted_lanes() {
+        let mut scene = RenderScene::empty((8, 8));
+        scene.sun = Some(test_sun(Vec3::new(0.3, -1.0, 0.2), Vec3::ONE, 0.002));
+        let fit = lanes_fit(2);
+        let lanes = sun_cascade_lanes(Some(&fit), &lanes_sun(), Mat4::IDENTITY);
+        let none = SunCascadeLanes::default();
+
+        assert_eq!(build_sun(&scene, true, 3, &lanes).cascade_view, 0);
+        scene.debug_view = Some(crate::DebugView::SunCascades);
+        assert_eq!(build_sun(&scene, true, 3, &lanes).cascade_view, 1);
+        assert_eq!(build_sun(&scene, true, 3, &none).cascade_view, 0);
+        assert_eq!(build_sun(&scene, false, 3, &lanes).cascade_view, 0);
+        scene.debug_view = Some(crate::DebugView::LocalShadowAtlas);
+        assert_eq!(build_sun(&scene, true, 3, &lanes).cascade_view, 0);
+    }
+
     fn sun_renderer(name: &str, shadow_map_size: u32, pcf: u32) -> Option<Renderer> {
         let mut renderer = skip_or_renderer(name)?;
         renderer.set_quality(
@@ -12839,6 +12852,56 @@ mod tests {
         let (lx, ly) = project_pixel(&scene, post_lit_point(nearest, 4.0), (w, h));
         let (contact, lit) = (luma(&base, cx, cy), luma(&image, lx, ly));
         assert!(contact + 30 < lit, "contact {contact} vs lit {lit}");
+    }
+
+    /// **The cascade view tints by cascade.** The same four-cascade scene with the view and without:
+    /// the near floor leans red (cascade 0), the floor at the 70 m post leans yellow
+    /// (cascade 3), and the floor past `shadow_distance` is untouched. Another view leaves the frame
+    /// byte-identical to no view, so the uniform flag is off for it.
+    #[test]
+    fn needs_gpu_sun_cascade_view_tints_by_cascade() {
+        let Some(renderer) = sun_renderer("sun_cascade_view_tints_by_cascade", 512, 3) else {
+            return;
+        };
+        let (w, h) = (128u32, 128u32);
+        let size = FrameSize::native(w, h);
+        let rgb = |image: &RenderedImage, (x, y): (u32, u32)| {
+            let i = ((y * image.width + x) * 4) as usize;
+            [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]].map(i32::from)
+        };
+        let render = |depth: f32, view: Option<crate::DebugView>| {
+            let mut scene = post_scene((w, h), depth, 4.0, true);
+            scene.debug_view = view;
+            let image = renderer.render(&scene, size).expect("cascaded frame");
+            (scene, image)
+        };
+
+        let near = POST_DEPTHS[0];
+        let (scene, tinted) = render(near, Some(crate::DebugView::SunCascades));
+        let (_, plain) = render(near, None);
+        let (_, other) = render(near, Some(crate::DebugView::LocalShadowAtlas));
+        assert_eq!(plain.rgba, other.rgba, "another view leaves the flag off");
+        let at = project_pixel(&scene, post_lit_point(near, 4.0), (w, h));
+        let [r, g, b] = rgb(&tinted, at);
+        assert!(
+            r > g + 20 && r > b + 20,
+            "near floor is not red: {r} {g} {b}"
+        );
+
+        let far = POST_DEPTHS[5];
+        let (scene, tinted) = render(far, Some(crate::DebugView::SunCascades));
+        let at = project_pixel(&scene, post_lit_point(far, 4.0), (w, h));
+        let [r, g, b] = rgb(&tinted, at);
+        assert!(
+            b + 20 < r && b + 20 < g,
+            "far floor is not yellow: {r} {g} {b}"
+        );
+
+        // The floor at z = -150 is about 206 m from this camera along its view axis, past the 100 m the
+        // cascades cover: it is untinted.
+        let (_, plain) = render(far, None);
+        let at = project_pixel(&scene, Vec3::new(4.25, 0.0, -150.0), (w, h));
+        assert_eq!(rgb(&tinted, at), rgb(&plain, at), "past the last cascade");
     }
 
     /// A camera 1.5 m up, pitched down, over a floor; the sun travels away from it. With `wall`, a

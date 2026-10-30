@@ -170,6 +170,7 @@ impl QualitySetting {
             dof_taps: params.dof_taps,
             shadow_map_size: params.shadow_map_size,
             local_shadow_atlas_size: params.local_shadow_atlas_size,
+            sun_cascades: params.sun_cascades,
             pcf: params.pcf,
             gi_rays: params.gi_rays,
             gi_probe_scale: params.gi_probe_scale,

@@ -606,6 +606,11 @@ pub struct PostChain {
     /// `composite`, writing the same target. Set only when the scene asked for it **and** the frame has
     /// an atlas ([`local_shadow_atlas`](PostChain::local_shadow_atlas)): a view never conjures its subject.
     pub local_shadow_view: bool,
+    /// The `sun_cascades` view: the mesh pass tints each fragment by its cascade
+    /// ([`crate::DebugView::SunCascades`]). It tints the `scene` pass and does not replace
+    /// `composite`, so it adds no pass. Set only when the scene asked for it **and** the frame fits
+    /// cascades ([`sun_cascades`](PostChain::sun_cascades)): a view never conjures its subject.
+    pub sun_cascade_view: bool,
     /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
     /// writing the `probe_live` transient (`MAX_PROBES`×6, `Rgba32Float`: one row per cube axis) that `reflections` reads
     /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
@@ -645,6 +650,11 @@ impl PostChain {
                 > 0)
             .then_some(edge)
         };
+        let sun_cascades = scene
+            .sun
+            .as_ref()
+            .and_then(|sun| sun.cascades)
+            .and_then(|config| QualityParams::FULL.sun_cascade_count(Some(config.count)));
         Self {
             ui: !scene.ui.is_empty(),
             // A sun draws a shadow map, at the extent the scene's own authoring implies. Lowering it
@@ -654,11 +664,7 @@ impl PostChain {
                 .sun
                 .is_some()
                 .then_some(QualityParams::FULL.shadow_map_size),
-            sun_cascades: scene
-                .sun
-                .as_ref()
-                .and_then(|sun| sun.cascades)
-                .and_then(|config| QualityParams::FULL.sun_cascade_count(Some(config.count))),
+            sun_cascades,
             // `ssao` is a strength *and* the gate: at zero the effect contributes nothing, so
             // scheduling three passes to compute it would be work with no output.
             ssao: scene.post.is_some_and(|post| post.ssao > 0.0),
@@ -693,6 +699,8 @@ impl PostChain {
                 && !scene.probes.is_empty(),
             local_shadow_view: scene.debug_view == Some(crate::DebugView::LocalShadowAtlas)
                 && local_shadow_atlas.is_some(),
+            sun_cascade_view: scene.debug_view == Some(crate::DebugView::SunCascades)
+                && sun_cascades.is_some(),
             probe_relight: !scene.probes.is_empty(),
             drop_shadow_atlas: crate::projector::occlusion_atlas(scene.drop_shadows.len())
                 .map(|atlas| atlas.edge),
@@ -707,6 +715,10 @@ impl PostChain {
             .or_else(|| {
                 self.local_shadow_view
                     .then_some(crate::DebugView::LocalShadowAtlas)
+            })
+            .or_else(|| {
+                self.sun_cascade_view
+                    .then_some(crate::DebugView::SunCascades)
             })
     }
 
@@ -745,6 +757,8 @@ impl PostChain {
         PostChain {
             shadow_map,
             sun_cascades,
+            // Masked cascades leave nothing to tint by: the normal frame is drawn.
+            sun_cascade_view: self.sun_cascade_view && sun_cascades.is_some(),
             ssao: self.ssao && quality.ssao,
             // The march reads the shadow map, so the pair cannot outlive it. Keeping the map alive
             // for the shafts alone was the alternative and is worse: "shadows off" would then still
@@ -1741,6 +1755,7 @@ mod tests {
                 // Content like `ui`: masking keeps it.
                 probe_view: bits & 1 != 0,
                 local_shadow_view: false,
+                sun_cascade_view: false,
                 probe_relight: bits & 1 != 0,
                 // Content too, like the probes: no quality switch removes a drop shadow.
                 drop_shadow_atlas: (bits & 1 != 0).then_some(128),
@@ -2293,6 +2308,59 @@ mod tests {
             ..Quality::FULL
         };
         assert_eq!(masked(&shadowless, &QualityParams::FULL), None);
+    }
+
+    fn cascaded_sun_scene() -> RenderScene {
+        let mut scene = sun_scene();
+        scene.sun.as_mut().unwrap().cascades = Some(crate::scene::SunCascadeConfig {
+            count: 4,
+            shadow_distance: 100.0,
+            splits: None,
+            shadow_near: -60.0,
+            shadow_far: 60.0,
+        });
+        scene
+    }
+
+    /// The cascade view tints the `scene` pass: it needs fitted cascades, adds no pass, dies with
+    /// the shadows and is named by `view()`.
+    #[test]
+    fn the_sun_cascade_view_needs_cascades_and_adds_no_pass() {
+        let size = FrameSize::native(1920, 1080);
+        let plain = cascaded_sun_scene();
+        let mut viewed = cascaded_sun_scene();
+        viewed.debug_view = Some(crate::DebugView::SunCascades);
+
+        let plain_chain = PostChain::for_scene(&plain);
+        assert!(!plain_chain.sun_cascade_view);
+        let chain = PostChain::for_scene(&viewed);
+        assert!(chain.sun_cascade_view);
+        assert_eq!(chain.view(), Some(crate::DebugView::SunCascades));
+        let names = |chain: PostChain| {
+            let (graph, _) = build_frame_graph(size, chain);
+            pass_names(&graph)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(chain), names(plain_chain));
+
+        assert!(
+            chain
+                .masked(&Quality::FULL, &QualityParams::FULL)
+                .sun_cascade_view
+        );
+        assert!(
+            !chain
+                .masked(&Quality::LOW, &QualityParams::LOW)
+                .sun_cascade_view
+        );
+
+        let mut cascadeless = sun_scene();
+        cascadeless.debug_view = Some(crate::DebugView::SunCascades);
+        let none = PostChain::for_scene(&cascadeless);
+        assert!(!none.sun_cascade_view);
+        assert_eq!(none.view(), None);
     }
 
     /// The cascade atlas is `sun_atlas_grid` tiles of the chain's edge; an unset sun keeps the

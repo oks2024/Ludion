@@ -39,7 +39,9 @@
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::math::powf;
 
-use crate::quality::{MAX_SUN_CASCADES, QualityParams};
+use crate::cull::{Aabb, CullVolume, Frustum, cull, instance_bounds};
+use crate::graph::PostChain;
+use crate::quality::{MAX_SUN_CASCADES, Quality, QualityParams};
 use crate::scene::{RenderScene, SunCascadeConfig};
 
 /// Blend of the logarithmic and uniform split schemes: `1` is fully logarithmic.
@@ -150,6 +152,102 @@ pub fn fit_sun_cascades(
             fit_cascade(&corners, near, far, &config, rotation, view_to_world, tile);
     }
     Some(out)
+}
+
+/// The caster indices each fitted cascade's box keeps, nearest cascade first, by culling
+/// `caster_bounds` (per instance, as `cull::instance_bounds` returns them) against the box.
+///
+/// The frame's shadow pass and [`sun_cascade_stats`] both call this, so the profile panel and the
+/// draw cannot disagree about which casters a cascade keeps.
+pub(crate) fn sun_cascade_casters(
+    fit: &SunCascades,
+    caster_bounds: &[Option<Aabb>],
+) -> Vec<Vec<u32>> {
+    fit.cascades[..fit.count as usize]
+        .iter()
+        .map(|cascade| {
+            let volume = CullVolume::Frustum(Frustum::from_view_proj(cascade.light_space));
+            cull(caster_bounds, &volume)
+        })
+        .collect()
+}
+
+/// What the frame's sun cascades decided, for the profile report.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct SunCascadeStats {
+    /// The cascade count the sun authors, 0 for a sun without `cascades` or a sunless scene.
+    pub authored: u32,
+    /// The cascades fitted this frame: `min(authored, the quality cap)`, 0 when none ran.
+    pub count: u32,
+    /// The edge of one cascade's shadow tile in texels, 0 when none ran.
+    pub tile: u32,
+    /// One entry per fitted cascade, nearest first.
+    pub cascades: Vec<SunCascadeStat>,
+}
+
+/// One fitted cascade, as the profile reports it.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct SunCascadeStat {
+    /// View depth, in metres, where the slice starts.
+    pub near: f32,
+    /// View depth, in metres, where the slice ends.
+    pub far: f32,
+    /// World metres per shadow texel.
+    pub texel: f32,
+    /// Instances the cascade's box keeps for the shadow pass.
+    pub casters: u32,
+}
+
+/// Fits the frame's cascades and returns only what was decided — the profile panel, with the boxes
+/// themselves dropped.
+///
+/// This is the profile driver's entry point (`ludion_engine::profile`): it does the fit and the
+/// per-cascade cull the renderer's per-frame prologue does, over bounds computed on the CPU from the
+/// scene's mesh assets, and needs no GPU adapter. Deliberately a separate call rather than a hook
+/// inside [`Renderer::render`](crate::Renderer::render): a profiler must never make the path it
+/// measures pay for being measured.
+pub fn sun_cascade_stats(
+    scene: &RenderScene,
+    quality: &Quality,
+    params: &QualityParams,
+) -> SunCascadeStats {
+    let authored = scene
+        .sun
+        .as_ref()
+        .and_then(|sun| sun.cascades)
+        .map_or(0, |config| config.count);
+    let chain = PostChain::for_scene(scene).masked(quality, params);
+    let fit = chain
+        .sun_cascades
+        .and_then(|_| fit_sun_cascades(scene, params, chain.shafts));
+    let Some(fit) = fit else {
+        return SunCascadeStats {
+            authored,
+            ..SunCascadeStats::default()
+        };
+    };
+    let asset_bounds: Vec<Option<Aabb>> = scene
+        .mesh_assets
+        .iter()
+        .map(|asset| Aabb::of_positions(&asset.positions))
+        .collect();
+    let caster_bounds = instance_bounds(&scene.meshes, &asset_bounds);
+    let casters = sun_cascade_casters(&fit, &caster_bounds);
+    SunCascadeStats {
+        authored,
+        count: fit.count,
+        tile: params.shadow_map_size,
+        cascades: fit.cascades[..fit.count as usize]
+            .iter()
+            .zip(&casters)
+            .map(|(cascade, kept)| SunCascadeStat {
+                near: cascade.near,
+                far: cascade.far,
+                texel: cascade.texel,
+                casters: kept.len() as u32,
+            })
+            .collect(),
+    }
 }
 
 /// The `count + 1` view-depth bounds `[near, c_1, …, last far]`, strictly ascending; `None` for a
@@ -555,5 +653,65 @@ mod tests {
         let a = fit(&scene, &QualityParams::FULL, false);
         assert_eq!(a, fit(&scene, &QualityParams::FULL, false));
         assert_eq!(a.count, MAX_SUN_CASCADES);
+    }
+
+    fn cube(model: Mat4) -> crate::scene::MeshInstance {
+        crate::scene::MeshInstance {
+            shape: crate::scene::MeshShape::Cube,
+            model,
+            normal_matrix: ludion_core::math::glam::Mat3::IDENTITY,
+            color: [1.0; 4],
+            material: [1.0, 0.0, 0.0],
+            use_vertex_material: false,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            bone_offset: 0,
+        }
+    }
+
+    #[test]
+    fn the_stats_mirror_the_fit_and_the_shared_caster_cull() {
+        let mut scene = scene_with(Some(config(4, 100.0, None)));
+        scene.meshes = [-2.0, -10.0, -30.0, -80.0]
+            .map(|z| cube(Mat4::from_translation(Vec3::new(0.0, 0.0, z))))
+            .to_vec();
+        let stats = sun_cascade_stats(&scene, &Quality::FULL, &QualityParams::FULL);
+        let fit = fit(&scene, &QualityParams::FULL, false);
+        assert_eq!((stats.authored, stats.count), (4, fit.count));
+        assert_eq!(stats.tile, QualityParams::FULL.shadow_map_size);
+        assert_eq!(stats.cascades.len(), 4);
+        for (i, stat) in stats.cascades.iter().enumerate() {
+            assert_eq!(
+                (stat.near, stat.far),
+                (fit.cascades[i].near, fit.cascades[i].far)
+            );
+            assert_eq!(stat.texel, fit.cascades[i].texel);
+            if i > 0 {
+                assert_eq!(stat.near, stats.cascades[i - 1].far);
+                assert!(stat.far > stat.near);
+            }
+        }
+        let bounds = instance_bounds(&scene.meshes, &[]);
+        let want = sun_cascade_casters(&fit, &bounds);
+        let got: Vec<u32> = stats.cascades.iter().map(|s| s.casters).collect();
+        assert_eq!(got, want.iter().map(|k| k.len() as u32).collect::<Vec<_>>());
+        assert!(got.iter().all(|&n| n >= 1), "{got:?}");
+    }
+
+    #[test]
+    fn the_stats_are_empty_without_a_fit() {
+        let scene = scene_with(Some(config(4, 100.0, None)));
+        let low = sun_cascade_stats(&scene, &Quality::LOW, &QualityParams::LOW);
+        assert_eq!(
+            low,
+            SunCascadeStats {
+                authored: 4,
+                ..SunCascadeStats::default()
+            }
+        );
+        let plain = sun_cascade_stats(&scene_with(None), &Quality::FULL, &QualityParams::FULL);
+        assert_eq!(plain, SunCascadeStats::default());
     }
 }

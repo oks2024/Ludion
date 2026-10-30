@@ -235,10 +235,11 @@ export type Command =
 export type GiRebakeMode = 'auto' | 'hold';
 /**
  * A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,
- * or the local-light shadow atlas.
+ * the local-light shadow atlas, or the lit frame tinted by sun cascade.
  * The spelling matches `ludion render --debug-view`.
  */
-export type RenderDebugView = 'ssr_confidence' | 'ssr_footprint' | 'probe_index' | 'local_shadow_atlas';
+export type RenderDebugView =
+  'ssr_confidence' | 'ssr_footprint' | 'probe_index' | 'local_shadow_atlas' | 'sun_cascades';
 /**
  * The event envelope: one [`Event`] (its `event` name + `data`), plus `sub`, `seq`, and an optional
  * `frame`.
@@ -2916,6 +2917,13 @@ export interface ProfileReport {
   scene: string;
   sim: SimProfile;
   /**
+   * Sun cascade planning: how many cascades the sun authored and the frame fitted, and each
+   * one's depth range, texel size and caster count. Filled by the **offline** driver and absent
+   * for a live capture, for `cluster`'s reason: the live host fits inside a frame a profiler
+   * must not make pay twice.
+   */
+  sun_cascades?: SunCascadeProfile | null;
+  /**
    * Frame-delivery timings, filled by the server for a live capture and absent otherwise (the
    * offline driver delivers no frames, so it has no transport to measure).
    */
@@ -3243,6 +3251,11 @@ export interface QualityProfile {
    * The SSR trace's extent as a fraction of the **output** extent, independent of `render_scale`.
    */
   ssr_scale: number;
+  /**
+   * The most cascades a sun fits on this machine (`min(authored, this)`); a sun without
+   * `cascades` draws the anchored box.
+   */
+  sun_cascades: number;
   [k: string]: unknown;
 }
 /**
@@ -3329,6 +3342,56 @@ export interface SimProfile {
    * lives in its filename if anywhere. Any live or offline capture fills it.
    */
   threads?: number | null;
+  [k: string]: unknown;
+}
+/**
+ * Sun cascade planning — what the sun asked for and what the frame fitted.
+ *
+ * Not measurements: the numbers are the shape of the frame's plan, reduced from the same fit and
+ * per-cascade cull the renderer runs, so two runs of the same frame produce identical numbers.
+ * `count < authored` means the quality capped the cascades; `count` 0 with `authored > 0` means
+ * shadows were masked or the camera was degenerate, so neither the cascades nor the anchored box
+ * drew — the report's `quality.shadows` names the first cause.
+ */
+export interface SunCascadeProfile {
+  /**
+   * The cascade count the sun authors; 0 for a sun without `cascades` or a sunless scene.
+   */
+  authored: number;
+  /**
+   * One entry per fitted cascade, nearest first.
+   */
+  cascades: SunCascadeSliceProfile[];
+  /**
+   * Cascades fitted this frame; 0 when none ran.
+   */
+  count: number;
+  /**
+   * Edge of one cascade's shadow tile in texels; 0 when none ran.
+   */
+  tile_edge: number;
+  [k: string]: unknown;
+}
+/**
+ * One fitted sun cascade.
+ */
+export interface SunCascadeSliceProfile {
+  /**
+   * Instances the cascade's box keeps for the shadow pass.
+   */
+  casters: number;
+  /**
+   * View depth, in metres, where the slice ends.
+   */
+  far: number;
+  /**
+   * View depth, in metres, where the slice starts.
+   */
+  near: number;
+  /**
+   * World metres per shadow texel.
+   */
+  texel: number;
   [k: string]: unknown;
 }
 /**

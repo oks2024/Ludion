@@ -327,6 +327,21 @@ fn render_debug_takes_the_local_shadow_atlas_view() {
     assert_eq!(debug_view(&mut engine, Some(None)), None);
 }
 
+#[test]
+fn render_debug_takes_the_sun_cascades_view() {
+    let root = fixture_root();
+    let mut engine = engine(&root, &DebugCategories::None);
+    assert_eq!(
+        debug_view(&mut engine, Some(Some(RenderDebugView::SunCascades))),
+        Some(RenderDebugView::SunCascades),
+    );
+    assert_eq!(
+        debug_view(&mut engine, None),
+        Some(RenderDebugView::SunCascades)
+    );
+    assert_eq!(debug_view(&mut engine, Some(None)), None);
+}
+
 const PHYSICS_SCENE: &str = "\
 format: 1
 seed: 7

@@ -277,6 +277,7 @@ mod tests {
             // per-frame column to lay out, and a timeline is drawn from columns.
             cluster: None,
             local_shadows: None,
+            sun_cascades: None,
             load: None,
             probes: None,
             samples: Some(ProfileSamples {

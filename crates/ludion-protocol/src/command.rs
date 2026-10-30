@@ -1047,7 +1047,7 @@ pub struct RenderDebugParams {
 }
 
 /// A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,
-/// or the local-light shadow atlas.
+/// the local-light shadow atlas, or the lit frame tinted by sun cascade.
 /// The spelling matches `ludion render --debug-view`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1061,6 +1061,8 @@ pub enum RenderDebugView {
     /// The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells
     /// dark blue, a red line on every cell border.
     LocalShadowAtlas,
+    /// Each mesh fragment tinted by the sun cascade that shades it.
+    SunCascades,
 }
 
 /// Reads an optional field as a *present* value, so an explicit `null` survives as `Some(None)`.

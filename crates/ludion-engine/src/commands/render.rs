@@ -250,6 +250,7 @@ fn renderer_view(view: RenderDebugView) -> DebugView {
         RenderDebugView::SsrFootprint => DebugView::SsrFootprint,
         RenderDebugView::ProbeIndex => DebugView::ProbeIndex,
         RenderDebugView::LocalShadowAtlas => DebugView::LocalShadowAtlas,
+        RenderDebugView::SunCascades => DebugView::SunCascades,
     }
 }
 
@@ -259,6 +260,7 @@ fn wire_view(view: DebugView) -> RenderDebugView {
         DebugView::SsrFootprint => RenderDebugView::SsrFootprint,
         DebugView::ProbeIndex => RenderDebugView::ProbeIndex,
         DebugView::LocalShadowAtlas => RenderDebugView::LocalShadowAtlas,
+        DebugView::SunCascades => RenderDebugView::SunCascades,
     }
 }
 

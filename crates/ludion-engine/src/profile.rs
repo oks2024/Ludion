@@ -52,7 +52,7 @@ const PROFILE_SIZE: (u32, u32) = (1920, 1080);
 // crate root) — one shape, two producers, no parallel definition to drift.
 pub use ludion_protocol::perf::{
     ClusterProfile, GpuProfile, LocalShadowProfile, PassTiming, ProfileReport, QualityProfile,
-    SimProfile, SystemTiming, TimingTail,
+    SimProfile, SunCascadeProfile, SunCascadeSliceProfile, SystemTiming, TimingTail,
 };
 
 /// Profiles the scene at `path`: warmup, then `frames` measured frames, returning the median report.
@@ -159,6 +159,7 @@ pub fn profile_engine(
     let (sim, samples) = profile_sim(engine, frames, warmup);
     let cluster = profile_cluster(engine, frames, warmup).map_err(|d| vec![d])?;
     let local_shadows = profile_local_shadows(engine).map_err(|d| vec![d])?;
+    let sun_cascades = profile_sun_cascades(engine).map_err(|d| vec![d])?;
     let gpu = profile_gpu(engine, frames, warmup).map_err(|d| vec![d])?;
 
     Ok(ProfileReport {
@@ -176,6 +177,7 @@ pub fn profile_engine(
         transport: None,
         cluster: Some(cluster),
         local_shadows: Some(local_shadows),
+        sun_cascades: Some(sun_cascades),
         load,
         probes: engine.probe_profile(),
         samples: Some(samples),
@@ -749,6 +751,7 @@ pub(crate) fn profile_replay_engine(
         transport: None,
         cluster: None,
         local_shadows: None,
+        sun_cascades: None,
         load: None,
         probes: None,
         samples: Some(samples),
@@ -908,6 +911,36 @@ fn profile_local_shadows(engine: &mut Engine) -> Result<LocalShadowProfile, Diag
         skipped: u64::from(stats.skipped),
         views: u64::from(stats.views),
         atlas_edge: u64::from(stats.atlas_edge),
+    })
+}
+
+/// Fits the frame's sun cascades and reports what the sun authored and the frame fitted.
+///
+/// Like [`profile_local_shadows`] it needs no adapter: the fit and the per-cascade cull are pure CPU
+/// arithmetic over the extracted scene ([`ludion_renderer::sun_cascade_stats`]), and the numbers are
+/// deterministic, so one call stands for every frame. It fits under the engine's own quality, so a
+/// `low` report says it fitted nothing.
+fn profile_sun_cascades(engine: &mut Engine) -> Result<SunCascadeProfile, Diagnostic> {
+    let (width, height) = PROFILE_SIZE;
+    let scene = engine
+        .extract_render_scene(width, height)
+        .map_err(collapse)?;
+    let setting = engine.quality();
+    let stats = ludion_renderer::sun_cascade_stats(&scene, &setting.quality, &setting.params);
+    Ok(SunCascadeProfile {
+        authored: u64::from(stats.authored),
+        count: u64::from(stats.count),
+        tile_edge: u64::from(stats.tile),
+        cascades: stats
+            .cascades
+            .iter()
+            .map(|c| SunCascadeSliceProfile {
+                near: f64::from(c.near),
+                far: f64::from(c.far),
+                texel: f64::from(c.texel),
+                casters: u64::from(c.casters),
+            })
+            .collect(),
     })
 }
 
@@ -2235,6 +2268,7 @@ entities:
             transport: None,
             cluster: None,
             local_shadows: None,
+            sun_cascades: None,
             load: None,
             probes: None,
             samples: None,
@@ -2466,6 +2500,53 @@ entities:
             quality.local_shadow_atlas_size,
             ludion_renderer::QualityParams::LOW.local_shadow_atlas_size,
         );
+        assert_eq!(
+            quality.sun_cascades,
+            ludion_renderer::QualityParams::LOW.sun_cascades,
+        );
+    }
+
+    /// The `sun_cascades` panel is the frame's own fit, pure CPU: it needs the engine's scene
+    /// extraction and the quality, not an adapter.
+    fn sun_cascade_panel(scene: &str, preset: &str) -> SunCascadeProfile {
+        let mut engine = counter_engine();
+        engine.load_inline_scene(scene).unwrap();
+        engine.set_quality(
+            crate::resolve_startup_quality(Some(preset), None).expect("a preset name"),
+        );
+        profile_sun_cascades(&mut engine).unwrap()
+    }
+
+    #[test]
+    fn the_sun_cascades_panel_reports_the_fit_at_each_quality() {
+        let scene = include_str!("../tests/fixtures/sun-cascades.yaml");
+
+        let full = sun_cascade_panel(scene, "full");
+        assert_eq!((full.authored, full.count, full.tile_edge), (4, 4, 2048));
+        assert_eq!(full.cascades.len(), 4);
+        assert!(full.cascades.windows(2).all(|p| p[0].far == p[1].near));
+        assert!(
+            full.cascades
+                .iter()
+                .all(|c| c.far > c.near && c.texel > 0.0)
+        );
+        assert!(full.cascades.iter().all(|c| c.casters >= 1), "{full:?}");
+
+        let medium = sun_cascade_panel(scene, "medium");
+        assert_eq!((medium.authored, medium.count), (4, 2));
+        assert_eq!(medium.cascades.len(), 2);
+
+        // `low` masks shadows: nothing fits, and the panel says what the sun asked for.
+        let low = sun_cascade_panel(scene, "low");
+        assert_eq!((low.authored, low.count, low.tile_edge), (4, 0, 0));
+        assert!(low.cascades.is_empty());
+    }
+
+    #[test]
+    fn the_sun_cascades_panel_is_zero_without_a_cascaded_sun() {
+        let panel = sun_cascade_panel(SCENE, "full");
+        assert_eq!((panel.authored, panel.count, panel.tile_edge), (0, 0, 0));
+        assert!(panel.cascades.is_empty());
     }
 
     /// The `local_shadows` panel is the frame's own plan: the fixture's shadowed spot (35°, one view)
@@ -2729,6 +2810,7 @@ entities:
             transport: None,
             cluster: None,
             local_shadows: None,
+            sun_cascades: None,
             load: None,
             probes: None,
             samples: None,
@@ -3341,6 +3423,7 @@ entities:
             ssr_view: Some(DebugView::SsrConfidence),
             probe_view: true,
             local_shadow_view: false,
+            sun_cascade_view: false,
             probe_relight: true,
             drop_shadow_atlas: Some(256),
             local_shadow_atlas: Some(256),

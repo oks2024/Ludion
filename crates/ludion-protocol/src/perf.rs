@@ -134,6 +134,12 @@ pub struct ProfileReport {
     /// reason: the live host plans inside a frame a profiler must not make pay twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_shadows: Option<LocalShadowProfile>,
+    /// Sun cascade planning: how many cascades the sun authored and the frame fitted, and each
+    /// one's depth range, texel size and caster count. Filled by the **offline** driver and absent
+    /// for a live capture, for `cluster`'s reason: the live host fits inside a frame a profiler
+    /// must not make pay twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sun_cascades: Option<SunCascadeProfile>,
     /// What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.
     /// Filled by the **offline** driver and absent for a live capture: a load is a one-off event the
     /// host has already run by the time a capture asks, and a disarmed host reads no clock for it.
@@ -212,6 +218,9 @@ pub struct QualityProfile {
     /// Edge length of the square local-light shadow atlas, in texels; the caster budget is a fixed
     /// view count, so only resolution follows this.
     pub local_shadow_atlas_size: u32,
+    /// The most cascades a sun fits on this machine (`min(authored, this)`); a sun without
+    /// `cascades` draws the anchored box.
+    pub sun_cascades: u32,
     /// Edge length of the shadow map's PCF kernel, in taps (`3` is a 3×3 average).
     pub pcf: u32,
     /// Rays cast per probe by the GI bake.
@@ -286,6 +295,38 @@ pub struct LocalShadowProfile {
     pub views: u64,
     /// The atlas edge the plan used, in texels; 0 when the quality masks shadows.
     pub atlas_edge: u64,
+}
+
+/// Sun cascade planning — what the sun asked for and what the frame fitted.
+///
+/// Not measurements: the numbers are the shape of the frame's plan, reduced from the same fit and
+/// per-cascade cull the renderer runs, so two runs of the same frame produce identical numbers.
+/// `count < authored` means the quality capped the cascades; `count` 0 with `authored > 0` means
+/// shadows were masked or the camera was degenerate, so neither the cascades nor the anchored box
+/// drew — the report's `quality.shadows` names the first cause.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SunCascadeProfile {
+    /// The cascade count the sun authors; 0 for a sun without `cascades` or a sunless scene.
+    pub authored: u64,
+    /// Cascades fitted this frame; 0 when none ran.
+    pub count: u64,
+    /// Edge of one cascade's shadow tile in texels; 0 when none ran.
+    pub tile_edge: u64,
+    /// One entry per fitted cascade, nearest first.
+    pub cascades: Vec<SunCascadeSliceProfile>,
+}
+
+/// One fitted sun cascade.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SunCascadeSliceProfile {
+    /// View depth, in metres, where the slice starts.
+    pub near: f64,
+    /// View depth, in metres, where the slice ends.
+    pub far: f64,
+    /// World metres per shadow texel.
+    pub texel: f64,
+    /// Instances the cascade's box keeps for the shadow pass.
+    pub casters: u64,
 }
 
 /// What loading a scene cost — wall time per phase, and deterministic per-kind asset counters.
@@ -595,6 +636,7 @@ impl ProfileWindowData {
             transport: self.transport,
             cluster: None,
             local_shadows: None,
+            sun_cascades: None,
             load: None,
             probes: None,
             samples: include_samples.then_some(self.samples),
@@ -807,6 +849,7 @@ mod tests {
             dof_taps: 32,
             shadow_map_size: 2048,
             local_shadow_atlas_size: 4096,
+            sun_cascades: 4,
             pcf: 3,
             gi_rays: 64,
             gi_probe_scale: 1.0,

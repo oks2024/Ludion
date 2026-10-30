@@ -47,7 +47,8 @@ struct Sun {
     // View depth of p = dot(view_depth.xyz, p) + view_depth.w: the negated third row of the camera's view matrix.
     view_depth: vec4<f32>,
     cascade_count: u32,
-    cascade_pad0: u32,
+    // 1 = the `sun_cascades` debug view: tint by cascade. Host render state, never set by a scene file.
+    cascade_view: u32,
     cascade_pad1: u32,
     cascade_pad2: u32,
 };
@@ -398,6 +399,42 @@ fn sun_shadow_cascaded(world_pos: vec3<f32>) -> f32 {
         beyond = sun_cascade_factor(i + 1u, world_pos);
     }
     return mix(here, beyond, (depth - band_start) / band);
+}
+
+// Mirrors `debug_view.rs::SUN_CASCADE_VIEW_PALETTE`.
+const SUN_CASCADE_TINT = array<vec3<f32>, 4>(
+    vec3<f32>(1.0, 0.45, 0.45),
+    vec3<f32>(0.45, 1.0, 0.45),
+    vec3<f32>(0.5, 0.6, 1.0),
+    vec3<f32>(1.0, 1.0, 0.4),
+);
+
+// The `sun_cascades` view's multiplier: the tint of the cascade that shades the fragment. It picks and
+// blends exactly as `sun_shadow_cascaded` does, with white past the last cascade.
+fn sun_cascade_tint(world_pos: vec3<f32>) -> vec3<f32> {
+    var tints = SUN_CASCADE_TINT;
+    let depth = dot(sun.view_depth.xyz, world_pos) + sun.view_depth.w;
+    var i = 0u;
+    for (; i < sun.cascade_count; i = i + 1u) {
+        if (sun.cascade_params[i].y > depth) {
+            break;
+        }
+    }
+    if (i >= sun.cascade_count) {
+        return vec3<f32>(1.0);
+    }
+    let near = sun.cascade_params[i].x;
+    let far = sun.cascade_params[i].y;
+    let band = 0.1 * (far - near);
+    let band_start = far - band;
+    if (depth <= band_start) {
+        return tints[i];
+    }
+    var beyond = vec3<f32>(1.0);
+    if (i + 1u < sun.cascade_count) {
+        beyond = tints[i + 1u];
+    }
+    return mix(tints[i], beyond, (depth - band_start) / band);
 }
 
 // The sun's shadow factor: the anchored lookup for a sun without fitted cascades, the cascaded one
@@ -797,6 +834,9 @@ fn shade_fragment(in: VsOut) -> CaptureOut {
 
     let shaded = shade(in.world_pos, normal, albedo, surface, ao, in.clip.xy, in.uv);
     var lit = shaded.lit;
+    if (sun.cascade_view != 0u && sun.cascade_count > 0u) {
+        lit = lit * sun_cascade_tint(in.world_pos);
+    }
     // Emissive rides the HDR/bloom pipeline: colour * intensity, no new pass, no new uniform — times
     // the emissive map where one is bound.
     var emissive = base * max(in.material.z, 0.0);

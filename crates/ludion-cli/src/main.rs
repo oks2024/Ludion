@@ -536,10 +536,11 @@ enum Command {
         /// `ssr_footprint` (the colour-pyramid level it read, over the level count; magenta where
         /// it found no hit) or `probe_index` (the winning reflection probe per pixel, coloured by
         /// rank; gray where no probe applies, black where there is no surface) or
-        /// `local_shadow_atlas` (the local-light shadow atlas, letterboxed). A view never turns
+        /// `local_shadow_atlas` (the local-light shadow atlas, letterboxed) or `sun_cascades` (the
+        /// lit frame, each mesh fragment tinted by the sun cascade that shades it). A view never turns
         /// its effect on: where the scene's `PostProcess.ssr` is 0, this quality masks the trace,
-        /// the scene has no probes, or no local light is granted a shadow, the normal frame is
-        /// drawn and the summary line says so.
+        /// the scene has no probes, no local light is granted a shadow, or the sun fits no cascades,
+        /// the normal frame is drawn and the summary line says so.
         #[arg(
             long,
             value_enum,
@@ -1655,6 +1656,8 @@ enum CliDebugView {
     ProbeIndex,
     #[value(name = "local_shadow_atlas")]
     LocalShadowAtlas,
+    #[value(name = "sun_cascades")]
+    SunCascades,
 }
 
 impl From<CliDebugView> for ludion_engine::DebugView {
@@ -1664,6 +1667,7 @@ impl From<CliDebugView> for ludion_engine::DebugView {
             CliDebugView::SsrFootprint => ludion_engine::DebugView::SsrFootprint,
             CliDebugView::ProbeIndex => ludion_engine::DebugView::ProbeIndex,
             CliDebugView::LocalShadowAtlas => ludion_engine::DebugView::LocalShadowAtlas,
+            CliDebugView::SunCascades => ludion_engine::DebugView::SunCascades,
         }
     }
 }

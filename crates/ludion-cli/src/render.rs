@@ -389,6 +389,10 @@ fn debug_view_note(
             " (debug view: {} not drawn: no local light is granted a shadow for this frame (none casts, none is in view, or this quality masks shadows))",
             ludion_engine::DebugView::LocalShadowAtlas.name()
         ),
+        (Some(ludion_engine::DebugView::SunCascades), None) => format!(
+            " (debug view: {} not drawn: the sun fits no cascades for this frame (no sun, no `cascades`, or this quality masks shadows))",
+            ludion_engine::DebugView::SunCascades.name()
+        ),
         (Some(view), None) => format!(
             " (debug view: {} not drawn: the scene has no reflection probes)",
             view.name()
