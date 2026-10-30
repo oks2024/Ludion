@@ -28,10 +28,10 @@ use ludion_ecs::World;
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
     DebugSegment, DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
-    GroundMarkerInstance, LocalShadowData, MeshData, MeshInstance, MeshShape, ParticleInstance,
-    PointLightData, PostData, ProbeData, ProbeVolume, QualityParams, RenderCamera, RenderScene,
-    SkinJoint, SpotLightData, SpriteInstance, SunData, TextRun, TextureImage, UiInstance,
-    WorldVoxelGrid, aspect_ratio,
+    GroundMarkerInstance, LocalShadowData, MAX_SUN_CASCADES, MeshData, MeshInstance, MeshShape,
+    ParticleInstance, PointLightData, PostData, ProbeData, ProbeVolume, QualityParams,
+    RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunCascadeConfig, SunData,
+    TextRun, TextureImage, UiInstance, WorldVoxelGrid, aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -2039,7 +2039,42 @@ fn build_sun(sun: &DirectionalLight, center: Vec3) -> SunData {
         light_space: projection * view,
         bias: sun.shadow_bias / (far - near),
         angular_radius,
+        cascades: sun_cascade_config(sun, near, far),
     }
+}
+
+/// The sun's authored cascade request for the renderer to fit, or `None` when `cascades` is unset.
+/// A Rust-built bad value bypasses validation, so it is clamped rather than rejected: a count into
+/// `1..=MAX_SUN_CASCADES`, a non-positive or non-finite distance to the component default, and splits that are not
+/// `count - 1` strictly ascending fractions in (0, 1) dropped (the practical split scheme).
+fn sun_cascade_config(sun: &DirectionalLight, near: f32, far: f32) -> Option<SunCascadeConfig> {
+    let count = sun.cascades?.clamp(1, MAX_SUN_CASCADES);
+    let shadow_distance = if sun.shadow_distance.is_finite() && sun.shadow_distance > 0.0 {
+        sun.shadow_distance
+    } else {
+        DirectionalLight::default().shadow_distance
+    };
+    let splits = sun
+        .cascade_splits
+        .as_deref()
+        .filter(|splits| {
+            splits.len() + 1 == count as usize
+                && splits.iter().all(|s| s.is_finite() && *s > 0.0 && *s < 1.0)
+                && splits.windows(2).all(|pair| pair[0] < pair[1])
+        })
+        .filter(|splits| !splits.is_empty())
+        .map(|splits| {
+            let mut padded = [0.0; 3];
+            padded[..splits.len()].copy_from_slice(splits);
+            padded
+        });
+    Some(SunCascadeConfig {
+        count,
+        shadow_distance,
+        splits,
+        shadow_near: near,
+        shadow_far: far,
+    })
 }
 
 /// The world-space geometry of every renderable entity — the shared output that both [`extract`]
@@ -4756,6 +4791,45 @@ mod tests {
         assert_eq!(
             data.bias,
             sun.shadow_bias / (sun.shadow_far - sun.shadow_near)
+        );
+        assert_eq!(data.cascades, None, "an unset sun carries no cascades");
+    }
+
+    /// An authored cascade request travels to the renderer; Rust-built bad values are sanitized.
+    #[test]
+    fn sun_carries_the_sanitized_cascade_config() {
+        let sun = DirectionalLight {
+            cascades: Some(4),
+            shadow_distance: 60.0,
+            cascade_splits: Some(vec![0.06, 0.15, 0.4]),
+            ..DirectionalLight::default()
+        };
+        assert_eq!(
+            build_sun(&sun, Vec3::ZERO).cascades,
+            Some(SunCascadeConfig {
+                count: 4,
+                shadow_distance: 60.0,
+                splits: Some([0.06, 0.15, 0.4]),
+                shadow_near: 1.0,
+                shadow_far: 200.0,
+            })
+        );
+
+        let bad = DirectionalLight {
+            cascades: Some(0),
+            shadow_distance: -5.0,
+            cascade_splits: Some(vec![0.5, 0.2]),
+            ..DirectionalLight::default()
+        };
+        assert_eq!(
+            build_sun(&bad, Vec3::ZERO).cascades,
+            Some(SunCascadeConfig {
+                count: 1,
+                shadow_distance: 100.0,
+                splits: None,
+                shadow_near: 1.0,
+                shadow_far: 200.0,
+            })
         );
     }
 

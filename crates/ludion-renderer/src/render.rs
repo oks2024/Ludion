@@ -8174,6 +8174,7 @@ mod tests {
             light_space: projection * view,
             bias,
             angular_radius: 0.0,
+            cascades: None,
         }
     }
 

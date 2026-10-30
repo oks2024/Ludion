@@ -1923,6 +1923,7 @@ mod tests {
             light_space: Mat4::from_scale(Vec3::splat(fit)),
             bias: fit,
             angular_radius: 0.0,
+            cascades: None,
         };
         let down = Vec3::new(0.0, -1.0, 0.0);
 

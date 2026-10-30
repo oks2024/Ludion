@@ -337,7 +337,25 @@ pub struct DebugSegment {
     pub color: [f32; 4],
 }
 
-/// A directional "sun" light with one orthographic shadow map — plain data for the renderer.
+/// The authored cascade request of a sun, already sanitized by extract: the renderer fits it to the
+/// camera (`fit_sun_cascades`). `splits` holds `count − 1` meaningful fractions of
+/// `shadow_distance`, the rest `0.0`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SunCascadeConfig {
+    /// Authored cascade count, `1..=4`.
+    pub count: u32,
+    /// View depth in metres the last cascade reaches, `> 0`.
+    pub shadow_distance: f32,
+    /// The authored inner far bounds, `None` for the practical split scheme.
+    pub splits: Option<[f32; 3]>,
+    /// Near bound of each cascade's depth range, relative to the cascade's centre.
+    pub shadow_near: f32,
+    /// Far bound of each cascade's depth range, relative to the cascade's centre.
+    pub shadow_far: f32,
+}
+
+/// A directional "sun" light with an orthographic shadow map (one anchored box, or cascades fitted
+/// to the camera) — plain data for the renderer.
 ///
 /// The mesh pass's sun term and the depth-only shadow pass consume it; a `None`
 /// [`RenderScene::sun`] uploads a zeroed uniform, which is zero pixel change by construction.
@@ -361,6 +379,9 @@ pub struct SunData {
     /// Angular radius of the light's disc in radians (already validated); `0.0` is a point light.
     /// Only the specular term reads it.
     pub angular_radius: f32,
+    /// `None` keeps the anchored box in [`light_space`](SunData::light_space); `Some` asks the
+    /// renderer to fit cascades (`fit_sun_cascades`).
+    pub cascades: Option<SunCascadeConfig>,
 }
 
 /// The scene's sky and lighting environment — plain data for the renderer, resolved from the

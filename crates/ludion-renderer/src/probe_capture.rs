@@ -611,6 +611,7 @@ pub(crate) mod tests {
                 * Mat4::look_to_rh(-dir * 20.0, dir, Vec3::Y),
             bias: 0.002,
             angular_radius: 0.0,
+            cascades: None,
         });
         scene.meshes = vec![
             mesh(

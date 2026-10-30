@@ -3541,6 +3541,7 @@ mod tests {
             light_space: ludion_core::math::glam::Mat4::IDENTITY,
             bias: 0.001,
             angular_radius: 0.0,
+            cascades: None,
         });
         scene
     }
