@@ -417,6 +417,41 @@ pub fn scene_camera_rig_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// `L1313` (a warning) for each `DirectionalLight` that sets `cascades` beside a `shadow_extent`
+/// other than the default: a cascaded sun fits its frustums to the camera, so the extent is unused.
+pub fn scene_sun_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let default_extent = f64::from(crate::DirectionalLight::default().shadow_extent);
+    let mut diagnostics = Vec::new();
+    for (index, entity) in scene.entities.iter().enumerate() {
+        let Some((_, light)) = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "DirectionalLight")
+        else {
+            continue;
+        };
+        let extent = light
+            .get("shadow_extent")
+            .and_then(crate::components::as_stored_f32);
+        if light.get("cascades").is_some() && extent.is_some_and(|e| e != default_extent) {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
+                    "this `DirectionalLight` sets `cascades` and a `shadow_extent`; each cascade is \
+                     fitted to the camera, so the extent and the `Transform` anchor are unused",
+                )
+                .with_path(format!(
+                    "/entities/{index}/components/DirectionalLight/shadow_extent"
+                ))
+                .with_help(
+                    "remove `shadow_extent`, or drop `cascades` to keep the anchored box",
+                ),
+            );
+        }
+    }
+    diagnostics
+}
+
 /// Every `L1261` a checked scene's solver colliders report when the scene has no `physics:` block:
 /// the solver is never installed, so a 3D shape or a rigid body would silently do nothing. The
 /// claim rule is [`ludion_physics::claims`].
@@ -769,6 +804,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_physics_diagnostics(scene));
     diagnostics.extend(scene_motor_diagnostics(scene));
     diagnostics.extend(scene_camera_rig_diagnostics(scene));
+    diagnostics.extend(scene_sun_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
     diagnostics.extend(crate::skin_bone::scene_skin_bone_diagnostics(
         project_root,
@@ -1168,6 +1204,38 @@ entities:
         );
         ludion_scene::check(&source, &crate::builtin_registry())
             .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"))
+    }
+
+    fn sun_scene(light: &str) -> Scene {
+        let source =
+            format!("format: 1\nentities:\n  - components:\n      DirectionalLight:\n{light}");
+        ludion_scene::check(&source, &crate::builtin_registry())
+            .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"))
+    }
+
+    #[test]
+    fn cascades_beside_a_custom_shadow_extent_is_l1313() {
+        let scene = sun_scene("        cascades: 2\n        shadow_extent: 34\n");
+        let found = scene_sun_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::DIRECTIONAL_LIGHT_EXTENT_UNUSED);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/DirectionalLight/shadow_extent")
+        );
+    }
+
+    #[test]
+    fn a_default_extent_or_no_cascades_is_clean() {
+        for light in [
+            "        cascades: 2\n        shadow_extent: 40.0\n",
+            "        shadow_extent: 34\n",
+        ] {
+            assert!(
+                scene_sun_diagnostics(&sun_scene(light)).is_empty(),
+                "{light}"
+            );
+        }
     }
 
     #[test]

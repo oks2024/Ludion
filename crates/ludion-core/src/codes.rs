@@ -541,10 +541,13 @@ pub mod code {
     /// (all components zero) or has a non-finite (`NaN`/`±Infinity`) component, or `shadow_near` is
     /// not less than `shadow_far`. A directional light's direction is normalized at extract; a zero
     /// or non-finite vector has no direction to normalize and would collapse the shadow frustum, and
-    /// an inverted depth range leaves it no depth to cover. These invariants live in the component's
+    /// an inverted depth range leaves it no depth to cover. Bad `cascade_splits` (without `cascades`,
+    /// the wrong length for it, not strictly ascending, or outside (0, 1)) are refused here too.
+    /// These invariants live in the component's
     /// semantic validator rather than its schema (the same split the `Collider` validator, `L1116`,
     /// uses). Raised by the `DirectionalLight` semantic validator (invoked by scene validation and
-    /// `component.set`); the JSON Pointer names `/direction`, `/shadow_far` or `/shadow_near`.
+    /// `component.set`); the JSON Pointer names `/direction`, `/shadow_far`, `/shadow_near`,
+    /// `/cascade_splits` or `/cascade_splits/{i}`.
     pub const DIRECTIONAL_LIGHT_INVALID_FRUSTUM: DiagnosticCode = DiagnosticCode::new("L1123");
 
     /// `L1124` — a single definition *module* concentrates more than
@@ -1515,6 +1518,12 @@ pub mod code {
     /// `L1312` — a `PointLight`/`SpotLight` `shadow_near` is non-finite, ≤ 0, or not below `range`;
     /// raised by the light's semantic validator; pointer `/shadow_near`.
     pub const LOCAL_LIGHT_INVALID_SHADOW: DiagnosticCode = DiagnosticCode::new("L1312");
+
+    /// `L1313` — a `DirectionalLight` sets `cascades` and a non-default `shadow_extent`. Under
+    /// cascades each frustum is fitted to the camera, so the extent and the `Transform` anchor are
+    /// unused. A **warning**, raised by the engine's scene check (`scene_sun_diagnostics`); pointer
+    /// `/entities/{i}/components/DirectionalLight/shadow_extent`.
+    pub const DIRECTIONAL_LIGHT_EXTENT_UNUSED: DiagnosticCode = DiagnosticCode::new("L1313");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
@@ -5092,7 +5101,13 @@ invariants live in the component's semantic validator rather than its schema —
 The JSON Pointer names `/direction`, or `/shadow_far` (`/shadow_near` if far is not authored). Fix:
 give the direction a non-zero, finite `[x, y, z]` — for example `[-0.3, -1.0, -0.2]`, a slightly
 angled overhead sun (the component default) — or make `shadow_far` greater than `shadow_near` (the
-defaults are 1.0 and 200.0).",
+defaults are 1.0 and 200.0).
+
+`cascade_splits` is checked here too: it needs `cascades`, must hold exactly `cascades - 1` values,
+and those must be finite, strictly ascending and inside (0, 1). The pointer is `/cascade_splits`
+(missing `cascades` or wrong length) or `/cascade_splits/{i}` (the first bad value). Fix: write
+`cascades: 4, cascade_splits: [0.06, 0.15, 0.4]`, or drop `cascade_splits` to use the engine's split
+scheme.",
     },
     CodeEntry {
         code: code::SCHEDULE_MODULE_CONCENTRATION,
@@ -7536,6 +7551,18 @@ the light casts shadows or authors a `shadow_near`; a non-casting light with a t
 
 Fix: give `shadow_near` a finite value above 0 and below `range` (default 0.05), or lower it to fit
 a small `range`.",
+    },
+    CodeEntry {
+        code: code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
+        severity: Severity::Warning,
+        title: "directional light shadow extent is unused under cascades",
+        explanation: "\
+A `DirectionalLight` sets `cascades` and also a `shadow_extent` other than the default 40.0 (pointer
+`/entities/{i}/components/DirectionalLight/shadow_extent`). Under cascades each shadow frustum is
+fitted to the active camera, so the extent and the light's `Transform` anchor are not read; the
+value does nothing.
+
+Fix: remove `shadow_extent`, or drop `cascades` to keep the anchored box.",
     },
     // --- L2xxx: render ---
     CodeEntry {
@@ -10264,6 +10291,7 @@ mod tests {
         code::CAMERA_RIG_NOT_INSTALLED,
         code::PREFAB_ASSET_PATH,
         code::LOCAL_LIGHT_INVALID_SHADOW,
+        code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -10517,6 +10545,7 @@ mod tests {
             code::COLLIDER_SCALE_IGNORED,
             code::LANE_PATH_VERTICAL,
             code::CAMERA_RIG_TARGET_MISSING,
+            code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

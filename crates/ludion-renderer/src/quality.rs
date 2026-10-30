@@ -11,6 +11,10 @@
 //! this crate free of I/O exactly as [`RenderScene`](crate::RenderScene) keeps it free of asset
 //! paths.
 
+/// The most cascades a sun can fit: the 2×2 atlas cap. The schema bound on
+/// `DirectionalLight.cascades` matches it.
+pub const MAX_SUN_CASCADES: u32 = 4;
+
 /// Which optional effects this machine renders.
 ///
 /// [`Quality::FULL`] — also [`Default`] — is every toggle true: masking is then the identity, so a
@@ -141,11 +145,11 @@ impl Default for Quality {
 ///
 /// Every axis is modulated. Four are uniform loop bounds the shaders read (`ssao_samples`,
 /// `shaft_steps`, `dof_taps`, `pcf`); `gi_rays` is a uniform both GI shaders read, one as a loop
-/// bound and one as a divisor; six are structure rather than arithmetic (`shadow_map_size` as the
-/// shadow map's extent, `local_shadow_atlas_size` as the local-light atlas's,
-/// `ibl_specular_size` as the sky specular cube's, `gi_probe_scale` as the
-/// probe lattice's, `render_scale` as the extent the scene is drawn at before it is resampled to the output,
-/// `ssr_scale` as the reflection trace's); and `particle_density` is spent before
+/// bound and one as a divisor; `sun_cascades` caps how many cascades a sun fits; six are structure
+/// rather than arithmetic (`shadow_map_size` as the shadow map's extent, `local_shadow_atlas_size`
+/// as the local-light atlas's, `ibl_specular_size` as the sky specular cube's, `gi_probe_scale` as
+/// the probe lattice's, `render_scale` as the extent the scene is drawn at before it is resampled
+/// to the output, `ssr_scale` as the reflection trace's); and `particle_density` is spent before
 /// this crate ever sees the frame, thinning how many particles reach the scene at all. A preset
 /// carrying the full value for an axis is therefore a statement about that axis, not a placeholder.
 ///
@@ -162,6 +166,10 @@ impl Default for Quality {
 /// // A cheaper preset draws the sun into a smaller map and averages fewer comparison taps.
 /// assert_eq!(QualityParams::MEDIUM.shadow_map_size, 1024);
 /// assert_eq!(QualityParams::FULL.shadow_map_size, 2048);
+/// // It also caps how many cascades a sun that authors them may fit.
+/// assert_eq!(QualityParams::FULL.sun_cascade_count(Some(4)), Some(4));
+/// assert_eq!(QualityParams::MEDIUM.sun_cascade_count(Some(4)), Some(2));
+/// assert_eq!(QualityParams::MEDIUM.sun_cascade_count(None), None);
 /// // The sky's specular cube halves its face edge at the cheapest preset.
 /// assert_eq!(QualityParams::FULL.ibl_specular_size, 256);
 /// assert_eq!(QualityParams::LOW.ibl_specular_size, 128);
@@ -186,6 +194,10 @@ pub struct QualityParams {
     /// because a resource's extent is graph structure; the mesh shader needs no telling, since it
     /// derives its texel size from `textureDimensions`.
     pub shadow_map_size: u32,
+    /// Caps the scene's `DirectionalLight.cascades` at this quality, `1..=`[`MAX_SUN_CASCADES`]. A
+    /// scene without `cascades` is untouched. A count, so cheaper is smaller; masked with the sun's
+    /// shadows at [`Quality::LOW`].
+    pub sun_cascades: u32,
     /// Edge length of the square local-light shadow atlas, in texels — the extent
     /// [`build_frame_graph`](crate::build_frame_graph) declares the `local_shadow_atlas` transient at.
     /// Structure like [`shadow_map_size`](QualityParams::shadow_map_size), carried by
@@ -290,6 +302,7 @@ impl QualityParams {
         shaft_steps: 32,
         dof_taps: 32,
         shadow_map_size: 2048,
+        sun_cascades: MAX_SUN_CASCADES,
         local_shadow_atlas_size: 4096,
         ibl_specular_size: 256,
         pcf: 3,
@@ -322,6 +335,7 @@ impl QualityParams {
         shaft_steps: 24,
         dof_taps: 20,
         shadow_map_size: QualityParams::FULL.shadow_map_size,
+        sun_cascades: 3,
         local_shadow_atlas_size: QualityParams::FULL.local_shadow_atlas_size,
         ibl_specular_size: QualityParams::FULL.ibl_specular_size,
         pcf: 3,
@@ -347,6 +361,7 @@ impl QualityParams {
         shaft_steps: 16,
         dof_taps: 12,
         shadow_map_size: 1024,
+        sun_cascades: 2,
         local_shadow_atlas_size: 2048,
         ibl_specular_size: QualityParams::FULL.ibl_specular_size,
         pcf: 3,
@@ -358,7 +373,7 @@ impl QualityParams {
     };
 
     /// [`Quality::LOW`] turns ambient occlusion, light shafts, depth of field and the sun's shadows
-    /// off, so the five counts those effects read are never uploaded and never read here: no frame
+    /// off, so the six counts those effects read are never uploaded and never read here: no frame
     /// this preset renders can distinguish them from any other value — there is no shadow map to
     /// size and no kernel to walk. They repeat [`MEDIUM`](QualityParams::MEDIUM)'s rather than a
     /// sentinel so the descriptor a profile report carries stays a plain count at every preset —
@@ -397,6 +412,16 @@ impl QualityParams {
             "full" => Some(QualityParams::FULL),
             _ => None,
         }
+    }
+
+    /// The cascade count a frame fits for a sun authoring `cascades`: `None` (the anchored box)
+    /// when unauthored, else `min(cascades, sun_cascades)`, both clamped into
+    /// `1..=`[`MAX_SUN_CASCADES`] (a Rust-built value is not validated).
+    pub fn sun_cascade_count(&self, cascades: Option<u32>) -> Option<u32> {
+        cascades.map(|authored| {
+            let clamp = |count: u32| count.clamp(1, MAX_SUN_CASCADES);
+            clamp(authored).min(clamp(self.sun_cascades))
+        })
     }
 }
 
@@ -585,6 +610,25 @@ mod tests {
         );
     }
 
+    /// An unauthored sun stays the anchored box at every quality; an authored count is capped by the
+    /// preset, and a Rust-built value outside `1..=MAX_SUN_CASCADES` is clamped rather than trusted.
+    #[test]
+    fn the_sun_cascade_count_is_the_authored_count_capped_by_the_quality() {
+        for params in [QualityParams::FULL, QualityParams::MEDIUM] {
+            assert_eq!(params.sun_cascade_count(None), None);
+        }
+        assert_eq!(QualityParams::FULL.sun_cascade_count(Some(4)), Some(4));
+        assert_eq!(QualityParams::HIGH.sun_cascade_count(Some(4)), Some(3));
+        assert_eq!(QualityParams::MEDIUM.sun_cascade_count(Some(4)), Some(2));
+        assert_eq!(QualityParams::MEDIUM.sun_cascade_count(Some(1)), Some(1));
+        assert_eq!(QualityParams::FULL.sun_cascade_count(Some(9)), Some(4));
+        let zero_cap = QualityParams {
+            sun_cascades: 0,
+            ..QualityParams::FULL
+        };
+        assert_eq!(zero_cap.sun_cascade_count(Some(3)), Some(1));
+    }
+
     /// The presets are a ladder: no axis ever costs more at a cheaper preset. Two of the four share
     /// their [`Quality`] toggles with `FULL`, so this ordering is the only thing that makes them
     /// distinct — the strict half below is what keeps the assertion from passing vacuously.
@@ -605,6 +649,7 @@ mod tests {
                 ("shaft_steps", low.shaft_steps, high.shaft_steps),
                 ("dof_taps", low.dof_taps, high.dof_taps),
                 ("shadow_map_size", low.shadow_map_size, high.shadow_map_size),
+                ("sun_cascades", low.sun_cascades, high.sun_cascades),
                 (
                     "local_shadow_atlas_size",
                     low.local_shadow_atlas_size,
@@ -663,6 +708,11 @@ mod tests {
                 QualityParams::MEDIUM.gi_rays,
                 QualityParams::HIGH.gi_rays,
                 QualityParams::FULL.gi_rays,
+            ),
+            (
+                QualityParams::MEDIUM.sun_cascades,
+                QualityParams::HIGH.sun_cascades,
+                QualityParams::FULL.sun_cascades,
             ),
         ] {
             assert!(medium < high && high < full, "{medium} < {high} < {full}");

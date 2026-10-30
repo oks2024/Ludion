@@ -90,7 +90,7 @@ pub use projector::{
     OCCLUSION_ATLAS_MAX, OCCLUSION_TILE, OcclusionAtlas, ProjectorBlend, ProjectorKind,
     footprint_bound, occlusion_atlas, occlusion_bias, occlusion_view,
 };
-pub use quality::{Quality, QualityParams};
+pub use quality::{MAX_SUN_CASCADES, Quality, QualityParams};
 pub use render::{GpuUploads, Renderer, is_renderer_shader};
 pub use scene::{
     CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment, DropShadowInstance,

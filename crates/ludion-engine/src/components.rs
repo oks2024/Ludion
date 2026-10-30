@@ -848,13 +848,13 @@ fn reflection_probe_invalid(pointer: &str, what: &str) -> Diagnostic {
 /// legibly than a quaternion, and the component stays agent-legible as text. The entity's
 /// [`Transform`] translation is not ignored: it anchors the **center** of the shadow frustum, so a
 /// game can parent the sun to the player and the shadow window follows the action (a static scene
-/// just leaves it at the origin). The shadow tunables are explicit fields with defaults — no
-/// scene-dependent auto-fit, so the frustum is deterministic trivially.
+/// just leaves it at the origin). The shadow tunables are explicit fields with defaults, so the
+/// anchored box is deterministic trivially; setting `cascades` opts into a camera fit instead.
 ///
 /// `extract()` resolves it into `RenderScene.sun`, which drives the mesh shader's sun term and the
 /// depth-only shadow pass. A sunless scene renders through a zeroed `Sun` uniform — byte-identical
 /// to the pre-sun pipeline.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct DirectionalLight {
     /// Direction the light travels, `[x, y, z]` (default `[-0.3, -1.0, -0.2]` — a slightly angled
     /// overhead sun, which casts legible ground shadows where a straight-down sun would hide them
@@ -897,6 +897,25 @@ pub struct DirectionalLight {
     #[serde(default, skip_serializing_if = "is_zero")]
     #[schemars(extend("x-ui-range" = [0.0, 2.0]))]
     pub angular_radius: f32,
+    /// Cascade count (1–4). Absent keeps the anchored shadow box exactly; set, the sun fits that
+    /// many cascades to the active camera, capped per quality by `sun_cascades`. Under cascades
+    /// `shadow_extent` and the `Transform` anchor are unused (`L1313`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 4))]
+    pub cascades: Option<u32>,
+    /// View depth in metres that the last cascade reaches, validated `> 0` (default `100.0`). Read
+    /// only under `cascades`.
+    #[serde(
+        default = "shadow_distance_default",
+        skip_serializing_if = "is_shadow_distance_default"
+    )]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    #[schemars(extend("x-ui-range" = [1.0, 500.0]))]
+    pub shadow_distance: f32,
+    /// The inner cascades' far bounds as fractions of `shadow_distance`: `cascades - 1` values,
+    /// strictly ascending in (0, 1) (`L1123`). Absent uses the engine's practical split scheme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cascade_splits: Option<Vec<f32>>,
 }
 
 impl Default for DirectionalLight {
@@ -910,6 +929,9 @@ impl Default for DirectionalLight {
             shadow_far: 200.0,
             shadow_bias: 0.05,
             angular_radius: 0.0,
+            cascades: None,
+            shadow_distance: shadow_distance_default(),
+            cascade_splits: None,
         }
     }
 }
@@ -925,7 +947,9 @@ pub(crate) fn as_stored_f32(value: &Value) -> Option<f64> {
 impl SemanticValidate for DirectionalLight {
     /// Rejects a `direction` that is zero-length or non-finite and a `shadow_near` that is not less
     /// than `shadow_far` (`L1123`, pointers `/direction` and `/shadow_far`, or `/shadow_near` if far
-    /// is not authored), an `angular_radius` that is non-finite or outside `[0, 45]` degrees
+    /// is not authored), `cascade_splits` that need `cascades`, miss its `cascades - 1` length or
+    /// are not strictly ascending in (0, 1) (`L1123`, pointer `/cascade_splits` or
+    /// `/cascade_splits/{i}`), an `angular_radius` that is non-finite or outside `[0, 45]` degrees
     /// (`L1282`, pointer `/angular_radius`), and checks `color` as an HDR colour (`L1263`). An absent depth bound
     /// compares as its default, so `shadow_near: 300` alone is caught. Defensive: runs on a
     /// schema-clean value; a wrong *shape* (missing, non-array, wrong arity) is the schema's job
@@ -967,8 +991,62 @@ impl SemanticValidate for DirectionalLight {
                 ));
             }
         }
+        out.extend(cascade_splits_diagnostics(value));
         out
     }
+}
+
+/// `L1123` — authored `cascade_splits` that the light cannot turn into cascades: no `cascades`, the
+/// wrong count, or a value that is not strictly ascending inside (0, 1). One diagnostic at most.
+fn cascade_splits_diagnostics(value: &Value) -> Vec<Diagnostic> {
+    const EXAMPLE: &str = "write `cascades: 4, cascade_splits: [0.06, 0.15, 0.4]`: cascades - 1 \
+                           fractions of `shadow_distance`, strictly ascending in (0, 1)";
+    let Some(splits) = value.get("cascade_splits").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let invalid = |pointer: String, message: String| {
+        vec![
+            Diagnostic::new(code::DIRECTIONAL_LIGHT_INVALID_FRUSTUM, message)
+                .with_path(pointer)
+                .with_help(EXAMPLE),
+        ]
+    };
+    let Some(cascades) = value.get("cascades").and_then(Value::as_u64) else {
+        return invalid(
+            "/cascade_splits".to_string(),
+            "the `DirectionalLight` authors `cascade_splits` without `cascades`, so there are no \
+             cascades to split"
+                .to_string(),
+        );
+    };
+    if splits.len() as u64 + 1 != cascades {
+        return invalid(
+            "/cascade_splits".to_string(),
+            format!(
+                "the `DirectionalLight` has {cascades} cascades, which need {} `cascade_splits`, \
+                 but {} are authored",
+                cascades - 1,
+                splits.len()
+            ),
+        );
+    }
+    let mut previous = 0.0_f64;
+    for (index, split) in splits.iter().enumerate() {
+        let Some(bound) = as_stored_f32(split) else {
+            continue;
+        };
+        if !bound.is_finite() || bound <= previous || bound >= 1.0 {
+            return invalid(
+                format!("/cascade_splits/{index}"),
+                format!(
+                    "the `DirectionalLight` cascade_splits[{index}] is {bound}, which is not \
+                     finite, not inside (0, 1), or not above the previous split ({previous})"
+                ),
+            );
+        }
+        previous = bound;
+    }
+    Vec::new()
 }
 
 /// `L1123` — a `DirectionalLight`'s shadow depth range is empty or inverted.
@@ -4354,6 +4432,13 @@ fn two_hundred() -> f32 {
 fn shadow_bias_default() -> f32 {
     0.05
 }
+fn shadow_distance_default() -> f32 {
+    100.0
+}
+#[allow(clippy::float_cmp)]
+fn is_shadow_distance_default(value: &f32) -> bool {
+    *value == shadow_distance_default()
+}
 fn local_shadow_bias_default() -> f32 {
     0.02
 }
@@ -5581,12 +5666,154 @@ mod tests {
             shadow_far: 120.0,
             shadow_bias: 0.003,
             angular_radius: 0.27,
+            cascades: Some(4),
+            shadow_distance: 60.0,
+            cascade_splits: Some(vec![0.06, 0.15, 0.4]),
         };
-        let json = serde_json::to_value(sun).unwrap();
+        let json = serde_json::to_value(&sun).unwrap();
         assert_eq!(
             serde_json::from_value::<DirectionalLight>(json).unwrap(),
             sun
         );
+    }
+
+    /// The cascade fields skip at their defaults, so a default sun serializes with exactly the keys
+    /// it always had: WorldHash and saved scene text do not move.
+    #[test]
+    fn a_default_sun_serializes_without_the_cascade_fields() {
+        let json = serde_json::to_value(DirectionalLight::default()).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "color",
+                "direction",
+                "intensity",
+                "shadow_bias",
+                "shadow_extent",
+                "shadow_far",
+                "shadow_near"
+            ]
+        );
+    }
+
+    /// A one-entity scene with `light` as the sun's fields. A `key: [a, b]` flow list is rewritten
+    /// to the block style scene files require, so the cases below stay readable.
+    fn sun_scene(light: &str) -> String {
+        let mut body = String::new();
+        for line in light.lines() {
+            let Some((key, rest)) = line.split_once(": [") else {
+                body.push_str(&format!("{line}\n"));
+                continue;
+            };
+            body.push_str(&format!("{key}:\n"));
+            let indent = &key[..key.len() - key.trim_start().len()];
+            for item in rest.trim_end_matches(']').split(", ") {
+                body.push_str(&format!("{indent}  - {item}\n"));
+            }
+        }
+        format!("format: 1\nentities:\n  - components:\n      DirectionalLight:\n{body}")
+    }
+
+    /// A sun with cascades survives the canonical writer byte-for-byte; one without emits no
+    /// cascade key.
+    #[test]
+    fn a_cascaded_sun_round_trips_through_the_canonical_writer() {
+        let registry = builtin_registry();
+        let plain = ludion_scene::check(&sun_scene("        intensity: 2.0\n"), &registry).unwrap();
+        let plain_text = ludion_scene::emit(&plain, &registry);
+        for key in ["cascades", "shadow_distance", "cascade_splits"] {
+            assert!(!plain_text.contains(key), "{key} leaked: {plain_text}");
+        }
+        let source = sun_scene(
+            "        cascades: 4\n        shadow_distance: 60.0\n        \
+             cascade_splits: [0.06, 0.15, 0.4]\n",
+        );
+        let scene = ludion_scene::check(&source, &registry).expect("a valid cascaded sun");
+        let once = ludion_scene::emit(&scene, &registry);
+        let reparsed = ludion_scene::check(&once, &registry).expect("emitted scene re-parses");
+        assert_eq!(once, ludion_scene::emit(&reparsed, &registry));
+        assert!(
+            once.contains("cascades: 4") && once.contains("shadow_distance: 60"),
+            "{once}"
+        );
+    }
+
+    fn sun_diagnostics(light: &str) -> Vec<Diagnostic> {
+        match ludion_scene::check(&sun_scene(light), &builtin_registry()) {
+            Ok(_) => Vec::new(),
+            Err(found) => found,
+        }
+    }
+
+    fn assert_sun_error(light: &str, code: &str, pointer: &str) {
+        let found = sun_diagnostics(light);
+        let at = format!("/entities/0/components/DirectionalLight{pointer}");
+        assert!(
+            found
+                .iter()
+                .any(|d| d.code.as_str() == code && d.path.as_deref() == Some(at.as_str())),
+            "expected {code} at {at} for {light:?}: {found:?}"
+        );
+    }
+
+    #[test]
+    fn cascades_and_shadow_distance_are_bounded_by_the_schema() {
+        for bad in ["0", "5"] {
+            assert_sun_error(&format!("        cascades: {bad}\n"), "L1014", "/cascades");
+        }
+        for bad in ["0.0", "-1.0"] {
+            assert_sun_error(
+                &format!("        shadow_distance: {bad}\n"),
+                "L1014",
+                "/shadow_distance",
+            );
+        }
+    }
+
+    #[test]
+    fn bad_cascade_splits_are_l1123() {
+        assert_sun_error(
+            "        cascade_splits: [0.5]\n",
+            "L1123",
+            "/cascade_splits",
+        );
+        for splits in ["[0.5]", "[0.2, 0.4, 0.6]"] {
+            assert_sun_error(
+                &format!("        cascades: 3\n        cascade_splits: {splits}\n"),
+                "L1123",
+                "/cascade_splits",
+            );
+        }
+        for (splits, index) in [
+            ("[0.0, 0.5]", 0),
+            ("[0.5, 1.0]", 1),
+            ("[0.4, 0.2]", 1),
+            ("[0.3, 0.3]", 1),
+        ] {
+            assert_sun_error(
+                &format!("        cascades: 3\n        cascade_splits: {splits}\n"),
+                "L1123",
+                &format!("/cascade_splits/{index}"),
+            );
+        }
+    }
+
+    #[test]
+    fn well_formed_cascades_are_clean() {
+        for light in [
+            "        cascades: 1\n",
+            "        cascades: 4\n        cascade_splits: [0.06, 0.15, 0.4]\n",
+            "        cascades: 2\n        shadow_distance: 60\n",
+        ] {
+            assert_eq!(sun_diagnostics(light), Vec::new(), "{light:?}");
+        }
     }
 
     /// `angular_radius` is validated to `[0, 45]` degrees (`L1282`) and absent from the serialized

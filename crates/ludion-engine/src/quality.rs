@@ -36,6 +36,7 @@
 //! shaft_steps = 16
 //! dof_taps = 12
 //! shadow_map_size = 1024
+//! sun_cascades = 2
 //! local_shadow_atlas_size = 2048
 //! ibl_specular_size = 128
 //! pcf = 1
@@ -376,6 +377,8 @@ struct Params {
     #[serde(default)]
     shadow_map_size: Option<u32>,
     #[serde(default)]
+    sun_cascades: Option<u32>,
+    #[serde(default)]
     local_shadow_atlas_size: Option<u32>,
     #[serde(default)]
     ibl_specular_size: Option<u32>,
@@ -465,6 +468,12 @@ fn parse_override_file(text: &str, path: &Path) -> Result<(Quality, QualityParam
                 overrides.shadow_map_size,
                 &mut params.shadow_map_size,
                 QualityParams::FULL.shadow_map_size,
+            ),
+            (
+                "sun_cascades",
+                overrides.sun_cascades,
+                &mut params.sun_cascades,
+                QualityParams::FULL.sun_cascades,
             ),
             (
                 "local_shadow_atlas_size",
@@ -635,7 +644,7 @@ fn invalid(message: String) -> Diagnostic {
         "use one of the presets ({}), or the path to a TOML override file (an optional `preset = \
          \"...\"` base, an optional `[effects]` table of \
          `ssao`/`shafts`/`dof`/`gi_dynamic`/`shadows`/`ssr` booleans, and an optional `[params]` table of \
-         `ssao_samples`/`shaft_steps`/`dof_taps`/`shadow_map_size`/`local_shadow_atlas_size`/`ibl_specular_size`/`pcf`/`gi_rays` \
+         `ssao_samples`/`shaft_steps`/`dof_taps`/`shadow_map_size`/`sun_cascades`/`local_shadow_atlas_size`/`ibl_specular_size`/`pcf`/`gi_rays` \
          counts plus the `gi_probe_scale`, `render_scale`, `particle_density` and `ssr_scale` multipliers); a host's `--quality` \
          flag beats {QUALITY_ENV} either way",
         preset_list(),
@@ -986,7 +995,7 @@ mod tests {
         assert_eq!(
             params_of(
                 "[params]\nssao_samples = 2\nshaft_steps = 3\ndof_taps = 5\nshadow_map_size = 512\n\
-                 local_shadow_atlas_size = 256\nibl_specular_size = 64\npcf = 1\ngi_rays = 16\ngi_probe_scale = 2.5\n\
+                 sun_cascades = 3\nlocal_shadow_atlas_size = 256\nibl_specular_size = 64\npcf = 1\ngi_rays = 16\ngi_probe_scale = 2.5\n\
                  render_scale = 0.5\nparticle_density = 0.5\n",
             ),
             QualityParams {
@@ -994,6 +1003,7 @@ mod tests {
                 shaft_steps: 3,
                 dof_taps: 5,
                 shadow_map_size: 512,
+                sun_cascades: 3,
                 local_shadow_atlas_size: 256,
                 ibl_specular_size: 64,
                 pcf: 1,
@@ -1354,6 +1364,7 @@ mod tests {
                 1,
                 QualityParams::FULL.shadow_map_size,
             ),
+            ("sun_cascades", 5, 1, QualityParams::FULL.sun_cascades),
             // The smallest legal atlas edge is one 16-texel tile row, not `1`.
             (
                 "local_shadow_atlas_size",
@@ -1393,6 +1404,17 @@ mod tests {
                 "the ends of the range are legal",
             );
         }
+    }
+
+    /// The `sun_cascades` override replaces the preset's cap in either direction, so a file can
+    /// lower it below `medium`'s or restore the ceiling.
+    #[test]
+    fn a_sun_cascades_override_replaces_the_presets_cap() {
+        let lowered = params_of("preset = \"medium\"\n[params]\nsun_cascades = 1\n");
+        assert_eq!(lowered.sun_cascades, 1);
+        assert_eq!(lowered.sun_cascade_count(Some(4)), Some(1));
+        let restored = params_of("preset = \"medium\"\n[params]\nsun_cascades = 4\n");
+        assert_eq!(restored.sun_cascade_count(Some(4)), Some(4));
     }
 
     #[test]
