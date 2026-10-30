@@ -46,8 +46,8 @@ settled plan, nothing built; **rejected** — closed by design.
 
 ### Rendering
 
-- **Lights and shadows** — one active `DirectionalLight`; one hand-placed 2048² orthographic shadow
-  map, no cascades, no automatic fit. `SpotLight` shipped (`Plan/spot-light.md`); point/spot shadows opt-in under a
+- **Lights and shadows** — one active `DirectionalLight`; a hand-placed 2048² orthographic box by default, or up to four
+  camera-fitted cascades (`cascades`, `Plan/shadow-mapping.md`). `SpotLight` shipped (`Plan/spot-light.md`); point/spot shadows opt-in under a
   per-frame caster budget (`Plan/shadow-mapping.md`). Area lights absent.
 - **Transparency and material coverage** — no alpha-blended, alpha-cutout or double-sided meshes
   (glTF refuses them with L1202); no order-independent transparency; no clearcoat, sheen,
@@ -152,7 +152,7 @@ it raise the number of autonomous agent iterations (the North Star)?
      shipped game.
 4. **The platformer as the next vertical slice** (`Plan/character-controller.md`). Let it pull the
    3D gaps it actually hits rather than building them in the abstract: debug draw (also an
-   agent-verification win — colliders visible in screenshots), cascaded shadows, alpha-cutout and
+   agent-verification win — colliders visible in screenshots), alpha-cutout and
    double-sided materials (the Blender pipeline hits these on its first props), animation blending
    beyond crossfade, CCD if a fast fall tunnels.
 5. **The shippable-game bundle, when a game is declared shipping** (post-M7 grilling): desktop

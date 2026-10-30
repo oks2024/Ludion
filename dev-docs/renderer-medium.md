@@ -20,7 +20,9 @@ L = T(d)·surface + ∫₀ᵈ σ_s·T(t)·[ L_ambient + p(θ)·V(t)·L_sun ] dt
 - **The directional term is `shafts.wgsl`'s march** — 32 steps, Bayer-offset, `SHAFT_OPTICAL_CUTOFF /
   σ_t` (= `3/σ_t`) or the recorded surface as its end, whichever is nearer. It folds in σ_s, the
   Henyey–Greenstein phase at `g = fog_anisotropy`, and `PostProcess.shafts`, so the blurred target *is*
-  the term `composite` adds — tinted by the sun's premultiplied colour and nothing more.
+  the term `composite` adds — tinted by the sun's premultiplied colour and nothing more. With a cascaded
+  sun the `Shafts` uniform carries the same cascade lanes: each step picks its cascade hard, with no
+  band, and a step past the last far bound is lit (`sun_visibility`).
 - **The geometry is shared through `snippets/medium.wgsl`.** `medium_optical_depth` (Wenzel's closed
   form for an exponential height medium past `fog_start`) is the *same function* the haze evaluates at
   the surface and the march evaluates per step, and `medium_density_ratio` weights each marched sample

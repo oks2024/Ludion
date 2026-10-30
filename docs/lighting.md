@@ -1,10 +1,10 @@
 ---
-description: The sun and its shadow frustum, point lights by the hundred, and SpotLight cones
+description: The sun, its shadow box and cascades, point lights by the hundred, and SpotLight cones
 ---
 
 # Lighting
 
-**Scope:** The `DirectionalLight` sun and its shadow map, how many `PointLight`s a scene may place
+**Scope:** The `DirectionalLight` sun, its shadow map and cascades, how many `PointLight`s a scene may place
 (any number) with what that costs, calibrating one, and the `SpotLight` cone. The sky and
 image-based lighting are `ludion docs environment`; a `PointLight`'s field defaults live in `ludion docs components`; the
 surfaces being lit are `ludion docs materials`; imaging is `ludion docs post-processing`.
@@ -54,19 +54,18 @@ negative `intensity`, a `PointLight.range` or `shadow_extent` of 0 or less, and 
 `shadow_bias` are `L1014` at the field, and a negative light `color` component is `L1263` — a
 negative colour subtracts light.
 
-**`Transform.translation` anchors the shadow frustum, not the light's origin.** A directional light
-has no position physically — but the entity's `Transform.translation` sets the *center* of the
-orthographic shadow frustum (a box `shadow_extent` units to each side, from `shadow_near` to
-`shadow_far` along `direction`). A static scene can leave it at the origin; a game that needs the
-shadow window to follow the action (a large level, a moving player) parents the sun entity to the
-player so the frustum center tracks it. There is no automatic scene-fit — the frustum is exactly
-what these fields say, deterministically, every frame.
+**`Transform.translation` anchors the default shadow box, not the light's origin.** A directional
+light has no position physically — but the entity's `Transform.translation` sets the *center* of the
+orthographic shadow box (`shadow_extent` units to each side, from `shadow_near` to `shadow_far` along
+`direction`). A static scene can leave it at the origin; a level longer than one box, or a moving
+camera, uses `cascades` instead. The box is deterministic, exactly these fields, every frame.
 
 **Shadow tunables**, all explicit fields with defaults tuned against the gallery scene:
 
 - **`shadow_extent`** (default `40.0`) — the orthographic half-size, in world units. Too small clips
   shadow-casting geometry outside the frustum (it simply casts no shadow); too large spreads the
-  fixed 2048² map's texels over more world space, softening shadow edges and inviting acne.
+  fixed 2048² map's texels over more world space, softening shadow edges and inviting acne. Unused
+  under `cascades`.
 - **`shadow_near`/`shadow_far`** (default `1.0`/`200.0`) — the frustum's near/far planes along
   `direction`, centered on `Transform.translation`. A negative `shadow_near` is valid — a symmetric
   `-100`..`100` range brackets the anchor's own plane — as long as it stays below `shadow_far`.
@@ -85,7 +84,7 @@ what these fields say, deterministically, every frame.
   thickness, with `texel` = `2·shadow_extent / 2048`, `θ` the angle between its face's normal and
   the light and `e` the sun's elevation: a thin wall under the default 70° sun at
   `shadow_extent: 96` lifts about 0.12 world units (measured), and `shadow_extent: 40` brings that
-  to about 0.05.
+  to about 0.05. Under `cascades` it is held per cascade (`ludion docs sun-cascades`).
 
 **Multiple suns: lowest `EntityId` wins.** Only one `DirectionalLight` is ever active — if a scene
 has more than one, extract deterministically picks the lowest-`EntityId` entity and ignores the
@@ -95,6 +94,12 @@ rest (no error).
 cast into the shadow map nor sample it (a lit sprite takes the sun's light unshadowed, two-sided, with
 no IBL, beside its ambient and point lights);
 `PointLight`s and `SpotLight`s are unshadowed unless they opt in (below). A mesh always casts and receives; there is no per-mesh opt-out. A `DropShadow` is not a light shadow: opaque meshes receive it whatever the light setup (`ludion docs drop-shadow`).
+
+## Cascades
+
+`cascades: 1..4` on the sun swaps the one box for shadow maps fitted to the camera: crisp near the
+lens, present far away, without parenting the sun to anything. Absent, the box above is unchanged.
+Fields, fit, seams and the profile check: `ludion docs sun-cascades`.
 
 ## Point lights: place as many as the look needs
 
@@ -194,4 +199,5 @@ rest stay lit and unshadowed. Fields, ranking, tuning and the profile check: `lu
 - `ludion docs post-processing` — the imaging chain.
 - `ludion docs components` — declaring components, and the built-in visual set.
 - `ludion docs local-shadows` — opt-in shadows for point and spot lights.
+- `ludion docs sun-cascades` — camera-fitted cascades for the sun's shadow.
 - `ludion docs drop-shadow` — the projected contact shadow under a character, no sun needed.

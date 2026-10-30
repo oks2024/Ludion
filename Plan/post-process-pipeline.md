@@ -784,7 +784,8 @@ engine hard-codes. The engine ships neutral defaults and orthogonal operators.
     chromatic aberration) folds into composite at near-zero architectural cost, and grain
     genuinely helps 8-bit night gradients. Depth/normal outlines are **deferred as an
     art-direction decision, not a rejection** — the normal target exists after wave 7, so the
-    build is cheap whenever the direction is chosen.
+    build is cheap whenever the direction is chosen. With a cascaded sun the shafts march the cascades,
+    which cover the `3/fog_density` reach (Clockout 0011, `Plan/shadow-mapping.md` decisions 15 and 17).
 14. **Budget by effect group, calibrated on a new all-on scene.** `[post_groups]` ceilings
     (bloom, ssao, dof, shafts, composite) summing member passes, plus a `[post] total`; a budget
     entry for an **absent** pass skips rather than fails (conditional passes require it). A mip

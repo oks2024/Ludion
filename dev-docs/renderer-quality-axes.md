@@ -45,6 +45,8 @@ description: Quality axes: uniform sample counts, gi_rays, gi_probe_scale, and w
   brighter-than-shadowed assertion catches. **Shafts leave with the map** (`masked` ANDs
   `shadow_map.is_some()` into `shafts`): the march samples it, and keeping the map alive for the
   beams alone would make "shadows off" still schedule the `shadow` pass — weakening, not absence.
+  `sun_cascades` is a resource-sizing axis: it reaches the graph through `PostChain::sun_cascades` (the
+  count) beside `shadow_map` (the tile edge), and is masked with the map.
 - **A field added to `Quality` must land in four homes in one change**: the struct plus every preset
   const and the `masked` site (`ludion-renderer`), the `Effects` TOML struct (`ludion-engine`,
   `deny_unknown_fields` — miss it and a file naming the new knob is an `L0016`), `describe`'s
@@ -83,7 +85,7 @@ description: Quality axes: uniform sample counts, gi_rays, gi_probe_scale, and w
   a whole pass** — `--quality low` dumps a 1440×810 `scene` inside a 1920×1080 `final` plus the
   `upscale` that joins them, which makes the dump the GPU-free check for the resolution too.
 - **The GI axes stay observable where the sun's do not.** `shadows: false` at `LOW` makes
-  `shadow_map_size`, `local_shadow_atlas_size` and `pcf` unobservable — no map or atlas is drawn (the `local_shadow` pass is masked with the `shadow` pass). `gi_dynamic: false` masks the per-frame
+  `shadow_map_size`, `local_shadow_atlas_size`, `sun_cascades` and `pcf` unobservable — no map or atlas is drawn (the `local_shadow` pass is masked with the `shadow` pass). `gi_dynamic: false` masks the per-frame
   *injection* only: the bake runs at every preset, so both GI axes land in a `GiVolume` scene's pixels
   at `LOW` too. A test asserting "this preset cannot distinguish the GI axes" asserts the opposite of
   the design.

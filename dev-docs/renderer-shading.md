@@ -40,6 +40,13 @@ re-blesses every mesh-bearing golden:
   zeroed `Sun` and a persistent 1×1 fallback depth texture at group 2 — no shader permutation, the
   term simply evaluates to zero. Only the mesh path reads group 2: sprites, billboards and text
   neither cast into the shadow map nor sample it (`Plan/shadow-mapping.md` decision 1).
+  With cascades the `Sun` uniform also carries per cascade `cascade_space` (world→light), `cascade_rect`
+  (the tile's UV rect in the atlas) and `cascade_params` (near, far, bias in that cascade's light-NDC),
+  plus `view_depth` and `cascade_count`. `sun_shadow_cascaded` picks the cascade by view depth, blends
+  across a band of 10% of its depth at each seam, fades to lit across the last band and clamps PCF
+  inside the tile; the bias is held at the same texel count per cascade. `sun_shadow` calls
+  `sun_shadow_anchored` verbatim at count 0, which is the bit-identity rule for a sun without cascades
+  (`ludion devdocs renderer-quality-axes`, `Plan/shadow-mapping.md` decisions 12–17).
 - **Local lights' shadows** — opt-in (`cast_shadows`), also mesh-only group 2, beside the sun:
   `3 local_shadow_tex: texture_depth_2d`, `4 local_views: array<LocalView>`, `5 light_shadow: array<u32>`
   (the light's first view index, `0xFFFFFFFF` unshadowed). The 48-byte `Light` record, the GI shaders and

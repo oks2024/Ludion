@@ -73,7 +73,7 @@ The label travels alongside the toggles because several presets resolve to the s
 **Toggles and parameters are two values, resolved together and set together.** `Quality` answers
 which effects the graph schedules; `QualityParams` answers how hard each scheduled effect works, and
 reaches the graph for the axes that size a *resource* — `shadow_map_size`,
-`local_shadow_atlas_size` and `gi_probe_scale` — because a resource's extent *is* graph structure. `Renderer::set_quality` takes
+`local_shadow_atlas_size`, `sun_cascades` (the count, with the tile edge) and `gi_probe_scale` — because a resource's extent *is* graph structure. `Renderer::set_quality` takes
 both in one call, so a renderer can never hold a machine's toggles beside another setting's counts.
 
 **`ibl_specular_size` sizes the sky specular cube** (256², 128² at `low`; a power of two, at least 16) at environment-bake time, not in the frame graph, so `masked` never sees it either. It is a `[params]` key but not in `describe` or the profile report's quality block. `mesh.wgsl` does not sample the cube; `reflections` does (`ludion devdocs renderer-reflections`).

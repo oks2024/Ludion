@@ -360,6 +360,8 @@ dimming and colour are all governed by the fog they live in.
 7. **New L-codes only where a new axis needs one.** Deleting `shafts_density` removes its rejections.
    `fog_albedo` is a scalar `[0,1]` → the schemars range's own `L1014`. `fog_anisotropy` is a scalar
    `(−1,1)` → same. No bounded-triple field is added, so `L1130` is not touched.
+8. **With a cascaded sun the shafts march the cascades,** which cover the `3/fog_density` reach (Clockout 0011,
+   `Plan/shadow-mapping.md` decisions 15 and 17). Owner approval 2026-10-29.
 
 ## Waves
 

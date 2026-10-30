@@ -1,4 +1,4 @@
-# Shadow mapping: the sun, drop shadows and local lights
+# Shadow mapping: the sun and its cascades, drop shadows and local lights
 
 > Status: **Waves 1–5 landed 2026-07-17** (Lore revs 228–231 for Waves 1–4; Wave 5 docs +
 > bookkeeping same day). Decisions settled with the user 2026-07-17 (shadow source = sun only;
@@ -13,13 +13,16 @@
 > `drop_shadow_occlusion` and `projector` passes and the `drop-shadow` gallery golden; the macOS twin is owed.
 > **Clockout 0007 (local-light shadows) mechanized 2026-10-30 at Lore r1780–r1790** (decision 1 fired, 3 and 6
 > extended, 9–11 new; replays re-pinned to the new wire hash at r1788); the macOS golden twin is owed (`Plan/owed.md`), and the darkness look gate is the game's.
+> **Clockout 0011 (sun cascades) mechanized 2026-10-30 at Lore r1792–r1799** (decisions 1, 3, 4, 6 amended; 12–17 new);
+> the replays are re-pinned to the new wire hash at r1798. The macOS twins, the M4 GPU tests and the iOS/Metal build are owed (`Plan/owed.md`).
 
 ## Goal
 
 A single directional "sun" light with one orthographic shadow map, received by the mesh path
 only. Depth becomes a first-class frame-graph resource first (the prerequisite recorded in
 `Plan/phase-11-pbr.md` "out of scope" and engine audit 2026-07-17 §2). Point lights stay
-unshadowed unless they opt in (decision 9); sprites/billboards/text stay Lambert and untouched.
+unshadowed unless they opt in (decision 9); sprites/billboards/text stay Lambert and untouched. The sun can
+opt in to camera-fitted cascades (decisions 12–17); the anchored box stays the default.
 
 ## Current-code facts (gathered 2026-07-17)
 
@@ -54,7 +57,7 @@ unshadowed unless they opt in (decision 9); sprites/billboards/text stay Lambert
    map, PCF 3×3 via a comparison sampler, consumed by `mesh.wgsl` only. Point-light shadows
    (cube maps, array textures) got a recorded trigger, first content where the sun can't sell
    the scene; it **fired** with Clockout request 0007 (approved 2026-10-28), spots included
-   (decisions 9–11). Sprites/billboards receiving shadows: recorded
+   (decisions 9–11). The map may instead be up to 4 cascades in one 2D atlas, each a `shadow_map_size` tile (decision 13). Sprites/billboards receiving shadows: recorded
    extension, decided if the HD-2D grounding visibly suffers at M6 (amending Phase 11's
    "sprites stay Lambert" is a deliberate act, not a default).
 2. **One pre-authorized pixel-moving wave** (Phase 11 precedent). Sun shading + shadow sampling
@@ -68,7 +71,7 @@ unshadowed unless they opt in (decision 9); sprites/billboards/text stay Lambert
    by bindgen unification rules). Sprite/text BGLs, pipelines, and goldens stay untouched by
    construction. The depth-only shadow shader carries its own light-space uniform. Local-light shadows bind in the
    same mesh-only group 2, beside the sun (bindings 3–5), never in group 1: `Light` stays 48 bytes and
-   the GI and sprite layouts are untouched.
+   the GI and sprite layouts are untouched. The cascade lanes stay in the group-2 `Sun` and the `Shafts` uniform (decision 14).
 4. **`DirectionalLight` carries an explicit `direction: [x,y,z]` field** (normalized at
    extract, L-coded validation error if zero), not Transform rotation — quaternion authoring is
    hostile to hand-edited YAML and the component is agent-legible as text. The entity's
@@ -78,13 +81,14 @@ unshadowed unless they opt in (decision 9); sprites/billboards/text stay Lambert
    just leaves it at the origin). Shadow tunables are explicit fields with defaults: `shadow_extent` (ortho
    half-size, default 40.0), `shadow_near`/`shadow_far` (1.0/200.0), `shadow_bias` (default
    pinned in Wave 3 against acne/peter-panning on the gallery scene). No auto-fit frustum —
-   explicit beats scene-dependent wobble, and it's deterministic trivially.
+   explicit beats scene-dependent wobble, and it's deterministic trivially. "No auto-fit frustum" is
+   superseded for an opt-in camera fit (decisions 12 and 15); the anchored box stays the default.
 5. **Multiple suns: extract takes the lowest-EntityId one** (pinned deterministic order),
    ignores the rest. No hard error — same posture as the 16-light cap.
 6. **The shadow pass is conditional on a sun being present** (the UI-overlay precedent):
    sunless scenes keep the exact 5/6-pass graph. `RenderScene.sun: Option<SunData>`. The
    `local_shadow` pass is likewise conditional on at least one granted light, and the same `shadows`
-   quality toggle masks it.
+   quality toggle masks it. With cascades the same pass and transient hold a larger atlas (decision 13).
 7. **Trigger bookkeeping**: shadow mapping leaves the textured-PBR trigger bundle; texture
    maps + IBL remain behind it (`roadmap-voxel-mesh-pbr.md` amended in Wave 5).
 8. **A drop shadow is a projection, not a light** (Clockout request 0006, approved 2026-10-28).
@@ -119,6 +123,24 @@ unshadowed unless they opt in (decision 9); sprites/billboards/text stay Lambert
     spot wider than 60° takes the omni path (authoring never fails); no fade or hysteresis; no static
     caching; distance rank; per-view CPU culling in the `cull` module, which Clockout request 0011 reuses.
     Out of scope kept: sprites, fog, GI.
+12. **An opt-in camera fit sits beside the explicit box** (Clockout request 0011, amendment 1). `cascades`,
+    `shadow_distance` and `cascade_splits` on `DirectionalLight`; absent, the anchored box is byte-identical.
+
+    *Why:* the fit follows the camera, not the scene, and snapping removes the wobble, so both of decision 4's
+    reasons for refusing an auto-fit are met.
+13. **Up to 4 cascades in one 2D atlas** (amendment 2): tiles of `shadow_map_size` laid out 1×1, 2×1 or 2×2, no
+    array textures. The sun keeps its own atlas, apart from decision 9's, so lamps never compete with it.
+14. **The data lives in group 2 and the shafts uniform** (amendment 3), with the same pass and transient.
+    `mesh.wgsl` and `shafts.wgsl` sample the cascades; the `Sun` uniform grew to 528 B and `Shafts` to 560 B.
+15. **The map is fitted to the active camera** (amendment 4): the slice's bounding sphere, a world-locked snap with
+    a 1-texel margin, practical splits at λ 0.75, the last cascade extended to the shaft reach.
+
+    *Why:* this extends decision 9's camera dependence from which lamps cast to where the sun's map lies.
+16. **The cascade count is per quality level** (amendment 5, owner ruling): cap 4/3/2/2, overridable in TOML,
+    splits re-fitted. It departs from decision 10 for the sun only, and the last far bound is invariant.
+17. **The open questions, settled.** The cascade is picked by view depth (one rule for meshes and shafts); a 10%
+    seam band and end fade on meshes, a hard pick in the shafts; bias held per cascade at 80/2048 texels; the box
+    carries a 1-texel margin; the sun keeps its own atlas.
 
 ## Waves
 
@@ -237,4 +259,18 @@ unshadowed unless they opt in (decision 9); sprites/billboards/text stay Lambert
   `--check budgets/pinned-rtx3090-lights-stress.toml` stays green, `scene` 0.948 ms, panel all zeros.
   vigil's `budget-horde` (`--profile 120 --profile-check budgets/pinned-rtx3090.toml`) stays green,
   `scene` 1.514 ms, panel all zeros, no `local_shadow` pass.
+- Budget TOMLs unchanged.
+
+## Sun cascade outcomes (Clockout 0011)
+
+- **Gallery goldens**: `examples/gallery/sun-cascades.yaml` → `examples/gallery/goldens/windows/sun-cascades.png`,
+  and `sun-cascades-view.png` for the `sun_cascades` render view, both re-verified at **SSIM 1.0000**. A raking
+  sun, a 100 m colonnade and a figure near the camera, four cascades.
+- **Profile panel**: `ludion profile` carries `sun_cascades`. On the gallery scene the splits are
+  6.69 / 14.88 / 32.09 / 100 m, the texels 0.0070 / 0.0144 / 0.0310 / 0.0987 m, the casters 7 / 13 / 27 / 42.
+- **Cost** (release, 120 frames, full preset; GPU ms for `shadow` / `scene` / summed pass medians): the gallery
+  scene with 4 cascades 0.035 / 0.087 / 0.2365, with the single anchored box 0.0087 / 0.0737 / 0.1971.
+- **Opt-in breach, informational**: vigil's `budget-horde` is 0.0809 / 1.661 / 2.563 with the single box; a
+  scratch copy with 4 cascades is 0.3246 / 1.748 / 2.989, casters 311 / 506 / 640 / 1055. That is over the
+  pinned-rtx3090 budget for `shadow` (0.150) and for `scene`. No committed scene opts in; one run.
 - Budget TOMLs unchanged.

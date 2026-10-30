@@ -20,6 +20,10 @@ expensive, one that grew alongside `total_refs` means the binning got looser —
 otherwise needs a GPU capture (`ludion devdocs renderer-clustering`). Occupancy is the tables
 themselves, never a sample, so two runs of one frame agree exactly.
 
+**The `local_shadows` and `sun_cascades` sections.** Two more offline-only planning shapes, not timings,
+so two runs of one frame agree exactly: which local lights the shadow budget granted
+(`ludion docs local-shadows`) and the sun's fitted cascades with their casters (`ludion docs sun-cascades`).
+
 **The `load` section.** A report may also carry `LoadProfile`: wall ms for the scene's load, split into
 `scene`, `mesh`, `texture` and `other` phases, the render phases `voxelize`, `renderer_init`,
 `gpu_upload`, `gi_bake` and `first_frame`, plus a `total`, and per asset kind a decoded / reused /

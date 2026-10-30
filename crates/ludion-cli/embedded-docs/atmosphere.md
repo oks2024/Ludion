@@ -79,6 +79,10 @@ haze *is* the sky along that ray and the two agree by construction.
   <file>` is how you see it: a working shaft frame lists a `shafts` and a `shafts_blur` pass, and a
   scene missing the sun or the medium lists neither. So "beams without fog" is a **thin** medium and
   a strong `shafts`, never `fog_density: 0`.
+- **Shafts only see what the sun's map covers.** With the default anchored box, air outside the box is
+  lit: anchor the box over the shafts, or use `cascades`. With a cascaded sun the march samples the
+  cascades, and the last one reaches the march's `3/fog_density`, so an occluder anywhere within the
+  reach shadows the air behind it (`ludion docs sun-cascades`).
 - **`fog_sky` needs an `Environment`.** With no sky to in-scatter, the renderer forces the blend to
   zero and the medium is the flat `fog_color` slab — a scene may author `fog_sky` with no
   `Environment` and render byte-identically to one that omits it. `Environment.ibl_intensity`
