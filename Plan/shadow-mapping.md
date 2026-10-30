@@ -11,8 +11,8 @@
 > the two macOS re-blesses (`sun-shadows.png` new, `ui-hud-1080.png` re-bless) queued for the next
 > mac session. **Decision 8 (Clockout 0006) mechanized 2026-10-29:** the `DropShadow` component, the
 > `drop_shadow_occlusion` and `projector` passes and the `drop-shadow` gallery golden; the macOS twin is owed.
-> **Clockout 0007 (local-light shadows) mechanized at Lore r1780–r1786** (decision 1 fired, 3 and 6 extended,
-> 9–11 new); the macOS golden twin is owed (`Plan/owed.md`), and the darkness look gate is the game's.
+> **Clockout 0007 (local-light shadows) mechanized 2026-10-30 at Lore r1780–r1790** (decision 1 fired, 3 and 6
+> extended, 9–11 new; replays re-pinned to the new wire hash at r1788); the macOS golden twin is owed (`Plan/owed.md`), and the darkness look gate is the game's.
 
 ## Goal
 
