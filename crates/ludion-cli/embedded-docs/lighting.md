@@ -93,7 +93,7 @@ rest (no error).
 **What does *not* cast or receive a shadow**, by settled scope: sprites, billboards, and text neither
 cast into the shadow map nor sample it (a lit sprite takes the sun's light unshadowed, two-sided, with
 no IBL, beside its ambient and point lights);
-`PointLight`s and `SpotLight`s are unshadowed unless they opt in (below). A mesh always casts and receives; there is no per-mesh opt-out. A `DropShadow` is not a light shadow: opaque meshes receive it whatever the light setup (`ludion docs drop-shadow`).
+`PointLight`s and `SpotLight`s are unshadowed unless they opt in (below). A mesh always casts and receives; there is no per-mesh opt-out. A `mask` mesh casts its holes and a double-sided one casts from both faces (`ludion docs materials`). A `DropShadow` is not a light shadow: opaque meshes receive it whatever the light setup (`ludion docs drop-shadow`).
 
 ## Cascades
 

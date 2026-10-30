@@ -44,7 +44,7 @@ before touching the glTF→component mapping, the `L1202` unsupported-feature su
   nothing, `--allow-lossy` reproduces a committed fixture tree byte-for-byte, the imported tree
   passes `check-scene`, and the **round-trip gate** (the committed `expected/scene.yaml` is a hand-authored wrapper: an instance entry of `model.prefab.yaml` plus the camera a prefab cannot carry; `ludion docs prefabs`): import → check → golden render → re-export →
   re-import, asserting byte identity end to end.
-- `examples/import/scene.gltf` — the lossy-path fixture (a double-sided material, a base-color texture, several meshes) both test suites import; `examples/import-textured/scene.gltf` is the clean-path one (five maps on two cubes, the normal map tilted in both axes, one cube with an exporter-convention authored `TANGENT`).
+- `examples/import/scene.gltf` — the lossy-path fixture (a `BLEND` material, a base-color texture, several meshes) both test suites import; `examples/import-cutout/scene.gltf` is the strict `MASK`/`doubleSided` one (Blender 5.2 script, imported strict, tree byte-gated); `examples/import-textured/scene.gltf` is the clean-path one (five maps on two cubes, the normal map tilted in both axes, one cube with an exporter-convention authored `TANGENT`).
 
 ## Rules
 - **Same input, byte-identical plan — always.** Every walk is glTF **document order** (nodes,

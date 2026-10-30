@@ -7,7 +7,7 @@ description: The texture cook's encoders: BC7/ASTC 4x4, CPU mip chain, KTX2 writ
 
 ## Layout
 - `crates/ludion-cook/src/lib.rs` — `cook(&Image, &CookSettings) -> CompressedImage` (cap → align → chain → encode; stores `srgb_mean` of the pre-cap source pixels in `mean`), the preset and `ENCODER_VERSIONS` constants.
-- `src/mips.rs` — the 2×2 box chain, the cap, the bilinear align-up, edge-replication padding. sRGB colour averages in linear light (`ludion_assets::decode_srgb`/`encode_srgb`); alpha and linear maps average in bytes as `(a+b+c+d+2)/4`.
+- `src/mips.rs` — the cap, the bilinear align-up, edge-replication padding. The 2×2 box filter (`next_mip`; sRGB colour averages in linear light, alpha and linear maps average in bytes as `(a+b+c+d+2)/4`) lives in `ludion_assets::mips` beside `mask_mip_chain`. With `CookSettings.alpha_cutoff` set (a base-colour map bound by a `mask` mesh) the chain is `mask_mip_chain`; the cutoff joins the cook key only when set, so a cooked mask map is its own store entry and existing keys keep their bytes.
 - `src/encode.rs` — `intel_tex_2` BC7 (`opaque_basic`, or `alpha_basic` when any level-0 alpha < 255) and `ctt-astcenc` ASTC (`Medium`; `LdrSrgb`/`Ldr` profile; one single-threaded context per `cook` call).
 - `src/ktx2_write.rs` — `write_ktx2`: header, level index, DFD, one key/value entry (`LudionSrgbMean`, the image's `mean`), levels smallest first, 16-byte aligned. Returns `Vec<u8>`; the crate does no file IO.
 - `tests/cook.rs`, `tests/cooker_version.rs` — round trips through `read_ktx2` and an independent decoder (`texture2ddecoder`), corruption, thread determinism, the encoder pin.

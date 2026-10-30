@@ -51,9 +51,8 @@ possible.
   - **Supported:** triangles with positions, normals and `TEXCOORD_0`; tangents, given or generated;
     the five metallic-roughness maps as PNG; factors; emissive proportional to the base colour;
     multiple nodes and meshes; perspective cameras and point lights.
-  - **Refused with `L1202`:** skins, animations, morph targets, `doubleSided`, a non-`OPAQUE`
-    `alphaMode`, a second UV set, JPEG images, and unknown required extensions. The skin refusal is
-    lifted by `Plan/skeletal-animation.md` W1.
+  - **Refused with `L1202`:** skins, animations, morph targets, `BLEND` alpha, a second UV set, JPEG images, and unknown required extensions. The skin refusal is
+    lifted by `Plan/skeletal-animation.md` W1. *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): `doubleSided` and `MASK` are mapped (`double_sided`, `alpha_mode: mask`), no longer refused.*
 - **Trap: a material with no factors imports as fully metallic** (the glTF defaults are 1.0).
 - **ComfyUI** (`games/vigil/generation/workflows/`): all four workflows start from images. TRELLIS
   textures only the mesh it generates. No installed node loads an existing mesh.
@@ -172,8 +171,9 @@ possible.
   - glb, +Y up.
   - PNG images only.
   - Only the objects in the export collection.
-  - Every material has backface culling on (otherwise the exporter writes `doubleSided`, which is
-    `L1202`), an opaque blend mode, and explicit metallic and roughness values.
+  - Every material has backface culling on for closed meshes and off for sheets (off exports
+    `doubleSided`, which imports as `double_sided: true`), an opaque blend mode (or a `MASK` threshold
+    for holes), and explicit metallic and roughness values.
   - Modifiers are applied.
   - The first brief settles the scale convention (metres to units) and records it.
 - **`provenance.yaml`** (text, committed): the tool (`blender`), the full Blender version, the date,
@@ -282,8 +282,7 @@ engine needs are all in `Plan/skeletal-animation.md`.
   the detector.
 - **Screenshot-heavy loops are expensive.** Images dominate the token count. The log records
   screenshots separately from in-engine sheet renders, so the cost is explainable.
-- **Exporter defaults hit `L1202`.** `doubleSided` is on by default for Blender materials, and JPEG
-  sources export as JPEG. The contract's export settings are the mitigation. The idol brief pays for
+- **Exporter defaults hit `L1202`.** JPEG sources export as JPEG. *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): the `doubleSided` half is gone; it maps now.* The contract's export settings are the mitigation. The idol brief pays for
   whatever the settings miss.
 - **The thresholds sit above what the other routes cost on the idol.** Sculpt spent ~191 k tokens
   and ComfyUI 142 k, against Blender's 500 k threshold. A Blender idol that passes decision 13 can

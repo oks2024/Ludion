@@ -25,7 +25,8 @@ beside it.
 What it voxelizes: cubes, planes, spheres, voxel models, and **asset meshes** (`shape: asset`) —
 each asset-mesh triangle fills the cells its surface overlaps, so a hollow building stays hollow and a
 wall casts a shell, not a solid. Skinned meshes, characters, sculpts, assemblies and `GiDynamic`
-instances contribute nothing. An asset mesh's albedo is its vertex colours times `Mesh.color` times
+instances contribute nothing, and so do asset meshes with `alpha_mode: mask`, so light passes through a
+grating (`ludion docs materials`). An asset mesh's albedo is its vertex colours times `Mesh.color` times
 the base-colour map's mean in linear light (white when the mesh has no base-colour map); its
 emissive is the document's when it authors a material and `Mesh.emissive` otherwise. Texture maps
 themselves are not sampled.
@@ -157,7 +158,7 @@ profile` (`ludion docs running`), not in the rendered image.
   can tune a field on a `GiVolume` the scene already has, but it never creates the component.
 - **`L2111`** — the scene authors a `GiVolume` but nothing placed in it voxelizes, so there is no grid
   to dump. The message counts what was skipped (`GiDynamic` instances, skinned meshes, non-finite
-  transforms, sculpts, assemblies and empty meshes) and the help points at the first entity of each;
+  transforms, sculpts, assemblies, empty meshes and `mask` meshes, reason `cutout`) and the help points at the first entity of each;
   with none skipped, the scene places no mesh. Place static geometry, or drop `GiDynamic` from a mesh
   that should occlude.
 - **`L2105`** — `probe_spacing` lays more probes over the grid's world box than the bake can bind

@@ -162,6 +162,7 @@
    in codes.rs all revise together. Under Lambert (this lands before the swap) the new fields are
    render-inert — the import golden is asserted byte-identical here and re-blesses exactly once,
    at the swap.
+   *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): glTF `MASK` (with `alphaCutoff`) and `doubleSided` leave the L1202 surface and map onto `alpha_mode`, `alpha_cutoff` and `double_sided`; `BLEND` stays L1202, and the lossy fixture now rides its `BLEND` material.*
 8. **The sphere primitive upgrades in the swap wave: `sphere(24, 16)`, smooth analytic normals**
    (normal = normalized local position — exact, deterministic, CPU-side). A faceted 12×8 sphere
    cannot show a roughness gradient, and the park is the phase's gate; riding the swap wave means

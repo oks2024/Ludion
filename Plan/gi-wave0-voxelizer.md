@@ -171,6 +171,7 @@ Grid model: `WorldVoxelGrid { origin: Vec3, cell_size: f32, extent: [u32;3], occ
   the skip report.
 
   *Amended 2026-10-29 (owner approval, Clockout 0013): asset meshes contribute their surface shell.*
+  *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): asset meshes with `alpha_mode: mask` are skipped (skip report reason `cutout`). Follow-up: voxelize a mask mesh per texel (honour the base-map alpha) instead of skipping it; trigger: a cutout prop whose missing occlusion shows.*
 
 Albedo/emissive for a **primitive** come from the instance `color` and `material[2]` (the
 `[roughness, metallic, emissive]` lane) — the same channels the mesh path already carries.

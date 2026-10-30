@@ -15,11 +15,11 @@ ancillary chunk and hashes identically to the same pixels arriving through `ludi
 An accepted **mesh** goes through the same `ludion-import` library, called in-process in the mode the
 caller asks for: strict by default, `--allow-lossy` for the subset that maps, exactly as
 `ludion import` reads a `.glb` from disk. **A mesh generator's `SaveGLB` node writes
-`doubleSided: true` on every material, which strict mode refuses with `L1202`** — so an accepted
-generated mesh is in practice an `--allow-lossy` accept, and the flag's warning says what was left
-out: back-face culling, which is what a closed remeshed surface wants. Strict stays the default
-because a candidate that needs the flag should say so once, out loud, rather than silently losing
-something on every accept. `--out` names a
+`doubleSided: true` on every material, so `gen accept` clears `double_sided` on each accepted
+mesh and keeps the culled result** — a closed remeshed surface wants culling, and the flag says nothing
+about the candidate. A strict accept therefore succeeds on such a candidate. `--allow-lossy` stays for
+a candidate carrying a feature with no mapping (a `BLEND` material, say): strict refuses it with
+`L1202` and the flag's warning says what was left out. `--out` names a
 **directory** instead of a file: it must be absent or already empty, else `L1172`. The import writes
 `model.prefab.yaml` + `meshes/*.mesh.yaml` + `textures/<content-hash>.png` exactly as `ludion import` would,
 and the importer's own diagnostics pass through unchanged — `L1112` (over the vertex budget) among

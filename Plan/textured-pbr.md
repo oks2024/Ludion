@@ -101,6 +101,7 @@ that is a *different* trigger (voxel texturing — recorded deferred below), not
    `alphaMode`, `doubleSided` — is already coded and tested in `crates/ludion-import`, so this arc
    *removes* the texture entries from L1202 rather than adding to it). `--allow-lossy` still imports
    the rest. The L1202 explanation text and the crate mapping table update together.
+   *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): `MASK` and `doubleSided` leave the L1202 surface (they map onto `alpha_mode`/`alpha_cutoff`/`double_sided`); `BLEND` stays.*
 
 ## Fences (explicitly out of scope; triggers recorded)
 
@@ -239,7 +240,7 @@ and this arc's keys coexist with it (`origin` after `name`; this arc's keys afte
   `examples/import/` harness (expected tree, `goldens/<os>/scene.png`, an exit-gate test). The
   existing `examples/import/` fixture stays the lossy-path fixture: its `stone` material becomes
   `doubleSided` so `L1202` still fires once the base-color texture is supported; its gem renders
-  textured at Wave 3 (the planned one re-bless). **Real-asset check:** Khronos `Avocado` (CC0 1.0,
+  textured at Wave 3 (the planned one re-bless). *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): `doubleSided` no longer fires L1202; the fixture's lossy trigger is its `BLEND` material.* **Real-asset check:** Khronos `Avocado` (CC0 1.0,
   glTF-Sample-Assets) imported from an ignored scratch path and rendered to `Plan/artifacts/` — the
   8 MB GLB and its 2048² maps are not committed (the 1 MiB size gate); the fire-triggering ComfyUI
   asset owes the human look at the sitting.

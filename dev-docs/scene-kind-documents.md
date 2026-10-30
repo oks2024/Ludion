@@ -30,17 +30,18 @@ floats/vertex: `xyz` + handedness `w` ∈ {−1, 1}), optional per-vertex `emiss
 `roughness`, up to five optional texture references in canonical order —
 `base_color_texture`/`metallic_roughness_texture`/`normal_texture`/`occlusion_texture`/
 `emissive_texture`, each `{ path, wrap?, scale?/strength? }` with `path` relative to the document's
-own directory — optional skin keys `joints` (each `name`, `parent?`, `rest: { t, r, s }`,
+own directory — then optional `alpha_mode` (`opaque`/`mask`), `alpha_cutoff` and `double_sided`, each
+omitted at its default (`opaque`, `0.5`, `false`) — optional skin keys `joints` (each `name`, `parent?`, `rest: { t, r, s }`,
 `inverse_bind` — 16 floats, column-major; parent-first order, at most 256), `weights` and
 `bone_indices` (4 per vertex each), all three or none — and a required `indices` triangle list. It mirrors the scene pipeline (`parse` →
 `validate` → `check` → canonical `emit`) and takes **no** registry, because a mesh document is
 self-describing rather than component-bearing.
 
-The split: `L1110` is *structure* (missing or wrong-typed keys, an unrecognized `kind`, a malformed
+The split: `L1110` is *structure* (missing or wrong-typed keys, an `alpha_mode` other than `opaque`/`mask`, an unrecognized `kind`, a malformed
 list, an unknown key with a nearest match), `L1111` is *data consistency* (every float list finite;
 `positions` a multiple of 3; `normals` and each authored material list matching the vertex count
 one-for-one; `uvs` a multiple of 2 matching the vertex count; `tangents` exactly 4 floats per vertex
-with every 4th (`w`) exactly `-1` or `1`; `roughness`/`metallic` in `[0, 1]`; `emissive >= 0`;
+with every 4th (`w`) exactly `-1` or `1`; `alpha_cutoff` finite, in `[0, 1]` and only with `alpha_mode: mask`; `roughness`/`metallic` in `[0, 1]`; `emissive >= 0`;
 `indices` a multiple of 3 with every index in range; a texture reference needs `uvs`, `normal_texture`
 additionally needs `tangents`, and its `path` is non-empty). A `None` material or texture list means
 "use the default" and is never checked. Under the skin keys the split moves: `L1190` is structure

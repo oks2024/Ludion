@@ -67,6 +67,7 @@ re-blesses every mesh-bearing golden:
   occlusion_strength }` uniform. `MeshVertex` grows two lanes over the untextured layout — `uv` and
   `tangent` — so a mesh's full vertex struct is six lanes (position, normal, color, material, uv,
   tangent; locations 0–5), with the per-instance lanes following at 6–17.
+- **Cutout and double-sided ride the same uniform.** `MATERIAL_ALPHA_MASK` and `MATERIAL_DOUBLE_SIDED` are two more `material.flags` bits and `alpha_cutoff` is the lane that was `pad0`, so `MeshMaterial` stays 16 bytes. A `mask` fragment whose coverage (`Mesh.color.a` × base-map alpha) is under the cutoff is discarded; on a double-sided back face the whole frame flips (the final normal is negated after the normal map, so relief matches). Clear bits keep the historical arithmetic, which is why opaque culled content is byte-identical.
 - **The flag rule is what keeps an untextured draw byte-identical.** Every map sample in `fs_main`
   sits behind its own `material.flags` bit (`MATERIAL_BASE_COLOR`/`MATERIAL_METALLIC_ROUGHNESS`/
   `MATERIAL_NORMAL`/`MATERIAL_OCCLUSION`/`MATERIAL_EMISSIVE`); an untextured mesh binds a flags-zero

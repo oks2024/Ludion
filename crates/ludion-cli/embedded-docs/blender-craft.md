@@ -110,8 +110,14 @@ source as PNG, so the script asserts every `bpy.data.images` entry is PNG before
 - **One object per flat-factor material.** A `kind: mesh` document carries no base colour, so each
   object becomes one entity whose `Mesh.color`/`roughness`/`metallic`/`emissive` come from its
   material's factors. A multi-material object fans out into child entities instead.
-- **Every material:** `use_backface_culling = True`, Principled `Metallic` and `Roughness` set
-  explicitly, `Alpha` 1.0. Do not set `mat.use_nodes` — deprecated in 5.x, it only warns.
+- **Every material:** backface culling on for closed meshes, off for sheets (`use_backface_culling =
+  False` exports `doubleSided`, which imports as `double_sided: true`); Principled `Metallic` and
+  `Roughness` set explicitly, `Alpha` 1.0 unless cutting holes. Do not set `mat.use_nodes` —
+  deprecated in 5.x, it only warns.
+- **Cutout holes:** the image's `Alpha` output feeds the Principled `Alpha` input through a threshold
+  (`LESS_THAN` against the cutoff, then `1 −` that), which the exporter reads as glTF `MASK` with that
+  `alphaCutoff`; pick a cutoff exact in f32 (`0.25`) so the document writes it unchanged. Plain alpha
+  blend is `BLEND`, which is `L1202`. `examples/import-cutout/make-fixture.py` is the working script.
 - **Emissive:** `Mesh.emissive` is a scalar on the surface's own colour, so glTF `emissiveFactor` must
   equal `k × baseColorFactor`. Set `Emission Color = k × base` and `Emission Strength = 1.0`; a
   strength above 1 moves into `KHR_materials_emissive_strength`, which the import multiplies into
@@ -123,9 +129,10 @@ source as PNG, so the script asserts every `bpy.data.images` entry is PNG before
 
 ## Gotchas
 
-- **`doubleSided` is `L1202`.** Blender writes it for any material with backface culling off, which
-  is the default. A thin surface (a wing membrane, a leaf) then needs real thickness: offset a front
-  and a back copy along the surface normal and join them with a rim.
+- **Backface culling is off by default in Blender**, so a closed mesh exports `doubleSided` and draws
+  unculled unless you turn it on. A thin surface (a wing membrane, a leaf) keeps it off and needs no
+  thickened shell.
+- **`BLEND` is `L1202`.** Use `MASK` for holes.
 - **A material with no metallic factor imports fully metallic** (the glTF default is 1.0).
 - **A referenced JPEG image is `L1202`.**
 - **`bmesh.ops.create_uvsphere` and `bmesh.ops.solidify` break the headless replay.** Their face order
@@ -134,8 +141,8 @@ source as PNG, so the script asserts every `bpy.data.images` entry is PNG before
   so the defect hides in an interactive loop. Build spheres and thickened sheets vertex by vertex;
   `create_cube` and `bevel` were stable. Verify with two headless runs and `cmp` on the two glbs.
   After the fix the idol replays byte-identical: glb, and the imported tree.
-- **Smooth shading across a thin sheet** blends front, back and rim normals into dark streaks at the
-  edges. Tag those faces and keep them flat (`face.smooth = smooth and not face.tag`).
+- **Smooth shading across a deliberately thickened mesh** blends front, back and rim normals into dark
+  streaks at the edges. Tag the rim faces and keep them flat (`face.smooth = smooth and not face.tag`).
 - **Tube frames twist** when the reference vector is swapped mid-curve. Pick the first frame from a
   fixed axis and parallel-transport it (project the previous `u` onto each new normal plane).
 - **`render --model` shows one mesh document, uncoloured** — a flat-factor asset's colour and glow

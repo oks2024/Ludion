@@ -45,7 +45,7 @@ at their defaults saves and hashes exactly as before.
 
 ## Rules
 
-- **Meshes only.** Meshes cast and receive; sprites, billboards, text and particles do neither, and
+- **Meshes only.** Meshes cast and receive (a `mask` mesh casts its holes, a double-sided one from both faces); sprites, billboards, text and particles do neither, and
   fog and global illumination are not shadowed.
 - **A fixed budget per frame.** Candidates are the opted-in lights whose cluster footprint touches
   the camera frustum: the range sphere for a point light, the cone's bounding sphere for a spot. They rank by distance from the camera to the sphere's surface, nearest first, ties

@@ -64,7 +64,7 @@
 > write; `accept` takes the component registry as a parameter because the builtin set lives engine-side and
 > `ludion-gen` must not depend on the engine. **Rulings made during the build:** `gen accept --allow-lossy`
 > exists and strict stays the default, because `SaveGLB` always writes `doubleSided: true` (`L1202`) and a
-> generator has no re-export; provenance gains `images` (name, project-relative path, content hash), since a
+> generator has no re-export *(Amended 2026-10-30, owner approval 2026-10-29, Clockout 0010: that reason is superseded — `gen accept` clears `double_sided` and keeps the culled result; `--allow-lossy` remains for unmappable features such as `BLEND`)*; provenance gains `images` (name, project-relative path, content hash), since a
 > mesh run's `prompt` is empty and the reference image *is* its brief; the accepted idol lives at
 > `games/vigil/scenes/meshes/idol-generated/` and the gallery harness reaches it there rather than copying it;
 > each accepted mesh earns its own reasoned pair of size-allowlist lines (vertex text and maps both cross 1 MiB

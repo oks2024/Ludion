@@ -49,9 +49,9 @@ settled plan, nothing built; **rejected** — closed by design.
 - **Lights and shadows** — one active `DirectionalLight`; a hand-placed 2048² orthographic box by default, or up to four
   camera-fitted cascades (`cascades`, `Plan/shadow-mapping.md`). `SpotLight` shipped (`Plan/spot-light.md`); point/spot shadows opt-in under a
   per-frame caster budget (`Plan/shadow-mapping.md`). Area lights absent.
-- **Transparency and material coverage** — no alpha-blended, alpha-cutout or double-sided meshes
-  (glTF refuses them with L1202); no order-independent transparency; no clearcoat, sheen,
+- **Transparency and material coverage** — no alpha-blended meshes (glTF `BLEND` is L1202); no order-independent transparency; no clearcoat, sheen,
   transmission or subsurface. Foliage, glass, fences and hair cards are out.
+  *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): alpha-cutout (`alpha_mode: mask`) and double-sided meshes ship (Clockout 0010). Alpha-blend stays a gap; trigger: the first committed asset that must be seen through (e.g. the Noir skylight glass), a separate request with a sorted `transparents` mesh path.*
 - **Textures** — PNG decoded to RGBA8 only; no BC/ASTC/KTX2 compression. Voxel texturing deferred
   (`Plan/textured-pbr.md`).
 - **Anti-aliasing and upscaling** — supersampling (`--scale`) only. FXAA deferred; SMAA absent
@@ -153,7 +153,7 @@ it raise the number of autonomous agent iterations (the North Star)?
 4. **The platformer as the next vertical slice** (`Plan/character-controller.md`). Let it pull the
    3D gaps it actually hits rather than building them in the abstract: debug draw (also an
    agent-verification win — colliders visible in screenshots), alpha-cutout and
-   double-sided materials (the Blender pipeline hits these on its first props), animation blending
+   double-sided materials (the Blender pipeline hits these on its first props; the platformer pulled them and they shipped, Clockout 0010), animation blending
    beyond crossfade, CCD if a fast fall tunnels.
 5. **The shippable-game bundle, when a game is declared shipping** (post-M7 grilling): desktop
    export and packaging, texture compression (before iOS device work), music crossfades, stereo

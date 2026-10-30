@@ -78,7 +78,7 @@ deleted from. `gen sheet` and `gen accept` take an `ok` or `partial` run and ref
 `gen accept` freezes one candidate with its provenance: an image is re-encoded through the engine's
 deterministic PNG path (`<asset>.png` + a `<asset>.png.origin.yaml` sidecar), a mesh is imported
 in-process into a directory (strict by default; a generator's `SaveGLB` writes `doubleSided: true`,
-which strict refuses with `L1202`, so a generated mesh is in practice `--allow-lossy`). The format,
+which accept clears to keep the mesh culled). The format,
 the `origin` block and its fields: `ludion docs generation-accept`.
 
 ## Rules

@@ -65,6 +65,7 @@ opt in to camera-fitted cascades (decisions 12–17); the anchored box stays the
    3090 with committed diff reports; sunless scenes are *expected* byte-identical (+0.0
    contributions) but this is verified, not assumed. macOS re-bless queued for the next mac
    session. No shader permutations — one shading model (roadmap decision 8).
+   *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): the caster pass gains a `shadow_cutout` variant whose fragment stage binds the asset's material, and a cull-none variant, selected per draw by `draw_casters` for every caster pass. The shading model stays one (flag bits plus pipeline state, like the mirrored twin), so roadmap decision 8 holds.*
 3. **The sun never touches the shared `Lights` layout.** Sun params (direction, color·intensity,
    light-space matrix) + shadow map + comparison sampler live in a new mesh-only bind group
    (group 2) fed by a new `sun.wgsl` snippet or mesh-local declarations (Wave 3 picks, guided
@@ -161,7 +162,7 @@ opt in to camera-fitted cascades (decisions 12–17); the anchored box stays the
   it yet (consumed next wave, same feature — the no-dead-fields rule is satisfied at feature
   close, per Phase 11's own wave split). Exit: component round-trips scene YAML byte-stably,
   WorldHash unmoved for existing scenes, goldens byte-identical.
-- **Wave 3 — Shadow pass + sun shading (THE pixel-moving wave).** New depth-only `shadow.wgsl`
+- **Wave 3 — Shadow pass + sun shading (THE pixel-moving wave).** *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): the caster pass later gained `shadow_cutout.wgsl` and a cull-none variant (decision 2).* New depth-only `shadow.wgsl`
   (all registry touchpoints incl. hot-reload `ShaderId`), conditional `shadow` graph pass
   writing a graph-owned 2048² depth resource sampled by the scene pass; mesh group-2 bindings
   (sun uniform + shadow map + comparison sampler); `mesh.wgsl` gains the sun BRDF term (same

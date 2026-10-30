@@ -43,8 +43,10 @@ consts, `create_*_bgl` functions, `*_VS_MAIN_INPUTS` — are **generated**, not 
   the scene's `light_space` matrix (uploaded from one `SunData.light_space`), but `Sun` also carries
   `direction`/`color` while `ShadowView` is matrix-only. Reusing one struct name across them would
   hard-error the moment their shapes drifted at all; naming them apart makes that a non-issue by
-  construction. `shadow.wgsl` also composes **no** snippets — it needs neither the camera nor the
-  lights binding, only its own light-space matrix.
+  construction. `shadow.wgsl` composes only `skin.wgsl` — it needs neither the camera nor the
+  lights binding, only its own light-space matrix. Its sibling `shadow_cutout.wgsl` composes
+  `skin.wgsl` + `mesh_material.wgsl` so its fragment stage binds the asset's material and discards on
+  the same coverage test as the scene pass.
 - **What stays hand-written on purpose:** the vertex-buffer *structs* (`MeshInstanceRaw`,
   `SpriteInstanceRaw`, `TextVertexRaw`, `UiRectInstanceRaw`, `UiTextVertexRaw` in `render.rs`), the
   per-vertex/per-instance buffer split, and vertex step modes — WGSL doesn't express any of that,

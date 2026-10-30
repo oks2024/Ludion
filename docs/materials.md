@@ -1,5 +1,5 @@
 ---
-description: The three material scalars, the three surfaces that author them, precedence, and emissive bloom
+description: Material scalars, author surfaces, precedence, texture maps, cutout, double-sided, emissive bloom
 ---
 
 # Materials
@@ -8,8 +8,7 @@ description: The three material scalars, the three surfaces that author them, pr
 
 Every mesh-bearing surface — a primitive, an imported asset, a voxel model — shades through the same
 Cook-Torrance point-light + ambient BRDF, driven by three scalars, each optionally modulated by a
-texture map (below). A material here is always exactly these three numbers, whether authored flat or
-sampled per-pixel.
+texture map (below). A material is always exactly these three numbers, flat or sampled per-pixel.
 
 - **`roughness`** — perceptual, `[0, 1]`. `0.0` is mirror-smooth (a tight, bright highlight); `1.0`
   is fully matte (a broad, dim one). Default `1.0` — deliberately the closest the GGX lobe gets to
@@ -47,11 +46,9 @@ list — uses it entirely; the `Mesh` component's fields apply only to a mesh th
 are otherwise inert.** There is no partial mix *between surfaces*: a voxel model with one palette
 entry carrying `metallic: 1.0` ignores `Mesh.roughness`/`metallic`/`emissive` for every quad,
 including the ones whose palette entry authored nothing (those quads fall back to the default
-material `1.0/0.0/0.0`, not the component's values). This is different from `color`, which always
-multiplies (vertex × instance, white-neutral) — metallic's sane default (`0.0`) is multiplication's
-absorbing element, so multiplying materials together would make either a component-driven
-roughness/metallic sweep or a palette-driven metal inexpressible. Practically: pick **one** surface
-per mesh and author the whole material there. (A sculpt's own palette surface blends *within*
+material `1.0/0.0/0.0`, not the component's values). Unlike `color`, which always multiplies (vertex × instance),
+metallic's default (`0.0`) is multiplication's absorbing element, so multiplying would make either a
+component-driven sweep or a palette-driven metal inexpressible. Pick **one** surface per mesh and author the whole material there. (A sculpt's own palette surface blends *within*
 itself, across its parts, as noted above — that blend is internal to the one surface a sculpt
 authors, not a mix with `Mesh`'s fields.)
 
@@ -78,7 +75,7 @@ Textures arrive through `ludion import` (glTF), through `gen accept` on a genera
 `ludion mesh apply` deriving one from a `kind: mesh-edit` document (`ludion docs mesh-editing`) — the
 one deliberate way to paint a map without a DCC tool, `emissive` only. There is no wire command and
 no editor UI that authors a texture directly. A hand-written reference in a `.mesh.yaml` is legal
-(the format is read, not import-only) but not a promoted workflow. Each map is a
+but not a promoted workflow. Each map is a
 `{ path, wrap?, scale?/strength? }` block, `path` relative to the mesh document's own directory (`..`
 is fine; an absolute, drive or device path is refused, `L1111`):
 
@@ -100,6 +97,46 @@ A mesh that references no texture is unaffected: the renderer's untextured arith
 as it did before textures existed (`ludion devdocs renderer-shading`). Voxel models, sculpt models,
 and primitives (`cube`/`plane`/`sphere`) carry no UVs and so cannot reference a texture at all —
 voxel texturing is a recorded deferred possibility, not a current surface. To mark a UV-less mesh, project a texture onto it with a `Decal` (`ludion docs decals`).
+
+## Cutout and double-sided
+
+An asset mesh document carries three optional keys after its maps, none written at its default, so a
+document that authors none keeps its bytes:
+
+- **`alpha_mode`** — `opaque` (default) or `mask`; any other value is `L1110`. On `opaque` alpha is ignored.
+- **`alpha_cutoff`** — `[0, 1]`, `mask` only, default `0.5`. Non-finite, outside `[0, 1]`, or set
+  without `mask` is `L1111`.
+- **`double_sided`** — default `false`; the mesh draws unculled.
+
+```yaml
+base_color_texture:
+  path: textures/0123456789abcdef.png
+alpha_mode: mask
+alpha_cutoff: 0.35
+double_sided: true
+```
+
+**Coverage** is `Mesh.color.a × base_color_texture.a` (glTF's rule); a `mask` fragment under the cutoff
+is discarded. `mask` with no base map is legal — the coverage is then `Mesh.color.a`. The test runs in
+the scene pass, probe capture, the SSAO prepass and every shadow caster (the sun's map and cascades,
+the local-light atlas, the drop-shadow occlusion depth), so a grating's holes reach its shadow and the
+light shafts. A double-sided mesh casts from both faces.
+
+On a back face the whole shading frame flips: the final normal is negated after the normal map applies,
+so both faces show the same relief, and `scene_normal`, reflections, SSR and lit decals see the flipped
+normal. Decal receivers paint double-sided backs. A mirrored double-sided instance matches its
+unmirrored twin.
+
+A base-colour map bound by a `mask` mesh gets a coverage-preserving mip chain: each level's alpha is
+scaled so the fraction of texels at or above the cutoff matches level 0, so thin bars survive at
+distance. It holds under `textures: source` and `cooked` alike; every other map keeps the box chain.
+
+**Render-only:** a collider built from a cutout mesh stays solid, so a grating stays walkable. The GI
+voxelizer skips `mask` meshes, so light passes through a grating (`ludion docs global-illumination`).
+Voxel, sculpt and primitive meshes carry no UVs and cannot be cutout. `BLEND` (sorted transparency) is
+not supported: `ludion import` refuses it with `L1202`; glTF `MASK` and `doubleSided` map onto these
+keys. `examples/gallery/cutout-double-sided.yaml` shows it all; the Blender set-up is
+`ludion docs blender-craft`.
 
 ## A roughness × metallic sweep (copyable)
 
@@ -141,15 +178,13 @@ larger grid (`examples/gallery/material-park.yaml` is the full 6×6 version):
         metallic: 1.0
 ```
 
-The same albedo, varied only by the two scalars, is the fastest way to see the BRDF: the left sphere
-gets a tight bright highlight on an otherwise-colored diffuse ball; the right gets a broad, dim
+The left sphere gets a tight bright highlight on a colored diffuse ball; the right a broad, dim
 highlight tinted to the albedo with almost no diffuse response.
 
 ## Emissive + bloom (copyable)
 
-`emissive` rides the renderer's existing HDR/bloom pipeline with zero new passes: any fragment whose
-final color exceeds `1.0` blooms. A voxel palette entry is a natural source since a whole glyph glows
-at once — from `examples/gallery/voxels/beacon.voxel.yaml`:
+`emissive` rides the existing HDR/bloom pipeline with no new pass: any fragment whose final color
+exceeds `1.0` blooms. A voxel palette entry is a natural source — from `examples/gallery/voxels/beacon.voxel.yaml`:
 
 ```yaml
 palette:
@@ -170,8 +205,8 @@ palette:
     roughness: 0.25
 ```
 
-A `Mesh.emissive` on a plain primitive works the same way — set it high enough that `color ×
-emissive` clears `1.0` and the bloom pass picks it up; there is no separate "make it bloom" switch.
+A `Mesh.emissive` on a primitive works the same way: set it so `color × emissive` clears `1.0`; there
+is no separate "make it bloom" switch.
 
 ## Metals under ambient-only light
 
@@ -180,10 +215,9 @@ emissive` clears `1.0` and the bloom pass picks it up; there is no separate "mak
 point lights and sun. A `metallic: 1.0` surface has no diffuse response at all, so **a metal lit only
 by flat ambient (no point light or sun reaching it) reads as nearly black** — that is the BRDF working
 as specified, not a bug. If a metallic mesh looks dead in an `Environment`-less scene, the fix is
-content, not the shader: add or move a point light so its specular highlight actually lands on the
-surface, the way `material-park.yaml`'s warm key + cool fill are placed to hit every sphere in the
-sweep. Don't spend a bless round trying to brighten a metal by raising `emissive` or `color` — that
-changes the surface's own light output or tint, not its ability to reflect a light that isn't there.
+content, not the shader: add or move a point light so its specular highlight lands on the surface, as
+`material-park.yaml`'s warm key + cool fill do. Raising `emissive` or `color` doesn't help — it changes
+the surface's own light or tint, not its ability to reflect a light that isn't there.
 
 **With an `Environment`**, this stops being a hard limit: its GPU-prefiltered sky feeds every lit
 surface's ambient term, so a metal reflects the sky instead of nothing, with no point light required.
