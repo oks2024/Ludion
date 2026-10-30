@@ -4223,6 +4223,7 @@ impl FrameRecorder<'_> {
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::DecalReceiver, variant));
             }
             rp.set_bind_group(1, draw_bg, &[]);
+            rp.set_bind_group(MATERIAL_GROUP, &self.r.default_material_bg, &[]);
             let mb = self.r.mesh_of(draw.shape);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
             rp.set_vertex_buffer(1, draw.instances.slice(..));
@@ -4239,6 +4240,7 @@ impl FrameRecorder<'_> {
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::DecalReceiver, variant));
             }
             rp.set_bind_group(1, draw_bg, &[]);
+            rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
             rp.set_vertex_buffer(1, draw.instances.slice(..));
             rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -6449,9 +6451,21 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::DecalReceiver,
         file_name: "decal_receiver.wgsl",
         body: include_str!("shaders/decal_receiver.wgsl"),
-        // The prepass's vertex stage and dither: the camera, the bone palette and the tile.
-        snippets: &[Snippet::Camera, Snippet::Skin, Snippet::Bayer],
-        layouts: &[Some(LayoutId::CameraSkin), Some(LayoutId::DecalReceiver)],
+        // The prepass's vertex stage, dither and cutout test: the camera, the bone palette, the tile
+        // and the per-draw material.
+        snippets: &[
+            Snippet::Camera,
+            Snippet::Skin,
+            Snippet::Bayer,
+            Snippet::MeshMaterial,
+        ],
+        layouts: &[
+            Some(LayoutId::CameraSkin),
+            Some(LayoutId::DecalReceiver),
+            None,
+            None,
+            Some(LayoutId::MeshMaterial),
+        ],
     },
     ShaderDesc {
         id: ShaderId::DecalLit,
@@ -15801,6 +15815,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **A mask mesh's holes claim no receiver id.** A mask quad 0.5 mm above the floor, cut over its
+    /// left half, sits inside the depth slack of the floor beneath it. A decal listing only the quad
+    /// paints the quad's opaque half and leaves the floor under the holes as the bare render has it.
+    #[test]
+    fn needs_gpu_a_cutout_receiver_claims_no_pixel_through_its_holes() {
+        let Some(renderer) =
+            skip_or_renderer("a_cutout_receiver_claims_no_pixel_through_its_holes")
+        else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut scene = drop_shadow_fixture(w, h, false);
+        add_quad(
+            &mut scene,
+            mask_quad(0xF4_00, 0, 255),
+            flat_quad_model(0.0005, 3.0),
+        );
+        let mut decal =
+            decal_instance(crate::scene::DecalBlend::Multiply, Vec3::new(8.0, 2.0, 8.0));
+        decal.receivers = crate::scene::DecalReceivers::Only(vec![1]);
+        let (bare, painted) = decal_pair(&renderer, &scene, (w, h), vec![decal]);
+
+        let (hx, hy) = pixel_of(&scene, Vec3::new(-1.5, 0.0005, 0.5), w, h);
+        let (ox, oy) = pixel_of(&scene, Vec3::new(1.5, 0.0005, 0.5), w, h);
+        assert!(luma(&bare, hx, hy) > 30, "the floor under the holes is lit");
+        assert!(
+            luma(&painted, ox, oy) * 2 < luma(&bare, ox, oy),
+            "the opaque half is painted"
+        );
+        assert_eq!(
+            luma(&painted, hx, hy),
+            luma(&bare, hx, hy),
+            "the floor under the holes is not the quad's to paint"
+        );
     }
 
     /// **A map's `uv_rect` picks the texels the box shows**: the left texel is opaque black, the

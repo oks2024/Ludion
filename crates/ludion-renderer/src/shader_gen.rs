@@ -78,37 +78,37 @@ pub const LIT_NORMAL_MAP: u32 = 1;
 
 /// `MATERIAL_ALPHA_MASK`, hoisted from WGSL `const MATERIAL_ALPHA_MASK: u32`.
 ///
-/// Declared in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// Declared in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const MATERIAL_ALPHA_MASK: u32 = 32;
 
 /// `MATERIAL_BASE_COLOR`, hoisted from WGSL `const MATERIAL_BASE_COLOR: u32`.
 ///
-/// Declared in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// Declared in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const MATERIAL_BASE_COLOR: u32 = 1;
 
 /// `MATERIAL_DOUBLE_SIDED`, hoisted from WGSL `const MATERIAL_DOUBLE_SIDED: u32`.
 ///
-/// Declared in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// Declared in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const MATERIAL_DOUBLE_SIDED: u32 = 64;
 
 /// `MATERIAL_EMISSIVE`, hoisted from WGSL `const MATERIAL_EMISSIVE: u32`.
 ///
-/// Declared in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// Declared in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const MATERIAL_EMISSIVE: u32 = 16;
 
 /// `MATERIAL_METALLIC_ROUGHNESS`, hoisted from WGSL `const MATERIAL_METALLIC_ROUGHNESS: u32`.
 ///
-/// Declared in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// Declared in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const MATERIAL_METALLIC_ROUGHNESS: u32 = 2;
 
 /// `MATERIAL_NORMAL`, hoisted from WGSL `const MATERIAL_NORMAL: u32`.
 ///
-/// Declared in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// Declared in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const MATERIAL_NORMAL: u32 = 4;
 
 /// `MATERIAL_OCCLUSION`, hoisted from WGSL `const MATERIAL_OCCLUSION: u32`.
 ///
-/// Declared in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// Declared in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const MATERIAL_OCCLUSION: u32 = 8;
 
 /// `MAX_RELIGHT_POINTS`, hoisted from WGSL `const MAX_RELIGHT_POINTS: u32`.
@@ -515,7 +515,7 @@ const _: () = assert!(core::mem::offset_of!(LocalView, params) == 80);
 
 /// WGSL `struct MeshMaterial`.
 ///
-/// Declared in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// Declared in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct MeshMaterial {
@@ -1681,7 +1681,7 @@ pub const GI_BOUNCE_B_BINDING: u32 = 9;
 pub const GI_DYN_TEX_GROUP: u32 = 3;
 pub const GI_DYN_TEX_BINDING: u32 = 10;
 
-/// `base_color_tex` — `@group(4) @binding(0)`, in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// `base_color_tex` — `@group(4) @binding(0)`, in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const BASE_COLOR_TEX_GROUP: u32 = 4;
 pub const BASE_COLOR_TEX_BINDING: u32 = 0;
 
@@ -1693,7 +1693,7 @@ pub const LIT_DEPTH_BINDING: u32 = 0;
 pub const LIT_SURFACE_GROUP: u32 = 4;
 pub const LIT_SURFACE_BINDING: u32 = 1;
 
-/// `metallic_roughness_tex` — `@group(4) @binding(1)`, in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// `metallic_roughness_tex` — `@group(4) @binding(1)`, in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const METALLIC_ROUGHNESS_TEX_GROUP: u32 = 4;
 pub const METALLIC_ROUGHNESS_TEX_BINDING: u32 = 1;
 
@@ -1701,7 +1701,7 @@ pub const METALLIC_ROUGHNESS_TEX_BINDING: u32 = 1;
 pub const LIT_RECEIVERS_GROUP: u32 = 4;
 pub const LIT_RECEIVERS_BINDING: u32 = 2;
 
-/// `normal_tex` — `@group(4) @binding(2)`, in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// `normal_tex` — `@group(4) @binding(2)`, in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const NORMAL_TEX_GROUP: u32 = 4;
 pub const NORMAL_TEX_BINDING: u32 = 2;
 
@@ -1709,11 +1709,11 @@ pub const NORMAL_TEX_BINDING: u32 = 2;
 pub const LIT_PARAMS_GROUP: u32 = 4;
 pub const LIT_PARAMS_BINDING: u32 = 3;
 
-/// `occlusion_tex` — `@group(4) @binding(3)`, in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// `occlusion_tex` — `@group(4) @binding(3)`, in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const OCCLUSION_TEX_GROUP: u32 = 4;
 pub const OCCLUSION_TEX_BINDING: u32 = 3;
 
-/// `emissive_tex` — `@group(4) @binding(4)`, in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// `emissive_tex` — `@group(4) @binding(4)`, in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const EMISSIVE_TEX_GROUP: u32 = 4;
 pub const EMISSIVE_TEX_BINDING: u32 = 4;
 
@@ -1725,7 +1725,7 @@ pub const LIT_DECALS_BINDING: u32 = 4;
 pub const LIT_RECEIVER_IDS_GROUP: u32 = 4;
 pub const LIT_RECEIVER_IDS_BINDING: u32 = 5;
 
-/// `material_samp` — `@group(4) @binding(5)`, in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// `material_samp` — `@group(4) @binding(5)`, in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const MATERIAL_SAMP_GROUP: u32 = 4;
 pub const MATERIAL_SAMP_BINDING: u32 = 5;
 
@@ -1733,7 +1733,7 @@ pub const MATERIAL_SAMP_BINDING: u32 = 5;
 pub const LIT_BASE_MAP_GROUP: u32 = 4;
 pub const LIT_BASE_MAP_BINDING: u32 = 6;
 
-/// `material` — `@group(4) @binding(6)`, in `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// `material` — `@group(4) @binding(6)`, in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub const MATERIAL_GROUP: u32 = 4;
 pub const MATERIAL_BINDING: u32 = 6;
 
@@ -1782,7 +1782,7 @@ pub fn create_atlas_tex_atlas_sampler_bgl(device: &wgpu::Device) -> wgpu::BindGr
     })
 }
 
-/// Bind group layout `base_color_tex_metallic_roughness_tex_normal_tex_occlusion_tex_emissive_tex_material_samp_material` (@group 4), from `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
+/// Bind group layout `base_color_tex_metallic_roughness_tex_normal_tex_occlusion_tex_emissive_tex_material_samp_material` (@group 4), from `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`.
 pub fn create_base_color_tex_metallic_roughness_tex_normal_tex_occlusion_tex_emissive_tex_material_samp_material_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {

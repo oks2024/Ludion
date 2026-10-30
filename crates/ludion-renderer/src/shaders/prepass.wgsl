@@ -93,7 +93,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
         discard;
     }
     var coverage = in.color.a;
-    if ((material.flags & MATERIAL_BASE_COLOR) != 0u) {
+    if ((material.flags & (MATERIAL_ALPHA_MASK | MATERIAL_BASE_COLOR)) == (MATERIAL_ALPHA_MASK | MATERIAL_BASE_COLOR)) {
         coverage = coverage * textureSample(base_color_tex, material_samp, in.uv).a;
     }
     if (material_masked(coverage)) {

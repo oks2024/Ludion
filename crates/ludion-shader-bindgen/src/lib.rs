@@ -195,7 +195,12 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ),
     (
         "decal_receiver.wgsl",
-        &["camera.wgsl", "skin.wgsl", "bayer.wgsl"],
+        &[
+            "camera.wgsl",
+            "skin.wgsl",
+            "bayer.wgsl",
+            "mesh_material.wgsl",
+        ],
     ),
     ("dof.wgsl", &["fullscreen_vs.wgsl"]),
     ("dof_coc.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),

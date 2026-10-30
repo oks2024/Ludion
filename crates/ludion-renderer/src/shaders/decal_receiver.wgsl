@@ -6,11 +6,13 @@
 // There is no depth attachment: a fragment writes only where its depth matches the opaque pass's
 // `scene_depth` (within `DEPTH_SLACK`), so a listed mesh hidden behind another surface never claims
 // the pixel. The screen-door discard is the prepass's, so a mesh the camera-occlusion policy has
-// dithered away claims only the pixels the scene pass drew.
+// dithered away claims only the pixels the scene pass drew. The cutout test is the scene pass's too
+// (`material_masked` over the same coverage), so a mask mesh's holes claim nothing.
 //
 // The vertex inputs are mesh.wgsl's verbatim, as the prepass's are (all twenty locations), so the
 // pipeline reuses `MESH_VERTEX_ATTRS`/`MESH_INSTANCE_ATTRS`. The `Camera` uniform and the bone palette
-// (@group 0) and the shared `BAYER4` tile are snippets composed ahead of this file.
+// (@group 0), the shared `BAYER4` tile and the per-draw material (@group 4) are snippets composed
+// ahead of this file.
 
 struct VsIn {
     @location(0) position: vec3<f32>,
@@ -60,6 +62,9 @@ struct VsOut {
     @location(0) world_y: f32,
     @location(1) @interpolate(flat) fade: vec2<f32>,
     @location(2) @interpolate(flat) instance: u32,
+    @location(3) uv: vec2<f32>,
+    // The scene pass's own `vertex_color * color`, so the cutout coverage interpolates identically.
+    @location(4) color: vec4<f32>,
 };
 
 @vertex
@@ -77,6 +82,8 @@ fn vs_main(in: VsIn, @builtin(instance_index) instance: u32) -> VsOut {
     out.world_y = world.y;
     out.fade = in.fade.xy;
     out.instance = instance;
+    out.uv = in.uv;
+    out.color = in.vertex_color * in.color;
     return out;
 }
 
@@ -90,6 +97,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let bx = u32(in.clip.x) % 4u;
     let by = u32(in.clip.y) % 4u;
     if (eff_fade <= BAYER4[by * 4u + bx]) {
+        discard;
+    }
+    var coverage = in.color.a;
+    if ((material.flags & (MATERIAL_ALPHA_MASK | MATERIAL_BASE_COLOR)) == (MATERIAL_ALPHA_MASK | MATERIAL_BASE_COLOR)) {
+        coverage = coverage * textureSample(base_color_tex, material_samp, in.uv).a;
+    }
+    if (material_masked(coverage)) {
         discard;
     }
     let scene = textureLoad(recv_depth, vec2<i32>(in.clip.xy), 0);
