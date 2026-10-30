@@ -500,7 +500,12 @@ mod tests {
             ),
             // Nine: the anchored sun kernel, the cascade kernel and the local-light kernel each read
             // the count once as the loop's reach and twice more as the square that normalizes it.
-            ("mesh.wgsl", include_str!("shaders/mesh.wgsl"), "sun.pcf", 9),
+            (
+                "mesh_shading.wgsl",
+                include_str!("shaders/snippets/mesh_shading.wgsl"),
+                "sun.pcf",
+                9,
+            ),
             // Four: the march's loop bound, the ray set's elevation denominator, the hit cache's
             // stride, and the estimator's own `1/N`.
             (

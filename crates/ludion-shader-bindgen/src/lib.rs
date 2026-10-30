@@ -145,6 +145,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "hdr.wgsl",
             "dfg.wgsl",
             "gi_probe.wgsl",
+            "mesh_shading.wgsl",
         ],
     ),
     (

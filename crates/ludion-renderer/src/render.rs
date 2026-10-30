@@ -5732,6 +5732,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Hdr,
             Snippet::Dfg,
             Snippet::GiProbe,
+            Snippet::MeshShading,
         ],
         layouts: &[
             LayoutId::CameraSkin,
@@ -6114,6 +6115,8 @@ enum Snippet {
     /// `sh_l1` and `sky_visibility_at`, the one read of the sky-visibility probe volume,
     /// binding-free (mesh, reflections).
     GiProbe,
+    /// The mesh lighting — groups 2–3 and `shade` (mesh).
+    MeshShading,
     /// The pyramid footprint rule — a child texel's source interval and the texels it touches,
     /// binding-free (the Hi-Z and SSR colour pyramids).
     Footprint,
@@ -6150,6 +6153,7 @@ impl Snippet {
             Snippet::Dfg => "dfg.wgsl",
             Snippet::SpecularIbl => "specular_ibl.wgsl",
             Snippet::GiProbe => "gi_probe.wgsl",
+            Snippet::MeshShading => "mesh_shading.wgsl",
             Snippet::Footprint => "footprint.wgsl",
             Snippet::Ssr => "ssr.wgsl",
             Snippet::Srgb => "srgb.wgsl",
@@ -6175,6 +6179,7 @@ impl Snippet {
             Snippet::Dfg => include_str!("shaders/snippets/dfg.wgsl"),
             Snippet::SpecularIbl => include_str!("shaders/snippets/specular_ibl.wgsl"),
             Snippet::GiProbe => include_str!("shaders/snippets/gi_probe.wgsl"),
+            Snippet::MeshShading => include_str!("shaders/snippets/mesh_shading.wgsl"),
             Snippet::Footprint => include_str!("shaders/snippets/footprint.wgsl"),
             Snippet::Ssr => include_str!("shaders/snippets/ssr.wgsl"),
             Snippet::Srgb => include_str!("shaders/snippets/srgb.wgsl"),
@@ -6201,6 +6206,7 @@ impl Snippet {
             Snippet::Dfg,
             Snippet::SpecularIbl,
             Snippet::GiProbe,
+            Snippet::MeshShading,
             Snippet::Footprint,
             Snippet::Ssr,
             Snippet::Srgb,
