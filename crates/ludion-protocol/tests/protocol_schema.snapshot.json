@@ -510,7 +510,7 @@
         "type": "object"
       },
       "RenderDebugParams": {
-        "description": "Parameters for `render.debug`.\n\nOne verb that reads and sets. `categories` absent (`{}`) is a pure read; a list replaces the set\nof enabled debug-draw categories: `[]` turns everything off, and a list containing `\"all\"` turns\neverything on. Any string is accepted — a category nothing draws is simply never in the reply's\n`drawn`, which is how a client checks what a scene actually emits.\n\n`view` shows an SSR debug view in place of the composite: a name sets it, an explicit `null`\nclears it, and absent keeps what is in force. A view never turns SSR on — on a frame without\nSSR the normal frame is drawn.\n\nThe state is host render state, never world state: not hashed, not captured by `engine.snapshot`,\nnot recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a\nscreenshot taken with `motor` enabled shows the motor's lines.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{RenderDebugParams, RenderDebugView};\n\nlet cmd = Command::RenderDebug(RenderDebugParams {\n    categories: Some(vec![\"path\".to_string()]),\n    view: None,\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({ \"method\": \"render.debug\", \"params\": { \"categories\": [\"path\"] } }),\n);\n\n// An absent `categories` only reads.\nassert_eq!(RenderDebugParams::default().categories, None);\n\n// A `view` sets an SSR debug view, an explicit `null` clears it, an absent one keeps it.\nlet set: RenderDebugParams = serde_json::from_str(r#\"{\"view\": \"ssr_confidence\"}\"#).unwrap();\nassert_eq!(set.view, Some(Some(RenderDebugView::SsrConfidence)));\nlet cleared: RenderDebugParams = serde_json::from_str(r#\"{\"view\": null}\"#).unwrap();\nassert_eq!(cleared.view, Some(None));\n```",
+        "description": "Parameters for `render.debug`.\n\nOne verb that reads and sets. `categories` absent (`{}`) is a pure read; a list replaces the set\nof enabled debug-draw categories: `[]` turns everything off, and a list containing `\"all\"` turns\neverything on. Any string is accepted — a category nothing draws is simply never in the reply's\n`drawn`, which is how a client checks what a scene actually emits.\n\n`view` shows a debug view in place of the composite: a name sets it, an explicit `null`\nclears it, and absent keeps what is in force. A view never turns its effect on — on a frame\nwithout SSR, probes or a granted local-light shadow the normal frame is drawn.\n\nThe state is host render state, never world state: not hashed, not captured by `engine.snapshot`,\nnot recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a\nscreenshot taken with `motor` enabled shows the motor's lines.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{RenderDebugParams, RenderDebugView};\n\nlet cmd = Command::RenderDebug(RenderDebugParams {\n    categories: Some(vec![\"path\".to_string()]),\n    view: None,\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({ \"method\": \"render.debug\", \"params\": { \"categories\": [\"path\"] } }),\n);\n\n// An absent `categories` only reads.\nassert_eq!(RenderDebugParams::default().categories, None);\n\n// A `view` sets an SSR debug view, an explicit `null` clears it, an absent one keeps it.\nlet set: RenderDebugParams = serde_json::from_str(r#\"{\"view\": \"ssr_confidence\"}\"#).unwrap();\nassert_eq!(set.view, Some(Some(RenderDebugView::SsrConfidence)));\nlet cleared: RenderDebugParams = serde_json::from_str(r#\"{\"view\": null}\"#).unwrap();\nassert_eq!(cleared.view, Some(None));\n```",
         "properties": {
           "categories": {
             "description": "The categories to enable (`[]` for none, `\"all\"` for every one), or absent to read.",
@@ -531,13 +531,13 @@
                 "type": "null"
               }
             ],
-            "description": "The SSR debug view to show, an explicit `null` to clear it, or absent to keep it."
+            "description": "The debug view to show, an explicit `null` to clear it, or absent to keep it."
           }
         },
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nor the local-light shadow atlas.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -552,6 +552,11 @@
           {
             "const": "probe_index",
             "description": "The winning reflection probe per pixel, coloured by rank.",
+            "type": "string"
+          },
+          {
+            "const": "local_shadow_atlas",
+            "description": "The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells\ndark blue, a red line on every cell border.",
             "type": "string"
           }
         ]
@@ -2696,7 +2701,7 @@
         "type": "object"
       },
       "RenderDebugParams": {
-        "description": "Parameters for `render.debug`.\n\nOne verb that reads and sets. `categories` absent (`{}`) is a pure read; a list replaces the set\nof enabled debug-draw categories: `[]` turns everything off, and a list containing `\"all\"` turns\neverything on. Any string is accepted — a category nothing draws is simply never in the reply's\n`drawn`, which is how a client checks what a scene actually emits.\n\n`view` shows an SSR debug view in place of the composite: a name sets it, an explicit `null`\nclears it, and absent keeps what is in force. A view never turns SSR on — on a frame without\nSSR the normal frame is drawn.\n\nThe state is host render state, never world state: not hashed, not captured by `engine.snapshot`,\nnot recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a\nscreenshot taken with `motor` enabled shows the motor's lines.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{RenderDebugParams, RenderDebugView};\n\nlet cmd = Command::RenderDebug(RenderDebugParams {\n    categories: Some(vec![\"path\".to_string()]),\n    view: None,\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({ \"method\": \"render.debug\", \"params\": { \"categories\": [\"path\"] } }),\n);\n\n// An absent `categories` only reads.\nassert_eq!(RenderDebugParams::default().categories, None);\n\n// A `view` sets an SSR debug view, an explicit `null` clears it, an absent one keeps it.\nlet set: RenderDebugParams = serde_json::from_str(r#\"{\"view\": \"ssr_confidence\"}\"#).unwrap();\nassert_eq!(set.view, Some(Some(RenderDebugView::SsrConfidence)));\nlet cleared: RenderDebugParams = serde_json::from_str(r#\"{\"view\": null}\"#).unwrap();\nassert_eq!(cleared.view, Some(None));\n```",
+        "description": "Parameters for `render.debug`.\n\nOne verb that reads and sets. `categories` absent (`{}`) is a pure read; a list replaces the set\nof enabled debug-draw categories: `[]` turns everything off, and a list containing `\"all\"` turns\neverything on. Any string is accepted — a category nothing draws is simply never in the reply's\n`drawn`, which is how a client checks what a scene actually emits.\n\n`view` shows a debug view in place of the composite: a name sets it, an explicit `null`\nclears it, and absent keeps what is in force. A view never turns its effect on — on a frame\nwithout SSR, probes or a granted local-light shadow the normal frame is drawn.\n\nThe state is host render state, never world state: not hashed, not captured by `engine.snapshot`,\nnot recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a\nscreenshot taken with `motor` enabled shows the motor's lines.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{RenderDebugParams, RenderDebugView};\n\nlet cmd = Command::RenderDebug(RenderDebugParams {\n    categories: Some(vec![\"path\".to_string()]),\n    view: None,\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({ \"method\": \"render.debug\", \"params\": { \"categories\": [\"path\"] } }),\n);\n\n// An absent `categories` only reads.\nassert_eq!(RenderDebugParams::default().categories, None);\n\n// A `view` sets an SSR debug view, an explicit `null` clears it, an absent one keeps it.\nlet set: RenderDebugParams = serde_json::from_str(r#\"{\"view\": \"ssr_confidence\"}\"#).unwrap();\nassert_eq!(set.view, Some(Some(RenderDebugView::SsrConfidence)));\nlet cleared: RenderDebugParams = serde_json::from_str(r#\"{\"view\": null}\"#).unwrap();\nassert_eq!(cleared.view, Some(None));\n```",
         "properties": {
           "categories": {
             "description": "The categories to enable (`[]` for none, `\"all\"` for every one), or absent to read.",
@@ -2717,13 +2722,13 @@
                 "type": "null"
               }
             ],
-            "description": "The SSR debug view to show, an explicit `null` to clear it, or absent to keep it."
+            "description": "The debug view to show, an explicit `null` to clear it, or absent to keep it."
           }
         },
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nor the local-light shadow atlas.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -2738,6 +2743,11 @@
           {
             "const": "probe_index",
             "description": "The winning reflection probe per pixel, coloured by rank.",
+            "type": "string"
+          },
+          {
+            "const": "local_shadow_atlas",
+            "description": "The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells\ndark blue, a red line on every cell border.",
             "type": "string"
           }
         ]
@@ -4487,7 +4497,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nor the local-light shadow atlas.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -4502,6 +4512,11 @@
           {
             "const": "probe_index",
             "description": "The winning reflection probe per pixel, coloured by rank.",
+            "type": "string"
+          },
+          {
+            "const": "local_shadow_atlas",
+            "description": "The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells\ndark blue, a red line on every cell border.",
             "type": "string"
           }
         ]
@@ -6639,7 +6654,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nor the local-light shadow atlas.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -6654,6 +6669,11 @@
           {
             "const": "probe_index",
             "description": "The winning reflection probe per pixel, coloured by rank.",
+            "type": "string"
+          },
+          {
+            "const": "local_shadow_atlas",
+            "description": "The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells\ndark blue, a red line on every cell border.",
             "type": "string"
           }
         ]

@@ -234,10 +234,11 @@ export type Command =
  */
 export type GiRebakeMode = 'auto' | 'hold';
 /**
- * A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.
+ * A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,
+ * or the local-light shadow atlas.
  * The spelling matches `ludion render --debug-view`.
  */
-export type RenderDebugView = 'ssr_confidence' | 'ssr_footprint' | 'probe_index';
+export type RenderDebugView = 'ssr_confidence' | 'ssr_footprint' | 'probe_index' | 'local_shadow_atlas';
 /**
  * The event envelope: one [`Event`] (its `event` name + `data`), plus `sub`, `seq`, and an optional
  * `frame`.
@@ -2050,9 +2051,9 @@ export interface ViewPose {
  * everything on. Any string is accepted — a category nothing draws is simply never in the reply's
  * `drawn`, which is how a client checks what a scene actually emits.
  *
- * `view` shows an SSR debug view in place of the composite: a name sets it, an explicit `null`
- * clears it, and absent keeps what is in force. A view never turns SSR on — on a frame without
- * SSR the normal frame is drawn.
+ * `view` shows a debug view in place of the composite: a name sets it, an explicit `null`
+ * clears it, and absent keeps what is in force. A view never turns its effect on — on a frame
+ * without SSR, probes or a granted local-light shadow the normal frame is drawn.
  *
  * The state is host render state, never world state: not hashed, not captured by `engine.snapshot`,
  * not recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a
@@ -2088,7 +2089,7 @@ export interface RenderDebugParams {
    */
   categories?: string[] | null;
   /**
-   * The SSR debug view to show, an explicit `null` to clear it, or absent to keep it.
+   * The debug view to show, an explicit `null` to clear it, or absent to keep it.
    */
   view?: RenderDebugView | null;
   [k: string]: unknown;

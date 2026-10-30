@@ -535,9 +535,11 @@ enum Command {
         /// `ssr_confidence` (the screen-space reflection trace's confidence as gray),
         /// `ssr_footprint` (the colour-pyramid level it read, over the level count; magenta where
         /// it found no hit) or `probe_index` (the winning reflection probe per pixel, coloured by
-        /// rank; gray where no probe applies, black where there is no surface). A view never turns
+        /// rank; gray where no probe applies, black where there is no surface) or
+        /// `local_shadow_atlas` (the local-light shadow atlas, letterboxed). A view never turns
         /// its effect on: where the scene's `PostProcess.ssr` is 0, this quality masks the trace,
-        /// or the scene has no probes, the normal frame is drawn and the summary line says so.
+        /// the scene has no probes, or no local light is granted a shadow, the normal frame is
+        /// drawn and the summary line says so.
         #[arg(
             long,
             value_enum,
@@ -1651,6 +1653,8 @@ enum CliDebugView {
     SsrFootprint,
     #[value(name = "probe_index")]
     ProbeIndex,
+    #[value(name = "local_shadow_atlas")]
+    LocalShadowAtlas,
 }
 
 impl From<CliDebugView> for ludion_engine::DebugView {
@@ -1659,6 +1663,7 @@ impl From<CliDebugView> for ludion_engine::DebugView {
             CliDebugView::SsrConfidence => ludion_engine::DebugView::SsrConfidence,
             CliDebugView::SsrFootprint => ludion_engine::DebugView::SsrFootprint,
             CliDebugView::ProbeIndex => ludion_engine::DebugView::ProbeIndex,
+            CliDebugView::LocalShadowAtlas => ludion_engine::DebugView::LocalShadowAtlas,
         }
     }
 }

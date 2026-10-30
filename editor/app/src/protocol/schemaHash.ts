@@ -3,4 +3,4 @@
 // in `editor/protocol`. The `schema-drift` gate rejects a stale copy.
 
 /** XXH3-64 of the protocol schema snapshot these editor types were generated from. */
-export const SCHEMA_HASH = '0c114fba52b0fcb2';
+export const SCHEMA_HASH = 'c14e442a8c517db0';

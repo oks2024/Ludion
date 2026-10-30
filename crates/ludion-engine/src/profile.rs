@@ -900,12 +900,7 @@ fn profile_local_shadows(engine: &mut Engine) -> Result<LocalShadowProfile, Diag
     let scene = engine
         .extract_render_scene(width, height)
         .map_err(collapse)?;
-    let setting = engine.quality();
-    let edge = if setting.quality.shadows {
-        setting.params.local_shadow_atlas_size
-    } else {
-        0
-    };
+    let edge = engine.quality().local_shadow_edge();
     let stats = ludion_renderer::local_shadow_stats(&scene, edge);
     Ok(LocalShadowProfile {
         requested: u64::from(stats.requested),
@@ -1106,13 +1101,13 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// [`build_frame_graph`](ludion_renderer::build_frame_graph) can ever produce (`shadow` only for a
 /// scene with a sun, `overlay` only for a scene with UI, `resolve` only above a render scale of 1, `upscale` only below it,
 /// `gi_inject` only for a scene with a bouncing `GiVolume` and a light marked dynamic,
-/// `probe_relight` only for a scene with probes, `local_shadow` only for a scene with a shadowed spot or
+/// `probe_relight` only for a scene with probes, `local_shadow` (and `local_shadow_debug`) only for a scene with a shadowed spot or
 /// point light, `drop_shadow_occlusion` and `projector` only for a scene
 /// with a drop shadow).
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 39] = [
+const KNOWN_PASS_NAMES: [&str; 40] = [
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
     ludion_renderer::graph::pass::PREPASS,
@@ -1132,6 +1127,7 @@ const KNOWN_PASS_NAMES: [&str; 39] = [
     ludion_renderer::graph::pass::DROP_SHADOW_OCCLUSION,
     ludion_renderer::graph::pass::PROJECTOR,
     ludion_renderer::graph::pass::PROBE_DEBUG,
+    ludion_renderer::graph::pass::LOCAL_SHADOW_DEBUG,
     ludion_renderer::graph::pass::PROBE_RELIGHT,
     ludion_renderer::graph::pass::SHAFTS,
     ludion_renderer::graph::pass::SHAFTS_BLUR,
@@ -3343,6 +3339,7 @@ entities:
             ssr: Some(0.5),
             ssr_view: Some(DebugView::SsrConfidence),
             probe_view: true,
+            local_shadow_view: false,
             probe_relight: true,
             drop_shadow_atlas: Some(256),
             local_shadow_atlas: Some(256),

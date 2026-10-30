@@ -108,7 +108,8 @@
 //! reduce pass per further mip. The `ssr_trace` pass then marches a ray per trace texel through them
 //! into `ssr_trace` (`Rgba16Float`: radiance and confidence), which `ssr_blend` mixes over the fill. With
 //! [`PostChain::ssr_view`] set, [`pass::SSR_DEBUG`] replaces `composite` and draws the trace itself;
-//! [`PostChain::probe_view`] does the same with [`pass::PROBE_DEBUG`], drawing the winning probe per pixel.
+//! [`PostChain::probe_view`] does the same with [`pass::PROBE_DEBUG`], drawing the winning probe per pixel,
+//! and [`PostChain::local_shadow_view`] with [`pass::LOCAL_SHADOW_DEBUG`], drawing the local-light shadow atlas.
 //!
 //! ```text
 //! scene ─► reflections ─► hiz_seed ─► hiz_reduce_1 ─► … ─► ssr_color_seed ─► ssr_color_reduce_1 ─► … ─► ssr_trace ─► ssr_blend
@@ -194,6 +195,9 @@ pub mod pass {
     /// A full-screen view of the winning reflection probe per pixel (`ludion render --debug-view
     /// probe_index`): replaces `composite`, reads the normal and depth and writes the same target.
     pub const PROBE_DEBUG: &str = "probe_debug";
+    /// A full-screen view of the local-light shadow atlas (`ludion render --debug-view
+    /// local_shadow_atlas`): replaces `composite`, reads the atlas and writes the same target.
+    pub const LOCAL_SHADOW_DEBUG: &str = "local_shadow_debug";
     /// A probe capture's last pass: the lit face into the capture target, with sky visibility in
     /// alpha. Reads `scene` and `scene_depth`.
     pub const PROBE_FACE: &str = "probe_face";
@@ -594,6 +598,10 @@ pub struct PostChain {
     /// the same target. Only set when the scene has probes: a view never conjures its subject, so
     /// a probe-free scene draws the normal frame. Probes have no quality toggle, so `masked` keeps it.
     pub probe_view: bool,
+    /// A full-screen view of the local-light shadow atlas: [`pass::LOCAL_SHADOW_DEBUG`] replaces
+    /// `composite`, writing the same target. Set only when the scene asked for it **and** the frame has
+    /// an atlas ([`local_shadow_atlas`](PostChain::local_shadow_atlas)): a view never conjures its subject.
+    pub local_shadow_view: bool,
     /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
     /// writing the `probe_live` transient (`MAX_PROBES`×6, `Rgba32Float`: one row per cube axis) that `reflections` reads
     /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
@@ -624,6 +632,15 @@ impl PostChain {
     /// question is answered, so every render path and the `dump-graph` command cannot disagree about
     /// what a given scene draws.
     pub fn for_scene(scene: &RenderScene) -> Self {
+        // Grants do not depend on the edge, so the scene-implied ceiling answers "any granted?".
+        let local_shadow_atlas = {
+            let edge = QualityParams::FULL.local_shadow_atlas_size;
+            (crate::local_shadow::plan_local_shadows(scene, edge)
+                .stats
+                .granted
+                > 0)
+            .then_some(edge)
+        };
         Self {
             ui: !scene.ui.is_empty(),
             // A sun draws a shadow map, at the extent the scene's own authoring implies. Lowering it
@@ -665,18 +682,12 @@ impl PostChain {
                 .filter(|_| scene.post.is_some_and(|post| post.ssr > 0.0)),
             probe_view: scene.debug_view == Some(crate::DebugView::ProbeIndex)
                 && !scene.probes.is_empty(),
+            local_shadow_view: scene.debug_view == Some(crate::DebugView::LocalShadowAtlas)
+                && local_shadow_atlas.is_some(),
             probe_relight: !scene.probes.is_empty(),
             drop_shadow_atlas: crate::projector::occlusion_atlas(scene.drop_shadows.len())
                 .map(|atlas| atlas.edge),
-            // Grants do not depend on the edge, so the scene-implied ceiling answers "any granted?".
-            local_shadow_atlas: {
-                let edge = QualityParams::FULL.local_shadow_atlas_size;
-                (crate::local_shadow::plan_local_shadows(scene, edge)
-                    .stats
-                    .granted
-                    > 0)
-                .then_some(edge)
-            },
+            local_shadow_atlas,
         }
     }
 
@@ -684,6 +695,10 @@ impl PostChain {
     pub fn view(&self) -> Option<crate::DebugView> {
         self.ssr_view
             .or_else(|| self.probe_view.then_some(crate::DebugView::ProbeIndex))
+            .or_else(|| {
+                self.local_shadow_view
+                    .then_some(crate::DebugView::LocalShadowAtlas)
+            })
     }
 
     /// The chain the scene requires, minus what this machine's [`Quality`] disables — masking an
@@ -705,6 +720,11 @@ impl PostChain {
             .shadow_map
             .filter(|_| quality.shadows)
             .map(|_| params.shadow_map_size);
+        // One shadows toggle covers the sun and the local lights.
+        let masked_atlas = self
+            .local_shadow_atlas
+            .filter(|_| quality.shadows)
+            .map(|_| params.local_shadow_atlas_size);
         PostChain {
             shadow_map,
             ssao: self.ssao && quality.ssao,
@@ -717,6 +737,8 @@ impl PostChain {
             ssr: self.ssr.filter(|_| quality.ssr).map(|_| params.ssr_scale),
             ssr_view: self.ssr_view.filter(|_| self.ssr.is_some() && quality.ssr),
             probe_view: self.probe_view,
+            // Masked shadows leave no atlas to show: the normal frame is drawn.
+            local_shadow_view: self.local_shadow_view && masked_atlas.is_some(),
             probe_relight: self.probe_relight,
             // Off removes the pass and its volume; on re-lays the lattice at this machine's coarser
             // probe spacing, which only ever removes probes (`gi_bake::scaled_probe_count`). The
@@ -726,11 +748,7 @@ impl PostChain {
                 .gi_inject
                 .filter(|_| quality.gi_dynamic)
                 .map(|count| crate::gi_bake::scaled_probe_count(count, params.gi_probe_scale)),
-            // One shadows toggle covers the sun and the local lights.
-            local_shadow_atlas: self
-                .local_shadow_atlas
-                .filter(|_| quality.shadows)
-                .map(|_| params.local_shadow_atlas_size),
+            local_shadow_atlas: masked_atlas,
             ..self
         }
     }
@@ -1222,6 +1240,12 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
+        _ if chain.local_shadow_view => graph.add_external_pass(
+            pass::LOCAL_SHADOW_DEBUG,
+            pass::LOCAL_SHADOW_DEBUG,
+            vec![local_shadow_atlas.expect("the view implies an atlas")],
+            vec![composited],
+        ),
         _ if chain.probe_view => graph.add_external_pass(
             pass::PROBE_DEBUG,
             pass::PROBE_DEBUG,
@@ -1683,6 +1707,7 @@ mod tests {
                 ssr_view: None,
                 // Content like `ui`: masking keeps it.
                 probe_view: bits & 1 != 0,
+                local_shadow_view: false,
                 probe_relight: bits & 1 != 0,
                 // Content too, like the probes: no quality switch removes a drop shadow.
                 drop_shadow_atlas: (bits & 1 != 0).then_some(128),
@@ -2764,6 +2789,78 @@ mod tests {
         assert_eq!(chain.ssr_view, None);
         assert_eq!(chain.view(), Some(crate::DebugView::ProbeIndex));
         assert!(chain.masked(&Quality::LOW, &QualityParams::LOW).probe_view);
+    }
+
+    fn shadowed_scene() -> RenderScene {
+        let extent = (1920, 1080);
+        let mut scene = RenderScene::empty(extent);
+        scene.camera = crate::RenderCamera {
+            view: ludion_core::math::glam::Mat4::look_at_rh(
+                Default::default(),
+                -ludion_core::math::glam::Vec3::Z,
+                ludion_core::math::glam::Vec3::Y,
+            ),
+            projection: ludion_core::math::glam::Mat4::perspective_rh(
+                1.0,
+                crate::scene::aspect_ratio(extent),
+                0.1,
+                100.0,
+            ),
+            position: Default::default(),
+        };
+        scene.lights = vec![crate::PointLightData {
+            position: ludion_core::math::glam::Vec3::new(0.0, 0.0, -5.0),
+            color: ludion_core::math::glam::Vec3::ONE,
+            intensity: 1.0,
+            range: 3.0,
+            dynamic: false,
+            shadow: Some(crate::LocalShadowData {
+                bias: 0.02,
+                near: 0.1,
+            }),
+        }];
+        scene
+    }
+
+    /// The atlas view replaces `composite` and reads only the atlas.
+    #[test]
+    fn a_local_shadow_view_replaces_composite_and_reads_the_atlas() {
+        let size = FrameSize::native(1920, 1080);
+        let chain = PostChain {
+            local_shadow_atlas: Some(1024),
+            local_shadow_view: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(size, chain);
+        assert!(graph_pass(&graph, "composite").is_none());
+        let (reads, _) = graph_pass(&graph, "local_shadow_debug").unwrap();
+        assert_eq!(reads, ["local_shadow_atlas"]);
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// The view needs a granted light, survives only while shadows do, and `view()` names it.
+    #[test]
+    fn the_local_shadow_view_needs_a_grant_and_a_surviving_atlas() {
+        let mut scene = shadowed_scene();
+        scene.debug_view = Some(crate::DebugView::LocalShadowAtlas);
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.local_shadow_view);
+        assert_eq!(chain.view(), Some(crate::DebugView::LocalShadowAtlas));
+        assert!(
+            chain
+                .masked(&Quality::FULL, &QualityParams::FULL)
+                .local_shadow_view
+        );
+        assert!(
+            !chain
+                .masked(&Quality::LOW, &QualityParams::LOW)
+                .local_shadow_view
+        );
+
+        scene.lights.clear();
+        let none = PostChain::for_scene(&scene);
+        assert!(!none.local_shadow_view);
+        assert_eq!(none.view(), None);
     }
 
     /// With SSR on and the probe view asked, the probe pass is scheduled and the SSR one is not.

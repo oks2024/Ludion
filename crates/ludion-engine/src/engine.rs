@@ -3844,6 +3844,12 @@ impl Engine {
         )
         .map(|mut scene| {
             scene.debug_lines = crate::debug_draw::segments(world, &self.debug_draw);
+            if self.debug_draw.enables(crate::debug_draw::LOCAL_SHADOWS) {
+                let edge = self.quality.local_shadow_edge();
+                scene
+                    .debug_lines
+                    .extend(ludion_renderer::local_shadow_marks(&scene, edge));
+            }
             scene.debug_view = self.debug_view;
             scene
         });

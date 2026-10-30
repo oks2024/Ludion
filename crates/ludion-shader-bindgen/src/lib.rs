@@ -75,6 +75,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "hiz_reduce.wgsl",
     "hiz_seed.wgsl",
     "ibl.wgsl",
+    "local_shadow_debug.wgsl",
     "mesh.wgsl",
     "particle.wgsl",
     "prepass.wgsl",
@@ -172,6 +173,10 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("ground_marker.wgsl", &["camera.wgsl", "rounded_box.wgsl"]),
     ("hiz_reduce.wgsl", &["fullscreen_vs.wgsl", "footprint.wgsl"]),
     ("hiz_seed.wgsl", &["fullscreen_vs.wgsl", "footprint.wgsl"]),
+    (
+        "local_shadow_debug.wgsl",
+        &["fullscreen_vs.wgsl", "srgb.wgsl"],
+    ),
     ("particle.wgsl", &["camera.wgsl"]),
     ("prepass.wgsl", &["camera.wgsl", "skin.wgsl", "bayer.wgsl"]),
     (

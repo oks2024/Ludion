@@ -29,6 +29,11 @@ pub(crate) const HIERARCHY: &str = "hierarchy";
 /// The category [`segments`] draws from the world's reflection probes.
 pub(crate) const PROBES: &str = "probes";
 
+/// The category the engine appends to the extracted scene's lines: each requested shadowed local
+/// light, green when granted and red when skipped. Grants depend on the camera, so it is drawn from
+/// the extracted scene, not from the world.
+pub(crate) const LOCAL_SHADOWS: &str = "local_shadows";
+
 /// The category [`segments`] draws from the live `PhysicsWorld`'s colliders.
 pub(crate) const COLLIDERS: &str = "colliders";
 
@@ -347,7 +352,8 @@ impl DebugCategories {
 ///
 /// The `hierarchy` category is drawn here from the live world rather than by a system, so it is
 /// always current, even paused, and costs nothing unless enabled. It sorts among the categories;
-/// `probes` and `colliders` (every physics body's wireframe) are drawn the same way.
+/// `probes` and `colliders` (every physics body's wireframe) are drawn the same way. `local_shadows`
+/// is the exception: the engine appends it after extract, because it needs the camera's grants.
 pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegment> {
     if *filter == DebugCategories::None {
         return Vec::new();
@@ -384,7 +390,7 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
 
 /// The categories the world has drawn: what [`DebugDraw::drawn`] lists plus `hierarchy` when any
 /// entity has a `Parent`, `probes` when any has a `ReflectionProbe` and `colliders` when the
-/// physics world holds a body, sorted.
+/// physics world holds a body and `local_shadows` when any point or spot light casts, sorted.
 pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = world
         .resource::<DebugDraw>()
@@ -397,6 +403,9 @@ pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     }
     if crate::scene_physics::any_body(world) {
         names.push(COLLIDERS);
+    }
+    if crate::extract::any_local_shadow_caster(world) {
+        names.push(LOCAL_SHADOWS);
     }
     names.sort_unstable();
     names.dedup();
@@ -803,6 +812,36 @@ mod tests {
             "a toggle reaches the next extract"
         );
         assert_eq!(engine.debug_draw_drawn(), ["path", "probe"]);
+    }
+
+    /// The `local_shadows` marks: the fixture's shadowed point light (3 segments) and spot (4), green
+    /// when granted and red when the quality masks shadows, absent when the category is off.
+    #[test]
+    fn the_local_shadows_category_marks_granted_green_and_masked_red() {
+        const GREEN: [f32; 4] = [0.2, 1.0, 0.2, 1.0];
+        const DENIED: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+        let mut engine = engine(0);
+        engine
+            .load_inline_scene(include_str!("../tests/fixtures/local-shadows.yaml"))
+            .unwrap();
+        engine.set_quality(crate::QualitySetting::full());
+        assert!(lines(&mut engine).is_empty());
+
+        engine.set_debug_draw(DebugCategories::parse("local_shadows"));
+        assert_eq!(engine.debug_draw_drawn(), ["local_shadows"]);
+        let marks = lines(&mut engine);
+        assert_eq!(marks.len(), 3 + 4);
+        assert!(marks.iter().all(|m| m.color == GREEN));
+
+        engine.set_quality(
+            crate::resolve_startup_quality(Some("low"), None).expect("`low` is a preset name"),
+        );
+        let marks = lines(&mut engine);
+        assert_eq!(marks.len(), 3 + 4);
+        assert!(marks.iter().all(|m| m.color == DENIED));
+
+        engine.set_debug_draw(DebugCategories::None);
+        assert!(lines(&mut engine).is_empty());
     }
 
     #[test]

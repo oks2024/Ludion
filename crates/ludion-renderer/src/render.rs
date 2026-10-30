@@ -2936,6 +2936,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::SSR_TRACE => self.record_ssr_trace(pass),
             pass::SSR_DEBUG => self.record_ssr_debug(pass),
             pass::PROBE_DEBUG => self.record_probe_debug(pass),
+            pass::LOCAL_SHADOW_DEBUG => self.record_local_shadow_debug(pass),
             pass::PROBE_FACE => self.record_probe_face(pass),
             pass::TRANSPARENTS => self.record_transparents(pass),
             // The bright-pass threshold (`PostProcess.bloom_threshold`; default 1.0 reproduces the
@@ -4303,6 +4304,61 @@ impl FrameRecorder<'_> {
         rp.draw(0..3, 0..1);
     }
 
+    /// The local-shadow atlas debug view: the atlas letterboxed in place of `composite`. The cell table
+    /// carries each granted view's near and far planes so the shader can linearise its depth tile.
+    fn record_local_shadow_debug(&self, pass: &mut RecordedPass<'_>) {
+        let plan = self
+            .local_shadow
+            .as_ref()
+            .expect("the local shadow view is scheduled only with a plan");
+        let cells_per_side = crate::local_shadow::ATLAS_CELLS;
+        let cell = plan.stats.atlas_edge / cells_per_side;
+        let mut cells = [[0.0; 4];
+            (crate::local_shadow::ATLAS_CELLS * crate::local_shadow::ATLAS_CELLS) as usize];
+        for view in &plan.views {
+            let span = view.rect.size / cell;
+            for dy in 0..span {
+                for dx in 0..span {
+                    let (cx, cy) = (view.rect.x / cell + dx, view.rect.y / cell + dy);
+                    cells[(cy * cells_per_side + cx) as usize] = [view.near, view.far, 1.0, 0.0];
+                }
+            }
+        }
+        let (width, height) = self.size.render;
+        let uniform = shader_gen::LocalShadowDebug {
+            extent: [
+                width as f32,
+                height as f32,
+                plan.stats.atlas_edge as f32,
+                cell as f32,
+            ],
+            cells,
+        };
+        let uniform_buf = init_buffer(
+            pass.device,
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::bytes_of(&uniform),
+        );
+        let bind_group = pass.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("local shadow debug bind group"),
+            layout: self.r.layouts.get(LayoutId::LocalShadowDebug),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::LSDBG_ATLAS_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::LSDBG_BINDING,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+        let mut rp = pass.begin();
+        rp.set_pipeline(self.r.pipeline(ShaderId::LocalShadowDebug));
+        rp.set_bind_group(0, &bind_group, &[]);
+        rp.draw(0..3, 0..1);
+    }
+
     /// The supersampling resolve: the composited render-extent image box-filtered down to the output
     /// extent. The source extent comes from the frame's [`FrameSize`] rather than the pass (a
     /// `RecordedPass` knows only what it writes), and the ratio is computed here so the shader loops
@@ -5134,6 +5190,7 @@ enum ShaderId {
     ProbeFace,
     ProbeDebug,
     Projector,
+    LocalShadowDebug,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -5159,7 +5216,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 33;
+const SHADER_COUNT: usize = 34;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -5462,6 +5519,13 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         snippets: &[Snippet::RoundedBox],
         layouts: &[LayoutId::Projector],
     },
+    ShaderDesc {
+        id: ShaderId::LocalShadowDebug,
+        file_name: "local_shadow_debug.wgsl",
+        body: include_str!("shaders/local_shadow_debug.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Srgb],
+        layouts: &[LayoutId::LocalShadowDebug],
+    },
 ];
 
 impl ShaderId {
@@ -5708,10 +5772,11 @@ enum LayoutId {
     ProbeFace,
     ProbeDebug,
     Projector,
+    LocalShadowDebug,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 35;
+const LAYOUT_COUNT: usize = 36;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -5865,6 +5930,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         id: LayoutId::Projector,
         create: shader_gen::create_proj_depth_proj_normal_proj_occlusion_proj_params_projectors_bgl,
     },
+    LayoutDesc {
+        id: LayoutId::LocalShadowDebug,
+        create: shader_gen::create_lsdbg_atlas_lsdbg_bgl,
+    },
 ];
 
 /// Every bind group layout, built once and indexed by [`LayoutId`].
@@ -5976,7 +6045,8 @@ fn build_pipeline(
         | ShaderId::Upscale
         | ShaderId::Blit
         | ShaderId::SsrDebug
-        | ShaderId::ProbeDebug => {
+        | ShaderId::ProbeDebug
+        | ShaderId::LocalShadowDebug => {
             build_fullscreen_pipeline(device, label, src, &layout, OUTPUT_FORMAT, None)
         }
         ShaderId::UiRect => build_ui_rect_pipeline(device, label, src, &layout),
@@ -14288,6 +14358,57 @@ mod tests {
     fn view_pixel(image: &RenderedImage, (x, y): (u32, u32)) -> [u8; 3] {
         let at = ((y * image.width + x) * 4) as usize;
         [image.rgba[at], image.rgba[at + 1], image.rgba[at + 2]]
+    }
+
+    /// The atlas view letterboxes the atlas: black outside the square, linearised depth gray in the
+    /// granted spot's tile, flat dark blue in an ungranted cell.
+    #[test]
+    fn needs_gpu_local_shadow_atlas_view_shows_the_granted_tile() {
+        let Some(mut renderer) = skip_or_renderer("local_shadow_atlas_view_shows_the_granted_tile")
+        else {
+            return;
+        };
+        renderer.set_quality(
+            Quality::FULL,
+            QualityParams {
+                local_shadow_atlas_size: 256,
+                ..QualityParams::FULL
+            },
+        );
+        let (w, h) = (160u32, 120u32);
+        let mut scene = local_shadow_fixture(w, h, true);
+        scene.debug_view = Some(crate::DebugView::LocalShadowAtlas);
+        let image = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("render");
+        // The square is 120 px wide, starting at x = 20; atlas texel t lands on 20 + t * 120 / 256.
+        assert_eq!(view_pixel(&image, (5, 60)), [0, 0, 0], "left of the square");
+        let [r, g, b] = view_pixel(&image, (38, 18));
+        assert!(
+            r == g && g == b && r > 20,
+            "the spot's tile is gray: {r},{g},{b}"
+        );
+        let [r, g, b] = view_pixel(&image, (113, 94));
+        assert!(
+            r < 30 && b > r + 20,
+            "an ungranted cell is dark blue: {r},{g},{b}"
+        );
+    }
+
+    /// A view never conjures its subject: with no casting light the frame is the one without the view.
+    #[test]
+    fn needs_gpu_local_shadow_atlas_view_without_a_grant_draws_the_normal_frame() {
+        let Some(renderer) = skip_or_renderer("local_shadow_atlas_view_without_a_grant") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let plain = local_shadow_fixture(w, h, false);
+        let mut viewed = local_shadow_fixture(w, h, false);
+        viewed.debug_view = Some(crate::DebugView::LocalShadowAtlas);
+        let size = FrameSize::native(w, h);
+        let plain = renderer.render(&plain, size).expect("render");
+        let viewed = renderer.render(&viewed, size).expect("render");
+        assert_eq!(plain.rgba, viewed.rgba);
     }
 
     /// The upsample is premultiplied by confidence: a miss tap beside a hit must not drag the hit's

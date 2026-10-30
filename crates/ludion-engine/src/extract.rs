@@ -1899,6 +1899,17 @@ pub(crate) fn any_probe(world: &World) -> bool {
         .any(|id| world.has::<ReflectionProbe>(id))
 }
 
+/// Whether any point or spot light casts a shadow, for the `local_shadows` debug-draw category.
+pub(crate) fn any_local_shadow_caster(world: &World) -> bool {
+    world
+        .entities()
+        .chain(world.presentation_entities())
+        .any(|id| {
+            get::<PointLight>(world, id).is_some_and(|light| light.cast_shadows)
+                || get::<SpotLight>(world, id).is_some_and(|light| light.cast_shadows)
+        })
+}
+
 /// Segments in one great circle of a sphere probe's volume.
 const PROBE_CIRCLE_SEGMENTS: usize = 32;
 /// Half-length of the cross that marks a probe's capture point.

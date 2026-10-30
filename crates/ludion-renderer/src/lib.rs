@@ -78,7 +78,7 @@ pub use debug_view::{DebugView, PROBE_VIEW_PALETTE};
 pub use frame_observer::{FrameObserver, FramePhase};
 pub use gi_bake::{GiReadback, max_gi_probes};
 pub use graph::{FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json};
-pub use local_shadow::{LocalShadowStats, local_shadow_stats};
+pub use local_shadow::{LocalShadowStats, local_shadow_marks, local_shadow_stats};
 pub use ludion_font::GlyphQuad;
 pub use probe::{MAX_PROBES, ProbeData, ProbeVolume, probe_rank};
 pub use probe_capture::{

@@ -124,6 +124,16 @@ impl QualitySetting {
         }
     }
 
+    /// The local-light shadow atlas edge a frame at this setting plans with: the quality's axis, or 0
+    /// when it masks shadows. The one rule the profile panel and the `local_shadows` marks share.
+    pub(crate) fn local_shadow_edge(&self) -> u32 {
+        if self.quality.shadows {
+            self.params.local_shadow_atlas_size
+        } else {
+            0
+        }
+    }
+
     /// This setting as the descriptor a [`ProfileReport`](ludion_protocol::perf::ProfileReport)
     /// carries: the label, the toggles it resolved to, and the parameters it resolved to.
     ///

@@ -312,6 +312,21 @@ fn render_debug_draws_probes_and_takes_the_probe_index_view() {
     assert_eq!(engine.world_hash().unwrap(), hash);
 }
 
+#[test]
+fn render_debug_takes_the_local_shadow_atlas_view() {
+    let root = fixture_root();
+    let mut engine = engine(&root, &DebugCategories::None);
+    assert_eq!(
+        debug_view(&mut engine, Some(Some(RenderDebugView::LocalShadowAtlas))),
+        Some(RenderDebugView::LocalShadowAtlas),
+    );
+    assert_eq!(
+        debug_view(&mut engine, None),
+        Some(RenderDebugView::LocalShadowAtlas)
+    );
+    assert_eq!(debug_view(&mut engine, Some(None)), None);
+}
+
 const PHYSICS_SCENE: &str = "\
 format: 1
 seed: 7

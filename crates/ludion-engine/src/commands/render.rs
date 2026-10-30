@@ -249,6 +249,7 @@ fn renderer_view(view: RenderDebugView) -> DebugView {
         RenderDebugView::SsrConfidence => DebugView::SsrConfidence,
         RenderDebugView::SsrFootprint => DebugView::SsrFootprint,
         RenderDebugView::ProbeIndex => DebugView::ProbeIndex,
+        RenderDebugView::LocalShadowAtlas => DebugView::LocalShadowAtlas,
     }
 }
 
@@ -257,6 +258,7 @@ fn wire_view(view: DebugView) -> RenderDebugView {
         DebugView::SsrConfidence => RenderDebugView::SsrConfidence,
         DebugView::SsrFootprint => RenderDebugView::SsrFootprint,
         DebugView::ProbeIndex => RenderDebugView::ProbeIndex,
+        DebugView::LocalShadowAtlas => RenderDebugView::LocalShadowAtlas,
     }
 }
 

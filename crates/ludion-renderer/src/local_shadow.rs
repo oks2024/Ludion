@@ -42,7 +42,7 @@ use ludion_core::math::glam::{Mat4, Vec3};
 
 use crate::cluster::light_sphere;
 use crate::cull::{CullVolume, Frustum};
-use crate::scene::{LocalShadowData, RenderScene};
+use crate::scene::{DebugSegment, LocalShadowData, RenderScene};
 
 /// Cells per atlas side.
 pub(crate) const ATLAS_CELLS: u32 = 8;
@@ -73,6 +73,9 @@ pub(crate) struct LocalShadowView {
     pub(crate) rect: AtlasRect,
     /// Depth bias in world units, from the light's tunables.
     pub(crate) bias: f32,
+    /// Near and far planes of the projection, for linearising the depth tile.
+    pub(crate) near: f32,
+    pub(crate) far: f32,
     pub(crate) cull: CullVolume,
 }
 
@@ -98,6 +101,8 @@ pub(crate) struct LocalShadowPlan {
     pub(crate) views: Vec<LocalShadowView>,
     /// Per light-list entry, the index of its first view in `views`, or [`UNSHADOWED`].
     pub(crate) light_first_view: Vec<u32>,
+    /// Light-list indices of the candidates that were not granted, in rank order.
+    pub(crate) skipped: Vec<u32>,
     pub(crate) stats: LocalShadowStats,
 }
 
@@ -140,12 +145,59 @@ pub fn local_shadow_stats(scene: &RenderScene, atlas_edge: u32) -> LocalShadowSt
     plan_local_shadows(scene, atlas_edge).stats
 }
 
+const GRANTED: [f32; 4] = [0.2, 1.0, 0.2, 1.0];
+const DENIED: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+const MARK_HALF: f32 = 0.25;
+const MARK_AIM_MAX: f32 = 1.5;
+
+/// Marks every requested shadowed light in world space: a cross at its position, green when the
+/// frame granted it tiles and red when it was skipped, plus a spot's aim line.
+///
+/// Plans exactly as [`local_shadow_stats`] does, at `atlas_edge`, so the marks agree with the profile
+/// panel. It is the source of the `local_shadows` debug-draw category: grants depend on the camera,
+/// so the engine appends these to the extracted scene's lines rather than drawing them from the world.
+pub fn local_shadow_marks(scene: &RenderScene, atlas_edge: u32) -> Vec<DebugSegment> {
+    let plan = plan_local_shadows(scene, atlas_edge);
+    let point_count = scene.lights.len();
+    let granted = (0..plan.light_first_view.len() as u32)
+        .filter(|&i| plan.light_first_view[i as usize] != UNSHADOWED)
+        .map(|i| (i, GRANTED));
+    let skipped = plan.skipped.iter().map(|&i| (i, DENIED));
+    let mut out = Vec::new();
+    for (index, color) in granted.chain(skipped) {
+        let index = index as usize;
+        let (position, aim) = match index.checked_sub(point_count) {
+            None => (scene.lights[index].position, None),
+            Some(s) => {
+                let l = &scene.spot_lights[s];
+                (l.position, Some((l.direction, l.range)))
+            }
+        };
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            out.push(DebugSegment {
+                a: (position - axis * MARK_HALF).to_array(),
+                b: (position + axis * MARK_HALF).to_array(),
+                color,
+            });
+        }
+        if let Some((direction, range)) = aim {
+            out.push(DebugSegment {
+                a: position.to_array(),
+                b: (position + direction * range.min(MARK_AIM_MAX)).to_array(),
+                color,
+            });
+        }
+    }
+    out
+}
+
 /// Selects, ranks and lays out the frame's local shadow views.
 pub(crate) fn plan_local_shadows(scene: &RenderScene, atlas_edge: u32) -> LocalShadowPlan {
     let light_count = scene.lights.len() + scene.spot_lights.len();
     let mut plan = LocalShadowPlan {
         views: Vec::new(),
         light_first_view: vec![UNSHADOWED; light_count],
+        skipped: Vec::new(),
         stats: LocalShadowStats::default(),
     };
     let frustum = Frustum::from_view_proj(scene.camera.projection * scene.camera.view);
@@ -221,7 +273,8 @@ pub(crate) fn plan_local_shadows(scene: &RenderScene, atlas_edge: u32) -> LocalS
     let mut atlas = Atlas::default();
     for c in &candidates {
         if !budget {
-            break;
+            plan.skipped.push(c.index);
+            continue;
         }
         let tentative = atlas;
         let first = plan.views.len() as u32;
@@ -241,6 +294,7 @@ pub(crate) fn plan_local_shadows(scene: &RenderScene, atlas_edge: u32) -> LocalS
         } else {
             atlas = tentative;
             plan.views.truncate(first as usize);
+            plan.skipped.push(c.index);
         }
     }
     plan.stats.skipped = plan.stats.requested - plan.stats.granted;
@@ -279,6 +333,8 @@ fn spot_view(c: &Candidate, rect: AtlasRect) -> LocalShadowView {
         light_space,
         rect,
         bias: c.shadow.bias,
+        near: c.shadow.near,
+        far: c.range,
         cull: CullVolume::Frustum(Frustum::from_view_proj(light_space)),
     }
 }
@@ -293,6 +349,8 @@ fn cube_view(c: &Candidate, face: u8, rect: AtlasRect) -> LocalShadowView {
         light_space: projection * view,
         rect,
         bias: c.shadow.bias,
+        near: c.shadow.near,
+        far: c.range,
         cull: CullVolume::Sphere {
             center: c.position,
             radius: c.range,
@@ -465,6 +523,34 @@ mod tests {
         assert_eq!(none.requested, 4);
         assert_eq!(none.granted, 0);
         assert_eq!(none.skipped, none.requested);
+    }
+
+    #[test]
+    fn marks_are_green_for_grants_red_for_skips_and_agree_with_the_stats() {
+        let mut scene = scene_at_origin();
+        scene.lights = point_row(11);
+        let plan = plan_local_shadows(&scene, 4096);
+        assert_eq!(plan.skipped.len() as u32, plan.stats.skipped);
+        assert_eq!(plan.stats.requested, 11);
+        assert_eq!(plan.stats.granted + plan.stats.skipped, 11);
+        let marks = local_shadow_marks(&scene, 4096);
+        assert_eq!(marks.len(), 33);
+        let green = marks.iter().filter(|m| m.color == GRANTED).count();
+        assert_eq!(green as u32, plan.stats.granted * 3);
+        assert_eq!(marks.len() - green, plan.skipped.len() * 3);
+    }
+
+    #[test]
+    fn a_spot_mark_adds_an_aim_line_and_edge_zero_marks_everything_red() {
+        let mut scene = scene_at_origin();
+        scene.lights = point_row(1);
+        scene.spot_lights = spot_row(1);
+        let marks = local_shadow_marks(&scene, 0);
+        assert_eq!(marks.len(), 3 + 4);
+        assert!(marks.iter().all(|m| m.color == DENIED));
+        let granted = local_shadow_marks(&scene, 4096);
+        assert_eq!(granted.len(), 3 + 4);
+        assert!(granted.iter().all(|m| m.color == GRANTED));
     }
 
     #[test]

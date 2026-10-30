@@ -1000,9 +1000,9 @@ pub struct RenderViewParams {
 /// everything on. Any string is accepted — a category nothing draws is simply never in the reply's
 /// `drawn`, which is how a client checks what a scene actually emits.
 ///
-/// `view` shows an SSR debug view in place of the composite: a name sets it, an explicit `null`
-/// clears it, and absent keeps what is in force. A view never turns SSR on — on a frame without
-/// SSR the normal frame is drawn.
+/// `view` shows a debug view in place of the composite: a name sets it, an explicit `null`
+/// clears it, and absent keeps what is in force. A view never turns its effect on — on a frame
+/// without SSR, probes or a granted local-light shadow the normal frame is drawn.
 ///
 /// The state is host render state, never world state: not hashed, not captured by `engine.snapshot`,
 /// not recorded into a replay. It applies to the stream and to `render.screenshot` alike, so a
@@ -1036,7 +1036,7 @@ pub struct RenderDebugParams {
     /// The categories to enable (`[]` for none, `"all"` for every one), or absent to read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub categories: Option<Vec<String>>,
-    /// The SSR debug view to show, an explicit `null` to clear it, or absent to keep it.
+    /// The debug view to show, an explicit `null` to clear it, or absent to keep it.
     #[serde(
         default,
         deserialize_with = "explicit_null",
@@ -1046,7 +1046,8 @@ pub struct RenderDebugParams {
     pub view: Option<Option<RenderDebugView>>,
 }
 
-/// A debug view shown in place of the composite: the SSR trace at its own resolution, or the probe map.
+/// A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,
+/// or the local-light shadow atlas.
 /// The spelling matches `ludion render --debug-view`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1057,6 +1058,9 @@ pub enum RenderDebugView {
     SsrFootprint,
     /// The winning reflection probe per pixel, coloured by rank.
     ProbeIndex,
+    /// The local-light shadow atlas, letterboxed: granted tiles as linearised depth, ungranted cells
+    /// dark blue, a red line on every cell border.
+    LocalShadowAtlas,
 }
 
 /// Reads an optional field as a *present* value, so an explicit `null` survives as `Some(None)`.

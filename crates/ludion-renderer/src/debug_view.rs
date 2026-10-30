@@ -3,8 +3,8 @@
 //! A view replaces the finished picture with data one effect produced, so "why is this reflection
 //! missing" is answerable from one PNG. It is host render state, like debug-draw categories: it never
 //! enters a scene file or a `WorldHash`, and it never turns its effect on — with SSR off for the frame
-//! there is no trace to show, and a scene without probes has no index to draw; the normal frame is
-//! drawn in both cases.
+//! there is no trace to show, a scene without probes has no index to draw, and a frame with no granted
+//! local-light shadow has no atlas; the normal frame is drawn in each case.
 
 /// One of the full-screen debug views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,14 +17,18 @@ pub enum DebugView {
     /// The winning reflection probe per pixel, coloured by rank from [`PROBE_VIEW_PALETTE`] and scaled
     /// by its contribution; gray where no probe weights the surface, black only where there is no surface.
     ProbeIndex,
+    /// The frame's local-light shadow atlas, letterboxed: each granted tile's depth linearised to gray
+    /// (near bright, empty black), ungranted cells flat dark blue, a red line on every cell border.
+    LocalShadowAtlas,
 }
 
 impl DebugView {
     /// Every view, in the order the CLI lists them.
-    pub const ALL: [DebugView; 3] = [
+    pub const ALL: [DebugView; 4] = [
         DebugView::SsrConfidence,
         DebugView::SsrFootprint,
         DebugView::ProbeIndex,
+        DebugView::LocalShadowAtlas,
     ];
 
     /// The spelling used by the CLI and in summaries.
@@ -33,6 +37,7 @@ impl DebugView {
             DebugView::SsrConfidence => "ssr_confidence",
             DebugView::SsrFootprint => "ssr_footprint",
             DebugView::ProbeIndex => "probe_index",
+            DebugView::LocalShadowAtlas => "local_shadow_atlas",
         }
     }
 
