@@ -99,17 +99,12 @@ impl Frustum {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum CullVolume {
     Frustum(Frustum),
-    Sphere { center: Vec3, radius: f32 },
 }
 
 impl CullVolume {
     pub(crate) fn admits(&self, aabb: &Aabb) -> bool {
         match self {
             CullVolume::Frustum(f) => f.intersects_aabb(aabb),
-            CullVolume::Sphere { center, radius } => {
-                let nearest = center.clamp(aabb.min, aabb.max);
-                nearest.distance_squared(*center) <= radius * radius
-            }
         }
     }
 }
@@ -233,17 +228,6 @@ mod tests {
         assert!(f.intersects_aabb(&cube_at(Vec3::new(10.0, 0.0, -10.0))));
         assert!(f.intersects_sphere(Vec3::new(10.4, 0.0, -10.0), 1.0));
         assert!(!f.intersects_sphere(Vec3::new(20.0, 0.0, -10.0), 1.0));
-    }
-
-    #[test]
-    fn sphere_volume_admits_and_rejects() {
-        let v = CullVolume::Sphere {
-            center: Vec3::ZERO,
-            radius: 5.0,
-        };
-        assert!(v.admits(&cube_at(Vec3::new(4.8, 0.0, 0.0))));
-        assert!(!v.admits(&cube_at(Vec3::new(6.0, 0.0, 0.0))));
-        assert!(v.admits(&cube_at(Vec3::ZERO)));
     }
 
     #[test]

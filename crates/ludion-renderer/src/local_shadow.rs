@@ -268,7 +268,7 @@ pub(crate) fn plan_local_shadows(scene: &RenderScene, atlas_edge: u32) -> LocalS
     candidates.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.index.cmp(&b.index)));
     plan.stats.requested = candidates.len() as u32;
 
-    let budget = atlas_edge > 0 && atlas_edge.is_multiple_of(2 * ATLAS_CELLS);
+    let budget = is_valid_atlas_edge(atlas_edge);
     let cell = atlas_edge / ATLAS_CELLS;
     let mut atlas = Atlas::default();
     for c in &candidates {
@@ -343,19 +343,23 @@ fn cube_view(c: &Candidate, face: u8, rect: AtlasRect) -> LocalShadowView {
     let (direction, up) = CUBE_FACES[face as usize];
     let view = Mat4::look_to_rh(c.position, direction, up);
     let projection = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, c.shadow.near, c.range);
+    let light_space = projection * view;
     LocalShadowView {
         light: c.index,
         face,
-        light_space: projection * view,
+        light_space,
         rect,
         bias: c.shadow.bias,
         near: c.shadow.near,
         far: c.range,
-        cull: CullVolume::Sphere {
-            center: c.position,
-            radius: c.range,
-        },
+        cull: CullVolume::Frustum(Frustum::from_view_proj(light_space)),
     }
+}
+
+/// Whether `edge` can hold the atlas grid: positive and a multiple of `2 × ATLAS_CELLS`, so a cell
+/// is an even texel count. Any other edge grants nothing.
+pub fn is_valid_atlas_edge(edge: u32) -> bool {
+    edge > 0 && edge.is_multiple_of(2 * ATLAS_CELLS)
 }
 
 /// Cell occupancy of the atlas grid. Spots take whole aligned 2×2 blocks; cube faces fill a
@@ -426,6 +430,7 @@ impl Atlas {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cull::{Aabb, cull};
     use crate::scene::{PointLightData, RenderCamera, SpotLightData, aspect_ratio};
 
     const EXTENT: (u32, u32) = (1920, 1080);
@@ -733,8 +738,23 @@ mod tests {
                 clip.w <= 0.0 || ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0,
                 "face {face}"
             );
-            assert!(matches!(v.cull, CullVolume::Sphere { radius, .. } if radius == 20.0));
+            assert!(matches!(v.cull, CullVolume::Frustum(_)));
         }
+    }
+
+    #[test]
+    fn a_caster_on_plus_x_is_admitted_by_its_face_only() {
+        let mut scene = scene_at_origin();
+        let origin = Vec3::new(0.0, 0.0, -10.0);
+        scene.lights = vec![point(origin, 20.0, shadow())];
+        let plan = plan_local_shadows(&scene, 4096);
+        let caster = Aabb {
+            min: origin + Vec3::new(4.0, -0.5, -0.5),
+            max: origin + Vec3::new(5.0, 0.5, 0.5),
+        };
+        let bounds = [Some(caster)];
+        assert_eq!(cull(&bounds, &plan.views[0].cull), vec![0]);
+        assert!(cull(&bounds, &plan.views[1].cull).is_empty());
     }
 
     #[test]

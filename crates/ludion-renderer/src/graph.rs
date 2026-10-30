@@ -723,7 +723,10 @@ impl PostChain {
         // One shadows toggle covers the sun and the local lights.
         let masked_atlas = self
             .local_shadow_atlas
-            .filter(|_| quality.shadows)
+            .filter(|_| {
+                quality.shadows
+                    && crate::local_shadow::is_valid_atlas_edge(params.local_shadow_atlas_size)
+            })
             .map(|_| params.local_shadow_atlas_size);
         PostChain {
             shadow_map,
@@ -2510,6 +2513,24 @@ mod tests {
     }
 
     /// `local_shadow` precedes `scene`, whose last input is the atlas.
+    #[test]
+    fn an_invalid_local_shadow_edge_masks_the_atlas_away() {
+        let chain = PostChain {
+            local_shadow_atlas: Some(QualityParams::FULL.local_shadow_atlas_size),
+            local_shadow_view: true,
+            ..PostChain::default()
+        };
+        for edge in [1000, 0] {
+            let params = QualityParams {
+                local_shadow_atlas_size: edge,
+                ..QualityParams::FULL
+            };
+            let masked = chain.masked(&Quality::FULL, &params);
+            assert_eq!(masked.local_shadow_atlas, None, "edge {edge}");
+            assert!(!masked.local_shadow_view, "edge {edge}");
+        }
+    }
+
     #[test]
     fn the_local_shadow_pass_feeds_the_scene_pass_last() {
         let chain = PostChain {

@@ -44,7 +44,7 @@ struct Sun {
 @group(2) @binding(1) var shadow_tex: texture_depth_2d;
 @group(2) @binding(2) var shadow_samp: sampler_comparison;
 
-// Local-light shadows (Clockout 0007): the shadowed spot and point lights' views in one depth atlas.
+// Local-light shadows: the shadowed spot and point lights' views in one depth atlas.
 // They ride this mesh-only group beside the sun, not the shared lights group, so `Light` stays 48
 // bytes and the sprite/text shaders never see them (sprites do not receive). `light_shadow` holds
 // one entry per light-list index: the index of that light's first view in `local_views`, or
@@ -331,7 +331,7 @@ fn sun_shadow(world_pos: vec3<f32>) -> f32 {
 // The cube face is picked by the major axis of the light-to-fragment vector, ties resolved in the
 // order X, Y, Z — the table in `local_shadow.rs`. The bias is applied in world space BEFORE
 // projecting (perspective depth is non-linear, so an NDC bias would vary with distance): a step
-// toward the light plus a normal offset of a few texels. A cube fragment whose pushed position
+// toward the light plus a normal offset of one texel. A cube fragment whose pushed position
 // leaves its face is clamped to the face's edge, so the seam between faces stays lit; a spot
 // fragment outside its frustum is lit. Every tap is clamped inside the tile so PCF never reads the
 // neighbouring tile.

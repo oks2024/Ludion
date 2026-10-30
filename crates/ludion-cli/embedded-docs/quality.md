@@ -90,7 +90,7 @@ optional; an absent one keeps the base's, and an absent `preset` means `full`.
 | `params.shaft_steps` | int, `1..=32` | ray-march steps per light-shaft pixel |
 | `params.dof_taps` | int, `1..=32` | taps in the depth-of-field disc |
 | `params.shadow_map_size` | int, `1..=2048` | edge length of the square sun shadow map, in texels |
-| `params.local_shadow_atlas_size` | int, `..=4096`, a multiple of `16` (`L0016`) | edge length of the square local-light shadow atlas, in texels (`ludion docs local-shadows`) |
+| `params.local_shadow_atlas_size` | int, `16..=4096`, a multiple of `16` (`L0016`) | edge length of the square local-light shadow atlas, in texels (`ludion docs local-shadows`) |
 | `params.ibl_specular_size` | power-of-two int, `16..=256` | edge length of the sky's specular reflection cube faces, in texels (`128` at `low`, `256` otherwise) |
 | `params.pcf` | odd int, `1..=3` | edge length of the shadow map's filter kernel, in taps (`1` is a single centre tap) |
 | `params.gi_rays` | int, `1..=64`, a multiple of `16` | rays the GI bake traces per irradiance probe |

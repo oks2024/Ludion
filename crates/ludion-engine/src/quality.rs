@@ -125,9 +125,12 @@ impl QualitySetting {
     }
 
     /// The local-light shadow atlas edge a frame at this setting plans with: the quality's axis, or 0
-    /// when it masks shadows. The one rule the profile panel and the `local_shadows` marks share.
+    /// when it masks shadows or is not a valid edge. The one rule the profile panel and the
+    /// `local_shadows` marks share, and the one `PostChain::masked` applies.
     pub(crate) fn local_shadow_edge(&self) -> u32 {
-        if self.quality.shadows {
+        if self.quality.shadows
+            && ludion_renderer::is_valid_atlas_edge(self.params.local_shadow_atlas_size)
+        {
             self.params.local_shadow_atlas_size
         } else {
             0

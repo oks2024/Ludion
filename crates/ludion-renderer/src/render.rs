@@ -3367,7 +3367,7 @@ impl FrameRecorder<'_> {
         });
 
         // The mesh group-2 sun bind group: the sun uniform + the shadow map + the comparison sampler.
-        // On a frame that drew one the scene pass reads the graph's `shadow_map` (its one input);
+        // On a frame that drew one the scene pass reads the graph's `shadow_map`;
         // otherwise it reads nothing, so the persistent 1×1 fallback depth texture keeps the static
         // mesh pipeline layout satisfied (`Plan/shadow-mapping.md` constraint 6). The fallback is
         // never *sampled* — `build_sun` zeroes `light_space` on exactly these frames, so the shader

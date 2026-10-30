@@ -15,7 +15,9 @@ other fields are `ludion docs components`.
 2. `ludion render --scene examples/gallery/local-shadows.yaml --out local-shadows.png`.
 3. `ludion profile --scene examples/gallery/local-shadows.yaml --frames 30 --json target/profile.json`
    and read `local_shadows`: `requested`, `granted`, `skipped`, `views`, `atlas_edge`. `skipped > 0`
-   means opted-in lights the camera sees went unshadowed.
+   means opted-in lights the camera sees went unshadowed. At a quality that masks shadows (`low`) the
+   panel reports every requested light as skipped, so a `skipped == 0` check must run at a quality
+   with shadows on.
 4. `ludion render --scene examples/gallery/local-shadows.yaml --out atlas.png --debug-view local_shadow_atlas`
    shows the atlas, and `--debug-draw local_shadows` marks each opted-in light in the world: green
    granted, red skipped. `ludion docs debug-draw` has the pen; the view is also the wire `render.debug`
@@ -45,8 +47,8 @@ at their defaults saves and hashes exactly as before.
 
 - **Meshes only.** Meshes cast and receive; sprites, billboards, text and particles do neither, and
   fog and global illumination are not shadowed.
-- **A fixed budget per frame.** Candidates are the opted-in lights whose range sphere touches the
-  camera frustum. They rank by distance from the camera to the sphere's surface, nearest first, ties
+- **A fixed budget per frame.** Candidates are the opted-in lights whose cluster footprint touches
+  the camera frustum: the range sphere for a point light, the cone's bounding sphere for a spot. They rank by distance from the camera to the sphere's surface, nearest first, ties
   going to light-list order (point lights, then spots, each by ascending `EntityId`).
 - **An 8×8-cell atlas, granted whole.** A spot takes a 2×2 block of cells; a point light takes six
   one-cell cube faces, and so does a spot with `outer_angle` over 60°. A light is granted only if all
