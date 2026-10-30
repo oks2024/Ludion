@@ -44,6 +44,7 @@
 
 mod cluster;
 mod compressed;
+mod cull;
 mod debug_view;
 mod frame_observer;
 mod gi_bake;
@@ -52,6 +53,7 @@ mod gi_inject;
 pub mod graph;
 mod ibl;
 mod lobe;
+mod local_shadow;
 mod mesh;
 mod mipgen;
 mod probe;

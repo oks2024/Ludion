@@ -448,11 +448,16 @@ pub(crate) fn probe_masks(
 /// range sphere at the apex.
 fn bounding_sphere(light: &Light) -> (Vec3, f32) {
     let apex = Vec3::new(light.position[0], light.position[1], light.position[2]);
+    let axis = Vec3::new(light.axis[0], light.axis[1], light.axis[2]);
+    light_sphere(apex, axis, light.position[3], light.axis[3])
+}
+
+/// [`bounding_sphere`] over unpacked fields; a point light passes `cos_outer = -2.0` (see
+/// [`POINT_LIGHT_AXIS`]) for its range sphere.
+pub(crate) fn light_sphere(apex: Vec3, axis: Vec3, range: f32, cos_outer: f32) -> (Vec3, f32) {
     // Mirrors both consumers' `max(light.position.w, 1e-3)`: a light authored at range 0 still lights
     // a hair of geometry GPU-side, so the CPU must bin it as if it did.
-    let range = light.position[3].max(1e-3);
-    let cos_outer = light.axis[3];
-    let axis = Vec3::new(light.axis[0], light.axis[1], light.axis[2]);
+    let range = range.max(1e-3);
     if cos_outer < std::f32::consts::FRAC_1_SQRT_2 || !axis.is_finite() {
         return (apex, range);
     }
