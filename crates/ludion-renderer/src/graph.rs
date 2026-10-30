@@ -540,6 +540,10 @@ pub struct PostChain {
     /// masks shadows off ([`Quality::shadows`]) renders a sunlit shadowless frame rather than a
     /// sunless one.
     pub shadow_map: Option<u32>,
+    /// The cascade count when the sun authors `cascades` and a map is drawn: the map is then a
+    /// [`sun_atlas_grid`](crate::sun_atlas_grid) atlas of [`shadow_map`](PostChain::shadow_map)-edge
+    /// tiles. `None` keeps the single square map exactly.
+    pub sun_cascades: Option<u32>,
     /// The scene enables ambient occlusion: the [`pass::PREPASS`], [`pass::SSAO`] and
     /// [`pass::SSAO_BLUR`] passes are prepended and the scene pass samples the result
     /// (`Plan/post-process-pipeline.md` decision 8). False leaves the graph with none of the three,
@@ -650,6 +654,11 @@ impl PostChain {
                 .sun
                 .is_some()
                 .then_some(QualityParams::FULL.shadow_map_size),
+            sun_cascades: scene
+                .sun
+                .as_ref()
+                .and_then(|sun| sun.cascades)
+                .and_then(|config| QualityParams::FULL.sun_cascade_count(Some(config.count))),
             // `ssao` is a strength *and* the gate: at zero the effect contributes nothing, so
             // scheduling three passes to compute it would be work with no output.
             ssao: scene.post.is_some_and(|post| post.ssao > 0.0),
@@ -728,8 +737,14 @@ impl PostChain {
                     && crate::local_shadow::is_valid_atlas_edge(params.local_shadow_atlas_size)
             })
             .map(|_| params.local_shadow_atlas_size);
+        // Re-capping the FULL count with this machine's cap is `min(authored, cap)`, the count the fit uses.
+        let sun_cascades = self
+            .sun_cascades
+            .filter(|_| shadow_map.is_some())
+            .and_then(|count| params.sun_cascade_count(Some(count)));
         PostChain {
             shadow_map,
+            sun_cascades,
             ssao: self.ssao && quality.ssao,
             // The march reads the shadow map, so the pair cannot outlive it. Keeping the map alive
             // for the shafts alone was the alternative and is worse: "shadows off" would then still
@@ -755,6 +770,24 @@ impl PostChain {
             ..self
         }
     }
+}
+
+/// The `shadow_map` transient's descriptor: the square map, or the cascade atlas of
+/// `shadow_map`-edge tiles (readable back for tests, hence `CopySrc`).
+fn shadow_map_desc(chain: &PostChain) -> Option<TextureDesc> {
+    let edge = chain.shadow_map?;
+    let Some(count) = chain.sun_cascades else {
+        return Some(TextureDesc::sampled_depth(edge, edge));
+    };
+    let (columns, rows) = crate::sun_atlas_grid(count);
+    Some(TextureDesc {
+        usages: vec![
+            ludion_render_graph::TextureUsage::RenderAttachment,
+            ludion_render_graph::TextureUsage::TextureBinding,
+            ludion_render_graph::TextureUsage::CopySrc,
+        ],
+        ..TextureDesc::sampled_depth(edge * columns, edge * rows)
+    })
 }
 
 /// The pyramid's level count below the bright pass: levels 1..=[`PYRAMID_LEVELS`], each written by
@@ -908,9 +941,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // shadows-masked machine's — resource list is exactly the pre-shadow graph's,
     // `Plan/shadow-mapping.md` decision 6). A square sampled depth texture: written depth-only by
     // the `shadow` pass, sampled by the scene pass.
-    let shadow_map = chain
-        .shadow_map
-        .map(|edge| graph.transient("shadow_map", TextureDesc::sampled_depth(edge, edge)));
+    let shadow_map = shadow_map_desc(&chain).map(|desc| graph.transient("shadow_map", desc));
     // The ambient-occlusion chain (only when the scene enables it, so an AO-free scene's resource list
     // is exactly the pre-SSAO graph's — the same inversion the shadow map rests on).
     let ao = chain.ssao.then(|| AoTargets {
@@ -1457,7 +1488,8 @@ pub(crate) fn build_probe_capture_graph(
             && !chain.ui
             && !chain.debug_lines
             && chain.drop_shadow_atlas.is_none()
-            && chain.local_shadow_atlas.is_none(),
+            && chain.local_shadow_atlas.is_none()
+            && chain.sun_cascades.is_none(),
         "a probe face schedules none of the screen-space chains: {chain:?}"
     );
     debug_assert!(!chain.probe_relight, "a face scene carries no probes");
@@ -1467,9 +1499,7 @@ pub(crate) fn build_probe_capture_graph(
     let scene_normal = graph.transient("scene_normal", TextureDesc::hdr_color(face, face));
     let scene_specular = graph.transient("scene_specular", TextureDesc::color(face, face));
     let scene_emissive = graph.transient("scene_emissive", TextureDesc::hdr_color(face, face));
-    let shadow_map = chain
-        .shadow_map
-        .map(|edge| graph.transient("shadow_map", TextureDesc::sampled_depth(edge, edge)));
+    let shadow_map = shadow_map_desc(&chain).map(|desc| graph.transient("shadow_map", desc));
     let gi_dynamic = chain.gi_inject.map(|[cx, cy, cz]| {
         graph.transient(pass::GI_INJECT, TextureDesc::hdr_storage_volume(cx, cy, cz))
     });
@@ -1715,6 +1745,7 @@ mod tests {
                 // Content too, like the probes: no quality switch removes a drop shadow.
                 drop_shadow_atlas: (bits & 1 != 0).then_some(128),
                 local_shadow_atlas: None,
+                sun_cascades: None,
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -2228,6 +2259,73 @@ mod tests {
                 "the extent is not structure: the pass list is the same either way",
             );
         }
+    }
+
+    /// A sun authoring `cascades` derives its count; each quality caps it, and no map drops it.
+    #[test]
+    fn a_cascaded_sun_derives_and_masks_its_count() {
+        use crate::scene::{SunCascadeConfig, SunData};
+        use ludion_core::math::glam::{Mat4, Vec3};
+        let mut scene = RenderScene::empty((1920, 1080));
+        scene.sun = Some(SunData {
+            direction: Vec3::NEG_Y,
+            color: Vec3::ONE,
+            light_space: Mat4::IDENTITY,
+            bias: 0.0,
+            angular_radius: 0.0,
+            cascades: Some(SunCascadeConfig {
+                count: 4,
+                shadow_distance: 100.0,
+                splits: None,
+                shadow_near: -60.0,
+                shadow_far: 60.0,
+            }),
+        });
+        let chain = PostChain::for_scene(&scene);
+        assert_eq!(chain.sun_cascades, Some(4));
+        let masked =
+            |quality: &Quality, params: &QualityParams| chain.masked(quality, params).sun_cascades;
+        assert_eq!(masked(&Quality::FULL, &QualityParams::FULL), Some(4));
+        assert_eq!(masked(&Quality::HIGH, &QualityParams::HIGH), Some(3));
+        assert_eq!(masked(&Quality::MEDIUM, &QualityParams::MEDIUM), Some(2));
+        let shadowless = Quality {
+            shadows: false,
+            ..Quality::FULL
+        };
+        assert_eq!(masked(&shadowless, &QualityParams::FULL), None);
+    }
+
+    /// The cascade atlas is `sun_atlas_grid` tiles of the chain's edge; an unset sun keeps the
+    /// square map's descriptor exactly.
+    #[test]
+    fn the_cascade_atlas_is_declared_as_a_grid_of_tiles() {
+        let extent = |chain: PostChain| {
+            let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+            graph
+                .resources()
+                .iter()
+                .find(|r| r.name == "shadow_map")
+                .expect("the chain declares a shadow map")
+                .clone()
+        };
+        for (count, expected) in [
+            (1, (256, 256)),
+            (2, (512, 256)),
+            (3, (512, 512)),
+            (4, (512, 512)),
+        ] {
+            let map = extent(PostChain {
+                shadow_map: Some(256),
+                sun_cascades: Some(count),
+                ..PostChain::default()
+            });
+            assert_eq!((map.desc.extent.width, map.desc.extent.height), expected);
+        }
+        let unset = extent(PostChain {
+            shadow_map: Some(256),
+            ..PostChain::default()
+        });
+        assert_eq!(unset.desc, TextureDesc::sampled_depth(256, 256));
     }
 
     /// Level sizes halve down the pyramid (level 0 is the half-res bright pass), and every upsample

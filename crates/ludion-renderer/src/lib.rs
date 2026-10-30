@@ -102,7 +102,9 @@ pub use scene::{
     TextureImage, TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
     drop_shadow_fade,
 };
-pub use sun_cascade::{SUN_CASCADE_LAMBDA, SunCascade, SunCascades, fit_sun_cascades};
+pub use sun_cascade::{
+    SUN_CASCADE_LAMBDA, SunCascade, SunCascades, fit_sun_cascades, sun_atlas_grid, sun_atlas_tile,
+};
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`
 // directly.

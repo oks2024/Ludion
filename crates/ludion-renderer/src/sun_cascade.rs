@@ -30,6 +30,11 @@
 //!
 //! A fragment picks the first cascade whose `far` exceeds its view depth (`near`/`far` are view
 //! depths in metres).
+//!
+//! # Atlas
+//!
+//! The cascades share one depth texture of `shadow_map_size`-edge tiles, laid out row-major by
+//! [`sun_atlas_grid`]: 1×1, 2×1 or 2×2. A three-cascade atlas leaves its last tile cleared.
 
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::math::powf;
@@ -65,6 +70,22 @@ pub struct SunCascades {
     pub count: u32,
     /// Nearest slice first.
     pub cascades: [SunCascade; MAX_SUN_CASCADES as usize],
+}
+
+/// The atlas grid of `count` cascades as `(columns, rows)`; `count` clamps into
+/// `1..=`[`MAX_SUN_CASCADES`].
+pub fn sun_atlas_grid(count: u32) -> (u32, u32) {
+    match count.clamp(1, MAX_SUN_CASCADES) {
+        1 => (1, 1),
+        2 => (2, 1),
+        _ => (2, 2),
+    }
+}
+
+/// The `(column, row)` of cascade `index` in the atlas of `count` cascades.
+pub fn sun_atlas_tile(count: u32, index: u32) -> (u32, u32) {
+    let (columns, _) = sun_atlas_grid(count);
+    (index % columns, index / columns)
 }
 
 /// Fits the sun's cascades to the frame's camera, or `None` when the scene has no sun, the sun
@@ -247,6 +268,19 @@ fn fit_cascade(
 mod tests {
     use super::*;
     use crate::scene::{PostData, RenderCamera, SunData, aspect_ratio};
+
+    #[test]
+    fn the_atlas_grid_is_row_major_and_clamps() {
+        let grids: Vec<_> = (0..=5).map(sun_atlas_grid).collect();
+        assert_eq!(grids, [(1, 1), (1, 1), (2, 1), (2, 2), (2, 2), (2, 2)]);
+    }
+
+    #[test]
+    fn four_cascade_tiles_fill_the_grid_row_major() {
+        let tiles: Vec<_> = (0..4).map(|i| sun_atlas_tile(4, i)).collect();
+        assert_eq!(tiles, [(0, 0), (1, 0), (0, 1), (1, 1)]);
+        assert_eq!(sun_atlas_tile(2, 1), (1, 0));
+    }
 
     const EXTENT: (u32, u32) = (1920, 1080);
 

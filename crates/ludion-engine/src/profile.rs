@@ -3331,6 +3331,7 @@ entities:
         let everything = PostChain {
             ui: true,
             shadow_map: Some(1024),
+            sun_cascades: Some(4),
             ssao: true,
             shafts: true,
             dof: true,

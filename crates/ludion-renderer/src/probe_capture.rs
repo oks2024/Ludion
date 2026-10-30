@@ -62,6 +62,10 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     out.ui.clear();
     out.debug_lines.clear();
     out.probes.clear();
+    // A face is lit with the anchored box: a fit to a 90° face camera means nothing.
+    if let Some(sun) = &mut out.sun {
+        sun.cascades = None;
+    }
     out.probe_world = None;
     out.debug_view = None;
     let mut post = out.post.unwrap_or_default();

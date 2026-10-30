@@ -194,3 +194,44 @@ fn a_shadowed_local_light_dumps_the_local_shadow_pass() {
     assert!(!scheduled_passes(&plain).contains(&"local_shadow".to_string()));
     assert!(!plain.contains("local_shadow_atlas"));
 }
+
+/// A sun authoring `cascades` schedules the same passes as a plain sun, with `shadow_map` declared
+/// as the cascade atlas: 2×2 tiles at full quality, 2×1 at medium (whose cap is two).
+#[test]
+fn a_cascaded_sun_dumps_the_atlas() {
+    let dump = |setting: &QualitySetting| {
+        ludion_engine::dump_scene_graph_json(
+            &fixture("sun-cascades.yaml"),
+            FrameSize::native(64, 64),
+            setting,
+        )
+        .expect("the scene validates and schedules")
+    };
+    let shadow_map_extent = |json: &str| {
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let map = value["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|resource| resource["name"] == "shadow_map")
+            .expect("the shadow map is declared")
+            .clone();
+        (
+            map["width"].as_u64().unwrap(),
+            map["height"].as_u64().unwrap(),
+        )
+    };
+    let plain = ludion_engine::dump_scene_graph_json(
+        &gallery("sun-shadows.yaml"),
+        FrameSize::native(64, 64),
+        &QualitySetting::full(),
+    )
+    .unwrap();
+
+    let full = dump(&QualitySetting::full());
+    assert_eq!(scheduled_passes(&full), scheduled_passes(&plain));
+    assert_eq!(shadow_map_extent(&full), (4096, 4096));
+
+    let medium = dump(&ludion_engine::resolve_startup_quality(Some("medium"), None).unwrap());
+    assert_eq!(shadow_map_extent(&medium), (2048, 1024));
+}
