@@ -1,4 +1,4 @@
-# Shadow Mapping (sun-only first slice)
+# Shadow mapping: the sun, drop shadows and local lights
 
 > Status: **Waves 1–5 landed 2026-07-17** (Lore revs 228–231 for Waves 1–4; Wave 5 docs +
 > bookkeeping same day). Decisions settled with the user 2026-07-17 (shadow source = sun only;
@@ -11,13 +11,15 @@
 > the two macOS re-blesses (`sun-shadows.png` new, `ui-hud-1080.png` re-bless) queued for the next
 > mac session. **Decision 8 (Clockout 0006) mechanized 2026-10-29:** the `DropShadow` component, the
 > `drop_shadow_occlusion` and `projector` passes and the `drop-shadow` gallery golden; the macOS twin is owed.
+> **Clockout 0007 (local-light shadows) mechanized at Lore r1780–r1786** (decision 1 fired, 3 and 6 extended,
+> 9–11 new); the macOS golden twin is owed (`Plan/owed.md`), and the darkness look gate is the game's.
 
 ## Goal
 
 A single directional "sun" light with one orthographic shadow map, received by the mesh path
 only. Depth becomes a first-class frame-graph resource first (the prerequisite recorded in
 `Plan/phase-11-pbr.md` "out of scope" and engine audit 2026-07-17 §2). Point lights stay
-unshadowed; sprites/billboards/text stay Lambert and untouched.
+unshadowed unless they opt in (decision 9); sprites/billboards/text stay Lambert and untouched.
 
 ## Current-code facts (gathered 2026-07-17)
 
@@ -50,8 +52,9 @@ unshadowed; sprites/billboards/text stay Lambert and untouched.
 
 1. **Sun only.** New `DirectionalLight` component; one 2048² `Depth32Float` orthographic shadow
    map, PCF 3×3 via a comparison sampler, consumed by `mesh.wgsl` only. Point-light shadows
-   (cube maps, array textures) get a recorded trigger: first content where the sun can't sell
-   the scene (revisit at G7 Spectacle). Sprites/billboards receiving shadows: recorded
+   (cube maps, array textures) got a recorded trigger, first content where the sun can't sell
+   the scene; it **fired** with Clockout request 0007 (approved 2026-10-28), spots included
+   (decisions 9–11). Sprites/billboards receiving shadows: recorded
    extension, decided if the HD-2D grounding visibly suffers at M6 (amending Phase 11's
    "sprites stay Lambert" is a deliberate act, not a default).
 2. **One pre-authorized pixel-moving wave** (Phase 11 precedent). Sun shading + shadow sampling
@@ -63,7 +66,9 @@ unshadowed; sprites/billboards/text stay Lambert and untouched.
    light-space matrix) + shadow map + comparison sampler live in a new mesh-only bind group
    (group 2) fed by a new `sun.wgsl` snippet or mesh-local declarations (Wave 3 picks, guided
    by bindgen unification rules). Sprite/text BGLs, pipelines, and goldens stay untouched by
-   construction. The depth-only shadow shader carries its own light-space uniform.
+   construction. The depth-only shadow shader carries its own light-space uniform. Local-light shadows bind in the
+   same mesh-only group 2, beside the sun (bindings 3–5), never in group 1: `Light` stays 48 bytes and
+   the GI and sprite layouts are untouched.
 4. **`DirectionalLight` carries an explicit `direction: [x,y,z]` field** (normalized at
    extract, L-coded validation error if zero), not Transform rotation — quaternion authoring is
    hostile to hand-edited YAML and the component is agent-legible as text. The entity's
@@ -77,7 +82,9 @@ unshadowed; sprites/billboards/text stay Lambert and untouched.
 5. **Multiple suns: extract takes the lowest-EntityId one** (pinned deterministic order),
    ignores the rest. No hard error — same posture as the 16-light cap.
 6. **The shadow pass is conditional on a sun being present** (the UI-overlay precedent):
-   sunless scenes keep the exact 5/6-pass graph. `RenderScene.sun: Option<SunData>`.
+   sunless scenes keep the exact 5/6-pass graph. `RenderScene.sun: Option<SunData>`. The
+   `local_shadow` pass is likewise conditional on at least one granted light, and the same `shadows`
+   quality toggle masks it.
 7. **Trigger bookkeeping**: shadow mapping leaves the textured-PBR trigger bundle; texture
    maps + IBL remain behind it (`roadmap-voxel-mesh-pbr.md` amended in Wave 5).
 8. **A drop shadow is a projection, not a light** (Clockout request 0006, approved 2026-10-28).
@@ -95,6 +102,23 @@ unshadowed; sprites/billboards/text stay Lambert and untouched.
 
    *Why:* a readability cue must not depend on the scene having a sun, on where the sun points, or
    on the machine's quality.
+9. **Local-light shadows are opt-in under a camera-ranked caster budget** (Clockout request 0007).
+   `cast_shadows` on `PointLight` and `SpotLight`. Each frame, candidates are the opted-in lights whose
+   cluster footprint touches the camera frustum, ranked by `max(0, |camera − centre| − radius)`, ties
+   to light-list order. They are granted whole sets of tiles from an 8×8-cell atlas: a spot a 2×2
+   block, a point light (or a spot over 60°) six one-cell cube faces; a light that does not fit is
+   skipped and later candidates are still tried.
+
+   *Why:* the plan is deterministic per frame. It is the first render decision that depends on the
+   camera, so a golden's casters depend on its pose.
+10. **The budget is quality-invariant.** 16 spot tiles at every quality; only `local_shadow_atlas_size`
+    scales (4096 full/high, 2048 medium; `low` masks it with the sun).
+
+    *Why:* a slower machine never changes which lamps cast.
+11. **The open questions, settled.** Six cube faces in the atlas (paraboloids bend straight edges); a
+    spot wider than 60° takes the omni path (authoring never fails); no fade or hysteresis; no static
+    caching; distance rank; per-view CPU culling in the `cull` module, which Clockout request 0011 reuses.
+    Out of scope kept: sprites, fog, GI.
 
 ## Waves
 

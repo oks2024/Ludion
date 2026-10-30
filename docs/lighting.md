@@ -94,8 +94,7 @@ rest (no error).
 **What does *not* cast or receive a shadow**, by settled scope: sprites, billboards, and text neither
 cast into the shadow map nor sample it (a lit sprite takes the sun's light unshadowed, two-sided, with
 no IBL, beside its ambient and point lights);
-`PointLight`s and `SpotLight`s remain unshadowed — no cube-map/array-texture shadows, a recorded
-trigger revisited when the sun alone can't sell a scene. A mesh always casts and receives; there is no per-mesh opt-out. A `DropShadow` is not a light shadow: opaque meshes receive it whatever the light setup (`ludion docs drop-shadow`).
+`PointLight`s and `SpotLight`s are unshadowed unless they opt in (below). A mesh always casts and receives; there is no per-mesh opt-out. A `DropShadow` is not a light shadow: opaque meshes receive it whatever the light setup (`ludion docs drop-shadow`).
 
 ## Point lights: place as many as the look needs
 
@@ -164,14 +163,21 @@ A `SpotLight` is a point light with an axis: `color`, `intensity`, `range` as a 
   by writing `direction` from a system (hashed state, like any component).
 - **Calibrate it as a point light** (the shading is the same, times the cone factor). A narrow cone
   costs less than a point light of the same `range`; past 45° it bins like one.
-- **Limits:** no shadows, no global illumination, no visible shaft — the lit pool is the look.
+- **Limits:** shadows are opt-in (`ludion docs local-shadows`), no global illumination, no visible shaft — the lit pool is the look.
+
+## Local-light shadows
+
+`PointLight` and `SpotLight` cast no shadow until `cast_shadows: true` opts them in. A per-frame
+budget grants shadow maps to the camera-nearest opted-in lights, 16 spot tiles at every quality; the
+rest stay lit and unshadowed. Fields, ranking, tuning and the profile check: `ludion docs local-shadows`.
 
 ## Gotchas
 
-- **A point light shines through walls.** Point lights are unshadowed (see above), so an interior
-  lantern spills into the street and a street torch reaches inside. Placement and `range` are the
-  tools: pull the range in to the room it is meant to fill, and prefer several short-range lights to
-  one long-range one when a wall sits between them.
+- **A point light shines through walls.** An unshadowed light does, so an interior
+  lantern spills into the street and a street torch reaches inside. Opt in with `cast_shadows` when
+  placement can't contain it, within the budget; otherwise placement and `range` are the tools: pull
+  the range in to the room it is meant to fill, and prefer several short-range lights to one
+  long-range one when a wall sits between them.
 - **The shadow pass is genuinely conditional, and cheap when it runs.** A sunless scene skips it
   entirely (the mesh shader still binds a zeroed sun uniform and a 1×1 fallback map, whose cost is
   negligible and whose shadow lookup is never reached). On the pinned RTX 3090's budget-horde profile
@@ -187,4 +193,5 @@ A `SpotLight` is a point light with an axis: `color`, `intensity`, `range` as a 
 - `ludion docs materials` — the three material scalars.
 - `ludion docs post-processing` — the imaging chain.
 - `ludion docs components` — declaring components, and the built-in visual set.
+- `ludion docs local-shadows` — opt-in shadows for point and spot lights.
 - `ludion docs drop-shadow` — the projected contact shadow under a character, no sun needed.

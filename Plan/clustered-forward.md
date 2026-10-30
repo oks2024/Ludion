@@ -265,9 +265,8 @@ takes the posture.
   population. Brings the frame graph's first buffer resource and compute pass kind; the
   determinism discipline is GI §9.3's (gather over scatter, or integer atomics — WGSL has no float
   atomics to get wrong).
-- **Point/spot light shadows** — trigger: the wave-3 sitting judges interior torch leak
-  unacceptable *after* placement and range tuning have had their turn. Its own plan (atlas or cube
-  maps, shadow-caster budget); hundreds of shadow maps is not a direction (GI §9.7 concurs).
+- **Point/spot light shadows** — fired (Clockout 0007): opt-in under a caster budget,
+  `Plan/shadow-mapping.md` decisions 9–11.
 - **`SpotLight`** — trigger: content that needs a cone (a lighthouse, a searchlight, a doorway
   spill narrower than a sphere). Rides the same array and grid; a new component, so it arrives
   with its own validator and palette archetype.

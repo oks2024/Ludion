@@ -58,8 +58,8 @@ breach in a curtain wall.
 6. **No GI.** Spots feed neither the GI bake nor dynamic injection — `RenderScene.lights` stays the GI
    input and spots never enter it. `GiDynamic` stays PointLight-only. Trigger: a sitting judges a
    spot-lit interior wrong for lack of bounce.
-7. **No shadows.** The lighthouse accepts a beam that crosses masts unshadowed. Spot shadows ride
-   `Plan/clustered-forward.md`'s point/spot shadow entry.
+7. **Shadows are opt-in (`cast_shadows`),** lifted by Clockout 0007: `Plan/shadow-mapping.md`
+   decisions 1, 9–11.
 8. **The visible shaft: the lit pool alone.** From the 58° game camera the beam reads by its pool on
    quays and walls; no additive cone mesh, no fog in-scatter now. Trigger: the lighthouse sitting
    judges the sweep unreadable — then the height-fog in-scatter (the medium already marches the sun)

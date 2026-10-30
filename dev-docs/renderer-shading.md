@@ -39,8 +39,15 @@ re-blesses every mesh-bearing golden:
   (`textureSampleCompareLevel`, hardware comparison sampling, 9 taps). A sunless frame binds a
   zeroed `Sun` and a persistent 1×1 fallback depth texture at group 2 — no shader permutation, the
   term simply evaluates to zero. Only the mesh path reads group 2: sprites, billboards and text
-  neither cast into the shadow map nor sample it (`Plan/shadow-mapping.md` decision 1), and point
-  lights remain unshadowed.
+  neither cast into the shadow map nor sample it (`Plan/shadow-mapping.md` decision 1).
+- **Local lights' shadows** — opt-in (`cast_shadows`), also mesh-only group 2, beside the sun:
+  `3 local_shadow_tex: texture_depth_2d`, `4 local_views: array<LocalView>`, `5 light_shadow: array<u32>`
+  (the light's first view index, `0xFFFFFFFF` unshadowed). The 48-byte `Light` record, the GI shaders and
+  the sprite layouts are unchanged. Inside the clustered loop each light's radiance is multiplied by
+  `local_shadow`, which returns an exact `1.0` without sampling for an unshadowed or ungranted light, so
+  those lights shade bit-identically. A granted spot samples its tile; a point light picks its cube face
+  by major axis. PCF reuses the sun's kernel with taps clamped inside the tile, and the bias is applied in
+  world space before projection (`Plan/shadow-mapping.md` decisions 9–11).
 - **Material selection** — per-instance, not per-mesh-kind: `MeshInstanceRaw`'s material vec4 is
   `(roughness, metallic, emissive, use_vertex_material)`, and `vs_main` does
   `mix(instance_material, vertex_material, flag)`. So any mesh that authors its own material (a

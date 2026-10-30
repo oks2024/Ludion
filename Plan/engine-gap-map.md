@@ -47,8 +47,8 @@ settled plan, nothing built; **rejected** — closed by design.
 ### Rendering
 
 - **Lights and shadows** — one active `DirectionalLight`; one hand-placed 2048² orthographic shadow
-  map, no cascades, no automatic fit. `SpotLight` deferred; point/spot shadows deferred
-  (`Plan/clustered-forward.md`, `Plan/shadow-mapping.md`). Area lights absent.
+  map, no cascades, no automatic fit. `SpotLight` shipped (`Plan/spot-light.md`); point/spot shadows opt-in under a
+  per-frame caster budget (`Plan/shadow-mapping.md`). Area lights absent.
 - **Transparency and material coverage** — no alpha-blended, alpha-cutout or double-sided meshes
   (glTF refuses them with L1202); no order-independent transparency; no clearcoat, sheen,
   transmission or subsurface. Foliage, glass, fences and hair cards are out.

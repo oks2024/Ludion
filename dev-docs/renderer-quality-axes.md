@@ -83,7 +83,7 @@ description: Quality axes: uniform sample counts, gi_rays, gi_probe_scale, and w
   a whole pass** — `--quality low` dumps a 1440×810 `scene` inside a 1920×1080 `final` plus the
   `upscale` that joins them, which makes the dump the GPU-free check for the resolution too.
 - **The GI axes stay observable where the sun's do not.** `shadows: false` at `LOW` makes
-  `shadow_map_size` and `pcf` unobservable — no map is drawn. `gi_dynamic: false` masks the per-frame
+  `shadow_map_size`, `local_shadow_atlas_size` and `pcf` unobservable — no map or atlas is drawn (the `local_shadow` pass is masked with the `shadow` pass). `gi_dynamic: false` masks the per-frame
   *injection* only: the bake runs at every preset, so both GI axes land in a `GiVolume` scene's pixels
   at `LOW` too. A test asserting "this preset cannot distinguish the GI axes" asserts the opposite of
   the design.

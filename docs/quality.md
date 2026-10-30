@@ -45,12 +45,12 @@ form — anything that is not a preset name is read as a path.
 Names are case-insensitive. Only `low` changes *which* effects are drawn; `medium` and `high` keep
 every effect and make each work less hard:
 
-| preset | `ssao_samples` | `shaft_steps` | `dof_taps` | `shadow_map_size` | `pcf` | `gi_rays` | `gi_probe_scale` | `render_scale` | `particle_density` |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `low` | (effects off) | (effects off) | (effects off) | (shadows off) | (shadows off) | 16 | 2.0 | 0.75 | 0.25 |
-| `medium` | 8 | 16 | 12 | 1024 | 3 | 32 | 1.5 | 1.0 | 1.0 |
-| `high` | 12 | 24 | 20 | 2048 | 3 | 48 | 1.0 | 1.0 | 1.0 |
-| `full` (default) | 16 | 32 | 32 | 2048 | 3 | 64 | 1.0 | 1.0 | 1.0 |
+| preset | `ssao_samples` | `shaft_steps` | `dof_taps` | `shadow_map_size` | `local_shadow_atlas_size` | `pcf` | `gi_rays` | `gi_probe_scale` | `render_scale` | `particle_density` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `low` | (effects off) | (effects off) | (effects off) | (shadows off) | (shadows off) | (shadows off) | 16 | 2.0 | 0.75 | 0.25 |
+| `medium` | 8 | 16 | 12 | 1024 | 2048 | 3 | 32 | 1.5 | 1.0 | 1.0 |
+| `high` | 12 | 24 | 20 | 2048 | 4096 | 3 | 48 | 1.0 | 1.0 | 1.0 |
+| `full` (default) | 16 | 32 | 32 | 2048 | 4096 | 3 | 64 | 1.0 | 1.0 | 1.0 |
 
 A lower count is a coarser estimate of the same picture. `shadows` off keeps the sun lighting and only
 stops it casting.
@@ -90,6 +90,7 @@ optional; an absent one keeps the base's, and an absent `preset` means `full`.
 | `params.shaft_steps` | int, `1..=32` | ray-march steps per light-shaft pixel |
 | `params.dof_taps` | int, `1..=32` | taps in the depth-of-field disc |
 | `params.shadow_map_size` | int, `1..=2048` | edge length of the square sun shadow map, in texels |
+| `params.local_shadow_atlas_size` | int, `..=4096`, a multiple of `16` (`L0016`) | edge length of the square local-light shadow atlas, in texels (`ludion docs local-shadows`) |
 | `params.ibl_specular_size` | power-of-two int, `16..=256` | edge length of the sky's specular reflection cube faces, in texels (`128` at `low`, `256` otherwise) |
 | `params.pcf` | odd int, `1..=3` | edge length of the shadow map's filter kernel, in taps (`1` is a single centre tap) |
 | `params.gi_rays` | int, `1..=64`, a multiple of `16` | rays the GI bake traces per irradiance probe |
@@ -169,8 +170,9 @@ The verification modes refuse the flag, so a golden never depends on the store.
 - **`engine.describe` reports quality read-only**: its `quality` object carries the label (`low`,
   `custom`, …) plus the five toggles. To change it, restart or attach to another host.
 - **`dump-graph` cannot see a lowered parameter** — `medium` schedules exactly what `full` does — with
-  three exceptions that size a *resource*: `shadow_map_size` (the `shadow_map` transient),
-  `gi_probe_scale` (the `gi_inject` volume, where injection is scheduled) and `render_scale` (at `low`
+  four exceptions that size a *resource*: `shadow_map_size` (the `shadow_map` transient),
+  `local_shadow_atlas_size` (the local atlas, where a light is granted; `shadows: false` masks it and
+  the profile panel's `atlas_edge` reads 0), `gi_probe_scale` (the `gi_inject` volume, where injection is scheduled) and `render_scale` (at `low`
   the scene targets are 0.75 of the output and an `upscale` pass carries them back). Use it to check
   a *mask* or an extent; render an image to check a count.
 - **`gi_rays` and `gi_probe_scale` change what is baked.** The bake is cached on its inputs, so
