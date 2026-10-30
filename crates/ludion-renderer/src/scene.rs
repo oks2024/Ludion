@@ -323,6 +323,92 @@ pub fn drop_shadow_fade(depth: f32, max_distance: f32, fade_distance: f32) -> f3
     }
 }
 
+/// How a [`DecalInstance`] composites onto the surface it covers. In every mode, coverage is
+/// `texel.a × color.a × opacity × angle weight`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DecalBlend {
+    /// Lit paint: the decal is a surface (albedo = `texel.rgb × color.rgb`, its own roughness,
+    /// metallic and normal) shaded by the lighting its receiver got, blended over the lit result by
+    /// coverage. Paint, stripes, tape.
+    Alpha,
+    /// Unlit darkening: `lit × lerp(1, texel.rgb × color.rgb, coverage)`. Scorch, grime,
+    /// footprints.
+    Multiply,
+    /// `lit + texel.rgb × color.rgb × coverage`, HDR, so it blooms. Glowing route marks,
+    /// telegraphs.
+    Add,
+    /// A clear film: the multiply darkening plus a dielectric specular lobe at the decal's
+    /// roughness and normal; the receiver's own colour stays visible. Wet patches, glue, varnish.
+    Coat,
+}
+
+/// Which meshes a [`DecalInstance`] paints, as ascending indices into [`RenderScene::meshes`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum DecalReceivers {
+    /// Every mesh but these receives.
+    Exclude(Vec<u32>),
+    /// Only these meshes receive.
+    Only(Vec<u32>),
+}
+
+/// The texture maps of a [`DecalInstance`], each absent until resolved.
+#[derive(Clone, PartialEq, Debug)]
+pub struct DecalMaps {
+    /// The sRGB colour map: rgb multiplies the tint, alpha is the coverage.
+    pub base_color: Option<MeshTexture>,
+    /// The tangent-space normal map.
+    pub normal: Option<MeshTexture>,
+    /// The glTF-packed metallic-roughness map.
+    pub metallic_roughness: Option<MeshTexture>,
+    /// The normal map's strength (default `1`).
+    pub normal_scale: f32,
+}
+
+impl Default for DecalMaps {
+    fn default() -> Self {
+        DecalMaps {
+            base_color: None,
+            normal: None,
+            metallic_roughness: None,
+            normal_scale: 1.0,
+        }
+    }
+}
+
+/// One projected decal: plain data for the renderer.
+///
+/// `ludion-engine`'s extract resolves a `Decal` component plus its entity's world pose into this.
+/// The box is the unit cube `[-0.5, 0.5]³` in box space; [`box_to_world`](DecalInstance::box_to_world)
+/// carries the authored size and the entity's world scale, its columns are the projection frame
+/// (the normal map's tangents), and box-space **−Y** is the projection direction.
+#[derive(Clone, PartialEq, Debug)]
+pub struct DecalInstance {
+    /// Box space to world space.
+    pub box_to_world: Mat4,
+    /// The inverse of [`box_to_world`](DecalInstance::box_to_world).
+    pub world_to_box: Mat4,
+    /// How the decal composites.
+    pub blend: DecalBlend,
+    /// Linear RGBA tint (HDR for the `add` blend).
+    pub color: [f32; 4],
+    /// Overall strength, `[0, 1]`.
+    pub opacity: f32,
+    /// The roughness painted; `None` keeps the receiver's own.
+    pub roughness: Option<f32>,
+    /// The metallic value painted, `[0, 1]`.
+    pub metallic: f32,
+    /// The sub-rectangle of the maps the box covers, `[u0, v0, u1, v1]`.
+    pub uv_rect: [f32; 4],
+    /// The angle fade `[start, end]` in degrees.
+    pub angle_fade: [f32; 2],
+    /// The sort key the instance was ordered by.
+    pub layer: i16,
+    /// The resolved maps.
+    pub maps: DecalMaps,
+    /// The meshes the decal paints.
+    pub receivers: DecalReceivers,
+}
+
 /// One world-space debug line: plain data for the renderer's debug pass.
 ///
 /// `ludion-engine` fills [`RenderScene::debug_lines`] from the categories the host enabled; the
@@ -1169,6 +1255,10 @@ pub struct RenderScene {
     /// Projected drop shadows, in ascending-`EntityId` extract order. Empty for a scene that
     /// authors none, which draws no shadow pass and leaves the frame byte-identical.
     pub drop_shadows: Vec<DropShadowInstance>,
+    /// Projected decals in draw order: ascending `layer`, then **descending** `EntityId`, so the
+    /// lowest id draws last and wins. Empty for a scene that authors none, which leaves the frame
+    /// byte-identical.
+    pub decals: Vec<DecalInstance>,
     /// World-space debug lines from the categories the host enabled; empty by default.
     pub debug_lines: Vec<DebugSegment>,
     /// A full-screen debug view that replaces the finished picture, when the host asked for one and
@@ -1248,6 +1338,7 @@ impl RenderScene {
             sprites: Vec::new(),
             ground_markers: Vec::new(),
             drop_shadows: Vec::new(),
+            decals: Vec::new(),
             debug_lines: Vec::new(),
             debug_view: None,
             particles: Vec::new(),

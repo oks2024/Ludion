@@ -52,6 +52,7 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     out.texts.clear();
     out.ground_markers.clear();
     out.drop_shadows.clear();
+    out.decals.clear();
     // Probes are lit by local lights unshadowed, like the GI bake.
     for light in &mut out.lights {
         light.shadow = None;

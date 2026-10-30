@@ -12,13 +12,13 @@ use ludion_core::time::{SimTime, TickRate};
 use ludion_ecs::World;
 use ludion_engine::components::{Anchor, UiList, UiListItem, UiRect, UiText};
 use ludion_engine::{
-    Camera, DropShadow, Environment, Fade, GiDynamic, GroundMarker, GroundMarkerShape, Mesh,
-    MeshSource, ParticleEmitter, PointLight, PostProcess, QualityParams, Sprite, TileAppearance,
-    Tilemap, Transform, extract, extract_at,
+    Camera, Decal, DecalReceiverSet, DropShadow, Environment, Fade, GiDynamic, GroundMarker,
+    GroundMarkerShape, Mesh, MeshSource, ParticleEmitter, PointLight, PostProcess, QualityParams,
+    Sprite, TileAppearance, Tilemap, Transform, extract, extract_at,
 };
 use ludion_renderer::{
-    GROUND_MARKER_LIFT, GroundMarkerShape as RendererMarkerShape, MeshShape, RenderCamera,
-    UiInstance,
+    DecalReceivers, GROUND_MARKER_LIFT, GroundMarkerShape as RendererMarkerShape, MeshShape,
+    RenderCamera, UiInstance,
 };
 
 fn scene_world() -> World {
@@ -2811,4 +2811,202 @@ fn a_drop_shadow_excludes_its_casters_hierarchy_but_not_other_meshes() {
     assert_eq!(scene.drop_shadows.len(), 2);
     assert_eq!(scene.drop_shadows[0].exclude, [1, 2]);
     assert_eq!(scene.drop_shadows[1].exclude, [3]);
+}
+
+// --- Clockout 0012: Decal through extract ---
+
+fn decal_entity(
+    world: &mut World,
+    parent: Option<ludion_core::ids::EntityId>,
+    transform: Transform,
+    decal: Decal,
+) -> ludion_core::ids::EntityId {
+    let e = shadow_entity(world, parent, transform, false);
+    world.insert(e, decal).unwrap();
+    e
+}
+
+/// A scene with no `Decal` extracts an empty list.
+#[test]
+fn a_scene_without_decals_extracts_none() {
+    let scene = extract(&scene_world(), (320, 180), Path::new(".")).unwrap();
+    assert!(scene.decals.is_empty());
+}
+
+/// The box matrices compose the parent chain, the authored size and the world scale: the unit
+/// cube's corners land on the expected world points, and the inverse undoes the forward matrix.
+#[test]
+fn a_parented_scaled_decal_carries_its_box_matrices() {
+    let mut world = World::new();
+    let root = shadow_entity(
+        &mut world,
+        None,
+        Transform {
+            translation: [10.0, 0.0, 0.0],
+            rotation: [0.0, 90.0, 0.0],
+            scale: [2.0, 2.0, 2.0],
+        },
+        false,
+    );
+    decal_entity(
+        &mut world,
+        Some(root),
+        Transform {
+            translation: [1.0, 0.0, 0.0],
+            ..Transform::default()
+        },
+        Decal {
+            size: [2.0, 1.0, 4.0],
+            ..Decal::default()
+        },
+    );
+
+    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    assert_eq!(scene.decals.len(), 1);
+    let decal = &scene.decals[0];
+    // The child sits at local +X 1, which the root's 90 degree yaw carries to world -Z 2 (scale 2);
+    // the box is size x world scale = [4, 2, 8] along the child's rotated axes.
+    let centre = Vec3::new(10.0, 0.0, -2.0);
+    // Local +X maps to world -Z under a +90 degree yaw, local +Z to world +X.
+    let expected = |x: f32, y: f32, z: f32| centre + Vec3::new(z * 8.0, y * 2.0, -x * 4.0);
+    for (x, y, z) in [
+        (0.5, 0.5, 0.5),
+        (-0.5, 0.5, 0.5),
+        (0.5, -0.5, -0.5),
+        (-0.5, -0.5, 0.5),
+    ] {
+        let world_point = decal.box_to_world.transform_point3(Vec3::new(x, y, z));
+        assert!(
+            (world_point - expected(x, y, z)).length() < 1e-4,
+            "corner ({x}, {y}, {z}) landed at {world_point:?}"
+        );
+    }
+    let product = decal.world_to_box * decal.box_to_world;
+    assert!(product.abs_diff_eq(Mat4::IDENTITY, 1e-5), "{product:?}");
+}
+
+/// A decal scaled to nothing covers nothing and is skipped.
+#[test]
+fn a_zero_scale_decal_is_skipped() {
+    let mut world = World::new();
+    decal_entity(
+        &mut world,
+        None,
+        Transform {
+            scale: [0.0, 1.0, 1.0],
+            ..Transform::default()
+        },
+        Decal::default(),
+    );
+    decal_entity(&mut world, None, Transform::default(), Decal::default());
+    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    assert_eq!(scene.decals.len(), 1);
+}
+
+/// Decals draw in ascending layer, and within a layer the lowest entity id draws last.
+#[test]
+fn decals_extract_in_layer_then_descending_id_order() {
+    let mut world = World::new();
+    let mut spawn = |layer: i16, x: f32| {
+        decal_entity(
+            &mut world,
+            None,
+            Transform {
+                translation: [x, 0.0, 0.0],
+                ..Transform::default()
+            },
+            Decal {
+                layer,
+                ..Decal::default()
+            },
+        )
+    };
+    // a < b < c by id; the x translation tags each.
+    let _a = spawn(1, 1.0);
+    let _b = spawn(0, 2.0);
+    let _c = spawn(0, 3.0);
+    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let order: Vec<f32> = scene
+        .decals
+        .iter()
+        .map(|d| d.box_to_world.transform_point3(Vec3::ZERO).x)
+        .collect();
+    assert_eq!(order, [3.0, 2.0, 1.0]);
+}
+
+/// `all` excludes exactly the skinned instances; `hierarchy` admits the unskinned meshes of the
+/// decal's root and descendants and no unrelated mesh.
+#[test]
+fn decal_receivers_follow_the_skin_and_the_hierarchy() {
+    use ludion_scene::{JointRest, MeshDocument as SceneMeshDocument, MeshJoint, MeshSkin};
+
+    let dir = std::env::temp_dir().join(format!("ludion-extract-decal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("meshes")).unwrap();
+    let mut identity = [0.0; 16];
+    for i in 0..4 {
+        identity[i * 5] = 1.0;
+    }
+    let skinned_doc = SceneMeshDocument {
+        positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        skin: Some(MeshSkin {
+            joints: vec![MeshJoint {
+                name: "root".to_string(),
+                parent: None,
+                rest: JointRest {
+                    translation: [0.0, 0.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0, 1.0, 1.0],
+                },
+                inverse_bind: identity,
+            }],
+            weights: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            bone_indices: vec![0; 12],
+        }),
+        indices: vec![0, 1, 2],
+        ..SceneMeshDocument::default()
+    };
+    std::fs::write(
+        dir.join("meshes/skinned.mesh.yaml"),
+        ludion_scene::emit_mesh(&skinned_doc),
+    )
+    .unwrap();
+
+    let mut world = World::new();
+    let other = shadow_entity(&mut world, None, Transform::default(), true); // mesh 0
+    let root = shadow_entity(&mut world, None, Transform::default(), true); // mesh 1
+    let child = shadow_entity(&mut world, Some(root), Transform::default(), true); // mesh 2
+    let skinned = world.spawn(); // mesh 3, a descendant of the root
+    world.insert(skinned, Transform::default()).unwrap();
+    world
+        .insert(
+            skinned,
+            Mesh {
+                shape: MeshSource::Asset("meshes/skinned.mesh.yaml".to_string()),
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+    world.insert(skinned, ludion_ecs::Parent(root)).unwrap();
+    let _ = (other, child);
+    decal_entity(
+        &mut world,
+        Some(root),
+        Transform::default(),
+        Decal {
+            receivers: DecalReceiverSet::Hierarchy,
+            ..Decal::default()
+        },
+    );
+    decal_entity(&mut world, None, Transform::default(), Decal::default());
+
+    let scene = extract(&world, (320, 180), &dir).unwrap();
+    assert_eq!(scene.meshes.len(), 4);
+    assert_eq!(scene.meshes[3].bone_offset, 1, "mesh 3 is the skinned one");
+    // Hierarchy decal has the lower id and so draws last.
+    assert_eq!(scene.decals.len(), 2);
+    assert_eq!(scene.decals[1].receivers, DecalReceivers::Only(vec![1, 2]));
+    assert_eq!(scene.decals[0].receivers, DecalReceivers::Exclude(vec![3]));
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

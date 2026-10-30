@@ -2631,6 +2631,295 @@ impl SemanticValidate for DropShadow {
     }
 }
 
+/// How a [`DecalMap`]'s sampler addresses coordinates outside `[0, 1]`, the same on both axes.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MapWrap {
+    /// Tile the image (the default).
+    #[default]
+    Repeat,
+    /// Hold the edge texel.
+    Clamp,
+    /// Tile, mirroring every other copy.
+    Mirror,
+}
+
+fn is_default_wrap(value: &MapWrap) -> bool {
+    *value == MapWrap::Repeat
+}
+
+/// How a [`Decal`] composites onto the surface it covers. In every mode, coverage is
+/// `texel.a × color.a × opacity × angle weight`.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DecalBlend {
+    /// Lit paint: the decal is a surface (albedo = `texel.rgb × color.rgb`, its own roughness,
+    /// metallic and normal) shaded by the lighting its receiver got, blended over the lit result by
+    /// coverage. Paint, stripes, tape.
+    #[default]
+    Alpha,
+    /// Unlit darkening: `lit × lerp(1, texel.rgb × color.rgb, coverage)`. Scorch, grime,
+    /// footprints.
+    Multiply,
+    /// `lit + texel.rgb × color.rgb × coverage`, HDR, so it blooms. Glowing route marks,
+    /// telegraphs.
+    Add,
+    /// A clear film: the multiply darkening plus a dielectric specular lobe at the decal's
+    /// roughness and normal; the receiver's own colour stays visible. Wet patches, glue, varnish.
+    Coat,
+}
+
+fn is_default_blend(value: &DecalBlend) -> bool {
+    *value == DecalBlend::Alpha
+}
+
+/// One texture map of a [`Decal`]: a PNG path and how it is sampled. `path` is relative to the
+/// document it is written in.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct DecalMap {
+    /// The PNG, relative to the document it is written in.
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
+    pub path: String,
+    /// The address mode (default `repeat`).
+    #[serde(default, skip_serializing_if = "is_default_wrap")]
+    pub wrap: MapWrap,
+    /// A normal map's strength (default `1`); meaningless on the other maps.
+    #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
+    pub scale: f32,
+}
+
+fn one_f32() -> f32 {
+    1.0
+}
+
+#[allow(clippy::float_cmp)]
+fn is_one_f32(value: &f32) -> bool {
+    *value == 1.0
+}
+
+/// Which surfaces a [`Decal`] paints.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DecalReceiverSet {
+    /// Every unskinned mesh the box touches.
+    #[default]
+    All,
+    /// Only the meshes of the decal's hierarchy root and its descendants.
+    Hierarchy,
+}
+
+fn is_default_receivers(value: &DecalReceiverSet) -> bool {
+    *value == DecalReceiverSet::All
+}
+
+fn decal_size_default() -> [f32; 3] {
+    [1.0; 3]
+}
+fn decal_uv_rect_default() -> [f32; 4] {
+    [0.0, 0.0, 1.0, 1.0]
+}
+fn decal_color_default() -> [f32; 4] {
+    [1.0; 4]
+}
+fn decal_angle_fade_default() -> [f32; 2] {
+    [60.0, 80.0]
+}
+
+#[allow(clippy::float_cmp)]
+fn is_decal_size_default(value: &[f32; 3]) -> bool {
+    *value == decal_size_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_decal_uv_rect_default(value: &[f32; 4]) -> bool {
+    *value == decal_uv_rect_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_decal_color_default(value: &[f32; 4]) -> bool {
+    *value == decal_color_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_decal_angle_fade_default(value: &[f32; 2]) -> bool {
+    *value == decal_angle_fade_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_zero_f32(value: &f32) -> bool {
+    *value == 0.0
+}
+fn is_zero_layer(value: &i16) -> bool {
+    *value == 0
+}
+
+/// A projected decal: an oriented box, centred on the entity and oriented by its world rotation
+/// through `Parent`, that paints textures onto the surfaces inside it.
+///
+/// The box projects along its local **−Y**, so an unrotated decal paints the floor below it; the
+/// texture's `u` runs along +X and `v` along +Z. Its extent is `size` times the entity's world
+/// scale, per axis. Render-only: it never touches the sim, and a scene without one renders exactly
+/// as before. Every field is omitted from the canonical text at its default, so `Decal: {}` is the
+/// whole component.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct Decal {
+    /// The box in metres, before the entity's world scale: `x` by `z` is the footprint, `y` the
+    /// projection depth (default `[1, 1, 1]`). Every element strictly positive and finite (`L2106`).
+    #[serde(
+        default = "decal_size_default",
+        skip_serializing_if = "is_decal_size_default"
+    )]
+    pub size: [f32; 3],
+    /// The colour map, sRGB: its rgb multiplies `color` and its alpha is the coverage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_color_texture: Option<DecalMap>,
+    /// A tangent-space normal map, applied for the `alpha` and `coat` blends only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_texture: Option<DecalMap>,
+    /// A glTF-packed map (`G` roughness, `B` metallic), applied for the `alpha` and `coat` blends
+    /// only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metallic_roughness_texture: Option<DecalMap>,
+    /// The sub-rectangle of the maps the box covers, `[u0, v0, u1, v1]` (default the whole image),
+    /// in the `Sprite` UV convention. Each element in `[0, 1]`.
+    #[serde(
+        default = "decal_uv_rect_default",
+        skip_serializing_if = "is_decal_uv_rect_default"
+    )]
+    #[schemars(inner(range(min = 0.0, max = 1.0)))]
+    pub uv_rect: [f32; 4],
+    /// RGBA tint multiplied into the colour map (default opaque white). HDR for the `add` blend
+    /// (`L1263`).
+    #[serde(
+        default = "decal_color_default",
+        skip_serializing_if = "is_decal_color_default"
+    )]
+    pub color: [f32; 4],
+    /// Overall strength in `[0, 1]` (default `1`).
+    #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub opacity: f32,
+    /// The roughness the decal paints, in `[0, 1]`; absent keeps the receiver's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub roughness: Option<f32>,
+    /// The metallic value the decal paints, in `[0, 1]` (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub metallic: f32,
+    /// How the decal composites (default [`DecalBlend::Alpha`]).
+    #[serde(default, skip_serializing_if = "is_default_blend")]
+    pub blend: DecalBlend,
+    /// The angle fade `[start, end]` in degrees (default `[60, 80]`): the decal's weight is 1 where
+    /// the receiving normal is within `start` of the box's local +Y and 0 beyond `end`. Holds
+    /// `0 <= start <= end <= 90` (`L2112`).
+    #[serde(
+        default = "decal_angle_fade_default",
+        skip_serializing_if = "is_decal_angle_fade_default"
+    )]
+    #[schemars(extend("x-ui-range" = [0.0, 90.0]))]
+    pub angle_fade: [f32; 2],
+    /// The sort key (default `0`). Decals draw in ascending `layer`; within a layer the lowest
+    /// entity id draws last and wins.
+    #[serde(default, skip_serializing_if = "is_zero_layer")]
+    pub layer: i16,
+    /// Which surfaces the decal paints (default every unskinned mesh).
+    #[serde(default, skip_serializing_if = "is_default_receivers")]
+    pub receivers: DecalReceiverSet,
+}
+
+impl Default for Decal {
+    fn default() -> Self {
+        Decal {
+            size: decal_size_default(),
+            base_color_texture: None,
+            normal_texture: None,
+            metallic_roughness_texture: None,
+            uv_rect: decal_uv_rect_default(),
+            color: decal_color_default(),
+            opacity: 1.0,
+            roughness: None,
+            metallic: 0.0,
+            blend: DecalBlend::Alpha,
+            angle_fade: decal_angle_fade_default(),
+            layer: 0,
+            receivers: DecalReceiverSet::All,
+        }
+    }
+}
+
+impl SemanticValidate for Decal {
+    /// `color` is an HDR colour (`L1263`); a `size` element that is not strictly positive and
+    /// finite is `L2106` at `/size/<n>`; an `angle_fade` element outside `[0, 90]` or non-finite is
+    /// `L2112` at `/angle_fade/<n>`, and a pair with `start > end` is `L2112` at `/angle_fade`.
+    /// Works by field name, so a schema-invalid value adds nothing it cannot read.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = value_color_diagnostics("Decal", value, "color");
+        if let Some(size) = value.get("size").and_then(Value::as_array) {
+            for (index, element) in size.iter().enumerate() {
+                let Some(dimension) = as_stored_f32(element) else {
+                    continue;
+                };
+                if !ludion_core::number::positive_f32(dimension) {
+                    out.push(
+                        Diagnostic::new(
+                            code::GROUND_MARKER_NON_POSITIVE_DIMENSION,
+                            format!(
+                                "decal `size` element {index} is {dimension}, which is not valid; \
+                                 every `Decal` size element must be a strictly positive, finite \
+                                 number as an f32 (at least ~1.4e-45)"
+                            ),
+                        )
+                        .with_path(format!("/size/{index}"))
+                        .with_help("give the element a value greater than 0"),
+                    );
+                }
+            }
+        }
+        if let Some(fade) = value.get("angle_fade").and_then(Value::as_array) {
+            let mut all_valid = fade.len() == 2;
+            let mut angles = [0.0_f32; 2];
+            for (index, element) in fade.iter().enumerate() {
+                let Some(angle) = as_stored_f32(element) else {
+                    all_valid = false;
+                    continue;
+                };
+                let angle = angle as f32;
+                if !angle.is_finite() || !(0.0..=90.0).contains(&angle) {
+                    all_valid = false;
+                    out.push(
+                        Diagnostic::new(
+                            code::DECAL_INVALID_ANGLE_FADE,
+                            format!(
+                                "decal `angle_fade` element {index} is {angle}, which is not \
+                                 valid; it must be a finite angle in degrees within 0 to 90"
+                            ),
+                        )
+                        .with_path(format!("/angle_fade/{index}"))
+                        .with_help("give `angle_fade` two angles with 0 <= start <= end <= 90"),
+                    );
+                } else if let Some(slot) = angles.get_mut(index) {
+                    *slot = angle;
+                }
+            }
+            let [start, end] = angles;
+            if all_valid && start > end {
+                out.push(
+                    Diagnostic::new(
+                        code::DECAL_INVALID_ANGLE_FADE,
+                        format!(
+                            "decal `angle_fade` start {start} is above its end {end}; the fade \
+                             would run backwards"
+                        ),
+                    )
+                    .with_path("/angle_fade")
+                    .with_help("order the pair as [start, end] with start <= end"),
+                );
+            }
+        }
+        out
+    }
+}
+
 /// A camera's projection. The pose comes from the entity's [`Transform`] (the camera looks down its
 /// local −Z axis).
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
@@ -4789,6 +5078,11 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<DropShadow>("DropShadow")
         .expect("unique");
+    // The projected decal, appended after the drop shadow; validated for its box size, HDR tint
+    // and angle fade.
+    registry
+        .register_validated::<Decal>("Decal")
+        .expect("unique");
     registry
 }
 
@@ -5266,12 +5560,13 @@ mod tests {
                 "LaneConstraint",
                 "CameraRig",
                 "DropShadow",
+                "Decal",
             ]
         );
         assert_eq!(
             registry.len(),
-            41,
-            "appending the drop shadow grows the registry by exactly one"
+            42,
+            "appending the decal grows the registry by exactly one"
         );
     }
 
@@ -6403,6 +6698,7 @@ mod tests {
         clean::<Text>("Text");
         clean::<GroundMarker>("GroundMarker");
         clean::<DropShadow>("DropShadow");
+        clean::<Decal>("Decal");
         clean::<ParticleEmitter>("ParticleEmitter");
         clean::<Tilemap>("Tilemap");
     }
@@ -8068,6 +8364,191 @@ entities:
         assert!(found.is_empty(), "{found:?}");
     }
 
+    // --- Decal, L2106, L2112 ---
+
+    /// An empty `Decal: {}` deserializes to the default and re-emits as exactly `Decal: {}`.
+    #[test]
+    fn empty_decal_is_the_default_and_re_emits_empty() {
+        let decal: Decal = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(decal, Decal::default());
+        let registry = builtin_registry();
+        let source = "format: 1\nentities:\n  - components:\n      Decal: {}\n";
+        let scene = ludion_scene::check(source, &registry).expect("an empty decal is valid");
+        assert!(
+            ludion_scene::emit(&scene, &registry).contains("      Decal: {}\n"),
+            "the default decal re-emits as `Decal: {{}}`"
+        );
+    }
+
+    /// A decal with every field off its default survives the canonical writer idempotently.
+    #[test]
+    fn a_fully_authored_decal_round_trips_through_the_canonical_writer() {
+        let registry = builtin_registry();
+        let source = concat!(
+            "format: 1\n",
+            "entities:\n",
+            "  - components:\n",
+            "      Decal:\n",
+            "        size:\n",
+            "          - 2.0\n",
+            "          - 0.5\n",
+            "          - 3.0\n",
+            "        base_color_texture:\n",
+            "          path: decals/scorch.png\n",
+            "          wrap: clamp\n",
+            "        normal_texture:\n",
+            "          path: decals/scorch_n.png\n",
+            "          scale: 0.5\n",
+            "        metallic_roughness_texture:\n",
+            "          path: decals/scorch_mr.png\n",
+            "          wrap: mirror\n",
+            "        uv_rect:\n",
+            "          - 0.25\n",
+            "          - 0.0\n",
+            "          - 0.75\n",
+            "          - 0.5\n",
+            "        color:\n",
+            "          - 2.0\n",
+            "          - 1.0\n",
+            "          - 0.5\n",
+            "          - 0.9\n",
+            "        opacity: 0.8\n",
+            "        roughness: 0.3\n",
+            "        metallic: 0.5\n",
+            "        blend: coat\n",
+            "        angle_fade:\n",
+            "          - 30.0\n",
+            "          - 50.0\n",
+            "        layer: -2\n",
+            "        receivers: hierarchy\n",
+        );
+        let scene = ludion_scene::check(source, &registry).expect("a valid decal");
+        let once = ludion_scene::emit(&scene, &registry);
+        for field in [
+            "size:",
+            "base_color_texture:",
+            "wrap: clamp",
+            "scale: 0.5",
+            "wrap: mirror",
+            "uv_rect:",
+            "color:",
+            "opacity: 0.8",
+            "roughness: 0.3",
+            "metallic: 0.5",
+            "blend: coat",
+            "angle_fade:",
+            "layer: -2",
+            "receivers: hierarchy",
+        ] {
+            assert!(once.contains(field), "`{field}` missing from {once}");
+        }
+        let reparsed = ludion_scene::check(&once, &registry).expect("emitted scene re-parses");
+        assert_eq!(once, ludion_scene::emit(&reparsed, &registry));
+    }
+
+    /// Checks `body` (a `Decal` mapping's fields) and returns the `(code, path)` pairs raised.
+    fn decal_diagnostics(body: &str) -> Vec<(String, String)> {
+        let registry = builtin_registry();
+        let source = format!("format: 1\nentities:\n  - components:\n      Decal:\n{body}");
+        match ludion_scene::check(&source, &registry) {
+            Ok(_) => Vec::new(),
+            Err(diagnostics) => diagnostics
+                .iter()
+                .map(|d| {
+                    (
+                        d.code.as_str().to_string(),
+                        d.path.clone().unwrap_or_default(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn decal_pointer(field: &str) -> String {
+        format!("/entities/0/components/Decal/{field}")
+    }
+
+    /// A non-positive `size` element is `L2106` at that element.
+    #[test]
+    fn a_non_positive_decal_size_is_l2106_at_the_element() {
+        let found = decal_diagnostics(
+            "        size:\n          - 0.0\n          - 1.0\n          - -1.0\n",
+        );
+        for index in [0, 2] {
+            assert!(
+                found.contains(&("L2106".to_string(), decal_pointer(&format!("size/{index}")))),
+                "{found:?}"
+            );
+        }
+        assert_eq!(found.len(), 2, "{found:?}");
+    }
+
+    /// A negative tint is the HDR colour rule, `L1263`.
+    #[test]
+    fn a_negative_decal_color_is_l1263() {
+        let found = decal_diagnostics(
+            "        color:\n          - -1.0\n          - 0.0\n          - 0.0\n          - 1.0\n",
+        );
+        assert!(found.iter().any(|(code, _)| code == "L1263"), "{found:?}");
+    }
+
+    /// Out-of-range scalars are the schema's ordinary `L1014`, at the field or element.
+    #[test]
+    fn decal_scalars_are_bounded_by_the_schema() {
+        for (body, pointer) in [
+            ("        opacity: 1.5\n", "opacity"),
+            ("        roughness: -0.1\n", "roughness"),
+            ("        metallic: 2.0\n", "metallic"),
+            (
+                "        uv_rect:\n          - 0.0\n          - 0.0\n          - 1.5\n          - 1.0\n",
+                "uv_rect/2",
+            ),
+        ] {
+            let found = decal_diagnostics(body);
+            assert!(
+                found.contains(&("L1014".to_string(), decal_pointer(pointer))),
+                "{body}: {found:?}"
+            );
+        }
+    }
+
+    /// The angle fade holds `0 <= start <= end <= 90` (`L2112`).
+    #[test]
+    fn decal_angle_fade_is_l2112() {
+        let l2112 = |field: &str| ("L2112".to_string(), decal_pointer(field));
+        assert_eq!(
+            decal_diagnostics("        angle_fade:\n          - 80.0\n          - 60.0\n"),
+            [l2112("angle_fade")]
+        );
+        assert_eq!(
+            decal_diagnostics("        angle_fade:\n          - -1.0\n          - 80.0\n"),
+            [l2112("angle_fade/0")]
+        );
+        assert_eq!(
+            decal_diagnostics("        angle_fade:\n          - 10.0\n          - 95.0\n"),
+            [l2112("angle_fade/1")]
+        );
+        assert!(
+            decal_diagnostics("        angle_fade:\n          - 0.0\n          - 90.0\n")
+                .is_empty()
+        );
+    }
+
+    /// The three map paths are asset paths, so the registry rebases them document-relative.
+    #[test]
+    fn decal_map_paths_are_asset_paths() {
+        let registry = builtin_registry();
+        let paths = registry.get("Decal").expect("registered").asset_paths();
+        assert_eq!(
+            paths,
+            [
+                "/base_color_texture/path",
+                "/metallic_roughness_texture/path",
+                "/normal_texture/path",
+            ]
+        );
+    }
+
     // --- UiList, UiListItem, L1118 ---
 
     /// `UiList` round-trips through serde with non-default fields, items included.
@@ -8341,6 +8822,14 @@ entities:
             ),
             ("PatternPlayer", vec!["/pattern".into()]),
             ("Volley", vec!["/pattern".into()]),
+            (
+                "Decal",
+                vec![
+                    "/base_color_texture/path".into(),
+                    "/metallic_roughness_texture/path".into(),
+                    "/normal_texture/path".into(),
+                ],
+            ),
             (
                 "Collider",
                 vec![

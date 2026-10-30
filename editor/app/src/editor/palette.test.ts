@@ -21,6 +21,7 @@ describe('palette archetypes', () => {
       'particles',
       'reflection-probe',
       'drop-shadow',
+      'decal',
     ]);
   });
 

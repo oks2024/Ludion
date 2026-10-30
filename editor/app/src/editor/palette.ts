@@ -181,6 +181,16 @@ export const ARCHETYPES: readonly Archetype[] = [
       DropShadow: { shape: { type: 'disc', radius: 0.5 }, opacity: 0.6, softness: 0.5, max_distance: 20, fade_distance: 4 },
     },
   },
+  {
+    // decal: data only. The box projects along its local -Y, so unrotated it paints the floor below it.
+    id: 'decal',
+    label: 'Decal',
+    name: 'Decal',
+    components: {
+      Transform: { translation: [0, 0.5, 0] },
+      Decal: {},
+    },
+  },
 ];
 
 /** Builds the `entity.spawn` command for an archetype (name param + default components). */

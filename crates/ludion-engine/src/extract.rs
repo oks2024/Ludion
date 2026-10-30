@@ -27,11 +27,12 @@ use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
 use ludion_ecs::World;
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
-    DebugSegment, DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
-    GroundMarkerInstance, LocalShadowData, MAX_SUN_CASCADES, MeshData, MeshInstance, MeshShape,
-    ParticleInstance, PointLightData, PostData, ProbeData, ProbeVolume, QualityParams,
-    RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunCascadeConfig, SunData,
-    TextRun, TextureImage, UiInstance, WorldVoxelGrid, aspect_ratio,
+    DebugSegment, DecalBlend, DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance,
+    EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, LocalShadowData,
+    MAX_SUN_CASCADES, MeshData, MeshInstance, MeshShape, ParticleInstance, PointLightData,
+    PostData, ProbeData, ProbeVolume, QualityParams, RenderCamera, RenderScene, SkinJoint,
+    SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, UiInstance,
+    WorldVoxelGrid, aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -39,10 +40,11 @@ use crate::assembly_mesh::AssemblyData;
 use crate::asset_cache::{AssetCache, AssetRefs, SourceFiles};
 use crate::character::CharacterData;
 use crate::components::{
-    Animation, Camera, ClipAnchor, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume,
-    GroundMarker, GroundMarkerShape, Mesh, MeshGrid, MeshSource, ParticleEmitter, PointLight,
-    PostProcess, ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite, SpriteBlend,
-    Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
+    Animation, Camera, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalReceiverSet,
+    DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
+    GroundMarkerShape, Mesh, MeshGrid, MeshSource, ParticleEmitter, PointLight, PostProcess,
+    ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite, SpriteBlend, Text,
+    Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
 };
 use crate::docs::DocStore;
 use crate::fonts::FontLibrary;
@@ -1233,6 +1235,8 @@ fn extract_inner(
         }
     };
 
+    let decals = extract_decals(world, &ids, &mut poses, &meshes, &mesh_owners);
+
     Ok(RenderScene {
         camera,
         ambient,
@@ -1242,6 +1246,7 @@ fn extract_inner(
         sprites,
         ground_markers: extract_ground_markers(world, &ids, &mut poses),
         drop_shadows: extract_drop_shadows(world, &ids, &mut poses, &mesh_owners),
+        decals,
         debug_lines: Vec::new(),
         debug_view: None,
         particles: extract_particles(
@@ -1545,6 +1550,92 @@ fn extract_drop_shadows(
                 exclude,
             })
         })
+        .collect()
+}
+
+/// Every [`Decal`] in the world, resolved into the renderer's [`DecalInstance`] in draw order:
+/// ascending `layer`, then descending `EntityId`, so the lowest id draws last and wins.
+///
+/// The box matrices come from the entity's composed world pose (the `Parent` chain and scale) times
+/// the authored `size`; a decal whose box is not invertible (a zero scale while animating out) covers
+/// nothing and is skipped. Receivers are indices into `meshes`, which `mesh_owners` parallels: `all`
+/// excludes the skinned instances, `hierarchy` admits only the unskinned meshes owned by the decal's
+/// hierarchy root and its descendants. The hierarchy's child map is built only when a `hierarchy`
+/// decal exists.
+fn extract_decals(
+    world: &World,
+    ids: &[EntityId],
+    poses: &mut WorldAffines,
+    meshes: &[MeshInstance],
+    mesh_owners: &[EntityId],
+) -> Vec<DecalInstance> {
+    let skinned = |index: usize| meshes.get(index).is_some_and(|mesh| mesh.bone_offset != 0);
+    let mut skinned_indices: Option<Vec<u32>> = None;
+    let mut children = None;
+    let mut decals: Vec<(i16, EntityId, DecalInstance)> = Vec::new();
+    for &id in ids {
+        let Some(decal) = get::<Decal>(world, id) else {
+            continue;
+        };
+        let box_to_world =
+            render_pose(world, poses, id).model() * Mat4::from_scale(Vec3::from(decal.size));
+        let determinant = box_to_world.determinant();
+        if !determinant.is_finite() || determinant.abs() < f32::MIN_POSITIVE {
+            continue;
+        }
+        let receivers = match decal.receivers {
+            DecalReceiverSet::All => DecalReceivers::Exclude(
+                skinned_indices
+                    .get_or_insert_with(|| {
+                        (0..meshes.len())
+                            .filter(|&index| skinned(index))
+                            .map(|index| index as u32)
+                            .collect()
+                    })
+                    .clone(),
+            ),
+            DecalReceiverSet::Hierarchy => {
+                let root = crate::hierarchy::hierarchy_root(world, id);
+                let children = children.get_or_insert_with(|| ludion_ecs::ChildMap::build(world));
+                let mut owners: BTreeSet<EntityId> =
+                    children.descendants(root).into_iter().collect();
+                owners.insert(root);
+                DecalReceivers::Only(
+                    mesh_owners
+                        .iter()
+                        .enumerate()
+                        .filter(|&(index, owner)| owners.contains(owner) && !skinned(index))
+                        .map(|(index, _)| index as u32)
+                        .collect(),
+                )
+            }
+        };
+        let instance = DecalInstance {
+            box_to_world,
+            world_to_box: box_to_world.inverse(),
+            blend: match decal.blend {
+                DecalBlendAuthored::Alpha => DecalBlend::Alpha,
+                DecalBlendAuthored::Multiply => DecalBlend::Multiply,
+                DecalBlendAuthored::Add => DecalBlend::Add,
+                DecalBlendAuthored::Coat => DecalBlend::Coat,
+            },
+            color: decal.color,
+            opacity: decal.opacity,
+            roughness: decal.roughness,
+            metallic: decal.metallic,
+            uv_rect: decal.uv_rect,
+            angle_fade: decal.angle_fade,
+            layer: decal.layer,
+            // Maps are resolved through the asset cache, not here.
+            maps: DecalMaps::default(),
+            receivers,
+        };
+        decals.push((decal.layer, id, instance));
+    }
+    decals.sort_by_key(|(layer, id, _)| (*layer, std::cmp::Reverse(*id)));
+    decals
+        .into_iter()
+        .map(|(_, _, instance)| instance)
         .collect()
 }
 

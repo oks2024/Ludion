@@ -1614,10 +1614,10 @@ pub mod code {
     /// voxelizer during extract, before any probe volume is allocated.
     pub const GI_VOLUME_PROBE_BUDGET_EXCEEDED: DiagnosticCode = DiagnosticCode::new("L2105");
 
-    /// `L2106` — a `GroundMarker` or `DropShadow` shape dimension (`radius`, `length`, `width`) is
-    /// not a strictly positive, finite number, so the marker has no footprint to draw. Raised by
-    /// `ludion-engine`'s `GroundMarker` and `DropShadow` semantic validators, at scene-check /
-    /// `component.set` time.
+    /// `L2106` — a `GroundMarker` or `DropShadow` shape dimension (`radius`, `length`, `width`), or
+    /// a `Decal` `size` element, is not a strictly positive, finite number, so the marker has no
+    /// footprint to draw. Raised by `ludion-engine`'s `GroundMarker`, `DropShadow` and `Decal`
+    /// semantic validators, at scene-check / `component.set` time.
     pub const GROUND_MARKER_NON_POSITIVE_DIMENSION: DiagnosticCode = DiagnosticCode::new("L2106");
 
     /// `L2107` — a `ParticleEmitter` authors an effect that cannot be evaluated: a non-finite or
@@ -1651,6 +1651,11 @@ pub mod code {
     /// `GiVolume` resolves to no grid — every placed mesh was skipped, or none is placed. Raised by
     /// `ludion-engine`'s voxel-sheet dump, before any GPU adapter is requested.
     pub const GI_VOLUME_EMPTY: DiagnosticCode = DiagnosticCode::new("L2111");
+
+    /// `L2112` — a `Decal` `angle_fade` is unusable: it must hold `0 <= start <= end <= 90`, all
+    /// finite. Raised by `ludion-engine`'s `Decal` semantic validator, at scene-check /
+    /// `component.set` time; the pointer is `/angle_fade` or `/angle_fade/<n>`.
+    pub const DECAL_INVALID_ANGLE_FADE: DiagnosticCode = DiagnosticCode::new("L2112");
 
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
@@ -7932,8 +7937,8 @@ Removing the `GiVolume` component entirely turns global illumination off.",
         title: "GroundMarker shape dimension is not positive",
         explanation: "\
 A `GroundMarker` (or a `DropShadow`) authors a shape whose `radius`, `length`, or `width` is zero,
-negative, or not a finite number. The message names the field and the value; the JSON Pointer points
-at it.
+negative, or not a finite number; a `Decal` raises the same code for a `size` element. The message
+names the field and the value; the JSON Pointer points at it.
 
 A ground marker is drawn from an analytic signed-distance function over its footprint, so every
 dimension is a real length in world units and there is no distance to evaluate against a degenerate
@@ -8069,6 +8074,25 @@ present and the content is the problem.
 
 Fix: place static geometry inside the scene, or drop `GiDynamic` from a mesh that should occlude. A
 skinned mesh never voxelizes; give the scene static stand-in geometry if it should shape the bounce.",
+    },
+    CodeEntry {
+        code: code::DECAL_INVALID_ANGLE_FADE,
+        severity: Severity::Error,
+        title: "Decal angle fade is invalid",
+        explanation: "\
+A `Decal` authors an `angle_fade` the projection cannot be faded with. The message names the value;
+the JSON Pointer points at the element, or at `/angle_fade` when the pair is out of order.
+
+θ is the angle, in degrees, between the receiving surface's normal and the decal box's local +Y (the
+direction back towards the projector). The decal's weight is 1 at or below `start` and 0 at or above
+`end`, fading between, so a decal does not smear across surfaces that face away from it. Both values
+must be finite and within `[0, 90]`: past 90 degrees a surface faces away and is never painted, so a
+larger bound means nothing. `start` must not exceed `end`, or the fade would run backwards.
+
+Fix: give `angle_fade` two finite angles with `0 <= start <= end <= 90`.
+
+    Decal:
+      angle_fade: [60.0, 80.0]",
     },
     CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
@@ -10317,6 +10341,7 @@ mod tests {
         code::RENDER_PLACEMENT_NON_FINITE,
         code::DROP_SHADOW_INVALID_DISTANCE,
         code::GI_VOLUME_EMPTY,
+        code::DECAL_INVALID_ANGLE_FADE,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,

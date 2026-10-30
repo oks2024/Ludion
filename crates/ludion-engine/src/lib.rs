@@ -120,12 +120,13 @@ pub use character::{
     load as load_character,
 };
 pub use components::{
-    Anchor, Animation, AudioEmitter, Camera, ClipAnchor, DirectionalLight, DropShadow, EmitShape,
-    Environment, Fade, GiDynamic, GiVolume, GroundMarker, GroundMarkerShape, Mesh, MeshGrid,
-    MeshSource, Name, PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PointLight,
-    PostProcess, ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight, Sprite,
-    SpriteBlend, Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect, UiText,
-    builtin_registry, crossfade, set_speed,
+    Anchor, Animation, AudioEmitter, Camera, ClipAnchor, Decal, DecalBlend, DecalMap,
+    DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
+    GiVolume, GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, Name,
+    PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PointLight, PostProcess,
+    ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight, Sprite, SpriteBlend,
+    Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect, UiText, builtin_registry,
+    crossfade, set_speed,
 };
 pub use cooked_maps::TextureSource;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
