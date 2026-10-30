@@ -508,7 +508,7 @@ fn local_shadow(index: u32, world_pos: vec3<f32>, n: vec3<f32>, l: vec3<f32>, di
     let uv = view.rect.xy + local * view.rect.z;
     let texel = view.rect.w;
     let reach = i32(sun.pcf) / 2;
-    let margin = (f32(reach) + 0.5) * texel;
+    let margin = 0.5 * texel;
     let lo = view.rect.xy + vec2<f32>(margin);
     let hi = view.rect.xy + vec2<f32>(view.rect.z - margin);
     var sum = 0.0;
