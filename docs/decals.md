@@ -61,8 +61,9 @@ green = image up = box −Z.
   lower layer; the drop shadow darkens paint under the hero.
 - **Receivers.** Every opaque mesh kind. Never the sky, sprites, particles, text, ground markers or
   skinned meshes. `receivers: hierarchy` limits a decal to its own root and the root's descendants;
-  when any decal excludes a mesh, a `decal_receivers` id redraw runs, and a 1–2 px contact rim can
-  show.
+  whenever any decal lists receiver meshes (an `all` decal in a scene with skinned meshes excludes
+  them, and any `hierarchy` decal lists its own), a `decal_receivers` id redraw runs, and a 1–2 px
+  contact rim can show.
 - **Hash-neutral and graph-neutral.** Render-only. A scene with no `Decal` and no `DropShadow` keeps
   its exact graph; lit decals add `decals_lit` and the `lit_normal` transient; unlit ones ride
   `projector`.

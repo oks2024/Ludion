@@ -1105,3 +1105,106 @@ fn needs_gpu_a_line_behind_geometry_shows_dimmed() {
         "the occluded line is dimmer than the open one: {hidden} vs {open}"
     );
 }
+
+/// Writes a `w × h` RGBA8 PNG of one repeated `texel`.
+fn write_flat_png(path: &Path, w: u32, h: u32, texel: [u8; 4]) {
+    let file = std::fs::File::create(path).expect("png file creates");
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("png header writes");
+    let data: Vec<u8> = texel
+        .iter()
+        .copied()
+        .cycle()
+        .take((w * h * 4) as usize)
+        .collect();
+    writer.write_image_data(&data).expect("png data writes");
+}
+
+/// **A lit decal's partial coverage leaves the projector a full-strength normal.** Half-covering
+/// alpha paint with an 80°-tilted normal map blends the target's normal with the receiver's into one
+/// shorter than 1 (`y ≈ 0.59`, below the multiply decal's `angle_fade` start of 45° ≈ 0.71, though the
+/// direction is 40° off up). Read raw, the multiply scorch over it would lose about half its weight;
+/// normalized, it blackens the floor.
+#[test]
+fn needs_gpu_a_multiply_decal_over_half_covered_normal_mapped_paint_keeps_full_strength() {
+    let dir = std::env::temp_dir().join(format!(
+        "ludion-gpu-render-decal-norm-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir creates");
+    write_flat_png(&dir.join("half.png"), 4, 4, [255, 255, 255, 128]);
+    write_flat_png(&dir.join("solid.png"), 4, 4, [255, 255, 255, 255]);
+    write_flat_png(&dir.join("tilt.png"), 4, 4, [253, 128, 150, 255]);
+
+    let mut y = Yaml::default();
+    y.push(0, "format: 1");
+    y.push(0, "name: \"decal normal normalization fixture\"");
+    y.push(0, "entities:");
+    y.push(1, "- name: camera");
+    y.push(2, "components:");
+    y.push(3, "Transform:");
+    y.vec(4, "translation", &[0.0, 4.0, 0.0]);
+    y.vec(4, "rotation", &[-90.0, 0.0, 0.0]);
+    y.push(3, "Camera:");
+    y.push(4, "projection:");
+    y.push(5, "type: perspective");
+    y.push(5, "fov_y_deg: 60.0");
+    y.push(1, "- name: sun");
+    y.push(2, "components:");
+    y.push(3, "DirectionalLight:");
+    y.vec(4, "direction", &[0.0, -1.0, 0.0]);
+    y.push(4, "intensity: 2.0");
+    y.cube(
+        "ground",
+        [0.0, -0.25, 0.0],
+        [40.0, 0.5, 40.0],
+        [0.85, 0.85, 0.85],
+        0.0,
+    );
+    y.push(1, "- name: paint");
+    y.push(2, "components:");
+    y.push(3, "Transform:");
+    y.vec(4, "translation", &[0.0, 0.2, 0.0]);
+    y.push(3, "Decal:");
+    y.vec(4, "size", &[3.0, 1.0, 3.0]);
+    y.push(4, "base_color_texture:");
+    y.push(5, "path: half.png");
+    y.push(4, "normal_texture:");
+    y.push(5, "path: tilt.png");
+    y.push(1, "- name: scorch");
+    y.push(2, "components:");
+    y.push(3, "Transform:");
+    y.vec(4, "translation", &[0.0, 0.2, 0.0]);
+    y.push(3, "Decal:");
+    y.vec(4, "size", &[2.0, 1.0, 2.0]);
+    y.vec(4, "color", &[0.0, 0.0, 0.0, 1.0]);
+    y.push(4, "base_color_texture:");
+    y.push(5, "path: solid.png");
+    y.vec(4, "angle_fade", &[45.0, 60.0]);
+    y.push(4, "blend: multiply");
+    let scene = dir.join("scene.yaml");
+    std::fs::write(&scene, y.0).expect("scene writes");
+
+    let outcome = match render_scene(&scene, FrameSize::native(1920, 1080), false) {
+        Ok(outcome) => outcome,
+        Err(errors) if no_adapter(&errors) => {
+            eprintln!("[decal-normalize] SKIPPED: no GPU adapter available");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        Err(errors) => panic!("[decal-normalize] render failed: {errors:?}"),
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let (cx, cy) = (outcome.image.width / 2, outcome.image.height / 2);
+    let i = ((cy * outcome.image.width + cx) * 4) as usize;
+    let p = &outcome.image.rgba[i..i + 3];
+    eprintln!("[decal-normalize] centre pixel {p:?}");
+    assert!(
+        p.iter().all(|&c| c <= 8),
+        "a black multiply decal over half-covered paint must blacken the floor: {p:?}"
+    );
+}

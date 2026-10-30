@@ -172,9 +172,17 @@ fn footprint_coverage(p: Projector, world: vec3<f32>) -> f32 {
     return mix(hard, soft, clamp(p.shape.w, 0.0, 1.0));
 }
 
+// A normal read from the scene normal target, unit length again: under a lit decal's partial
+// coverage the target holds a blend of two normals, shorter than 1. A zero normal (no surface)
+// stays zero.
+fn unit_normal(normal: vec3<f32>) -> vec3<f32> {
+    let len = length(normal);
+    return select(normal, normal / len, len > 1e-4);
+}
+
 // How squarely the surface faces up: a wall gets 0, a 45 degree slope 0.71.
 fn facing(normal: vec3<f32>) -> f32 {
-    return clamp(normal.y, 0.0, 1.0);
+    return clamp(unit_normal(normal).y, 0.0, 1.0);
 }
 
 // The height fade, the twin of `drop_shadow_fade` in `scene.rs`: 1 until `fade_distance` before the
@@ -294,7 +302,7 @@ fn fs_decal(in: DecalVsOut) -> @location(0) vec4<f32> {
     let inside = all(abs(local) <= vec3<f32>(0.5));
     let kept = depth < 1.0 && inside && decal_receives(d, pixel);
     let rgb = texel.rgb * d.color.rgb;
-    let coverage = texel.a * d.color.a * d.look.x * angle_weight(d, normal);
+    let coverage = texel.a * d.color.a * d.look.x * angle_weight(d, unit_normal(normal));
     let c = select(0.0, clamp(coverage, 0.0, 1.0), kept);
     let multiplied = mix(vec3<f32>(1.0), rgb, c);
     let added = rgb * c;

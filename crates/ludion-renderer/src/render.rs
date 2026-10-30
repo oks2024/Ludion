@@ -4091,12 +4091,13 @@ impl FrameRecorder<'_> {
         // Every draw's instance sources in one buffer, the draws' offsets into it kept alongside.
         let mut ids: Vec<u32> = Vec::new();
         let mut bases: Vec<u32> = Vec::new();
-        let sources = self
-            .mesh_draws
-            .iter()
-            .map(|d| &d.sources)
-            .chain(self.mesh_asset_draws.iter().map(|d| &d.sources));
-        for draw_sources in sources {
+        let sources_of_draws = || {
+            self.mesh_draws
+                .iter()
+                .map(|d| &d.sources)
+                .chain(self.mesh_asset_draws.iter().map(|d| &d.sources))
+        };
+        for draw_sources in sources_of_draws() {
             bases.push(ids.len() as u32);
             ids.extend_from_slice(draw_sources);
         }
@@ -4109,9 +4110,13 @@ impl FrameRecorder<'_> {
             wgpu::BufferUsages::STORAGE,
             &storage_bytes(&ids),
         );
-        let draw_bgs: Vec<wgpu::BindGroup> = bases
+        let draw_bgs: Vec<Option<wgpu::BindGroup>> = bases
             .iter()
-            .map(|&base| {
+            .zip(sources_of_draws())
+            .map(|(&base, draw_sources)| {
+                if only_ranges(draw_sources, &self.decals.receivers).is_empty() {
+                    return None;
+                }
                 let uniform = shader_gen::RecvDraw {
                     base,
                     pad0: 0,
@@ -4123,7 +4128,7 @@ impl FrameRecorder<'_> {
                     wgpu::BufferUsages::UNIFORM,
                     bytemuck::bytes_of(&uniform),
                 );
-                pass.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                Some(pass.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("decal receivers bind group"),
                     layout: self.r.layouts.get(LayoutId::DecalReceiver),
                     entries: &[
@@ -4140,7 +4145,7 @@ impl FrameRecorder<'_> {
                             resource: buf.as_entire_binding(),
                         },
                     ],
-                })
+                }))
             })
             .collect();
 
@@ -4151,10 +4156,8 @@ impl FrameRecorder<'_> {
         let mut draw_bgs = draw_bgs.iter();
         for draw in &self.mesh_draws {
             let draw_bg = draw_bgs.next().expect("one bind group per draw");
+            let Some(draw_bg) = draw_bg else { continue };
             let kept = only_ranges(&draw.sources, &self.decals.receivers);
-            if kept.is_empty() {
-                continue;
-            }
             if draw.mirrored != mirrored {
                 mirrored = draw.mirrored;
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::DecalReceiver, mirrored));
@@ -4169,10 +4172,8 @@ impl FrameRecorder<'_> {
         }
         for draw in &self.mesh_asset_draws {
             let draw_bg = draw_bgs.next().expect("one bind group per draw");
+            let Some(draw_bg) = draw_bg else { continue };
             let kept = only_ranges(&draw.sources, &self.decals.receivers);
-            if kept.is_empty() {
-                continue;
-            }
             if draw.mirrored != mirrored {
                 mirrored = draw.mirrored;
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::DecalReceiver, mirrored));
