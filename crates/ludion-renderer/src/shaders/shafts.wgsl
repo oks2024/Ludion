@@ -60,6 +60,9 @@
 // there is no reach field: the reach of an exponential medium is a function of its extinction, so a
 // range knob would be a second spelling of `fog_density`.
 //
+// Under sun cascades the air past the last cascade is lit; the fit reaches the last cascade out to
+// this extinction cutoff when the frame runs shafts.
+//
 // The march still *starts* at the camera under a nonzero `fog_start`, and the steps inside it
 // contribute exactly zero through the density ratio rather than being skipped. Re-distributing the
 // steps over `[fog_start, end]` would sample the medium better, but it would move every pixel of the
@@ -117,6 +120,19 @@ struct Shafts {
     // generated POD carries no implicit padding — a hole has to have a name.
     pad0: f32,
     pad1: f32,
+    // The sun's fitted cascades, as the mesh pass's `Sun` carries them; lanes `cascade_count..` are
+    // zero and a count of 0 keeps the anchored `light_space` above.
+    cascade_space: array<mat4x4<f32>, 4>,
+    // xy = the tile's UV origin in the atlas, zw = its UV size.
+    cascade_rect: array<vec4<f32>, 4>,
+    // The far view depth (m) of each cascade.
+    cascade_far: vec4<f32>,
+    // View depth of p = dot(view_depth.xyz, p) + view_depth.w.
+    view_depth: vec4<f32>,
+    cascade_count: u32,
+    cascade_pad0: u32,
+    cascade_pad1: u32,
+    cascade_pad2: u32,
 };
 
 // The scene pass's depth, at the render extent. `Depth32Float` is unfilterable and this pass binds
@@ -153,7 +169,7 @@ fn world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
 // Whether the sun reaches `world_pos`: 1 lit, 0 shadowed. A point outside the light frustum is lit,
 // the same convention the mesh pass's PCF lookup uses — a shadow map covers what it covers, and
 // treating everything beyond it as dark would put a hard black wall at the frustum's edge.
-fn sun_visibility(world_pos: vec3<f32>) -> f32 {
+fn sun_visibility_anchored(world_pos: vec3<f32>) -> f32 {
     let clip = shafts.light_space * vec4<f32>(world_pos, 1.0);
     if (clip.w <= 0.0) {
         return 1.0;
@@ -167,6 +183,50 @@ fn sun_visibility(world_pos: vec3<f32>) -> f32 {
     let texel = clamp(vec2<i32>(uv * vec2<f32>(dims)), vec2<i32>(0), dims - vec2<i32>(1));
     let occluder = textureLoad(shafts_shadow, texel, 0);
     return select(0.0, 1.0, ndc.z <= occluder);
+}
+
+// The cascaded lookup: the first cascade whose far depth exceeds the sample's view depth answers
+// with one exact texel inside its tile. There is no seam band and no fade here — the march is
+// integrated and blurred, and a point past the last cascade is lit, the same rule as past the
+// camera's far plane.
+fn sun_visibility_cascaded(world_pos: vec3<f32>) -> f32 {
+    let depth = dot(shafts.view_depth.xyz, world_pos) + shafts.view_depth.w;
+    var i = 0u;
+    for (; i < shafts.cascade_count; i = i + 1u) {
+        if (shafts.cascade_far[i] > depth) {
+            break;
+        }
+    }
+    if (i >= shafts.cascade_count) {
+        return 1.0;
+    }
+    let clip = shafts.cascade_space[i] * vec4<f32>(world_pos, 1.0);
+    if (clip.w <= 0.0) {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    if (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    let rect = shafts.cascade_rect[i];
+    let dims = vec2<f32>(textureDimensions(shafts_shadow));
+    let origin = rect.xy * dims;
+    let size = rect.zw * dims;
+    let local = vec2<f32>(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
+    let texel = clamp(
+        vec2<i32>(origin + local * size),
+        vec2<i32>(origin),
+        vec2<i32>(origin + size) - vec2<i32>(1),
+    );
+    let occluder = textureLoad(shafts_shadow, texel, 0);
+    return select(0.0, 1.0, ndc.z <= occluder);
+}
+
+fn sun_visibility(world_pos: vec3<f32>) -> f32 {
+    if (shafts.cascade_count == 0u) {
+        return sun_visibility_anchored(world_pos);
+    }
+    return sun_visibility_cascaded(world_pos);
 }
 
 fn henyey_greenstein(cos_theta: f32) -> f32 {

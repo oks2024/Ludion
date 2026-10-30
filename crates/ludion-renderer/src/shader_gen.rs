@@ -699,8 +699,16 @@ pub struct Shafts {
     pub steps: u32,
     pub pad0: f32,
     pub pad1: f32,
+    pub cascade_space: [[[f32; 4]; 4]; 4],
+    pub cascade_rect: [[f32; 4]; 4],
+    pub cascade_far: [f32; 4],
+    pub view_depth: [f32; 4],
+    pub cascade_count: u32,
+    pub cascade_pad0: u32,
+    pub cascade_pad1: u32,
+    pub cascade_pad2: u32,
 }
-const _: () = assert!(core::mem::size_of::<Shafts>() == 192);
+const _: () = assert!(core::mem::size_of::<Shafts>() == 560);
 const _: () = assert!(core::mem::offset_of!(Shafts, inv_view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(Shafts, light_space) == 64);
 const _: () = assert!(core::mem::offset_of!(Shafts, cam_pos) == 128);
@@ -715,6 +723,14 @@ const _: () = assert!(core::mem::offset_of!(Shafts, fog_height_falloff) == 176);
 const _: () = assert!(core::mem::offset_of!(Shafts, steps) == 180);
 const _: () = assert!(core::mem::offset_of!(Shafts, pad0) == 184);
 const _: () = assert!(core::mem::offset_of!(Shafts, pad1) == 188);
+const _: () = assert!(core::mem::offset_of!(Shafts, cascade_space) == 192);
+const _: () = assert!(core::mem::offset_of!(Shafts, cascade_rect) == 448);
+const _: () = assert!(core::mem::offset_of!(Shafts, cascade_far) == 512);
+const _: () = assert!(core::mem::offset_of!(Shafts, view_depth) == 528);
+const _: () = assert!(core::mem::offset_of!(Shafts, cascade_count) == 544);
+const _: () = assert!(core::mem::offset_of!(Shafts, cascade_pad0) == 548);
+const _: () = assert!(core::mem::offset_of!(Shafts, cascade_pad1) == 552);
+const _: () = assert!(core::mem::offset_of!(Shafts, cascade_pad2) == 556);
 
 /// WGSL `struct Sky`.
 ///
@@ -852,8 +868,16 @@ pub struct Sun {
     pub disc_sin: f32,
     pub disc_cos: f32,
     pub disc_spread: f32,
+    pub cascade_space: [[[f32; 4]; 4]; 4],
+    pub cascade_rect: [[f32; 4]; 4],
+    pub cascade_params: [[f32; 4]; 4],
+    pub view_depth: [f32; 4],
+    pub cascade_count: u32,
+    pub cascade_pad0: u32,
+    pub cascade_pad1: u32,
+    pub cascade_pad2: u32,
 }
-const _: () = assert!(core::mem::size_of::<Sun>() == 112);
+const _: () = assert!(core::mem::size_of::<Sun>() == 528);
 const _: () = assert!(core::mem::offset_of!(Sun, light_space) == 0);
 const _: () = assert!(core::mem::offset_of!(Sun, direction) == 64);
 const _: () = assert!(core::mem::offset_of!(Sun, color) == 80);
@@ -861,6 +885,14 @@ const _: () = assert!(core::mem::offset_of!(Sun, pcf) == 96);
 const _: () = assert!(core::mem::offset_of!(Sun, disc_sin) == 100);
 const _: () = assert!(core::mem::offset_of!(Sun, disc_cos) == 104);
 const _: () = assert!(core::mem::offset_of!(Sun, disc_spread) == 108);
+const _: () = assert!(core::mem::offset_of!(Sun, cascade_space) == 112);
+const _: () = assert!(core::mem::offset_of!(Sun, cascade_rect) == 368);
+const _: () = assert!(core::mem::offset_of!(Sun, cascade_params) == 432);
+const _: () = assert!(core::mem::offset_of!(Sun, view_depth) == 496);
+const _: () = assert!(core::mem::offset_of!(Sun, cascade_count) == 512);
+const _: () = assert!(core::mem::offset_of!(Sun, cascade_pad0) == 516);
+const _: () = assert!(core::mem::offset_of!(Sun, cascade_pad1) == 520);
+const _: () = assert!(core::mem::offset_of!(Sun, cascade_pad2) == 524);
 
 /// WGSL `struct Ui`.
 ///
@@ -2804,7 +2836,7 @@ pub fn create_shafts_depth_shafts_shadow_shafts_samp_shafts_bgl(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(192),
+                    min_binding_size: wgpu::BufferSize::new(560),
                 },
                 count: None,
             },
@@ -3011,7 +3043,7 @@ pub fn create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shad
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(112),
+                    min_binding_size: wgpu::BufferSize::new(528),
                 },
                 count: None,
             },

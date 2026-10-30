@@ -34,10 +34,22 @@ struct Sun {
     pcf: u32,
     // The disc's angular radius θ, for the specular representative point: sin θ, cos θ and
     // tan θ / 2 (the roughness widening). All zero for a point light or a sunless frame; `disc_sin`
-    // is the gate. The matrices give this struct 16-byte alignment, so its size is 112 either way.
+    // is the gate. The cascade lanes below start 16-aligned, so the fields above are 112 bytes.
     disc_sin: f32,
     disc_cos: f32,
     disc_spread: f32,
+    // Per cascade, nearest first; lanes count.. are zero. A count of 0 keeps the anchored box above.
+    cascade_space: array<mat4x4<f32>, 4>,
+    // xy = the tile's UV origin in the atlas, zw = its UV size (a 2×1 atlas has non-square UV tiles).
+    cascade_rect: array<vec4<f32>, 4>,
+    // x = near view depth (m), y = far view depth (m), z = depth bias in this cascade's light-NDC, w unused.
+    cascade_params: array<vec4<f32>, 4>,
+    // View depth of p = dot(view_depth.xyz, p) + view_depth.w: the negated third row of the camera's view matrix.
+    view_depth: vec4<f32>,
+    cascade_count: u32,
+    cascade_pad0: u32,
+    cascade_pad1: u32,
+    cascade_pad2: u32,
 };
 
 @group(2) @binding(0) var<uniform> sun: Sun;
@@ -297,7 +309,7 @@ fn fresnel_schlick(vdh: f32, f0: vec3<f32>) -> vec3<f32> {
 // at a 2048² map, converted to light-NDC depth by extract — grows with the texel, since a grazing
 // surface's depth error per tap does too (a 1024² map at the unscaled bias stripes every sunlit
 // slope with acne). The shadow pass adds a hardware slope-scaled bias on top of this constant.
-fn sun_shadow(world_pos: vec3<f32>) -> f32 {
+fn sun_shadow_anchored(world_pos: vec3<f32>) -> f32 {
     let clip = sun.light_space * vec4<f32>(world_pos, 1.0);
     if (clip.w <= 0.0) {
         return 1.0;
@@ -322,6 +334,79 @@ fn sun_shadow(world_pos: vec3<f32>) -> f32 {
         }
     }
     return sum / f32(sun.pcf * sun.pcf);
+}
+
+// One cascade's PCF factor, 1 = lit. The cascade's tile of the atlas stands where the anchored map
+// does: ndc xy outside [-1, 1], z outside [0, 1] or a point behind the light is lit. Every tap is
+// clamped inside the tile, so the kernel never reads the neighbouring cascade. The bias is already in
+// this cascade's light-NDC, scaled so it holds the same number of texels in every cascade.
+fn sun_cascade_factor(i: u32, world_pos: vec3<f32>) -> f32 {
+    let clip = sun.cascade_space[i] * vec4<f32>(world_pos, 1.0);
+    if (clip.w <= 0.0) {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    if (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    let rect = sun.cascade_rect[i];
+    let local = vec2<f32>(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
+    let uv = rect.xy + local * rect.zw;
+    let texel = 1.0 / vec2<f32>(textureDimensions(shadow_tex));
+    let compare = ndc.z - sun.cascade_params[i].z;
+    let reach = i32(sun.pcf) / 2;
+    let margin = (f32(reach) + 0.5) * texel;
+    let lo = rect.xy + margin;
+    let hi = rect.xy + rect.zw - margin;
+    var sum = 0.0;
+    for (var dy = -reach; dy <= reach; dy = dy + 1) {
+        for (var dx = -reach; dx <= reach; dx = dx + 1) {
+            let tap = clamp(uv + vec2<f32>(f32(dx), f32(dy)) * texel, lo, hi);
+            // `Level` variant for the anchored lookup's reason: the cascade pick is non-uniform.
+            sum = sum + textureSampleCompareLevel(shadow_tex, shadow_samp, tap, compare);
+        }
+    }
+    return sum / f32(sun.pcf * sun.pcf);
+}
+
+// The cascaded lookup. A fragment takes the first cascade whose far depth exceeds its view depth —
+// the nearest, finest map that covers it; past the last far the sun is simply lit. The last tenth of
+// a cascade's depth range blends spatially into the next cascade (or, for the last, into lit), so
+// the change of texel size at a seam is a gradient rather than a visible line. The blend reads both
+// maps from this fragment alone, with no history, so a still frame stays deterministic.
+fn sun_shadow_cascaded(world_pos: vec3<f32>) -> f32 {
+    let depth = dot(sun.view_depth.xyz, world_pos) + sun.view_depth.w;
+    var i = 0u;
+    for (; i < sun.cascade_count; i = i + 1u) {
+        if (sun.cascade_params[i].y > depth) {
+            break;
+        }
+    }
+    if (i >= sun.cascade_count) {
+        return 1.0;
+    }
+    let near = sun.cascade_params[i].x;
+    let far = sun.cascade_params[i].y;
+    let band = 0.1 * (far - near);
+    let here = sun_cascade_factor(i, world_pos);
+    let band_start = far - band;
+    if (depth <= band_start) {
+        return here;
+    }
+    var beyond = 1.0;
+    if (i + 1u < sun.cascade_count) {
+        beyond = sun_cascade_factor(i + 1u, world_pos);
+    }
+    return mix(here, beyond, (depth - band_start) / band);
+}
+
+// The sun's shadow factor: the anchored lookup for a sun without fitted cascades, the cascaded one
+// otherwise. The anchored body is untouched, so a count of 0 shades byte for byte as before.
+fn sun_shadow(world_pos: vec3<f32>) -> f32 {
+    if (sun.cascade_count == 0u) {
+        return sun_shadow_anchored(world_pos);
+    }
+    return sun_shadow_cascaded(world_pos);
 }
 
 // The shadow factor of the light at list index `index` for a fragment, 1.0 = lit. `l` is the unit

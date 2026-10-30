@@ -45,6 +45,10 @@ use crate::scene::{RenderScene, SunCascadeConfig};
 /// Blend of the logarithmic and uniform split schemes: `1` is fully logarithmic.
 pub const SUN_CASCADE_LAMBDA: f32 = 0.75;
 
+/// World metres per shadow texel of the default 40 m anchored box at 2048². The authored bias holds
+/// the same number of texels in every cascade, so a cascade's bias scales by its texel over this.
+pub const SUN_CASCADE_BIAS_TEXEL: f32 = 80.0 / 2048.0;
+
 /// Smallest shadow map edge the fit accepts: below it the one-texel margin is the whole box.
 const MIN_TILE: u32 = 4;
 
