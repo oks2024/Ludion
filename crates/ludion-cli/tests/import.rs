@@ -19,6 +19,9 @@ fn import_root() -> PathBuf {
 fn textured_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-textured")
 }
+fn cutout_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-cutout")
+}
 fn fixture() -> PathBuf {
     import_root().join("scene.gltf")
 }
@@ -139,6 +142,51 @@ fn textured_import_reproduces_committed_tree_in_default_mode() {
         "model.prefab.yaml",
         "meshes/tangent-cube.mesh.yaml",
         "meshes/computed-cube.mesh.yaml",
+    ] {
+        let check = run_ludion(&["check-scene", out.join(rel).to_str().unwrap()]);
+        assert!(
+            check.status.success(),
+            "check-scene failed for {rel}: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+}
+
+/// The cutout fixture (`examples/import-cutout/`, exported from Blender) imports in **default
+/// mode** and reproduces its committed tree byte-for-byte: a `MASK` grating carrying its cutoff, and
+/// three `doubleSided` meshes (flap, tape strip, open lamp shade).
+#[test]
+fn cutout_import_reproduces_committed_tree_in_default_mode() {
+    let (out, output) = import_beside_copy("import_cutout", &cutout_root().join("scene.gltf"), &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "the cutout fixture must import with no unsupported feature: {stderr}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "a fully supported document warns about nothing: {stderr}"
+    );
+    assert_trees_identical(&cutout_root().join("expected"), &out);
+
+    let mesh =
+        |name: &str| std::fs::read_to_string(out.join(format!("meshes/{name}.mesh.yaml"))).unwrap();
+    let grating = mesh("grating");
+    assert!(grating.contains("alpha_mode: mask\n"), "{grating}");
+    assert!(grating.contains("alpha_cutoff: 0.25\n"), "{grating}");
+    assert!(!grating.contains("double_sided"), "{grating}");
+    for name in ["flap", "tape", "shade"] {
+        let text = mesh(name);
+        assert!(text.contains("double_sided: true\n"), "{name}: {text}");
+        assert!(!text.contains("alpha_mode"), "{name}: {text}");
+    }
+
+    for rel in [
+        "model.prefab.yaml",
+        "meshes/grating.mesh.yaml",
+        "meshes/flap.mesh.yaml",
+        "meshes/tape.mesh.yaml",
+        "meshes/shade.mesh.yaml",
     ] {
         let check = run_ludion(&["check-scene", out.join(rel).to_str().unwrap()]);
         assert!(

@@ -1,0 +1,344 @@
+# Feature: Mesh documents with cutout and double-sided materials, under the sun with shafts and SSAO.
+# (a) a mask grating raised on four posts: its holes pass the sun, so the floor shadow is a lattice and
+# the beams through the fog are striped (alpha_mode mask, the default cutoff 0.5); (b) a double_sided
+# flap facing away from the camera, a point light on the camera side: the seen back face is lit as a
+# front face would be (the shading frame flips), beside (c) the same quad single-sided, which shows
+# nothing from behind; (d) the flap mesh at scale [-1, 1, 1] beside its unmirrored twin, both shaded
+# alike with the F mirrored (the mirrored instance keeps its face winding); (e) a distant mask card of
+# thin wires (alpha_cutoff 0.4) whose strands stay visible at minified size (coverage-preserving
+# mips). Every other field is a default, pinned here by omission. ludion docs materials.
+format: 1
+name: "cutout-double-sided - Mesh documents: alpha_mode mask, double_sided"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 5.5
+          - 15.0
+        rotation:
+          - -17.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 55.0
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.015
+          - 0.04
+        sky_horizon:
+          - 0.03
+          - 0.04
+          - 0.08
+        sky_ground:
+          - 0.005
+          - 0.006
+          - 0.012
+        ibl_intensity: 0.25
+      PostProcess:
+        fog_density: 0.06
+        fog_color:
+          - 0.004
+          - 0.006
+          - 0.012
+        fog_start: 12.0
+        fog_sky: 0.0
+        ssao: 1.0
+        ssao_radius: 1.2
+        shafts: 5.0
+        exposure: 0.6
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - -10.0
+      DirectionalLight:
+        direction:
+          - 0.2
+          - -0.5
+          - 0.8
+        color:
+          - 0.75
+          - 0.82
+          - 1.0
+        intensity: 1.4
+        shadow_extent: 24.0
+        shadow_near: 1.0
+        shadow_far: 80.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 120.0
+          - 1.0
+          - 120.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.09
+          - 0.1
+          - 0.12
+          - 1.0
+        roughness: 1.0
+  - name: grating
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 0.0
+        rotation:
+          - -90.0
+          - 0.0
+          - 0.0
+        scale:
+          - 6.0
+          - 6.0
+          - 1.0
+      Mesh:
+        shape: 
+          asset: meshes/cutout-grating.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 0.5
+  - name: post-1
+    components:
+      Transform:
+        translation:
+          - -2.9
+          - 1.5
+          - -2.9
+        scale:
+          - 0.12
+          - 3.0
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.3
+          - 0.33
+          - 1.0
+        roughness: 0.7
+  - name: post-2
+    components:
+      Transform:
+        translation:
+          - 2.9
+          - 1.5
+          - -2.9
+        scale:
+          - 0.12
+          - 3.0
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.3
+          - 0.33
+          - 1.0
+        roughness: 0.7
+  - name: post-3
+    components:
+      Transform:
+        translation:
+          - -2.9
+          - 1.5
+          - 2.9
+        scale:
+          - 0.12
+          - 3.0
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.3
+          - 0.33
+          - 1.0
+        roughness: 0.7
+  - name: post-4
+    components:
+      Transform:
+        translation:
+          - 2.9
+          - 1.5
+          - 2.9
+        scale:
+          - 0.12
+          - 3.0
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.3
+          - 0.33
+          - 1.0
+        roughness: 0.7
+  - name: flap
+    components:
+      Transform:
+        translation:
+          - -8.4
+          - 1.4
+          - 3.0
+        rotation:
+          - 0.0
+          - 180.0
+          - 0.0
+        scale:
+          - 2.4
+          - 2.4
+          - 1.0
+      Mesh:
+        shape: 
+          asset: meshes/cutout-flap.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 0.6
+  - name: flap-culled
+    components:
+      Transform:
+        translation:
+          - -5.6
+          - 1.4
+          - 3.0
+        rotation:
+          - 0.0
+          - 180.0
+          - 0.0
+        scale:
+          - 2.4
+          - 2.4
+          - 1.0
+      Mesh:
+        shape: 
+          asset: meshes/cutout-flap-culled.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 0.6
+  - name: flap-light
+    components:
+      Transform:
+        translation:
+          - -7.0
+          - 2.4
+          - 6.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.95
+          - 0.85
+        intensity: 12.0
+        range: 7.0
+  - name: sheet-mirrored
+    components:
+      Transform:
+        translation:
+          - 5.6
+          - 1.4
+          - 3.0
+        scale:
+          - -2.4
+          - 2.4
+          - 1.0
+      Mesh:
+        shape: 
+          asset: meshes/cutout-flap.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 0.6
+  - name: sheet-twin
+    components:
+      Transform:
+        translation:
+          - 8.4
+          - 1.4
+          - 3.0
+        scale:
+          - 2.4
+          - 2.4
+          - 1.0
+      Mesh:
+        shape: 
+          asset: meshes/cutout-flap.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 0.6
+  - name: sheet-light
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 2.6
+          - 6.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.95
+          - 0.85
+        intensity: 12.0
+        range: 7.0
+  - name: wires
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 4.5
+          - -6.0
+        scale:
+          - 3.5
+          - 3.5
+          - 1.0
+      Mesh:
+        shape: 
+          asset: meshes/cutout-wires.mesh.yaml
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 0.5
+  - name: wires-light
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 4.5
+          - -4.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.95
+          - 0.85
+        intensity: 30.0
+        range: 6.0

@@ -1,0 +1,50 @@
+format: 1
+kind: mesh
+name: cutout-wires
+positions:
+  - -0.5
+  - -0.5
+  - 0.0
+  - 0.5
+  - -0.5
+  - 0.0
+  - 0.5
+  - 0.5
+  - 0.0
+  - -0.5
+  - 0.5
+  - 0.0
+normals:
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+uvs:
+  - 0.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+base_color_texture:
+  path: "../assets/cutout-wires.png"
+alpha_mode: mask
+alpha_cutoff: 0.4
+double_sided: true
+indices:
+  - 0
+  - 1
+  - 2
+  - 0
+  - 2
+  - 3

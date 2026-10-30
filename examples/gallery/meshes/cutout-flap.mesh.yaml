@@ -1,0 +1,48 @@
+format: 1
+kind: mesh
+name: cutout-flap
+positions:
+  - -0.5
+  - -0.5
+  - 0.0
+  - 0.5
+  - -0.5
+  - 0.0
+  - 0.5
+  - 0.5
+  - 0.0
+  - -0.5
+  - 0.5
+  - 0.0
+normals:
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+uvs:
+  - 0.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+base_color_texture:
+  path: "../assets/cutout-sheet.png"
+double_sided: true
+indices:
+  - 0
+  - 1
+  - 2
+  - 0
+  - 2
+  - 3
