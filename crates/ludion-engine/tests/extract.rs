@@ -12,13 +12,13 @@ use ludion_core::time::{SimTime, TickRate};
 use ludion_ecs::World;
 use ludion_engine::components::{Anchor, UiList, UiListItem, UiRect, UiText};
 use ludion_engine::{
-    Camera, Decal, DecalReceiverSet, DropShadow, Environment, Fade, GiDynamic, GroundMarker,
-    GroundMarkerShape, Mesh, MeshSource, ParticleEmitter, PointLight, PostProcess, QualityParams,
-    Sprite, TileAppearance, Tilemap, Transform, extract, extract_at,
+    Camera, Decal, DecalMap, DecalReceiverSet, DropShadow, Environment, Fade, GiDynamic,
+    GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshSource, ParticleEmitter, PointLight,
+    PostProcess, QualityParams, Sprite, TileAppearance, Tilemap, Transform, extract, extract_at,
 };
 use ludion_renderer::{
-    DecalReceivers, GROUND_MARKER_LIFT, GroundMarkerShape as RendererMarkerShape, MeshShape,
-    RenderCamera, UiInstance,
+    DecalReceivers, GROUND_MARKER_LIFT, GroundMarkerShape as RendererMarkerShape, MapImage,
+    MeshShape, RenderCamera, TextureWrap, UiInstance,
 };
 
 fn scene_world() -> World {
@@ -3008,5 +3008,127 @@ fn decal_receivers_follow_the_skin_and_the_hierarchy() {
     assert_eq!(scene.decals[1].receivers, DecalReceivers::Only(vec![1, 2]));
     assert_eq!(scene.decals[0].receivers, DecalReceivers::Exclude(vec![3]));
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn decal_map(path: &str, wrap: MapWrap, scale: f32) -> Option<DecalMap> {
+    Some(DecalMap {
+        path: path.to_string(),
+        wrap,
+        scale,
+    })
+}
+
+/// A decal's maps resolve into the instance with their wrap and the normal map's scale; an absent
+/// map stays empty.
+#[test]
+fn decal_maps_resolve_with_wrap_and_normal_scale() {
+    let dir =
+        std::env::temp_dir().join(format!("ludion-extract-decal-maps-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("decals")).unwrap();
+    let png = ludion_assets::encode_png(1, 1, &[255, 0, 0, 255]).unwrap();
+    std::fs::write(dir.join("decals/c.png"), &png).unwrap();
+    std::fs::write(dir.join("decals/n.png"), &png).unwrap();
+
+    let mut world = World::new();
+    decal_entity(
+        &mut world,
+        None,
+        Transform::default(),
+        Decal {
+            base_color_texture: decal_map("decals/c.png", MapWrap::Repeat, 1.0),
+            normal_texture: decal_map("decals/n.png", MapWrap::Clamp, 0.5),
+            ..Decal::default()
+        },
+    );
+    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let maps = &scene.decals[0].maps;
+    let base = maps.base_color.as_ref().expect("base colour map");
+    assert_eq!(base.wrap, TextureWrap::Repeat);
+    assert!(matches!(base.image, MapImage::Source(_)));
+    assert_eq!(
+        maps.normal.as_ref().expect("normal map").wrap,
+        TextureWrap::Clamp
+    );
+    assert_eq!(maps.normal_scale, 0.5);
+    assert!(maps.metallic_roughness.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A decal naming a missing PNG is an `L1101` at the decal's map path.
+#[test]
+fn a_missing_decal_map_is_l1101_at_the_map_path() {
+    let dir =
+        std::env::temp_dir().join(format!("ludion-extract-decal-miss-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut world = World::new();
+    decal_entity(
+        &mut world,
+        None,
+        Transform::default(),
+        Decal {
+            base_color_texture: decal_map("decals/nope.png", MapWrap::Repeat, 1.0),
+            ..Decal::default()
+        },
+    );
+    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code.as_str(), "L1101");
+    let pointer = errors[0].path.as_deref().unwrap();
+    assert!(
+        pointer.starts_with("/entities/")
+            && pointer.ends_with("/components/Decal/base_color_texture/path"),
+        "{pointer}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A decal written in a prefab in a sub-directory names its map relative to the prefab; the scene
+/// load rebases it, so the engine's own extract finds the PNG.
+#[test]
+fn a_prefab_decal_map_is_rebased_through_the_scene_load() {
+    let dir = std::env::temp_dir().join(format!(
+        "ludion-extract-decal-prefab-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("props")).unwrap();
+    let png = ludion_assets::encode_png(1, 1, &[255, 0, 0, 255]).unwrap();
+    std::fs::write(dir.join("props/stain.png"), png).unwrap();
+    std::fs::write(
+        dir.join("props/stain.prefab.yaml"),
+        "format: 1
+kind: prefab
+name: stain
+entities:
+  - name: stain
+    components:
+      Transform: {}
+      Decal:
+        base_color_texture:
+          path: stain.png
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.yaml"),
+        "format: 1
+name: decal
+entities:
+  - name: spot
+    prefab: props/stain.prefab.yaml
+",
+    )
+    .unwrap();
+
+    let engine = ludion_engine::Engine::builder()
+        .load_scene_file(&dir.join("scene.yaml"))
+        .expect("the scene loads");
+    let scene = extract(engine.world(), (320, 180), &dir).unwrap();
+    assert_eq!(scene.decals.len(), 1);
+    assert!(scene.decals[0].maps.base_color.is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }

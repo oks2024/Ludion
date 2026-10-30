@@ -16,6 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ludion_assets::Image;
+use ludion_assets::cooked::ColorSpace;
 use ludion_core::codes::code;
 use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::Diagnostic;
@@ -29,10 +30,10 @@ use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
     DebugSegment, DecalBlend, DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance,
     EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, LocalShadowData,
-    MAX_SUN_CASCADES, MeshData, MeshInstance, MeshShape, ParticleInstance, PointLightData,
-    PostData, ProbeData, ProbeVolume, QualityParams, RenderCamera, RenderScene, SkinJoint,
-    SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, UiInstance,
-    WorldVoxelGrid, aspect_ratio,
+    MAX_SUN_CASCADES, MapImage, MeshData, MeshInstance, MeshShape, MeshTexture, ParticleInstance,
+    PointLightData, PostData, ProbeData, ProbeVolume, QualityParams, RenderCamera, RenderScene,
+    SkinJoint, SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage,
+    TextureWrap, UiInstance, WorldVoxelGrid, aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -40,11 +41,11 @@ use crate::assembly_mesh::AssemblyData;
 use crate::asset_cache::{AssetCache, AssetRefs, SourceFiles};
 use crate::character::CharacterData;
 use crate::components::{
-    Animation, Camera, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalReceiverSet,
-    DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
-    GroundMarkerShape, Mesh, MeshGrid, MeshSource, ParticleEmitter, PointLight, PostProcess,
-    ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite, SpriteBlend, Text,
-    Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
+    Animation, Camera, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
+    DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
+    GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, ParticleEmitter, PointLight,
+    PostProcess, ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite, SpriteBlend,
+    Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
 };
 use crate::docs::DocStore;
 use crate::fonts::FontLibrary;
@@ -68,6 +69,9 @@ pub(crate) trait SceneAssets {
     /// Resolves a sprite/tilemap texture path to a decoded, premultiplied [`TextureImage`],
     /// `Arc`-shared so a cached hit is a refcount bump, not a byte copy.
     fn texture(&mut self, rel: &str) -> Result<Arc<TextureImage>, Diagnostic>;
+    /// Resolves a decal's map at the content-root path `rel` in the colour role `space`, through the
+    /// same cache entry (and cooked role) a mesh document's map of that file would use.
+    fn map(&mut self, rel: &str, space: ColorSpace) -> Result<MapImage, Diagnostic>;
     /// Resolves a `Sprite.atlas` / `Tilemap` legend `atlas` path to its parsed `kind: atlas`
     /// document and packed colour image. `Arc`-shared like a mesh: a stage is one atlas, so every
     /// quad on screen resolves the same entry.
@@ -131,6 +135,11 @@ struct CachedAssets<'a> {
 impl SceneAssets for CachedAssets<'_> {
     fn texture(&mut self, rel: &str) -> Result<Arc<TextureImage>, Diagnostic> {
         self.cache.load(self.root, rel).cloned()
+    }
+    fn map(&mut self, rel: &str, space: ColorSpace) -> Result<MapImage, Diagnostic> {
+        self.cache
+            .load_map(self.root, rel, space)
+            .map(|(image, _)| image)
     }
     fn atlas(&mut self, rel: &str) -> Result<Arc<AtlasAsset>, Vec<Diagnostic>> {
         self.cache.load_atlas(self.root, rel).cloned()
@@ -1188,6 +1197,17 @@ fn extract_inner(
         }
     }
 
+    let decals = extract_decals(
+        world,
+        &ids,
+        &mut poses,
+        &meshes,
+        &mesh_owners,
+        project_root,
+        assets,
+        &mut errors,
+    );
+
     // A `MeshGrid` places one mesh per cell, so a legend entry that fails to load fails once per
     // cell, identically; report each exact (code, pointer, message) once.
     let mut seen = std::collections::BTreeSet::new();
@@ -1234,8 +1254,6 @@ fn extract_inner(
             (voxel, gi)
         }
     };
-
-    let decals = extract_decals(world, &ids, &mut poses, &meshes, &mesh_owners);
 
     Ok(RenderScene {
         camera,
@@ -1562,18 +1580,26 @@ fn extract_drop_shadows(
 /// excludes the skinned instances, `hierarchy` admits only the unskinned meshes owned by the decal's
 /// hierarchy root and its descendants. The hierarchy's child map is built only when a `hierarchy`
 /// decal exists.
+///
+/// Maps resolve through `assets`, so they share the asset cache's entries (and its cooked role) with
+/// a mesh's maps. A map that fails to load pushes its diagnostic onto `errors`, pointed at the
+/// decal's map path, and leaves its slot empty.
+#[allow(clippy::too_many_arguments)]
 fn extract_decals(
     world: &World,
     ids: &[EntityId],
     poses: &mut WorldAffines,
     meshes: &[MeshInstance],
     mesh_owners: &[EntityId],
+    project_root: &Path,
+    assets: &mut dyn SceneAssets,
+    errors: &mut Vec<Diagnostic>,
 ) -> Vec<DecalInstance> {
     let skinned = |index: usize| meshes.get(index).is_some_and(|mesh| mesh.bone_offset != 0);
     let mut skinned_indices: Option<Vec<u32>> = None;
     let mut children = None;
     let mut decals: Vec<(i16, EntityId, DecalInstance)> = Vec::new();
-    for &id in ids {
+    for (index, &id) in ids.iter().enumerate() {
         let Some(decal) = get::<Decal>(world, id) else {
             continue;
         };
@@ -1626,8 +1652,36 @@ fn extract_decals(
             uv_rect: decal.uv_rect,
             angle_fade: decal.angle_fade,
             layer: decal.layer,
-            // Maps are resolved through the asset cache, not here.
-            maps: DecalMaps::default(),
+            maps: DecalMaps {
+                base_color: decal_map(
+                    project_root,
+                    assets,
+                    errors,
+                    index,
+                    "base_color_texture",
+                    decal.base_color_texture.as_ref(),
+                    ColorSpace::Srgb,
+                ),
+                normal: decal_map(
+                    project_root,
+                    assets,
+                    errors,
+                    index,
+                    "normal_texture",
+                    decal.normal_texture.as_ref(),
+                    ColorSpace::Linear,
+                ),
+                metallic_roughness: decal_map(
+                    project_root,
+                    assets,
+                    errors,
+                    index,
+                    "metallic_roughness_texture",
+                    decal.metallic_roughness_texture.as_ref(),
+                    ColorSpace::Linear,
+                ),
+                normal_scale: decal.normal_texture.as_ref().map_or(1.0, |map| map.scale),
+            },
             receivers,
         };
         decals.push((decal.layer, id, instance));
@@ -1637,6 +1691,40 @@ fn extract_decals(
         .into_iter()
         .map(|(_, _, instance)| instance)
         .collect()
+}
+
+/// Resolves one of a decal's maps, or `None` when the decal authors none or the load failed (the
+/// diagnostic is pushed onto `errors` at `/entities/{index}/components/Decal/{field}/path`).
+fn decal_map(
+    project_root: &Path,
+    assets: &mut dyn SceneAssets,
+    errors: &mut Vec<Diagnostic>,
+    index: usize,
+    field: &str,
+    map: Option<&DecalMap>,
+    space: ColorSpace,
+) -> Option<MeshTexture> {
+    let map = map?;
+    let rel = ludion_core::paths::normalize(&map.path);
+    match assets.map(&rel, space) {
+        Ok(image) => Some(MeshTexture {
+            image,
+            wrap: match map.wrap {
+                MapWrap::Repeat => TextureWrap::Repeat,
+                MapWrap::Clamp => TextureWrap::Clamp,
+                MapWrap::Mirror => TextureWrap::Mirror,
+            },
+        }),
+        Err(base) => {
+            let mut diagnostic =
+                base.with_path(format!("/entities/{index}/components/Decal/{field}/path"));
+            if let Some(name) = suggest_asset(project_root, &rel) {
+                diagnostic = diagnostic.with_help(format!("nearest match is `{name}`"));
+            }
+            errors.push(diagnostic);
+            None
+        }
+    }
 }
 
 /// Every particle of every [`ParticleEmitter`] in the world at `now`, in
@@ -2556,6 +2644,9 @@ impl RefLoader {
 }
 
 impl SceneAssets for RefLoader {
+    fn map(&mut self, _: &str, _: ColorSpace) -> Result<MapImage, Diagnostic> {
+        Err(Self::unresolved().remove(0))
+    }
     fn texture(&mut self, _: &str) -> Result<Arc<TextureImage>, Diagnostic> {
         Err(Self::unresolved().remove(0))
     }
@@ -2639,6 +2730,21 @@ pub(crate) fn asset_refs(world: &World, project_root: &Path) -> AssetRefs {
             }
         };
         set.insert(ludion_core::paths::normalize(path));
+    }
+    for &id in &ids {
+        let Some(decal) = get::<Decal>(world, id) else {
+            continue;
+        };
+        for (map, space) in [
+            (&decal.base_color_texture, ColorSpace::Srgb),
+            (&decal.normal_texture, ColorSpace::Linear),
+            (&decal.metallic_roughness_texture, ColorSpace::Linear),
+        ] {
+            if let Some(map) = map {
+                refs.maps
+                    .insert((ludion_core::paths::normalize(&map.path), space));
+            }
+        }
     }
     refs
 }

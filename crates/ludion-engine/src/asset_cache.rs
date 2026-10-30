@@ -125,6 +125,8 @@ pub(crate) struct AssetRefs {
     pub(crate) sculpts: BTreeSet<String>,
     pub(crate) assemblies: BTreeSet<String>,
     pub(crate) characters: BTreeSet<String>,
+    /// Maps a decal names, with the colour role each is read in; a mesh's maps come from its document.
+    pub(crate) maps: BTreeSet<(String, ColorSpace)>,
 }
 
 /// One decoded entry, ready to insert: what a worker thread hands back to the cache's owner. Every
@@ -695,10 +697,11 @@ impl AssetCache {
         ))
     }
 
-    /// Reads the map at the resolved path `resolved` in the colour role `space` **through** the
-    /// cache: a hit is reported as reused, a miss decodes it once as an entry of its own. Every mesh
-    /// naming one file shares the `Arc`, so the decode counter is unique files, not references.
-    fn mesh_map(
+    /// Reads a mesh's or a decal's map at the resolved path `resolved` in the colour role `space`
+    /// **through** the cache: a hit is reported as reused, a miss decodes it once as an entry of its
+    /// own. Every mesh or decal naming one file shares the `Arc`, so the decode counter is unique
+    /// files, not references.
+    pub(crate) fn load_map(
         &mut self,
         project_root: &Path,
         resolved: &str,
@@ -727,7 +730,7 @@ impl AssetCache {
             let (doc, hash) = crate::mesh_asset::read_document(project_root, rel)?;
             let (mesh, sources) =
                 crate::mesh_asset::assemble(rel, &doc, hash, &mut |path, space| {
-                    self.mesh_map(project_root, path, space)
+                    self.load_map(project_root, path, space)
                 })?;
             self.meshes.insert(key.to_string(), Arc::new(mesh));
             return Ok(sources);
@@ -876,12 +879,14 @@ impl AssetCache {
         self.meshes.retain(|key, _| meshes.contains(key));
         self.retain_edges();
 
-        // A map no kept mesh binds is an orphan.
+        // A map no kept mesh binds and no decal names is an orphan.
         let dependents = &self.dependents;
+        let decal_maps: BTreeSet<&str> = refs.maps.iter().map(|(key, _)| key.as_str()).collect();
         self.mesh_maps.retain(|(key, _), _| {
-            dependents
-                .get(key)
-                .is_some_and(|entries| entries.iter().any(|(kind, _)| *kind == AssetKind::Mesh))
+            decal_maps.contains(key.as_str())
+                || dependents
+                    .get(key)
+                    .is_some_and(|entries| entries.iter().any(|(kind, _)| *kind == AssetKind::Mesh))
         });
         let maps = &self.mesh_maps;
         self.cook_misses
@@ -935,7 +940,7 @@ impl AssetCache {
     /// Four stages, each decoding on worker threads and then inserting **serially in sorted key
     /// order**, so the cache's contents, its dependency edges and the observer's event order never
     /// depend on the thread count: the non-mesh kinds, every mesh document, every map those
-    /// documents bind plus the loose textures, and last each mesh assembled against its maps. A
+    /// documents bind or a decal names plus the loose textures, and last each mesh assembled against its maps. A
     /// failure is dropped here — the extract that follows hits the same miss and reports it with its
     /// usual diagnostic. Every walked entry the cache already holds (and the maps of a held mesh) is
     /// reported as reused. Voxel grids and the volley, particle, UI and font atlases stay lazy.
@@ -1003,7 +1008,7 @@ impl AssetCache {
             .filter_map(|(key, read)| read.ok().map(|(doc, hash)| (key, doc, hash)))
             .collect();
 
-        // Stage 3: the maps those documents bind, then the loose textures.
+        // Stage 3: the maps those documents bind and the decals name, then the loose textures.
         let mut maps: BTreeSet<(String, MapRole)> = BTreeSet::new();
         for (key, doc, _) in &docs {
             for (path, space) in crate::mesh_asset::map_paths(key, doc) {
@@ -1014,6 +1019,14 @@ impl AssetCache {
                 } else {
                     maps.insert((path, role));
                 }
+            }
+        }
+        for (path, space) in &refs.maps {
+            let role = self.role(path, *space);
+            if self.mesh_maps.contains_key(&(path.clone(), role)) {
+                self.report_reused(AssetKind::MeshMap(role), path);
+            } else {
+                maps.insert((path.clone(), role));
             }
         }
         let mut jobs: Vec<(AssetKind, &str)> = maps
@@ -2789,6 +2802,57 @@ parts:
         let edges: Vec<_> = cache.dependents.keys().collect();
         let hashes: Vec<_> = cache.source_hashes.keys().collect();
         assert_eq!(edges, hashes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A decal's map is an entry of its own: held with no mesh, evicted unless a decal still names it,
+    /// re-read by a reload of its PNG, and decoded by the prefetch.
+    #[test]
+    fn a_decal_only_map_is_held_retained_prefetched_and_reloaded() {
+        let dir = std::env::temp_dir().join(format!("ludion-decal-map-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("decals")).unwrap();
+        let png_rel = "decals/d.png";
+        std::fs::write(dir.join(png_rel), png_bytes(10)).unwrap();
+        let named = AssetRefs {
+            maps: [(png_rel.to_string(), ColorSpace::Srgb)]
+                .into_iter()
+                .collect(),
+            ..AssetRefs::default()
+        };
+
+        // (a) Loaded with no mesh involved.
+        let mut cache = AssetCache::new();
+        let (_, first) = cache.load_map(&dir, png_rel, ColorSpace::Srgb).unwrap();
+        assert!(cache.contains_mesh_map(png_rel));
+        assert!(cache.mesh_map_image(png_rel, ColorSpace::Srgb).is_some());
+
+        // (b) Kept while a decal names it, evicted once none does.
+        cache.retain_referenced(&dir, &named);
+        assert!(cache.contains_mesh_map(png_rel));
+        cache.retain_referenced(&dir, &AssetRefs::default());
+        assert!(!cache.contains_mesh_map(png_rel));
+
+        // (c) A reload of the PNG re-reads it under the same key.
+        cache.load_map(&dir, png_rel, ColorSpace::Srgb).unwrap();
+        std::fs::write(dir.join(png_rel), png_bytes(200)).unwrap();
+        cache.reload(&dir, png_rel).unwrap();
+        let (_, reloaded) = cache.load_map(&dir, png_rel, ColorSpace::Srgb).unwrap();
+        assert_ne!(reloaded, first);
+
+        // (d) The prefetch decodes it, and a second one leaves the held entry alone.
+        let mut fresh = AssetCache::new();
+        fresh.prefetch(&dir, &named);
+        assert!(fresh.contains_mesh_map(png_rel));
+        let held = fresh.mesh_map_image(png_rel, ColorSpace::Srgb).unwrap();
+        fresh.prefetch(&dir, &named);
+        assert_eq!(
+            fresh
+                .mesh_map_image(png_rel, ColorSpace::Srgb)
+                .unwrap()
+                .identity(),
+            held.identity()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
