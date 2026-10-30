@@ -49,6 +49,8 @@ struct Projector {
 struct ProjectorParams {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
+    // x: 1 when the normal target is `lit_normal`, whose blends can be shorter than unit length.
+    flags: vec4<f32>,
 }
 
 // The opaque pass's depth, at the render extent (loaded, never filtered).
@@ -172,12 +174,12 @@ fn footprint_coverage(p: Projector, world: vec3<f32>) -> f32 {
     return mix(hard, soft, clamp(p.shape.w, 0.0, 1.0));
 }
 
-// A normal read from the scene normal target, unit length again: under a lit decal's partial
+// A normal read from `lit_normal`, unit length again: under a lit decal's partial
 // coverage the target holds a blend of two normals, shorter than 1. A zero normal (no surface)
 // stays zero.
 fn unit_normal(normal: vec3<f32>) -> vec3<f32> {
     let len = length(normal);
-    return select(normal, normal / len, len > 1e-4);
+    return select(normal, normal / len, proj_params.flags.x > 0.5 && len > 1e-4);
 }
 
 // How squarely the surface faces up: a wall gets 0, a 45 degree slope 0.71.

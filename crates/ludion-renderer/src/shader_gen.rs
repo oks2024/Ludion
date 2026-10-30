@@ -630,10 +630,12 @@ const _: () = assert!(core::mem::offset_of!(ProjectorDecal, surface) == 224);
 pub struct ProjectorParams {
     pub view_proj: [[f32; 4]; 4],
     pub inv_view_proj: [[f32; 4]; 4],
+    pub flags: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<ProjectorParams>() == 128);
+const _: () = assert!(core::mem::size_of::<ProjectorParams>() == 144);
 const _: () = assert!(core::mem::offset_of!(ProjectorParams, view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(ProjectorParams, inv_view_proj) == 64);
+const _: () = assert!(core::mem::offset_of!(ProjectorParams, flags) == 128);
 
 /// WGSL `struct RecvDraw`.
 ///
@@ -2733,7 +2735,7 @@ pub fn create_proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(128),
+                    min_binding_size: wgpu::BufferSize::new(144),
                 },
                 count: None,
             },

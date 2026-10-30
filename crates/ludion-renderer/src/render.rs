@@ -4235,6 +4235,12 @@ impl FrameRecorder<'_> {
         let uniform = shader_gen::ProjectorParams {
             view_proj: self.view_proj.to_cols_array_2d(),
             inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
+            flags: [
+                f32::from(!self.decals.lit_instances.is_empty()),
+                0.0,
+                0.0,
+                0.0,
+            ],
         };
         let uniform_buf = init_buffer(
             pass.device,
