@@ -12,6 +12,7 @@ fn settings(target: CookTarget, color_space: ColorSpace) -> CookSettings {
         target,
         color_space,
         max_texture_size: None,
+        alpha_cutoff: None,
     }
 }
 
@@ -254,4 +255,35 @@ fn a_file_without_its_mean_entry_is_refused() {
     // Header index: kvd length at byte 60.
     bytes[60..64].copy_from_slice(&0u32.to_le_bytes());
     assert!(read_ktx2(&bytes, CookTarget::Desktop, ColorSpace::Srgb).is_err());
+}
+
+#[test]
+fn a_mask_cutoff_changes_the_lower_levels_only() {
+    let mut rgba = vec![0u8; 64 * 64 * 4];
+    for y in 0..64 {
+        for x in 0..64 {
+            let texel = &mut rgba[(y * 64 + x) * 4..][..4];
+            texel[..3].copy_from_slice(&[(x * 4) as u8, (y * 4) as u8, 90]);
+            texel[3] = if x % 8 == 0 {
+                255 - (y * 2 + x / 8 * 3) as u8
+            } else {
+                0
+            };
+        }
+    }
+    let strands = Image {
+        width: 64,
+        height: 64,
+        rgba,
+        hash: 1,
+    };
+    let plain = settings(CookTarget::Desktop, ColorSpace::Srgb);
+    let masked = CookSettings {
+        alpha_cutoff: Some(0.5),
+        ..plain
+    };
+    let plain = cook(&strands, &plain).unwrap();
+    let masked = cook(&strands, &masked).unwrap();
+    assert_eq!(plain.levels[0], masked.levels[0]);
+    assert_ne!(plain.levels[3], masked.levels[3]);
 }

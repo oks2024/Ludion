@@ -138,7 +138,7 @@ impl SceneAssets for CachedAssets<'_> {
     }
     fn map(&mut self, rel: &str, space: ColorSpace) -> Result<MapImage, Diagnostic> {
         self.cache
-            .load_map(self.root, rel, space)
+            .load_map(self.root, rel, space, None)
             .map(|(image, _)| image)
     }
     fn atlas(&mut self, rel: &str) -> Result<Arc<AtlasAsset>, Vec<Diagnostic>> {

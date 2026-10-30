@@ -94,6 +94,14 @@ impl CookMiss {
     }
 }
 
+/// The colour role a cooked map is read in: its colour space and, for a base-colour map bound by an
+/// `alpha_mode: mask` mesh, the cutoff (as `f32::to_bits`) its mips preserve coverage at.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) struct CookRole {
+    pub(crate) space: ColorSpace,
+    pub(crate) alpha_cutoff: Option<u32>,
+}
+
 /// Where cooked maps live for one project and which maps they cover: resolved once per host setting
 /// from the manifest, the renderer's supported [`CookTarget`]s and which store exists.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -183,12 +191,12 @@ impl CookLookup {
             .map(|(_, cap)| *cap)
     }
 
-    /// Reads the cooked copy of the map whose PNG bytes are `png`, in `space` under the table cap
+    /// Reads the cooked copy of the map whose PNG bytes are `png`, in `role` under the table cap
     /// `cap`.
     pub(crate) fn read(
         &self,
         png: &AssetBytes,
-        space: ColorSpace,
+        role: CookRole,
         cap: Option<u32>,
     ) -> Result<Arc<CookedMap>, CookMiss> {
         let target = self.target.ok_or(CookMiss::Unsupported)?;
@@ -196,8 +204,9 @@ impl CookLookup {
             png.hash,
             &CookSettings {
                 target,
-                color_space: space,
+                color_space: role.space,
                 max_texture_size: cap,
+                alpha_cutoff: role.alpha_cutoff.map(f32::from_bits),
             },
         );
         let bytes = std::fs::read(self.store.join(cooked_file_name(key))).map_err(|error| {
@@ -206,8 +215,8 @@ impl CookLookup {
                 _ => CookMiss::Missing(Some(error.to_string())),
             }
         })?;
-        let image = read_ktx2(&bytes, target, space).map_err(CookMiss::Corrupt)?;
-        check_compressed(&image, space == ColorSpace::Srgb).map_err(CookMiss::Invalid)?;
+        let image = read_ktx2(&bytes, target, role.space).map_err(CookMiss::Corrupt)?;
+        check_compressed(&image, role.space == ColorSpace::Srgb).map_err(CookMiss::Invalid)?;
         Ok(Arc::new(CookedMap { key, image }))
     }
 }

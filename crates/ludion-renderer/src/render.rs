@@ -11915,6 +11915,7 @@ mod tests {
             target,
             color_space,
             max_texture_size: None,
+            alpha_cutoff: None,
         };
         let cooked = ludion_cook::cook(source, &settings).expect("cook");
         read_ktx2(&ludion_cook::write_ktx2(&cooked), target, color_space).expect("read_ktx2")

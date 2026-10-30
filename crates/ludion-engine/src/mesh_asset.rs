@@ -49,7 +49,7 @@ pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> 
     let (doc, hash) = read_document(root, rel)?;
     // One decode per path whatever the roles asking for it.
     let mut decoded: StableMap<String, Arc<TextureImage>> = StableMap::new();
-    assemble(rel, &doc, hash, &mut |path, _| {
+    assemble(rel, &doc, hash, &mut |path, _, _| {
         let path = path.to_string();
         if !decoded.contains_key(&path) {
             decoded.insert(path.clone(), decode_map(root, &path)?);
@@ -63,9 +63,10 @@ pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> 
 
 /// Resolves one mesh map, by its resolved project-relative path and colour role, to its image and
 /// the content hash of the PNG file it came from (the image's own identity is the cook key for a
-/// cooked map).
+/// cooked map). The third argument is the `alpha_mode: mask` cutoff, set on the base-colour map only:
+/// a cooked copy is keyed by it.
 pub(crate) type MapResolver<'a> =
-    dyn FnMut(&str, ColorSpace) -> Result<(MapImage, u64), Diagnostic> + 'a;
+    dyn FnMut(&str, ColorSpace, Option<f32>) -> Result<(MapImage, u64), Diagnostic> + 'a;
 
 /// Builds a document's [`MeshData`] — [`decode`], its texture maps bound through `resolve`, and the
 /// map identities folded into [`MeshData::hash`] so an edited PNG, or a switch between a map and its
@@ -123,15 +124,19 @@ pub(crate) fn map_from_bytes(
     }))
 }
 
-/// The distinct `(resolved map path, colour role)` pairs `doc` (the mesh at `rel`) references, in
-/// slot order.
-pub(crate) fn map_paths(rel: &str, doc: &MeshDocument) -> Vec<(String, ColorSpace)> {
-    let mut paths: Vec<(String, ColorSpace)> = Vec::new();
-    for (_, reference, space) in texture_slots(doc) {
+/// The distinct `(resolved map path, colour role, mask cutoff)` triples `doc` (the mesh at `rel`)
+/// references, in slot order.
+pub(crate) fn map_paths(rel: &str, doc: &MeshDocument) -> Vec<(String, ColorSpace, Option<f32>)> {
+    let mut paths: Vec<(String, ColorSpace, Option<f32>)> = Vec::new();
+    for (_, reference, space, cutoff) in texture_slots(doc) {
         let Some(reference) = reference else {
             continue;
         };
-        let resolved = (ludion_core::paths::sibling(rel, &reference.path), space);
+        let resolved = (
+            ludion_core::paths::sibling(rel, &reference.path),
+            space,
+            cutoff,
+        );
         if !paths.contains(&resolved) {
             paths.push(resolved);
         }
@@ -169,32 +174,54 @@ pub(crate) fn with_mesh_source<T>(
 
 /// The five texture slots in the document's canonical order, each paired with its own JSON Pointer
 /// and its colour role: colour (base colour, emissive) is sRGB, a measurement linear — the split
-/// the renderer's `material_maps` samples with.
-fn texture_slots(doc: &MeshDocument) -> [(&'static str, Option<&TextureRef>, ColorSpace); 5] {
+/// the renderer's `material_maps` samples with. The last element is the mask cutoff, set on the
+/// base-colour slot only.
+#[allow(clippy::type_complexity)]
+fn texture_slots(
+    doc: &MeshDocument,
+) -> [(&'static str, Option<&TextureRef>, ColorSpace, Option<f32>); 5] {
     let maps = &doc.textures;
+    let cutoff = mask_cutoff(doc);
     [
         (
             "/base_color_texture",
             maps.base_color.as_ref(),
             ColorSpace::Srgb,
+            cutoff,
         ),
         (
             "/metallic_roughness_texture",
             maps.metallic_roughness.as_ref(),
             ColorSpace::Linear,
+            None,
         ),
-        ("/normal_texture", maps.normal.as_ref(), ColorSpace::Linear),
+        (
+            "/normal_texture",
+            maps.normal.as_ref(),
+            ColorSpace::Linear,
+            None,
+        ),
         (
             "/occlusion_texture",
             maps.occlusion.as_ref(),
             ColorSpace::Linear,
+            None,
         ),
         (
             "/emissive_texture",
             maps.emissive.as_ref(),
             ColorSpace::Srgb,
+            None,
         ),
     ]
+}
+
+/// The document's `alpha_mode: mask` cutoff, `None` for an opaque mesh.
+fn mask_cutoff(doc: &MeshDocument) -> Option<f32> {
+    match doc.alpha_mode {
+        AlphaMode::Mask { cutoff } => Some(cutoff as f32),
+        AlphaMode::Opaque => None,
+    }
 }
 
 /// Binds the PNG behind every texture map `doc`, the mesh at `rel`, references — each fetched through
@@ -223,11 +250,8 @@ fn bind_textures(
 ) -> Result<(Option<MeshTextures>, SourceFiles, Vec<u64>), Vec<Diagnostic>> {
     let maps = &doc.textures;
     let slots = texture_slots(doc);
-    let alpha_cutoff = match doc.alpha_mode {
-        AlphaMode::Mask { cutoff } => Some(cutoff as f32),
-        AlphaMode::Opaque => None,
-    };
-    if slots.iter().all(|(_, reference, _)| reference.is_none()) {
+    let alpha_cutoff = mask_cutoff(doc);
+    if slots.iter().all(|(_, reference, ..)| reference.is_none()) {
         let set = alpha_cutoff.map(|cutoff| MeshTextures {
             base_color: None,
             metallic_roughness: None,
@@ -243,23 +267,24 @@ fn bind_textures(
 
     // Keyed by the authored path and role: `None` records a map already reported as failing, so a
     // second slot naming it neither re-reads it nor duplicates its diagnostic.
-    let mut images: StableMap<(String, ColorSpace), Option<MapImage>> = StableMap::new();
+    let mut images: StableMap<(String, ColorSpace, Option<u32>), Option<MapImage>> =
+        StableMap::new();
     let mut errors = Vec::new();
     let mut failed: Vec<String> = Vec::new();
     let mut files: SourceFiles = Vec::new();
     let mut identities: Vec<(String, u64)> = Vec::new();
     let mut resolved: [Option<MeshTexture>; 5] = Default::default();
-    for (index, (key, reference, space)) in slots.iter().enumerate() {
+    for (index, (key, reference, space, cutoff)) in slots.iter().enumerate() {
         let Some(reference) = reference else {
             continue;
         };
-        let image_key = (reference.path.clone(), *space);
+        let image_key = (reference.path.clone(), *space, cutoff.map(f32::to_bits));
         if !images.contains_key(&image_key) {
             let resolved_path = ludion_core::paths::sibling(rel, &reference.path);
             let image = if failed.contains(&resolved_path) {
                 None
             } else {
-                match resolve(&resolved_path, *space) {
+                match resolve(&resolved_path, *space, *cutoff) {
                     Ok((image, source_hash)) => {
                         if !files.iter().any(|(path, _)| *path == resolved_path) {
                             files.push((resolved_path.clone(), source_hash));

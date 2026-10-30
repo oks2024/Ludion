@@ -59,7 +59,7 @@ use ludion_scene::MeshDocument;
 
 use crate::assembly_mesh::AssemblyData;
 use crate::character::CharacterData;
-use crate::cooked_maps::{CookLookup, CookMiss};
+use crate::cooked_maps::{CookLookup, CookMiss, CookRole};
 use crate::extract::{AtlasAsset, load_texture};
 use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
 use crate::voxel_mesh::VoxelStaticGrid;
@@ -70,7 +70,7 @@ use crate::voxel_mesh::VoxelStaticGrid;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum MapRole {
     Source,
-    Cooked(ColorSpace),
+    Cooked(CookRole),
 }
 
 /// Which of the cache's maps an entry lives in — the tag a dependency edge carries so a reload
@@ -169,9 +169,9 @@ fn decode(
             let bytes = ludion_assets::load_bytes(project_root, rel).map_err(|d| vec![d])?;
             let hash = bytes.hash;
             let cooked = match (role, cook) {
-                (MapRole::Cooked(space), Some(cook)) => {
+                (MapRole::Cooked(role), Some(cook)) => {
                     let cap = cook.cap_for(key).unwrap_or(None);
-                    Some(cook.read(&bytes, space, cap))
+                    Some(cook.read(&bytes, role, cap))
                 }
                 (MapRole::Cooked(_), None) => Some(Err(CookMiss::Unsupported)),
                 (MapRole::Source, _) => None,
@@ -246,7 +246,7 @@ pub(crate) struct AssetCache {
     mesh_maps: BTreeMap<(String, MapRole), MapImage>,
     /// Why each cooked entry of [`mesh_maps`](AssetCache::mesh_maps) holds its PNG instead, in step
     /// with it.
-    cook_misses: BTreeMap<(String, ColorSpace), CookMiss>,
+    cook_misses: BTreeMap<(String, CookRole), CookMiss>,
     /// Where cooked maps are read from, or `None` to decode every map from its PNG. Host state, like
     /// [`observer`](AssetCache::observer): changing it drops every mesh map and the meshes built
     /// from them ([`set_cook`](AssetCache::set_cook)).
@@ -681,9 +681,12 @@ impl AssetCache {
 
     /// The role the map at the normalized `key` is held under for the colour role `space`: cooked
     /// when the lookup covers the path, else the PNG's.
-    fn role(&self, key: &str, space: ColorSpace) -> MapRole {
+    fn role(&self, key: &str, space: ColorSpace, alpha_cutoff: Option<f32>) -> MapRole {
         match &self.cook {
-            Some(cook) if cook.cap_for(key).is_some() => MapRole::Cooked(space),
+            Some(cook) if cook.cap_for(key).is_some() => MapRole::Cooked(CookRole {
+                space,
+                alpha_cutoff: alpha_cutoff.map(f32::to_bits),
+            }),
             _ => MapRole::Source,
         }
     }
@@ -706,9 +709,10 @@ impl AssetCache {
         project_root: &Path,
         resolved: &str,
         space: ColorSpace,
+        alpha_cutoff: Option<f32>,
     ) -> Result<(MapImage, u64), Diagnostic> {
         let key = normalize_key(resolved);
-        let role = self.role(&key, space);
+        let role = self.role(&key, space, alpha_cutoff);
         if !self.mesh_maps.contains_key(&(key.clone(), role)) {
             self.load_entry(project_root, AssetKind::MeshMap(role), resolved)
                 .map_err(first_diagnostic)?;
@@ -729,8 +733,8 @@ impl AssetCache {
         if kind == AssetKind::Mesh {
             let (doc, hash) = crate::mesh_asset::read_document(project_root, rel)?;
             let (mesh, sources) =
-                crate::mesh_asset::assemble(rel, &doc, hash, &mut |path, space| {
-                    self.load_map(project_root, path, space)
+                crate::mesh_asset::assemble(rel, &doc, hash, &mut |path, space, alpha_cutoff| {
+                    self.load_map(project_root, path, space, alpha_cutoff)
                 })?;
             self.meshes.insert(key.to_string(), Arc::new(mesh));
             return Ok(sources);
@@ -747,10 +751,10 @@ impl AssetCache {
         match decoded {
             Decoded::Texture(image) => self.images.insert(key, image).is_some(),
             Decoded::MeshMap(role, image, miss) => {
-                if let MapRole::Cooked(space) = role {
+                if let MapRole::Cooked(cook_role) = role {
                     match miss {
-                        Some(miss) => self.cook_misses.insert((key.clone(), space), miss),
-                        None => self.cook_misses.remove(&(key.clone(), space)),
+                        Some(miss) => self.cook_misses.insert((key.clone(), cook_role), miss),
+                        None => self.cook_misses.remove(&(key.clone(), cook_role)),
                     };
                 }
                 self.mesh_maps.insert((key, role), image).is_some()
@@ -784,8 +788,8 @@ impl AssetCache {
         match kind {
             AssetKind::Texture => self.images.remove(key).is_some(),
             AssetKind::MeshMap(role) => {
-                if let MapRole::Cooked(space) = role {
-                    self.cook_misses.remove(&(key.to_string(), space));
+                if let MapRole::Cooked(cook_role) = role {
+                    self.cook_misses.remove(&(key.to_string(), cook_role));
                 }
                 self.mesh_maps.remove(&(key.to_string(), role)).is_some()
             }
@@ -890,7 +894,7 @@ impl AssetCache {
         });
         let maps = &self.mesh_maps;
         self.cook_misses
-            .retain(|(key, space), _| maps.contains_key(&(key.clone(), MapRole::Cooked(*space))));
+            .retain(|(key, role), _| maps.contains_key(&(key.clone(), MapRole::Cooked(*role))));
         self.retain_edges();
 
         self.begin(LoadPhase::Other);
@@ -1011,9 +1015,9 @@ impl AssetCache {
         // Stage 3: the maps those documents bind and the decals name, then the loose textures.
         let mut maps: BTreeSet<(String, MapRole)> = BTreeSet::new();
         for (key, doc, _) in &docs {
-            for (path, space) in crate::mesh_asset::map_paths(key, doc) {
+            for (path, space, alpha_cutoff) in crate::mesh_asset::map_paths(key, doc) {
                 let path = normalize_key(&path);
-                let role = self.role(&path, space);
+                let role = self.role(&path, space, alpha_cutoff);
                 if self.mesh_maps.contains_key(&(path.clone(), role)) {
                     self.report_reused(AssetKind::MeshMap(role), &path);
                 } else {
@@ -1022,7 +1026,7 @@ impl AssetCache {
             }
         }
         for (path, space) in &refs.maps {
-            let role = self.role(path, *space);
+            let role = self.role(path, *space, None);
             if self.mesh_maps.contains_key(&(path.clone(), role)) {
                 self.report_reused(AssetKind::MeshMap(role), path);
             } else {
@@ -1045,16 +1049,17 @@ impl AssetCache {
         // Stage 4: assemble serially, so a map that failed above fails its meshes the same way.
         self.begin(LoadPhase::Mesh);
         for (key, doc, hash) in &docs {
-            let assembled = crate::mesh_asset::assemble(key, doc, *hash, &mut |path, space| {
-                let path_key = normalize_key(path);
-                self.held_map(&path_key, self.role(&path_key, space))
-                    .ok_or_else(|| {
-                        Diagnostic::new(
-                            ludion_core::codes::code::ASSET_FILE_IO,
-                            format!("mesh map `{path}` did not decode"),
-                        )
-                    })
-            });
+            let assembled =
+                crate::mesh_asset::assemble(key, doc, *hash, &mut |path, space, alpha_cutoff| {
+                    let path_key = normalize_key(path);
+                    self.held_map(&path_key, self.role(&path_key, space, alpha_cutoff))
+                        .ok_or_else(|| {
+                            Diagnostic::new(
+                                ludion_core::codes::code::ASSET_FILE_IO,
+                                format!("mesh map `{path}` did not decode"),
+                            )
+                        })
+                });
             if let Ok((mesh, sources)) = assembled {
                 self.meshes.insert((*key).clone(), Arc::new(mesh));
                 self.report_decoded(project_root, AssetKind::Mesh, key, &sources);
@@ -1181,7 +1186,7 @@ impl AssetCache {
     #[cfg(test)]
     pub(crate) fn mesh_map_image(&self, key: &str, space: ColorSpace) -> Option<MapImage> {
         let key = normalize_key(key);
-        self.held_map(&key, self.role(&key, space))
+        self.held_map(&key, self.role(&key, space, None))
             .map(|(image, _)| image)
     }
 
@@ -2306,6 +2311,7 @@ parts:
             target,
             color_space: space,
             max_texture_size: cap,
+            alpha_cutoff: None,
         };
         let cooked = ludion_cook::cook(&source, &settings).unwrap();
         let store = dir.join(".ludion/cooked").join(target.name());
@@ -2823,7 +2829,9 @@ parts:
 
         // (a) Loaded with no mesh involved.
         let mut cache = AssetCache::new();
-        let (_, first) = cache.load_map(&dir, png_rel, ColorSpace::Srgb).unwrap();
+        let (_, first) = cache
+            .load_map(&dir, png_rel, ColorSpace::Srgb, None)
+            .unwrap();
         assert!(cache.contains_mesh_map(png_rel));
         assert!(cache.mesh_map_image(png_rel, ColorSpace::Srgb).is_some());
 
@@ -2834,10 +2842,14 @@ parts:
         assert!(!cache.contains_mesh_map(png_rel));
 
         // (c) A reload of the PNG re-reads it under the same key.
-        cache.load_map(&dir, png_rel, ColorSpace::Srgb).unwrap();
+        cache
+            .load_map(&dir, png_rel, ColorSpace::Srgb, None)
+            .unwrap();
         std::fs::write(dir.join(png_rel), png_bytes(200)).unwrap();
         cache.reload(&dir, png_rel).unwrap();
-        let (_, reloaded) = cache.load_map(&dir, png_rel, ColorSpace::Srgb).unwrap();
+        let (_, reloaded) = cache
+            .load_map(&dir, png_rel, ColorSpace::Srgb, None)
+            .unwrap();
         assert_ne!(reloaded, first);
 
         // (d) The prefetch decodes it, and a second one leaves the held entry alone.

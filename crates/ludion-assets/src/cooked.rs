@@ -77,7 +77,7 @@ pub enum ColorSpace {
 }
 
 /// Everything besides the source bytes that decides a cooked map's bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct CookSettings {
     /// The GPU family.
     pub target: CookTarget,
@@ -85,6 +85,9 @@ pub struct CookSettings {
     pub color_space: ColorSpace,
     /// Halve the map until neither side exceeds this (`None`: keep the source size).
     pub max_texture_size: Option<u32>,
+    /// The `alpha_mode: mask` cutoff a base-colour map's mips preserve coverage at; `None` for every
+    /// other map.
+    pub alpha_cutoff: Option<f32>,
 }
 
 /// A GPU block-compression format, 16 bytes per 4×4 block.
@@ -145,12 +148,12 @@ impl CompressedImage {
 /// # Example
 /// ```
 /// use ludion_assets::cooked::{ColorSpace, CookSettings, CookTarget, cook_key};
-/// let settings = CookSettings { target: CookTarget::Desktop, color_space: ColorSpace::Srgb, max_texture_size: None };
+/// let settings = CookSettings { target: CookTarget::Desktop, color_space: ColorSpace::Srgb, max_texture_size: None, alpha_cutoff: None };
 /// assert_eq!(cook_key(7, &settings), cook_key(7, &settings));
 /// assert_ne!(cook_key(7, &settings), cook_key(8, &settings));
 /// ```
 pub fn cook_key(source_hash: u64, settings: &CookSettings) -> u64 {
-    let mut record = Vec::with_capacity(22);
+    let mut record = Vec::with_capacity(26);
     record.extend_from_slice(b"LCK1");
     record.extend_from_slice(&source_hash.to_le_bytes());
     record.extend_from_slice(&COOKER_VERSION.to_le_bytes());
@@ -163,6 +166,9 @@ pub fn cook_key(source_hash: u64, settings: &CookSettings) -> u64 {
         ColorSpace::Linear => 1,
     });
     record.extend_from_slice(&settings.max_texture_size.unwrap_or(0).to_le_bytes());
+    if let Some(cutoff) = settings.alpha_cutoff {
+        record.extend_from_slice(&cutoff.to_bits().to_le_bytes());
+    }
     xxh3_64(&record)
 }
 
@@ -655,6 +661,7 @@ mod tests {
         target: CookTarget::Desktop,
         color_space: ColorSpace::Srgb,
         max_texture_size: None,
+        alpha_cutoff: None,
     };
 
     #[test]
@@ -716,6 +723,17 @@ mod tests {
                 }
             )
         );
+        let masked = |cutoff| {
+            cook_key(
+                1,
+                &CookSettings {
+                    alpha_cutoff: Some(cutoff),
+                    ..BASE
+                },
+            )
+        };
+        assert_ne!(key, masked(0.5));
+        assert_ne!(masked(0.5), masked(0.3));
     }
 
     #[test]

@@ -490,6 +490,7 @@ entities:
             target,
             color_space: ColorSpace::Srgb,
             max_texture_size: None,
+            alpha_cutoff: None,
         };
         let store = dir.join(".ludion/cooked").join(target.name());
         std::fs::create_dir_all(&store).unwrap();

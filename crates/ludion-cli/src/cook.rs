@@ -18,7 +18,7 @@ use ludion_assets::{Image, content_hash, decode_png};
 use ludion_core::atomic::write_atomic;
 use ludion_core::codes::code::{COOK_ENCODE_FAILED, IMPORT_OUTPUT_IO};
 use ludion_core::diagnostics::Diagnostic;
-use ludion_scene::{MeshTextures, parse_mesh};
+use ludion_scene::{AlphaMode, MeshTextures, parse_mesh};
 
 use crate::sync::io_failure;
 
@@ -107,6 +107,8 @@ struct MapUse {
     png: PathBuf,
     srgb: bool,
     max_texture_size: Option<u32>,
+    /// `f32::to_bits` of the `alpha_mode: mask` cutoff, on the base-colour map only.
+    alpha_cutoff: Option<u32>,
 }
 
 /// One store entry to produce.
@@ -116,16 +118,21 @@ struct Unit {
 }
 
 /// The maps a mesh document names, in their colour role: colour maps are sRGB, data maps linear.
-fn roles(textures: &MeshTextures) -> Vec<(ColorSpace, &str)> {
+/// Only the base-colour map carries the mesh's mask cutoff, as `f32::to_bits`.
+fn roles(textures: &MeshTextures, alpha_mode: AlphaMode) -> Vec<(ColorSpace, &str, Option<u32>)> {
+    let cutoff = match alpha_mode {
+        AlphaMode::Opaque => None,
+        AlphaMode::Mask { cutoff } => Some((cutoff as f32).to_bits()),
+    };
     [
-        (ColorSpace::Srgb, &textures.base_color),
-        (ColorSpace::Linear, &textures.metallic_roughness),
-        (ColorSpace::Linear, &textures.normal),
-        (ColorSpace::Linear, &textures.occlusion),
-        (ColorSpace::Srgb, &textures.emissive),
+        (ColorSpace::Srgb, &textures.base_color, cutoff),
+        (ColorSpace::Linear, &textures.metallic_roughness, None),
+        (ColorSpace::Linear, &textures.normal, None),
+        (ColorSpace::Linear, &textures.occlusion, None),
+        (ColorSpace::Srgb, &textures.emissive, None),
     ]
     .into_iter()
-    .filter_map(|(space, map)| map.as_ref().map(|map| (space, map.path.as_str())))
+    .filter_map(|(space, map, cutoff)| map.as_ref().map(|map| (space, map.path.as_str(), cutoff)))
     .collect()
 }
 
@@ -365,6 +372,7 @@ fn settings(target: CookTarget, map: &MapUse) -> CookSettings {
             ColorSpace::Linear
         },
         max_texture_size: map.max_texture_size,
+        alpha_cutoff: map.alpha_cutoff.map(f32::from_bits),
     }
 }
 
@@ -377,13 +385,14 @@ fn read_mesh(mesh: &MeshFile) -> Result<Vec<MapUse>, (PathBuf, Vec<Diagnostic>)>
         )
     })?;
     let document = parse_mesh(&text).map_err(|diagnostics| (mesh.path.clone(), diagnostics))?;
-    Ok(roles(&document.textures)
+    Ok(roles(&document.textures, document.alpha_mode)
         .into_iter()
-        .filter_map(|(space, reference)| {
+        .filter_map(|(space, reference, alpha_cutoff)| {
             Some(MapUse {
                 png: resolve_map(&mesh.stem_dir, &mesh.path, reference)?,
                 srgb: space == ColorSpace::Srgb,
                 max_texture_size: mesh.max_texture_size,
+                alpha_cutoff,
             })
         })
         .collect())
@@ -515,9 +524,12 @@ mod tests {
             occlusion: map("o.png"),
             emissive: map("e.png"),
         };
-        let found: Vec<(bool, &str)> = roles(&textures)
+        let found: Vec<(bool, &str)> = roles(&textures, AlphaMode::Opaque)
             .into_iter()
-            .map(|(space, path)| (space == ColorSpace::Srgb, path))
+            .map(|(space, path, cutoff)| {
+                assert_eq!(cutoff, None);
+                (space == ColorSpace::Srgb, path)
+            })
             .collect();
         assert_eq!(
             found,
@@ -529,6 +541,22 @@ mod tests {
                 (true, "e.png")
             ]
         );
-        assert!(roles(&MeshTextures::default()).is_empty());
+        assert!(roles(&MeshTextures::default(), AlphaMode::Opaque).is_empty());
+    }
+
+    #[test]
+    fn only_the_base_colour_carries_the_mask_cutoff() {
+        use ludion_scene::TextureRef;
+        let map = |path: &str| Some(TextureRef::new(path));
+        let textures = MeshTextures {
+            base_color: map("b.png"),
+            emissive: map("e.png"),
+            ..MeshTextures::default()
+        };
+        let found: Vec<(&str, Option<u32>)> = roles(&textures, AlphaMode::Mask { cutoff: 0.5 })
+            .into_iter()
+            .map(|(_, path, cutoff)| (path, cutoff))
+            .collect();
+        assert_eq!(found, [("b.png", Some(0.5f32.to_bits())), ("e.png", None)]);
     }
 }

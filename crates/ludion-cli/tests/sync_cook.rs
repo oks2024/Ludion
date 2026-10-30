@@ -198,9 +198,14 @@ fn png_files(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// The `(png, is_srgb)` pairs the derived meshes reference, read straight off the mesh documents
-/// (a colour slot is sRGB, the rest linear), independently of the cook stage.
-fn expected_units(project: &Path) -> BTreeSet<(PathBuf, bool)> {
+/// One map a derived mesh references: its PNG, whether it cooks as sRGB, and the `f32` bits of the
+/// mask cutoff when it is a mask mesh's base-colour map.
+type Unit = (PathBuf, bool, Option<u32>);
+
+/// The units the derived meshes reference, read straight off the mesh documents (a colour slot is
+/// sRGB, the rest linear; only a mask mesh's base colour carries its cutoff), independently of the
+/// cook stage.
+fn expected_units(project: &Path) -> BTreeSet<Unit> {
     let mut units = BTreeSet::new();
     let mut stack = vec![project.join("assets/derived")];
     while let Some(dir) = stack.pop() {
@@ -214,16 +219,22 @@ fn expected_units(project: &Path) -> BTreeSet<(PathBuf, bool)> {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            let mut slot: Option<bool> = None;
+            let mask = text.lines().any(|line| line == "alpha_mode: mask");
+            let cutoff = text
+                .lines()
+                .find_map(|line| line.strip_prefix("alpha_cutoff: "))
+                .map_or(0.5, |value| value.parse::<f32>().unwrap());
+            let mut slot: Option<(bool, Option<u32>)> = None;
             for line in text.lines() {
                 if let Some(name) = line.strip_suffix("_texture:") {
-                    slot = Some(matches!(name, "base_color" | "emissive"));
-                } else if let (Some(srgb), Some(reference)) =
+                    let cutoff = (mask && name == "base_color").then(|| cutoff.to_bits());
+                    slot = Some((matches!(name, "base_color" | "emissive"), cutoff));
+                } else if let (Some((srgb, cutoff)), Some(reference)) =
                     (slot, line.trim().strip_prefix("path: "))
                 {
                     let reference = reference.trim_matches('"');
                     let png = path.parent().unwrap().join(reference);
-                    units.insert((std::fs::canonicalize(png).unwrap(), srgb));
+                    units.insert((std::fs::canonicalize(png).unwrap(), srgb, cutoff));
                     slot = None;
                 }
             }
@@ -232,7 +243,12 @@ fn expected_units(project: &Path) -> BTreeSet<(PathBuf, bool)> {
     units
 }
 
-fn settings(target: CookTarget, srgb: bool, cap: Option<u32>) -> CookSettings {
+fn settings(
+    target: CookTarget,
+    srgb: bool,
+    cap: Option<u32>,
+    alpha_cutoff: Option<u32>,
+) -> CookSettings {
     CookSettings {
         target,
         color_space: if srgb {
@@ -241,20 +257,24 @@ fn settings(target: CookTarget, srgb: bool, cap: Option<u32>) -> CookSettings {
             ColorSpace::Linear
         },
         max_texture_size: cap,
+        alpha_cutoff: alpha_cutoff.map(f32::from_bits),
     }
 }
 
 /// The store file names the units should have for `target` and `cap`.
 fn expected_names(
-    units: &BTreeSet<(PathBuf, bool)>,
+    units: &BTreeSet<Unit>,
     target: CookTarget,
     cap: Option<u32>,
 ) -> BTreeSet<String> {
     units
         .iter()
-        .map(|(png, srgb)| {
+        .map(|(png, srgb, cutoff)| {
             let hash = content_hash(&std::fs::read(png).unwrap());
-            ludion_assets::cooked::cooked_file_name(cook_key(hash, &settings(target, *srgb, cap)))
+            ludion_assets::cooked::cooked_file_name(cook_key(
+                hash,
+                &settings(target, *srgb, cap, *cutoff),
+            ))
         })
         .collect()
 }
@@ -330,10 +350,10 @@ fn colour_maps_cook_as_srgb_and_data_maps_as_linear() {
     let dir = unique_maps_project("cook-roles", &["a"], 64);
     assert_clean(&sync(&dir));
     let units = expected_units(&dir);
-    assert!(units.iter().any(|(_, srgb)| *srgb) && units.iter().any(|(_, srgb)| !*srgb));
-    for (png, srgb) in &units {
+    assert!(units.iter().any(|(_, srgb, _)| *srgb) && units.iter().any(|(_, srgb, _)| !*srgb));
+    for (png, srgb, cutoff) in &units {
         let hash = content_hash(&std::fs::read(png).unwrap());
-        let key = cook_key(hash, &settings(CookTarget::Desktop, *srgb, None));
+        let key = cook_key(hash, &settings(CookTarget::Desktop, *srgb, None, *cutoff));
         let bytes = std::fs::read(
             store(&dir, "desktop").join(ludion_assets::cooked::cooked_file_name(key)),
         )
@@ -651,5 +671,39 @@ fn needs_gpu_a_synced_project_loads_cooked_with_no_fallback() {
     assert_eq!(
         texture.decoded, 0,
         "a map fell back to its PNG: {texture:?}"
+    );
+}
+
+#[test]
+fn a_mask_meshs_base_colour_cooks_under_the_cutoff_key_and_the_rest_do_not() {
+    let dir = scratch("cook-mask");
+    write_manifest(&dir, "", "");
+    write_kit(&dir, "a", 64);
+    let gltf_path = dir.join("kits/a/export/a.gltf");
+    let mut gltf: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&gltf_path).unwrap()).unwrap();
+    for material in gltf["materials"].as_array_mut().unwrap() {
+        material["alphaMode"] = "MASK".into();
+        material["alphaCutoff"] = 0.5.into();
+    }
+    std::fs::write(&gltf_path, serde_json::to_string_pretty(&gltf).unwrap()).unwrap();
+
+    let run = sync(&dir);
+    assert_clean(&run);
+    let units = expected_units(&dir);
+    assert!(
+        units.iter().any(|(_, _, cutoff)| cutoff.is_some()),
+        "no mask base colour found: {units:?}"
+    );
+    assert!(
+        units
+            .iter()
+            .any(|(_, srgb, cutoff)| !*srgb && cutoff.is_none()),
+        "data maps must stay plain"
+    );
+    assert_eq!(field(&run.1, "cooked") as usize, units.len());
+    assert_eq!(
+        names(&store_files(&dir, "desktop")),
+        expected_names(&units, CookTarget::Desktop, None)
     );
 }

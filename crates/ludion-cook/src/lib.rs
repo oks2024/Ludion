@@ -19,7 +19,7 @@
 //!
 //! let rgba: Vec<u8> = (0..8 * 8).flat_map(|i| [(i * 4) as u8, 255 - (i * 4) as u8, 90, 255]).collect();
 //! let image = Image { width: 8, height: 8, rgba, hash: 0 };
-//! let settings = CookSettings { target: CookTarget::Desktop, color_space: ColorSpace::Srgb, max_texture_size: None };
+//! let settings = CookSettings { target: CookTarget::Desktop, color_space: ColorSpace::Srgb, max_texture_size: None, alpha_cutoff: None };
 //!
 //! let cooked = ludion_cook::cook(&image, &settings)?;
 //! let file = ludion_cook::write_ktx2(&cooked);
@@ -130,12 +130,8 @@ pub fn cook(image: &Image, settings: &CookSettings) -> Result<CompressedImage, C
     let mut encoder = encode::Encoder::new(format, settings.color_space, alpha)?;
     let (base_width, base_height) = (level.width as u32, level.height as u32);
     let mut levels = Vec::new();
-    loop {
+    for level in chain(level, srgb, settings.alpha_cutoff) {
         levels.push(encoder.encode(&level)?);
-        if level.width == 1 && level.height == 1 {
-            break;
-        }
-        level = ludion_assets::mips::next_mip(&level, srgb);
     }
     Ok(CompressedImage {
         format,
@@ -145,4 +141,66 @@ pub fn cook(image: &Image, settings: &CookSettings) -> Result<CompressedImage, C
         levels,
         mean,
     })
+}
+
+/// The mip levels to encode, level 0 first: the plain box-filter chain, or with a mask cutoff the
+/// coverage-preserving one so thin cutouts survive minification.
+fn chain(
+    level0: ludion_assets::mips::Level,
+    srgb: bool,
+    cutoff: Option<f32>,
+) -> Vec<ludion_assets::mips::Level> {
+    if let Some(cutoff) = cutoff {
+        return ludion_assets::mips::mask_mip_chain(level0, srgb, cutoff);
+    }
+    let mut levels = vec![level0];
+    while let Some(last) = levels.last().filter(|l| l.width != 1 || l.height != 1) {
+        let next = ludion_assets::mips::next_mip(last, srgb);
+        levels.push(next);
+    }
+    levels
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strands() -> ludion_assets::mips::Level {
+        let mut rgba = vec![0u8; 64 * 64 * 4];
+        for y in 0..64 {
+            for x in 0..64 {
+                let texel = &mut rgba[(y * 64 + x) * 4..][..4];
+                texel[..3].copy_from_slice(&[(x * 4) as u8, (y * 4) as u8, 90]);
+                texel[3] = if x % 8 == 0 {
+                    255 - (y * 2 + x / 8 * 3) as u8
+                } else {
+                    0
+                };
+            }
+        }
+        ludion_assets::mips::Level {
+            width: 64,
+            height: 64,
+            rgba,
+        }
+    }
+
+    #[test]
+    fn no_cutoff_is_the_plain_box_chain() {
+        let chain = chain(strands(), true, None);
+        let mut expected = vec![strands()];
+        while expected.last().unwrap().width > 1 {
+            let next = ludion_assets::mips::next_mip(expected.last().unwrap(), true);
+            expected.push(next);
+        }
+        assert_eq!(chain, expected);
+    }
+
+    #[test]
+    fn a_cutoff_is_the_coverage_preserving_chain() {
+        assert_eq!(
+            chain(strands(), true, Some(0.5)),
+            ludion_assets::mips::mask_mip_chain(strands(), true, 0.5)
+        );
+    }
 }

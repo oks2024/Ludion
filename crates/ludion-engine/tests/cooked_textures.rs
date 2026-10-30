@@ -101,13 +101,21 @@ fn project(tag: &str) -> PathBuf {
     dir
 }
 
-/// Writes the cooked copy of the map at `png` under its key in `dir`'s store for `target`.
-fn cook_map(dir: &Path, png: &str, target: CookTarget, space: ColorSpace) {
+/// Writes the cooked copy of the map at `png` under its key in `dir`'s store for `target`;
+/// `alpha_cutoff` is the mask cutoff a mask mesh's base-colour map is cooked at.
+fn cook_map(
+    dir: &Path,
+    png: &str,
+    target: CookTarget,
+    space: ColorSpace,
+    alpha_cutoff: Option<f32>,
+) {
     let source = ludion_assets::load_png(dir, png).unwrap();
     let settings = CookSettings {
         target,
         color_space: space,
         max_texture_size: None,
+        alpha_cutoff,
     };
     let cooked = ludion_cook::cook(&source, &settings).unwrap();
     let store = dir.join(".ludion/cooked").join(target.name());
@@ -220,8 +228,8 @@ fn needs_gpu_cooked_render_matches_source_within_ssim() {
         return;
     };
     let dir = project("ssim");
-    cook_map(&dir, BASE, target, ColorSpace::Srgb);
-    cook_map(&dir, NORMAL, target, ColorSpace::Linear);
+    cook_map(&dir, BASE, target, ColorSpace::Srgb, None);
+    cook_map(&dir, NORMAL, target, ColorSpace::Linear, None);
 
     let source = engine(&dir, TextureSource::Source)
         .render_png(64, 64)
@@ -281,5 +289,34 @@ fn needs_gpu_default_is_source() {
     assert_eq!(engine.textures(), TextureSource::Source);
     let rounds = live_logs(engine, 1);
     assert!(l1271(&rounds[0]).is_empty(), "{:?}", rounds[0]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A mask mesh's base-colour map is read from the entry cooked at its cutoff: that store raises no
+/// `L1271`, and one cooked only without the cutoff is a miss.
+#[test]
+fn needs_gpu_mask_mesh_reads_the_cutoff_keyed_entry() {
+    let Some(target) = target_or_skip("mask_mesh_reads_the_cutoff_keyed_entry") else {
+        return;
+    };
+    let mask_doc = mesh_doc()
+        + "alpha_mode: mask
+alpha_cutoff: 0.5
+";
+
+    let dir = project("mask-hit");
+    std::fs::write(dir.join(MESH), &mask_doc).unwrap();
+    cook_map(&dir, BASE, target, ColorSpace::Srgb, Some(0.5));
+    cook_map(&dir, NORMAL, target, ColorSpace::Linear, None);
+    let rounds = live_logs(engine(&dir, TextureSource::Cooked), 1);
+    assert!(l1271(&rounds[0]).is_empty(), "{:?}", rounds[0]);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let dir = project("mask-miss");
+    std::fs::write(dir.join(MESH), &mask_doc).unwrap();
+    cook_map(&dir, BASE, target, ColorSpace::Srgb, None);
+    cook_map(&dir, NORMAL, target, ColorSpace::Linear, None);
+    let rounds = live_logs(engine(&dir, TextureSource::Cooked), 1);
+    assert_eq!(l1271(&rounds[0]).len(), 1, "{:?}", rounds[0]);
     let _ = std::fs::remove_dir_all(&dir);
 }

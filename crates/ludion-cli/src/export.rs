@@ -1175,6 +1175,7 @@ mod tests {
                 target: CookTarget::Ios,
                 color_space,
                 max_texture_size: None,
+                alpha_cutoff: None,
             };
             let file = ludion_assets::cooked::cooked_file_name(cook_key(
                 ludion_assets::content_hash(&bytes),
