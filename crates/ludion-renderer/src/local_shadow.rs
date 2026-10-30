@@ -78,15 +78,17 @@ pub(crate) struct LocalShadowView {
 
 /// What a planning pass decided, for the profile report.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct LocalShadowStats {
+pub struct LocalShadowStats {
     /// Casting lights whose footprint touches the camera frustum.
-    pub(crate) requested: u32,
-    pub(crate) granted: u32,
+    pub requested: u32,
+    /// Casting lights granted a set of atlas tiles.
+    pub granted: u32,
     /// `requested − granted`: candidates that did not fit the atlas.
-    pub(crate) skipped: u32,
-    pub(crate) views: u32,
+    pub skipped: u32,
+    /// Shadow views drawn: a spot takes one, a point light (or a wide spot) six.
+    pub views: u32,
     /// The atlas edge in texels, 0 when no view was granted.
-    pub(crate) atlas_edge: u32,
+    pub atlas_edge: u32,
 }
 
 /// The frame's local-shadow views and the per-light lookup.
@@ -125,6 +127,18 @@ const CUBE_FACES: [(Vec3, Vec3); 6] = [
     (Vec3::Z, Vec3::NEG_Y),
     (Vec3::NEG_Z, Vec3::NEG_Y),
 ];
+
+/// Plans the frame's local shadows and returns only what was decided — the profile panel, with the
+/// views themselves dropped.
+///
+/// This is the profile driver's entry point (`ludion_engine::profile`): it does exactly the planning
+/// the renderer's per-frame prologue does, and needs no GPU adapter — it is pure CPU arithmetic over
+/// the extracted scene. Deliberately a separate call rather than a hook inside
+/// [`Renderer::render`](crate::Renderer::render): a profiler must never make the path it measures pay
+/// for being measured.
+pub fn local_shadow_stats(scene: &RenderScene, atlas_edge: u32) -> LocalShadowStats {
+    plan_local_shadows(scene, atlas_edge).stats
+}
 
 /// Selects, ranks and lays out the frame's local shadow views.
 pub(crate) fn plan_local_shadows(scene: &RenderScene, atlas_edge: u32) -> LocalShadowPlan {
@@ -436,6 +450,21 @@ mod tests {
         ];
         let plan = plan_local_shadows(&scene, 4096);
         assert_eq!(plan.light_first_view, vec![0, 6]);
+    }
+
+    #[test]
+    fn the_stats_entry_matches_the_plan_and_a_zero_edge_grants_nothing() {
+        let mut scene = scene_at_origin();
+        scene.lights = point_row(2);
+        scene.spot_lights = spot_row(2);
+        assert_eq!(
+            local_shadow_stats(&scene, 4096),
+            plan_local_shadows(&scene, 4096).stats
+        );
+        let none = local_shadow_stats(&scene, 0);
+        assert_eq!(none.requested, 4);
+        assert_eq!(none.granted, 0);
+        assert_eq!(none.skipped, none.requested);
     }
 
     #[test]

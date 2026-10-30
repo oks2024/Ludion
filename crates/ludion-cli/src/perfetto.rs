@@ -276,6 +276,7 @@ mod tests {
             // The trace has no cluster lane: the cluster build is one CPU cost per frame with no
             // per-frame column to lay out, and a timeline is drawn from columns.
             cluster: None,
+            local_shadows: None,
             load: None,
             probes: None,
             samples: Some(ProfileSamples {

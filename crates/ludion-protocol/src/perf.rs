@@ -129,6 +129,11 @@ pub struct ProfileReport {
     /// offline driver owns its own loop and can time the build as its own span.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<ClusterProfile>,
+    /// Local-light shadow planning: how many shadowed lights the frame requested, was granted and
+    /// skipped. Filled by the **offline** driver and absent for a live capture, for `cluster`'s
+    /// reason: the live host plans inside a frame a profiler must not make pay twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_shadows: Option<LocalShadowProfile>,
     /// What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.
     /// Filled by the **offline** driver and absent for a live capture: a load is a one-off event the
     /// host has already run by the time a capture asks, and a disarmed host reads no clock for it.
@@ -204,6 +209,9 @@ pub struct QualityProfile {
     pub dof_taps: u32,
     /// Edge length of the square sun shadow map, in texels.
     pub shadow_map_size: u32,
+    /// Edge length of the square local-light shadow atlas, in texels; the caster budget is a fixed
+    /// view count, so only resolution follows this.
+    pub local_shadow_atlas_size: u32,
     /// Edge length of the shadow map's PCF kernel, in taps (`3` is a 3×3 average).
     pub pcf: u32,
     /// Rays cast per probe by the GI bake.
@@ -257,6 +265,27 @@ pub struct ClusterProfile {
     /// loop runs at all. The all-cells mean is `total_refs / cells`, one division away, which is why
     /// this one is the occupied mean rather than a second spelling of a derivable number.
     pub mean_list_len: f64,
+}
+
+/// Local-light shadow planning — which shadowed lights the frame wanted and which it got.
+///
+/// Not measurements: the counts are the shape of the frame's plan, reduced from the same planner the
+/// renderer runs, so two runs of the same frame produce identical numbers. `skipped > 0` means
+/// opted-in lights the camera sees went unshadowed (the game's `skipped == 0` check). A quality that
+/// masks shadows grants nothing: `granted` is 0, `skipped` equals `requested` and `atlas_edge` is 0,
+/// which is honest for a frame that drew no local shadow — the report's `quality.shadows` names why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalShadowProfile {
+    /// Casting lights whose footprint touches the camera frustum.
+    pub requested: u64,
+    /// Lights granted a set of atlas tiles.
+    pub granted: u64,
+    /// `requested − granted`: candidates that did not fit the caster budget.
+    pub skipped: u64,
+    /// Shadow views drawn: a spot takes one, a point light (or a spot wider than 60°) six.
+    pub views: u64,
+    /// The atlas edge the plan used, in texels; 0 when the quality masks shadows.
+    pub atlas_edge: u64,
 }
 
 /// What loading a scene cost — wall time per phase, and deterministic per-kind asset counters.
@@ -565,6 +594,7 @@ impl ProfileWindowData {
             },
             transport: self.transport,
             cluster: None,
+            local_shadows: None,
             load: None,
             probes: None,
             samples: include_samples.then_some(self.samples),
@@ -776,6 +806,7 @@ mod tests {
             shaft_steps: 32,
             dof_taps: 32,
             shadow_map_size: 2048,
+            local_shadow_atlas_size: 4096,
             pcf: 3,
             gi_rays: 64,
             gi_probe_scale: 1.0,

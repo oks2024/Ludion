@@ -155,6 +155,7 @@ impl QualitySetting {
             shaft_steps: params.shaft_steps,
             dof_taps: params.dof_taps,
             shadow_map_size: params.shadow_map_size,
+            local_shadow_atlas_size: params.local_shadow_atlas_size,
             pcf: params.pcf,
             gi_rays: params.gi_rays,
             gi_probe_scale: params.gi_probe_scale,

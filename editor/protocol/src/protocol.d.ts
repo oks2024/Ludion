@@ -2883,6 +2883,12 @@ export interface ProfileReport {
    */
   load?: LoadProfile | null;
   /**
+   * Local-light shadow planning: how many shadowed lights the frame requested, was granted and
+   * skipped. Filled by the **offline** driver and absent for a live capture, for `cluster`'s
+   * reason: the live host plans inside a frame a profiler must not make pay twice.
+   */
+  local_shadows?: LocalShadowProfile | null;
+  /**
    * Frames measured; every median below is over this many samples.
    */
   measured_frames: number;
@@ -3079,6 +3085,38 @@ export interface AssetLoadCounters {
   [k: string]: unknown;
 }
 /**
+ * Local-light shadow planning — which shadowed lights the frame wanted and which it got.
+ *
+ * Not measurements: the counts are the shape of the frame's plan, reduced from the same planner the
+ * renderer runs, so two runs of the same frame produce identical numbers. `skipped > 0` means
+ * opted-in lights the camera sees went unshadowed (the game's `skipped == 0` check). A quality that
+ * masks shadows grants nothing: `granted` is 0, `skipped` equals `requested` and `atlas_edge` is 0,
+ * which is honest for a frame that drew no local shadow — the report's `quality.shadows` names why.
+ */
+export interface LocalShadowProfile {
+  /**
+   * The atlas edge the plan used, in texels; 0 when the quality masks shadows.
+   */
+  atlas_edge: number;
+  /**
+   * Lights granted a set of atlas tiles.
+   */
+  granted: number;
+  /**
+   * Casting lights whose footprint touches the camera frustum.
+   */
+  requested: number;
+  /**
+   * `requested − granted`: candidates that did not fit the caster budget.
+   */
+  skipped: number;
+  /**
+   * Shadow views drawn: a spot takes one, a point light (or a spot wider than 60°) six.
+   */
+  views: number;
+  [k: string]: unknown;
+}
+/**
  * The last reflection-probe resolve: probes loaded from the store versus captured.
  *
  * `hits` stays 0 on the Fresh paths (`ludion profile`, `--profile`), which never read the store, by
@@ -3139,6 +3177,11 @@ export interface QualityProfile {
    * Edge length of a face of the sky's specular cube, in texels.
    */
   ibl_specular_size: number;
+  /**
+   * Edge length of the square local-light shadow atlas, in texels; the caster budget is a fixed
+   * view count, so only resolution follows this.
+   */
+  local_shadow_atlas_size: number;
   /**
    * Edge length of the shadow map's PCF kernel, in taps (`3` is a 3×3 average).
    */

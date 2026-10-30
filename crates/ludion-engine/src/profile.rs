@@ -51,8 +51,8 @@ const PROFILE_SIZE: (u32, u32) = (1920, 1080);
 // offline driver writes, so they live in `ludion-protocol` and are re-exported here (and from the
 // crate root) — one shape, two producers, no parallel definition to drift.
 pub use ludion_protocol::perf::{
-    ClusterProfile, GpuProfile, PassTiming, ProfileReport, QualityProfile, SimProfile,
-    SystemTiming, TimingTail,
+    ClusterProfile, GpuProfile, LocalShadowProfile, PassTiming, ProfileReport, QualityProfile,
+    SimProfile, SystemTiming, TimingTail,
 };
 
 /// Profiles the scene at `path`: warmup, then `frames` measured frames, returning the median report.
@@ -158,6 +158,7 @@ pub fn profile_engine(
     let load = measure_load(engine)?;
     let (sim, samples) = profile_sim(engine, frames, warmup);
     let cluster = profile_cluster(engine, frames, warmup).map_err(|d| vec![d])?;
+    let local_shadows = profile_local_shadows(engine).map_err(|d| vec![d])?;
     let gpu = profile_gpu(engine, frames, warmup).map_err(|d| vec![d])?;
 
     Ok(ProfileReport {
@@ -174,6 +175,7 @@ pub fn profile_engine(
         // `profile_sim` below fills them, so a `--perfetto` export needs no `--attach`.
         transport: None,
         cluster: Some(cluster),
+        local_shadows: Some(local_shadows),
         load,
         probes: engine.probe_profile(),
         samples: Some(samples),
@@ -746,6 +748,7 @@ pub(crate) fn profile_replay_engine(
         },
         transport: None,
         cluster: None,
+        local_shadows: None,
         load: None,
         probes: None,
         samples: Some(samples),
@@ -883,6 +886,33 @@ fn profile_cluster(
         total_refs: stats.total_refs,
         max_list_len: u64::from(stats.max_list_len),
         mean_list_len: stats.mean_list_len,
+    })
+}
+
+/// Plans the frame's local-light shadows and reports what was requested, granted and skipped.
+///
+/// Like [`profile_cluster`] it needs no adapter: the planner is pure CPU arithmetic over the
+/// extracted scene ([`ludion_renderer::local_shadow_stats`]), and the counts are deterministic, so
+/// one call stands for every frame. It plans at the edge the frame itself would use — the quality's
+/// atlas size, or 0 when the quality masks shadows — so a `low` report says it granted nothing.
+fn profile_local_shadows(engine: &mut Engine) -> Result<LocalShadowProfile, Diagnostic> {
+    let (width, height) = PROFILE_SIZE;
+    let scene = engine
+        .extract_render_scene(width, height)
+        .map_err(collapse)?;
+    let setting = engine.quality();
+    let edge = if setting.quality.shadows {
+        setting.params.local_shadow_atlas_size
+    } else {
+        0
+    };
+    let stats = ludion_renderer::local_shadow_stats(&scene, edge);
+    Ok(LocalShadowProfile {
+        requested: u64::from(stats.requested),
+        granted: u64::from(stats.granted),
+        skipped: u64::from(stats.skipped),
+        views: u64::from(stats.views),
+        atlas_edge: u64::from(stats.atlas_edge),
     })
 }
 
@@ -2208,6 +2238,7 @@ entities:
             },
             transport: None,
             cluster: None,
+            local_shadows: None,
             load: None,
             probes: None,
             samples: None,
@@ -2225,7 +2256,13 @@ entities:
         // (`samples` and `cluster`, unlike `transport`, are *not* what `profile_engine` itself
         // produces any more — see `profile_engine_fills_raw_samples_offline` and
         // `profile_engine_fills_the_cluster_section_offline` below for those.)
-        for key in ["quality", "transport", "cluster", "samples"] {
+        for key in [
+            "quality",
+            "transport",
+            "cluster",
+            "local_shadows",
+            "samples",
+        ] {
             assert!(
                 value.get(key).is_none(),
                 "`None` sections are omitted, not null: `{key}`"
@@ -2236,6 +2273,7 @@ entities:
             reparsed.quality.is_none()
                 && reparsed.transport.is_none()
                 && reparsed.cluster.is_none()
+                && reparsed.local_shadows.is_none()
                 && reparsed.samples.is_none()
         );
         assert_eq!(serde_json::to_value(&reparsed).unwrap(), value);
@@ -2428,6 +2466,83 @@ entities:
             ludion_renderer::QualityParams::FULL.shadow_map_size,
             "the sun's map is a modulated axis too, so a cheap preset must not report the ceiling",
         );
+        assert_eq!(
+            quality.local_shadow_atlas_size,
+            ludion_renderer::QualityParams::LOW.local_shadow_atlas_size,
+        );
+    }
+
+    /// The `local_shadows` panel is the frame's own plan: the fixture's shadowed spot (35°, one view)
+    /// and shadowed point light (six cube faces) are both in view, so seven views and nothing
+    /// skipped — and the `local_shadow` pass shows up in the GPU timings when there is an adapter.
+    #[test]
+    fn needs_gpu_profile_engine_fills_the_local_shadows_panel() {
+        let mut engine = counter_engine();
+        engine
+            .load_inline_scene(include_str!("../tests/fixtures/local-shadows.yaml"))
+            .unwrap();
+        engine.set_quality(
+            crate::resolve_startup_quality(Some("full"), None).expect("`full` is a preset name"),
+        );
+        let report = profile_engine(&mut engine, "inline".to_string(), 5, 1).unwrap();
+
+        let panel = report
+            .local_shadows
+            .expect("the offline driver fills the local_shadows panel");
+        assert_eq!(
+            (panel.requested, panel.granted, panel.skipped, panel.views),
+            (2, 2, 0, 7)
+        );
+        assert_eq!(panel.atlas_edge, 4096);
+        assert_eq!(report.quality.unwrap().local_shadow_atlas_size, 4096);
+        if report.gpu.available {
+            let pass = report
+                .gpu
+                .passes
+                .iter()
+                .find(|p| p.name == "local_shadow")
+                .expect("a frame that grants a view times the local_shadow pass");
+            assert!(pass.median_ms.is_some());
+        }
+    }
+
+    /// A quality that masks shadows draws none: the panel still counts what the camera sees, and
+    /// reports that none of it was granted.
+    #[test]
+    fn needs_gpu_profile_engine_local_shadows_panel_is_empty_at_low() {
+        let mut engine = counter_engine();
+        engine
+            .load_inline_scene(include_str!("../tests/fixtures/local-shadows.yaml"))
+            .unwrap();
+        engine.set_quality(
+            crate::resolve_startup_quality(Some("low"), None).expect("`low` is a preset name"),
+        );
+        let report = profile_engine(&mut engine, "inline".to_string(), 5, 1).unwrap();
+
+        let panel = report.local_shadows.unwrap();
+        assert_eq!(panel.requested, 2);
+        assert_eq!(panel.granted, 0);
+        assert_eq!(panel.skipped, panel.requested);
+        assert_eq!((panel.views, panel.atlas_edge), (0, 0));
+        assert!(report.gpu.passes.iter().all(|p| p.name != "local_shadow"));
+    }
+
+    #[test]
+    fn needs_gpu_profile_engine_local_shadows_panel_is_zero_for_an_empty_scene() {
+        let mut engine = counter_engine();
+        engine.load_inline_scene(SCENE).unwrap();
+        let report = profile_engine(&mut engine, "inline".to_string(), 5, 1).unwrap();
+        let panel = report.local_shadows.unwrap();
+        assert_eq!(
+            (
+                panel.requested,
+                panel.granted,
+                panel.skipped,
+                panel.views,
+                panel.atlas_edge
+            ),
+            (0, 0, 0, 0, 0)
+        );
     }
 
     #[test]
@@ -2617,6 +2732,7 @@ entities:
             },
             transport: None,
             cluster: None,
+            local_shadows: None,
             load: None,
             probes: None,
             samples: None,

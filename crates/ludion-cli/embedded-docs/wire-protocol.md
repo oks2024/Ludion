@@ -20,7 +20,7 @@ frame. This is exactly what the MCP adapter and the editor do underneath. A mess
 // → client sends first
 {"protocol_version": 1, "client": "my-probe 0.0.0", "features": []}
 // ← server replies
-{"engine_version": "0.0.0", "protocol_version": 1, "schema_hash": "e4be653199a3bc43"}
+{"engine_version": "0.0.0", "protocol_version": 1, "schema_hash": "0c114fba52b0fcb2"}
 ```
 
 (The value shown is the hash at the time of writing, not a contract — the schema grows and the hash

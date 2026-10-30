@@ -2348,6 +2348,7 @@ mod budget_quality_tests {
             },
             transport: None,
             cluster: None,
+            local_shadows: None,
             load: None,
             probes: None,
             samples: None,

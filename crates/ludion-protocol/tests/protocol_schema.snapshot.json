@@ -4007,6 +4007,49 @@
         ],
         "type": "object"
       },
+      "LocalShadowProfile": {
+        "description": "Local-light shadow planning — which shadowed lights the frame wanted and which it got.\n\nNot measurements: the counts are the shape of the frame's plan, reduced from the same planner the\nrenderer runs, so two runs of the same frame produce identical numbers. `skipped > 0` means\nopted-in lights the camera sees went unshadowed (the game's `skipped == 0` check). A quality that\nmasks shadows grants nothing: `granted` is 0, `skipped` equals `requested` and `atlas_edge` is 0,\nwhich is honest for a frame that drew no local shadow — the report's `quality.shadows` names why.",
+        "properties": {
+          "atlas_edge": {
+            "description": "The atlas edge the plan used, in texels; 0 when the quality masks shadows.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "granted": {
+            "description": "Lights granted a set of atlas tiles.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requested": {
+            "description": "Casting lights whose footprint touches the camera frustum.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skipped": {
+            "description": "`requested − granted`: candidates that did not fit the caster budget.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "views": {
+            "description": "Shadow views drawn: a spot takes one, a point light (or a spot wider than 60°) six.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requested",
+          "granted",
+          "skipped",
+          "views",
+          "atlas_edge"
+        ],
+        "type": "object"
+      },
       "PassTiming": {
         "description": "One frame-graph pass's median GPU time across the measured frames.",
         "properties": {
@@ -4146,6 +4189,17 @@
               }
             ],
             "description": "What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.\nFilled by the **offline** driver and absent for a live capture: a load is a one-off event the\nhost has already run by the time a capture asks, and a disarmed host reads no clock for it."
+          },
+          "local_shadows": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LocalShadowProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Local-light shadow planning: how many shadowed lights the frame requested, was granted and\nskipped. Filled by the **offline** driver and absent for a live capture, for `cluster`'s\nreason: the live host plans inside a frame a profiler must not make pay twice."
           },
           "measured_frames": {
             "description": "Frames measured; every median below is over this many samples.",
@@ -4349,6 +4403,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "local_shadow_atlas_size": {
+            "description": "Edge length of the square local-light shadow atlas, in texels; the caster budget is a fixed\nview count, so only resolution follows this.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "pcf": {
             "description": "Edge length of the shadow map's PCF kernel, in taps (`3` is a 3×3 average).",
             "format": "uint32",
@@ -4416,6 +4476,7 @@
           "shaft_steps",
           "dof_taps",
           "shadow_map_size",
+          "local_shadow_atlas_size",
           "pcf",
           "gi_rays",
           "gi_probe_scale",
@@ -6098,6 +6159,49 @@
         ],
         "type": "object"
       },
+      "LocalShadowProfile": {
+        "description": "Local-light shadow planning — which shadowed lights the frame wanted and which it got.\n\nNot measurements: the counts are the shape of the frame's plan, reduced from the same planner the\nrenderer runs, so two runs of the same frame produce identical numbers. `skipped > 0` means\nopted-in lights the camera sees went unshadowed (the game's `skipped == 0` check). A quality that\nmasks shadows grants nothing: `granted` is 0, `skipped` equals `requested` and `atlas_edge` is 0,\nwhich is honest for a frame that drew no local shadow — the report's `quality.shadows` names why.",
+        "properties": {
+          "atlas_edge": {
+            "description": "The atlas edge the plan used, in texels; 0 when the quality masks shadows.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "granted": {
+            "description": "Lights granted a set of atlas tiles.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requested": {
+            "description": "Casting lights whose footprint touches the camera frustum.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skipped": {
+            "description": "`requested − granted`: candidates that did not fit the caster budget.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "views": {
+            "description": "Shadow views drawn: a spot takes one, a point light (or a spot wider than 60°) six.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requested",
+          "granted",
+          "skipped",
+          "views",
+          "atlas_edge"
+        ],
+        "type": "object"
+      },
       "PassTiming": {
         "description": "One frame-graph pass's median GPU time across the measured frames.",
         "properties": {
@@ -6237,6 +6341,17 @@
               }
             ],
             "description": "What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.\nFilled by the **offline** driver and absent for a live capture: a load is a one-off event the\nhost has already run by the time a capture asks, and a disarmed host reads no clock for it."
+          },
+          "local_shadows": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LocalShadowProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Local-light shadow planning: how many shadowed lights the frame requested, was granted and\nskipped. Filled by the **offline** driver and absent for a live capture, for `cluster`'s\nreason: the live host plans inside a frame a profiler must not make pay twice."
           },
           "measured_frames": {
             "description": "Frames measured; every median below is over this many samples.",
@@ -6440,6 +6555,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "local_shadow_atlas_size": {
+            "description": "Edge length of the square local-light shadow atlas, in texels; the caster budget is a fixed\nview count, so only resolution follows this.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "pcf": {
             "description": "Edge length of the shadow map's PCF kernel, in taps (`3` is a 3×3 average).",
             "format": "uint32",
@@ -6507,6 +6628,7 @@
           "shaft_steps",
           "dof_taps",
           "shadow_map_size",
+          "local_shadow_atlas_size",
           "pcf",
           "gi_rays",
           "gi_probe_scale",

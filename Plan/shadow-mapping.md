@@ -193,3 +193,24 @@ unshadowed; sprites/billboards/text stay Lambert and untouched.
   side, the side that extrapolates to the centre's depth), so normal maps and smooth normals no longer cut
   a blob's rim; where an axis has no such side (a sliver or concave corner) it falls back to the shaded
   normal. `needs_gpu_a_drop_shadow_ignores_a_perturbed_shading_normal` pins it.
+
+## Local-light shadow outcomes (Clockout 0007)
+
+- **Gallery golden**: `examples/gallery/local-shadows.yaml` → `examples/gallery/goldens/windows/local-shadows.png`
+  (960×540), blessed with `cargo run -p ludion-cli -- test --dir examples/gallery --filter local-shadows --bless`,
+  re-verified at **SSIM 1.0000**. No sun, no environment: a shadowed spot (36° outer) throws a crate and the
+  mannequin, a shadowed point light ringed by three pillars throws radial shadows onto the floor and the side
+  and back walls, and an unshadowed blue point light behind a short wall passes straight through it. No acne,
+  light leak, cube-face seam or tile bleed seen.
+- **Profile panel**: `ludion profile` carries `local_shadows` (`requested`, `granted`, `skipped`, `views`,
+  `atlas_edge`) and `quality.local_shadow_atlas_size`. On the gallery scene: requested 2, granted 2,
+  skipped 0, views 7 (one spot, six cube faces), atlas 4096. At `low` the panel grants nothing.
+- **Cost** (`cargo run --release -p ludion-cli -- profile --scene examples/gallery/local-shadows.yaml --frames 120`,
+  1080p, full preset, RTX 3090; the scratch twin has every `cast_shadows` removed): GPU `local_shadow`
+  **0.031 ms**; `scene` 0.166 ms with and 0.104 ms without; the summed pass medians 0.314 ms with and
+  0.237 ms without.
+- **No-opt-in scenes**: `examples/gallery/lights-stress.yaml` with
+  `--check budgets/pinned-rtx3090-lights-stress.toml` stays green, `scene` 0.948 ms, panel all zeros.
+  vigil's `budget-horde` (`--profile 120 --profile-check budgets/pinned-rtx3090.toml`) stays green,
+  `scene` 1.514 ms, panel all zeros, no `local_shadow` pass.
+- Budget TOMLs unchanged.
