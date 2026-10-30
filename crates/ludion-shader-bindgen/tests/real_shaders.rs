@@ -165,10 +165,11 @@ fn all_repo_shaders_reflect_and_unify() {
     // (Hi-Z seed, Hi-Z reduce, colour) three more, and the SSR trace's one, and the SSR debug view's
     // trace group, the probe capture's face group, and the probe index view's
     // normal + depth group, and the probe relight kernel's, and the SSR blend's fill + normal +
-    // specular + depth + trace group, and the local-shadow atlas debug view's. Of
+    // specular + depth + trace group, and the local-shadow atlas debug view's, and the decal
+    // projector's map group and the receiver-id pass's draw group. Of
     // them exactly four are compute-only (gi_bake, gi_inject, probe_relight, the IBL prefilter trio): the emitter
     // skips their BGLs because compute pipelines keep auto-derived layouts.
-    assert_eq!(reflection.bind_groups.len(), 40);
+    assert_eq!(reflection.bind_groups.len(), 42);
     let mut compute_only: Vec<&str> = reflection
         .bind_groups
         .iter()

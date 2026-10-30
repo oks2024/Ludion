@@ -235,3 +235,29 @@ fn a_cascaded_sun_dumps_the_atlas() {
     let medium = dump(&ludion_engine::resolve_startup_quality(Some("medium"), None).unwrap());
     assert_eq!(shadow_map_extent(&medium), (2048, 1024));
 }
+
+/// A scene with a decal schedules the projector once, before `transparents`, with no drop-shadow
+/// occlusion pass and no receiver pass for an unlisted decal, and the same at the cheapest quality
+/// (a decal is content); a decal-free scene keeps the graph without it.
+#[test]
+fn a_decal_scene_dumps_one_projector_and_nothing_else() {
+    let dump = |path: PathBuf, setting: &QualitySetting| {
+        ludion_engine::dump_scene_graph_json(&path, FrameSize::native(64, 64), setting)
+            .expect("the scene validates and schedules")
+    };
+    for setting in [
+        QualitySetting::full(),
+        ludion_engine::resolve_startup_quality(Some("low"), None).unwrap(),
+    ] {
+        let json = dump(fixture("decals.yaml"), &setting);
+        let passes = scheduled_passes(&json);
+        let count = |name: &str| passes.iter().filter(|pass| *pass == name).count();
+        assert_eq!(count("projector"), 1, "{passes:?}");
+        assert_eq!(count("drop_shadow_occlusion"), 0);
+        assert_eq!(count("decal_receivers"), 0);
+        let position = |name: &str| passes.iter().position(|pass| pass == name).unwrap();
+        assert!(position("projector") < position("transparents"));
+    }
+    let plain = dump(gallery("spot-lights.yaml"), &QualitySetting::full());
+    assert!(!scheduled_passes(&plain).contains(&"projector".to_string()));
+}

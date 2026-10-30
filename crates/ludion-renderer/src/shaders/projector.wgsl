@@ -17,6 +17,12 @@
 // pipeline multiplies into the scene colour. The CPU bakes every constant the shader needs into the
 // instance, so no trigonometry or tolerance is duplicated here.
 //
+// A decal is drawn by its own entry points, `vs_decal` / `fs_decal`, over the same stages: the box is
+// the unit cube in the decal's box space, the pixel is rejected outside it, the map is sampled at the
+// box-space XZ mapped through `uv_rect`, and the result is a multiply (`mix(1, rgb, c)`) or an add
+// (`rgb * c`) by the instance's blend. Its own entry points keep `fs_main`'s `fwidth` out of any
+// per-instance branch and leave the drop shadow's math untouched.
+//
 // `sd_rounded_box` comes from the shared `shaders/snippets/rounded_box.wgsl`.
 
 // The instance. `ids` = (kind, blend, occlusion tile index or 0xFFFFFFFF for none, 0).
@@ -38,6 +44,25 @@ struct Projector {
     occ_view: mat4x4<f32>,
 }
 
+// One decal. `ids` = (kind, blend, 0, 0).
+struct ProjectorDecal {
+    ids: vec4<u32>,
+    // Box space (the unit cube centred on the origin) to world, and back.
+    box_to_world: mat4x4<f32>,
+    world_to_box: mat4x4<f32>,
+    // Linear RGBA tint.
+    color: vec4<f32>,
+    // The sub-rectangle of the map the box covers: u0, v0, u1, v1.
+    uv_rect: vec4<f32>,
+    // x = opacity, y = cos(angle end), z = cos(angle start), w = -1 for a mirrored box, else 1.
+    look: vec4<f32>,
+    // xyz = the box's world +Y, normalized: the axis the angle fade measures a normal against.
+    axis: vec4<f32>,
+    // x = 0 receives everywhere but the list (exclude) or 1 only the list, y = the list's offset in
+    // `proj_receiver_ids`, z = its length.
+    receivers: vec4<u32>,
+}
+
 struct ProjectorParams {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
@@ -51,6 +76,14 @@ struct ProjectorParams {
 @group(0) @binding(2) var proj_occlusion: texture_depth_2d;
 @group(0) @binding(3) var<uniform> proj_params: ProjectorParams;
 @group(0) @binding(4) var<storage, read> projectors: array<Projector>;
+// Mesh index + 1 of the listed mesh visible at each pixel, 0 where none (or no decal lists any).
+@group(0) @binding(5) var proj_receivers: texture_2d<f32>;
+@group(0) @binding(6) var<storage, read> proj_decals: array<ProjectorDecal>;
+// Every decal's receiver list, ascending, concatenated; a decal names its slice.
+@group(0) @binding(7) var<storage, read> proj_receiver_ids: array<u32>;
+// The decal batch's base-colour map (the white default for a drop shadow).
+@group(1) @binding(0) var proj_map: texture_2d<f32>;
+@group(1) @binding(1) var proj_map_samp: sampler;
 
 const NO_OCCLUSION: u32 = 0xFFFFFFFFu;
 // The particle pass's soft-edge gaussian: `exp(-SOFT_FALLOFF)` is the value at the rim.
@@ -237,4 +270,92 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let darkening = p.look.x * coverage * facing(normal) * fade * first;
     let shade = select(0.0, darkening, kept);
     return vec4<f32>(vec3<f32>(1.0 - shade), 1.0);
+}
+
+// A map gradient's longest length, as a share of the decal's uv-rect span. At a depth edge the
+// reconstructed world position jumps across the box, and an unclamped gradient would pick the
+// smallest mip of the whole map.
+const GRADIENT_CLAMP: f32 = 0.25;
+
+struct DecalVsOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) @interpolate(flat) decal: u32,
+}
+
+// The decal's box as the same 36-vertex cube, in box space `[-0.5, 0.5]^3`. A mirrored box (negative
+// determinant) reverses the winding the transform gives it, so its `x` is negated here to keep the
+// cube's back faces the ones the front-face cull keeps.
+@vertex
+fn vs_decal(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> DecalVsOut {
+    let d = proj_decals[ii];
+    var corner = cube_corner(vi);
+    corner.x = corner.x * d.look.w;
+    var out: DecalVsOut;
+    out.clip = proj_params.view_proj * (d.box_to_world * vec4<f32>(corner * 0.5, 1.0));
+    out.decal = ii;
+    return out;
+}
+
+fn clamp_gradient(g: vec2<f32>, longest: f32) -> vec2<f32> {
+    return g * min(1.0, longest / max(length(g), 1e-12));
+}
+
+// Whether the listed mesh visible at `pixel` lets decal `d` paint. No listed mesh there (id 0) is
+// "not in the list": an exclude list receives, an only list does not.
+fn decal_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
+    let id = u32(textureLoad(proj_receivers, pixel, 0).x + 0.5);
+    let wanted = id - 1u;
+    var lo = 0u;
+    var hi = select(0u, d.receivers.z, id != 0u);
+    while (lo < hi) {
+        let mid = (lo + hi) / 2u;
+        if (proj_receiver_ids[d.receivers.y + mid] < wanted) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    let listed = id != 0u && lo < d.receivers.z && proj_receiver_ids[d.receivers.y + lo] == wanted;
+    return select(!listed, listed, d.receivers.x == 1u);
+}
+
+// The angle fade: 1 within `start` of the box's +Y, 0 beyond `end`, a smoothstep between. The CPU
+// bakes the cosines (`look.z` = cos(start) >= `look.y` = cos(end)); equal edges are a step, since
+// `smoothstep` with equal edges is undefined. A normal facing away from the box is below both.
+fn angle_weight(d: ProjectorDecal, normal: vec3<f32>) -> f32 {
+    let facing = dot(normal, d.axis.xyz);
+    let ramp = smoothstep(d.look.y, d.look.z, facing);
+    let step_weight = select(0.0, 1.0, facing >= d.look.y);
+    return select(ramp, step_weight, d.look.z <= d.look.y);
+}
+
+@fragment
+fn fs_decal(in: DecalVsOut) -> @location(0) vec4<f32> {
+    let frag = in.clip;
+    let d = proj_decals[in.decal];
+    let pixel = vec2<i32>(frag.xy);
+    let depth = textureLoad(proj_depth, pixel, 0);
+    let world = world_from_depth(frag.xy / vec2<f32>(textureDimensions(proj_depth)), depth);
+    let normal = textureLoad(proj_normal, pixel, 0).xyz;
+    let local = (d.world_to_box * vec4<f32>(world, 1.0)).xyz;
+    let uv = mix(d.uv_rect.xy, d.uv_rect.zw, vec2<f32>(local.x + 0.5, local.z + 0.5));
+
+    // Derivatives and the sample run for every pixel, in uniform control flow; the rejections only
+    // zero the coverage.
+    let longest = GRADIENT_CLAMP * max(length(d.uv_rect.zw - d.uv_rect.xy), 1e-6);
+    let texel = textureSampleGrad(
+        proj_map,
+        proj_map_samp,
+        uv,
+        clamp_gradient(dpdx(uv), longest),
+        clamp_gradient(dpdy(uv), longest),
+    );
+    let inside = all(abs(local) <= vec3<f32>(0.5));
+    let kept = depth < 1.0 && inside && decal_receives(d, pixel);
+    let rgb = texel.rgb * d.color.rgb;
+    let coverage = texel.a * d.color.a * d.look.x * angle_weight(d, normal);
+    let c = select(0.0, clamp(coverage, 0.0, 1.0), kept);
+    let multiplied = mix(vec3<f32>(1.0), rgb, c);
+    let added = rgb * c;
+    return vec4<f32>(select(multiplied, added, d.ids.y == 1u), 1.0);
 }

@@ -1,0 +1,51 @@
+# Fixture: a floor and one multiply decal - the dump schedules the projector with no occlusion pass.
+format: 1
+name: "decals - a floor under a multiply decal"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - 8.0
+        rotation:
+          - -25.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 42.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 20.0
+          - 1.0
+          - 20.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.5
+          - 0.48
+          - 0.45
+          - 1.0
+  - name: scorch
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Decal:
+        size:
+          - 3.0
+          - 1.0
+          - 3.0
+        blend: multiply
+        color:
+          - 0.1
+          - 0.1
+          - 0.1
+          - 1.0

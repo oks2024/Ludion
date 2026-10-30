@@ -20,9 +20,12 @@
 //! - **reflections** — a fullscreen additive pass over the opaque scene (the sky's indirect specular).
 //! - **local_shadow** — present only with a shadowed spot or point light ([`PostChain::local_shadow_atlas`]):
 //!   a depth-only atlas of per-light views, culled per view, drawn after the sun's `shadow` pass.
-//! - **drop_shadow_occlusion / projector** — present only with a drop shadow ([`PostChain::drop_shadow_atlas`]):
-//!   a depth-only atlas of straight-down tiles, one per caster, then the generic projector pass that
-//!   multiplies each shadow's footprint into `scene`, after `reflections` and before `transparents`.
+//! - **drop_shadow_occlusion / projector** — present only with a drop shadow ([`PostChain::drop_shadow_atlas`])
+//!   or a decal ([`PostChain::decals`]): a depth-only atlas of straight-down tiles, one per caster,
+//!   then the generic projector pass that paints each decal and multiplies each shadow's footprint
+//!   into `scene`, after `reflections` and before `transparents`.
+//! - **decal_receivers** — present only when a decal lists receiver meshes ([`PostChain::decal_receivers`]):
+//!   the listed meshes redrawn into an id target, depth-matched against `scene_depth`, read by the projector.
 //! - **transparents** — the sky, ground markers, sprites/billboards (alpha, depth-tested), particles
 //!   and text, over the same target.
 //! - **bloom_threshold / bloom_down_1..5 / bloom_up_4..0** — a six-level bloom pyramid: a bright-pass
@@ -207,9 +210,14 @@ pub mod pass {
     pub const DROP_SHADOW_OCCLUSION: &str = "drop_shadow_occlusion";
     /// The generic projector pass: one box volume per instance, the world position rebuilt from
     /// `scene_depth`, the instance's analytic footprint evaluated and multiplied into `scene`. It is
-    /// present exactly when the scene carries a drop shadow (each one a projector instance), so it
-    /// appears together with the occlusion atlas.
+    /// present exactly when the scene carries a drop shadow (each one a projector instance) or a
+    /// decal, so a drop shadow's occlusion atlas and a decal's receiver ids both feed it.
     pub const PROJECTOR: &str = "projector";
+    /// The decal receiver-id pass: redraws the meshes some decal lists, writing `mesh index + 1` into
+    /// an `R32Float` target where the redraw's depth matches `scene_depth` (0 elsewhere), so the
+    /// projector can honour a decal's `Exclude`/`Only` list per pixel. Present only when a decal's
+    /// receiver list names a mesh, and always before [`PROJECTOR`].
+    pub const DECAL_RECEIVERS: &str = "decal_receivers";
     /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
     /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.
     pub const TRANSPARENTS: &str = "transparents";
@@ -634,6 +642,14 @@ pub struct PostChain {
     ///
     /// It carries the extent for the reason [`shadow_map`](PostChain::shadow_map) carries its edge.
     pub local_shadow_atlas: Option<u32>,
+    /// The scene carries a projected decal: the [`pass::PROJECTOR`] is scheduled even without a drop
+    /// shadow. `false` leaves the graph with no decal work, which is what makes a decal-free frame
+    /// byte-identical by construction. A decal is content, so `masked` keeps it.
+    pub decals: bool,
+    /// Some decal's receiver list names a mesh: the [`pass::DECAL_RECEIVERS`] pass runs before the
+    /// projector and writes the `decal_receivers` transient (`R32Float`, the render extent) it reads.
+    /// Only ever set with [`decals`](PostChain::decals). Content too, so `masked` keeps it.
+    pub decal_receivers: bool,
 }
 
 impl PostChain {
@@ -707,6 +723,8 @@ impl PostChain {
             drop_shadow_atlas: crate::projector::occlusion_atlas(scene.drop_shadows.len())
                 .map(|atlas| atlas.edge),
             local_shadow_atlas,
+            decals: !scene.decals.is_empty(),
+            decal_receivers: !crate::projector::receiver_union(&scene.decals).is_empty(),
         }
     }
 
@@ -1052,6 +1070,14 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             },
         )
     });
+    // The decal receiver ids, on the same append-before-`final` terms. Never in a probe face: a face
+    // schedules no decals.
+    let decal_receivers = chain.decal_receivers.then(|| {
+        graph.transient(
+            pass::DECAL_RECEIVERS,
+            TextureDesc::r32_float(render_w, render_h),
+        )
+    });
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
     let output = graph.output("final", TextureDesc::present_target(width, height));
@@ -1186,10 +1212,25 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             vec![],
             atlas,
         );
+    }
+    // Decal receiver ids are read from `scene_depth` alone, so they sit right before the projector.
+    if let Some(receivers) = decal_receivers {
+        graph.add_external_pass(
+            pass::DECAL_RECEIVERS,
+            pass::DECAL_RECEIVERS,
+            vec![scene_depth],
+            vec![receivers],
+        );
+    }
+    // The recorder maps the inputs by the chain's flags: the atlas, then the receiver ids.
+    if drop_shadow_atlas.is_some() || chain.decals {
+        let mut projector_reads = vec![scene_depth, scene_normal];
+        projector_reads.extend(drop_shadow_atlas);
+        projector_reads.extend(decal_receivers);
         graph.add_external_pass(
             pass::PROJECTOR,
             pass::PROJECTOR,
-            vec![scene_depth, scene_normal, atlas],
+            projector_reads,
             vec![scene],
         );
     }
@@ -1506,6 +1547,8 @@ pub(crate) fn build_probe_capture_graph(
             && !chain.ui
             && !chain.debug_lines
             && chain.drop_shadow_atlas.is_none()
+            && !chain.decals
+            && !chain.decal_receivers
             && chain.local_shadow_atlas.is_none()
             && chain.sun_cascades.is_none(),
         "a probe face schedules none of the screen-space chains: {chain:?}"
@@ -1765,6 +1808,9 @@ mod tests {
                 drop_shadow_atlas: (bits & 1 != 0).then_some(128),
                 local_shadow_atlas: None,
                 sun_cascades: None,
+                // Content like the drop shadows: masking keeps both.
+                decals: bits & 1 != 0,
+                decal_receivers: bits & 1 != 0,
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -2619,6 +2665,192 @@ mod tests {
                 .drop_shadow_atlas,
             Some(256)
         );
+    }
+
+    /// A decal over nothing in particular: `receivers` is its list.
+    fn decal_instance(receivers: crate::scene::DecalReceivers) -> crate::scene::DecalInstance {
+        use ludion_core::math::glam::Mat4;
+        crate::scene::DecalInstance {
+            box_to_world: Mat4::IDENTITY,
+            world_to_box: Mat4::IDENTITY,
+            blend: crate::scene::DecalBlend::Multiply,
+            color: [1.0; 4],
+            opacity: 1.0,
+            roughness: None,
+            metallic: 0.0,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            angle_fade: [60.0, 80.0],
+            layer: 0,
+            maps: crate::scene::DecalMaps::default(),
+            receivers,
+        }
+    }
+
+    /// A scene with no decal and no drop shadow keeps the frozen pass list: neither flag, no resource.
+    #[test]
+    fn a_decal_free_scene_keeps_the_frozen_graph() {
+        let chain = PostChain::for_scene(&RenderScene::empty((1920, 1080)));
+        assert!(!chain.decals && !chain.decal_receivers);
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let names = pass_names(&graph);
+        assert_eq!(names.len(), 15);
+        assert!(!names.contains(&"projector") && !names.contains(&"decal_receivers"));
+        assert!(!resource_names(&graph).contains(&"decal_receivers"));
+    }
+
+    /// Decals alone schedule the projector once, before `transparents`, with no occlusion pass and
+    /// no receiver pass, reading only the depth and the normal.
+    #[test]
+    fn decals_alone_schedule_one_projector_and_nothing_else() {
+        let chain = PostChain {
+            decals: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        assert_eq!(
+            pass_names(&graph)[..4],
+            ["scene", "reflections", "projector", "transparents"],
+        );
+        assert_eq!(pass_names(&graph).len(), 16);
+        let name_of = |id: &ResourceId| graph.resources()[id.index()].name.as_str();
+        let projector = graph
+            .passes()
+            .iter()
+            .find(|p| p.name == "projector")
+            .unwrap();
+        assert_eq!(
+            projector.reads().iter().map(name_of).collect::<Vec<_>>(),
+            ["scene_depth", "scene_normal"],
+        );
+        assert!(!resource_names(&graph).contains(&"decal_receivers"));
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// A receiver list adds the id pass before the projector, the id target is the last resource
+    /// before `final`, and the projector reads it last.
+    #[test]
+    fn receiver_lists_add_the_id_pass_before_the_projector() {
+        let chain = PostChain {
+            decals: true,
+            decal_receivers: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let resources = resource_names(&graph);
+        assert_eq!(
+            resources[resources.len() - 2..],
+            ["decal_receivers", "final"]
+        );
+        assert_eq!(
+            pass_names(&graph)[..5],
+            [
+                "scene",
+                "reflections",
+                "decal_receivers",
+                "projector",
+                "transparents"
+            ],
+        );
+        let name_of = |id: &ResourceId| graph.resources()[id.index()].name.as_str();
+        let find = |name: &str| graph.passes().iter().find(|p| p.name == name).unwrap();
+        assert_eq!(
+            find("decal_receivers")
+                .reads()
+                .iter()
+                .map(name_of)
+                .collect::<Vec<_>>(),
+            ["scene_depth"],
+        );
+        assert_eq!(
+            find("projector")
+                .reads()
+                .iter()
+                .map(name_of)
+                .collect::<Vec<_>>(),
+            ["scene_depth", "scene_normal", "decal_receivers"],
+        );
+        let ids = graph
+            .resources()
+            .iter()
+            .find(|r| r.name == "decal_receivers")
+            .unwrap();
+        assert_eq!(
+            ids.desc.format,
+            ludion_render_graph::TextureFormat::R32Float
+        );
+        assert_eq!(
+            (ids.desc.extent.width, ids.desc.extent.height),
+            (1920, 1080)
+        );
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// With a drop shadow too there is still one projector, after the occlusion pass, reading the
+    /// atlas before the receiver ids.
+    #[test]
+    fn decals_and_drop_shadows_share_one_projector_after_the_occlusion_pass() {
+        let chain = PostChain {
+            drop_shadow_atlas: Some(128),
+            decals: true,
+            decal_receivers: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let names = pass_names(&graph);
+        assert_eq!(names.iter().filter(|n| **n == "projector").count(), 1);
+        let order = schedule(&graph).unwrap();
+        let ordered = order.order_names();
+        let pos = |n: &str| ordered.iter().position(|p| *p == n).unwrap();
+        assert!(pos("drop_shadow_occlusion") < pos("projector"));
+        assert!(pos("decal_receivers") < pos("projector"));
+        assert!(pos("projector") < pos("transparents"));
+        let name_of = |id: &ResourceId| graph.resources()[id.index()].name.as_str();
+        let projector = graph
+            .passes()
+            .iter()
+            .find(|p| p.name == "projector")
+            .unwrap();
+        assert_eq!(
+            projector.reads().iter().map(name_of).collect::<Vec<_>>(),
+            [
+                "scene_depth",
+                "scene_normal",
+                "drop_shadow_occlusion",
+                "decal_receivers"
+            ],
+        );
+    }
+
+    /// Decals are content: `masked` at low keeps both flags.
+    #[test]
+    fn masking_keeps_the_decal_flags() {
+        let chain = PostChain {
+            decals: true,
+            decal_receivers: true,
+            ..PostChain::default()
+        };
+        let low = chain.masked(
+            &Quality::preset("low").unwrap(),
+            &QualityParams::preset("low").unwrap(),
+        );
+        assert!(low.decals && low.decal_receivers);
+    }
+
+    /// `for_scene` derives `decals` from any decal and `decal_receivers` from a non-empty list.
+    #[test]
+    fn for_scene_derives_the_decal_flags() {
+        use crate::scene::DecalReceivers;
+        let mut scene = RenderScene::empty((1920, 1080));
+        scene
+            .decals
+            .push(decal_instance(DecalReceivers::Exclude(Vec::new())));
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.decals && !chain.decal_receivers);
+        scene
+            .decals
+            .push(decal_instance(DecalReceivers::Only(vec![3])));
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.decals && chain.decal_receivers);
     }
 
     /// A scene whose camera at the origin looks down -Z, with `spot` as its only spot light.

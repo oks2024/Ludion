@@ -1,15 +1,19 @@
-//! The projector pass's CPU half: instance packing and the drop-shadow occlusion atlas.
+//! The projector pass's CPU half: instance packing, the drop-shadow occlusion atlas and the decal
+//! batches.
 //!
-//! The pass itself (`shaders/projector.wgsl`) is the engine's generic way to paint an analytic
-//! footprint onto the opaque scene; a drop shadow is its first client. This module is pure — no
-//! GPU, no scene beyond [`DropShadowInstance`] — so the layout arithmetic, the matrices and the
-//! exclusion ranges are unit-tested without an adapter.
+//! The pass itself (`shaders/projector.wgsl`) is the engine's generic way to paint onto the opaque
+//! scene; a drop shadow is its first client and a decal its second. This module is pure — no GPU,
+//! no scene beyond [`DropShadowInstance`] and [`DecalInstance`] — so the layout arithmetic, the
+//! matrices, the exclusion ranges and the batching are unit-tested without an adapter.
 
 use std::ops::Range;
 
-use ludion_core::math::glam::{Mat4, Vec3};
+use ludion_core::math::glam::{Mat3, Mat4, Vec3};
 
-use crate::scene::{DROP_SHADOW_ANCHOR_TOLERANCE, DropShadowInstance};
+use crate::scene::{
+    DROP_SHADOW_ANCHOR_TOLERANCE, DecalBlend, DecalInstance, DecalReceivers, DropShadowInstance,
+    TextureWrap,
+};
 use crate::shader_gen;
 
 /// What a projector instance paints. Written into every instance.
@@ -18,6 +22,8 @@ use crate::shader_gen;
 pub enum ProjectorKind {
     /// A drop shadow: an analytic footprint, first-surface tested against an occlusion tile.
     DropShadow = 0,
+    /// A decal: a box volume sampling a map, tested against the receivers it lists.
+    Decal = 1,
 }
 
 /// How a projector instance combines with the scene colour. Written into every instance.
@@ -26,6 +32,8 @@ pub enum ProjectorKind {
 pub enum ProjectorBlend {
     /// `scene *= output`: overlapping projectors darken multiplicatively.
     Multiply = 0,
+    /// `scene += output`: the decal's glow adds to the lit colour.
+    Add = 1,
 }
 
 /// The occlusion tile edge a small caster count gets, in texels.
@@ -110,6 +118,131 @@ pub fn occlusion_view(ds: &DropShadowInstance) -> Mat4 {
 pub fn occlusion_bias(ds: &DropShadowInstance, atlas: &OcclusionAtlas) -> f32 {
     let texel_world = 2.0 * footprint_bound(ds.shape) / atlas.tile as f32;
     (0.01 + 2.0 * texel_world) / (DROP_SHADOW_ANCHOR_TOLERANCE + ds.max_distance)
+}
+
+/// Every mesh index some decal's receiver list names, ascending and deduplicated: the meshes the
+/// receiver-id pass redraws. Empty means no decal needs the pass.
+pub(crate) fn receiver_union(decals: &[DecalInstance]) -> Vec<u32> {
+    let mut union: Vec<u32> = decals
+        .iter()
+        .flat_map(|decal| match &decal.receivers {
+            DecalReceivers::Exclude(list) | DecalReceivers::Only(list) => list.iter().copied(),
+        })
+        .collect();
+    union.sort_unstable();
+    union.dedup();
+    union
+}
+
+/// The instance ranges of a mesh draw whose source is in `keep` (ascending): the twin of
+/// [`kept_ranges`] for the receiver-id pass, which redraws only the listed meshes.
+pub(crate) fn only_ranges(sources: &[u32], keep: &[u32]) -> Vec<Range<u32>> {
+    let mut ranges: Vec<Range<u32>> = Vec::new();
+    let mut listed = keep.iter().copied().peekable();
+    for (position, &source) in sources.iter().enumerate() {
+        while listed.next_if(|&k| k < source).is_some() {}
+        if listed.peek() != Some(&source) {
+            continue;
+        }
+        let position = position as u32;
+        match ranges.last_mut() {
+            Some(last) if last.end == position => last.end += 1,
+            _ => ranges.push(position..position + 1),
+        }
+    }
+    ranges
+}
+
+/// One draw of consecutive decals that share a blend and a base-colour map.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) struct DecalBatch {
+    /// How the batch's pipeline blends.
+    pub blend: ProjectorBlend,
+    /// The base-colour map's identity and wrap, `None` for the white default.
+    pub map: Option<(u64, TextureWrap)>,
+    /// The batch's instances in the packed decal list.
+    pub range: Range<u32>,
+    /// The input index of the batch's first decal, whose map the batch binds.
+    pub first: usize,
+}
+
+/// The drawable decals packed in scene order: their GPU instances, the receiver lists concatenated
+/// (each ascending, so the shader can binary-search its slice), and the draws.
+///
+/// `alpha` and `coat` decals are skipped. A batch is a maximal run of *consecutive* drawables with
+/// one blend and one map: merging non-adjacent runs would reorder a multiply against an add.
+pub(crate) fn pack_decals(
+    decals: &[DecalInstance],
+) -> (Vec<shader_gen::ProjectorDecal>, Vec<u32>, Vec<DecalBatch>) {
+    let mut instances = Vec::new();
+    let mut receiver_ids = Vec::new();
+    let mut batches: Vec<DecalBatch> = Vec::new();
+    for (index, decal) in decals.iter().enumerate() {
+        let blend = match decal.blend {
+            DecalBlend::Multiply => ProjectorBlend::Multiply,
+            DecalBlend::Add => ProjectorBlend::Add,
+            DecalBlend::Alpha | DecalBlend::Coat => continue,
+        };
+        let map = decal
+            .maps
+            .base_color
+            .as_ref()
+            .map(|map| (map.image.identity(), map.wrap));
+        let position = instances.len() as u32;
+        match batches.last_mut() {
+            Some(last) if last.blend == blend && last.map == map => last.range.end += 1,
+            _ => batches.push(DecalBatch {
+                blend,
+                map,
+                range: position..position + 1,
+                first: index,
+            }),
+        }
+        instances.push(decal_instance(decal, blend, receiver_ids.len() as u32));
+        let (DecalReceivers::Exclude(list) | DecalReceivers::Only(list)) = &decal.receivers;
+        receiver_ids.extend_from_slice(list);
+    }
+    (instances, receiver_ids, batches)
+}
+
+/// The cosines of a decal's angle fade `[start, end]` in degrees, `(cos end, cos start)`: the
+/// shader's smoothstep runs from the first to the second.
+fn angle_cosines(angle_fade: [f32; 2]) -> (f32, f32) {
+    let [start, end] = angle_fade;
+    (
+        ludion_core::math::cos(end.to_radians()),
+        ludion_core::math::cos(start.to_radians()),
+    )
+}
+
+/// The GPU instance of `decal`, whose receiver list starts at `receiver_offset` of the packed ids.
+fn decal_instance(
+    decal: &DecalInstance,
+    blend: ProjectorBlend,
+    receiver_offset: u32,
+) -> shader_gen::ProjectorDecal {
+    let (cos_end, cos_start) = angle_cosines(decal.angle_fade);
+    let mirrored = Mat3::from_mat4(decal.box_to_world).determinant() < 0.0;
+    let axis = decal.box_to_world.y_axis.truncate().normalize_or_zero();
+    let (only, list) = match &decal.receivers {
+        DecalReceivers::Exclude(list) => (0, list),
+        DecalReceivers::Only(list) => (1, list),
+    };
+    shader_gen::ProjectorDecal {
+        ids: [ProjectorKind::Decal as u32, blend as u32, 0, 0],
+        box_to_world: decal.box_to_world.to_cols_array_2d(),
+        world_to_box: decal.world_to_box.to_cols_array_2d(),
+        color: decal.color,
+        uv_rect: decal.uv_rect,
+        look: [
+            decal.opacity,
+            cos_end,
+            cos_start,
+            if mirrored { -1.0 } else { 1.0 },
+        ],
+        axis: [axis.x, axis.y, axis.z, 0.0],
+        receivers: [only, receiver_offset, list.len() as u32, 0],
+    }
 }
 
 /// The instance ranges of a mesh draw to render for a caster: those of `sources` (ascending
@@ -288,5 +421,169 @@ mod tests {
         assert_eq!(instance.tile[..3], [0.0, 0.25, 0.25]);
         assert_eq!(instance.look[3], footprint_bound(ds.shape));
         assert_eq!(instance.yaw[3], 2.0);
+    }
+
+    fn decal(blend: DecalBlend) -> DecalInstance {
+        DecalInstance {
+            box_to_world: Mat4::IDENTITY,
+            world_to_box: Mat4::IDENTITY,
+            blend,
+            color: [1.0; 4],
+            opacity: 1.0,
+            roughness: None,
+            metallic: 0.0,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            angle_fade: [60.0, 80.0],
+            layer: 0,
+            maps: crate::scene::DecalMaps::default(),
+            receivers: DecalReceivers::Exclude(Vec::new()),
+        }
+    }
+
+    fn mapped(blend: DecalBlend, hash: u64, wrap: TextureWrap) -> DecalInstance {
+        let image = crate::TextureImage {
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+            hash,
+            filter_linear: false,
+            premultiplied_on_load: false,
+            mean: [1.0; 4],
+        };
+        let mut d = decal(blend);
+        d.maps.base_color = Some(crate::scene::MeshTexture {
+            image: crate::scene::MapImage::Source(std::sync::Arc::new(image)),
+            wrap,
+        });
+        d
+    }
+
+    #[test]
+    fn runs_batch_in_order_and_never_merge_across_a_different_blend() {
+        let decals = [
+            decal(DecalBlend::Multiply),
+            decal(DecalBlend::Multiply),
+            decal(DecalBlend::Add),
+            decal(DecalBlend::Multiply),
+        ];
+        let (instances, _, batches) = pack_decals(&decals);
+        assert_eq!(instances.len(), 4);
+        let shape: Vec<_> = batches.iter().map(|b| (b.blend, b.range.clone())).collect();
+        assert_eq!(
+            shape,
+            [
+                (ProjectorBlend::Multiply, 0..2),
+                (ProjectorBlend::Add, 2..3),
+                (ProjectorBlend::Multiply, 3..4),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_different_map_or_wrap_starts_a_new_batch() {
+        let decals = [
+            mapped(DecalBlend::Multiply, 7, TextureWrap::Clamp),
+            mapped(DecalBlend::Multiply, 7, TextureWrap::Clamp),
+            mapped(DecalBlend::Multiply, 7, TextureWrap::Repeat),
+            mapped(DecalBlend::Multiply, 8, TextureWrap::Repeat),
+            decal(DecalBlend::Multiply),
+        ];
+        let (_, _, batches) = pack_decals(&decals);
+        let shape: Vec<_> = batches
+            .iter()
+            .map(|b| (b.map, b.range.clone(), b.first))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (Some((7, TextureWrap::Clamp)), 0..2, 0),
+                (Some((7, TextureWrap::Repeat)), 2..3, 2),
+                (Some((8, TextureWrap::Repeat)), 3..4, 3),
+                (None, 4..5, 4),
+            ]
+        );
+    }
+
+    #[test]
+    fn alpha_and_coat_decals_are_not_packed() {
+        let decals = [
+            decal(DecalBlend::Alpha),
+            decal(DecalBlend::Multiply),
+            decal(DecalBlend::Coat),
+            decal(DecalBlend::Add),
+        ];
+        let (instances, _, batches) = pack_decals(&decals);
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0].ids, [1, 0, 0, 0]);
+        assert_eq!(instances[1].ids, [1, 1, 0, 0]);
+        // The multiply and the add are not adjacent in the input but are in the packed list.
+        assert_eq!(batches.len(), 2);
+        assert!(pack_decals(&[decal(DecalBlend::Alpha)]).2.is_empty());
+    }
+
+    #[test]
+    fn receiver_slices_carry_their_mode_offset_and_length() {
+        let mut a = decal(DecalBlend::Multiply);
+        a.receivers = DecalReceivers::Exclude(vec![2, 5]);
+        let b = decal(DecalBlend::Multiply);
+        let mut c = decal(DecalBlend::Multiply);
+        c.receivers = DecalReceivers::Only(vec![1, 3, 9]);
+        let (instances, ids, _) = pack_decals(&[a, b, c]);
+        assert_eq!(ids, [2, 5, 1, 3, 9]);
+        assert_eq!(instances[0].receivers, [0, 0, 2, 0]);
+        assert_eq!(instances[1].receivers, [0, 2, 0, 0]);
+        assert_eq!(instances[2].receivers, [1, 2, 3, 0]);
+    }
+
+    #[test]
+    fn the_union_is_ascending_and_deduplicated() {
+        let mut a = decal(DecalBlend::Multiply);
+        a.receivers = DecalReceivers::Exclude(vec![2, 5]);
+        let mut b = decal(DecalBlend::Add);
+        b.receivers = DecalReceivers::Only(vec![1, 5, 9]);
+        assert_eq!(receiver_union(&[a, b]), [1, 2, 5, 9]);
+        assert!(receiver_union(&[decal(DecalBlend::Multiply)]).is_empty());
+        assert!(receiver_union(&[]).is_empty());
+    }
+
+    #[test]
+    fn only_ranges_keep_exactly_the_listed_sources() {
+        assert_eq!(only_ranges(&[2, 5, 9], &[]), Vec::<Range<u32>>::new());
+        assert_eq!(only_ranges(&[2, 5, 9], &[2, 5, 9]), vec![0..3]);
+        assert_eq!(only_ranges(&[2, 5, 9, 11, 12], &[5, 11]), [1..2, 3..4]);
+        assert_eq!(only_ranges(&[4, 5, 6, 7], &[0, 5, 6, 20]), vec![1..3]);
+        assert_eq!(only_ranges(&[], &[1]), Vec::<Range<u32>>::new());
+        for sources in [&[2u32, 5, 9, 11][..], &[1, 2, 3]] {
+            let list = [2, 9];
+            let kept = kept_ranges(sources, &list);
+            let only = only_ranges(sources, &list);
+            let count = |r: &[Range<u32>]| r.iter().map(|r| r.len()).sum::<usize>();
+            assert_eq!(count(&kept) + count(&only), sources.len());
+        }
+    }
+
+    #[test]
+    fn a_mirrored_box_stores_the_sign_and_the_axis_is_normalized() {
+        let mut d = decal(DecalBlend::Multiply);
+        d.box_to_world = Mat4::from_scale(Vec3::new(-2.0, 3.0, 2.0));
+        let instance = pack_decals(&[d]).0.remove(0);
+        assert_eq!(instance.look[3], -1.0);
+        assert_eq!(instance.axis, [0.0, 1.0, 0.0, 0.0]);
+        let plain = pack_decals(&[decal(DecalBlend::Multiply)]).0.remove(0);
+        assert_eq!(plain.look[3], 1.0);
+    }
+
+    #[test]
+    fn the_angle_cosines_are_baked_end_first() {
+        let mut d = decal(DecalBlend::Multiply);
+        d.angle_fade = [60.0, 90.0];
+        let look = pack_decals(&[d]).0[0].look;
+        assert!((look[1] - 0.0).abs() < 1e-6, "cos 90 = {}", look[1]);
+        assert!((look[2] - 0.5).abs() < 1e-6, "cos 60 = {}", look[2]);
+        // A step: both cosines are bit-equal, which is what the shader tests for.
+        let mut step = decal(DecalBlend::Multiply);
+        step.angle_fade = [45.0, 45.0];
+        let look = pack_decals(&[step]).0[0].look;
+        assert_eq!(look[1], look[2]);
     }
 }
