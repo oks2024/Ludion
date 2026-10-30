@@ -149,7 +149,7 @@ fn textured_import_reproduces_committed_tree_in_default_mode() {
     }
 }
 
-/// Default (non-lossy) mode fails on the fixture's double-sided material, naming it, and writes
+/// Default (non-lossy) mode fails on the fixture's alpha-blended material, naming it, and writes
 /// nothing.
 #[test]
 fn default_mode_fails_with_l1202_and_writes_nothing() {
@@ -162,7 +162,7 @@ fn default_mode_fails_with_l1202_and_writes_nothing() {
     ]);
     assert!(
         !output.status.success(),
-        "a double-sided material must fail a non-lossy import"
+        "an alpha-blended material must fail a non-lossy import"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("error[L1202]"), "expected L1202: {stderr}");
@@ -188,7 +188,7 @@ fn lossy_import_reproduces_committed_tree() {
     );
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("warning[L1202]"),
-        "the double-sided drop must be a printed warning in lossy mode"
+        "the blend drop must be a printed warning in lossy mode"
     );
     assert_trees_identical(&expected_dir(), &out);
     assert!(

@@ -156,6 +156,7 @@ fn mesh_data(mesh: SculptMesh, hash: u64) -> MeshData {
         textures: None,
         authored_material: true,
         base_color_mean: [1.0; 4],
+        double_sided: false,
         indices: mesh.indices,
         hash,
     }

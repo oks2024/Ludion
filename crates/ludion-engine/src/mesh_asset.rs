@@ -21,7 +21,7 @@ use ludion_core::math::glam::{DMat4, DQuat, DVec3, Mat4, Quat, Vec3};
 use ludion_renderer::{
     MapImage, MeshData, MeshTexture, MeshTextures, SkinJoint, TextureImage, TextureWrap,
 };
-use ludion_scene::{MeshDocument, MeshSkin, TextureRef};
+use ludion_scene::{AlphaMode, MeshDocument, MeshSkin, TextureRef};
 
 use crate::asset_cache::{SourceFiles, fold_source_hashes};
 
@@ -198,8 +198,9 @@ fn texture_slots(doc: &MeshDocument) -> [(&'static str, Option<&TextureRef>, Col
 }
 
 /// Binds the PNG behind every texture map `doc`, the mesh at `rel`, references — each fetched through
-/// `resolve` — as the renderer's [`MeshTextures`]. `None` when the document references no map at all —
-/// the renderer's signal to take the untextured arithmetic exactly.
+/// `resolve` — as the renderer's [`MeshTextures`]. `None` when the document references no map and no mask —
+/// the renderer's signal to take the untextured arithmetic exactly. A map-less `mask` mesh still
+/// binds a set (every map `None`), since the cutoff rides it.
 ///
 /// A reference's `path` resolves **relative to the mesh document's own directory** — the rule a
 /// sculpt part's `path` and an assembly's `file:` parts follow — through the same
@@ -222,8 +223,22 @@ fn bind_textures(
 ) -> Result<(Option<MeshTextures>, SourceFiles, Vec<u64>), Vec<Diagnostic>> {
     let maps = &doc.textures;
     let slots = texture_slots(doc);
+    let alpha_cutoff = match doc.alpha_mode {
+        AlphaMode::Mask { cutoff } => Some(cutoff as f32),
+        AlphaMode::Opaque => None,
+    };
     if slots.iter().all(|(_, reference, _)| reference.is_none()) {
-        return Ok((None, Vec::new(), Vec::new()));
+        let set = alpha_cutoff.map(|cutoff| MeshTextures {
+            base_color: None,
+            metallic_roughness: None,
+            normal: None,
+            occlusion: None,
+            emissive: None,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
+            alpha_cutoff: Some(cutoff),
+        });
+        return Ok((set, Vec::new(), Vec::new()));
     }
 
     // Keyed by the authored path and role: `None` records a map already reported as failing, so a
@@ -290,7 +305,7 @@ fn bind_textures(
         // glTF's per-map scalars ride the set, not the map: the identity `1` when the map is absent.
         normal_scale: maps.normal.as_ref().map_or(1.0, |r| r.factor as f32),
         occlusion_strength: maps.occlusion.as_ref().map_or(1.0, |r| r.factor as f32),
-        alpha_cutoff: None,
+        alpha_cutoff,
     };
     Ok((Some(textures), files, identities))
 }
@@ -373,6 +388,7 @@ pub(crate) fn decode(doc: &MeshDocument, hash: u64) -> MeshData {
         textures: None,
         authored_material,
         base_color_mean: [1.0; 4],
+        double_sided: doc.double_sided,
         indices,
         hash,
     }
@@ -774,5 +790,42 @@ mod tests {
         let data = load(&dir, "meshes/x.mesh.yaml").expect("an untextured mesh loads");
         assert!(data.textures.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A mask document's cutoff rides the bound set, with or without a base map.
+    #[test]
+    fn load_carries_the_mask_cutoff() {
+        let keys = "base_color_texture:\n  path: ../textures/t.png\n\
+                    alpha_mode: mask\nalpha_cutoff: 0.3\n";
+        let dir = project("mask", &textured_doc(keys), &[("t.png", png(128))]);
+        let data = load(&dir, "meshes/x.mesh.yaml").expect("a textured mask loads");
+        let textures = data.textures.expect("the document references a map");
+        assert_eq!(textures.alpha_cutoff, Some(0.3));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let dir = project("mask-bare", &textured_doc("alpha_mode: mask\n"), &[]);
+        let data = load(&dir, "meshes/x.mesh.yaml").expect("a map-less mask loads");
+        let textures = data.textures.expect("a mask binds a set even without maps");
+        assert!(textures.base_color.is_none() && textures.normal.is_none());
+        assert!(textures.metallic_roughness.is_none() && textures.occlusion.is_none());
+        assert!(textures.emissive.is_none());
+        assert_eq!(textures.alpha_cutoff, Some(0.5));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `double_sided` narrows onto `MeshData` untouched; a plain document is single-sided.
+    #[test]
+    fn decode_carries_double_sided() {
+        let doc = MeshDocument {
+            positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            indices: vec![0, 1, 2],
+            ..Default::default()
+        };
+        assert!(!decode(&doc, 0).double_sided);
+        let both = MeshDocument {
+            double_sided: true,
+            ..doc
+        };
+        assert!(decode(&both, 0).double_sided);
     }
 }

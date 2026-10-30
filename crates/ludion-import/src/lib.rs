@@ -52,9 +52,11 @@
 //! carries one, are generated (`tangents.rs`) when a normal map needs one and it does not, and are
 //! absent otherwise.
 //!
+//! A material's `MASK` alpha mode with its `alphaCutoff` (default 0.5), and `doubleSided`, map onto
+//! the mesh document's `alpha_mode: mask` / `alpha_cutoff` and `double_sided: true`.
+//!
 //! Everything else — a texture on a second UV set or with per-axis wrap modes that disagree (a mesh
-//! document holds one mode for both), a non-`OPAQUE` `alphaMode`, a `doubleSided` material (the mesh
-//! pipeline back-face culls), a camera (a prefab carries none), a non-point light, a morph target, an
+//! document holds one mode for both), a `BLEND` `alphaMode` (`MASK` is the mapped alternative), a camera (a prefab carries none), a non-point light, a morph target, an
 //! animation channel on a non-joint node or of morph weights, a node `matrix` that shears, a sparse or non-triangle primitive, a
 //! JPEG image, any other *required* extension — is an `L1202`, naming the offender. By default any `L1202` aborts the import (nothing is written);
 //! `--allow-lossy` downgrades them to warnings and compiles the supported subset. Any other
@@ -84,8 +86,8 @@ use ludion_core::diagnostics::{Diagnostic, Severity};
 use ludion_core::math::glam::{DQuat, DVec3};
 use ludion_core::math::quat_to_euler_xyz_degrees;
 use ludion_scene::{
-    AnimationDocument, MeshDocument, MeshSkin, MeshTextures, PrefabDocument, SceneEntity,
-    TextureRef, TextureWrap,
+    AlphaMode, AnimationDocument, MeshDocument, MeshSkin, MeshTextures, PrefabDocument,
+    SceneEntity, TextureRef, TextureWrap,
 };
 use serde_json::Value;
 
@@ -105,9 +107,9 @@ use convert::{
     spot_light_value, transform_value,
 };
 use diagnostics::{
-    camera_unsupported, extension_ignored, invalid_gltf, malformed, node_inside_joint_chain,
-    node_matrix_shears, node_under_joint, non_proportional_emissive, output_io, unsupported,
-    unweighted_vertices,
+    blend_unsupported, camera_unsupported, extension_ignored, invalid_gltf, malformed,
+    node_inside_joint_chain, node_matrix_shears, node_under_joint, non_proportional_emissive,
+    output_io, unsupported, unweighted_vertices,
 };
 use document::check_structure;
 use skin::{SkinBinding, bind_skin, map_weights};
@@ -683,12 +685,6 @@ fn resolve_primitive(
     let pbr = material.pbr_metallic_roughness();
 
     let textures = material_textures(&material, &label, inputs, state)?;
-    if material.alpha_mode() != gltf::material::AlphaMode::Opaque {
-        state.lossy(unsupported("a non-opaque alpha mode", &label));
-    }
-    if material.double_sided() {
-        state.lossy(unsupported("a double-sided material", &label));
-    }
 
     let color = pbr.base_color_factor();
     let roughness = pbr.roughness_factor();
@@ -696,6 +692,25 @@ fn resolve_primitive(
     let offender = material_label(&material);
     let finite =
         |values: &[f32], what: &str| require_finite(values, what, &offender).map_err(|d| vec![d]);
+    let alpha_mode = match material.alpha_mode() {
+        gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
+        gltf::material::AlphaMode::Blend => {
+            state.lossy(blend_unsupported(&label));
+            AlphaMode::Opaque
+        }
+        gltf::material::AlphaMode::Mask => {
+            let cutoff = material.alpha_cutoff().unwrap_or(0.5);
+            finite(&[cutoff], "alphaCutoff")?;
+            if !(0.0..=1.0).contains(&cutoff) {
+                return Err(vec![malformed(format!(
+                    "{offender}'s alphaCutoff {cutoff} is outside [0, 1]"
+                ))]);
+            }
+            AlphaMode::Mask {
+                cutoff: f64::from(cutoff),
+            }
+        }
+    };
     finite(&color, "baseColorFactor")?;
     finite(&[roughness], "roughnessFactor")?;
     finite(&[metallic], "metallicFactor")?;
@@ -726,6 +741,8 @@ fn resolve_primitive(
         doc: MeshDocument {
             // Re-name to the deduped, sanitized filename stem so the doc's `name:` and its path agree.
             name: Some(name),
+            alpha_mode,
+            double_sided: material.double_sided(),
             ..doc
         },
     });

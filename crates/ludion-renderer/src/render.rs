@@ -8511,6 +8511,7 @@ mod tests {
             textures: None,
             authored_material: false,
             base_color_mean: [1.0; 4],
+            double_sided: false,
             indices: vec![0, 1, 2],
             hash,
         }
@@ -8566,6 +8567,7 @@ mod tests {
             textures: None,
             authored_material: true,
             base_color_mean: [1.0; 4],
+            double_sided: false,
             indices: vec![0, 1, 2],
             hash: 0,
         };
@@ -9255,6 +9257,7 @@ mod tests {
             textures: None,
             authored_material: false,
             base_color_mean: [1.0; 4],
+            double_sided: false,
             indices: vec![],
             hash: 0xE0E0,
         };
@@ -10079,6 +10082,7 @@ mod tests {
             textures: None,
             authored_material: false,
             base_color_mean: [1.0; 4],
+            double_sided: false,
             indices: vec![0, 1, 2, 0, 2, 3],
             hash,
         }
@@ -11671,6 +11675,7 @@ mod tests {
             }),
             authored_material: false,
             base_color_mean: [1.0; 4],
+            double_sided: false,
             indices: vec![0, 1, 2, 0, 2, 3],
             hash,
         }

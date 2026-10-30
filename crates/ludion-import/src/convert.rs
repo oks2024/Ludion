@@ -12,7 +12,7 @@
 //! an imported scene a canonical fixed point (`scene.load` → `scene.save` reproduces it). Mesh and
 //! clip documents are `f64`-typed and keep the widened digits.
 
-use ludion_scene::{MeshDocument, MeshTextures};
+use ludion_scene::{AlphaMode, MeshDocument, MeshTextures};
 use serde_json::{Map, Value, json};
 
 /// A JSON number holding the exact `f64` that `v` widens to (the f32 round-trip rule).
@@ -131,6 +131,8 @@ pub(crate) fn mesh_document(
         metallic: None,
         roughness: None,
         textures,
+        alpha_mode: AlphaMode::Opaque,
+        double_sided: false,
         skin: None,
         indices,
     }

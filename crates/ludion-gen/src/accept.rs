@@ -245,6 +245,8 @@ fn accept_mesh(
             .map_err(|diagnostics| readdress_lossy(diagnostics, allow_lossy))?;
     for mesh in &mut import.meshes {
         mesh.doc.origin = Some(origin.clone());
+        // ComfyUI's `SaveGLB` flags every material double-sided, and a closed remesh wants culling.
+        mesh.doc.double_sided = false;
     }
 
     let prefab_yaml = ludion_scene::emit_prefab(&import.prefab, registry);
@@ -286,9 +288,9 @@ fn accept_mesh(
 
 /// Rewrites every `L1202`'s help for the accept path. The importer's own advice addresses someone
 /// holding an exportable source, which whoever generated a `.glb` never is: there is no re-export
-/// that could drop the `SaveGLB` node's `doubleSided`, so the flag is the only answer while the
-/// import is strict — and once it has been passed, repeating it is noise, so the warning says what
-/// was left out instead.
+/// that could drop the feature at the source, so the flag is the only answer while the import is
+/// strict — and once it has been passed, repeating it is noise, so the warning says what was left
+/// out instead.
 fn readdress_lossy(diagnostics: Vec<Diagnostic>, allow_lossy: bool) -> Vec<Diagnostic> {
     diagnostics
         .into_iter()
@@ -297,16 +299,12 @@ fn readdress_lossy(diagnostics: Vec<Diagnostic>, allow_lossy: bool) -> Vec<Diagn
                 return diagnostic;
             }
             if allow_lossy {
-                diagnostic.with_help(
-                    "the mesh was imported without it; a dropped double-sided flag leaves the \
-                     surface back-face culled, which is what a closed remeshed mesh wants",
-                )
+                diagnostic.with_help("the mesh was imported without this feature")
             } else {
                 diagnostic.with_help(
                     "`ludion gen accept <run> <index> --out <dir> --allow-lossy` imports the \
                      supported subset and leaves this out — a generated `.glb` has no re-export to \
-                     fix it at the source; a dropped double-sided flag leaves the surface back-face \
-                     culled, which is what a closed remeshed mesh wants",
+                     fix it at the source",
                 )
             }
         })
@@ -986,10 +984,48 @@ inputs:
     }
 
     #[test]
+    fn a_double_sided_candidate_accepts_strict_and_is_written_culled() {
+        let fixture = fixture("mesh-double-sided", "ok", "mesh", 1);
+        let chunk = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-textured/scene.gltf"),
+        )
+        .expect("the committed textured glTF fixture");
+        let patched = String::from_utf8(chunk)
+            .expect("the fixture is text")
+            .replace(
+                "\"pbrMetallicRoughness\"",
+                "\"doubleSided\":true,\"pbrMetallicRoughness\"",
+            );
+        assert!(patched.contains("\"doubleSided\""));
+        std::fs::write(
+            fixture.run_dir.join("0000.glb"),
+            glb_of(patched.into_bytes()),
+        )
+        .expect("the patched candidate");
+        record_image(&fixture);
+        let out = fixture.root.join("assets/idol");
+
+        let accepted = accept(&fixture.run_dir, 0, &out, &registry(), false)
+            .unwrap_or_else(|d| panic!("a double-sided mesh accepts strict: {:?}", codes(&d)));
+
+        let mesh = accepted
+            .mesh
+            .as_ref()
+            .expect("a mesh accept reports its tree");
+        assert!(!mesh.meshes.is_empty());
+        for document in &mesh.meshes {
+            let text = std::fs::read_to_string(&document.path).expect("the document is on disk");
+            assert!(!text.contains("double_sided"), "{text}");
+            let parsed = ludion_scene::check_mesh(&text).expect("the written document checks");
+            assert!(!parsed.double_sided);
+        }
+    }
+
+    #[test]
     fn an_l1202_on_the_accept_path_is_readdressed_to_the_flag_then_to_what_was_dropped() {
         let unsupported = Diagnostic::new(
             code::IMPORT_UNSUPPORTED_FEATURE,
-            "a double-sided material on mesh 0 has no Ludion mapping",
+            "a `BLEND` alpha mode on mesh 0 has no Ludion mapping",
         )
         .with_help("re-export without it, or pass `--allow-lossy`");
 
@@ -1004,7 +1040,7 @@ inputs:
             !help.contains("--allow-lossy"),
             "a warning past the flag never advises passing it: {help}"
         );
-        assert!(help.contains("back-face culled"), "{help}");
+        assert!(help.contains("without this feature"), "{help}");
     }
 
     /// Rewrites a fixture's `run.json` through `edit`.

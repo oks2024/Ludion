@@ -391,6 +391,7 @@ pub(crate) fn mesh(doc: &VoxelDocument, hash: u64) -> MeshData {
         textures: None,
         authored_material,
         base_color_mean: [1.0; 4],
+        double_sided: false,
         indices,
         hash,
     }
@@ -474,6 +475,7 @@ mod tests {
             textures: None,
             authored_material: false,
             base_color_mean: [1.0; 4],
+            double_sided: false,
             indices,
             hash,
         }

@@ -7,8 +7,8 @@
 //! - a hand-authored fixture pins the exact canonical text.
 
 use ludion_scene::{
-    MeshDocument, MeshTextures, TextureRef, TextureWrap, check_mesh, emit_mesh, parse_mesh,
-    validate_mesh,
+    AlphaMode, MeshDocument, MeshTextures, TextureRef, TextureWrap, check_mesh, emit_mesh,
+    parse_mesh, validate_mesh,
 };
 use proptest::prelude::*;
 
@@ -116,14 +116,20 @@ fn mesh_doc() -> impl Strategy<Value = MeshDocument> {
         let indices = indices_for(vertex_count);
         let name = proptest::option::of(any::<String>());
         let generated_from = proptest::option::of(any::<String>());
+        let alpha_mode = prop_oneof![
+            Just(AlphaMode::Opaque),
+            (0.0f64..=1.0).prop_map(|cutoff| AlphaMode::Mask { cutoff }),
+        ];
         (
             (name, generated_from, positions, normals, uvs, tangents),
             (emissive, metallic, roughness, mesh_textures(), indices),
+            (alpha_mode, any::<bool>()),
         )
             .prop_map(
                 move |(
                     (name, generated_from, positions, normals, uvs, tangents),
                     (emissive, metallic, roughness, textures, indices),
+                    (alpha_mode, double_sided),
                 )| {
                     let mut doc = MeshDocument {
                         name,
@@ -137,6 +143,8 @@ fn mesh_doc() -> impl Strategy<Value = MeshDocument> {
                         metallic,
                         roughness,
                         textures,
+                        alpha_mode,
+                        double_sided,
                         skin: None,
                         indices,
                     };
@@ -683,6 +691,8 @@ fn vertex_budget_warning_does_not_fail_validation() {
         metallic: None,
         roughness: None,
         textures: MeshTextures::default(),
+        alpha_mode: AlphaMode::Opaque,
+        double_sided: false,
         skin: None,
         indices: vec![0, 1, 2],
     };

@@ -64,7 +64,26 @@ const REST_ROTATION_TOLERANCE: f64 = 1e-3;
 const JOINT_KEYS: [&str; 4] = ["name", "parent", "rest", "inverse_bind"];
 const REST_KEYS: [&str; 3] = ["t", "r", "s"];
 
-const MESH_KEYS: [&str; 21] = [
+const ALPHA_MODE_NAMES: [&str; 2] = ["opaque", "mask"];
+
+/// The default `alpha_cutoff` of a `mask` mesh (glTF's `alphaCutoff` default).
+pub const DEFAULT_ALPHA_CUTOFF: f64 = 0.5;
+
+/// How a mesh's coverage is resolved: drawn whole, or cut out where its alpha falls under a cutoff.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum AlphaMode {
+    /// Every fragment is drawn.
+    #[default]
+    Opaque,
+    /// A fragment is discarded when the base-colour map's alpha times `Mesh.color.a` is under
+    /// `cutoff`, a value in `[0, 1]`.
+    Mask {
+        /// The coverage threshold.
+        cutoff: f64,
+    },
+}
+
+const MESH_KEYS: [&str; 24] = [
     "format",
     "kind",
     "name",
@@ -82,6 +101,9 @@ const MESH_KEYS: [&str; 21] = [
     "normal_texture",
     "occlusion_texture",
     "emissive_texture",
+    "alpha_mode",
+    "alpha_cutoff",
+    "double_sided",
     "joints",
     "weights",
     "bone_indices",
@@ -130,6 +152,11 @@ pub struct MeshDocument {
     /// The texture maps this mesh references, each optional. Empty for every palette, primitive and
     /// untextured imported mesh.
     pub textures: MeshTextures,
+    /// Whether the mesh is cut out by alpha. Render-only; a `Mask` cutoff tests the base-colour
+    /// map's alpha times `Mesh.color.a`.
+    pub alpha_mode: AlphaMode,
+    /// Whether the mesh draws unculled, back faces shaded with a flipped normal. Render-only.
+    pub double_sided: bool,
     /// The skeleton and per-vertex skin weights of a skinned mesh. `None` for every unskinned mesh,
     /// which is every mesh authored before skins existed.
     pub skin: Option<MeshSkin>,
@@ -392,6 +419,10 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
     let mut joints: Option<Vec<MeshJoint>> = None;
     let mut weights: Option<Vec<f64>> = None;
     let mut bone_indices: Option<Vec<u32>> = None;
+    let mut alpha_mode_seen = false;
+    let mut alpha_mask = false;
+    let mut alpha_cutoff: Option<f64> = None;
+    let mut alpha_cutoff_line = 0;
 
     for entry in &entries {
         match entry.key.as_str() {
@@ -542,6 +573,39 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
                 doc.textures.emissive =
                     expect_texture_ref(&entry.node, "emissive_texture", None, &mut diagnostics);
             }
+            "alpha_mode" => {
+                alpha_mode_seen = true;
+                if let Some(mask) = expect_alpha_mode(&entry.node, &mut diagnostics) {
+                    alpha_mask = mask;
+                }
+            }
+            "alpha_cutoff" => {
+                alpha_cutoff = expect_number(
+                    &entry.node,
+                    "/alpha_cutoff",
+                    "alpha_cutoff",
+                    &mut diagnostics,
+                );
+                alpha_cutoff_line = entry.node.line;
+            }
+            "double_sided" => {
+                if let NodeValue::Scalar(Value::Bool(flag)) = &entry.node.value {
+                    doc.double_sided = *flag;
+                } else {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            code::MESH_DOCUMENT_STRUCTURE,
+                            format!(
+                                "`double_sided` must be true or false, found {} (line {})",
+                                entry.node.value.type_phrase(),
+                                entry.node.line
+                            ),
+                        )
+                        .with_path("/double_sided")
+                        .with_help("write `double_sided: true`, or omit it"),
+                    );
+                }
+            }
             "joints" => {
                 skin_first.get_or_insert("/joints");
                 joints = parse_joints(&entry.node, &mut diagnostics);
@@ -609,6 +673,29 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
             "indices",
             "add a flat `indices` list — a triangle list, 3 indices per triangle",
         ));
+    }
+
+    if alpha_mask {
+        doc.alpha_mode = AlphaMode::Mask {
+            cutoff: alpha_cutoff.unwrap_or(DEFAULT_ALPHA_CUTOFF),
+        };
+    } else if alpha_cutoff.is_some() {
+        let how = if alpha_mode_seen {
+            "is `opaque`"
+        } else {
+            "is absent"
+        };
+        diagnostics.push(
+            Diagnostic::new(
+                code::MESH_DATA_CONSISTENCY,
+                format!(
+                    "`alpha_cutoff` only means something with `alpha_mode: mask`, but \
+                     `alpha_mode` {how} (line {alpha_cutoff_line})"
+                ),
+            )
+            .with_path("/alpha_cutoff")
+            .with_help("add `alpha_mode: mask`, or remove `alpha_cutoff`"),
+        );
     }
 
     if let Some(first) = skin_first {
@@ -1218,6 +1305,52 @@ fn expect_wrap(
     }
 }
 
+/// Parses `alpha_mode` from its closed set of spellings; `Some(true)` for `mask`.
+fn expect_alpha_mode(node: &Node, diagnostics: &mut Vec<Diagnostic>) -> Option<bool> {
+    let NodeValue::Scalar(Value::String(name)) = &node.value else {
+        diagnostics.push(
+            Diagnostic::new(
+                code::MESH_DOCUMENT_STRUCTURE,
+                format!(
+                    "`alpha_mode` must be a string, found {} (line {})",
+                    node.value.type_phrase(),
+                    node.line
+                ),
+            )
+            .with_path("/alpha_mode")
+            .with_help(format!(
+                "`alpha_mode` is one of: {}",
+                ALPHA_MODE_NAMES.join(", ")
+            )),
+        );
+        return None;
+    };
+    match name.as_str() {
+        "opaque" => Some(false),
+        "mask" => Some(true),
+        unknown => {
+            let help = if unknown == "blend" {
+                "sorted alpha-blend is unsupported; use `mask` to cut the mesh out by alpha"
+                    .to_string()
+            } else {
+                match suggest::nearest(unknown, ALPHA_MODE_NAMES) {
+                    Some(candidate) => format!("nearest match is `{candidate}`"),
+                    None => format!("`alpha_mode` is one of: {}", ALPHA_MODE_NAMES.join(", ")),
+                }
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::MESH_DOCUMENT_STRUCTURE,
+                    format!("unknown alpha mode `{unknown}` (line {})", node.line),
+                )
+                .with_path("/alpha_mode")
+                .with_help(help),
+            );
+            None
+        }
+    }
+}
+
 /// Parses a single number (a texture's `scale`/`strength`). Finiteness is data consistency, checked
 /// in [`validate`].
 fn expect_number(
@@ -1391,6 +1524,18 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
         &mut diagnostics,
     );
     check_textures(doc, &mut diagnostics);
+    if let AlphaMode::Mask { cutoff } = doc.alpha_mode
+        && (!cutoff.is_finite() || !(0.0..=1.0).contains(&cutoff))
+    {
+        diagnostics.push(
+            Diagnostic::new(
+                code::MESH_DATA_CONSISTENCY,
+                format!("`alpha_cutoff` is {cutoff}, but it must be a finite value in [0, 1]"),
+            )
+            .with_path("/alpha_cutoff")
+            .with_help("a fragment is cut out where its alpha is under the cutoff; 0.5 is typical"),
+        );
+    }
     check_skin(doc, vertex_count, &mut diagnostics);
 
     if !doc.indices.len().is_multiple_of(3) {
@@ -1832,7 +1977,8 @@ pub(crate) fn budget_warning(doc: &MeshDocument) -> Option<Diagnostic> {
 /// (optional), `uvs` (optional), `tangents` (optional — geometry, so it sits with the other vertex
 /// lists), `emissive`/`metallic`/`roughness` (each optional, alphabetical
 /// order, emitted only when authored), the five texture references (optional, in
-/// [`MeshTextures::slots`] order), the skin (`joints`, `weights`, `bone_indices` — optional, all
+/// [`MeshTextures::slots`] order), `alpha_mode: mask` (with `alpha_cutoff` unless it is 0.5) and
+/// `double_sided: true` (each only when set), the skin (`joints`, `weights`, `bone_indices` — optional, all
 /// three together), `indices`, each flat list one entry per line, ryu
 /// shortest-round-trip floats — the mesh analog of [`crate::emit`].
 pub(crate) fn emit(doc: &MeshDocument) -> String {
@@ -1876,6 +2022,17 @@ pub(crate) fn emit(doc: &MeshDocument) -> String {
         if let Some(reference) = slot.reference {
             write_texture_ref(&mut out, &slot, reference);
         }
+    }
+    if let AlphaMode::Mask { cutoff } = doc.alpha_mode {
+        out.push_str("alpha_mode: mask\n");
+        if cutoff != DEFAULT_ALPHA_CUTOFF {
+            out.push_str("alpha_cutoff: ");
+            out.push_str(&format_float(cutoff));
+            out.push('\n');
+        }
+    }
+    if doc.double_sided {
+        out.push_str("double_sided: true\n");
     }
     if let Some(skin) = &doc.skin {
         write_joints(&mut out, &skin.joints);
@@ -2238,6 +2395,103 @@ indices:
         let text = emit(&doc);
         assert!(text.contains("normal_texture:\n  path: textures/fedcba9876543210.png\nindices:"));
         assert!(!text.contains("wrap") && !text.contains("scale"));
+    }
+
+    fn with_keys(keys: &str) -> String {
+        CUBE_TRI.replace("indices:", &format!("{keys}indices:"))
+    }
+
+    #[test]
+    fn alpha_and_double_sided_keys_round_trip() {
+        let source = with_keys("alpha_mode: mask\nalpha_cutoff: 0.25\ndouble_sided: true\n");
+        let doc = parse(&source).expect("the keys parse");
+        assert_eq!(doc.alpha_mode, AlphaMode::Mask { cutoff: 0.25 });
+        assert!(doc.double_sided);
+        assert!(validate(&doc).is_empty());
+        assert_eq!(emit(&doc), source);
+    }
+
+    #[test]
+    fn explicit_alpha_defaults_normalize_away() {
+        let source = with_keys("alpha_mode: mask\nalpha_cutoff: 0.5\ndouble_sided: false\n");
+        let doc = parse(&source).expect("the keys parse");
+        assert_eq!(doc.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
+        assert_eq!(emit(&doc), with_keys("alpha_mode: mask\n"));
+        let opaque = parse(&with_keys("alpha_mode: opaque\n")).expect("opaque parses");
+        assert_eq!(opaque.alpha_mode, AlphaMode::Opaque);
+        assert_eq!(emit(&opaque), CUBE_TRI);
+    }
+
+    #[test]
+    fn a_mask_without_a_base_map_is_valid() {
+        let doc = parse(&with_keys("alpha_mode: mask\n")).expect("mask parses");
+        assert!(doc.textures.base_color.is_none());
+        assert!(validate(&doc).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_alpha_mode_is_l1110_with_a_suggestion() {
+        let diagnostics = parse(&with_keys("alpha_mode: maks\n")).unwrap_err();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.path.as_deref() == Some("/alpha_mode"))
+            .expect("the bad mode is reported");
+        assert_eq!(d.code, code::MESH_DOCUMENT_STRUCTURE);
+        assert!(
+            d.help
+                .as_deref()
+                .is_some_and(|h| h.contains("nearest match"))
+        );
+        let blend = parse(&with_keys("alpha_mode: blend\n")).unwrap_err();
+        assert!(
+            blend
+                .iter()
+                .any(|d| d.help.as_deref().is_some_and(|h| h.contains("`mask`")))
+        );
+    }
+
+    #[test]
+    fn a_non_boolean_double_sided_is_l1110() {
+        let diagnostics = parse(&with_keys("double_sided: 1\n")).unwrap_err();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.path.as_deref() == Some("/double_sided"))
+            .expect("the bad flag is reported");
+        assert_eq!(d.code, code::MESH_DOCUMENT_STRUCTURE);
+    }
+
+    #[test]
+    fn an_out_of_range_cutoff_is_l1111() {
+        for bad in ["1.5", "-0.1"] {
+            let source = with_keys(&format!("alpha_mode: mask\nalpha_cutoff: {bad}\n"));
+            let doc = parse(&source).expect("the structure is fine");
+            let diagnostics = validate(&doc);
+            let d = diagnostics
+                .iter()
+                .find(|d| d.path.as_deref() == Some("/alpha_cutoff"))
+                .unwrap_or_else(|| panic!("`{bad}` is refused"));
+            assert_eq!(d.code, code::MESH_DATA_CONSISTENCY, "{bad}");
+        }
+        let doc = MeshDocument {
+            alpha_mode: AlphaMode::Mask { cutoff: f64::NAN },
+            ..parse(CUBE_TRI).unwrap()
+        };
+        assert!(!validate(&doc).is_empty());
+    }
+
+    #[test]
+    fn a_cutoff_without_mask_is_l1111() {
+        for keys in [
+            "alpha_cutoff: 0.3\n",
+            "alpha_mode: opaque\nalpha_cutoff: 0.3\n",
+        ] {
+            let diagnostics = parse(&with_keys(keys)).unwrap_err();
+            let d = diagnostics
+                .iter()
+                .find(|d| d.path.as_deref() == Some("/alpha_cutoff"))
+                .expect("the stray cutoff is reported");
+            assert_eq!(d.code, code::MESH_DATA_CONSISTENCY);
+        }
     }
 
     /// A texture path may climb with `..` but not leave the content root by an absolute, drive or

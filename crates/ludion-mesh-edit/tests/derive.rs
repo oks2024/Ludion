@@ -153,6 +153,24 @@ fn the_derived_document_points_back_and_out() {
     );
 }
 
+/// The derive clones the source document, so its cutout and double-sided keys ride through.
+#[test]
+fn the_derived_document_keeps_the_alpha_and_double_sided_keys() {
+    let dir = tree("alpha");
+    let source = PLATE_MESH.replace(
+        "indices:",
+        "alpha_mode: mask\nalpha_cutoff: 0.3\ndouble_sided: true\nindices:",
+    );
+    write(&dir.join("meshes/plate.mesh.yaml"), source.as_bytes());
+    let document =
+        ludion_scene::check_mesh(derived(&dir).document()).unwrap_or_else(|d| panic!("{d:#?}"));
+    assert_eq!(
+        document.alpha_mode,
+        ludion_scene::AlphaMode::Mask { cutoff: 0.3 }
+    );
+    assert!(document.double_sided);
+}
+
 /// Decision 9's trap, as a test: writing a per-vertex material list would flip the loader's
 /// `authored_material` and silently make the scene's own `metallic`/`roughness`/`emissive` inert.
 #[test]

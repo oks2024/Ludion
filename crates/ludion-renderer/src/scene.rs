@@ -874,6 +874,8 @@ pub struct MeshData {
     /// white (`[1.0; 4]`) when no map is bound or no mean is stored. Extract/voxelizer input only — the
     /// renderer never reads it.
     pub base_color_mean: [f32; 4],
+    /// Draws unculled, back faces shaded with a flipped normal — per-draw pipeline state.
+    pub double_sided: bool,
     /// Triangle list: flat vertex indices, 3 per triangle.
     pub indices: Vec<u32>,
     /// Content hash of the source mesh document folded with the hashes of every texture file it names

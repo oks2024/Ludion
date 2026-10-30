@@ -36,22 +36,21 @@ fn component<'a>(import: &'a Import, entity: usize, name: &str) -> Option<&'a se
 }
 
 #[test]
-fn default_mode_fails_on_the_double_sided_material_naming_it() {
+fn default_mode_fails_on_the_blend_material_naming_it() {
     let errors = import(
         &fixture_bytes(),
         ExternalFiles::Beside(&fixture_dir()),
         false,
     )
-    .expect_err("the fixture's `stone` is double-sided, so a non-lossy import must fail");
+    .expect_err("the fixture's `stone` is alpha-blended, so a non-lossy import must fail");
     assert_eq!(
         errors.len(),
         2,
-        "the double-sided material (a shared mesh reports once) and the camera node"
+        "the blend material (a shared mesh reports once) and the camera node"
     );
     assert!(errors.iter().all(|e| e.code.as_str() == "L1202"));
     assert!(
-        errors[0].message.contains("double-sided material")
-            && errors[0].message.contains("pedestal-mesh"),
+        errors[0].message.contains("BLEND") && errors[0].message.contains("pedestal-mesh"),
         "the L1202 must name the offender: {}",
         errors[0].message
     );
@@ -79,7 +78,7 @@ fn allow_lossy_compiles_the_supported_subset_with_a_warning() {
     assert_eq!(
         import.warnings.len(),
         2,
-        "the double-sided material and the camera"
+        "the blend material and the camera"
     );
     assert!(import.warnings.iter().all(|w| w.code.as_str() == "L1202"));
 }
@@ -779,28 +778,69 @@ fn no_normal_texture_emits_no_tangents() {
 }
 
 #[test]
-fn non_opaque_alpha_mode_is_l1202() {
-    for mode in ["MASK", "BLEND"] {
-        let json = mesh_gltf(&format!(r#"{{"name":"m","alphaMode":"{mode}"}}"#), false);
-        let messages = lossy_messages(&json);
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("non-opaque alpha mode") && m.contains("tri-mesh")),
-            "{mode}: {messages:?}"
-        );
-    }
+fn a_mask_material_maps_its_cutoff() {
+    let json = mesh_gltf(
+        r#"{"name":"m","alphaMode":"MASK","alphaCutoff":0.25}"#,
+        false,
+    );
+    let import = import_clean(&json);
+    assert_eq!(
+        only_mesh(&import).alpha_mode,
+        ludion_scene::AlphaMode::Mask { cutoff: 0.25 }
+    );
 }
 
 #[test]
-fn double_sided_material_is_l1202() {
+fn a_mask_material_without_a_cutoff_takes_the_default_and_writes_none() {
+    let json = mesh_gltf(r#"{"name":"m","alphaMode":"MASK"}"#, false);
+    let import = import_clean(&json);
+    let doc = only_mesh(&import);
+    assert_eq!(
+        doc.alpha_mode,
+        ludion_scene::AlphaMode::Mask { cutoff: 0.5 }
+    );
+    let text = ludion_scene::emit_mesh(doc);
+    assert!(text.contains("alpha_mode: mask\n"), "{text}");
+    assert!(!text.contains("alpha_cutoff"), "{text}");
+}
+
+#[test]
+fn a_double_sided_material_maps_to_double_sided() {
     let json = mesh_gltf(r#"{"name":"m","doubleSided":true}"#, false);
-    let messages = lossy_messages(&json);
+    let import = import_clean(&json);
+    assert!(only_mesh(&import).double_sided);
+}
+
+#[test]
+fn a_blend_material_is_l1202_naming_blend_and_pointing_at_mask() {
+    let json = mesh_gltf(r#"{"name":"m","alphaMode":"BLEND"}"#, false);
+    let errors = import(
+        json.as_bytes(),
+        ExternalFiles::Beside(Path::new(".")),
+        false,
+    )
+    .expect_err("BLEND has no mapping");
+    let blend = errors
+        .iter()
+        .find(|d| d.message.contains("BLEND"))
+        .expect("the BLEND material is named");
+    assert_eq!(blend.code.as_str(), "L1202");
+    assert!(blend.message.contains("tri-mesh"), "{}", blend.message);
     assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("double-sided material") && m.contains("tri-mesh")),
-        "{messages:?}"
+        blend.help.as_deref().is_some_and(|h| h.contains("MASK")),
+        "{:?}",
+        blend.help
+    );
+}
+
+#[test]
+fn an_opaque_single_sided_material_emits_none_of_the_keys() {
+    let json = mesh_gltf(r#"{"name":"m"}"#, false);
+    let import = import_clean(&json);
+    let text = ludion_scene::emit_mesh(only_mesh(&import));
+    assert!(
+        !text.contains("alpha_") && !text.contains("double_sided"),
+        "{text}"
     );
 }
 

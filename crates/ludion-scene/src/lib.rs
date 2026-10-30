@@ -177,9 +177,9 @@ pub use map::{
     MarkerCell, MeshSpec, generate, generate_traced, parse_map, parse_map_kit,
 };
 pub use mesh::{
-    JointRest, MESH_FORMAT_VERSION, MESH_JOINT_LIMIT, MESH_VERTEX_BUDGET, MeshDocument, MeshJoint,
-    MeshSkin, MeshTextures, SKIN_WEIGHT_SUM_TOLERANCE, TextureRef, TextureWrap, read_mesh_joints,
-    rest_model_matrices,
+    AlphaMode, DEFAULT_ALPHA_CUTOFF, JointRest, MESH_FORMAT_VERSION, MESH_JOINT_LIMIT,
+    MESH_VERTEX_BUDGET, MeshDocument, MeshJoint, MeshSkin, MeshTextures, SKIN_WEIGHT_SUM_TOLERANCE,
+    TextureRef, TextureWrap, read_mesh_joints, rest_model_matrices,
 };
 pub use mesh_edit::{
     MESH_EDIT_FORMAT_VERSION, MeshEditDocument, MeshEditKey, MeshEditMap, MeshEditOp,

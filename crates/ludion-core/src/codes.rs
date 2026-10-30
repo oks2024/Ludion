@@ -1131,7 +1131,7 @@ pub mod code {
     pub const IMPORT_INVALID_GLTF: DiagnosticCode = DiagnosticCode::new("L1201");
 
     /// `L1202` — a glTF document uses a feature the importer does not map onto a Ludion component
-    /// (a texture on a second UV set, any camera — a prefab carries no `Camera`, a non-point light, a morph target,
+    /// (a texture on a second UV set, a `BLEND` alpha mode, any camera — a prefab carries no `Camera`, a non-point light, a morph target,
     /// an animation channel on a non-joint node or a morph-weights channel, a sparse or non-triangle
     /// primitive, a JPEG image, any other extension). A hard error by default — the offending node/mesh/accessor is named — downgraded
     /// to a printed warning by `--allow-lossy`. Raised by `ludion-import`.
@@ -3650,7 +3650,9 @@ A mesh document is a strict-subset YAML mapping with a fixed top-level shape:
     - 0
 
 The optional skin keys `joints`, `weights` and `bone_indices` come together and their inner shape
-is `L1190`.
+is `L1190`. Three optional material keys sit before them: `alpha_mode` (`opaque`, the default, or
+`mask`), `alpha_cutoff` (a number, `mask` only) and `double_sided` (`true` or `false`, default
+`false`).
 
 `format` must be `1`; `kind` must be exactly `mesh` (a document with no `kind` key at all is a
 scene, not a mesh, so `ludion check-scene` never reaches this validator for one); `positions` and
@@ -3683,7 +3685,8 @@ Specifically, one of:
   - `indices` has a length not divisible by 3 (a triangle list needs 3 indices per triangle), or
     some index names a vertex position that does not exist (must be less than the vertex count
     derived from `positions`);
-  - some float in `positions`, `normals`, or `uvs` is not finite (`NaN` or `±Infinity`).
+  - some float in `positions`, `normals`, or `uvs` is not finite (`NaN` or `±Infinity`);
+  - `alpha_cutoff` is not a finite value in `[0, 1]`, or is set without `alpha_mode: mask`.
 
 The JSON Pointer names the offending list or element.
 
@@ -6214,7 +6217,9 @@ five metallic-roughness maps onto the mesh document's texture references, each r
 re-encoded through the deterministic encoder and named by its content hash; `TANGENT`, or a generated
 frame where a normal map needs one, onto the document's `tangents`; a `KHR_lights_punctual` point light onto `PointLight`; and a skin — `JOINTS_0`/`WEIGHTS_0`
 and inverse bind matrices — onto the mesh document's `joints`/`weights`/`bone_indices`, its joint
-nodes folded in rather than emitted as entities.
+nodes folded in rather than emitted as entities; and a material's `MASK` alpha mode with its
+`alphaCutoff`, and `doubleSided`, onto the mesh document's `alpha_mode`/`alpha_cutoff` and
+`double_sided` keys.
 
 `emissiveFactor` maps onto `Mesh.emissive` only when it *is* one of Ludion's scalars: `Mesh.emissive`
 is an HDR intensity on the surface's own color, never an independent tint, so `[0, 0, 0]` maps to
@@ -6224,8 +6229,8 @@ exactly on the f32 values. A non-proportional `emissiveFactor` is reported here,
 
 Everything else is reported here rather than silently discarded — a texture on a second UV set or
 with per-axis wrap modes that disagree (a reference holds one mode for both axes), a textured
-material on a primitive without `TEXCOORD_0`, a non-`OPAQUE` `alphaMode`, a `doubleSided` material
-(the mesh pipeline back-face culls), a node whose `matrix` shears (a skew, or a non-uniform scale
+material on a primitive without `TEXCOORD_0`, a `BLEND` `alphaMode` (sorted alpha-blend has no
+mapping; `MASK` maps onto `alpha_mode: mask`), a node whose `matrix` shears (a skew, or a non-uniform scale
 above a rotation, which a `Transform` cannot hold), a camera of any kind (a prefab carries no `Camera`, which a
 scene has one of: the node stays as a `Transform`-only part when `--allow-lossy`), a directional or spot light, a
 morph target, an animation channel on a non-joint node (or of morph weights), a sparse or

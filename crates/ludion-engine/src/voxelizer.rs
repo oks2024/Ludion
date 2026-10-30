@@ -1542,6 +1542,7 @@ mod tests {
             textures: None,
             authored_material: false,
             base_color_mean: [1.0; 4],
+            double_sided: false,
             indices: vec![0, 1, 2],
             hash: 1,
         };
