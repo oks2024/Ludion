@@ -38,14 +38,6 @@
 //! Views are right-handed `look_to_rh` from the light position, clip depth is wgpu's `[0, 1]`, and
 //! `light_space = projection * view` like the sun's.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the local-light shadow recorder, which renders and samples these views"
-    )
-)]
-
 use ludion_core::math::glam::{Mat4, Vec3};
 
 use crate::cluster::light_sphere;

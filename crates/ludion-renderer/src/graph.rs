@@ -18,6 +18,8 @@
 //! - **scene** — opaque meshes (depth-tested, lit) into a full-resolution HDR (`Rgba16Float`)
 //!   target, and their normal+roughness and F0+specular-occlusion into two more.
 //! - **reflections** — a fullscreen additive pass over the opaque scene (the sky's indirect specular).
+//! - **local_shadow** — present only with a shadowed spot or point light ([`PostChain::local_shadow_atlas`]):
+//!   a depth-only atlas of per-light views, culled per view, drawn after the sun's `shadow` pass.
 //! - **drop_shadow_occlusion / projector** — present only with a drop shadow ([`PostChain::drop_shadow_atlas`]):
 //!   a depth-only atlas of straight-down tiles, one per caster, then the generic projector pass that
 //!   multiplies each shadow's footprint into `scene`, after `reflections` and before `transparents`.
@@ -159,6 +161,10 @@ pub mod pass {
     /// only when the frame draws one — the scene carries a sun and this machine's quality keeps its
     /// shadows (`Plan/shadow-mapping.md` decision 6).
     pub const SHADOW: &str = "shadow";
+    /// The depth-only local-light shadow pass: each granted spot or point-light view drawn, culled
+    /// to that view, into its tile of the `local_shadow_atlas`. Present only when at least one
+    /// casting light is granted a view and this machine's quality keeps shadows.
+    pub const LOCAL_SHADOW: &str = "local_shadow";
     /// The opaque scene pass: every mesh, lit, into the HDR colour target plus the normal+roughness
     /// and F0+occlusion targets the reflections pass reads.
     pub const SCENE: &str = "scene";
@@ -602,6 +608,15 @@ pub struct PostChain {
     ///
     /// It carries the extent for the reason [`shadow_map`](PostChain::shadow_map) carries its edge.
     pub drop_shadow_atlas: Option<u32>,
+    /// The edge of the local-light shadow atlas, or `None` when no light is granted a view: the
+    /// [`pass::LOCAL_SHADOW`] pass is added after the sun's `shadow` pass, with the atlas as a
+    /// transient the `scene` pass reads as its last input. `Some` only when at least one casting
+    /// light is granted (`local_shadow::plan_local_shadows`); `None` leaves the graph exactly as it
+    /// was before local lights could cast, which is what makes an unshadowed frame byte-identical by
+    /// construction. The sun's `shadows` toggle masks it too.
+    ///
+    /// It carries the extent for the reason [`shadow_map`](PostChain::shadow_map) carries its edge.
+    pub local_shadow_atlas: Option<u32>,
 }
 
 impl PostChain {
@@ -653,6 +668,15 @@ impl PostChain {
             probe_relight: !scene.probes.is_empty(),
             drop_shadow_atlas: crate::projector::occlusion_atlas(scene.drop_shadows.len())
                 .map(|atlas| atlas.edge),
+            // Grants do not depend on the edge, so the scene-implied ceiling answers "any granted?".
+            local_shadow_atlas: {
+                let edge = QualityParams::FULL.local_shadow_atlas_size;
+                (crate::local_shadow::plan_local_shadows(scene, edge)
+                    .stats
+                    .granted
+                    > 0)
+                .then_some(edge)
+            },
         }
     }
 
@@ -702,6 +726,11 @@ impl PostChain {
                 .gi_inject
                 .filter(|_| quality.gi_dynamic)
                 .map(|count| crate::gi_bake::scaled_probe_count(count, params.gi_probe_scale)),
+            // One shadows toggle covers the sun and the local lights.
+            local_shadow_atlas: self
+                .local_shadow_atlas
+                .filter(|_| quality.shadows)
+                .map(|_| params.local_shadow_atlas_size),
             ..self
         }
     }
@@ -939,6 +968,20 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             TextureDesc::sampled_depth(edge, edge),
         )
     });
+    // The local-light shadow atlas, declared on the same terms. `CopySrc` lets a test read it back.
+    let local_shadow_atlas = chain.local_shadow_atlas.map(|edge| {
+        graph.transient(
+            "local_shadow_atlas",
+            TextureDesc {
+                usages: vec![
+                    ludion_render_graph::TextureUsage::RenderAttachment,
+                    ludion_render_graph::TextureUsage::TextureBinding,
+                    ludion_render_graph::TextureUsage::CopySrc,
+                ],
+                ..TextureDesc::sampled_depth(edge, edge)
+            },
+        )
+    });
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
     let output = graph.output("final", TextureDesc::present_target(width, height));
@@ -967,6 +1010,17 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     if let Some(shadow_map) = shadow_map {
         graph.add_external_pass_with_depth(pass::SHADOW, pass::SHADOW, vec![], vec![], shadow_map);
         scene_reads.push(shadow_map);
+    }
+    // The local-light atlas is drawn beside the sun's map; the scene pass reads it last, so every
+    // other scene input keeps its index.
+    if let Some(atlas) = local_shadow_atlas {
+        graph.add_external_pass_with_depth(
+            pass::LOCAL_SHADOW,
+            pass::LOCAL_SHADOW,
+            vec![],
+            vec![],
+            atlas,
+        );
     }
     // Prepass → ssao → blur, each ordered by the next one's read, and the scene pass's read of the
     // blurred factor is what puts the whole chain in front of it.
@@ -999,6 +1053,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         graph.add_external_compute_pass(pass::GI_INJECT, pass::GI_INJECT, vec![], gi_dynamic);
         scene_reads.push(gi_dynamic);
     }
+    scene_reads.extend(local_shadow_atlas);
     graph.add_external_pass_with_depth(
         pass::SCENE,
         pass::SCENE,
@@ -1374,7 +1429,8 @@ pub(crate) fn build_probe_capture_graph(
             && !chain.dof
             && !chain.ui
             && !chain.debug_lines
-            && chain.drop_shadow_atlas.is_none(),
+            && chain.drop_shadow_atlas.is_none()
+            && chain.local_shadow_atlas.is_none(),
         "a probe face schedules none of the screen-space chains: {chain:?}"
     );
     debug_assert!(!chain.probe_relight, "a face scene carries no probes");
@@ -1630,6 +1686,7 @@ mod tests {
                 probe_relight: bits & 1 != 0,
                 // Content too, like the probes: no quality switch removes a drop shadow.
                 drop_shadow_atlas: (bits & 1 != 0).then_some(128),
+                local_shadow_atlas: None,
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -2366,6 +2423,83 @@ mod tests {
         );
     }
 
+    /// A scene whose camera at the origin looks down -Z, with `spot` as its only spot light.
+    fn scene_with_spot(
+        position: ludion_core::math::glam::Vec3,
+        shadow: Option<crate::scene::LocalShadowData>,
+    ) -> RenderScene {
+        use crate::scene::{RenderCamera, SpotLightData, aspect_ratio};
+        use ludion_core::math::glam::{Mat4, Vec3};
+        let extent = (1920, 1080);
+        let mut scene = RenderScene::empty(extent);
+        scene.camera = RenderCamera {
+            view: Mat4::look_at_rh(Vec3::ZERO, -Vec3::Z, Vec3::Y),
+            projection: Mat4::perspective_rh(
+                60.0_f32.to_radians(),
+                aspect_ratio(extent),
+                0.1,
+                1000.0,
+            ),
+            position: Vec3::ZERO,
+        };
+        scene.spot_lights.push(SpotLightData {
+            position,
+            direction: -Vec3::Z,
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range: 3.0,
+            cos_inner: 15.0_f32.to_radians().cos(),
+            cos_outer: 30.0_f32.to_radians().cos(),
+            shadow,
+        });
+        scene
+    }
+
+    /// The atlas is derived only for a casting light the camera can see, and is the quality's
+    /// edge once masked; the shadows toggle removes it.
+    #[test]
+    fn for_scene_derives_the_local_shadow_atlas_from_granted_lights() {
+        use crate::scene::LocalShadowData;
+        use ludion_core::math::glam::Vec3;
+        let casting = Some(LocalShadowData {
+            bias: 0.05,
+            near: 0.1,
+        });
+        let seen = Vec3::new(0.0, 0.0, -5.0);
+        let granted = PostChain::for_scene(&scene_with_spot(seen, casting));
+        assert_eq!(granted.local_shadow_atlas, Some(4096));
+        assert_eq!(
+            PostChain::for_scene(&scene_with_spot(Vec3::new(0.0, 0.0, 500.0), casting))
+                .local_shadow_atlas,
+            None,
+            "a casting light outside the frustum is not granted",
+        );
+        assert_eq!(
+            PostChain::for_scene(&scene_with_spot(seen, None)).local_shadow_atlas,
+            None,
+        );
+        let low = granted.masked(&Quality::LOW, &QualityParams::LOW);
+        assert_eq!(low.local_shadow_atlas, None);
+        let medium = granted.masked(&Quality::MEDIUM, &QualityParams::MEDIUM);
+        assert_eq!(medium.local_shadow_atlas, Some(2048));
+    }
+
+    /// `local_shadow` precedes `scene`, whose last input is the atlas.
+    #[test]
+    fn the_local_shadow_pass_feeds_the_scene_pass_last() {
+        let chain = PostChain {
+            local_shadow_atlas: Some(256),
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let names = pass_names(&graph);
+        let pos = |n: &str| names.iter().position(|p| *p == n).unwrap();
+        assert!(pos("local_shadow") < pos("scene"));
+        let scene_pass = &graph.passes()[pos("scene")];
+        let atlas = graph.passes()[pos("local_shadow")].depth;
+        assert_eq!(scene_pass.reads.last().copied(), atlas);
+        assert_eq!(scene_pass.reads.len(), 1, "no other scene input moved");
+    }
     #[test]
     fn ssr_pyramids_schedule_between_reflections_and_the_blend() {
         let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), ssr_chain());

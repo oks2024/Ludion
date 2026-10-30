@@ -141,8 +141,9 @@ impl Default for Quality {
 ///
 /// Every axis is modulated. Four are uniform loop bounds the shaders read (`ssao_samples`,
 /// `shaft_steps`, `dof_taps`, `pcf`); `gi_rays` is a uniform both GI shaders read, one as a loop
-/// bound and one as a divisor; five are structure rather than arithmetic (`shadow_map_size` as the
-/// shadow map's extent, `ibl_specular_size` as the sky specular cube's, `gi_probe_scale` as the
+/// bound and one as a divisor; six are structure rather than arithmetic (`shadow_map_size` as the
+/// shadow map's extent, `local_shadow_atlas_size` as the local-light atlas's,
+/// `ibl_specular_size` as the sky specular cube's, `gi_probe_scale` as the
 /// probe lattice's, `render_scale` as the extent the scene is drawn at before it is resampled to the output,
 /// `ssr_scale` as the reflection trace's); and `particle_density` is spent before
 /// this crate ever sees the frame, thinning how many particles reach the scene at all. A preset
@@ -185,6 +186,13 @@ pub struct QualityParams {
     /// because a resource's extent is graph structure; the mesh shader needs no telling, since it
     /// derives its texel size from `textureDimensions`.
     pub shadow_map_size: u32,
+    /// Edge length of the square local-light shadow atlas, in texels — the extent
+    /// [`build_frame_graph`](crate::build_frame_graph) declares the `local_shadow_atlas` transient at.
+    /// Structure like [`shadow_map_size`](QualityParams::shadow_map_size), carried by
+    /// [`PostChain::local_shadow_atlas`](crate::PostChain). **A multiple of 16**: the atlas is an 8×8
+    /// grid of cells whose spot tiles are 2×2. The caster budget is a view count fixed by
+    /// `local_shadow::ATLAS_CELLS`, so only resolution scales.
+    pub local_shadow_atlas_size: u32,
     /// Edge length of the sky IBL's specular cube faces, in texels — a power of two, at least 16 (two
     /// mips), with a mip chain below it that stops at 8×8. Structure like [`shadow_map_size`](QualityParams::shadow_map_size): the mesh
     /// shaders learn the lod range from the `reflections` uniform, not from the size.
@@ -282,6 +290,7 @@ impl QualityParams {
         shaft_steps: 32,
         dof_taps: 32,
         shadow_map_size: 2048,
+        local_shadow_atlas_size: 4096,
         ibl_specular_size: 256,
         pcf: 3,
         gi_rays: 64,
@@ -313,6 +322,7 @@ impl QualityParams {
         shaft_steps: 24,
         dof_taps: 20,
         shadow_map_size: QualityParams::FULL.shadow_map_size,
+        local_shadow_atlas_size: QualityParams::FULL.local_shadow_atlas_size,
         ibl_specular_size: QualityParams::FULL.ibl_specular_size,
         pcf: 3,
         gi_rays: 48,
@@ -337,6 +347,7 @@ impl QualityParams {
         shaft_steps: 16,
         dof_taps: 12,
         shadow_map_size: 1024,
+        local_shadow_atlas_size: 2048,
         ibl_specular_size: QualityParams::FULL.ibl_specular_size,
         pcf: 3,
         gi_rays: 32,
@@ -595,6 +606,11 @@ mod tests {
                 ("dof_taps", low.dof_taps, high.dof_taps),
                 ("shadow_map_size", low.shadow_map_size, high.shadow_map_size),
                 (
+                    "local_shadow_atlas_size",
+                    low.local_shadow_atlas_size,
+                    high.local_shadow_atlas_size,
+                ),
+                (
                     "ibl_specular_size",
                     low.ibl_specular_size,
                     high.ibl_specular_size,
@@ -660,6 +676,14 @@ mod tests {
         assert!(
             maps[1] < maps[2],
             "a cheaper preset must draw the sun into a smaller map: {maps:?}",
+        );
+        let atlases: Vec<u32> = ladder
+            .iter()
+            .map(|(_, params)| params.local_shadow_atlas_size)
+            .collect();
+        assert!(
+            atlases[1] < atlases[2],
+            "a cheaper preset must draw local lights into a smaller atlas: {atlases:?}",
         );
         // The GI axes are the only two that also move at `low`, because `Quality::LOW` masks the
         // injection and not the bake — a `GiVolume` scene still pays for both there, so a preset

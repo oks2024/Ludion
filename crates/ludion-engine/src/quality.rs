@@ -36,6 +36,7 @@
 //! shaft_steps = 16
 //! dof_taps = 12
 //! shadow_map_size = 1024
+//! local_shadow_atlas_size = 2048
 //! ibl_specular_size = 128
 //! pcf = 1
 //! gi_rays = 32
@@ -361,6 +362,8 @@ struct Params {
     #[serde(default)]
     shadow_map_size: Option<u32>,
     #[serde(default)]
+    local_shadow_atlas_size: Option<u32>,
+    #[serde(default)]
     ibl_specular_size: Option<u32>,
     #[serde(default)]
     pcf: Option<u32>,
@@ -450,6 +453,12 @@ fn parse_override_file(text: &str, path: &Path) -> Result<(Quality, QualityParam
                 QualityParams::FULL.shadow_map_size,
             ),
             (
+                "local_shadow_atlas_size",
+                overrides.local_shadow_atlas_size,
+                &mut params.local_shadow_atlas_size,
+                QualityParams::FULL.local_shadow_atlas_size,
+            ),
+            (
                 "ibl_specular_size",
                 overrides.ibl_specular_size,
                 &mut params.ibl_specular_size,
@@ -506,6 +515,18 @@ fn parse_override_file(text: &str, path: &Path) -> Result<(Quality, QualityParam
             return Err(invalid(format!(
                 "`{}` sets `ibl_specular_size` to {size}, below 16: the specular chain stops at an \
                  8x8 face and needs at least two mips",
+                path.display(),
+            )));
+        }
+        // The local-light atlas is an 8x8 grid of cells and a spot's tile is 2x2 of them, so an
+        // edge that does not divide by 16 would cut a tile across a texel.
+        if let Some(size) = overrides
+            .local_shadow_atlas_size
+            .filter(|size| size % 16 != 0)
+        {
+            return Err(invalid(format!(
+                "`{}` sets `local_shadow_atlas_size` to {size}, which is not a multiple of 16: the \
+                 atlas is an 8x8 grid of cells whose spot tiles are 2x2, so its edge must divide by 16",
                 path.display(),
             )));
         }
@@ -600,7 +621,7 @@ fn invalid(message: String) -> Diagnostic {
         "use one of the presets ({}), or the path to a TOML override file (an optional `preset = \
          \"...\"` base, an optional `[effects]` table of \
          `ssao`/`shafts`/`dof`/`gi_dynamic`/`shadows`/`ssr` booleans, and an optional `[params]` table of \
-         `ssao_samples`/`shaft_steps`/`dof_taps`/`shadow_map_size`/`ibl_specular_size`/`pcf`/`gi_rays` \
+         `ssao_samples`/`shaft_steps`/`dof_taps`/`shadow_map_size`/`local_shadow_atlas_size`/`ibl_specular_size`/`pcf`/`gi_rays` \
          counts plus the `gi_probe_scale`, `render_scale`, `particle_density` and `ssr_scale` multipliers); a host's `--quality` \
          flag beats {QUALITY_ENV} either way",
         preset_list(),
@@ -951,7 +972,7 @@ mod tests {
         assert_eq!(
             params_of(
                 "[params]\nssao_samples = 2\nshaft_steps = 3\ndof_taps = 5\nshadow_map_size = 512\n\
-                 ibl_specular_size = 64\npcf = 1\ngi_rays = 16\ngi_probe_scale = 2.5\n\
+                 local_shadow_atlas_size = 256\nibl_specular_size = 64\npcf = 1\ngi_rays = 16\ngi_probe_scale = 2.5\n\
                  render_scale = 0.5\nparticle_density = 0.5\n",
             ),
             QualityParams {
@@ -959,6 +980,7 @@ mod tests {
                 shaft_steps: 3,
                 dof_taps: 5,
                 shadow_map_size: 512,
+                local_shadow_atlas_size: 256,
                 ibl_specular_size: 64,
                 pcf: 1,
                 gi_rays: 16,
@@ -1318,6 +1340,13 @@ mod tests {
                 1,
                 QualityParams::FULL.shadow_map_size,
             ),
+            // The smallest legal atlas edge is one 16-texel tile row, not `1`.
+            (
+                "local_shadow_atlas_size",
+                8192,
+                16,
+                QualityParams::FULL.local_shadow_atlas_size,
+            ),
             (
                 "ibl_specular_size",
                 512,
@@ -1350,6 +1379,21 @@ mod tests {
                 "the ends of the range are legal",
             );
         }
+    }
+
+    #[test]
+    fn an_indivisible_local_shadow_atlas_is_l0016_naming_the_grid() {
+        let diagnostic = parse_override_file(
+            "[params]\nlocal_shadow_atlas_size = 1000\n",
+            Path::new("quality.toml"),
+        )
+        .expect_err("1000 does not divide by 16");
+        assert_eq!(diagnostic.code, code::QUALITY_SETTING_INVALID);
+        assert!(
+            diagnostic.message.contains("multiple of 16"),
+            "{}",
+            diagnostic.message
+        );
     }
 
     #[test]

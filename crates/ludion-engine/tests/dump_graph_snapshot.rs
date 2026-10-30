@@ -161,3 +161,36 @@ fn a_sun_scene_dumps_the_shadow_pass() {
     );
     assert!(json.contains("shadow_map"), "the shadow map is declared");
 }
+
+fn fixture(scene: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(scene)
+}
+
+/// A scene with a shadowed local light schedules `local_shadow` before `scene` and declares its
+/// atlas; the cheapest quality removes both, and a scene that never opts in keeps the pre-feature
+/// graph.
+#[test]
+fn a_shadowed_local_light_dumps_the_local_shadow_pass() {
+    let dump = |path: PathBuf, setting: &QualitySetting| {
+        ludion_engine::dump_scene_graph_json(&path, FrameSize::native(64, 64), setting)
+            .expect("the scene validates and schedules")
+    };
+    let full = dump(fixture("local-shadows.yaml"), &QualitySetting::full());
+    let passes = scheduled_passes(&full);
+    let position = |name: &str| passes.iter().position(|pass| pass == name).unwrap();
+    assert!(position("local_shadow") < position("scene"));
+    assert!(full.contains("local_shadow_atlas"), "the atlas is declared");
+
+    let low = dump(
+        fixture("local-shadows.yaml"),
+        &ludion_engine::resolve_startup_quality(Some("low"), None).unwrap(),
+    );
+    assert!(!scheduled_passes(&low).contains(&"local_shadow".to_string()));
+    assert!(!low.contains("local_shadow_atlas"));
+
+    let plain = dump(gallery("spot-lights.yaml"), &QualitySetting::full());
+    assert!(!scheduled_passes(&plain).contains(&"local_shadow".to_string()));
+    assert!(!plain.contains("local_shadow_atlas"));
+}

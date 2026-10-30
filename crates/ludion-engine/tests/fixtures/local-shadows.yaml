@@ -1,0 +1,84 @@
+# Fixture: a shadowed spot and a shadowed point light over a ground plane and a cube caster, for the
+# graph dump and the local-light shadow pass tests.
+format: 1
+name: "local-shadows - cast_shadows on a spot and a point light"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 5.0
+          - 12.0
+        rotation:
+          - -20.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 22.0
+          - 1.0
+          - 22.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.7
+          - 0.7
+          - 0.72
+          - 1.0
+  - name: caster
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.4
+          - 0.3
+          - 1.0
+  - name: spot
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 6.0
+          - 0.0
+      SpotLight:
+        intensity: 8.0
+        range: 12.0
+        direction:
+          - 0.0
+          - -1.0
+          - 0.0
+        inner_angle: 20.0
+        outer_angle: 35.0
+        cast_shadows: true
+  - name: point
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 4.0
+          - 0.0
+      PointLight:
+        intensity: 6.0
+        range: 12.0
+        cast_shadows: true

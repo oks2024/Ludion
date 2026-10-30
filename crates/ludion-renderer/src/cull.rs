@@ -4,13 +4,7 @@
 //! cascade) filters the same instance list. Every test may admit an instance that is not visible and
 //! never rejects one that is; an instance whose bounds cannot be known on the CPU is always drawn.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the local-light shadow recorder, which filters casters per view"
-    )
-)]
+use std::ops::Range;
 
 use ludion_core::math::glam::{Mat4, Vec3, Vec4};
 
@@ -161,10 +155,36 @@ pub(crate) fn cull(bounds: &[Option<Aabb>], volume: &CullVolume) -> Vec<u32> {
         .collect()
 }
 
+/// The instance-position ranges of a mesh draw whose `sources` (ascending `scene.meshes` indices,
+/// one per instance) are `visible`, adjacent positions coalesced into one range.
+pub(crate) fn visible_ranges(sources: &[u32], visible: &[bool]) -> Vec<Range<u32>> {
+    let mut ranges: Vec<Range<u32>> = Vec::new();
+    for (position, &source) in sources.iter().enumerate() {
+        if !visible[source as usize] {
+            continue;
+        }
+        let position = position as u32;
+        match ranges.last_mut() {
+            Some(last) if last.end == position => last.end += 1,
+            _ => ranges.push(position..position + 1),
+        }
+    }
+    ranges
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ludion_core::math::glam::{Mat3, Quat};
+
+    #[test]
+    fn visible_ranges_coalesce_runs_and_skip_gaps() {
+        let sources = [0, 2, 3, 5, 6, 7];
+        let visible = [true, false, true, false, false, true, true, false];
+        assert_eq!(visible_ranges(&sources, &visible), vec![0..2, 3..5]);
+        assert_eq!(visible_ranges(&sources, &[true; 8]), vec![0..6]);
+        assert!(visible_ranges(&sources, &[false; 8]).is_empty());
+    }
 
     fn instance(shape: MeshShape, model: Mat4) -> MeshInstance {
         MeshInstance {

@@ -23,11 +23,13 @@ use ludion_render_graph::{
 };
 
 use crate::compressed::{self, CompressedUploadError};
+use crate::cull::{Aabb, cull, instance_bounds, visible_ranges};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
 use crate::graph::{FrameSize, PostChain, build_frame_graph, build_probe_capture_graph, pass};
 use crate::ibl::{Ibl, ResolvedEnv};
+use crate::local_shadow::{LocalShadowPlan, plan_local_shadows};
 use crate::mesh::{self, MeshVertex};
 use crate::mipgen::{MipGen, mip_level_count};
 use crate::probe::{MAX_PROBES, probe_rank};
@@ -259,6 +261,8 @@ struct MeshAssetGpu {
     indices: wgpu::Buffer,
     vertex_count: u32,
     index_count: u32,
+    /// The object-space box of the vertices, cached with the upload for per-view shadow culling.
+    bounds: Option<Aabb>,
     /// The mesh pass's group-4 material bind group — the maps this mesh's material carries, the 1×1
     /// defaults in the slots it does not, and the `flags` word that decides which the shader reads.
     /// Built with the upload because the cache key ([`MeshData::hash`]) moves whenever the document
@@ -1573,6 +1577,22 @@ impl Renderer {
         } else {
             Vec::new()
         };
+        let local_shadow = chain
+            .local_shadow_atlas
+            .map(|edge| plan_local_shadows(scene, edge));
+        debug_assert!(
+            local_shadow
+                .as_ref()
+                .is_none_or(|plan| !plan.views.is_empty()),
+            "the graph schedules local_shadow exactly when a light is granted a view",
+        );
+        let caster_bounds = if local_shadow.is_some() {
+            let asset_bounds: Vec<Option<Aabb>> =
+                mesh_assets.iter().map(|asset| asset.bounds).collect();
+            instance_bounds(&scene.meshes, &asset_bounds)
+        } else {
+            Vec::new()
+        };
         let ground_marker_draw = self.build_ground_marker_draw(scene, device);
         let debug_line_draw = self.build_debug_line_draw(scene, device);
         let sprite_draws = self.build_sprite_draws(scene, device, &textures);
@@ -1618,6 +1638,8 @@ impl Renderer {
             mesh_asset_draws,
             drop_shadows,
             occlusion_atlas,
+            local_shadow,
+            caster_bounds,
             ground_marker_draw,
             debug_line_draw,
             sprite_draws,
@@ -2774,6 +2796,11 @@ struct FrameRecorder<'a> {
     /// schedules neither projector pass.
     drop_shadows: Vec<DropShadowInstance>,
     occlusion_atlas: Option<OcclusionAtlas>,
+    /// This frame's local-light shadow grants, or `None` when the graph schedules no `local_shadow`
+    /// pass, and the world bounds of every `scene.meshes` instance the per-view cull tests (empty
+    /// without a plan).
+    local_shadow: Option<LocalShadowPlan>,
+    caster_bounds: Vec<Option<Aabb>>,
     /// The scene's ground markers, or `None` when it authors none — in which case the scene pass
     /// binds no marker pipeline and issues no marker draw.
     ground_marker_draw: Option<GroundMarkerDraw>,
@@ -2792,6 +2819,7 @@ impl PassRecorder for FrameRecorder<'_> {
     fn record(&self, pass: &mut RecordedPass<'_>) {
         match pass.kind {
             pass::SHADOW => self.record_shadow(pass),
+            pass::LOCAL_SHADOW => self.record_local_shadow(pass),
             pass::PREPASS => self.record_prepass(pass),
             pass::SSAO => self.record_ssao(pass),
             pass::SHAFTS => self.record_shafts(pass),
@@ -3516,6 +3544,110 @@ impl FrameRecorder<'_> {
             }
             for draw in &self.mesh_asset_draws {
                 let kept = kept_ranges(&draw.sources, &ds.exclude);
+                if kept.is_empty() {
+                    continue;
+                }
+                if draw.mirrored != mirrored {
+                    mirrored = draw.mirrored;
+                    rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, mirrored));
+                }
+                rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
+                rp.set_vertex_buffer(1, draw.instances.slice(..));
+                rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                for range in kept {
+                    rp.draw_indexed(0..draw.mesh.index_count, 0, range);
+                }
+            }
+        }
+    }
+
+    /// The local-light shadow pass (present only when a light is granted a view): each granted view
+    /// drawn depth-only into its tile of the graph-owned atlas, with the sun shadow's pipeline and
+    /// instance buffers. Casters are culled per view; a skinned instance is always drawn. Clears
+    /// depth to 1.0, so an ungranted tile reads as unoccluded. The sun's pass is untouched.
+    fn record_local_shadow(&self, pass: &mut RecordedPass<'_>) {
+        let depth_view = pass
+            .depth
+            .expect("the local shadow pass declares a depth attachment");
+        let plan = self
+            .local_shadow
+            .as_ref()
+            .expect("the local shadow pass is scheduled only with a plan");
+        let view_bgs: Vec<wgpu::BindGroup> = plan
+            .views
+            .iter()
+            .map(|view| {
+                let uniform = shader_gen::ShadowView {
+                    light_space: view.light_space.to_cols_array_2d(),
+                };
+                let buf = init_buffer(
+                    pass.device,
+                    wgpu::BufferUsages::UNIFORM,
+                    bytemuck::bytes_of(&uniform),
+                );
+                skin_bind_group(
+                    pass.device,
+                    self.r.layouts.get(LayoutId::ShadowView),
+                    SHADOW_VIEW_BINDING,
+                    &buf,
+                    &self.bone_palette_buf,
+                )
+            })
+            .collect();
+
+        let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("local_shadow"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: pass.timestamp_writes(),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        rp.set_pipeline(self.r.pipeline(ShaderId::Shadow));
+        let mut mirrored = false;
+        let mut visible = vec![false; self.caster_bounds.len()];
+        for (view, view_bg) in plan.views.iter().zip(&view_bgs) {
+            let rect = view.rect;
+            rp.set_viewport(
+                rect.x as f32,
+                rect.y as f32,
+                rect.size as f32,
+                rect.size as f32,
+                0.0,
+                1.0,
+            );
+            rp.set_scissor_rect(rect.x, rect.y, rect.size, rect.size);
+            rp.set_bind_group(SHADOW_VIEW_GROUP, view_bg, &[]);
+            visible.fill(false);
+            for index in cull(&self.caster_bounds, &view.cull) {
+                visible[index as usize] = true;
+            }
+            for draw in &self.mesh_draws {
+                let kept = visible_ranges(&draw.sources, &visible);
+                if kept.is_empty() {
+                    continue;
+                }
+                if draw.mirrored != mirrored {
+                    mirrored = draw.mirrored;
+                    rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, mirrored));
+                }
+                let mb = self.r.mesh_of(draw.shape);
+                rp.set_vertex_buffer(0, mb.buffer.slice(..));
+                rp.set_vertex_buffer(1, draw.instances.slice(..));
+                for range in kept {
+                    rp.draw(0..mb.vertex_count, range);
+                }
+            }
+            for draw in &self.mesh_asset_draws {
+                let kept = visible_ranges(&draw.sources, &visible);
                 if kept.is_empty() {
                     continue;
                 }
@@ -4672,6 +4804,7 @@ fn upload_mesh_asset(
         indices: index_buffer,
         vertex_count: vertex_count as u32,
         index_count: mesh.indices.len() as u32,
+        bounds: Aabb::of_positions(&mesh.positions),
         material_bg,
     }
 }
@@ -11556,6 +11689,195 @@ mod tests {
             ((clip.x * 0.5 + 0.5) * w as f32) as u32,
             ((0.5 - clip.y * 0.5) * h as f32) as u32,
         )
+    }
+
+    /// A lit floor and cube under a spot straight above, seen by `drop_shadow_fixture`'s camera;
+    /// `cast_shadows` toggles the spot's opt-in.
+    fn local_shadow_fixture(w: u32, h: u32, cast_shadows: bool) -> RenderScene {
+        let mut scene = drop_shadow_fixture(w, h, false);
+        scene.meshes.push(cube(
+            Vec3::new(0.0, 0.5, 0.0),
+            Vec3::ONE,
+            [0.8, 0.5, 0.4, 1.0],
+        ));
+        scene.spot_lights.push(crate::scene::SpotLightData {
+            position: Vec3::new(0.0, 4.0, 0.0),
+            direction: -Vec3::Y,
+            color: Vec3::ONE,
+            intensity: 20.0,
+            range: 10.0,
+            cos_inner: 20.0_f32.to_radians().cos(),
+            cos_outer: 40.0_f32.to_radians().cos(),
+            shadow: cast_shadows.then_some(crate::scene::LocalShadowData {
+                bias: 0.05,
+                near: 0.1,
+            }),
+        });
+        scene
+    }
+
+    /// Reads a `Depth32Float` target back, unpadding the 256-byte row alignment.
+    fn read_depth32(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<f32> {
+        let size = texture.size();
+        let (w, h) = (size.width, size.height);
+        let row = (w * 4).div_ceil(256) * 256;
+        let device = renderer.gpu.device();
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("depth readback"),
+            size: u64::from(row * h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(h),
+                },
+            },
+            size,
+        );
+        renderer.gpu.queue().submit(Some(encoder.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the device polls");
+        rx.recv().unwrap().expect("the buffer maps");
+        let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
+        let mut out = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let at = (y * row + x * 4) as usize;
+                out.push(f32::from_le_bytes(mapped[at..at + 4].try_into().unwrap()));
+            }
+        }
+        out
+    }
+
+    /// **The local-shadow pass writes the granted view's tile and nothing else.** The atlas is read
+    /// back: inside the spot's rect some texel holds scene depth (< 1.0), and every texel outside
+    /// every granted rect is exactly the 1.0 clear.
+    #[test]
+    fn needs_gpu_the_local_shadow_pass_fills_only_the_granted_tiles() {
+        let Some(mut renderer) =
+            skip_or_renderer("the_local_shadow_pass_fills_only_the_granted_tiles")
+        else {
+            return;
+        };
+        let edge = 256;
+        renderer.set_quality(
+            Quality::FULL,
+            QualityParams {
+                local_shadow_atlas_size: edge,
+                ..QualityParams::FULL
+            },
+        );
+        let (w, h) = (160u32, 120u32);
+        let size = FrameSize::native(w, h);
+        let scene = local_shadow_fixture(w, h, true);
+        let chain =
+            PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params);
+        assert_eq!(chain.local_shadow_atlas, Some(edge));
+        let (graph, _) = build_frame_graph(size, chain);
+        let atlas = graph
+            .passes()
+            .iter()
+            .find(|declared| declared.name == pass::LOCAL_SHADOW)
+            .and_then(|declared| declared.depth)
+            .expect("the graph schedules the local shadow pass");
+        let scheduled = schedule(&graph).expect("the graph schedules");
+        let recorder = renderer.prepare_frame(&scene, size, None);
+        let granted: Vec<_> = recorder
+            .local_shadow
+            .as_ref()
+            .expect("the spot is granted")
+            .views
+            .iter()
+            .map(|view| view.rect)
+            .collect();
+
+        let copy = renderer
+            .gpu
+            .device()
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("local shadow atlas copy"),
+                size: wgpu::Extent3d {
+                    width: edge,
+                    height: edge,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+        renderer
+            .gpu
+            .execute_into(
+                &scheduled,
+                &recorder,
+                &[(
+                    atlas,
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &copy,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                )],
+            )
+            .expect("the frame renders");
+        let depth = read_depth32(&renderer, &copy);
+        let inside = |x: u32, y: u32| {
+            granted
+                .iter()
+                .any(|r| x >= r.x && x < r.x + r.size && y >= r.y && y < r.y + r.size)
+        };
+        let mut drawn = 0;
+        for y in 0..edge {
+            for x in 0..edge {
+                let d = depth[(y * edge + x) as usize];
+                if inside(x, y) {
+                    drawn += usize::from(d < 1.0);
+                } else {
+                    assert_eq!(d, 1.0, "texel ({x}, {y}) is outside every granted tile");
+                }
+            }
+        }
+        assert!(drawn > 0, "the granted tile holds the scene's depth");
+    }
+
+    /// **Nothing samples the atlas yet, so opting a light in changes no pixel.**
+    #[test]
+    fn needs_gpu_a_local_shadow_caster_leaves_the_frame_unchanged() {
+        let Some(renderer) = skip_or_renderer("a_local_shadow_caster_leaves_the_frame_unchanged")
+        else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let size = FrameSize::native(w, h);
+        let plain = renderer
+            .render(&local_shadow_fixture(w, h, false), size)
+            .expect("a plain render");
+        let casting = renderer
+            .render(&local_shadow_fixture(w, h, true), size)
+            .expect("a casting render");
+        assert_eq!(plain.rgba, casting.rgba);
     }
 
     /// **A drop shadow darkens the floor under its footprint and nothing outside it.** The pixel under
