@@ -222,14 +222,18 @@ pass/graph/extract-plumbing change.
   fired.
 - **Sprite atlas / sprite-sheet pipeline** — unrelated (the SDF approach sidesteps it); own trigger
   (`Plan/phase-8-assets-and-sound.md`) untouched.
-- **A general decal system** (arbitrary projected textures on arbitrary geometry) — the reference game's needs
-  are all ground-anchored; no named consumer for the general case. Trigger: a concrete need for a
-  telegraph/effect on non-flat or vertical geometry (e.g. a wall-mounted sigil).
-  - *Partial firing, 2026-10-28 (Clockout request 0006):* projecting onto non-flat geometry was the
-    recorded trigger. Request 0006 built the generic projector pass (analytic multiply only) that
-    general decals extend; `DropShadow` is its first client and did not consume the trigger. The
-    trigger fires through request 0012: textured decals, arbitrary projection directions and
-    vertical surfaces stay deferred until then.
+- **A general decal system** (arbitrary projected textures on arbitrary geometry) — **shipped** (Clockout
+  request 0012, Lore r1803–r1810; `ludion docs decals`, gallery `decals`). Trigger fired on vertical
+  and non-flat needs (painted gap lips, hazard stripes, wear, wet patches, scorch).
+  - *Design:* `Decal` is an oriented box projecting along local −Y, with four blend modes (alpha,
+    multiply, add, coat), an angle fade, a layer sort key and receiver rules (skinned never; opt-in
+    `hierarchy`). It extends 0006's generic projector pass (supersedes 0006's amendment 2), which
+    `DropShadow` first used. Lit decals (alpha, coat) shade in a `decals_lit` pass before
+    `reflections` and write their painted normal, roughness and F0 so probe, sky and SSR reflect the
+    paint (owner ruling). Order decision: lit decals, then multiply and add in `projector`, then every
+    drop shadow, with (layer, EntityId) within each group. Rejected: drawing every mode before
+    `reflections`, which would leave multiply missing SSR and let add feed it. This deviates from the
+    request's single-slot Order paragraph; the orchestrator accepted it.
 
 ## Risks / open questions
 

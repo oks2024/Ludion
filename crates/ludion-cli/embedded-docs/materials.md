@@ -99,7 +99,7 @@ enforced by `L1111`.
 A mesh that references no texture is unaffected: the renderer's untextured arithmetic runs exactly
 as it did before textures existed (`ludion devdocs renderer-shading`). Voxel models, sculpt models,
 and primitives (`cube`/`plane`/`sphere`) carry no UVs and so cannot reference a texture at all —
-voxel texturing is a recorded deferred possibility, not a current surface.
+voxel texturing is a recorded deferred possibility, not a current surface. To mark a UV-less mesh, project a texture onto it with a `Decal` (`ludion docs decals`).
 
 ## A roughness × metallic sweep (copyable)
 

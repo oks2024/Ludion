@@ -86,5 +86,6 @@ ludion render --scene examples/gallery/drop-shadow.yaml --out drop-shadow.png
 
 - `ludion docs lighting` — the sun's shadow map, a different mechanism.
 - `ludion docs ground-telegraphs` — the flat marker that draws on top of a drop shadow.
+- `ludion docs decals` — every `Decal` draws before a drop shadow, so the blob darkens paint.
 - `ludion docs hierarchy` — `Parent` and local transforms.
 - `ludion docs components` — the built-in visual set.

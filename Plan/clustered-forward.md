@@ -23,7 +23,7 @@
 > demonstrably covers (the engine's AA is SSAA, whose supersampled G-buffer bandwidth punishes
 > deferred quadratically; the content style is sprite/alpha-heavy, which needs a clustered forward
 > path under deferred *anyway*). The falsifier stays recorded: deferred earns a plan only if the
-> material model grows genuinely expensive per-pixel shading (textured PBR, decal layers) **and**
+> material model grows genuinely expensive per-pixel shading (textured PBR, decal layers — projector decals are forward-shaded per draw and are not that case) **and**
 > opaque overdraw stays high despite a Z-prepass — neither trigger has fired.
 >
 > **Relationships:**

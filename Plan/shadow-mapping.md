@@ -102,7 +102,9 @@ opt in to camera-fitted cascades (decisions 12–17); the anchored box stays the
    - It is exempt from the `shadows` quality knob.
    - The drop shadow's screen pass is the renderer's generic projector pass, which Clockout request
      0012's decals extend; the first-surface occlusion stays a drop-shadow stage, keyed per projector
-     instance (amendment A1, approved 2026-10-29).
+     instance (amendment A1, approved 2026-10-29). Shipped: the projector family gained decal clients
+     (multiply, add) and a second slot, `decals_lit`, before `reflections` for lit decals. Order: lit decals,
+     then multiply and add, then every drop shadow; ascending layer, lowest EntityId last within a layer.
 
    *Why:* a readability cue must not depend on the scene having a sun, on where the sun points, or
    on the machine's quality.

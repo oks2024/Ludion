@@ -63,7 +63,7 @@ settled plan, nothing built; **rejected** — closed by design.
   (`dev-docs/ludion-shader-bindgen.md`).
 - **Cameras** — exactly one (`L2101`): no render-to-texture, split screen, portals; minimap deferred
   (a private plan).
-- **Geometry** — no decals (analytic `GroundMarker` telegraphs only), terrain renderer, foliage,
+- **Geometry** — ~~no decals~~ (shipped, Clockout 0012; `GroundMarker` stays the analytic telegraph), terrain renderer, foliage,
   morph targets (L1202), GPU-driven or indirect draws. MRT deferred.
 - **Particles** — CPU, unlit camera-facing discs. No GPU simulation, mesh particles, collision;
   world-space trails rejected (`docs/particles.md`).
