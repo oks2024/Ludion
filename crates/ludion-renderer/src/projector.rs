@@ -12,7 +12,7 @@ use ludion_core::math::glam::{Mat3, Mat4, Vec3};
 
 use crate::scene::{
     DROP_SHADOW_ANCHOR_TOLERANCE, DecalBlend, DecalInstance, DecalReceivers, DropShadowInstance,
-    TextureWrap,
+    RenderScene, TextureWrap,
 };
 use crate::shader_gen;
 
@@ -132,6 +132,41 @@ pub(crate) fn receiver_union(decals: &[DecalInstance]) -> Vec<u32> {
     union.sort_unstable();
     union.dedup();
     union
+}
+
+/// What the projector pass plans for a frame's decals, for the profiler: the decals by blend mode,
+/// the draws and the meshes the receiver-id pass redraws.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DecalStats {
+    /// Decals blended as alpha.
+    pub alpha: u32,
+    /// Decals blended as multiply.
+    pub multiply: u32,
+    /// Decals blended as add.
+    pub add: u32,
+    /// Decals blended as coat.
+    pub coat: u32,
+    /// Decal draws of the projector pass.
+    pub draws: u32,
+    /// Meshes the receiver-id pass redraws; 0 means the pass is not scheduled.
+    pub receiver_meshes: u32,
+}
+
+/// The [`DecalStats`] of `scene`, from the same packing and receiver union the frame draws with: a
+/// pure CPU entry point, so the profiler needs no adapter.
+pub fn decal_stats(scene: &RenderScene) -> DecalStats {
+    let mut stats = DecalStats::default();
+    for decal in &scene.decals {
+        match decal.blend {
+            DecalBlend::Alpha => stats.alpha += 1,
+            DecalBlend::Multiply => stats.multiply += 1,
+            DecalBlend::Add => stats.add += 1,
+            DecalBlend::Coat => stats.coat += 1,
+        }
+    }
+    stats.draws = pack_decals(&scene.decals).2.len() as u32;
+    stats.receiver_meshes = receiver_union(&scene.decals).len() as u32;
+    stats
 }
 
 /// The instance ranges of a mesh draw whose source is in `keep` (ascending): the twin of
@@ -533,6 +568,37 @@ mod tests {
         assert_eq!(instances[0].receivers, [0, 0, 2, 0]);
         assert_eq!(instances[1].receivers, [0, 2, 0, 0]);
         assert_eq!(instances[2].receivers, [1, 2, 3, 0]);
+    }
+
+    #[test]
+    fn decal_stats_count_each_mode_the_draws_and_the_receiver_union() {
+        let mut multiply = decal(DecalBlend::Multiply);
+        multiply.receivers = DecalReceivers::Only(vec![1, 4]);
+        let mut add = decal(DecalBlend::Add);
+        add.receivers = DecalReceivers::Exclude(vec![4, 6]);
+        let mut scene = RenderScene::empty((64, 64));
+        scene.decals = vec![
+            decal(DecalBlend::Alpha),
+            multiply.clone(),
+            multiply,
+            add,
+            decal(DecalBlend::Coat),
+        ];
+        assert_eq!(
+            decal_stats(&scene),
+            DecalStats {
+                alpha: 1,
+                multiply: 2,
+                add: 1,
+                coat: 1,
+                draws: 2,
+                receiver_meshes: 3,
+            }
+        );
+        assert_eq!(
+            decal_stats(&RenderScene::empty((64, 64))),
+            DecalStats::default()
+        );
     }
 
     #[test]

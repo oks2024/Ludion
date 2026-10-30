@@ -140,6 +140,11 @@ pub struct ProfileReport {
     /// must not make pay twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sun_cascades: Option<SunCascadeProfile>,
+    /// Projected decals of the frame: how many of each blend mode and how many draws and receiver
+    /// meshes the projector pass plans. Filled by the **offline** driver for a scene with a decal;
+    /// absent otherwise and for a live capture, for `cluster`'s reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decals: Option<DecalProfile>,
     /// What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.
     /// Filled by the **offline** driver and absent for a live capture: a load is a one-off event the
     /// host has already run by the time a capture asks, and a disarmed host reads no clock for it.
@@ -295,6 +300,26 @@ pub struct LocalShadowProfile {
     pub views: u64,
     /// The atlas edge the plan used, in texels; 0 when the quality masks shadows.
     pub atlas_edge: u64,
+}
+
+/// Projected decals — the frame's decals by blend mode and what the projector pass plans for them.
+///
+/// Not measurements: the counts are the shape of the frame's plan, reduced from the same packing the
+/// renderer runs, so two runs of the same frame produce identical numbers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DecalProfile {
+    /// Decals blended as `alpha`.
+    pub alpha: u64,
+    /// Decals blended as `multiply`.
+    pub multiply: u64,
+    /// Decals blended as `add`.
+    pub add: u64,
+    /// Decals blended as `coat`.
+    pub coat: u64,
+    /// Decal draws in the projector pass: runs of consecutive decals sharing a blend and a map.
+    pub draws: u64,
+    /// Meshes the receiver-id pass redraws; 0 means the pass is not scheduled.
+    pub receiver_meshes: u64,
 }
 
 /// Sun cascade planning — what the sun asked for and what the frame fitted.
@@ -637,6 +662,7 @@ impl ProfileWindowData {
             cluster: None,
             local_shadows: None,
             sun_cascades: None,
+            decals: None,
             load: None,
             probes: None,
             samples: include_samples.then_some(self.samples),

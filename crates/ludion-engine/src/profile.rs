@@ -51,8 +51,9 @@ const PROFILE_SIZE: (u32, u32) = (1920, 1080);
 // offline driver writes, so they live in `ludion-protocol` and are re-exported here (and from the
 // crate root) — one shape, two producers, no parallel definition to drift.
 pub use ludion_protocol::perf::{
-    ClusterProfile, GpuProfile, LocalShadowProfile, PassTiming, ProfileReport, QualityProfile,
-    SimProfile, SunCascadeProfile, SunCascadeSliceProfile, SystemTiming, TimingTail,
+    ClusterProfile, DecalProfile, GpuProfile, LocalShadowProfile, PassTiming, ProfileReport,
+    QualityProfile, SimProfile, SunCascadeProfile, SunCascadeSliceProfile, SystemTiming,
+    TimingTail,
 };
 
 /// Profiles the scene at `path`: warmup, then `frames` measured frames, returning the median report.
@@ -160,6 +161,7 @@ pub fn profile_engine(
     let cluster = profile_cluster(engine, frames, warmup).map_err(|d| vec![d])?;
     let local_shadows = profile_local_shadows(engine).map_err(|d| vec![d])?;
     let sun_cascades = profile_sun_cascades(engine).map_err(|d| vec![d])?;
+    let decals = profile_decals(engine).map_err(|d| vec![d])?;
     let gpu = profile_gpu(engine, frames, warmup).map_err(|d| vec![d])?;
 
     Ok(ProfileReport {
@@ -178,6 +180,7 @@ pub fn profile_engine(
         cluster: Some(cluster),
         local_shadows: Some(local_shadows),
         sun_cascades: Some(sun_cascades),
+        decals,
         load,
         probes: engine.probe_profile(),
         samples: Some(samples),
@@ -752,6 +755,7 @@ pub(crate) fn profile_replay_engine(
         cluster: None,
         local_shadows: None,
         sun_cascades: None,
+        decals: None,
         load: None,
         probes: None,
         samples: Some(samples),
@@ -912,6 +916,29 @@ fn profile_local_shadows(engine: &mut Engine) -> Result<LocalShadowProfile, Diag
         views: u64::from(stats.views),
         atlas_edge: u64::from(stats.atlas_edge),
     })
+}
+
+/// Counts the frame's decals by blend mode and the draws and receiver meshes the projector plans.
+///
+/// Like [`profile_local_shadows`] it needs no adapter: the packing is pure CPU over the extracted
+/// scene ([`ludion_renderer::decal_stats`]). A scene without a decal has no panel.
+fn profile_decals(engine: &mut Engine) -> Result<Option<DecalProfile>, Diagnostic> {
+    let (width, height) = PROFILE_SIZE;
+    let scene = engine
+        .extract_render_scene(width, height)
+        .map_err(collapse)?;
+    if scene.decals.is_empty() {
+        return Ok(None);
+    }
+    let stats = ludion_renderer::decal_stats(&scene);
+    Ok(Some(DecalProfile {
+        alpha: u64::from(stats.alpha),
+        multiply: u64::from(stats.multiply),
+        add: u64::from(stats.add),
+        coat: u64::from(stats.coat),
+        draws: u64::from(stats.draws),
+        receiver_meshes: u64::from(stats.receiver_meshes),
+    }))
 }
 
 /// Fits the frame's sun cascades and reports what the sun authored and the frame fitted.
@@ -2270,6 +2297,7 @@ entities:
             cluster: None,
             local_shadows: None,
             sun_cascades: None,
+            decals: None,
             load: None,
             probes: None,
             samples: None,
@@ -2292,6 +2320,7 @@ entities:
             "transport",
             "cluster",
             "local_shadows",
+            "decals",
             "samples",
         ] {
             assert!(
@@ -2305,6 +2334,7 @@ entities:
                 && reparsed.transport.is_none()
                 && reparsed.cluster.is_none()
                 && reparsed.local_shadows.is_none()
+                && reparsed.decals.is_none()
                 && reparsed.samples.is_none()
         );
         assert_eq!(serde_json::to_value(&reparsed).unwrap(), value);
@@ -2548,6 +2578,34 @@ entities:
         let panel = sun_cascade_panel(SCENE, "full");
         assert_eq!((panel.authored, panel.count, panel.tile_edge), (0, 0, 0));
         assert!(panel.cascades.is_empty());
+    }
+
+    /// The `decals` panel counts the fixture's one multiply decal and its one draw; a scene without a
+    /// decal has no panel. It needs no adapter, like the cascade panel.
+    #[test]
+    fn the_decals_panel_counts_the_fixture_and_is_absent_without_a_decal() {
+        let mut engine = counter_engine();
+        engine
+            .load_inline_scene(include_str!("../tests/fixtures/decals.yaml"))
+            .unwrap();
+        let panel = profile_decals(&mut engine)
+            .unwrap()
+            .expect("a scene with a decal has the panel");
+        assert_eq!(
+            panel,
+            DecalProfile {
+                alpha: 0,
+                multiply: 1,
+                add: 0,
+                coat: 0,
+                draws: 1,
+                receiver_meshes: 0,
+            }
+        );
+
+        let mut empty = counter_engine();
+        empty.load_inline_scene(SCENE).unwrap();
+        assert_eq!(profile_decals(&mut empty).unwrap(), None);
     }
 
     /// The `local_shadows` panel is the frame's own plan: the fixture's shadowed spot (35°, one view)
@@ -2812,6 +2870,7 @@ entities:
             cluster: None,
             local_shadows: None,
             sun_cascades: None,
+            decals: None,
             load: None,
             probes: None,
             samples: None,

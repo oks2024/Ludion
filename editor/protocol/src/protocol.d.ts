@@ -2877,6 +2877,12 @@ export interface ProfileReport {
    * offline driver owns its own loop and can time the build as its own span.
    */
   cluster?: ClusterProfile | null;
+  /**
+   * Projected decals of the frame: how many of each blend mode and how many draws and receiver
+   * meshes the projector pass plans. Filled by the **offline** driver for a scene with a decal;
+   * absent otherwise and for a live capture, for `cluster`'s reason.
+   */
+  decals?: DecalProfile | null;
   gpu: GpuProfile;
   /**
    * What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.
@@ -2981,6 +2987,39 @@ export interface ClusterProfile {
    * gets looser, whether or not any single list gets longer.
    */
   total_refs: number;
+  [k: string]: unknown;
+}
+/**
+ * Projected decals — the frame's decals by blend mode and what the projector pass plans for them.
+ *
+ * Not measurements: the counts are the shape of the frame's plan, reduced from the same packing the
+ * renderer runs, so two runs of the same frame produce identical numbers.
+ */
+export interface DecalProfile {
+  /**
+   * Decals blended as `add`.
+   */
+  add: number;
+  /**
+   * Decals blended as `alpha`.
+   */
+  alpha: number;
+  /**
+   * Decals blended as `coat`.
+   */
+  coat: number;
+  /**
+   * Decal draws in the projector pass: runs of consecutive decals sharing a blend and a map.
+   */
+  draws: number;
+  /**
+   * Decals blended as `multiply`.
+   */
+  multiply: number;
+  /**
+   * Meshes the receiver-id pass redraws; 0 means the pass is not scheduled.
+   */
+  receiver_meshes: number;
   [k: string]: unknown;
 }
 /**

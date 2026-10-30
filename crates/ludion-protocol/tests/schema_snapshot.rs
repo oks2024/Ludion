@@ -20,7 +20,7 @@ use ludion_protocol::schema;
 const SNAPSHOT: &str = include_str!("protocol_schema.snapshot.json");
 
 /// The committed schema hash (16 hex digits). Re-bless when the schema changes.
-const EXPECTED_SCHEMA_HASH: &str = "dd1f62f668e12990";
+const EXPECTED_SCHEMA_HASH: &str = "9a95c772178d87c0";
 
 #[test]
 fn schema_matches_committed_snapshot() {

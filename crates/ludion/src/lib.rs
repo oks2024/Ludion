@@ -2350,6 +2350,7 @@ mod budget_quality_tests {
             cluster: None,
             local_shadows: None,
             sun_cascades: None,
+            decals: None,
             load: None,
             probes: None,
             samples: None,

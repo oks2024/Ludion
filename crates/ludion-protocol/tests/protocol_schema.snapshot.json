@@ -3791,6 +3791,56 @@
         ],
         "type": "object"
       },
+      "DecalProfile": {
+        "description": "Projected decals — the frame's decals by blend mode and what the projector pass plans for them.\n\nNot measurements: the counts are the shape of the frame's plan, reduced from the same packing the\nrenderer runs, so two runs of the same frame produce identical numbers.",
+        "properties": {
+          "add": {
+            "description": "Decals blended as `add`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "alpha": {
+            "description": "Decals blended as `alpha`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "coat": {
+            "description": "Decals blended as `coat`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "draws": {
+            "description": "Decal draws in the projector pass: runs of consecutive decals sharing a blend and a map.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "multiply": {
+            "description": "Decals blended as `multiply`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "receiver_meshes": {
+            "description": "Meshes the receiver-id pass redraws; 0 means the pass is not scheduled.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "alpha",
+          "multiply",
+          "add",
+          "coat",
+          "draws",
+          "receiver_meshes"
+        ],
+        "type": "object"
+      },
       "DestroyedEntity": {
         "description": "A descendant destroyed with its ancestor by `entity.destroy`: its old id and component state.\n\n# Example\n```\nuse ludion_protocol::response::DestroyedEntity;\nuse ludion_core::ids::EntityId;\nuse std::collections::BTreeMap;\n\nlet d = DestroyedEntity { entity: EntityId::new(5, 0), components: BTreeMap::new() };\nassert_eq!(d.entity.index(), 5);\n```",
         "properties": {
@@ -4194,6 +4244,17 @@
               }
             ],
             "description": "Clustered-forward light binning: what the frame's cluster tables cost to build and how\ncrowded they came out. Filled by the **offline** driver and absent for a live capture — the\nmirror image of `transport`, and for the mirror-image reason: the live host builds its\ncluster tables inside a frame a profiler must neither stall nor make pay twice, while the\noffline driver owns its own loop and can time the build as its own span."
+          },
+          "decals": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DecalProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Projected decals of the frame: how many of each blend mode and how many draws and receiver\nmeshes the projector pass plans. Filled by the **offline** driver for a scene with a decal;\nabsent otherwise and for a live capture, for `cluster`'s reason."
           },
           "gpu": {
             "$ref": "#/$defs/GpuProfile",
@@ -6041,6 +6102,56 @@
         ],
         "type": "object"
       },
+      "DecalProfile": {
+        "description": "Projected decals — the frame's decals by blend mode and what the projector pass plans for them.\n\nNot measurements: the counts are the shape of the frame's plan, reduced from the same packing the\nrenderer runs, so two runs of the same frame produce identical numbers.",
+        "properties": {
+          "add": {
+            "description": "Decals blended as `add`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "alpha": {
+            "description": "Decals blended as `alpha`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "coat": {
+            "description": "Decals blended as `coat`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "draws": {
+            "description": "Decal draws in the projector pass: runs of consecutive decals sharing a blend and a map.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "multiply": {
+            "description": "Decals blended as `multiply`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "receiver_meshes": {
+            "description": "Meshes the receiver-id pass redraws; 0 means the pass is not scheduled.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "alpha",
+          "multiply",
+          "add",
+          "coat",
+          "draws",
+          "receiver_meshes"
+        ],
+        "type": "object"
+      },
       "DestroyedEntity": {
         "description": "A descendant destroyed with its ancestor by `entity.destroy`: its old id and component state.\n\n# Example\n```\nuse ludion_protocol::response::DestroyedEntity;\nuse ludion_core::ids::EntityId;\nuse std::collections::BTreeMap;\n\nlet d = DestroyedEntity { entity: EntityId::new(5, 0), components: BTreeMap::new() };\nassert_eq!(d.entity.index(), 5);\n```",
         "properties": {
@@ -6444,6 +6555,17 @@
               }
             ],
             "description": "Clustered-forward light binning: what the frame's cluster tables cost to build and how\ncrowded they came out. Filled by the **offline** driver and absent for a live capture — the\nmirror image of `transport`, and for the mirror-image reason: the live host builds its\ncluster tables inside a frame a profiler must neither stall nor make pay twice, while the\noffline driver owns its own loop and can time the build as its own span."
+          },
+          "decals": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DecalProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Projected decals of the frame: how many of each blend mode and how many draws and receiver\nmeshes the projector pass plans. Filled by the **offline** driver for a scene with a decal;\nabsent otherwise and for a live capture, for `cluster`'s reason."
           },
           "gpu": {
             "$ref": "#/$defs/GpuProfile",

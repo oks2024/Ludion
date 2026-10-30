@@ -88,8 +88,8 @@ pub use probe_capture::{
     AxisIrradiance, ProbeIrradiance, ProbeReadback, ProbeResolve, ResolvedProbe,
 };
 pub use projector::{
-    OCCLUSION_ATLAS_MAX, OCCLUSION_TILE, OcclusionAtlas, ProjectorBlend, ProjectorKind,
-    footprint_bound, occlusion_atlas, occlusion_bias, occlusion_view,
+    DecalStats, OCCLUSION_ATLAS_MAX, OCCLUSION_TILE, OcclusionAtlas, ProjectorBlend, ProjectorKind,
+    decal_stats, footprint_bound, occlusion_atlas, occlusion_bias, occlusion_view,
 };
 pub use quality::{MAX_SUN_CASCADES, Quality, QualityParams};
 pub use render::{GpuUploads, Renderer, is_renderer_shader};

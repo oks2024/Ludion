@@ -278,6 +278,7 @@ mod tests {
             cluster: None,
             local_shadows: None,
             sun_cascades: None,
+            decals: None,
             load: None,
             probes: None,
             samples: Some(ProfileSamples {
