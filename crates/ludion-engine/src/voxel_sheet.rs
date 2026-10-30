@@ -320,6 +320,11 @@ fn gi_volume_empty(path: &Path, index: usize, skipped: &SkipReport) -> Diagnosti
             "sculpt, assembly or empty mesh",
             "sculpts, assemblies and meshes with no triangles are not voxelized",
         ),
+        (
+            &skipped.cutout,
+            "cutout",
+            "an `alpha_mode: mask` mesh lets light through and is not voxelized",
+        ),
     ];
     let counts: Vec<String> = reasons
         .iter()

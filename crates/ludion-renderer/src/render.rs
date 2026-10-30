@@ -271,6 +271,9 @@ struct MeshAssetGpu {
     bounds: Option<Aabb>,
     /// Whether the mesh draws through the cull-none variant, with its back faces shaded.
     double_sided: bool,
+    /// Whether the material is `alpha_mode: mask`, which the shadow casters draw through the cutout
+    /// pipeline (a map-less mask counts: the vertex-colour alpha alone can cut).
+    cutout: bool,
     /// The mesh pass's group-4 material bind group — the maps this mesh's material carries, the 1×1
     /// defaults in the slots it does not, and the `flags` word that decides which the shader reads.
     /// Built with the upload because the cache key ([`MeshData::hash`]) moves whenever the document
@@ -2864,6 +2867,23 @@ impl MeshDraw {
             double_sided: false,
         }
     }
+
+    /// A primitive has no material, so it always casts through the depth-only pipeline.
+    fn caster(&self) -> CasterPipeline {
+        CasterPipeline {
+            variant: self.variant(),
+            cutout: false,
+        }
+    }
+}
+
+/// Which shadow caster pipeline a draw records with: the depth-only [`ShaderId::Shadow`] or the
+/// cutout [`ShaderId::ShadowCutout`], each in the draw's [`MeshVariant`]. The default is the
+/// pipeline every caster pass binds first.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct CasterPipeline {
+    variant: MeshVariant,
+    cutout: bool,
 }
 
 /// The frame's decals as the two decal passes consume them: packed instances, the receiver lists, and
@@ -2908,6 +2928,14 @@ impl MeshAssetDraw {
         MeshVariant {
             mirrored: self.mirrored,
             double_sided: self.mesh.double_sided,
+        }
+    }
+
+    /// The shadow caster pipeline this draw records with.
+    fn caster(&self) -> CasterPipeline {
+        CasterPipeline {
+            variant: self.variant(),
+            cutout: self.mesh.cutout,
         }
     }
 }
@@ -3337,10 +3365,10 @@ impl PassRecorder for FrameRecorder<'_> {
 }
 
 impl FrameRecorder<'_> {
-    /// The depth-only sun shadow pass (present only on a sun frame): every mesh — both the per-shape
-    /// primitive draws and the indexed asset draws — rendered into the graph-owned shadow map with the
-    /// shadow pipeline, reusing the scene pass's instance buffers. Clears depth to 1.0 and **stores**
-    /// it for the scene pass to sample.
+    /// The depth-only sun shadow pass (present only on a sun frame), plus the cutout caster for mask
+    /// meshes: every mesh — both the per-shape primitive draws and the indexed asset draws — rendered
+    /// into the graph-owned shadow map with the shadow pipeline, reusing the scene pass's instance
+    /// buffers. Clears depth to 1.0 and **stores** it for the scene pass to sample.
     fn record_shadow(&self, pass: &mut RecordedPass<'_>) {
         if let Some(cascades) = &self.sun_cascades {
             return self.record_sun_cascades(pass, cascades);
@@ -3375,31 +3403,21 @@ impl FrameRecorder<'_> {
             multiview_mask: None,
         });
 
-        rp.set_pipeline(self.r.pipeline(ShaderId::Shadow));
+        let mut bound = CasterPipeline::default();
+        rp.set_pipeline(self.caster_pipeline(bound));
         rp.set_bind_group(SHADOW_VIEW_GROUP, &shadow_view_bg, &[]);
-        let mut variant = MeshVariant::PLAIN;
-        // Primitive meshes: same per-shape vertex buffer + instance buffer as the scene pass.
-        for draw in &self.mesh_draws {
-            if draw.variant().culled() != variant {
-                variant = draw.variant().culled();
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, variant));
-            }
-            let mb = self.r.mesh_of(draw.shape);
-            rp.set_vertex_buffer(0, mb.buffer.slice(..));
-            rp.set_vertex_buffer(1, draw.instances.slice(..));
-            rp.draw(0..mb.vertex_count, 0..draw.count);
-        }
-        // Asset meshes: same indexed instanced draw.
-        for draw in &self.mesh_asset_draws {
-            if draw.variant().culled() != variant {
-                variant = draw.variant().culled();
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, variant));
-            }
-            rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-            rp.set_vertex_buffer(1, draw.instances.slice(..));
-            rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            rp.draw_indexed(0..draw.mesh.index_count, 0, 0..draw.count);
-        }
+        // Every instance of every draw: `sources` is parallel to the instance buffer.
+        self.draw_casters(
+            &mut rp,
+            |s| std::iter::once(0..s.len() as u32).collect(),
+            &mut bound,
+        );
+    }
+
+    /// The shadow caster pipeline for `key`: depth-only, or the cutout caster for a mask mesh, in the
+    /// draw's winding and cull variant.
+    fn caster_pipeline(&self, key: CasterPipeline) -> &wgpu::RenderPipeline {
+        self.mesh_pipeline(caster_shader(key), key.variant)
     }
 
     /// The pipeline a mesh-geometry draw records with: the shader's winding and cull variant for
@@ -3896,8 +3914,8 @@ impl FrameRecorder<'_> {
 
     /// The drop-shadow occlusion pass (present only with a drop shadow): for each caster, every
     /// mesh but its own rendered straight down into the caster's tile of the graph-owned atlas, with
-    /// the sun shadow's pipeline and instance buffers. Clears depth to 1.0 and **stores** it for the
-    /// projector pass to sample.
+    /// the sun shadow's pipelines (depth-only, plus the cutout caster for mask meshes) and instance
+    /// buffers. Clears depth to 1.0 and **stores** it for the projector pass to sample.
     fn record_drop_shadow_occlusion(&self, pass: &mut RecordedPass<'_>) {
         let depth_view = pass
             .depth
@@ -3942,53 +3960,23 @@ impl FrameRecorder<'_> {
             multiview_mask: None,
         });
 
-        rp.set_pipeline(self.r.pipeline(ShaderId::Shadow));
-        let mut variant = MeshVariant::PLAIN;
+        let mut bound = CasterPipeline::default();
+        rp.set_pipeline(self.caster_pipeline(bound));
         for (index, (ds, view_bg)) in self.drop_shadows.iter().zip(&view_bgs).enumerate() {
             let (x, y) = atlas.tile_origin(index);
             let tile = atlas.tile;
             rp.set_viewport(x as f32, y as f32, tile as f32, tile as f32, 0.0, 1.0);
             rp.set_scissor_rect(x, y, tile, tile);
             rp.set_bind_group(SHADOW_VIEW_GROUP, view_bg, &[]);
-            for draw in &self.mesh_draws {
-                let kept = kept_ranges(&draw.sources, &ds.exclude);
-                if kept.is_empty() {
-                    continue;
-                }
-                if draw.variant().culled() != variant {
-                    variant = draw.variant().culled();
-                    rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, variant));
-                }
-                let mb = self.r.mesh_of(draw.shape);
-                rp.set_vertex_buffer(0, mb.buffer.slice(..));
-                rp.set_vertex_buffer(1, draw.instances.slice(..));
-                for range in kept {
-                    rp.draw(0..mb.vertex_count, range);
-                }
-            }
-            for draw in &self.mesh_asset_draws {
-                let kept = kept_ranges(&draw.sources, &ds.exclude);
-                if kept.is_empty() {
-                    continue;
-                }
-                if draw.variant().culled() != variant {
-                    variant = draw.variant().culled();
-                    rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, variant));
-                }
-                rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-                rp.set_vertex_buffer(1, draw.instances.slice(..));
-                rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                for range in kept {
-                    rp.draw_indexed(0..draw.mesh.index_count, 0, range);
-                }
-            }
+            self.draw_casters(&mut rp, |s| kept_ranges(s, &ds.exclude), &mut bound);
         }
     }
 
     /// The local-light shadow pass (present only when a light is granted a view): each granted view
-    /// drawn depth-only into its tile of the graph-owned atlas, with the sun shadow's pipeline and
-    /// instance buffers. Casters are culled per view; a skinned instance is always drawn. Clears
-    /// depth to 1.0, so an ungranted tile reads as unoccluded. The sun's pass is untouched.
+    /// drawn depth-only (plus the cutout caster for mask meshes) into its tile of the graph-owned
+    /// atlas, with the sun shadow's pipelines and instance buffers. Casters are culled per view; a
+    /// skinned instance is always drawn. Clears depth to 1.0, so an ungranted tile reads as
+    /// unoccluded. The sun's pass is untouched.
     fn record_local_shadow(&self, pass: &mut RecordedPass<'_>) {
         let depth_view = pass
             .depth
@@ -4019,8 +4007,8 @@ impl FrameRecorder<'_> {
             multiview_mask: None,
         });
 
-        rp.set_pipeline(self.r.pipeline(ShaderId::Shadow));
-        let mut variant = MeshVariant::PLAIN;
+        let mut bound = CasterPipeline::default();
+        rp.set_pipeline(self.caster_pipeline(bound));
         let mut visible = vec![false; self.caster_bounds.len()];
         for (view, view_bg) in plan.views.iter().zip(&view_bgs) {
             let rect = view.rect;
@@ -4038,7 +4026,7 @@ impl FrameRecorder<'_> {
             for index in cull(&self.caster_bounds, &view.cull) {
                 visible[index as usize] = true;
             }
-            self.draw_casters(&mut rp, &visible, &mut variant);
+            self.draw_casters(&mut rp, |s| visible_ranges(s, &visible), &mut bound);
         }
     }
 
@@ -4062,22 +4050,23 @@ impl FrameRecorder<'_> {
         )
     }
 
-    /// Draws the casters `visible` marks (indexed by caster, as `caster_bounds`) with the shadow
-    /// pipeline; `variant` tracks which pipeline variant is bound across calls.
+    /// The one caster loop behind all four shadow passes. `ranges` maps a draw's `sources` to the
+    /// instance ranges to draw; `bound` tracks which caster pipeline is bound across calls. Primitives
+    /// first, then assets; a mask asset binds its own material before each draw.
     fn draw_casters(
         &self,
         rp: &mut wgpu::RenderPass<'_>,
-        visible: &[bool],
-        variant: &mut MeshVariant,
+        ranges: impl Fn(&[u32]) -> Vec<std::ops::Range<u32>>,
+        bound: &mut CasterPipeline,
     ) {
         for draw in &self.mesh_draws {
-            let kept = visible_ranges(&draw.sources, visible);
+            let kept = ranges(&draw.sources);
             if kept.is_empty() {
                 continue;
             }
-            if draw.variant().culled() != *variant {
-                *variant = draw.variant().culled();
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, *variant));
+            if draw.caster() != *bound {
+                *bound = draw.caster();
+                rp.set_pipeline(self.caster_pipeline(*bound));
             }
             let mb = self.r.mesh_of(draw.shape);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
@@ -4087,13 +4076,16 @@ impl FrameRecorder<'_> {
             }
         }
         for draw in &self.mesh_asset_draws {
-            let kept = visible_ranges(&draw.sources, visible);
+            let kept = ranges(&draw.sources);
             if kept.is_empty() {
                 continue;
             }
-            if draw.variant().culled() != *variant {
-                *variant = draw.variant().culled();
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, *variant));
+            if draw.caster() != *bound {
+                *bound = draw.caster();
+                rp.set_pipeline(self.caster_pipeline(*bound));
+            }
+            if bound.cutout {
+                rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             }
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
             rp.set_vertex_buffer(1, draw.instances.slice(..));
@@ -4104,9 +4096,10 @@ impl FrameRecorder<'_> {
         }
     }
 
-    /// The sun pass of a cascaded frame: each fitted cascade drawn depth-only into its tile of the
-    /// atlas, row-major, with its own matrix and casters culled to its box (a skinned instance is
-    /// always drawn). Clears depth to 1.0, so a tile no cascade fills reads as unoccluded.
+    /// The sun pass of a cascaded frame: each fitted cascade drawn into its tile of the atlas,
+    /// row-major, depth-only (plus the cutout caster for mask meshes), with its own matrix and casters
+    /// culled to its box (a skinned instance is always drawn). Clears depth to 1.0, so a tile no
+    /// cascade fills reads as unoccluded.
     fn record_sun_cascades(&self, pass: &mut RecordedPass<'_>, cascades: &SunCascades) {
         let depth_view = pass
             .depth
@@ -4132,8 +4125,8 @@ impl FrameRecorder<'_> {
             multiview_mask: None,
         });
 
-        rp.set_pipeline(self.r.pipeline(ShaderId::Shadow));
-        let mut variant = MeshVariant::PLAIN;
+        let mut bound = CasterPipeline::default();
+        rp.set_pipeline(self.caster_pipeline(bound));
         let mut visible = vec![false; self.caster_bounds.len()];
         let tile = self.sun_tile;
         for (index, view_bg) in view_bgs.iter().enumerate() {
@@ -4146,7 +4139,7 @@ impl FrameRecorder<'_> {
             for &caster in &self.sun_cascade_casters[index] {
                 visible[caster as usize] = true;
             }
-            self.draw_casters(&mut rp, &visible, &mut variant);
+            self.draw_casters(&mut rp, |s| visible_ranges(s, &visible), &mut bound);
         }
     }
 
@@ -5645,7 +5638,7 @@ fn is_mirrored(model: &Mat4) -> bool {
 }
 
 /// Which of a mesh-geometry shader's four pipelines a draw records with.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 struct MeshVariant {
     /// The model matrix is a reflection: winding reversed so the outside faces stay the front.
     mirrored: bool,
@@ -5678,13 +5671,14 @@ impl MeshVariant {
     fn index(self) -> usize {
         usize::from(self.mirrored) | usize::from(self.double_sided) << 1
     }
+}
 
-    /// The same winding, single-sided: what the depth-only shadow casters draw with.
-    fn culled(self) -> MeshVariant {
-        MeshVariant {
-            double_sided: false,
-            ..self
-        }
+/// The shader a caster pipeline runs: with [`MeshVariant::index`] it names the pipeline slot.
+fn caster_shader(key: CasterPipeline) -> ShaderId {
+    if key.cutout {
+        ShaderId::ShadowCutout
+    } else {
+        ShaderId::Shadow
     }
 }
 
@@ -5832,6 +5826,10 @@ fn upload_mesh_asset(
         index_count: mesh.indices.len() as u32,
         bounds: Aabb::of_positions(&mesh.positions),
         double_sided: mesh.double_sided,
+        cutout: mesh
+            .textures
+            .as_ref()
+            .is_some_and(|t| t.alpha_cutoff.is_some()),
         material_bg,
     }
 }
@@ -6045,6 +6043,7 @@ fn skin_bind_group(
 enum ShaderId {
     Mesh,
     Shadow,
+    ShadowCutout,
     Prepass,
     Sky,
     GroundMarker,
@@ -6104,7 +6103,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 36;
+const SHADER_COUNT: usize = 37;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -6147,6 +6146,21 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // The bone palette, so a skinned mesh casts its deformed shadow rather than its rest pose.
         snippets: &[Snippet::Skin],
         layouts: &[Some(LayoutId::ShadowView)],
+    },
+    ShaderDesc {
+        id: ShaderId::ShadowCutout,
+        file_name: "shadow_cutout.wgsl",
+        body: include_str!("shaders/shadow_cutout.wgsl"),
+        // The bone palette, and the per-draw material for the mask test; group 4 sits where mesh and
+        // prepass keep it, since bindgen unifies the material bindings by name.
+        snippets: &[Snippet::Skin, Snippet::MeshMaterial],
+        layouts: &[
+            Some(LayoutId::ShadowView),
+            None,
+            None,
+            None,
+            Some(LayoutId::MeshMaterial),
+        ],
     },
     ShaderDesc {
         id: ShaderId::Prepass,
@@ -7005,6 +7019,9 @@ fn build_pipeline(
         ShaderId::Shadow => {
             return twinned(build_shadow_pipeline, &module(device, label, src));
         }
+        ShaderId::ShadowCutout => {
+            return twinned(build_shadow_cutout_pipeline, &module(device, label, src));
+        }
         ShaderId::Prepass => {
             return twinned(build_prepass_pipeline, &module(device, label, src));
         }
@@ -7430,14 +7447,65 @@ fn build_shadow_pipeline(
         // Depth-only: no fragment stage, no color targets.
         fragment: None,
         primitive: mesh_primitive(variant),
-        depth_stencil: Some(wgpu::DepthStencilState {
-            bias: wgpu::DepthBiasState {
-                constant: 0,
-                slope_scale: SHADOW_SLOPE_BIAS,
-                clamp: 0.0,
-            },
-            ..depth_state(true, wgpu::CompareFunction::Less)
+        depth_stencil: Some(shadow_depth_state()),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The depth state both shadow caster pipelines write with, so their bias cannot drift apart.
+fn shadow_depth_state() -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        bias: wgpu::DepthBiasState {
+            constant: 0,
+            slope_scale: SHADOW_SLOPE_BIAS,
+            clamp: 0.0,
+        },
+        ..depth_state(true, wgpu::CompareFunction::Less)
+    }
+}
+
+/// The cutout shadow caster: [`build_shadow_pipeline`]'s depth state with a fragment stage (no
+/// colour target) that discards a mask material's holes. It reads the mesh vertex and instance
+/// arrays verbatim, as the prepass does.
+///
+/// `variant` picks the winding and the culling ([`mesh_primitive`]).
+fn build_shadow_cutout_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    variant: MeshVariant,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MeshVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &MESH_VERTEX_ATTRS,
+                }),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MeshInstanceRaw>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &MESH_INSTANCE_ATTRS,
+                }),
+            ],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
+        primitive: mesh_primitive(variant),
+        depth_stencil: Some(shadow_depth_state()),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -12331,10 +12399,15 @@ mod tests {
 
     /// An 8×2 base-colour map, one orange everywhere; the left half's alpha is `left_alpha`.
     fn half_alpha_map(hash: u64, left_alpha: u8) -> crate::scene::MeshTexture {
+        alpha_map(hash, left_alpha, 255)
+    }
+
+    /// [`half_alpha_map`] with the right half's alpha chosen too.
+    fn alpha_map(hash: u64, left_alpha: u8, right_alpha: u8) -> crate::scene::MeshTexture {
         let mut rgba = Vec::new();
         for _ in 0..2 {
             for x in 0..8 {
-                let alpha = if x < 4 { left_alpha } else { 255 };
+                let alpha = if x < 4 { left_alpha } else { right_alpha };
                 rgba.extend_from_slice(&[200, 120, 60, alpha]);
             }
         }
@@ -12582,6 +12655,361 @@ mod tests {
             "coverage 0.2 < cutoff 0.5 must discard every fragment",
         );
         assert_ne!(with_alpha(0.8).rgba, without.rgba, "coverage 0.8 must draw");
+    }
+
+    // --- Cutout and double-sided shadow casters ----------------------------------------------
+
+    /// A mask quad (cutoff 0.5) whose base map has alpha `left` over its left half and `right` over
+    /// its right half. `hash` keys the mesh cache, so each distinct content needs its own.
+    fn mask_quad(hash: u64, left: u8, right: u8) -> MeshData {
+        sheet(
+            hash,
+            false,
+            Some(cutout_textures(
+                Some(alpha_map(hash ^ 0x005E_EDA1, left, right)),
+                Some(0.5),
+            )),
+        )
+    }
+
+    /// `quad` as the scene's only asset, with one instance at `model` (scalar material, so lit).
+    fn add_quad(scene: &mut RenderScene, quad: MeshData, model: Mat4) {
+        scene.mesh_assets.push(Arc::new(quad));
+        let mut instance = skin_instance(model, 0);
+        instance.material = [1.0, 0.0, 0.0];
+        instance.normal_matrix = Mat3::from_mat4(model).inverse().transpose();
+        scene.meshes.push(instance);
+    }
+
+    /// The quad laid flat at height `y`, facing up, spanning `±scale` in x and z.
+    fn flat_quad_model(y: f32, scale: f32) -> Mat4 {
+        Mat4::from_translation(Vec3::new(0.0, y, 0.0))
+            * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+            * Mat4::from_scale(Vec3::splat(scale))
+    }
+
+    /// [`needs_gpu_occluder_shadows_the_receiver`]'s ground and camera under a straight-down sun,
+    /// with the sun's cascades on when asked.
+    fn cutout_sun_scene(w: u32, h: u32, cascades: bool) -> RenderScene {
+        let mut scene = RenderScene::empty((w, h));
+        scene.ambient = [0.05; 3];
+        let position = Vec3::new(0.0, 3.0, 11.0);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(position, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::perspective_rh(
+                60.0_f32.to_radians(),
+                w as f32 / h as f32,
+                0.1,
+                100.0,
+            ),
+            position,
+        };
+        let mut sun = test_sun(Vec3::NEG_Y, Vec3::splat(3.0), 0.002);
+        if cascades {
+            sun.cascades = Some(crate::scene::SunCascadeConfig {
+                count: 4,
+                shadow_distance: 60.0,
+                splits: None,
+                shadow_near: -60.0,
+                shadow_far: 60.0,
+            });
+        }
+        scene.sun = Some(sun);
+        scene.meshes = vec![ground(20.0)];
+        scene
+    }
+
+    /// **A mask mesh casts only its opaque texels into the sun map**, single map and cascades alike.
+    /// A quad laid flat above the floor, its left half cut and its right half opaque: the floor under
+    /// the opaque half is dark against the frame without the quad, the floor under the cut half is
+    /// not. The quad is edge-on to the camera, so only the floor's luma moves.
+    #[test]
+    fn needs_gpu_a_cutout_casts_only_its_opaque_texels_into_the_sun_map() {
+        let Some(renderer) = skip_or_renderer("a_cutout_casts_only_its_opaque_texels") else {
+            return;
+        };
+        let (w, h) = (128u32, 96u32);
+        let size = FrameSize::native(w, h);
+        for (n, cascades) in [false, true].into_iter().enumerate() {
+            let bare_scene = cutout_sun_scene(w, h, cascades);
+            let bare = renderer.render(&bare_scene, size).expect("bare render");
+            let mut scene = bare_scene.clone();
+            add_quad(
+                &mut scene,
+                mask_quad(0xF1_00 + n as u64, 0, 255),
+                flat_quad_model(3.0, 3.0),
+            );
+            let shadowed = renderer.render(&scene, size).expect("cutout render");
+
+            let (cx, cy) = pixel_of(&scene, Vec3::new(-1.5, 0.0, 0.0), w, h);
+            let (ox, oy) = pixel_of(&scene, Vec3::new(1.5, 0.0, 0.0), w, h);
+            assert!(
+                luma(&bare, ox, oy) > 60,
+                "cascades={cascades}: the floor is lit"
+            );
+            assert!(
+                luma(&shadowed, ox, oy) + 40 < luma(&bare, ox, oy),
+                "cascades={cascades}: the floor under the opaque half is dark: {} vs {}",
+                luma(&bare, ox, oy),
+                luma(&shadowed, ox, oy),
+            );
+            assert!(
+                luma(&shadowed, cx, cy).abs_diff(luma(&bare, cx, cy)) <= 2,
+                "cascades={cascades}: the floor under the cut half stays lit: {} vs {}",
+                luma(&bare, cx, cy),
+                luma(&shadowed, cx, cy),
+            );
+        }
+    }
+
+    /// **A double-sided sheet casts from either side.** An opaque quad facing the floor, away from a
+    /// straight-down sun, casts nothing when single-sided (the guard) and a full shadow when
+    /// double-sided, as a plain mesh and as a mask, and also under a mirroring scale.
+    #[test]
+    fn needs_gpu_a_double_sided_sheet_casts_from_its_back() {
+        let Some(renderer) = skip_or_renderer("a_double_sided_sheet_casts_from_its_back") else {
+            return;
+        };
+        let (w, h) = (128u32, 96u32);
+        let size = FrameSize::native(w, h);
+        let bare_scene = cutout_sun_scene(w, h, false);
+        let bare = renderer.render(&bare_scene, size).expect("bare render");
+        let probes = [Vec3::new(-1.5, 0.0, 0.0), Vec3::new(1.5, 0.0, 0.0)];
+        for mask in [false, true] {
+            for (double_sided, scale_x) in [(false, 3.0), (true, 3.0), (true, -3.0)] {
+                let hash = 0xF2_00
+                    + u64::from(mask) * 4
+                    + u64::from(double_sided) * 2
+                    + u64::from(scale_x < 0.0);
+                let textures = mask.then(|| {
+                    cutout_textures(Some(alpha_map(hash ^ 0x005E_EDA2, 255, 255)), Some(0.5))
+                });
+                let mut scene = bare_scene.clone();
+                add_quad(
+                    &mut scene,
+                    sheet(hash, double_sided, textures),
+                    Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0))
+                        * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
+                        * Mat4::from_scale(Vec3::new(scale_x, 3.0, 3.0)),
+                );
+                let image = renderer.render(&scene, size).expect("sheet render");
+                for probe in probes {
+                    let (x, y) = pixel_of(&scene, probe, w, h);
+                    let (lit, now) = (luma(&bare, x, y), luma(&image, x, y));
+                    let label =
+                        format!("mask={mask} double_sided={double_sided} scale_x={scale_x}");
+                    if double_sided {
+                        assert!(
+                            now + 40 < lit,
+                            "{label}: the back face casts: {lit} vs {now}"
+                        );
+                    } else {
+                        assert!(
+                            now.abs_diff(lit) <= 2,
+                            "{label}: a culled back face casts nothing: {lit} vs {now}",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// **The shafts inherit the cutout through the sun map.** A vertical mask quad across the wall's
+    /// slot, facing the sun: fully cut it changes no byte, fully opaque it closes the beam, and cut on
+    /// one half only it leaves the beam between the two.
+    #[test]
+    fn needs_gpu_the_shafts_inherit_a_cutout_through_the_sun_map() {
+        let Some(renderer) = skip_or_renderer("the_shafts_inherit_a_cutout") else {
+            return;
+        };
+        let (w, h) = (96u32, 96u32);
+        let size = FrameSize::native(w, h);
+        let mut open_scene = shafts_scene(w, h);
+        open_scene.post = Some(shafts_post(8.0));
+        let open = renderer.render(&open_scene, size).expect("open slot");
+        let with_quad = |hash: u64, left: u8, right: u8| {
+            let mut scene = open_scene.clone();
+            // Facing the sun (-Z), slightly wider than the slot and as tall as the slabs.
+            add_quad(
+                &mut scene,
+                mask_quad(hash, left, right),
+                Mat4::from_translation(Vec3::new(0.0, 2.0, -3.0))
+                    * Mat4::from_rotation_y(std::f32::consts::PI)
+                    * Mat4::from_scale(Vec3::new(1.02, 12.0, 1.0)),
+            );
+            renderer.render(&scene, size).expect("quad render")
+        };
+        let beam = |img: &RenderedImage| column_luma(img, 0, w / 2);
+
+        let cut = with_quad(0xF3_01, 0, 0);
+        assert_eq!(cut.rgba, open.rgba, "a fully cut quad changes nothing");
+        let closed = with_quad(0xF3_02, 255, 255);
+        assert!(
+            beam(&closed) + 8.0 < beam(&open),
+            "an opaque quad closes the beam: {:.2} vs {:.2}",
+            beam(&open),
+            beam(&closed),
+        );
+        let half = with_quad(0xF3_03, 0, 255);
+        assert!(
+            beam(&closed) < beam(&half) && beam(&half) < beam(&open),
+            "a half-cut quad passes half the beam: {:.2} < {:.2} < {:.2}",
+            beam(&closed),
+            beam(&half),
+            beam(&open),
+        );
+    }
+
+    /// **An opaque asset caster is unmoved by the cutout pipeline.** A mask at cutoff 0 never
+    /// discards, so an opaque quad renders byte-identically with `alpha_cutoff: Some(0.0)` (the cutout
+    /// caster) and `None` (the depth-only one), under the sun map, a granted spot and a drop shadow.
+    #[test]
+    fn needs_gpu_an_opaque_caster_is_byte_identical_through_the_cutout_pipeline() {
+        let Some(renderer) = skip_or_renderer("an_opaque_caster_is_byte_identical") else {
+            return;
+        };
+        let (w, h) = (128u32, 96u32);
+        let size = FrameSize::native(w, h);
+        let opaque = |hash: u64, cutoff: Option<f32>| {
+            sheet(
+                hash,
+                false,
+                Some(cutout_textures(
+                    Some(alpha_map(hash ^ 0x005E_EDA4, 255, 255)),
+                    cutoff,
+                )),
+            )
+        };
+        type Build = fn(u32, u32, MeshData) -> RenderScene;
+        let cases: [(&str, Build); 3] = [
+            ("sun", |w, h, quad| {
+                let mut scene = cutout_sun_scene(w, h, false);
+                add_quad(&mut scene, quad, flat_quad_model(3.0, 3.0));
+                scene
+            }),
+            ("spot", |w, h, quad| {
+                let mut scene = local_receive_scene(w, h);
+                add_quad(&mut scene, quad, flat_quad_model(3.0, 3.0));
+                scene.spot_lights = vec![casting_spot(Vec3::new(0.0, 8.0, 0.0), 20.0, true)];
+                scene
+            }),
+            ("drop shadow", |w, h, quad| {
+                let mut scene = drop_shadow_fixture(w, h, false);
+                add_quad(
+                    &mut scene,
+                    quad,
+                    Mat4::from_translation(Vec3::new(1.0, 0.5, 0.0))
+                        * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+                        * Mat4::from_scale(Vec3::new(1.0, 2.0, 1.0)),
+                );
+                scene.drop_shadows.push(fixture_drop_shadow(Vec::new()));
+                scene
+            }),
+        ];
+        for (n, (name, build)) in cases.into_iter().enumerate() {
+            let depth_only = renderer
+                .render(&build(w, h, opaque(0xF4_00 + 2 * n as u64, None)), size)
+                .expect("depth-only render");
+            let cutout = renderer
+                .render(
+                    &build(w, h, opaque(0xF4_01 + 2 * n as u64, Some(0.0))),
+                    size,
+                )
+                .expect("cutout render");
+            assert_eq!(
+                depth_only.rgba, cutout.rgba,
+                "{name}: a never-discarding cutout caster must match the depth-only one",
+            );
+        }
+    }
+
+    /// **A granted spot's shadow map holds the cutout too.** A flat mask quad under the light, its
+    /// left half cut: against the frame with the spot's shadow off, the floor in the opaque half's
+    /// shadow is dark and the floor beyond the cut half's footprint is untouched.
+    #[test]
+    fn needs_gpu_a_local_shadow_casts_only_the_opaque_texels() {
+        let Some(renderer) = skip_or_renderer("a_local_shadow_casts_only_the_opaque_texels") else {
+            return;
+        };
+        let (w, h) = (192u32, 108u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = local_receive_scene(w, h);
+        add_quad(
+            &mut scene,
+            mask_quad(0xF5_01, 0, 255),
+            flat_quad_model(3.0, 3.0),
+        );
+        scene.spot_lights = vec![casting_spot(Vec3::new(0.0, 8.0, 0.0), 20.0, false)];
+        let plain = renderer.render(&scene, size).expect("an unshadowed render");
+        scene.spot_lights = vec![casting_spot(Vec3::new(0.0, 8.0, 0.0), 20.0, true)];
+        let shadowed = renderer.render(&scene, size).expect("a shadowed render");
+
+        let at = |p: Vec3| pixel_of(&scene, p, w, h);
+        let (ox, oy) = at(Vec3::new(4.0, 0.0, 0.0));
+        let (before, after) = (luma(&plain, ox, oy), luma(&shadowed, ox, oy));
+        assert!(before > 40, "the floor beyond the quad is lit: {before}");
+        assert!(
+            after * 10 < before,
+            "the floor in the opaque half's shadow is dark: {before} -> {after}",
+        );
+        let (cx, cy) = at(Vec3::new(-4.0, 0.0, 0.0));
+        assert!(
+            luma(&shadowed, cx, cy).abs_diff(luma(&plain, cx, cy)) <= 2,
+            "the floor beyond the cut half stays lit: {} vs {}",
+            luma(&plain, cx, cy),
+            luma(&shadowed, cx, cy),
+        );
+    }
+
+    /// **The drop-shadow occlusion pass honours the cutout, and the first-surface rule holds.** A
+    /// quad laid over half the footprint: fully cut it is no surface at all, so the shadow reaches the
+    /// floor exactly as in a frame without it; opaque it takes the shadow and spares the floor.
+    #[test]
+    fn needs_gpu_a_drop_shadow_sees_through_a_cutout() {
+        let Some(renderer) = skip_or_renderer("a_drop_shadow_sees_through_a_cutout") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let size = FrameSize::native(w, h);
+        let quad_model = Mat4::from_translation(Vec3::new(1.0, 0.5, 0.0))
+            * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+            * Mat4::from_scale(Vec3::new(1.0, 2.0, 1.0));
+        let scene_with = |quad: Option<MeshData>, drop: bool| {
+            let mut scene = drop_shadow_fixture(w, h, false);
+            if let Some(quad) = quad {
+                add_quad(&mut scene, quad, quad_model);
+            }
+            if drop {
+                scene.drop_shadows.push(fixture_drop_shadow(Vec::new()));
+            }
+            scene
+        };
+        let floor = pixel_of(&scene_with(None, false), Vec3::new(0.8, 0.0, 0.5), w, h);
+        let floor_luma = |scene: &RenderScene| {
+            luma(
+                &renderer.render(scene, size).expect("render"),
+                floor.0,
+                floor.1,
+            )
+        };
+
+        let bare = floor_luma(&scene_with(None, false));
+        let plateless = floor_luma(&scene_with(None, true));
+        assert!(
+            plateless * 10 < bare * 6,
+            "the guard: {bare} -> {plateless}"
+        );
+        assert_eq!(
+            floor_luma(&scene_with(Some(mask_quad(0xF6_01, 0, 0)), true)),
+            plateless,
+            "a fully cut quad lets the shadow through to the floor",
+        );
+        let opaque_bare = floor_luma(&scene_with(Some(mask_quad(0xF6_02, 255, 255)), false));
+        assert_eq!(
+            floor_luma(&scene_with(Some(mask_quad(0xF6_02, 255, 255)), true)),
+            opaque_bare,
+            "an opaque quad is the first surface, so the floor beneath keeps its light",
+        );
     }
 
     /// A closed box of half-extent 1: six outward-facing quads, counter-clockwise from outside.
@@ -19600,10 +20028,41 @@ mod tests {
         // pins that reuse: `prepass.wgsl` must keep declaring all twenty locations, in the mesh's
         // formats, however few of them its body reads.
         assert_eq!(mesh.as_slice(), crate::shader_gen::PREPASS_VS_MAIN_INPUTS);
+        assert_eq!(
+            mesh.as_slice(),
+            crate::shader_gen::SHADOW_CUTOUT_VS_MAIN_INPUTS
+        );
         // The decal receiver pass reuses them the same way.
         assert_eq!(
             mesh.as_slice(),
             crate::shader_gen::DECAL_RECEIVER_VS_MAIN_INPUTS
+        );
+    }
+
+    /// The eight `(mirrored, double_sided, cutout)` caster keys each pick their own pipeline slot, and
+    /// the default key is the depth-only pass's main pipeline, the one every caster pass binds first.
+    #[test]
+    fn caster_keys_map_to_distinct_pipeline_slots() {
+        let mut slots = Vec::new();
+        for bits in 0..8u8 {
+            let key = CasterPipeline {
+                variant: MeshVariant {
+                    mirrored: bits & 1 != 0,
+                    double_sided: bits & 2 != 0,
+                },
+                cutout: bits & 4 != 0,
+            };
+            slots.push((caster_shader(key) as usize, key.variant.index()));
+        }
+        slots.sort_unstable();
+        slots.dedup();
+        assert_eq!(slots.len(), 8, "every caster key owns a pipeline slot");
+
+        let default = CasterPipeline::default();
+        assert_eq!(
+            (caster_shader(default), default.variant.index()),
+            (ShaderId::Shadow, 0),
+            "the all-false key is the Shadow main pipeline",
         );
     }
 

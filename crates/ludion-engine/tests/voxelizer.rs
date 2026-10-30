@@ -1346,3 +1346,77 @@ fn a_gi_volume_with_no_mesh_dumps_l2111_naming_the_empty_scene() {
         errors[0].message
     );
 }
+
+/// A scene file in a scratch project holding one `alpha_mode: mask` mesh next to `extra` entities.
+fn cutout_scene(tag: &str, extra: &str) -> std::path::PathBuf {
+    let scene = dump_scene(
+        tag,
+        &format!(
+            "{DUMP_GI_AND_CAMERA}  - name: fence
+    components:
+      Transform: {{}}
+      Mesh:
+        shape:
+          asset: meshes/fence.mesh.yaml
+{extra}"
+        ),
+    );
+    let meshes = scene.parent().unwrap().join("meshes");
+    std::fs::create_dir_all(&meshes).unwrap();
+    let mask = format!(
+        "{}alpha_mode: mask\n",
+        mesh_doc(&CUBE_CORNERS, &CUBE_TRIANGLES, None)
+    );
+    std::fs::write(meshes.join("fence.mesh.yaml"), mask).unwrap();
+    scene
+}
+
+/// A `GiVolume` whose only mesh is an `alpha_mode: mask` asset resolves to no grid: `L2111` counts the
+/// cutout and points at its entity.
+#[test]
+fn a_gi_volume_with_only_a_cutout_mesh_dumps_l2111() {
+    let scene = cutout_scene("cutout-only", "");
+    let errors = ludion_engine::render_voxel_sheet(
+        &ludion_engine::builtin_registry(),
+        &scene,
+        ludion_engine::FrameSize::native(64, 64),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].code.as_str(), "L2111");
+    assert!(
+        errors[0].message.contains("1 cutout"),
+        "{}",
+        errors[0].message
+    );
+    assert!(
+        errors[0]
+            .help
+            .as_deref()
+            .unwrap_or("")
+            .contains("/entities/2"),
+        "{errors:?}"
+    );
+}
+
+/// A cutout beside a mesh that does voxelize raises nothing: `L2111` fires only on an empty grid.
+#[test]
+fn a_cutout_beside_a_voxelizing_mesh_renders_the_sheet() {
+    let scene = cutout_scene(
+        "cutout-beside-cube",
+        "  - name: crate
+    components:
+      Transform: {}
+      Mesh:
+        shape: cube
+",
+    );
+    ludion_engine::render_voxel_sheet(
+        &ludion_engine::builtin_registry(),
+        &scene,
+        ludion_engine::FrameSize::native(64, 64),
+        &[],
+    )
+    .expect("the cube builds a grid; the cutout is skipped without a diagnostic");
+}

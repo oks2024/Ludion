@@ -47,7 +47,8 @@
 //!   both texture axes voxelize alike; white without a map. Emissive follows
 //!   the render path's selection: the mean of the three vertices' authored emissive when the
 //!   document authors a material, the `Mesh` component's otherwise; the emissive map is not
-//!   sampled. A skinned asset mesh and a `Character` are skipped (the grid is a static baseline);
+//!   sampled. A skinned asset mesh and a `Character` are skipped (the grid is a static baseline),
+//!   and so is an `alpha_mode: mask` mesh (a solid shell would block the light its holes pass);
 //!   sculpts, assemblies and assembly parts are skipped too — the shell rasterizer does not take
 //!   them. [`voxelize`] returns what it skipped as a [`SkipReport`] (counts by reason, the
 //!   first entity index of each), the same on a cache hit and a miss.
@@ -133,6 +134,9 @@ pub(crate) struct SkipReport {
     /// Sources the voxelizer does not rasterize: sculpts, assemblies and assembly parts, and an
     /// asset mesh with no triangles.
     pub unsupported: SkipCount,
+    /// Asset meshes whose material is `alpha_mode: mask`: light passes through their holes, which a
+    /// solid shell would block.
+    pub cutout: SkipCount,
 }
 
 /// How many instances one skip reason dropped, and the entity index of the first (for a pointer).
@@ -437,6 +441,14 @@ fn resolve(
                 };
                 if !data.skin_joints.is_empty() {
                     skipped.skinned.note(mesh.index);
+                    continue;
+                }
+                if data
+                    .textures
+                    .as_ref()
+                    .is_some_and(|t| t.alpha_cutoff.is_some())
+                {
+                    skipped.cutout.note(mesh.index);
                     continue;
                 }
                 if data.positions.is_empty() || data.indices.is_empty() {

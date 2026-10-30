@@ -6662,8 +6662,8 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
         }
 
-        /// The skip report counts each reason: dynamic, skinned, and unsupported sources, with the
-        /// entity index of the first; asset meshes it rasterizes are not counted.
+        /// The skip report counts each reason: dynamic, skinned, cutout and unsupported sources, with
+        /// the entity index of the first; asset meshes it rasterizes are not counted.
         #[test]
         fn the_skip_report_counts_what_was_left_out() {
             let dir = project_with_a_prop("skips", 0.0);
@@ -6684,6 +6684,17 @@ mod tests {
             );
             place_mesh(&mut world, MeshSource::Cube, true);
             place_mesh(&mut world, MeshSource::Cube, true);
+            let prop = std::fs::read_to_string(dir.join("meshes/prop.mesh.yaml")).unwrap();
+            std::fs::write(
+                dir.join("meshes/mask.mesh.yaml"),
+                format!("{prop}alpha_mode: mask\n"),
+            )
+            .unwrap();
+            place_mesh(
+                &mut world,
+                MeshSource::Asset("meshes/mask.mesh.yaml".into()),
+                false,
+            );
 
             let ids: Vec<_> = world.entities().collect();
             let camera = single_camera(&world, &ids).unwrap().unwrap();
@@ -6701,6 +6712,7 @@ mod tests {
             assert_eq!((report.skinned.count, report.skinned.first), (1, Some(2)));
             assert_eq!(report.non_finite.count, 0);
             assert_eq!(report.unsupported.count, 0);
+            assert_eq!((report.cutout.count, report.cutout.first), (1, Some(5)));
             let _ = std::fs::remove_dir_all(&dir);
         }
 
