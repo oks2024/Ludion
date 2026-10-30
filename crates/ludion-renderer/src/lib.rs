@@ -103,8 +103,9 @@ pub use scene::{
     drop_shadow_fade,
 };
 pub use sun_cascade::{
-    SUN_CASCADE_BIAS_TEXEL, SUN_CASCADE_LAMBDA, SunCascade, SunCascadeStat, SunCascadeStats,
-    SunCascades, fit_sun_cascades, sun_atlas_grid, sun_atlas_tile, sun_cascade_stats,
+    SUN_CASCADE_BIAS_TEXEL, SUN_CASCADE_LAMBDA, SUN_CASCADE_MIN_TILE, SunCascade, SunCascadeStat,
+    SunCascadeStats, SunCascades, fit_sun_cascades, sun_atlas_grid, sun_atlas_tile,
+    sun_cascade_stats,
 };
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`

@@ -1521,7 +1521,8 @@ pub mod code {
 
     /// `L1313` — a `DirectionalLight` sets `cascades` and a non-default `shadow_extent`. Under
     /// cascades each frustum is fitted to the camera, so the extent and the `Transform` anchor are
-    /// unused. A **warning**, raised by the engine's scene check (`scene_sun_diagnostics`); pointer
+    /// unused by the camera's shadows; reflection-probe captures still use the anchored box. A
+    /// **warning**, raised by the engine's scene check (`scene_sun_diagnostics`); pointer
     /// `/entities/{i}/components/DirectionalLight/shadow_extent`.
     pub const DIRECTIONAL_LIGHT_EXTENT_UNUSED: DiagnosticCode = DiagnosticCode::new("L1313");
 

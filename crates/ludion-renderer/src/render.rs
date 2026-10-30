@@ -1416,14 +1416,13 @@ impl Renderer {
         let sun_cascades = chain
             .sun_cascades
             .and_then(|_| fit_sun_cascades(scene, &self.quality_params, chain.shafts));
-        #[cfg(test)]
-        let sun_cascades = self.sun_cascade_override.get().or(sun_cascades);
-        debug_assert!(
-            sun_cascades
-                .as_ref()
-                .is_none_or(|fit| Some(fit.count) == chain.sun_cascades),
+        debug_assert_eq!(
+            sun_cascades.as_ref().map(|fit| fit.count),
+            chain.sun_cascades,
             "the graph and the fit agree on the cascade count",
         );
+        #[cfg(test)]
+        let sun_cascades = self.sun_cascade_override.get().or(sun_cascades);
         let sun_lanes = scene
             .sun
             .as_ref()
@@ -12997,6 +12996,83 @@ mod tests {
             compared > 200,
             "only {compared} pixels are cascade 0's alone"
         );
+    }
+
+    /// **The seam band never blends toward a cascade that does not cover the fragment.** A camera
+    /// with a 1° fov looks at a wall filling the frame, a slab 2 m toward the sun shadowing it. Cascade
+    /// 0 spans 0.1–1 m with its band at 0.9–1 m, and cascade 1 is a sliver at 1–1.02 m whose box is
+    /// far smaller than the wall's distance from it. The wall at 0.95 m, inside the band, shades like
+    /// the wall at 0.85 m: both are in the slab's shadow, not blended toward cascade 1's "lit".
+    #[test]
+    fn needs_gpu_sun_cascade_band_never_blends_into_an_uncovering_cascade() {
+        let Some(renderer) = sun_renderer(
+            "sun_cascade_band_never_blends_into_an_uncovering_cascade",
+            512,
+            3,
+        ) else {
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let size = FrameSize::native(w, h);
+        let toward_sun = Vec3::new(0.0, 0.5, 1.0).normalize();
+        let render = |depth: f32, slab: bool| {
+            let mut scene = RenderScene::empty((w, h));
+            let eye = Vec3::ZERO;
+            scene.camera = crate::scene::RenderCamera {
+                view: Mat4::look_to_rh(eye, -Vec3::Z, Vec3::Y),
+                projection: Mat4::perspective_rh(
+                    1.0_f32.to_radians(),
+                    crate::scene::aspect_ratio((w, h)),
+                    0.1,
+                    1000.0,
+                ),
+                position: eye,
+            };
+            let mut sun = test_sun(-toward_sun, Vec3::splat(3.0), 0.05 / 48.0);
+            sun.cascades = Some(crate::scene::SunCascadeConfig {
+                count: 4,
+                shadow_distance: 100.0,
+                splits: Some([0.01, 0.0102, 0.9]),
+                shadow_near: -10.0,
+                shadow_far: 10.0,
+            });
+            scene.sun = Some(sun);
+            scene.meshes.push(cube(
+                Vec3::new(0.0, 0.0, -depth - 0.05),
+                Vec3::new(1.0, 1.0, 0.1),
+                [0.8; 4],
+            ));
+            if slab {
+                let on_the_wall = Vec3::new(0.0, 0.0, -depth);
+                scene.meshes.push(cube(
+                    on_the_wall + toward_sun * 2.0,
+                    Vec3::new(20.0, 20.0, 0.1),
+                    [0.8; 4],
+                ));
+            }
+            renderer.render(&scene, size).expect("frame")
+        };
+        let lit = render(0.85, false);
+        let before = render(0.85, true);
+        let in_band = render(0.95, true);
+        let centre = (w / 2, h / 2);
+        let (lit_luma, shadow_luma) = (
+            luma(&lit, centre.0, centre.1),
+            luma(&before, centre.0, centre.1),
+        );
+        assert!(
+            shadow_luma + 30 < lit_luma,
+            "the slab shadows the wall: {shadow_luma} vs lit {lit_luma}"
+        );
+        for y in 0..h {
+            for x in 0..w {
+                let (a, b) = (luma(&before, x, y), luma(&in_band, x, y));
+                assert!(
+                    a.abs_diff(b) <= 3 * 3,
+                    "({x}, {y}): {a} at 0.85 m vs {b} in the band"
+                );
+            }
+        }
     }
 
     /// **A far occluder darkens the march.** Fog and shafts under a four-cascade sun whose

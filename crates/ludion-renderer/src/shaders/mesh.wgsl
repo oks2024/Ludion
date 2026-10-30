@@ -337,28 +337,36 @@ fn sun_shadow_anchored(world_pos: vec3<f32>) -> f32 {
     return sum / f32(sun.pcf * sun.pcf);
 }
 
-// One cascade's PCF factor, 1 = lit. The cascade's tile of the atlas stands where the anchored map
-// does: ndc xy outside [-1, 1], z outside [0, 1] or a point behind the light is lit. Every tap is
-// clamped inside the tile, so the kernel never reads the neighbouring cascade. The bias is already in
-// this cascade's light-NDC, scaled so it holds the same number of texels in every cascade.
-fn sun_cascade_factor(i: u32, world_pos: vec3<f32>) -> f32 {
+// Whether cascade `i`'s box holds the point: ndc xy inside [-1, 1], z inside [0, 1], in front of the
+// light. A fragment the box does not hold is lit by that cascade, which is not the same as shadowed
+// by nothing — the seam band must not blend toward it.
+fn sun_cascade_covers(i: u32, world_pos: vec3<f32>) -> bool {
     let clip = sun.cascade_space[i] * vec4<f32>(world_pos, 1.0);
     if (clip.w <= 0.0) {
-        return 1.0;
+        return false;
     }
     let ndc = clip.xyz / clip.w;
-    if (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+    return !(abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0 || ndc.z < 0.0 || ndc.z > 1.0);
+}
+
+// One cascade's PCF factor, 1 = lit. The cascade's tile of the atlas stands where the anchored map
+// does: a point the box does not cover is lit. Every tap is clamped half a texel inside the tile, so
+// the kernel never reads the neighbouring cascade. The bias is already in this cascade's light-NDC,
+// scaled so it holds the same number of texels in every cascade.
+fn sun_cascade_factor(i: u32, world_pos: vec3<f32>) -> f32 {
+    if (!sun_cascade_covers(i, world_pos)) {
         return 1.0;
     }
+    let clip = sun.cascade_space[i] * vec4<f32>(world_pos, 1.0);
+    let ndc = clip.xyz / clip.w;
     let rect = sun.cascade_rect[i];
     let local = vec2<f32>(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
     let uv = rect.xy + local * rect.zw;
     let texel = 1.0 / vec2<f32>(textureDimensions(shadow_tex));
     let compare = ndc.z - sun.cascade_params[i].z;
     let reach = i32(sun.pcf) / 2;
-    let margin = (f32(reach) + 0.5) * texel;
-    let lo = rect.xy + margin;
-    let hi = rect.xy + rect.zw - margin;
+    let lo = rect.xy + 0.5 * texel;
+    let hi = rect.xy + rect.zw - 0.5 * texel;
     var sum = 0.0;
     for (var dy = -reach; dy <= reach; dy = dy + 1) {
         for (var dx = -reach; dx <= reach; dx = dx + 1) {
@@ -373,7 +381,8 @@ fn sun_cascade_factor(i: u32, world_pos: vec3<f32>) -> f32 {
 // The cascaded lookup. A fragment takes the first cascade whose far depth exceeds its view depth —
 // the nearest, finest map that covers it; past the last far the sun is simply lit. The last tenth of
 // a cascade's depth range blends spatially into the next cascade (or, for the last, into lit), so
-// the change of texel size at a seam is a gradient rather than a visible line. The blend reads both
+// the change of texel size at a seam is a gradient rather than a visible line. The blend targets the
+// next cascade only where its box covers the fragment, else this cascade's own factor. The blend reads both
 // maps from this fragment alone, with no history, so a still frame stays deterministic.
 fn sun_shadow_cascaded(world_pos: vec3<f32>) -> f32 {
     let depth = dot(sun.view_depth.xyz, world_pos) + sun.view_depth.w;
@@ -396,7 +405,10 @@ fn sun_shadow_cascaded(world_pos: vec3<f32>) -> f32 {
     }
     var beyond = 1.0;
     if (i + 1u < sun.cascade_count) {
-        beyond = sun_cascade_factor(i + 1u, world_pos);
+        beyond = here;
+        if (sun_cascade_covers(i + 1u, world_pos)) {
+            beyond = sun_cascade_factor(i + 1u, world_pos);
+        }
     }
     return mix(here, beyond, (depth - band_start) / band);
 }
@@ -410,7 +422,8 @@ const SUN_CASCADE_TINT = array<vec3<f32>, 4>(
 );
 
 // The `sun_cascades` view's multiplier: the tint of the cascade that shades the fragment. It picks and
-// blends exactly as `sun_shadow_cascaded` does, with white past the last cascade.
+// blends exactly as `sun_shadow_cascaded` does (toward the next cascade only where its box covers the
+// fragment), with white past the last cascade.
 fn sun_cascade_tint(world_pos: vec3<f32>) -> vec3<f32> {
     var tints = SUN_CASCADE_TINT;
     let depth = dot(sun.view_depth.xyz, world_pos) + sun.view_depth.w;
@@ -432,7 +445,10 @@ fn sun_cascade_tint(world_pos: vec3<f32>) -> vec3<f32> {
     }
     var beyond = vec3<f32>(1.0);
     if (i + 1u < sun.cascade_count) {
-        beyond = tints[i + 1u];
+        beyond = tints[i];
+        if (sun_cascade_covers(i + 1u, world_pos)) {
+            beyond = tints[i + 1u];
+        }
     }
     return mix(tints[i], beyond, (depth - band_start) / band);
 }

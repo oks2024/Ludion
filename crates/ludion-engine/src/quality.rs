@@ -542,6 +542,17 @@ fn parse_override_file(text: &str, path: &Path) -> Result<(Quality, QualityParam
                 path.display(),
             )));
         }
+        if let Some(size) = overrides
+            .shadow_map_size
+            .filter(|size| *size < ludion_renderer::SUN_CASCADE_MIN_TILE)
+        {
+            return Err(invalid(format!(
+                "`{}` sets `shadow_map_size` to {size}, below {}: a sun cascade's tile keeps a \
+                 one-texel margin per side, which below 4 texels is the whole tile",
+                path.display(),
+                ludion_renderer::SUN_CASCADE_MIN_TILE,
+            )));
+        }
         // The local-light atlas is an 8x8 grid of cells and a spot's tile is 2x2 of them, so an
         // edge that does not divide by 16 would cut a tile across a texel.
         if let Some(size) = overrides
@@ -1359,10 +1370,11 @@ mod tests {
             ("ssao_samples", 17, 1, QualityParams::FULL.ssao_samples),
             ("shaft_steps", 33, 1, QualityParams::FULL.shaft_steps),
             ("dof_taps", 33, 1, QualityParams::FULL.dof_taps),
+            // The smallest legal shadow map is one cascade tile with its margin, not `1`.
             (
                 "shadow_map_size",
                 4096,
-                1,
+                ludion_renderer::SUN_CASCADE_MIN_TILE,
                 QualityParams::FULL.shadow_map_size,
             ),
             ("sun_cascades", 5, 1, QualityParams::FULL.sun_cascades),
@@ -1416,6 +1428,27 @@ mod tests {
         assert_eq!(lowered.sun_cascade_count(Some(4)), Some(1));
         let restored = params_of("preset = \"medium\"\n[params]\nsun_cascades = 4\n");
         assert_eq!(restored.sun_cascade_count(Some(4)), Some(4));
+    }
+
+    #[test]
+    fn a_shadow_map_below_four_texels_is_l0016_naming_the_margin() {
+        for size in 1..=3 {
+            let diagnostic = parse_override_file(
+                &format!("[params]\nshadow_map_size = {size}\n"),
+                Path::new("quality.toml"),
+            )
+            .expect_err("a cascade tile needs 4 texels");
+            assert_eq!(diagnostic.code, code::QUALITY_SETTING_INVALID);
+            assert!(
+                diagnostic.message.contains("one-texel margin"),
+                "{}",
+                diagnostic.message
+            );
+        }
+        assert_eq!(
+            params_of("[params]\nshadow_map_size = 4\n").shadow_map_size,
+            4
+        );
     }
 
     #[test]

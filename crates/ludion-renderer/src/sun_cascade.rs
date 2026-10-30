@@ -23,8 +23,9 @@
 //! centre goes to world. The box is that sphere plus one texel of margin per side, and its centre is
 //! snapped to the texel lattice of a light rotation fixed per sun, so texel edges sit at fixed world
 //! positions as the camera moves and shadow edges do not shimmer. The margin keeps the snapped box
-//! covering the whole sphere. The depth range is `shadow_near`/`shadow_far` around the cascade's
-//! centre, widened to contain the sphere.
+//! covering the whole sphere. The depth range is centred on the cascade, half
+//! of `shadow_far − shadow_near` to each side (the anchored box's convention), widened to contain the
+//! sphere.
 //!
 //! # Picking
 //!
@@ -42,7 +43,7 @@ use ludion_core::math::powf;
 use crate::cull::{Aabb, CullVolume, Frustum, cull, instance_bounds};
 use crate::graph::PostChain;
 use crate::quality::{MAX_SUN_CASCADES, Quality, QualityParams};
-use crate::scene::{RenderScene, SunCascadeConfig};
+use crate::scene::{RenderCamera, RenderScene, SunCascadeConfig};
 
 /// Blend of the logarithmic and uniform split schemes: `1` is fully logarithmic.
 pub const SUN_CASCADE_LAMBDA: f32 = 0.75;
@@ -52,7 +53,7 @@ pub const SUN_CASCADE_LAMBDA: f32 = 0.75;
 pub const SUN_CASCADE_BIAS_TEXEL: f32 = 80.0 / 2048.0;
 
 /// Smallest shadow map edge the fit accepts: below it the one-texel margin is the whole box.
-const MIN_TILE: u32 = 4;
+pub const SUN_CASCADE_MIN_TILE: u32 = 4;
 
 /// One fitted cascade.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -94,6 +95,33 @@ pub fn sun_atlas_tile(count: u32, index: u32) -> (u32, u32) {
     (index % columns, index / columns)
 }
 
+/// A camera's unprojected near and far corner rings and its view-depth range.
+pub(crate) struct CascadeCamera {
+    near_corners: [Vec3; 4],
+    far_corners: [Vec3; 4],
+    near: f32,
+    far: f32,
+}
+
+/// Unprojects `camera`'s near and far rings, or `None` unless its view-depth range is finite with
+/// `0 < near < far`: the one test that decides whether cascades can be fitted to a camera.
+pub(crate) fn cascade_camera(camera: &RenderCamera) -> Option<CascadeCamera> {
+    let inverse_projection = camera.projection.inverse();
+    let unproject = |x: f32, y: f32, z: f32| inverse_projection.project_point3(Vec3::new(x, y, z));
+    let near_corners =
+        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(x, y)| unproject(x, y, 0.0));
+    let far_corners =
+        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(x, y)| unproject(x, y, 1.0));
+    let near = -near_corners[0].z;
+    let far = -far_corners[0].z;
+    (near.is_finite() && far.is_finite() && 0.0 < near && near < far).then_some(CascadeCamera {
+        near_corners,
+        far_corners,
+        near,
+        far,
+    })
+}
+
 /// Fits the sun's cascades to the frame's camera, or `None` when the scene has no sun, the sun
 /// authors no `cascades`, the shadow map is too small, or the camera's range is degenerate.
 /// `shafts` is whether the frame runs the shafts pass.
@@ -105,26 +133,21 @@ pub fn fit_sun_cascades(
     let sun = scene.sun.as_ref()?;
     let config = sun.cascades?;
     let tile = quality.shadow_map_size;
-    if tile < MIN_TILE {
+    if tile < SUN_CASCADE_MIN_TILE {
         return None;
     }
     let count = quality.sun_cascade_count(Some(config.count))?;
 
     let camera = &scene.camera;
-    let inverse_projection = camera.projection.inverse();
-    let unproject = |x: f32, y: f32, z: f32| inverse_projection.project_point3(Vec3::new(x, y, z));
-    let near_corners =
-        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(x, y)| unproject(x, y, 0.0));
-    let far_corners =
-        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(x, y)| unproject(x, y, 1.0));
-    let camera_near = -near_corners[0].z;
-    let camera_far = -far_corners[0].z;
-    if !(camera_near.is_finite() && camera_far.is_finite() && camera_near < camera_far) {
-        return None;
-    }
+    let CascadeCamera {
+        near_corners,
+        far_corners,
+        near: camera_near,
+        far: camera_far,
+    } = cascade_camera(camera)?;
 
     let fog = scene.post.as_ref().map_or(0.0, |post| post.fog_density);
-    let bounds = split_depths(&config, count, camera_near, camera_far, shafts, fog)?;
+    let bounds = split_depths(&config, count, camera_near, camera_far, shafts, fog);
 
     let up = if sun.direction.y.abs() > 0.999 {
         Vec3::Z
@@ -250,8 +273,7 @@ pub fn sun_cascade_stats(
     }
 }
 
-/// The `count + 1` view-depth bounds `[near, c_1, …, last far]`, strictly ascending; `None` for a
-/// degenerate range.
+/// The `count + 1` view-depth bounds `[near, c_1, …, last far]`, strictly ascending.
 fn split_depths(
     config: &SunCascadeConfig,
     count: u32,
@@ -259,16 +281,15 @@ fn split_depths(
     camera_far: f32,
     shafts: bool,
     fog_density: f32,
-) -> Option<[f32; MAX_SUN_CASCADES as usize + 1]> {
+) -> [f32; MAX_SUN_CASCADES as usize + 1] {
     let distance = if config.shadow_distance.is_finite() && config.shadow_distance > 0.0 {
         config.shadow_distance
     } else {
         100.0
     };
-    let d_max = distance.min(camera_far);
-    if d_max <= camera_near {
-        return None;
-    }
+    // The chain already said cascades, so a distance short of the camera's near yields a sliver that
+    // fades to lit rather than a fit failure that swaps in the anchored box.
+    let d_max = distance.min(camera_far).max(camera_near * (1.0 + 1e-3));
     let last = if shafts && fog_density > 0.0 {
         d_max.max((3.0 / fog_density).min(camera_far))
     } else {
@@ -300,7 +321,7 @@ fn split_depths(
         };
     }
     bounds[n] = last;
-    Some(bounds)
+    bounds
 }
 
 /// The eight view-space corners of the slice between view depths `near` and `far`: the camera's
@@ -347,8 +368,9 @@ fn fit_cascade(
     let snapped_y = (light.y / texel).floor() * texel;
 
     let depth = -light.z;
-    let depth_near = depth + config.shadow_near.min(-radius);
-    let depth_far = depth + config.shadow_far.max(radius);
+    let reach = (0.5 * (config.shadow_far - config.shadow_near)).max(radius);
+    let depth_near = depth - reach;
+    let depth_far = depth + reach;
     let projection = Mat4::orthographic_rh(
         snapped_x - half,
         snapped_x + half,
@@ -698,6 +720,93 @@ mod tests {
         let got: Vec<u32> = stats.cascades.iter().map(|s| s.casters).collect();
         assert_eq!(got, want.iter().map(|k| k.len() as u32).collect::<Vec<_>>());
         assert!(got.iter().all(|&n| n >= 1), "{got:?}");
+    }
+
+    #[test]
+    fn a_sun_side_caster_50m_away_stays_in_cascade_0() {
+        let mut scene = scene_with(Some(SunCascadeConfig {
+            shadow_near: 1.0,
+            shadow_far: 200.0,
+            ..config(4, 100.0, None)
+        }));
+        move_camera(
+            &mut scene,
+            Mat4::look_at_rh(
+                Vec3::new(3.0, 2.0, 1.0),
+                Vec3::new(0.0, 0.0, -20.0),
+                Vec3::Y,
+            ),
+        );
+        let fit = fit(&scene, &QualityParams::FULL, false);
+        let camera = cascade_camera(&scene.camera).expect("a camera");
+        let view_to_world = scene.camera.view.inverse();
+        let direction = scene.sun.as_ref().unwrap().direction;
+        let cascade = &fit.cascades[0];
+        let corners = slice_corners(
+            &camera.near_corners,
+            &camera.far_corners,
+            camera.near,
+            camera.far,
+            cascade.near,
+            cascade.far,
+        );
+        for corner in corners {
+            let caster = view_to_world.transform_point3(corner) - direction * 50.0;
+            let ndc = cascade.light_space.project_point3(caster);
+            assert!((0.0..=1.0).contains(&ndc.z), "{ndc:?}");
+        }
+    }
+
+    #[test]
+    fn a_symmetric_range_keeps_its_box() {
+        let scene = scene_with(Some(config(4, 100.0, None)));
+        let tile = QualityParams::FULL.shadow_map_size;
+        let fit = fit(&scene, &QualityParams::FULL, false);
+        for cascade in &fit.cascades[..4] {
+            let radius = cascade.texel * (tile - 2) as f32 * 0.5;
+            let want = 2.0 * 60.0_f32.max(radius);
+            assert!(
+                (cascade.depth_range - want).abs() <= want * 1e-5,
+                "{} vs {want}",
+                cascade.depth_range
+            );
+        }
+    }
+
+    #[test]
+    fn the_chain_and_the_fit_agree_on_every_trigger() {
+        let normal = scene_with(Some(config(4, 100.0, None)));
+        let sliver = scene_with(Some(config(4, 0.05, None)));
+        let mut ortho = normal.clone();
+        ortho.camera.projection = Mat4::orthographic_rh(-10.0, 10.0, -10.0, 10.0, 0.0, 100.0);
+        let mut nan = normal.clone();
+        nan.camera.projection = Mat4::from_cols_array(&[f32::NAN; 16]);
+        let tiny_map = QualityParams {
+            shadow_map_size: 3,
+            ..QualityParams::FULL
+        };
+        let rows = [
+            ("a sliver distance", &sliver, QualityParams::FULL, Some(4)),
+            ("a 3-texel map", &normal, tiny_map, None),
+            ("an ortho near of 0", &ortho, QualityParams::FULL, None),
+            ("a NaN projection", &nan, QualityParams::FULL, None),
+            ("the normal scene", &normal, QualityParams::FULL, Some(4)),
+        ];
+        for (name, scene, params, want) in rows {
+            let chain = PostChain::for_scene(scene).masked(&Quality::FULL, &params);
+            let fit = fit_sun_cascades(scene, &params, chain.shafts);
+            assert_eq!(chain.sun_cascades, want, "{name}: chain");
+            assert_eq!(fit.map(|f| f.count), want, "{name}: fit");
+        }
+        let fit = fit(&sliver, &QualityParams::FULL, false);
+        let bounds: Vec<f32> = std::iter::once(fit.cascades[0].near)
+            .chain(fars(&fit))
+            .collect();
+        assert!(bounds.iter().all(|b| b.is_finite()), "{bounds:?}");
+        assert!(
+            bounds.windows(2).all(|pair| pair[0] < pair[1]),
+            "{bounds:?}"
+        );
     }
 
     #[test]

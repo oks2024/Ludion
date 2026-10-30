@@ -50,8 +50,9 @@ before. `cascade_splits` are the inner far bounds as fractions of `shadow_distan
 
 `shadow_near`/`shadow_far` keep their meaning, a depth range along `direction`, but are centred on
 each cascade rather than on the anchor and widened to at least the cascade's radius either way.
-`shadow_extent` and the entity's `Transform` anchor are unused under `cascades`; authoring a
-non-default `shadow_extent` beside `cascades` is the warning `L1313`.
+`shadow_extent` and the entity's `Transform` anchor are unused by the camera's shadows under
+`cascades`; reflection-probe captures still use the anchored box. Authoring a non-default
+`shadow_extent` beside `cascades` is the warning `L1313`.
 
 ## Rules
 
@@ -91,7 +92,8 @@ non-default `shadow_extent` beside `cascades` is the warning `L1313`.
   ship; the measured numbers are in `Plan/shadow-mapping.md`.
 - **Authored splits are ignored when quality lowers the count.** The fit re-splits with the practical
   scheme, since the authored list no longer matches.
-- **`shadow_extent` and the anchor do nothing here** (`L1313`). Set `shadow_distance` instead.
+- **`shadow_extent` and the anchor are unused by the camera's shadows** (`L1313`); reflection-probe
+  captures still use the anchored box. Set `shadow_distance` for the camera.
 - **Past the last cascade is lit.** Raise `shadow_distance`, or accept the fade.
 - **The view on a sun without cascades draws the normal frame,** and so does a frame with no fitted
   cascades (`count` 0 in the panel).

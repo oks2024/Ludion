@@ -654,7 +654,9 @@ impl PostChain {
             .sun
             .as_ref()
             .and_then(|sun| sun.cascades)
-            .and_then(|config| QualityParams::FULL.sun_cascade_count(Some(config.count)));
+            .and_then(|config| QualityParams::FULL.sun_cascade_count(Some(config.count)))
+            // The fit refuses a degenerate camera; the chain must say no cascades there too.
+            .filter(|_| crate::sun_cascade::cascade_camera(&scene.camera).is_some());
         Self {
             ui: !scene.ui.is_empty(),
             // A sun draws a shadow map, at the extent the scene's own authoring implies. Lowering it
@@ -752,7 +754,9 @@ impl PostChain {
         // Re-capping the FULL count with this machine's cap is `min(authored, cap)`, the count the fit uses.
         let sun_cascades = self
             .sun_cascades
-            .filter(|_| shadow_map.is_some())
+            .filter(|_| {
+                shadow_map.is_some() && params.shadow_map_size >= crate::SUN_CASCADE_MIN_TILE
+            })
             .and_then(|count| params.sun_cascade_count(Some(count)));
         PostChain {
             shadow_map,

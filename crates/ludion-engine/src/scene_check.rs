@@ -438,7 +438,8 @@ pub fn scene_sun_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 Diagnostic::new(
                     code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
                     "this `DirectionalLight` sets `cascades` and a `shadow_extent`; each cascade is \
-                     fitted to the camera, so the extent and the `Transform` anchor are unused",
+                     fitted to the camera, so the extent and the `Transform` anchor are unused by the \
+                     camera's shadows; reflection-probe captures still use the anchored box",
                 )
                 .with_path(format!(
                     "/entities/{index}/components/DirectionalLight/shadow_extent"

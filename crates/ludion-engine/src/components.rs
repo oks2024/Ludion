@@ -899,7 +899,8 @@ pub struct DirectionalLight {
     pub angular_radius: f32,
     /// Cascade count (1–4). Absent keeps the anchored shadow box exactly; set, the sun fits that
     /// many cascades to the active camera, capped per quality by `sun_cascades`. Under cascades
-    /// `shadow_extent` and the `Transform` anchor are unused (`L1313`).
+    /// `shadow_extent` and the `Transform` anchor are unused by the camera's shadows;
+    /// reflection-probe captures still use them (`L1313`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 4))]
     pub cascades: Option<u32>,
