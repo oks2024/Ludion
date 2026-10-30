@@ -318,7 +318,7 @@ fn gi_volume_empty(path: &Path, index: usize, skipped: &SkipReport) -> Diagnosti
         (
             &skipped.unsupported,
             "sculpt, assembly or empty mesh",
-            "sculpts and assemblies are not voxelized yet",
+            "sculpts, assemblies and meshes with no triangles are not voxelized",
         ),
     ];
     let counts: Vec<String> = reasons

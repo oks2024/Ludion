@@ -6328,7 +6328,7 @@ mod tests {
             };
             let voxelized = crate::voxelizer::voxelize(&placed.meshes, 0.5, &mut assets).unwrap();
             assert!(voxelized.grid.is_some());
-            let report = voxelized.skipped;
+            let report = crate::voxelizer::skip_report(&placed.meshes, &mut assets).unwrap();
             assert_eq!((report.dynamic.count, report.dynamic.first), (2, Some(3)));
             assert_eq!((report.skinned.count, report.skinned.first), (1, Some(2)));
             assert_eq!(report.non_finite.count, 0);

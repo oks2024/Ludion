@@ -48,8 +48,8 @@
 //!   the render path's selection: the mean of the three vertices' authored emissive when the
 //!   document authors a material, the `Mesh` component's otherwise; the emissive map is not
 //!   sampled. A skinned asset mesh and a `Character` are skipped (the grid is a static baseline);
-//!   sculpts, assemblies and assembly parts are skipped too — wiring them to the shell rasterizer is
-//!   a follow-up. [`voxelize`] returns what it skipped as a [`SkipReport`] (counts by reason, the
+//!   sculpts, assemblies and assembly parts are skipped too — the shell rasterizer does not take
+//!   them. [`voxelize`] returns what it skipped as a [`SkipReport`] (counts by reason, the
 //!   first entity index of each), the same on a cache hit and a miss.
 //!
 //! Primitives take their albedo from the instance color and their emissive from the `Mesh`
@@ -151,16 +151,10 @@ impl SkipCount {
     }
 }
 
-/// [`voxelize`]'s answer: the grid, and what was left out of it.
+/// [`voxelize`]'s answer: the grid ([`skip_report`] says what was left out of it).
 pub(crate) struct Voxelized {
     /// The grid, or `None` when the scene places no geometry the voxelizer rasterizes.
     pub grid: Option<Arc<WorldVoxelGrid>>,
-    /// What was dropped, by reason. Identical on a cache hit and a miss.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by tests; no runtime consumer yet")
-    )]
-    pub skipped: SkipReport,
 }
 
 /// Builds the world-space voxelization of `meshes` at `cell_size` world units per cell, or hands
@@ -182,23 +176,17 @@ pub(crate) fn voxelize(
     cell_size: f32,
     assets: &mut dyn SceneAssets,
 ) -> Result<Voxelized, Vec<Diagnostic>> {
-    let (instances, skipped) = resolve(meshes, assets)?;
+    let (instances, _) = resolve(meshes, assets)?;
     let signature = signature(&instances, cell_size);
     if let Some(cached) = assets.voxelization(signature) {
-        return Ok(Voxelized {
-            grid: cached,
-            skipped,
-        });
+        return Ok(Voxelized { grid: cached });
     }
     // A held session serves the grid it already has rather than paying the walk for a world whose
     // baseline the host has frozen. The signature above is still computed every frame — that
     // comparison *is* the staleness report, which is why it is never latched: a world that returns
     // to the held baseline hits the line above and is honestly not stale.
     if let Some(held) = assets.held_voxelization() {
-        return Ok(Voxelized {
-            grid: held,
-            skipped,
-        });
+        return Ok(Voxelized { grid: held });
     }
 
     // Object boxes of asset meshes walk every vertex, so they are computed here, on a miss, once
@@ -207,7 +195,6 @@ pub(crate) fn voxelize(
     let Some(bounds) = scene_bounds(&instances, &mut boxes) else {
         return Ok(Voxelized {
             grid: assets.set_voxelization(signature, None),
-            skipped,
         });
     };
     let mut grid = allocate(bounds, cell_size)?;
@@ -218,7 +205,6 @@ pub(crate) fn voxelize(
     }
     Ok(Voxelized {
         grid: assets.set_voxelization(signature, Some(Arc::new(grid.sealed()))),
-        skipped,
     })
 }
 
