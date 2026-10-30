@@ -58,7 +58,7 @@ struct GiBakeParams {
     // fallbacks are bound and the bounce half is skipped entirely.
     // y = rays traced per probe (`QualityParams::gi_rays`), a whole multiple of HIT_RAYS. It took a
     // pad lane rather than growing this struct, so every prior field's offset is unchanged.
-    // zw = pad.
+    // z = the first probe z this dispatch covers (the bake is submitted in z-slabs), w = pad.
     flags: vec4<u32>,
     // xyz = the direction sunlight travels (normalized), w = 1.0 when the scene has a sun.
     sun_dir: vec4<f32>,
@@ -419,7 +419,8 @@ fn store_escaped_hits(gid: vec3<u32>) {
 }
 
 @compute @workgroup_size(4, 4, 4)
-fn bake(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn bake(@builtin(global_invocation_id) dispatch_id: vec3<u32>) {
+    let gid = dispatch_id + vec3<u32>(0u, 0u, bake_params.flags.z);
     if (any(gid >= bake_params.counts.xyz)) {
         return;
     }

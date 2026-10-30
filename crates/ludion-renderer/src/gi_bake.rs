@@ -103,6 +103,22 @@ const WORKGROUP: [u32; 3] = shader_gen::GI_BAKE_BAKE_WORKGROUP_SIZE;
 /// polar cap and a strided subset is not.
 pub(crate) const HIT_RAYS: u32 = shader_gen::HIT_RAYS;
 
+/// The most probe-rays one bake submit carries. The OS GPU watchdog (Windows TDR, ~2 s) kills a
+/// device whose single packet runs too long, and a district-sized lattice baked in one packet can
+/// pass it when other processes time-slice the card. The plaza's 1.45M probes × 64 rays ≈ 93M
+/// probe-rays took ~363 ms in one packet on an RTX 3090, so this budget is ~30 ms per packet there.
+const BAKE_PROBE_RAYS_PER_SUBMIT: u64 = 8 << 20;
+
+/// The z-depth, in probes, of one bake slab: the largest multiple of `WORKGROUP[2]` whose
+/// `cx·cy·depth·rays` stays within `budget`. One workgroup layer is the minimum, even when a single
+/// layer exceeds the budget, and a slab never exceeds the lattice rounded up to a whole layer.
+fn bake_slab_depth(count: [u32; 3], rays: u32, budget: u64) -> u32 {
+    let layer = WORKGROUP[2];
+    let per_z = u64::from(count[0]) * u64::from(count[1]) * u64::from(rays);
+    let fits = u32::try_from(budget / per_z.max(1)).unwrap_or(u32::MAX) / layer * layer;
+    fits.clamp(layer, count[2].next_multiple_of(layer))
+}
+
 /// A packed hit word's face-code bit position — the flat cell index occupies bits 0..24, the face
 /// code bits 25..27, bits 28..31 are zero:
 ///
@@ -282,6 +298,10 @@ pub(crate) struct GiBake {
     /// outside `cfg(test)`: the degenerate bin is an oracle, never a shipping mode.
     #[cfg(test)]
     bin_build: std::cell::Cell<BinBuild>,
+    /// **Test-only.** Overrides [`BAKE_PROBE_RAYS_PER_SUBMIT`] so the slab oracle can bake one scene
+    /// as a single slab and as one workgroup layer per slab. Absent from a shipping build.
+    #[cfg(test)]
+    slab_budget: std::cell::Cell<Option<u64>>,
 }
 
 impl GiBake {
@@ -325,6 +345,8 @@ impl GiBake {
             bakes: std::cell::Cell::new(0),
             #[cfg(test)]
             bin_build: std::cell::Cell::new(BinBuild::Culled),
+            #[cfg(test)]
+            slab_budget: std::cell::Cell::new(None),
         }
     }
 
@@ -473,8 +495,13 @@ impl GiBake {
         })
     }
 
-    /// Runs the bake for `input`, returning the finished probe volumes. One encoder, one dispatch,
-    /// one submit — the bounce trio rides the same dispatch, because it comes off the same march.
+    /// Runs the bake for `input`, returning the finished probe volumes. The bounce trio rides the
+    /// same dispatches, because it comes off the same march.
+    ///
+    /// The lattice is submitted in z-slabs of at most [`BAKE_PROBE_RAYS_PER_SUBMIT`] probe-rays, one
+    /// encoder and one submit each, so no single GPU packet can outlast the OS watchdog. Each probe
+    /// is one independent invocation that writes only its own texels and hit-cache words, so the
+    /// slab a probe runs in cannot change its bytes.
     ///
     /// The lattice's size is an invariant, not a runtime branch: `ludion-engine`'s `probe_lattice`
     /// caps every axis at [`MAX_GI_TEXTURE_AXIS`] and reports `L2105` before the renderer is handed
@@ -549,7 +576,7 @@ impl GiBake {
             ),
             None => ([0.0; 4], [0.0; 4]),
         };
-        let params = GiBakeParams {
+        let mut params = GiBakeParams {
             grid: [
                 input.grid.origin.x,
                 input.grid.origin.y,
@@ -568,7 +595,7 @@ impl GiBake {
             sun_color,
             bin: bin.params,
         };
-        let (params_buf, lights_buf, bin_table_buf, bin_indices_buf) = {
+        let (lights_buf, bin_table_buf, bin_indices_buf) = {
             use wgpu::util::DeviceExt;
             let storage = |label: &str, contents: &[u8]| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -578,11 +605,6 @@ impl GiBake {
                 })
             };
             (
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("gi bake params"),
-                    contents: bytemuck::bytes_of(&params),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                }),
                 storage("gi bake lights", bytemuck::cast_slice(&lights)),
                 storage("gi bake bin table", bytemuck::cast_slice(&bin.table)),
                 storage("gi bake bin indices", bytemuck::cast_slice(&bin_indices)),
@@ -609,77 +631,96 @@ impl GiBake {
         let occupancy_view = voxel_view(input.occupancy, "gi bake occupancy");
         let albedo_view = voxel_view(input.albedo, "gi bake albedo");
 
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("gi bake"),
-            layout: &self.pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::BAKE_PARAMS_BINDING,
-                    resource: params_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::OCCUPANCY_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&occupancy_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::PROBES_OUT_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&storage_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::BAKE_ALBEDO_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&albedo_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::BAKE_LIGHT_LIST_BINDING,
-                    resource: lights_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::BOUNCE_R_OUT_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&bounce_views[0]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::BOUNCE_G_OUT_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&bounce_views[1]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::BOUNCE_B_OUT_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&bounce_views[2]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::BAKE_BIN_TABLE_BINDING,
-                    resource: bin_table_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::BAKE_BIN_INDICES_BINDING,
-                    resource: bin_indices_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::BAKE_HIT_CACHE_BINDING,
-                    resource: hits
-                        .as_ref()
-                        .unwrap_or(&self.hits_fallback)
-                        .as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("gi bake"),
-        });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        let bind_for = |params_buf: &wgpu::Buffer| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("gi bake"),
-                timestamp_writes: None,
+                layout: &self.pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::BAKE_PARAMS_BINDING,
+                        resource: params_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::OCCUPANCY_BINDING,
+                        resource: wgpu::BindingResource::TextureView(&occupancy_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::PROBES_OUT_BINDING,
+                        resource: wgpu::BindingResource::TextureView(&storage_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::BAKE_ALBEDO_BINDING,
+                        resource: wgpu::BindingResource::TextureView(&albedo_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::BAKE_LIGHT_LIST_BINDING,
+                        resource: lights_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::BOUNCE_R_OUT_BINDING,
+                        resource: wgpu::BindingResource::TextureView(&bounce_views[0]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::BOUNCE_G_OUT_BINDING,
+                        resource: wgpu::BindingResource::TextureView(&bounce_views[1]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::BOUNCE_B_OUT_BINDING,
+                        resource: wgpu::BindingResource::TextureView(&bounce_views[2]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::BAKE_BIN_TABLE_BINDING,
+                        resource: bin_table_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::BAKE_BIN_INDICES_BINDING,
+                        resource: bin_indices_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: shader_gen::BAKE_HIT_CACHE_BINDING,
+                        resource: hits
+                            .as_ref()
+                            .unwrap_or(&self.hits_fallback)
+                            .as_entire_binding(),
+                    },
+                ],
+            })
+        };
+
+        #[cfg(not(test))]
+        let budget = BAKE_PROBE_RAYS_PER_SUBMIT;
+        #[cfg(test)]
+        let budget = self.slab_budget.get().unwrap_or(BAKE_PROBE_RAYS_PER_SUBMIT);
+        let depth = bake_slab_depth(input.gi.count, input.rays, budget);
+        for z0 in (0..cz).step_by(depth as usize) {
+            params.flags[2] = z0;
+            let params_buf = {
+                use wgpu::util::DeviceExt;
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("gi bake params"),
+                    contents: bytemuck::bytes_of(&params),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                })
+            };
+            let bind = bind_for(&params_buf);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("gi bake"),
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups(
-                cx.div_ceil(WORKGROUP[0]),
-                cy.div_ceil(WORKGROUP[1]),
-                cz.div_ceil(WORKGROUP[2]),
-            );
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("gi bake"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &bind, &[]);
+                pass.dispatch_workgroups(
+                    cx.div_ceil(WORKGROUP[0]),
+                    cy.div_ceil(WORKGROUP[1]),
+                    depth.min(cz - z0).div_ceil(WORKGROUP[2]),
+                );
+            }
+            gpu.queue().submit(Some(encoder.finish()));
         }
-        gpu.queue().submit(Some(encoder.finish()));
 
         Baked {
             probes: texture,
@@ -736,6 +777,12 @@ impl GiBake {
     #[cfg(test)]
     pub(crate) fn set_bin_build(&self, build: BinBuild) {
         self.bin_build.set(build);
+    }
+
+    /// **Test-only.** Sets the probe-rays-per-submit budget the next bake slabs by.
+    #[cfg(test)]
+    pub(crate) fn set_slab_budget(&self, budget: u64) {
+        self.slab_budget.set(Some(budget));
     }
 }
 
@@ -2101,6 +2148,124 @@ mod tests {
             "the binned bake must be byte-identical to the all-lights-in-every-cell oracle — a \
              difference is a conservatism hole in the bin",
         );
+    }
+
+    /// A lattice small enough for the budget is one slab; the plaza-shaped one splits; the depth is
+    /// always whole workgroup layers, never below one, and the slabs tile `0..cz` exactly.
+    #[test]
+    fn the_bake_slab_depth_bounds_a_packet_and_tiles_the_lattice() {
+        let rays = QualityParams::FULL.gi_rays;
+        let layer = WORKGROUP[2];
+
+        let small = [9, 9, 9];
+        let depth = bake_slab_depth(small, rays, BAKE_PROBE_RAYS_PER_SUBMIT);
+        assert!(
+            depth >= small[2],
+            "a small lattice fits one slab, got depth {depth}"
+        );
+
+        let plaza = [180, 45, 180];
+        let depth = bake_slab_depth(plaza, rays, BAKE_PROBE_RAYS_PER_SUBMIT);
+        assert!(
+            plaza[2].div_ceil(depth) >= 8,
+            "a plaza-sized lattice must split into at least 8 slabs, got depth {depth}",
+        );
+
+        for count in [small, plaza, [7, 5, 13], [300, 300, 3], [1, 1, 1]] {
+            for budget in [1, 1 << 16, BAKE_PROBE_RAYS_PER_SUBMIT, u64::MAX] {
+                let depth = bake_slab_depth(count, rays, budget);
+                assert_eq!(depth % layer, 0, "{count:?} @ {budget}: depth {depth}");
+                assert!(depth >= layer);
+                let covered: u32 = (0..count[2])
+                    .step_by(depth as usize)
+                    .map(|z0| depth.min(count[2] - z0))
+                    .sum();
+                assert_eq!(covered, count[2], "{count:?} @ {budget}: slabs tile 0..cz");
+            }
+        }
+
+        // One layer over the budget still gets the one-layer minimum, not zero.
+        assert_eq!(bake_slab_depth([1000, 1000, 40], rays, 1), layer);
+    }
+
+    /// **The slab oracle.** Submitting the bake one workgroup layer at a time writes exactly the bytes
+    /// a single dispatch writes — visibility, bounce volumes and hit cache — including the overhang
+    /// of a lattice depth that is not a whole number of layers.
+    #[test]
+    fn needs_gpu_a_slabbed_bake_writes_the_same_bytes_as_one_dispatch() {
+        let Some(gpu) = skip_or_gpu("a_slabbed_bake_writes_the_same_bytes_as_one_dispatch") else {
+            return;
+        };
+        let grid = slab_grid(6);
+        let voxel_bake = VoxelBake::new();
+        let voxel = voxel_bake.resolve(&gpu, Some(&grid)).expect("an upload");
+        let mut gi = gi_data(&grid, 2.0);
+        gi.bounce = 1.0;
+        let lights: Vec<PointLightData> = [
+            (Vec3::new(2.0, 7.0, 2.0), Vec3::new(1.0, 0.6, 0.3)),
+            (Vec3::new(14.0, 7.0, 14.0), Vec3::new(0.3, 0.5, 1.0)),
+            (Vec3::new(8.0, 9.0, 8.0), Vec3::new(0.8, 0.8, 0.8)),
+        ]
+        .into_iter()
+        .map(|(position, color)| point_light(position, color, 2.0, 4.0))
+        .collect();
+
+        let one_layer = u64::from(gi.count[0])
+            * u64::from(gi.count[1])
+            * u64::from(FULL_RAYS)
+            * u64::from(WORKGROUP[2]);
+        let slab_depth = bake_slab_depth(gi.count, FULL_RAYS, one_layer);
+        assert_eq!(slab_depth, WORKGROUP[2]);
+        assert!(
+            gi.count[2].div_ceil(slab_depth) > 1,
+            "the lattice must split into more than one slab",
+        );
+        assert_ne!(
+            gi.count[2] % slab_depth,
+            0,
+            "the lattice depth must leave an overhang for the guard to discard",
+        );
+
+        let bake_with = |budget: u64| {
+            let bake = GiBake::new(&gpu);
+            bake.set_slab_budget(budget);
+            bake.resolve(
+                &gpu,
+                Some(BakeInput {
+                    grid: &grid,
+                    gi: &gi,
+                    albedo: &voxel.albedo,
+                    occupancy: &voxel.emissive_occupancy,
+                    lights: &lights,
+                    sun: None,
+                    rays: FULL_RAYS,
+                }),
+            );
+            let volumes = bake.cached_bounce().expect("a bounce bake");
+            let mut read: Vec<Vec<[f32; 4]>> =
+                volumes.iter().map(|t| read_probes(&gpu, t)).collect();
+            read.push(read_probes(
+                &gpu,
+                &bake.cached_probes().expect("a visibility volume"),
+            ));
+            let probes = (gi.count[0] * gi.count[1] * gi.count[2]) as usize;
+            let hits = read_buffer_u32(
+                &gpu,
+                &bake.cached_hits().expect("a bounce bake caches its hits"),
+                probes * HIT_RAYS as usize,
+            );
+            (read, hits)
+        };
+
+        let whole = bake_with(u64::MAX);
+        let slabbed = bake_with(one_layer);
+        assert!(
+            whole.0[0].iter().any(|probe| probe[0] > 0.0),
+            "the lights must actually bounce, or the comparison below is black agreeing with black",
+        );
+        assert!(whole.1.iter().any(|&word| word != 0));
+        assert_eq!(whole.0, slabbed.0, "slabbing moved a volume byte");
+        assert_eq!(whole.1, slabbed.1, "slabbing moved a hit-cache word");
     }
 
     /// **The exclusion is exact (§11 T5a).** A marked light is filtered out by

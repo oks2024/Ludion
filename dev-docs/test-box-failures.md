@@ -42,6 +42,11 @@ be performed on a file with a user-mapped section open"* when another process ho
   a loose `.o` per codegen unit there. `split-debuginfo = "packed"` would stop that but triples the
   incremental rebuild (dsymutil), so it is not set; `check.mjs` warns instead when the directory
   passes `LUDION_DEPS_WARN_FILES` (default 60000).
+- **A GPU test that ABORTs with `0xc0000409` (os error 1282) and prints nothing** is usually the NVIDIA
+  driver killing the process after a TDR, not a Rust panic. Confirm in the Application event log:
+  `Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddHours(-1)} | ? { $_.Message -match 'TDR has been detected' }`
+  names the exe. Concurrent test processes time-slice the card, so one long packet passes the 2 s window.
+  The fix is to bound the offending GPU packet (the GI bake submits in z-slabs), never to retry.
 - An older diagnosis blamed `model_sheet.rs` under parallel nextest. It is suspect: same scratch
   directory, same signature.
 
