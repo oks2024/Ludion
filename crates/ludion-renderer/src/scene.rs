@@ -928,6 +928,8 @@ pub struct MeshTextures {
     /// How far the [`occlusion`](MeshTextures::occlusion) map darkens toward its sampled value
     /// (glTF `occlusionTexture.strength`, default `1.0`; `0` leaves the term untouched).
     pub occlusion_strength: f32,
+    /// The `alpha_mode: mask` cutoff; `Some` builds the base-colour map's mips coverage-preserving.
+    pub alpha_cutoff: Option<f32>,
 }
 
 /// One texture map of a [`MeshTextures`] set: the decoded image and the wrap mode its glTF sampler

@@ -39,6 +39,7 @@ use xxhash_rust::xxh3::xxh3_64;
 
 pub mod cooked;
 pub mod import_sync;
+pub mod mips;
 pub mod shelf;
 
 #[cfg(feature = "watch")]

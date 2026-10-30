@@ -109,7 +109,7 @@ pub fn cook(image: &Image, settings: &CookSettings) -> Result<CompressedImage, C
     let srgb = settings.color_space == ColorSpace::Srgb;
     let mean = ludion_assets::srgb_mean(&image.rgba);
 
-    let mut level = mips::Level {
+    let mut level = ludion_assets::mips::Level {
         width,
         height,
         rgba: image.rgba.clone(),
@@ -135,7 +135,7 @@ pub fn cook(image: &Image, settings: &CookSettings) -> Result<CompressedImage, C
         if level.width == 1 && level.height == 1 {
             break;
         }
-        level = mips::next_mip(&level, srgb);
+        level = ludion_assets::mips::next_mip(&level, srgb);
     }
     Ok(CompressedImage {
         format,

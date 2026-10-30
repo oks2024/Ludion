@@ -347,6 +347,7 @@ mod tests {
                 emissive: None,
                 normal_scale: 1.0,
                 occlusion_strength: 1.0,
+                alpha_cutoff: None,
             }),
             authored_material: false,
             base_color_mean: [1.0; 4],

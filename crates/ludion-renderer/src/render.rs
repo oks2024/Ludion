@@ -246,6 +246,8 @@ struct MeshTextureKey {
     hash: u64,
     srgb: bool,
     encoding: MapEncoding,
+    /// The mask cutoff's bits, for a base-colour map whose mips preserve coverage.
+    alpha_cutoff: Option<u32>,
 }
 
 /// The procedural vertex buffer for one primitive shape.
@@ -1751,7 +1753,7 @@ impl Renderer {
          -> Option<(GpuTexture, TextureWrap)> {
             let (_, wrap) = key?;
             let map = pick(&scene.decals[first].maps).as_ref()?;
-            Some((cache.get(&mesh_texture_key(map, srgb))?.clone(), wrap))
+            Some((cache.get(&mesh_texture_key(map, srgb, None))?.clone(), wrap))
         };
         let draws_of = |batches: Vec<DecalBatch>| -> Vec<DecalDraw> {
             batches
@@ -1832,26 +1834,31 @@ impl Renderer {
             material.chain(decal)
         };
         let referenced: HashSet<MeshTextureKey> = maps()
-            .filter_map(|(map, srgb)| map.map(|map| mesh_texture_key(map, srgb)))
+            .filter_map(|(map, srgb, cutoff)| map.map(|map| mesh_texture_key(map, srgb, cutoff)))
             .collect();
         cache.retain(|key, _| referenced.contains(key));
-        for (map, srgb) in maps() {
+        for (map, srgb, cutoff) in maps() {
             let Some(map) = map else {
                 continue;
             };
-            cache.entry(mesh_texture_key(map, srgb)).or_insert_with(|| {
-                self.count_upload(|u| u.mesh_maps += 1);
-                self.upload_mesh_map(map, srgb)
-            });
+            cache
+                .entry(mesh_texture_key(map, srgb, cutoff))
+                .or_insert_with(|| {
+                    self.count_upload(|u| u.mesh_maps += 1);
+                    self.upload_mesh_map(map, srgb, cutoff)
+                });
         }
     }
 
     /// Uploads one scene map in the encoding [`mesh_texture_key`] names. A cooked map was checked
     /// by the engine (`check_compressed`, the device's support), so a refusal here breaks that
     /// contract; the slot gets a white texel rather than a panic in release.
-    fn upload_mesh_map(&self, map: &MeshTexture, srgb: bool) -> GpuTexture {
+    fn upload_mesh_map(&self, map: &MeshTexture, srgb: bool, cutoff: Option<f32>) -> GpuTexture {
         match &map.image {
-            MapImage::Source(image) => self.upload_mesh_texture(image, srgb),
+            MapImage::Source(image) => match cutoff {
+                Some(cutoff) => self.upload_mask_texture(image, srgb, cutoff),
+                None => self.upload_mesh_texture(image, srgb),
+            },
             MapImage::Cooked(cooked) => upload_compressed_in(&self.gpu, &cooked.image, srgb)
                 .unwrap_or_else(|error| {
                     debug_assert!(
@@ -1894,6 +1901,23 @@ impl Renderer {
         uploaded
     }
 
+    /// Uploads an `alpha_mode: mask` base-colour map with its mip chain built on the CPU, every level
+    /// keeping level 0's alpha coverage at `cutoff` (`ludion_assets::mips::mask_mip_chain`).
+    fn upload_mask_texture(&self, image: &TextureImage, srgb: bool, cutoff: f32) -> GpuTexture {
+        let format = if srgb {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+        let level0 = ludion_assets::mips::Level {
+            width: image.width as usize,
+            height: image.height as usize,
+            rgba: image.rgba.clone(),
+        };
+        let chain = ludion_assets::mips::mask_mip_chain(level0, srgb, cutoff);
+        upload_texture_levels_in(&self.gpu, &chain, format)
+    }
+
     /// The mesh pass's group-4 bind group for one material: the cached view of every map it carries,
     /// the 1×1 default in every slot it does not, the sampler its wrap mode asks for, and the
     /// `flags`/scalar uniform the shader branches on. `None` (a mesh with no material document, or one
@@ -1921,11 +1945,11 @@ impl Renderer {
         let maps = material_maps(textures);
         let mut flags = 0;
         let mut wrap = None;
-        for (slot, ((map, srgb), bit)) in maps.into_iter().zip(MATERIAL_FLAGS).enumerate() {
+        for (slot, ((map, srgb, cutoff), bit)) in maps.into_iter().zip(MATERIAL_FLAGS).enumerate() {
             let Some(map) = map else {
                 continue;
             };
-            let Some(uploaded) = cache.get(&mesh_texture_key(map, srgb)) else {
+            let Some(uploaded) = cache.get(&mesh_texture_key(map, srgb, cutoff)) else {
                 continue;
             };
             views[slot] = &uploaded.view;
@@ -5244,19 +5268,68 @@ fn upload_texture_in(
     GpuTexture { texture, view }
 }
 
-/// The cache key of one scene map: a source map keys on its content hash, a cooked map on its cook
-/// key and its block format.
-fn mesh_texture_key(map: &MeshTexture, srgb: bool) -> MeshTextureKey {
+/// Uploads a whole CPU mip chain (`levels[0]` is the base) to a sampleable `format` texture.
+fn upload_texture_levels_in(
+    gpu: &Gpu,
+    levels: &[ludion_assets::mips::Level],
+    format: wgpu::TextureFormat,
+) -> GpuTexture {
+    let base = &levels[0];
+    let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("ludion texture"),
+        size: wgpu::Extent3d {
+            width: base.width as u32,
+            height: base.height as u32,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (mip_level, level) in levels.iter().enumerate() {
+        gpu.queue().write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip_level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &level.rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(level.width as u32 * 4),
+                rows_per_image: Some(level.height as u32),
+            },
+            wgpu::Extent3d {
+                width: level.width as u32,
+                height: level.height as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    GpuTexture { texture, view }
+}
+
+/// The cache key of one scene map: a source map keys on its content hash (and, for a mask
+/// base-colour map, its cutoff, since the mips depend on it), a cooked map on its cook key and its
+/// block format.
+fn mesh_texture_key(map: &MeshTexture, srgb: bool, cutoff: Option<f32>) -> MeshTextureKey {
     match &map.image {
         MapImage::Source(image) => MeshTextureKey {
             hash: image.hash,
             srgb,
             encoding: MapEncoding::Rgba8,
+            alpha_cutoff: cutoff.map(f32::to_bits),
         },
         MapImage::Cooked(cooked) => MeshTextureKey {
             hash: cooked.key,
             srgb,
             encoding: cooked.image.format.into(),
+            alpha_cutoff: None,
         },
     }
 }
@@ -5431,27 +5504,31 @@ fn material_sampler(device: &wgpu::Device, mode: wgpu::AddressMode) -> wgpu::Sam
     })
 }
 
+/// One map slot: the map, whether its source is sRGB-encoded, and the mask cutoff its mips preserve
+/// coverage for (`Some` only on a mask material's base colour).
+type MapSlot<'a> = (Option<&'a MeshTexture>, bool, Option<f32>);
+
 /// A material's five slots in binding order, each paired with whether its source is sRGB-encoded — the
 /// colour-space half of the texture cache key. Base colour and emissive carry authored colour and
 /// decode; metallic-roughness, normal and occlusion carry measurements and are already linear
 /// (`Plan/textured-pbr.md` decision 5).
-fn material_maps(textures: &MeshTextures) -> [(Option<&MeshTexture>, bool); 5] {
+fn material_maps(textures: &MeshTextures) -> [MapSlot<'_>; 5] {
     [
-        (textures.base_color.as_ref(), true),
-        (textures.metallic_roughness.as_ref(), false),
-        (textures.normal.as_ref(), false),
-        (textures.occlusion.as_ref(), false),
-        (textures.emissive.as_ref(), true),
+        (textures.base_color.as_ref(), true, textures.alpha_cutoff),
+        (textures.metallic_roughness.as_ref(), false, None),
+        (textures.normal.as_ref(), false, None),
+        (textures.occlusion.as_ref(), false, None),
+        (textures.emissive.as_ref(), true, None),
     ]
 }
 
 /// A decal's three maps, each paired with whether its source is sRGB-encoded: the base colour decodes,
 /// the normal and metallic-roughness maps are measurements ([`material_maps`]'s rule).
-fn decal_maps(maps: &DecalMaps) -> [(Option<&MeshTexture>, bool); 3] {
+fn decal_maps(maps: &DecalMaps) -> [MapSlot<'_>; 3] {
     [
-        (maps.base_color.as_ref(), true),
-        (maps.normal.as_ref(), false),
-        (maps.metallic_roughness.as_ref(), false),
+        (maps.base_color.as_ref(), true, None),
+        (maps.normal.as_ref(), false, None),
+        (maps.metallic_roughness.as_ref(), false, None),
     ]
 }
 
@@ -9094,6 +9171,7 @@ mod tests {
                     emissive: None,
                     normal_scale: 1.0,
                     occlusion_strength: 1.0,
+                    alpha_cutoff: None,
                 });
             }
             Arc::new(mesh)
@@ -11589,6 +11667,7 @@ mod tests {
                 emissive: None,
                 normal_scale: 1.0,
                 occlusion_strength: 1.0,
+                alpha_cutoff: None,
             }),
             authored_material: false,
             base_color_mean: [1.0; 4],
@@ -11683,6 +11762,7 @@ mod tests {
                 emissive: None,
                 normal_scale: 1.0,
                 occlusion_strength: 1.0,
+                alpha_cutoff: None,
             };
             if base_colour {
                 textures.base_color = Some(map);
@@ -11766,7 +11846,7 @@ mod tests {
             cooked_renderer
                 .mesh_texture_cache
                 .borrow_mut()
-                .insert(mesh_texture_key(map, srgb), uploaded);
+                .insert(mesh_texture_key(map, srgb, None), uploaded);
             let from_cooked = cooked_renderer.render(&scene, size).expect("cooked render");
 
             let close = mean_abs_rgb(&from_source, &from_cooked);
@@ -11799,8 +11879,8 @@ mod tests {
             })),
             wrap: crate::scene::TextureWrap::Repeat,
         };
-        let bc7 = mesh_texture_key(&cooked(CompressedFormat::Bc7), true);
-        let astc = mesh_texture_key(&cooked(CompressedFormat::Astc4x4), true);
+        let bc7 = mesh_texture_key(&cooked(CompressedFormat::Bc7), true, None);
+        let astc = mesh_texture_key(&cooked(CompressedFormat::Astc4x4), true, None);
         assert_eq!((bc7.hash, bc7.encoding), (0xC0DE, MapEncoding::Bc7));
         assert_eq!((astc.hash, astc.encoding), (0xC0DE, MapEncoding::Astc4x4));
         let from_source = gradient_quad(Some(&source), true);
@@ -11808,11 +11888,33 @@ mod tests {
             .textures
             .as_ref()
             .and_then(|t| t.base_color.as_ref());
-        let source_key = mesh_texture_key(map.expect("the quad's map"), true);
+        let source_key = mesh_texture_key(map.expect("the quad's map"), true, None);
         assert_eq!(
             (source_key.hash, source_key.encoding),
             (0xAB, MapEncoding::Rgba8)
         );
+    }
+
+    /// A mask material's cutoff keys its base-colour map only; an opaque material's key is the
+    /// pre-mask one, and two cutoffs on one map never share a texture.
+    #[test]
+    fn a_mask_cutoff_keys_the_base_colour_map_only() {
+        let quad = gradient_quad(Some(&gradient_source(0xAB)), true);
+        let mut textures = quad.textures.expect("the quad's textures");
+        textures.occlusion = textures.base_color.clone();
+        let plain = material_maps(&textures);
+        assert!(plain.iter().all(|(_, _, cutoff)| cutoff.is_none()));
+        let map = textures.base_color.as_ref().expect("the base colour map");
+        assert_eq!(mesh_texture_key(map, true, None).alpha_cutoff, None);
+
+        textures.alpha_cutoff = Some(0.5);
+        let masked = material_maps(&textures);
+        assert_eq!(masked[0].2, Some(0.5));
+        assert!(masked[1..].iter().all(|(_, _, cutoff)| cutoff.is_none()));
+        let half = mesh_texture_key(map, true, Some(0.5));
+        let third = mesh_texture_key(map, true, Some(0.3));
+        assert_ne!(half, third);
+        assert_ne!(half, mesh_texture_key(map, true, None));
     }
 
     /// A format the device never requested is a typed refusal before any wgpu call, so no fault is

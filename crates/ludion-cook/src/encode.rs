@@ -5,7 +5,8 @@ use intel_tex_2 as tex;
 use ludion_assets::cooked::{ColorSpace, CompressedFormat};
 
 use crate::CookError;
-use crate::mips::{Level, pad_to_blocks};
+use crate::mips::pad_to_blocks;
+use ludion_assets::mips::Level;
 
 /// The encoder state of one `cook` call: the ASTC context (BC7 needs none).
 pub(crate) enum Encoder {

@@ -290,6 +290,7 @@ fn bind_textures(
         // glTF's per-map scalars ride the set, not the map: the identity `1` when the map is absent.
         normal_scale: maps.normal.as_ref().map_or(1.0, |r| r.factor as f32),
         occlusion_strength: maps.occlusion.as_ref().map_or(1.0, |r| r.factor as f32),
+        alpha_cutoff: None,
     };
     Ok((Some(textures), files, identities))
 }
