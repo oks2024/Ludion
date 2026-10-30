@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use ludion_core::diagnostics::Diagnostic;
+use ludion_engine::DebugView;
 use ludion_testkit::{GoldenOutcome, GoldenTest, SuiteDefaults, bless_requested};
 
 mod common;
@@ -234,6 +235,66 @@ fn needs_gpu_ui_hud_1080_matches_committed_golden_at_exactly_one() {
             );
         }
         Err(diagnostics) => panic!("the ui-hud 1080 render failed: {diagnostics:?}"),
+    }
+}
+
+/// The gallery's `sun-cascades.yaml` scene under the `sun_cascades` tint view at 960×540: the cascade
+/// view's sheet. The discovery pairing covers the scene's normal render.
+fn sun_cascades_view_test() -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery.join("sun-cascades.yaml"),
+        os_goldens().join("sun-cascades-view.png"),
+    )
+    .with_debug_view(Some(DebugView::SunCascades));
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// The cascade view's sheet — the Clockout 0011 acceptance item: `sun-cascades` under the
+/// `sun_cascades` debug view compares clean against its committed golden at exactly SSIM 1.0. Under
+/// `LUDION_BLESS`, (re)writes the committed golden instead. Skips gracefully with no GPU adapter.
+#[test]
+fn needs_gpu_sun_cascades_view_matches_committed_golden_at_exactly_one() {
+    let test = sun_cascades_view_test();
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!(
+                    "SKIPPED sun_cascades_view_matches_committed_golden_at_exactly_one (bless): {}",
+                    skip_note(&diagnostics)
+                );
+            }
+            Err(diagnostics) => {
+                panic!("blessing the sun-cascades view golden failed: {diagnostics:?}")
+            }
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir("sun_cascades_view_out");
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => {
+            assert_eq!(
+                report.ssim,
+                Some(1.0),
+                "the sun-cascades view render must be byte-identical to its freshly-blessed golden"
+            );
+        }
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!("the sun-cascades view golden failed: {}", report.summary)
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!(
+                "SKIPPED sun_cascades_view_matches_committed_golden_at_exactly_one: {}",
+                skip_note(&diagnostics)
+            );
+        }
+        Err(diagnostics) => panic!("the sun-cascades view render failed: {diagnostics:?}"),
     }
 }
 

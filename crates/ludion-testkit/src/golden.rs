@@ -92,6 +92,10 @@ pub struct GoldenTest {
     /// system draws needs `frames` of at least 1; host-drawn ones (`colliders`, `hierarchy`) need the
     /// world they read to exist.
     pub debug_draw: ludion_engine::DebugCategories,
+    /// A debug view the render is drawn under, exactly `ludion render --debug-view`. `None` (the
+    /// default) is the normal render. Scene goldens on the built-in path only: a game builder or a
+    /// model document renders without it.
+    pub debug_view: Option<ludion_engine::DebugView>,
     /// The registry the scene is validated against — built-in by default, a game's own via
     /// [`with_registry`](GoldenTest::with_registry).
     registry: fn() -> Registry,
@@ -118,6 +122,7 @@ impl GoldenTest {
             strip: None,
             frames: 0,
             debug_draw: ludion_engine::DebugCategories::None,
+            debug_view: None,
             registry: ludion_engine::builtin_registry,
             builder: None,
         }
@@ -127,6 +132,13 @@ impl GoldenTest {
     #[must_use]
     pub fn with_debug_draw(mut self, categories: ludion_engine::DebugCategories) -> Self {
         self.debug_draw = categories;
+        self
+    }
+
+    /// Renders the scene under `view`. See [`debug_view`](GoldenTest::debug_view).
+    #[must_use]
+    pub fn with_debug_view(mut self, view: Option<ludion_engine::DebugView>) -> Self {
+        self.debug_view = view;
         self
     }
 
@@ -416,7 +428,7 @@ impl GoldenTest {
                     &[],
                     self.frames,
                     &self.debug_draw,
-                    None,
+                    self.debug_view,
                 )?;
                 (outcome.image, outcome.adapter)
             }
