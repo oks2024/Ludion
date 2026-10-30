@@ -171,7 +171,7 @@ pub struct DecalStats {
     pub add: u32,
     /// Decals blended as coat.
     pub coat: u32,
-    /// Decal draws: the projector's batches, one per lit `alpha` decal and two per `coat` decal.
+    /// Decal draws: the projector's batches, and two per lit `alpha` or `coat` decal.
     pub draws: u32,
     /// Meshes the receiver-id pass redraws; 0 means the pass is not scheduled.
     pub receiver_meshes: u32,
@@ -190,8 +190,7 @@ pub fn decal_stats(scene: &RenderScene) -> DecalStats {
         }
     }
     stats.draws = (pack_decals(&scene.decals, DecalPass::Projector).2.len() as u32)
-        + stats.alpha
-        + 2 * stats.coat;
+        + 2 * (stats.alpha + stats.coat);
     stats.receiver_meshes = receiver_union(&scene.decals).len() as u32;
     stats
 }
@@ -746,8 +745,8 @@ mod tests {
                 multiply: 2,
                 add: 1,
                 coat: 1,
-                // Two projector batches, one alpha draw and the coat's two.
-                draws: 5,
+                // Two projector batches, and a base and a finish for each of the two lit decals.
+                draws: 6,
                 receiver_meshes: 3,
             }
         );

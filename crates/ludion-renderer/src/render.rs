@@ -775,7 +775,7 @@ impl Renderer {
         let set = self.pipelines[ShaderId::DecalLit as usize]
             .lit
             .as_ref()
-            .expect("the lit decal shader has its three pipelines");
+            .expect("the lit decal shader has its lit pipelines");
         &set[draw as usize]
     }
 
@@ -4329,10 +4329,14 @@ impl FrameRecorder<'_> {
     /// `[scene_depth, scene_normal, decal_receivers?]` and then the scene pass's own tail (shadow map?,
     /// AO?, dynamic GI?, local-light atlas?), which `shading_groups` unpacks.
     ///
+    /// The pass writes `scene`, the `lit_normal` copy of the receiver's normal and roughness with the
+    /// paint blended in, and `scene_specular`'s F0, so the reflections see the paint as a surface. A
+    /// fullscreen copy fills `lit_normal` first.
+    ///
     /// The draw order is the lit decals' `(layer, EntityId)` order; the multiply and add decals and the
-    /// drop shadows draw after, in the projector. An `alpha` decal is one draw; a `coat` is two, the
-    /// tint and then the specular lobe. Every draw is its own instance, so a later decal blends over
-    /// an earlier one's result; the batches only choose the map bind group.
+    /// drop shadows draw after, in the projector. Each decal is two draws, a base and a finish, for its
+    /// own instance, so a later decal blends over an earlier one's result: never batch them over a run.
+    /// The batches only choose the map bind group.
     fn record_decals_lit(&self, pass: &mut RecordedPass<'_>) {
         let has_receivers = !self.decals.receivers.is_empty();
         let head = 2 + usize::from(has_receivers);
@@ -4436,17 +4440,45 @@ impl FrameRecorder<'_> {
                 })
             })
             .collect();
-        // Load, never clear: the draws paint into the lit scene.
-        let mut rp = pass.begin();
+        // The draws paint into the lit scene and its F0, so those two load; `lit_normal` is filled
+        // whole by the copy below.
+        let load = |view| wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        };
+        let [scene, lit_normal, specular] = [0, 1, 2].map(|i| pass.colors()[i].view);
+        let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("decals_lit"),
+            color_attachments: &[
+                Some(load(scene)),
+                Some(clear_transparent(lit_normal)),
+                Some(load(specular)),
+            ],
+            depth_stencil_attachment: None,
+            timestamp_writes: pass.timestamp_writes(),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
         rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
         rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);
         rp.set_bind_group(ENV_GROUP, &env_bg, &[]);
+        // Every batch binds the same frame inputs, so the first one serves the copy.
+        if let Some(first) = batch_bgs.first() {
+            rp.set_bind_group(shader_gen::LIT_DEPTH_GROUP, first, &[]);
+            rp.set_pipeline(self.r.lit_pipeline(LitDraw::Copy));
+            rp.draw(0..3, 0..1);
+        }
         for (draw, bind_group) in self.decals.lit_draws.iter().zip(&batch_bgs) {
             rp.set_bind_group(shader_gen::LIT_DEPTH_GROUP, bind_group, &[]);
             let stages: &[LitDraw] = match draw.blend {
-                ProjectorBlend::Coat => &[LitDraw::CoatBase, LitDraw::CoatSpec],
-                _ => &[LitDraw::Alpha],
+                ProjectorBlend::Coat => &[LitDraw::CoatBase, LitDraw::CoatFinish],
+                _ => &[LitDraw::AlphaBase, LitDraw::AlphaFinish],
             };
             for instance in draw.range.clone() {
                 for &stage in stages {
@@ -6209,8 +6241,10 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         file_name: "decal_lit.wgsl",
         body: include_str!("shaders/decal_lit.wgsl"),
         // The projector's box volume under the mesh lighting: the camera, the clustered lights, the
-        // mesh shading's own dependencies and the decal instance.
+        // mesh shading's own dependencies and the decal instance, behind the fullscreen stage the
+        // surface copy draws with.
         snippets: &[
+            Snippet::FullscreenVs,
             Snippet::Camera,
             Snippet::ClusterGrid,
             Snippet::Lights,
@@ -6699,9 +6733,8 @@ struct ShaderPipelines {
     capture: Option<[wgpu::RenderPipeline; 2]>,
     /// The projector shader's decal twins `[multiply, add]` (entry `vs_decal`/`fs_decal`).
     decal: Option<[wgpu::RenderPipeline; 2]>,
-    /// The lit decal shader's pipelines `[alpha, coat_base, coat_spec]`: the surface blend, the tint
-    /// multiply and the specular add, all over the same box volume.
-    lit: Option<[wgpu::RenderPipeline; 3]>,
+    /// The lit decal shader's pipelines, in the order of [`LitDraw`].
+    lit: Option<[wgpu::RenderPipeline; 5]>,
 }
 
 /// Builds the pipelines shader `id` feeds, from `src` and the layouts its registry row names. The
@@ -6820,14 +6853,7 @@ fn build_pipeline(
         }
         ShaderId::ProbeFace => build_probe_face_pipeline(device, label, src, &layout),
         ShaderId::DecalLit => {
-            let lit = [
-                ("fs_lit_alpha", LIT_ALPHA),
-                ("fs_lit_coat_base", PROJECTOR_MULTIPLY),
-                ("fs_lit_coat_spec", PROJECTOR_ADD),
-            ]
-            .map(|(fs, blend)| {
-                projector_pipeline(device, label, src, &layout, ("vs_lit", fs), blend)
-            });
+            let lit = build_lit_pipelines(device, label, src, &layout);
             return ShaderPipelines {
                 main: lit[0].clone(),
                 mirrored: None,
@@ -7713,30 +7739,164 @@ const PROJECTOR_MULTIPLY: wgpu::BlendState = wgpu::BlendState {
     },
 };
 
-/// The draws of a lit decal, in the order of [`ShaderPipelines::lit`].
+/// The draws of the lit decal pass, in the order of [`ShaderPipelines::lit`]. A decal runs its base
+/// then its finish; the copy is the pass's first draw.
 #[derive(Clone, Copy)]
 enum LitDraw {
-    /// The decal's shaded surface, blended by its coverage.
-    Alpha,
-    /// A coat's tint: the lit colour multiplied toward the decal's.
+    /// The decal's shaded surface, blended by its coverage, with the painted normal and F0.
+    AlphaBase,
+    /// The alpha decal's roughness, completing the lerp the base started.
+    AlphaFinish,
+    /// A coat's tint: the lit colour multiplied toward the decal's, with the painted normal and F0.
     CoatBase,
-    /// A coat's specular lobe, added.
-    CoatSpec,
+    /// A coat's specular lobe, added, and its roughness.
+    CoatFinish,
+    /// `scene_normal` copied into `lit_normal`.
+    Copy,
 }
 
-/// `dst * (1 - src.a) + src`, destination alpha untouched: a lit decal's premultiplied surface.
+const LIT_ADD: wgpu::BlendComponent = wgpu::BlendComponent {
+    src_factor: wgpu::BlendFactor::One,
+    dst_factor: wgpu::BlendFactor::One,
+    operation: wgpu::BlendOperation::Add,
+};
+
+/// Destination alpha untouched.
+const LIT_KEEP_ALPHA: wgpu::BlendComponent = wgpu::BlendComponent {
+    src_factor: wgpu::BlendFactor::Zero,
+    dst_factor: wgpu::BlendFactor::One,
+    operation: wgpu::BlendOperation::Add,
+};
+
+/// `dst * (1 - src.a) + src`: a lit decal's premultiplied surface.
+const LIT_OVER: wgpu::BlendComponent = wgpu::BlendComponent {
+    src_factor: wgpu::BlendFactor::One,
+    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+    operation: wgpu::BlendOperation::Add,
+};
+
+/// Colour `dst * (1 - src.a) + src`, destination alpha untouched: a lit decal's scene colour.
 const LIT_ALPHA: wgpu::BlendState = wgpu::BlendState {
-    color: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
+    color: LIT_OVER,
+    alpha: LIT_KEEP_ALPHA,
+};
+
+/// The base draw's normal + roughness: the normal blended over, the roughness scaled by `1 - c`.
+const LIT_SURFACE_BASE: wgpu::BlendState = wgpu::BlendState {
+    color: LIT_OVER,
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
         dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
         operation: wgpu::BlendOperation::Add,
     },
-    alpha: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::Zero,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Add,
-    },
 };
+
+/// The finish draw's roughness: `c * r` added onto the alpha channel.
+const LIT_SURFACE_FINISH: wgpu::BlendState = wgpu::BlendState {
+    color: LIT_KEEP_ALPHA,
+    alpha: LIT_ADD,
+};
+
+/// One colour target of a lit decal pipeline.
+fn lit_target(
+    format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+    write_mask: wgpu::ColorWrites,
+) -> Option<wgpu::ColorTargetState> {
+    Some(wgpu::ColorTargetState {
+        format,
+        blend,
+        write_mask,
+    })
+}
+
+/// The lit decal pass's pipelines in [`LitDraw`] order. Every one has the pass's three targets:
+/// `scene`, `lit_normal` and `scene_specular`; the write masks pick the ones a draw touches.
+fn build_lit_pipelines(
+    device: &wgpu::Device,
+    label: &str,
+    src: &str,
+    layout: &wgpu::PipelineLayout,
+) -> [wgpu::RenderPipeline; 5] {
+    use wgpu::ColorWrites as W;
+    let rgb = W::RED | W::GREEN | W::BLUE;
+    let build = |(vs, fs): (&str, &str), cull, targets: [Option<wgpu::ColorTargetState>; 3]| {
+        let shader = module(device, label, src);
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(vs),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(fs),
+                targets: &targets,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: cull,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let boxed = Some(wgpu::Face::Front);
+    let scene = |blend, mask| lit_target(HDR_FORMAT, Some(blend), mask);
+    let base_surface = lit_target(HDR_FORMAT, Some(LIT_SURFACE_BASE), W::ALL);
+    let base_f0 = lit_target(OUTPUT_FORMAT, Some(LIT_ALPHA), rgb);
+    let finish_surface = lit_target(HDR_FORMAT, Some(LIT_SURFACE_FINISH), W::ALPHA);
+    let untouched = |format| lit_target(format, None, W::empty());
+    [
+        build(
+            ("vs_lit", "fs_lit_alpha_base"),
+            boxed,
+            [
+                scene(LIT_ALPHA, W::ALL),
+                base_surface.clone(),
+                base_f0.clone(),
+            ],
+        ),
+        build(
+            ("vs_lit", "fs_lit_alpha_finish"),
+            boxed,
+            [
+                scene(PROJECTOR_ADD, W::ALL),
+                finish_surface.clone(),
+                untouched(OUTPUT_FORMAT),
+            ],
+        ),
+        build(
+            ("vs_lit", "fs_lit_coat_base"),
+            boxed,
+            [scene(PROJECTOR_MULTIPLY, W::ALL), base_surface, base_f0],
+        ),
+        build(
+            ("vs_lit", "fs_lit_coat_finish"),
+            boxed,
+            [
+                scene(PROJECTOR_ADD, W::ALL),
+                finish_surface,
+                untouched(OUTPUT_FORMAT),
+            ],
+        ),
+        build(
+            ("vs_main", "fs_lit_copy"),
+            None,
+            [
+                untouched(HDR_FORMAT),
+                lit_target(HDR_FORMAT, None, W::ALL),
+                untouched(OUTPUT_FORMAT),
+            ],
+        ),
+    ]
+}
 
 /// `dst + src`, alpha untouched: the projector's add.
 const PROJECTOR_ADD: wgpu::BlendState = wgpu::BlendState {
@@ -14834,6 +14994,183 @@ mod tests {
             "a grey coat darkens away from the highlight: {} -> {}",
             luma(&bare, ax, ay),
             luma(&tinted, ax, ay),
+        );
+    }
+
+    /// **A painted mirror is a mirror mesh.** An opaque alpha decal of roughness 0.1 and metallic 1 over
+    /// a rough floor reflects the sky like a floor authored with that material, with the environment
+    /// alone and with SSR on: the reflections read the painted normal, roughness and F0.
+    #[test]
+    fn needs_gpu_a_painted_mirror_equals_a_mirror_mesh() {
+        let Some(renderer) = skip_or_renderer("a_painted_mirror_equals_a_mirror_mesh") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let paint = [0.8, 0.8, 0.8];
+        for ssr in [0.0, 1.0] {
+            let mut scene = lit_decal_fixture(w, h);
+            scene.environment = Some(vivid_env(1.0));
+            scene.post = Some(PostData {
+                ssr,
+                ..exact_post()
+            });
+            let mut decal = lit_decal(crate::scene::DecalBlend::Alpha, paint);
+            decal.roughness = Some(0.1);
+            decal.metallic = 1.0;
+            let (bare, painted) = decal_pair(&renderer, &scene, (w, h), vec![decal]);
+            let mut authored = scene.clone();
+            authored.meshes[0].color = [paint[0], paint[1], paint[2], 1.0];
+            authored.meshes[0].material = [0.1, 1.0, 0.0];
+            let reference = renderer
+                .render(&authored, FrameSize::native(w, h))
+                .expect("an authored render");
+            let (x, y) = pixel_of(&scene, Vec3::ZERO, w, h);
+            assert!(
+                luma(&painted, x, y).abs_diff(luma(&bare, x, y)) > 8,
+                "ssr {ssr}: the paint changes the floor: {:?} vs {:?}",
+                pixel(&bare, x, y),
+                pixel(&painted, x, y),
+            );
+            assert_pixels_within(
+                pixel(&painted, x, y),
+                pixel(&reference, x, y),
+                3,
+                &format!("ssr {ssr}: the painted mirror at the box centre"),
+            );
+        }
+    }
+
+    /// **Overlap is exact per instance.** A rough decal followed by an opaque glossy one in the same
+    /// batch renders what the glossy one alone does: the second decal's base and finish both replace
+    /// the first's colour, normal, roughness and F0.
+    #[test]
+    fn needs_gpu_an_opaque_lit_decal_hides_the_one_under_it_exactly() {
+        let Some(renderer) = skip_or_renderer("an_opaque_lit_decal_hides_the_one_under_it_exactly")
+        else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut scene = lit_decal_fixture(w, h);
+        scene.environment = Some(vivid_env(1.0));
+        let mut under = lit_decal(crate::scene::DecalBlend::Alpha, [0.9, 0.2, 0.2]);
+        under.roughness = Some(1.0);
+        let mut over = lit_decal(crate::scene::DecalBlend::Alpha, [0.2, 0.2, 0.9]);
+        over.roughness = Some(0.05);
+        over.metallic = 0.5;
+        let (_, alone) = decal_pair(&renderer, &scene, (w, h), vec![over.clone()]);
+        let (_, stacked) = decal_pair(&renderer, &scene, (w, h), vec![under.clone(), over]);
+        let (_, under_alone) = decal_pair(&renderer, &scene, (w, h), vec![under]);
+        assert_ne!(alone.rgba, under_alone.rgba, "the fixture tells them apart");
+        assert_eq!(
+            alone.rgba, stacked.rgba,
+            "the opaque decal replaces everything under it"
+        );
+    }
+
+    /// **A coat over the sky writes nothing.** A coat box reaching past the floor's edge leaves the sky
+    /// pixels inside it, and the floor beside the edge, exactly as the bare frame has them: a zero
+    /// normal must not leak NaN into the painted surface the reflections read.
+    #[test]
+    fn needs_gpu_a_coat_over_the_sky_leaves_the_frame_alone() {
+        let Some(renderer) = skip_or_renderer("a_coat_over_the_sky_leaves_the_frame_alone") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut scene = drop_shadow_fixture(w, h, false);
+        scene.environment = Some(vivid_env(1.0));
+        scene.post = Some(PostData {
+            ssr: 1.0,
+            ..exact_post()
+        });
+        // The floor ends at z = -3; the box reaches to z = -8 over the sky.
+        scene.meshes[0].model = Mat4::from_translation(Vec3::new(0.0, 0.0, 7.0))
+            * Mat4::from_scale(Vec3::new(20.0, 1.0, 20.0));
+        let mut coat = lit_decal(crate::scene::DecalBlend::Coat, [1.0, 1.0, 1.0]);
+        coat.box_to_world = Mat4::from_translation(Vec3::new(0.0, 0.0, -4.0))
+            * Mat4::from_scale(Vec3::new(8.0, 4.0, 10.0));
+        coat.world_to_box = coat.box_to_world.inverse();
+        coat.roughness = Some(1.0);
+        let (bare, coated) = decal_pair(&renderer, &scene, (w, h), vec![coat]);
+        // Sky inside the box: above the floor edge, at the box's depth.
+        let (sx, sy) = pixel_of(&scene, Vec3::new(0.0, 1.0, -6.0), w, h);
+        assert_eq!(pixel(&coated, sx, sy), pixel(&bare, sx, sy), "sky pixel");
+        for x in 0..w {
+            for y in 0..h {
+                let (a, b) = (pixel(&coated, x, y), pixel(&bare, x, y));
+                if y.abs_diff(sy) < 40 {
+                    assert!(
+                        a[0].abs_diff(b[0]) < 40,
+                        "no artefact at ({x}, {y}): {a:?} vs {b:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **A coat reflects the sky.** A white coat at roughness 0.05 on a rough dark floor under a bright
+    /// sky brightens the floor; at roughness 1 the gain is smaller.
+    #[test]
+    fn needs_gpu_a_coat_reflects_the_sky() {
+        let Some(renderer) = skip_or_renderer("a_coat_reflects_the_sky") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut scene = drop_shadow_fixture(w, h, false);
+        scene.environment = Some(vivid_env(1.0));
+        scene.meshes[0].color = [0.02, 0.02, 0.02, 1.0];
+        let coat = |roughness: f32| {
+            let mut coat = lit_decal(crate::scene::DecalBlend::Coat, [1.0, 1.0, 1.0]);
+            coat.roughness = Some(roughness);
+            coat
+        };
+        let (bare, glossy) = decal_pair(&renderer, &scene, (w, h), vec![coat(0.05)]);
+        let (_, matte) = decal_pair(&renderer, &scene, (w, h), vec![coat(1.0)]);
+        let (x, y) = pixel_of(&scene, Vec3::new(0.0, 0.0, 2.0), w, h);
+        let green = |image: &RenderedImage| i32::from(pixel(image, x, y)[1]);
+        let (base, shiny, dull) = (green(&bare), green(&glossy), green(&matte));
+        assert!(
+            shiny > base + 5,
+            "the glossy coat mirrors the sky: {base} -> {shiny}"
+        );
+        assert!(
+            dull - base < shiny - base,
+            "a rough coat gains less: {base} -> {dull} vs {shiny}"
+        );
+    }
+
+    /// **A coat shows SSR.** Beside an emissive box, the puddle pixels toward it are brighter with a
+    /// glossy coat than with a rough one: the trace reads the coat's roughness.
+    #[test]
+    fn needs_gpu_a_coat_shows_screen_space_reflections() {
+        let Some(renderer) = skip_or_renderer("a_coat_shows_screen_space_reflections") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut scene = drop_shadow_fixture(w, h, false);
+        scene.environment = Some(test_env());
+        scene.post = Some(PostData {
+            ssr: 1.0,
+            ..exact_post()
+        });
+        scene.meshes[0].color = [0.05, 0.05, 0.05, 1.0];
+        let mut lamp = cube(Vec3::new(0.0, 0.5, -1.0), Vec3::ONE, [1.0, 0.3, 0.3, 1.0]);
+        lamp.material = [0.5, 0.0, 3.0];
+        scene.meshes.push(lamp);
+        let coat = |roughness: f32| {
+            let mut coat = lit_decal(crate::scene::DecalBlend::Coat, [1.0, 1.0, 1.0]);
+            coat.roughness = Some(roughness);
+            coat.receivers = crate::scene::DecalReceivers::Only(vec![0]);
+            coat
+        };
+        let (_, glossy) = decal_pair(&renderer, &scene, (w, h), vec![coat(0.05)]);
+        let (_, matte) = decal_pair(&renderer, &scene, (w, h), vec![coat(1.0)]);
+        let (x, y) = pixel_of(&scene, Vec3::new(0.0, 0.0, 0.8), w, h);
+        let red = |image: &RenderedImage| i32::from(pixel(image, x, y)[0]);
+        assert!(
+            red(&glossy) > red(&matte) + 8,
+            "the glossy puddle shows the lamp: {} vs {}",
+            red(&matte),
+            red(&glossy),
         );
     }
 

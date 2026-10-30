@@ -1099,6 +1099,11 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             TextureDesc::r32_float(render_w, render_h),
         )
     });
+    // The lit decals' copy of `scene_normal` with the paint blended in, which every later reader of
+    // the surface normal takes instead (a pass cannot sample the target it blends into).
+    let lit_normal = chain
+        .lit_decals
+        .then(|| graph.transient("lit_normal", TextureDesc::hdr_color(render_w, render_h)));
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
     let output = graph.output("final", TextureDesc::present_target(width, height));
@@ -1195,13 +1200,18 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         let mut lit_reads = vec![scene_depth, scene_normal];
         lit_reads.extend(decal_receivers);
         lit_reads.extend(tail);
-        graph.add_external_pass(pass::DECALS_LIT, pass::DECALS_LIT, lit_reads, vec![scene]);
+        let mut lit_writes = vec![scene];
+        lit_writes.extend(lit_normal);
+        lit_writes.push(scene_specular);
+        graph.add_external_pass(pass::DECALS_LIT, pass::DECALS_LIT, lit_reads, lit_writes);
     }
+    // Past the lit decals, the surface normal is the painted one.
+    let surface_normal = lit_normal.unwrap_or(scene_normal);
     // Reads in the shader's binding order; additive into `scene`, after the opaque pass. The relight
     // table is the last read when the scene has probes. Like the injection, the relight reads nothing
     // the graph owns. With SSR on the pass also writes the fill into `refl_fill`, which `ssr_blend`
     // subtracts.
-    let mut reflections_reads = vec![scene_normal, scene_specular, scene_depth];
+    let mut reflections_reads = vec![surface_normal, scene_specular, scene_depth];
     if let Some(probe_live) = probe_live {
         graph.add_external_compute_pass(
             pass::PROBE_RELIGHT,
@@ -1227,13 +1237,13 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // seed runs before `transparents` attach the depth, and the blend, which reads the trace and adds
     // into `scene`, runs before `transparents` too.
     if let (Some(ssr), Some(refl_fill)) = (&ssr, refl_fill) {
-        declare_ssr_passes(&mut graph, ssr, scene, scene_normal, scene_depth);
+        declare_ssr_passes(&mut graph, ssr, scene, surface_normal, scene_depth);
         graph.add_external_pass(
             pass::SSR_BLEND,
             pass::SSR_BLEND,
             vec![
                 refl_fill,
-                scene_normal,
+                surface_normal,
                 scene_specular,
                 scene_depth,
                 ssr.trace,
@@ -1255,7 +1265,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     }
     // The recorder maps the inputs by the chain's flags: the atlas, then the receiver ids.
     if drop_shadow_atlas.is_some() || chain.decals {
-        let mut projector_reads = vec![scene_depth, scene_normal];
+        let mut projector_reads = vec![scene_depth, surface_normal];
         projector_reads.extend(drop_shadow_atlas);
         projector_reads.extend(decal_receivers);
         graph.add_external_pass(
@@ -1373,7 +1383,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         _ if chain.probe_view => graph.add_external_pass(
             pass::PROBE_DEBUG,
             pass::PROBE_DEBUG,
-            vec![scene_normal, scene_depth],
+            vec![surface_normal, scene_depth],
             vec![composited],
         ),
         (Some(_), Some(ssr)) => graph.add_external_pass(
@@ -2894,9 +2904,40 @@ mod tests {
         );
         assert_eq!(
             lit.writes().iter().map(name_of).collect::<Vec<_>>(),
-            ["scene"]
+            ["scene", "lit_normal", "scene_specular"]
         );
         assert!(schedule(&graph).is_ok());
+    }
+
+    /// With lit decals every reader past `decals_lit` takes the painted normal; the scene pass keeps
+    /// the receiver's. A multiply-only scene has no `lit_normal`.
+    #[test]
+    fn lit_decals_hand_the_painted_normal_to_the_later_readers() {
+        let chain = PostChain {
+            lit_decals: true,
+            decals: true,
+            ssr: Some(QualityParams::FULL.ssr_scale),
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let name_of = |id: &ResourceId| graph.resources()[id.index()].name.as_str();
+        let reads = |pass: &str| -> Vec<&str> {
+            let pass = graph.passes().iter().find(|p| p.name == pass).unwrap();
+            pass.reads().iter().map(name_of).collect()
+        };
+        for pass in ["reflections", "ssr_trace", "ssr_blend", "projector"] {
+            let r = reads(pass);
+            assert!(r.contains(&"lit_normal"), "{pass}: {r:?}");
+            assert!(!r.contains(&"scene_normal"), "{pass}: {r:?}");
+        }
+        assert!(!reads("scene").contains(&"lit_normal"));
+
+        let multiply_only = PostChain {
+            decals: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), multiply_only);
+        assert!(graph.resources().iter().all(|r| r.name != "lit_normal"));
     }
 
     /// Lit and multiply decals together schedule both passes, the lit one first, and the receiver

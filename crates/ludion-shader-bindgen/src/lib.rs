@@ -180,6 +180,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     (
         "decal_lit.wgsl",
         &[
+            "fullscreen_vs.wgsl",
             "camera.wgsl",
             "cluster_grid.wgsl",
             "lights.wgsl",

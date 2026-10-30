@@ -4,12 +4,23 @@
 // `ProjectorDecal` instance); what differs is that the surface under the box is re-lit by the mesh
 // lighting (`shade`) with the decal's albedo, roughness, metallic and normal.
 //
-// Three entry points, one per pipeline, all over `lit_sample`:
-//   - `fs_lit_alpha`: `lerp(lit, shaded, c)` as a premultiplied blend (`One, OneMinusSrcAlpha`);
-//   - `fs_lit_coat_base`: the tint, `lit * lerp(1, rgb, c)`, a multiply (`Zero, Src`);
-//   - `fs_lit_coat_spec`: the dielectric specular lobe of the sun and the clustered lights at the
-//     decal's roughness and normal, added (`One, One`). A zero albedo leaves exactly those lobes:
-//     every diffuse, ambient and GI term of `shade` carries the albedo as a factor.
+// The pass writes three targets, so the reflections, SSR and the projector see the paint as a surface:
+// location 0 is `scene`, location 1 the `lit_normal` copy of the receiver's normal (rgb) and roughness
+// (a), location 2 `scene_specular`'s F0 (rgb; its occlusion alpha stays the receiver's). A pass cannot
+// sample what it blends into, so `fs_lit_copy` first fills `lit_normal` from `scene_normal` with a
+// fullscreen triangle, and every later reader takes `lit_normal`.
+//
+// Each decal is two draws, a base and a finish, run back to back for that one decal so overlaps blend
+// exactly. All over `lit_sample`:
+//   - `fs_lit_alpha_base`: `lerp(lit, shaded, c)` as a premultiplied blend (`One, OneMinusSrcAlpha`),
+//     the painted normal and F0 blended by `c`, and the roughness scaled by `1 - c`;
+//   - `fs_lit_alpha_finish`: adds `c * roughness` onto what the base left, completing the lerp;
+//   - `fs_lit_coat_base`: the tint, `lit * lerp(1, rgb, c)`, a multiply (`Zero, Src`), with the same
+//     surface blend at the dielectric F0;
+//   - `fs_lit_coat_finish`: the dielectric specular lobe of the sun and the clustered lights at the
+//     decal's roughness and normal, added (`One, One`), and the roughness completion. A zero albedo
+//     leaves exactly those lobes: every diffuse, ambient and GI term of `shade` carries the albedo as
+//     a factor.
 //
 // `c`, the coverage, is `fs_decal`'s: the map's alpha, the tint's alpha, the opacity and the angle
 // fade, zero outside the box, behind no surface or on a mesh the decal does not paint.
@@ -153,28 +164,78 @@ fn lit_ao(frag: vec4<f32>) -> f32 {
     return ao;
 }
 
+// What a lit draw writes: scene colour, painted normal + roughness, and F0. Each pipeline's blend
+// state and write mask choose which of the three it touches.
+struct LitOut {
+    @location(0) color: vec4<f32>,
+    @location(1) surface: vec4<f32>,
+    @location(2) f0: vec4<f32>,
+}
+
+fn lit_out(color: vec4<f32>, surface: vec4<f32>, f0: vec4<f32>) -> LitOut {
+    var out: LitOut;
+    out.color = color;
+    out.surface = surface;
+    out.f0 = f0;
+    return out;
+}
+
+// The roughness `shade` stores for a mesh.
+fn lit_roughness(r: f32) -> f32 {
+    return clamp(r, 0.045, 1.0);
+}
+
+// The pass's first draw: `lit_normal` starts as the receiver's normal and roughness. The other two
+// targets are masked off.
 @fragment
-fn fs_lit_alpha(in: LitVsOut) -> @location(0) vec4<f32> {
+fn fs_lit_copy(in: VsOut) -> LitOut {
+    let surface = textureLoad(lit_surface, vec2<i32>(in.pos.xy), 0);
+    return lit_out(vec4<f32>(0.0), surface, vec4<f32>(0.0));
+}
+
+@fragment
+fn fs_lit_alpha_base(in: LitVsOut) -> LitOut {
     let s = lit_sample(in);
     if (s.c <= 0.0) {
-        return vec4<f32>(0.0);
+        return lit_out(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
     }
     let shaded = shade(s.world, s.n, s.rgb, vec3<f32>(s.roughness, s.metallic, 0.0), lit_ao(in.clip), in.clip.xy, 1.0);
-    return vec4<f32>(s.c * hdr_safe(shaded.lit), s.c);
+    return lit_out(
+        vec4<f32>(s.c * hdr_safe(shaded.lit), s.c),
+        vec4<f32>(s.c * shaded.n, s.c),
+        vec4<f32>(s.c * shaded.f0, s.c),
+    );
 }
 
 @fragment
-fn fs_lit_coat_base(in: LitVsOut) -> @location(0) vec4<f32> {
+fn fs_lit_alpha_finish(in: LitVsOut) -> LitOut {
     let s = lit_sample(in);
-    return vec4<f32>(mix(vec3<f32>(1.0), s.rgb, s.c), 1.0);
+    return lit_out(vec4<f32>(0.0), vec4<f32>(0.0, 0.0, 0.0, s.c * lit_roughness(s.roughness)), vec4<f32>(0.0));
 }
 
 @fragment
-fn fs_lit_coat_spec(in: LitVsOut) -> @location(0) vec4<f32> {
+fn fs_lit_coat_base(in: LitVsOut) -> LitOut {
+    let s = lit_sample(in);
+    // A zero normal (sky, or no opaque surface) normalizes to NaN, which `0 * NaN` would carry into
+    // the blend: zero coverage writes exact zeros instead.
+    let covered = s.c > 0.0;
+    return lit_out(
+        vec4<f32>(mix(vec3<f32>(1.0), s.rgb, s.c), 1.0),
+        select(vec4<f32>(0.0), vec4<f32>(s.c * normalize(s.n), s.c), covered),
+        select(vec4<f32>(0.0), vec4<f32>(vec3<f32>(s.c * 0.04), s.c), covered),
+    );
+}
+
+@fragment
+fn fs_lit_coat_finish(in: LitVsOut) -> LitOut {
     let s = lit_sample(in);
     if (s.c <= 0.0) {
-        return vec4<f32>(0.0);
+        return lit_out(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
     }
     let spec = shade(s.world, s.n, vec3<f32>(0.0), vec3<f32>(s.roughness, 0.0, 0.0), lit_ao(in.clip), in.clip.xy, 1.0);
-    return vec4<f32>(s.c * hdr_safe(spec.lit), 0.0);
+    return lit_out(
+        vec4<f32>(s.c * hdr_safe(spec.lit), 0.0),
+        vec4<f32>(0.0, 0.0, 0.0, s.c * lit_roughness(s.roughness)),
+        vec4<f32>(0.0),
+    );
 }
