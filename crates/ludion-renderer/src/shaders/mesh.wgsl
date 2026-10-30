@@ -9,44 +9,9 @@
 // The `Camera` uniform (@group 0), the clustered-forward light set (@group 1: the `LightHeader`
 // uniform, `light_list`, `cluster_table`, `cluster_lights`) and the shared `BAYER4` dither tile are
 // snippets composed ahead of this file (`shaders/snippets/camera.wgsl`, `snippets/lights.wgsl`,
-// `snippets/bayer.wgsl`), as is the mesh shading (groups 2–3 and `shade`, `snippets/mesh_shading.wgsl`) —
+// `snippets/bayer.wgsl`), as is the mesh shading (groups 2–3 and `shade`, `snippets/mesh_shading.wgsl`) and the
+// per-draw material maps (@group 4, `snippets/mesh_material.wgsl`) —
 // see Plan/shader-bindgen.md decision 16. This body declares only what is unique to the mesh pass.
-
-// The per-draw material maps — glTF's metallic-roughness set, a mesh-only @group(4) set once per draw
-// (the sprite pass's `SPRITE_TEX_GROUP` is the precedent). One pipeline, no re-batching: which maps a
-// draw actually carries lives in `material.flags`, and each term below reads its own bit. A draw with
-// a bit clear takes the historical arithmetic *unchanged* — no sample, no multiply by a neutral
-// texel — which is what keeps an untextured frame byte-identical on every driver
-// (`Plan/textured-pbr.md` G4). The 1×1 defaults bound in the clear slots exist only so the bind
-// group is complete; nothing reads them.
-struct MeshMaterial {
-    // Which maps are bound, as the `MATERIAL_*` bits below.
-    flags: u32,
-    // glTF `normalTexture.scale` — how hard the sampled tangent-space xy is scaled.
-    normal_scale: f32,
-    // glTF `occlusionTexture.strength` — how far the ambient term darkens toward the sampled value.
-    occlusion_strength: f32,
-    // The struct's 16-byte alignment rounds its size up, and `shader_gen`'s generated POD carries no
-    // implicit padding — a hole has to have a name, exactly as `Sun`'s three tail lanes do.
-    pad0: f32,
-};
-
-const MATERIAL_BASE_COLOR: u32 = 1u;
-const MATERIAL_METALLIC_ROUGHNESS: u32 = 2u;
-const MATERIAL_NORMAL: u32 = 4u;
-const MATERIAL_OCCLUSION: u32 = 8u;
-const MATERIAL_EMISSIVE: u32 = 16u;
-
-@group(4) @binding(0) var base_color_tex: texture_2d<f32>;
-@group(4) @binding(1) var metallic_roughness_tex: texture_2d<f32>;
-@group(4) @binding(2) var normal_tex: texture_2d<f32>;
-@group(4) @binding(3) var occlusion_tex: texture_2d<f32>;
-@group(4) @binding(4) var emissive_tex: texture_2d<f32>;
-// Trilinear, anisotropic, with the wrap mode the material authored — one sampler for all five maps,
-// picked per draw from the renderer's small shared set.
-@group(4) @binding(5) var material_samp: sampler;
-@group(4) @binding(6) var<uniform> material: MeshMaterial;
-
 
 struct VsIn {
     @location(0) position: vec3<f32>,
@@ -168,17 +133,17 @@ struct CaptureOut {
 }
 
 @fragment
-fn fs_main(in: VsOut) -> FsOut {
-    let c = shade_fragment(in);
+fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> FsOut {
+    let c = shade_fragment(in, front_facing);
     return FsOut(c.color, c.normal_roughness, c.specular);
 }
 
 @fragment
-fn fs_capture(in: VsOut) -> CaptureOut {
-    return shade_fragment(in);
+fn fs_capture(in: VsOut, @builtin(front_facing) front_facing: bool) -> CaptureOut {
+    return shade_fragment(in, front_facing);
 }
 
-fn shade_fragment(in: VsOut) -> CaptureOut {
+fn shade_fragment(in: VsOut, front_facing: bool) -> CaptureOut {
     // Screen-door occlusion fade (opaque pipeline — no blend, no depth-write change; discard is the
     // whole mechanism). `height_min` (fade.y) gates by world height: only fragments strictly ABOVE it
     // fade, so the top-fade-stories case leaves the lower body fully opaque; at or below it the
@@ -205,8 +170,15 @@ fn shade_fragment(in: VsOut) -> CaptureOut {
     // whether or not a base-colour map is bound (glTF's emissive is independent of base colour).
     let base = in.color.rgb;
     var albedo = base;
+    // Cutout coverage: the instance × vertex alpha, times the base-colour map's where one is bound.
+    var coverage = in.color.a;
     if ((material.flags & MATERIAL_BASE_COLOR) != 0u) {
-        albedo = albedo * textureSample(base_color_tex, material_samp, in.uv).rgb;
+        let texel = textureSample(base_color_tex, material_samp, in.uv);
+        albedo = albedo * texel.rgb;
+        coverage = coverage * texel.a;
+    }
+    if (material_masked(coverage)) {
+        discard;
     }
 
     // glTF packs roughness in `g` and metallic in `b`; both are factors on what the vertex/instance
@@ -229,6 +201,10 @@ fn shade_fragment(in: VsOut) -> CaptureOut {
         let sampled = textureSample(normal_tex, material_samp, in.uv).xyz * 2.0 - 1.0;
         let scaled = sampled * vec3<f32>(material.normal_scale, material.normal_scale, 1.0);
         normal = normalize(mat3x3<f32>(t, b, n_geom) * scaled);
+    }
+    // A double-sided back face is the same surface seen from behind: the whole shading frame flips.
+    if (material_back_face(front_facing)) {
+        normal = -normal;
     }
 
     var occlusion_map = 1.0;

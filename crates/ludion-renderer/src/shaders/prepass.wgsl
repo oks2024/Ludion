@@ -15,8 +15,10 @@
 // ignores — so the pipeline reuses `MESH_VERTEX_ATTRS`/`MESH_INSTANCE_ATTRS` instead of hand-writing a
 // third attribute array with hand-computed byte offsets into `MeshInstanceRaw`.
 //
-// The `Camera` uniform and the bone palette (@group 0) and the shared `BAYER4` dither tile are
-// snippets composed ahead of this file (Plan/shader-bindgen.md decision 16).
+// The `Camera` uniform and the bone palette (@group 0), the shared `BAYER4` dither tile and the
+// per-draw material (@group 4, `snippets/mesh_material.wgsl`) are snippets composed ahead of this file
+// (Plan/shader-bindgen.md decision 16). The material is read only for the cutout test and the
+// double-sided back-face flip, so a cutout occludes exactly the texels the scene pass draws.
 
 struct VsIn {
     @location(0) position: vec3<f32>,
@@ -48,6 +50,9 @@ struct VsOut {
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) @interpolate(flat) fade: vec2<f32>,
+    @location(3) uv: vec2<f32>,
+    // The scene pass's own `vertex_color * color`, so the cutout coverage interpolates identically.
+    @location(4) color: vec4<f32>,
 };
 
 @vertex
@@ -68,11 +73,13 @@ fn vs_main(in: VsIn) -> VsOut {
     out.world_pos = world.xyz;
     out.world_normal = (normal_mat * vec4<f32>(normal, 0.0)).xyz;
     out.fade = in.fade.xy;
+    out.uv = in.uv;
+    out.color = in.vertex_color * in.color;
     return out;
 }
 
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     // The same screen-door discard the scene pass applies, over the same tile at the same extent, so
     // the two passes rasterize the same silhouette. Without it a building the camera-occlusion policy
     // has dithered away would still occlude — AO cast by geometry the viewer cannot see.
@@ -85,7 +92,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (eff_fade <= BAYER4[by * 4u + bx]) {
         discard;
     }
+    var coverage = in.color.a;
+    if ((material.flags & MATERIAL_BASE_COLOR) != 0u) {
+        coverage = coverage * textureSample(base_color_tex, material_samp, in.uv).a;
+    }
+    if (material_masked(coverage)) {
+        discard;
+    }
+    var normal = normalize(in.world_normal);
+    if (material_back_face(front_facing)) {
+        normal = -normal;
+    }
     // World-space, stored signed: the target is `Rgba16Float`, so a normal needs no encode/decode pair
     // (an 8-bit unorm target would, and an sRGB one would be outright wrong).
-    return vec4<f32>(normalize(in.world_normal), 1.0);
+    return vec4<f32>(normal, 1.0);
 }

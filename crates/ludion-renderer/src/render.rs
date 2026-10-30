@@ -59,11 +59,11 @@ use crate::shader_gen::{
     ATLAS_TEX_GROUP, BONE_PALETTE_BINDING, BloomThreshold, CAMERA_BINDING, CAMERA_GROUP,
     CLUSTER_LIGHTS_BINDING, CLUSTER_TABLE_BINDING, Camera, Composite, DownsampleParams,
     ENV_BINDING, ENV_GROUP, ENV_SAMP_BINDING, EnvParams, IRRADIANCE_TEX_BINDING,
-    LIGHT_LIST_BINDING, LIGHTS_BINDING, LIGHTS_GROUP, MATERIAL_BASE_COLOR, MATERIAL_EMISSIVE,
-    MATERIAL_GROUP, MATERIAL_METALLIC_ROUGHNESS, MATERIAL_NORMAL, MATERIAL_OCCLUSION, MeshMaterial,
-    RECT_TEX_GROUP, ResolveParams, SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, SKY_GROUP,
-    SPRITE_TEX_GROUP, SRC_TEX_GROUP, SUN_GROUP, Sky, Sun, UI_GROUP, Ui, UpsampleParams,
-    UpscaleParams,
+    LIGHT_LIST_BINDING, LIGHTS_BINDING, LIGHTS_GROUP, MATERIAL_ALPHA_MASK, MATERIAL_BASE_COLOR,
+    MATERIAL_DOUBLE_SIDED, MATERIAL_EMISSIVE, MATERIAL_GROUP, MATERIAL_METALLIC_ROUGHNESS,
+    MATERIAL_NORMAL, MATERIAL_OCCLUSION, MeshMaterial, RECT_TEX_GROUP, ResolveParams,
+    SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, SKY_GROUP, SPRITE_TEX_GROUP, SRC_TEX_GROUP, SUN_GROUP,
+    Sky, Sun, UI_GROUP, Ui, UpsampleParams, UpscaleParams,
 };
 // The clustered-forward light payload: the light array, the header uniform and the per-cell index
 // tables (`Plan/clustered-forward.md`). The renderer's job with them is upload and bind; which
@@ -269,6 +269,8 @@ struct MeshAssetGpu {
     index_count: u32,
     /// The object-space box of the vertices, cached with the upload for per-view shadow culling.
     bounds: Option<Aabb>,
+    /// Whether the mesh draws through the cull-none variant, with its back faces shaded.
+    double_sided: bool,
     /// The mesh pass's group-4 material bind group — the maps this mesh's material carries, the 1×1
     /// defaults in the slots it does not, and the `flags` word that decides which the shader reads.
     /// Built with the upload because the cache key ([`MeshData::hash`]) moves whenever the document
@@ -745,22 +747,23 @@ impl Renderer {
         &self.pipelines[id as usize].main
     }
 
-    /// The winding-reversed twin of a mesh-geometry shader's pipeline, for a draw whose model matrix
-    /// is a reflection ([`is_mirrored`]).
-    fn mirrored_pipeline(&self, id: ShaderId) -> &wgpu::RenderPipeline {
-        self.pipelines[id as usize]
-            .mirrored
+    /// A mesh-geometry shader's pipeline for `variant`: winding-reversed for a reflection
+    /// ([`is_mirrored`]), cull-none for a double-sided mesh.
+    fn variant_pipeline(&self, id: ShaderId, variant: MeshVariant) -> &wgpu::RenderPipeline {
+        let variants = self.pipelines[id as usize]
+            .variants
             .as_ref()
-            .unwrap_or_else(|| panic!("{} has no mirrored pipeline twin", id.label()))
+            .unwrap_or_else(|| panic!("{} has no mesh pipeline variants", id.label()));
+        &variants[variant.index()]
     }
 
-    /// The mesh shader's probe-capture pipeline (four targets), winding-reversed when `mirrored`.
-    fn capture_pipeline(&self, id: ShaderId, mirrored: bool) -> &wgpu::RenderPipeline {
-        let pair = self.pipelines[id as usize]
+    /// The mesh shader's probe-capture pipeline (four targets) for `variant`.
+    fn capture_pipeline(&self, id: ShaderId, variant: MeshVariant) -> &wgpu::RenderPipeline {
+        let variants = self.pipelines[id as usize]
             .capture
             .as_ref()
-            .unwrap_or_else(|| panic!("{} has no capture pipeline twin", id.label()));
-        &pair[usize::from(mirrored)]
+            .unwrap_or_else(|| panic!("{} has no capture pipeline variants", id.label()));
+        &variants[variant.index()]
     }
 
     /// The projector's decal pipeline for `blend` (`Multiply` or `Add`).
@@ -1806,8 +1809,11 @@ impl Renderer {
                     .entry(m.hash)
                     .or_insert_with(|| {
                         self.count_upload(|u| u.mesh_assets += 1);
-                        let material_bg =
-                            self.material_bind_group(self.gpu.device(), m.textures.as_ref());
+                        let material_bg = self.material_bind_group(
+                            self.gpu.device(),
+                            m.textures.as_ref(),
+                            m.double_sided,
+                        );
                         upload_mesh_asset(self.gpu.device(), m, material_bg)
                     })
                     .clone()
@@ -1920,9 +1926,10 @@ impl Renderer {
 
     /// The mesh pass's group-4 bind group for one material: the cached view of every map it carries,
     /// the 1×1 default in every slot it does not, the sampler its wrap mode asks for, and the
-    /// `flags`/scalar uniform the shader branches on. `None` (a mesh with no material document, or one
-    /// whose material is scalar only) is [`Renderer::default_material_bg`] itself — the primitives'
-    /// group describes exactly that draw.
+    /// `flags`/scalar uniform the shader branches on: the map bits, `MATERIAL_ALPHA_MASK` with its
+    /// cutoff when `textures` carries one, and `MATERIAL_DOUBLE_SIDED`. No `textures` on a
+    /// single-sided mesh (no material document, or a scalar-only one) is
+    /// [`Renderer::default_material_bg`] itself — the primitives' group describes exactly that draw.
     ///
     /// **Wrap mode:** one sampler serves all five maps, so the group takes the base-colour map's wrap
     /// when there is one and otherwise the first present map's, in binding order. glTF allows a
@@ -1936,25 +1943,44 @@ impl Renderer {
         &self,
         device: &wgpu::Device,
         textures: Option<&MeshTextures>,
+        double_sided: bool,
     ) -> wgpu::BindGroup {
-        let Some(textures) = textures else {
+        if textures.is_none() && !double_sided {
             return self.default_material_bg.clone();
-        };
+        }
         let mut views = default_material_views(&self.white, &self.material_defaults);
         let cache = self.mesh_texture_cache.borrow();
-        let maps = material_maps(textures);
-        let mut flags = 0;
+        let mut material = MeshMaterial {
+            flags: if double_sided {
+                MATERIAL_DOUBLE_SIDED
+            } else {
+                0
+            },
+            ..UNTEXTURED_MATERIAL
+        };
         let mut wrap = None;
-        for (slot, ((map, srgb, cutoff), bit)) in maps.into_iter().zip(MATERIAL_FLAGS).enumerate() {
-            let Some(map) = map else {
-                continue;
-            };
-            let Some(uploaded) = cache.get(&mesh_texture_key(map, srgb, cutoff)) else {
-                continue;
-            };
-            views[slot] = &uploaded.view;
-            flags |= bit;
-            wrap = wrap.or(Some(map.wrap));
+        if let Some(textures) = textures {
+            for (slot, ((map, srgb, cutoff), bit)) in material_maps(textures)
+                .into_iter()
+                .zip(MATERIAL_FLAGS)
+                .enumerate()
+            {
+                let Some(map) = map else {
+                    continue;
+                };
+                let Some(uploaded) = cache.get(&mesh_texture_key(map, srgb, cutoff)) else {
+                    continue;
+                };
+                views[slot] = &uploaded.view;
+                material.flags |= bit;
+                wrap = wrap.or(Some(map.wrap));
+            }
+            material.normal_scale = textures.normal_scale;
+            material.occlusion_strength = textures.occlusion_strength;
+            if let Some(cutoff) = textures.alpha_cutoff {
+                material.flags |= MATERIAL_ALPHA_MASK;
+                material.alpha_cutoff = cutoff;
+            }
         }
         let sampler = match wrap.unwrap_or_default() {
             TextureWrap::Repeat => &self.material_sampler_repeat,
@@ -1966,12 +1992,7 @@ impl Renderer {
             self.layouts.get(LayoutId::MeshMaterial),
             views,
             sampler,
-            MeshMaterial {
-                flags,
-                normal_scale: textures.normal_scale,
-                occlusion_strength: textures.occlusion_strength,
-                pad0: 0.0,
-            },
+            material,
         )
     }
 
@@ -2828,11 +2849,21 @@ struct MeshDraw {
     shape: MeshShape,
     instances: wgpu::Buffer,
     count: u32,
-    /// Draws through the shader's winding-reversed twin ([`is_mirrored`]).
+    /// Draws through the shader's winding-reversed variant ([`is_mirrored`]).
     mirrored: bool,
     /// Ascending indices into `scene.meshes` of this draw's instances, in instance order, so the
     /// drop-shadow occlusion pass can skip a caster's own.
     sources: Vec<u32>,
+}
+
+impl MeshDraw {
+    /// A primitive is always single-sided.
+    fn variant(&self) -> MeshVariant {
+        MeshVariant {
+            mirrored: self.mirrored,
+            double_sided: false,
+        }
+    }
 }
 
 /// The frame's decals as the two decal passes consume them: packed instances, the receiver lists, and
@@ -2866,10 +2897,19 @@ struct MeshAssetDraw {
     mesh: MeshAssetGpu,
     instances: wgpu::Buffer,
     count: u32,
-    /// Draws through the shader's winding-reversed twin ([`is_mirrored`]).
+    /// Draws through the shader's winding-reversed variant ([`is_mirrored`]).
     mirrored: bool,
     /// As [`MeshDraw::sources`].
     sources: Vec<u32>,
+}
+
+impl MeshAssetDraw {
+    fn variant(&self) -> MeshVariant {
+        MeshVariant {
+            mirrored: self.mirrored,
+            double_sided: self.mesh.double_sided,
+        }
+    }
 }
 
 struct SpriteDraw {
@@ -3337,12 +3377,12 @@ impl FrameRecorder<'_> {
 
         rp.set_pipeline(self.r.pipeline(ShaderId::Shadow));
         rp.set_bind_group(SHADOW_VIEW_GROUP, &shadow_view_bg, &[]);
-        let mut mirrored = false;
+        let mut variant = MeshVariant::PLAIN;
         // Primitive meshes: same per-shape vertex buffer + instance buffer as the scene pass.
         for draw in &self.mesh_draws {
-            if draw.mirrored != mirrored {
-                mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, mirrored));
+            if draw.variant().culled() != variant {
+                variant = draw.variant().culled();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, variant));
             }
             let mb = self.r.mesh_of(draw.shape);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
@@ -3351,9 +3391,9 @@ impl FrameRecorder<'_> {
         }
         // Asset meshes: same indexed instanced draw.
         for draw in &self.mesh_asset_draws {
-            if draw.mirrored != mirrored {
-                mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, mirrored));
+            if draw.variant().culled() != variant {
+                variant = draw.variant().culled();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, variant));
             }
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
             rp.set_vertex_buffer(1, draw.instances.slice(..));
@@ -3362,14 +3402,10 @@ impl FrameRecorder<'_> {
         }
     }
 
-    /// The pipeline a mesh-geometry draw records with: the shader's winding-reversed twin when the
-    /// draw's instances are reflections ([`is_mirrored`]).
-    fn mesh_pipeline(&self, id: ShaderId, mirrored: bool) -> &wgpu::RenderPipeline {
-        if mirrored {
-            self.r.mirrored_pipeline(id)
-        } else {
-            self.r.pipeline(id)
-        }
+    /// The pipeline a mesh-geometry draw records with: the shader's winding and cull variant for
+    /// the draw's instances ([`MeshVariant`]).
+    fn mesh_pipeline(&self, id: ShaderId, variant: MeshVariant) -> &wgpu::RenderPipeline {
+        self.r.variant_pipeline(id, variant)
     }
 
     /// The depth+normal prepass (present only on an AO frame): the same opaque geometry the scene pass
@@ -3411,11 +3447,12 @@ impl FrameRecorder<'_> {
 
         rp.set_pipeline(self.r.pipeline(ShaderId::Prepass));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_skin_bg, &[]);
-        let mut mirrored = false;
+        let mut variant = MeshVariant::PLAIN;
         for draw in &self.mesh_draws {
-            if draw.mirrored != mirrored {
-                mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Prepass, mirrored));
+            rp.set_bind_group(MATERIAL_GROUP, &self.r.default_material_bg, &[]);
+            if draw.variant() != variant {
+                variant = draw.variant();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::Prepass, variant));
             }
             let mb = self.r.mesh_of(draw.shape);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
@@ -3423,10 +3460,11 @@ impl FrameRecorder<'_> {
             rp.draw(0..mb.vertex_count, 0..draw.count);
         }
         for draw in &self.mesh_asset_draws {
-            if draw.mirrored != mirrored {
-                mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Prepass, mirrored));
+            if draw.variant() != variant {
+                variant = draw.variant();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::Prepass, variant));
             }
+            rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
             rp.set_vertex_buffer(1, draw.instances.slice(..));
             rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -3710,23 +3748,23 @@ impl FrameRecorder<'_> {
         let (sun_bg, env_bg) = self.shading_groups(pass.device, pass.inputs);
 
         // Meshes.
-        let mesh_pipeline = |mirrored| {
+        let mesh_pipeline = |variant| {
             if emissive.is_some() {
-                self.r.capture_pipeline(ShaderId::Mesh, mirrored)
+                self.r.capture_pipeline(ShaderId::Mesh, variant)
             } else {
-                self.mesh_pipeline(ShaderId::Mesh, mirrored)
+                self.mesh_pipeline(ShaderId::Mesh, variant)
             }
         };
-        rp.set_pipeline(mesh_pipeline(false));
+        rp.set_pipeline(mesh_pipeline(MeshVariant::PLAIN));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_skin_bg, &[]);
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
         rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);
         rp.set_bind_group(ENV_GROUP, &env_bg, &[]);
-        let mut mirrored = false;
+        let mut variant = MeshVariant::PLAIN;
         for draw in &self.mesh_draws {
-            if draw.mirrored != mirrored {
-                mirrored = draw.mirrored;
-                rp.set_pipeline(mesh_pipeline(mirrored));
+            if draw.variant() != variant {
+                variant = draw.variant();
+                rp.set_pipeline(mesh_pipeline(variant));
             }
             let mb = self.r.mesh_of(draw.shape);
             // Group 4 is the per-draw material. A procedural primitive has no material document, so it
@@ -3740,9 +3778,9 @@ impl FrameRecorder<'_> {
         // Asset meshes — same pipeline/bind groups, but an indexed instanced draw, and the group-4
         // material of the mesh being drawn.
         for draw in &self.mesh_asset_draws {
-            if draw.mirrored != mirrored {
-                mirrored = draw.mirrored;
-                rp.set_pipeline(mesh_pipeline(mirrored));
+            if draw.variant() != variant {
+                variant = draw.variant();
+                rp.set_pipeline(mesh_pipeline(variant));
             }
             rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
@@ -3905,7 +3943,7 @@ impl FrameRecorder<'_> {
         });
 
         rp.set_pipeline(self.r.pipeline(ShaderId::Shadow));
-        let mut mirrored = false;
+        let mut variant = MeshVariant::PLAIN;
         for (index, (ds, view_bg)) in self.drop_shadows.iter().zip(&view_bgs).enumerate() {
             let (x, y) = atlas.tile_origin(index);
             let tile = atlas.tile;
@@ -3917,9 +3955,9 @@ impl FrameRecorder<'_> {
                 if kept.is_empty() {
                     continue;
                 }
-                if draw.mirrored != mirrored {
-                    mirrored = draw.mirrored;
-                    rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, mirrored));
+                if draw.variant().culled() != variant {
+                    variant = draw.variant().culled();
+                    rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, variant));
                 }
                 let mb = self.r.mesh_of(draw.shape);
                 rp.set_vertex_buffer(0, mb.buffer.slice(..));
@@ -3933,9 +3971,9 @@ impl FrameRecorder<'_> {
                 if kept.is_empty() {
                     continue;
                 }
-                if draw.mirrored != mirrored {
-                    mirrored = draw.mirrored;
-                    rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, mirrored));
+                if draw.variant().culled() != variant {
+                    variant = draw.variant().culled();
+                    rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, variant));
                 }
                 rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
                 rp.set_vertex_buffer(1, draw.instances.slice(..));
@@ -3982,7 +4020,7 @@ impl FrameRecorder<'_> {
         });
 
         rp.set_pipeline(self.r.pipeline(ShaderId::Shadow));
-        let mut mirrored = false;
+        let mut variant = MeshVariant::PLAIN;
         let mut visible = vec![false; self.caster_bounds.len()];
         for (view, view_bg) in plan.views.iter().zip(&view_bgs) {
             let rect = view.rect;
@@ -4000,7 +4038,7 @@ impl FrameRecorder<'_> {
             for index in cull(&self.caster_bounds, &view.cull) {
                 visible[index as usize] = true;
             }
-            self.draw_casters(&mut rp, &visible, &mut mirrored);
+            self.draw_casters(&mut rp, &visible, &mut variant);
         }
     }
 
@@ -4025,16 +4063,21 @@ impl FrameRecorder<'_> {
     }
 
     /// Draws the casters `visible` marks (indexed by caster, as `caster_bounds`) with the shadow
-    /// pipeline; `mirrored` tracks which pipeline twin is bound across calls.
-    fn draw_casters(&self, rp: &mut wgpu::RenderPass<'_>, visible: &[bool], mirrored: &mut bool) {
+    /// pipeline; `variant` tracks which pipeline variant is bound across calls.
+    fn draw_casters(
+        &self,
+        rp: &mut wgpu::RenderPass<'_>,
+        visible: &[bool],
+        variant: &mut MeshVariant,
+    ) {
         for draw in &self.mesh_draws {
             let kept = visible_ranges(&draw.sources, visible);
             if kept.is_empty() {
                 continue;
             }
-            if draw.mirrored != *mirrored {
-                *mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, *mirrored));
+            if draw.variant().culled() != *variant {
+                *variant = draw.variant().culled();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, *variant));
             }
             let mb = self.r.mesh_of(draw.shape);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
@@ -4048,9 +4091,9 @@ impl FrameRecorder<'_> {
             if kept.is_empty() {
                 continue;
             }
-            if draw.mirrored != *mirrored {
-                *mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, *mirrored));
+            if draw.variant().culled() != *variant {
+                *variant = draw.variant().culled();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::Shadow, *variant));
             }
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
             rp.set_vertex_buffer(1, draw.instances.slice(..));
@@ -4090,7 +4133,7 @@ impl FrameRecorder<'_> {
         });
 
         rp.set_pipeline(self.r.pipeline(ShaderId::Shadow));
-        let mut mirrored = false;
+        let mut variant = MeshVariant::PLAIN;
         let mut visible = vec![false; self.caster_bounds.len()];
         let tile = self.sun_tile;
         for (index, view_bg) in view_bgs.iter().enumerate() {
@@ -4103,7 +4146,7 @@ impl FrameRecorder<'_> {
             for &caster in &self.sun_cascade_casters[index] {
                 visible[caster as usize] = true;
             }
-            self.draw_casters(&mut rp, &visible, &mut mirrored);
+            self.draw_casters(&mut rp, &visible, &mut variant);
         }
     }
 
@@ -4176,15 +4219,15 @@ impl FrameRecorder<'_> {
         let mut rp = pass.begin_clear(wgpu::Color::TRANSPARENT);
         rp.set_pipeline(self.r.pipeline(ShaderId::DecalReceiver));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_skin_bg, &[]);
-        let mut mirrored = false;
+        let mut variant = MeshVariant::PLAIN;
         let mut draw_bgs = draw_bgs.iter();
         for draw in &self.mesh_draws {
             let draw_bg = draw_bgs.next().expect("one bind group per draw");
             let Some(draw_bg) = draw_bg else { continue };
             let kept = only_ranges(&draw.sources, &self.decals.receivers);
-            if draw.mirrored != mirrored {
-                mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::DecalReceiver, mirrored));
+            if draw.variant() != variant {
+                variant = draw.variant();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::DecalReceiver, variant));
             }
             rp.set_bind_group(1, draw_bg, &[]);
             let mb = self.r.mesh_of(draw.shape);
@@ -4198,9 +4241,9 @@ impl FrameRecorder<'_> {
             let draw_bg = draw_bgs.next().expect("one bind group per draw");
             let Some(draw_bg) = draw_bg else { continue };
             let kept = only_ranges(&draw.sources, &self.decals.receivers);
-            if draw.mirrored != mirrored {
-                mirrored = draw.mirrored;
-                rp.set_pipeline(self.mesh_pipeline(ShaderId::DecalReceiver, mirrored));
+            if draw.variant() != variant {
+                variant = draw.variant();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::DecalReceiver, variant));
             }
             rp.set_bind_group(1, draw_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
@@ -5150,7 +5193,7 @@ fn target_texel(pass: &RecordedPass<'_>) -> [f32; 2] {
 /// entry. Panics for a shader that binds several (only a fullscreen post shader reaches here).
 fn fullscreen_layout(id: ShaderId) -> LayoutId {
     match id.desc().layouts {
-        [layout] => *layout,
+        [Some(layout)] => *layout,
         _ => panic!(
             "{} is not a fullscreen effect: it binds several layouts",
             id.file_name()
@@ -5464,7 +5507,7 @@ const UNTEXTURED_MATERIAL: MeshMaterial = MeshMaterial {
     flags: 0,
     normal_scale: 1.0,
     occlusion_strength: 1.0,
-    pad0: 0.0,
+    alpha_cutoff: 0.0,
 };
 
 /// The texture binding index per material slot, in the order [`material_maps`] and
@@ -5601,6 +5644,65 @@ fn is_mirrored(model: &Mat4) -> bool {
     Mat3::from_mat4(*model).determinant() < 0.0
 }
 
+/// Which of a mesh-geometry shader's four pipelines a draw records with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MeshVariant {
+    /// The model matrix is a reflection: winding reversed so the outside faces stay the front.
+    mirrored: bool,
+    /// The mesh draws both faces; the shader shades a back face with the flipped normal.
+    double_sided: bool,
+}
+
+impl MeshVariant {
+    const PLAIN: MeshVariant = MeshVariant {
+        mirrored: false,
+        double_sided: false,
+    };
+    /// Every variant, in [`index`](MeshVariant::index) order.
+    const ALL: [MeshVariant; 4] = [
+        MeshVariant::PLAIN,
+        MeshVariant {
+            mirrored: true,
+            double_sided: false,
+        },
+        MeshVariant {
+            mirrored: false,
+            double_sided: true,
+        },
+        MeshVariant {
+            mirrored: true,
+            double_sided: true,
+        },
+    ];
+
+    fn index(self) -> usize {
+        usize::from(self.mirrored) | usize::from(self.double_sided) << 1
+    }
+
+    /// The same winding, single-sided: what the depth-only shadow casters draw with.
+    fn culled(self) -> MeshVariant {
+        MeshVariant {
+            double_sided: false,
+            ..self
+        }
+    }
+}
+
+/// The primitive state of a mesh-geometry pipeline. `Cw` for a mirrored model (a negative
+/// determinant reverses triangle winding, so its outside faces would otherwise be the culled ones,
+/// and `front_facing` stays right for a double-sided draw); no culling when double-sided.
+fn mesh_primitive(variant: MeshVariant) -> wgpu::PrimitiveState {
+    wgpu::PrimitiveState {
+        cull_mode: (!variant.double_sided).then_some(wgpu::Face::Back),
+        front_face: if variant.mirrored {
+            wgpu::FrontFace::Cw
+        } else {
+            wgpu::FrontFace::Ccw
+        },
+        ..Default::default()
+    }
+}
+
 /// The per-instance occlusion-fade vec4 `(fade, height_min, bone_offset, handedness)`. The mesh
 /// shader's Bayer-dither discard reads the first two lanes (the default `(1.0, -f32::MAX)` never
 /// discards, so a fade-free frame is render-identical by construction); the vertex shader reads the
@@ -5729,6 +5831,7 @@ fn upload_mesh_asset(
         vertex_count: vertex_count as u32,
         index_count: mesh.indices.len() as u32,
         bounds: Aabb::of_positions(&mesh.positions),
+        double_sided: mesh.double_sided,
         material_bg,
     }
 }
@@ -5997,7 +6100,7 @@ struct ShaderDesc {
     /// are byte-compared by `renderer_composition_matches_bindgen_registry`).
     snippets: &'static [Snippet],
     /// The bind group layouts the pipeline binds, in `@group` order.
-    layouts: &'static [LayoutId],
+    layouts: &'static [Option<LayoutId>],
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
@@ -6027,13 +6130,14 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Dfg,
             Snippet::GiProbe,
             Snippet::MeshShading,
+            Snippet::MeshMaterial,
         ],
         layouts: &[
-            LayoutId::CameraSkin,
-            LayoutId::Lights,
-            LayoutId::Sun,
-            LayoutId::Env,
-            LayoutId::MeshMaterial,
+            Some(LayoutId::CameraSkin),
+            Some(LayoutId::Lights),
+            Some(LayoutId::Sun),
+            Some(LayoutId::Env),
+            Some(LayoutId::MeshMaterial),
         ],
     },
     ShaderDesc {
@@ -6042,7 +6146,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/shadow.wgsl"),
         // The bone palette, so a skinned mesh casts its deformed shadow rather than its rest pose.
         snippets: &[Snippet::Skin],
-        layouts: &[LayoutId::ShadowView],
+        layouts: &[Some(LayoutId::ShadowView)],
     },
     ShaderDesc {
         id: ShaderId::Prepass,
@@ -6050,15 +6154,26 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/prepass.wgsl"),
         // The camera to project with, the bone palette to skin with, and the shared dither tile so
         // the prepass discards exactly the fragments the scene pass will.
-        snippets: &[Snippet::Camera, Snippet::Skin, Snippet::Bayer],
-        layouts: &[LayoutId::CameraSkin],
+        snippets: &[
+            Snippet::Camera,
+            Snippet::Skin,
+            Snippet::Bayer,
+            Snippet::MeshMaterial,
+        ],
+        layouts: &[
+            Some(LayoutId::CameraSkin),
+            None,
+            None,
+            None,
+            Some(LayoutId::MeshMaterial),
+        ],
     },
     ShaderDesc {
         id: ShaderId::Sky,
         file_name: "sky.wgsl",
         body: include_str!("shaders/sky.wgsl"),
         snippets: &[Snippet::SkyGradient],
-        layouts: &[LayoutId::Sky],
+        layouts: &[Some(LayoutId::Sky)],
     },
     ShaderDesc {
         id: ShaderId::GroundMarker,
@@ -6067,14 +6182,18 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // The camera to project the flat quad with, and nothing else: markers are unlit, so the
         // clustered light set they would otherwise compose has nothing to contribute.
         snippets: &[Snippet::Camera, Snippet::RoundedBox],
-        layouts: &[LayoutId::Camera],
+        layouts: &[Some(LayoutId::Camera)],
     },
     ShaderDesc {
         id: ShaderId::Sprite,
         file_name: "sprite.wgsl",
         body: include_str!("shaders/sprite.wgsl"),
         snippets: &[Snippet::Camera, Snippet::ClusterGrid, Snippet::Lights],
-        layouts: &[LayoutId::Camera, LayoutId::Lights, LayoutId::SpriteTex],
+        layouts: &[
+            Some(LayoutId::Camera),
+            Some(LayoutId::Lights),
+            Some(LayoutId::SpriteTex),
+        ],
     },
     ShaderDesc {
         id: ShaderId::Particle,
@@ -6083,14 +6202,14 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // The camera to billboard against, and nothing else: particles are unlit, so the clustered
         // light set they would otherwise compose has nothing to contribute.
         snippets: &[Snippet::Camera],
-        layouts: &[LayoutId::Camera],
+        layouts: &[Some(LayoutId::Camera)],
     },
     ShaderDesc {
         id: ShaderId::Text,
         file_name: "text.wgsl",
         body: include_str!("shaders/text.wgsl"),
         snippets: &[Snippet::Camera, Snippet::Glyph],
-        layouts: &[LayoutId::Camera, LayoutId::Atlas],
+        layouts: &[Some(LayoutId::Camera), Some(LayoutId::Atlas)],
     },
     ShaderDesc {
         id: ShaderId::Ssao,
@@ -6098,7 +6217,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/ssao.wgsl"),
         // `bayer.wgsl` supplies the estimator's per-pixel rotation, whose period `ssao_blur` cancels.
         snippets: &[Snippet::FullscreenVs, Snippet::Bayer],
-        layouts: &[LayoutId::Ssao],
+        layouts: &[Some(LayoutId::Ssao)],
     },
     ShaderDesc {
         id: ShaderId::Shafts,
@@ -6107,14 +6226,14 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // `bayer.wgsl` supplies the march's per-pixel step offset, whose period `shafts_blur` cancels;
         // `medium.wgsl` the optical depth and local density the composite's haze reads from too.
         snippets: &[Snippet::FullscreenVs, Snippet::Bayer, Snippet::Medium],
-        layouts: &[LayoutId::Shafts],
+        layouts: &[Some(LayoutId::Shafts)],
     },
     ShaderDesc {
         id: ShaderId::DofCoc,
         file_name: "dof_coc.wgsl",
         body: include_str!("shaders/dof_coc.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
-        layouts: &[LayoutId::DofCoc],
+        layouts: &[Some(LayoutId::DofCoc)],
     },
     ShaderDesc {
         id: ShaderId::Dof,
@@ -6123,35 +6242,35 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // No `bayer.wgsl`: the gather is a fixed spiral filter, not a dithered estimator, so it has no
         // period to cancel and no blur pass behind it.
         snippets: &[Snippet::FullscreenVs],
-        layouts: &[LayoutId::Dof],
+        layouts: &[Some(LayoutId::Dof)],
     },
     ShaderDesc {
         id: ShaderId::BoxBlur,
         file_name: "box_blur.wgsl",
         body: include_str!("shaders/box_blur.wgsl"),
         snippets: &[Snippet::FullscreenVs],
-        layouts: &[LayoutId::BoxBlur],
+        layouts: &[Some(LayoutId::BoxBlur)],
     },
     ShaderDesc {
         id: ShaderId::Threshold,
         file_name: "threshold.wgsl",
         body: include_str!("shaders/threshold.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
-        layouts: &[LayoutId::Threshold],
+        layouts: &[Some(LayoutId::Threshold)],
     },
     ShaderDesc {
         id: ShaderId::BloomDown,
         file_name: "bloom_down.wgsl",
         body: include_str!("shaders/bloom_down.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
-        layouts: &[LayoutId::BloomDown],
+        layouts: &[Some(LayoutId::BloomDown)],
     },
     ShaderDesc {
         id: ShaderId::BloomUp,
         file_name: "bloom_up.wgsl",
         body: include_str!("shaders/bloom_up.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
-        layouts: &[LayoutId::BloomUp],
+        layouts: &[Some(LayoutId::BloomUp)],
     },
     ShaderDesc {
         id: ShaderId::Composite,
@@ -6165,42 +6284,42 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Hdr,
             Snippet::Srgb,
         ],
-        layouts: &[LayoutId::Composite],
+        layouts: &[Some(LayoutId::Composite)],
     },
     ShaderDesc {
         id: ShaderId::Resolve,
         file_name: "resolve.wgsl",
         body: include_str!("shaders/resolve.wgsl"),
         snippets: &[Snippet::FullscreenVs],
-        layouts: &[LayoutId::Resolve],
+        layouts: &[Some(LayoutId::Resolve)],
     },
     ShaderDesc {
         id: ShaderId::Upscale,
         file_name: "upscale.wgsl",
         body: include_str!("shaders/upscale.wgsl"),
         snippets: &[Snippet::FullscreenVs],
-        layouts: &[LayoutId::Upscale],
+        layouts: &[Some(LayoutId::Upscale)],
     },
     ShaderDesc {
         id: ShaderId::Blit,
         file_name: "blit.wgsl",
         body: include_str!("shaders/blit.wgsl"),
         snippets: &[Snippet::FullscreenVs],
-        layouts: &[LayoutId::Src],
+        layouts: &[Some(LayoutId::Src)],
     },
     ShaderDesc {
         id: ShaderId::UiRect,
         file_name: "ui_rect.wgsl",
         body: include_str!("shaders/ui_rect.wgsl"),
         snippets: &[],
-        layouts: &[LayoutId::Ui, LayoutId::Rect],
+        layouts: &[Some(LayoutId::Ui), Some(LayoutId::Rect)],
     },
     ShaderDesc {
         id: ShaderId::UiText,
         file_name: "ui_text.wgsl",
         body: include_str!("shaders/ui_text.wgsl"),
         snippets: &[Snippet::Glyph],
-        layouts: &[LayoutId::Ui, LayoutId::Atlas],
+        layouts: &[Some(LayoutId::Ui), Some(LayoutId::Atlas)],
     },
     ShaderDesc {
         id: ShaderId::DebugLine,
@@ -6209,7 +6328,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // The camera to project the world-space endpoints with; group 1 is the scene depth the
         // x-ray test reads plus the output extent that maps a fragment onto it.
         snippets: &[Snippet::Camera],
-        layouts: &[LayoutId::Camera, LayoutId::DebugLine],
+        layouts: &[Some(LayoutId::Camera), Some(LayoutId::DebugLine)],
     },
     ShaderDesc {
         id: ShaderId::Reflections,
@@ -6225,7 +6344,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Probes,
             Snippet::GiProbe,
         ],
-        layouts: &[LayoutId::Reflections],
+        layouts: &[Some(LayoutId::Reflections)],
     },
     ShaderDesc {
         id: ShaderId::SsrBlend,
@@ -6237,28 +6356,28 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Dfg,
             Snippet::Ssr,
         ],
-        layouts: &[LayoutId::SsrBlend],
+        layouts: &[Some(LayoutId::SsrBlend)],
     },
     ShaderDesc {
         id: ShaderId::HizSeed,
         file_name: "hiz_seed.wgsl",
         body: include_str!("shaders/hiz_seed.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Footprint],
-        layouts: &[LayoutId::HizSeed],
+        layouts: &[Some(LayoutId::HizSeed)],
     },
     ShaderDesc {
         id: ShaderId::HizReduce,
         file_name: "hiz_reduce.wgsl",
         body: include_str!("shaders/hiz_reduce.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Footprint],
-        layouts: &[LayoutId::HizReduce],
+        layouts: &[Some(LayoutId::HizReduce)],
     },
     ShaderDesc {
         id: ShaderId::SsrColor,
         file_name: "ssr_color.wgsl",
         body: include_str!("shaders/ssr_color.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Hdr, Snippet::Footprint],
-        layouts: &[LayoutId::SsrColor],
+        layouts: &[Some(LayoutId::SsrColor)],
     },
     ShaderDesc {
         id: ShaderId::SsrTrace,
@@ -6270,21 +6389,21 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Lobe,
             Snippet::Ssr,
         ],
-        layouts: &[LayoutId::SsrTrace],
+        layouts: &[Some(LayoutId::SsrTrace)],
     },
     ShaderDesc {
         id: ShaderId::SsrDebug,
         file_name: "ssr_debug.wgsl",
         body: include_str!("shaders/ssr_debug.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Srgb],
-        layouts: &[LayoutId::SsrDebug],
+        layouts: &[Some(LayoutId::SsrDebug)],
     },
     ShaderDesc {
         id: ShaderId::ProbeFace,
         file_name: "probe_face.wgsl",
         body: include_str!("shaders/probe_face.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
-        layouts: &[LayoutId::ProbeFace],
+        layouts: &[Some(LayoutId::ProbeFace)],
     },
     ShaderDesc {
         id: ShaderId::ProbeDebug,
@@ -6296,21 +6415,21 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Probes,
             Snippet::Srgb,
         ],
-        layouts: &[LayoutId::ProbeDebug],
+        layouts: &[Some(LayoutId::ProbeDebug)],
     },
     ShaderDesc {
         id: ShaderId::Projector,
         file_name: "projector.wgsl",
         body: include_str!("shaders/projector.wgsl"),
         snippets: &[Snippet::RoundedBox, Snippet::Decal],
-        layouts: &[LayoutId::Projector, LayoutId::ProjectorMap],
+        layouts: &[Some(LayoutId::Projector), Some(LayoutId::ProjectorMap)],
     },
     ShaderDesc {
         id: ShaderId::LocalShadowDebug,
         file_name: "local_shadow_debug.wgsl",
         body: include_str!("shaders/local_shadow_debug.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Srgb],
-        layouts: &[LayoutId::LocalShadowDebug],
+        layouts: &[Some(LayoutId::LocalShadowDebug)],
     },
     ShaderDesc {
         id: ShaderId::DecalReceiver,
@@ -6318,7 +6437,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/decal_receiver.wgsl"),
         // The prepass's vertex stage and dither: the camera, the bone palette and the tile.
         snippets: &[Snippet::Camera, Snippet::Skin, Snippet::Bayer],
-        layouts: &[LayoutId::CameraSkin, LayoutId::DecalReceiver],
+        layouts: &[Some(LayoutId::CameraSkin), Some(LayoutId::DecalReceiver)],
     },
     ShaderDesc {
         id: ShaderId::DecalLit,
@@ -6339,11 +6458,11 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Decal,
         ],
         layouts: &[
-            LayoutId::Camera,
-            LayoutId::Lights,
-            LayoutId::Sun,
-            LayoutId::Env,
-            LayoutId::DecalLit,
+            Some(LayoutId::Camera),
+            Some(LayoutId::Lights),
+            Some(LayoutId::Sun),
+            Some(LayoutId::Env),
+            Some(LayoutId::DecalLit),
         ],
     },
 ];
@@ -6437,6 +6556,9 @@ enum Snippet {
     GiProbe,
     /// The mesh lighting — groups 2–3 and `shade` (mesh).
     MeshShading,
+    /// The per-draw material maps and flags — `@group(4)`, the cutout and back-face tests (mesh,
+    /// prepass).
+    MeshMaterial,
     /// The pyramid footprint rule — a child texel's source interval and the texels it touches,
     /// binding-free (the Hi-Z and SSR colour pyramids).
     Footprint,
@@ -6477,6 +6599,7 @@ impl Snippet {
             Snippet::SpecularIbl => "specular_ibl.wgsl",
             Snippet::GiProbe => "gi_probe.wgsl",
             Snippet::MeshShading => "mesh_shading.wgsl",
+            Snippet::MeshMaterial => "mesh_material.wgsl",
             Snippet::Footprint => "footprint.wgsl",
             Snippet::Ssr => "ssr.wgsl",
             Snippet::Srgb => "srgb.wgsl",
@@ -6504,6 +6627,7 @@ impl Snippet {
             Snippet::SpecularIbl => include_str!("shaders/snippets/specular_ibl.wgsl"),
             Snippet::GiProbe => include_str!("shaders/snippets/gi_probe.wgsl"),
             Snippet::MeshShading => include_str!("shaders/snippets/mesh_shading.wgsl"),
+            Snippet::MeshMaterial => include_str!("shaders/snippets/mesh_material.wgsl"),
             Snippet::Footprint => include_str!("shaders/snippets/footprint.wgsl"),
             Snippet::Ssr => include_str!("shaders/snippets/ssr.wgsl"),
             Snippet::Srgb => include_str!("shaders/snippets/srgb.wgsl"),
@@ -6532,6 +6656,7 @@ impl Snippet {
             Snippet::SpecularIbl,
             Snippet::GiProbe,
             Snippet::MeshShading,
+            Snippet::MeshMaterial,
             Snippet::Footprint,
             Snippet::Ssr,
             Snippet::Srgb,
@@ -6809,12 +6934,14 @@ impl Layouts {
 /// One shader's pipelines; the mesh-geometry shaders also carry a winding-reversed twin.
 struct ShaderPipelines {
     main: wgpu::RenderPipeline,
-    mirrored: Option<wgpu::RenderPipeline>,
+    /// A mesh-geometry shader's four cull variants, indexed by [`MeshVariant::index`] (`main` is the
+    /// first).
+    variants: Option<[wgpu::RenderPipeline; 4]>,
     /// The reflections shader's twin that also writes `refl_fill` (entry `fs_split`).
     split: Option<wgpu::RenderPipeline>,
-    /// The mesh shader's probe-capture twins — `[main, mirrored]` with the fourth, emissive target
-    /// (entry `fs_capture`).
-    capture: Option<[wgpu::RenderPipeline; 2]>,
+    /// The mesh shader's probe-capture variants, by [`MeshVariant::index`], with the fourth, emissive
+    /// target (entry `fs_capture`).
+    capture: Option<[wgpu::RenderPipeline; 4]>,
     /// The projector shader's decal twins `[multiply, add]` (entry `vs_decal`/`fs_decal`).
     decal: Option<[wgpu::RenderPipeline; 2]>,
     /// The lit decal shader's pipelines, in the order of [`LitDraw`].
@@ -6839,7 +6966,7 @@ fn build_pipeline(
         .desc()
         .layouts
         .iter()
-        .map(|&layout| Some(layouts.get(layout)))
+        .map(|&layout| layout.map(|layout| layouts.get(layout)))
         .collect();
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(label),
@@ -6849,31 +6976,41 @@ fn build_pipeline(
     let twinned = |build: fn(
         &wgpu::Device,
         &str,
-        &str,
+        &wgpu::ShaderModule,
         &wgpu::PipelineLayout,
-        wgpu::FrontFace,
-    ) -> wgpu::RenderPipeline| ShaderPipelines {
-        main: build(device, label, src, &layout, wgpu::FrontFace::Ccw),
-        mirrored: Some(build(device, label, src, &layout, wgpu::FrontFace::Cw)),
-        split: None,
-        capture: None,
-        decal: None,
-        lit: None,
+        MeshVariant,
+    ) -> wgpu::RenderPipeline,
+                   shader: &wgpu::ShaderModule| {
+        let variants =
+            MeshVariant::ALL.map(|variant| build(device, label, shader, &layout, variant));
+        ShaderPipelines {
+            main: variants[0].clone(),
+            variants: Some(variants),
+            split: None,
+            capture: None,
+            decal: None,
+            lit: None,
+        }
     };
     let main = match id {
         ShaderId::Mesh => {
+            let shader = module(device, label, src);
             return ShaderPipelines {
-                capture: Some(
-                    [wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw].map(|front_face| {
-                        build_mesh_capture_pipeline(device, label, src, &layout, front_face)
-                    }),
-                ),
-                ..twinned(build_mesh_pipeline)
+                capture: Some(MeshVariant::ALL.map(|variant| {
+                    build_mesh_capture_pipeline(device, label, &shader, &layout, variant)
+                })),
+                ..twinned(build_mesh_pipeline, &shader)
             };
         }
-        ShaderId::Shadow => return twinned(build_shadow_pipeline),
-        ShaderId::Prepass => return twinned(build_prepass_pipeline),
-        ShaderId::DecalReceiver => return twinned(build_decal_receiver_pipeline),
+        ShaderId::Shadow => {
+            return twinned(build_shadow_pipeline, &module(device, label, src));
+        }
+        ShaderId::Prepass => {
+            return twinned(build_prepass_pipeline, &module(device, label, src));
+        }
+        ShaderId::DecalReceiver => {
+            return twinned(build_decal_receiver_pipeline, &module(device, label, src));
+        }
         ShaderId::Sky => build_sky_pipeline(device, label, src, &layout),
         ShaderId::GroundMarker => build_ground_marker_pipeline(device, label, src, &layout),
         ShaderId::Sprite => build_sprite_pipeline(device, label, src, &layout),
@@ -6912,7 +7049,7 @@ fn build_pipeline(
         ShaderId::Reflections => {
             return ShaderPipelines {
                 main: build_reflections_pipeline(device, label, src, &layout),
-                mirrored: None,
+                variants: None,
                 split: Some(build_reflections_split_pipeline(
                     device, label, src, &layout,
                 )),
@@ -6940,7 +7077,7 @@ fn build_pipeline(
             let lit = build_lit_pipelines(device, label, src, &layout);
             return ShaderPipelines {
                 main: lit[0].clone(),
-                mirrored: None,
+                variants: None,
                 split: None,
                 capture: None,
                 decal: None,
@@ -6950,7 +7087,7 @@ fn build_pipeline(
         ShaderId::Projector => {
             return ShaderPipelines {
                 main: build_projector_pipeline(device, label, src, &layout),
-                mirrored: None,
+                variants: None,
                 split: None,
                 capture: None,
                 decal: Some(
@@ -6963,7 +7100,7 @@ fn build_pipeline(
     };
     ShaderPipelines {
         main,
-        mirrored: None,
+        variants: None,
         split: None,
         capture: None,
         decal: None,
@@ -7164,23 +7301,22 @@ const SHADOW_INSTANCE_ATTRS: [wgpu::VertexAttribute; 5] = [
     },
 ];
 
-/// `front_face` is `Cw` for the mirrored twin: a model matrix with a negative determinant reverses
-/// triangle winding, so its outside faces would otherwise be the culled ones.
+/// `variant` picks the winding and the culling ([`mesh_primitive`]).
 fn build_mesh_pipeline(
     device: &wgpu::Device,
     label: &str,
-    src: &str,
+    shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    front_face: wgpu::FrontFace,
+    variant: MeshVariant,
 ) -> wgpu::RenderPipeline {
     // The opaque scene pass's three targets, in the graph's declaration order: `scene` (HDR),
     // `scene_normal` (HDR) and `scene_specular` (`OUTPUT_FORMAT`, sRGB 8-bit).
     build_mesh_pipeline_for(
         device,
         label,
-        src,
+        shader,
         layout,
-        front_face,
+        variant,
         "fs_main",
         &[HDR_FORMAT, HDR_FORMAT, OUTPUT_FORMAT],
     )
@@ -7191,16 +7327,16 @@ fn build_mesh_pipeline(
 fn build_mesh_capture_pipeline(
     device: &wgpu::Device,
     label: &str,
-    src: &str,
+    shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    front_face: wgpu::FrontFace,
+    variant: MeshVariant,
 ) -> wgpu::RenderPipeline {
     build_mesh_pipeline_for(
         device,
         label,
-        src,
+        shader,
         layout,
-        front_face,
+        variant,
         "fs_capture",
         &[HDR_FORMAT, HDR_FORMAT, OUTPUT_FORMAT, HDR_FORMAT],
     )
@@ -7209,20 +7345,17 @@ fn build_mesh_capture_pipeline(
 fn build_mesh_pipeline_for(
     device: &wgpu::Device,
     label: &str,
-    src: &str,
+    shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    front_face: wgpu::FrontFace,
+    variant: MeshVariant,
     fragment_entry: &str,
     formats: &[wgpu::TextureFormat],
 ) -> wgpu::RenderPipeline {
-    // `src` is the already-composed source (camera + lights snippets + the mesh body); the caller
-    // (`Renderer::compose` / `builtin_composed`) did the composition, so this just builds the module.
-    let shader = module(device, label, src);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_main"),
             buffers: &[
                 Some(wgpu::VertexBufferLayout {
@@ -7239,7 +7372,7 @@ fn build_mesh_pipeline_for(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some(fragment_entry),
             targets: &formats
                 .iter()
@@ -7253,11 +7386,7 @@ fn build_mesh_pipeline_for(
                 .collect::<Vec<_>>(),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
-            front_face,
-            ..Default::default()
-        },
+        primitive: mesh_primitive(variant),
         depth_stencil: Some(depth_state(true, wgpu::CompareFunction::Less)),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
@@ -7270,21 +7399,19 @@ fn build_mesh_pipeline_for(
 /// like the main mesh pass — the conventional baseline; a small constant shader bias
 /// (`Sun.direction.w`) handles acne, with peter-panning kept minimal at the pinned default.
 ///
-/// `front_face` is `Cw` for the mirrored twin: a model matrix with a negative determinant reverses
-/// triangle winding, so its outside faces would otherwise be the culled ones.
+/// `variant` picks the winding and the culling ([`mesh_primitive`]).
 fn build_shadow_pipeline(
     device: &wgpu::Device,
     label: &str,
-    src: &str,
+    shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    front_face: wgpu::FrontFace,
+    variant: MeshVariant,
 ) -> wgpu::RenderPipeline {
-    let shader = module(device, label, src);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_main"),
             buffers: &[
                 Some(wgpu::VertexBufferLayout {
@@ -7302,11 +7429,7 @@ fn build_shadow_pipeline(
         },
         // Depth-only: no fragment stage, no color targets.
         fragment: None,
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
-            front_face,
-            ..Default::default()
-        },
+        primitive: mesh_primitive(variant),
         depth_stencil: Some(wgpu::DepthStencilState {
             bias: wgpu::DepthBiasState {
                 constant: 0,
@@ -7328,21 +7451,19 @@ fn build_shadow_pipeline(
 /// hand-computed byte offsets into the middle of [`MeshInstanceRaw`], which the `vertex_attr_array!`
 /// macro cannot express and which nothing would catch if it drifted.
 ///
-/// `front_face` is `Cw` for the mirrored twin: a model matrix with a negative determinant reverses
-/// triangle winding, so its outside faces would otherwise be the culled ones.
+/// `variant` picks the winding and the culling ([`mesh_primitive`]).
 fn build_prepass_pipeline(
     device: &wgpu::Device,
     label: &str,
-    src: &str,
+    shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    front_face: wgpu::FrontFace,
+    variant: MeshVariant,
 ) -> wgpu::RenderPipeline {
-    let shader = module(device, label, src);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_main"),
             buffers: &[
                 Some(wgpu::VertexBufferLayout {
@@ -7359,7 +7480,7 @@ fn build_prepass_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: HDR_FORMAT,
@@ -7368,11 +7489,7 @@ fn build_prepass_pipeline(
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
-            front_face,
-            ..Default::default()
-        },
+        primitive: mesh_primitive(variant),
         depth_stencil: Some(depth_state(true, wgpu::CompareFunction::Less)),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
@@ -7381,21 +7498,19 @@ fn build_prepass_pipeline(
 }
 
 /// The decal receiver-id pipeline: the prepass's vertex stage into one `R32Float` target, no depth
-/// attachment (the fragment tests `scene_depth` itself) and no blend. `front_face` is `Cw` for the
-/// mirrored twin, as for the prepass.
+/// attachment (the fragment tests `scene_depth` itself) and no blend. `variant` is the prepass's.
 fn build_decal_receiver_pipeline(
     device: &wgpu::Device,
     label: &str,
-    src: &str,
+    shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    front_face: wgpu::FrontFace,
+    variant: MeshVariant,
 ) -> wgpu::RenderPipeline {
-    let shader = module(device, label, src);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_main"),
             buffers: &[
                 Some(wgpu::VertexBufferLayout {
@@ -7412,7 +7527,7 @@ fn build_decal_receiver_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::R32Float,
@@ -7421,11 +7536,7 @@ fn build_decal_receiver_pipeline(
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
-            front_face,
-            ..Default::default()
-        },
+        primitive: mesh_primitive(variant),
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
@@ -12058,6 +12169,18 @@ mod tests {
     /// normal-mapped quad at -x, over a symmetric ground, camera on the x = 0 plane, sun in the
     /// yz-plane. `mirror` reflects every instance but the ground through x = 0.
     fn mirror_scene(w: u32, h: u32, mirror: bool, ssao: bool) -> RenderScene {
+        mirror_scene_with(w, h, mirror, ssao, -20.0, false)
+    }
+
+    /// [`mirror_scene`] with the quad turned `quad_degrees` about y and optionally double-sided.
+    fn mirror_scene_with(
+        w: u32,
+        h: u32,
+        mirror: bool,
+        ssao: bool,
+        quad_degrees: f32,
+        double_sided: bool,
+    ) -> RenderScene {
         let mut scene = RenderScene::empty((w, h));
         let position = Vec3::new(0.0, 3.0, 7.0);
         scene.camera = crate::scene::RenderCamera {
@@ -12079,9 +12202,10 @@ mod tests {
         if ssao {
             scene.post = Some(ao_post(1.0, 2.0));
         }
-        scene
-            .mesh_assets
-            .push(Arc::new(normal_mapped_quad(0x4D49_5252)));
+        scene.mesh_assets.push(Arc::new(MeshData {
+            double_sided,
+            ..normal_mapped_quad(0x4D49_5252)
+        }));
 
         let mut cube = cube(Vec3::ZERO, Vec3::ONE, [0.9, 0.3, 0.2, 1.0]);
         cube.model = Mat4::from_translation(Vec3::new(1.2, 0.5, 0.0))
@@ -12089,7 +12213,7 @@ mod tests {
         cube.normal_matrix = Mat3::from_mat4(cube.model).inverse().transpose();
         let mut quad = skin_instance(
             Mat4::from_translation(Vec3::new(-1.5, 1.0, 0.0))
-                * Mat4::from_rotation_y(-20.0_f32.to_radians())
+                * Mat4::from_rotation_y(quad_degrees.to_radians())
                 * Mat4::from_scale(Vec3::splat(1.2)),
             0,
         );
@@ -12152,6 +12276,420 @@ mod tests {
                 mean <= 0.5 && frac <= 0.005,
                 "ssao={ssao}: mirrored scene differs from the flipped plain scene: \
                  mean abs diff {mean:.3} (≤ 0.5), fraction > 8: {frac:.4} (≤ 0.005)",
+            );
+        }
+    }
+
+    // --- Cutout and double-sided meshes (Clockout request 0010) ------------------------------
+
+    /// Mean absolute channel difference and the fraction of pixels off by more than 8 in any
+    /// channel, between two same-size frames.
+    fn image_error(a: &RenderedImage, b: &RenderedImage) -> (f32, f32) {
+        assert_eq!((a.width, a.height), (b.width, b.height));
+        let (mut sum, mut bad) = (0u64, 0u32);
+        for px in 0..(a.width * a.height) as usize {
+            let worst = (0..3)
+                .map(|c| a.rgba[px * 4 + c].abs_diff(b.rgba[px * 4 + c]))
+                .inspect(|d| sum += *d as u64)
+                .max()
+                .unwrap();
+            bad += (worst > 8) as u32;
+        }
+        let pixels = (a.width * a.height) as f32;
+        (sum as f32 / (pixels * 3.0), bad as f32 / pixels)
+    }
+
+    /// A `normal_mapped_quad` with its material replaced: `textures` as given, `double_sided` as given.
+    fn sheet(
+        hash: u64,
+        double_sided: bool,
+        textures: Option<crate::scene::MeshTextures>,
+    ) -> MeshData {
+        MeshData {
+            textures,
+            double_sided,
+            ..normal_mapped_quad(hash)
+        }
+    }
+
+    /// A material set carrying only a base-colour map and a cutoff.
+    fn cutout_textures(
+        base_color: Option<crate::scene::MeshTexture>,
+        alpha_cutoff: Option<f32>,
+    ) -> crate::scene::MeshTextures {
+        crate::scene::MeshTextures {
+            base_color,
+            metallic_roughness: None,
+            normal: None,
+            occlusion: None,
+            emissive: None,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
+            alpha_cutoff,
+        }
+    }
+
+    /// An 8×2 base-colour map, one orange everywhere; the left half's alpha is `left_alpha`.
+    fn half_alpha_map(hash: u64, left_alpha: u8) -> crate::scene::MeshTexture {
+        let mut rgba = Vec::new();
+        for _ in 0..2 {
+            for x in 0..8 {
+                let alpha = if x < 4 { left_alpha } else { 255 };
+                rgba.extend_from_slice(&[200, 120, 60, alpha]);
+            }
+        }
+        crate::scene::MeshTexture {
+            image: MapImage::Source(Arc::new(crate::scene::TextureImage {
+                width: 8,
+                height: 2,
+                rgba,
+                hash,
+                filter_linear: true,
+                premultiplied_on_load: false,
+                mean: [1.0; 4],
+            })),
+            wrap: crate::scene::TextureWrap::Clamp,
+        }
+    }
+
+    /// An orthographic frame on the origin from `(0, 0, ±8)`. A sun travelling along `d` (negated for
+    /// the back view) lights the sheet at the origin: negating the normal, light and view together
+    /// leaves every BRDF lobe unchanged, so the back view of a double-sided sheet must equal the
+    /// front view mirrored horizontally.
+    fn sheet_scene(w: u32, h: u32, back: bool, asset: MeshData) -> RenderScene {
+        let mut scene = RenderScene::empty((w, h));
+        let z = if back { -8.0 } else { 8.0 };
+        let position = Vec3::new(0.0, 0.0, z);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(position, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::orthographic_rh(-2.0, 2.0, -2.0, 2.0, 0.1, 50.0),
+            position,
+        };
+        scene.ambient = [0.2; 3];
+        // Output dither is a screen-space pattern the mirror does not carry across.
+        scene.post = Some(PostData {
+            dither: false,
+            ..PostData::default()
+        });
+        let travel = Vec3::new(0.35, -0.45, -1.0);
+        scene.sun = Some(test_sun(
+            if back { -travel } else { travel },
+            Vec3::splat(3.0),
+            0.002,
+        ));
+        scene.mesh_assets.push(Arc::new(asset));
+        let mut instance = skin_instance(Mat4::IDENTITY, 0);
+        instance.material = [1.0, 0.0, 0.0];
+        scene.meshes = vec![instance];
+        scene
+    }
+
+    #[test]
+    fn needs_gpu_a_double_sided_back_face_shades_with_the_flipped_normal() {
+        let Some(renderer) =
+            skip_or_renderer("a_double_sided_back_face_shades_with_the_flipped_normal")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let render = |back: bool, asset: MeshData| {
+            renderer
+                .render(&sheet_scene(w, h, back, asset), FrameSize::native(w, h))
+                .expect("sheet render")
+        };
+        let plain_front = render(false, sheet(0xB0_01, true, None));
+        let plain_back = render(true, sheet(0xB0_01, true, None));
+        let mapped_front = render(false, sheet(0xB0_02, true, normal_mapped_quad(0).textures));
+        let mapped_back = render(true, sheet(0xB0_02, true, normal_mapped_quad(0).textures));
+        for (label, front, back) in [
+            ("plain", &plain_front, &plain_back),
+            ("normal-mapped", &mapped_front, &mapped_back),
+        ] {
+            let (mean, frac) = mirror_error(back, front);
+            assert!(
+                mean <= 0.5 && frac <= 0.005,
+                "{label}: the back view must equal the front view mirrored: mean {mean:.3} (≤ 0.5), \
+                 fraction > 8: {frac:.4} (≤ 0.005)",
+            );
+        }
+        // The fixture bites: the normal map changes the shading, and a single-sided sheet seen from
+        // behind is culled down to the background.
+        let (map_effect, _) = image_error(&mapped_front, &plain_front);
+        assert!(
+            map_effect > 1.0,
+            "the normal map must act (mean diff {map_effect:.3})"
+        );
+        let culled = render(true, sheet(0xB0_03, false, None));
+        let empty = renderer
+            .render(
+                &{
+                    let mut scene = sheet_scene(w, h, true, sheet(0xB0_03, false, None));
+                    scene.meshes.clear();
+                    scene
+                },
+                FrameSize::native(w, h),
+            )
+            .expect("empty render");
+        let centre = ((h / 2 * w + w / 2) * 4) as usize;
+        assert_eq!(
+            culled.rgba[centre..centre + 4],
+            empty.rgba[centre..centre + 4]
+        );
+        assert_ne!(
+            plain_back.rgba[centre..centre + 4],
+            empty.rgba[centre..centre + 4],
+            "the double-sided sheet must draw from behind",
+        );
+    }
+
+    /// A double-sided quad turned to show its back, reflected through x = 0, still renders as the exact
+    /// mirror image — scene pass and SSAO prepass.
+    #[test]
+    fn needs_gpu_a_mirrored_double_sided_back_face_renders_as_the_mirror_image() {
+        let Some(renderer) =
+            skip_or_renderer("a_mirrored_double_sided_back_face_renders_as_the_mirror_image")
+        else {
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        for ssao in [false, true] {
+            let render = |mirror: bool| {
+                // A mirrored double-sided draw keeps its own `Cw`, cull-none variant.
+                let scene = mirror_scene_with(w, h, mirror, ssao, 160.0, true);
+                renderer
+                    .render(&scene, FrameSize::native(w, h))
+                    .expect("render")
+            };
+            let (plain, mirrored) = (render(false), render(true));
+            let (mean, frac) = mirror_error(&mirrored, &plain);
+            assert!(
+                mean <= 0.5 && frac <= 0.005,
+                "ssao={ssao}: mean abs diff {mean:.3} (≤ 0.5), fraction > 8: {frac:.4} (≤ 0.005)",
+            );
+        }
+    }
+
+    /// A vertical plane on a floor; `plane` is asset 0, standing on `y = 0`.
+    fn cutout_scene(w: u32, h: u32, ssao: bool, plane: MeshData) -> RenderScene {
+        let mut scene = RenderScene::empty((w, h));
+        let position = Vec3::new(0.0, 2.5, 6.0);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(position, Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
+            projection: Mat4::perspective_rh(
+                50.0_f32.to_radians(),
+                crate::scene::aspect_ratio((w, h)),
+                0.1,
+                1000.0,
+            ),
+            position,
+        };
+        scene.ambient = [0.5; 3];
+        if ssao {
+            scene.post = Some(ao_post(1.0, 2.0));
+        }
+        scene.mesh_assets.push(Arc::new(plane));
+        let mut instance = skin_instance(Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)), 0);
+        instance.material = [1.0, 0.0, 0.0];
+        scene.meshes = vec![ground(20.0), instance];
+        scene
+    }
+
+    #[test]
+    fn needs_gpu_a_cutout_discards_in_the_scene_pass_and_the_ssao_prepass() {
+        let Some(renderer) =
+            skip_or_renderer("a_cutout_discards_in_the_scene_pass_and_the_ssao_prepass")
+        else {
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        // The cutout: left half alpha 0, right half opaque, mask at 0.5.
+        let masked = sheet(
+            0xC0_01,
+            false,
+            Some(cutout_textures(Some(half_alpha_map(0xC0_10, 0)), Some(0.5))),
+        );
+        // The reference: only the opaque right half exists, with no mask.
+        let cropped = MeshData {
+            positions: vec![
+                0.0, -1.0, 0.0, //
+                1.0, -1.0, 0.0, //
+                1.0, 1.0, 0.0, //
+                0.0, 1.0, 0.0,
+            ],
+            uvs: vec![0.5, 1.0, 1.0, 1.0, 1.0, 0.0, 0.5, 0.0],
+            ..sheet(
+                0xC0_02,
+                false,
+                Some(cutout_textures(Some(half_alpha_map(0xC0_11, 255)), None)),
+            )
+        };
+        // The same plane with the mask cleared draws its transparent half as opaque.
+        let unmasked = sheet(
+            0xC0_03,
+            false,
+            Some(cutout_textures(Some(half_alpha_map(0xC0_10, 0)), None)),
+        );
+        for ssao in [false, true] {
+            let render = |plane: &MeshData| {
+                renderer
+                    .render(
+                        &cutout_scene(w, h, ssao, plane.clone()),
+                        FrameSize::native(w, h),
+                    )
+                    .expect("cutout render")
+            };
+            let (reference, cut, full) = (render(&cropped), render(&masked), render(&unmasked));
+            let (mean, frac) = image_error(&cut, &reference);
+            // Tight on purpose: a prepass that kept the phantom half would darken the floor crease
+            // under it by a mean 0.26 and 0.5 % of the frame.
+            assert!(
+                mean <= 0.1 && frac <= 0.001,
+                "ssao={ssao}: the cutout must match the cropped plane: mean {mean:.3} (≤ 0.1), \
+                 fraction > 8: {frac:.4} (≤ 0.001)",
+            );
+            let (_, guard) = image_error(&full, &reference);
+            assert!(
+                guard > 0.02,
+                "ssao={ssao}: the unmasked plane must differ from the reference (fraction {guard:.4})",
+            );
+        }
+    }
+
+    #[test]
+    fn needs_gpu_a_map_less_mask_cuts_on_the_vertex_and_instance_alpha() {
+        let Some(renderer) =
+            skip_or_renderer("a_map_less_mask_cuts_on_the_vertex_and_instance_alpha")
+        else {
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let plane = sheet(0xD0_01, false, Some(cutout_textures(None, Some(0.5))));
+        let with_alpha = |alpha: f32| {
+            let mut scene = cutout_scene(w, h, false, plane.clone());
+            scene.meshes[1].color = [1.0, 1.0, 1.0, alpha];
+            renderer
+                .render(&scene, FrameSize::native(w, h))
+                .expect("map-less render")
+        };
+        let mut without = cutout_scene(w, h, false, plane.clone());
+        without.meshes.pop();
+        let without = renderer
+            .render(&without, FrameSize::native(w, h))
+            .expect("render without");
+        assert_eq!(
+            with_alpha(0.2).rgba,
+            without.rgba,
+            "coverage 0.2 < cutoff 0.5 must discard every fragment",
+        );
+        assert_ne!(with_alpha(0.8).rgba, without.rgba, "coverage 0.8 must draw");
+    }
+
+    /// A closed box of half-extent 1: six outward-facing quads, counter-clockwise from outside.
+    fn box_asset(hash: u64, double_sided: bool) -> MeshData {
+        let mut mesh = MeshData {
+            positions: Vec::new(),
+            normals: Vec::new(),
+            colors: Vec::new(),
+            materials: Vec::new(),
+            uvs: Vec::new(),
+            tangents: Vec::new(),
+            weights: Vec::new(),
+            bone_indices: Vec::new(),
+            indices: Vec::new(),
+            ..sheet(hash, double_sided, None)
+        };
+        for (n, u) in [
+            (Vec3::X, Vec3::Y),
+            (Vec3::NEG_X, Vec3::Y),
+            (Vec3::Y, Vec3::Z),
+            (Vec3::NEG_Y, Vec3::Z),
+            (Vec3::Z, Vec3::X),
+            (Vec3::NEG_Z, Vec3::X),
+        ] {
+            let v = n.cross(u);
+            let base = (mesh.positions.len() / 3) as u32;
+            for (su, sv, uv) in [
+                (-1.0, -1.0, [0.0, 1.0]),
+                (1.0, -1.0, [1.0, 1.0]),
+                (1.0, 1.0, [1.0, 0.0]),
+                (-1.0, 1.0, [0.0, 0.0]),
+            ] {
+                mesh.positions.extend((n + u * su + v * sv).to_array());
+                mesh.normals.extend(n.to_array());
+                mesh.colors.extend([1.0; 4]);
+                mesh.materials.extend([1.0, 0.0, 0.0]);
+                mesh.uvs.extend(uv);
+                mesh.tangents.extend([u.x, u.y, u.z, 1.0]);
+                mesh.weights.extend([1.0, 0.0, 0.0, 0.0]);
+                mesh.bone_indices.extend([0; 4]);
+            }
+            mesh.indices
+                .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+        mesh
+    }
+
+    /// A clear bit keeps today's arithmetic: a closed box seen from outside, and a normal-mapped
+    /// opaque quad, render byte-identically through every variant of the new material flags.
+    #[test]
+    fn needs_gpu_opaque_meshes_render_identically_with_and_without_the_new_flags() {
+        let Some(renderer) =
+            skip_or_renderer("opaque_meshes_render_identically_with_and_without_the_new_flags")
+        else {
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        for ssao in [false, true] {
+            // Each variant has its own hash: the mesh-asset cache is keyed on it, so a shared hash
+            // would render the second frame from the first's cached GPU mesh.
+            let box_frame = |double_sided: bool, inside: bool| {
+                let hash = 0xE0_01 + 2 * u64::from(double_sided);
+                let mut scene = cutout_scene(w, h, ssao, box_asset(hash, double_sided));
+                scene.sun = Some(test_sun(
+                    Vec3::new(0.3, -1.0, -0.5),
+                    Vec3::splat(3.0),
+                    0.002,
+                ));
+                scene.meshes[1].model = Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0))
+                    * Mat4::from_rotation_y(30.0_f32.to_radians())
+                    * Mat4::from_scale(Vec3::splat(0.8));
+                scene.meshes[1].normal_matrix =
+                    Mat3::from_mat4(scene.meshes[1].model).inverse().transpose();
+                if inside {
+                    let eye = Vec3::new(0.0, 1.0, 0.0);
+                    scene.camera.view = Mat4::look_at_rh(eye, eye - Vec3::Z, Vec3::Y);
+                    scene.camera.position = eye;
+                }
+                renderer
+                    .render(&scene, FrameSize::native(w, h))
+                    .expect("box render")
+            };
+            assert_eq!(
+                box_frame(true, false).rgba,
+                box_frame(false, false).rgba,
+                "ssao={ssao}: a closed box must not change with double_sided",
+            );
+            // The pair differs in setup: from inside, only the double-sided box draws its walls.
+            assert_ne!(
+                box_frame(true, true).rgba,
+                box_frame(false, true).rgba,
+                "ssao={ssao}: the double-sided box must draw from inside",
+            );
+            let mapped = |cutoff: Option<f32>| {
+                let hash = 0xE0_02 + 2 * u64::from(cutoff.is_some());
+                let mut textures = normal_mapped_quad(0).textures.unwrap();
+                textures.alpha_cutoff = cutoff;
+                renderer
+                    .render(
+                        &cutout_scene(w, h, ssao, sheet(hash, false, Some(textures))),
+                        FrameSize::native(w, h),
+                    )
+                    .expect("mapped render")
+            };
+            assert_eq!(
+                mapped(Some(0.0)).rgba,
+                mapped(None).rgba,
+                "ssao={ssao}: a mask at cutoff 0 never discards",
             );
         }
     }

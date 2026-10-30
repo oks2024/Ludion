@@ -152,6 +152,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "dfg.wgsl",
             "gi_probe.wgsl",
             "mesh_shading.wgsl",
+            "mesh_material.wgsl",
         ],
     ),
     (
@@ -205,7 +206,15 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         &["fullscreen_vs.wgsl", "srgb.wgsl"],
     ),
     ("particle.wgsl", &["camera.wgsl"]),
-    ("prepass.wgsl", &["camera.wgsl", "skin.wgsl", "bayer.wgsl"]),
+    (
+        "prepass.wgsl",
+        &[
+            "camera.wgsl",
+            "skin.wgsl",
+            "bayer.wgsl",
+            "mesh_material.wgsl",
+        ],
+    ),
     (
         "reflections.wgsl",
         &[
