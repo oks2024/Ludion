@@ -96,6 +96,7 @@ mod skin_bone;
 mod snapshot;
 mod sprite_sheet;
 pub mod sweep;
+mod tick_observer;
 mod trace;
 pub mod transition;
 pub mod ui;
@@ -113,8 +114,8 @@ pub use audio::{
 };
 pub use bisect::{
     BisectReport, ComponentDiff, DriveDone, EntityDiff, KeyframeDivergence, KeyframeDriftReport,
-    RunConfig, WorldDiff, bisect_divergence, first_divergent_frame, localize_divergence,
-    verify_replay_keyframes,
+    RunConfig, WorldCapture, WorldDiff, bisect_divergence, first_divergent_frame,
+    localize_divergence, verify_replay_keyframes, world_diff,
 };
 pub use builder::EngineBuilder;
 pub use character::{
@@ -232,6 +233,7 @@ pub use sweep::{
     FrameCell, FrameStripOutcome, MAX_SWEEP_CELLS, SweepCell, SweepOutcome, render_frame_strip,
     render_sweep_sheet,
 };
+pub use tick_observer::TickObserver;
 pub use trace::{
     GroundRecord, LaneRecord, MotorRecord, PlatformRecord, ReportRecord, SensorRecord,
     SurfaceRecord, TraceChannel, TraceRecord, load_input_script, trace, trace_with, write_jsonl,

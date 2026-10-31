@@ -76,6 +76,7 @@ use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 use crate::quality::QualitySetting;
 use crate::recording::{AppliedDocReload, Recorder};
 use crate::scene_physics;
+use crate::tick_observer::TickObserver;
 
 /// This engine build's version string (used in `engine.describe`, snapshots, and replay headers).
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -367,6 +368,9 @@ pub struct Engine {
     /// `--dev-shaders`, `ludion dev`) turns it on, confining the pipeline-recreation risk to dev hosts.
     /// Render-side switch, never sim state: it is not hashed and not part of a snapshot.
     shader_reload: bool,
+    /// The per-tick watch ([`set_tick_observer`](Engine::set_tick_observer)). Host state, never
+    /// hashed or snapshotted; `Send` because the engine moves into the live sim thread.
+    tick_observer: Option<Box<dyn TickObserver>>,
     /// The live frame stream's persistent 3-deep readback ring (lazily created, recreated on a render
     /// size change, discarded when no `frames` subscriber remains — unless a present target is
     /// attached, which renders out of the graph textures the ring holds). `None` outside an active
@@ -745,6 +749,7 @@ impl Engine {
             gi_stale: false,
             renderer: None,
             shader_reload: false,
+            tick_observer: None,
             stream_ring: None,
             present: None,
             subscriptions: Subscriptions::new(),
@@ -1437,8 +1442,57 @@ impl Engine {
     /// While the live profiler is armed ([`perf_arm`](Engine::perf_arm)) this takes the observed
     /// path instead; the branch is one `Option` test, and the tick it performs is the same one (see
     /// the private `advance_live_profiled`).
+    ///
+    /// A [`TickObserver`] set with [`set_tick_observer`](Engine::set_tick_observer) watches here, so
+    /// it sees every tick `sim.step` and the live loop perform.
     pub fn advance_live(&mut self) -> bool {
         self.freeze_probe_world_before_tick();
+        let Some(mut observer) = self.tick_observer.take() else {
+            return self.advance_live_unwatched();
+        };
+        let will_tick = match self.driver.run_state() {
+            RunState::Running => true,
+            RunState::Stepping { remaining } => remaining > 0,
+            _ => false,
+        };
+        let probe = will_tick
+            && observer.before_tick(self.driver.frame(), self.driver.world(), &self.registry);
+        let ran = if probe {
+            let frame = self.driver.frame();
+            let was_running = self.driver.run_state() == RunState::Running;
+            // Disjoint field borrows: the registry is read by the observer while the driver ticks.
+            let registry = &self.registry;
+            let ran = self
+                .driver
+                .advance_probed(&mut |name, world| observer.after_system(name, world, registry));
+            if ran {
+                self.finish_live_tick(frame, was_running);
+            }
+            ran
+        } else {
+            self.advance_live_unwatched()
+        };
+        if ran {
+            observer.after_tick(self.driver.frame(), self.driver.world(), &self.registry);
+        }
+        self.tick_observer = Some(observer);
+        ran
+    }
+
+    /// Installs a read-only per-tick [`TickObserver`], replacing any previous one. The observer is
+    /// host state: not in the world, not hashed, not snapshotted — a restore or scene load leaves it
+    /// in place.
+    pub fn set_tick_observer(&mut self, observer: impl TickObserver + 'static) {
+        self.tick_observer = Some(Box::new(observer));
+    }
+
+    /// Removes the [`TickObserver`], if any.
+    pub fn clear_tick_observer(&mut self) {
+        self.tick_observer = None;
+    }
+
+    /// The tick [`advance_live`](Engine::advance_live) performs when no observer probes it.
+    fn advance_live_unwatched(&mut self) -> bool {
         if self.perf.is_some() {
             return self.advance_live_profiled();
         }

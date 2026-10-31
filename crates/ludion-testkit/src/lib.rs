@@ -67,6 +67,7 @@
 mod image;
 
 pub mod audio;
+pub mod determinism;
 pub mod drift;
 pub mod driver;
 pub mod golden;
@@ -78,6 +79,7 @@ pub mod ssim;
 pub mod stats;
 pub mod suite;
 
+pub use determinism::assert_deterministic;
 pub use drift::assert_components_drift_safe;
 pub use driver::{GameplayDriver, inject, loaded_engine, step};
 pub use golden::{

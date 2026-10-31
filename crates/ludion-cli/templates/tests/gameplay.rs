@@ -5,7 +5,6 @@
 use {{name_ident}}::Player;
 use ludion::prelude::*;
 use ludion_testkit::GameplayDriver;
-use serde_json::json;
 
 /// The game scene, embedded so these tests are self-contained.
 const SCENE: &str = include_str!("../scenes/main.yaml");
@@ -17,20 +16,6 @@ fn player_x(engine: &mut Engine) -> f32 {
         x = Some(player.x);
     }
     x.expect("the scene has a Player entity")
-}
-
-/// The command sequence the determinism test drives: press Right, then run 60 ticks.
-fn run_commands() -> Vec<Command> {
-    vec![
-        Command::InputInject(command::InputInjectParams {
-            frame: Some(FrameIndex::new(0)),
-            event: json!({"kind": "key_down", "key": "Right"}),
-        }),
-        Command::SimStep(command::SimStepParams {
-            ticks: 60,
-            hash: false,
-        }),
-    ]
 }
 
 /// Sim assertion: the custom system moves the custom component while its key is held.
@@ -59,13 +44,15 @@ fn player_stays_put_without_input() {
     );
 }
 
-/// Determinism: two identical runs produce identical per-frame `WorldHash` sequences. `WorldHash` is
-/// registry-driven, so the custom `Player` component is hashed with no extra wiring.
+/// Determinism: two runs of the same inputs reach the same `WorldHash` on every tick. On a mismatch
+/// the failure names the frame, the first system and the component fields that differ.
 #[test]
-fn two_runs_produce_identical_worldhash_sequences() {
-    let run = || {
-        let mut engine = ludion_testkit::loaded_engine({{name_ident}}::game(), SCENE);
-        ludion_engine::drive_hashes(&mut engine, run_commands()).expect("drive succeeds")
-    };
-    assert_eq!(run(), run(), "the simulation must be deterministic");
+fn two_runs_are_deterministic() {
+    ludion_testkit::assert_deterministic(
+        || ludion_testkit::loaded_engine({{name_ident}}::game(), SCENE),
+        |engine| {
+            ludion_testkit::inject(engine, InputEvent::KeyDown { key: Key::Right });
+            ludion_testkit::step(engine, 60);
+        },
+    );
 }

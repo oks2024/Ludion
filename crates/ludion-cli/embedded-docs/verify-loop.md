@@ -25,10 +25,12 @@ let snap = driver.snapshot();                // restore(snap) rewinds state and 
 ```
 
 **WorldHash determinism.** A `WorldHash` is a 16-hex-digit fingerprint of all live component state.
-Two runs of the same commands must produce identical per-frame hash sequences — that is what proves
-your sim is deterministic. `ludion_engine::drive_hashes(&mut engine, commands)` returns the sequence;
-assert two runs are equal (see `tests/gameplay.rs`). Cross-process, the same idea is
-`ludion sim-hash --scene … --frames N` (run it twice: identical output). Concept: `ludion devdocs ludion-sim`.
+Two runs of the same body must produce identical per-tick hashes — that proves your sim is
+deterministic. `ludion_testkit::assert_deterministic(build, body)` runs `body` (plain `&mut Engine`
+code) over two fresh engines; a mismatch panics naming the frame, the first differing system and the
+component fields (see `tests/gameplay.rs`). `ludion_engine::drive_hashes` remains for an explicit
+trace. Cross-process, the same idea is `ludion sim-hash --scene … --frames N` (run it twice:
+identical output). Concept: `ludion devdocs ludion-sim`.
 
 **Golden images.** A golden test renders the scene and compares it to a committed PNG via tiled SSIM.
 The generated `tests/golden.rs` is green out of the box: until the first golden is committed it prints

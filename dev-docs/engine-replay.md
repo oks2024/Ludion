@@ -93,7 +93,9 @@ physics scene carries the blob in every keyframe.
 
 **Divergence bisection** (`bisect.rs`) turns "the hashes differ at frame N" — which localizes
 nothing — into a named entity, component and system. Two tools over one world-diff core, both
-single-threaded:
+single-threaded. The core is public: `WorldCapture` (an owned world reduction), `world_diff(&a, &b)`,
+and the read-only `TickObserver` (`Engine::set_tick_observer`, hooked in `advance_live` only) that the
+testkit's `assert_deterministic` is built on:
 
 - `verify_replay_keyframes(builder, bytes, root)` re-drives a committed `.lrp` with today's code and
   compares live state against every embedded keyframe, reporting the **first** that fails

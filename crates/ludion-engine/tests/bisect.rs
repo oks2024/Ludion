@@ -7,10 +7,12 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use ludion_engine::{Engine, EngineBuilder, RunConfig, bisect_divergence, verify_replay_keyframes};
-use ludion_protocol::Command;
-use ludion_protocol::command::SimStepParams;
+use ludion_engine::{
+    Engine, EngineBuilder, RunConfig, bisect_divergence, verify_replay_keyframes, world_diff,
+};
+use ludion_protocol::command::{EngineRestoreParams, SimStepParams};
 use ludion_protocol::replay::{ReplayReader, ReplayRecord};
+use ludion_protocol::{Command, ResponseBody};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -412,4 +414,37 @@ fn the_localizer_probes_a_recorded_panic_tick() {
     .expect("the probe of a recorded panic tick is not an error")
     .expect("the two configurations diverge");
     assert_eq!(report.frame.as_u64(), PANIC_FRAME + 1);
+}
+
+/// A second engine restored from the first's snapshot holds an identical world; one component edit
+/// then shows up in `world_diff` by component and field.
+#[test]
+fn world_diff_is_empty_for_a_restored_twin_and_names_an_edit() {
+    let mut a = game(scale_v1).build().unwrap();
+    a.load_inline_scene(SCENE).unwrap();
+    a.execute(Command::SimStep(SimStepParams {
+        ticks: 3,
+        hash: false,
+    }))
+    .unwrap();
+    let snapshot = match a.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut b = game(scale_v1).build().unwrap();
+    b.load_inline_scene(SCENE).unwrap();
+    b.execute(Command::EngineRestore(EngineRestoreParams {
+        snapshot: serde_json::Value::clone(&snapshot),
+    }))
+    .unwrap();
+    assert!(world_diff(&a, &b).unwrap().is_empty());
+
+    for (c,) in b.world_mut().query::<(&mut Counter,)>() {
+        c.n += 1.0;
+    }
+    let diff = world_diff(&a, &b).unwrap();
+    assert_eq!(diff.changed_total, 1);
+    let component = &diff.changed[0].components[0];
+    assert_eq!(component.component, "Counter");
+    assert_eq!(component.fields, vec!["n".to_string()]);
 }

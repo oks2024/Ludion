@@ -217,6 +217,46 @@ fn world_doc(world: &World, registry: &Registry) -> Result<WorldDoc, Diagnostic>
     Ok(doc)
 }
 
+/// An owned reduction of a world to its comparable component data — hold one from a first run while
+/// a second run executes, then [`diff`](WorldCapture::diff) them.
+#[derive(Debug, Clone)]
+pub struct WorldCapture(WorldDoc);
+
+impl WorldCapture {
+    /// Reduces `world` (read through `registry`) to a capture.
+    ///
+    /// # Errors
+    /// A component serialization failure (`L0007`).
+    pub fn capture(world: &World, registry: &Registry) -> Result<Self, Diagnostic> {
+        world_doc(world, registry).map(Self)
+    }
+
+    /// Compares `self` (the left side) with `right`.
+    pub fn diff(&self, right: &WorldCapture) -> WorldDiff {
+        diff_docs(&self.0, &right.0)
+    }
+}
+
+/// Diffs the worlds of two engines, entity by entity and component by component; `left` is the
+/// left side of the result. Each engine is reduced with its own registry.
+///
+/// # Errors
+/// A component serialization failure (`L0007`).
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, world_diff};
+///
+/// let a = Engine::builder().build().unwrap();
+/// let b = Engine::builder().build().unwrap();
+/// assert!(world_diff(&a, &b).unwrap().is_empty());
+/// ```
+pub fn world_diff(left: &Engine, right: &Engine) -> Result<WorldDiff, Diagnostic> {
+    let left = WorldCapture::capture(left.world(), left.registry())?;
+    let right = WorldCapture::capture(right.world(), right.registry())?;
+    Ok(left.diff(&right))
+}
+
 /// Reduces a recorded keyframe (an `engine.snapshot` document) to the same [`WorldDoc`] shape.
 ///
 /// Every component value is **normalized through its registered Rust type** — deserialized and

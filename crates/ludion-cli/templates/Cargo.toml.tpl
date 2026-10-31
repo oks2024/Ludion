@@ -44,7 +44,7 @@ schemars = "1"
 [dev-dependencies]
 # The golden-image harness (with the game's registry seam) — a game's test-only dependency.
 ludion-testkit = {{ludion_testkit_dep}}
-# `drive_hashes` for the WorldHash-determinism test.
+# Engine types for tests that name them.
 ludion-engine = {{ludion_engine_dep}}
 # Core types (`Diagnostic`, the RNG) for tests that assert on them.
 ludion-core = {{ludion_core_dep}}
