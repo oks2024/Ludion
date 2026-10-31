@@ -26,7 +26,8 @@ frame-streaming wire format itself to `frame-streaming`, the protocol/`Client` S
   `Gpu::request_for_surface`), the shared `ludion_render_graph::blit` of the latest decoded frame,
   resize/reconfigure handling; a device fault after a submit is fatal and ends the viewer.
 - `crates/ludion-window/src/keymap.rs` — physical keycode → the wire's `input.inject` key-event
-  shape (`wire_key_event`).
+  shape (`KeyMapper::map`). Stateful only to fold left/right Shift/Ctrl/Alt into one key;
+  `release_modifiers` frees held ones on window focus loss.
 - `crates/ludion-window/src/mouse.rs` — cursor-position → render-target-space mapping
   (`map_cursor_to_frame`) plus mouse button/wheel → wire event `Value`s.
 - `crates/ludion-window/src/gamepad.rs` — `gilrs` axis/button → wire `gamepad_*` event `Value`s

@@ -35,7 +35,7 @@ import {
 import type { InputInjectParams } from '@ludion/protocol';
 import type { EditorMode } from '../App';
 import type { ProtocolClient } from '../protocol/client';
-import { keyEdgeToInject } from '../viewer/keymap';
+import { keyEdgeToInject, ModifierFold } from '../viewer/keymap';
 import { createLagProbe, formatLag, type LagProbe } from '../viewer/lagProbe';
 import {
   mouseButtonInject,
@@ -78,6 +78,8 @@ export function PreviewPanel({ client, mode, onFrameStatus }: PreviewPanelProps)
   // The buttons the engine still thinks are held, and the move coalescer: one `mouse_move` per
   // animation frame at most, so a high-Hz pointer can't flood the very connection being measured.
   const heldButtonsRef = useRef<Set<EngineMouseButton>>(new Set());
+  // Folds left/right modifier keys into one engine key across key events.
+  const modifierFoldRef = useRef(new ModifierFold());
   const pendingMoveRef = useRef<{ x: number; y: number } | null>(null);
   const moveRafRef = useRef<number | null>(null);
 
@@ -106,7 +108,7 @@ export function PreviewPanel({ client, mode, onFrameStatus }: PreviewPanelProps)
       if (mode !== 'play') {
         return;
       }
-      const params = keyEdgeToInject({ code: event.code, type: event.type as 'keydown' | 'keyup', repeat: event.repeat });
+      const params = keyEdgeToInject({ code: event.code, type: event.type as 'keydown' | 'keyup', repeat: event.repeat }, modifierFoldRef.current);
       if (params === null) {
         return;
       }

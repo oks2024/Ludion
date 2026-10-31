@@ -357,3 +357,29 @@ fn injecting_at_a_frame_that_has_already_run_is_refused_and_not_recorded() {
         .collect();
     assert_eq!(inputs, vec![4], "only the accepted inject is recorded");
 }
+
+#[test]
+fn folded_modifier_keys_inject_and_edge_like_any_key() {
+    let dir = fresh_dir("modifiers");
+    let mut engine = booted(&dir);
+    for (name, key) in [
+        ("Shift", Key::Shift),
+        ("Ctrl", Key::Ctrl),
+        ("Alt", Key::Alt),
+    ] {
+        inject(&mut engine, None, key_down(name));
+        engine.advance_live();
+        assert!(input(&engine).is_held(key) && input(&engine).was_pressed(key));
+        engine.advance_live();
+        assert!(input(&engine).is_held(key) && !input(&engine).was_pressed(key));
+        inject(&mut engine, None, json!({ "kind": "key_up", "key": name }));
+        engine.advance_live();
+        assert!(!input(&engine).is_held(key) && input(&engine).was_released(key));
+    }
+
+    let refused = engine.execute(Command::InputInject(InputInjectParams {
+        frame: None,
+        event: key_down("LeftShift"),
+    }));
+    assert!(refused.is_err(), "there is no per-side modifier key");
+}

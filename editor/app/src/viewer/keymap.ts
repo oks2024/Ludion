@@ -7,6 +7,9 @@
 // layout-independent identity we want — so this maps `code`, never `key`. Unmapped keys return
 // `null` (the engine only knows the milestone-minimal set), and OS auto-repeat is suppressed so a
 // held key produces exactly one `key_down` edge, mirroring the engine's own no-repeat semantics.
+//
+// Shift, Ctrl and Alt are folded: left and right are one engine key, held while either side is down.
+// `ModifierFold` remembers the sides so a second side or one of two releases sends no spurious edge.
 
 import type { InputInjectParams } from '@ludion/protocol';
 
@@ -17,7 +20,8 @@ export type EngineKey =
   | 'Digit0' | 'Digit1' | 'Digit2' | 'Digit3' | 'Digit4'
   | 'Digit5' | 'Digit6' | 'Digit7' | 'Digit8' | 'Digit9'
   | 'Up' | 'Down' | 'Left' | 'Right'
-  | 'Space' | 'Enter' | 'Escape';
+  | 'Space' | 'Enter' | 'Escape'
+  | 'Shift' | 'Ctrl' | 'Alt';
 
 const ARROWS: Readonly<Record<string, EngineKey>> = {
   ArrowUp: 'Up',
@@ -30,12 +34,18 @@ const NAMED: Readonly<Record<string, EngineKey>> = {
   Space: 'Space',
   Enter: 'Enter',
   Escape: 'Escape',
+  ShiftLeft: 'Shift',
+  ShiftRight: 'Shift',
+  ControlLeft: 'Ctrl',
+  ControlRight: 'Ctrl',
+  AltLeft: 'Alt',
+  AltRight: 'Alt',
 };
 
 /**
  * Translates a `KeyboardEvent.code` to the engine's abstract key name, or `null` if the engine has
  * no such key. Handles the four families the milestone set covers: `KeyA`–`KeyZ`, `Digit0`–`Digit9`,
- * the four arrows, and Space/Enter/Escape.
+ * the four arrows, Space/Enter/Escape, and either side of Shift/Ctrl/Alt (folded by `ModifierFold`).
  */
 export function codeToEngineKey(code: string): EngineKey | null {
   if (/^Key[A-Z]$/.test(code)) {
@@ -55,18 +65,41 @@ export interface KeyEdge {
   readonly repeat: boolean;
 }
 
+/** Tracks which physical sides of each modifier are down, so left and right fold into one key. */
+export class ModifierFold {
+  private readonly down = new Map<string, Set<string>>();
+
+  /** Whether this edge changes the folded key: the first side down, or the last side up. */
+  changes(key: EngineKey, code: string, type: 'keydown' | 'keyup'): boolean {
+    const sides = this.down.get(key) ?? new Set<string>();
+    this.down.set(key, sides);
+    const wasDown = sides.size > 0;
+    if (type === 'keydown') {
+      sides.add(code);
+    } else {
+      sides.delete(code);
+    }
+    return wasDown !== sides.size > 0;
+  }
+}
+
+const MODIFIER_KEYS: ReadonlySet<EngineKey> = new Set<EngineKey>(['Shift', 'Ctrl', 'Alt']);
+
 /**
  * Builds the `input.inject` params for a keyboard edge, or `null` when nothing should be sent:
- * an unmapped key, or an auto-repeat `keydown` (the engine treats a re-asserted held key as no new
- * edge, so forwarding repeats would be pure noise). The event carries no `frame`, so the engine
- * applies it at the next tick boundary.
+ * an unmapped key, an auto-repeat `keydown` (the engine treats a re-asserted held key as no new
+ * edge, so forwarding repeats would be pure noise), or a modifier edge that leaves the folded key
+ * unchanged. The event carries no `frame`, so the engine applies it at the next tick boundary.
  */
-export function keyEdgeToInject(edge: KeyEdge): InputInjectParams | null {
+export function keyEdgeToInject(edge: KeyEdge, fold: ModifierFold): InputInjectParams | null {
   if (edge.type === 'keydown' && edge.repeat) {
     return null;
   }
   const key = codeToEngineKey(edge.code);
   if (key === null) {
+    return null;
+  }
+  if (MODIFIER_KEYS.has(key) && !fold.changes(key, edge.code, edge.type)) {
     return null;
   }
   const kind = edge.type === 'keydown' ? 'key_down' : 'key_up';

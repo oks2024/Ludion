@@ -64,7 +64,7 @@ import { toDiagnostic, type DiagnosticView } from './diagnostic';
 import { DiagnosticBanner } from './DiagnosticBanner';
 import { entityKey } from './Inspector';
 import { createInjectCoalescer, type InjectCoalescer } from './injectCoalescer';
-import { keyEdgeToInject, isTextEditingTarget } from './keymap';
+import { keyEdgeToInject, isTextEditingTarget, ModifierFold } from './keymap';
 import { createLagProbe, formatLag, type LagProbe } from './lagProbe';
 import { mouseButtonInject, mouseMoveInject, pointerButtonName, releaseInjects, type EngineMouseButton } from './mousemap';
 import {
@@ -379,6 +379,8 @@ export function Viewport({
   // latest-wins gate, which self-paces sends to the server's reply rate instead of rAF rate (this
   // feature's whole point — see injectCoalescer.ts's header).
   const heldButtonsRef = useRef<Set<EngineMouseButton>>(new Set());
+  // Folds left/right modifier keys into one engine key across key events.
+  const modifierFoldRef = useRef(new ModifierFold());
 
   // Mirrors `client` every render so the coalescer's `send` (bound once, below) never closes over a
   // stale client after a reconnect swaps the prop (App recreates `ProtocolClient` on reconnect).
@@ -590,7 +592,7 @@ export function Viewport({
       if (mode !== 'play') {
         return;
       }
-      const inject = keyEdgeToInject({ code: event.code, type: event.type as 'keydown' | 'keyup', repeat: event.repeat });
+      const inject = keyEdgeToInject({ code: event.code, type: event.type as 'keydown' | 'keyup', repeat: event.repeat }, modifierFoldRef.current);
       if (inject === null) {
         return;
       }

@@ -7,6 +7,10 @@
 //! never the produced character. Keys the engine has no name for are ignored, and OS auto-repeat is
 //! suppressed so a held key produces exactly one `key_down` edge, matching the engine's own no-repeat
 //! edge semantics (the TS viewer's `keymap.ts` does the same).
+//!
+//! The modifiers (`"Shift"`, `"Ctrl"`, `"Alt"`) are folded: left and right are one engine key, held
+//! while either side is down. That makes [`KeyMapper`] the one stateful piece — it remembers which
+//! sides are down so a second side or the release of one of two never sends a spurious edge.
 
 use winit::event::ElementState;
 use winit::keyboard::KeyCode;
@@ -30,25 +34,82 @@ impl WireKey {
     }
 }
 
-/// Translates a physical key transition into the wire event to inject, or `None` when nothing should
-/// be sent: an unmapped key (the engine has no such key), or an auto-repeat press (the engine treats
-/// a re-asserted held key as no new edge, so forwarding repeats would be pure noise). A repeat
-/// *release* is impossible from winit but, if seen, still maps — only presses are repeat-suppressed.
-pub fn wire_key_event(code: KeyCode, state: ElementState, repeat: bool) -> Option<WireKey> {
-    if state == ElementState::Pressed && repeat {
-        return None;
+/// The three folded modifiers, in the order `release_modifiers` reports them.
+const MODIFIERS: [&str; 3] = ["Shift", "Ctrl", "Alt"];
+
+/// The modifier a [`KeyCode`] belongs to (index into [`MODIFIERS`]) and which physical side it is.
+fn modifier_side(code: KeyCode) -> Option<(usize, usize)> {
+    Some(match code {
+        KeyCode::ShiftLeft => (0, 0),
+        KeyCode::ShiftRight => (0, 1),
+        KeyCode::ControlLeft => (1, 0),
+        KeyCode::ControlRight => (1, 1),
+        KeyCode::AltLeft => (2, 0),
+        KeyCode::AltRight => (2, 1),
+        _ => return None,
+    })
+}
+
+/// Translates physical key transitions into the wire events to inject. Stateful only for the
+/// modifiers: left and right fold into one engine key, so the mapper tracks which sides are down and
+/// emits an edge only when the folded key changes (releasing one of two held Shifts sends nothing).
+#[derive(Default)]
+pub struct KeyMapper {
+    /// Per modifier (Shift, Ctrl, Alt), whether its left / right side is down.
+    down: [[bool; 2]; 3],
+}
+
+impl KeyMapper {
+    /// Translates a physical key transition into the wire event to inject, or `None` when nothing
+    /// should be sent: an unmapped key (the engine has no such key), an auto-repeat press (the engine
+    /// treats a re-asserted held key as no new edge, so forwarding repeats would be pure noise), or a
+    /// modifier edge that does not change the folded key. A repeat *release* is impossible from winit
+    /// but, if seen, still maps — only presses are repeat-suppressed.
+    pub fn map(&mut self, code: KeyCode, state: ElementState, repeat: bool) -> Option<WireKey> {
+        if state == ElementState::Pressed && repeat {
+            return None;
+        }
+        let pressed = state == ElementState::Pressed;
+        if let Some((modifier, side)) = modifier_side(code) {
+            let sides = &mut self.down[modifier];
+            if sides[side] == pressed {
+                return None;
+            }
+            sides[side] = pressed;
+            if sides[1 - side] {
+                return None;
+            }
+            let kind = if pressed { "key_down" } else { "key_up" };
+            return Some(WireKey {
+                kind,
+                key: MODIFIERS[modifier],
+            });
+        }
+        let key = key_name(code)?;
+        let kind = if pressed { "key_down" } else { "key_up" };
+        Some(WireKey { kind, key })
     }
-    let key = key_name(code)?;
-    let kind = match state {
-        ElementState::Pressed => "key_down",
-        ElementState::Released => "key_up",
-    };
-    Some(WireKey { kind, key })
+
+    /// Releases every held modifier (window focus lost: the OS delivers no key-up for a key let go
+    /// elsewhere, e.g. Alt-Tab) and forgets the sides, one `key_up` per folded key.
+    pub fn release_modifiers(&mut self) -> Vec<WireKey> {
+        let mut out = Vec::new();
+        for (modifier, sides) in self.down.iter_mut().enumerate() {
+            if sides.iter().any(|&down| down) {
+                out.push(WireKey {
+                    kind: "key_up",
+                    key: MODIFIERS[modifier],
+                });
+            }
+            *sides = [false; 2];
+        }
+        out
+    }
 }
 
 /// Maps a winit [`KeyCode`] to the engine's abstract key name, or `None` if the engine's
 /// milestone-minimal key set has no such key. Covers the four families the set defines: `KeyA`–`KeyZ`,
-/// `Digit0`–`Digit9`, the four arrows, and Space/Enter/Escape.
+/// `Digit0`–`Digit9`, the four arrows, and Space/Enter/Escape. Modifiers go through [`KeyMapper`].
 fn key_name(code: KeyCode) -> Option<&'static str> {
     let name = match code {
         KeyCode::KeyA => "A",
@@ -104,7 +165,69 @@ mod tests {
     use super::*;
 
     fn down(code: KeyCode) -> Option<WireKey> {
-        wire_key_event(code, ElementState::Pressed, false)
+        KeyMapper::default().map(code, ElementState::Pressed, false)
+    }
+
+    fn edge(kind: &'static str, key: &'static str) -> Option<WireKey> {
+        Some(WireKey { kind, key })
+    }
+
+    #[test]
+    fn each_modifier_side_maps_to_its_folded_name() {
+        for (code, name) in [
+            (KeyCode::ShiftLeft, "Shift"),
+            (KeyCode::ShiftRight, "Shift"),
+            (KeyCode::ControlLeft, "Ctrl"),
+            (KeyCode::ControlRight, "Ctrl"),
+            (KeyCode::AltLeft, "Alt"),
+            (KeyCode::AltRight, "Alt"),
+        ] {
+            assert_eq!(down(code), edge("key_down", name));
+        }
+    }
+
+    #[test]
+    fn two_shift_sides_fold_into_one_held_key() {
+        let mut keys = KeyMapper::default();
+        let press = ElementState::Pressed;
+        let release = ElementState::Released;
+        assert_eq!(
+            keys.map(KeyCode::ShiftLeft, press, false),
+            edge("key_down", "Shift")
+        );
+        assert_eq!(keys.map(KeyCode::ShiftRight, press, false), None);
+        assert_eq!(keys.map(KeyCode::ShiftLeft, release, false), None);
+        assert_eq!(
+            keys.map(KeyCode::ShiftRight, release, false),
+            edge("key_up", "Shift")
+        );
+        // A release of a side never recorded down sends nothing.
+        assert_eq!(keys.map(KeyCode::ShiftLeft, release, false), None);
+    }
+
+    #[test]
+    fn focus_loss_releases_held_modifiers_once() {
+        let mut keys = KeyMapper::default();
+        keys.map(KeyCode::ShiftLeft, ElementState::Pressed, false);
+        keys.map(KeyCode::AltRight, ElementState::Pressed, false);
+        assert_eq!(
+            keys.release_modifiers(),
+            vec![
+                WireKey {
+                    kind: "key_up",
+                    key: "Shift"
+                },
+                WireKey {
+                    kind: "key_up",
+                    key: "Alt"
+                }
+            ]
+        );
+        assert_eq!(
+            keys.map(KeyCode::AltRight, ElementState::Released, false),
+            None
+        );
+        assert!(keys.release_modifiers().is_empty());
     }
 
     #[test]
@@ -198,7 +321,7 @@ mod tests {
     #[test]
     fn release_maps_to_key_up() {
         assert_eq!(
-            wire_key_event(KeyCode::Space, ElementState::Released, false),
+            KeyMapper::default().map(KeyCode::Space, ElementState::Released, false),
             Some(WireKey {
                 kind: "key_up",
                 key: "Space"
@@ -211,7 +334,7 @@ mod tests {
         for code in [
             KeyCode::Tab,
             KeyCode::F1,
-            KeyCode::ShiftLeft,
+            KeyCode::CapsLock,
             KeyCode::NumpadEnter,
         ] {
             assert_eq!(down(code), None);
@@ -222,12 +345,12 @@ mod tests {
     fn auto_repeat_press_is_suppressed_but_release_is_not() {
         // A held key re-asserts as a repeat press: no new edge should be forwarded.
         assert_eq!(
-            wire_key_event(KeyCode::KeyW, ElementState::Pressed, true),
+            KeyMapper::default().map(KeyCode::KeyW, ElementState::Pressed, true),
             None
         );
         // Repeat only suppresses presses; a release always maps.
         assert_eq!(
-            wire_key_event(KeyCode::KeyW, ElementState::Released, true),
+            KeyMapper::default().map(KeyCode::KeyW, ElementState::Released, true),
             Some(WireKey {
                 kind: "key_up",
                 key: "W"

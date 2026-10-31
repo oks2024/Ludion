@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 /// A key on the keyboard, as an abstract, layout-independent name.
 ///
-/// This is the milestone-minimal set (letters, digits, arrows, and the few control keys a
-/// Breakout/Sokoban-class game needs); variants are appended as games require them. The serde form
+/// This is the milestone-minimal set (letters, digits, arrows, the few control keys a
+/// Breakout/Sokoban-class game needs, and the folded modifiers); variants are appended as games require them. The serde form
 /// is the variant name as a string (`"W"`, `"Left"`, `"Space"`), which is what appears in scripts
 /// and on the wire.
 ///
@@ -115,6 +115,12 @@ pub enum Key {
     Enter,
     /// The escape key.
     Escape,
+    /// Either Shift key (left and right fold into one; held while either is down).
+    Shift,
+    /// Either Ctrl key (left and right fold into one; held while either is down).
+    Ctrl,
+    /// Either Alt key (Option on macOS; left and right fold into one; held while either is down).
+    Alt,
 }
 
 /// A mouse button, as an abstract name. The serde form is `snake_case`
@@ -710,6 +716,27 @@ mod tests {
         input.begin_tick();
         input.apply(InputEvent::KeyUp { key: Key::D });
         assert!(!input.was_released(Key::D));
+    }
+
+    #[test]
+    fn modifier_keys_edge_like_any_key() {
+        let mut input = InputState::default();
+        input.begin_tick();
+        input.apply(InputEvent::KeyDown { key: Key::Shift });
+        assert!(input.is_held(Key::Shift) && input.was_pressed(Key::Shift));
+
+        input.begin_tick();
+        assert!(input.is_held(Key::Shift) && !input.was_pressed(Key::Shift));
+
+        input.begin_tick();
+        input.apply(InputEvent::KeyUp { key: Key::Shift });
+        assert!(!input.is_held(Key::Shift) && input.was_released(Key::Shift));
+    }
+
+    #[test]
+    fn modifier_keys_serialize_by_variant_name() {
+        assert_eq!(serde_json::to_string(&Key::Ctrl).unwrap(), "\"Ctrl\"");
+        assert_eq!(serde_json::from_str::<Key>("\"Alt\"").unwrap(), Key::Alt);
     }
 
     #[test]

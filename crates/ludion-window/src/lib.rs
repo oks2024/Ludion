@@ -99,7 +99,7 @@ pub use crate::frame::DecodedFrame;
 pub use crate::reconnect::{StreamSink, run_frame_stream};
 
 use crate::gpu::{Presenter, RenderError};
-use crate::keymap::wire_key_event;
+use crate::keymap::KeyMapper;
 
 /// How the streamed frames are decoded to RGBA and handed between threads: a latest-wins slot that
 /// the stream thread replaces and the main thread reads. `Arc` so a redraw clones only a pointer,
@@ -179,6 +179,7 @@ pub fn run(options: WindowOptions, stop: Receiver<()>) -> Result<(), Diagnostic>
         options,
         slot,
         input_tx,
+        keys: KeyMapper::default(),
         presenter: None,
         window: None,
         fatal: None,
@@ -228,6 +229,8 @@ struct App {
     options: WindowOptions,
     slot: FrameSlot,
     input_tx: Sender<serde_json::Value>,
+    /// Folds left/right modifiers into one engine key across events.
+    keys: KeyMapper,
     presenter: Option<Presenter>,
     window: Option<Arc<Window>>,
     /// Set when a fatal error (lost connection, out-of-memory) ends the loop; becomes `run`'s `Err`.
@@ -357,10 +360,16 @@ impl ApplicationHandler<UserEvent> for App {
                 ..
             } => {
                 if let PhysicalKey::Code(key_code) = event.physical_key
-                    && let Some(wire) = wire_key_event(key_code, event.state, event.repeat)
+                    && let Some(wire) = self.keys.map(key_code, event.state, event.repeat)
                 {
                     // Best-effort: if the input thread has gone, the game just stops receiving
                     // keys — never a reason to tear the window down.
+                    let _ = self.input_tx.send(wire.to_value());
+                }
+            }
+            // A modifier let go while another window had focus never gets a key-up.
+            WindowEvent::Focused(false) => {
+                for wire in self.keys.release_modifiers() {
                     let _ = self.input_tx.send(wire.to_value());
                 }
             }

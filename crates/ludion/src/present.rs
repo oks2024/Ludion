@@ -42,7 +42,7 @@ use crossbeam_channel::{Receiver, Sender};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::live::SIM_STOP_GRACE;
-use ludion_window::keymap::wire_key_event;
+use ludion_window::keymap::KeyMapper;
 use ludion_window::mouse;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -123,6 +123,7 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions) -> ExitCode {
         proxy,
         running: running.clone(),
         input_tx,
+        keys: KeyMapper::default(),
         input_rx: Some(input_rx),
         internal_stop_rx: Some(internal_stop_rx),
         window: None,
@@ -192,6 +193,8 @@ struct App {
     proxy: EventLoopProxy<HostEvent>,
     running: Arc<AtomicBool>,
     input_tx: Sender<serde_json::Value>,
+    /// Folds left/right modifiers into one engine key across events.
+    keys: KeyMapper,
     /// Handed to the forwarder thread on `resumed`.
     input_rx: Option<Receiver<serde_json::Value>>,
     /// Handed to the waiter thread on `resumed`.
@@ -372,10 +375,16 @@ impl ApplicationHandler<HostEvent> for App {
                 ..
             } => {
                 if let PhysicalKey::Code(key_code) = event.physical_key
-                    && let Some(wire) = wire_key_event(key_code, event.state, event.repeat)
+                    && let Some(wire) = self.keys.map(key_code, event.state, event.repeat)
                 {
                     // Best-effort: if the forwarder has gone, the game just stops receiving keys —
                     // never a reason to tear the window down.
+                    let _ = self.input_tx.send(wire.to_value());
+                }
+            }
+            // A modifier let go while another window had focus never gets a key-up.
+            WindowEvent::Focused(false) => {
+                for wire in self.keys.release_modifiers() {
                     let _ = self.input_tx.send(wire.to_value());
                 }
             }
