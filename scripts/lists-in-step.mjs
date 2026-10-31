@@ -30,6 +30,9 @@
 //   crate-allow  no strict or sim crate carries a crate-level `#![allow(..)]` / `#![expect(..)]` of
 //             `clippy::disallowed_methods` / `disallowed_types`, which would switch the denylist off for
 //             the whole crate; an item-level allow with a why-comment stays legal (audit 2026-10-03 Q5).
+//   proptest  every `proptest!` block opens with a `proptest_config` that is `deterministic_config()` or a
+//             `RngSeed::Fixed` seed with `failure_persistence: None`, so a red run reproduces anywhere and
+//             no `.proptest-regressions` file is written (audit 2026-10-31 section 34).
 //
 // Every violation is reported, not just the first.
 //
@@ -465,6 +468,25 @@ function checkBless() {
   return { errors, count };
 }
 
+// A proptest on the default config draws a fresh seed per run and writes regression files beside the
+// source; a red run then cannot be reproduced. Every block pins its seed and turns persistence off.
+function checkProptest() {
+  const errors = [];
+  let count = 0;
+  for (const [file, text] of rustSources()) {
+    const lines = text.split('\n');
+    lines.forEach((line, i) => {
+      if (!/^\s*proptest!\s*\{/.test(line)) return;
+      count++;
+      const next = lines.slice(i + 1).find((l) => l.trim() !== '') ?? '';
+      const ok = /#!\[proptest_config\(/.test(next)
+        && (/deterministic_config\(\)/.test(next) || (/RngSeed::Fixed\(/.test(next) && /failure_persistence:\s*None/.test(next)));
+      if (!ok) errors.push(`proptest: ${file}:${i + 1} \`proptest!\` must open with \`#![proptest_config(..)]\` using a fixed seed and \`failure_persistence: None\` (\`ludion devdocs ludion-testkit\`)`);
+    });
+  }
+  return { errors, count };
+}
+
 // A crate-level inner attribute silences the denylist for the whole crate; the generated clippy.toml
 // is then a decoration. Only item-level allows (with a why-comment) may carve an exception.
 // The `cfg_attr` wrapper and a manifest `[lints.clippy]` / `[workspace.lints.clippy]` entry set to
@@ -518,10 +540,11 @@ const clippy = checkClippyLists(REPO_ROOT, workspaceDirs(REPO_ROOT));
 const requireGpu = checkRequireGpu();
 const bless = checkBless();
 const crateAllow = checkCrateAllows();
-const errors = [...nextest.errors, ...requireGpu.errors, ...bless.errors, ...crateAllow.errors, ...header.errors, ...clippy.errors];
+const proptest = checkProptest();
+const errors = [...nextest.errors, ...requireGpu.errors, ...bless.errors, ...crateAllow.errors, ...proptest.errors, ...header.errors, ...clippy.errors];
 
 if (errors.length === 0) {
-  console.log(`lists-in-step: OK (nextest ${nextest.count} tests scanned, c-header ${header.count} items, clippy ${clippy.count} files, require-gpu ${requireGpu.count} files, bless ${bless.count} files, crate-allow ${crateAllow.count} files)`);
+  console.log(`lists-in-step: OK (nextest ${nextest.count} tests scanned, c-header ${header.count} items, clippy ${clippy.count} files, require-gpu ${requireGpu.count} files, bless ${bless.count} files, crate-allow ${crateAllow.count} files, proptest ${proptest.count} blocks)`);
   process.exit(0);
 }
 console.error(`lists-in-step: ${errors.length} list(s) out of step`);

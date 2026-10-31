@@ -11,6 +11,9 @@
 
 use ludion_scene::{check_doc, emit_doc};
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 use serde_json::{Map, Value, json};
 
 /// A `weapon` kind's schema — the shape `schema_for!(WeaponDoc)` would produce for a struct with
@@ -277,6 +280,7 @@ fn weapon_value() -> impl Strategy<Value = Value> {
 }
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn emit_check_emit_is_byte_idempotent(value in weapon_value()) {
         let schema = weapon_schema();

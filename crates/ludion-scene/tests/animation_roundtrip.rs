@@ -16,6 +16,9 @@ use ludion_scene::{
     emit_animation, parse_animation, validate_animation,
 };
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 
 // --- Strategies -------------------------------------------------------------------------------
 
@@ -183,6 +186,7 @@ fn animation_doc() -> impl Strategy<Value = AnimationDocument> {
 // --- Properties -------------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn emit_then_check_loses_nothing(doc in animation_doc()) {
         let text = emit_animation(&doc);

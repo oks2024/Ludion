@@ -13,6 +13,9 @@ use ludion_scene::{
     ScenePhysicsSpace, emit, parse, parse_prefab, validate,
 };
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 use serde_json::{Value, json};
 
 // --- Strategies -------------------------------------------------------------------------------
@@ -306,6 +309,7 @@ fn without_null_keys(value: &Value) -> Value {
 // --- Properties -------------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn emit_then_parse_loses_nothing(s in scene()) {
         let registry = registry();

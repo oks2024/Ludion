@@ -38,6 +38,7 @@ perceptual tier at all) are `determinism.md`; the render pipeline being verified
 ## Rules
 
 - **A game whose `ludion.toml` declares `[[import]]` calls `require_derived_imports` in its test roots**: an unsynced tree silently drops meshes and colliders, so two runs agree on the wrong world.
+- **Proptests use a fixed seed and no failure persistence** (`ProptestConfig { rng_seed: RngSeed::Fixed(..), failure_persistence: None, .. }`; `crates/ludion-scene/tests/support/deterministic.rs` is the shared form): a red run must reproduce on every machine. A case a property finds becomes a named regression test, never a `.proptest-regressions` file.
 - Testkit is host-side: its `clippy.toml` carries no denylist (see `determinism.md`); SSIM purity
   is enforced by design and tests, not lints.
 

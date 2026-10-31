@@ -1049,6 +1049,7 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig { rng_seed: proptest::test_runner::RngSeed::Fixed(7919), failure_persistence: None, ..ProptestConfig::default() })]
         /// A wide, unbiased draw over JSON shapes: whatever a component's `Serialize` describes, the
         /// encoder and the pre-optimization `Value` walker must agree on it.
         #[test]

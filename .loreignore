@@ -114,3 +114,6 @@ __pycache__/
 
 # Derived by `ludion sync` from games/vigil/art/town; noise, so ignored in both VCSs.
 /games/vigil/assets/town/
+
+# Proptest persistence is off repo-wide (fixed seeds); a stray regression file is noise.
+*.proptest-regressions

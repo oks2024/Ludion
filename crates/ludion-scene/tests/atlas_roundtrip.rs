@@ -15,6 +15,9 @@ use ludion_scene::{
     validate_atlas, validate_atlas_source,
 };
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 
 const SOURCE: &str = include_str!("fixtures/good_atlas_source.atlas-source.yaml");
 const ATLAS: &str = include_str!("fixtures/good_atlas.atlas.yaml");
@@ -205,6 +208,7 @@ fn atlas_source_doc() -> impl Strategy<Value = AtlasSourceDocument> {
 // --- Properties ---------------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn an_atlas_survives_emit_then_check(doc in atlas_doc()) {
         let text = emit_atlas(&doc);

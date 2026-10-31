@@ -14,6 +14,9 @@ use ludion_scene::{
     voxel_budget_warning,
 };
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 
 // --- Strategies -------------------------------------------------------------------------------
 
@@ -141,6 +144,7 @@ fn voxel_doc() -> impl Strategy<Value = VoxelDocument> {
 // --- Properties -------------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn emit_then_check_loses_nothing(doc in voxel_doc()) {
         let text = emit_voxel(&doc);

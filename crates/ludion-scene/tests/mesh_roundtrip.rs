@@ -11,6 +11,9 @@ use ludion_scene::{
     parse_mesh, validate_mesh,
 };
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 
 // --- Strategies -------------------------------------------------------------------------------
 
@@ -170,6 +173,7 @@ fn mesh_doc() -> impl Strategy<Value = MeshDocument> {
 // --- Properties -------------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn emit_then_check_loses_nothing(doc in mesh_doc()) {
         let text = emit_mesh(&doc);

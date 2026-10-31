@@ -11,6 +11,9 @@
 
 use ludion_scene::{PartDocument, check_part, emit_part, parse_part, validate_part};
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 
 // --- Strategies -------------------------------------------------------------------------------
 
@@ -56,6 +59,7 @@ fn part_doc() -> impl Strategy<Value = PartDocument> {
 // --- Properties -------------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn emit_then_check_loses_nothing(doc in part_doc()) {
         let text = emit_part(&doc);

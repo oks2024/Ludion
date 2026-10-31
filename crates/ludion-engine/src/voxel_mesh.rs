@@ -1073,6 +1073,7 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig { rng_seed: proptest::test_runner::RngSeed::Fixed(7919), failure_persistence: None, ..ProptestConfig::default() })]
         /// The stats never disagree with the stream they summarize, on any grid.
         #[test]
         fn stats_agree_with_the_stream(model in arb_model()) {

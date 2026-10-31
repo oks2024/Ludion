@@ -11,6 +11,9 @@
 
 use ludion_scene::{emit_doc, open_profile};
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 use serde_json::{Map, Value, json};
 
 /// A profile type's schema — the shape `schema_for!(SaveState)` would produce for a struct with a
@@ -209,6 +212,7 @@ fn profile_value() -> impl Strategy<Value = Value> {
 }
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn emit_open_emit_is_byte_idempotent(value in profile_value()) {
         let schema = profile_schema();

@@ -19,6 +19,9 @@ use ludion_scene::{
     emit_assembly, parse_assembly, validate_assembly,
 };
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 
 // --- Strategies -------------------------------------------------------------------------------
 
@@ -152,6 +155,7 @@ fn assembly_doc() -> impl Strategy<Value = AssemblyDocument> {
 // --- Properties -------------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn emit_then_check_loses_nothing(doc in assembly_doc()) {
         let text = emit_assembly(&doc);

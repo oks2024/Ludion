@@ -136,6 +136,7 @@ fn boundary_f32_bit_patterns_survive_the_real_replay_path() {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig { rng_seed: proptest::test_runner::RngSeed::Fixed(7919), failure_persistence: None, ..ProptestConfig::default() })]
     /// "Plus a large random draw": an arbitrary `u32` covers the entire f32 bit-pattern space
     /// uniformly (subnormals, infinities, NaNs, and every ordinary value alike), so this is a
     /// wide, unbiased complement to the explicit boundary list above.

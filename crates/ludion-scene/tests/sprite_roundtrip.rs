@@ -14,6 +14,9 @@ use ludion_scene::{
     validate_sprite,
 };
 use proptest::prelude::*;
+#[path = "support/deterministic.rs"]
+mod deterministic;
+use deterministic::deterministic_config;
 
 const GOOD: &str = include_str!("fixtures/good_sprite.sprite.yaml");
 const BROKEN: &str = include_str!("fixtures/broken_sprite.sprite.yaml");
@@ -380,6 +383,7 @@ fn sprite_doc_either_palette() -> impl Strategy<Value = SpriteDocument> {
 // --- Properties ---------------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(deterministic_config())]
     #[test]
     fn emit_then_check_loses_nothing(doc in sprite_doc_either_palette()) {
         let text = emit_sprite(&doc);
