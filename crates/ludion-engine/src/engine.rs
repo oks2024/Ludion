@@ -52,8 +52,8 @@ use ludion_protocol::replay::{
 use ludion_protocol::response::EntityBounds;
 use ludion_protocol::{Channel, PROTOCOL_VERSION, SubId, schema};
 use ludion_renderer::{
-    FrameSinks, FrameSize, Gpu, PresentSize, PresentTarget, ProbeWorld, RenderScale, RenderScene,
-    RenderedImage, Renderer, StreamReadback,
+    AntiAliasing, FrameSinks, FrameSize, Gpu, PresentSize, PresentTarget, ProbeWorld, RenderScale,
+    RenderScene, RenderedImage, Renderer, StreamReadback,
 };
 use ludion_scene::{ExpandedScene, InstanceTransform, Scene, SceneEntity, ScenePhysics};
 use ludion_sim::{InputState, RunState, SimConfig, SimDriver, Speed, WorldHash};
@@ -297,6 +297,18 @@ pub struct Engine {
     /// not hashed, not snapshotted, and invisible to `extract()` — it changes only how many pixels
     /// the chain draws before resampling back to [`render_size`](Engine::render_size).
     render_scale_override: Option<RenderScale>,
+    /// The anti-aliasing mode the game packaged
+    /// ([`EngineBuilder::anti_aliasing`](crate::EngineBuilder::anti_aliasing)), `Off` unless set. The
+    /// weakest of the three sources; see [`anti_aliasing`](Engine::anti_aliasing). A client setting,
+    /// never sim state: not hashed, not snapshotted, and invisible to `extract()`.
+    pub(crate) anti_aliasing_default: AntiAliasing,
+    /// The host's explicit mode ([`set_anti_aliasing`](Engine::set_anti_aliasing)), if it named one.
+    /// Same status as `anti_aliasing_default`.
+    anti_aliasing_override: Option<AntiAliasing>,
+    /// The mode the game's own systems last requested through
+    /// [`RenderSettings`](crate::RenderSettings), the strongest source. Lives here rather than in the
+    /// world so a district switch or restore does not forget it; same status as the others.
+    anti_aliasing_game: Option<AntiAliasing>,
     /// The host's render quality setting ([`set_quality`](Engine::set_quality)) — which optional
     /// effects to draw, plus the label of the choice that produced them. Default
     /// [`QualitySetting::default`] (everything the scene authors, labelled `"full"`). A client
@@ -714,6 +726,9 @@ impl Engine {
             debug_draw: crate::DebugCategories::None,
             debug_view: None,
             render_scale_override: None,
+            anti_aliasing_default: AntiAliasing::Off,
+            anti_aliasing_override: None,
+            anti_aliasing_game: None,
             quality: QualitySetting::default(),
             textures: TextureSource::default(),
             cook_resolved: false,
@@ -764,6 +779,7 @@ impl Engine {
         engine.install_presentation_rules();
         engine.install_scene_switch();
         engine.install_shutdown();
+        engine.install_render_settings();
         engine.install_debug_draw();
         engine.install_game_clock(GameClock::default());
         engine.install_diagnostics(crate::Diagnostics::default());
@@ -920,6 +936,28 @@ impl Engine {
     /// host may call them in either order and gets the same frame.
     pub fn render_scale(&self) -> RenderScale {
         crate::resolve_render_scale(self.render_scale_override, &self.quality)
+    }
+
+    /// Sets this host's anti-aliasing mode, beating the game's packaged default from
+    /// [`EngineBuilder::anti_aliasing`](crate::EngineBuilder::anti_aliasing) but not the game's own
+    /// runtime request through [`RenderSettings`](crate::RenderSettings).
+    ///
+    /// A host switch, not a protocol command: it changes how pixels are drawn, never the sim. Applies
+    /// from the next render.
+    pub fn set_anti_aliasing(&mut self, mode: AntiAliasing) {
+        self.anti_aliasing_override = Some(mode);
+    }
+
+    /// The anti-aliasing mode this engine renders with: the game's runtime request, else the host's
+    /// [`set_anti_aliasing`](Engine::set_anti_aliasing), else the builder default, else `Off`
+    /// ([`resolve_anti_aliasing`](crate::resolve_anti_aliasing)). Resolved on read from three
+    /// separately held values, so the order they are set in never matters.
+    pub fn anti_aliasing(&self) -> AntiAliasing {
+        crate::resolve_anti_aliasing(
+            self.anti_aliasing_game,
+            self.anti_aliasing_override,
+            self.anti_aliasing_default,
+        )
     }
 
     /// Sets this host's render quality — which optional effects every render performs (see
@@ -1488,6 +1526,7 @@ impl Engine {
         self.sync_audio_emitters(frame);
         self.drain_profile(frame);
         self.drain_residue_clear();
+        self.drain_render_settings();
         if !self.drain_shutdown() {
             self.drain_scene_switch(frame);
         }
@@ -1902,6 +1941,20 @@ impl Engine {
         self.install_residue_store();
     }
 
+    /// Moves the game's pending [`RenderSettings`](crate::RenderSettings) request onto the engine, which
+    /// outlives every world rebuild. Render-only and a pure function of the sim: nothing about it is
+    /// recorded, hashed or snapshotted, and the next render pushes it to the renderer.
+    fn drain_render_settings(&mut self) {
+        let requested = self
+            .driver
+            .world_mut()
+            .resource_mut::<crate::RenderSettings>()
+            .and_then(crate::RenderSettings::take);
+        if requested.is_some() {
+            self.anti_aliasing_game = requested;
+        }
+    }
+
     /// Drains a quit a game system asked for through the [`Shutdown`](crate::Shutdown) resource,
     /// returning whether one was pending.
     ///
@@ -2105,6 +2158,15 @@ impl Engine {
         self.driver
             .world_mut()
             .insert_resource(crate::Shutdown::default());
+    }
+
+    /// Installs a fresh (empty) [`RenderSettings`](crate::RenderSettings) resource into the current
+    /// world, the [`install_shutdown`](Engine::install_shutdown) mold. Excluded from the world hash and
+    /// from snapshots.
+    fn install_render_settings(&mut self) {
+        self.driver
+            .world_mut()
+            .insert_resource(crate::RenderSettings::default());
     }
 
     /// Installs a fresh (empty) [`DebugDraw`](crate::DebugDraw) resource into the current world. Called
@@ -3624,8 +3686,10 @@ impl Engine {
         }
         let hold = self.gi_hold();
         let store = self.probe_store.clone();
+        let anti_aliasing = self.anti_aliasing();
         let renderer = self.renderer.as_mut().expect("just initialized");
         renderer.set_gi_hold(hold);
+        renderer.set_anti_aliasing(anti_aliasing);
         renderer.set_probe_store(store);
         Ok(())
     }
@@ -3976,6 +4040,8 @@ impl Engine {
                 "gi_dynamic": self.quality.quality.gi_dynamic,
                 "shadows": self.quality.quality.shadows,
             },
+            // The anti-aliasing mode this host draws with, read-only like `quality`.
+            "anti_aliasing": self.anti_aliasing().name(),
             // The `render.view` override in force, or `null` when the stream is on the scene's own
             // camera — host render state a client can read without a round trip of its own.
             "view": match &self.view_override {
@@ -5218,6 +5284,7 @@ impl Engine {
         self.install_presentation_rules();
         self.install_scene_switch();
         self.install_shutdown();
+        self.install_render_settings();
         self.install_debug_draw();
         // A restore resumes the gameplay time it captured, not a clock level with the frame counter.
         self.install_game_clock(match &kind {

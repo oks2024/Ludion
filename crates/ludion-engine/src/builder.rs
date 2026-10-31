@@ -51,6 +51,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::Registry;
 use ludion_protocol::Command;
 use ludion_protocol::command::SceneLoadParams;
+use ludion_renderer::AntiAliasing;
 use ludion_spatial::Plane;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -93,6 +94,7 @@ pub struct EngineBuilder {
     category_gains: CategoryGains,
     plane: Plane,
     render_size: (u32, u32),
+    anti_aliasing: AntiAliasing,
     registrations: Vec<Registration>,
     systems: Vec<SystemSpec>,
     doc_kinds: Vec<DocKind>,
@@ -120,6 +122,7 @@ impl EngineBuilder {
             category_gains: CategoryGains::default(),
             plane: Plane::default(),
             render_size: DEFAULT_RENDER_SIZE,
+            anti_aliasing: AntiAliasing::default(),
             registrations: Vec::new(),
             systems: Vec::new(),
             doc_kinds: Vec::new(),
@@ -217,6 +220,15 @@ impl EngineBuilder {
     #[must_use]
     pub fn render_size(mut self, width: u32, height: u32) -> Self {
         self.render_size = (width, height);
+        self
+    }
+
+    /// Sets the anti-aliasing mode this game ships with ([`AntiAliasing::Off`] unless set). A packaged
+    /// default: a host's [`Engine::set_anti_aliasing`] beats it, and so does the game's own runtime
+    /// request through [`RenderSettings`](crate::RenderSettings).
+    #[must_use]
+    pub fn anti_aliasing(mut self, mode: AntiAliasing) -> Self {
+        self.anti_aliasing = mode;
         self
     }
 
@@ -641,6 +653,7 @@ impl EngineBuilder {
         // Set before the mirror: `install_plane` copies the field onto the world, and every later
         // world (re)build re-runs it.
         engine.plane = self.plane;
+        engine.anti_aliasing_default = self.anti_aliasing;
         engine.install_plane();
         // Set before `install_docs`, which runs them: the passes are engine configuration derived
         // from the game, re-run on every world the engine builds.

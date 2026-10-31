@@ -82,6 +82,7 @@ pub mod ragdoll;
 mod recording;
 mod render;
 pub mod render_extent;
+mod render_settings;
 mod render_size;
 mod render_view;
 mod replay;
@@ -200,6 +201,7 @@ pub use render::{
     render_scene, render_scene_with_builder, render_scene_with_registry,
 };
 pub use render_extent::RenderExtent;
+pub use render_settings::{RenderSettings, resolve_anti_aliasing};
 pub use render_size::{
     MAX_HEIGHT as MAX_RENDER_HEIGHT, MAX_WIDTH as MAX_RENDER_WIDTH, RENDER_SIZE_ENV,
     resolve_startup_render_size,
@@ -242,6 +244,6 @@ pub use voxel_sheet::{GiSheetOutcome, VoxelSheetOutcome, render_gi_sheet, render
 // along because [`Engine::attach_surface`] returns one: a windowed host must be able to name what
 // it holds.
 pub use ludion_renderer::{
-    DebugView, FrameSize, GpuUploads, PresentSize, Quality, QualityParams, RenderScale,
-    dump_frame_graph_json,
+    AntiAliasing, DebugView, FrameSize, GpuUploads, PresentSize, Quality, QualityParams,
+    RenderScale, dump_frame_graph_json,
 };
