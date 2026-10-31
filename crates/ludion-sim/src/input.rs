@@ -173,6 +173,12 @@ pub enum GamepadButton {
     DpadLeft,
     /// D-pad right.
     DpadRight,
+    /// The left trigger, pressed while its analog value is at or past [`TRIGGER_THRESHOLD`];
+    /// synthesised from [`GamepadAxis::LeftTrigger`].
+    LeftTrigger,
+    /// The right trigger, pressed while its analog value is at or past [`TRIGGER_THRESHOLD`];
+    /// synthesised from [`GamepadAxis::RightTrigger`].
+    RightTrigger,
 }
 
 /// A gamepad analog axis, as an abstract name. Each [`InputEvent::GamepadAxis`] names one of
@@ -197,6 +203,10 @@ pub enum GamepadAxis {
 /// The engine's standard radial stick deadzone, used by [`InputState::move_vector`]. Pass your own
 /// to [`GamepadState::left_stick_dz`] / [`GamepadState::right_stick_dz`] to override.
 pub const STICK_DEADZONE: f32 = 0.2;
+
+/// The fixed level at which a trigger's analog value presses its synthesised button (`>=`
+/// presses, below releases; no hysteresis — read `left_trigger()` for your own).
+pub const TRIGGER_THRESHOLD: f32 = 0.5;
 
 /// Serde helper: encodes an `f32` as its IEEE-754 bit pattern (a `u32`), never as a JSON number.
 ///
@@ -292,12 +302,13 @@ pub enum InputEvent {
         #[serde(rename = "value_bits", with = "f32_bits")]
         value: f32,
     },
-    /// A gamepad button transitioned (or was reasserted) down.
+    /// A gamepad button transitioned (or was reasserted) down. A trigger button sets that
+    /// trigger's axis to `1`.
     GamepadButtonDown {
         /// Which button.
         button: GamepadButton,
     },
-    /// A gamepad button was released.
+    /// A gamepad button was released. A trigger button sets that trigger's axis to `0`.
     GamepadButtonUp {
         /// Which button.
         button: GamepadButton,
@@ -461,7 +472,8 @@ impl MouseState {
 ///
 /// Mirrors [`InputState`]'s key vocabulary: sticks and triggers are level (persist across ticks,
 /// set by [`InputEvent::GamepadAxis`]); buttons follow the same held/pressed/released edge rules
-/// as keys.
+/// as keys. Each trigger also drives a button ([`GamepadButton::LeftTrigger`] /
+/// [`GamepadButton::RightTrigger`]), held while its level is at or past [`TRIGGER_THRESHOLD`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GamepadState {
@@ -478,7 +490,30 @@ pub struct GamepadState {
     released: StableSet<GamepadButton>,
 }
 
+fn is_trigger_button(button: GamepadButton) -> bool {
+    matches!(
+        button,
+        GamepadButton::LeftTrigger | GamepadButton::RightTrigger
+    )
+}
+
 impl GamepadState {
+    /// Stores a trigger's level and keeps its button in step: held exactly while the value is
+    /// at or past [`TRIGGER_THRESHOLD`].
+    fn set_trigger(&mut self, button: GamepadButton, value: f32) {
+        match button {
+            GamepadButton::LeftTrigger => self.left_trigger = value,
+            _ => self.right_trigger = value,
+        }
+        if value >= TRIGGER_THRESHOLD {
+            if self.held.insert(button) {
+                self.pressed.insert(button);
+            }
+        } else if self.held.remove(&button) {
+            self.released.insert(button);
+        }
+    }
+
     /// The left stick's current `(x, y)`, each component in `[-1, 1]`.
     pub fn left_stick(&self) -> [f32; 2] {
         self.left_stick
@@ -514,8 +549,9 @@ impl GamepadState {
         self.released.contains(&button)
     }
 
-    /// Whether any button went down this frame. Buttons only: sticks and triggers are levels and
-    /// never count — use [`any_axis_beyond`](GamepadState::any_axis_beyond).
+    /// Whether any button went down this frame. Buttons only, the synthesised trigger buttons
+    /// included: the sticks are levels and never count — use
+    /// [`any_axis_beyond`](GamepadState::any_axis_beyond).
     pub fn any_pressed(&self) -> bool {
         !self.pressed.is_empty()
     }
@@ -652,8 +688,9 @@ impl InputState {
     /// Whether any key, mouse button or gamepad button went down this frame — one tick per press
     /// (an edge, like `UiNav`).
     ///
-    /// Every key counts, `Escape` and the modifiers included. The cursor, the wheel, the sticks and
-    /// the triggers never count; for analog input add
+    /// Every key counts, `Escape` and the modifiers included. The cursor, the wheel and the
+    /// sticks never count; a trigger counts through its synthesised button once past
+    /// [`TRIGGER_THRESHOLD`]. For analog input add
     /// [`gamepad().any_axis_beyond(t)`](GamepadState::any_axis_beyond).
     pub fn any_pressed(&self) -> bool {
         !self.pressed.is_empty() || self.mouse.any_pressed() || self.gamepad.any_pressed()
@@ -786,16 +823,24 @@ impl InputState {
                 GamepadAxis::LeftStickY => self.gamepad.left_stick[1] = value,
                 GamepadAxis::RightStickX => self.gamepad.right_stick[0] = value,
                 GamepadAxis::RightStickY => self.gamepad.right_stick[1] = value,
-                GamepadAxis::LeftTrigger => self.gamepad.left_trigger = value,
-                GamepadAxis::RightTrigger => self.gamepad.right_trigger = value,
+                GamepadAxis::LeftTrigger => {
+                    self.gamepad.set_trigger(GamepadButton::LeftTrigger, value)
+                }
+                GamepadAxis::RightTrigger => {
+                    self.gamepad.set_trigger(GamepadButton::RightTrigger, value)
+                }
             },
             InputEvent::GamepadButtonDown { button } => {
-                if self.gamepad.held.insert(button) {
+                if is_trigger_button(button) {
+                    self.gamepad.set_trigger(button, 1.0);
+                } else if self.gamepad.held.insert(button) {
                     self.gamepad.pressed.insert(button);
                 }
             }
             InputEvent::GamepadButtonUp { button } => {
-                if self.gamepad.held.remove(&button) {
+                if is_trigger_button(button) {
+                    self.gamepad.set_trigger(button, 0.0);
+                } else if self.gamepad.held.remove(&button) {
                     self.gamepad.released.insert(button);
                 }
             }
@@ -1132,7 +1177,7 @@ mod tests {
             },
             InputEvent::MouseWheel { delta: [0.0, 1.0] },
             axis(GamepadAxis::LeftStickX, 1.0),
-            axis(GamepadAxis::LeftTrigger, 1.0),
+            axis(GamepadAxis::LeftTrigger, 0.49),
         ]);
         assert!(!levels.any_pressed());
 
@@ -1151,6 +1196,95 @@ mod tests {
             input.begin_tick();
             assert!(!input.any_pressed(), "still held: {event:?}");
         }
+    }
+
+    /// Applies `events` on a fresh tick of `input`.
+    fn tick(input: &mut InputState, events: &[InputEvent]) {
+        input.begin_tick();
+        for &e in events {
+            input.apply(e);
+        }
+    }
+
+    #[test]
+    fn trigger_crossing_presses_once_and_releases_once() {
+        let mut input = InputState::default();
+        let rt = GamepadButton::RightTrigger;
+        let (mut presses, mut releases) = (0, 0);
+        for v in [0.2, 0.6, 0.8, 0.3, 0.1] {
+            tick(&mut input, &[axis(GamepadAxis::RightTrigger, v)]);
+            assert_eq!(input.gamepad().right_trigger(), v);
+            presses += input.gamepad().was_pressed(rt) as u32;
+            releases += input.gamepad().was_released(rt) as u32;
+            if v == 0.6 {
+                assert!(input.gamepad().was_pressed(rt));
+            }
+            if v == 0.8 {
+                assert!(input.gamepad().is_held(rt) && !input.gamepad().was_pressed(rt));
+            }
+            if v == 0.3 {
+                assert!(input.gamepad().was_released(rt));
+            }
+        }
+        assert_eq!((presses, releases), (1, 1));
+    }
+
+    #[test]
+    fn trigger_threshold_is_inclusive_without_hysteresis() {
+        let lt = GamepadButton::LeftTrigger;
+        let mut input = InputState::default();
+        tick(&mut input, &[axis(GamepadAxis::LeftTrigger, 0.5)]);
+        assert!(input.gamepad().was_pressed(lt));
+        tick(&mut input, &[axis(GamepadAxis::LeftTrigger, 0.49)]);
+        assert!(input.gamepad().was_released(lt) && !input.gamepad().is_held(lt));
+        tick(&mut input, &[axis(GamepadAxis::LeftTrigger, 0.5)]);
+        assert!(input.gamepad().was_pressed(lt));
+
+        let mut input = InputState::default();
+        tick(
+            &mut input,
+            &[
+                axis(GamepadAxis::LeftTrigger, 0.6),
+                axis(GamepadAxis::LeftTrigger, 0.4),
+            ],
+        );
+        assert!(input.gamepad().was_pressed(lt) && input.gamepad().was_released(lt));
+        assert!(!input.gamepad().is_held(lt));
+
+        tick(&mut input, &[axis(GamepadAxis::LeftTrigger, f32::NAN)]);
+        assert!(!input.gamepad().is_held(lt));
+    }
+
+    #[test]
+    fn trigger_counts_in_any_pressed_and_actions() {
+        const FIRE: Action = Action {
+            keys: &[],
+            buttons: &[GamepadButton::RightTrigger],
+        };
+        let mut input = InputState::default();
+        tick(&mut input, &[axis(GamepadAxis::RightTrigger, 1.0)]);
+        assert!(input.any_pressed());
+        assert!(input.gamepad().any_pressed());
+        assert!(input.gamepad().any_held());
+        assert!(input.action_pressed(&FIRE));
+        tick(&mut input, &[]);
+        assert!(input.gamepad().is_held(GamepadButton::RightTrigger));
+        assert!(!input.action_pressed(&FIRE));
+        tick(&mut input, &[axis(GamepadAxis::RightTrigger, 0.0)]);
+        assert!(input.action_released(&FIRE));
+    }
+
+    #[test]
+    fn trigger_button_event_sets_the_axis() {
+        let lt = GamepadButton::LeftTrigger;
+        let mut input = InputState::default();
+        tick(&mut input, &[InputEvent::GamepadButtonDown { button: lt }]);
+        assert_eq!(input.gamepad().left_trigger(), 1.0);
+        assert!(input.gamepad().is_held(lt) && input.gamepad().was_pressed(lt));
+        tick(&mut input, &[InputEvent::GamepadButtonUp { button: lt }]);
+        assert_eq!(input.gamepad().left_trigger(), 0.0);
+        assert!(input.gamepad().was_released(lt));
+        assert_eq!(serde_json::to_value(lt).unwrap(), "left_trigger");
     }
 
     #[test]

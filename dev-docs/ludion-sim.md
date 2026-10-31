@@ -86,7 +86,8 @@ mouse and gamepad buttons (`is_held`/`was_pressed`/`was_released`, same idempote
 plus `mouse.wheel()` — an accumulator that sums this frame's `MouseWheel` deltas and resets to zero
 next tick. The matching events are `MouseMove`/`MouseDown`/`MouseUp`/`MouseWheel`,
 `GamepadAxis { axis, value }` (one generic event names one of six axes), and
-`GamepadButtonDown`/`GamepadButtonUp`. Capture is out-of-sim, in whichever window is hosting (the
+`GamepadButtonDown`/`GamepadButtonUp`. Each trigger axis also drives its `GamepadButton` at
+`TRIGGER_THRESHOLD` (held ⇔ value ≥ 0.5), and a trigger button event sets the axis. Capture is out-of-sim, in whichever window is hosting (the
 facade's in-process `--window` or the `ludion-window` viewer — both emit only `input.inject`);
 headless leaves `InputState` at its default (mouse `[0,0]`, no buttons, zero axes), the correct
 quiescent degrade.

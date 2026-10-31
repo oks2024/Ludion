@@ -19,7 +19,8 @@
 //!
 //! Button indices follow `GamepadButton`'s declaration order — `South` 0, `East`, `West`, `North`,
 //! `LeftShoulder`, `RightShoulder`, `LeftStick`, `RightStick`, `Start`, `Select`, `DpadUp`,
-//! `DpadDown`, `DpadLeft`, `DpadRight` 13 — and axis indices `GamepadAxis`'s: `LeftStickX` 0,
+//! `DpadDown`, `DpadLeft`, `DpadRight` 13; the trigger buttons have no index: send the trigger
+//! axes (4, 5) and the engine presses them — and axis indices `GamepadAxis`'s: `LeftStickX` 0,
 //! `LeftStickY`, `RightStickX`, `RightStickY`, `LeftTrigger`, `RightTrigger` 5. Every forwarder
 //! accepts a null handle and returns `false` (or does nothing) for it.
 //!

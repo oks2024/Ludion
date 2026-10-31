@@ -5,8 +5,10 @@
 //! `GamepadButton`/`GamepadAxis` (Plan/phase-13-input.md decision 1) already mirrors, with one
 //! naming wrinkle: `gilrs` reports the analog triggers *twice* — as a digital `Button::LeftTrigger2`/
 //! `RightTrigger2` (pressed past a threshold) and as a continuous `Axis::LeftZ`/`RightZ`. The engine's
-//! vocabulary models triggers as **axes only** (`GamepadAxis::LeftTrigger`/`RightTrigger`, level
-//! `[0, 1]`), so the digital trigger buttons are deliberately unmapped here — `Button::LeftTrigger`/
+//! vocabulary takes each trigger as an axis (`GamepadAxis::LeftTrigger`/`RightTrigger`, level
+//! `[0, 1]`) and synthesises its own `GamepadButton::LeftTrigger`/`RightTrigger` from that axis at
+//! `TRIGGER_THRESHOLD`, so gilrs's digital trigger buttons (its own threshold) are deliberately
+//! unmapped here — one source per trigger. `Button::LeftTrigger`/
 //! `RightTrigger` (the *shoulder* buttons, SDL `LB`/`RB`) map to `"left_shoulder"`/`"right_shoulder"`
 //! instead, which is the standard gilrs/SDL naming (shoulder = `Trigger`, analog trigger =
 //! `Trigger2`). `Axis::DPadX`/`DPadY` (a hat reported as an axis pair on some backends) are also
@@ -45,8 +47,8 @@ fn clamp_axis_value(axis: Axis, value: f32) -> f32 {
 }
 
 /// Maps a `gilrs` button to the engine's abstract button name, or `None` for one with no engine
-/// equivalent (`C`, `Z`, `Mode`, the analog trigger buttons `LeftTrigger2`/`RightTrigger2` — see the
-/// module docs — and `Unknown`).
+/// equivalent (`C`, `Z`, `Mode`, the analog trigger buttons `LeftTrigger2`/`RightTrigger2`, which the
+/// engine synthesises from the axis — see the module docs — and `Unknown`).
 fn button_name(button: Button) -> Option<&'static str> {
     match button {
         Button::South => Some("south"),

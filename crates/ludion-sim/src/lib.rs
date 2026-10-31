@@ -80,6 +80,6 @@ pub use driver::{DriverRestore, PastFrameInject, SimConfig, SimDriver};
 pub use hash::{HashReport, NonFinite, WorldHash};
 pub use input::{
     Action, GamepadAxis, GamepadButton, GamepadState, InputEvent, InputScript, InputState, Key,
-    MouseButton, MouseState, STICK_DEADZONE, ScriptedInput,
+    MouseButton, MouseState, STICK_DEADZONE, ScriptedInput, TRIGGER_THRESHOLD,
 };
 pub use run_state::{RunState, Speed};

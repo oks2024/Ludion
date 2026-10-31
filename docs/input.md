@@ -47,13 +47,16 @@ pad only). Sticks and triggers are **level analog**; buttons are edges like keys
 - `input.gamepad().is_held(GamepadButton::South)`, `was_pressed`, `was_released` — buttons.
   `GamepadButton` names faces by **position** (`South`/`East`/`West`/`North` — Xbox A/B/X/Y,
   PlayStation ✕/○/▢/△), plus `LeftShoulder`/`RightShoulder`, `LeftStick`/`RightStick` (clicks),
-  `Start`/`Select`, and `DpadUp`/`DpadDown`/`DpadLeft`/`DpadRight`.
+  `Start`/`Select`, and `DpadUp`/`DpadDown`/`DpadLeft`/`DpadRight`, and `LeftTrigger`/`RightTrigger`.
+- Each trigger is also a button, held while its value is `>= TRIGGER_THRESHOLD` (0.5): so
+  `was_pressed(GamepadButton::RightTrigger)` is a trigger pull and it can go in an `Action`. The
+  analog value stays readable; there is no hysteresis (0.5 presses, 0.49 releases).
 
 ## "Press anything" — `input.any_pressed()`
 
 True on the tick any key, mouse button or gamepad button goes down — one tick per press, like an
-edge. Every key counts (`Escape` and the modifiers too); the cursor, the wheel, the sticks and the
-triggers never do. Add the analog test yourself, with your own threshold:
+edge. Every key counts (`Escape` and the modifiers too); the cursor, the wheel and the sticks never
+do; a trigger counts once pulled past `TRIGGER_THRESHOLD`. Add the analog test yourself, with your own threshold:
 
 ```rust
 if input.any_pressed() || input.gamepad().any_axis_beyond(0.5) {
