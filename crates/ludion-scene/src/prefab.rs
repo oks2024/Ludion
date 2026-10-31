@@ -28,12 +28,19 @@ use serde_json::Value;
 use crate::expand::{merge_partial, ref_targets, remap_positions};
 use crate::scalar::scalar_string;
 use crate::yaml::{self, NodeValue};
-use crate::{Scene, SceneEntity, emit as scene_emit, envelope, parse as scene_parse};
+use crate::{AssemblyClip, Scene, SceneEntity, emit as scene_emit, envelope, parse as scene_parse};
 
 /// The prefab document format version this crate reads and writes.
 pub const PREFAB_FORMAT_VERSION: u64 = 1;
 
-const PREFAB_KEYS: [&str; 5] = ["format", "kind", "name", "generated_from", "entities"];
+const PREFAB_KEYS: [&str; 6] = [
+    "format",
+    "kind",
+    "name",
+    "generated_from",
+    "clips",
+    "entities",
+];
 const SCENE_ONLY_KEYS: [&str; 3] = ["seed", "physics", "preload"];
 
 /// A parsed `kind: prefab` document.
@@ -43,6 +50,9 @@ pub struct PrefabDocument {
     pub name: Option<String>,
     /// The source file this prefab was generated from; a generated prefab is write-only.
     pub generated_from: Option<String>,
+    /// Clip bindings (short name → clip file, relative to the prefab), sorted by short name. Empty
+    /// means the prefab binds no clips; an authored `clips: {}` and an absent `clips` are the same.
+    pub clips: Vec<AssemblyClip>,
     /// The parts, in document order; every one is named.
     pub entities: Vec<SceneEntity>,
 }
@@ -68,7 +78,8 @@ impl PrefabDocument {
 
     /// Rewrites every path in the document from relative-to-this-prefab to content-root form, in
     /// place. `key` is the prefab's own content-root path. Covers the asset paths of the parts'
-    /// components, of every instance entry's `overrides`, and each nested entry's `prefab`; empty
+    /// components, of every instance entry's `overrides`, each nested entry's `prefab` and each
+    /// clip binding's file; empty
     /// paths (inert defaults) and unknown components are left alone.
     ///
     /// # Example
@@ -90,6 +101,9 @@ impl PrefabDocument {
     /// assert_eq!(doc.entities[0].components[0].1["mesh"], "level/render/meshes/a.mesh.yaml");
     /// ```
     pub fn rebase(&mut self, key: &str, registry: &Registry) {
+        for clip in &mut self.clips {
+            clip.file = ludion_core::paths::sibling(key, &clip.file);
+        }
         for entity in &mut self.entities {
             rebase_components(&mut entity.components, key, registry);
             if let Some(instance) = entity.instance.as_deref_mut() {
@@ -332,6 +346,14 @@ pub(crate) fn parse(source: &str) -> Result<PrefabDocument, Vec<Diagnostic>> {
                     &mut diagnostics,
                 );
             }
+            "clips" => {
+                doc.clips = envelope::parse_clips(
+                    entry,
+                    code::PREFAB_DOCUMENT_STRUCTURE,
+                    "clips/open.anim.yaml",
+                    &mut diagnostics,
+                );
+            }
             "entities" => {
                 entities_seen = true;
                 match &entry.node.value {
@@ -475,6 +497,34 @@ fn check_part_names(parts: &[(usize, SceneEntity)], diagnostics: &mut Vec<Diagno
 /// the prefab's directory.
 pub(crate) fn validate(doc: &PrefabDocument, registry: &Registry) -> Vec<Diagnostic> {
     let mut diagnostics = crate::validate::validate(&doc.to_scene(), registry);
+    for clip in &doc.clips {
+        let pointer = format!("/clips/{}", yaml::pointer_token(&clip.name));
+        if clip.name.is_empty() {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::PREFAB_DOCUMENT_STRUCTURE,
+                    "a clip binding has an empty short name",
+                )
+                .with_path(pointer.clone())
+                .with_help(
+                    "name the clip the way game code selects it — `open`, `snap` — or remove the \
+                     binding",
+                ),
+            );
+        }
+        if clip.file.is_empty() {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::PREFAB_DOCUMENT_STRUCTURE,
+                    format!("the clip binding `{}` has an empty file path", clip.name),
+                )
+                .with_path(pointer)
+                .with_help("point the binding at the clip document, relative to this prefab file"),
+            );
+        } else {
+            check_path("clip", &clip.file, pointer, &mut diagnostics);
+        }
+    }
     for (index, entity) in doc.entities.iter().enumerate() {
         let base = format!("/entities/{index}");
         check_component_paths(
@@ -547,8 +597,8 @@ fn check_path(what: &str, path: &str, pointer: String, diagnostics: &mut Vec<Dia
     }
 }
 
-/// Writes `doc` in canonical form: `format`, `kind`, `name`, `generated_from`, then the entities
-/// as a scene writes them.
+/// Writes `doc` in canonical form: `format`, `kind`, `name`, `generated_from`, `clips`, then the
+/// entities as a scene writes them.
 pub(crate) fn emit(doc: &PrefabDocument, registry: &Registry) -> String {
     let mut out = String::from("format: 1\nkind: prefab\n");
     if let Some(name) = &doc.name {
@@ -560,6 +610,18 @@ pub(crate) fn emit(doc: &PrefabDocument, registry: &Registry) -> String {
         out.push_str("generated_from: ");
         out.push_str(&scalar_string(generated_from));
         out.push('\n');
+    }
+    if !doc.clips.is_empty() {
+        out.push_str("clips:\n");
+        let mut clips = doc.clips.clone();
+        clips.sort_by(|a, b| a.name.cmp(&b.name));
+        for clip in &clips {
+            out.push_str("  ");
+            out.push_str(&scalar_string(&clip.name));
+            out.push_str(": ");
+            out.push_str(&scalar_string(&clip.file));
+            out.push('\n');
+        }
     }
     if doc.entities.is_empty() {
         out.push_str("entities: []\n");

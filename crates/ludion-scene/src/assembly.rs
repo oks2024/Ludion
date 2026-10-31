@@ -334,7 +334,12 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
                 doc.parts = parse_parts(entry, &mut diagnostics);
             }
             "clips" => {
-                doc.clips = parse_clips(entry, &mut diagnostics);
+                doc.clips = envelope::parse_clips(
+                    entry,
+                    code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                    "anims/humanoid-walk.anim.yaml",
+                    &mut diagnostics,
+                );
             }
             "joints" => {
                 doc.joints = parse_joints(entry, &mut diagnostics);
@@ -755,50 +760,8 @@ fn parse_mirror(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -
     }
 }
 
-/// Parses `clips`: a mapping of short name to clip file path, returned sorted by short name (the
-/// canonical order [`emit`] writes). A duplicate short name is already rejected as `L1007` by the
-/// shared YAML layer before this function runs.
-fn parse_clips(entry: &MapEntry, diagnostics: &mut Vec<Diagnostic>) -> Vec<AssemblyClip> {
-    let NodeValue::Mapping(entries) = &entry.node.value else {
-        diagnostics.push(
-            Diagnostic::new(
-                code::ASSEMBLY_DOCUMENT_STRUCTURE,
-                format!(
-                    "`clips` must be a mapping of clip name to clip file, found {} (line {})",
-                    entry.node.value.type_phrase(),
-                    entry.node.line
-                ),
-            )
-            .with_path("/clips")
-            .with_help(
-                "write one binding per line:\n  clips:\n    walk: \
-                 anims/humanoid-walk.anim.yaml",
-            ),
-        );
-        return Vec::new();
-    };
-    let mut out = Vec::with_capacity(entries.len());
-    for sub in entries {
-        let pointer = format!("/clips/{}", pointer_token(&sub.key));
-        if let Some(file) = envelope::expect_string(
-            &sub.node,
-            &pointer,
-            "a clip binding",
-            code::ASSEMBLY_DOCUMENT_STRUCTURE,
-            diagnostics,
-        ) {
-            out.push(AssemblyClip {
-                name: sub.key.clone(),
-                file,
-            });
-        }
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
-}
-
 /// Parses `joints`: a mapping of child part name to joint spec, returned sorted by part name (the
-/// canonical order [`emit`] writes). Mirrors [`parse_clips`]'s mapping walk.
+/// canonical order [`emit`] writes). Mirrors [`envelope::parse_clips`]'s mapping walk.
 fn parse_joints(entry: &MapEntry, diagnostics: &mut Vec<Diagnostic>) -> Vec<AssemblyJoint> {
     let NodeValue::Mapping(entries) = &entry.node.value else {
         diagnostics.push(

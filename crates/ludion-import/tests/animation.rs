@@ -588,8 +588,8 @@ fn loop_extras_set_the_flag_and_the_seam() {
     assert_eq!(seam.rotation_deg, 0.0);
 }
 
-/// Morph weights and a channel on a non-joint node are `L1202`; the joint channels still import
-/// under `--allow-lossy`.
+/// Morph weights and a skin joint mixed into an animation of parts are `L1202`; the part channel
+/// still imports under `--allow-lossy`.
 #[test]
 fn unmappable_channels_are_l1202() {
     let weights = Channel {
@@ -607,16 +607,26 @@ fn unmappable_channels_are_l1202() {
     let errors = run(&animations, false).expect_err("strict refuses");
     assert_eq!(codes(&errors), ["L1202", "L1202"]);
     assert!(errors[0].message.contains("morph-weights"), "{errors:?}");
-    assert!(errors[1].message.contains("non-joint node"), "{errors:?}");
+    assert!(
+        errors[1]
+            .message
+            .contains("skin joint in an animation of prefab parts"),
+        "{errors:?}"
+    );
 
-    let plan = run(&animations, true).expect("lossy imports the joint channel");
+    let plan = run(&animations, true).expect("lossy imports the part channel");
     assert_eq!(plan.clips.len(), 1);
+    assert!(plan.clips[0].binds_parts);
     assert_eq!(plan.warnings.len(), 2);
     assert!(plan.warnings.iter().all(|w| w.code.as_str() == "L1202"));
 
     let none = [animation(vec![Channel {
         node: BODY,
-        ..translation(BODY, vec![0.0, 1.0], &[[0.0; 3], [1.0, 0.0, 0.0]])
+        path: "weights",
+        interpolation: "LINEAR",
+        times: vec![0.0, 1.0],
+        values: vec![0.0, 1.0],
+        components: 1,
     }])];
     let plan = run(&none, true).expect("lossy");
     assert!(plan.clips.is_empty());
@@ -626,6 +636,148 @@ fn unmappable_channels_are_l1202() {
             .any(|w| w.message.contains("no importable channel")),
         "{:?}",
         plan.warnings
+    );
+}
+
+/// The skin joints first, then a part: the part channel is the one dropped.
+#[test]
+fn a_part_channel_in_an_animation_of_skin_joints_is_l1202() {
+    let joint = translation(ROOT, vec![0.0, 1.0], &[[0.0; 3], [1.0, 0.0, 0.0]]);
+    let on_body = translation(BODY, vec![0.0, 1.0], &[[0.0; 3], [1.0, 0.0, 0.0]]);
+    let animations = [animation(vec![joint, on_body])];
+
+    let errors = run(&animations, false).expect_err("strict refuses");
+    assert_eq!(codes(&errors), ["L1202"]);
+    assert!(
+        errors[0]
+            .message
+            .contains("prefab part in an animation of skin joints"),
+        "{errors:?}"
+    );
+    let plan = run(&animations, true).expect("lossy imports the joint channel");
+    assert!(!plan.clips[0].binds_parts);
+    assert!(plan.prefab.clips.is_empty());
+}
+
+/// A part clip on a node with no mesh (a pivot): the track names the part and the prefab lists it.
+#[test]
+fn a_rotation_on_a_pivot_node_imports_as_a_part_clip() {
+    let nodes = format!(r#"{NODES},{{"name":"pivot"}}"#);
+    let spin = rotation(
+        4,
+        vec![0.0, 1.0],
+        &[quat([1.0, 0.0, 0.0], 0.0), quat([1.0, 0.0, 0.0], -100.0)],
+    );
+    let json = gltf_with_nodes(&[animation(vec![spin])], &nodes, SKINS);
+    let plan = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports");
+
+    let clip = &plan.clips[0];
+    assert!(clip.binds_parts);
+    assert_eq!(clip.doc.tracks[0].target, "pivot");
+    let end = clip.doc.tracks[0].rotation.last().unwrap();
+    assert!((end.v[0] + 100.0).abs() < 1e-3, "{:?}", end.v);
+    assert_eq!(plan.prefab.clips.len(), 1);
+    assert_eq!(plan.prefab.clips[0].name, "clip");
+    assert_eq!(plan.prefab.clips[0].file, "clips/clip.anim.yaml");
+}
+
+/// A STEP sampler keeps `ease: step` on every key after the first, and reduction keeps the steps.
+#[test]
+fn a_step_channel_on_a_part_keeps_its_steps() {
+    let step = Channel {
+        interpolation: "STEP",
+        ..translation(
+            BODY,
+            vec![0.0, 0.5, 1.0],
+            &[[0.0; 3], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+        )
+    };
+    let clip = clip_of(&[animation(vec![step])]);
+    assert!(clip.binds_parts);
+    let keys = &clip.doc.tracks[0].translation;
+    assert_eq!(keys.len(), 3, "{keys:?}");
+    assert!(keys[1..].iter().all(|k| k.ease == Ease::Step), "{keys:?}");
+    assert!(emit_animation(&clip.doc).contains("ease: step"));
+}
+
+/// A CUBICSPLINE part channel is resampled into frames within the reduce tolerance.
+#[test]
+fn a_cubicspline_part_channel_resamples_within_bound() {
+    // In-tangent, value, out-tangent per key; zero tangents make a smoothstep.
+    let cubic = Channel {
+        interpolation: "CUBICSPLINE",
+        ..translation(
+            BODY,
+            vec![0.0, 1.0],
+            &[
+                [0.0; 3],
+                [0.0; 3],
+                [0.0; 3],
+                [0.0; 3],
+                [1.0, 0.0, 0.0],
+                [0.0; 3],
+            ],
+        )
+    };
+    let clip = clip_of(&[animation(vec![cubic])]);
+    assert!(clip.binds_parts);
+    assert!(
+        clip.report.source_frames > 2,
+        "{}",
+        clip.report.source_frames
+    );
+    assert!(clip.report.joints[0].translation <= 0.002);
+}
+
+/// A child listed before its parent still yields parent-first tracks, and the child measures in
+/// model space under a rotated parent.
+#[test]
+fn part_tracks_are_parent_first_whatever_the_document_order() {
+    let nodes = format!(
+        r#"{NODES},{{"name":"hand","translation":[1,0,0]}},{{"name":"arm","rotation":[0,0.7071068,0,0.7071068],"children":[4]}}"#
+    );
+    let turn = rotation(
+        5,
+        vec![0.0, 0.5, 1.0],
+        &[
+            quat([0.0, 1.0, 0.0], 90.0),
+            quat([0.0, 1.0, 0.0], 135.0),
+            quat([0.0, 1.0, 0.0], 180.0),
+        ],
+    );
+    let reach = translation(4, vec![0.0, 1.0], &[[1.0, 0.0, 0.0], [1.0, 1.0, 0.0]]);
+    let json = gltf_with_nodes(&[animation(vec![reach, turn])], &nodes, SKINS);
+    let plan = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports");
+
+    let targets: Vec<&str> = plan.clips[0]
+        .doc
+        .tracks
+        .iter()
+        .map(|t| t.target.as_str())
+        .collect();
+    assert_eq!(targets, ["arm", "hand"]);
+    let names: Vec<&str> = plan.clips[0]
+        .report
+        .joints
+        .iter()
+        .map(|j| j.joint.as_str())
+        .collect();
+    assert_eq!(names, ["body", "arm", "hand"]);
+}
+
+/// A node under a skin joint is no part, so a channel on it has nothing to drive.
+#[test]
+fn a_channel_on_a_node_under_a_skin_joint_is_l1202() {
+    let nodes = NODES.replace(r#""name":"head","#, r#""name":"head","children":[4],"#);
+    let nodes = format!(r#"{nodes},{{"name":"hat"}}"#);
+    let on_hat = translation(4, vec![0.0, 1.0], &[[0.0; 3], [1.0, 0.0, 0.0]]);
+    let json = gltf_with_nodes(&[animation(vec![on_hat])], &nodes, SKINS);
+    let errors = import(json.as_bytes(), ExternalFiles::Refused, false).expect_err("refused");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("node that has no part")),
+        "{errors:?}"
     );
 }
 

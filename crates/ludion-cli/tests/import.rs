@@ -25,6 +25,9 @@ fn cutout_root() -> PathBuf {
 fn tinted_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-tinted-emissive")
 }
+fn node_clips_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-node-clips")
+}
 fn fixture() -> PathBuf {
     import_root().join("scene.gltf")
 }
@@ -185,6 +188,50 @@ fn tinted_emissive_import_reproduces_committed_tree_in_default_mode() {
         "meshes/card-textured.mesh.yaml",
         "meshes/card-constant.mesh.yaml",
         "meshes/card-proportional.mesh.yaml",
+    ] {
+        let check = run_ludion(&["check-scene", out.join(rel).to_str().unwrap()]);
+        assert!(
+            check.status.success(),
+            "check-scene failed for {rel}: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+}
+
+/// The hinge fixture (`examples/import-node-clips/`) imports in **default mode** — no
+/// `--allow-lossy`, no warning — and reproduces its committed tree byte-for-byte: the prefab lists
+/// its two part clips in `clips:`, and the STEP clip keeps `ease: step`.
+#[test]
+fn node_clips_import_reproduces_committed_tree_in_default_mode() {
+    let (out, output) = import_beside_copy(
+        "import_node_clips",
+        &node_clips_root().join("scene.gltf"),
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "the hinge fixture must import with no unsupported feature: {stderr}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "a fully supported document warns about nothing: {stderr}"
+    );
+    assert_trees_identical(&node_clips_root().join("expected"), &out);
+
+    let read = |rel: &str| std::fs::read_to_string(out.join(rel)).unwrap();
+    let prefab = read("model.prefab.yaml");
+    assert!(prefab.contains(
+        "clips:
+  open: clips/open.anim.yaml
+  snap: clips/snap.anim.yaml
+"
+    ));
+    assert!(read("clips/snap.anim.yaml").contains("ease: step"));
+    for rel in [
+        "model.prefab.yaml",
+        "clips/open.anim.yaml",
+        "clips/snap.anim.yaml",
     ] {
         let check = run_ludion(&["check-scene", out.join(rel).to_str().unwrap()]);
         assert!(

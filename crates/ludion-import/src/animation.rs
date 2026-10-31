@@ -16,7 +16,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::f64::{acos, quat_to_euler_xyz_degrees, sin, sqrt};
 use ludion_core::math::glam::{DMat3, DMat4, DQuat, DVec3};
 use ludion_scene::{
-    AnimationDocument, AnimationTrack, Ease, Keyframe, MeshJoint, sample_channel, sample_rotation,
+    AnimationDocument, AnimationTrack, Ease, JointRest, Keyframe, sample_channel, sample_rotation,
 };
 use serde_json::Value;
 
@@ -66,10 +66,75 @@ pub struct KeyCounts {
     pub after: usize,
 }
 
+/// One node of the hierarchy a clip animates: a skin joint or a prefab part. A rig is parent-first.
+#[derive(Clone)]
+struct RigNode {
+    name: String,
+    parent: Option<usize>,
+    rest: JointRest,
+}
+
+/// What an animation's tracks are named after.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Target {
+    /// The joints of the skin worn by this mesh.
+    Skin(usize),
+    /// The prefab's parts.
+    Parts,
+}
+
+/// The prefab parts as an animation rig: parent-first, plus each part's slot by glTF node.
+struct PartRig {
+    nodes: Vec<RigNode>,
+    slot_of_node: BTreeMap<usize, usize>,
+}
+
+/// The emitted nodes of `document` parent-first (a depth-first walk from the roots in document
+/// order, children in their listed order), each named by `part_names` (`None` for a node that is
+/// no part: a skin joint, or a node under one).
+fn part_rig(document: &gltf::Document, part_names: &[Option<String>]) -> PartRig {
+    let nodes: Vec<gltf::Node> = document.nodes().collect();
+    let mut is_child = vec![false; nodes.len()];
+    for node in &nodes {
+        for child in node.children() {
+            is_child[child.index()] = true;
+        }
+    }
+    let mut rig = PartRig {
+        nodes: Vec::new(),
+        slot_of_node: BTreeMap::new(),
+    };
+    let mut stack: Vec<(usize, Option<usize>)> = (0..nodes.len())
+        .rev()
+        .filter(|&index| !is_child[index])
+        .map(|index| (index, None))
+        .collect();
+    while let Some((index, parent)) = stack.pop() {
+        let Some(name) = &part_names[index] else {
+            continue;
+        };
+        let (translation, rotation, scale) = nodes[index].transform().decomposed();
+        let slot = rig.nodes.len();
+        rig.nodes.push(RigNode {
+            name: name.clone(),
+            parent,
+            rest: JointRest {
+                translation: translation.map(f64::from),
+                rotation: rotation.map(f64::from),
+                scale: scale.map(f64::from),
+            },
+        });
+        rig.slot_of_node.insert(index, slot);
+        let children: Vec<usize> = nodes[index].children().map(|child| child.index()).collect();
+        stack.extend(children.into_iter().rev().map(|child| (child, Some(slot))));
+    }
+    rig
+}
+
 /// One emitted track's key counts, in the order the tracks are emitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrackReport {
-    /// The track's target (a joint name).
+    /// The track's target (a joint or part name).
     pub target: String,
     /// The rotation channel.
     pub rotation: KeyCounts,
@@ -83,7 +148,7 @@ pub struct TrackReport {
 /// source frame (an index into [`ClipReport::frame_times`]) where each occurred.
 #[derive(Clone, Debug, PartialEq)]
 pub struct JointError {
-    /// The joint's name.
+    /// The joint's or part's name.
     pub joint: String,
     /// Worst rotation difference, degrees.
     pub rotation_deg: f64,
@@ -100,7 +165,7 @@ pub struct JointError {
 }
 
 /// How far a looping clip's last pose is from its first: the worst model-space difference between
-/// the reduced clip at `t = 0` and at `t = duration`, over every joint.
+/// the reduced clip at `t = 0` and at `t = duration`, over every joint or part.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SeamError {
     /// Worst rotation difference, degrees.
@@ -120,7 +185,7 @@ pub struct ClipReport {
     pub frame_times: Vec<f64>,
     /// Key counts per emitted track.
     pub tracks: Vec<TrackReport>,
-    /// The worst model-space error of every joint of the skin, in the skin's joint order.
+    /// The worst model-space error of every joint of the skin, or part of the prefab, in rig order.
     pub joints: Vec<JointError>,
     /// Present only for a `loop: true` clip.
     pub seam: Option<SeamError>,
@@ -140,10 +205,10 @@ struct SourceChannel {
     values: Vec<[f64; 4]>,
 }
 
-/// One joint's up-to-three source channels, indexed by [`ROTATION`], [`TRANSLATION`], [`SCALE`].
+/// One rig node's up-to-three source channels, indexed by [`ROTATION`], [`TRANSLATION`], [`SCALE`].
 type JointChannels = [Option<SourceChannel>; 3];
 
-/// Per joint and channel, the source sampled at every frame (empty for an absent channel).
+/// Per rig node and channel, the source sampled at every frame (empty for an absent channel).
 type SourceTable = Vec<[Vec<[f64; 4]>; 3]>;
 
 enum Read {
@@ -152,11 +217,13 @@ enum Read {
     Dropped(Diagnostic),
 }
 
-/// Imports every animation of `document` as a clip. `L1202` diagnostics go to `lossy`; the returned
+/// Imports every animation of `document` as a clip. `part_names` holds each node's prefab part
+/// name (`None` for a node that is no part). `L1202` diagnostics go to `lossy`; the returned
 /// errors (`L1201`, `L1206`, `L1207`, `L1208`) are never downgraded.
 pub(crate) fn import_animations(
     document: &gltf::Document,
     bindings: &BTreeMap<usize, SkinBinding>,
+    part_names: &[Option<String>],
     buffers: &Buffers,
     lossy: &mut Vec<Diagnostic>,
 ) -> Result<Vec<ClipArtifact>, Vec<Diagnostic>> {
@@ -168,6 +235,8 @@ pub(crate) fn import_animations(
                 .or_insert((mesh, binding.gltf_to_joint[slot] as usize));
         }
     }
+
+    let parts = part_rig(document, part_names);
 
     let mut clips = Vec::new();
     let mut errors = Vec::new();
@@ -182,8 +251,9 @@ pub(crate) fn import_animations(
             }
         };
 
-        // The first surviving channel picks the skin; a channel on another skin is dropped.
-        let mut skin: Option<(usize, Vec<JointChannels>)> = None;
+        // The first surviving channel picks the target set (one skin, or the prefab's parts); a
+        // channel of another set is dropped.
+        let mut chosen: Option<(Target, Vec<JointChannels>)> = None;
         let mut failed = false;
         for channel in animation.channels() {
             let target = channel.target();
@@ -198,17 +268,23 @@ pub(crate) fn import_animations(
                     continue;
                 }
             };
-            let Some(&(mesh, joint)) = joint_of_node.get(&node.index()) else {
+            let (set, slot) = if let Some(&(mesh, joint)) = joint_of_node.get(&node.index()) {
+                (Target::Skin(mesh), joint)
+            } else if let Some(&slot) = parts.slot_of_node.get(&node.index()) {
+                (Target::Parts, slot)
+            } else {
                 lossy.push(unsupported(
-                    "an animation channel on a non-joint node",
+                    "an animation channel on a node that has no part (it hangs under a skin joint)",
                     &offender,
                 ));
                 continue;
             };
-            let binding = &bindings[&mesh];
-            if binding.reframed[joint] {
-                let name = &binding.joints[joint].name;
-                let what = if binding.joints[joint].parent.is_some() {
+            if let Target::Skin(mesh) = set
+                && bindings[&mesh].reframed[slot]
+            {
+                let binding = &bindings[&mesh];
+                let name = &binding.joints[slot].name;
+                let what = if binding.joints[slot].parent.is_some() {
                     format!(
                         "an animation channel on joint `{name}`, whose rest folds in the \
                          transform of the non-joint node above it"
@@ -222,9 +298,21 @@ pub(crate) fn import_animations(
                 lossy.push(channel_on_reframed_joint(&what, &offender));
                 continue;
             }
-            if skin.as_ref().is_some_and(|(chosen, _)| *chosen != mesh) {
+            if let Some((held, _)) = &chosen
+                && *held != set
+            {
                 lossy.push(unsupported(
-                    "an animation channel on a joint of a second skin",
+                    match (held, set) {
+                        (Target::Skin(_), Target::Skin(_)) => {
+                            "an animation channel on a joint of a second skin"
+                        }
+                        (Target::Skin(_), Target::Parts) => {
+                            "an animation channel on a prefab part in an animation of skin joints"
+                        }
+                        (Target::Parts, _) => {
+                            "an animation channel on a skin joint in an animation of prefab parts"
+                        }
+                    },
                     &offender,
                 ));
                 continue;
@@ -244,15 +332,14 @@ pub(crate) fn import_animations(
                     continue;
                 }
             };
-            let (_, joints) = skin.get_or_insert_with(|| {
-                (
-                    mesh,
-                    (0..binding.joints.len())
-                        .map(|_| [None, None, None])
-                        .collect(),
-                )
+            let (_, nodes) = chosen.get_or_insert_with(|| {
+                let count = match set {
+                    Target::Skin(mesh) => bindings[&mesh].joints.len(),
+                    Target::Parts => parts.nodes.len(),
+                };
+                (set, (0..count).map(|_| [None, None, None]).collect())
             });
-            if joints[joint][kind].replace(source).is_some() {
+            if nodes[slot][kind].replace(source).is_some() {
                 errors.push(malformed(format!(
                     "{offender} is animated on its {} by two channels",
                     CHANNEL_NAMES[kind]
@@ -263,24 +350,38 @@ pub(crate) fn import_animations(
         if failed {
             continue;
         }
-        let Some((mesh, channels)) = skin else {
+        let Some((set, channels)) = chosen else {
             lossy.push(unsupported(
                 "an animation with no importable channel",
                 &label,
             ));
             continue;
         };
-        let joints = &bindings[&mesh].joints;
+        let (rig, noun): (Vec<RigNode>, &str) = match set {
+            Target::Skin(mesh) => (
+                bindings[&mesh]
+                    .joints
+                    .iter()
+                    .map(|joint| RigNode {
+                        name: joint.name.clone(),
+                        parent: joint.parent.map(|parent| parent as usize),
+                        rest: joint.rest,
+                    })
+                    .collect(),
+                "joint",
+            ),
+            Target::Parts => (parts.nodes.clone(), "part"),
+        };
 
         let frames = match source_frames(&channels, &extras.tolerances) {
             Ok(frames) => frames,
             Err(miss) => {
                 errors.push(cubic_too_curved(format!(
-                    "{label}: the CUBICSPLINE {} channel of joint `{}` curves too sharply between \
+                    "{label}: the CUBICSPLINE {} channel of {noun} `{}` curves too sharply between \
                      t = {}s and t = {}s for the importer to follow within the reduce tolerance \
                      of {} (it subdivides an interval up to {MAX_CUBIC_STEPS} steps)",
                     CHANNEL_NAMES[miss.kind],
-                    joints[miss.joint].name,
+                    rig[miss.node].name,
                     miss.start,
                     miss.end,
                     extras.tolerances.reduce[miss.kind],
@@ -295,8 +396,7 @@ pub(crate) fn import_animations(
         }
 
         let table = sample_source(&channels, &frames);
-        let (tracks, counts) =
-            reduce_tracks(joints, &channels, &table, &frames, &extras.tolerances);
+        let (tracks, counts) = reduce_tracks(&rig, &channels, &table, &frames, &extras.tolerances);
         let mut doc = AnimationDocument {
             name: None,
             generated_from: None,
@@ -305,9 +405,9 @@ pub(crate) fn import_animations(
             events: Vec::new(),
             tracks,
         };
-        let mut report = measure(joints, &table, &doc, &frames, extras.looped);
+        let mut report = measure(&rig, &table, &doc, &frames, extras.looped);
         report.tracks = counts;
-        if let Some(diagnostic) = check_bound(&label, &report, &extras.tolerances) {
+        if let Some(diagnostic) = check_bound(&label, noun, &report, &extras.tolerances) {
             errors.push(diagnostic);
             continue;
         }
@@ -327,6 +427,7 @@ pub(crate) fn import_animations(
             rel_path: format!("{CLIP_DIR}/{stem}.anim.yaml"),
             doc,
             report,
+            binds_parts: set == Target::Parts,
         });
     }
     if errors.is_empty() {
@@ -509,7 +610,7 @@ const MAX_CUBIC_STEPS: u32 = 64;
 
 /// A CUBICSPLINE interval that 64 steps cannot follow within the reduce tolerance.
 struct CubicMiss {
-    joint: usize,
+    node: usize,
     kind: usize,
     start: f64,
     end: f64,
@@ -525,8 +626,8 @@ fn source_frames(
     tolerances: &Tolerances,
 ) -> Result<Vec<f64>, CubicMiss> {
     let mut frames = Vec::new();
-    for (joint, joint_channels) in channels.iter().enumerate() {
-        for (kind, channel) in joint_channels.iter().enumerate() {
+    for (node, node_channels) in channels.iter().enumerate() {
+        for (kind, channel) in node_channels.iter().enumerate() {
             let Some(channel) = channel else { continue };
             let cubic = channel.interpolation == Interpolation::CubicSpline;
             for pair in channel.times.windows(2) {
@@ -550,7 +651,7 @@ fn source_frames(
                 }) {
                     if steps == MAX_CUBIC_STEPS {
                         return Err(CubicMiss {
-                            joint,
+                            node,
                             kind,
                             start: pair[0],
                             end: pair[1],
@@ -820,9 +921,9 @@ fn push_unwound(out: &mut Vec<Keyframe>, mut end: Keyframe, channel: &SourceChan
     push_unwound(out, end, channel, depth - 1);
 }
 
-/// Tracks in the joints' parent-first order, with their key counts.
+/// Tracks in the rig's parent-first order, with their key counts.
 fn reduce_tracks(
-    joints: &[MeshJoint],
+    rig: &[RigNode],
     channels: &[JointChannels],
     table: &SourceTable,
     frames: &[f64],
@@ -830,7 +931,7 @@ fn reduce_tracks(
 ) -> (Vec<AnimationTrack>, Vec<TrackReport>) {
     let mut tracks = Vec::new();
     let mut counts = Vec::new();
-    for (joint, name) in joints.iter().map(|joint| &joint.name).enumerate() {
+    for (joint, name) in rig.iter().map(|node| &node.name).enumerate() {
         let mut reduced: [Vec<Keyframe>; 3] = [Vec::new(), Vec::new(), Vec::new()];
         let mut key_counts = [KeyCounts::default(); 3];
         for kind in [ROTATION, TRANSLATION, SCALE] {
@@ -842,7 +943,7 @@ fn reduce_tracks(
             } else {
                 Ease::Linear
             };
-            let rest = &joints[joint].rest;
+            let rest = &rig[joint].rest;
             let rest_value = match kind {
                 ROTATION => rest.rotation,
                 TRANSLATION => [
@@ -906,13 +1007,13 @@ fn local_matrix(rotation: [f64; 4], translation: [f64; 3], scale: [f64; 3]) -> D
     )
 }
 
-/// Every joint's model-space pose from its local matrix, composed down the parent-first list.
-fn model_poses(joints: &[MeshJoint], local: impl Fn(usize) -> DMat4) -> Vec<Pose> {
-    let mut models: Vec<DMat4> = Vec::with_capacity(joints.len());
-    for (index, joint) in joints.iter().enumerate() {
+/// Every node's model-space pose from its local matrix, composed down the parent-first list.
+fn model_poses(rig: &[RigNode], local: impl Fn(usize) -> DMat4) -> Vec<Pose> {
+    let mut models: Vec<DMat4> = Vec::with_capacity(rig.len());
+    for (index, node) in rig.iter().enumerate() {
         let matrix = local(index);
-        models.push(match joint.parent {
-            Some(parent) => models[parent as usize] * matrix,
+        models.push(match node.parent {
+            Some(parent) => models[parent] * matrix,
             None => matrix,
         });
     }
@@ -959,7 +1060,7 @@ fn pose_difference(a: &Pose, b: &Pose) -> [f64; 3] {
 /// Measures `clip` against the source at every source frame, in model space, and (for a looping
 /// clip) how far its end pose is from its start. `tracks` in the result is left empty.
 fn measure(
-    joints: &[MeshJoint],
+    rig: &[RigNode],
     table: &SourceTable,
     clip: &AnimationDocument,
     frames: &[f64],
@@ -971,9 +1072,9 @@ fn measure(
         .map(|track| (track.target.as_str(), track))
         .collect();
     let clip_poses = |t: f64| {
-        model_poses(joints, |j| {
-            let rest = &joints[j].rest;
-            match track_of.get(joints[j].name.as_str()) {
+        model_poses(rig, |j| {
+            let rest = &rig[j].rest;
+            match track_of.get(rig[j].name.as_str()) {
                 None => local_matrix(rest.rotation, rest.translation, rest.scale),
                 Some(track) => {
                     let rotation = sample_rotation(&track.rotation, t).unwrap_or(rest.rotation);
@@ -986,10 +1087,10 @@ fn measure(
         })
     };
 
-    let mut worst: Vec<JointError> = joints
+    let mut worst: Vec<JointError> = rig
         .iter()
-        .map(|joint| JointError {
-            joint: joint.name.clone(),
+        .map(|node| JointError {
+            joint: node.name.clone(),
             rotation_deg: 0.0,
             rotation_frame: 0,
             translation: 0.0,
@@ -999,8 +1100,8 @@ fn measure(
         })
         .collect();
     for (frame, &t) in frames.iter().enumerate() {
-        let source = model_poses(joints, |j| {
-            let rest = &joints[j].rest;
+        let source = model_poses(rig, |j| {
+            let rest = &rig[j].rest;
             let row = &table[j];
             let vec3 = |kind: usize, default: [f64; 3]| {
                 row[kind].get(frame).map_or(default, |v| [v[0], v[1], v[2]])
@@ -1057,7 +1158,12 @@ fn measure(
 }
 
 /// `L1206` for the worst offence (the largest error-to-bound ratio) of a clip over its bound.
-fn check_bound(label: &str, report: &ClipReport, tolerances: &Tolerances) -> Option<Diagnostic> {
+fn check_bound(
+    label: &str,
+    noun: &str,
+    report: &ClipReport,
+    tolerances: &Tolerances,
+) -> Option<Diagnostic> {
     let mut offence: Option<(f64, String)> = None;
     for joint in &report.joints {
         let measured = [
@@ -1080,7 +1186,7 @@ fn check_bound(label: &str, report: &ClipReport, tolerances: &Tolerances) -> Opt
                 offence = Some((
                     ratio,
                     format!(
-                        "{label}: after key reduction joint `{}` strays from the source by \
+                        "{label}: after key reduction {noun} `{}` strays from the source by \
                          {error:.6}{unit} in model-space {} at frame {frame} (t = {}s), over \
                          the bound of {bound}{unit}",
                         joint.joint, CHANNEL_NAMES[kind], report.frame_times[frame]

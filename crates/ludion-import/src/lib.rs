@@ -32,7 +32,7 @@
 //! | the five metallic-roughness maps       | the mesh doc's texture references       |
 //! | `TANGENT`, or a generated tangent frame| the mesh doc's `tangents`               |
 //! | skin (`JOINTS_0`/`WEIGHTS_0`, inverse binds) | the mesh doc's `joints`/`weights`/`bone_indices`; joint nodes folded, not entities |
-//! | animation (joint channels)             | `clips/<name>.anim.yaml`                |
+//! | animation (joint or part channels)     | `clips/<name>.anim.yaml`; part clips listed in the prefab's `clips:` |
 //! | `KHR_lights_punctual` point light      | `PointLight` (`cast_shadows: false`)    |
 //! | a *referenced* PNG image               | re-encoded `textures/<hash>.png`        |
 //!
@@ -65,7 +65,7 @@
 //!
 //! Everything else — a texture on a second UV set or with per-axis wrap modes that disagree (a mesh
 //! document holds one mode for both), a `BLEND` `alphaMode` (`MASK` is the mapped alternative), a camera (a prefab carries none), a non-point light, a morph target, an
-//! animation channel on a non-joint node or of morph weights, a node `matrix` that shears, a sparse or non-triangle primitive, a
+//! animation channel of morph weights, on a node under a skin joint, or mixing skin joints and prefab parts, a node `matrix` that shears, a sparse or non-triangle primitive, a
 //! JPEG image, any other *required* extension — is an `L1202`, naming the offender. By default any `L1202` aborts the import (nothing is written);
 //! `--allow-lossy` downgrades them to warnings and compiles the supported subset. Any other
 //! *optional* extension in `extensionsUsed` is ignored with the warning `L1239`.
@@ -79,10 +79,12 @@
 //! 256 joints, a second joint/weight set, a mesh shared with another node, a node or a mesh, camera
 //! or light on a joint) is an `L1202`.
 //!
-//! An animation (`animation.rs`) becomes one clip whose tracks are named after the skin's joints:
-//! keys are reduced, rotations unwrapped to Euler degrees, and the result measured against the
-//! source in model space — a clip over its bound is `L1206` (never downgraded), a bad `extras` key
-//! `L1207`. See `dev-docs/ludion-import.md`.
+//! An animation (`animation.rs`) becomes one clip whose tracks are named after the skin's joints,
+//! or, when its channels sit on nodes that became prefab parts, after those parts (the prefab then
+//! lists the clip in its `clips:` map; one animation never mixes the two): keys are reduced,
+//! rotations unwrapped to Euler degrees, and the result measured against the source in model space
+//! — a clip over its bound is `L1206` (never downgraded), a bad `extras` key `L1207`. See
+//! `dev-docs/ludion-import.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -94,8 +96,8 @@ use ludion_core::diagnostics::{Diagnostic, Severity};
 use ludion_core::math::glam::{DQuat, DVec3};
 use ludion_core::math::quat_to_euler_xyz_degrees;
 use ludion_scene::{
-    AlphaMode, AnimationDocument, MeshDocument, MeshSkin, MeshTextures, PrefabDocument,
-    SceneEntity, TextureRef, TextureWrap,
+    AlphaMode, AnimationDocument, AssemblyClip, MeshDocument, MeshSkin, MeshTextures,
+    PrefabDocument, SceneEntity, TextureRef, TextureWrap,
 };
 use serde_json::Value;
 
@@ -232,6 +234,9 @@ pub struct ClipArtifact {
     pub doc: AnimationDocument,
     /// What reduction did and how close the clip stays to the source.
     pub report: ClipReport,
+    /// Whether the clip's tracks name prefab parts (listed in the prefab's `clips:`), not the
+    /// joints of a skin.
+    pub binds_parts: bool,
 }
 
 /// One re-encoded texture plus its output-relative path.
@@ -312,9 +317,14 @@ pub fn import(
         buffers: &buffers,
         external,
     };
-    let (entities, bindings) = build_entities(document, &inputs, &mut state)?;
-    let clips = match animation::import_animations(document, &bindings, &buffers, &mut state.lossy)
-    {
+    let (entities, bindings, part_names) = build_entities(document, &inputs, &mut state)?;
+    let clips = match animation::import_animations(
+        document,
+        &bindings,
+        &part_names,
+        &buffers,
+        &mut state.lossy,
+    ) {
         Ok(clips) => clips,
         Err(errors) => {
             // A refused clip is never downgraded, so it fails the import in both modes.
@@ -333,6 +343,7 @@ pub fn import(
             .map(str::to_string),
         // The importer sees bytes, not paths: the CLI sets the provenance marker.
         generated_from: None,
+        clips: part_clip_bindings(&clips),
         entities,
     };
 
@@ -392,8 +403,27 @@ impl State {
     }
 }
 
-/// The entities of a build and the skin bindings (keyed by mesh index) the animation pass needs.
-type Built = (Vec<SceneEntity>, BTreeMap<usize, SkinBinding>);
+/// The entities of a build, the skin bindings (keyed by mesh index) and each node's part name
+/// (`None` for a node that is no part) the animation pass needs.
+type Built = (
+    Vec<SceneEntity>,
+    BTreeMap<usize, SkinBinding>,
+    Vec<Option<String>>,
+);
+
+/// The prefab's `clips:` map: one binding per clip whose tracks name parts, by file stem, sorted.
+fn part_clip_bindings(clips: &[ClipArtifact]) -> Vec<AssemblyClip> {
+    let mut bindings: Vec<AssemblyClip> = clips
+        .iter()
+        .filter(|clip| clip.binds_parts)
+        .map(|clip| AssemblyClip {
+            name: clip.doc.name.clone().expect("an imported clip is named"),
+            file: clip.rel_path.clone(),
+        })
+        .collect();
+    bindings.sort_by(|a, b| a.name.cmp(&b.name));
+    bindings
+}
 
 /// Builds one entity per emitted node in document order, then appends one child entity per
 /// primitive of every multi-primitive mesh, each parented to its node. A skin's joint nodes are
@@ -527,7 +557,10 @@ fn build_entities(
     }
 
     node_entities.extend(child_entities);
-    Ok((node_entities, bindings))
+    let part_names = (0..nodes.len())
+        .map(|index| emitted[index].then(|| entity_names[index].clone()))
+        .collect();
+    Ok((node_entities, bindings, part_names))
 }
 
 /// Binds every skinned mesh to its skin, keyed by mesh index. A skinned node without a mesh

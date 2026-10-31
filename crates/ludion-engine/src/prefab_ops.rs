@@ -243,6 +243,7 @@ pub(crate) fn create(
         &PrefabDocument {
             name: None,
             generated_from: None,
+            clips: Vec::new(),
             entities: parts,
         },
         registry,

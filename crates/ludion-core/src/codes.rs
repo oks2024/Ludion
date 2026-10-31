@@ -1132,8 +1132,8 @@ pub mod code {
 
     /// `L1202` — a glTF document uses a feature the importer does not map onto a Ludion component
     /// (a texture on a second UV set, a `BLEND` alpha mode, any camera — a prefab carries no `Camera`, a non-point light, a morph target,
-    /// an animation channel on a non-joint node or a morph-weights channel, a sparse or non-triangle
-    /// primitive, a JPEG image, any other extension). A hard error by default — the offending node/mesh/accessor is named — downgraded
+    /// a morph-weights channel, an animation channel on a node under a skin joint, or one mixing skin
+    /// joints and prefab parts, a sparse or non-triangle primitive, a JPEG image, any other extension). A hard error by default — the offending node/mesh/accessor is named — downgraded
     /// to a printed warning by `--allow-lossy`. Raised by `ludion-import`.
     pub const IMPORT_UNSUPPORTED_FEATURE: DiagnosticCode = DiagnosticCode::new("L1202");
 
@@ -1272,7 +1272,8 @@ pub mod code {
     pub const HIERARCHY_REPARENT_TOO_DEEP: DiagnosticCode = DiagnosticCode::new("L1260");
 
     /// `L1226` — a `kind: prefab` document is malformed at the top level: empty, bad `format` or
-    /// `kind`, an unknown key, or a scene-only key (`seed`, `physics`, `generated_from`).
+    /// `kind`, an unknown key, a scene-only key (`seed`, `physics`, `generated_from`), or a `clips`
+    /// map that is not a mapping of short name to clip file (or has an empty name or file).
     pub const PREFAB_DOCUMENT_STRUCTURE: DiagnosticCode = DiagnosticCode::new("L1226");
 
     /// `L1227` — a prefab part has no `name`, an empty one, or one containing `/`.
@@ -6234,7 +6235,8 @@ material on a primitive without `TEXCOORD_0`, a `BLEND` `alphaMode` (sorted alph
 mapping; `MASK` maps onto `alpha_mode: mask`), a node whose `matrix` shears (a skew, or a non-uniform scale
 above a rotation, which a `Transform` cannot hold), a camera of any kind (a prefab carries no `Camera`, which a
 scene has one of: the node stays as a `Transform`-only part when `--allow-lossy`), a directional or spot light, a
-morph target, an animation channel on a non-joint node (or of morph weights), a sparse or
+morph target, an animation channel of morph weights, on a node that has no part (it hangs under
+a skin joint), or mixing skin joints and prefab parts in one animation, a sparse or
 non-triangle-list primitive, a referenced JPEG image, or any other extension. A skin is refused where it does not fit the mesh document: more than 256 joints, a
 second `JOINTS_n`/`WEIGHTS_n` set, a mesh shared by several skinned nodes (or skinned and unskinned),
 a node parented to a skin joint, or a mesh, camera or light on a joint node. A non-joint node between
@@ -6719,7 +6721,8 @@ Fix: pick a shallower parent, or flatten the chain so no entity has more than 64
         explanation: "A `kind: prefab` document is malformed at the top level: it is empty, its root is not a
 mapping, `format` or `kind` is missing or wrong, it carries an unrecognized top-level key, or it
 carries a scene-only key (`seed`, `physics`, `generated_from`). A prefab is `format`, `kind`, an
-optional `name`, and an `entities:` list; the scene that spawns it owns the seed and the physics block.
+optional `name`, an optional `clips:` map of short name to clip file, and an `entities:` list; the
+scene that spawns it owns the seed and the physics block.
 
 Fix: write `format: 1`, `kind: prefab` and `entities:`, and remove any `seed`, `physics` or
 `generated_from` key.",

@@ -21,6 +21,7 @@ use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 use ludion_core::suggest;
 use serde_json::Value;
 
+use crate::AssemblyClip;
 use crate::yaml::{MapEntry, Node, NodeValue, pointer_token};
 
 /// Checks a `format:` entry: a non-negative integer equal to `expected`. Pushes a diagnostic for a
@@ -151,6 +152,47 @@ pub(crate) fn expect_string(
             None
         }
     }
+}
+
+/// Parses a document's `clips` key: a mapping of short name to clip file path, returned sorted by
+/// short name (the canonical order the emitters write). `example` is the file path the help shows.
+/// A duplicate short name is already rejected as `L1007` by the shared YAML layer.
+pub(crate) fn parse_clips(
+    entry: &MapEntry,
+    code: DiagnosticCode,
+    example: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<AssemblyClip> {
+    let NodeValue::Mapping(entries) = &entry.node.value else {
+        diagnostics.push(
+            Diagnostic::new(
+                code,
+                format!(
+                    "`clips` must be a mapping of clip name to clip file, found {} (line {})",
+                    entry.node.value.type_phrase(),
+                    entry.node.line
+                ),
+            )
+            .with_path("/clips")
+            .with_help(format!(
+                "write one binding per line:\n  clips:\n    walk: {example}"
+            )),
+        );
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(entries.len());
+    for sub in entries {
+        let pointer = format!("/clips/{}", pointer_token(&sub.key));
+        if let Some(file) = expect_string(&sub.node, &pointer, "a clip binding", code, diagnostics)
+        {
+            out.push(AssemblyClip {
+                name: sub.key.clone(),
+                file,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// Builds the "does not have a key named" diagnostic for an unrecognized top-level (or, via `base`,
