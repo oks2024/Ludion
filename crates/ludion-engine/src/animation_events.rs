@@ -1,8 +1,8 @@
 //! Animation events: the per-tick `(entity, clip, event)` crossings a game's logic reacts to
 //! (`Plan/animation-clips.md` decisions 11, 14 and 15).
 //!
-//! A clip's authored events (an assembly clip's own, a character's effective events with its speed
-//! overlay) are named instants inside the clip. [`animation_events`] is a sim system a game
+//! A clip's authored events (an assembly or prefab clip's own, a character's effective events with its
+//! speed overlay) are named instants inside the clip. [`animation_events`] is a sim system a game
 //! registers in its own schedule, after whatever writes `Animation` and before whatever reads the
 //! result, the [`play_patterns`](crate::play_patterns) precedent. Each tick it rewrites the
 //! [`AnimationEvents`] resource with everything the clock crossed. A scene whose game never
@@ -39,8 +39,12 @@
 //! **Order.** Entities in ascending id order, then crossing time, then authored order, then `end`.
 //! The walk is sequential, so the log is thread-count invariant by construction.
 //!
-//! **Where timing comes from.** No sim-side resource holds assembly or character data (the asset
-//! cache is render-only), so [`AnimationLibrary`] loads each model once, lazily, through the same
+//! **Prefab instances.** An `Animation` on the root part of a prefab instance (`PrefabInstance.root`
+//! is the entity itself) plays the prefab's `clips:`; a root that also has an assembly or character
+//! `Mesh` uses the mesh's model. The root need not carry a `Mesh`.
+//!
+//! **Where timing comes from.** No sim-side resource holds assembly, character or prefab data (the
+//! asset cache is render-only), so [`AnimationLibrary`] loads each model once, lazily, through the same
 //! validated loaders extraction uses and keeps only the clip timing. Like a
 //! [`DocStore`](crate::DocStore) it is engine configuration derived from committed content, never
 //! hashed, and rebuilt from disk at every load, restore and switch. **`asset.reload` does not
@@ -65,6 +69,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::components::{Animation, Mesh, MeshSource, Sprite};
 use crate::extract::clock_elapsed;
+use crate::prefab::PrefabInstance;
 
 /// The reserved name of the implicit event a one-shot clip fires when it finishes.
 const END: &str = "end";
@@ -90,9 +95,26 @@ pub(crate) struct ClipTiming {
 /// configuration installed at every world rebuild, never hashed; see the module docs.
 pub(crate) struct AnimationLibrary {
     root: PathBuf,
-    /// Keyed by the `Mesh.shape` path; `Err` holds the loader's diagnostics for a model that failed
+    /// Keyed by model kind and path; `Err` holds the loader's diagnostics for a model that failed
     /// to load.
-    models: BTreeMap<String, Result<BTreeMap<String, ClipTiming>, Vec<Diagnostic>>>,
+    models: BTreeMap<Model, Result<BTreeMap<String, ClipTiming>, Vec<Diagnostic>>>,
+}
+
+/// A model that binds clips, with its path: the `Mesh.shape` of an assembly or character, or an
+/// instanced prefab.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Model {
+    Assembly(String),
+    Character(String),
+    Prefab(String),
+}
+
+impl Model {
+    fn path(&self) -> &str {
+        match self {
+            Model::Assembly(rel) | Model::Character(rel) | Model::Prefab(rel) => rel,
+        }
+    }
 }
 
 impl AnimationLibrary {
@@ -104,59 +126,52 @@ impl AnimationLibrary {
         }
     }
 
-    /// The clip timings of the assembly or character `shape` names, loading it on first use.
-    /// `Ok(None)` for any other shape, `Err` with the loader's diagnostics for a model that
-    /// failed to load.
-    fn timings(
-        &mut self,
-        shape: &MeshSource,
-    ) -> Result<Option<&BTreeMap<String, ClipTiming>>, &[Diagnostic]> {
-        let (MeshSource::Assembly(rel) | MeshSource::Character(rel)) = shape else {
-            return Ok(None);
-        };
-        if !self.models.contains_key(rel) {
-            let loaded = match shape {
-                MeshSource::Assembly(_) => {
-                    crate::assembly_mesh::load(&self.root, rel).map(|data| {
+    /// The clip timings of `model`, loading it on first use, or the loader's diagnostics for a
+    /// model that failed to load.
+    fn timings(&mut self, model: &Model) -> Result<&BTreeMap<String, ClipTiming>, &[Diagnostic]> {
+        if !self.models.contains_key(model) {
+            let rel = model.path();
+            let timing = |name: &str,
+                          clip: &ludion_scene::AnimationDocument,
+                          speed,
+                          events: &[AnimationEvent]| {
+                (
+                    name.to_string(),
+                    ClipTiming {
+                        duration: clip.duration,
+                        looped: clip.looped,
+                        speed,
+                        events: events.to_vec(),
+                    },
+                )
+            };
+            let loaded = match model {
+                Model::Assembly(_) => crate::assembly_mesh::load(&self.root, rel).map(|data| {
+                    data.clips
+                        .iter()
+                        .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
+                        .collect()
+                }),
+                Model::Character(_) => crate::character::load(&self.root, rel).map(|data| {
+                    data.clips
+                        .iter()
+                        .map(|b| timing(&b.name, &b.clip, b.speed, &b.events))
+                        .collect()
+                }),
+                Model::Prefab(_) => {
+                    crate::prefab_clips::load_with_sources(&self.root, rel).map(|(data, _)| {
                         data.clips
                             .iter()
-                            .map(|binding| {
-                                (
-                                    binding.name.clone(),
-                                    ClipTiming {
-                                        duration: binding.clip.duration,
-                                        looped: binding.clip.looped,
-                                        speed: 1.0,
-                                        events: binding.clip.events.clone(),
-                                    },
-                                )
-                            })
+                            .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
                             .collect()
                     })
                 }
-                _ => crate::character::load(&self.root, rel).map(|data| {
-                    data.clips
-                        .iter()
-                        .map(|binding| {
-                            (
-                                binding.name.clone(),
-                                ClipTiming {
-                                    duration: binding.clip.duration,
-                                    looped: binding.clip.looped,
-                                    speed: binding.speed,
-                                    events: binding.events.clone(),
-                                },
-                            )
-                        })
-                        .collect()
-                }),
             };
-            self.models.insert(rel.clone(), loaded);
+            self.models.insert(model.clone(), loaded);
         }
-        match self.models.get(rel) {
-            Some(Ok(timings)) => Ok(Some(timings)),
-            Some(Err(error)) => Err(error),
-            None => Ok(None),
+        match &self.models[model] {
+            Ok(timings) => Ok(timings),
+            Err(error) => Err(error),
         }
     }
 }
@@ -222,13 +237,16 @@ impl AnimationEvents {
 /// ones that read the events, and declares its reads:
 ///
 /// ```
-/// use ludion_engine::{Animation, AnimationEvents, Engine, Mesh, Sprite, animation_events};
+/// use ludion_engine::{
+///     Animation, AnimationEvents, Engine, Mesh, PrefabInstance, Sprite, animation_events,
+/// };
 /// use ludion_protocol::{Command, command};
 ///
 /// let mut engine = Engine::builder()
 ///     .system("animation_events", animation_events)
 ///     .query::<(&Animation, &Mesh)>()
 ///     .query::<(&Animation, &Sprite)>()
+///     .query::<(&Animation, &PrefabInstance)>()
 ///     .build()
 ///     .unwrap();
 /// engine
@@ -282,18 +300,33 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
     let ticks = now.ticks();
     let mut failures = Vec::new();
     let mut walked = Vec::new();
-    for (id, (animation, mesh)) in world.query_ids::<(&Animation, &Mesh)>() {
-        let shape = &mesh.shape;
-        let clip = &animation.clip;
-        if clip.is_empty() || !matches!(shape, MeshSource::Assembly(_) | MeshSource::Character(_)) {
-            continue;
+    // Entities in ascending id order: a mesh model, else the instance's prefab for a root part.
+    let mut playing: BTreeMap<EntityId, (Animation, Model)> = BTreeMap::new();
+    for (id, (animation, instance)) in world.query_ids::<(&Animation, &PrefabInstance)>() {
+        if instance.root == id && !animation.clip.is_empty() {
+            playing.insert(
+                id,
+                (animation.clone(), Model::Prefab(instance.source.clone())),
+            );
         }
-        let timing = match library.timings(shape) {
-            Ok(timings) => timings.and_then(|timings| timings.get(clip)),
+    }
+    for (id, (animation, mesh)) in world.query_ids::<(&Animation, &Mesh)>() {
+        let model = match &mesh.shape {
+            MeshSource::Assembly(rel) => Model::Assembly(rel.clone()),
+            MeshSource::Character(rel) => Model::Character(rel.clone()),
+            _ => continue,
+        };
+        if !animation.clip.is_empty() {
+            playing.insert(id, (animation.clone(), model));
+        }
+    }
+    for (id, (animation, model)) in playing {
+        let animation = &animation;
+        let clip = &animation.clip;
+        let timing = match library.timings(&model) {
+            Ok(timings) => timings.get(clip),
             Err(error) => {
-                if let MeshSource::Assembly(rel) | MeshSource::Character(rel) = shape {
-                    failures.push((id, clip.clone(), rel.clone(), error.to_vec()));
-                }
+                failures.push((id, clip.clone(), model.path().to_string(), error.to_vec()));
                 None
             }
         };
@@ -360,7 +393,7 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
         let diagnostic = causes
             .into_iter()
             .fold(diagnostic, Diagnostic::with_related);
-        crate::diagnostics::report_full(world, format!("{id}/Mesh/shape"), diagnostic);
+        crate::diagnostics::report_full(world, format!("{id}/Animation/clip"), diagnostic);
     }
 }
 

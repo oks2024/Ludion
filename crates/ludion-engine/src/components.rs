@@ -4019,7 +4019,10 @@ fn ui_element_non_positive_size(value: f64, pointer: &str) -> Diagnostic {
 /// One component, resolved against whatever the entity renders: on a [`Mesh`] whose `shape` is an
 /// assembly, `clip` names an entry of that assembly's `clips:` map and poses its parts; on a
 /// [`Sprite`] drawn from an atlas, it names one of that atlas's `flipbooks:` and chooses the region
-/// the quad shows. An entity carrying both reads the same name on each.
+/// the quad shows. An entity carrying both reads the same name on each. On the **root part of a
+/// prefab instance** it names an entry of the prefab's `clips:` map and poses every part of the
+/// instance the clip has a track for, each relative to its authored rest, so the instance's placement
+/// and overrides ride on top; a part with no track keeps its exact stored pose.
 ///
 /// **Playback is visual-only.** The pose is a pure function of `(clip, sim time)` evaluated at
 /// `extract()`; no system writes it back, nothing sim-side reads it, and the entity keeps its one
@@ -4047,8 +4050,8 @@ fn ui_element_non_positive_size(value: f64, pointer: &str) -> Diagnostic {
 /// logic that no document-time check can see.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct Animation {
-    /// The clip's short name, as bound in the assembly's or character's `clips:` map or the atlas's
-    /// `flipbooks:` (default `""` — no clip, so the rest pose or the authored frame).
+    /// The clip's short name, as bound in the assembly's, character's or prefab's `clips:` map or the
+    /// atlas's `flipbooks:` (default `""` — no clip, so the rest pose or the authored frame).
     #[serde(default)]
     pub clip: String,
     /// The frame playback started at; clip time is measured from it (default frame `0`). A frame in

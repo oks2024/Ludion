@@ -70,12 +70,13 @@ pub(crate) enum LoadKind {
     Sculpt,
     Assembly,
     Character,
+    PrefabClips,
     Atlas,
 }
 
 impl LoadKind {
     /// Every kind, in the order a report lists them.
-    pub(crate) const ALL: [LoadKind; 8] = [
+    pub(crate) const ALL: [LoadKind; 9] = [
         LoadKind::Texture,
         LoadKind::Mesh,
         LoadKind::Voxel,
@@ -83,6 +84,7 @@ impl LoadKind {
         LoadKind::Sculpt,
         LoadKind::Assembly,
         LoadKind::Character,
+        LoadKind::PrefabClips,
         LoadKind::Atlas,
     ];
 
@@ -96,6 +98,7 @@ impl LoadKind {
             LoadKind::Sculpt => "sculpt",
             LoadKind::Assembly => "assembly",
             LoadKind::Character => "character",
+            LoadKind::PrefabClips => "prefab_clips",
             LoadKind::Atlas => "atlas",
         }
     }

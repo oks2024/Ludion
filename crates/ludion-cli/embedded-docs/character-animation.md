@@ -80,7 +80,7 @@ clips:
 ## AnimationEvents
 
 - Register `animation_events` **before** the system that reads the resource, declaring
-  `.query::<(&Animation, &Mesh)>()` and `.query::<(&Animation, &Sprite)>()`; a consumer reads
+  `.query::<(&Animation, &Mesh)>()`, `.query::<(&Animation, &Sprite)>()` and `.query::<(&Animation, &PrefabInstance)>()` (the shape is observed even with no prefab in the world, so a missing declaration is `L1126`); a consumer reads
   `events.fired(entity, clip, name)` the same tick.
 - A one-shot clip emits an implicit `end`; a clip's own events come from the clip or the character's
   `events:` overlay (`L1198` for a malformed one, `L1200` for an overlay on a clip that has its own).

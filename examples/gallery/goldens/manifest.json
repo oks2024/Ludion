@@ -1,5 +1,6 @@
 {
   "anti-aliasing": { "anti_aliasing": "smaa" },
+  "prefab-clips": { "frames": 21 },
   "collider-wireframes": { "frames": 2, "debug_draw": ["colliders"] },
   "ragdoll-skinned": { "frames": 150 },
   "sprite-flipbook": { "frames": 23 },

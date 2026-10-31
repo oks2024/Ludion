@@ -253,10 +253,10 @@ pub(crate) struct LoadClock {
     gpu_upload: Option<Duration>,
     gi_bake: Option<Duration>,
     probe_bake: Option<Duration>,
-    decoded: [u64; 8],
-    cooked: [u64; 8],
-    reused: [u64; 8],
-    bytes: [u64; 8],
+    decoded: [u64; 9],
+    cooked: [u64; 9],
+    reused: [u64; 9],
+    bytes: [u64; 9],
     seen: BTreeSet<(usize, String)>,
 }
 
@@ -1829,6 +1829,7 @@ entities:
             "sculpt",
             "assembly",
             "character",
+            "prefab_clips",
             "atlas",
         ] {
             let c = counters(&load, kind);

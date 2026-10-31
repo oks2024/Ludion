@@ -22,7 +22,7 @@ use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat3, Mat4, Quat, Vec3};
-use ludion_core::math::{Affine3, euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
+use ludion_core::math::{Affine3, Trs, euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
 use ludion_core::par;
 use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
 use ludion_ecs::World;
@@ -49,10 +49,12 @@ use crate::components::{
 };
 use crate::docs::DocStore;
 use crate::fonts::FontLibrary;
-use crate::hierarchy::WorldAffines;
+use crate::hierarchy::{WorldAffines, level_trs};
 use crate::load_observer::LoadPhase;
 use crate::particles::{self, CameraBasis};
 use crate::patterns::{self, BulletKind, PatternDoc, Volley};
+use crate::prefab::PrefabInstance;
+use crate::prefab_clips::PrefabClipData;
 use crate::ui;
 use crate::voxel_mesh::VoxelStaticGrid;
 
@@ -96,6 +98,9 @@ pub(crate) trait SceneAssets {
     /// Resolves a `Mesh.shape: character` path to its loaded character: the mesh path (resolved
     /// through [`mesh`](SceneAssets::mesh) like an `asset`) and its bound clips.
     fn character(&mut self, rel: &str) -> Result<Arc<CharacterData>, Vec<Diagnostic>>;
+    /// Resolves a prefab's content-root path to the clips it binds and its parts' authored rests,
+    /// for an animated instance root.
+    fn prefab_clips(&mut self, rel: &str) -> Result<Arc<PrefabClipData>, Vec<Diagnostic>>;
     /// The world voxelization already built for the instance set `signature` stands for, or `None`
     /// when this loader holds none. The inner `Option` is the voxelizer's own answer (a scene with
     /// nothing rasterizable has no grid).
@@ -161,6 +166,9 @@ impl SceneAssets for CachedAssets<'_> {
     }
     fn character(&mut self, rel: &str) -> Result<Arc<CharacterData>, Vec<Diagnostic>> {
         self.cache.load_character(self.root, rel).cloned()
+    }
+    fn prefab_clips(&mut self, rel: &str) -> Result<Arc<PrefabClipData>, Vec<Diagnostic>> {
+        self.cache.load_prefab_clips(self.root, rel).cloned()
     }
     fn voxelization(&self, signature: u64) -> Option<Option<Arc<WorldVoxelGrid>>> {
         self.cache.voxelization(signature)
@@ -519,6 +527,7 @@ pub fn extract(
 /// That time is read by exactly one family of concerns, the closed-form evaluators: the two clip
 /// evaluators derive an [`Animation`]-carrying entity's clip time as
 /// `(now − started) × seconds_per_tick` — the assembly evaluator poses a `Mesh`'s parts from it, the
+/// prefab evaluator poses the parts of an instance whose root carries the `Animation`, the
 /// flipbook evaluator picks which atlas region a `Sprite` shows — and the same subtraction places a
 /// particle emitter's live window and a [`Volley`](crate::Volley)'s bullets. Everything else in a
 /// `RenderScene` is a pure function of the world, so a world with none of them extracts
@@ -2671,6 +2680,9 @@ impl SceneAssets for RefLoader {
     fn character(&mut self, _: &str) -> Result<Arc<CharacterData>, Vec<Diagnostic>> {
         Err(Self::unresolved())
     }
+    fn prefab_clips(&mut self, _: &str) -> Result<Arc<PrefabClipData>, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
     fn voxelization(&self, _: u64) -> Option<Option<Arc<WorldVoxelGrid>>> {
         None
     }
@@ -2732,6 +2744,13 @@ pub(crate) fn asset_refs(world: &World, project_root: &Path) -> AssetRefs {
         set.insert(ludion_core::paths::normalize(path));
     }
     for &id in &ids {
+        if get::<Animation>(world, id).is_some()
+            && let Some(instance) = get::<PrefabInstance>(world, id)
+            && instance.root == id
+        {
+            refs.prefab_clips
+                .insert(ludion_core::paths::normalize(&instance.source));
+        }
         let Some(decal) = get::<Decal>(world, id) else {
             continue;
         };
@@ -2784,6 +2803,8 @@ pub(crate) fn place<'w>(
         lights: Vec::new(),
         spot_lights: Vec::new(),
     };
+
+    prefab_part_poses(world, ids, assets, now, poses);
 
     for (index, &id) in ids.iter().enumerate() {
         let pose = render_pose(world, poses, id);
@@ -3826,6 +3847,155 @@ pub(crate) fn character_pose<'a>(
         weight,
     });
     (pose, fade)
+}
+
+/// One playing prefab instance: its loaded clips and the sides of its `Animation`, as indices into
+/// `data.clips` with the clip time to sample each at.
+struct PrefabPlay {
+    data: Arc<PrefabClipData>,
+    pose: Option<(usize, f64)>,
+    fade: Option<(Option<(usize, f64)>, f64)>,
+}
+
+/// Poses the parts of every prefab instance whose root carries an [`Animation`]: each part the
+/// selected clip has a track for takes the sampled pose in `poses`, so the part and everything
+/// placed below it draw posed. Visual-only like an assembly's clips: no stored `Transform` changes.
+///
+/// A clip is chosen by game logic at runtime, so every miss (no clip bound under the name, an
+/// instance whose prefab will not load) is silent and leaves the rest pose, as for
+/// [`animation_pose`].
+///
+/// Track values are the part's absolute local TRS, a channel the track lacks reading the part's
+/// authored rest. The sample is applied **relative to that rest**: a part whose stored `Transform`
+/// is the authored one takes the sample as is, and one the instance placed or overrode takes
+/// `stored * rest^-1 * sample`, so the placement rides on top (exact for uniform scale).
+fn prefab_part_poses(
+    world: &World,
+    ids: &[EntityId],
+    assets: &mut dyn SceneAssets,
+    now: SimTime,
+    poses: &mut WorldAffines,
+) {
+    let mut plays: BTreeMap<EntityId, PrefabPlay> = BTreeMap::new();
+    for &id in ids {
+        let Some(animation) = get::<Animation>(world, id) else {
+            continue;
+        };
+        let Some(instance) = get::<PrefabInstance>(world, id).filter(|i| i.root == id) else {
+            continue;
+        };
+        let Ok(data) = assets.prefab_clips(&instance.source) else {
+            continue;
+        };
+        let side = |name: &str, elapsed: f64| {
+            let index = data.clips.iter().position(|binding| binding.name == name)?;
+            Some((
+                index,
+                ludion_scene::clip_phase(&data.clips[index].clip, elapsed),
+            ))
+        };
+        let pose = side(&animation.clip, clip_elapsed(animation, now));
+        let fade = fade_weight(animation, now).map(|weight| {
+            (
+                side(&animation.from, from_clip_elapsed(animation, now)),
+                weight,
+            )
+        });
+        if pose.is_some() || fade.as_ref().is_some_and(|(from, _)| from.is_some()) {
+            plays.insert(
+                id,
+                PrefabPlay {
+                    data: data.clone(),
+                    pose,
+                    fade,
+                },
+            );
+        }
+    }
+    if plays.is_empty() {
+        return;
+    }
+    for &id in ids {
+        let Some(instance) = get::<PrefabInstance>(world, id) else {
+            continue;
+        };
+        let Some(play) = plays.get(&instance.root) else {
+            continue;
+        };
+        if !world.has::<Transform>(id) {
+            continue;
+        }
+        let stored = transform_of(world, id);
+        let rest = play
+            .data
+            .rests
+            .get(&instance.part)
+            .copied()
+            .unwrap_or(stored);
+        let rest_trs = level_trs(&rest);
+        let sample = |side: Option<(usize, f64)>| {
+            let (index, t) = side?;
+            ludion_scene::joint_pose(&play.data.clips[index].clip, &instance.part, t)
+        };
+        let sampled = match &play.fade {
+            None => sample(play.pose).map(|pose| apply_channels(&rest_trs, &pose)),
+            Some((from, weight)) => {
+                blended_prefab_part(&rest_trs, sample(*from), sample(play.pose), *weight)
+            }
+        };
+        let Some(sampled) = sampled else {
+            continue;
+        };
+        let posed = if stored == rest {
+            sampled
+        } else {
+            level_trs(&stored)
+                .mul_trs(&rest_trs.inverse())
+                .mul_trs(&sampled)
+        };
+        poses.set_posed(id, posed);
+    }
+}
+
+/// `rest` with each channel `pose` animates replaced.
+fn apply_channels(rest: &Trs, pose: &ludion_scene::PartPose) -> Trs {
+    let narrow = |v: [f64; 3]| v.map(|c| c as f32);
+    Trs {
+        translation: pose.translation.map_or(rest.translation, narrow),
+        rotation: pose.rotation.map_or(rest.rotation, |q| q.map(|c| c as f32)),
+        scale: pose.scale.map_or(rest.scale, narrow),
+    }
+}
+
+/// [`blended_joint_pose`]'s twin for a prefab part: `from` and `to` blended `weight` of the way to
+/// `to`, each missing channel (or side) read as `rest`. `None` when neither side has a track.
+fn blended_prefab_part(
+    rest: &Trs,
+    from: Option<ludion_scene::PartPose>,
+    to: Option<ludion_scene::PartPose>,
+    weight: f64,
+) -> Option<Trs> {
+    if from.is_none() && to.is_none() {
+        return None;
+    }
+    let (from, to) = (from.unwrap_or_default(), to.unwrap_or_default());
+    let widen = |v: [f32; 3]| v.map(f64::from);
+    let lerp3 = |a: Option<[f64; 3]>, b: Option<[f64; 3]>, rest: [f32; 3]| {
+        let rest = widen(rest);
+        let (a, b) = (a.unwrap_or(rest), b.unwrap_or(rest));
+        [0, 1, 2].map(|i| (a[i] + (b[i] - a[i]) * weight) as f32)
+    };
+    let rest_q = rest.rotation.map(f64::from);
+    let rotation = ludion_scene::slerp(
+        from.rotation.unwrap_or(rest_q),
+        to.rotation.unwrap_or(rest_q),
+        weight,
+    );
+    Some(Trs {
+        translation: lerp3(from.translation, to.translation, rest.translation),
+        rotation: rotation.map(|c| c as f32),
+        scale: lerp3(from.scale, to.scale, rest.scale),
+    })
 }
 
 /// The atlas region the entity's [`Animation`] is showing at `now`, or `None` — meaning the sprite

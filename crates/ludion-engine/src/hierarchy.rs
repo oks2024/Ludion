@@ -220,26 +220,48 @@ type Memo = (Option<Affine3>, u32);
 /// ancestor's accumulator is bit-identical to folding from the root: an ancestor's chain is a
 /// prefix of its descendant's, and the fold is left-to-right. Only valid chains are memoized, so a
 /// memoized entity is never on a cycle.
+///
+/// A node may carry a **posed local** ([`set_posed`](WorldAffines::set_posed)): a presentation-only
+/// pose that replaces its stored `Transform` in the fold, so the entities below it follow. Poses are
+/// set before the first lookup of a batch (a memo would hold the stale fold). Only the batch that
+/// owns the table sees them: a light, camera or probe built with a fresh table draws from the stored
+/// pose.
 pub(crate) struct WorldAffines {
     memo: SlotTable<Memo>,
+    posed: SlotTable<Trs>,
 }
 
 impl WorldAffines {
     pub(crate) fn new() -> Self {
         Self {
             memo: SlotTable::new(),
+            posed: SlotTable::new(),
         }
     }
 
+    /// Poses `entity`'s local transform as `trs` for this batch, in place of its stored `Transform`.
+    pub(crate) fn set_posed(&mut self, entity: EntityId, trs: Trs) {
+        self.posed.set(entity, trs);
+    }
+
+    /// The local `Trs` the fold uses for `node`: its posed local, else its stored `Transform`.
+    fn level(&self, world: &World, node: EntityId) -> Option<Trs> {
+        self.posed
+            .get(node)
+            .or_else(|| local(world, node).map(|transform| level_trs(&transform)))
+    }
+
     /// `entity`'s world affine when it has a `Parent` and a `Transform` and its chain has more than
-    /// itself; `None` for a root or an entity degraded to one, which the caller draws from its stored
-    /// `Transform`. Otherwise equal to [`world_affine`], bit for bit. Walks up only to the first
-    /// memoized ancestor, with no allocation.
+    /// itself, or when it is posed; `None` for an unposed root or an entity degraded to one, which
+    /// the caller draws from its stored `Transform`. Otherwise equal to [`world_affine`], bit for
+    /// bit. Walks up only to the first memoized ancestor, with no allocation.
     pub(crate) fn parented(&mut self, world: &World, entity: EntityId) -> Option<Affine3> {
         if !world.has::<Parent>(entity) {
-            return None;
+            return self.posed.get(entity).map(|trs| trs.to_affine());
         }
-        local(world, entity)?;
+        if self.posed.get(entity).is_none() {
+            local(world, entity)?;
+        }
         if let Some((acc, depth)) = self.memo.get(entity) {
             return if depth > 0 { acc } else { None };
         }
@@ -274,8 +296,8 @@ impl WorldAffines {
         }
         let mut acc = base.and_then(|(acc, _)| acc);
         for (step, node) in stack[..len].iter().rev().enumerate() {
-            if let Some(transform) = local(world, *node) {
-                let level = level_trs(&transform).to_affine();
+            if let Some(level) = self.level(world, *node) {
+                let level = level.to_affine();
                 acc = Some(match acc {
                     None => level,
                     Some(parent) => parent.mul_affine(&level),
@@ -873,6 +895,78 @@ mod tests {
         assert_eq!(poses.parented(&world, a), None);
         assert_eq!(poses.parented(&world, b), None);
         assert_eq!(poses.parented(&world, orphan), None);
+    }
+
+    fn translated(x: f32) -> Trs {
+        level_trs(&at(x))
+    }
+
+    #[test]
+    fn an_empty_posed_table_changes_no_bit() {
+        let mut world = World::new();
+        let root = spawn(&mut world, at(1.0), None);
+        let child = spawn(&mut world, at(2.0), Some(root));
+        let grandchild = spawn(&mut world, at(3.0), Some(child));
+        let mut poses = WorldAffines::new();
+        assert_eq!(poses.parented(&world, root), None);
+        for id in [child, grandchild] {
+            assert_eq!(
+                poses.parented(&world, id).map(|a| a.cols),
+                world_affine(&world, id).map(|a| a.cols)
+            );
+        }
+    }
+
+    #[test]
+    fn a_posed_root_and_a_posed_child_carry_their_descendants() {
+        let mut world = World::new();
+        let root = spawn(&mut world, at(1.0), None);
+        let child = spawn(&mut world, at(2.0), Some(root));
+        let grandchild = spawn(&mut world, at(3.0), Some(child));
+        let mut poses = WorldAffines::new();
+        poses.set_posed(root, translated(10.0));
+        poses.set_posed(child, translated(20.0));
+        // A posed root has no `Parent` yet reports its pose, so the caller stops reading the stored one.
+        assert_eq!(
+            poses
+                .parented(&world, root)
+                .map(|a| a.transform_point([0.0; 3])),
+            Some([10.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            poses
+                .parented(&world, child)
+                .map(|a| a.transform_point([0.0; 3])),
+            Some([30.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            poses
+                .parented(&world, grandchild)
+                .map(|a| a.transform_point([0.0; 3])),
+            Some([33.0, 0.0, 0.0])
+        );
+        // The stored transforms are untouched.
+        assert_eq!(
+            world_pose_transform(&world, grandchild)
+                .unwrap()
+                .translation,
+            [6.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn a_pose_set_on_a_parent_before_the_first_lookup_reaches_a_child_looked_up_first() {
+        let mut world = World::new();
+        let root = spawn(&mut world, at(1.0), None);
+        let child = spawn(&mut world, at(2.0), Some(root));
+        let mut poses = WorldAffines::new();
+        poses.set_posed(root, translated(10.0));
+        assert_eq!(
+            poses
+                .parented(&world, child)
+                .map(|a| a.transform_point([0.0; 3])),
+            Some([12.0, 0.0, 0.0])
+        );
     }
 
     fn moved_parent(world: &mut World) -> EntityId {

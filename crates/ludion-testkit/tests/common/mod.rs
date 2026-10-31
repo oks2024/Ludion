@@ -12,7 +12,9 @@
 #![allow(dead_code)]
 
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Animation, AnimationEvents, Engine, EngineBuilder, Mesh, Sprite};
+use ludion_engine::{
+    Animation, AnimationEvents, Engine, EngineBuilder, Mesh, PrefabInstance, Sprite,
+};
 use ludion_engine::{
     BlendIn, CameraRig, RigConfig, RigMode, TrackRig, add_trauma, animation_events, crossfade,
     snap_rig,
@@ -83,6 +85,7 @@ pub fn cycle_builder() -> EngineBuilder {
         .system("animation_events", animation_events)
         .query::<(&Animation, &Mesh)>()
         .query::<(&Animation, &Sprite)>()
+        .query::<(&Animation, &PrefabInstance)>()
         .system("cycle_character", cycle_character)
         .query::<(&mut Animation,)>()
 }

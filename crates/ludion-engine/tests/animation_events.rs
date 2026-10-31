@@ -15,7 +15,7 @@ use ludion_core::time::GameClock;
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
     Animation, AnimationEvents, ClipEvent, Egress, EgressChannels, Engine, EngineBuilder, Mesh,
-    Sprite, animation_events, verify_replay_keyframes,
+    PrefabInstance, Sprite, animation_events, verify_replay_keyframes,
 };
 use ludion_protocol::command::{StreamSubscribeParams, SubscribeMode};
 use ludion_protocol::event::{Event, LogEvent};
@@ -275,6 +275,7 @@ fn game(root: &Path) -> EngineBuilder {
         .system("animation_events", animation_events)
         .query::<(&Animation, &Mesh)>()
         .query::<(&Animation, &Sprite)>()
+        .query::<(&Animation, &PrefabInstance)>()
         .system("record", record)
 }
 
@@ -561,6 +562,7 @@ fn game_around(root: &Path, early: Option<Driver>, late: Option<Driver>) -> Engi
         .system("animation_events", animation_events)
         .query::<(&Animation, &Mesh)>()
         .query::<(&Animation, &Sprite)>()
+        .query::<(&Animation, &PrefabInstance)>()
         .system("record", record);
     if let Some(driver) = late {
         builder = builder
@@ -971,4 +973,45 @@ fn set_speed_during_a_hold_neither_skips_nor_repeats() {
             "{name}: a held tick fires nothing: {log:?}"
         );
     }
+}
+
+/// An `Animation` on a prefab instance's root plays the prefab's `clips:`: the one-shot `open`
+/// fires its implicit `end` once, on the root, at its 1 s mark.
+#[test]
+fn a_prefab_root_fires_end_for_its_one_shot_clip() {
+    let dir =
+        std::env::temp_dir().join(format!("ludion-anim-events-{}-prefab", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-node-clips/expected");
+    for file in [
+        "model.prefab.yaml",
+        "clips/open.anim.yaml",
+        "clips/snap.anim.yaml",
+        "meshes/base.mesh.yaml",
+        "meshes/lid.mesh.yaml",
+        "meshes/latch.mesh.yaml",
+    ] {
+        write(
+            &dir,
+            &format!("hinge/{file}"),
+            &std::fs::read_to_string(source.join(file)).unwrap(),
+        );
+    }
+    let mut engine = game(&dir).build().expect("the game builds");
+    engine
+        .load_inline_scene(
+            "format: 1\nseed: 1\nentities:\n  - name: door\n    prefab: hinge/model.prefab.yaml\n    overrides:\n      base:\n        Animation:\n          clip: open\n",
+        )
+        .expect("the scene loads");
+    let log = log_after(&mut engine, 90);
+    let ends = ticks_of(&log, "end");
+    assert_eq!(ends.len(), 1, "{log:?}");
+    assert!((60..=61).contains(&ends[0]), "{log:?}");
+    assert!(
+        log.iter()
+            .all(|(_, event)| event.entity.index == 0 && event.clip == "open"),
+        "the root is the door's first part: {log:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

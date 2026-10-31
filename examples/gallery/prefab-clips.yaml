@@ -1,0 +1,78 @@
+# Feature: prefab clips - a kind: prefab instance plays the clips its prefab binds. Three instances
+# of one imported hinge (a base slab, a lid on a hinge edge, a latch on the lid), left to right:
+# `open` (LINEAR, the lid swinging up), `snap` (STEP, the same swing keyed on twos at 12 fps), and
+# no Animation (the rest pose). The Animation sits on each instance's root part, `base`, through an
+# override; `base` itself has no track and never moves. Frame 21 is 0.35 s in: open's lid is
+# mid-swing, snap's is on a held key. The prefab is `ludion import` output (write-only), from
+# examples/import-node-clips/scene.gltf.
+format: 1
+name: prefab-clips - a prefab instance plays its imported node clips
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 4.6
+        rotation:
+          - -30.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: key
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 5.0
+          - 6.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.97
+          - 0.92
+        intensity: 1.8
+        range: 24.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 30.0
+          - 1.0
+          - 30.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.4
+          - 0.4
+          - 0.42
+          - 1.0
+        roughness: 0.8
+  - name: opening
+    prefab: prefabs/hinge/model.prefab.yaml
+    transform:
+      translation:
+        - -2.5
+        - 0.0
+        - 0.0
+    overrides:
+      base:
+        Animation:
+          clip: open
+  - name: snapping
+    prefab: prefabs/hinge/model.prefab.yaml
+    overrides:
+      base:
+        Animation:
+          clip: snap
+  - name: still
+    prefab: prefabs/hinge/model.prefab.yaml
+    transform:
+      translation:
+        - 2.5
+        - 0.0
+        - 0.0

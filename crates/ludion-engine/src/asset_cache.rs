@@ -62,6 +62,7 @@ use crate::character::CharacterData;
 use crate::cooked_maps::{CookLookup, CookMiss, CookRole};
 use crate::extract::{AtlasAsset, load_texture};
 use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
+use crate::prefab_clips::PrefabClipData;
 use crate::voxel_mesh::VoxelStaticGrid;
 
 /// Which pixels a mesh map's cache entry holds: the PNG's decode, or — under `textures: cooked`, for
@@ -87,6 +88,7 @@ enum AssetKind {
     Sculpt,
     Assembly,
     Character,
+    PrefabClips,
     Atlas,
 }
 
@@ -100,6 +102,7 @@ impl AssetKind {
             AssetKind::Sculpt => LoadKind::Sculpt,
             AssetKind::Assembly => LoadKind::Assembly,
             AssetKind::Character => LoadKind::Character,
+            AssetKind::PrefabClips => LoadKind::PrefabClips,
             AssetKind::Atlas => LoadKind::Atlas,
         }
     }
@@ -125,6 +128,8 @@ pub(crate) struct AssetRefs {
     pub(crate) sculpts: BTreeSet<String>,
     pub(crate) assemblies: BTreeSet<String>,
     pub(crate) characters: BTreeSet<String>,
+    /// The prefabs whose clips an animated instance root plays.
+    pub(crate) prefab_clips: BTreeSet<String>,
     /// Maps a decal names, with the colour role each is read in; a mesh's maps come from its document.
     pub(crate) maps: BTreeSet<(String, ColorSpace)>,
 }
@@ -140,6 +145,7 @@ enum Decoded {
     Sculpt(MeshData),
     Assembly(AssemblyData),
     Character(CharacterData),
+    PrefabClips(PrefabClipData),
     Atlas(AtlasAsset),
 }
 
@@ -214,6 +220,10 @@ fn decode(
             let (data, sources) = crate::character::load_with_sources(project_root, rel)?;
             (Decoded::Character(data), sources)
         }
+        AssetKind::PrefabClips => {
+            let (data, sources) = crate::prefab_clips::load_with_sources(project_root, rel)?;
+            (Decoded::PrefabClips(data), sources)
+        }
         AssetKind::Atlas => {
             let (asset, sources) = crate::extract::load_atlas_with_sources(project_root, rel)?;
             (Decoded::Atlas(asset), sources)
@@ -257,6 +267,7 @@ pub(crate) struct AssetCache {
     sculpts: BTreeMap<String, Arc<MeshData>>,
     assemblies: BTreeMap<String, Arc<AssemblyData>>,
     characters: BTreeMap<String, Arc<CharacterData>>,
+    prefab_clips: BTreeMap<String, Arc<PrefabClipData>>,
     atlases: BTreeMap<String, Arc<AtlasAsset>>,
     /// Which cached entries each **source file** feeds, as `(kind, entry key)`: an entry's own
     /// document key maps to itself, and every other file it read (an assembly's part or clip, a
@@ -302,6 +313,7 @@ impl AssetCache {
             sculpts: BTreeMap::new(),
             assemblies: BTreeMap::new(),
             characters: BTreeMap::new(),
+            prefab_clips: BTreeMap::new(),
             atlases: BTreeMap::new(),
             dependents: BTreeMap::new(),
             source_hashes: BTreeMap::new(),
@@ -590,6 +602,30 @@ impl AssetCache {
         Ok(self.characters.get(&key).expect("just inserted on a miss"))
     }
 
+    /// Reads the prefab at `rel` **through** the cache for the clips it binds: a miss reads the
+    /// prefab document and every clip file it names and records all of them as reload dependencies,
+    /// so editing the prefab or any clip re-reads the entry.
+    ///
+    /// # Errors
+    /// `L1101`/`L1226` (and the clips' own codes) if a *missing* entry cannot be read or parsed; a
+    /// cached entry never errors.
+    pub(crate) fn load_prefab_clips(
+        &mut self,
+        project_root: &Path,
+        rel: &str,
+    ) -> Result<&Arc<PrefabClipData>, Vec<Diagnostic>> {
+        let key = normalize_key(rel);
+        if !self.prefab_clips.contains_key(&key) {
+            self.load_entry(project_root, AssetKind::PrefabClips, rel)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::PrefabClips.load_kind(), &key);
+        }
+        Ok(self
+            .prefab_clips
+            .get(&key)
+            .expect("just inserted on a miss"))
+    }
+
     /// Reads the atlas at `rel` **through** the cache — the atlas analog of
     /// [`load_assembly`](AssetCache::load_assembly): a miss reads and validates the `kind: atlas`
     /// document *and* decodes the packed colour PNG it names, inserts the pair, and returns it. A hit
@@ -764,6 +800,7 @@ impl AssetCache {
             Decoded::Sculpt(mesh) => self.sculpts.insert(key, Arc::new(mesh)).is_some(),
             Decoded::Assembly(data) => self.assemblies.insert(key, Arc::new(data)).is_some(),
             Decoded::Character(data) => self.characters.insert(key, Arc::new(data)).is_some(),
+            Decoded::PrefabClips(data) => self.prefab_clips.insert(key, Arc::new(data)).is_some(),
             Decoded::Atlas(asset) => self.atlases.insert(key, Arc::new(asset)).is_some(),
         };
     }
@@ -779,6 +816,7 @@ impl AssetCache {
             AssetKind::Sculpt => self.sculpts.contains_key(key),
             AssetKind::Assembly => self.assemblies.contains_key(key),
             AssetKind::Character => self.characters.contains_key(key),
+            AssetKind::PrefabClips => self.prefab_clips.contains_key(key),
             AssetKind::Atlas => self.atlases.contains_key(key),
         }
     }
@@ -799,6 +837,7 @@ impl AssetCache {
             AssetKind::Sculpt => self.sculpts.remove(key).is_some(),
             AssetKind::Assembly => self.assemblies.remove(key).is_some(),
             AssetKind::Character => self.characters.remove(key).is_some(),
+            AssetKind::PrefabClips => self.prefab_clips.remove(key).is_some(),
             AssetKind::Atlas => self.atlases.remove(key).is_some(),
         };
     }
@@ -880,6 +919,8 @@ impl AssetCache {
             .retain(|key, _| refs.assemblies.contains(key));
         self.characters
             .retain(|key, _| refs.characters.contains(key));
+        self.prefab_clips
+            .retain(|key, _| refs.prefab_clips.contains(key));
         self.meshes.retain(|key, _| meshes.contains(key));
         self.retain_edges();
 
@@ -953,12 +994,13 @@ impl AssetCache {
     pub(crate) fn prefetch(&mut self, project_root: &Path, refs: &AssetRefs) {
         // Stage 1: everything that is one file-set to one value.
         let mut jobs: Vec<(AssetKind, &str)> = Vec::new();
-        let others: [(AssetKind, &BTreeSet<String>); 5] = [
+        let others: [(AssetKind, &BTreeSet<String>); 6] = [
             (AssetKind::Atlas, &refs.atlases),
             (AssetKind::Voxel, &refs.voxels),
             (AssetKind::Sculpt, &refs.sculpts),
             (AssetKind::Assembly, &refs.assemblies),
             (AssetKind::Character, &refs.characters),
+            (AssetKind::PrefabClips, &refs.prefab_clips),
         ];
         for (kind, keys) in others {
             for key in keys {
@@ -1225,6 +1267,12 @@ impl AssetCache {
     #[cfg(test)]
     pub(crate) fn contains_character(&self, key: &str) -> bool {
         self.characters.contains_key(&normalize_key(key))
+    }
+
+    /// Whether the cache holds a prefab's clips at `key` (in its normalized form). Test-only.
+    #[cfg(test)]
+    pub(crate) fn contains_prefab_clips(&self, key: &str) -> bool {
+        self.prefab_clips.contains_key(&normalize_key(key))
     }
 
     /// Whether the cache holds an atlas at `key` (in its normalized form). Test-only.
@@ -1848,6 +1896,46 @@ tracks:
         cache.reload(&dir, clip).unwrap();
         let after_clip = cache.load_character(&dir, rel).unwrap().clone();
         assert_eq!(after_clip.clip("idle").unwrap().clip.duration, 3.0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A prefab's clips are cached like a character's: a miss loads, a hit reuses the same `Arc`, and
+    /// reloading a clip file re-reads the entry.
+    #[test]
+    fn prefab_clips_miss_loads_hit_reuses_and_a_clip_edit_reloads() {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-prefab-clips-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("clips")).unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-node-clips/expected");
+        let rel = "model.prefab.yaml";
+        let clip = "clips/open.anim.yaml";
+        for file in [rel, clip, "clips/snap.anim.yaml"] {
+            std::fs::copy(fixture.join(file), dir.join(file)).unwrap();
+        }
+
+        let mut cache = AssetCache::new();
+        assert!(!cache.contains_prefab_clips(rel));
+        let first = cache.load_prefab_clips(&dir, rel).unwrap().clone();
+        assert!(cache.contains_prefab_clips(rel));
+        let duration = first.clips[0].clip.duration;
+        let hit = cache.load_prefab_clips(&dir, rel).unwrap().clone();
+        assert!(Arc::ptr_eq(&first, &hit), "a hit reuses the cached entry");
+
+        let edited = std::fs::read_to_string(dir.join(clip))
+            .unwrap()
+            .replace(&format!("duration: {duration:?}"), "duration: 9.0");
+        std::fs::write(dir.join(clip), edited).unwrap();
+        assert_eq!(cache.resolve_key(&dir, clip).as_deref(), Some(clip));
+        cache.reload(&dir, clip).unwrap();
+        let after = cache.load_prefab_clips(&dir, rel).unwrap().clone();
+        assert!(
+            !Arc::ptr_eq(&first, &after),
+            "a clip edit re-reads the entry"
+        );
+        assert_eq!(after.clips[0].clip.duration, 9.0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

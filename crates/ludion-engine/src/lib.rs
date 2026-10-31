@@ -71,6 +71,7 @@ pub mod patterns;
 pub mod perf_live;
 mod player_profile;
 mod prefab;
+mod prefab_clips;
 mod prefab_ops;
 mod probe_bake;
 mod probe_check;
