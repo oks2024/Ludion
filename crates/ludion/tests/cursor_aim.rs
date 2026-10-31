@@ -14,14 +14,13 @@ use serde_json::json;
 #[derive(Serialize, Deserialize, schemars::JsonSchema, Clone, Copy, Debug, Default)]
 struct Turret {}
 
-const STICK_DEADZONE: f32 = 0.2;
 const RAD_TO_DEG: f32 = 180.0 / core::f32::consts::PI;
 const VIEWPORT: (u32, u32) = (1280, 720);
 
 fn aim_turret(world: &mut World, _ctx: &SystemCtx) {
     let input = world.resource::<InputState>().unwrap();
     let cursor = input.mouse().position();
-    let stick = input.gamepad().right_stick();
+    let stick = input.gamepad().right_stick_dz(STICK_DEADZONE);
 
     let Some((camera, cam_xform)) = world
         .query::<(&Camera, &Transform)>()
@@ -31,8 +30,7 @@ fn aim_turret(world: &mut World, _ctx: &SystemCtx) {
         return;
     };
     let cursor_aim = cursor_ground_point(cursor, &camera, &cam_xform);
-    let stick_deflected =
-        stick[0] * stick[0] + stick[1] * stick[1] > STICK_DEADZONE * STICK_DEADZONE;
+    let stick_deflected = stick != [0.0, 0.0];
 
     for (_turret, xform) in world.query::<(&Turret, &mut Transform)>() {
         let yaw_deg = if stick_deflected {

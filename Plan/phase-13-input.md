@@ -399,7 +399,7 @@ wave is independently landable, one commit.
 
 ## Explicitly out of scope (triggers recorded)
 
-- **Input remapping / bindings config** — games map raw keys/buttons/axes themselves. Trigger: a
+- **Input remapping / bindings config** — games hold their bindings as `const Action`s over `InputState`'s reads (`ludion docs input`). Trigger: a
   second game wanting remapping (E2 brief non-goal).
 - **Touch input** — no target platform needs it in this arc. Trigger: a touch platform (E2 brief).
 - **Multiple gamepads** — player 1 only; the capture layer forwards the first connected pad. Trigger: a

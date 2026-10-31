@@ -48,7 +48,7 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
 - **Input:**
   - `InputState` has keys, the mouse and one gamepad, with analog sticks recorded bit-exact in
     replays.
-  - There are no action maps; games map raw input.
+  - There are no action maps: `InputState` offers a standard move vector, key-or-button actions and trigger edges, and games own their bindings as constants (`ludion docs input`).
   - The iOS touch mapper turns a `touch-layout` into gamepad events.
 - **Hierarchy:** `Parent` is a link only, with no transform propagation. Nothing supports riding a
   platform.

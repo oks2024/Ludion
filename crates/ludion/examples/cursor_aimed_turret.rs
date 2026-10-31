@@ -34,10 +34,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default)]
 struct Turret {}
 
-/// Below this right-stick deflection (as a squared magnitude, to skip a `sqrt`) the stick is
-/// treated as centred and the turret falls back to cursor aim.
-const STICK_DEADZONE: f32 = 0.2;
-
 /// Radians → degrees as a plain multiply (deterministic, unlike `f32::to_degrees`'s trig cousins).
 const RAD_TO_DEG: f32 = 180.0 / core::f32::consts::PI;
 
@@ -52,7 +48,7 @@ fn aim_turret(world: &mut World, _ctx: &SystemCtx) {
     // mutable query below.
     let input = world.resource::<InputState>().unwrap();
     let cursor = input.mouse().position();
-    let stick = input.gamepad().right_stick();
+    let stick = input.gamepad().right_stick_dz(STICK_DEADZONE);
 
     // The scene's camera pose + projection, needed to unproject the cursor. Copy it out (both are
     // `Copy`) so the query's borrow ends too.
@@ -66,8 +62,7 @@ fn aim_turret(world: &mut World, _ctx: &SystemCtx) {
 
     // Resolve the cursor's ground point once (it is the same for every turret).
     let cursor_aim = cursor_ground_point(cursor, &camera, &cam_xform);
-    let stick_deflected =
-        stick[0] * stick[0] + stick[1] * stick[1] > STICK_DEADZONE * STICK_DEADZONE;
+    let stick_deflected = stick != [0.0, 0.0];
 
     for (_turret, xform) in world.query::<(&Turret, &mut Transform)>() {
         let yaw_deg = if stick_deflected {

@@ -228,27 +228,16 @@ pub fn triggers(world: &mut World, _ctx: &SystemCtx) {
     }
 }
 
-/// The horizontal intent in `[-1, 1]²` (x, z): the keys, else the left stick; a diagonal is not
-/// faster than an axis.
-fn move_intent(input: &InputState) -> [f32; 2] {
-    let axis = |plus: &[Key], minus: &[Key]| {
-        f32::from(plus.iter().any(|&k| input.is_held(k)))
-            - f32::from(minus.iter().any(|&k| input.is_held(k)))
-    };
-    let mut intent = [
-        axis(&[Key::Right, Key::D], &[Key::Left, Key::A]),
-        axis(&[Key::Down, Key::S], &[Key::Up, Key::W]),
-    ];
-    if intent == [0.0, 0.0] {
-        let stick = input.gamepad().left_stick();
-        intent = [stick[0], -stick[1]];
-    }
-    let length = (intent[0] * intent[0] + intent[1] * intent[1]).sqrt();
-    if length > 1.0 {
-        intent = [intent[0] / length, intent[1] / length];
-    }
-    intent
-}
+/// Jump: Space or the pad's south button.
+const JUMP: Action = Action {
+    keys: &[Key::Space],
+    buttons: &[GamepadButton::South],
+};
+/// Crouch: C or the pad's east button.
+const CROUCH: Action = Action {
+    keys: &[Key::C],
+    buttons: &[GamepadButton::East],
+};
 
 /// Drives the hero: input → velocity, gravity, jump and its cut, crouch, one `move_character`
 /// call, and a respawn when the motor is crushed or the hero falls out of the world.
@@ -269,11 +258,10 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
         .flatten()
         .is_some_and(|motor_state| motor_state.grounded);
     let input = world.resource::<InputState>().unwrap();
-    let intent = move_intent(input);
-    let jump = input.was_pressed(Key::Space) || input.gamepad().was_pressed(GamepadButton::South);
-    let jump_released =
-        input.was_released(Key::Space) || input.gamepad().was_released(GamepadButton::South);
-    let crouch_held = input.is_held(Key::C) || input.gamepad().is_held(GamepadButton::East);
+    let stick = input.move_vector();
+    let jump = input.action_pressed(&JUMP);
+    let jump_released = input.action_released(&JUMP);
+    let crouch_held = input.action_held(&CROUCH);
     // The yaw the rig posed last tick: the stick is relative to what the player sees.
     let yaw = camera_entity(world)
         .and_then(|camera| world.get::<CameraRig>(camera).ok().flatten())
@@ -299,7 +287,6 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
     state.velocity_y -= runner.gravity * ctx.dt;
 
     // The free direction blended toward the lane's by the lane's weight.
-    let stick = [intent[0], -intent[1]];
     let free = camera_relative_yaw(stick, yaw);
     let direction = match lane_frame(world, hero) {
         Some(frame) => {
