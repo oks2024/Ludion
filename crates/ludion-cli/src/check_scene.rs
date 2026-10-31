@@ -1302,26 +1302,135 @@ fn run_prefab(mut reporter: Reporter, source: &str) -> ExitCode {
             return exit;
         }
     }
+    let clips = if doc.clips.is_empty() {
+        Vec::new()
+    } else {
+        let root = path.parent().unwrap_or_else(|| Path::new("."));
+        let rel = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let data = match ludion_engine::load_prefab_clips(root, &rel) {
+            Ok(data) => data,
+            Err(diagnostics) => return reporter.fail(diagnostics),
+        };
+        let part_names = match prefab_part_names(root, &rel) {
+            Ok(names) => names,
+            Err(diagnostics) => return reporter.fail(diagnostics),
+        };
+        let unmatched = prefab_clip_target_diagnostics(&data, &part_names);
+        if let Some(exit) = fail_or_warn(&mut reporter, unmatched) {
+            return exit;
+        }
+        data.clips
+    };
     let components: usize = doc
         .entities
         .iter()
         .map(|entity| entity.components.len())
         .sum();
     let parts = doc.entities.len();
-    let fields = serde_json::json!({ "name": doc.name, "parts": parts, "components": components });
+    let fields = serde_json::json!({
+        "name": doc.name,
+        "parts": parts,
+        "components": components,
+        "clips": clips.iter().map(|clip| serde_json::json!({
+            "name": clip.name,
+            "file": clip.file,
+            "duration": clip.clip.duration,
+            "looped": clip.clip.looped,
+            "tracks": clip.clip.tracks.len(),
+        })).collect::<Vec<_>>(),
+    });
     reporter.ok(fields, || {
         let name = doc
             .name
             .as_ref()
             .map(|name| format!(" {name}"))
             .unwrap_or_default();
+        let clip_count = if clips.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", {} clip{}",
+                clips.len(),
+                if clips.len() == 1 { "" } else { "s" }
+            )
+        };
         println!(
-            "{}: OK (prefab{name}, {parts} part{}, {components} component{})",
+            "{}: OK (prefab{name}, {parts} part{}, {components} component{}{clip_count})",
             path.display(),
             if parts == 1 { "" } else { "s" },
             if components == 1 { "" } else { "s" }
         );
+        for clip in &clips {
+            println!(
+                "  clip {}: {}, duration {}, loop {}, {} track{}",
+                clip.name,
+                clip.file,
+                clip.clip.duration,
+                clip.clip.looped,
+                clip.clip.tracks.len(),
+                if clip.clip.tracks.len() == 1 { "" } else { "s" },
+            );
+        }
     })
+}
+
+/// The part names an instance of the prefab at `root`/`rel` spawns (`entities[].name`, a nested
+/// instance's parts by their composed path) — what playback binds a clip's tracks against.
+fn prefab_part_names(root: &Path, rel: &str) -> Result<Vec<String>, Vec<Diagnostic>> {
+    let registry = builtin_registry();
+    let probe = format!(
+        "format: 1
+entities:
+  - name: subject
+    prefab: {}
+",
+        serde_json::Value::from(rel)
+    );
+    let scene = ludion_scene::check(&probe, &registry)?;
+    let expanded = ludion_engine::expand_scene(root, &registry, &scene)?;
+    Ok(expanded
+        .instances
+        .into_iter()
+        .find(|instance| instance.depth == 0)
+        .map(|instance| instance.paths)
+        .unwrap_or_default())
+}
+
+/// One `L1314` per clip track whose `target` is not a part of the prefab.
+fn prefab_clip_target_diagnostics(
+    data: &ludion_engine::PrefabClipData,
+    parts: &[String],
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for binding in &data.clips {
+        for track in &binding.clip.tracks {
+            if parts.contains(&track.target) {
+                continue;
+            }
+            let help = match ludion_core::suggest::nearest(
+                &track.target,
+                parts.iter().map(String::as_str),
+            ) {
+                Some(candidate) => format!("nearest part is `{candidate}`"),
+                None => "a track's target must be a part name (`entities[].name`)".to_string(),
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::PREFAB_CLIP_TARGET,
+                    format!(
+                        "the clip `{}` (`{}`) animates `{}`, which is not a part of this prefab",
+                        binding.name, binding.file, track.target
+                    ),
+                )
+                .with_path(format!("/clips/{}", pointer_token(&binding.name)))
+                .with_help(help),
+            );
+        }
+    }
+    diagnostics
 }
 
 /// `kind: character`: loads the document with its skinned mesh and every clip it binds, rooted at

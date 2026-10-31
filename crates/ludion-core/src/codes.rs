@@ -1527,6 +1527,11 @@ pub mod code {
     /// `/entities/{i}/components/DirectionalLight/shadow_extent`.
     pub const DIRECTIONAL_LIGHT_EXTENT_UNUSED: DiagnosticCode = DiagnosticCode::new("L1313");
 
+    /// `L1314` — a clip a `kind: prefab` document binds under `clips:` has a track whose `target`
+    /// names no part of the prefab; playback would silently draw that part at rest. Raised by
+    /// `check-scene <prefab>`; pointer `/clips/<name>`.
+    pub const PREFAB_CLIP_TARGET: DiagnosticCode = DiagnosticCode::new("L1314");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7579,6 +7584,18 @@ value does nothing.
 
 Fix: remove `shadow_extent`, or drop `cascades` to keep the anchored box.",
     },
+    CodeEntry {
+        code: code::PREFAB_CLIP_TARGET,
+        severity: Severity::Error,
+        title: "a prefab clip animates a part the prefab does not have",
+        explanation: "A clip bound in a `kind: prefab` document's `clips:` map has a track whose `target` is not the name
+of one of the prefab's parts (pointer `/clips/<name>`). A track binds by part name when the clip
+plays on an instance, so an unmatched track moves nothing: the part it meant to pose is drawn at rest
+and the clip looks partly dead, with no error at play time. A nested instance's parts bind by their
+composed path (`turret/barrel`).
+
+Fix: rename the track's `target` to a part name (`entities[].name`); the message names the nearest one.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -10331,6 +10348,7 @@ mod tests {
         code::PREFAB_ASSET_PATH,
         code::LOCAL_LIGHT_INVALID_SHADOW,
         code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
+        code::PREFAB_CLIP_TARGET,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

@@ -177,6 +177,77 @@ fn figure_wave_strip_test() -> GoldenTest {
     test
 }
 
+/// The gallery's prefab-clip goldens: a 900×600 **phase strip** of `prefabs/hinge/model.prefab.yaml`
+/// playing `clip` — four evenly spaced phases laid out side by side in one cell. The hinge is the
+/// node-clip import's output, so these pin a prefab's posed render the way the figure strip pins an
+/// assembly's: `open` is a smooth LINEAR swing, `snap` the same hinge on stepped keys.
+fn hinge_strip_test(clip: &str) -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery
+            .join("prefabs")
+            .join("hinge")
+            .join("model.prefab.yaml"),
+        os_goldens().join(format!("hinge-{clip}-strip.png")),
+    );
+    test.width = 900;
+    test.height = 600;
+    test.clip = Some(clip.to_string());
+    test.strip = Some(4);
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// Renders the hinge strip for `clip` and compares it against the committed golden at exactly SSIM
+/// 1.0, or (re)writes the golden under `LUDION_BLESS`. Skips with no GPU adapter.
+fn check_hinge_strip(clip: &str) {
+    let test = hinge_strip_test(clip);
+    let label = format!("hinge_{clip}_strip");
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!("SKIPPED {label} (bless): no GPU adapter");
+            }
+            Err(diagnostics) => panic!("blessing the {label} failed: {diagnostics:?}"),
+        }
+        return;
+    }
+
+    match test.run(&scratch_dir(&format!("{label}_out"))) {
+        Ok(GoldenOutcome::Passed { report }) => {
+            assert_eq!(
+                report.ssim,
+                Some(1.0),
+                "the {label} must render byte-identically to its blessed golden"
+            );
+            assert_eq!((report.actual_width, report.actual_height), (900, 600));
+        }
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!("the {label} failed its golden: {}", report.summary)
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!("SKIPPED {label}: {}", skip_note(&diagnostics));
+        }
+        Err(diagnostics) => panic!("the {label} render failed: {diagnostics:?}"),
+    }
+}
+
+/// The hinge's `snap` strip: stepped keys hold each pose on twos.
+#[test]
+fn needs_gpu_hinge_snap_strip_matches_committed_golden_at_exactly_one() {
+    check_hinge_strip("snap");
+}
+
+/// The hinge's `open` strip: the lid swings smoothly across the four phases.
+#[test]
+fn needs_gpu_hinge_open_strip_matches_committed_golden_at_exactly_one() {
+    check_hinge_strip("open");
+}
+
 /// The gallery's `ui-hud.yaml` scene rendered at 1920×1080 (the discovery pairing already covers it
 /// at 960×540) — same 16:9 aspect, so the canvas is identical and only pixel scale doubles (Phase 14
 /// decision 7's "same-aspect x2 proves uniform canvas scaling on real pixels").

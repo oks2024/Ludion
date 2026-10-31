@@ -1,7 +1,7 @@
 //! The model-view harness: one model document → one deterministic turntable **contact sheet**.
 //!
-//! [`render_model_sheet`] takes a single `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, or
-//! `.sculpt.yaml` document,
+//! [`render_model_sheet`] takes a single `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`,
+//! `.character.yaml`, or `.prefab.yaml` document,
 //! synthesizes a standard turntable scene around it (a normalized model, a ground plane, a per-view
 //! camera, and a neutral key + fill light rig), renders each requested [`ModelView`], and stitches
 //! the cells into **one** RGBA8 [`RenderedImage`]. It collapses the voxel/mesh authoring loop to
@@ -116,8 +116,9 @@
 //! # Posed sheets and strips (`clip` / `time` / `strip`)
 //!
 //! An **assembly** renders at its rest pose until [`ModelSheetRequest::clip`] names a clip its
-//! `clips:` map binds, and a **character** (`*.character.yaml`) likewise with the clips it binds —
-//! alone, since its mesh and clips resolve relative to its own file. A character's clip time is
+//! `clips:` map binds, and a **character** (`*.character.yaml`) or a **prefab** (`*.prefab.yaml`, posed on
+//! an instance entry's root part) likewise with the clips it binds — alone, since its parts and clips
+//! resolve relative to its own file. A character's clip time is
 //! `tick × seconds_per_tick × overlay speed`, and a report's `time` is that clip time.
 //! [`ModelSheetRequest::crossfade`] renders the blend of two bound clips as a strip whose phases are
 //! the fade's weights. The pose is not a second evaluator: the synthesized scene's model entity
@@ -207,6 +208,7 @@ use crate::assembly_mesh::AssemblyData;
 use crate::builtin_registry;
 use crate::character::CharacterData;
 use crate::extract::{ClipPose, CrossfadePose, extract_at, part_placements, part_placements_faded};
+use crate::prefab_clips::PrefabClipData;
 use crate::sweep::MAX_SWEEP_CELLS;
 
 /// A turntable view. [`ALL`](ModelView::ALL) is the canonical sheet order;
@@ -407,8 +409,8 @@ pub struct ModelSheetRequest<'a> {
     /// the same size. In a lineup the tallest model earns the pixels and the rest stay honest
     /// against it.
     pub true_size: bool,
-    /// Pose the model with the clip its assembly or character binds under this short name, instead
-    /// of rendering the rest pose. Assembly and character documents only, and a single model.
+    /// Pose the model with the clip its assembly, character or prefab binds under this short name, instead
+    /// of rendering the rest pose. Assembly, character and prefab documents only, and a single model.
     pub clip: Option<&'a str>,
     /// The clip instant to pose at, in seconds (`None` means `0.0`). Quantized to the nearest
     /// [`TickRate::DEFAULT`] tick — see the module docs. Needs [`clip`](Self::clip) or
@@ -422,7 +424,7 @@ pub struct ModelSheetRequest<'a> {
     pub strip: Option<u32>,
     /// Render the blend of one bound clip into another as a strip of phases, each at its fade
     /// weight — [`DEFAULT_CROSSFADE_PHASES`] of them unless [`strip`](Self::strip) says otherwise.
-    /// Assembly and character documents, a single model, and no [`clip`](Self::clip).
+    /// Assembly, character and prefab documents, a single model, and no [`clip`](Self::clip).
     pub crossfade: Option<CrossfadeSpec<'a>>,
     /// Frame every view on this named part of a `kind: sculpt` model instead of the whole model,
     /// keeping the rest of the model in the picture. A single model only.
@@ -553,7 +555,7 @@ pub struct TrueSizeFraming {
 /// played and one [`PhaseReport`] per rendered phase.
 #[derive(Clone, Debug)]
 pub struct ClipOutcome {
-    /// The clip's short name, as the assembly or character binds it — the incoming clip of a
+    /// The clip's short name, as the assembly, character or prefab binds it — the incoming clip of a
     /// crossfade.
     pub name: String,
     /// The clip's authored `duration`, in seconds.
@@ -761,7 +763,7 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
 
     // --- All CPU-side work happens before the GPU is requested. ---
     let mut loaded = load_models(request.models)?;
-    check_character_alone(&loaded)?;
+    check_alone(&loaded)?;
     remesh_overridden_sculpt(request, &mut loaded)?;
     let focus = request
         .part
@@ -895,7 +897,12 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
             request.channel,
         );
         let scene = ludion_scene::check(&yaml, &builtin_registry())?;
-        let world = ludion_scene::instantiate(&scene, &builtin_registry())?;
+        // A prefab is an instance entry, not a mesh shape, so its cell expands before it spawns.
+        let world = if matches!(bounds[0].kind, ModelKind::Prefab(_)) {
+            crate::render::expanded_world(root, &builtin_registry(), &scene)?.1
+        } else {
+            ludion_scene::instantiate(&scene, &builtin_registry())?
+        };
         let mut driver = SimDriver::new(world, Schedule::new(), SimConfig::default());
         driver.run_ticks(0);
         // `now` is tick 0 for every un-posed sheet, which is exactly what `extract()` passes — so a
@@ -1239,20 +1246,26 @@ fn isolate_part(scene: &mut RenderScene, part_of: &[Option<u32>], part: u32) {
     }
 }
 
-/// A character renders alone: its mesh and clips resolve relative to its own file, and a lineup
-/// stages every model into a numbered slot of its own.
-fn check_character_alone(loaded: &[LoadedModel]) -> Result<(), Vec<Diagnostic>> {
-    if loaded.len() > 1
-        && loaded
-            .iter()
-            .any(|model| matches!(model.extra, LoadedExtra::Character(_)))
-    {
-        return Err(refuse_clip(
-            "a lineup cannot include a `kind: character` model: a character renders alone, since \
-             its mesh and clips resolve relative to its own file"
-                .to_string(),
-            "render the character on its own sheet (`render --model <name>.character.yaml`)",
-        ));
+/// A character or a prefab renders alone: its mesh, parts and clips resolve relative to its own
+/// file, and a lineup stages every model into a numbered slot of its own.
+fn check_alone(loaded: &[LoadedModel]) -> Result<(), Vec<Diagnostic>> {
+    if loaded.len() > 1 {
+        for model in loaded {
+            let (kind, resolves) = match model.extra {
+                LoadedExtra::Character(_) => ("character", "its mesh and clips"),
+                LoadedExtra::Prefab(_) => ("prefab", "its parts and clips"),
+                _ => continue,
+            };
+            return Err(refuse_clip(
+                format!(
+                    "a lineup cannot include a `kind: {kind}` model: a {kind} renders alone, \
+                     since {resolves} resolve relative to its own file"
+                ),
+                &format!(
+                    "render the {kind} on its own sheet (`render --model <name>.{kind}.yaml`)"
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -1592,6 +1605,9 @@ enum ModelKind {
     /// A `*.character.yaml` skinned mesh with bound clips, referenced by a
     /// `Mesh.shape: { character: … }`.
     Character,
+    /// A `*.prefab.yaml` part tree, placed by an instance entry (`prefab: …`). Carries the name of
+    /// its root part, the one a clip's `Animation` sits on.
+    Prefab(String),
 }
 
 impl ModelKind {
@@ -1603,6 +1619,7 @@ impl ModelKind {
             ModelKind::Assembly => "assembly",
             ModelKind::Sculpt => "sculpt",
             ModelKind::Character => "character",
+            ModelKind::Prefab(_) => "prefab",
         }
     }
 }
@@ -1634,6 +1651,7 @@ enum LoadedExtra {
     Assembly(AssemblyDocument),
     Sculpt(Box<LoadedSculpt>),
     Character(CharacterData),
+    Prefab(PrefabClipData),
 }
 
 /// A sculpt document and what it meshes to — under the request's `--set` once
@@ -1682,8 +1700,9 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
                 format!("could not read model document `{}`: {error}", model.display()),
             )
             .with_help(
-                "pass a readable `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`, or \
-                 `.character.yaml` model document (check the path and permissions)",
+                "pass a readable `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`, \
+                 `.character.yaml`, or `.prefab.yaml` model document (check the path and \
+                 permissions)",
             ),
         ]
         })?;
@@ -1701,8 +1720,8 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
                     ),
                 )
                 .with_help(
-                    "pass a `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`, or \
-                     `.character.yaml` model document",
+                    "pass a `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`, \
+                     `.character.yaml`, or `.prefab.yaml` model document",
                 ),
             ]
         })?;
@@ -1807,18 +1826,47 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
                 extra: LoadedExtra::Character(data),
             })
         }
+        // Rooted at the file's own directory, like a character: the parts' meshes and the clips
+        // resolve relative to it. Its bounds are the rest-pose box of one expanded instance.
+        Some("prefab") => {
+            let root = model.parent().unwrap_or_else(|| Path::new("."));
+            let (data, _) = crate::prefab_clips::load_with_sources(root, &file_name)?;
+            let doc = ludion_scene::parse_prefab(&source)?;
+            let root_part = doc
+                .entities
+                .first()
+                .and_then(|entity| entity.name.clone())
+                .ok_or_else(|| {
+                    refuse_clip(
+                        format!("prefab `{file_name}` has no named first part to pose"),
+                        "a prefab's first entity is its root part: give it a `name:`",
+                    )
+                })?;
+            let (min, max) = prefab_aabb(root, &file_name)?;
+            Ok(LoadedModel {
+                bounds: ModelBounds {
+                    kind: ModelKind::Prefab(root_part),
+                    min,
+                    max,
+                    file_name,
+                    scale: 1.0,
+                    emissive_texture: false,
+                },
+                extra: LoadedExtra::Prefab(data),
+            })
+        }
         Some(other) => Err(vec![
             Diagnostic::new(
                 code::MODEL_SHEET_INPUT,
                 format!(
                     "model document `{}` has kind `{other}`, but the model view harness renders \
-                     only `voxel`, `mesh`, `assembly`, `sculpt`, or `character` documents",
+                     only `voxel`, `mesh`, `assembly`, `sculpt`, `character`, or `prefab` documents",
                     model.display()
                 ),
             )
             .with_help(
                 "point `render --model` at a `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, \
-                 `.sculpt.yaml`, or `.character.yaml` document",
+                 `.sculpt.yaml`, `.character.yaml`, or `.prefab.yaml` document",
             ),
         ]),
         None => Err(vec![
@@ -1826,14 +1874,14 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
                 code::MODEL_SHEET_INPUT,
                 format!(
                     "model document `{}` has no `kind:` key; the model view harness needs a \
-                     `voxel`, `mesh`, `assembly`, `sculpt`, or `character` document (a scene has \
-                     no `kind:` and cannot be rendered as a model)",
+                     `voxel`, `mesh`, `assembly`, `sculpt`, `character`, or `prefab` document (a \
+                     scene has no `kind:` and cannot be rendered as a model)",
                     model.display()
                 ),
             )
             .with_help(
-                "add `kind: voxel`, `kind: mesh`, `kind: assembly`, `kind: sculpt`, or `kind: \
-                 character`, or render a scene with `render --scene`",
+                "add `kind: voxel`, `kind: mesh`, `kind: assembly`, `kind: sculpt`, `kind: \
+                 character`, or `kind: prefab`, or render a scene with `render --scene`",
             ),
         ]),
     }
@@ -1846,6 +1894,65 @@ fn assembly_aabb(doc: &AssemblyDocument) -> ([f32; 3], [f32; 3]) {
     let [sx, sy, sz] = doc.size;
     let (hx, hz) = (sx as f32 * 0.5, sz as f32 * 0.5);
     ([-hx, 0.0, -hz], [hx, sy as f32, hz])
+}
+
+/// The rest-pose box of one instance of the prefab at `root`/`rel`: the prefab is expanded and
+/// extracted on the CPU, and the box is taken over every mesh the extract drew. A prefab's parts
+/// live in other documents, so no one document holds its bounds.
+fn prefab_aabb(root: &Path, rel: &str) -> Result<([f32; 3], [f32; 3]), Vec<Diagnostic>> {
+    /// The corners of the unit primitives: cube, plane and sphere all span ±0.5.
+    const UNIT_CORNERS: [[f32; 3]; 8] = [
+        [-0.5, -0.5, -0.5],
+        [0.5, -0.5, -0.5],
+        [-0.5, 0.5, -0.5],
+        [0.5, 0.5, -0.5],
+        [-0.5, -0.5, 0.5],
+        [0.5, -0.5, 0.5],
+        [-0.5, 0.5, 0.5],
+        [0.5, 0.5, 0.5],
+    ];
+    let registry = builtin_registry();
+    let probe = format!(
+        "format: 1\nentities:\n  - name: subject\n    prefab: {}\n",
+        quote_yaml(rel)
+    );
+    let scene = ludion_scene::check(&probe, &registry)?;
+    let (_, world) = crate::render::expanded_world(root, &registry, &scene)?;
+    let rendered = extract_at(
+        &world,
+        (1, 1),
+        root,
+        SimTime::from_ticks(0, TickRate::DEFAULT),
+        QualityParams::FULL.particle_density,
+    )?;
+    let mut points: Vec<[f32; 3]> = Vec::new();
+    for instance in &rendered.meshes {
+        let to_world = |p: Vec3| instance.model.transform_point3(p).to_array();
+        match instance.shape {
+            ludion_renderer::MeshShape::Asset(index) => {
+                if let Some(asset) = rendered.mesh_assets.get(index) {
+                    points.extend(
+                        asset
+                            .positions
+                            .chunks_exact(3)
+                            .map(|v| to_world(Vec3::new(v[0], v[1], v[2]))),
+                    );
+                }
+            }
+            _ => points.extend(
+                UNIT_CORNERS
+                    .iter()
+                    .map(|corner| to_world(Vec3::from_array(*corner))),
+            ),
+        }
+    }
+    if points.is_empty() {
+        return Err(refuse_clip(
+            format!("prefab `{rel}` draws no mesh, so there is nothing to frame"),
+            "give a part a `Mesh` component (`ludion docs prefabs`)",
+        ));
+    }
+    Ok(points_aabb(points.into_iter()))
 }
 
 // --- Posed sheets, strips, and the per-phase gap analysis (decision 11) ------------------------
@@ -1923,14 +2030,18 @@ fn clip_names<'a>(
             "character",
             data.clips.iter().map(|clip| clip.name.as_str()).collect(),
         )),
+        LoadedExtra::Prefab(data) => Ok((
+            "prefab",
+            data.clips.iter().map(|clip| clip.name.as_str()).collect(),
+        )),
         _ => Err(refuse_clip(
             format!(
-                "{what} cannot pose this model: only an assembly or a character has parts or \
-                 bones to pose and clips to name them from"
+                "{what} cannot pose this model: only an assembly, a character or a prefab has \
+                 parts or bones to pose and clips to name them from"
             ),
             "a `.voxel.yaml`/`.mesh.yaml`/`.sculpt.yaml` model is one rigid piece — render it \
-             without `--clip`/`--crossfade`, or point `--model` at the assembly or character \
-             that animates it",
+             without `--clip`/`--crossfade`, or point `--model` at the assembly, character or \
+             prefab that animates it",
         )),
     }
 }
@@ -1966,6 +2077,8 @@ enum ClipSource<'a> {
     Assembly(Box<AssemblyPosing>),
     /// A character: clips only, with no voxel grid to analyse.
     Character(&'a CharacterData),
+    /// A prefab: clips only — its parts are meshes, with no voxel grid to analyse.
+    Prefab(&'a PrefabClipData),
 }
 
 /// What an assembly's posed render reads: its mesh data for the pose, and the assembled grid the
@@ -1985,6 +2098,7 @@ impl<'a> ClipSource<'a> {
     fn load(model: &Path, loaded: &'a LoadedModel) -> Result<Self, Vec<Diagnostic>> {
         match &loaded.extra {
             LoadedExtra::Character(data) => Ok(ClipSource::Character(data)),
+            LoadedExtra::Prefab(data) => Ok(ClipSource::Prefab(data)),
             _ => {
                 let root = model.parent().unwrap_or_else(|| Path::new("."));
                 let rel = loaded.bounds.file_name.as_str();
@@ -2008,6 +2122,11 @@ impl<'a> ClipSource<'a> {
         let bound = match self {
             ClipSource::Assembly(posing) => posing.data.clip(name).map(|clip| (clip, 1.0)),
             ClipSource::Character(data) => data.clip(name).map(|clip| (&clip.clip, clip.speed)),
+            ClipSource::Prefab(data) => data
+                .clips
+                .iter()
+                .find(|clip| clip.name == name)
+                .map(|clip| (&clip.clip, 1.0)),
         };
         bound.expect("the name was checked against the same document `load` resolved")
     }
@@ -2033,7 +2152,7 @@ impl<'a> ClipSource<'a> {
                     tick,
                 )
             }
-            ClipSource::Character(_) => Ok(PhaseReport {
+            ClipSource::Character(_) | ClipSource::Prefab(_) => Ok(PhaseReport {
                 time,
                 tick,
                 components: None,
@@ -2044,7 +2163,7 @@ impl<'a> ClipSource<'a> {
     }
 }
 
-/// Resolves `name` against the model: checks it is an assembly or character that binds the name,
+/// Resolves `name` against the model: checks it is an assembly, character or prefab that binds the name,
 /// loads what the pose needs, and computes every phase's time, `started` frame, and report.
 ///
 /// A character's clip time is `elapsed × binding.speed`, so the tick that reaches clip time `t` is
@@ -2503,6 +2622,21 @@ fn stage(
                 ),
             ]);
         }
+        LoadedExtra::Prefab(_) => {
+            return Err(vec![
+                Diagnostic::new(
+                    code::SCENE_OVERRIDE_INVALID,
+                    "`--set`/`--sweep` cannot override this model: a prefab has no palette to \
+                     tune"
+                        .to_string(),
+                )
+                .with_help(
+                    "a `.prefab.yaml` draws its parts' own meshes and materials — change the \
+                     part documents, or override the scene that places the instance \
+                     (`render --scene … --set`)",
+                ),
+            ]);
+        }
         LoadedExtra::Character(_) => {
             return Err(vec![
                 Diagnostic::new(
@@ -2635,8 +2769,11 @@ fn stage_lineup(sources: &[&Path], loaded: &[LoadedModel]) -> Result<Staged, Vec
                 .map(|doc| ludion_scene::emit_assembly(&doc)),
             LoadedExtra::Sculpt(sculpt) => stage_sculpt_dependencies(source, &sculpt.doc, &slot)?
                 .map(|doc| ludion_scene::emit_sculpt(&doc)),
-            // `check_character_alone` refuses a character in a lineup before anything is staged.
-            LoadedExtra::Voxel(_) | LoadedExtra::Mesh | LoadedExtra::Character(_) => None,
+            // `check_alone` refuses a character or a prefab in a lineup before anything is staged.
+            LoadedExtra::Voxel(_)
+            | LoadedExtra::Mesh
+            | LoadedExtra::Character(_)
+            | LoadedExtra::Prefab(_) => None,
         };
         std::fs::create_dir_all(&slot)
             .and_then(|()| match &rewritten {
@@ -3468,12 +3605,23 @@ fn synthesize_scene(
         .zip(&subject.placements)
         .enumerate()
     {
-        let shape_key = match bounds.kind {
+        let shape_key = match &bounds.kind {
             ModelKind::Voxel => "voxel",
             ModelKind::Mesh => "asset",
             ModelKind::Assembly => "assembly",
             ModelKind::Sculpt => "sculpt",
             ModelKind::Character => "character",
+            ModelKind::Prefab(root_part) => {
+                push_prefab_instance(
+                    &mut yaml,
+                    index,
+                    name,
+                    root_part,
+                    placement,
+                    animations.get(index).copied().flatten(),
+                );
+                continue;
+            }
         };
         let scale = placement.scale;
         yaml.push_str("  - components:\n");
@@ -3581,6 +3729,40 @@ fn synthesize_scene(
     yaml
 }
 
+/// Appends one prefab instance entry: the normalizing placement on the entry, and a posed sheet's
+/// `Animation` as an override of the root part, where playback reads it.
+fn push_prefab_instance(
+    yaml: &mut String,
+    index: usize,
+    file: &str,
+    root_part: &str,
+    placement: &Placement,
+    animation: Option<AnimationSpec>,
+) {
+    let scale = placement.scale;
+    yaml.push_str(&format!(
+        "  - name: phase-{index}\n    prefab: {}\n",
+        quote_yaml(file)
+    ));
+    yaml.push_str("    transform:\n");
+    push_seq(yaml, "      ", "translation", &placement.translation);
+    push_seq(yaml, "      ", "scale", &[scale, scale, scale]);
+    let Some(animation) = animation else {
+        return;
+    };
+    yaml.push_str("    overrides:\n");
+    yaml.push_str(&format!("      {}:\n", quote_yaml(root_part)));
+    yaml.push_str("        Animation:\n");
+    yaml.push_str(&format!("          clip: {}\n", quote_yaml(animation.clip)));
+    yaml.push_str(&format!("          started: {}\n", animation.started));
+    if let Some(fade) = animation.fade {
+        yaml.push_str(&format!("          from: {}\n", quote_yaml(fade.from)));
+        yaml.push_str(&format!("          from_started: {}\n", fade.from_started));
+        yaml.push_str(&format!("          fade_started: {}\n", fade.fade_started));
+        yaml.push_str(&format!("          fade: {:?}\n", fade.seconds));
+    }
+}
+
 /// Appends [`ModelChannel::Emissive`]'s carrier entity: an `Environment` with no sky, no ambient and
 /// no image-based lighting, and a `PostProcess` flattened to a pass-through.
 ///
@@ -3646,6 +3828,18 @@ fn quote_yaml(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A prefab's bounds are the rest-pose box of its expanded parts: the hinge's lid sits at
+    /// z = −0.4 and its latch at z = +0.4, so the box must enclose both.
+    #[test]
+    fn a_prefabs_bounds_enclose_all_its_parts() {
+        let hinge = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/import-node-clips/expected/model.prefab.yaml");
+        let loaded = load_model(&hinge).unwrap_or_else(|d| panic!("{d:#?}"));
+        assert!(matches!(&loaded.bounds.kind, ModelKind::Prefab(root) if root == "base"));
+        assert!(loaded.bounds.min[2] <= -0.4, "{:?}", loaded.bounds.min);
+        assert!(loaded.bounds.max[2] >= 0.4, "{:?}", loaded.bounds.max);
+    }
 
     #[test]
     fn a_crossfade_spec_parses_three_fields() {

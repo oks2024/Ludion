@@ -165,3 +165,94 @@ fn a_bad_override_path_is_l1233_with_the_nearest_name() {
     assert!(stderr.contains("`bulb`"), "{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A copy of the node-clip import's hinge prefab, under a scratch directory unique to `tag`.
+fn hinge_copy(tag: &str) -> PathBuf {
+    let source =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-node-clips/expected");
+    let dir = std::env::temp_dir().join(format!("ludion-check-hinge-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for file in [
+        "model.prefab.yaml",
+        "clips/open.anim.yaml",
+        "clips/snap.anim.yaml",
+        "meshes/base.mesh.yaml",
+        "meshes/lid.mesh.yaml",
+        "meshes/latch.mesh.yaml",
+    ] {
+        let to = dir.join(file);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(source.join(file), to).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn a_prefab_with_clips_lists_them() {
+    let dir = hinge_copy("lists");
+    let output = run_check_scene(&dir.join("model.prefab.yaml"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("3 parts"), "{stdout}");
+    assert!(stdout.contains(", 2 clips)"), "{stdout}");
+    assert!(
+        stdout.contains("  clip open: clips/open.anim.yaml, duration"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("  clip snap: clips/snap.anim.yaml"),
+        "{stdout}"
+    );
+
+    let json = Command::new(env!("CARGO_BIN_EXE_ludion"))
+        .args(["check-scene", "--json"])
+        .arg(dir.join("model.prefab.yaml"))
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(report["clips"][1]["name"], "snap");
+    assert_eq!(report["clips"][1]["looped"], false);
+}
+
+#[test]
+fn a_clip_track_naming_no_part_is_l1314_with_the_nearest_part() {
+    let dir = hinge_copy("bad-target");
+    let clip = dir.join("clips/snap.anim.yaml");
+    let text = std::fs::read_to_string(&clip).unwrap();
+    assert!(text.contains("\n  latch:\n"));
+    std::fs::write(&clip, text.replace("\n  latch:\n", "\n  latchh:\n")).unwrap();
+    let output = run_check_scene(&dir.join("model.prefab.yaml"));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1314"), "{stderr}");
+    assert!(
+        stderr.contains("animates `latchh`, which is not a part of this prefab"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("nearest part is `latch`"), "{stderr}");
+}
+
+#[test]
+fn an_unclipped_prefab_is_unchanged_and_json_lists_no_clips() {
+    let path = scratch(
+        "plain.prefab.yaml",
+        "format: 1\nkind: prefab\nname: plain\nentities:\n  - name: a\n    components:\n      Transform: {}\n",
+    );
+    let output = run_check_scene(&path);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("OK (prefab plain, 1 part, 1 component)"),
+        "{stdout}"
+    );
+    let json = Command::new(env!("CARGO_BIN_EXE_ludion"))
+        .args(["check-scene", "--json"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(report["clips"], serde_json::json!([]));
+}

@@ -41,8 +41,8 @@
 //! line names the render extent whenever it differs, so a quality setting can never silently
 //! disagree with the resolution the user asked for.
 //!
-//! **Model mode** (`--model`) renders a `.voxel.yaml`/`.mesh.yaml`/`.assembly.yaml`/`.sculpt.yaml`
-//! model document (an assembly at its rest pose) as a turntable contact sheet via
+//! **Model mode** (`--model`) renders a `.voxel.yaml`/`.mesh.yaml`/`.assembly.yaml`/`.sculpt.yaml`/`.prefab.yaml`
+//! model document (an assembly or prefab at its rest pose) as a turntable contact sheet via
 //! `ludion_engine::render_model_sheet` — the model-view harness that collapses the voxel/mesh
 //! authoring loop to `check-scene` → `render --model` → look at one image. `--out`
 //! defaults to `<name>.sheet.png` in the current directory when omitted. `--rig <scene>` swaps the
@@ -58,7 +58,7 @@
 //! n evenly spaced phases in one image), and every phase prints a **gap analysis** — the posed
 //! model's connected-component count plus, when it is more than one, the parts owning each piece
 //! that came away, in the same `connectivity owners:` shape `check-scene` prints over the rest pose.
-//! A `.character.yaml` poses the same way (alone, no gap analysis: its phases print the clip time,
+//! A `.character.yaml` or `.prefab.yaml` poses the same way (alone, no gap analysis: its phases print the clip time,
 //! including its binding's overlay speed), and `--crossfade <from>:<to>:<seconds>` lays out the blend
 //! of two bound clips as a strip whose phases print their fade `weight`, defaulting `--out` to
 //! `<name>-<from>-<to>-crossfade.png`.
@@ -952,7 +952,7 @@ fn join_owners(owners: &[String]) -> String {
 
 /// The default `--out` for model and sprite mode: `<name>.sheet.png` in the current directory, where
 /// `<name>` is the document's file stem with a trailing `.voxel`/`.mesh`/`.assembly`/`.sculpt`/
-/// `.character`/`.sprite` suffix stripped (`lantern.voxel.yaml` -> `lantern.sheet.png`, `ship.sprite.yaml` ->
+/// `.character`/`.prefab`/`.sprite` suffix stripped (`lantern.voxel.yaml` -> `lantern.sheet.png`, `ship.sprite.yaml` ->
 /// `ship.sheet.png`). Atlas mode has its own name ([`default_atlas_out`]) because a sprite document
 /// and the atlas it is packed into routinely share a stem, and one silently overwriting the other's
 /// sheet would be the worst kind of default.
@@ -977,6 +977,7 @@ fn default_sheet_out(model: &Path, request: &Request) -> PathBuf {
         .or_else(|| stem.strip_suffix(".assembly"))
         .or_else(|| stem.strip_suffix(".sculpt"))
         .or_else(|| stem.strip_suffix(".character"))
+        .or_else(|| stem.strip_suffix(".prefab"))
         .or_else(|| stem.strip_suffix(".sprite"))
         .unwrap_or(&stem);
     // A channel is a different picture of the same subject, so it never lands on the ordinary

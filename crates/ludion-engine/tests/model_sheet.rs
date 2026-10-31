@@ -1479,7 +1479,7 @@ fn a_clip_against_a_voxel_document_is_l1117() {
     assert!(
         errors[0]
             .message
-            .contains("only an assembly or a character"),
+            .contains("only an assembly, a character or a prefab"),
         "{errors:?}"
     );
 }
@@ -2024,4 +2024,81 @@ fn crossfade_request_errors_are_readable() {
         errors[0].message.contains("`--clip` or `--crossfade`"),
         "{errors:?}"
     );
+}
+
+// --- Prefabs -----------------------------------------------------------------------------------
+
+/// The hinge prefab the node-clip import emits: `base`, `lid` and `latch`, with `open` and `snap`.
+/// Read-only; every test renders from the repo's own copy.
+fn hinge() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/import-node-clips/expected/model.prefab.yaml")
+}
+
+/// A prefab poses through the model harness: a strip's phases differ from rest and from each other.
+#[test]
+fn needs_gpu_a_prefab_clip_strip_poses_the_hinge() {
+    let path = hinge();
+    let models = [path.as_path()];
+    let rest_request = ModelSheetRequest {
+        views: &[ModelView::Game],
+        ..plain(&models, 480, 270)
+    };
+    let Some(rest) = pose_or_skip("prefab_rest", &rest_request) else {
+        return;
+    };
+    let strip = pose_or_skip(
+        "prefab_strip",
+        &ModelSheetRequest {
+            clip: Some("snap"),
+            strip: Some(4),
+            ..rest_request
+        },
+    )
+    .expect("adapter");
+    assert_ne!(sheet_bytes(&strip), sheet_bytes(&rest));
+    let clip = strip.clip.as_ref().expect("a posed sheet reports its clip");
+    assert_eq!((clip.name.as_str(), clip.phases.len()), ("snap", 4));
+    assert!(clip.phases.iter().all(|phase| phase.components.is_none()));
+}
+
+/// Prefab refusals that need no GPU: an unbound clip lists the bound ones, a lineup and an
+/// override are refused.
+#[test]
+fn prefab_request_errors_are_readable() {
+    let path = hinge();
+    let models = [path.as_path()];
+    let errors = render_model_sheet(&ModelSheetRequest {
+        clip: Some("nope"),
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1117");
+    for name in ["open", "snap"] {
+        assert!(
+            errors[0].message.contains(&format!("`{name}`")),
+            "{errors:?}"
+        );
+    }
+
+    let dir = temp_dir("prefab_lineup");
+    let voxel = write_fixture(&dir, "l-shape.voxel.yaml", L_SHAPE_VOXEL);
+    let pair = [path.as_path(), voxel.as_path()];
+    let errors = render_model_sheet(&plain(&pair, 64, 64)).unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1117");
+    assert!(
+        errors[0].message.contains("a prefab renders alone"),
+        "{errors:?}"
+    );
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        set: &[SceneOverride {
+            pointer: "/palette/a/color".to_string(),
+            value: json!([1.0, 0.0, 0.0]),
+        }],
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L4008");
+    assert!(errors[0].message.contains("a prefab has no palette"));
 }

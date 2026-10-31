@@ -28,6 +28,15 @@ pub struct PrefabClipData {
     pub rests: BTreeMap<String, Transform>,
 }
 
+/// Reads the prefab at `root`/`rel` and every clip file it names — [`load_with_sources`] without the
+/// dependency list, for `check-scene`.
+///
+/// # Errors
+/// As [`load_with_sources`].
+pub fn load(root: &Path, rel: &str) -> Result<PrefabClipData, Vec<Diagnostic>> {
+    load_with_sources(root, rel).map(|(data, _)| data)
+}
+
 /// Reads the prefab at `root`/`rel` and every clip file it names, reporting **every file it read**
 /// — the prefab first, then each clip, as `root`-relative paths, each with the content hash of the
 /// bytes it decoded: the entry's reload dependency set (see [`crate::asset_cache`]).

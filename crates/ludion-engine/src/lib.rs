@@ -185,6 +185,7 @@ pub use perf_live::{
 };
 pub use player_profile::{Profile, ProfileSaveEntry};
 pub use prefab::{PrefabInstance, spawn_prefab};
+pub use prefab_clips::{PrefabClipData, load as load_prefab_clips};
 pub use prefab_ops::{PrefabApplied, PrefabReverted, revert_prefab, unpack_prefab};
 pub use probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 pub use probe_check::scene_probe_diagnostics;

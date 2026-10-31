@@ -1249,7 +1249,7 @@ fn clip_on_a_voxel_model_is_l1117() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("error[L1117]"), "{stderr}");
     assert!(
-        stderr.contains("only an assembly or a character"),
+        stderr.contains("only an assembly, a character or a prefab"),
         "{stderr}"
     );
 }
@@ -1940,4 +1940,138 @@ fn needs_gpu_a_character_clip_strip_names_its_output() {
         );
     }
     assert!(dir.join("mannequin-run-strip.png").exists());
+}
+
+// --- Prefabs -----------------------------------------------------------------------------------
+
+/// The hinge prefab the node-clip import emits (`open` and `snap`). Read-only.
+fn hinge() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/import-node-clips/expected/model.prefab.yaml")
+}
+
+/// A prefab `--clip` strip defaults to `<name>-<clip>-strip.png` (the `.prefab` suffix stripped) and
+/// prints one report line per phase, with no gap analysis.
+#[test]
+fn needs_gpu_a_prefab_clip_strip_names_its_output() {
+    let dir = target_tmpdir().join("prefab_strip");
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            hinge().to_str().unwrap(),
+            "--clip",
+            "snap",
+            "--strip",
+            "4",
+            "--width",
+            "480",
+            "--height",
+            "270",
+        ],
+    );
+    if !output.status.success() {
+        if is_no_adapter(&output) {
+            eprintln!("SKIPPED a_prefab_clip_strip_names_its_output: no GPU adapter");
+            return;
+        }
+        panic!(
+            "render --clip --strip failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(dir.join("model-snap-strip.png").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("phase 3:"), "{stdout}");
+    assert!(
+        !stdout.contains("component"),
+        "a prefab has no gap analysis: {stdout}"
+    );
+}
+
+/// A prefab crossfade writes `<name>-<from>-<to>-crossfade.png` and reports each phase's weight.
+#[test]
+fn needs_gpu_a_prefab_crossfade_names_its_output_and_prints_weights() {
+    let dir = target_tmpdir().join("prefab_crossfade");
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            hinge().to_str().unwrap(),
+            "--crossfade",
+            "open:snap:0.25",
+            "--width",
+            "480",
+            "--height",
+            "270",
+        ],
+    );
+    if !output.status.success() {
+        if is_no_adapter(&output) {
+            eprintln!("SKIPPED a_prefab_crossfade_names_its_output: no GPU adapter");
+            return;
+        }
+        panic!(
+            "render --crossfade failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(dir.join("model-open-snap-crossfade.png").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("crossfade open -> snap over 0.25s"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("weight 0.000"), "{stdout}");
+}
+
+/// **The rest pose is untouched.** `--clip open --time 0` — where every track's first key is the
+/// part's rest — writes the same bytes as the prefab with no clip at all. Needs a GPU.
+#[test]
+fn needs_gpu_a_prefab_clip_at_time_zero_writes_the_rest_pose_bytes() {
+    let dir = target_tmpdir().join("prefab_t0_bytes");
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let (rest_out, posed_out) = (dir.join("rest.png"), dir.join("posed.png"));
+    let render = |extra: &[&str], out: &Path| {
+        let model = hinge();
+        let mut args = vec!["render", "--model", model.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        args.extend([
+            "--out",
+            out.to_str().unwrap(),
+            "--width",
+            "300",
+            "--height",
+            "200",
+        ]);
+        run_ludion(&args)
+    };
+    let rest = render(&[], &rest_out);
+    if !rest.status.success() {
+        if is_no_adapter(&rest) {
+            eprintln!(
+                "SKIPPED a_prefab_clip_at_time_zero_writes_the_rest_pose_bytes: no GPU adapter"
+            );
+            return;
+        }
+        panic!(
+            "rest render failed: {}",
+            String::from_utf8_lossy(&rest.stderr)
+        );
+    }
+    let posed = render(&["--clip", "open", "--time", "0"], &posed_out);
+    assert!(
+        posed.status.success(),
+        "render --clip --time failed: {}",
+        String::from_utf8_lossy(&posed.stderr)
+    );
+    assert_eq!(
+        std::fs::read(&rest_out).unwrap(),
+        std::fs::read(&posed_out).unwrap(),
+        "a clip at t = 0 draws the rest pose"
+    );
 }

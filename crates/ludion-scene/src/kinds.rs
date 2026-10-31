@@ -125,7 +125,7 @@ pub const KINDS: &[KindEntry] = &[
         noun: "a prefab",
         check: KindCheck::Here(|s| crate::parse_prefab(s).map(drop)),
         doc_store: false,
-        model_sheet: false,
+        model_sheet: true,
     },
     KindEntry {
         name: "path",
