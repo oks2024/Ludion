@@ -94,6 +94,8 @@ grow the other two into the same value.
    - **Cluster grid dimensions** — the 16×9×16 grid is fixed-count precisely so it is `--scale`
      invariant; making it a quality axis reintroduces the per-machine variation that decision bought
      out, for a cost that measures in the hundredths of a millisecond.
+   - **AA mode** — decision 5's zero churn: a preset moving it would move every golden's look and
+     cost. Anti-aliasing is a host setting beside `--scale` (`--aa`), off by default.
    - **IBL prefilter sizes** — the prefilter is cached by content hash and paid once at load, so
      shrinking it buys frame time that was never being spent.
    - **Authoring instruments** — the model/voxel contact sheets and `render --sweep` stay at FULL
@@ -358,6 +360,10 @@ Two decisions worth not re-litigating:
 - **`build_sun` zeroes `light_space` exactly when the frame has no map**, reaching `mesh.wgsl`'s
   existing fully-lit early-out. Without that zeroing the scene pass comparison-samples the 1×1
   fallback depth and shadows the world *solid* — the failure the guard test is aimed at.
+
+**Further additive revision (Clockout request 0009):** the descriptor gains `quality.anti_aliasing`
+(the mode the host resolved; absent reads `off`), moving the wire hash to `3d3a318c5d8a9d00`. A
+budget check refuses a report whose mode is not `off`, as it refuses a non-`full` preset (`L4020`).
 
 **Deviation from decision 7, taken deliberately: a second profile-schema revision**
 (`e49517e93ed32dd8` → `3b840452912903dc`, purely additive). Decision 7 budgeted one revision for the

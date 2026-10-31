@@ -41,6 +41,7 @@ report `L0008` from a game project.
 - `ludion docs running` — hosting a scene, attaching peers, `render.bounds`, recording.
 - `ludion docs export` — `ludion export`: a game as an Xcode project for iOS.
 - `ludion docs quality` — per-machine render quality: `--quality`, the presets, the override file.
+- `ludion docs anti-aliasing` — SMAA 1x: `--aa`, the runtime switch, and what it won't fix.
 - `ludion docs dev-loop` — `ludion dev`, the live rebuild → snapshot → restore loop.
 - `ludion docs recipes` — copyable patterns: spawning, collision, lights.
 - `ludion docs wire-protocol` — the JSON-over-WebSocket protocol, from a bare socket.

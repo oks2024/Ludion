@@ -3,6 +3,9 @@
 > **CLOSED — shipped; the waves delivered through "Wave 11 delivered 2026-07-26" and
 > "`PostProcess.ssao_direct` shipped whole 2026-07-29" (wave log below). Owed: the `ssao_direct`
 > value gate — the field is whole; only its shipped value rides a human sitting.**
+> SMAA 1x amendment shipped 2026-10-31 (Clockout request 0009, Lore r1825–r1831): three conditional
+> passes after `composite`, 0.095 ms summed at 1080p on the RTX 3090 against 0.125 → 0.462 ms for the
+> scene pass at `--scale 2`; `edge_aliasing` on `post-full` 0.798 → 0.464 (0.492 at `--scale 2`).
 > Status: **ACCEPTED 2026-07-25** (user direction) — direction settled the same day in a grill-me
 > session where every decision below was answered explicitly. Multi-wave master plan, executed step
 > by step — defects first. Runs under the graphics-engine feature stream as a standalone plan (the
@@ -202,7 +205,8 @@
 > the scene pass's colour *and* its depth — carried an in-degree it could never work off and reported
 > itself as an `L2001` cycle. No graph had that shape before wave 6. Fixed by deduplicating `deps`,
 > with a regression test. On the effect: **fog is scene-referred and vignette display-referred**, so
-> the pinned order is `scene + bloom` → fog → exposure → tonemap → grade → vignette → dither. **Fog
+> the pinned order is `scene + bloom` → fog → exposure → tonemap → grade → vignette → dither (with
+> anti-aliasing on: vignette → AA → grain → dither, decision 2). **Fog
 > does not apply where nothing was drawn** (`depth < 1.0` is the test; the sky sits at exactly far
 > depth) — otherwise distance fog would replace an authored `Environment` gradient with a slab of fog
 > colour, and the corollary for an author is in the field docs: a `fog_color` near `sky_horizon` is
@@ -695,6 +699,9 @@ engine hard-codes. The engine ships neutral defaults and orthogonal operators.
    "Composite" is today's `tonemap` pass, grown up. Rejected: every-effect-its-own-pass (~8
    needless full-res round trips for one-ALU operations, combinatorial golden churn) and one
    uber-pass (cannot express bloom/DoF/SSAO anyway, and destroys `--dump-timings` attribution).
+   *Amended (Clockout request 0009, owner-approved 2026-10-29):* with anti-aliasing on, the order is
+   vignette → AA → grain → dither, grain and dither run by the AA's last pass (`smaa_blend`);
+   AA-off frames are unchanged.
 3. **Authoring surface: an opt-in `PostProcess` singleton component**, inline fields, lowest-
    `EntityId` wins, **absent ⇒ today's pipeline byte-for-byte** (the `Environment` /
    `DirectionalLight` precedent). `Environment` keeps sky/ambient/IBL — *lighting*; `PostProcess`
@@ -711,8 +718,11 @@ engine hard-codes. The engine ships neutral defaults and orthogonal operators.
    determinism risk. `--scale` is a **client setting** (CLI flag, serve/host option, a shipped
    game's settings item) — supersampling is a quality level, not a look. Rejected: FXAA (blurs;
    no help for specular shimmer — recorded as a trigger-gated cheap path), MSAA (needs
-   multisample support in the graph and fixes only geometric edges — the minority of the
-   content), and scene-authored scale (content must not dictate the client's GPU budget).
+   multisample support in the graph and fixes only geometric edges — the minority of sprite
+   content; in a mesh game they are the majority), and scene-authored scale (content must not dictate the client's
+   GPU budget). *Amended (Clockout request 0009, owner-approved 2026-10-29, SMAA only):* SSAA stays
+   the ceiling and the only fix for sub-pixel content; a single-frame post AA (SMAA 1x) is a client
+   setting beside it, off by default and switchable at runtime. FXAA stays rejected.
 5. **Temporal AA is rejected, with a recorded trigger.** Not for determinism reasons — TAA's
    jitter is a Halton sequence indexed by frame, and it is bit-reproducible. It is rejected
    because (a) it needs motion vectors, i.e. MRT *plus* previous-frame transforms threaded
@@ -968,7 +978,8 @@ engine hard-codes. The engine ships neutral defaults and orthogonal operators.
   wave 7; the build is cheap whenever the direction is chosen. It would also be the second consumer
   that earns the prepass its own budget group.
 - **FXAA as a cheap AA path** — trigger: the first platform that cannot afford supersampling
-  (see `Plan/console-strategy.md`).
+  (see `Plan/console-strategy.md`). Stays deferred; the trigger was read as met by a shipped window
+  that cannot supersample, and answered by SMAA 1x (Clockout request 0009), not FXAA.
 - **`.cube` LUT colour grading** — trigger: a look analytic grading cannot express. Note a
   `.cube` file is ASCII, so it does not fire the binary-asset objection; the objection is that an
   agent cannot author a 32³ LUT by hand.

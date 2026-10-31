@@ -63,7 +63,9 @@ spacing, an eighth of the probes. Its range is `1.0` upward.
 up; cheaper is smaller, `1.0` is native. `low`'s `0.75` draws 56% of the pixels — every pass the render
 extent sizes takes the discount. `medium`/`high` stay native (a resampled frame is softer, not just
 coarser). More than native is supersampling — the host's `--scale` — so `1.0` is the ceiling, and
-**an explicit `--scale` beats the one a quality supplies, which beats native.**
+**an explicit `--scale` beats the one a quality supplies, which beats native.** Edge anti-aliasing
+(`--aa`) is a host setting beside `--scale`, not a quality axis: no preset touches it
+(`ludion docs anti-aliasing`).
 
 **`particle_density`** is the one axis the engine spends, not the renderer: it multiplies every
 `ParticleEmitter`'s `rate` and `burst` at extract time — population only; sizes, colours, speeds,

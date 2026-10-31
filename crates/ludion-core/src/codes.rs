@@ -2068,8 +2068,8 @@ pub mod code {
     /// `ludion-engine`'s budget check — a gate that measured nothing must not read as a pass.
     pub const BUDGET_GPU_UNMEASURED: DiagnosticCode = DiagnosticCode::new("L4019");
 
-    /// `L4020` — a profile report measured below full quality was checked against a budget, which
-    /// refuses to compare it. Raised by the `ludion` facade's budget check.
+    /// `L4020` — a profile report measured below full quality, or with anti-aliasing on, was checked
+    /// against a budget, which refuses to compare it. Raised by the `ludion` facade's budget check.
     pub const BUDGET_QUALITY_MISMATCH: DiagnosticCode = DiagnosticCode::new("L4020");
 
     /// `L4021` — `ludion profile --perfetto` was given a report with no per-frame `samples` to build a
@@ -9809,9 +9809,10 @@ CPU-only budget — remove the GPU lines from the file.",
     CodeEntry {
         code: code::BUDGET_QUALITY_MISMATCH,
         severity: Severity::Error,
-        title: "a reduced-quality profile report cannot be checked against a budget",
+        title: "a reduced-quality or anti-aliased profile report cannot be checked against a budget",
         explanation: "\
-A profile report measured below full quality was handed to a budget check, which refuses it.
+A profile report measured below full quality, or with anti-aliasing on, was handed to a budget check,
+which refuses it.
 
 A budget is calibrated against everything the scene authors, so its ceilings describe frames a
 reduced-quality run never rendered: the comparison would pass for a reason nobody chose, which is
@@ -9819,7 +9820,11 @@ worse than not running it. The refusal reads off the report's own `quality` desc
 an `--attach` capture of someone else's host exactly as it covers a local run. A report carrying no
 descriptor predates the field and is compared as before.
 
-Fix: re-measure at `--quality full` (or with `LUDION_QUALITY` unset) and check that report.",
+An anti-aliased capture (`quality.anti_aliasing` other than `off`) is refused the same way: it pays
+passes the budget never measured.
+
+Fix: re-measure at `--quality full` (or with `LUDION_QUALITY` unset), and without `--aa` (or with
+`--aa off`), and check that report.",
     },
     CodeEntry {
         code: code::PROFILE_SAMPLES_MISSING,

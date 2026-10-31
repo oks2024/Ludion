@@ -1539,7 +1539,8 @@ pub fn profile_report_json(report: &ludion_engine::ProfileReport) -> String {
 /// rendered: the comparison would pass for a reason nobody chose, which is worse than not running it.
 /// The refusal reads off the report's own [`quality`](ludion_engine::ProfileReport::quality)
 /// descriptor, so it covers an `--attach` capture of someone else's host exactly as it covers a local
-/// run. A report carrying no descriptor at all predates the field and is compared as before.
+/// run. A report carrying no descriptor at all predates the field and is compared as before. An
+/// anti-aliased capture is refused for the same reason: it pays passes the budget never measured.
 #[cfg(feature = "wire")]
 pub fn check_budget_report(report: &ludion_engine::ProfileReport, budget_path: &Path) -> ExitCode {
     let full = ludion_engine::QualitySetting::FULL_LABEL;
@@ -1547,6 +1548,15 @@ pub fn check_budget_report(report: &ludion_engine::ProfileReport, budget_path: &
         && quality.preset != full
     {
         eprintln!("{}", quality_refusal(&quality.preset, budget_path));
+        return ExitCode::FAILURE;
+    }
+    if let Some(quality) = &report.quality
+        && quality.anti_aliasing != ludion_engine::AntiAliasing::Off.name()
+    {
+        eprintln!(
+            "{}",
+            anti_aliasing_refusal(&quality.anti_aliasing, budget_path)
+        );
         return ExitCode::FAILURE;
     }
     let budget = match ludion_engine::load_budget(budget_path) {
@@ -1589,6 +1599,23 @@ fn quality_refusal(preset: &str, budget: &Path) -> Diagnostic {
         "a budget is calibrated against everything the scene authors — re-measure at \
          `--quality {full}` (or with `LUDION_QUALITY` unset) to compare"
     ))
+}
+
+/// The `L4020` refusal to compare a report measured with anti-aliasing `mode` against `budget`.
+#[cfg(feature = "wire")]
+fn anti_aliasing_refusal(mode: &str, budget: &Path) -> Diagnostic {
+    Diagnostic::new(
+        code::BUDGET_QUALITY_MISMATCH,
+        format!(
+            "this measurement was taken with anti-aliasing `{mode}`, so it cannot be checked \
+             against `{}`",
+            budget.display(),
+        ),
+    )
+    .with_help(
+        "a budget is calibrated with anti-aliasing off — re-measure without `--aa` (or with \
+         `--aa off`) to compare",
+    )
 }
 
 /// Runs `--bake-probes`: loads `scene` through the game's builder, bakes its reflection probes at
@@ -2372,18 +2399,17 @@ mod budget_quality_tests {
     //! covered by the same six lines.
 
     use super::*;
-    use ludion_engine::{ProfileReport, QualitySetting, SimProfile};
+    use ludion_engine::{AntiAliasing, ProfileReport, QualitySetting, SimProfile};
 
     /// A report labelled `quality`, with timings comfortably inside [`budget`]'s ceilings — the
     /// descriptor is the subject here, not the numbers.
-    fn report_at(quality: Option<&str>) -> ProfileReport {
+    fn report_at(quality: Option<&str>, aa: ludion_engine::AntiAliasing) -> ProfileReport {
         ProfileReport {
             scene: "scenes/main.yaml".to_string(),
             warmup_frames: 0,
             measured_frames: 60,
             quality: quality.map(|preset| {
-                let mut descriptor =
-                    QualitySetting::default().descriptor(ludion_engine::AntiAliasing::Off);
+                let mut descriptor = QualitySetting::default().descriptor(aa);
                 descriptor.preset = preset.to_string();
                 descriptor
             }),
@@ -2434,7 +2460,7 @@ mod budget_quality_tests {
         let budget = budget("refused");
         for preset in ["low", "medium", "high", QualitySetting::CUSTOM_LABEL] {
             assert_eq!(
-                check_budget_report(&report_at(Some(preset)), &budget),
+                check_budget_report(&report_at(Some(preset), AntiAliasing::Off), &budget),
                 ExitCode::FAILURE,
                 "`{preset}` must be refused, not compared",
             );
@@ -2458,10 +2484,31 @@ mod budget_quality_tests {
     #[test]
     fn a_full_or_descriptorless_measurement_is_compared() {
         let budget = budget("compared");
-        for report in [report_at(Some("full")), report_at(None)] {
+        for report in [
+            report_at(Some("full"), AntiAliasing::Off),
+            report_at(None, AntiAliasing::Off),
+        ] {
             assert_eq!(check_budget_report(&report, &budget), ExitCode::SUCCESS);
         }
         let _ = std::fs::remove_file(&budget);
+    }
+
+    /// An SMAA capture pays passes the budget never measured, so a `full` report with the mode on
+    /// is refused with the same code as a reduced preset.
+    #[test]
+    fn an_anti_aliased_measurement_is_refused_rather_than_compared() {
+        let budget = budget("anti-aliased");
+        assert_eq!(
+            check_budget_report(&report_at(Some("full"), AntiAliasing::Smaa), &budget),
+            ExitCode::FAILURE,
+        );
+        let _ = std::fs::remove_file(&budget);
+        let diagnostic = anti_aliasing_refusal("smaa", Path::new("budgets/x.toml"));
+        assert_eq!(diagnostic.code, code::BUDGET_QUALITY_MISMATCH);
+        let rendered = diagnostic.to_string();
+        assert!(rendered.starts_with("error[L4020]: "), "{rendered}");
+        assert!(rendered.contains("`smaa`"), "{rendered}");
+        assert!(rendered.contains("x.toml"), "{rendered}");
     }
 }
 

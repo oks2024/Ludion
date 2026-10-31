@@ -54,8 +54,8 @@ settled plan, nothing built; **rejected** — closed by design.
   *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): alpha-cutout (`alpha_mode: mask`) and double-sided meshes ship (Clockout 0010). Alpha-blend stays a gap; trigger: the first committed asset that must be seen through (e.g. the Noir skylight glass), a separate request with a sorted `transparents` mesh path.*
 - **Textures** — PNG decoded to RGBA8 only; no BC/ASTC/KTX2 compression. Voxel texturing deferred
   (`Plan/textured-pbr.md`).
-- **Anti-aliasing and upscaling** — supersampling (`--scale`) only. FXAA deferred; SMAA absent
-  (both compatible with the no-temporal rule); FSR/DLSS absent (the temporal ones are out with TAA).
+- **Anti-aliasing and upscaling** — supersampling (`--scale`) plus SMAA 1x (`--aa`,
+  runtime-switchable); FXAA deferred; FSR/DLSS absent (the temporal ones are out with TAA).
 - **Reflections and GI** — IBL of the procedural sky plus the opt-in voxel/probe diffuse GI. No SSR
   (deferred), no reflection probes, no specular GI.
 - **Exposure** — manual only; auto-exposure absent. `.cube` LUT grading deferred.
@@ -157,7 +157,7 @@ it raise the number of autonomous agent iterations (the North Star)?
    beyond crossfade, CCD if a fast fall tunnels.
 5. **The shippable-game bundle, when a game is declared shipping** (post-M7 grilling): desktop
    export and packaging, texture compression (before iOS device work), music crossfades, stereo
-   panning with volume buses and a settings surface, input rebinding, localization, SMAA.
+   panning with volume buses and a settings surface, input rebinding, localization.
 
 Not recommended now: networking, material graphs or a custom-shader surface (a second, weaker API
 surface — Pillar 6), GPU particles, SSR or reflection probes, terrain, vehicles, Android, web,

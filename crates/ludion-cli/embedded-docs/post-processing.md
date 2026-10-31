@@ -38,6 +38,9 @@ chromatic aberration → depth of field → + bloom + halation → the medium (h
   → exposure → tonemap → grade → vignette → grain → dither
 ```
 
+With SMAA on, the tail is `… vignette → SMAA → grain → dither`: grain and dither move into the AA's
+last pass. See `ludion docs anti-aliasing`.
+
 The split worth knowing is scene-referred against display-referred. Everything through the medium
 happens to the *light*, in linear HDR, before any camera transform — a camera photographs fogged
 light, it does not fog a photograph. The grade and the vignette are the opposite: a look and a lens
