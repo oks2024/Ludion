@@ -93,6 +93,7 @@
 //
 // Zero npm dependencies — Node built-ins only. Runs unchanged on Windows and macOS.
 
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -274,6 +275,41 @@ function canaryOverMessage(text) {
 function reportCanaryFailure(code, hitLines) {
   if (code === 1) for (const l of hitLines) console.error(`commit: ${l}`);
   else console.error(`commit: the privacy canary could not run (exit ${code}, see above) — fix that, then commit again.`);
+}
+
+// ── mirror content guard ────────────────────────────────────────────────────
+// Every flow that writes a mirror commit runs this over the staged git index before the commit.
+// Lore has already committed by then (and keeps the private copy); a refusal leaves only the mirror
+// behind, repaired by `--mirror-only` once the file is clean.
+function hashWorking(entries) {
+  const hashes = new Map();
+  for (const e of entries) {
+    if (e.path.endsWith('/')) continue;
+    const abs = path.join(REPO_ROOT, e.path);
+    hashes.set(e.path, existsSync(abs) ? createHash('sha256').update(readFileSync(abs)).digest('hex') : null);
+  }
+  return hashes;
+}
+
+// `staged` is what Lore staged for this commit (path -> hash), when this flow staged anything: a
+// file whose bytes moved since would be mirrored as bytes Lore never committed.
+function mirrorGuard(staged = new Map()) {
+  return () => {
+    const drifted = [...hashWorking([...staged.keys()].map((p) => ({ path: p }))).entries()].filter(([p, h]) => h !== staged.get(p));
+    if (drifted.length) {
+      console.error('commit: these files changed between Lore staging them and the mirror commit:');
+      for (const [p] of drifted) console.error(`commit:   ${p}`);
+      console.error('commit: Lore is committed but the git mirror is NOT — the mirror would publish bytes Lore does not hold.');
+      console.error('commit: re-commit them with Lore, or run `node scripts/commit.mjs --mirror-only "<message>" <paths>`.');
+      return false;
+    }
+    const canary = run(process.execPath, [path.join(REPO_ROOT, 'scripts', 'privacy-canary.mjs'), '--staged']);
+    if (canary.code !== 0) {
+      reportCanaryFailure(canary.code, ['the staged files carry a private token (see above) — mirror commit aborted.']);
+      console.error('commit: Lore is committed but the git mirror is NOT; fix the file(s), then `node scripts/commit.mjs --mirror-only "<message>" <paths>`.');
+    }
+    return canary.code === 0;
+  };
 }
 
 // ── Lore preflight — never author on a stale parent, never maul a merge ─────
@@ -691,7 +727,7 @@ function catchUpMirror(online, paths) {
     'Collapses Lore-native commits made since the last mirror (Lore is the\n' +
     'source of truth); see `lore history` for the individual revisions.\n\n' +
     `[lore ${curRev} | ${curSig}]`;
-  const result = mirrorCommit({ message: catchUp, sig: curSig, paths: paths.length ? paths : null, online, push: !values['no-push'] });
+  const result = mirrorCommit({ message: catchUp, sig: curSig, paths: paths.length ? paths : null, online, push: !values['no-push'], guard: mirrorGuard() });
   if (result.summary.startsWith('skipped')) {
     console.log(`commit: nothing to commit — tree and git mirror both match Lore revision ${curRev}`);
     reportMirrorProblem(result);
@@ -766,6 +802,8 @@ function commitFlow() {
     process.exit(2);
   }
 
+  // Private paths never reach the mirror, so their bytes are not tracked.
+  const stagedHashes = hashWorking(loreState().staged.filter((e) => !isPrivate(e.path, PRIVATE)));
   const commit = lore(['commit', message]);
   if (commit.code !== 0) {
     if (commit.output.includes('Nothing staged for commit')) catchUpMirror(online, paths); // exits
@@ -796,7 +834,7 @@ function commitFlow() {
     `${message.trimEnd()}\n\n` +
     'Mirror of the Lore-native commit (Lore is the source of truth).\n\n' +
     `[lore ${rev} | ${sig}]`;
-  const mirror = mirrorCommit({ message: mirrorMessage, sig, paths: paths.length ? paths : null, online, push: !values['no-push'] });
+  const mirror = mirrorCommit({ message: mirrorMessage, sig, paths: paths.length ? paths : null, online, push: !values['no-push'], guard: mirrorGuard(stagedHashes) });
   const mirrorFailed = mirror.summary === 'FAILED' && !mirror.problem;
   if (mirrorFailed) {
     console.error('commit: git mirror commit failed — Lore is committed and authoritative, but the mirror');
@@ -871,13 +909,7 @@ function mirrorOnlyFlow() {
     `${message.trimEnd()}\n\n` +
     'Mirror of Lore-tracked content (Lore is the source of truth).\n\n' +
     `[lore ${state.rev} | ${state.local}]`;
-  // The canary reads the staged files, so a private token in any of them aborts before the commit.
-  const guard = () => {
-    const canary = run(process.execPath, [path.join(REPO_ROOT, 'scripts', 'privacy-canary.mjs'), '--staged']);
-    if (canary.code !== 0) reportCanaryFailure(canary.code, ['the staged files carry a private token (see above) — mirror commit aborted.']);
-    return canary.code === 0;
-  };
-  const mirror = mirrorCommit({ message: mirrorMessage, sig: state.local, paths, online, push: !values['no-push'], guard });
+  const mirror = mirrorCommit({ message: mirrorMessage, sig: state.local, paths, online, push: !values['no-push'], guard: mirrorGuard() });
   console.log(`\nLore revision ${state.rev} (unchanged) · git mirror: ${mirror.summary}`);
   const problem = reportMirrorProblem(mirror);
   if (problem || (mirror.summary === 'FAILED' && !mirror.problem)) process.exit(1);

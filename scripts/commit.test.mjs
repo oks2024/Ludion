@@ -97,6 +97,7 @@ if (verb === 'unstage') {
 }
 if (verb === 'commit') {
   if (server.failCommit) exit(1, 'commit failed: injected');
+  if (server.mutateOnCommit) writeFileSync(server.mutateOnCommit.file, server.mutateOnCommit.content);
   if (!Object.keys(ws.staged).length) exit(1, 'Nothing staged for commit');
   const rev = ws.rev + 1;
   const sig = createHash('sha256').update(rev + args[0] + randomBytes(8).toString('hex')).digest('hex');
@@ -738,6 +739,41 @@ describe('commit.mjs', { concurrency: true }, () => {
       expectCode(r, 1);
       assert.match(r.out, /private token/);
       assert.equal(w.server().rev, rev);
+    });
+
+    test('28b. file contents holding a token block the mirror commit of a normal commit; Lore keeps them', (t) => {
+      const { w, a } = tokenWorld(t);
+      const head = a.git('rev-parse', 'HEAD');
+      a.write('x.txt', `leak ${TOKEN}\n`);
+      const r = a.commit('add x', 'x.txt');
+      expectCode(r, 1);
+      assert.match(r.out, /private token/);
+      assert.match(r.out, /Lore is committed but the git mirror is NOT/);
+      assert.ok(loreHolds(w, 'x.txt', `leak ${TOKEN}\n`));
+      assert.equal(a.git('rev-parse', 'HEAD'), head);
+    });
+
+    test('28c. file contents holding a token block the --all-style catch-up mirror', (t) => {
+      const { a } = tokenWorld(t);
+      const head = a.git('rev-parse', 'HEAD');
+      const text = `leak ${TOKEN}\n`;
+      a.write('x.txt', text);
+      a.setLore({ files: { ...a.lore().files, 'x.txt': Buffer.from(text).toString('base64') } });
+      const r = a.commit('catch up', 'x.txt');
+      expectCode(r, 1);
+      assert.match(r.out, /private token/);
+      assert.equal(a.git('rev-parse', 'HEAD'), head);
+    });
+
+    test('28d. a file changed between Lore staging and the mirror commit is refused', (t) => {
+      const { w, a } = tokenWorld(t);
+      const head = a.git('rev-parse', 'HEAD');
+      a.write('x.txt', 'X\n');
+      w.setServer({ mutateOnCommit: { file: path.join(a.dir, 'x.txt'), content: 'changed\n' } });
+      const r = a.commit('add x', 'x.txt');
+      expectCode(r, 1);
+      assert.match(r.out, /changed between Lore staging/);
+      assert.equal(a.git('rev-parse', 'HEAD'), head);
     });
   });
 });
