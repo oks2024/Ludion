@@ -10,7 +10,7 @@ Screen-space UI is for HUDs, menus, and overlays: elements that never move with 
 get depth-clipped, and read the same size at every output resolution. Two builtin components carry
 it: `UiRect` (a colored or textured quad — `texture: None` is the `Sprite` convention for a plain
 tinted rect, not a separate rect/sprite pair) and `UiText` (a run of text in the same faces `Text`
-draws in world space — the embedded 8×8 face unless `font` names one — laid out in screen space instead). Both are anchored to one of nine canvas
+draws in world space — the `default` face of `fonts.yaml`, else the embedded 8×8 face, unless `font` names one — laid out in screen space instead). Both are anchored to one of nine canvas
 points via `Anchor`. World-space `Text` still exists and still matters — a floating damage number
 over a character, a nameplate, anything that should perspective-scale and occlude with the scene —
 UI is for everything that should not.
@@ -105,7 +105,7 @@ rather than a zero-size or alpha-zero trick.
         order: 2
 ```
 
-`UiText.font` names a baked face from `fonts.yaml` (`ludion docs fonts`); without it the text uses the embedded 8×8 face described below. `UiText.size` is the glyph cell height in canvas units; its block measures width = longest
+`UiText.font` names a baked face from `fonts.yaml` (`ludion docs fonts`); without it the text uses the `default` face of `fonts.yaml`, else the embedded 8×8 face described below. `UiText.size` is the glyph cell height in canvas units; its block measures width = longest
 line's advance width (glyph count × `size` on the 8×8 face), height = line count × `size` — so a `Center` anchor centers the whole
 measured block for free, and an empty `text: ""` is legal and draws nothing (a common toggle: swap a
 label's text between `""` and a message rather than adding or removing the entity). `visible: false`
@@ -165,7 +165,8 @@ hit-tests by hand with the same anchor math the renderer draws with, re-exported
 
 ```rust,ignore
 let cursor = world.resource::<InputState>().unwrap().mouse().position(); // render-target pixels
-let rect = math::resolve_ui_rect(Anchor::BottomLeft, [24.0, -24.0], [200.0, 32.0], (1280, 720));
+let viewport = world.resource::<RenderExtent>().copied().unwrap_or_default().size();
+let rect = math::resolve_ui_rect(Anchor::BottomLeft, [24.0, -24.0], [200.0, 32.0], viewport);
 let hit = cursor[0] >= rect[0] && cursor[0] < rect[0] + rect[2]
        && cursor[1] >= rect[1] && cursor[1] < rect[1] + rect[3];
 ```

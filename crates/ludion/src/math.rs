@@ -83,7 +83,8 @@
 
 pub use ludion_core::math::*;
 pub use ludion_engine::ui::{
-    FontFace, list_hit, measure_ui_text, resolve_ui_rect, resolve_ui_text, wrap_ui_text,
+    FontFace, list_hit, measure_ui_list, measure_ui_text, resolve_ui_list, resolve_ui_rect,
+    resolve_ui_text, ui_list_window, wrap_ui_text,
 };
 pub use ludion_engine::{ModelCamera, ModelView, fit_distance_for_aspect, model_camera};
 

@@ -73,8 +73,8 @@ model and pivot rule; the canvas coordinate model, `UiRect` and `UiText` themsel
   holds more items than that, only `max_visible` are drawn, in a window recomputed every frame from
   `selected`: the cursor is kept centred (`start = selected − max_visible/2`) and clamped at both
   ends, so there is no scroll state to desync — it's pure arithmetic, `ui_list_window(&list) ->
-  Range<usize>` in `ludion_engine::ui` is the exact function extract uses, and a game can call the
-  same one. `navigate` doesn't change: the cursor still walks every item, wraps at the ends and skips
+  Range<usize>` is the exact function extract uses, and a game can call the same one at
+  `ludion::math::ui_list_window` (so can `measure_ui_list` and `resolve_ui_list`). `navigate` doesn't change: the cursor still walks every item, wraps at the ends and skips
   disabled ones — the window just follows it. The measured block follows the window too: height
   counts the title plus the *windowed* items only, but width still runs over the title and every
   item, visible or not, so the panel never changes width while scrolling. Nothing marks a hidden item
@@ -96,7 +96,8 @@ model and pivot rule; the canvas coordinate model, `UiRect` and `UiText` themsel
   `(1280, 720)` then resolves a click against pixels nothing is drawn at. (`RenderExtent` is host
   state — never hashed, never snapshotted — and a recording's mouse events are render-target pixels,
   so a session recorded at one extent is replayed at that same extent.) It walks the identical
-  geometry `extract` draws, so a hit and the drawn line never disagree, and it returns the item under
+  geometry `extract` draws, so a hit and the drawn line never disagree (a list with `visible: false`
+  draws nothing and never hits: `None`), and it returns the item under
   the cursor **whether or not that item is enabled** — the same refusal split as everywhere else in
   `UiList`: the hit test only answers what is under the cursor, and the caller decides whether a
   disabled item's hit counts.
@@ -145,7 +146,7 @@ model and pivot rule; the canvas coordinate model, `UiRect` and `UiText` themsel
 - `line_spacing` and `padding` carry an ordinary schema lower bound of `0.0` — a negative value is
   `L1014` at the field. `size` itself must be strictly positive and finite — `L1118`, the same rule
   `UiRect.size` and `UiText.size` carry; see `ludion docs screen-ui`.
-- Without `font`, the glyph set is the embedded 8×8 face's: lowercase folds to uppercase, an unmapped
+- Without `font`, the list uses the `default` face of `fonts.yaml`, else the embedded 8×8 face, whose glyph set is: lowercase folds to uppercase, an unmapped
   character renders blank — the same rule for `UiList` items as for `UiText`. A named face has its
   own charset (`ludion docs fonts`).
 - An item or title is always one row: a line break inside it draws as a space in measurement,

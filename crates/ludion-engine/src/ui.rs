@@ -511,7 +511,8 @@ pub(crate) fn ui_list_draw(
 /// An item is one row; its line breaks draw as spaces.
 ///
 /// Returns `None` over the title line, the `line_spacing` gap between lines, the `padding` band
-/// around the block, anywhere outside it, an empty list, or a non-finite `cursor` coordinate. The
+/// around the block, anywhere outside it, an empty list, a list whose `visible` is `false` (nothing
+/// is drawn, so nothing is hit), or a non-finite `cursor` coordinate. The
 /// returned index already accounts for [`ui_list_window`] (`ui_list_lines` carries `window.start +
 /// offset`), and it comes back **whether or not the item is enabled** — a hit test answers "what is
 /// under the cursor", and refusing a disabled item is the caller's job, exactly as `navigate` only
@@ -542,7 +543,7 @@ pub fn list_hit(
     viewport: (u32, u32),
     cursor: [f32; 2],
 ) -> Option<u32> {
-    if !cursor[0].is_finite() || !cursor[1].is_finite() {
+    if !list.visible || !cursor[0].is_finite() || !cursor[1].is_finite() {
         return None;
     }
     let (layout, measured) = resolve_list(face, list, viewport);
@@ -1479,6 +1480,23 @@ mod tests {
         assert_eq!(
             list_hit(FontFace::embedded(), &list, viewport, cursor),
             Some(1)
+        );
+    }
+
+    /// A hidden list draws nothing (extract skips it), so nothing is ever hit.
+    #[test]
+    fn list_hit_on_a_hidden_list_is_none() {
+        let mut list = list_of(vec![item("A"), item("B")]);
+        let viewport = (1920, 1080);
+        let cursor = point_on_line(&list, viewport, 1, 0.5);
+        assert_eq!(
+            list_hit(FontFace::embedded(), &list, viewport, cursor),
+            Some(1)
+        );
+        list.visible = false;
+        assert_eq!(
+            list_hit(FontFace::embedded(), &list, viewport, cursor),
+            None
         );
     }
 
