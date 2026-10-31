@@ -9,8 +9,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { PROBES, missingNeedles } from './denylist-canary.mjs';
-import { acquireLock } from '../../scripts/check-lock.mjs';
-import { killTree, spawnTool } from '../../scripts/kill-tree.mjs';
+import { acquireLock, pruneScopeTemps } from '../../scripts/check-lock.mjs';
+import { killTree, quoteForCmd, spawnTool } from '../../scripts/kill-tree.mjs';
 import { headGeneratedFrom } from '../../scripts/drift-lib.mjs';
 import { runGate as atlasGate } from '../../scripts/atlas-drift.mjs';
 import { runGate as meshGate } from '../../scripts/mesh-edit-drift.mjs';
@@ -429,7 +429,6 @@ test('voxel-drift checks a generator with no model and rejects a model from else
 test('voxel-drift fails when every generator is a scaffold', () => {
   const root = scratchTree({
     'games/v/s.voxel.gen.mjs': voxelGenerator(null),
-    'games/v/s.voxel.yaml': 'format: 1\nslices:\n',
   });
   try {
     const calls = [];
@@ -444,10 +443,23 @@ test('voxel-drift fails when every generator is a scaffold', () => {
   }
 });
 
-test('voxel-drift skips a scaffold and fails a generated model that lost generated_from', () => {
+test('voxel-drift fails an existing model that neither side ties to a generator', () => {
   const root = scratchTree({
     'games/v/s.voxel.gen.mjs': voxelGenerator(null),
     'games/v/s.voxel.yaml': 'format: 1\nslices:\n',
+  });
+  try {
+    const { errors, scaffolds } = voxelGate({ root, ludion: voxelStub([]) });
+    assert.equal(scaffolds, 0);
+    assert.ok(errors.some((e) => e.includes('games/v/s.voxel.yaml exists') && e.includes('generated_from')), errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('voxel-drift skips a scaffold and fails a generated model that lost generated_from', () => {
+  const root = scratchTree({
+    'games/v/s.voxel.gen.mjs': voxelGenerator(null),
     'games/v/g.voxel.gen.mjs': voxelGenerator('g.voxel.gen.mjs'),
     'games/v/g.voxel.yaml': 'format: 1\ngenerated_from: g.voxel.gen.mjs\nslices:\n',
   });
@@ -737,6 +749,30 @@ test('the ECS budget counts code lines before the test module only', () => {
   assert.equal(countCodeLines(text), 3);
   assert.equal(countCodeLines('x\n  #[cfg(test)]\ny\n'), 3);
   assert.equal(countCodeLines(''), 0);
+});
+
+test('the ECS budget keeps counting past a cfg(test) that is not a test module', () => {
+  const text = ['#[cfg(test)]', 'use x::y;', 'fn a() {}', '#[cfg(test)]', 'mod tests {', '    fn t() {}', '}', ''].join('\n');
+  assert.equal(countCodeLines(text), 3);
+});
+
+test('quoteForCmd quotes whitespace and cmd metacharacters and doubles embedded quotes', () => {
+  assert.equal(quoteForCmd('cargo'), 'cargo');
+  assert.equal(quoteForCmd('a b'), '"a b"');
+  for (const t of ['a&b', 'a|b', 'a<b', 'a>b', 'a^b', 'a(b', 'a)b', '%PATH%', 'hi!']) assert.equal(quoteForCmd(t), `"${t}"`);
+  assert.equal(quoteForCmd('say "hi"'), '"say ""hi"""');
+  assert.equal(quoteForCmd(''), '""');
+});
+
+test('pruneScopeTemps removes dead scoped temp roots and keeps live, own and unrelated ones', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'prune-'));
+  try {
+    for (const n of ['ludion-check-ab-scope-1', 'ludion-check-ab-scope-2', 'ludion-check-ab-scope-3', 'ludion-check-ab', 'other-scope-1']) mkdirSync(path.join(tmp, n));
+    pruneScopeTemps(tmp, 'ludion-check-ab-scope-', (pid) => pid === 2, 3);
+    assert.deepEqual(readdirSync(tmp).sort(), ['ludion-check-ab', 'ludion-check-ab-scope-2', 'ludion-check-ab-scope-3', 'other-scope-1']);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('the target guard deletes the largest trees until under both limits, and nothing when under', () => {

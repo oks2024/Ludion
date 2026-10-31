@@ -11,10 +11,14 @@ import { spawn } from 'node:child_process';
 
 const IS_WINDOWS = process.platform === 'win32';
 
+// Quotes a token for cmd.exe when it holds whitespace or a metacharacter; embedded `"` doubles.
+export function quoteForCmd(t) {
+  return t === '' || /[\s&|<>^()%!"]/.test(t) ? `"${t.replaceAll('"', '""')}"` : t;
+}
+
 export function spawnTool(cmd, args, options) {
-  const quote = (t) => (/\s/.test(t) ? `"${t}"` : t);
   return IS_WINDOWS
-    ? spawn([cmd, ...args].map(quote).join(' '), { ...options, shell: true })
+    ? spawn([cmd, ...args].map(quoteForCmd).join(' '), { ...options, shell: true })
     : spawn(cmd, args, { ...options, detached: true });
 }
 

@@ -4,7 +4,7 @@
 # nextest runs each test in its own process and schedules the whole workspace across every core
 # instead of one test binary at a time. That is the whole point — but a handful of tests are not
 # safely co-schedulable, and "flaky tests are P0 bugs" (CLAUDE.md, tiered determinism). The groups
-# below are the exhaustive list of those exceptions; everything not named here runs unbounded.
+# below are the known exceptions; everything not named here runs unbounded.
 #
 # nextest cannot run doctests. The test lane is therefore always TWO commands — `cargo nextest run
 # --workspace` AND `cargo test --workspace --doc` — in every place it is invoked. Dropping the
@@ -57,9 +57,10 @@ cargo-build = { max-threads = 1 }
 # ── overrides ────────────────────────────────────────────────────────────────
 # The `#[ignore]`d identity replay is minutes per test and unmeasured on a loaded box: it gets the
 # step ceiling `scripts/check.mjs` already holds it to (60 min) instead of the 10-20 min default.
+# `binary(thread_identity)` covers every such binary (the engine's and breakout's).
 # vigil's own campaigns (soak, probe) live in `games/vigil/.config/nextest.toml`.
 [[profile.default.overrides]]
-filter = 'binary_id(=breakout::thread_identity)'
+filter = 'binary(thread_identity)'
 slow-timeout = { period = "60s", terminate-after = 60 }
 
 # The engine's ≥30 fps-at-1080p delivery floors over loopback (Phase 4 exit criterion 1) — every
@@ -78,9 +79,11 @@ test-group = '@global'
 threads-required = "num-test-threads"
 priority = 100
 
-# The remaining wall-clock assertions:
+# The tight-margin wall-clock assertions (not every test that reads a clock):
 #   - `needs_gpu_max_fps_throttles_frame_delivery` counts frames in a ~1.1 s window and asserts a floor of 1.
 #   - `call_timeout` asserts a 300 ms client timeout fires inside 2 s.
+#   - `a_socket_that_never_upgrades_does_not_hold_shutdown` asserts a shutdown under 2 s.
+#   - `a_waited_run_whose_jobs_vanish_ends_before_its_timeout` asserts a run ends under 3 s.
 #   - `e6_bench` is a per-frame millisecond budget (E6). It is
 #     `#[ignore]`d, so it costs nothing here — this entry is what keeps it honest whenever it is
 #     run explicitly. (The E6 budget gate proper is the release-mode, pinned-GPU `budgets`
@@ -92,6 +95,8 @@ priority = 100
 [[profile.default.overrides]]
 filter = """
     (binary_id(=ludion-server::delivery) & test(=needs_gpu_max_fps_throttles_frame_delivery))
+  | (binary_id(=ludion-server::wire) & test(=a_socket_that_never_upgrades_does_not_hold_shutdown))
+  | (binary_id(=ludion-gen::mock) & test(=a_waited_run_whose_jobs_vanish_ends_before_its_timeout))
   | binary_id(=ludion-client::call_timeout)
   | binary_id(=ludion-cli::profile_attach)
   | binary_id(=ludion-spatial::e6_bench)

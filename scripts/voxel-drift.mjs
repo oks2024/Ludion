@@ -80,7 +80,14 @@ export function runGate({ root = REPO_ROOT, scanRoots = SCAN_ROOTS, ludion = run
       continue;
     }
     if (!emitsProvenance && claimOf(model) !== path.resolve(source)) {
-      scaffolds += 1;
+      if (existsSync(model)) {
+        errors.push(
+          `${rel(model)} exists but neither it nor ${rel(source)} carries \`generated_from\` — `
+          + 'add provenance to the generator, or `generated_from:` to the model naming it',
+        );
+      } else {
+        scaffolds += 1;
+      }
       continue;
     }
     checked += 1;

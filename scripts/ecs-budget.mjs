@@ -20,21 +20,26 @@ import path from 'node:path';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const LIMIT = 3000;
 
-// Non-blank, non-comment lines of `text` before its first column-0 `#[cfg(test)]`.
+// Non-blank, non-comment lines of `text` before its first `#[cfg(test)]` that opens a `mod`.
 export function countCodeLines(text) {
-  const cut = text.search(/^#\[cfg\(test\)\]/m);
+  const cut = text.search(/^#\[cfg\(test\)\]\s*\n\s*(?:pub(?:\([^)]*\))?\s+)?mod\s/m);
   const code = cut === -1 ? text : text.slice(0, cut);
   return code.split('\n').filter((l) => l.trim() !== '' && !l.trim().startsWith('//')).length;
 }
 
+export function rsFiles(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? rsFiles(path.join(dir, e.name)) : e.name.endsWith('.rs') ? [path.join(dir, e.name)] : []);
+}
+
 function main() {
   const src = path.join(REPO_ROOT, 'crates', 'ludion-ecs', 'src');
-  const files = readdirSync(src).filter((n) => n.endsWith('.rs'));
+  const files = rsFiles(src);
   if (files.length === 0) {
     console.error(`ecs-budget: no .rs files under ${src}`);
     process.exit(1);
   }
-  const total = files.reduce((sum, n) => sum + countCodeLines(readFileSync(path.join(src, n), 'utf8').replace(/\r\n/g, '\n')), 0);
+  const total = files.reduce((sum, n) => sum + countCodeLines(readFileSync(n, 'utf8').replace(/\r\n/g, '\n')), 0);
   if (total <= LIMIT) {
     console.log(`ecs-budget: ok (${total} of ${LIMIT} code lines across ${files.length} files)`);
     process.exit(0);

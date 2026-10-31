@@ -1,7 +1,7 @@
 // The single-run lock for scripts/check.mjs: two concurrent runs share `.build/` and the workspace,
 // and the second would delete the first's logs. Zero dependencies, Node built-ins only.
 
-import { linkSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 // A lock file that does not parse is a holder mid-write or a crash; it is only stale once it has sat this long.
@@ -89,5 +89,18 @@ export function acquireLock(lockPath, info) {
     return { ok: false, holder: readHolder(lockPath) ?? {} };
   } finally {
     quietUnlink(temp);
+  }
+}
+
+// Removes the temp roots `<prefix><pid>` of scoped runs whose pid is dead (best-effort); `keep` is
+// the calling run's own pid.
+export function pruneScopeTemps(tmp, prefix, pidIsAlive, keep) {
+  let entries = [];
+  try { entries = readdirSync(tmp); } catch { return; }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue;
+    const pid = Number(entry.slice(prefix.length));
+    if (pid === keep || (Number.isInteger(pid) && pidIsAlive(pid))) continue;
+    try { rmSync(path.join(tmp, entry), { recursive: true, force: true, maxRetries: 3 }); } catch { /* EBUSY/EPERM: the next run retries */ }
   }
 }

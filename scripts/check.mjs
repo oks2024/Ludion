@@ -80,7 +80,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { acquireLock } from './check-lock.mjs';
+import { acquireLock, pruneScopeTemps } from './check-lock.mjs';
 import { classify, loadWorkspace } from './check-scope.mjs';
 import { writeFileAtomic } from './atomic-write.mjs';
 import { killTree, spawnTool } from './kill-tree.mjs';
@@ -903,6 +903,8 @@ function pidAlive(pid) {
 
 // A scoped run refuses while a default run holds target/check.lock, and prunes the log dirs of dead
 // scoped runs; its own log dir (named by its pid) is what marks it live.
+const TEMP_PREFIX = `ludion-check-${createHash('sha256').update(REPO_ROOT).digest('hex').slice(0, 8)}-scope-`;
+
 function scopeLock() {
   let holder = null;
   try { holder = JSON.parse(readFileSync(LOCK, 'utf8')); } catch { /* no default run */ }
@@ -913,7 +915,15 @@ function scopeLock() {
       if (pid !== process.pid && !(Number.isInteger(pid) && pidAlive(pid))) rmSync(path.join(SCOPE_ROOT, entry), { recursive: true, force: true });
     }
   }
+  pruneScopeTemps(os.tmpdir(), TEMP_PREFIX, pidAlive, process.pid);
   return { ok: true, release() {} };
+}
+
+// A scoped run's temp root is its own: it goes on every exit path, red included (the report names
+// logs under target/, not this root); a hard kill is left to the next scoped run's prune.
+function removeOwnScopeTemp() {
+  if (!scope) return;
+  try { rmSync(TEST_TEMP, { recursive: true, force: true, maxRetries: 3 }); } catch { /* pruned by the next scoped run */ }
 }
 
 function warnIfScopedRunsLive() {
@@ -938,7 +948,8 @@ async function main() {
   }
   if (!scope) warnIfScopedRunsLive();
   process.on('exit', lock.release);
-  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) process.on(sig, () => { for (const c of liveChildren) killTree(c); lock.release(); process.exit(code); });
+  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) process.on(sig, () => { for (const c of liveChildren) killTree(c); lock.release(); removeOwnScopeTemp(); process.exit(code); });
+  process.on('exit', removeOwnScopeTemp);
   rmSync(LOG_DIR, { recursive: true, force: true });
   mkdirSync(LOG_DIR, { recursive: true });
   if (runRust) {
