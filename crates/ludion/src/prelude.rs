@@ -54,7 +54,8 @@
 //!   singleton component, and its value.
 //! - **Sim/input/time** — [`InputState`], [`Key`], [`InputEvent`]; the mouse/gamepad devices
 //!   [`MouseState`]/[`GamepadState`] (reached via `input.mouse()`/`input.gamepad()`) and their
-//!   name enums [`MouseButton`], [`GamepadButton`], [`GamepadAxis`]; [`SimTime`], [`FrameIndex`],
+//!   name enums [`MouseButton`], [`GamepadButton`], [`GamepadAxis`]; the const-constructible key-or-button
+//!   binding [`Action`] and the standard radial stick deadzone [`STICK_DEADZONE`]; [`SimTime`], [`FrameIndex`],
 //!   [`TickRate`]. [`GameClock`] is the gameplay half of that time: the resource a game calls
 //!   `hold()` on every frame it is frozen (`world.resource_mut::<GameClock>().unwrap().hold()`), so
 //!   that `ctx.game_time` / `ctx.game_frame` — what every closed-form evaluator reads, from a
@@ -179,7 +180,8 @@ pub use ludion_ecs::{
 };
 
 pub use ludion_sim::{
-    GamepadAxis, GamepadButton, GamepadState, InputEvent, InputState, Key, MouseButton, MouseState,
+    Action, GamepadAxis, GamepadButton, GamepadState, InputEvent, InputState, Key, MouseButton,
+    MouseState, STICK_DEADZONE,
 };
 
 pub use crate::math;

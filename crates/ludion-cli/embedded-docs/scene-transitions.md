@@ -154,7 +154,7 @@ with no snapshot-format change.
 
 - `ludion docs scene-residue` — what a district keeps between visits, and reading it back.
 - `ludion docs player-profiles` — persistent save state.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs running` — hosting a scene and observing it, and the `Shutdown` resource that ends it.
 - `ludion docs scene-format` — the strict-YAML scene document.
 - `ludion docs game-clock` — `GameClock`, the one resource a snapshot carries.

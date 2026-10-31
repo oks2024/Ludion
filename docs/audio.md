@@ -214,6 +214,6 @@ fn game() -> EngineBuilder {
 
 ## Next
 
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs verify-loop` — the `cargo test` verification loop.
 - `ludion docs running` — hosting a scene and observing it.

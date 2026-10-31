@@ -64,7 +64,7 @@ window, or server; its project root is the scene's, as when hosting. Conflicts w
 `input.inject`); device capture is `ludion-window`'s pure mapping layer — winit mouse through the
 letterbox transform into render-target pixels, one `gilrs` pad, no `ludion-sim` dependency — which
 `present.rs` and that crate's own viewer both reuse. Headless — a plain `ludion serve`, every CI
-run — captures nothing, so `InputState` stays default. The game-side API is `ludion docs systems`.
+run — captures nothing, so `InputState` stays default. The game-side API is `ludion docs input`.
 
 ## Rules
 

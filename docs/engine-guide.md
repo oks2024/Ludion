@@ -19,7 +19,8 @@ report `L0008` from a game project.
 - `ludion docs components` — declaring components, drift safety, and the core scene/render set.
 - `ludion docs components-ui` — `UiRect`/`UiText`/`UiList`/`Text`: the UI and world-text components.
 - `ludion docs components-fx` — `Sprite`/`Tilemap`/particles/patterns/`Animation`/`AudioEmitter`.
-- `ludion docs systems` — queries, time, input, RNG, determinism rules, presentation state.
+- `ludion docs systems` — queries, time, RNG, determinism rules, presentation state.
+- `ludion docs input` — keys, mouse and gamepad reads, press-anything, the move vector, actions, cursor aim.
 - `ludion docs game-clock` — freezing gameplay time on demand while the sim keeps ticking.
 - `ludion docs scene-format` — the strict-YAML scene document and its canonical form.
 - `ludion docs tilemaps` — the `Tilemap` glyph grid, read by the renderer and your logic.

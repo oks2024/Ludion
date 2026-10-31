@@ -201,7 +201,7 @@ of life icons and a jewel drawn from regions of the sprites gallery's committed 
 - `ludion docs sprites` — the sprite layer's hub; a `UiRect` spends the same committed atlas.
 - `ludion docs ui-list` — the selectable-menu widget: format, cursor/activation, windowing.
 - `ludion docs fonts` — TrueType faces for `UiText`/`UiList`/`Text`.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs components` — declaring components, and the built-in visual set.
 - `ludion docs post-processing` — the imaging chain.
 - `ludion docs verify-loop` — the `cargo test` verification loop.

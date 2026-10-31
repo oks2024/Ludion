@@ -210,7 +210,7 @@ so a reader scheduled before the rebuild continues exactly.
 - `ludion docs physics` — rigid bodies: the `physics:` block, forces, contact events, solver queries.
 - `ludion docs collision-layers` — which pairs never meet, and query filters.
 - `ludion docs physics-joints` — the `Joint` component.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs tilemaps` — the `Tilemap` grid component.
 - `ludion docs recipes` — copyable patterns.
 - `ludion docs verify-loop` — the `cargo test` verification loop.

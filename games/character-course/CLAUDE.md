@@ -1,7 +1,7 @@
 # character-course
 
 A greybox obstacle course for the character motor and the reference run/jump/crouch controller
-(`ludion docs systems` for input). A public example game crate, shaped like `games/breakout`.
+(`ludion docs input` for input). A public example game crate, shaped like `games/breakout`.
 
 ## Project layout
 

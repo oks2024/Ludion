@@ -62,7 +62,8 @@ Move a light instead by mutating its entity's `Transform` in the same shape.
 
 ## Next
 
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
+- `ludion docs input` — reading keyboard, mouse and gamepad input.
 - `ludion docs collision` — colliders and spatial queries.
 - `ludion docs components` — declaring components, and the built-in visual set.
 - `ludion docs verify-loop` — the `cargo test` verification loop.

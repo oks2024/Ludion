@@ -54,6 +54,6 @@ small example: a `lib.rs` wiring root over `components.rs`, `systems.rs` and `tu
 ## Next
 
 - `ludion docs components` — declaring components, and the built-in visual set.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs getting-started` — the starter game end to end.
 - `ludion docs scene-format` — the strict-YAML scene document.

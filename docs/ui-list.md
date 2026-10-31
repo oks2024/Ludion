@@ -156,5 +156,5 @@ model and pivot rule; the canvas coordinate model, `UiRect` and `UiText` themsel
 
 - `ludion docs screen-ui` — `UiRect`/`UiText`: the canvas, anchors, draw order, and text wrapping.
 - `ludion docs fonts` — the `font` field: baked faces and proportional measurement.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs components` — declaring components, and the built-in visual set.

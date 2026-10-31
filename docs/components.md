@@ -104,7 +104,7 @@ prevents.)
 - `ludion docs components-ui` — `UiRect`/`UiText`/`UiList`/`Text`: the screen-space and world-text components.
 - `ludion docs components-fx` — `Sprite`/`Tilemap`/`ParticleEmitter`/`Volley`/`PatternPlayer`/`PathFollower`/`Animation`/`AudioEmitter`: content and effect components.
 - `ludion docs motor` — `CharacterMotor`/`SurfaceVelocity`; `ludion docs lane` — `LaneConstraint`; `ludion docs camera` — `CameraRig`.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs scene-format` — the strict-YAML scene document.
 - `ludion docs materials` — the three material scalars.
 - `ludion docs lighting` — the sun and its shadow map, `PointLight` calibration, and the `SpotLight` cone; `ludion docs local-shadows` — their opt-in shadows; `ludion docs sun-cascades` — the sun's camera-fitted cascades.

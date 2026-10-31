@@ -202,5 +202,5 @@ tool-write normalizes the file.
 
 - `ludion docs player-profiles` — persistent save state.
 - `ludion docs scene-format` — the strict-YAML scene document.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs dev-loop` — the live reload loop.

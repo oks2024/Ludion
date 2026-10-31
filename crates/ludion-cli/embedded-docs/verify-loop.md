@@ -128,5 +128,5 @@ picture. Three entry points print the same lines: `ludion trace --scene <FILE> [
 
 - `ludion docs running` — hosting a scene and observing it.
 - `ludion docs dev-loop` — the live reload loop.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs scene-format` — the strict-YAML scene document.

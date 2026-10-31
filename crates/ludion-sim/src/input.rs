@@ -11,7 +11,9 @@
 //! serialize to JSON-compatible shapes so scripts can travel through the wire protocol and the
 //! replay format unchanged.
 
+use core::f32::consts::FRAC_1_SQRT_2;
 use ludion_core::collections::StableSet;
+use ludion_core::math;
 use ludion_core::time::FrameIndex;
 use serde::{Deserialize, Serialize};
 
@@ -191,6 +193,10 @@ pub enum GamepadAxis {
     /// The right (analog) trigger, in `[0, 1]`.
     RightTrigger,
 }
+
+/// The engine's standard radial stick deadzone, used by [`InputState::move_vector`]. Pass your own
+/// to [`GamepadState::left_stick_dz`] / [`GamepadState::right_stick_dz`] to override.
+pub const STICK_DEADZONE: f32 = 0.2;
 
 /// Serde helper: encodes an `f32` as its IEEE-754 bit pattern (a `u32`), never as a JSON number.
 ///
@@ -438,6 +444,17 @@ impl MouseState {
     pub fn wheel(&self) -> [f32; 2] {
         self.wheel
     }
+
+    /// Whether any button went down this frame. Buttons only: position and wheel never count.
+    pub fn any_pressed(&self) -> bool {
+        !self.pressed.is_empty()
+    }
+
+    /// Whether any button is currently down. Buttons only, like
+    /// [`any_pressed`](MouseState::any_pressed).
+    pub fn any_held(&self) -> bool {
+        !self.held.is_empty()
+    }
 }
 
 /// Gamepad state: level analog sticks/triggers and edge button sets.
@@ -496,6 +513,78 @@ impl GamepadState {
     pub fn was_released(&self, button: GamepadButton) -> bool {
         self.released.contains(&button)
     }
+
+    /// Whether any button went down this frame. Buttons only: sticks and triggers are levels and
+    /// never count — use [`any_axis_beyond`](GamepadState::any_axis_beyond).
+    pub fn any_pressed(&self) -> bool {
+        !self.pressed.is_empty()
+    }
+
+    /// Whether any button is currently down. Buttons only, like
+    /// [`any_pressed`](GamepadState::any_pressed).
+    pub fn any_held(&self) -> bool {
+        !self.held.is_empty()
+    }
+
+    /// Whether either stick's magnitude or either trigger is at or past `threshold`. The caller
+    /// owns the threshold.
+    pub fn any_axis_beyond(&self, threshold: f32) -> bool {
+        math::hypot(self.left_stick[0], self.left_stick[1]) >= threshold
+            || math::hypot(self.right_stick[0], self.right_stick[1]) >= threshold
+            || self.left_trigger >= threshold
+            || self.right_trigger >= threshold
+    }
+
+    /// The left stick with a radial deadzone: zero inside `deadzone`, then a ramp that is 0 at the
+    /// edge and unit length at full tilt, direction kept, never longer than 1. `deadzone` is in
+    /// `[0, 1)`; a negative value is treated as 0 and `1` or more reads as always zero.
+    pub fn left_stick_dz(&self, deadzone: f32) -> [f32; 2] {
+        radial_deadzone(self.left_stick, deadzone)
+    }
+
+    /// The right stick with a radial deadzone; see
+    /// [`left_stick_dz`](GamepadState::left_stick_dz).
+    pub fn right_stick_dz(&self, deadzone: f32) -> [f32; 2] {
+        radial_deadzone(self.right_stick, deadzone)
+    }
+}
+
+fn radial_deadzone(stick: [f32; 2], deadzone: f32) -> [f32; 2] {
+    let deadzone = deadzone.max(0.0);
+    let m = math::hypot(stick[0], stick[1]);
+    if m <= deadzone || deadzone >= 1.0 {
+        return [0.0, 0.0];
+    }
+    let scale = (m.min(1.0) - deadzone) / ((1.0 - deadzone) * m);
+    [stick[0] * scale, stick[1] * scale]
+}
+
+/// A game-owned input binding: any of these keys or gamepad buttons triggers it.
+///
+/// Constructible in a `const`; rebinding is out of scope, so games hold their bindings as
+/// constants and read them with [`InputState::action_pressed`], [`action_held`] and
+/// [`action_released`].
+///
+/// [`action_held`]: InputState::action_held
+/// [`action_released`]: InputState::action_released
+///
+/// # Example
+/// ```
+/// use ludion_sim::{Action, GamepadButton, InputEvent, InputState, Key};
+///
+/// const JUMP: Action = Action { keys: &[Key::Space], buttons: &[GamepadButton::South] };
+///
+/// let mut input = InputState::default();
+/// input.begin_tick();
+/// input.apply(InputEvent::GamepadButtonDown { button: GamepadButton::South });
+/// assert!(input.action_pressed(&JUMP));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Action {
+    /// Keys that trigger the action.
+    pub keys: &'static [Key],
+    /// Gamepad buttons that trigger the action.
+    pub buttons: &'static [GamepadButton],
 }
 
 /// The per-tick input state systems read, maintained by the driver as a `World` resource.
@@ -537,7 +626,10 @@ pub struct InputState {
 }
 
 impl InputState {
-    /// Nothing held, no edges, analogs and cursor at rest — what a snapshot omits.
+    /// Whether the state equals the default — what a snapshot omits.
+    ///
+    /// Counts held keys, analogs and the cursor position, so a parked cursor keeps it false. It is
+    /// not a "press anything" test: use [`any_pressed`](InputState::any_pressed).
     pub fn is_idle(&self) -> bool {
         *self == Self::default()
     }
@@ -555,6 +647,78 @@ impl InputState {
     /// Whether `key` transitioned up this frame.
     pub fn was_released(&self, key: Key) -> bool {
         self.released.contains(&key)
+    }
+
+    /// Whether any key, mouse button or gamepad button went down this frame — one tick per press
+    /// (an edge, like `UiNav`).
+    ///
+    /// Every key counts, `Escape` and the modifiers included. The cursor, the wheel, the sticks and
+    /// the triggers never count; for analog input add
+    /// [`gamepad().any_axis_beyond(t)`](GamepadState::any_axis_beyond).
+    pub fn any_pressed(&self) -> bool {
+        !self.pressed.is_empty() || self.mouse.any_pressed() || self.gamepad.any_pressed()
+    }
+
+    /// Whether any key is currently down. Keyboard only: use
+    /// [`mouse().any_held()`](MouseState::any_held) and
+    /// [`gamepad().any_held()`](GamepadState::any_held) to latch on the other devices.
+    pub fn any_key_held(&self) -> bool {
+        !self.held.is_empty()
+    }
+
+    /// The standard movement vector: arrows, WASD and the D-pad, else the left stick.
+    ///
+    /// Digital input reads as −1/0/+1 per axis (opposites cancel) and wins over the stick while
+    /// either axis is non-zero; two axes at once are scaled by 1/√2. With no digital input the
+    /// result is [`left_stick_dz(STICK_DEADZONE)`](GamepadState::left_stick_dz). `+x` is right and
+    /// `+y` is up/forward (`W` and stick-up are `+y`); the length never exceeds 1. It feeds
+    /// `camera_relative*` / `lane_relative`; a game wanting full speed on any deflection
+    /// normalises it itself.
+    pub fn move_vector(&self) -> [f32; 2] {
+        let axis =
+            |pos: [Key; 2], pos_pad: GamepadButton, neg: [Key; 2], neg_pad: GamepadButton| {
+                let down = |keys: [Key; 2], pad| {
+                    keys.iter().any(|&k| self.is_held(k)) || self.gamepad.is_held(pad)
+                };
+                f32::from(u8::from(down(pos, pos_pad))) - f32::from(u8::from(down(neg, neg_pad)))
+            };
+        let x = axis(
+            [Key::Right, Key::D],
+            GamepadButton::DpadRight,
+            [Key::Left, Key::A],
+            GamepadButton::DpadLeft,
+        );
+        let y = axis(
+            [Key::Up, Key::W],
+            GamepadButton::DpadUp,
+            [Key::Down, Key::S],
+            GamepadButton::DpadDown,
+        );
+        match (x != 0.0, y != 0.0) {
+            (true, true) => [x * FRAC_1_SQRT_2, y * FRAC_1_SQRT_2],
+            (false, false) => self.gamepad.left_stick_dz(STICK_DEADZONE),
+            _ => [x, y],
+        }
+    }
+
+    /// Whether any key or button of `action` went down this frame.
+    pub fn action_pressed(&self, action: &Action) -> bool {
+        action.keys.iter().any(|&k| self.was_pressed(k))
+            || action.buttons.iter().any(|&b| self.gamepad.was_pressed(b))
+    }
+
+    /// Whether any key or button of `action` is currently down.
+    pub fn action_held(&self, action: &Action) -> bool {
+        action.keys.iter().any(|&k| self.is_held(k))
+            || action.buttons.iter().any(|&b| self.gamepad.is_held(b))
+    }
+
+    /// Whether the action's last held input went up this frame: some key or button was released
+    /// and none of the action's inputs is still down.
+    pub fn action_released(&self, action: &Action) -> bool {
+        (action.keys.iter().any(|&k| self.was_released(k))
+            || action.buttons.iter().any(|&b| self.gamepad.was_released(b)))
+            && !self.action_held(action)
     }
 
     /// The mouse's state (level position, edge buttons, wheel accumulator).
@@ -944,5 +1108,169 @@ mod tests {
             json,
             serde_json::json!({"kind": "gamepad_button_down", "button": "dpad_up"})
         );
+    }
+
+    fn ticked(events: &[InputEvent]) -> InputState {
+        let mut input = InputState::default();
+        input.begin_tick();
+        for &e in events {
+            input.apply(e);
+        }
+        input
+    }
+
+    fn axis(axis: GamepadAxis, value: f32) -> InputEvent {
+        InputEvent::GamepadAxis { axis, value }
+    }
+
+    #[test]
+    fn any_pressed_ignores_levels_and_fires_one_tick_per_press() {
+        assert!(!InputState::default().any_pressed());
+        let levels = ticked(&[
+            InputEvent::MouseMove {
+                position: [5.0, 5.0],
+            },
+            InputEvent::MouseWheel { delta: [0.0, 1.0] },
+            axis(GamepadAxis::LeftStickX, 1.0),
+            axis(GamepadAxis::LeftTrigger, 1.0),
+        ]);
+        assert!(!levels.any_pressed());
+
+        for event in [
+            InputEvent::KeyDown { key: Key::F },
+            InputEvent::KeyDown { key: Key::Escape },
+            InputEvent::MouseDown {
+                button: MouseButton::Left,
+            },
+            InputEvent::GamepadButtonDown {
+                button: GamepadButton::South,
+            },
+        ] {
+            let mut input = ticked(&[event]);
+            assert!(input.any_pressed(), "{event:?}");
+            input.begin_tick();
+            assert!(!input.any_pressed(), "still held: {event:?}");
+        }
+    }
+
+    #[test]
+    fn any_held_is_per_device() {
+        let mut input = ticked(&[InputEvent::KeyDown { key: Key::F }]);
+        assert!(input.any_key_held());
+        assert!(!input.mouse().any_held());
+        assert!(!input.gamepad().any_held());
+        input.apply(InputEvent::KeyUp { key: Key::F });
+        assert!(!input.any_key_held());
+
+        input.apply(InputEvent::MouseDown {
+            button: MouseButton::Right,
+        });
+        assert!(input.mouse().any_held());
+        input.apply(InputEvent::MouseUp {
+            button: MouseButton::Right,
+        });
+        assert!(!input.mouse().any_held());
+
+        input.apply(InputEvent::GamepadButtonDown {
+            button: GamepadButton::Start,
+        });
+        assert!(input.gamepad().any_held());
+        input.apply(InputEvent::GamepadButtonUp {
+            button: GamepadButton::Start,
+        });
+        assert!(!input.gamepad().any_held());
+    }
+
+    #[test]
+    fn any_axis_beyond_is_inclusive() {
+        let at = |a, v| ticked(&[axis(a, v)]).gamepad().any_axis_beyond(0.5);
+        assert!(at(GamepadAxis::LeftStickX, 0.5));
+        assert!(at(GamepadAxis::RightTrigger, 0.5));
+        assert!(!at(GamepadAxis::LeftStickX, 0.49));
+        assert!(!at(GamepadAxis::LeftTrigger, 0.49));
+    }
+
+    #[test]
+    fn radial_deadzone_ramps_from_the_edge_to_unit_length() {
+        let stick = |x, y| {
+            ticked(&[
+                axis(GamepadAxis::LeftStickX, x),
+                axis(GamepadAxis::LeftStickY, y),
+            ])
+        };
+        let dz = |x, y| stick(x, y).gamepad().left_stick_dz(0.2);
+        assert_eq!(dz(0.1, 0.1), [0.0, 0.0]);
+        assert_eq!(dz(0.2, 0.0), [0.0, 0.0]);
+        for (x, y) in [(1.0, 0.0), (1.0, 1.0)] {
+            let v = dz(x, y);
+            assert!((math::hypot(v[0], v[1]) - 1.0).abs() < 1e-6, "{v:?}");
+        }
+        let mid = dz(0.6, 0.0);
+        assert!((mid[0] - 0.5).abs() < 1e-6 && mid[1] == 0.0, "{mid:?}");
+        let right = ticked(&[axis(GamepadAxis::RightStickY, -1.0)])
+            .gamepad()
+            .right_stick_dz(0.2);
+        assert!((right[1] + 1.0).abs() < 1e-6, "{right:?}");
+    }
+
+    #[test]
+    fn move_vector_reads_keys_dpad_then_stick() {
+        let key = |k| InputEvent::KeyDown { key: k };
+        assert_eq!(ticked(&[key(Key::W)]).move_vector(), [0.0, 1.0]);
+
+        let diag = ticked(&[key(Key::W), key(Key::D)]).move_vector();
+        assert!(diag[0] == FRAC_1_SQRT_2 && diag[1] == FRAC_1_SQRT_2);
+        assert!(math::hypot(diag[0], diag[1]) <= 1.0);
+
+        let pad = InputEvent::GamepadButtonDown {
+            button: GamepadButton::DpadRight,
+        };
+        assert_eq!(ticked(&[pad]).move_vector(), [1.0, 0.0]);
+
+        let stick_left = axis(GamepadAxis::LeftStickX, -1.0);
+        assert_eq!(
+            ticked(&[key(Key::A), key(Key::D), stick_left]).move_vector(),
+            [-1.0, 0.0]
+        );
+        assert_eq!(ticked(&[key(Key::D), stick_left]).move_vector(), [1.0, 0.0]);
+        assert_eq!(
+            ticked(&[
+                axis(GamepadAxis::LeftStickX, 0.1),
+                axis(GamepadAxis::LeftStickY, 0.1)
+            ])
+            .move_vector(),
+            [0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn actions_fire_from_either_input_and_release_with_the_last() {
+        const JUMP: Action = Action {
+            keys: &[Key::Space],
+            buttons: &[GamepadButton::South],
+        };
+        let key = ticked(&[InputEvent::KeyDown { key: Key::Space }]);
+        assert!(key.action_pressed(&JUMP) && key.action_held(&JUMP));
+        let pad = ticked(&[InputEvent::GamepadButtonDown {
+            button: GamepadButton::South,
+        }]);
+        assert!(pad.action_pressed(&JUMP));
+
+        let mut input = ticked(&[
+            InputEvent::KeyDown { key: Key::Space },
+            InputEvent::GamepadButtonDown {
+                button: GamepadButton::South,
+            },
+        ]);
+        input.begin_tick();
+        input.apply(InputEvent::KeyUp { key: Key::Space });
+        assert!(!input.action_released(&JUMP));
+        input.begin_tick();
+        input.apply(InputEvent::GamepadButtonUp {
+            button: GamepadButton::South,
+        });
+        assert!(input.action_released(&JUMP));
+        input.begin_tick();
+        assert!(!input.action_released(&JUMP));
     }
 }

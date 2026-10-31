@@ -132,6 +132,6 @@ a level change is a one-line edit that both the picture and the rules pick up.
 
 - `ludion docs sprites` — the sprite layer's hub; a tilemap spends the same committed atlas.
 - `ludion docs components` — declaring components, and the built-in visual set.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs collision` — colliders and spatial queries.
 - `ludion docs scene-format` — the strict-YAML scene document.

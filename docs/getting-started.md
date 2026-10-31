@@ -66,5 +66,6 @@ proves it renders. The gameplay test proves the paddle slides 3.0 units in 30 ti
 
 - `ludion docs project-anatomy` — what `ludion new` scaffolds, file by file.
 - `ludion docs components` — declaring components, and the built-in visual set.
-- `ludion docs systems` — the system contract, input, and the determinism rules.
+- `ludion docs systems` — the system contract and the determinism rules.
+- `ludion docs input` — reading keyboard, mouse and gamepad input.
 - `ludion docs verify-loop` — the `cargo test` verification loop.
