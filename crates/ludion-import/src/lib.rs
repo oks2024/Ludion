@@ -33,7 +33,7 @@
 //! | `TANGENT`, or a generated tangent frame| the mesh doc's `tangents`               |
 //! | skin (`JOINTS_0`/`WEIGHTS_0`, inverse binds) | the mesh doc's `joints`/`weights`/`bone_indices`; joint nodes folded, not entities |
 //! | animation (joint or part channels)     | `clips/<name>.anim.yaml`; part clips listed in the prefab's `clips:` |
-//! | `KHR_lights_punctual` point light      | `PointLight` (`cast_shadows: false`)    |
+//! | `KHR_lights_punctual` point/spot light | `PointLight`/`SpotLight` (`cast_shadows: false`) |
 //! | a *referenced* PNG image               | re-encoded `textures/<hash>.png`        |
 //!
 //! `Mesh.emissive` is a scalar HDR intensity on the surface's own color, not an independent tint
@@ -64,9 +64,9 @@
 //! the mesh document's `alpha_mode: mask` / `alpha_cutoff` and `double_sided: true`.
 //!
 //! Everything else — a texture on a second UV set or with per-axis wrap modes that disagree (a mesh
-//! document holds one mode for both), a `BLEND` `alphaMode` (`MASK` is the mapped alternative), a camera (a prefab carries none), a non-point light, a morph target, an
+//! document holds one mode for both), a `BLEND` alpha mode (`MASK` is the mapped alternative), a camera (a prefab carries none), a directional light, a morph target, an
 //! animation channel of morph weights, on a node under a skin joint, or mixing skin joints and prefab parts, a node `matrix` that shears, a sparse or non-triangle primitive, a
-//! JPEG image, any other *required* extension — is an `L1202`, naming the offender. By default any `L1202` aborts the import (nothing is written);
+//! JPEG image, any other required extension — is an `L1202`, naming the offender. By default any `L1202` aborts the import (nothing is written);
 //! `--allow-lossy` downgrades them to warnings and compiles the supported subset. Any other
 //! *optional* extension in `extensionsUsed` is ignored with the warning `L1239`.
 //!
@@ -126,6 +126,18 @@ use skin::{SkinBinding, bind_skin, map_weights};
 use sources::{Buffers, resolve_image};
 pub use tangents::compute_tangents;
 use tangents::faceted_normals;
+
+/// The glTF features that are an `L1202`, as short phrases. `ludion import --help`, the `L1202`
+/// explain text and this crate's rustdoc each name exactly this set (a `ludion-cli` test pins it).
+pub const UNSUPPORTED_FEATURES: &[&str] = &[
+    "a texture on a second UV set",
+    "a camera",
+    "a directional light",
+    "a BLEND alpha mode",
+    "a morph target",
+    "a JPEG image",
+    "any other required extension",
+];
 
 /// The prefab file written at the root of the output tree.
 pub const PREFAB_FILE: &str = "model.prefab.yaml";

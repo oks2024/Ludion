@@ -818,8 +818,8 @@ enum Command {
     /// Compile a foreign format into canonical Ludion text: a glTF (`.gltf`/`.glb`) into a `kind: prefab`
     /// plus its mesh, animation-clip and texture assets, or a `.png` into an editable
     /// `kind: sprite` document. Deterministic: same input → byte-identical output. Any glTF
-    /// feature the importer cannot map (a texture, a camera, a non-point light, a
-    /// morph, a JPEG image, another extension) is an `L1202` error naming the offender;
+    /// feature the importer cannot map (a texture on a second UV set, a camera, a directional light,
+    /// a BLEND alpha mode, a morph target, a JPEG image, any other required extension) is an `L1202` error naming the offender;
     /// `--allow-lossy` downgrades those to warnings and compiles the supported subset. A PNG whose colours outnumber a sprite
     /// document's glyphs is `L4014`, answered by `--quantize N`.
     Import {

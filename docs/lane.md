@@ -98,7 +98,7 @@ A `motor` trace line for a lane call carries `"lane":{"s","ds","weight","lateral
 | L1300 | a `LaneConstraint` field is out of range (a time, `pull_speed` or `search_window` negative or not finite, `offset`/`s` not finite, `blend` outside 0..1): check-scene, and once per entity at runtime for a lane built in Rust |
 | L1301 | the `path` fails to load (runtime, once per entity; the lane stays inert) |
 | L1302 | a `LaneConstraint` entity has no `CharacterMotor` (check-scene, runtime) |
-| L1303 | warning: the path has a near-vertical span (horizontal tangent under 0.05), where the lane frame is carried from the neighbouring stretch (scanned once per path, reported once per entity) |
+| L1303 | warning: the path has a near-vertical span (horizontal tangent under 0.05), where forward/lateral swing sharply, and the frame is carried from the neighbouring stretch only where the tangent is vertical (scanned once per path, reported once per entity) |
 
 `ludion explain L1300` prints the fix.
 

@@ -1131,7 +1131,7 @@ pub mod code {
     pub const IMPORT_INVALID_GLTF: DiagnosticCode = DiagnosticCode::new("L1201");
 
     /// `L1202` — a glTF document uses a feature the importer does not map onto a Ludion component
-    /// (a texture on a second UV set, a `BLEND` alpha mode, any camera — a prefab carries no `Camera`, a non-point light, a morph target,
+    /// (a texture on a second UV set, a `BLEND` alpha mode, any camera — a prefab carries no `Camera`, a directional light, a morph target,
     /// a morph-weights channel, an animation channel on a node under a skin joint, or one mixing skin
     /// joints and prefab parts, a sparse or non-triangle primitive, a JPEG image, any other extension). A hard error by default — the offending node/mesh/accessor is named — downgraded
     /// to a printed warning by `--allow-lossy`. Raised by `ludion-import`.
@@ -6236,13 +6236,13 @@ without `TEXCOORD_0`; `--allow-lossy` skips just the emissive and warns.
 
 Everything else is reported here rather than silently discarded — a texture on a second UV set or
 with per-axis wrap modes that disagree (a reference holds one mode for both axes), a textured
-material on a primitive without `TEXCOORD_0`, a `BLEND` `alphaMode` (sorted alpha-blend has no
+material on a primitive without `TEXCOORD_0`, a `BLEND` alpha mode (sorted alpha-blend has no
 mapping; `MASK` maps onto `alpha_mode: mask`), a node whose `matrix` shears (a skew, or a non-uniform scale
-above a rotation, which a `Transform` cannot hold), a camera of any kind (a prefab carries no `Camera`, which a
-scene has one of: the node stays as a `Transform`-only part when `--allow-lossy`), a directional or spot light, a
-morph target, an animation channel of morph weights, on a node that has no part (it hangs under
+above a rotation, which a `Transform` cannot hold), a camera (of any kind; a prefab carries no `Camera`, which a
+scene has one of: the node stays as a `Transform`-only part when `--allow-lossy`), a directional light (point and
+spot lights map onto `PointLight`/`SpotLight`), a morph target, an animation channel of morph weights, on a node that has no part (it hangs under
 a skin joint), or mixing skin joints and prefab parts in one animation, a sparse or
-non-triangle-list primitive, a referenced JPEG image, or any other extension. A skin is refused where it does not fit the mesh document: more than 256 joints, a
+non-triangle-list primitive, a JPEG image that a material references, or any other required extension. A skin is refused where it does not fit the mesh document: more than 256 joints, a
 second `JOINTS_n`/`WEIGHTS_n` set, a mesh shared by several skinned nodes (or skinned and unskinned),
 a node parented to a skin joint, or a mesh, camera or light on a joint node. A non-joint node between
 two joints of a skin is dropped as an entity, and its transform is folded into the rest of the
@@ -7463,10 +7463,11 @@ Fix: add a `CharacterMotor` to the entity, or remove the `LaneConstraint`.",
         code: code::LANE_PATH_VERTICAL,
         severity: Severity::Warning,
         title: "a lane path has a near-vertical span",
-        explanation: "A lane's path has a span whose horizontal tangent is almost zero (under about 87 degrees from
-the horizontal plane), so \"forward\" and \"sideways\" are not defined there from the tangent alone. The
-message names the arc-length range. The lane keeps working: across such a span its frame uses the
-sideways direction carried over from the path's previous stretch.
+        explanation: "A lane's path has a span whose horizontal tangent is almost zero (the span is steeper than about
+87 degrees from the horizontal plane), so \"forward\" and \"sideways\" are barely defined there from the
+tangent alone: the frame swings sharply across such a span. The message names the arc-length range. The
+lane keeps working; only where the tangent is exactly vertical is the sideways direction carried over
+from the path's previous stretch.
 
 Fix: tilt the span so it keeps some horizontal travel, or shorten it; a lane is meant for paths that
 run along the ground, not for ladders or shafts.",
@@ -7489,7 +7490,7 @@ degrees).",
         code: code::CAMERA_RIG_TARGET_MISSING,
         severity: Severity::Warning,
         title: "a camera rig target no longer exists",
-        explanation: "The entity named by `CameraRig.rig.target` has been despawned, or never existed. The rig reports
+        explanation: "The entity named by `CameraRig.target` has been despawned, or never existed. The rig reports
 this once and holds its last pose until the target is set again. A `target` of null is not an
 error: a game may assign it later.
 

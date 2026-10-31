@@ -272,7 +272,7 @@ pub(crate) fn path_vertical(path: &str, spans: &[(f32, f32)]) -> Diagnostic {
         .join(", ");
     Diagnostic::new(
         code::LANE_PATH_VERTICAL,
-        format!("lane path `{path}` is near-vertical over {ranges}; the lane frame there is carried from the neighbouring stretch"),
+        format!("lane path `{path}` is near-vertical over {ranges}; the lane frame swings sharply there, and is carried from the neighbouring stretch only where the tangent is vertical"),
     )
     .with_path("/path")
     .with_help("tilt the span so it keeps some horizontal travel, or shorten it")
