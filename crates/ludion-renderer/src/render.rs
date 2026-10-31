@@ -11216,6 +11216,73 @@ mod tests {
         assert!(grained_apart > 0, "the grain must reach the SMAA frame");
     }
 
+    /// **SMAA blends what the `Off` path would have stored.** A shallow-sloped square at 6.0 against a
+    /// dark background, tonemap `none`: the composite's half-float output holds the raw value, and the
+    /// `Off` path's 8-bit store clamps it. Mixing the raw value instead washes the edge pixels out to
+    /// white, a bright fringe about a third above `Off`'s light. Every `Smaa` pixel stays within the
+    /// range of the `Off` frame's 3x3 neighbourhood (one step of slack), and the light in the edge band is
+    /// what `Off`'s is, not a multiple of it.
+    #[test]
+    fn needs_gpu_smaa_blends_the_clamped_frame() {
+        let Some(mut renderer) = skip_or_renderer("smaa_blends_the_clamped_frame") else {
+            return;
+        };
+        let (w, h) = (96u32, 96u32);
+        let mut scene = known_hdr_scene(w, h, [6.0, 6.0, 6.0]);
+        scene.meshes[0].model = Mat4::from_rotation_z(0.12) * Mat4::from_scale(Vec3::splat(2.0));
+        scene.post = Some(crate::scene::PostData {
+            tonemap: TonemapOperator::None,
+            bloom_strength: 0.0,
+            dither: false,
+            ..crate::scene::PostData::default()
+        });
+        let size = FrameSize::native(w, h);
+        let off = renderer.render(&scene, size).expect("off render");
+        renderer.set_anti_aliasing(AntiAliasing::Smaa);
+        let smaa = renderer.render(&scene, size).expect("smaa render");
+
+        let at = |img: &RenderedImage, x: i32, y: i32, c: usize| {
+            let x = x.clamp(0, w as i32 - 1) as u32;
+            let y = y.clamp(0, h as i32 - 1) as u32;
+            img.rgba[((y * w + x) * 4) as usize + c]
+        };
+        let to_linear = |v: u8| {
+            let s = f64::from(v) / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let (mut off_band, mut smaa_band) = (0.0, 0.0);
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                for c in 0..3 {
+                    let (mut lo, mut hi) = (u8::MAX, u8::MIN);
+                    for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))) {
+                        let v = at(&off, x + dx, y + dy, c);
+                        lo = lo.min(v);
+                        hi = hi.max(v);
+                    }
+                    let v = at(&smaa, x, y, c);
+                    assert!(
+                        v.saturating_add(1) >= lo && v <= hi.saturating_add(1),
+                        "({x}, {y}) channel {c}: {v} outside the Off range {lo}..={hi}",
+                    );
+                    if hi > lo.saturating_add(8) {
+                        off_band += to_linear(at(&off, x, y, c));
+                        smaa_band += to_linear(v);
+                    }
+                }
+            }
+        }
+        assert!(off_band > 0.0, "the fixture must have an edge");
+        assert!(
+            smaa_band <= off_band * 1.1,
+            "SMAA added light along the edge: {smaa_band} against Off's {off_band}",
+        );
+    }
+
     /// A UI overlay renders under SMAA: the graph and the recorder agree on the overlay path, the
     /// rect is drawn over the antialiased image, and the pixels outside it match the `Off` frame.
     #[test]

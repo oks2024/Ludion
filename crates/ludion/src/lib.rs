@@ -1613,8 +1613,8 @@ fn anti_aliasing_refusal(mode: &str, budget: &Path) -> Diagnostic {
         ),
     )
     .with_help(
-        "a budget is calibrated with anti-aliasing off — re-measure without `--aa` (or with \
-         `--aa off`) to compare",
+        "a budget is calibrated with anti-aliasing off — re-measure with `--aa off` to \
+         compare",
     )
 }
 

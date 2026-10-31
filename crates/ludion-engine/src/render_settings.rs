@@ -38,13 +38,24 @@ use ludion_renderer::AntiAliasing;
 /// ```
 #[derive(Default, Debug)]
 pub struct RenderSettings {
-    anti_aliasing: Option<AntiAliasing>,
+    /// `Some(Some(mode))` sets the game's choice, `Some(None)` clears it.
+    anti_aliasing: Option<Option<AntiAliasing>>,
 }
 
 impl RenderSettings {
     /// Requests an anti-aliasing mode from the next frame on. The last request in a tick wins.
+    ///
+    /// The choice lives on the [`Engine`](crate::Engine): it survives world rebuilds but not a
+    /// `ludion dev` restart, and an `engine.restore` does not roll it back. A game re-requests from its
+    /// own option state on boot and after a restore (every tick, or on change plus on load).
     pub fn request_anti_aliasing(&mut self, mode: AntiAliasing) {
-        self.anti_aliasing = Some(mode);
+        self.anti_aliasing = Some(Some(mode));
+    }
+
+    /// Returns to the host's `--aa` flag, else the builder default, from the next frame on: drops the
+    /// game's own choice. The last request in a tick wins.
+    pub fn clear_anti_aliasing(&mut self) {
+        self.anti_aliasing = Some(None);
     }
 
     /// Whether a request is waiting for the next frame boundary — false again once the engine has
@@ -53,8 +64,9 @@ impl RenderSettings {
         self.anti_aliasing.is_some()
     }
 
-    /// Takes the pending anti-aliasing request, leaving none (the engine's drain path).
-    pub(crate) fn take(&mut self) -> Option<AntiAliasing> {
+    /// Takes the pending request, leaving none (the engine's drain path): `Some(Some(mode))` sets the
+    /// game's choice, `Some(None)` clears it.
+    pub(crate) fn take(&mut self) -> Option<Option<AntiAliasing>> {
         self.anti_aliasing.take()
     }
 }
@@ -119,9 +131,50 @@ mod tests {
         settings.request_anti_aliasing(AntiAliasing::Smaa);
         settings.request_anti_aliasing(AntiAliasing::Off);
         assert!(settings.is_pending());
-        assert_eq!(settings.take(), Some(AntiAliasing::Off));
+        assert_eq!(settings.take(), Some(Some(AntiAliasing::Off)));
         assert!(!settings.is_pending());
         assert_eq!(settings.take(), None);
+    }
+
+    fn drive(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+        let Some(settings) = world.resource_mut::<RenderSettings>() else {
+            return;
+        };
+        match ctx.frame {
+            FrameIndex(1) => settings.request_anti_aliasing(AntiAliasing::Smaa),
+            FrameIndex(3) => settings.clear_anti_aliasing(),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn clearing_returns_to_the_host_and_builder() {
+        let mut engine = Engine::builder().system("drive", drive).build().unwrap();
+        engine.set_anti_aliasing(AntiAliasing::Off);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            engine.advance_live();
+            seen.push(engine.anti_aliasing());
+        }
+        assert_eq!(
+            seen,
+            [
+                AntiAliasing::Off,
+                AntiAliasing::Smaa,
+                AntiAliasing::Smaa,
+                AntiAliasing::Off
+            ]
+        );
+
+        let mut engine = Engine::builder()
+            .anti_aliasing(AntiAliasing::Smaa)
+            .system("drive", drive)
+            .build()
+            .unwrap();
+        for _ in 0..4 {
+            engine.advance_live();
+        }
+        assert_eq!(engine.anti_aliasing(), AntiAliasing::Smaa);
     }
 
     #[test]

@@ -1950,8 +1950,8 @@ impl Engine {
             .world_mut()
             .resource_mut::<crate::RenderSettings>()
             .and_then(crate::RenderSettings::take);
-        if requested.is_some() {
-            self.anti_aliasing_game = requested;
+        if let Some(choice) = requested {
+            self.anti_aliasing_game = choice;
         }
     }
 

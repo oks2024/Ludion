@@ -9823,8 +9823,8 @@ descriptor predates the field and is compared as before.
 An anti-aliased capture (`quality.anti_aliasing` other than `off`) is refused the same way: it pays
 passes the budget never measured.
 
-Fix: re-measure at `--quality full` (or with `LUDION_QUALITY` unset), and without `--aa` (or with
-`--aa off`), and check that report.",
+Fix: re-measure at `--quality full` (or with `LUDION_QUALITY` unset), and with `--aa off`, and check
+that report.",
     },
     CodeEntry {
         code: code::PROFILE_SAMPLES_MISSING,

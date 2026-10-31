@@ -74,8 +74,20 @@ fn encoded_output(color: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
     return srgb_to_linear(linear_to_srgb(color) + offset);
 }
 
+// The Off path's 8-bit store clamps; the Rgba16Float intermediate does not. Every texel is clamped before
+// it is mixed, so the blend mixes what the Off path would have stored.
 fn color_at(uv: vec2<f32>) -> vec3<f32> {
-    return textureSampleLevel(smaa_blend_src, smaa_blend_samp, uv, 0.0).rgb;
+    return clamp(
+        textureSampleLevel(smaa_blend_src, smaa_blend_samp, uv, 0.0).rgb,
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+}
+
+// What the linear sampler's fetch at `uv + shift * texel` returns, as an explicit mix of two clamped
+// texels: `shift` is nonzero along one axis only, and `uv` is a texel centre.
+fn color_shifted(uv: vec2<f32>, shift: vec2<f32>, texel: vec2<f32>) -> vec3<f32> {
+    return mix(color_at(uv), color_at(uv + sign(shift) * texel), abs(shift.x + shift.y));
 }
 
 fn weights_at(uv: vec2<f32>) -> vec4<f32> {
@@ -110,10 +122,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
         blending_weight = blending_weight / dot(blending_weight, vec2<f32>(1.0, 1.0));
 
-        // The bilinear fetch mixes the current pixel with the chosen neighbour.
-        let blending_coord = blending_offset * vec4<f32>(rt.xy, -rt.xy) + uv.xyxy;
-        color = blending_weight.x * color_at(blending_coord.xy)
-            + blending_weight.y * color_at(blending_coord.zw);
+        // The two taps the reference reads with one bilinear fetch each: the current pixel mixed with the
+        // chosen neighbour, one on each side.
+        color = blending_weight.x * color_shifted(uv, blending_offset.xy, rt.xy)
+            + blending_weight.y * color_shifted(uv, -blending_offset.zw, rt.xy);
     }
 
     if (smaa_blend_params.grain != 0.0 || smaa_blend_params.dither != 0u) {

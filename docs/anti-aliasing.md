@@ -55,7 +55,11 @@ fn options(world: &mut World, _ctx: &SystemCtx) {
 }
 ```
 
-The request applies at the next frame boundary. `engine.describe` and a profile report's
+The request applies at the next frame boundary. `settings.clear_anti_aliasing()` drops the game's
+choice and returns to the host's `--aa`, else the builder default. The choice lives on the Engine: it
+survives world rebuilds but not a `ludion dev` restart, and an `engine.restore` does not roll it back,
+so a game re-requests from its own option state on boot and after a restore (every tick, or on change
+plus on load). `engine.describe` and a profile report's
 `quality.anti_aliasing` name the mode the host resolved.
 
 A golden suite pins the mode per scene with the `goldens/manifest.json` key `anti_aliasing` (a name
@@ -77,7 +81,7 @@ A golden suite pins the mode per scene with the `goldens/manifest.json` key `ant
 - **Chain order:** with SMAA on, composite writes grain 0 and dither 0, and `smaa_blend` applies grain
   then dither: `… vignette → SMAA → grain → dither`.
 - **A budget refuses an SMAA report** with `L4020`, as it refuses a non-`full` preset: an SMAA capture
-  pays passes the budget never measured. Re-measure without `--aa`.
+  pays passes the budget never measured. Re-measure with `--aa off`.
 
 ## Gotchas
 
