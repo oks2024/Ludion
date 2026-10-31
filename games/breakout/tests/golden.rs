@@ -9,16 +9,18 @@
 
 use std::path::PathBuf;
 
-use ludion_testkit::golden::{DEFAULT_HEIGHT, DEFAULT_SSIM_THRESHOLD, DEFAULT_WIDTH};
-use ludion_testkit::{GameplayDriver, GoldenTest};
+use ludion_core::codes::code;
+use ludion_testkit::{GameplayDriver, GoldenOutcome, GoldenTest};
 
 /// The scene, embedded as `tests/menu.rs` does.
 const MAIN_SCENE: &str = include_str!("../scenes/main.yaml");
 
 fn scene() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("scenes")
-        .join("main.yaml")
+    scenes_dir().join("main.yaml")
+}
+
+fn scenes_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scenes")
 }
 
 fn goldens_root() -> PathBuf {
@@ -41,60 +43,54 @@ fn needs_gpu_main_scene_matches_its_golden() {
 }
 
 /// The pause menu open over the board, drawn with its baked Inter face. The driver is rooted at
-/// `scenes/`, where `fonts.yaml` lives; `GoldenTest::single` renders a scene at rest and cannot press
-/// a key, so this test follows its recipe by hand.
+/// `scenes/`, where `fonts.yaml` lives; it presses the key, and `check_engine_golden` runs the
+/// recipe on the engine it drove.
 #[test]
 fn needs_gpu_open_menu_matches_its_golden() {
-    let platform = match ludion_testkit::platform_dir() {
-        Ok(platform) => platform,
-        Err(diag) => {
-            eprintln!("SKIPPED golden test:\n{diag}");
-            return;
-        }
-    };
-    let golden = goldens_root().join(platform).join("menu.png");
-
-    let scenes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scenes");
-    let mut driver = GameplayDriver::new(breakout::game().project_root(scenes), MAIN_SCENE);
+    let mut driver = GameplayDriver::new(breakout::game().project_root(scenes_dir()), MAIN_SCENE);
     driver.tap("Escape");
-    let actual = match driver
-        .engine_mut()
-        .render_png(DEFAULT_WIDTH, DEFAULT_HEIGHT)
-    {
-        Ok(png) => png,
-        Err(diag) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&diag)) => {
-            assert!(
-                !ludion_testkit::bless_requested(),
-                "a bless must never skip: no GPU adapter (L2003)"
-            );
-            eprintln!("SKIPPED golden test: no GPU adapter (L2003)");
-            return;
-        }
-        Err(diag) => panic!("rendering the open menu failed: {diag}"),
-    };
+    ludion_testkit::check_engine_golden(driver.engine_mut(), goldens_root(), "menu", &out_dir());
+}
 
-    if ludion_testkit::bless_requested() {
-        std::fs::write(&golden, &actual).expect("the menu golden is writable");
-        eprintln!("blessed {} — review it, then commit it", golden.display());
-        return;
+/// Frame 0 of the committed `run.lrp` (the post-load world, no tick run) is the main scene at rest.
+/// `run`, not `check`: a bless would overwrite `main.png` and race the main-scene test.
+#[test]
+fn needs_gpu_replay_start_matches_the_main_golden() {
+    let bytes = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("run.lrp"))
+        .expect("run.lrp reads");
+    let outcome = GoldenTest::from_replay(&bytes, 0, scenes_dir(), goldens_root(), "main")
+        .with_builder(breakout::game)
+        .run(&out_dir());
+    match outcome {
+        Ok(GoldenOutcome::Passed { report }) => eprintln!("golden passed: {}", report.summary),
+        Ok(GoldenOutcome::Failed { report, .. }) => panic!(
+            "replay frame 0 differs from main.png: {}\n{:?}",
+            report.summary, report.provenance
+        ),
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diags) if ludion_core::require_gpu::is_no_adapter(&diags) => {
+            eprintln!("SKIPPED replay golden test: no GPU adapter (L2003)");
+        }
+        Err(diags) => match ludion_testkit::unverifiable(&diags) {
+            Some(skip) => eprintln!("SKIPPED replay golden test:\n{skip}"),
+            None => panic!("rendering the replay frame failed: {diags:?}"),
+        },
     }
-    if !golden.exists() {
-        ludion_testkit::missing_golden(
-            &golden,
-            "bless it on your pinned GPU with `LUDION_BLESS=1 cargo test -p breakout --test golden`, \
-             review the written PNG, then commit it",
-        );
-        return;
-    }
-    let report = ludion_testkit::compare_png_bytes(
-        &std::fs::read(&golden).expect("the menu golden reads back"),
-        &actual,
-        DEFAULT_SSIM_THRESHOLD,
-    )
-    .expect("both PNGs decode");
+}
+
+/// A frame past the replay's end is `L3021`; the render is never reached, so no GPU is needed.
+#[test]
+fn a_replay_frame_past_its_end_is_l3021() {
+    let bytes = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("run.lrp"))
+        .expect("run.lrp reads");
+    let outcome = GoldenTest::from_replay(&bytes, 1_000_000, scenes_dir(), goldens_root(), "main")
+        .with_builder(breakout::game)
+        .run(&out_dir());
+    let Err(diags) = outcome else {
+        panic!("a frame past the end must be refused");
+    };
     assert!(
-        report.pass,
-        "menu golden comparison failed: {}",
-        report.summary
+        diags.iter().any(|d| d.code == code::REPLAY_FRAME_WINDOW),
+        "expected L3021, got {diags:?}"
     );
 }
