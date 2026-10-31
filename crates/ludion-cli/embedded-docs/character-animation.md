@@ -44,7 +44,7 @@ clips:
   `Animation.speed`. An empty or unbound clip name draws the rest pose. The pose is render-side only — never hashed or recorded. A skin with `SkinBone`
   followers is posed by them instead. Lighting follows the pose: a joint with a non-uniform scale
   bends the skin's normals the way it bends the surface.
-- Editing the character, its mesh or any clip re-reads it. `ludion check-scene <file>` loads and
+- Editing the character, its mesh or any clip re-reads it (the pose; `AnimationEvents` picks up retimed events at the next load, restore or scene switch). `ludion check-scene <file>` loads and
   reports it, with a `contact <joint>: height min … max …` line per clip for each ground-contact
   joint (a leaf joint whose vertices sit at the mesh's floor at rest — the feet), sampled at 30 Hz in
   mesh units; `SkinBone` parts can name a character's skin.

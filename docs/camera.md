@@ -103,7 +103,7 @@ Category `camera` (`--debug-draw camera`), hash-neutral: the rail polyline, the 
 
 ## Diagnostics
 
-On each of `L1304`–`L1309` the rig **holds its pose**. `target: null` and `path: ""` are inert and not reported. `ludion explain L####` has the fix.
+On `L1304`–`L1307` and `L1309` the rig **holds its pose**; on `L1308` the lowest-id rig still runs and the others are ignored. `target: null` and `path: ""` are inert and not reported. `ludion explain L####` has the fix.
 
 | code | raised when |
 | --- | --- |

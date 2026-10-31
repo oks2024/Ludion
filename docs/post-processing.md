@@ -127,8 +127,10 @@ anisotropy.
   (default `0.0` — off, and the gate). It is the lens's *aperture*: there is deliberately no separate
   in-focus range, because the sharp band is a consequence of the aperture. Widen it by lowering `dof`.
 - **`focus_distance`** — the focal plane in world units, `>= 0` (default `10.0`; inert while `dof` is
-  zero). A game that wants autofocus writes this field from a system each tick — that is sim state
-  and replays, where an engine-side autofocus would make the image a function of the camera's history.
+  zero). A game that wants autofocus writes this field from a system each tick: a sim system (hashed, replays), or a presentation
+  system on a presentation entity's `PostProcess` (unhashed, `ludion docs presentation`; the scene must
+  have no sim `PostProcess`, which would win). Either way it is a function of world state, never of the
+  camera's history, which an engine-side autofocus would make the image.
   `ludion render --look-at` sets it to the framing distance.
 - **`vignette`** / **`vignette_radius`** — corner darkening strength `[0, 1]` (default `0.0` — off,
   and the gate) and the normalized screen radius it starts at `[0, 1]` (default `0.5`). The geometry

@@ -1534,8 +1534,10 @@ pub enum TonemapOperator {
 ///
 /// The two fields are a **lens**: `focus_distance` is what is sharp, `dof` is how fast everything else
 /// stops being. There is deliberately no in-focus range field — see `dof` — and no autofocus mode:
-/// a game that wants one writes `focus_distance` from a system each tick, which is sim state and
-/// replays, where an engine-side autofocus would make the image a function of the camera's history.
+/// a game that wants one writes `focus_distance` from a system each tick: a sim system (hashed,
+/// replays) or a presentation system on a presentation entity's `PostProcess` (unhashed; no sim
+/// `PostProcess` may exist, it would win). An engine-side autofocus would make the image a function
+/// of the camera's history.
 ///
 /// # Film emulation
 ///
@@ -1943,8 +1945,9 @@ pub struct PostProcess {
     /// be a second mechanism — it would have to reduce the depth buffer and feed the answer back into
     /// the next frame, which makes the image a function of the camera's history rather than of world
     /// state, the exact property `Plan/post-process-pipeline.md` decision 5 rejects temporal AA for.
-    /// A system that sets `focus_distance` from the player's own position each tick is sim state, is
-    /// deterministic, replays, and needs nothing from the renderer.
+    /// A system that sets `focus_distance` from the player's own position each tick is
+    /// deterministic and needs nothing from the renderer: a sim system replays (hashed), a
+    /// presentation system on a presentation entity's `PostProcess` is unhashed.
     #[serde(default = "focus_distance_default")]
     #[schemars(range(min = 0.0))]
     #[schemars(extend("x-ui-range" = [0.0, 100.0]))]
@@ -4017,17 +4020,18 @@ fn ui_element_non_positive_size(value: f64, pointer: &str) -> Diagnostic {
 /// Which clip this entity is playing, and since when (`Plan/voxel-animation.md` decisions 6 and 8).
 ///
 /// One component, resolved against whatever the entity renders: on a [`Mesh`] whose `shape` is an
-/// assembly, `clip` names an entry of that assembly's `clips:` map and poses its parts; on a
+/// assembly or a character, `clip` names an entry of that assembly's `clips:` map and poses its parts; on a
 /// [`Sprite`] drawn from an atlas, it names one of that atlas's `flipbooks:` and chooses the region
 /// the quad shows. An entity carrying both reads the same name on each. On the **root part of a
 /// prefab instance** it names an entry of the prefab's `clips:` map and poses every part of the
 /// instance the clip has a track for, each relative to its authored rest, so the instance's placement
 /// and overrides ride on top; a part with no track keeps its exact stored pose.
 ///
-/// **Playback is visual-only.** The pose is a pure function of `(clip, sim time)` evaluated at
-/// `extract()`; no system writes it back, nothing sim-side reads it, and the entity keeps its one
-/// `Transform` and one collision footprint however its limbs move. Pausing freezes the pose for
-/// free, and a replay reproduces it because the only inputs are this component and the tick count.
+/// **The pose is visual-only.** It is a pure function of `(clip, sim time)` evaluated at
+/// `extract()`; no system writes it back, and the entity keeps its one `Transform` and one
+/// collision footprint however its limbs move. Pausing freezes the pose for free, and a replay
+/// reproduces it because the only inputs are this component and the tick count. Once a game
+/// registers `animation_events`, clip timing is sim input (`ludion docs character-animation`).
 ///
 /// **Clip selection is game code.** There is no state machine: a movement system writes
 /// `clip: "walk"`, a combat system writes `clip: "attack"`, and a transition is a hard cut unless
@@ -4043,7 +4047,7 @@ fn ui_element_non_positive_size(value: f64, pointer: &str) -> Diagnostic {
 /// clip ticks consumed at the frame it was called, after which the new `speed` covers the ticks
 /// since.
 ///
-/// On an entity that binds nothing under `clip` — a `Mesh.shape` that is not an assembly, an
+/// On an entity that binds nothing under `clip` — a `Mesh.shape` that is not an assembly or a character, an
 /// assembly or atlas with no such clip, a `Sprite` drawn from a loose `texture:` — this component is
 /// inert: the model renders at its rest pose and the sprite shows its authored `frame`. An unknown
 /// clip name is a silent degrade, never a diagnostic, because a clip is chosen at runtime by game
@@ -4422,6 +4426,7 @@ pub struct ParticleEmitter {
     #[schemars(extend("x-ui-range" = [0.0, 4.0]))]
     pub extent: [f32; 3],
     /// Particles released per second, continuously (default `40.0`). `0.0` is a burst-only emitter.
+    /// Non-negative (`L1014`; non-finite `L2107`).
     #[serde(default = "particle_rate_default")]
     #[schemars(range(min = 0.0))]
     #[schemars(extend("x-ui-range" = [0.0, 200.0]))]
@@ -4436,7 +4441,7 @@ pub struct ParticleEmitter {
     #[schemars(with = "u64")]
     pub started: FrameIndex,
     /// Seconds of continuous emission after `started` (default `0.0` — endless, and therefore in
-    /// steady state at every instant). Must be finite and non-negative (`L2107`).
+    /// steady state at every instant). Non-negative (`L1014`; non-finite `L2107`).
     #[serde(default)]
     #[schemars(range(min = 0.0))]
     #[schemars(extend("x-ui-range" = [0.0, 10.0]))]
@@ -4463,7 +4468,7 @@ pub struct ParticleEmitter {
     #[schemars(extend("x-ui-range" = [-20.0, 20.0]))]
     pub gravity: f32,
     /// Linear drag in inverse seconds (default `0.0` — none). Speed decays as `e^(−drag × age)`
-    /// toward the terminal velocity `gravity / drag`. Finite and non-negative (`L2107`).
+    /// toward the terminal velocity `gravity / drag`. Non-negative (`L1014`; non-finite `L2107`).
     #[serde(default)]
     #[schemars(range(min = 0.0))]
     #[schemars(extend("x-ui-range" = [0.0, 10.0]))]
@@ -4475,12 +4480,13 @@ pub struct ParticleEmitter {
     #[schemars(extend("x-ui-range" = [-4.0, 4.0]))]
     pub floor: f32,
     /// Disc diameter in world units at age zero (default `0.25`), lerped to `end_size` over the
-    /// particle's life and multiplied by `Transform.scale.x`. Finite and non-negative (`L2107`).
+    /// particle's life and multiplied by `Transform.scale.x`. Non-negative (`L1014`; non-finite `L2107`).
     #[serde(default = "particle_start_size_default")]
     #[schemars(range(min = 0.0))]
     #[schemars(extend("x-ui-range" = [0.0, 4.0]))]
     pub start_size: f32,
     /// Disc diameter at the end of the particle's life (default `0.0` — it shrinks away).
+    /// Non-negative (`L1014`; non-finite `L2107`).
     #[serde(default)]
     #[schemars(range(min = 0.0))]
     #[schemars(extend("x-ui-range" = [0.0, 4.0]))]

@@ -96,7 +96,8 @@ tracks:
 ```
 
 Playback applies `rotation`, `translation` and `scale` (a part scales about its pivot, and its
-children ride the scaled frame; a ragdoll switch ignores `scale`); it does not deliver `events`.
+children ride the scaled frame; a ragdoll switch ignores `scale`); a game that registers `animation_events` receives its `events` (`ludion docs
+character-animation`).
 There is no visibility channel. Canonical form is `format, kind, name, generated_from, duration, loop,
 events, tracks`, sorts tracks by target name, orders channels `rotation, translation, scale`, and
 writes `ease: linear` as the key's absence. An event block:
@@ -138,15 +139,17 @@ events:
 `Animation` is a built-in component: `clip` (the short name, default `""`), `started` (the
 `FrameIndex` playback is measured from, default `0`), `speed` (default `1.0`, `>= 0`).
 
-- **Playback is visual-only, a hard line.** The pose is a pure function of `(clip, sim time)`
+- **The pose is visual-only, a hard line.** The pose is a pure function of `(clip, sim time)`
   derived at the render boundary and written back nowhere. The entity keeps its one `Transform` and
-  collision footprint; the world hash and replays are untouched, pausing freezes the pose. No limb hitboxes.
+  collision footprint; pausing freezes the pose. No limb hitboxes. Once a game registers
+  `animation_events`, clip timing is sim input (`ludion docs character-animation`).
 - **Write the component only when the choice changes.** Re-stamping `started` every frame restarts
   the clip every frame (and churns the world hash for a `String` that did not change). The component
   is ordinary hashed sim state: it snapshots, and it rides a scene transition.
 - **An unbound name is a silent rest pose** — no clip, an empty name, or a name the assembly does
   not bind — with no diagnostic: a complaint would fire sixty times a second.
-- **Transitions are hard cuts.** There is no blending, so a clip change shows immediately.
+- **A plain `clip` write is a hard cut.** `crossfade(&mut animation, clip, seconds, ctx.game_frame)`
+  blends from the outgoing clip (rotation slerps, translation/scale lerp).
 - `speed: 0.0` freezes on the clip's first instant; a `started` frame in the future reads as that same
   first instant rather than a negative time.
 
@@ -160,9 +163,11 @@ sheet reports the exact tick and seconds it used, so `--time 0.401` renders tick
 Per part, in the assembly's authored order:
 
 ```text
-local_i = T(offset_i − offset_parent + translation_i) · pivot_i · R_i · pivot_i⁻¹
+local_i = T(offset_i − offset_parent + translation_i) · pivot_i · R_i · S_i · pivot_i⁻¹
 world_i = world_parent · local_i
 ```
+
+`S_i` is identity when the part has no `scale` channel.
 
 - **A part translates in its REST frame, then rotates about its pivot.** The ordinary `T · R` order,
   so a `translation` key is never bent by that same part's own rotation — a torso authored to bob `+Y`

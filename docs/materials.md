@@ -7,7 +7,7 @@ description: Material scalars, author surfaces, precedence, texture maps, cutout
 **Scope:** How every mesh-bearing surface shades: `roughness`, `metallic`, `emissive`, where each may be authored, and which surface wins. The lights that hit them are lighting; what the post stack then does to the image is post-processing.
 
 Every mesh-bearing surface — a primitive, an imported asset, a voxel model — shades through the same
-Cook-Torrance point-light + ambient BRDF, driven by three scalars, each optionally modulated by a
+Cook-Torrance point/spot-light + ambient BRDF, driven by three scalars, each optionally modulated by a
 texture map (below). A material is always exactly these three numbers, flat or sampled per-pixel.
 
 - **`roughness`** — perceptual, `[0, 1]`. `0.0` is mirror-smooth (a tight, bright highlight); `1.0`
@@ -24,7 +24,7 @@ texture map (below). A material is always exactly these three numbers, flat or s
 
 ## The three author surfaces
 
-The same three fields exist in three places, always named and ranged identically:
+The same three fields exist in four places, always named and ranged identically:
 
 1. **`Mesh` component fields** — `roughness`, `metallic`, `emissive` (the built-in component table is
    `ludion docs components`). The only surface for a primitive (`cube`/`plane`/`sphere`) or a plain
@@ -73,8 +73,8 @@ modulating one of the terms above:
   `base_color_texture` (glTF's rule): an emissive glow does not require, or inherit from, a base
   color map.
 
-Textures arrive through `ludion import` (glTF), through `gen accept` on a generated mesh, or through
-`ludion mesh apply` deriving one from a `kind: mesh-edit` document (`ludion docs mesh-editing`) — the
+Textures arrive through `ludion import` (glTF), through `gen accept` on a generated mesh, through `ludion texture build` from a `kind: texture`
+recipe (`ludion docs texture-recipes`), or through `ludion mesh apply` deriving one from a `kind: mesh-edit` document (`ludion docs mesh-editing`) — the
 one deliberate way to paint a map without a DCC tool, `emissive` only. There is no wire command and
 no editor UI that authors a texture directly. A hand-written reference in a `.mesh.yaml` is legal
 but not a promoted workflow. Each map is a
@@ -214,7 +214,7 @@ is no separate "make it bloom" switch.
 
 **Without an `Environment`** (see `ludion docs environment`), ambient stays
 `ambient.rgb × albedo` (ordinary, non-directional), and the specular lobe only comes from the scene's
-point lights and sun. A `metallic: 1.0` surface has no diffuse response at all, so **a metal lit only
+point lights, spot lights and sun. A `metallic: 1.0` surface has no diffuse response at all, so **a metal lit only
 by flat ambient (no point light or sun reaching it) reads as nearly black** — that is the BRDF working
 as specified, not a bug. If a metallic mesh looks dead in an `Environment`-less scene, the fix is
 content, not the shader: add or move a point light so its specular highlight lands on the surface, as

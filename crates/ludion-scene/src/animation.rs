@@ -11,7 +11,9 @@
 //! a clip in isolation, the way [`crate::part`] validates a part in isolation from its owning
 //! assembly. A clip may also carry `events` (named instants, `{t, name}`, strictly increasing)
 //! and `generated_from` (the source path of an imported clip, which then keeps its events in the
-//! character overlay instead). Playback does not apply `scale` or deliver `events`.
+//! character overlay instead). Playback applies `scale` (a ragdoll switch
+//! ignores it). A game that registers `animation_events` receives `events` (`ludion docs
+//! character-animation`).
 //!
 //! **Block-style keyframes, not flow-style.** `Plan/voxel-animation.md`'s reference sketch writes
 //! a keyframe in YAML flow style (`{ t: 0.0, v: [25, 0, 0] }`), but the crate's strict-YAML subset

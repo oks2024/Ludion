@@ -38,7 +38,7 @@ pub struct CharacterMotor {
     /// How far below the feet the motor snaps back to ground while walking off a lip, in metres
     /// (default `0.25`; `>= 0`).
     pub snap_distance: f32,
-    /// The gap kept between the capsule and what it touches, in metres (default `0.01`; `>= 0`).
+    /// The gap kept between the capsule and what it touches, in metres (default `0.01`; `> 0`).
     pub skin_width: f32,
     /// The collision layer, named in the scene's `physics.layers`; `None` is the implicit `default`
     /// layer, and the field is omitted from the saved text.

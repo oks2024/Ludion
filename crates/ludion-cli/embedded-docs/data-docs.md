@@ -13,7 +13,7 @@ in-world store, canonical byte-idempotent emit, and hot reload. You register a s
 read. **Numbers and archetype names live in text; behavior stays in Rust**, so retuning the armory
 needs no recompile.
 
-It is not a scene (no `kind:`, spawns entities) and not an engine asset (`kind: mesh`/`voxel`): it is
+It is not a scene (no `kind:`, spawns entities) and not an engine asset (an engine kind such as `mesh`, `voxel`, `prefab`, `atlas`): it is
 game data the *engine* has no built-in type for, so you teach it the type.
 
 ## The doc envelope
@@ -31,7 +31,7 @@ cooldown: 0.8
 
 - `format: 1` — the document format version (the only version this engine reads; else `L1119`).
 - `kind: weapon` — marks the file and routes it. The engine peeks this on every `*.yaml` under the
-  content root: no `kind` is a scene (skipped), `mesh`/`voxel` is an engine asset (skipped), a
+  content root: no `kind` is a scene (skipped), an engine kind (any row of `ludion_scene::KINDS`: `mesh`, `voxel`, `prefab`, `atlas`, …) is skipped, a
   registered kind loads, and an **unregistered** `kind` fails the boot with `L1119` and a nearest-match
   suggestion — a typo'd `kind:` is loud, never silently ignored. The exception is an engine with no
   game kind registered, such as the built-in one (`ludion serve`, `ludion sim-hash`): it hosts anyone's
@@ -149,7 +149,7 @@ exits 0 when its content root holds no data-docs, and a data-doc whose kind noth
 `.patterns()` validates its docs, so a patterns-only game passes; build output (`target/`,
 `node_modules/`, dot-directories) is never walked. It reuses the **exact in-process validation
 the live engine runs**, so CI and runtime agree by construction — there is no separate schema file to drift. (`ludion check-scene`
-stays engine-kind-only: it validates a single scene/mesh/voxel file and hard-rejects an unknown
+stays engine-kind-only: it validates a single scene or engine-kind file and hard-rejects an unknown
 `kind:`, because it cannot know a game's types without loading the game binary — which is why the doc
 check lives in the game's own facade.)
 

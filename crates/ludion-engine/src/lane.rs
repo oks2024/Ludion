@@ -817,7 +817,7 @@ pub struct LaneInput {
 /// `forward` points to the screen's right (`screen_right`, a world direction) or to its left,
 /// `across = stick[1]`, and `direction = along · forward`.
 ///
-/// When `forward` is within 80° of perpendicular to `screen_right` (|`forward · screen_right`| below
+/// When `forward` is within 10° of perpendicular to `screen_right` (|`forward · screen_right`| below
 /// cos 80°) the lane runs into or out of the screen and left/right cannot tell the ways apart.
 /// Below that threshold the helper returns `+forward`: it is pure and has no previous frame to keep
 /// the last sign from, so a caller that wants hysteresis holds its own sign.

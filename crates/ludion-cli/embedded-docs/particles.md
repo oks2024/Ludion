@@ -33,10 +33,10 @@ ParticleEmitter:
     - 0.3
     - 0.0
     - 0.0
-  rate: 35.0                         # particles/second, continuous (default 40.0; >=0, L2107)
+  rate: 35.0                         # particles/second, continuous (default 40.0; >=0, L1014; non-finite L2107)
   burst: 0                           # particles released at once at `started` (default 0)
   started: 0                         # the frame the effect starts at (default 0)
-  duration: 0.0                      # seconds of emission after `started` (default 0.0 = endless)
+  duration: 0.0                      # seconds of emission after `started` (default 0.0 = endless; >=0, L1014)
   life:  # seconds, uniform [min, max] (default [0.8, 1.4]; L2107)
     - 1.2
     - 2.0
@@ -45,10 +45,10 @@ ParticleEmitter:
     - 0.9
   spread_deg: 20.0                   # emission-cone half-angle about local +Y (default 30.0, [0,180]: L1014)
   gravity: -1.2                      # world -Y accel, units/s^2 (default 0.0; negative lifts)
-  drag: 0.6                          # linear drag, 1/s (default 0.0 = none; >=0, L2107)
+  drag: 0.6                          # linear drag, 1/s (default 0.0 = none; >=0, L1014; non-finite L2107)
   floor: -1000.0                     # world Y below which a particle isn't drawn (default -f32::MAX)
-  start_size: 0.18                   # disc diameter at age zero (default 0.25; >=0, L2107)
-  end_size: 0.02                     # disc diameter at end of life (default 0.0 = shrinks away; >=0, L2107)
+  start_size: 0.18                   # disc diameter at age zero (default 0.25; >=0, L1014; non-finite L2107)
+  end_size: 0.02                     # disc diameter at end of life (default 0.0 = shrinks away; >=0, L1014; non-finite L2107)
   start_color:  # linear RGBA at age zero, HDR-capable (default opaque white)
     - 3.0
     - 1.4
