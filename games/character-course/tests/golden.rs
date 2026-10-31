@@ -9,6 +9,10 @@ use std::path::PathBuf;
 
 use ludion_testkit::GoldenTest;
 
+fn out_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(concat!("testkit-", env!("CARGO_PKG_NAME")))
+}
+
 #[test]
 fn needs_gpu_main_scene_matches_its_golden() {
     GoldenTest::single(
@@ -16,7 +20,7 @@ fn needs_gpu_main_scene_matches_its_golden() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("goldens"),
         "main",
         character_course::registry,
-        &PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("testkit"),
+        &out_dir(),
     );
 }
 
@@ -32,5 +36,5 @@ fn needs_gpu_behind_rig_matches_its_golden() {
     .with_builder(character_course::game)
     .with_registry(character_course::registry)
     .with_frames(60)
-    .check(&PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("testkit-behind"));
+    .check(&out_dir());
 }

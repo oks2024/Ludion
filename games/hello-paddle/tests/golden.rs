@@ -21,7 +21,7 @@ fn goldens_root() -> PathBuf {
 }
 
 fn out_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("testkit")
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(concat!("testkit-", env!("CARGO_PKG_NAME")))
 }
 
 #[test]
