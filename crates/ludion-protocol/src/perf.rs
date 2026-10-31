@@ -409,7 +409,7 @@ pub struct LoadProfile {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AssetLoadCounters {
     /// The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,
-    /// `character`, `atlas`).
+    /// `character`, `prefab_clips`, `atlas`).
     pub kind: String,
     /// Decode events: one per decoded file, so a map shared by two meshes decodes once.
     pub decoded: u64,

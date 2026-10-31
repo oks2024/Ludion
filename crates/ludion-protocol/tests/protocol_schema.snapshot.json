@@ -3718,7 +3718,7 @@
             "type": "integer"
           },
           "kind": {
-            "description": "The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,\n`character`, `atlas`).",
+            "description": "The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,\n`character`, `prefab_clips`, `atlas`).",
             "type": "string"
           },
           "reused": {
@@ -6034,7 +6034,7 @@
             "type": "integer"
           },
           "kind": {
-            "description": "The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,\n`character`, `atlas`).",
+            "description": "The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,\n`character`, `prefab_clips`, `atlas`).",
             "type": "string"
           },
           "reused": {

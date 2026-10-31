@@ -3123,7 +3123,7 @@ export interface AssetLoadCounters {
   decoded: number;
   /**
    * The asset kind's name (`texture`, `mesh`, `voxel`, `voxel_grid`, `sculpt`, `assembly`,
-   * `character`, `atlas`).
+   * `character`, `prefab_clips`, `atlas`).
    */
   kind: string;
   /**
