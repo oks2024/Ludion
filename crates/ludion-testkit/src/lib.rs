@@ -18,7 +18,9 @@
 //! `EngineBuilder`, load its scene inline" step every headless gameplay/replay/audio test starts
 //! from, and [`GameplayDriver`] adds a frame-cursor-tracked `hold`/`release`/`tap` on top for tests
 //! that script key presses. [`golden::GoldenTest::single`] is the matching one-call recipe for a
-//! game's own golden-image test (resolve the per-OS path, skip/bless/compare) — see its doc example.
+//! game's own golden-image test (resolve the per-OS path, skip/bless/compare) — see its doc example;
+//! [`check_engine_golden`] and [`golden::GoldenTest::from_replay`] run the same recipe on an engine
+//! the test drove and on a recorded session.
 //!
 //! [`stats::image_stats`] answers the other image question — not "did this frame change?" but "does
 //! this frame carry a *defect*?", with no reference image at all: [`ImageStats`] scores quantization
@@ -80,7 +82,8 @@ pub use drift::assert_components_drift_safe;
 pub use driver::{GameplayDriver, loaded_engine};
 pub use golden::{
     GoldenOutcome, GoldenTest, MACOS_REFERENCE_ADAPTER, WINDOWS_REFERENCE_ADAPTER, bless_requested,
-    compare_png_bytes, missing_golden, platform_dir, provenance_label, unverifiable,
+    check_engine_golden, compare_png_bytes, missing_golden, platform_dir, provenance_label,
+    unverifiable,
 };
 pub use image::DecodedImage;
 pub use imports::{missing_derived_imports, require_derived_imports};

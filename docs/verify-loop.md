@@ -57,13 +57,21 @@ ticks only the engine's empty schedule — so frame N is frame 0 with the flipbo
 N ticks, which is how an early wave or a boss phase gets a committed golden:
 
 ```rust
-GoldenTest::new("scenes/stage-1.yaml", "goldens/windows/wave-1.png")
+GoldenTest::in_set("scenes/stage-1.yaml", "goldens", "wave-1")
     .with_builder(shmup::game)   // supersedes .with_registry — the builder carries the registry
-    .with_frames(600);              // 600 game ticks, systems and all
+    .with_frames(600)            // 600 game ticks, systems and all
+    .check(out_dir);
 ```
 
-Scripted input stays out of it: for "after the player did X", record a replay and render from it
-(`--replay-frames`, in `ludion docs running`).
+"After the player did X" has two forms, each the same skip/bless/compare recipe: an engine your test
+built and drove, or a frame of a recorded replay:
+
+```rust
+check_engine_golden(&mut engine, "goldens", "menu-open", out_dir);   // renders it as it stands
+GoldenTest::from_replay(bytes, 240, env!("CARGO_MANIFEST_DIR"), "goldens", "shop")
+    .with_builder(shmup::game)
+    .check(out_dir);                                                  // frame 0 = post-load world
+```
 
 **Reading a golden failure.** `L2203` (SSIM below threshold, or any single tile below the 0.95 tile
 floor — a local defect the global mean would hide) and `L2207` (a tile's colour error over the
@@ -73,7 +81,7 @@ region) write `<stem>.diff.json` + `<stem>.actual.png` under `target/tmp/testkit
 with pixel coordinates and a compass region (`top-left`, `center`, …) — so you know *where* the render
 changed without opening an image viewer. Harness details: `ludion devdocs ludion-testkit`.
 
-A failure via `GoldenTest::single` also prints a `provenance:` line naming the adapter it rendered on
+A failure of any form also prints a `provenance:` line naming the adapter it rendered on
 against the pinned reference for your platform (`ludion_testkit::provenance_label`): off the pinned
 adapter, a red is environment until it is re-run on the reference box; on it, a red is a regression.
 

@@ -12,18 +12,21 @@
 //! ([`ludion_engine::render_scene`]) — check → instantiate → tick(0) → extract → render
 //! — or, with [`GoldenTest::with_builder`], the game's own engine
 //! ([`ludion_engine::render_scene_with_builder`]), whose ticks run the game's systems so a golden can
-//! be an early wave instead of the scene at rest.
+//! be an early wave instead of the scene at rest. An engine the test built and drove itself goes
+//! through [`check_engine_golden`], and a recorded session through [`GoldenTest::from_replay`].
 //! Either way a golden test is never a second render pipeline to keep in sync with the real one; the
 //! sheet is just the rendered image, and everything downstream is identical. Comparison and reporting
 //! are [`crate::ssim`] and [`crate::report`]; this module is the glue: render, load the golden,
 //! decide pass/fail/bless, and write artifacts on failure.
 
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::Registry;
-use ludion_engine::EngineBuilder;
+use ludion_engine::{Engine, EngineBuilder, QualitySetting};
 
 use crate::image::{self, DecodedImage};
 use crate::report::DiffReport;
@@ -55,12 +58,12 @@ pub const DEFAULT_TILE_COLOR_CEILING: f64 = 4.0;
 ///
 /// A `fn`-pointer `registry` field (defaulting to [`ludion_engine::builtin_registry`]) is the seam a
 /// *game* golden test uses: a scene naming custom components validates only against a registry that
-/// knows them, so [`with_registry`](GoldenTest::with_registry) swaps in the game's. A second
-/// `fn`-pointer field goes one further: [`with_builder`](GoldenTest::with_builder) renders through
+/// knows them, so [`with_registry`](GoldenTest::with_registry) swaps in the game's. A shared
+/// builder closure goes one further: [`with_builder`](GoldenTest::with_builder) renders through
 /// the game's whole engine, so [`frames`](GoldenTest::frames) ticks run the game's **systems** and a
 /// golden can be an early wave rather than the scene at rest. Built-in gallery tests never touch
-/// either. (`fn` pointers derive `Clone`/`Debug`, so the struct's derives are intact.)
-#[derive(Clone, Debug)]
+/// either. (The closure lives in an `Arc`, so the struct stays `Clone`; `Debug` is written by hand.)
+#[derive(Clone)]
 pub struct GoldenTest {
     /// Path to the scene file to render.
     pub scene: PathBuf,
@@ -107,8 +110,73 @@ pub struct GoldenTest {
     /// [`with_builder`](GoldenTest::with_builder): its schedule runs for [`frames`](Self::frames)
     /// ticks, so the golden can be a wave, a midboss entry, a boss phase. `None` (the default) is
     /// the built-in schedule, which moves nothing but the sim clock.
-    builder: Option<fn() -> EngineBuilder>,
+    builder: Option<Arc<dyn Fn() -> EngineBuilder + Send + Sync>>,
+    /// The recorded session this test renders a frame of, via [`GoldenTest::from_replay`]; `None`
+    /// (the default) renders the `scene` file.
+    replay: Option<ReplaySource>,
 }
+
+/// A replay a golden renders one frame of.
+#[derive(Clone)]
+struct ReplaySource {
+    bytes: Arc<[u8]>,
+    frame: u64,
+    project_root: PathBuf,
+}
+
+impl std::fmt::Debug for GoldenTest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoldenTest")
+            .field("scene", &self.scene)
+            .field("golden", &self.golden)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("ssim_threshold", &self.ssim_threshold)
+            .field("clip", &self.clip)
+            .field("time", &self.time)
+            .field("strip", &self.strip)
+            .field("frames", &self.frames)
+            .field("debug_draw", &self.debug_draw)
+            .field("debug_view", &self.debug_view)
+            .field("anti_aliasing", &self.anti_aliasing)
+            .field("registry", &"<fn>")
+            .field("builder", &self.builder.as_ref().map(|_| "<fn>"))
+            .field(
+                "replay",
+                &self
+                    .replay
+                    .as_ref()
+                    .map(|r| format!("frame {} of {} bytes", r.frame, r.bytes.len())),
+            )
+            .finish()
+    }
+}
+
+/// What the golden flow reads from the environment, so the flow itself can be driven by value.
+struct Env {
+    platform: Result<&'static str, Diagnostic>,
+    bless: bool,
+    any_adapter: bool,
+    require_reference: bool,
+}
+
+impl Env {
+    fn current() -> Env {
+        Env {
+            platform: platform_dir(),
+            bless: bless_requested(),
+            any_adapter: any_adapter_bless(),
+            require_reference: reference_adapter_required(),
+        }
+    }
+}
+
+/// One render of the thing under test: its image and the adapter it rendered on.
+type Render<'a> = dyn FnMut() -> Result<(DecodedImage, String), Vec<Diagnostic>> + 'a;
+
+/// How to bless a missing golden, shared by every recipe form.
+const BLESS_HINT: &str = "bless it on your pinned GPU with `LUDION_BLESS=1 LUDION_BLESS_ANY_ADAPTER=1 cargo \
+     test` (PowerShell: set both with `$env:`), review the written PNG, then commit it";
 
 impl GoldenTest {
     /// Builds a golden test at the default resolution and threshold ([`DEFAULT_WIDTH`] ×
@@ -130,7 +198,43 @@ impl GoldenTest {
             anti_aliasing: ludion_engine::AntiAliasing::Off,
             registry: ludion_engine::builtin_registry,
             builder: None,
+            replay: None,
         }
+    }
+
+    /// A golden at `goldens_root/<os>/<stem>.png`, the per-OS set path every game recipe uses
+    /// (`<os>` is [`platform_dir`], or the host OS name off the pinned tier, where
+    /// [`check`](GoldenTest::check) skips before reading it). Chain the builders, then
+    /// [`check`](GoldenTest::check).
+    pub fn in_set(
+        scene: impl Into<PathBuf>,
+        goldens_root: impl AsRef<Path>,
+        stem: &str,
+    ) -> GoldenTest {
+        GoldenTest::new(scene, set_golden(goldens_root.as_ref(), stem))
+    }
+
+    /// A golden of frame `frame` of a recorded `.lrp` session (`bytes`), driven against the engine
+    /// of [`with_builder`](GoldenTest::with_builder) (the built-in one when unset) rooted at
+    /// `project_root`, at `goldens_root/<os>/<stem>.png`. Frame 0 is the initial post-load world;
+    /// the numbering is [`ludion_engine::ReplayFramesRequest`]'s. A frame past the replay's end is
+    /// `L3021`. [`frames`](GoldenTest::frames), [`clip`](GoldenTest::clip) and
+    /// [`debug_view`](GoldenTest::debug_view) do not apply to a replay. Compare with
+    /// [`check`](GoldenTest::check).
+    pub fn from_replay(
+        bytes: &[u8],
+        frame: u64,
+        project_root: impl Into<PathBuf>,
+        goldens_root: impl AsRef<Path>,
+        stem: &str,
+    ) -> GoldenTest {
+        let mut test = GoldenTest::in_set(PathBuf::new(), goldens_root, stem);
+        test.replay = Some(ReplaySource {
+            bytes: Arc::from(bytes),
+            frame,
+            project_root: project_root.into(),
+        });
+        test
     }
 
     /// Draws `categories` into the render. See [`debug_draw`](GoldenTest::debug_draw).
@@ -167,23 +271,26 @@ impl GoldenTest {
     /// Renders the scene through `builder`'s own engine, running the **game's** schedule for
     /// [`frames`](Self::frames) ticks — the seam a golden of an early wave, a midboss entry or a boss
     /// phase needs, since the built-in schedule's frame N is frame 0 with nothing but the sim clock
-    /// moved. `builder` is a `fn` so the struct stays `Clone`; pass the game's `fn() -> EngineBuilder`
-    /// (the same one its `main` hands to `ludion::run`).
+    /// moved. `builder` is any `Fn() -> EngineBuilder` (a closure capturing config included); pass
+    /// the game's own (the same one its `main` hands to `ludion::run`).
     ///
     /// This supersedes [`with_registry`](GoldenTest::with_registry): when both are set the builder
-    /// wins, because its engine already validates against the game's registry. Scripted input is out
-    /// of scope — a committed replay stays the tool for "after the player did X".
+    /// wins, because its engine already validates against the game's registry. Scripted input is
+    /// [`from_replay`](GoldenTest::from_replay)'s job.
     ///
     /// ```no_run
     /// # use ludion_testkit::GoldenTest;
     /// # fn game() -> ludion_engine::EngineBuilder { ludion_engine::Engine::builder() }
-    /// GoldenTest::new("scenes/stage-1.yaml", "goldens/windows/wave-1.png")
+    /// GoldenTest::in_set("scenes/stage-1.yaml", "goldens", "wave-1")
     ///     .with_builder(game)
     ///     .with_frames(600);
     /// ```
     #[must_use]
-    pub fn with_builder(mut self, builder: fn() -> EngineBuilder) -> Self {
-        self.builder = Some(builder);
+    pub fn with_builder(
+        mut self,
+        builder: impl Fn() -> EngineBuilder + Send + Sync + 'static,
+    ) -> Self {
+        self.builder = Some(Arc::new(builder));
         self
     }
 
@@ -208,54 +315,13 @@ impl GoldenTest {
     /// it), or — for a byte-exact threshold on the host's per-OS golden set — `L2205` (unpinned
     /// platform) / `L2210` (not the reference adapter), both a skip per [`unverifiable`].
     pub fn run(&self, out_dir: &Path) -> Result<GoldenOutcome, Vec<Diagnostic>> {
-        let skip = |adapter: Option<&str>| {
-            compare_skip(
-                &self.golden,
-                self.ssim_threshold,
-                platform_dir(),
-                adapter,
-                any_adapter_bless(),
-            )
-        };
-        if let Some(diag) = skip(None) {
-            return Err(vec![diag]);
-        }
-        let (actual, adapter) = self.render()?;
-        if let Some(diag) = skip(Some(&adapter)) {
-            return Err(vec![refuse_adapter_skip(
-                diag,
-                reference_adapter_required(),
-            )]);
-        }
-        let golden = image::read_golden(&self.golden).map_err(|d| vec![d])?;
-
-        let stem = test_stem(&self.golden);
-        let actual_path = out_dir.join(format!("{stem}.actual.png"));
-        let report_path = out_dir.join(format!("{stem}.diff.json"));
-
-        let report = report_for(
-            &golden,
-            &actual,
-            &self.golden.display().to_string(),
-            &actual_path.display().to_string(),
+        run_with(
+            &self.golden,
             self.ssim_threshold,
-            Some(&adapter),
-        );
-
-        if report.pass {
-            return Ok(GoldenOutcome::Passed { report });
-        }
-
-        std::fs::create_dir_all(out_dir).map_err(|error| vec![io_diagnostic(out_dir, error)])?;
-        write_png(&actual_path, &actual)?;
-        ludion_core::atomic::write_atomic(&report_path, report.to_json())
-            .map_err(|error| vec![io_diagnostic(&report_path, error)])?;
-
-        Ok(GoldenOutcome::Failed {
-            report,
-            actual_path,
-            report_path,
-        })
+            out_dir,
+            &Env::current(),
+            &mut || self.render(),
+        )
     }
 
     /// Renders the scene and (re)writes the golden PNG unconditionally — creating a missing golden
@@ -268,20 +334,7 @@ impl GoldenTest {
     /// the rendering GPU is not that platform's pinned reference adapter (opt out with
     /// `LUDION_BLESS_ANY_ADAPTER=1`).
     pub fn bless(&self) -> Result<GoldenOutcome, Vec<Diagnostic>> {
-        let (actual, adapter) = self.render()?;
-        if let Ok(platform) = platform_dir()
-            && let Some(refusal) =
-                bless_refusal(&self.golden, platform, &adapter, any_adapter_bless())
-        {
-            return Err(vec![refusal]);
-        }
-        if let Some(parent) = self.golden.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| vec![io_diagnostic(parent, error)])?;
-        }
-        write_png(&self.golden, &actual)?;
-        Ok(GoldenOutcome::Blessed {
-            golden: self.golden.clone(),
-        })
+        bless_with(&self.golden, &Env::current(), &mut || self.render())
     }
 
     /// The whole game-project golden-test recipe in one call: resolve the per-OS golden path
@@ -290,12 +343,12 @@ impl GoldenTest {
     /// see [`missing_golden`]), bless when [`bless_requested`] says to, otherwise render and
     /// compare — panicking with the diff summary on a mismatch, and skipping gracefully on the no-adapter
     /// signal (`L2003`). This is the entire body every game's `tests/golden.rs` used to hand-roll
-    /// per scene; see the [crate docs](crate) for a runnable game-project example (`GoldenTest::new`
-    /// covers the same steps individually, for a caller that wants to customize one of them).
+    /// per scene; it is exactly
+    /// `GoldenTest::in_set(..).with_registry(registry).check(out_dir)`, and see the
+    /// [crate docs](crate) for a runnable game-project example.
     ///
     /// # Panics
-    /// If an asked-for bless fails (including no GPU adapter — a bless must never skip), or if the
-    /// comparison fails (either a genuine mismatch, or a render diagnostic other than `L2003`).
+    /// As [`check`](GoldenTest::check).
     ///
     /// # Example
     /// ```no_run
@@ -322,54 +375,30 @@ impl GoldenTest {
         registry: fn() -> Registry,
         out_dir: &Path,
     ) {
-        let platform = match platform_dir() {
-            Ok(platform) => platform,
-            Err(diag) => {
-                eprintln!("SKIPPED golden test:\n{diag}");
-                return;
-            }
-        };
-        let golden = goldens_root
-            .as_ref()
-            .join(platform)
-            .join(format!("{stem}.png"));
-        let test = GoldenTest::new(scene, &golden).with_registry(registry);
+        GoldenTest::in_set(scene, goldens_root, stem)
+            .with_registry(registry)
+            .check(out_dir);
+    }
 
-        if bless_requested() {
-            match test.bless() {
-                Ok(_) => {
-                    eprintln!("blessed {} — review it, then commit it", golden.display());
-                    return;
-                }
-                Err(diags) => panic!("blessing the golden failed: {diags:?}"),
-            }
-        }
-
-        if !golden.exists() {
-            missing_golden(
-                &golden,
-                "bless it on your pinned GPU with `LUDION_BLESS=1 LUDION_BLESS_ANY_ADAPTER=1 cargo \
-                 test` (PowerShell: set both with `$env:`), review the written PNG, then commit it",
-            );
-            return;
-        }
-
-        match test.run(out_dir) {
-            // The score is printed on a PASS too: a golden can sit inside the tolerance a long way
-            // from the scene, and the worst tile is what says how much floor margin remains.
-            Ok(GoldenOutcome::Passed { report }) => eprintln!("golden passed: {}", report.summary),
-            Ok(GoldenOutcome::Blessed { .. }) => {}
-            Ok(GoldenOutcome::Failed { report, .. }) => match &report.provenance {
-                Some(provenance) => {
-                    panic!("golden comparison failed: {}\n{provenance}", report.summary)
-                }
-                None => panic!("golden comparison failed: {}", report.summary),
-            },
-            Err(diags) if ludion_core::require_gpu::is_no_adapter(&diags) => {
-                eprintln!("SKIPPED golden test: no GPU adapter (L2003)");
-            }
-            Err(diags) => panic!("rendering the golden scene failed: {diags:?}"),
-        }
+    /// The golden recipe for this test: skip off the pinned tier (`L2205`), bless when
+    /// [`bless_requested`] says to, skip while the golden set is empty, otherwise render and compare —
+    /// panicking with the diff summary on a mismatch and skipping gracefully on the no-adapter
+    /// signal (`L2003`). Every game entry point ([`single`](GoldenTest::single),
+    /// [`from_replay`](GoldenTest::from_replay), [`check_engine_golden`]) runs this one flow, so its
+    /// adapter guards (`L2206` on bless, `L2210` on a byte-exact compare) cannot be bypassed.
+    /// Valid on any `GoldenTest`, whatever built it.
+    ///
+    /// # Panics
+    /// If an asked-for bless fails (including no GPU adapter — a bless must never skip), or if the
+    /// comparison fails (either a genuine mismatch, or a render diagnostic other than a skip).
+    pub fn check(&self, out_dir: &Path) {
+        check_with(
+            &self.golden,
+            self.ssim_threshold,
+            out_dir,
+            &Env::current(),
+            &mut || self.render(),
+        );
     }
 
     /// Renders the source at this test's configured resolution, dispatching on its `kind:`: a
@@ -388,10 +417,13 @@ impl GoldenTest {
     /// `"NVIDIA GeForce RTX 3090 (Vulkan)"`), so a caller can tell a provenance-shaped failure from
     /// a regression-shaped one ([`provenance_label`]).
     fn render(&self) -> Result<(DecodedImage, String), Vec<Diagnostic>> {
+        if let Some(replay) = &self.replay {
+            return self.render_replay(replay);
+        }
         let kind = std::fs::read_to_string(&self.scene)
             .ok()
             .and_then(|source| ludion_scene::peek_kind(&source));
-        let (image, adapter) = match (kind.as_deref(), self.builder) {
+        let (image, adapter) = match (kind.as_deref(), self.builder.as_deref()) {
             (Some(kind), _)
                 if ludion_scene::kind_entry(kind).is_some_and(|entry| entry.model_sheet) =>
             {
@@ -454,6 +486,226 @@ impl GoldenTest {
             },
             adapter,
         ))
+    }
+
+    /// Drives `replay` to its frame and renders the engine there, [`check_engine_golden`]'s render.
+    fn render_replay(
+        &self,
+        replay: &ReplaySource,
+    ) -> Result<(DecodedImage, String), Vec<Diagnostic>> {
+        let builder = self
+            .builder
+            .as_deref()
+            .map_or_else(Engine::builder, |b| b());
+        let mut rendered = None;
+        let mut last = 0;
+        ludion_engine::replay_with(
+            builder,
+            &replay.bytes,
+            &replay.project_root,
+            |engine, frame| {
+                last = frame.as_u64();
+                if last != replay.frame {
+                    return Ok(ControlFlow::Continue(()));
+                }
+                rendered = Some(render_engine(engine, self.width, self.height));
+                Ok(ControlFlow::Break(()))
+            },
+        )
+        .map_err(|d| vec![d])?;
+        rendered.unwrap_or_else(|| {
+            Err(vec![
+                Diagnostic::new(
+                    code::REPLAY_FRAME_WINDOW,
+                    format!(
+                        "the golden asked for frame {}, but this replay records frames 0..={last}",
+                        replay.frame
+                    ),
+                )
+                .with_help(format!("golden a frame in 0..={last}")),
+            ])
+        })
+    }
+}
+
+/// `goldens_root/<os>/<stem>.png`: the golden every recipe form resolves. Off the pinned tier the
+/// directory is the host OS name, which the flow skips before reading.
+fn set_golden(goldens_root: &Path, stem: &str) -> PathBuf {
+    goldens_root
+        .join(platform_dir().unwrap_or(std::env::consts::OS))
+        .join(format!("{stem}.png"))
+}
+
+/// Renders `engine` as it stands, at full quality, and names the adapter — the render every
+/// engine-driven golden shares. The engine's quality is left at full.
+fn render_engine(
+    engine: &mut Engine,
+    width: u32,
+    height: u32,
+) -> Result<(DecodedImage, String), Vec<Diagnostic>> {
+    engine.set_quality(QualitySetting::full());
+    let png = engine.render_png(width, height).map_err(|d| vec![d])?;
+    let image = image::decode_png(&png).map_err(|d| vec![d])?;
+    let adapter = engine.adapter_label().map_err(|d| vec![d])?;
+    Ok((image, adapter))
+}
+
+/// The golden recipe for an engine the test built and drove itself — a menu opened by injected
+/// input, a state reached through the game's own API: renders it as it stands, at full quality and
+/// the default resolution ([`DEFAULT_WIDTH`] × [`DEFAULT_HEIGHT`]), against
+/// `goldens_root/<os>/<stem>.png`, with every guard [`GoldenTest::check`] has. The engine is not
+/// stepped, and its quality is left at full.
+///
+/// # Panics
+/// As [`GoldenTest::check`].
+///
+/// # Example
+/// ```no_run
+/// # use ludion_engine::Engine;
+/// # fn open_menu(_: &mut Engine) {}
+/// let mut engine = Engine::new();
+/// open_menu(&mut engine);
+/// ludion_testkit::check_engine_golden(
+///     &mut engine,
+///     "goldens",
+///     "menu-open",
+///     std::path::Path::new("target/testkit"),
+/// );
+/// ```
+pub fn check_engine_golden(
+    engine: &mut Engine,
+    goldens_root: impl AsRef<Path>,
+    stem: &str,
+    out_dir: &Path,
+) {
+    check_with(
+        &set_golden(goldens_root.as_ref(), stem),
+        DEFAULT_SSIM_THRESHOLD,
+        out_dir,
+        &Env::current(),
+        &mut || render_engine(engine, DEFAULT_WIDTH, DEFAULT_HEIGHT),
+    );
+}
+
+/// The compare flow: skip when `golden` has no pinned tier to compare on, `render` and compare
+/// against it, write `<stem>.actual.png` / `<stem>.diff.json` to `out_dir` on a failure only.
+fn run_with(
+    golden: &Path,
+    threshold: f64,
+    out_dir: &Path,
+    env: &Env,
+    render: &mut Render,
+) -> Result<GoldenOutcome, Vec<Diagnostic>> {
+    let skip = |adapter: Option<&str>| {
+        compare_skip(
+            golden,
+            threshold,
+            env.platform.clone(),
+            adapter,
+            env.any_adapter,
+        )
+    };
+    if let Some(diag) = skip(None) {
+        return Err(vec![diag]);
+    }
+    let (actual, adapter) = render()?;
+    if let Some(diag) = skip(Some(&adapter)) {
+        return Err(vec![refuse_adapter_skip(diag, env.require_reference)]);
+    }
+    let expected = image::read_golden(golden).map_err(|d| vec![d])?;
+
+    let stem = test_stem(golden);
+    let actual_path = out_dir.join(format!("{stem}.actual.png"));
+    let report_path = out_dir.join(format!("{stem}.diff.json"));
+
+    let report = report_for(
+        &expected,
+        &actual,
+        &golden.display().to_string(),
+        &actual_path.display().to_string(),
+        threshold,
+        Some(&adapter),
+    );
+
+    if report.pass {
+        return Ok(GoldenOutcome::Passed { report });
+    }
+
+    std::fs::create_dir_all(out_dir).map_err(|error| vec![io_diagnostic(out_dir, error)])?;
+    write_png(&actual_path, &actual)?;
+    ludion_core::atomic::write_atomic(&report_path, report.to_json())
+        .map_err(|error| vec![io_diagnostic(&report_path, error)])?;
+
+    Ok(GoldenOutcome::Failed {
+        report,
+        actual_path,
+        report_path,
+    })
+}
+
+/// The bless flow: `render`, refuse (`L2206`) a pinned-set golden from a non-reference adapter, and
+/// write `golden`.
+fn bless_with(
+    golden: &Path,
+    env: &Env,
+    render: &mut Render,
+) -> Result<GoldenOutcome, Vec<Diagnostic>> {
+    let (actual, adapter) = render()?;
+    if let Ok(platform) = &env.platform
+        && let Some(refusal) = bless_refusal(golden, platform, &adapter, env.any_adapter)
+    {
+        return Err(vec![refusal]);
+    }
+    if let Some(parent) = golden.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| vec![io_diagnostic(parent, error)])?;
+    }
+    write_png(golden, &actual)?;
+    Ok(GoldenOutcome::Blessed {
+        golden: golden.to_path_buf(),
+    })
+}
+
+/// The whole recipe behind [`GoldenTest::check`], [`GoldenTest::single`] and
+/// [`check_engine_golden`]; see [`GoldenTest::check`].
+fn check_with(golden: &Path, threshold: f64, out_dir: &Path, env: &Env, render: &mut Render) {
+    if let Err(diag) = &env.platform {
+        eprintln!("SKIPPED golden test:\n{diag}");
+        return;
+    }
+
+    if env.bless {
+        match bless_with(golden, env, render) {
+            Ok(_) => {
+                eprintln!("blessed {} — review it, then commit it", golden.display());
+                return;
+            }
+            Err(diags) => panic!("blessing the golden failed: {diags:?}"),
+        }
+    }
+
+    if !golden.exists() {
+        missing_golden(golden, BLESS_HINT);
+        return;
+    }
+
+    match run_with(golden, threshold, out_dir, env, render) {
+        // The score is printed on a PASS too: a golden can sit inside the tolerance a long way
+        // from the scene, and the worst tile is what says how much floor margin remains.
+        Ok(GoldenOutcome::Passed { report }) => eprintln!("golden passed: {}", report.summary),
+        Ok(GoldenOutcome::Blessed { .. }) => {}
+        Ok(GoldenOutcome::Failed { report, .. }) => match &report.provenance {
+            Some(provenance) => {
+                panic!("golden comparison failed: {}\n{provenance}", report.summary)
+            }
+            None => panic!("golden comparison failed: {}", report.summary),
+        },
+        Err(diags) if ludion_core::require_gpu::is_no_adapter(&diags) => {
+            eprintln!("SKIPPED golden test: no GPU adapter (L2003)");
+        }
+        Err(diags) => match unverifiable(&diags) {
+            Some(skip) => eprintln!("SKIPPED golden test:\n{skip}"),
+            None => panic!("rendering the golden scene failed: {diags:?}"),
+        },
     }
 }
 
@@ -1106,6 +1358,185 @@ mod tests {
                 .builder
                 .is_some()
         );
+    }
+
+    #[test]
+    fn with_builder_takes_a_capturing_closure_and_the_test_stays_clone_and_debug() {
+        let n = 3;
+        let test = GoldenTest::new("scene.yaml", "golden.png").with_builder(move || {
+            let _ = n;
+            ludion_engine::Engine::builder()
+        });
+        let copy = test.clone();
+        assert!(copy.builder.is_some());
+        let text = format!("{copy:?}");
+        assert!(text.contains("<fn>"), "{text}");
+    }
+
+    fn solid(rgba: [u8; 4]) -> DecodedImage {
+        DecodedImage {
+            width: 16,
+            height: 16,
+            rgba: rgba.repeat(16 * 16),
+        }
+    }
+
+    const REFERENCE: &str = "NVIDIA GeForce RTX 3090 (Vulkan)";
+
+    fn env(bless: bool, any_adapter: bool) -> Env {
+        Env {
+            platform: Ok("windows"),
+            bless,
+            any_adapter,
+            require_reference: false,
+        }
+    }
+
+    /// Runs `check_with` over a render that counts its calls; returns the count and the panic text.
+    fn check(
+        golden: &Path,
+        out_dir: &Path,
+        env: &Env,
+        image: &DecodedImage,
+        adapter: &str,
+    ) -> (u32, Option<String>) {
+        let mut calls = 0;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            check_with(golden, 0.99, out_dir, env, &mut || {
+                calls += 1;
+                Ok((image.clone(), adapter.to_owned()))
+            });
+        }));
+        let panic = outcome.err().map(|payload| {
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "a non-string panic".to_owned())
+        });
+        (calls, panic)
+    }
+
+    #[test]
+    fn a_bless_writes_the_golden_on_the_reference_adapter() {
+        let root = scratch_set("bless");
+        let golden = root.join("windows").join("a.png");
+        let (calls, panic) = check(
+            &golden,
+            &root.join("out"),
+            &env(true, false),
+            &solid([255, 0, 0, 255]),
+            REFERENCE,
+        );
+        assert_eq!((calls, panic), (1, None));
+        assert!(golden.exists());
+    }
+
+    #[test]
+    fn a_bless_from_another_adapter_is_refused_unless_opted_out() {
+        let root = scratch_set("bless-refused");
+        let golden = root.join("windows").join("a.png");
+        let red = solid([255, 0, 0, 255]);
+        let (_, panic) = check(&golden, &root.join("out"), &env(true, false), &red, LAPTOP);
+        let text = panic.expect("a laptop GPU must not bless the pinned set");
+        assert!(text.contains("L2206"), "{text}");
+        assert!(!golden.exists());
+
+        let (_, panic) = check(&golden, &root.join("out"), &env(true, true), &red, LAPTOP);
+        assert_eq!(panic, None);
+        assert!(golden.exists());
+    }
+
+    #[test]
+    fn an_unpinned_platform_skips_before_rendering() {
+        let root = scratch_set("unpinned");
+        let mut unpinned = env(true, false);
+        unpinned.platform = Err(Diagnostic::new(
+            code::RENDER_GOLDEN_PLATFORM_UNPINNED,
+            "no tier",
+        ));
+        let (calls, panic) = check(
+            &root.join("linux").join("a.png"),
+            &root.join("out"),
+            &unpinned,
+            &solid([0, 0, 0, 255]),
+            LAPTOP,
+        );
+        assert_eq!((calls, panic), (0, None));
+    }
+
+    #[test]
+    fn a_fresh_golden_set_skips_without_rendering() {
+        let root = scratch_set("fresh");
+        let (calls, panic) = check(
+            &root.join("windows").join("a.png"),
+            &root.join("out"),
+            &env(false, false),
+            &solid([0, 0, 0, 255]),
+            REFERENCE,
+        );
+        assert_eq!((calls, panic), (0, None));
+    }
+
+    #[test]
+    fn a_live_golden_set_missing_its_golden_is_l2201() {
+        let root = scratch_set("live-missing");
+        std::fs::create_dir_all(root.join("macos")).unwrap();
+        std::fs::write(root.join("macos").join("a.png"), b"").unwrap();
+        let (calls, panic) = check(
+            &root.join("windows").join("b.png"),
+            &root.join("out"),
+            &env(false, false),
+            &solid([0, 0, 0, 255]),
+            REFERENCE,
+        );
+        assert_eq!(calls, 0);
+        let text = panic.expect("a live set with a missing golden must fail");
+        assert!(text.contains("L2201"), "{text}");
+    }
+
+    #[test]
+    fn a_failing_compare_names_where_it_rendered() {
+        // `GoldenTest::from_replay(..).check(..)` ends in this same `check_with`, so its failure
+        // carries the same provenance line.
+        let root = scratch_set("fail");
+        let golden = root.join("windows").join("a.png");
+        write_png(&golden, &solid([255, 0, 0, 255])).unwrap();
+        let out = root.join("out");
+        let (calls, panic) = check(
+            &golden,
+            &out,
+            &env(false, false),
+            &solid([0, 0, 255, 255]),
+            LAPTOP,
+        );
+        assert_eq!(calls, 1);
+        let text = panic.expect("a red render against a blue golden must fail");
+        assert!(text.contains("provenance:"), "{text}");
+        assert!(out.join("a.actual.png").exists());
+    }
+
+    #[test]
+    fn a_passing_compare_leaves_no_artifacts() {
+        let root = scratch_set("pass");
+        let golden = root.join("windows").join("a.png");
+        write_png(&golden, &solid([255, 0, 0, 255])).unwrap();
+        let out = root.join("out");
+        let (calls, panic) = check(
+            &golden,
+            &out,
+            &env(false, false),
+            &solid([255, 0, 0, 255]),
+            REFERENCE,
+        );
+        assert_eq!((calls, panic), (1, None));
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn in_set_resolves_the_per_os_golden() {
+        let test = GoldenTest::in_set("scene.yaml", "goldens", "main");
+        let dir = platform_dir().unwrap_or(std::env::consts::OS);
+        assert_eq!(test.golden, Path::new("goldens").join(dir).join("main.png"));
     }
 
     #[test]

@@ -292,12 +292,7 @@ pub fn render_scene_with_builder(
     );
     let png = engine.render_png(size.0, size.1).map_err(|d| vec![d])?;
     let load = crate::profile::finish_load(&mut engine);
-    let renderer = engine.renderer().map_err(|d| vec![d])?;
-    let adapter = format!(
-        "{} ({})",
-        renderer.adapter_name(),
-        renderer.adapter_backend()
-    );
+    let adapter = engine.adapter_label().map_err(|d| vec![d])?;
     Ok(BuilderRenderOutcome {
         png,
         adapter,

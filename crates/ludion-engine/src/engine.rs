@@ -3608,6 +3608,21 @@ impl Engine {
         self.render_png_through(width, height, false)
     }
 
+    /// The human-readable adapter this engine renders on, `"<name> (<backend>)"`, e.g.
+    /// `"NVIDIA GeForce RTX 3090 (Vulkan)"` — what a golden's provenance line classifies.
+    /// Creates the renderer if it has none.
+    ///
+    /// # Errors
+    /// `L2003`/`L2004` as [`render_png`](Engine::render_png).
+    pub fn adapter_label(&mut self) -> Result<String, Diagnostic> {
+        let renderer = self.renderer()?;
+        Ok(format!(
+            "{} ({})",
+            renderer.adapter_name(),
+            renderer.adapter_backend()
+        ))
+    }
+
     /// [`render_png`](Engine::render_png), through the view override when one is in force.
     ///
     /// The `camera: "view"` half of `render.screenshot`. `use_view` false is exactly `render_png`,

@@ -52,10 +52,15 @@ description: Testkit golden path: SSIM + colour gate, per-OS goldens, render sea
   EngineBuilder)` is the seam that does involve one**: the scene renders through the game's whole
   engine, so `frames` ticks run the game's systems and a golden can be an early wave or a boss phase
   rather than the scene at rest. It supersedes `with_registry` when both are set (the builder's
-  engine already validates against the game's registry). Scripted input stays out of scope — a
-  committed replay is the tool for "after the player did X". Built-in directory suites
-  (`discover`/`run_suite`) never touch either seam. (`fn` pointers derive `Clone`/`Debug`, so
-  `GoldenTest`'s derives are unchanged.)
+  engine already validates against the game's registry). The builder is an `Arc`'d closure (`Clone`;
+  `Debug` is hand-written). Scripted input has two entry points that share the one flow:
+  `GoldenTest::from_replay(..)` renders a frame of a recorded session, and
+  `check_engine_golden(&mut Engine, ..)` renders an engine the test drove. `GoldenTest::in_set(..)`
+  + `.check(out)` is the recipe `single` is a one-liner over; all of them end in the private
+  `check_with`/`run_with`/`bless_with`, which take the render as a closure and the environment as an
+  `Env` value, so the adapter guards (`L2206`/`L2205`/`L2210`) cannot be bypassed and the unit tests
+  drive the whole flow with a fake render. Built-in directory suites (`discover`/`run_suite`) never
+  touch either seam.
 - **The comparison itself is bit-deterministic everywhere**: pure integer/`f64` CPU math over
   decoded RGBA8 — no GPU, no `f32` platform drift. Identical images score exactly `1.0`, no
   tolerance; unit tests assert this.
