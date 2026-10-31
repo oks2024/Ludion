@@ -18,12 +18,6 @@ type V2 = [f64; 2];
 pub(crate) const AREA_TEX_SIZE: (u32, u32) = (160, 560);
 /// The search table's extent.
 pub(crate) const SEARCH_TEX_SIZE: (u32, u32) = (64, 16);
-/// The longest orthogonal search, in pixels.
-pub(crate) const AREA_TEX_MAX_DISTANCE: u32 = 16;
-/// The longest diagonal search, in pixels.
-pub(crate) const AREA_TEX_MAX_DISTANCE_DIAG: u32 = 20;
-/// One pattern block's height as a fraction of the table: the subsample offset's stride.
-pub(crate) const AREA_TEX_SUBTEX_SIZE: f32 = 1.0 / 7.0;
 
 const SUBSAMPLE_OFFSETS_ORTHO: [f64; 7] = [0.0, -0.25, 0.25, -0.125, 0.125, -0.375, 0.375];
 const SUBSAMPLE_OFFSETS_DIAG: [(f64, f64); 5] = [
@@ -448,6 +442,27 @@ mod tests {
         assert_eq!(fnv1a(&tex), 0x247a_58bb_ba65_292d);
         // Subsample 0, pattern 0 at distance 0 on both sides is the null pattern: no area.
         assert_eq!(&tex[..2], &[0, 0]);
+    }
+
+    /// `smaa_weights.wgsl` declares the tables' geometry as its own consts; the generator's sizes are
+    /// the source they must equal.
+    #[test]
+    fn the_weights_shader_agrees_with_the_tables() {
+        use crate::shader_gen as shader;
+        assert_eq!(shader::SMAA_AREATEX_MAX_DISTANCE as usize, SIZE_ORTHO);
+        assert_eq!(shader::SMAA_AREATEX_MAX_DISTANCE_DIAG as usize, SIZE_DIAG);
+        assert_eq!(
+            shader::SMAA_AREATEX_SUBTEX_COUNT as usize,
+            SUBSAMPLE_OFFSETS_ORTHO.len()
+        );
+        assert_eq!(
+            (shader::SMAA_AREATEX_WIDTH, shader::SMAA_AREATEX_HEIGHT),
+            AREA_TEX_SIZE
+        );
+        assert_eq!(
+            (shader::SMAA_SEARCHTEX_WIDTH, shader::SMAA_SEARCHTEX_HEIGHT),
+            SEARCH_TEX_SIZE
+        );
     }
 
     /// The hash is of the byte array in the upstream `Textures/SearchTex.h`.

@@ -91,6 +91,9 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "shadow_cutout.wgsl",
     "shafts.wgsl",
     "sky.wgsl",
+    "smaa_blend.wgsl",
+    "smaa_edges.wgsl",
+    "smaa_weights.wgsl",
     "sprite.wgsl",
     "ssao.wgsl",
     "ssr_blend.wgsl",
@@ -253,6 +256,12 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("shadow.wgsl", &["skin.wgsl"]),
     ("shadow_cutout.wgsl", &["skin.wgsl", "mesh_material.wgsl"]),
     ("sky.wgsl", &["sky_gradient.wgsl"]),
+    (
+        "smaa_blend.wgsl",
+        &["fullscreen_vs.wgsl", "bayer.wgsl", "srgb.wgsl"],
+    ),
+    ("smaa_edges.wgsl", &["fullscreen_vs.wgsl", "srgb.wgsl"]),
+    ("smaa_weights.wgsl", &["fullscreen_vs.wgsl"]),
     ("ssao.wgsl", &["fullscreen_vs.wgsl", "bayer.wgsl"]),
     (
         "ssr_blend.wgsl",

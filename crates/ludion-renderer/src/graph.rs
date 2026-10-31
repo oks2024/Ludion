@@ -303,9 +303,9 @@ pub mod pass {
     pub const DOF: &str = "dof";
     /// Scene + bloom composited, then exposure, the tonemap operator and the output dither, HDR→sRGB
     /// into the output (or into the `ldr` transient when UI is present or the frame is
-    /// supersampled), or into `aa_input` when SMAA runs. Everything that is a pure per-pixel function of already-sampled colour folds
-    /// into this one pass rather than costing a full-resolution round trip of its own
-    /// (`Plan/post-process-pipeline.md` decision 2).
+    /// supersampled), or into `aa_input` when SMAA runs. Everything that is a pure per-pixel
+    /// function of already-sampled colour folds into this one pass rather than costing a
+    /// full-resolution round trip of its own (`Plan/post-process-pipeline.md` decision 2).
     pub const COMPOSITE: &str = "composite";
     /// SMAA luma edge detection over `aa_input` into `smaa_edges`. Only with
     /// [`PostChain::smaa_scheduled`].
@@ -1437,8 +1437,9 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         dof.gathered
     });
 
-    // The tail is a chain of at most three passes (six with SMAA), each writing the output directly when it is the
-    // last one. Every edge below is derived by the scheduler from the next pass's read.
+    // The tail is a chain of at most three passes (six with SMAA), each writing the output directly
+    // when it is the last one. Every edge below is derived by the scheduler from the next pass's
+    // read.
     let composited = ldr.unwrap_or(output);
     // With SMAA the composite (or a debug view's stand-in) writes `aa_input`, and the blend writes
     // what the composite would have.
