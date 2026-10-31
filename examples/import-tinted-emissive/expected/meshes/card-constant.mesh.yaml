@@ -1,0 +1,49 @@
+format: 1
+kind: mesh
+name: card-constant
+positions:
+  - -0.5
+  - -0.5
+  - 0.0
+  - 0.5
+  - -0.5
+  - 0.0
+  - 0.5
+  - 0.5
+  - 0.0
+  - -0.5
+  - 0.5
+  - 0.0
+normals:
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+uvs:
+  - 0.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+base_color_texture:
+  path: "../textures/e4824a772182be5d.png"
+emissive_texture:
+  path: "../textures/8a4d52edaaafd3f5.png"
+indices:
+  - 0
+  - 1
+  - 2
+  - 0
+  - 2
+  - 3

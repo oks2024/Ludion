@@ -163,6 +163,7 @@
    render-inert — the import golden is asserted byte-identical here and re-blesses exactly once,
    at the swap.
    *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): glTF `MASK` (with `alphaCutoff`) and `doubleSided` leave the L1202 surface and map onto `alpha_mode`, `alpha_cutoff` and `double_sided`; `BLEND` stays L1202, and the lossy fixture now rides its `BLEND` material.*
+   *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0014): a non-proportional emissiveFactor leaves the L1202 list — the importer bakes it into an emissive map (Mesh.emissive = the largest factor/base ratio, the map carries the hue; decision 1 unchanged); L1202 keeps a tint over a base channel below 1/255 and a tint on a primitive without TEXCOORD_0.*
 8. **The sphere primitive upgrades in the swap wave: `sphere(24, 16)`, smooth analytic normals**
    (normal = normalized local position — exact, deterministic, CPU-side). A faceted 12×8 sphere
    cannot show a roughness gradient, and the park is the phase's gate; riding the swap wave means
@@ -275,7 +276,7 @@
 - **The exact-proportionality emissive rule will reject some real glTF assets.** That's the
   designed behavior (structured L1202 with an actionable fix beats silently changing the render);
   `--allow-lossy` imports the rest. If real content hits this often, an RGB emissive is a
-  recorded possible extension — decided then, not now.
+  recorded possible extension — decided then, not now. Resolved import-side by Clockout 0014 (decision 7 amendment).
 - **Sequencing vs open user gates:** Phases 8/9's open items (sound listen, publish decisions,
   CI standup) share no files with this phase except docs; no L-code collision (this phase adds
   none). Safe to run in parallel with those gates staying open.

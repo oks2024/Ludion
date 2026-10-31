@@ -936,39 +936,190 @@ fn an_unmapped_required_extension_aborts_once_without_l1239() {
     assert!(errors[0].message.contains("KHR_materials_specular"));
 }
 
+// --- Tinted emissive: baked into a map (`Plan/phase-11-pbr.md` decision 1, request 0014) ---------
+
+/// A dyadic tint: `base` × `[2, 1, 0.5]` is `EMISSIVE`, so `Mesh.emissive` is 2 and the hue
+/// `[1, 0.5, 0.25]`.
+const TINT_BASE: [f32; 3] = [0.5, 0.25, 1.0];
+const TINT_EMISSIVE: [f32; 3] = [1.0, 0.25, 0.5];
+const TINT_HUE: [f32; 3] = [1.0, 0.5, 0.25];
+
+fn tinted_material(extra: &str) -> String {
+    format!(
+        r#"{{"name":"tinted","pbrMetallicRoughness":{{"baseColorFactor":[{},{},{},1]}},"emissiveFactor":[{},{},{}]{extra}}}"#,
+        TINT_BASE[0],
+        TINT_BASE[1],
+        TINT_BASE[2],
+        TINT_EMISSIVE[0],
+        TINT_EMISSIVE[1],
+        TINT_EMISSIVE[2],
+    )
+}
+
+fn texture_at<'a>(import: &'a Import, rel_path: &str) -> &'a [u8] {
+    &import
+        .textures
+        .iter()
+        .find(|t| t.rel_path == rel_path.trim_start_matches("../"))
+        .unwrap_or_else(|| panic!("no texture {rel_path}"))
+        .png
+}
+
 #[test]
-fn non_proportional_emissive_factor_is_l1202_naming_the_material() {
-    // 0.2/0.4 = 0.5 but 0.2/0.6 ≈ 0.333 — no single `k` reproduces both channels.
+fn a_tinted_emissive_without_a_texture_bakes_a_one_texel_map() {
+    let import = import_clean(&mesh_gltf(&tinted_material(""), false));
+    assert!(import.warnings.is_empty(), "{:?}", import.warnings);
+    assert_eq!(component(&import, 0, "Mesh").unwrap()["emissive"], 2.0);
+    assert_eq!(import.textures.len(), 1, "only the baked map is written");
+    let reference = only_mesh(&import).textures.emissive.as_ref().unwrap();
+    assert_eq!(reference.wrap, TextureWrap::Repeat);
+    assert_eq!(reference.factor, 1.0);
+    let (width, height, rgba) =
+        ludion_assets::decode_png(texture_at(&import, &reference.path), "baked").unwrap();
+    assert_eq!((width, height), (1, 1));
+    let want: Vec<u8> = TINT_HUE
+        .iter()
+        .map(|&h| ludion_assets::encode_srgb(h))
+        .chain([255])
+        .collect();
+    assert_eq!(rgba, want);
+}
+
+#[test]
+fn a_tinted_emissive_texture_is_baked_at_its_size_and_the_source_is_not_written() {
+    let json = mesh_gltf(&tinted_material(r#","emissiveTexture":{"index":0}"#), true);
+    let import = import_clean(&json);
+    assert!(import.warnings.is_empty(), "{:?}", import.warnings);
+    assert_eq!(component(&import, 0, "Mesh").unwrap()["emissive"], 2.0);
+    assert_eq!(
+        import.textures.len(),
+        1,
+        "the untinted source is not written"
+    );
+    assert_ne!(import.textures[0].rel_path, "textures/38e03d43f345ff3e.png");
+    let reference = only_mesh(&import).textures.emissive.as_ref().unwrap();
+    let (width, height, _) = ludion_assets::decode_png(&import.textures[0].png, "baked").unwrap();
+    assert_eq!((width, height), (4, 4), "the source PNG is 4×4");
+    assert_eq!(
+        reference.path,
+        format!("../{}", import.textures[0].rel_path)
+    );
+}
+
+/// The shader renders `base × E × decode(map)`; the glTF wants `factor × decode(source)`.
+#[test]
+fn the_baked_map_reproduces_factor_times_texture_within_half_a_step() {
+    let json = mesh_gltf(&tinted_material(r#","emissiveTexture":{"index":0}"#), true);
+    let import = import_clean(&json);
+    let intensity = 2.0_f32;
+    let (_, _, source) =
+        ludion_assets::decode_png(&base64::decode(PNG_B64).unwrap(), "source").unwrap();
+    let (_, _, baked) = ludion_assets::decode_png(&import.textures[0].png, "baked").unwrap();
+    assert_eq!(source.len(), baked.len());
+    for (texel, (src, map)) in source.chunks(4).zip(baked.chunks(4)).enumerate() {
+        assert_eq!(src[3], map[3], "alpha is copied (texel {texel})");
+        for c in 0..3 {
+            let rendered = TINT_BASE[c] * intensity * ludion_assets::decode_srgb(map[c]);
+            let wanted = TINT_EMISSIVE[c] * ludion_assets::decode_srgb(src[c]);
+            let step = ludion_assets::decode_srgb(map[c].saturating_add(1))
+                - ludion_assets::decode_srgb(map[c].saturating_sub(1));
+            let bound = TINT_BASE[c] * intensity * step / 2.0 + 1e-6;
+            assert!(
+                (rendered - wanted).abs() <= bound,
+                "texel {texel} channel {c}: rendered {rendered}, wanted {wanted}, bound {bound}"
+            );
+        }
+    }
+}
+
+#[test]
+fn one_baked_map_is_shared_by_materials_with_the_same_tint() {
+    let texture = one_texture("{}");
+    let slot = r#","emissiveTexture":{"index":0}"#;
+    let materials = format!("{},{}", tinted_material(slot), tinted_material(slot));
+    let json = mesh_gltf_with(&materials, &texture, WITH_UVS).replace(
+        r#""material":0}]"#,
+        r#""material":0},{"attributes":{"POSITION":0,"TEXCOORD_0":1},"material":1}]"#,
+    );
+    let import = import_clean(&json);
+    assert_eq!(import.meshes.len(), 2);
+    assert_eq!(import.textures.len(), 1, "same texture and hue: one file");
+}
+
+#[test]
+fn proportional_and_zero_emissive_add_no_texture() {
+    for emissive in ["[0.25,0.125,0.5]", "[0,0,0]"] {
+        let json = mesh_gltf(
+            &format!(
+                r#"{{"name":"m","pbrMetallicRoughness":{{"baseColorFactor":[0.5,0.25,1,1]}},"emissiveFactor":{emissive}}}"#
+            ),
+            false,
+        );
+        let import = import_clean(&json);
+        assert!(import.textures.is_empty(), "{emissive}");
+        assert_eq!(only_mesh(&import).textures.emissive, None, "{emissive}");
+    }
+}
+
+#[test]
+fn an_emissive_channel_over_a_zero_base_channel_is_l1202_naming_the_material() {
     let json = mesh_gltf(
-        r#"{"name":"mismatched","pbrMetallicRoughness":{"baseColorFactor":[0.4,0.6,0.5,1]},"emissiveFactor":[0.2,0.2,0.0]}"#,
+        r#"{"name":"mismatched","pbrMetallicRoughness":{"baseColorFactor":[0.0,0.5,0.5,1]},"emissiveFactor":[0.5,0.5,0.5]}"#,
         false,
     );
     let messages = lossy_messages(&json);
     assert!(
-        messages.iter().any(|m| {
-            m.contains("emissiveFactor")
-                && m.contains("not a scalar multiple of")
-                && m.contains("mismatched")
-        }),
+        messages
+            .iter()
+            .any(|m| m.contains("emissiveFactor red") && m.contains("mismatched")),
         "{messages:?}"
-    );
-}
-
-#[test]
-fn non_proportional_emissive_factor_is_skipped_with_a_warning_in_lossy_mode() {
-    let json = mesh_gltf(
-        r#"{"name":"mismatched","pbrMetallicRoughness":{"baseColorFactor":[0.4,0.6,0.5,1]},"emissiveFactor":[0.2,0.2,0.0]}"#,
-        false,
     );
     let import = import(json.as_bytes(), ExternalFiles::Beside(Path::new(".")), true)
         .expect("lossy mode imports the rest of the material");
     assert_eq!(import.warnings.len(), 1);
-    assert_eq!(import.warnings[0].code.as_str(), "L1202");
-    assert!(import.warnings[0].message.contains("mismatched"));
-    // The emissive is skipped (defaults to 0.0); color/metallic/roughness still import.
     let mesh = component(&import, 0, "Mesh").unwrap();
     assert_eq!(mesh["emissive"], 0.0);
-    assert_eq!(mesh["color"][0], f64::from(0.4_f32));
+    assert_eq!(mesh["color"][1], 0.5);
+    assert!(import.textures.is_empty());
+}
+
+#[test]
+fn a_near_zero_base_channel_is_refused_but_one_step_bakes() {
+    let material = |base: f32| {
+        format!(
+            r#"{{"name":"dim","pbrMetallicRoughness":{{"baseColorFactor":[{base},0.5,0.5,1]}},"emissiveFactor":[0.5,0.25,0.5]}}"#
+        )
+    };
+    let messages = lossy_messages(&mesh_gltf(&material(0.003), false));
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("emissiveFactor red") && m.contains("dim")),
+        "{messages:?}"
+    );
+    let import = import_clean(&mesh_gltf(&material(1.0 / 255.0), false));
+    let emissive = component(&import, 0, "Mesh").unwrap()["emissive"]
+        .as_f64()
+        .unwrap();
+    assert!(emissive.is_finite() && emissive > 100.0, "{emissive}");
+    assert_eq!(import.textures.len(), 1);
+}
+
+#[test]
+fn a_tinted_emissive_without_texcoord_0_is_l1202_naming_the_material() {
+    let json = mesh_gltf_with(&tinted_material(""), "", POSITION_ONLY);
+    let messages = lossy_messages(&json);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("TEXCOORD_0") && m.contains("tinted")),
+        "{messages:?}"
+    );
+    let import = import(json.as_bytes(), ExternalFiles::Beside(Path::new(".")), true)
+        .expect("lossy mode imports the rest of the material");
+    assert_eq!(import.warnings.len(), 1, "{:?}", import.warnings);
+    assert_eq!(component(&import, 0, "Mesh").unwrap()["emissive"], 0.0);
+    assert!(import.textures.is_empty());
 }
 
 #[test]

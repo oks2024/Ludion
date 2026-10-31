@@ -22,6 +22,9 @@ fn textured_root() -> PathBuf {
 fn cutout_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-cutout")
 }
+fn tinted_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-tinted-emissive")
+}
 fn fixture() -> PathBuf {
     import_root().join("scene.gltf")
 }
@@ -33,6 +36,9 @@ fn golden(platform: &str) -> PathBuf {
 }
 fn textured_golden(platform: &str) -> PathBuf {
     golden_in(&textured_root(), platform)
+}
+fn tinted_golden(platform: &str) -> PathBuf {
+    golden_in(&tinted_root(), platform)
 }
 fn golden_in(root: &Path, platform: &str) -> PathBuf {
     root.join("goldens").join(platform).join("scene.png")
@@ -152,6 +158,216 @@ fn textured_import_reproduces_committed_tree_in_default_mode() {
     }
 }
 
+/// The tinted-emissive fixture (`examples/import-tinted-emissive/`) imports in **default mode** with
+/// no warning and reproduces its committed tree byte-for-byte: a baked map per tinted material, none
+/// for the proportional control.
+#[test]
+fn tinted_emissive_import_reproduces_committed_tree_in_default_mode() {
+    let (out, output) = import_beside_copy("import_tinted", &tinted_root().join("scene.gltf"), &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "the tinted fixture must import with no unsupported feature: {stderr}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "a fully supported document warns about nothing: {stderr}"
+    );
+    assert_trees_identical(&tinted_root().join("expected"), &out);
+
+    let mesh =
+        |name: &str| std::fs::read_to_string(out.join(format!("meshes/{name}.mesh.yaml"))).unwrap();
+    assert!(mesh("card-textured").contains("emissive_texture:"));
+    assert!(mesh("card-constant").contains("emissive_texture:"));
+    assert!(!mesh("card-proportional").contains("emissive_texture:"));
+    for rel in [
+        "model.prefab.yaml",
+        "meshes/card-textured.mesh.yaml",
+        "meshes/card-constant.mesh.yaml",
+        "meshes/card-proportional.mesh.yaml",
+    ] {
+        let check = run_ludion(&["check-scene", out.join(rel).to_str().unwrap()]);
+        assert!(
+            check.status.success(),
+            "check-scene failed for {rel}: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+}
+
+/// **Tinted-emissive radiance (GPU).** The imported `card-constant` (baked 1×1 map, `Mesh.color` the
+/// base, `Mesh.emissive` the intensity) must render what the glTF asked for: `emissiveFactor`.
+/// The reference is the same card with no map and the factor spelled directly as `color / emissive`.
+#[test]
+fn needs_gpu_tinted_emissive_renders_texture_times_factor() {
+    let (out, import) = import_beside_copy(
+        "import_tinted_radiance_tree",
+        &tinted_root().join("scene.gltf"),
+        &[],
+    );
+    assert!(
+        import.status.success(),
+        "import failed: {}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let mesh_text = std::fs::read_to_string(out.join("meshes/card-constant.mesh.yaml")).unwrap();
+    let mut baked = ludion_scene::parse_mesh(&mesh_text).expect("the imported mesh parses");
+    // Only emission may reach the pixels: no albedo map, no lights, a black sky.
+    baked.textures.base_color = None;
+    let mut reference = baked.clone();
+    reference.textures.emissive = None;
+    std::fs::write(
+        out.join("meshes/card-baked.mesh.yaml"),
+        ludion_scene::emit_mesh(&baked),
+    )
+    .unwrap();
+    std::fs::write(
+        out.join("meshes/card-reference.mesh.yaml"),
+        ludion_scene::emit_mesh(&reference),
+    )
+    .unwrap();
+
+    // The `emissiveFactor` the fixture authors on `card-constant`'s material.
+    let factor = [0.25_f64, 0.5, 2.0];
+    let peak = factor.iter().copied().fold(0.0, f64::max);
+    // Scene files take block-style sequences only.
+    let seq = |indent: usize, values: &[f64]| -> String {
+        values
+            .iter()
+            .map(|v| {
+                format!(
+                    "{}- {v:?}
+",
+                    " ".repeat(indent)
+                )
+            })
+            .collect()
+    };
+    let scene = |asset: &str, color: [f64; 3], emissive: f64| {
+        let origin = [0.0, 0.0, 0.0];
+        let unit = [1.0, 1.0, 1.0];
+        let rgba = [color[0], color[1], color[2], 1.0];
+        format!(
+            "format: 1
+name: radiance
+seed: 0
+entities:
+  - name: card
+    components:
+      Transform:
+        translation:
+{}        rotation:
+{}        scale:
+{}      Mesh:
+        shape:
+          asset: {asset}
+        color:
+{}        roughness: 0.75
+        metallic: 0.0
+        emissive: {emissive:?}
+  - name: sky
+    components:
+      Environment:
+        sky_zenith:
+{}        sky_horizon:
+{}        sky_ground:
+{}  - name: camera
+    components:
+      Transform:
+        translation:
+{}        rotation:
+{}        scale:
+{}      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.836624
+        near: 0.1
+        far: 100.0
+",
+            seq(10, &origin),
+            seq(10, &origin),
+            seq(10, &unit),
+            seq(10, &rgba),
+            seq(10, &origin),
+            seq(10, &origin),
+            seq(10, &origin),
+            seq(10, &[0.0, 0.0, 2.0]),
+            seq(10, &origin),
+            seq(10, &unit),
+        )
+    };
+    // The imported instance: the prefab's `Mesh` values for `card-constant`.
+    let imported_color = [0.5, 0.5, 1.0];
+    let imported_emissive = 2.0;
+    let render = |name: &str, text: String| -> Result<Vec<u8>, Output> {
+        let scene_path = out.join(format!("{name}.yaml"));
+        std::fs::write(&scene_path, text).unwrap();
+        let png = scratch(&format!("import_tinted_radiance_{name}")).join("out.png");
+        let output = run_ludion(&[
+            "render",
+            "--scene",
+            scene_path.to_str().unwrap(),
+            "--width",
+            "128",
+            "--height",
+            "128",
+            "--out",
+            png.to_str().unwrap(),
+        ]);
+        if output.status.success() {
+            Ok(std::fs::read(&png).unwrap())
+        } else {
+            Err(output)
+        }
+    };
+    let baked_png = match render(
+        "baked",
+        scene(
+            "meshes/card-baked.mesh.yaml",
+            imported_color,
+            imported_emissive,
+        ),
+    ) {
+        Ok(png) => png,
+        Err(output) if is_no_adapter(&output) => {
+            eprintln!("SKIPPED needs_gpu_tinted_emissive: no GPU adapter");
+            return;
+        }
+        Err(output) => panic!("render failed: {}", String::from_utf8_lossy(&output.stderr)),
+    };
+    let reference_png = render(
+        "reference",
+        scene(
+            "meshes/card-reference.mesh.yaml",
+            factor.map(|f| f / peak),
+            peak,
+        ),
+    )
+    .unwrap_or_else(|o| panic!("render failed: {}", String::from_utf8_lossy(&o.stderr)));
+
+    let decode = |png: &[u8]| ludion_assets::decode_png(png, "render").unwrap();
+    let (width, height, a) = decode(&baked_png);
+    let (_, _, b) = decode(&reference_png);
+    let mut worst = 0_i32;
+    let mut lit = 0;
+    for y in height / 3..2 * height / 3 {
+        for x in width / 3..2 * width / 3 {
+            let i = ((y * width + x) * 4) as usize;
+            if a[i..i + 3].iter().any(|&v| v > 8) {
+                lit += 1;
+            }
+            for c in 0..3 {
+                worst = worst.max((i32::from(a[i + c]) - i32::from(b[i + c])).abs());
+            }
+        }
+    }
+    assert!(lit > 0, "the card must be visibly emissive in the centre");
+    assert!(
+        worst <= 2,
+        "the baked tint differs from the factor by {worst}/255"
+    );
+}
+
 /// The cutout fixture (`examples/import-cutout/`, exported from Blender) imports in **default
 /// mode** and reproduces its committed tree byte-for-byte: a `MASK` grating carrying its cutoff, and
 /// three `doubleSided` meshes (flap, tape strip, open lamp shade).
@@ -221,6 +437,49 @@ fn default_mode_fails_with_l1202_and_writes_nothing() {
     assert!(
         !out.join("model.prefab.yaml").exists(),
         "a failed import must not write a partial tree"
+    );
+}
+
+/// A tint over a base channel that is zero cannot be baked: strict import fails `L1202` naming the
+/// material and the channel and writes nothing; `--allow-lossy` imports the part with no emissive.
+#[test]
+fn refused_zero_base_tint_is_l1202_strict_and_drops_only_the_emissive_when_lossy() {
+    let gltf = tinted_root().join("refused-zero-base.gltf");
+    let out = scratch("import_refused_zero_base");
+    let strict = run_ludion(&[
+        "import",
+        gltf.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(!strict.status.success());
+    let stderr = String::from_utf8_lossy(&strict.stderr);
+    assert!(stderr.contains("error[L1202]"), "{stderr}");
+    assert!(
+        stderr.contains("refused-zero-base-material") && stderr.contains("green"),
+        "{stderr}"
+    );
+    assert!(!out.join("model.prefab.yaml").exists());
+
+    let lossy = run_ludion(&[
+        "import",
+        gltf.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+        "--allow-lossy",
+    ]);
+    assert!(
+        lossy.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lossy.stderr)
+    );
+    let prefab = std::fs::read_to_string(out.join("model.prefab.yaml")).unwrap();
+    assert!(
+        prefab.contains(
+            "emissive: 0.0
+"
+        ),
+        "{prefab}"
     );
 }
 
@@ -663,6 +922,34 @@ fn needs_gpu_textured_exit_gate() {
         &textured_root().join("expected").join("scene.yaml"),
         "import_textured_roundtrip",
     );
+}
+
+/// **Tinted-emissive exit gate (GPU).** Renders the textured card (ramp × hue) and the constant
+/// card (1×1 hue map) beside the proportional control against the blessed golden, then checks
+/// `scene.load` → `scene.save` is byte-equal. The import itself is pinned by
+/// `tinted_emissive_import_reproduces_committed_tree_in_default_mode`.
+#[test]
+fn needs_gpu_tinted_emissive_exit_gate() {
+    let platform = match ludion_testkit::platform_dir() {
+        Ok(platform) => platform,
+        Err(diag) => {
+            eprintln!(
+                "SKIPPED tinted_emissive_exit_gate:
+{diag}"
+            );
+            return;
+        }
+    };
+    let scene = tinted_root().join("expected").join("scene.yaml");
+    if assert_matches_golden(
+        &scene,
+        &tinted_golden(platform),
+        "import_tinted_golden_out",
+        "tinted_emissive_exit_gate",
+    ) {
+        return;
+    }
+    assert_load_save_roundtrip(&scene, "import_tinted_roundtrip");
 }
 
 /// Renders `scene` and asserts it matches `golden` at exactly SSIM 1.0 (same-machine render vs its

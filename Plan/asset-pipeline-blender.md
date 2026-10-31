@@ -49,7 +49,7 @@ possible.
   `textures/<hash>.png`. Re-importing gives byte-identical output, and `check-scene` plus
   `check_mesh` run before anything is written.
   - **Supported:** triangles with positions, normals and `TEXCOORD_0`; tangents, given or generated;
-    the five metallic-roughness maps as PNG; factors; emissive proportional to the base colour;
+    the five metallic-roughness maps as PNG; factors; emissive factors (a tint bakes into an emissive map);
     multiple nodes and meshes; perspective cameras and point lights.
   - **Refused with `L1202`:** skins, animations, morph targets, `BLEND` alpha, a second UV set, JPEG images, and unknown required extensions. The skin refusal is
     lifted by `Plan/skeletal-animation.md` W1. *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): `doubleSided` and `MASK` are mapped (`double_sided`, `alpha_mode: mask`), no longer refused.*

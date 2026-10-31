@@ -18,7 +18,9 @@ texture map (below). A material is always exactly these three numbers, flat or s
   Default `0.0`.
 - **`emissive`** — `>= 0`, an HDR intensity multiplier on the surface's **own** color — never a
   separate RGB. `2.0` on a `[0.4, 0.8, 1.0]` surface glows that same cyan twice as bright, not some
-  other color. Default `0.0` (no glow).
+  other color. Default `0.0` (no glow). `ludion import` bakes a glTF `emissiveFactor` that is not a
+  multiple of the base colour into an emissive map, so a tinted glow still imports (the field itself
+  stays a scalar).
 
 ## The three author surfaces
 

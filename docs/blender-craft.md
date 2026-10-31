@@ -118,12 +118,13 @@ source as PNG, so the script asserts every `bpy.data.images` entry is PNG before
   (`LESS_THAN` against the cutoff, then `1 −` that), which the exporter reads as glTF `MASK` with that
   `alphaCutoff`; pick a cutoff exact in f32 (`0.25`) so the document writes it unchanged. Plain alpha
   blend is `BLEND`, which is `L1202`. `examples/import-cutout/make-fixture.py` is the working script.
-- **Emissive:** `Mesh.emissive` is a scalar on the surface's own colour, so glTF `emissiveFactor` must
-  equal `k × baseColorFactor`. Set `Emission Color = k × base` and `Emission Strength = 1.0`; a
-  strength above 1 moves into `KHR_materials_emissive_strength`, which the import multiplies into
-  `Mesh.emissive`. Keep `k × base ≤ 1` per channel and
-  choose dyadic values (`0.0625, 0.3125, 0.09375` × 3) so the product is exact in f32; the import then
-  writes `emissive: 3.0`. For a textured mesh the glow is `Mesh.color × emissive × emissive map`
+- **Emissive:** any Emission Color works. A glTF `emissiveFactor` equal to `k × baseColorFactor` maps
+  straight to the scalar `Mesh.emissive`; any other factor is baked into an emissive map by the
+  import (needs UVs; every base channel the glow uses must be ≥ 1/255 — a black base channel under a
+  coloured glow is `L1202`). A strength above 1 moves into `KHR_materials_emissive_strength`, which
+  the import multiplies into `Mesh.emissive`. For the proportional path, keep `k × base ≤ 1` per
+  channel and choose dyadic values (`0.0625, 0.3125, 0.09375` × 3) so the product is exact in f32; the
+  import then writes `emissive: 3.0`. For a textured mesh the glow is `Mesh.color × emissive × emissive map`
   (glTF's rule — the base map is never read), so the emissive map must carry the glow colour: a grey
   mask glows white.
 

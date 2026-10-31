@@ -6221,11 +6221,12 @@ nodes folded in rather than emitted as entities; and a material's `MASK` alpha m
 `alphaCutoff`, and `doubleSided`, onto the mesh document's `alpha_mode`/`alpha_cutoff` and
 `double_sided` keys.
 
-`emissiveFactor` maps onto `Mesh.emissive` only when it *is* one of Ludion's scalars: `Mesh.emissive`
-is an HDR intensity on the surface's own color, never an independent tint, so `[0, 0, 0]` maps to
-`0.0` and a non-zero factor maps only when it equals some scalar `k` times `baseColorFactor`'s RGB
-exactly on the f32 values. A non-proportional `emissiveFactor` is reported here, naming the material;
-`--allow-lossy` skips just the emissive (the rest of the material still imports) and warns.
+`emissiveFactor` maps onto `Mesh.emissive` as a scalar when it equals some `k` times
+`baseColorFactor`'s RGB exactly on the f32 values (`[0, 0, 0]` maps to `0.0`). Any other factor is
+baked into an emissive map: `Mesh.emissive` becomes the largest factor/base ratio and the map, the
+`emissiveTexture` or one texel, carries the hue. It is reported here, naming the material, only when
+a channel's base is below 1/255 while its emissive is not, or when a tint lands on a primitive
+without `TEXCOORD_0`; `--allow-lossy` skips just the emissive and warns.
 
 Everything else is reported here rather than silently discarded — a texture on a second UV set or
 with per-axis wrap modes that disagree (a reference holds one mode for both axes), a textured

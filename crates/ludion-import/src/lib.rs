@@ -37,12 +37,20 @@
 //! | a *referenced* PNG image               | re-encoded `textures/<hash>.png`        |
 //!
 //! `Mesh.emissive` is a scalar HDR intensity on the surface's own color, not an independent tint
-//! (`Plan/phase-11-pbr.md` decision 1), so `emissiveFactor` only maps when it *is* one: `[0,0,0]`
-//! maps to `0.0`, and a non-zero factor maps to scalar `k` only when it equals `k ×
-//! baseColorFactor.rgb` within a few ULP per channel (`f32` rounding means an authored-exact
-//! proportional factor need not satisfy `c * (e / c) == e` bit-for-bit; see `proportional_emissive`
-//! for the bound). A non-proportional `emissiveFactor` is an `L1202` naming the material;
-//! `--allow-lossy` skips just the emissive (the rest of the material still imports) and warns.
+//! (`Plan/phase-11-pbr.md` decision 1), so `emissiveFactor` (× `KHR_materials_emissive_strength`)
+//! maps straight only when it *is* one: `[0,0,0]` maps to `0.0`, and a non-zero factor maps to
+//! scalar `k` only when it equals `k × baseColorFactor.rgb` within a few ULP per channel (`f32`
+//! rounding means an authored-exact proportional factor need not satisfy `c * (e / c) == e`
+//! bit-for-bit; see `proportional_emissive` for the bound).
+//!
+//! Any other factor is a tint, and the importer bakes it. The shader renders `Mesh.color ×
+//! Mesh.emissive × emissive map`, so with `r = factor / baseColorFactor.rgb` per channel,
+//! `Mesh.emissive` is `max r` and the emissive map is the glTF `emissiveTexture` (or one white
+//! texel) times `r / max r` in linear light, at the texture's size. The baked map is an ordinary
+//! `textures/<hash>.png`; the untinted source is not written for it. A channel with a zero base
+//! and a non-zero factor, or a tint on a primitive without `TEXCOORD_0`, cannot be carried and is an
+//! `L1202` naming the material; `--allow-lossy` skips just the emissive (the rest of the material
+//! still imports) and warns.
 //!
 //! The five metallic-roughness maps (`baseColorTexture`, `metallicRoughnessTexture`,
 //! `normalTexture`, `occlusionTexture`, `emissiveTexture`) are re-encoded to canonical PNGs named by
@@ -107,9 +115,9 @@ use convert::{
     spot_light_value, transform_value,
 };
 use diagnostics::{
-    blend_unsupported, camera_unsupported, extension_ignored, invalid_gltf, malformed,
-    node_inside_joint_chain, node_matrix_shears, node_under_joint, non_proportional_emissive,
-    output_io, unsupported, unweighted_vertices,
+    blend_unsupported, camera_unsupported, emissive_without_uvs, emissive_zero_base_channel,
+    extension_ignored, invalid_gltf, malformed, node_inside_joint_chain, node_matrix_shears,
+    node_under_joint, output_io, unsupported, unweighted_vertices,
 };
 use document::check_structure;
 use skin::{SkinBinding, bind_skin, map_weights};
@@ -372,6 +380,9 @@ struct State {
     image_paths: BTreeMap<usize, Option<String>>,
     /// The content hashes already emitted — two images with identical pixels share one file.
     texture_hashes: BTreeSet<u64>,
+    /// Baked tinted-emissive maps, keyed by the source image index (`None` for the 1×1 map) and the
+    /// hue's bits.
+    tinted_paths: BTreeMap<(Option<usize>, [u32; 3]), Option<String>>,
     textures: Vec<TextureArtifact>,
 }
 
@@ -684,14 +695,38 @@ fn resolve_primitive(
     let label = primitive_label(mesh, primitive);
     let pbr = material.pbr_metallic_roughness();
 
-    let textures = material_textures(&material, &label, inputs, state)?;
-
     let color = pbr.base_color_factor();
     let roughness = pbr.roughness_factor();
     let metallic = pbr.metallic_factor();
     let offender = material_label(&material);
     let finite =
         |values: &[f32], what: &str| require_finite(values, what, &offender).map_err(|d| vec![d]);
+    finite(&color, "baseColorFactor")?;
+    let strength = material.emissive_strength().unwrap_or(1.0);
+    finite(&[strength], "KHR_materials_emissive_strength")?;
+    let emissive_factor = material.emissive_factor().map(|c| c * strength);
+    finite(&emissive_factor, "emissiveFactor")?;
+    let has_uvs = primitive.get(&Semantic::TexCoords(0)).is_some();
+    let emissive_map = emissive_mapping(
+        emissive_factor,
+        [color[0], color[1], color[2]],
+        has_uvs,
+        &offender,
+        state,
+    );
+    let tint = match emissive_map {
+        EmissiveMap::Tinted { hue, .. } => Some(hue),
+        _ => None,
+    };
+
+    let textures = material_textures(&material, &label, tint, inputs, state)?;
+    let emissive = match emissive_map {
+        EmissiveMap::Scalar(k) => k,
+        // The baked map carries the hue; if its slot was refused (already reported) the uniform
+        // intensity alone would glow the wrong colour, so the emissive drops with it.
+        EmissiveMap::Tinted { intensity, .. } if textures.emissive.is_some() => intensity,
+        EmissiveMap::Tinted { .. } | EmissiveMap::Refused => 0.0,
+    };
     let alpha_mode = match material.alpha_mode() {
         gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
         gltf::material::AlphaMode::Blend => {
@@ -711,21 +746,8 @@ fn resolve_primitive(
             }
         }
     };
-    finite(&color, "baseColorFactor")?;
     finite(&[roughness], "roughnessFactor")?;
     finite(&[metallic], "metallicFactor")?;
-    let strength = material.emissive_strength().unwrap_or(1.0);
-    finite(&[strength], "KHR_materials_emissive_strength")?;
-    let emissive_factor = material.emissive_factor().map(|c| c * strength);
-    finite(&emissive_factor, "emissiveFactor")?;
-    let base_rgb = [color[0], color[1], color[2]];
-    let emissive = match proportional_emissive(emissive_factor, base_rgb) {
-        Some(k) => k,
-        None => {
-            state.lossy(non_proportional_emissive(&offender));
-            0.0
-        }
-    };
 
     let Some(doc) = build_mesh_document(mesh, primitive, textures, skin, inputs, state)? else {
         return Ok(None);
@@ -783,6 +805,93 @@ fn proportional_emissive(emissive: [f32; 3], base_color: [f32; 3]) -> Option<f32
     exact.then_some(k)
 }
 
+/// How a material's emissive reaches the mesh document.
+#[derive(Clone, Copy)]
+enum EmissiveMap {
+    /// A scalar intensity on the surface's own colour: no map.
+    Scalar(f32),
+    /// An independent tint: `intensity` is the HDR scalar, `hue` (each channel in `[0, 1]`) goes
+    /// into a baked emissive map.
+    Tinted { intensity: f32, hue: [f32; 3] },
+    /// Inexpressible (reported); the emissive imports as `0.0`.
+    Refused,
+}
+
+/// A base-colour channel below one 8-bit step cannot carry a colour, so a tint over it is refused.
+const TINT_BASE_EPSILON: f32 = 1.0 / 255.0;
+
+/// Decides the [`EmissiveMap`] for `emissive` (factor × strength) over `base` (`baseColorFactor.rgb`).
+///
+/// The shader renders `Mesh.color × Mesh.emissive × emissive_map`, so a tinted factor `f` is carried
+/// as per-channel ratio `r = f / base`: `emissive = max r`, map hue `= r / max r`. A channel with a
+/// zero base and a non-zero factor has no `r`, and a map cannot be sampled without `TEXCOORD_0`.
+fn emissive_mapping(
+    emissive: [f32; 3],
+    base: [f32; 3],
+    has_uvs: bool,
+    offender: &str,
+    state: &mut State,
+) -> EmissiveMap {
+    if let Some(k) = proportional_emissive(emissive, base) {
+        return EmissiveMap::Scalar(k);
+    }
+    let mut ratio = [0.0_f32; 3];
+    for c in 0..3 {
+        if emissive[c] == 0.0 {
+            continue;
+        }
+        let r = emissive[c] / base[c];
+        if base[c] < TINT_BASE_EPSILON || !(r.is_finite() && r > 0.0) {
+            state.lossy(emissive_zero_base_channel(
+                offender,
+                ["red", "green", "blue"][c],
+                emissive[c],
+                base[c],
+            ));
+            return EmissiveMap::Refused;
+        }
+        ratio[c] = r;
+    }
+    if !has_uvs {
+        state.lossy(emissive_without_uvs(offender));
+        return EmissiveMap::Refused;
+    }
+    let intensity = ratio.into_iter().fold(0.0_f32, f32::max);
+    if !(intensity.is_finite() && intensity > 0.0) {
+        let c = (0..3)
+            .max_by(|&a, &b| ratio[a].total_cmp(&ratio[b]))
+            .unwrap_or(0);
+        state.lossy(emissive_zero_base_channel(
+            offender,
+            ["red", "green", "blue"][c],
+            emissive[c],
+            base[c],
+        ));
+        return EmissiveMap::Refused;
+    }
+    EmissiveMap::Tinted {
+        intensity,
+        hue: ratio.map(|r| r / intensity),
+    }
+}
+
+/// Bakes an emissive map: `src` (RGBA8; `None` is one opaque white texel) times `hue` per channel,
+/// multiplied in linear light and re-encoded sRGB, alpha copied. Returns `(width, height, rgba)`.
+fn bake_tinted(src: Option<(u32, u32, &[u8])>, hue: [f32; 3]) -> (u32, u32, Vec<u8>) {
+    let (width, height, rgba) = src.unwrap_or((1, 1, &[255, 255, 255, 255]));
+    let linear: [f32; 256] = std::array::from_fn(|i| ludion_assets::decode_srgb(i as u8));
+    let mut out = Vec::with_capacity(rgba.len());
+    for texel in rgba.chunks_exact(4) {
+        for c in 0..3 {
+            out.push(ludion_assets::encode_srgb(
+                linear[usize::from(texel[c])] * hue[c],
+            ));
+        }
+        out.push(texel[3]);
+    }
+    (width, height, out)
+}
+
 /// f32 does not generally satisfy `c * (e / c) == e`: recovering `k` from one channel and
 /// reapplying it to another carries the source's own authoring-time rounding (`e = round(c ×
 /// k_true)`) plus two more roundings here (the division that recovered `k`, then this
@@ -818,6 +927,7 @@ fn material_label(material: &gltf::Material) -> String {
 fn material_textures(
     material: &gltf::Material,
     label: &str,
+    tint: Option<[f32; 3]>,
     inputs: &Inputs,
     state: &mut State,
 ) -> Result<MeshTextures, Vec<Diagnostic>> {
@@ -850,8 +960,12 @@ fn material_textures(
     ];
 
     let mut references: [Option<TextureRef>; 5] = Default::default();
-    for (slot, resolved) in slots.into_iter().zip(references.iter_mut()) {
-        if let Some((texture, tex_coord, factor)) = slot {
+    for (index, (slot, resolved)) in slots.into_iter().zip(references.iter_mut()).enumerate() {
+        const EMISSIVE_SLOT: usize = 4;
+        if let (EMISSIVE_SLOT, Some(hue)) = (index, tint) {
+            let texture = slot.map(|(texture, tex_coord, _)| (texture, tex_coord));
+            *resolved = tinted_reference(texture, hue, label, inputs, state)?;
+        } else if let Some((texture, tex_coord, factor)) = slot {
             *resolved = texture_reference(&texture, tex_coord, factor, label, inputs, state)?;
         }
     }
@@ -901,6 +1015,103 @@ fn texture_reference(
     }))
 }
 
+/// The emissive slot of a tinted material: the glTF `emissiveTexture` (when there is one) baked with
+/// `hue`, or a 1×1 map of the hue alone. `Ok(None)` (with an `L1202`) under the same refusals as
+/// [`texture_reference`].
+fn tinted_reference(
+    texture: Option<(gltf::texture::Texture, u32)>,
+    hue: [f32; 3],
+    label: &str,
+    inputs: &Inputs,
+    state: &mut State,
+) -> Result<Option<TextureRef>, Vec<Diagnostic>> {
+    let (image, wrap) = match &texture {
+        Some((texture, tex_coord)) => {
+            if *tex_coord != 0 {
+                state.lossy(unsupported("a texture on a second UV set", label));
+                return Ok(None);
+            }
+            let sampler = texture.sampler();
+            if sampler.wrap_s() != sampler.wrap_t() {
+                state.lossy(unsupported(
+                    "a sampler with different wrap modes per axis",
+                    label,
+                ));
+                return Ok(None);
+            }
+            (Some(texture.source()), wrap_mode(sampler.wrap_s()))
+        }
+        None => (None, TextureWrap::Repeat),
+    };
+    let Some(rel_path) =
+        emit_tinted_texture(image.as_ref(), hue, inputs, state).map_err(|d| vec![d])?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(TextureRef {
+        path: format!("../{rel_path}"),
+        wrap,
+        factor: 1.0,
+    }))
+}
+
+/// Bakes (once per image and hue) `image` times `hue` into the texture set; `None` bakes the 1×1
+/// constant map. `Ok(None)` for a JPEG (`L1202`, reported once per image).
+fn emit_tinted_texture(
+    image: Option<&gltf::image::Image>,
+    hue: [f32; 3],
+    inputs: &Inputs,
+    state: &mut State,
+) -> Result<Option<String>, Diagnostic> {
+    let key = (image.map(gltf::image::Image::index), hue.map(f32::to_bits));
+    if let Some(cached) = state.tinted_paths.get(&key) {
+        return Ok(cached.clone());
+    }
+    let baked = match image {
+        None => bake_tinted(None, hue),
+        Some(image) => {
+            if let Some(None) = state.image_paths.get(&image.index()) {
+                state.tinted_paths.insert(key, None);
+                return Ok(None);
+            }
+            let resolved = resolve_image(image, inputs.buffers, inputs.external)?;
+            if !resolved.is_png {
+                state.lossy(unsupported(
+                    "a JPEG image",
+                    &named("image", image.index(), image.name()),
+                ));
+                state.image_paths.insert(image.index(), None);
+                state.tinted_paths.insert(key, None);
+                return Ok(None);
+            }
+            let label = format!("image {}", image.index());
+            let (width, height, rgba) = ludion_assets::decode_png(&resolved.bytes, &label)?;
+            bake_tinted(Some((width, height, &rgba)), hue)
+        }
+    };
+    let (width, height, rgba) = baked;
+    let png = ludion_assets::encode_png(width, height, &rgba).map_err(|detail| {
+        invalid_gltf(format!("re-encoding a baked emissive map failed: {detail}"))
+    })?;
+    let rel_path = register_png(png, state);
+    state.tinted_paths.insert(key, Some(rel_path.clone()));
+    Ok(Some(rel_path))
+}
+
+/// Adds canonical PNG bytes to the plan's texture set under their content hash (a repeat is the
+/// same file) and returns the output-relative path.
+fn register_png(png: Vec<u8>, state: &mut State) -> String {
+    let hash = ludion_assets::content_hash(&png);
+    let rel_path = format!("{TEXTURE_DIR}/{hash:016x}.png");
+    if state.texture_hashes.insert(hash) {
+        state.textures.push(TextureArtifact {
+            rel_path: rel_path.clone(),
+            png,
+        });
+    }
+    rel_path
+}
+
 /// glTF's sampler wrap mode as a mesh document spells it.
 fn wrap_mode(mode: WrappingMode) -> TextureWrap {
     match mode {
@@ -937,14 +1148,7 @@ fn emit_texture(
     let (width, height, rgba) = ludion_assets::decode_png(&resolved.bytes, &label)?;
     let png = ludion_assets::encode_png(width, height, &rgba)
         .map_err(|detail| invalid_gltf(format!("re-encoding {label} failed: {detail}")))?;
-    let hash = ludion_assets::content_hash(&png);
-    let rel_path = format!("{TEXTURE_DIR}/{hash:016x}.png");
-    if state.texture_hashes.insert(hash) {
-        state.textures.push(TextureArtifact {
-            rel_path: rel_path.clone(),
-            png,
-        });
-    }
+    let rel_path = register_png(png, state);
     state
         .image_paths
         .insert(image.index(), Some(rel_path.clone()));

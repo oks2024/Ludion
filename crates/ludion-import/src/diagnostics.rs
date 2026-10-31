@@ -86,21 +86,40 @@ pub(crate) fn camera_unsupported(offender: &str) -> Diagnostic {
     )
 }
 
-/// `L1202` — a material's `emissiveFactor` cannot be expressed as `Mesh.emissive` (a scalar
-/// intensity on the surface's own color): it is not an exact scalar multiple of `baseColorFactor`'s
-/// RGB on the f32 values. `material` names the offending material.
-pub(crate) fn non_proportional_emissive(material: &str) -> Diagnostic {
+/// `L1202` — a tinted emissive is baked into a map scaled by `baseColorFactor`, so a channel whose
+/// base is (near-)zero cannot carry a non-zero `emissiveFactor`. Names the material and the channel.
+pub(crate) fn emissive_zero_base_channel(
+    material: &str,
+    channel: &str,
+    emissive: f32,
+    base: f32,
+) -> Diagnostic {
     Diagnostic::new(
         code::IMPORT_UNSUPPORTED_FEATURE,
         format!(
-            "{material}'s `emissiveFactor` is not a scalar multiple of `baseColorFactor` and has no \
-             Ludion mapping"
+            "{material}'s emissiveFactor {channel} {emissive} sits on a baseColorFactor {channel} of \
+             {base}, which is too small to carry it (emission is baked relative to the base colour)"
         ),
     )
     .with_help(
-        "set `emissiveFactor` to a scalar multiple of `baseColorFactor` (Ludion's emissive is an \
-         intensity on the surface's own color, not an independent tint), or pass `--allow-lossy` to \
-         import the rest and leave the emissive out",
+        "give `baseColorFactor` a larger value in that channel (at least 1/255), or zero the \
+         emissive there, or pass `--allow-lossy` to import the rest and leave the emissive out",
+    )
+}
+
+/// `L1202` — a tinted emissive is baked into an emissive map, which needs `TEXCOORD_0` to be
+/// sampled. `material` names the offending material.
+pub(crate) fn emissive_without_uvs(material: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::IMPORT_UNSUPPORTED_FEATURE,
+        format!(
+            "{material}'s `emissiveFactor` is not a scalar multiple of `baseColorFactor`, so it needs \
+             a baked emissive map, but the primitive has no TEXCOORD_0 to sample it with"
+        ),
+    )
+    .with_help(
+        "export the mesh with UVs (TEXCOORD_0), or make `emissiveFactor` a scalar multiple of \
+         `baseColorFactor`, or pass `--allow-lossy` to import the rest and leave the emissive out",
     )
 }
 

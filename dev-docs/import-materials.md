@@ -1,5 +1,5 @@
 ---
-description: ludion-import material, texture and geometry mapping — emissive proportionality, tangents
+description: ludion-import material, texture and geometry mapping — emissive mapping and tint bake, tangents
 ---
 # import-materials
 
@@ -9,13 +9,18 @@ description: ludion-import material, texture and geometry mapping — emissive p
 
 A primitive's material maps through `mesh_reference`: `baseColorFactor` → `Mesh.color`,
 `roughnessFactor`/`metallicFactor` → `Mesh.roughness`/`Mesh.metallic` directly, and
-`emissiveFactor` through `proportional_emissive` — Ludion's `Mesh.emissive` is a scalar HDR
-intensity on the surface's *own* color, never an independent tint, so a non-zero `emissiveFactor`
-only maps when it equals `k × baseColorFactor.rgb` exactly on the f32 values (within an 8-ULP
-tolerance that absorbs the rounding chain, documented at `EMISSIVE_REL_TOLERANCE`); otherwise it's
-an `L1202` naming the material, and the emissive is dropped (not the whole material) under
-`--allow-lossy`. `KHR_materials_emissive_strength` multiplies `emissiveFactor` first, so the product is
-what must be proportional and what lands in `Mesh.emissive`. Its five metallic-roughness maps map through `material_textures`: each referenced
+`emissiveFactor` through `emissive_mapping` — Ludion's `Mesh.emissive` is a scalar HDR
+intensity on the surface's *own* color, so a non-zero `emissiveFactor` maps straight only when it
+equals `k × baseColorFactor.rgb` on the f32 values (`proportional_emissive`, within an 8-ULP
+tolerance that absorbs the rounding chain, documented at `EMISSIVE_REL_TOLERANCE`). Any other factor
+is a tint and is **baked**: the shader renders `Mesh.color × Mesh.emissive × emissive map`, so with
+`r = factor / base` per channel `Mesh.emissive` is `max r` and the map is the `emissiveTexture` (or
+one white texel) times `r / max r`, multiplied in linear light (`bake_tinted`), at the texture's size,
+written as an ordinary hash-named texture (the untinted source is not written for it). A channel with
+a zero base and a non-zero factor, or a tint on a primitive without `TEXCOORD_0`, is an `L1202`
+naming the material; the emissive is dropped (not the whole material) under `--allow-lossy`.
+`KHR_materials_emissive_strength` multiplies `emissiveFactor` first, so the product is what is
+classified and what lands in `Mesh.emissive`. Its five metallic-roughness maps map through `material_textures`: each referenced
 image re-encodes through `ludion_assets::decode_png`/`encode_png` and is written as
 `textures/<content hash of the canonical PNG bytes>.png` — identical pixels are **one** committed
 file whatever the exporter named them, and an image no supported slot references is not written at

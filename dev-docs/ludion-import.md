@@ -14,7 +14,7 @@ before touching the glTF→component mapping, the `L1202` unsupported-feature su
 ## Layout
 - `crates/ludion-import/src/lib.rs` — the crate root: the exhaustive glTF→Ludion mapping table (in
   the module docs), `import()`, `Import`/`MeshArtifact`/`TextureArtifact`, part/mesh/texture
-  building, and the emissive-proportionality check.
+  building, and the emissive mapping (proportional scalar, or a tint baked into an emissive map).
 - `crates/ludion-import/src/convert.rs` — pure glTF-value → `serde_json::Value` conversions:
   `transform_value`, `mesh_value` (the `Mesh` component — see Gotchas),
   `point_light_value`, `parent_value`, `mesh_document`, and the quaternion→Euler-XYZ-degrees
@@ -94,7 +94,7 @@ that merely fails stays `L1201`.
 Accessors and mesh data are checked before any reader (`accessors.rs`, `ludion_scene::validate_mesh`)
 and every float handed to a component builder is checked finite; malformed data is `L1201` naming the element.
 
-Material, texture and geometry mapping (`mesh_reference`, the emissive-proportionality rule, content-hashed textures, tangents): `ludion devdocs import-materials`.
+Material, texture and geometry mapping (`mesh_reference`, the emissive mapping and tint bake, content-hashed textures, tangents): `ludion devdocs import-materials`.
 
 
 `Import::write` then lays out `model.prefab.yaml` (caller-supplied canonical text — this crate never emits
@@ -130,7 +130,7 @@ cargo run -p ludion-cli -- explain L1202      # and L1201, L1203, L1206
   the first place to look.
 - **`--allow-lossy` is per-feature, not per-material or per-primitive.** A textured material still
   imports its flat color/roughness/metallic; only the texture reference itself is dropped. A
-  non-proportional `emissiveFactor` drops only the emissive, not the mesh. Read an `L1202`'s
+  unmappable tinted `emissiveFactor` (a zero base channel, no `TEXCOORD_0`) drops only the emissive, not the mesh. Read an `L1202`'s
   message to know exactly what was kept vs. dropped.
 - **With a skin, entity positions are not node indices.** Joint nodes are folded out of the entity
   list, so every `Parent` goes through `entity_of` (node index → entity position); don't index the
