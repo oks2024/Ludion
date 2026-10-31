@@ -4,20 +4,11 @@
 
 use {{name_ident}}::Player;
 use ludion::prelude::*;
+use ludion_testkit::GameplayDriver;
 use serde_json::json;
 
 /// The game scene, embedded so these tests are self-contained.
 const SCENE: &str = include_str!("../scenes/main.yaml");
-
-/// A fresh engine built from this game's config with the scene loaded — the path every test starts
-/// from. Loading succeeds because the engine registers `Player` on top of the built-ins.
-fn loaded_engine() -> Engine {
-    let mut engine = {{name_ident}}::game().build().expect("the game builds");
-    engine
-        .load_inline_scene(SCENE)
-        .expect("the scene loads against the game registry");
-    engine
-}
 
 /// Reads the single player entity's `Player::x` out of the world.
 fn player_x(engine: &mut Engine) -> f32 {
@@ -26,13 +17,6 @@ fn player_x(engine: &mut Engine) -> f32 {
         x = Some(player.x);
     }
     x.expect("the scene has a Player entity")
-}
-
-/// Steps the engine `ticks` fixed ticks.
-fn step(engine: &mut Engine, ticks: u64) {
-    engine
-        .execute(Command::SimStep(command::SimStepParams { ticks, hash: false }))
-        .expect("sim steps");
 }
 
 /// The command sequence the determinism test drives: press Right, then run 60 ticks.
@@ -53,26 +37,21 @@ fn run_commands() -> Vec<Command> {
 /// 30 ticks * 6.0 units/s * (1/60 s) = 3.0 units.
 #[test]
 fn player_slides_right_while_key_is_held() {
-    let mut engine = loaded_engine();
-    engine
-        .execute(Command::InputInject(command::InputInjectParams {
-            frame: Some(FrameIndex::new(0)),
-            event: json!({"kind": "key_down", "key": "Right"}),
-        }))
-        .expect("input injects");
-    step(&mut engine, 30);
-    let x = player_x(&mut engine);
+    let mut driver = GameplayDriver::new({{name_ident}}::game(), SCENE);
+    driver.hold("Right", 30);
+    let x = player_x(driver.engine_mut());
     assert!(
         (x - 3.0).abs() < 1e-3,
         "player should have slid ~3.0 units after 30 ticks, got {x}"
     );
 }
 
-/// Sim assertion (negative): with no input the system runs but mutates nothing.
+/// Sim assertion (negative): with no input the system runs but mutates nothing. This one keeps a bare
+/// `Engine` and the free `step`.
 #[test]
 fn player_stays_put_without_input() {
-    let mut engine = loaded_engine();
-    step(&mut engine, 30);
+    let mut engine = ludion_testkit::loaded_engine({{name_ident}}::game(), SCENE);
+    ludion_testkit::step(&mut engine, 30);
     assert_eq!(
         player_x(&mut engine),
         0.0,
@@ -85,7 +64,7 @@ fn player_stays_put_without_input() {
 #[test]
 fn two_runs_produce_identical_worldhash_sequences() {
     let run = || {
-        let mut engine = loaded_engine();
+        let mut engine = ludion_testkit::loaded_engine({{name_ident}}::game(), SCENE);
         ludion_engine::drive_hashes(&mut engine, run_commands()).expect("drive succeeds")
     };
     assert_eq!(run(), run(), "the simulation must be deterministic");

@@ -11,19 +11,17 @@ cargo test          # sim assertions + WorldHash determinism + the golden
 ```
 
 **Sim assertions.** Drive the real engine and assert on component state. This is the everyday check —
-no GPU needed. (Full example: `tests/gameplay.rs`.) A test engine roots at `.` unless you
-`project_root(...)` it — root it where the host does, or a `*.yaml` walk (data-docs) descends
-whatever sits under the default root, `target/` included.
+no GPU needed. (Full example: `tests/gameplay.rs`.) `ludion_testkit::GameplayDriver` drives any engine: `new`
+(inline scene), `from_scene_file` (roots at the scene's directory) or `from_engine` (one you built and
+stepped). A test engine roots at `.` unless you `project_root(...)` it — root it where the host does, or a `*.yaml` walk (data-docs)
+descends whatever sits under the default root, `target/` included. The free `step`/`inject` serve a bare `Engine`.
 
 ```rust
-let mut engine = <game>::game().build().unwrap();
-engine.load_inline_scene(SCENE).unwrap();
-engine.execute(Command::InputInject(command::InputInjectParams {
-    frame: Some(FrameIndex::new(0)),
-    event: serde_json::json!({"kind": "key_down", "key": "Right"}),
-})).unwrap();
-engine.execute(Command::SimStep(command::SimStepParams { ticks: 30, hash: false })).unwrap();
-// ... query the world and assert.
+let mut driver = GameplayDriver::new(<game>::game(), SCENE);
+driver.hold("Right", 30);                    // also tap, release, set_axis, inject_event
+let reached = driver.run_until(120, |e| player_x(e) > 5.0);  // Some(frame) | None
+let snap = driver.snapshot();                // restore(snap) rewinds state and cursor
+// ... query driver.engine_mut().world_mut() and assert.
 ```
 
 **WorldHash determinism.** A `WorldHash` is a 16-hex-digit fingerprint of all live component state.

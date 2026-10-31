@@ -79,7 +79,7 @@ pub mod stats;
 pub mod suite;
 
 pub use drift::assert_components_drift_safe;
-pub use driver::{GameplayDriver, loaded_engine};
+pub use driver::{GameplayDriver, inject, loaded_engine, step};
 pub use golden::{
     GoldenOutcome, GoldenTest, MACOS_REFERENCE_ADAPTER, WINDOWS_REFERENCE_ADAPTER, bless_requested,
     check_engine_golden, compare_png_bytes, missing_golden, platform_dir, provenance_label,
