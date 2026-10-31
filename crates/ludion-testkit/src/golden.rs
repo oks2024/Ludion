@@ -45,7 +45,7 @@ pub const DEFAULT_SSIM_THRESHOLD: f64 = 0.99;
 /// under a hundredth; a tile below this floor fails the comparison regardless. The effective floor
 /// is clamped to the comparison's threshold, so a looser `ssim_threshold` loosens it too.
 pub const DEFAULT_TILE_FLOOR: f64 = 0.95;
-/// The default ceiling on any single tile's colour error: the mean absolute R, G or B channel
+/// The default ceiling on any single tile's colour error: the mean absolute R, G, B or A channel
 /// difference over the tile, 0–255. SSIM scores luma only, so a hue change that keeps brightness
 /// structure (a grade, a palette or channel-order change) passes it; this gate catches that. A fixed
 /// constant: a looser `ssim_threshold` does not loosen colour.
@@ -563,7 +563,7 @@ fn refuse_adapter_skip(skip: Diagnostic, required: bool) -> Diagnostic {
     skip
 }
 
-/// The skip diagnostic for a byte-exact comparison (`threshold >= 1.0`) of `golden` that cannot be
+/// The skip diagnostic for an RGBA-identity comparison (`threshold >= 1.0`) of `golden` that cannot be
 /// verified here, or `None` when the comparison should run.
 ///
 /// Applies only to a golden whose parent directory is the host's per-OS set (`goldens/<os>/`), unless
@@ -742,7 +742,8 @@ pub fn compare_png_bytes(
 }
 
 /// The one place a decoded golden/actual pair becomes a [`DiffReport`]: a dimension mismatch when the
-/// sizes differ, otherwise a full tiled SSIM comparison. Shared by [`GoldenTest::run`] (file-based)
+/// sizes differ, otherwise a full tiled SSIM comparison; at `threshold >= 1.0` the pair must also be
+/// RGBA-identical. Shared by [`GoldenTest::run`] (file-based)
 /// and [`compare_png_bytes`] (bytes-based) so there is exactly one comparison-decision path.
 /// `adapter`, when known, becomes the report's [`DiffReport::provenance`] line.
 fn report_for(
@@ -777,8 +778,55 @@ fn report_for(
             &comparison,
         )
     };
+    if (golden.width, golden.height) == (actual.width, actual.height)
+        && threshold >= 1.0
+        && report.pass
+        && golden.rgba != actual.rgba
+    {
+        report.pass = false;
+        report.summary = identity_failure_summary(golden, actual, report.mae);
+    }
     report.provenance = adapter.map(|a| provenance_label(a, std::env::consts::OS));
     report
+}
+
+/// The `FAIL:` line for a pair that clears SSIM and colour at threshold 1.0 but is not RGBA-identical.
+/// One pass over the pixel pairs; `golden` and `actual` have equal dimensions.
+fn identity_failure_summary(
+    golden: &DecodedImage,
+    actual: &DecodedImage,
+    mae: Option<f64>,
+) -> String {
+    let width = golden.width.max(1) as usize;
+    let mut differing = 0usize;
+    let mut alpha_only = 0usize;
+    let mut first: Option<(usize, &[u8], &[u8])> = None;
+    for (index, (g, a)) in golden
+        .rgba
+        .chunks_exact(4)
+        .zip(actual.rgba.chunks_exact(4))
+        .enumerate()
+    {
+        if g == a {
+            continue;
+        }
+        differing += 1;
+        if g[..3] == a[..3] {
+            alpha_only += 1;
+        }
+        first.get_or_insert((index, g, a));
+    }
+    let (index, g, a) = first.unwrap_or((0, &[0; 4], &[0; 4]));
+    format!(
+        "FAIL: ssim and colour pass but the image is not byte-identical at threshold 1.0 (RGBA \
+         identity): {differing} differing pixel(s), {alpha_only} in alpha only; first at ({}, {}) \
+         golden rgba {:?} vs actual rgba {:?}; mae {:.6}",
+        index % width,
+        index / width,
+        g,
+        a,
+        mae.unwrap_or(0.0)
+    )
 }
 
 /// The result of running (or blessing) one [`GoldenTest`].
@@ -1092,5 +1140,75 @@ mod tests {
     fn provenance_label_names_no_reference_off_the_pinned_platforms() {
         let label = provenance_label("Mesa llvmpipe", "linux");
         assert!(label.contains("no pinned reference adapter"), "{label}");
+    }
+
+    fn opaque_image(size: u32) -> DecodedImage {
+        let mut rgba = Vec::new();
+        for y in 0..size {
+            for x in 0..size {
+                rgba.extend_from_slice(&[(x * 7 % 256) as u8, (y * 5 % 256) as u8, 90, 255]);
+            }
+        }
+        DecodedImage {
+            width: size,
+            height: size,
+            rgba,
+        }
+    }
+
+    fn report(golden: &DecodedImage, actual: &DecodedImage, threshold: f64) -> DiffReport {
+        report_for(golden, actual, "g", "a", threshold, None)
+    }
+
+    #[test]
+    fn identical_rgba_passes_at_one() {
+        let image = opaque_image(32);
+        assert!(report(&image, &image.clone(), 1.0).pass);
+    }
+
+    #[test]
+    fn an_alpha_only_lsb_fails_at_one_with_l2207() {
+        let golden = opaque_image(32);
+        let mut actual = golden.clone();
+        actual.rgba[(5 * 32 + 3) * 4 + 3] = 254;
+        let report = report(&golden, &actual, 1.0);
+        assert!(!report.pass);
+        assert_eq!(report.diagnostic().code.as_str(), "L2207");
+        assert!(report.summary.contains("(3, 5)"), "{}", report.summary);
+        assert!(
+            report.summary.contains("1 in alpha only"),
+            "{}",
+            report.summary
+        );
+    }
+
+    #[test]
+    fn an_rgb_lsb_fails_at_one() {
+        let golden = opaque_image(32);
+        let mut actual = golden.clone();
+        actual.rgba[2] = 91;
+        assert!(!report(&golden, &actual, 1.0).pass);
+    }
+
+    #[test]
+    fn an_alpha_lsb_passes_below_one() {
+        let golden = opaque_image(32);
+        let mut actual = golden.clone();
+        actual.rgba[3] = 254;
+        assert!(report(&golden, &actual, 0.99).pass);
+    }
+
+    #[test]
+    fn a_transparent_tile_fails_the_colour_ceiling_below_one() {
+        let golden = opaque_image(64);
+        let mut actual = golden.clone();
+        for y in 0..8 {
+            for x in 0..8 {
+                actual.rgba[(y * 64 + x) * 4 + 3] = 0;
+            }
+        }
+        let report = report(&golden, &actual, 0.99);
+        assert!(!report.pass);
+        assert_eq!(report.diagnostic().code.as_str(), "L2207");
     }
 }

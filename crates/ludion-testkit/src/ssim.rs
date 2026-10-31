@@ -24,13 +24,13 @@
 //! window at all scores as the pixel-weighted mean of those flat tile scores.
 //!
 //! **Colour.** SSIM sees luma only, so a hue change that preserves brightness is invisible to it.
-//! Each tile therefore also carries [`TileDiff::color_error`], the largest of its R, G and B mean
+//! Each tile therefore also carries [`TileDiff::color_error`], the largest of its R, G, B and A mean
 //! absolute channel differences (exact integer sums); the gate in [`crate::golden`] bounds it.
 //!
 //! Luma uses Rec. 709 weights over the sRGB-encoded bytes directly (no linearization — golden
 //! comparison cares about the encoded pixels that actually get written to disk, not scene-linear
-//! light). Alpha is not part of SSIM or the colour error; the milestone's rendered output is always
-//! opaque. [`mean_absolute_error`] is the secondary signal, over all four channels.
+//! light). Alpha is not part of SSIM but is part of the colour error, so a translucent regression
+//! cannot hide behind opaque luma. [`mean_absolute_error`] is the secondary signal, over all four channels.
 //!
 //! Constants: `k1 = 0.01`, `k2 = 0.03`, `L = 255` (the standard 8-bit dynamic range) — the textbook
 //! defaults. Identical images score exactly 1.0: every expression is symmetric in its two inputs.
@@ -86,7 +86,7 @@ pub struct TileDiff {
     /// This tile's SSIM score: the minimum over the windows centred in it (same formula and
     /// constants as the global score).
     pub ssim: f64,
-    /// The largest of the tile's mean absolute R, G and B channel differences (0–255 scale).
+    /// The largest of the tile's mean absolute R, G, B and A channel differences (0–255 scale).
     #[serde(default)]
     pub color_error: f64,
     /// A coarse human name for the tile's position, one of the nine compass-style labels documented
@@ -443,7 +443,7 @@ fn ssim_index(
     numerator / denominator
 }
 
-/// Per tile (row-major), the largest of the R, G and B mean absolute differences.
+/// Per tile (row-major), the largest of the R, G, B and A mean absolute differences.
 fn tile_color_errors(
     a: &DecodedImage,
     b: &DecodedImage,
@@ -454,7 +454,7 @@ fn tile_color_errors(
     let mut errors = Vec::with_capacity(cols.len() * rows.len());
     for &(y, h) in rows {
         for &(x, w) in cols {
-            let mut sums = [0u64; 3];
+            let mut sums = [0u64; 4];
             for row in y..y + h {
                 let start = (row as usize * width + x as usize) * 4;
                 let end = start + w as usize * 4;

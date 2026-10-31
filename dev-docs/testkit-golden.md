@@ -23,6 +23,8 @@ description: Testkit golden path: SSIM + colour gate, per-OS goldens, render sea
   (flattened 16×16). `tests/compare_oracle.rs` holds that line over every committed golden of both
   platforms. `DEFAULT_SSIM_THRESHOLD` is calibrated for the local/pinned-GPU tier only — hosted
   CI on a software rasterizer would need its own, looser calibration, which does not exist yet.
+  At threshold 1.0 ("byte-exact") the pair must additionally be RGBA-identical — alpha included;
+  a breach fails with `L2207`, its summary giving the differing-pixel count, the first pixel and the MAE.
 - **Goldens are blessed per pinned OS.** The pinned tier is a per-(OS, GPU) pair, so each pinned
   platform keeps its own committed set under a per-OS subdirectory: `goldens/windows/<stem>.png`
   (RTX 3090) and `goldens/macos/<stem>.png` (Apple M4). `platform_dir()` resolves the host's
@@ -71,8 +73,8 @@ rationals — no `exp`, so the score is bit-identical everywhere; identical imag
 1.0). Only fully-inside windows count; the global score is their mean. The fixed **8×8 tile grid**
 only *localizes*: a window belongs to the tile holding its centre pixel and a tile scores its
 minimum window (a tile with no window centre — an image under 11 px — falls back to one flat
-window). Per tile, `color_error` is the largest of the R, G, B mean absolute channel differences
-(exact integer sums, alpha excluded). Luma is Rec. 709 over the sRGB-encoded bytes directly (no
+window). Per tile, `color_error` is the largest of the R, G, B and A mean absolute channel differences
+(exact integer sums, alpha included). Luma is Rec. 709 over the sRGB-encoded bytes directly (no
 linearization — the comparison cares about the pixels written to disk); alpha is excluded from
 SSIM. Constants are the textbook `k1 = 0.01`, `k2 = 0.03`, `L = 255`. `mean_absolute_error`
 (all four channels, 0–255 scale) stays the secondary signal. A small colour-only change below tile
