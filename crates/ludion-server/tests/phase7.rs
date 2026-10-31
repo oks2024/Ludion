@@ -183,7 +183,7 @@ fn needs_gpu_paused_engine_reloads_an_overwritten_texture_over_the_wire() {
 
     client.unsubscribe(frames).unwrap();
     client.unsubscribe(reloaded).unwrap();
-    server.shutdown();
+    server.shutdown_clean();
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -222,7 +222,7 @@ fn needs_gpu_watcher_forwards_a_disk_overwrite_as_a_reload() {
         eprintln!("SKIPPED watcher_forwards_a_disk_overwrite_as_a_reload: no GPU adapter");
         client.unsubscribe(frames).unwrap();
         client.unsubscribe(reloaded).unwrap();
-        server.shutdown();
+        server.shutdown_clean();
         let _ = std::fs::remove_dir_all(&root);
         return;
     }
@@ -257,7 +257,7 @@ fn needs_gpu_watcher_forwards_a_disk_overwrite_as_a_reload() {
 
     client.unsubscribe(frames).unwrap();
     client.unsubscribe(reloaded).unwrap();
-    server.shutdown();
+    server.shutdown_clean();
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -279,7 +279,7 @@ fn asset_reload_leaves_the_worldhash_trace_unchanged() {
         let h1 = client.sim_hash().unwrap().as_u64();
         client.sim_step(3, false).unwrap();
         let h2 = client.sim_hash().unwrap().as_u64();
-        server.shutdown();
+        server.shutdown_clean();
         (h0, h1, h2)
     };
 
@@ -308,7 +308,7 @@ fn asset_reload_leaves_the_worldhash_trace_unchanged() {
 
     client.sim_step(3, false).unwrap();
     let h2 = client.sim_hash().unwrap().as_u64();
-    server.shutdown();
+    server.shutdown_clean();
 
     assert_eq!(
         (h0, h1, h2),

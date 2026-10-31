@@ -224,7 +224,7 @@ fn needs_gpu_connect_spawn_step_screenshot_is_byte_identical_to_in_process() {
         "the screenshot applies after the 10 stepped ticks"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 // --- Exit criterion 2: a testkit suite runs over the wire ----------------------------------------
@@ -284,7 +284,7 @@ fn needs_gpu_testkit_ssim_comparison_runs_over_the_wire() {
         "ssim {:?} below the suite threshold {DEFAULT_SSIM_THRESHOLD}",
         report.ssim
     );
-    server.shutdown();
+    server.shutdown_clean();
 
     // --- Negative: a different scene over the wire fails the sprites golden, and the failure is
     // localized (real signal, not vacuous success). ---
@@ -317,7 +317,7 @@ fn needs_gpu_testkit_ssim_comparison_runs_over_the_wire() {
         bad.summary
     );
 
-    other_server.shutdown();
+    other_server.shutdown_clean();
 }
 
 // --- Exit criterion 3: a wire-driven recording replays to an identical hash sequence -------------
@@ -376,7 +376,7 @@ fn wire_recorded_session_replays_to_an_identical_hash_sequence() {
     // Shut down cleanly: joins the sim thread, drops the engine, and closes the (unbuffered) replay
     // file — every record is already on disk.
     drop(client);
-    server.shutdown();
+    server.shutdown_clean();
 
     let recorded = std::fs::read(&record_path).expect("recording file reads back");
 

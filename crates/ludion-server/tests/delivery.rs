@@ -250,7 +250,7 @@ fn scene_changed_events_deliver_then_stop_after_unsubscribe() {
         "no event may arrive on a closed subscription"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// **Subscription ownership.** A connection can close only the subscriptions it opened: another
@@ -289,7 +289,7 @@ fn another_connection_cannot_unsubscribe_a_sub_it_does_not_own() {
         "the owner's subscription survived the foreign unsubscribe"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// Reads text messages until an `EventMessage` for `sub` arrives (skipping request replies that race
@@ -410,7 +410,7 @@ fn needs_gpu_events_stay_gapless_while_frames_flow() {
          (audit finding 1.3); {load_replies}/{LOADS} loads were answered, got {seqs:?}",
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 // --- Frame delivery (GPU) ------------------------------------------------------------------------
@@ -458,7 +458,7 @@ fn needs_gpu_frames_deliver_as_qoi_encoded_binary_messages() {
         "decoded pixels match the header dimensions"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// **Frame delivery, LZ4.** A subscription naming `LZ4_RGBA` receives frames tagged with that format,
@@ -510,7 +510,7 @@ fn needs_gpu_frames_deliver_as_lz4_when_requested() {
         "the block decompresses to exactly one RGBA image of the header's dimensions"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// **Frame delivery, raw.** A subscription naming `RAW_RGBA` receives frames tagged with that format
@@ -563,7 +563,7 @@ fn needs_gpu_frames_deliver_as_raw_rgba_when_requested() {
         "the raw payload carries real pixels, not a zeroed buffer"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// **Per-format routing.** Three clients subscribe to `frames` with *different* codecs — one per
@@ -648,7 +648,7 @@ fn needs_gpu_mixed_format_subs_each_receive_their_own_format() {
         );
     }
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// **Stamped frame indices are monotonic (through the async streaming ring).** A resumed engine
@@ -693,7 +693,7 @@ fn needs_gpu_streamed_frame_indices_are_strictly_increasing() {
         "the stream must deliver at least two frames to compare indices, got {seen}"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// **Per-connection routing.** Two clients each open their own `frames` subscription; each receives
@@ -735,7 +735,7 @@ fn needs_gpu_two_clients_each_receive_only_their_own_sub() {
         );
     }
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// **max_fps throttling.** A `frames` subscription capped at 5 fps, read for ~1s, delivers far fewer
@@ -776,7 +776,7 @@ fn needs_gpu_max_fps_throttles_frame_delivery() {
         "max_fps=5 over ~1s must deliver far fewer than the unthrottled rate, got {count}"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// Reads until the reply for `id` arrives, counting how many binary frame messages arrived ahead of
@@ -900,7 +900,7 @@ fn needs_gpu_replies_do_not_queue_behind_frames() {
         "sim.hash round trips must still complete while frames stream; median {median:?}"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// **Disconnect cleanup.** A client subscribes to `frames`, then drops its connection. The server stays
@@ -939,5 +939,5 @@ fn needs_gpu_dropping_a_frames_client_leaves_the_server_healthy() {
         "the fresh client sees its own new sub"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }

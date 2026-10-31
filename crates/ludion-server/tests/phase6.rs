@@ -379,7 +379,7 @@ fn scripted_designer_session_meets_the_phase_6_exit_criteria() {
 
     // Shut down cleanly so the (unbuffered) recording flushes fully before we read it back.
     drop(client);
-    server.shutdown();
+    server.shutdown_clean();
     let recorded_bytes = std::fs::read(&record_path).expect("recording reads back");
 
     // --- (a) Minimal diff, mechanized -----------------------------------------------------------

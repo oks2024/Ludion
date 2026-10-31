@@ -207,7 +207,7 @@ fn needs_gpu_paused_engine_reloads_an_overwritten_voxel_model_over_the_wire() {
 
     client.unsubscribe(frames).unwrap();
     client.unsubscribe(reloaded).unwrap();
-    server.shutdown();
+    server.shutdown_clean();
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -245,7 +245,7 @@ fn voxel_reload_leaves_the_worldhash_trace_unchanged() {
 
         client.sim_step(3, false).unwrap();
         let h2 = client.sim_hash().unwrap().as_u64();
-        server.shutdown();
+        server.shutdown_clean();
         (h0, h1, h2)
     }
 

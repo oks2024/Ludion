@@ -351,6 +351,15 @@ impl Server {
         self.teardown()
     }
 
+    /// [`shutdown`](Server::shutdown) for tests: panics with the diagnostic if the sim thread did not
+    /// stop cleanly, so a sim-thread panic fails the test that caused it.
+    #[doc(hidden)]
+    pub fn shutdown_clean(self) {
+        if let Some(diagnostic) = self.shutdown() {
+            panic!("server did not shut down cleanly: {diagnostic:?}");
+        }
+    }
+
     /// The shared teardown used by both [`shutdown`](Server::shutdown) and [`Drop`] (which ignores
     /// the result: an explicit `shutdown` has already taken the sim handle by then).
     fn teardown(&mut self) -> Option<Diagnostic> {

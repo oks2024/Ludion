@@ -105,5 +105,5 @@ fn default_has_no_timeout_and_a_generous_timeout_still_succeeds() {
         .sim_hash()
         .expect("a call within the timeout budget succeeds");
 
-    server.shutdown();
+    server.shutdown_clean();
 }

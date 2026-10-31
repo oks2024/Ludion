@@ -256,7 +256,7 @@ fn run_fps_gate(format: FrameFormat) {
         eprintln!("{ceiling}");
     }
     let ceiling = ceiling.unwrap_or_default();
-    server.shutdown();
+    server.shutdown_clean();
 
     // The criterion is 30 fps. The root Cargo.toml sets `ludion-server`'s dev profile to
     // `debug-assertions = false` (opt-level 3 already optimizes the monomorphized QOI encode), so
@@ -444,7 +444,7 @@ fn needs_gpu_recorded_viewer_session_replays_to_an_identical_hash_sequence() {
     }
     client.unsubscribe(scene_sub).unwrap();
     drop(client);
-    server.shutdown();
+    server.shutdown_clean();
 
     let recorded = std::fs::read(&record_path).expect("recording file reads back");
 

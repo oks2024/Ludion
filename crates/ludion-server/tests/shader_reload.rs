@@ -217,7 +217,7 @@ fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
         "shader reload must not change the WorldHash"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -317,7 +317,7 @@ fn needs_gpu_dev_host_reloads_a_snippet_and_rebuilds_all_dependents() {
         "snippet reload must not change the WorldHash"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -345,6 +345,6 @@ fn non_dev_host_refuses_a_shader_reload_with_l2008() {
         "a shader reload without the dev flag is L2008: {err}"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
     let _ = std::fs::remove_dir_all(&root);
 }

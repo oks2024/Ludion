@@ -142,7 +142,7 @@ fn scene_changed_events_arrive_in_order_and_survive_an_interleaved_call() {
         "the second event bumps the sequence"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 /// `next_event` returns `Ok(None)` promptly when nothing is subscribed and nothing arrives — a
@@ -177,7 +177,7 @@ fn next_event_times_out_promptly_with_no_subscription() {
         "call must still work after next_event times out: {hash:?}"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
 
 // --- Frame flow (GPU, graceful skip) --------------------------------------------------------------
@@ -233,5 +233,5 @@ fn needs_gpu_frames_deliver_as_qoi_frames_matching_their_header_dimensions() {
         "decoded pixels match the header dimensions"
     );
 
-    server.shutdown();
+    server.shutdown_clean();
 }
