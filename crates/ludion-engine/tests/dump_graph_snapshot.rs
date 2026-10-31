@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use ludion_engine::QualitySetting;
-use ludion_renderer::{FrameSize, PostChain};
+use ludion_renderer::{AntiAliasing, FrameSize, PostChain};
 
 /// The committed canonical output at 64×64. `.gitattributes` forces LF, matching what the writer
 /// produces.
@@ -42,6 +42,26 @@ fn minimal_chain_dump_graph_matches_committed_snapshot() {
         json, SNAPSHOT,
         "dump-graph JSON drifted from the committed snapshot; if intended, regenerate \
          crates/ludion-engine/tests/snapshots/frame_graph_64x64.json",
+    );
+}
+
+/// The SMAA chain at 64×64: the minimal graph with the three AA passes behind `composite`.
+const SMAA_SNAPSHOT: &str = include_str!("snapshots/frame_graph_64x64_smaa.json");
+
+#[test]
+fn smaa_chain_dump_graph_matches_committed_snapshot() {
+    let json = ludion_engine::dump_frame_graph_json(
+        FrameSize::native(64, 64),
+        PostChain {
+            aa: AntiAliasing::Smaa,
+            ..PostChain::default()
+        },
+    )
+    .expect("the frame graph always schedules");
+    assert_eq!(
+        json, SMAA_SNAPSHOT,
+        "dump-graph JSON drifted from the committed snapshot; if intended, regenerate \
+         crates/ludion-engine/tests/snapshots/frame_graph_64x64_smaa.json",
     );
 }
 

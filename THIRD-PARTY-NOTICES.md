@@ -39,3 +39,11 @@ TTF always carries its licence beside it, and a copy lives under `licenses/`.
 - `examples/gallery/fonts/Silkscreen-Regular.ttf` — Silkscreen, "Copyright 2001 The Silkscreen Project
   Authors", from <https://github.com/google/fonts/tree/main/ofl/silkscreen>. Licence:
   `Silkscreen-OFL.txt`, copy `licenses/Silkscreen-OFL.txt`.
+
+## SMAA
+
+The SMAA lookup-table generator (`crates/ludion-renderer/src/smaa_lut.rs`) is a port of `Scripts/AreaTex.py` and
+`Scripts/SearchTex.py` from SMAA, "Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia,
+Fernando Navarro, Diego Gutierrez", from <https://github.com/iryoku/smaa>, under the MIT licence (with
+upstream's clarification that binary distributions need not carry the notice). Licence copy:
+`licenses/SMAA-MIT.txt`.

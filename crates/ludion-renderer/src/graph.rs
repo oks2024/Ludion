@@ -147,6 +147,13 @@
 //! composite ─► ldr ─► resample ─► ldr_resolved ─► overlay ─► final       [scaled, UI]
 //! ```
 //!
+//! With [`AntiAliasing::Smaa`] the composite writes `aa_input` instead, and three passes stand
+//! between it and the seam it would have written (`ldr`, or `final` when nothing follows):
+//!
+//! ```text
+//! composite ─► aa_input ─► smaa_edges ─► smaa_weights ─► smaa_blend ─► (ldr ─► …) | final
+//! ```
+//!
 //! where `resample` is [`resolve`](pass::RESOLVE) or [`upscale`](pass::UPSCALE) — one seam, one
 //! extra pass, whichever direction the scale went ([`FrameSize::resample`]).
 //!
@@ -296,10 +303,18 @@ pub mod pass {
     pub const DOF: &str = "dof";
     /// Scene + bloom composited, then exposure, the tonemap operator and the output dither, HDR→sRGB
     /// into the output (or into the `ldr` transient when UI is present or the frame is
-    /// supersampled). Everything that is a pure per-pixel function of already-sampled colour folds
+    /// supersampled), or into `aa_input` when SMAA runs. Everything that is a pure per-pixel function of already-sampled colour folds
     /// into this one pass rather than costing a full-resolution round trip of its own
     /// (`Plan/post-process-pipeline.md` decision 2).
     pub const COMPOSITE: &str = "composite";
+    /// SMAA luma edge detection over `aa_input` into `smaa_edges`. Only with
+    /// [`PostChain::smaa_scheduled`].
+    pub const SMAA_EDGES: &str = "smaa_edges";
+    /// SMAA blending weights from `smaa_edges`, looked up in the AreaTex and SearchTex tables.
+    pub const SMAA_WEIGHTS: &str = "smaa_weights";
+    /// SMAA neighbourhood blend of `aa_input` by `smaa_weights`, then grain and dither, into the
+    /// target `composite` would have written.
+    pub const SMAA_BLEND: &str = "smaa_blend";
     /// The supersampling downsample: an area-weighted box filter from the render extent to the
     /// output extent. Present only when
     /// [`FrameSize::supersampled`](crate::FrameSize::supersampled), and always after `composite` and
@@ -316,6 +331,39 @@ pub mod pass {
     /// Screen-space UI overlay: blit the tonemapped LDR image, then draw the sorted UI rects/text on
     /// top, into the output. Only present when the scene carries UI (`Plan/phase-14-ui.md` dec. 5).
     pub const OVERLAY: &str = "overlay";
+}
+
+/// The anti-aliasing a frame applies after `composite`: SMAA 1x with luma edge detection and the
+/// fixed HIGH constants, at the render extent and before any resample or overlay. A client setting
+/// like [`RenderScale`]: not scene content, not hashed, not on the wire.
+///
+/// # Example
+/// ```
+/// use ludion_renderer::AntiAliasing;
+///
+/// assert_eq!(AntiAliasing::default(), AntiAliasing::Off);
+/// assert_eq!(AntiAliasing::Smaa.name(), "smaa");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AntiAliasing {
+    /// No anti-aliasing: the graph is exactly the one without it.
+    #[default]
+    Off,
+    /// Subpixel morphological anti-aliasing, one sample per pixel.
+    Smaa,
+}
+
+impl AntiAliasing {
+    /// Every mode, in the order a client lists them.
+    pub const ALL: [AntiAliasing; 2] = [AntiAliasing::Off, AntiAliasing::Smaa];
+
+    /// The spelling used in summaries and by clients.
+    pub fn name(self) -> &'static str {
+        match self {
+            AntiAliasing::Off => "off",
+            AntiAliasing::Smaa => "smaa",
+        }
+    }
 }
 
 /// A validated render-scale factor: finite, at least `0.25`, at most `4.0`.
@@ -629,6 +677,10 @@ pub struct PostChain {
     /// `composite`, so it adds no pass. Set only when the scene asked for it **and** the frame fits
     /// cascades ([`sun_cascades`](PostChain::sun_cascades)): a view never conjures its subject.
     pub sun_cascade_view: bool,
+    /// The anti-aliasing the host asked for. A client setting like [`RenderScale`]: `for_scene` leaves
+    /// it [`Off`](AntiAliasing::Off), [`masked`](PostChain::masked) never changes it, and a debug view
+    /// suppresses it ([`smaa_scheduled`](PostChain::smaa_scheduled)).
+    pub aa: AntiAliasing,
     /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
     /// writing the `probe_live` transient (`MAX_PROBES`×6, `Rgba32Float`: one row per cube axis) that `reflections` reads
     /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
@@ -746,7 +798,19 @@ impl PostChain {
                 .iter()
                 .any(|d| matches!(d.blend, DecalBlend::Alpha | DecalBlend::Coat)),
             decal_receivers: !crate::projector::receiver_union(&scene.decals).is_empty(),
+            aa: AntiAliasing::Off,
         }
+    }
+
+    /// Whether this frame runs the SMAA passes: SMAA is selected and no debug view stands in for the
+    /// finished picture. The one predicate the graph and the recorder share. A view flag is only set
+    /// when its subject exists, so a view with nothing to show still draws an anti-aliased frame.
+    pub fn smaa_scheduled(self) -> bool {
+        self.aa == AntiAliasing::Smaa
+            && self.ssr_view.is_none()
+            && !self.probe_view
+            && !self.local_shadow_view
+            && !self.sun_cascade_view
     }
 
     /// The debug view this chain draws in place of the finished picture, if any.
@@ -868,6 +932,17 @@ struct AoTargets {
     raw: ResourceId,
     /// The blurred factor the scene pass samples.
     blurred: ResourceId,
+}
+
+/// The SMAA chain's transient targets, declared together when [`PostChain::smaa_scheduled`].
+#[derive(Clone, Copy)]
+struct SmaaTargets {
+    /// The tonemapped frame `composite` writes in place of `ldr`/`final`.
+    input: ResourceId,
+    /// The luma edge mask.
+    edges: ResourceId,
+    /// The blending weights.
+    weights: ResourceId,
 }
 
 /// The light-shaft chain's transient targets, declared together when [`PostChain::shafts`] is on.
@@ -1122,6 +1197,14 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // at the output extent whichever pass wrote it.
     let ldr_resolved = (overlay && resample.is_some())
         .then(|| graph.transient("ldr_resolved", TextureDesc::color(width, height)));
+    // The SMAA transients, declared last so every AA-off resource list is unchanged. All three are
+    // linear `Rgba16Float` at the render extent: the input must keep more than 8 bits (grain and
+    // dither move into the blend) and the edge and weight values must not go through an sRGB target.
+    let smaa = chain.smaa_scheduled().then(|| SmaaTargets {
+        input: graph.transient("aa_input", TextureDesc::hdr_color(render_w, render_h)),
+        edges: graph.transient("smaa_edges", TextureDesc::hdr_color(render_w, render_h)),
+        weights: graph.transient("smaa_weights", TextureDesc::hdr_color(render_w, render_h)),
+    });
 
     // Everything the scene pass samples, in the order `record_scene` unpacks `pass.inputs`. Every
     // entry is conditional, so the recorder indexes by which flags are set rather than by a fixed
@@ -1354,9 +1437,12 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         dof.gathered
     });
 
-    // The tail is a chain of at most three passes, each writing the output directly when it is the
+    // The tail is a chain of at most three passes (six with SMAA), each writing the output directly when it is the
     // last one. Every edge below is derived by the scheduler from the next pass's read.
     let composited = ldr.unwrap_or(output);
+    // With SMAA the composite (or a debug view's stand-in) writes `aa_input`, and the blend writes
+    // what the composite would have.
+    let composite_target = smaa.map_or(composited, |smaa| smaa.input);
     // `scene_depth` is read on **every** frame, not only a fogged one: making it conditional would
     // fork `composite` into two bind group layouts and two pipelines for one shader, which the
     // sunless frame's zeroed uniform plus 1×1 fallback depth already refuses to do. The cost is that
@@ -1378,27 +1464,47 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             pass::LOCAL_SHADOW_DEBUG,
             pass::LOCAL_SHADOW_DEBUG,
             vec![local_shadow_atlas.expect("the view implies an atlas")],
-            vec![composited],
+            vec![composite_target],
         ),
         _ if chain.probe_view => graph.add_external_pass(
             pass::PROBE_DEBUG,
             pass::PROBE_DEBUG,
             vec![surface_normal, scene_depth],
-            vec![composited],
+            vec![composite_target],
         ),
         (Some(_), Some(ssr)) => graph.add_external_pass(
             pass::SSR_DEBUG,
             pass::SSR_DEBUG,
             vec![ssr.trace],
-            vec![composited],
+            vec![composite_target],
         ),
         _ => graph.add_external_pass(
             pass::COMPOSITE,
             pass::COMPOSITE,
             composite_reads,
-            vec![composited],
+            vec![composite_target],
         ),
     };
+    if let Some(smaa) = smaa {
+        graph.add_external_pass(
+            pass::SMAA_EDGES,
+            pass::SMAA_EDGES,
+            vec![smaa.input],
+            vec![smaa.edges],
+        );
+        graph.add_external_pass(
+            pass::SMAA_WEIGHTS,
+            pass::SMAA_WEIGHTS,
+            vec![smaa.edges],
+            vec![smaa.weights],
+        );
+        graph.add_external_pass(
+            pass::SMAA_BLEND,
+            pass::SMAA_BLEND,
+            vec![smaa.input, smaa.weights],
+            vec![composited],
+        );
+    }
     let tail = match (ldr, resample) {
         (Some(ldr), Some(resample)) => {
             let target = ldr_resolved.unwrap_or(output);
@@ -1854,6 +1960,12 @@ mod tests {
                 decals: bits & 1 != 0,
                 lit_decals: bits & 1 != 0,
                 decal_receivers: bits & 1 != 0,
+                // A client setting: no quality preset masks it, so it varies with `ui` and survives.
+                aa: if bits & 1 != 0 {
+                    AntiAliasing::Smaa
+                } else {
+                    AntiAliasing::Off
+                },
             };
             // The march reads the shadow map, so no scene derives shafts without one. The sixteen
             // combinations that pair them are not chains that exist, and `masked` is free to clear
@@ -3702,6 +3814,194 @@ mod tests {
             ["ldr_resolved"],
         );
         assert_eq!(overlay.color_targets(), [output]);
+    }
+
+    // --- SMAA ------------------------------------------------------------------------------
+
+    fn smaa() -> PostChain {
+        PostChain {
+            aa: AntiAliasing::Smaa,
+            ..PostChain::default()
+        }
+    }
+
+    fn reads_of<'g>(graph: &'g RenderGraph, pass: &str) -> Vec<&'g str> {
+        let pass = graph.passes().iter().find(|p| p.name == pass).unwrap();
+        pass.reads()
+            .iter()
+            .map(|r| graph.resources()[r.index()].name.as_str())
+            .collect()
+    }
+
+    fn writes_of<'g>(graph: &'g RenderGraph, pass: &str) -> Vec<&'g str> {
+        let pass = graph.passes().iter().find(|p| p.name == pass).unwrap();
+        pass.color_targets()
+            .iter()
+            .map(|r| graph.resources()[r.index()].name.as_str())
+            .collect()
+    }
+
+    /// The AA-on graph is the AA-off graph of the same frame plus the three passes right after
+    /// `composite` and the three transients after every other resource, so the AA-off lists the
+    /// other tests pin stay prefixes. Returns the AA-on graph.
+    fn assert_smaa_extends(size: FrameSize, base: PostChain) -> RenderGraph {
+        let (off, _) = build_frame_graph(size, base);
+        let (on, _) = build_frame_graph(
+            size,
+            PostChain {
+                aa: AntiAliasing::Smaa,
+                ..base
+            },
+        );
+        let mut passes = pass_names(&off);
+        let at = passes.iter().position(|p| *p == "composite").unwrap() + 1;
+        passes.splice(at..at, ["smaa_edges", "smaa_weights", "smaa_blend"]);
+        assert_eq!(pass_names(&on), passes);
+        assert_eq!(schedule(&on).unwrap().order_names(), passes);
+        let mut resources = resource_names(&off);
+        resources.extend(["aa_input", "smaa_edges", "smaa_weights"]);
+        assert_eq!(resource_names(&on), resources);
+
+        assert_eq!(reads_of(&on, "smaa_edges"), ["aa_input"]);
+        assert_eq!(reads_of(&on, "smaa_weights"), ["smaa_edges"]);
+        assert_eq!(reads_of(&on, "smaa_blend"), ["aa_input", "smaa_weights"]);
+        assert_eq!(writes_of(&on, "composite"), ["aa_input"]);
+        assert_eq!(
+            writes_of(&on, "smaa_blend"),
+            writes_of(&off, "composite"),
+            "the blend writes what composite would have",
+        );
+        let (render_w, render_h) = (size.render.0, size.render.1);
+        for name in ["aa_input", "smaa_edges", "smaa_weights"] {
+            let r = on.resources().iter().find(|r| r.name == name).unwrap();
+            assert_eq!(
+                (r.desc.extent.width, r.desc.extent.height),
+                (render_w, render_h)
+            );
+            assert_eq!(r.desc.format, TextureDesc::hdr_color(1, 1).format, "{name}");
+        }
+        on
+    }
+
+    #[test]
+    fn smaa_native_graph_blends_into_the_output() {
+        let graph = assert_smaa_extends(FrameSize::native(960, 540), PostChain::default());
+        assert_eq!(writes_of(&graph, "smaa_blend"), ["final"]);
+    }
+
+    #[test]
+    fn smaa_with_ui_blends_into_ldr_before_the_overlay() {
+        let ui = PostChain {
+            ui: true,
+            ..PostChain::default()
+        };
+        let graph = assert_smaa_extends(FrameSize::native(960, 540), ui);
+        assert_eq!(writes_of(&graph, "smaa_blend"), ["ldr"]);
+        assert_eq!(reads_of(&graph, "overlay"), ["ldr"]);
+    }
+
+    /// Both resample directions: the AA runs at the render extent, before the resample.
+    #[test]
+    fn smaa_runs_at_the_render_extent_before_the_resample() {
+        let graph = assert_smaa_extends(ssaa(960, 540), PostChain::default());
+        assert_eq!(writes_of(&graph, "smaa_blend"), ["ldr"]);
+        assert_eq!(reads_of(&graph, "resolve"), ["ldr"]);
+        let graph = assert_smaa_extends(sub_native(960, 540), PostChain::default());
+        assert_eq!(writes_of(&graph, "smaa_blend"), ["ldr"]);
+        assert_eq!(reads_of(&graph, "upscale"), ["ldr"]);
+    }
+
+    #[test]
+    fn smaa_with_supersampling_and_ui_ends_resolve_then_overlay() {
+        let ui = PostChain {
+            ui: true,
+            ..PostChain::default()
+        };
+        let graph = assert_smaa_extends(ssaa(960, 540), ui);
+        let names = pass_names(&graph);
+        assert_eq!(
+            names[names.len() - 6..],
+            [
+                "composite",
+                "smaa_edges",
+                "smaa_weights",
+                "smaa_blend",
+                "resolve",
+                "overlay"
+            ],
+        );
+        assert_eq!(writes_of(&graph, "smaa_blend"), ["ldr"]);
+        assert_eq!(writes_of(&graph, "resolve"), ["ldr_resolved"]);
+    }
+
+    /// A debug view stands in for the finished picture, so no AA pass is scheduled behind it.
+    #[test]
+    fn a_debug_view_schedules_no_smaa() {
+        let views = [
+            PostChain {
+                ssr: Some(0.5),
+                ssr_view: Some(crate::DebugView::SsrConfidence),
+                ..PostChain::default()
+            },
+            PostChain {
+                probe_view: true,
+                ..PostChain::default()
+            },
+            PostChain {
+                local_shadow_atlas: Some(512),
+                local_shadow_view: true,
+                ..PostChain::default()
+            },
+            PostChain {
+                shadow_map: Some(1024),
+                sun_cascades: Some(2),
+                sun_cascade_view: true,
+                ..PostChain::default()
+            },
+        ];
+        for view in views {
+            assert!(
+                !PostChain {
+                    aa: AntiAliasing::Smaa,
+                    ..view
+                }
+                .smaa_scheduled()
+            );
+            let size = FrameSize::native(64, 64);
+            let (off, _) = build_frame_graph(size, view);
+            let (on, _) = build_frame_graph(
+                size,
+                PostChain {
+                    aa: AntiAliasing::Smaa,
+                    ..view
+                },
+            );
+            assert_eq!(pass_names(&on), pass_names(&off), "{view:?}");
+            assert_eq!(resource_names(&on), resource_names(&off), "{view:?}");
+        }
+        assert!(smaa().smaa_scheduled());
+        assert!(!PostChain::default().smaa_scheduled());
+    }
+
+    /// No quality preset masks the AA: a machine's `low` keeps SMAA at its reduced extent.
+    #[test]
+    fn masking_never_changes_the_anti_aliasing() {
+        for (quality, params) in [
+            (Quality::FULL, QualityParams::FULL),
+            (Quality::LOW, QualityParams::LOW),
+        ] {
+            assert_eq!(smaa().masked(&quality, &params).aa, AntiAliasing::Smaa);
+        }
+    }
+
+    #[test]
+    fn anti_aliasing_lists_and_names_every_mode() {
+        assert_eq!(AntiAliasing::default(), AntiAliasing::Off);
+        assert_eq!(AntiAliasing::ALL.map(AntiAliasing::name), ["off", "smaa"]);
+        assert_eq!(
+            PostChain::for_scene(&RenderScene::empty((64, 64))).aa,
+            AntiAliasing::Off
+        );
     }
 
     // --- Sub-native rendering (Plan/scalability.md) ---------------------------------------

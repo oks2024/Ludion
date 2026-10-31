@@ -1168,7 +1168,7 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 42] = [
+const KNOWN_PASS_NAMES: [&str; 45] = [
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
     ludion_renderer::graph::pass::PREPASS,
@@ -1208,6 +1208,9 @@ const KNOWN_PASS_NAMES: [&str; 42] = [
     ludion_renderer::graph::pass::BLOOM_UP[3],
     ludion_renderer::graph::pass::BLOOM_UP[4],
     ludion_renderer::graph::pass::COMPOSITE,
+    ludion_renderer::graph::pass::SMAA_EDGES,
+    ludion_renderer::graph::pass::SMAA_WEIGHTS,
+    ludion_renderer::graph::pass::SMAA_BLEND,
     ludion_renderer::graph::pass::RESOLVE,
     ludion_renderer::graph::pass::UPSCALE,
     ludion_renderer::graph::pass::OVERLAY,
@@ -3492,6 +3495,14 @@ entities:
             decals: true,
             lit_decals: true,
             decal_receivers: true,
+            aa: ludion_renderer::AntiAliasing::Off,
+        };
+        // A debug view replaces the AA, so the SMAA passes are only producible with every view off.
+        let smaa = PostChain {
+            aa: ludion_renderer::AntiAliasing::Smaa,
+            ssr_view: None,
+            probe_view: false,
+            ..everything
         };
         let sizes = [
             FrameSize::native(1280, 720),
@@ -3499,7 +3510,7 @@ entities:
             FrameSize::scaled(1280, 720, RenderScale::new(0.5).unwrap()),
         ];
         for size in sizes {
-            for chain in [PostChain::default(), everything] {
+            for chain in [PostChain::default(), everything, smaa] {
                 let json = dump_frame_graph_json(size, chain).expect("the graph schedules");
                 let dump: serde_json::Value = serde_json::from_str(&json).unwrap();
                 for pass in dump["passes"].as_array().expect("passes array") {
