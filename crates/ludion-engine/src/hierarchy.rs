@@ -224,8 +224,9 @@ type Memo = (Option<Affine3>, u32);
 /// A node may carry a **posed local** ([`set_posed`](WorldAffines::set_posed)): a presentation-only
 /// pose that replaces its stored `Transform` in the fold, so the entities below it follow. Poses are
 /// set before the first lookup of a batch (a memo would hold the stale fold). Only the batch that
-/// owns the table sees them: a light, camera or probe built with a fresh table draws from the stored
-/// pose.
+/// owns the table sees them: the extract batch (point and spot lights, rendered probes, decals,
+/// particles) follows, while a camera, the sun, the `probes` debug lines and colliders are built
+/// with a fresh table and draw from the stored pose.
 pub(crate) struct WorldAffines {
     memo: SlotTable<Memo>,
     posed: SlotTable<Trs>,

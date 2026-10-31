@@ -209,6 +209,75 @@ fn two_instances_of_one_prefab_play_their_own_clips() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A point light under a posed part follows the clip in the extracted scene while its stored
+/// `Transform` does not move.
+#[test]
+fn a_point_light_under_a_posed_part_follows_the_clip() {
+    let root = fixture_project("light");
+    let scene = "\
+format: 1
+seed: 1
+entities:
+  - name: opening
+    prefab: hinge/model.prefab.yaml
+    overrides:
+      base:
+        Animation:
+          clip: open
+      latch:
+        PointLight: {}
+";
+    let engine = engine_with(&root, scene);
+    let lights_at = |tick: u64| {
+        extract_at(
+            engine.world(),
+            (320, 180),
+            engine.project_root(),
+            SimTime::from_ticks(tick, TickRate::DEFAULT),
+            QualityParams::FULL.particle_density,
+        )
+        .expect("the fixture world extracts")
+        .lights
+    };
+    let (start, mid) = (lights_at(0), lights_at(18));
+    assert_eq!(start.len(), 1);
+    assert_eq!(mid.len(), 1);
+    assert_ne!(
+        mid[0].position, start[0].position,
+        "the light rode the lid's clip"
+    );
+    let latch = engine
+        .world()
+        .entities()
+        .find(|&id| {
+            engine
+                .world()
+                .get::<ludion_engine::PointLight>(id)
+                .unwrap()
+                .is_some()
+        })
+        .expect("the latch carries the light");
+    let stored = engine
+        .world()
+        .get::<Transform>(latch)
+        .unwrap()
+        .unwrap()
+        .translation;
+    let _ = lights_at(18);
+    assert_eq!(
+        engine
+            .world()
+            .get::<Transform>(latch)
+            .unwrap()
+            .unwrap()
+            .translation,
+        stored,
+        "the stored Transform never moves"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The sim half: an animated run's per-frame `WorldHash` trace and recorded `.lrp` are identical
 /// whether or not frames are extracted along the way, and no stored `Transform` changes.
 #[test]

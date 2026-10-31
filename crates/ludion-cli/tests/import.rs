@@ -198,6 +198,42 @@ fn tinted_emissive_import_reproduces_committed_tree_in_default_mode() {
     }
 }
 
+/// The gallery hinge prefab is a copy of the fixture's expected tree with only `generated_from`
+/// re-pointed, so it cannot drift from what the importer produces.
+#[test]
+fn the_committed_gallery_hinge_matches_the_node_clips_fixture() {
+    let gallery =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/prefabs/hinge");
+    let expected = node_clips_root().join("expected");
+    let mut gallery_files = collect_files(&gallery);
+    let mut expected_files = collect_files(&expected);
+    gallery_files.sort();
+    expected_files.sort();
+    assert_eq!(
+        gallery_files, expected_files,
+        "the two trees hold different files"
+    );
+    let without_origin = |path: PathBuf| {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with("generated_from:"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            )
+    };
+    for rel in &expected_files {
+        assert_eq!(
+            without_origin(gallery.join(rel)),
+            without_origin(expected.join(rel)),
+            "gallery `{}` drifted from the fixture",
+            rel.display()
+        );
+    }
+}
+
 /// The hinge fixture (`examples/import-node-clips/`) imports in **default mode** — no
 /// `--allow-lossy`, no warning — and reproduces its committed tree byte-for-byte: the prefab lists
 /// its two part clips in `clips:`, and the STEP clip keeps `ease: step`.

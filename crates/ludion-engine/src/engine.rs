@@ -2871,6 +2871,15 @@ impl Engine {
     ) -> Result<crate::PrefabApplied, Vec<Diagnostic>> {
         let result = crate::prefab_ops::apply(self.driver.world_mut(), instance, parts);
         self.drain_prefab_texts();
+        if let Ok(applied) = &result {
+            // The rewritten prefab is a source of its cached clip rests: re-read them now, or a
+            // part would pose against the old rest. A failed re-read leaves the entry dropped for
+            // the next extract to report.
+            let root = self.project_root().to_path_buf();
+            if let Some(key) = self.asset_cache().resolve_key(&root, &applied.path) {
+                let _ = self.asset_cache_mut().reload(&root, &key);
+            }
+        }
         result
     }
 
@@ -6048,5 +6057,72 @@ entities:
         assert!(logs[0].message.contains("recording stopped"));
         let failure = engine.stop_recording().expect_err("the death is returned");
         assert_eq!(failure.code.as_str(), "L3042");
+    }
+    ///  on a hand-authored prefab re-reads the clip rests the engine's cache holds:
+    /// the lid then poses exactly as in a fresh extract over the rewritten file.
+    #[test]
+    fn apply_prefab_refreshes_the_cached_clip_rests() {
+        let scene = "format: 1
+seed: 1
+entities:
+  - name: opening
+    prefab: hinge/model.prefab.yaml
+    overrides:
+      base:
+        Animation:
+          clip: open
+";
+        let root = std::env::temp_dir().join(format!("ludion-apply-rests-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-node-clips/expected");
+        for file in [
+            "model.prefab.yaml",
+            "clips/open.anim.yaml",
+            "clips/snap.anim.yaml",
+            "meshes/base.mesh.yaml",
+            "meshes/lid.mesh.yaml",
+            "meshes/latch.mesh.yaml",
+        ] {
+            let to = root.join("hinge").join(file);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(source.join(file), to).unwrap();
+        }
+        let file = root.join("hinge/model.prefab.yaml");
+        let hand_authored: String = std::fs::read_to_string(&file)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with("generated_from"))
+            .map(|line| {
+                format!(
+                    "{line}
+"
+                )
+            })
+            .collect();
+        std::fs::write(&file, hand_authored).unwrap();
+
+        let mut engine = Engine::with_project_root(&root);
+        engine.load_inline_scene(scene).expect("the scene loads");
+        engine.extract_render_scene(320, 180).expect("extracts");
+        let ids: Vec<_> = engine.world().entities().collect();
+        let mut moved = *engine.world().get::<Transform>(ids[1]).unwrap().unwrap();
+        moved.rotation[0] += 10.0;
+        engine.world_mut().insert(ids[1], moved).unwrap();
+        engine.apply_prefab(ids[0], None).expect("applies");
+
+        let after = engine
+            .extract_render_scene(320, 180)
+            .expect("extracts")
+            .meshes;
+        let mut fresh = Engine::with_project_root(&root);
+        fresh.load_inline_scene(scene).expect("the scene loads");
+        let fresh = fresh
+            .extract_render_scene(320, 180)
+            .expect("extracts")
+            .meshes;
+        assert_eq!(after[1].model, fresh[1].model);
+        assert_eq!(after[2].model, fresh[2].model);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
