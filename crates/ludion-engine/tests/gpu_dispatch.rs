@@ -332,6 +332,7 @@ fn needs_gpu_render_debug_view_draws_the_ssr_view_the_cli_draws() {
         0,
         &ludion_engine::DebugCategories::None,
         Some(ludion_engine::DebugView::SsrConfidence),
+        ludion_engine::AntiAliasing::Off,
     )
     .unwrap();
     assert_eq!(

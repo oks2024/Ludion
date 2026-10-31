@@ -121,6 +121,18 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::{EngineBuilder, ProbeSource, TextureSource};
 
+/// The `--aa` value parser: the names of [`ludion_engine::AntiAliasing::ALL`], clap refusing the rest.
+#[cfg(feature = "wire")]
+fn aa_value_parser() -> impl clap::builder::TypedValueParser<Value = ludion_engine::AntiAliasing> {
+    use clap::builder::TypedValueParser;
+    clap::builder::PossibleValuesParser::new(
+        ludion_engine::AntiAliasing::ALL.map(ludion_engine::AntiAliasing::name),
+    )
+    .map(|name| {
+        ludion_engine::AntiAliasing::from_name(&name).expect("clap admits only a listed name")
+    })
+}
+
 /// `ludion::run`'s fixed argument set, mirroring `ludion serve` so a game's own binary and the CLI
 /// host a scene the same way.
 #[cfg(feature = "wire")]
@@ -310,6 +322,13 @@ pub(crate) struct RunArgs {
     /// that is neither a preset nor a usable file is `L0016` and refuses to start.
     #[arg(long, value_name = "PRESET|FILE")]
     quality: Option<String>,
+    /// Anti-aliasing mode: `off` (the default) or `smaa`, SMAA 1x after composite. The host's choice:
+    /// it beats the builder's default and loses to the game's own runtime choice (an options menu).
+    /// Render-only, so no `WorldHash` or recording moves. Ignored by `--replay-frames`,
+    /// `--replay-verify`, `--profile-replay` and `--bake-probes`, whose artifacts are compared across
+    /// machines.
+    #[arg(long, value_name = "off|smaa", value_parser = aa_value_parser())]
+    aa: Option<ludion_engine::AntiAliasing>,
     /// Mesh-map source: `cooked` loads BC7/ASTC maps `ludion sync` wrote, falling back per map to the
     /// PNG with an L1271 warning; `source` decodes the PNGs. Live hosting defaults to `cooked`,
     /// `--profile` to `source`. Verification modes always render `source`.
@@ -503,6 +522,7 @@ pub fn run(builder: EngineBuilder) -> ExitCode {
         scene: Some(scene),
         threads: args.threads,
         quality: args.quality,
+        anti_aliasing: args.aa,
         textures: args.textures.as_deref().and_then(TextureSource::from_name),
         probes: Some(ProbeSource::from_flag(args.probes.as_deref())),
         render_size: args.render_size,
@@ -665,6 +685,7 @@ pub(crate) fn run_short_circuit(
             args.frames.unwrap_or(0),
             &quality,
             &ludion_engine::DebugCategories::parse(args.debug_draw.as_deref().unwrap_or_default()),
+            args.aa,
         ));
     }
 
@@ -679,6 +700,7 @@ pub(crate) fn run_short_circuit(
             frames,
             args.profile_check.as_deref(),
             quality,
+            args.aa,
             args.textures
                 .as_deref()
                 .and_then(TextureSource::from_name)
@@ -1281,7 +1303,13 @@ fn run_render_out(
     frames: u64,
     quality: &ludion_engine::QualitySetting,
     debug: &ludion_engine::DebugCategories,
+    anti_aliasing: Option<ludion_engine::AntiAliasing>,
 ) -> ExitCode {
+    // No host mode exists on this path, so the builder level resolves identically to one.
+    let builder = match anti_aliasing {
+        Some(mode) => builder.anti_aliasing(mode),
+        None => builder,
+    };
     match render_scene_out(
         builder.observe_load(),
         scene,
@@ -1413,6 +1441,7 @@ fn run_profile(
     frames: u64,
     check: Option<&Path>,
     quality: ludion_engine::QualitySetting,
+    anti_aliasing: Option<ludion_engine::AntiAliasing>,
     textures: TextureSource,
 ) -> ExitCode {
     let mut engine = match builder.observe_load().load_scene_file(scene) {
@@ -1423,6 +1452,9 @@ fn run_profile(
         }
     };
     engine.set_quality(quality);
+    if let Some(mode) = anti_aliasing {
+        engine.set_anti_aliasing(mode);
+    }
     engine.set_textures(textures);
 
     let warmup = ludion_engine::warmup_for(frames);
@@ -2211,6 +2243,26 @@ mod host_diagnostic_tests {
             ];
             assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
         }
+    }
+
+    #[test]
+    fn aa_parses_a_mode_and_refuses_the_rest() {
+        use clap::builder::TypedValueParser;
+        use ludion_engine::AntiAliasing;
+
+        assert_eq!(RunArgs::try_parse_from(["game"]).unwrap().aa, None);
+        let parsed = RunArgs::try_parse_from(["game", "--aa", "smaa"]).unwrap();
+        assert_eq!(parsed.aa, Some(AntiAliasing::Smaa));
+        assert!(RunArgs::try_parse_from(["game", "--aa", "bogus"]).is_err());
+        let listed: Vec<_> = aa_value_parser()
+            .possible_values()
+            .expect("a possible-values parser lists its values")
+            .map(|value| value.get_name().to_string())
+            .collect();
+        assert_eq!(
+            listed,
+            AntiAliasing::ALL.map(|mode| mode.name().to_string())
+        );
     }
 
     #[test]

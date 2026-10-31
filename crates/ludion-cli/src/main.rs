@@ -82,6 +82,17 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 
+/// The `--aa` value parser: the names of [`ludion_engine::AntiAliasing::ALL`], clap refusing the rest.
+fn aa_value_parser() -> impl clap::builder::TypedValueParser<Value = ludion_engine::AntiAliasing> {
+    use clap::builder::TypedValueParser;
+    clap::builder::PossibleValuesParser::new(
+        ludion_engine::AntiAliasing::ALL.map(ludion_engine::AntiAliasing::name),
+    )
+    .map(|name| {
+        ludion_engine::AntiAliasing::from_name(&name).expect("clap admits only a listed name")
+    })
+}
+
 /// The `ludion` command-line tool.
 #[derive(Debug, Parser)]
 #[command(name = "ludion", version, about = "The Ludion engine CLI", long_about = None)]
@@ -694,6 +705,12 @@ enum Command {
         /// this.
         #[arg(long, conflicts_with = "model")]
         scale: Option<f32>,
+        /// Anti-aliasing mode: `off` (the default) or `smaa`, SMAA 1x after composite. Applies to a plain `--scene` render; `--sweep`, `--frames` strips and the authoring
+        /// instruments (`--model`, `--sprite`, `--atlas`) ignore it, as they ignore `--quality`. A host
+        /// quality setting like `--scale`: no hash, golden or replay moves. The game's own
+        /// options-menu choice beats it.
+        #[arg(long, value_name = "off|smaa", value_parser = aa_value_parser())]
+        aa: Option<ludion_engine::AntiAliasing>,
     },
     /// Capture a scene's reflection probes into the probe store (`.ludion/cooked/probes/` beside the
     /// scene) and print one line per probe: its name, store key and whether it was `captured` now or
@@ -731,6 +748,11 @@ enum Command {
         /// quality builds.
         #[arg(long)]
         scale: Option<f32>,
+        /// Anti-aliasing mode: `off` (the default) or `smaa`, SMAA 1x after composite. The dump lists the three `smaa_*` passes after `composite`. A host
+        /// quality setting like `--scale`: no hash, golden or replay moves. The game's own
+        /// options-menu choice beats it.
+        #[arg(long, value_name = "off|smaa", value_parser = aa_value_parser())]
+        aa: Option<ludion_engine::AntiAliasing>,
     },
     /// Run (or bless) a directory's golden-image test suite: every `*.yaml`/`*.yml` scene directly
     /// inside `--dir`, each compared against `<dir>/goldens/<os>/<scene-stem>.png` (goldens are
@@ -787,6 +809,11 @@ enum Command {
         /// and leaves the store alone.
         #[arg(long, value_name = "store|rebake", value_parser = ["store", "rebake"])]
         probes: Option<String>,
+        /// Anti-aliasing mode: `off` (the default) or `smaa`, SMAA 1x after composite. Every frame this host renders, screenshots and the live stream alike. A host
+        /// quality setting like `--scale`: no hash, golden or replay moves. The game's own
+        /// options-menu choice beats it.
+        #[arg(long, value_name = "off|smaa", value_parser = aa_value_parser())]
+        aa: Option<ludion_engine::AntiAliasing>,
     },
     /// Compile a foreign format into canonical Ludion text: a glTF (`.gltf`/`.glb`) into a `kind: prefab`
     /// plus its mesh, animation-clip and texture assets, or a `.png` into an editable
@@ -942,6 +969,11 @@ enum Command {
         /// only (conflicts with `--attach`).
         #[arg(long)]
         scale: Option<f32>,
+        /// Anti-aliasing mode: `off` (the default) or `smaa`, SMAA 1x after composite. Measures the GPU passes with it on. Offline only (conflicts with `--attach`). A host
+        /// quality setting like `--scale`: no hash, golden or replay moves. The game's own
+        /// options-menu choice beats it.
+        #[arg(long, value_name = "off|smaa", value_parser = aa_value_parser(), conflicts_with = "attach")]
+        aa: Option<ludion_engine::AntiAliasing>,
         /// Write a Chrome trace-event JSON (openable at ui.perfetto.dev) to this path. Works with
         /// both `--scene` and `--attach`: the offline driver fills the report's per-frame samples
         /// itself, and an `--attach` capture requests them automatically whenever `--perfetto` is
@@ -970,6 +1002,11 @@ enum Command {
         /// launch, so a reload captures its probes afresh instead of reading the probe store.
         #[arg(long, value_name = "store|rebake", value_parser = ["store", "rebake"])]
         probes: Option<String>,
+        /// Anti-aliasing mode: `off` (the default) or `smaa`, SMAA 1x after composite. Forwarded to every launch of the game. A host
+        /// quality setting like `--scale`: no hash, golden or replay moves. The game's own
+        /// options-menu choice beats it.
+        #[arg(long, value_name = "off|smaa", value_parser = aa_value_parser())]
+        aa: Option<ludion_engine::AntiAliasing>,
     },
     /// Compile a `kind: map` source into a canonical scene of concrete entities — the map-authoring
     /// pipeline's deterministic compile verb (mirrors `import`). Resolves the map's `kit:` and each
@@ -2007,6 +2044,7 @@ fn main() -> std::process::ExitCode {
             distance,
             fov,
             scale,
+            aa,
             true_size,
             clip,
             time,
@@ -2123,6 +2161,7 @@ fn main() -> std::process::ExitCode {
                     fov,
                 },
                 scale,
+                anti_aliasing: aa.unwrap_or_default(),
                 true_size,
                 clip: clip.as_deref(),
                 time,
@@ -2143,7 +2182,15 @@ fn main() -> std::process::ExitCode {
             width,
             height,
             scale,
-        } => dump_graph::run(&scene, width, height, scale, &quality),
+            aa,
+        } => dump_graph::run(
+            &scene,
+            width,
+            height,
+            scale,
+            aa.unwrap_or_default(),
+            &quality,
+        ),
         Command::Test { dir, bless, filter } => test::run(&dir, bless, filter.as_deref()),
         Command::Serve {
             scene,
@@ -2154,6 +2201,7 @@ fn main() -> std::process::ExitCode {
             dev_shaders,
             scale,
             probes,
+            aa,
         } => serve::run(
             &scene,
             &addr,
@@ -2162,6 +2210,7 @@ fn main() -> std::process::ExitCode {
             window,
             dev_shaders,
             scale,
+            aa,
             quality,
             render_size,
             probes.as_deref(),
@@ -2196,6 +2245,7 @@ fn main() -> std::process::ExitCode {
             json,
             check,
             scale,
+            aa,
             perfetto,
         } => match attach {
             Some(url) => profile::run_attach(
@@ -2213,6 +2263,7 @@ fn main() -> std::process::ExitCode {
                     json.as_deref(),
                     check.as_deref(),
                     scale,
+                    aa,
                     perfetto.as_deref(),
                     quality,
                 )
@@ -2242,11 +2293,13 @@ fn main() -> std::process::ExitCode {
             addr,
             window,
             probes,
+            aa,
         } => dev::run(
             scene.as_deref(),
             &addr,
             window,
             probes.as_deref() == Some("rebake"),
+            aa,
         ),
         Command::GenerateMap { maps, out, check } => {
             generate_map::run(&maps, out.as_deref(), check)
@@ -2345,5 +2398,43 @@ fn main() -> std::process::ExitCode {
                 palette_from,
             } => sculpt::run_new(&out, name.as_deref(), palette_from.as_deref()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aa_flag_lists_exactly_the_modes_and_refuses_the_rest() {
+        let parser = aa_value_parser();
+        let listed: Vec<_> = clap::builder::TypedValueParser::possible_values(&parser)
+            .expect("a possible-values parser lists its values")
+            .map(|value| value.get_name().to_string())
+            .collect();
+        assert_eq!(
+            listed,
+            ludion_engine::AntiAliasing::ALL.map(|mode| mode.name().to_string())
+        );
+
+        assert!(
+            Cli::try_parse_from(["ludion", "dump-graph", "--scene", "x", "--aa", "bogus"]).is_err()
+        );
+        let parsed = Cli::try_parse_from(["ludion", "dump-graph", "--scene", "x", "--aa", "smaa"])
+            .expect("a listed mode parses");
+        assert!(matches!(
+            parsed.command,
+            Command::DumpGraph {
+                aa: Some(ludion_engine::AntiAliasing::Smaa),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn profile_attach_refuses_aa() {
+        assert!(
+            Cli::try_parse_from(["ludion", "profile", "--attach", "u", "--aa", "smaa"]).is_err()
+        );
     }
 }

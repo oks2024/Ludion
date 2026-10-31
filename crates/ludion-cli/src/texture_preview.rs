@@ -348,6 +348,7 @@ pub fn render(dir: &Path, recipe: &str, refs: &MapRefs) -> Result<Outcome, Vec<D
         0,
         &DebugCategories::default(),
         None,
+        ludion_engine::AntiAliasing::Off,
     );
     match rendered {
         Ok(outcome) => {

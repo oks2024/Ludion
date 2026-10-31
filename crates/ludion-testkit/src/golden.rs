@@ -429,6 +429,7 @@ impl GoldenTest {
                     self.frames,
                     &self.debug_draw,
                     self.debug_view,
+                    ludion_engine::AntiAliasing::Off,
                 )?;
                 (outcome.image, outcome.adapter)
             }

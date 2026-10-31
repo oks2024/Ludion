@@ -27,8 +27,8 @@ use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
 use ludion_protocol::perf::LoadProfile;
 use ludion_renderer::{
-    DebugView, FrameSize, GpuUploads, PostChain, QualityParams, RenderScene, RenderedImage,
-    Renderer,
+    AntiAliasing, DebugView, FrameSize, GpuUploads, PostChain, QualityParams, RenderScene,
+    RenderedImage, Renderer,
 };
 use ludion_scene::{AppliedOverride, SceneOverride};
 use ludion_sim::SimDriver;
@@ -88,6 +88,7 @@ pub fn render_scene(
         0,
         &DebugCategories::None,
         None,
+        AntiAliasing::Off,
     )
 }
 
@@ -115,6 +116,7 @@ pub fn render_scene(
 ///
 /// `quality` is the caller's own — this path builds a one-shot renderer, so nothing else can supply
 /// it. [`QualitySetting::full`] renders every effect the scene authors, at every axis's ceiling.
+/// `anti_aliasing` is likewise the caller's: this path has no builder or host to resolve it from.
 ///
 /// # Errors
 /// As [`render_scene`], plus `L1013` if the scene names a component `registry` does not know, and
@@ -130,6 +132,7 @@ pub fn render_scene_with_registry(
     frames: u64,
     debug: &DebugCategories,
     view: Option<DebugView>,
+    anti_aliasing: AntiAliasing,
 ) -> Result<RenderOutcome, Vec<Diagnostic>> {
     let (mut render_scene, applied_overrides, debug_drawn) = extract_scene_file(
         registry,
@@ -145,6 +148,7 @@ pub fn render_scene_with_registry(
     // GPU work happens only now, after all CPU-side validation has passed.
     let mut renderer = Renderer::new().map_err(|d| vec![d])?;
     renderer.set_quality(quality.quality, quality.params);
+    renderer.set_anti_aliasing(anti_aliasing);
     let adapter = format!(
         "{} ({})",
         renderer.adapter_name(),
@@ -321,6 +325,7 @@ pub fn dump_scene_graph_json(
     path: &Path,
     size: FrameSize,
     quality: &QualitySetting,
+    anti_aliasing: AntiAliasing,
 ) -> Result<String, Vec<Diagnostic>> {
     // The graph is a statement about which passes run, and particles are drawn inside the `scene`
     // pass whatever their count — so this path extracts at full density regardless of `quality`,
@@ -336,7 +341,10 @@ pub fn dump_scene_graph_json(
     )?;
     ludion_renderer::dump_frame_graph_json(
         size,
-        PostChain::for_scene(&scene).masked(&quality.quality, &quality.params),
+        PostChain {
+            aa: anti_aliasing,
+            ..PostChain::for_scene(&scene).masked(&quality.quality, &quality.params)
+        },
     )
     .map_err(|d| vec![d])
 }

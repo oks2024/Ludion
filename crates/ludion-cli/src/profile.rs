@@ -61,6 +61,7 @@ pub fn run(
     json_out: Option<&Path>,
     check: Option<&Path>,
     scale: Option<f32>,
+    anti_aliasing: Option<ludion_engine::AntiAliasing>,
     perfetto_out: Option<&Path>,
     quality: ludion_engine::QualitySetting,
 ) -> ExitCode {
@@ -71,13 +72,19 @@ pub fn run(
             return ExitCode::FAILURE;
         }
     };
-    let report =
-        match ludion_engine::profile_scene(scene, frames, warmup_for(frames), scale, quality) {
-            Ok(report) => report,
-            Err(diagnostics) => {
-                return crate::diagnostic::report(scene, &diagnostics);
-            }
-        };
+    let report = match ludion_engine::profile_scene(
+        scene,
+        frames,
+        warmup_for(frames),
+        scale,
+        anti_aliasing,
+        quality,
+    ) {
+        Ok(report) => report,
+        Err(diagnostics) => {
+            return crate::diagnostic::report(scene, &diagnostics);
+        }
+    };
 
     finish(&report, json_out, check, perfetto_out)
 }

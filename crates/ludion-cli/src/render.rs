@@ -158,6 +158,8 @@ pub struct Request<'a> {
     /// `quality`'s. In sprite mode the whole-number game scale of the sheet's second block, and in
     /// atlas-clip mode the whole-number scale the flipbook instrument draws at.
     pub scale: Option<f32>,
+    /// `--aa` (plain scene mode): the anti-aliasing the one-shot renderer applies; `Off` when absent.
+    pub anti_aliasing: ludion_engine::AntiAliasing,
     /// `--true-size` (model mode).
     pub true_size: bool,
     /// `--clip` (model mode: the assembly clip to pose with; atlas mode: the flipbook to draw).
@@ -252,6 +254,7 @@ pub fn run(request: &Request) -> ExitCode {
                     request.quality,
                     &DebugCategories::parse(request.debug_draw.unwrap_or_default()),
                     request.debug_view,
+                    request.anti_aliasing,
                 ),
             }
         }
@@ -282,6 +285,7 @@ fn run_scene(
     quality: &QualitySetting,
     debug: &DebugCategories,
     view: Option<ludion_engine::DebugView>,
+    anti_aliasing: ludion_engine::AntiAliasing,
 ) -> ExitCode {
     let overrides = match parse_overrides(set) {
         Ok(overrides) => overrides,
@@ -337,6 +341,7 @@ fn run_scene(
         frames,
         debug,
         view,
+        anti_aliasing,
     ) {
         Ok(outcome) => {
             for applied in &outcome.applied_overrides {

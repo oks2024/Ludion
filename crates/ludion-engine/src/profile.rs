@@ -66,6 +66,8 @@ pub use ludion_protocol::perf::{
 /// another, so the pixel count is part of what the report describes. A missing GPU is not an error —
 /// the sim section is still measured and the GPU section reports `available: false`.
 ///
+/// `anti_aliasing` is the caller's host-level mode; `None` leaves the engine's default (`Off`).
+///
 /// `quality` is this machine's render quality ([`resolve_startup_quality`](crate::resolve_startup_quality)):
 /// it decides which optional effects the measured frames render, how hard each works, and — absent a
 /// `scale` — how many pixels they cover. It is reported back in [`ProfileReport::quality`] so a
@@ -85,7 +87,7 @@ pub use ludion_protocol::perf::{
 /// // adapterless host the GPU section reports `available: false`; the sim section is always
 /// // measured.
 /// let quality = ludion_engine::QualitySetting::default();
-/// let report = profile_scene(Path::new("scenes/main.yaml"), 60, 5, None, quality)?;
+/// let report = profile_scene(Path::new("scenes/main.yaml"), 60, 5, None, None, quality)?;
 /// println!("frame total: {} ms", report.sim.frame_total_median_ms);
 /// # Ok::<(), Vec<ludion_core::diagnostics::Diagnostic>>(())
 /// ```
@@ -94,12 +96,16 @@ pub fn profile_scene(
     frames: u64,
     warmup: u64,
     scale: Option<ludion_renderer::RenderScale>,
+    anti_aliasing: Option<ludion_renderer::AntiAliasing>,
     quality: crate::QualitySetting,
 ) -> Result<ProfileReport, Vec<Diagnostic>> {
     let root = path.parent().unwrap_or_else(|| Path::new("."));
     let mut engine = Engine::with_project_root(root);
     if let Some(scale) = scale {
         engine.set_render_scale(scale);
+    }
+    if let Some(mode) = anti_aliasing {
+        engine.set_anti_aliasing(mode);
     }
     engine.set_quality(quality);
     let source = std::fs::read_to_string(path).map_err(|error| {

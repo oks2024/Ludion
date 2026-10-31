@@ -55,6 +55,7 @@ fn render_or_skip(
         0,
         &ludion_engine::DebugCategories::None,
         None,
+        ludion_engine::AntiAliasing::Off,
     ) {
         Ok(RenderOutcome { image, .. }) => Some(DecodedImage {
             width: image.width,

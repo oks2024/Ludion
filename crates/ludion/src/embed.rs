@@ -87,6 +87,9 @@ pub struct StartOptions {
     /// The quality a packaged build ships with, used when neither `quality` nor `LUDION_QUALITY`
     /// chooses one — so whoever launches the build can still override it.
     pub packaged_quality: Option<String>,
+    /// The host's anti-aliasing mode, in place of the builder default. A game's runtime request still
+    /// beats it.
+    pub anti_aliasing: Option<ludion_engine::AntiAliasing>,
     /// The render extent (`WxH`), in place of `LUDION_RENDER_SIZE`.
     pub render_size: Option<String>,
     /// Honor an `asset.reload` on a renderer `.wgsl` by recreating its pipeline live.
@@ -689,6 +692,14 @@ fn stop_pair(options: &StartOptions) -> (Stopper, StopWait) {
     (Stopper::Sim(signal), StopWait::Sim(receiver))
 }
 
+/// Applies the host-level render settings `options` names to the freshly built `engine`. An unset
+/// field leaves the builder's default alone.
+fn apply_host_settings(engine: &mut ludion_engine::Engine, options: &StartOptions) {
+    if let Some(mode) = options.anti_aliasing {
+        engine.set_anti_aliasing(mode);
+    }
+}
+
 /// The boot thread's whole life: build the engine, take the surface, then run the loop until stop.
 /// Prints its own diagnostics; `false` is a failed boot.
 fn run_boot(boot: Boot) -> bool {
@@ -734,6 +745,7 @@ fn run_boot(boot: Boot) -> bool {
             ) else {
                 return false;
             };
+            apply_host_settings(&mut engine, &options);
             // Dev-only shader hot reload: `ludion dev` forwards `--dev-shaders` so its WGSL fast path
             // can round-trip a shader edit over the wire.
             if options.dev_shaders {
@@ -1100,6 +1112,34 @@ mod tests {
         )
         .unwrap_or_else(|_| panic!("the engine boots"));
         assert_eq!(engine.probes(), ProbeSource::Store);
+    }
+
+    /// The host's `--aa` beats the builder default, and an unset one leaves it standing.
+    #[test]
+    fn a_host_aa_mode_beats_the_builder_default() {
+        use ludion_engine::AntiAliasing;
+
+        let content = content_root("aa-host");
+        let boot = |options: StartOptions| {
+            let mut engine = crate::prepare_game_engine(
+                builder().anti_aliasing(AntiAliasing::Smaa),
+                &content.join("scenes/main.yaml"),
+                None,
+                QualitySetting::full(),
+                options.live_textures(),
+                options.live_probes(),
+                None,
+            )
+            .unwrap_or_else(|_| panic!("the engine boots"));
+            apply_host_settings(&mut engine, &options);
+            engine.anti_aliasing()
+        };
+        assert_eq!(boot(StartOptions::default()), AntiAliasing::Smaa);
+        let off = StartOptions {
+            anti_aliasing: Some(AntiAliasing::Off),
+            ..StartOptions::default()
+        };
+        assert_eq!(boot(off), AntiAliasing::Off);
     }
 
     fn step_hash(embedded: &Embedded, ticks: u32) -> WireHash {

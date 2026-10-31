@@ -79,6 +79,7 @@ fn render(
         0,
         &DebugCategories::None,
         view,
+        ludion_engine::AntiAliasing::Off,
     ) {
         Ok(RenderOutcome {
             image, debug_view, ..

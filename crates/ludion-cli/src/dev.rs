@@ -147,8 +147,8 @@
 //!
 //! ## What reaches the child, and what does not
 //!
-//! A child's argv is exactly `--addr`, `--scene`, `--restore`, `--dev-shaders`, `--probes rebake` and
-//! `--supervised` (see `try_launch_once`) — the six things dev itself decides; `--supervised` is what makes the child
+//! A child's argv is exactly `--addr`, `--scene`, `--restore`, `--dev-shaders`, `--probes rebake`,
+//! `--aa <mode>` and `--supervised` (see `try_launch_once`) — the things dev itself decides; `--supervised` is what makes the child
 //! exit when dev's end of its stdin closes. Nothing else on `ludion dev`'s own
 //! command line is forwarded, deliberately: dev supervises a game binary whose flags are the game's
 //! (`ludion::run`'s `RunArgs`), not this CLI's, and translating between the two would make dev a
@@ -177,6 +177,7 @@ use ludion_core::atomic::write_atomic;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
+use ludion_engine::AntiAliasing;
 use ludion_protocol::command::AssetReloadParams;
 use ludion_protocol::restore::{RestoreEntry, RestoreReport};
 use ludion_protocol::{Command as WireCommand, ResponseBody};
@@ -531,7 +532,13 @@ fn rfc3339_utc(time: SystemTime) -> String {
 /// the window rides each reload's same-port blink via `ludion-window`'s reconnect. The child is
 /// always headless — passing `--window` to the child would make the window die and reopen on every
 /// reload.
-pub fn run(scene: Option<&Path>, addr: &str, window: bool, rebake_probes: bool) -> ExitCode {
+pub fn run(
+    scene: Option<&Path>,
+    addr: &str,
+    window: bool,
+    rebake_probes: bool,
+    anti_aliasing: Option<AntiAliasing>,
+) -> ExitCode {
     let project = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(error) => {
@@ -576,6 +583,7 @@ pub fn run(scene: Option<&Path>, addr: &str, window: bool, rebake_probes: bool) 
     let flags = ChildFlags {
         dev_shaders: shader_dir.is_some(),
         rebake_probes,
+        anti_aliasing,
     };
 
     // First start: sync the derived imports, build, then launch a plain (not paused) child and wait
@@ -695,6 +703,7 @@ pub fn run(scene: Option<&Path>, addr: &str, window: bool, rebake_probes: bool) 
     let mut watches = DevWatches::none();
     watches.dev_shaders = flags.dev_shaders;
     watches.rebake_probes = flags.rebake_probes;
+    watches.anti_aliasing = flags.anti_aliasing;
     let scenes = project.join("scenes");
     if scenes.is_dir() {
         match ludion_assets::watch(&scenes, WATCH_DEBOUNCE) {
@@ -764,6 +773,8 @@ struct DevWatches {
     dev_shaders: bool,
     /// Whether launched children get `--probes rebake`.
     rebake_probes: bool,
+    /// The `--aa` mode launched children get, if dev was given one.
+    anti_aliasing: Option<AntiAliasing>,
 }
 
 impl DevWatches {
@@ -776,6 +787,7 @@ impl DevWatches {
             _shaders_handle: None,
             dev_shaders: false,
             rebake_probes: false,
+            anti_aliasing: None,
         }
     }
 }
@@ -788,6 +800,8 @@ struct ChildFlags {
     dev_shaders: bool,
     /// The child captures its reflection probes afresh instead of reading the probe store.
     rebake_probes: bool,
+    /// The child hosts with this anti-aliasing mode; absent leaves its builder default.
+    anti_aliasing: Option<AntiAliasing>,
 }
 
 impl ChildFlags {
@@ -798,6 +812,9 @@ impl ChildFlags {
         }
         if self.rebake_probes {
             args.extend(["--probes", "rebake"]);
+        }
+        if let Some(mode) = self.anti_aliasing {
+            args.extend(["--aa", mode.name()]);
         }
         args
     }
@@ -936,6 +953,7 @@ fn supervise_loop(
     let flags = ChildFlags {
         dev_shaders: watches.dev_shaders,
         rebake_probes: watches.rebake_probes,
+        anti_aliasing: watches.anti_aliasing,
     };
     // A snapshot is kept on disk, waiting for a launch to restore it (see `reload`): the file exists
     // exactly while one is kept, so a resume that failed at startup arrives here with it set.
@@ -2618,13 +2636,18 @@ mod tests {
         let none = ChildFlags {
             dev_shaders: false,
             rebake_probes: false,
+            anti_aliasing: None,
         };
         assert!(none.args().is_empty());
-        let both = ChildFlags {
+        let all = ChildFlags {
             dev_shaders: true,
             rebake_probes: true,
+            anti_aliasing: Some(AntiAliasing::Smaa),
         };
-        assert_eq!(both.args(), ["--dev-shaders", "--probes", "rebake"]);
+        assert_eq!(
+            all.args(),
+            ["--dev-shaders", "--probes", "rebake", "--aa", "smaa"]
+        );
     }
 
     #[test]

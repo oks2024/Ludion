@@ -439,6 +439,33 @@ fn dump_graph_is_deterministic() {
     assert_eq!(value["resources"][0]["width"], 1920);
 }
 
+/// `dump-graph --aa smaa` puts the SMAA passes in the graph; without the flag they are absent.
+#[test]
+fn dump_graph_aa_flag_adds_the_smaa_passes() {
+    let scene = empty_scene();
+    let pass_names = |extra: &[&str]| -> Vec<String> {
+        let mut args = vec!["dump-graph", "--scene", scene.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        let output = run_ludion(&args);
+        assert!(
+            output.status.success(),
+            "dump-graph failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("dump-graph emits valid JSON");
+        value["passes"]
+            .as_array()
+            .expect("a graph has passes")
+            .iter()
+            .map(|pass| pass["name"].as_str().expect("a pass is named").to_string())
+            .collect()
+    };
+    assert!(pass_names(&["--aa", "smaa"]).contains(&"smaa_blend".to_string()));
+    assert!(!pass_names(&[]).contains(&"smaa_blend".to_string()));
+    assert!(!pass_names(&["--aa", "off"]).contains(&"smaa_blend".to_string()));
+}
+
 /// The global `--quality` reaches the graph: at `low` a scene that authors AO, shafts and DoF builds
 /// the same passes as one that authored none of them. `dump-graph` is the CPU-only way to see it, so
 /// this is the whole flag proven end to end without a GPU.

@@ -364,6 +364,22 @@ impl AntiAliasing {
             AntiAliasing::Smaa => "smaa",
         }
     }
+
+    /// The mode a [`name`](Self::name) spells; `None` for anything else.
+    ///
+    /// ```
+    /// use ludion_renderer::AntiAliasing;
+    ///
+    /// for mode in AntiAliasing::ALL {
+    ///     assert_eq!(AntiAliasing::from_name(mode.name()), Some(mode));
+    /// }
+    /// assert_eq!(AntiAliasing::from_name("fxaa"), None);
+    /// ```
+    pub fn from_name(name: &str) -> Option<AntiAliasing> {
+        AntiAliasing::ALL
+            .into_iter()
+            .find(|mode| mode.name() == name)
+    }
 }
 
 /// A validated render-scale factor: finite, at least `0.25`, at most `4.0`.

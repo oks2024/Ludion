@@ -73,6 +73,7 @@ fn a_bare_scene_dumps_the_minimal_graph() {
         &gallery("meshes.yaml"),
         FrameSize::native(64, 64),
         &QualitySetting::full(),
+        AntiAliasing::Off,
     )
     .expect("the gallery scene validates and schedules");
     assert_eq!(json, SNAPSHOT);
@@ -86,6 +87,7 @@ fn a_ui_scene_dumps_the_overlay_pass() {
         &gallery("ui-hud.yaml"),
         FrameSize::native(64, 64),
         &QualitySetting::full(),
+        AntiAliasing::Off,
     )
     .expect("the gallery scene validates and schedules");
     assert_eq!(
@@ -122,6 +124,7 @@ fn a_ground_marker_scene_dumps_the_unchanged_minimal_graph() {
         &gallery("ground-markers.yaml"),
         FrameSize::native(64, 64),
         &QualitySetting::full(),
+        AntiAliasing::Off,
     )
     .expect("the gallery scene validates and schedules");
     assert_eq!(
@@ -140,6 +143,7 @@ fn a_particle_scene_dumps_the_unchanged_minimal_graph() {
         &gallery("particles.yaml"),
         FrameSize::native(64, 64),
         &QualitySetting::full(),
+        AntiAliasing::Off,
     )
     .expect("the gallery scene validates and schedules");
     assert_eq!(
@@ -156,6 +160,7 @@ fn a_sun_scene_dumps_the_shadow_pass() {
         &gallery("sun-shadows.yaml"),
         FrameSize::native(64, 64),
         &QualitySetting::full(),
+        AntiAliasing::Off,
     )
     .expect("the gallery scene validates and schedules");
     assert_eq!(
@@ -194,8 +199,13 @@ fn fixture(scene: &str) -> PathBuf {
 #[test]
 fn a_shadowed_local_light_dumps_the_local_shadow_pass() {
     let dump = |path: PathBuf, setting: &QualitySetting| {
-        ludion_engine::dump_scene_graph_json(&path, FrameSize::native(64, 64), setting)
-            .expect("the scene validates and schedules")
+        ludion_engine::dump_scene_graph_json(
+            &path,
+            FrameSize::native(64, 64),
+            setting,
+            AntiAliasing::Off,
+        )
+        .expect("the scene validates and schedules")
     };
     let full = dump(fixture("local-shadows.yaml"), &QualitySetting::full());
     let passes = scheduled_passes(&full);
@@ -224,6 +234,7 @@ fn a_cascaded_sun_dumps_the_atlas() {
             &fixture("sun-cascades.yaml"),
             FrameSize::native(64, 64),
             setting,
+            AntiAliasing::Off,
         )
         .expect("the scene validates and schedules")
     };
@@ -245,6 +256,7 @@ fn a_cascaded_sun_dumps_the_atlas() {
         &gallery("sun-shadows.yaml"),
         FrameSize::native(64, 64),
         &QualitySetting::full(),
+        AntiAliasing::Off,
     )
     .unwrap();
 
@@ -262,8 +274,13 @@ fn a_cascaded_sun_dumps_the_atlas() {
 #[test]
 fn a_decal_scene_dumps_one_projector_and_nothing_else() {
     let dump = |path: PathBuf, setting: &QualitySetting| {
-        ludion_engine::dump_scene_graph_json(&path, FrameSize::native(64, 64), setting)
-            .expect("the scene validates and schedules")
+        ludion_engine::dump_scene_graph_json(
+            &path,
+            FrameSize::native(64, 64),
+            setting,
+            AntiAliasing::Off,
+        )
+        .expect("the scene validates and schedules")
     };
     for setting in [
         QualitySetting::full(),
@@ -294,6 +311,7 @@ fn a_lit_decal_scene_dumps_decals_lit_and_no_projector() {
             &fixture("decals-lit.yaml"),
             FrameSize::native(64, 64),
             &setting,
+            AntiAliasing::Off,
         )
         .expect("the scene validates and schedules");
         let passes = scheduled_passes(&json);
@@ -305,4 +323,40 @@ fn a_lit_decal_scene_dumps_decals_lit_and_no_projector() {
         assert!(position("scene") < position("decals_lit"));
         assert!(position("decals_lit") < position("reflections"));
     }
+}
+
+/// A host's anti-aliasing mode schedules the three SMAA passes directly after `composite`, last, at
+/// every preset (no quality masks it); `Off` is the pinned graph.
+#[test]
+fn a_host_aa_mode_dumps_the_smaa_passes_after_composite() {
+    for setting in [
+        QualitySetting::full(),
+        ludion_engine::resolve_startup_quality(Some("low"), None).unwrap(),
+    ] {
+        let dump = |mode| {
+            ludion_engine::dump_scene_graph_json(
+                &gallery("meshes.yaml"),
+                FrameSize::native(64, 64),
+                &setting,
+                mode,
+            )
+            .expect("the gallery scene validates and schedules")
+        };
+        let passes = scheduled_passes(&dump(AntiAliasing::Smaa));
+        let composite = passes.iter().position(|pass| pass == "composite").unwrap();
+        assert_eq!(
+            passes[composite + 1..],
+            ["smaa_edges", "smaa_weights", "smaa_blend"],
+            "{passes:?}"
+        );
+        assert!(!scheduled_passes(&dump(AntiAliasing::Off)).contains(&"smaa_edges".to_string()));
+    }
+    let off = ludion_engine::dump_scene_graph_json(
+        &gallery("meshes.yaml"),
+        FrameSize::native(64, 64),
+        &QualitySetting::full(),
+        AntiAliasing::Off,
+    )
+    .unwrap();
+    assert_eq!(off, SNAPSHOT);
 }

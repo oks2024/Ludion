@@ -12,7 +12,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use ludion_engine::{FrameSize, QualitySetting, RenderScale};
+use ludion_engine::{AntiAliasing, FrameSize, QualitySetting, RenderScale};
 
 use crate::diagnostic;
 
@@ -27,12 +27,14 @@ use crate::diagnostic;
 /// lowered shadow map is declared at this machine's own extent, and a machine that draws below
 /// native dumps the smaller scene targets and the `upscale` pass that carries them back — so this
 /// verb answers "what does *this box* render" and not only "what does this scene ask for". An
-/// explicit `scale` beats the one the quality supplies.
+/// explicit `scale` beats the one the quality supplies. `anti_aliasing` adds the `smaa_*` passes
+/// after `composite` at every preset.
 pub fn run(
     scene: &Path,
     width: u32,
     height: u32,
     scale: Option<f32>,
+    anti_aliasing: AntiAliasing,
     quality: &QualitySetting,
 ) -> ExitCode {
     let explicit = match scale.map(RenderScale::new).transpose() {
@@ -44,6 +46,7 @@ pub fn run(
         scene,
         FrameSize::scaled(width, height, scale),
         quality,
+        anti_aliasing,
     ) {
         Ok(json) => {
             // `dump_graph_json` already ends with a newline; use `print!` to avoid a blank line.

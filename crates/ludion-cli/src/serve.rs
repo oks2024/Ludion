@@ -51,6 +51,7 @@ pub fn run(
     window: bool,
     dev_shaders: bool,
     scale: Option<f32>,
+    anti_aliasing: Option<ludion_engine::AntiAliasing>,
     quality: ludion_engine::QualitySetting,
     render_size: Option<(u32, u32)>,
     probes: Option<&str>,
@@ -70,9 +71,13 @@ pub fn run(
     // `--dev-shaders`, and for the same reason: they are the host's GPU budget, not the world's. An
     // attached client reads both through `engine.describe` and negotiates neither. `--scale` is set
     // only when it was given, so an absent flag leaves the extent to the quality rather than
-    // overriding it with a native nobody asked for.
+    // overriding it with a native nobody asked for. `--aa` is the same: absent, the game's builder
+    // default stands; given, it beats that default and loses to the game's own runtime choice.
     if let Some(scale) = scale {
         engine.set_render_scale(scale);
+    }
+    if let Some(mode) = anti_aliasing {
+        engine.set_anti_aliasing(mode);
     }
     engine.set_quality(quality);
     // Served scenes are live content too: read cooked maps where `ludion sync` wrote them, else the PNG.
