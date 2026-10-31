@@ -1,0 +1,758 @@
+# Feature: Anti-aliasing - the SMAA 1x gallery scene. The manifest (goldens/manifest.json) pins its
+# golden to `anti_aliasing: smaa`, so the committed image is the post-AA frame; every other gallery
+# golden renders with AA off. Each prop is a failure mode an edge-only resolve has to repair:
+# (a) a receding slatted belt, thin bright slats on a dark base that shrink toward the vanishing point;
+# (b) two grazing rails, long thin boxes nearly parallel to the view direction, whose edges crawl
+# across many rows at a shallow slope; (c) a thin emissive strip tilted about 10 degrees against a
+# black backdrop, the worst case for stair-stepping; (d) a one-to-two-pixel wire; (e) a ten-tooth cog
+# of boxes, so corners and short diagonals meet; (f) a flat matte grey wall under even light with no
+# edge anywhere in a 64x48 px patch at 960x540 or 480x270, the patch the grain-preservation gate
+# measures (SMAA must neither smear nor add to the per-pixel film grain); (g) an opaque UiRect holding
+# a UiText, drawn after AA so its interior stays byte-identical to the unresolved frame. The sun
+# comes from the camera side so nothing shades the wall; `PostProcess.grain` is Noir's 0.03, and
+# dof and chromatic_aberration stay at 0.0, since either would soften the edges the pass exists to
+# measure. ludion docs post-processing.
+format: 1
+name: "anti-aliasing - SMAA 1x: thin edges, grazing lines, a cog, grain and an opaque UI label"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 14.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.004
+          - 0.005
+          - 0.01
+        sky_horizon:
+          - 0.01
+          - 0.012
+          - 0.02
+        sky_ground:
+          - 0.002
+          - 0.002
+          - 0.004
+        ibl_intensity: 0.1
+      PostProcess:
+        grain: 0.03
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - -2.0
+      DirectionalLight:
+        direction:
+          - 0.0
+          - -0.4
+          - -1.0
+        intensity: 1.0
+        shadow_extent: 24.0
+        shadow_near: 1.0
+        shadow_far: 60.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 120.0
+          - 1.0
+          - 120.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.05
+          - 0.05
+          - 0.06
+          - 1.0
+        roughness: 1.0
+  - name: backdrop
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 4.0
+          - -4.0
+        scale:
+          - 18.0
+          - 8.0
+          - 0.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 1.0
+        roughness: 1.0
+  - name: wall
+    components:
+      Transform:
+        translation:
+          - 10.0
+          - 4.0
+          - -4.0
+        scale:
+          - 9.0
+          - 8.0
+          - 0.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.3
+          - 0.3
+          - 1.0
+        roughness: 1.0
+  - name: belt-base
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.05
+          - 2.0
+        scale:
+          - 2.4
+          - 0.1
+          - 16.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.06
+          - 0.06
+          - 0.07
+          - 1.0
+        roughness: 0.9
+  - name: slat-1
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - 9.4
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-2
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - 8.2
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-3
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - 7.0
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-4
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - 5.8
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-5
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - 4.6
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-6
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - 3.4
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-7
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - 2.2
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-8
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - 1.0
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-9
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - -0.2
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-10
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - -1.4
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-11
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - -2.6
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-12
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - -3.8
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: slat-13
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.125
+          - -5.0
+        scale:
+          - 2.2
+          - 0.05
+          - 0.12
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.8
+          - 0.55
+          - 1.0
+        roughness: 0.6
+  - name: rail-1
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 0.4
+          - 4.0
+        rotation:
+          - 0.0
+          - 1.5
+          - 0.0
+        scale:
+          - 0.06
+          - 0.06
+          - 14.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.9
+          - 0.95
+          - 1.0
+        roughness: 0.4
+  - name: rail-2
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 1.2
+          - 4.0
+        rotation:
+          - 0.0
+          - -1.5
+          - 0.0
+        scale:
+          - 0.06
+          - 0.06
+          - 14.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.9
+          - 0.95
+          - 1.0
+        roughness: 0.4
+  - name: strip
+    components:
+      Transform:
+        translation:
+          - -9.0
+          - 6.5
+          - -3.7
+        rotation:
+          - 0.0
+          - 0.0
+          - 10.0
+        scale:
+          - 5.0
+          - 0.06
+          - 0.06
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.8
+          - 0.4
+          - 1.0
+        roughness: 0.5
+        emissive: 4.0
+  - name: wire
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 2.0
+          - -3.7
+        rotation:
+          - 0.0
+          - 0.0
+          - -3.0
+        scale:
+          - 6.0
+          - 0.04
+          - 0.04
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.9
+          - 0.9
+          - 1.0
+        roughness: 0.5
+  - name: cog-hub
+    components:
+      Transform:
+        translation:
+          - -1.0
+          - 4.0
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 18.0
+        scale:
+          - 1.8
+          - 1.8
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-1
+    components:
+      Transform:
+        translation:
+          - 0.15
+          - 4.0
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-2
+    components:
+      Transform:
+        translation:
+          - -0.0696
+          - 4.676
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 36.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-3
+    components:
+      Transform:
+        translation:
+          - -0.6446
+          - 5.0937
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 72.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-4
+    components:
+      Transform:
+        translation:
+          - -1.3554
+          - 5.0937
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 108.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-5
+    components:
+      Transform:
+        translation:
+          - -1.9304
+          - 4.676
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 144.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-6
+    components:
+      Transform:
+        translation:
+          - -2.15
+          - 4.0
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 180.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-7
+    components:
+      Transform:
+        translation:
+          - -1.9304
+          - 3.324
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 216.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-8
+    components:
+      Transform:
+        translation:
+          - -1.3554
+          - 2.9063
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 252.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-9
+    components:
+      Transform:
+        translation:
+          - -0.6446
+          - 2.9063
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 288.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: cog-tooth-10
+    components:
+      Transform:
+        translation:
+          - -0.0696
+          - 3.324
+          - -3.5
+        rotation:
+          - 0.0
+          - 0.0
+          - 324.0
+        scale:
+          - 0.45
+          - 0.3
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.72
+          - 0.78
+          - 1.0
+        roughness: 0.4
+  - name: label-panel
+    components:
+      UiRect:
+        anchor: bottom_right
+        offset:
+          - -24.0
+          - -24.0
+        size:
+          - 300.0
+          - 64.0
+        color:
+          - 0.1
+          - 0.1
+          - 0.14
+          - 1.0
+        order: 0
+  - name: label-text
+    components:
+      UiText:
+        anchor: center
+        offset:
+          - 786.0
+          - 484.0
+        text: SMAA 1X
+        size: 28.0
+        color:
+          - 0.95
+          - 0.9
+          - 0.7
+          - 1.0
+        order: 1

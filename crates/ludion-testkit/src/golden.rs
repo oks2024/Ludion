@@ -96,6 +96,10 @@ pub struct GoldenTest {
     /// default) is the normal render. Scene goldens on the built-in path only: a game builder or a
     /// model document renders without it.
     pub debug_view: Option<ludion_engine::DebugView>,
+    /// The anti-aliasing mode the render runs under, exactly `ludion render --aa`. `Off` (the
+    /// default) is every golden that existed before this field. Scene goldens on the built-in path
+    /// only: a game builder or a model document renders without it.
+    pub anti_aliasing: ludion_engine::AntiAliasing,
     /// The registry the scene is validated against — built-in by default, a game's own via
     /// [`with_registry`](GoldenTest::with_registry).
     registry: fn() -> Registry,
@@ -123,6 +127,7 @@ impl GoldenTest {
             frames: 0,
             debug_draw: ludion_engine::DebugCategories::None,
             debug_view: None,
+            anti_aliasing: ludion_engine::AntiAliasing::Off,
             registry: ludion_engine::builtin_registry,
             builder: None,
         }
@@ -139,6 +144,13 @@ impl GoldenTest {
     #[must_use]
     pub fn with_debug_view(mut self, view: Option<ludion_engine::DebugView>) -> Self {
         self.debug_view = view;
+        self
+    }
+
+    /// Renders the scene under `mode`. See [`anti_aliasing`](GoldenTest::anti_aliasing).
+    #[must_use]
+    pub fn with_anti_aliasing(mut self, mode: ludion_engine::AntiAliasing) -> Self {
+        self.anti_aliasing = mode;
         self
     }
 
@@ -429,7 +441,7 @@ impl GoldenTest {
                     self.frames,
                     &self.debug_draw,
                     self.debug_view,
-                    ludion_engine::AntiAliasing::Off,
+                    self.anti_aliasing,
                 )?;
                 (outcome.image, outcome.adapter)
             }

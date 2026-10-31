@@ -22,7 +22,8 @@
 //! ```
 //!
 //! Every field (`width`, `height`, `ssim_threshold`, `frames`, `debug_draw` — a list of debug-draw
-//! category names, as `ludion render --debug-draw` takes) is optional and falls back to the
+//! category names, as `ludion render --debug-draw` takes — and `anti_aliasing`, a mode name as
+//! `ludion render --aa` takes) is optional and falls back to the
 //! suite default (`frames` defaults to `0`, the scene at rest) when absent or when the manifest
 //! itself is absent. The manifest is strict (`L2208`): no other fields, `ssim_threshold` in
 //! `(0, 1]`, `width`/`height` above 0, and every key must be the stem of a scene in `<dir>`.
@@ -47,6 +48,7 @@ struct ManifestEntry {
     ssim_threshold: Option<f64>,
     frames: Option<u64>,
     debug_draw: Option<Vec<String>>,
+    anti_aliasing: Option<String>,
 }
 
 /// Suite-wide defaults, overridable per scene by the manifest.
@@ -172,6 +174,13 @@ pub fn discover(
         if let Some(names) = overrides.and_then(|o| o.debug_draw.clone()) {
             test.debug_draw = ludion_engine::DebugCategories::from_names(names);
         }
+        // Validated at load, so the name always parses.
+        if let Some(mode) = overrides
+            .and_then(|o| o.anti_aliasing.as_deref())
+            .and_then(ludion_engine::AntiAliasing::from_name)
+        {
+            test.anti_aliasing = mode;
+        }
         tests.push(DiscoveredTest { name: stem, test });
     }
     Ok(tests)
@@ -199,7 +208,7 @@ fn load_manifest(dir: &Path) -> Result<BTreeMap<String, ManifestEntry>, Diagnost
             )
             .with_help(
                 "a manifest is a JSON object mapping scene stems to optional \
-                 {\"width\":.., \"height\":.., \"ssim_threshold\":.., \"frames\":.., \"debug_draw\":[..]} overrides, \
+                 {\"width\":.., \"height\":.., \"ssim_threshold\":.., \"frames\":.., \"debug_draw\":[..], \"anti_aliasing\":\"..\"} overrides, \
                  and no other fields; fix the JSON, or delete the file to use the suite defaults",
             )
         })?;
@@ -244,6 +253,16 @@ fn validate_entry(path: &Path, stem: &str, entry: &ManifestEntry) -> Result<(), 
             "debug_draw",
             format!("{names:?}"),
             "a debug-draw category name must not be blank",
+        );
+    }
+    if let Some(name) = &entry.anti_aliasing
+        && ludion_engine::AntiAliasing::from_name(name).is_none()
+    {
+        let modes = ludion_engine::AntiAliasing::ALL.map(|mode| mode.name());
+        return refuse(
+            "anti_aliasing",
+            format!("`{name}`"),
+            &format!("anti_aliasing must be one of {}", modes.join(", ")),
         );
     }
     Ok(())
@@ -492,6 +511,40 @@ mod tests {
             ludion_engine::DebugCategories::parse("colliders")
         );
         assert_eq!(drawn("plain"), ludion_engine::DebugCategories::None);
+    }
+
+    #[test]
+    fn manifest_applies_an_anti_aliasing_override() {
+        let tests = verifiable(discover_with_manifest(
+            "anti_aliasing",
+            &["scene", "plain"],
+            r#"{"scene": {"anti_aliasing": "smaa"}}"#,
+        ))
+        .expect("the manifest is valid");
+        let mode = |stem: &str| {
+            tests
+                .iter()
+                .find(|t| t.name == stem)
+                .unwrap()
+                .test
+                .anti_aliasing
+        };
+        assert_eq!(mode("scene"), ludion_engine::AntiAliasing::Smaa);
+        assert_eq!(mode("plain"), ludion_engine::AntiAliasing::Off);
+    }
+
+    #[test]
+    fn manifest_refuses_an_unknown_anti_aliasing_mode() {
+        let error = discover_with_manifest(
+            "anti_aliasing_bad",
+            &["scene"],
+            r#"{"scene": {"anti_aliasing": "fxaa"}}"#,
+        )
+        .err()
+        .expect("fxaa is not a mode");
+        assert_eq!(error.code, code::GOLDEN_MANIFEST_INVALID);
+        assert!(error.message.contains("anti_aliasing"), "{}", error.message);
+        assert!(error.message.contains("fxaa"), "{}", error.message);
     }
 
     #[test]
