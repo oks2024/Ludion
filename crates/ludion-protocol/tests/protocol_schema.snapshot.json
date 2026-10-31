@@ -4464,6 +4464,11 @@
       "QualityProfile": {
         "description": "The render quality a measurement was taken at: what the machine chose, which optional effects\nthat resolved to, and how hard each one worked.\n\nIt travels with a report for the reason [`SimProfile::threads`] does — two measurements taken\nunder different machine settings are not comparable, and only the report can say so. Quality is a\nper-machine host switch (`--quality`, `LUDION_QUALITY`), never scene content and never sim state,\nso nothing here affects a `WorldHash`: a report at `low` and one at `full` describe the same\nsimulation costing different pixels.\n\nThe `preset` label and the six toggles are the *choice*; the parameter axes below them are the\n*build* — a shader's sample count or a texture descriptor's size, reported as the renderer\ncurrently runs them. A false toggle leaves that effect's passes out of the frame graph entirely,\nso its axis describes work that was not done: `shadows: false` beside a `shadow_map_size` of 1024\nmeans no map of any size was drawn, and reading the axis without the toggle is the misreading\nevery toggle here exists to prevent.",
         "properties": {
+          "anti_aliasing": {
+            "default": "off",
+            "description": "The anti-aliasing mode the frames were drawn with (`off` or `smaa`), as the host resolved it.\nSMAA adds three passes after composite, so two reports at different modes are not comparable.",
+            "type": "string"
+          },
           "dof": {
             "description": "Whether depth of field ran on a scene that authored it.",
             "type": "boolean"
@@ -6775,6 +6780,11 @@
       "QualityProfile": {
         "description": "The render quality a measurement was taken at: what the machine chose, which optional effects\nthat resolved to, and how hard each one worked.\n\nIt travels with a report for the reason [`SimProfile::threads`] does — two measurements taken\nunder different machine settings are not comparable, and only the report can say so. Quality is a\nper-machine host switch (`--quality`, `LUDION_QUALITY`), never scene content and never sim state,\nso nothing here affects a `WorldHash`: a report at `low` and one at `full` describe the same\nsimulation costing different pixels.\n\nThe `preset` label and the six toggles are the *choice*; the parameter axes below them are the\n*build* — a shader's sample count or a texture descriptor's size, reported as the renderer\ncurrently runs them. A false toggle leaves that effect's passes out of the frame graph entirely,\nso its axis describes work that was not done: `shadows: false` beside a `shadow_map_size` of 1024\nmeans no map of any size was drawn, and reading the axis without the toggle is the misreading\nevery toggle here exists to prevent.",
         "properties": {
+          "anti_aliasing": {
+            "default": "off",
+            "description": "The anti-aliasing mode the frames were drawn with (`off` or `smaa`), as the host resolved it.\nSMAA adds three passes after composite, so two reports at different modes are not comparable.",
+            "type": "string"
+          },
           "dof": {
             "description": "Whether depth of field ran on a scene that authored it.",
             "type": "boolean"

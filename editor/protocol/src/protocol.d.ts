@@ -3200,6 +3200,11 @@ export interface ProbeProfile {
  */
 export interface QualityProfile {
   /**
+   * The anti-aliasing mode the frames were drawn with (`off` or `smaa`), as the host resolved it.
+   * SMAA adds three passes after composite, so two reports at different modes are not comparable.
+   */
+  anti_aliasing?: string;
+  /**
    * Whether depth of field ran on a scene that authored it.
    */
   dof: boolean;

@@ -76,7 +76,7 @@ use std::path::Path;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_protocol::perf::QualityProfile;
-use ludion_renderer::{Quality, QualityParams, RenderScale};
+use ludion_renderer::{AntiAliasing, Quality, QualityParams, RenderScale};
 use serde::Deserialize;
 
 /// The environment variable naming a machine's render quality: a preset name, or the path to a TOML
@@ -142,20 +142,24 @@ impl QualitySetting {
     /// carries: the label, the toggles it resolved to, and the parameters it resolved to.
     ///
     /// Every field is read from the resolved setting rather than restated, so a report can never
-    /// claim a sample count the GPU did not run.
+    /// claim a sample count the GPU did not run. The anti-aliasing mode is the one field a setting
+    /// does not own — the engine resolves it from several sources — so the caller passes it in.
     ///
     /// # Example
     /// ```
-    /// use ludion_engine::{QualitySetting, resolve_startup_quality};
+    /// use ludion_engine::{AntiAliasing, QualitySetting, resolve_startup_quality};
     ///
-    /// let descriptor = QualitySetting::full().descriptor();
+    /// let descriptor = QualitySetting::full().descriptor(AntiAliasing::Off);
     /// assert_eq!(descriptor.preset, "full");
     /// assert_eq!(descriptor.ssao_samples, 16);
+    /// assert_eq!(descriptor.anti_aliasing, "off");
     ///
-    /// let medium = resolve_startup_quality(Some("medium"), None).unwrap().descriptor();
+    /// let medium = resolve_startup_quality(Some("medium"), None)
+    ///     .unwrap()
+    ///     .descriptor(AntiAliasing::Smaa);
     /// assert_eq!(medium.ssao_samples, 8);
     /// ```
-    pub fn descriptor(&self) -> QualityProfile {
+    pub fn descriptor(&self, anti_aliasing: AntiAliasing) -> QualityProfile {
         let params = self.params;
         QualityProfile {
             preset: self.label.clone(),
@@ -177,6 +181,7 @@ impl QualitySetting {
             render_scale: params.render_scale,
             ssr_scale: params.ssr_scale,
             ibl_specular_size: params.ibl_specular_size,
+            anti_aliasing: anti_aliasing.name().to_string(),
         }
     }
 }
@@ -788,18 +793,18 @@ mod tests {
     /// this machine chose, never what the build happens to compile.
     #[test]
     fn the_descriptor_carries_the_label_the_toggles_and_the_resolved_axes() {
-        let low = resolved(Some("low"), None).descriptor();
+        let low = resolved(Some("low"), None).descriptor(AntiAliasing::Off);
         assert_eq!(low.preset, "low");
         assert!(!low.ssao && !low.shafts && !low.dof);
 
-        let medium = resolved(Some("medium"), None).descriptor();
+        let medium = resolved(Some("medium"), None).descriptor(AntiAliasing::Off);
         assert_eq!(medium.preset, "medium");
         assert_ne!(
             medium.preset, low.preset,
             "the label distinguishes settings whose toggles coincide",
         );
 
-        let full = QualitySetting::full().descriptor();
+        let full = QualitySetting::full().descriptor(AntiAliasing::Off);
         let params = QualityParams::FULL;
         assert_eq!(full.ssao_samples, params.ssao_samples);
         assert_eq!(full.shaft_steps, params.shaft_steps);
@@ -836,7 +841,7 @@ mod tests {
         // a report taken at `medium` is not comparable with one taken at `full` and says why.
         assert_eq!(medium.ssao_samples, QualityParams::MEDIUM.ssao_samples);
         assert_ne!(medium.ssao_samples, full.ssao_samples);
-        let high = resolved(Some("high"), None).descriptor();
+        let high = resolved(Some("high"), None).descriptor(AntiAliasing::Off);
         assert_eq!(high.shaft_steps, QualityParams::HIGH.shaft_steps);
         assert_ne!(high.dof_taps, full.dof_taps);
 
@@ -866,7 +871,7 @@ mod tests {
             "shadowless.toml",
             "preset = \"full\"\n[effects]\nshadows = false\n",
         );
-        let descriptor = resolved(Some(&file.value()), None).descriptor();
+        let descriptor = resolved(Some(&file.value()), None).descriptor(AntiAliasing::Off);
         assert_eq!(descriptor.preset, QualitySetting::CUSTOM_LABEL);
         assert!(
             !descriptor.shadows,

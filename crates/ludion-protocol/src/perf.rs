@@ -246,6 +246,14 @@ pub struct QualityProfile {
     pub ssr_scale: f32,
     /// Edge length of a face of the sky's specular cube, in texels.
     pub ibl_specular_size: u32,
+    /// The anti-aliasing mode the frames were drawn with (`off` or `smaa`), as the host resolved it.
+    /// SMAA adds three passes after composite, so two reports at different modes are not comparable.
+    #[serde(default = "default_anti_aliasing")]
+    pub anti_aliasing: String,
+}
+
+fn default_anti_aliasing() -> String {
+    "off".into()
 }
 
 /// Clustered-forward light binning — the CPU build's cost, and the occupancy of the tables it built.
@@ -882,10 +890,19 @@ mod tests {
             render_scale: 1.0,
             ssr_scale: 0.5,
             ibl_specular_size: 256,
+            anti_aliasing: "smaa".into(),
         };
         let text = serde_json::to_string(&full).unwrap();
         let parsed: QualityProfile = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed, full);
+
+        let mut old = serde_json::to_value(&full).unwrap();
+        old.as_object_mut().unwrap().remove("anti_aliasing");
+        let parsed: QualityProfile = serde_json::from_value(old).unwrap();
+        assert_eq!(
+            parsed.anti_aliasing, "off",
+            "a report without the key was drawn with no AA"
+        );
 
         let medium = QualityProfile {
             preset: "medium".into(),

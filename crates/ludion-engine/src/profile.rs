@@ -176,7 +176,7 @@ pub fn profile_engine(
         measured_frames: frames,
         // Which effects the GPU numbers above paid for, from the host that owns the setting. Two
         // reports taken at different qualities are not comparable, and only the report can say so.
-        quality: Some(engine.quality().descriptor()),
+        quality: Some(engine.quality().descriptor(engine.anti_aliasing())),
         sim,
         gpu,
         // The offline driver delivers no frames, so it has no transport to measure — that section
@@ -2546,6 +2546,21 @@ entities:
             quality.sun_cascades,
             ludion_renderer::QualityParams::LOW.sun_cascades,
         );
+        assert_eq!(
+            quality.anti_aliasing, "off",
+            "a host that set no AA draws without it"
+        );
+    }
+
+    /// The report names the anti-aliasing mode the host resolved, so an SMAA capture is never
+    /// mistaken for an `off` one.
+    #[test]
+    fn needs_gpu_profile_engine_reports_the_hosts_anti_aliasing() {
+        let mut engine = counter_engine();
+        engine.load_inline_scene(SCENE).unwrap();
+        engine.set_anti_aliasing(crate::AntiAliasing::Smaa);
+        let report = profile_engine(&mut engine, "inline".to_string(), 5, 1).unwrap();
+        assert_eq!(report.quality.unwrap().anti_aliasing, "smaa");
     }
 
     /// The `sun_cascades` panel is the frame's own fit, pure CPU: it needs the engine's scene

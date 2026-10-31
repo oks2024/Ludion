@@ -2382,7 +2382,8 @@ mod budget_quality_tests {
             warmup_frames: 0,
             measured_frames: 60,
             quality: quality.map(|preset| {
-                let mut descriptor = QualitySetting::default().descriptor();
+                let mut descriptor =
+                    QualitySetting::default().descriptor(ludion_engine::AntiAliasing::Off);
                 descriptor.preset = preset.to_string();
                 descriptor
             }),

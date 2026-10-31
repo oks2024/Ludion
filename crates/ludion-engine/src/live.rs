@@ -606,7 +606,7 @@ fn flush_pending_capture(engine: &mut Engine, pending: &mut Option<PendingCaptur
     let mut report = window.into_report(scene, entry.include_samples);
     // A window measures frames; the quality they were rendered at belongs to this host, so it is
     // filled here rather than carried through the conversion (the `transport` pattern).
-    report.quality = Some(engine.quality().descriptor());
+    report.quality = Some(engine.quality().descriptor(engine.anti_aliasing()));
     report.probes = engine.probe_profile();
     let _ = entry.reply.try_send(Ok(Dispatched {
         body: ResponseBody::ProfileReport {
