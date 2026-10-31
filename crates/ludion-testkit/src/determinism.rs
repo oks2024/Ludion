@@ -261,36 +261,55 @@ fn localize(
 ) -> ! {
     let a = run(build, body, Mode::Probe { tick });
     let b = run(build, body, Mode::Probe { tick });
-    let boundary = if a.log.pre_tick != b.log.pre_tick {
-        Boundary::Pre
+    let (a_len, b_len) = (a.log.systems.len(), b.log.systems.len());
+    let common = a_len.min(b_len);
+    // Where each run is captured. Equal-prefix lists of unequal length mean a system ran in only one
+    // run: the longer run is captured after that extra system, the shorter after its last one.
+    let (a_at, b_at, system, systems_probed) = if a.log.pre_tick != b.log.pre_tick {
+        (Boundary::Pre, Boundary::Pre, None, 0)
+    } else if let Some(index) = a
+        .log
+        .systems
+        .iter()
+        .zip(&b.log.systems)
+        .position(|(l, r)| l != r)
+    {
+        (
+            Boundary::System(index),
+            Boundary::System(index),
+            Some(a.log.systems[index].0.to_string()),
+            a_len,
+        )
+    } else if a_len != b_len {
+        let before = common
+            .checked_sub(1)
+            .map_or(Boundary::Pre, Boundary::System);
+        let extra = Boundary::System(common);
+        let (longer, name) = if a_len > b_len {
+            (&a.log.systems, a.log.systems[common].0)
+        } else {
+            (&b.log.systems, b.log.systems[common].0)
+        };
+        let (a_at, b_at) = if a_len > b_len {
+            (extra, before)
+        } else {
+            (before, extra)
+        };
+        (a_at, b_at, Some(name.to_string()), longer.len())
     } else {
-        a.log
-            .systems
-            .iter()
-            .zip(&b.log.systems)
-            .position(|(l, r)| l != r)
-            .map_or(Boundary::End, Boundary::System)
+        (Boundary::End, Boundary::End, None, a_len)
     };
-    let a_capture = run(build, body, Mode::Capture { tick, at: boundary })
+    let a_capture = run(build, body, Mode::Capture { tick, at: a_at })
         .log
         .capture;
-    let b_capture = run(build, body, Mode::Capture { tick, at: boundary })
+    let b_capture = run(build, body, Mode::Capture { tick, at: b_at })
         .log
         .capture;
     let (Some(a_capture), Some(b_capture)) = (a_capture, b_capture) else {
         panic!(
-            "assert_deterministic: the runs diverge at frame {} but the divergent tick did not \
-             reproduce on re-run — the body or build() is nondeterministic across runs",
+            "assert_deterministic: the runs diverge at frame {} but the divergent tick did not              reproduce on re-run — the body or build() is nondeterministic across runs",
             frame.as_u64()
         );
-    };
-    let (system, systems_probed) = match boundary {
-        Boundary::Pre => (None, 0),
-        Boundary::System(index) => (
-            Some(a.log.systems[index].0.to_string()),
-            a.log.systems.len(),
-        ),
-        Boundary::End => (None, a.log.systems.len()),
     };
     let report = BisectReport {
         left: "run A".to_string(),
@@ -300,7 +319,7 @@ fn localize(
         systems_probed,
         world: a_capture.diff(&b_capture),
     };
-    let note = if boundary == Boundary::Pre {
+    let note = if a_at == Boundary::Pre {
         "\n  the worlds already differed as the tick began: the body's own edits or commands before \
          that step diverged"
     } else {

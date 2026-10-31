@@ -115,6 +115,56 @@ fn set_axis_round_trips_bit_exact_and_replays_identically() {
     assert_eq!(axis_run(), (bits, hash), "two identical runs hash equal");
 }
 
+/// A shared in-memory recording sink.
+#[derive(Clone, Default)]
+struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_recorded_axis_run_replays_to_the_live_hash_trace() {
+    let sink = Sink::default();
+    let mut driver = GameplayDriver::new(EngineBuilder::new(), EMPTY);
+    driver.engine_mut().set_recording(sink.clone()).unwrap();
+    driver.set_axis(GamepadAxis::LeftStickX, f32::from_bits(AWKWARD));
+    driver.set_axis(GamepadAxis::LeftStickY, -f32::from_bits(0x3F11_1111));
+    let mut live = Vec::new();
+    for _ in 0..3 {
+        driver.step(1);
+        live.push((driver.frame(), world_hash(driver.engine_mut())));
+    }
+    driver.engine_mut().stop_recording().unwrap();
+    let bytes = sink.0.lock().unwrap().clone();
+
+    let replayed: Vec<(u64, u64)> = ludion_engine::replay_hashes(&bytes, ".")
+        .expect("the recording replays")
+        .into_iter()
+        .map(|(frame, hash)| (frame.as_u64(), hash.as_u64()))
+        .collect();
+    for entry in &live {
+        assert!(
+            replayed.contains(entry),
+            "live (frame, hash) {entry:?} is absent from the replay trace {replayed:?}"
+        );
+    }
+}
+
+#[test]
+fn the_frame_follows_the_engine_when_it_is_stepped_outside_the_driver() {
+    let mut driver = GameplayDriver::new(EngineBuilder::new(), EMPTY);
+    ludion_testkit::step(driver.engine_mut(), 3);
+    assert_eq!(driver.frame(), 3);
+    assert_eq!(driver.frame(), driver.engine().frame().as_u64());
+}
+
 const ONE_ENTITY: &str = "format: 1
 entities:
   - components:

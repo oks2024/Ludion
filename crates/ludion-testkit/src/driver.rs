@@ -1,8 +1,7 @@
 //! [`GameplayDriver`] and the free [`step`]/[`inject`] — headless gameplay tests over any [`Engine`]:
 //! one built from a scene file ([`GameplayDriver::from_scene_file`]), from an inline scene
 //! ([`GameplayDriver::new`], [`loaded_engine`]), or one the test already built and stepped
-//! ([`GameplayDriver::from_engine`]). The driver keeps a frame cursor so scripted presses land on the
-//! right tick, and adds typed input, an engine-driven [`run_until`](GameplayDriver::run_until), and
+//! ([`GameplayDriver::from_engine`]). Scripted presses land on the engine's current frame, and the driver adds typed input, an engine-driven [`run_until`](GameplayDriver::run_until), and
 //! `snapshot`/`restore`. A test that keeps a bare [`Engine`] uses the free [`step`] and [`inject`].
 //!
 //! # A note on this crate's dependency edge
@@ -89,16 +88,15 @@ pub fn inject(engine: &mut Engine, event: InputEvent) {
         .expect("input injects");
 }
 
-/// A scripted-input driver over any [`Engine`]: tracks a frame cursor so a test can
-/// `hold`/`release`/`tap` keys, send typed [`InputEvent`]s, run until a predicate holds, and
-/// `snapshot`/`restore`, without re-deriving which frame each input lands on.
+/// A scripted-input driver over any [`Engine`]: a test can `hold`/`release`/`tap` keys, send typed
+/// [`InputEvent`]s, run until a predicate holds, and `snapshot`/`restore`, without re-deriving which
+/// frame each input lands on.
 ///
-/// The cursor is the engine frame the next `inject` targets (read from the engine on construction
-/// and after `restore`), not "ticks since construction". Reach the engine through
+/// Inputs target the engine's current frame, read live, so stepping the engine outside the driver
+/// cannot leave a stale frame. Reach the engine through
 /// [`engine`](GameplayDriver::engine) / [`engine_mut`](GameplayDriver::engine_mut).
 pub struct GameplayDriver {
     engine: Engine,
-    frame: u64,
 }
 
 impl GameplayDriver {
@@ -148,7 +146,7 @@ impl GameplayDriver {
         }
     }
 
-    /// Wraps an engine the test already built (and possibly stepped); the cursor starts at its frame.
+    /// Wraps an engine the test already built (and possibly stepped); inputs target its current frame.
     ///
     /// # Example
     /// ```
@@ -160,8 +158,7 @@ impl GameplayDriver {
     /// assert_eq!(GameplayDriver::from_engine(engine).frame(), 4);
     /// ```
     pub fn from_engine(engine: Engine) -> Self {
-        let frame = engine.frame().as_u64();
-        GameplayDriver { engine, frame }
+        GameplayDriver { engine }
     }
 
     /// Gives the engine back, e.g. to hand it to a golden check.
@@ -181,21 +178,20 @@ impl GameplayDriver {
         &mut self.engine
     }
 
-    /// The frame cursor: the engine frame the next `inject` targets.
+    /// The engine's current frame: the frame the next `inject` targets.
     pub fn frame(&self) -> u64 {
-        self.frame
+        self.engine.frame().as_u64()
     }
 
-    /// Steps the engine `ticks` fixed ticks, advancing the frame cursor by the same amount.
+    /// Steps the engine `ticks` fixed ticks.
     ///
     /// # Panics
     /// If the `sim.step` command fails.
     pub fn step(&mut self, ticks: u64) {
         step(&mut self.engine, ticks);
-        self.frame += ticks;
     }
 
-    /// Steps one tick at a time, up to `max_ticks`, and returns the cursor after the first tick where
+    /// Steps one tick at a time, up to `max_ticks`, and returns the frame after the first tick where
     /// `predicate` holds, or `None` if it never does. A system panic surfaces as the `step` panic.
     ///
     /// # Example
@@ -215,7 +211,7 @@ impl GameplayDriver {
         for _ in 0..max_ticks {
             self.step(1);
             if predicate(&mut self.engine) {
-                return Some(self.frame);
+                return Some(self.frame());
             }
         }
         None
@@ -237,7 +233,7 @@ impl GameplayDriver {
         }
     }
 
-    /// Restores `snapshot` into this engine and re-syncs the frame cursor to the restored frame.
+    /// Restores `snapshot` into this engine.
     ///
     /// # Panics
     /// If the command fails or answers another body.
@@ -252,11 +248,10 @@ impl GameplayDriver {
             ResponseBody::Restored { .. } => {}
             other => panic!("expected a restore, got {other:?}"),
         }
-        self.frame = self.engine.frame().as_u64();
     }
 
     /// Injects one keyboard event (`{"kind": kind, "key": key}`, e.g. `("key_down", "Right")`) at
-    /// the current frame cursor.
+    /// the current frame.
     ///
     /// # Panics
     /// If the `input.inject` command fails.
@@ -264,7 +259,7 @@ impl GameplayDriver {
         self.inject_value(json!({"kind": kind, "key": key}));
     }
 
-    /// Injects a typed [`InputEvent`] at the current frame cursor; analog fields serialize as their
+    /// Injects a typed [`InputEvent`] at the current frame; analog fields serialize as their
     /// IEEE-754 bits, so they replay bit-exact.
     ///
     /// # Panics
@@ -273,7 +268,7 @@ impl GameplayDriver {
         self.inject_value(serde_json::to_value(event).expect("an InputEvent always serializes"));
     }
 
-    /// Sets a gamepad axis to `value` at the current frame cursor.
+    /// Sets a gamepad axis to `value` at the current frame.
     ///
     /// # Example
     /// ```
@@ -289,7 +284,7 @@ impl GameplayDriver {
         self.inject_event(InputEvent::GamepadAxis { axis, value });
     }
 
-    /// Injects an already-serialized input event at the current frame cursor — the raw seam under
+    /// Injects an already-serialized input event at the current frame — the raw seam under
     /// [`inject_event`](GameplayDriver::inject_event) and [`inject`](GameplayDriver::inject).
     ///
     /// # Panics
@@ -297,7 +292,7 @@ impl GameplayDriver {
     pub fn inject_value(&mut self, event: Value) {
         self.engine
             .execute(Command::InputInject(command::InputInjectParams {
-                frame: Some(FrameIndex::new(self.frame)),
+                frame: Some(FrameIndex::new(self.frame())),
                 event,
             }))
             .expect("input injects");

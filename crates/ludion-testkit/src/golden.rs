@@ -218,8 +218,10 @@ impl GoldenTest {
     /// of [`with_builder`](GoldenTest::with_builder) (the built-in one when unset) rooted at
     /// `project_root`, at `goldens_root/<os>/<stem>.png`. Frame 0 is the initial post-load world;
     /// the numbering is [`ludion_engine::ReplayFramesRequest`]'s. A frame past the replay's end is
-    /// `L3021`. [`frames`](GoldenTest::frames), [`clip`](GoldenTest::clip) and
-    /// [`debug_view`](GoldenTest::debug_view) do not apply to a replay. Compare with
+    /// `L3021`. [`frames`](GoldenTest::frames), [`clip`](GoldenTest::clip),
+    /// [`debug_view`](GoldenTest::debug_view), [`debug_draw`](GoldenTest::debug_draw),
+    /// [`anti_aliasing`](GoldenTest::anti_aliasing) and
+    /// [`with_registry`](GoldenTest::with_registry) do not apply to a replay. Compare with
     /// [`check`](GoldenTest::check).
     pub fn from_replay(
         bytes: &[u8],

@@ -139,3 +139,31 @@ fn an_edit_that_differs_per_run_before_a_step_is_reported_as_pre_tick() {
     assert!(!message.contains("first differing system"), "{message}");
     assert!(message.contains("fields: level"), "{message}");
 }
+
+fn extra_bump(world: &mut World, _: &SystemCtx) {
+    for (g,) in world.query::<(&mut Gauge,)>() {
+        g.level += 1.0;
+    }
+}
+
+#[test]
+fn a_system_that_runs_in_only_one_run_is_named_as_the_extra() {
+    // Only the second `build()` registers `extra_bump`, so run B's schedule is one system longer.
+    let builds = AtomicU32::new(0);
+    let message = panic_text(|| {
+        assert_deterministic(
+            || {
+                let builder = game(no_drift);
+                let builder = if builds.fetch_add(1, Ordering::SeqCst) % 2 == 1 {
+                    builder.system("extra_bump", extra_bump)
+                } else {
+                    builder
+                };
+                loaded_engine(builder, SCENE)
+            },
+            |engine| step(engine, 3),
+        );
+    });
+    assert!(message.contains("`extra_bump`"), "{message}");
+    assert!(message.contains("fields: level"), "{message}");
+}

@@ -56,6 +56,12 @@ fn needs_gpu_open_menu_matches_its_golden() {
 /// `run`, not `check`: a bless would overwrite `main.png` and race the main-scene test.
 #[test]
 fn needs_gpu_replay_start_matches_the_main_golden() {
+    if ludion_testkit::platform_dir().is_err() || ludion_testkit::bless_requested() {
+        eprintln!(
+            "SKIPPED replay golden test: unpinned platform or bless run (never blesses main.png)"
+        );
+        return;
+    }
     let bytes = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("run.lrp"))
         .expect("run.lrp reads");
     let outcome = GoldenTest::from_replay(&bytes, 0, scenes_dir(), goldens_root(), "main")
