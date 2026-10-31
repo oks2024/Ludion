@@ -93,7 +93,7 @@ bpy.ops.export_scene.gltf(
 
 An animated asset flips two of those arguments: `export_animations=True, export_extras=True` (the
 skin needs `export_skins=True` as well). `ludion import` then writes one `clips/<name>.anim.yaml`
-per Action, with tracks named after the joints. Two custom properties on the Action steer it and
+per Action, with tracks named after the joints. A rigid animation (whole nodes, no skin) imports as prefab clips instead: `ludion docs prefab-animation`. Two custom properties on the Action steer it and
 ride out as glTF extras: `loop` (bool, default false) and, only when the defaults refuse a clip
 with `L1206`, the tolerances `bound_rotation_deg`, `bound_translation` and `bound_scale` (the
 `reduce_*` twins keep more keys). An unknown key is `L1207`; `ludion explain L1206` has the numbers.

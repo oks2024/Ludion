@@ -334,6 +334,8 @@ parents before children.
   22nd kind: `Plan/document-kinds.md`'s trigger has fired independently, and this plan should not
   wait on it but should add its row the table way.
 
+  *Amended 2026-10-31 (owner approval 2026-10-30, Clockout 0016): a prefab gains an optional `clips:` map (short name to a `kind: animation` file, relative to the prefab; absent when empty, so existing prefabs are byte-identical); an instance plays one through `Animation` on its root part.*
+
 ```yaml
 format: 1
 kind: prefab

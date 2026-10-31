@@ -218,6 +218,7 @@ outside the mesh content hash, so nothing is re-uploaded to the GPU.
 - `ludion docs voxel-assemblies` — the model the clips address: parts, pivots, the humanoid names.
 - `ludion docs character-animation` — skinned characters: the `kind: character` document, clips, `crossfade`, `AnimationEvents`.
 - `ludion docs sprite-animation` — the same `Animation` component over a `Sprite`'s atlas flipbook.
+- `ludion docs prefab-animation` — imported rigid node clips on a prefab instance.
 - `ludion docs components` — `Animation`'s row, and every other built-in component.
 - `ludion docs voxel-sheets` — the sheet flags `--clip` composes with.
 - `ludion docs dev-loop` — the live rebuild and reload loop a clip edit rides.

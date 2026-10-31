@@ -14,7 +14,10 @@ Runs after `build_entities` (which returns the skin bindings): each glTF animati
 importer. Design: `Plan/animation-clips.md` decisions 8, 9, 11–13.
 `ludion check-scene <clip>` re-imports a clip's `generated_from` and prints its `ClipReport` (`crates/ludion-cli/src/clip_report.rs`).
 - **Mapping.** Translation/rotation/scale channels on a joint of a bound skin → the track named after
-  the joint (parent-first order). `L1202`, channel dropped: morph weights, a non-joint node, a
+  the joint (parent-first order). Channels on a non-joint node that became a prefab part (the `RigNode` rig,
+  parent-first DFS) → a track named after the part; the `ClipArtifact` part binding lands in the prefab's
+  `clips:` map. `L1202`, channel dropped: morph weights, a channel on a node with no part, an animation
+  mixing skin joints and parts, a
   channel on a *root* joint whose rest is re-expressed in the mesh frame or on a joint whose rest
   folds a helper node above it (`SkinBinding.reframed`), a joint of a second skin, sparse accessors. An animation with
   no surviving channel, or zero length, writes no clip (`L1202`).

@@ -133,9 +133,14 @@ Parts are not parented unless the prefab says so, so despawning an instance is d
 
 A scene (or another prefab) can place a prefab with one entity entry — `name`, `prefab:`, `transform`, `overrides`, `removed` — expanded at load, and `scene.save` writes live instances back as such entries. That format, nesting, `L1231`–`L1238` and `prefab.create`/`apply`/`revert`/`unpack` are `ludion docs prefab-instances`.
 
+## Clips
+
+A prefab may bind clips under an optional `clips:` map (short name to a `kind: animation` file, relative to the prefab); a glTF import writes it for rigid node animation. Playback, the `check-scene` clip checks and `L1314` are `ludion docs prefab-animation`.
+
 ## Next
 
 - `ludion docs prefab-instances` — instance entries in scenes, save, apply/revert/unpack.
+- `ludion docs prefab-animation` — `clips:` on a prefab, played on an instance's root part.
 - `ludion docs hierarchy` — `Parent`, `reparent`, cascade despawn.
 - `ludion docs physics-joints` — the `Joint` and `JointMotor` syntax a prefab's parts use.
 - `ludion docs wire-protocol` — `prefab.spawn` §9.

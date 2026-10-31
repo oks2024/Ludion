@@ -121,3 +121,4 @@ cargo run -p ludion-testkit --example character_cycle -- --replay-verify example
 - `ludion docs components` — the `Animation` component's fields and defaults.
 - `ludion docs sprite-animation` — the same component over a `Sprite`'s flipbook.
 - `ludion docs blender-craft` — authoring the rig and clips in Blender.
+- `ludion docs prefab-animation` — rigid node clips on a prefab, no skin.

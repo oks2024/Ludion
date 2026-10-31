@@ -71,6 +71,8 @@ Runtime, strips and the gallery scene.
   `CHARACTER_DATA_CONSISTENCY`, `L1208` `IMPORT_CLIP_AT_REST`, `L1209` `ANIMATION_SPRITE_CROSSFADE`,
   `L1210` `ANIMATION_MODEL_UNLOADED`. The M4 bless and events twin passed 2026-09-30 (rev 996).
 
+*Amended 2026-10-31 (owner approval 2026-10-30, Clockout 0016): rigid glTF node animation imports as prefab clips (a `clips:` map on the prefab, tracks keyed by part name), plays on a prefab instance's root part, and is read by `check-scene` (`L1314`) and `render --model <prefab>`; `ludion docs prefab-animation`.*
+
 ### W3
 
 Editor clip preview, no new wire method (decision 18). The Voxel Artist's clip strip
@@ -104,7 +106,7 @@ the clip.
 - **Skins:** the mesh document carries `joints` (rest TRS and inverse bind), `weights` and
   `bone_indices`. The GPU palette skins every mesh pass. `extract.rs::posed_palette` builds a palette
   from `SkinBone` parts or the rest pose. `Animation` on a skin that parts name is `L1197`.
-- **Import:** glTF animations are `L1202` (`crates/ludion-import`).
+- **Import:** glTF animations are `L1202` (`crates/ludion-import`). *Amended 2026-10-31 (Clockout 0016): TRS channels on non-joint nodes that become prefab parts leave `L1202`; morph weights stay.*
 - **Tooling:** `render --model x.assembly.yaml --clip <c> [--time <s>] [--strip <n>]` for voxel
   assemblies only.
 - **Game driver pattern:** vigil's `games/vigil/src/animation.rs` writes `Animation` from Rust and
