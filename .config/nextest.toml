@@ -103,6 +103,15 @@ filter = """
 """
 test-group = 'wall-clock'
 
+# The facade's embed and C-ABI host tests each boot a real engine and stop it, and `stop()` waits a 5 s
+# wall-clock grace for the sim thread (L4022). A saturated box misses that grace and `stop()` returns 1,
+# so under full-suite load these fail while passing in ~2.4 s alone. Like the fps gates, they claim the
+# whole run pool so nothing co-runs with them; this precedes the GPU entry (none carries the prefix).
+[[profile.default.overrides]]
+filter = 'binary_id(=ludion) & (test(/^embed::tests::/) | test(/^ffi::tests::/))'
+test-group = '@global'
+threads-required = "num-test-threads"
+
 # `ludion-cli::new` runs `cargo test` over a freshly scaffolded project and `ludion-cli::dev` drives
 # the `ludion dev` hot-reload supervisor through several rebuilds; `ludion-cli::phase7` and
 # `ludion-mcp::integration` each `cargo build` a binary they then spawn. All four take cargo's build
