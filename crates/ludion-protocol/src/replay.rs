@@ -325,10 +325,13 @@ impl<W: Write> ReplayWriter<W> {
         let header_json = serde_json::to_vec(header).map_err(io::Error::other)?;
         let compressed = zstd::encode_all(&header_json[..], ZSTD_LEVEL)?;
         check_writable("header", header_json.len(), compressed.len())?;
-        inner.write_all(&REPLAY_MAGIC)?;
-        inner.write_all(&REPLAY_FORMAT_VERSION.to_le_bytes())?;
-        inner.write_all(&(compressed.len() as u32).to_le_bytes())?;
-        inner.write_all(&compressed)?;
+        // One write per unit: a failed write can tear only the last record, which the reader drops.
+        let mut buf = Vec::with_capacity(10 + compressed.len());
+        buf.extend_from_slice(&REPLAY_MAGIC);
+        buf.extend_from_slice(&REPLAY_FORMAT_VERSION.to_le_bytes());
+        buf.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&compressed);
+        inner.write_all(&buf)?;
         Ok(ReplayWriter { inner, records: 0 })
     }
 
@@ -466,11 +469,13 @@ impl<W: Write> ReplayWriter<W> {
     fn write_framed(&mut self, kind: u8, frame: FrameIndex, body_json: &[u8]) -> io::Result<()> {
         let compressed = zstd::encode_all(body_json, ZSTD_LEVEL)?;
         check_writable(kind_name(kind), body_json.len(), compressed.len())?;
-        self.inner.write_all(&[kind])?;
-        self.inner.write_all(&frame.as_u64().to_le_bytes())?;
-        self.inner
-            .write_all(&(compressed.len() as u32).to_le_bytes())?;
-        self.inner.write_all(&compressed)?;
+        // One write per record: a failed write can tear only the last record, which the reader drops.
+        let mut buf = Vec::with_capacity(13 + compressed.len());
+        buf.push(kind);
+        buf.extend_from_slice(&frame.as_u64().to_le_bytes());
+        buf.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&compressed);
+        self.inner.write_all(&buf)?;
         self.records += 1;
         Ok(())
     }
@@ -635,6 +640,10 @@ pub struct ReplayReader<'a> {
     bytes: &'a [u8],
     header: ReplayHeader,
     records_start: usize,
+    /// End of the last whole record: `bytes.len()` unless the file ends in a torn record.
+    records_end: usize,
+    /// Byte offset where a torn final record starts, if the file has one.
+    torn_tail: Option<usize>,
 }
 
 /// The result of [`ReplayReader::seek`]: the latest keyframe at or before the target, and the
@@ -652,8 +661,9 @@ impl<'a> ReplayReader<'a> {
     /// Parses the header and validates the container framing.
     ///
     /// # Errors
-    /// - `L3010` if the magic/version is wrong, the file is truncated, or a record/header is not
-    ///   valid JSON.
+    /// - `L3010` if the magic/version is wrong, the header is truncated or not valid JSON, or a
+    ///   complete record header names an unknown kind. A torn *final* record is not an error: it is
+    ///   dropped and reported by [`ReplayReader::torn_tail`].
     /// - `L3011` if a zstd frame fails to decompress.
     pub fn new(bytes: &'a [u8]) -> Result<Self, Diagnostic> {
         if bytes.len() < 10 {
@@ -674,16 +684,40 @@ impl<'a> ReplayReader<'a> {
             .checked_add(header_len)
             .filter(|end| *end <= bytes.len())
             .ok_or_else(|| format_err("replay header length runs past the end of the file"))?;
-        let header_json = decompress(&bytes[10..header_end], || {
+        let header_json = decompress(&bytes[10..header_end], None, || {
             "the replay header (at byte offset 10)".to_string()
         })?;
         let header: ReplayHeader = serde_json::from_slice(&header_json)
             .map_err(|e| format_err(format!("replay header is not valid JSON: {e}")))?;
+        let (records_end, torn_tail) = frame_walk(bytes, header_end)?;
         Ok(ReplayReader {
             bytes,
             header,
             records_start: header_end,
+            records_end,
+            torn_tail,
         })
+    }
+
+    /// The `L3052` warning for a torn final record, if the file ends in one. The record was
+    /// dropped: [`records`](Self::records) and [`seek`](Self::seek) cover the whole records before it.
+    pub fn torn_tail(&self) -> Option<Diagnostic> {
+        let offset = self.torn_tail?;
+        Some(
+            Diagnostic::new(
+                code::REPLAY_TORN_TAIL,
+                format!(
+                    "the replay ends in a torn record at byte offset {offset}; its {} trailing \
+                     bytes were dropped",
+                    self.bytes.len() - offset
+                ),
+            )
+            .with_help(
+                "the session replays up to the last whole record; this is what a recording \
+                 stopped mid-write (L3042) or a killed host leaves, so re-record if the full \
+                 session matters",
+            ),
+        )
     }
 
     /// The parsed header.
@@ -693,7 +727,11 @@ impl<'a> ReplayReader<'a> {
 
     /// Decodes every record in order.
     pub fn records(&self) -> Result<Vec<ReplayRecord>, Diagnostic> {
-        self.scan()?.iter().map(|raw| decode_record(raw)).collect()
+        let mut budget = DecodeBudget::new(self.bytes.len());
+        self.scan()
+            .iter()
+            .map(|raw| decode_record(raw, &mut budget))
+            .collect()
     }
 
     /// Finds the latest keyframe at or before `target` and the deltas that reach `target` from it.
@@ -706,8 +744,15 @@ impl<'a> ReplayReader<'a> {
     /// A keyframe without a `pending_input` key (an empty script, or one written before the field
     /// existed) also gets the inputs written before it and stamped in `(keyframe, target]`, first,
     /// since an older keyframe lost exactly those.
+    ///
+    /// # Errors
+    /// - `L3021` if the stream resets the sim frame (a `scene.load` after a tick, or an
+    ///   `engine.restore`), which makes a frame target ambiguous.
+    /// - `L3017` / `L3011` / `L3010` as for [`records`](Self::records).
     pub fn seek(&self, target: FrameIndex) -> Result<Seek, Diagnostic> {
-        let raw = self.scan()?;
+        let raw = self.scan();
+        let mut budget = DecodeBudget::new(self.bytes.len());
+        refuse_frame_reset(&raw, &mut budget)?;
 
         // Latest keyframe with frame <= target.
         let keyframe_index = raw
@@ -717,7 +762,7 @@ impl<'a> ReplayReader<'a> {
             .map(|(i, _)| i);
 
         let keyframe = match keyframe_index {
-            Some(i) => match decode_record(&raw[i])? {
+            Some(i) => match decode_record(&raw[i], &mut budget)? {
                 ReplayRecord::Keyframe { frame, snapshot } => Some((frame, snapshot)),
                 _ => unreachable!("index selected a keyframe"),
             },
@@ -730,7 +775,7 @@ impl<'a> ReplayReader<'a> {
         {
             for r in raw[..i].iter().filter(|r| r.kind == KIND_INPUT) {
                 if r.frame > *keyframe_frame && r.frame <= target {
-                    deltas.push(decode_record(r)?);
+                    deltas.push(decode_record(r, &mut budget)?);
                 }
             }
         }
@@ -740,26 +785,19 @@ impl<'a> ReplayReader<'a> {
             if r.kind == KIND_KEYFRAME || r.frame > target {
                 continue;
             }
-            deltas.push(decode_record(r)?);
+            deltas.push(decode_record(r, &mut budget)?);
         }
 
         Ok(Seek { keyframe, deltas })
     }
 
-    /// Walks the record framing, borrowing each still-compressed body without decompressing it.
-    fn scan(&self) -> Result<Vec<RawRecord<'a>>, Diagnostic> {
+    /// Borrows each whole record's still-compressed body, without decompressing it. The framing
+    /// was validated by `new`.
+    fn scan(&self) -> Vec<RawRecord<'a>> {
         let mut out = Vec::new();
         let mut offset = self.records_start;
-        while offset < self.bytes.len() {
-            if offset + 13 > self.bytes.len() {
-                return Err(format_err("replay is truncated inside a record header"));
-            }
+        while offset < self.records_end {
             let kind = self.bytes[offset];
-            if kind > KIND_MAX {
-                return Err(format_err(format!(
-                    "replay has an unknown record kind {kind}"
-                )));
-            }
             let frame = FrameIndex::new(u64::from_le_bytes(
                 self.bytes[offset + 1..offset + 9].try_into().unwrap(),
             ));
@@ -767,10 +805,7 @@ impl<'a> ReplayReader<'a> {
                 u32::from_le_bytes(self.bytes[offset + 9..offset + 13].try_into().unwrap())
                     as usize;
             let body_start = offset + 13;
-            let body_end = body_start
-                .checked_add(body_len)
-                .filter(|end| *end <= self.bytes.len())
-                .ok_or_else(|| format_err("replay record body runs past the end of the file"))?;
+            let body_end = body_start + body_len;
             out.push(RawRecord {
                 kind,
                 frame,
@@ -779,13 +814,98 @@ impl<'a> ReplayReader<'a> {
             });
             offset = body_end;
         }
-        Ok(out)
+        out
     }
 }
 
+/// Walks the record framing from `start` without decompressing: returns the end of the last whole
+/// record and, when the file ends in a torn record, where that record starts. A tail shorter than a
+/// record header, or a body running past the end, runs to EOF by construction, so it can only be the
+/// final record.
+///
+/// # Errors
+/// `L3010` if a complete record header names an unknown kind.
+fn frame_walk(bytes: &[u8], start: usize) -> Result<(usize, Option<usize>), Diagnostic> {
+    let mut offset = start;
+    while offset < bytes.len() {
+        if offset + 13 > bytes.len() {
+            return Ok((offset, Some(offset)));
+        }
+        let kind = bytes[offset];
+        if kind > KIND_MAX {
+            return Err(format_err(format!(
+                "replay has an unknown record kind {kind}"
+            )));
+        }
+        let body_len =
+            u32::from_le_bytes(bytes[offset + 9..offset + 13].try_into().unwrap()) as usize;
+        match (offset + 13)
+            .checked_add(body_len)
+            .filter(|end| *end <= bytes.len())
+        {
+            Some(end) => offset = end,
+            None => return Ok((offset, Some(offset))),
+        }
+    }
+    Ok((offset, None))
+}
+
+/// Refuses a stream that resets or jumps the sim frame, which makes a seek target ambiguous: a
+/// `scene.load` after any tick, or an `engine.restore` anywhere. Mirrors the engine's windowed
+/// replay modes.
+///
+/// # Errors
+/// `L3021` naming the first offending record; decode errors as for `decode_record`.
+fn refuse_frame_reset(raw: &[RawRecord<'_>], budget: &mut DecodeBudget) -> Result<(), Diagnostic> {
+    let mut ticks = 0u64;
+    for (index, r) in raw.iter().enumerate() {
+        let what = match r.kind {
+            KIND_SCENE_LOAD if ticks > 0 => "a `scene.load`".to_owned(),
+            KIND_COMMAND => match decode_record(r, budget)? {
+                ReplayRecord::Command {
+                    command: Command::SimStep(params),
+                    ..
+                } => {
+                    ticks = ticks.saturating_add(params.ticks);
+                    continue;
+                }
+                ReplayRecord::Command {
+                    command: Command::SceneLoad(params),
+                    ..
+                } if ticks > 0 => format!("a `scene.load` of `{}`", params.path),
+                ReplayRecord::Command {
+                    command: Command::EngineRestore(_),
+                    ..
+                } => "an `engine.restore`".to_owned(),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        return Err(Diagnostic::new(
+            code::REPLAY_FRAME_WINDOW,
+            format!(
+                "seek cannot use this replay: record #{} at byte offset {} (frame {}, {what}) after \
+                 {ticks} recorded ticks resets the sim frame, so frame numbers repeat or jump and a \
+                 seek target is ambiguous",
+                index + 1,
+                r.body_offset,
+                r.frame.as_u64()
+            ),
+        )
+        .with_help(
+            "seek a recording that has no engine.restore and no scene.load after its first tick \
+             (record the session after the load), or replay it whole",
+        ));
+    }
+    Ok(())
+}
+
 /// Decompresses one raw record body and reconstructs the typed [`ReplayRecord`].
-fn decode_record(raw: &RawRecord<'_>) -> Result<ReplayRecord, Diagnostic> {
-    let body = decompress(raw.body, || {
+fn decode_record(
+    raw: &RawRecord<'_>,
+    budget: &mut DecodeBudget,
+) -> Result<ReplayRecord, Diagnostic> {
+    let body = decompress(raw.body, Some(budget), || {
         format!("the replay record body at byte offset {}", raw.body_offset)
     })?;
     let record = match raw.kind {
@@ -876,6 +996,10 @@ const FLOOR: u64 = 1024 * 1024;
 /// spends per frame.
 const HARD_CEILING: u64 = 256 * 1024 * 1024;
 
+/// The absolute ceiling for everything one read call decodes: it bounds memory across many tiny
+/// frames that each get the `FLOOR`.
+const FILE_HARD_CEILING: u64 = 2 * 1024 * 1024 * 1024;
+
 // The reproducer's 274-byte frame must stay refused, and a keyframe must have real room.
 const _: () = assert!(FLOOR < 8 * 1024 * 1024);
 const _: () = assert!(HARD_CEILING >= 64 * 1024 * 1024);
@@ -886,6 +1010,28 @@ fn frame_ceiling(compressed_len: usize) -> u64 {
     (compressed_len as u64)
         .saturating_mul(MAX_RATIO)
         .clamp(FLOOR, HARD_CEILING)
+}
+
+/// The most a read call may decode in total from a file of `file_len` bytes.
+fn file_ceiling(file_len: usize) -> u64 {
+    (file_len as u64)
+        .saturating_mul(MAX_RATIO)
+        .clamp(FLOOR, FILE_HARD_CEILING)
+}
+
+/// The running decompressed total of one `records()` / `seek()` call against its whole-file ceiling.
+struct DecodeBudget {
+    used: u64,
+    ceiling: u64,
+}
+
+impl DecodeBudget {
+    fn new(file_len: usize) -> Self {
+        DecodeBudget {
+            used: 0,
+            ceiling: file_ceiling(file_len),
+        }
+    }
 }
 
 /// zstd-decompresses one frame under a hard output ceiling (`frame_ceiling` of its length).
@@ -899,17 +1045,26 @@ fn frame_ceiling(compressed_len: usize) -> u64 {
 ///
 /// # Errors
 /// - `L3011` if the bytes are not a decodable zstd frame.
-/// - `L3017` if the frame decompresses to more than its ceiling.
-fn decompress(frame: &[u8], location: impl FnOnce() -> String) -> Result<Vec<u8>, Diagnostic> {
+/// - `L3017` if the frame decompresses to more than its ceiling, or the call's running total passes
+///   the whole-file ceiling (`budget`; the header is judged per frame only).
+fn decompress(
+    frame: &[u8],
+    budget: Option<&mut DecodeBudget>,
+    location: impl FnOnce() -> String,
+) -> Result<Vec<u8>, Diagnostic> {
     use std::io::Read;
 
     let ceiling = frame_ceiling(frame.len());
+    let remaining = budget
+        .as_deref()
+        .map_or(u64::MAX, |b| b.ceiling.saturating_sub(b.used));
+    let read_limit = ceiling.min(remaining);
     let decoder = zstd::stream::read::Decoder::new(frame).map_err(compression_err)?;
     // Read at most ceiling + 1 bytes: yielding ceiling + 1 proves the frame exceeds the cap, and the
     // buffer never grows past that regardless of the frame's advertised content size.
     let mut out = Vec::new();
     decoder
-        .take(ceiling + 1)
+        .take(read_limit + 1)
         .read_to_end(&mut out)
         .map_err(compression_err)?;
     if out.len() as u64 > ceiling {
@@ -928,6 +1083,26 @@ fn decompress(frame: &[u8], location: impl FnOnce() -> String) -> Result<Vec<u8>
             "this is a decompression bomb or a corrupt frame; re-record the session or verify the \
              .lrp came from a trusted `ludion` run",
         ));
+    }
+    if let Some(budget) = budget {
+        if out.len() as u64 > remaining {
+            return Err(Diagnostic::new(
+                code::REPLAY_DECOMPRESSED_TOO_LARGE,
+                format!(
+                    "{} takes the replay past its {} KiB whole-file decode ceiling ({MAX_RATIO}x \
+                     the file's size, at most {} GiB); {} KiB were already decoded",
+                    location(),
+                    budget.ceiling / 1024,
+                    FILE_HARD_CEILING / (1024 * 1024 * 1024),
+                    budget.used / 1024
+                ),
+            )
+            .with_help(
+                "this is a decompression bomb or a corrupt file; re-record the session or verify \
+                 the .lrp came from a trusted `ludion` run",
+            ));
+        }
+        budget.used += out.len() as u64;
     }
     Ok(out)
 }
@@ -991,13 +1166,7 @@ mod tests {
         let reader = ReplayReader::new(bytes).expect("a committed replay parses");
         let header_len = u32::from_le_bytes(bytes[6..10].try_into().unwrap()) as usize;
         let mut frames = vec![&bytes[10..10 + header_len]];
-        frames.extend(
-            reader
-                .scan()
-                .expect("a committed replay's framing scans")
-                .iter()
-                .map(|raw| raw.body),
-        );
+        frames.extend(reader.scan().iter().map(|raw| raw.body));
         frames
             .into_iter()
             .map(|frame| {
@@ -1018,6 +1187,7 @@ mod tests {
                 reader.records().is_ok(),
                 "{path} no longer decodes under its frame ceilings"
             );
+            assert!(reader.torn_tail().is_none(), "{path} ends in a torn record");
             for (compressed, decompressed) in frame_sizes(&bytes) {
                 assert!(
                     decompressed * 4 <= frame_ceiling(compressed),
@@ -1232,12 +1402,189 @@ mod tests {
             ReplayReader::new(&bad_magic).unwrap_err().code,
             code::REPLAY_FORMAT
         );
+    }
 
-        // Truncate mid-body: header parses, but scanning the records fails.
+    #[test]
+    fn a_torn_final_record_is_dropped_with_a_warning() {
         let bytes = sample_session();
-        let truncated = &bytes[..bytes.len() - 3];
-        let reader = ReplayReader::new(truncated).unwrap();
-        assert_eq!(reader.records().unwrap_err().code, code::REPLAY_FORMAT);
+        assert!(ReplayReader::new(&bytes).unwrap().torn_tail().is_none());
+        let whole = ReplayReader::new(&bytes).unwrap().records().unwrap();
+        let last_start = {
+            let reader = ReplayReader::new(&bytes).unwrap();
+            reader.scan().last().unwrap().body_offset - 13
+        };
+        // One byte off the body, then a cut inside the 13-byte record header, then a lone kind byte.
+        for cut in [bytes.len() - 1, last_start + 5, last_start + 1] {
+            let reader = ReplayReader::new(&bytes[..cut]).unwrap();
+            assert_eq!(reader.records().unwrap(), whole[..whole.len() - 1]);
+            let warning = reader.torn_tail().expect("a torn tail is reported");
+            assert_eq!(warning.code, code::REPLAY_TORN_TAIL);
+            assert!(warning.message.contains(&last_start.to_string()));
+        }
+        // A cut exactly at a record boundary is a clean, shorter file.
+        let reader = ReplayReader::new(&bytes[..last_start]).unwrap();
+        assert!(reader.torn_tail().is_none());
+        assert_eq!(reader.records().unwrap().len(), whole.len() - 1);
+    }
+
+    #[test]
+    fn a_truncated_header_still_refuses() {
+        let bytes = sample_session();
+        let header_end = ReplayReader::new(&bytes).unwrap().records_start;
+        for cut in [5, 9, header_end - 1] {
+            assert_eq!(
+                ReplayReader::new(&bytes[..cut]).unwrap_err().code,
+                code::REPLAY_FORMAT,
+                "cut at {cut}"
+            );
+        }
+    }
+
+    /// `count` input records, each a ~600 KiB run of one letter: tiny on disk, over half the per-frame
+    /// floor once inflated.
+    fn inflating_session(count: usize) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        let mut writer = ReplayWriter::new(&mut buffer, &header()).unwrap();
+        let big = serde_json::Value::String("a".repeat(600 * 1024));
+        for frame in 0..count {
+            writer
+                .write_input(FrameIndex::new(frame as u64), &big)
+                .unwrap();
+        }
+        writer.into_inner().unwrap();
+        buffer
+    }
+
+    #[test]
+    fn many_tiny_inflating_frames_hit_the_file_budget() {
+        let bytes = inflating_session(4);
+        assert!(bytes.len() < 4096, "the file stays tiny: {}", bytes.len());
+        let reader = ReplayReader::new(&bytes).unwrap();
+        let err = reader.records().unwrap_err();
+        assert_eq!(err.code, code::REPLAY_DECOMPRESSED_TOO_LARGE);
+        assert!(err.message.contains("whole-file"), "{}", err.message);
+        let err = reader.seek(FrameIndex::new(3)).unwrap_err();
+        assert_eq!(err.code, code::REPLAY_DECOMPRESSED_TOO_LARGE);
+
+        let one = inflating_session(1);
+        assert_eq!(ReplayReader::new(&one).unwrap().records().unwrap().len(), 1);
+    }
+
+    fn step(ticks: u64) -> Command {
+        Command::SimStep(crate::command::SimStepParams { ticks, hash: false })
+    }
+
+    fn scene_load_command() -> Command {
+        Command::SceneLoad(crate::command::SceneLoadParams {
+            path: "b.yaml".into(),
+        })
+    }
+
+    #[test]
+    fn seek_refuses_a_scene_load_after_a_tick() {
+        for record_kind in [false, true] {
+            let mut buffer = Vec::new();
+            let mut writer = ReplayWriter::new(&mut buffer, &header()).unwrap();
+            writer.write_command(FrameIndex::new(0), &step(5)).unwrap();
+            if record_kind {
+                writer
+                    .write_scene_load(FrameIndex::new(5), "b.yaml", "entities: []\n")
+                    .unwrap();
+            } else {
+                writer
+                    .write_command(FrameIndex::new(5), &scene_load_command())
+                    .unwrap();
+            }
+            writer.into_inner().unwrap();
+            let err = ReplayReader::new(&buffer)
+                .unwrap()
+                .seek(FrameIndex::new(3))
+                .unwrap_err();
+            assert_eq!(err.code, code::REPLAY_FRAME_WINDOW, "{}", err.message);
+        }
+    }
+
+    #[test]
+    fn seek_refuses_an_engine_restore() {
+        let mut buffer = Vec::new();
+        let mut writer = ReplayWriter::new(&mut buffer, &header()).unwrap();
+        writer
+            .write_command(
+                FrameIndex::new(0),
+                &Command::EngineRestore(crate::command::EngineRestoreParams {
+                    snapshot: serde_json::json!({}),
+                }),
+            )
+            .unwrap();
+        writer.into_inner().unwrap();
+        let err = ReplayReader::new(&buffer)
+            .unwrap()
+            .seek(FrameIndex::new(0))
+            .unwrap_err();
+        assert_eq!(err.code, code::REPLAY_FRAME_WINDOW, "{}", err.message);
+    }
+
+    #[test]
+    fn seek_allows_a_scene_load_before_the_first_tick() {
+        let mut buffer = Vec::new();
+        let mut writer = ReplayWriter::new(&mut buffer, &header()).unwrap();
+        writer
+            .write_command(FrameIndex::new(0), &scene_load_command())
+            .unwrap();
+        writer
+            .write_scene_load(FrameIndex::new(0), "b.yaml", "entities: []\n")
+            .unwrap();
+        writer.write_command(FrameIndex::new(0), &step(5)).unwrap();
+        writer.into_inner().unwrap();
+        let seek = ReplayReader::new(&buffer)
+            .unwrap()
+            .seek(FrameIndex::new(5))
+            .unwrap();
+        assert_eq!(seek.deltas.len(), 3);
+    }
+
+    /// A sink that accepts `budget` bytes, then fails every write.
+    struct FailingSink {
+        bytes: Vec<u8>,
+        budget: usize,
+    }
+
+    impl Write for FailingSink {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.bytes.len() + buf.len() > self.budget {
+                let take = self.budget - self.bytes.len();
+                self.bytes.extend_from_slice(&buf[..take]);
+                return Err(io::Error::other("disk full"));
+            }
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_sink_failing_mid_record_leaves_a_torn_tail() {
+        let whole = sample_session();
+        let full = ReplayReader::new(&whole).unwrap().records().unwrap();
+        let mut sink = FailingSink {
+            bytes: Vec::new(),
+            budget: whole.len() - 3,
+        };
+        let mut writer = ReplayWriter::new(&mut sink, &header()).unwrap();
+        let mut failed = false;
+        for record in &full {
+            if writer.write_record(record).is_err() {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed, "the sink fails inside the last record");
+        let reader = ReplayReader::new(&sink.bytes).unwrap();
+        assert_eq!(reader.records().unwrap(), full[..full.len() - 1]);
+        assert_eq!(reader.torn_tail().unwrap().code, code::REPLAY_TORN_TAIL);
     }
 
     #[test]
@@ -1616,8 +1963,7 @@ mod tests {
         let mut bytes = sample_session();
         let records_start = ReplayReader::new(&bytes).unwrap().records_start;
         bytes[records_start] = 8; // clobber the first record's kind byte
-        let reader = ReplayReader::new(&bytes).unwrap();
-        let err = reader.records().unwrap_err();
+        let err = ReplayReader::new(&bytes).unwrap_err();
         assert_eq!(err.code, code::REPLAY_FORMAT);
     }
 

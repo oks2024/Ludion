@@ -42,6 +42,12 @@ pub fn run(path: &Path, hashes: bool) -> ExitCode {
         }
     };
 
+    if let Ok(reader) = ludion_protocol::replay::ReplayReader::new(&bytes)
+        && let Some(warning) = reader.torn_tail()
+    {
+        eprintln!("{warning}");
+    }
+
     // Root the replay's project at the replay file's own directory (resolved absolute, cwd-independent
     // — the same convention `serve`/`sim-hash` use for a scene). Inline-scene replays ignore this;
     // path-scene replays resolve their reference here, so a replay+scene tree stays valid when moved.

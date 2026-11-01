@@ -977,10 +977,10 @@ fn replay_project_root(
 }
 
 /// Reads a recorded session, as an `L1015` diagnostic when the file cannot be read — the same
-/// refusal `ludion replay` prints.
+/// refusal `ludion replay` prints. Warns (`L3052`) when the file ends in a torn record.
 #[cfg(feature = "wire")]
 fn read_replay(path: &Path) -> Result<Vec<u8>, Diagnostic> {
-    std::fs::read(path).map_err(|error| {
+    let bytes = std::fs::read(path).map_err(|error| {
         Diagnostic::new(
             code::SCENE_IO,
             format!(
@@ -989,7 +989,13 @@ fn read_replay(path: &Path) -> Result<Vec<u8>, Diagnostic> {
             ),
         )
         .with_help("check the path (relative to the current directory) and permissions")
-    })
+    })?;
+    if let Ok(reader) = ludion_protocol::replay::ReplayReader::new(&bytes)
+        && let Some(warning) = reader.torn_tail()
+    {
+        eprintln!("{warning}");
+    }
+    Ok(bytes)
 }
 
 /// Runs `--replay-frames`: drives this game's committed `.lrp` frame-by-frame through the game's own

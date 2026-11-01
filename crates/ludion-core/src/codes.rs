@@ -1960,6 +1960,11 @@ pub mod code {
     /// event is not JSON or not the shape this protocol version defines. Raised by `ludion-client`.
     pub const PROTOCOL_MALFORMED_REPLY: DiagnosticCode = DiagnosticCode::new("L3051");
 
+    /// `L3052` — a replay's final record is cut short (a recording stopped mid-write or a killed
+    /// host); the reader dropped it and the session replays up to the last whole record. A warning.
+    /// Raised by `ludion-protocol`.
+    pub const REPLAY_TORN_TAIL: DiagnosticCode = DiagnosticCode::new("L3052");
+
     // --- L4xxx: sim (raised by `ludion-sim`) ---
 
     /// `L4001` — a simulation speed factor was not a finite number in `[1/64, 64]`. Raised by
@@ -8585,6 +8590,11 @@ one. A legitimate keyframe of any size up to 256 MiB therefore records and repla
 ceiling when reading means the frame is a decompression bomb or the file is corrupt; hitting it
 when recording means one snapshot is past 256 MiB or compresses better than 256:1.
 
+A whole read call (`records`, `seek`) is also capped: the frames it decodes may total at most 256x
+the file's size, within 1 MiB and 2 GiB, so many small frames cannot add up to an allocation no
+single frame's ceiling would allow. That message names the total, the cap and the record offset
+where it tripped.
+
 Fix: re-record the session (or a smaller scene), or verify the `.lrp` came from a trusted `ludion`
 run.",
     },
@@ -8780,6 +8790,24 @@ envelope the client sent is L3001, not this.
 Fix: connect to a host built from the same engine version as the client.",
     },
     CodeEntry {
+        code: code::REPLAY_TORN_TAIL,
+        severity: Severity::Warning,
+        title: "a replay ends in a torn record",
+        explanation: "\
+The last record of a replay is cut short: the file ends inside a record header, or the record's
+body runs past the end of the file. The reader dropped that record and the session replays up to
+the last whole record.
+
+This is what a recording stopped mid-write (L3042) or a killed host leaves behind: the writer emits
+each record with one write, so a failed or interrupted write can tear only the final record. Only
+the final record is forgiven — a cut inside the header, or an unknown record kind in a complete
+record header, is still L3010. The message names the byte offset where the torn record starts and
+how many trailing bytes were dropped.
+
+Fix: if the full session matters, re-record it. Otherwise nothing: the replay is valid as far as
+it goes.",
+    },
+    CodeEntry {
         code: code::REPLAY_FRAME_WINDOW,
         severity: Severity::Error,
         title: "replay-to-frames window is out of range",
@@ -8804,7 +8832,9 @@ numbers repeat and a window or divergence frame is ambiguous: window or bisect a
 neither (record the session after the load), or replay it whole with `--replay-verify`. A
 `--profile-replay` window that measures no frame (`--from 0 --to 0`: frame 0 is the loaded world, no
 tick produces it) has nothing to report: widen it to include a ticked frame. A bisect frame the
-replay never reaches is named with the replay's last frame: bisect against a frame in `0..=<last>`.",
+replay never reaches is named with the replay's last frame: bisect against a frame in `0..=<last>`.
+`ReplayReader::seek` refuses the same two resets: seek a recording that has neither, or replay it
+whole.",
     },
     CodeEntry {
         code: code::SERVER_ACCEPT_FAILED,
@@ -10433,6 +10463,7 @@ mod tests {
         code::RESTORE_SNAPSHOT_FIELD_UNKNOWN,
         code::REPLAY_PANIC_NOT_REPRODUCED,
         code::PROTOCOL_MALFORMED_REPLY,
+        code::REPLAY_TORN_TAIL,
         // --- L4xxx: sim ---
         code::INVALID_SIM_SPEED,
         code::INPUT_SCRIPT_IO,
@@ -10609,6 +10640,7 @@ mod tests {
             code::TRANSITION_CARRY_ORPHANED,
             code::RESTORE_ENGINE_VERSION_DIFFERS,
             code::RESTORE_SNAPSHOT_FIELD_UNKNOWN,
+            code::REPLAY_TORN_TAIL,
             code::RESIDUE_DUPLICATE_NAME,
             code::RESIDUE_CARRY_CONFLICT,
             code::RESIDUE_EVICTED,
