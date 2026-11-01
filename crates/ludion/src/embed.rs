@@ -107,6 +107,10 @@ pub struct StartOptions {
     /// it, and unless `render_size` or `LUDION_RENDER_SIZE` names an extent the render extent follows
     /// its aspect ([`safe_render_extent`]). `None` is the whole surface and no derived extent.
     pub safe_rect: Option<HostRect>,
+    /// The render extent follows the surface's physical size ([`window_render_extent`]) unless an
+    /// extent is named; a desktop window host sets it. Ignored when `safe_rect` is given, and ignored
+    /// when `record` is set (a recording keeps the default extent, letterboxed).
+    pub follow_surface: bool,
     /// The surface's initial size in physical pixels when the host has no [`Surface`] to carry it;
     /// ignored when a surface is given.
     pub size: Option<(u32, u32)>,
@@ -136,14 +140,38 @@ impl StartOptions {
 /// The extent is host state, never hashed.
 pub fn safe_render_extent(safe_w: u32, safe_h: u32) -> (u32, u32) {
     const HEIGHT: u32 = 720;
-    const FLOOR: u32 = 1280;
     if safe_w == 0 || safe_h == 0 {
-        return (FLOOR, HEIGHT);
+        return (1280, HEIGHT);
     }
+    follow_extent(safe_w, safe_h, HEIGHT)
+}
+
+/// The render extent a desktop window asks for: the window's own height (at most
+/// [`MAX_RENDER_HEIGHT`](ludion_engine::MAX_RENDER_HEIGHT)) at the window's aspect, never narrower
+/// than 16:9 and never wider than the widest extent a host may ask for. A window of another aspect
+/// than the extent is letterboxed by the blit: a taller-than-16:9 window gets bars above and below,
+/// and so does one clamped by either cap. `None` for a zero dimension (a minimized window), which
+/// leaves the extent alone. The extent is host state, never hashed.
+pub fn window_render_extent(w: u32, h: u32) -> Option<(u32, u32)> {
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some(follow_extent(w, h, h.min(ludion_engine::MAX_RENDER_HEIGHT)))
+}
+
+/// `height` high at the aspect `w`:`h`, its width clamped to `[16:9, MAX_RENDER_WIDTH]`. The caller
+/// guarantees non-zero arguments.
+fn follow_extent(w: u32, h: u32, height: u32) -> (u32, u32) {
     // Rounded to nearest, in integers: the product fits u64 for any u32 pair.
-    let width = (u64::from(HEIGHT) * u64::from(safe_w) + u64::from(safe_h) / 2) / u64::from(safe_h);
-    let width = u32::try_from(width).unwrap_or(u32::MAX);
-    (width.clamp(FLOOR, ludion_engine::MAX_RENDER_WIDTH), HEIGHT)
+    let scaled = |num: u32, den: u32| {
+        let width = (u64::from(height) * u64::from(num) + u64::from(den) / 2) / u64::from(den);
+        u32::try_from(width).unwrap_or(u32::MAX)
+    };
+    let floor = scaled(16, 9);
+    (
+        scaled(w, h).clamp(floor, ludion_engine::MAX_RENDER_WIDTH.max(floor)),
+        height,
+    )
 }
 
 /// Where the engine comes from: a game the boot thread builds from its builder (a packaged host, and
@@ -183,14 +211,23 @@ impl Injector {
     }
 }
 
+/// What a derived render extent follows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Follow {
+    /// The host's safe area ([`safe_render_extent`]), re-derived by `resize`.
+    SafeArea,
+    /// The surface's physical size ([`window_render_extent`]), re-derived by `follow_surface`.
+    Surface,
+}
+
 /// The surface's size and safe rect, kept as host state so a resize that arrives before the boot has
 /// attached the surface is not lost. Never part of the world.
 struct ResizeSlot {
     size: (u32, u32),
     safe: Option<HostRect>,
-    /// The render extent the safe rect chose, when the host lets it (no explicit extent); `None`
-    /// leaves the extent alone on every resize.
-    derived_extent: Option<(u32, u32)>,
+    /// The render extent a host rule chose, and which rule, when the host lets it (no explicit
+    /// extent); `None` leaves the extent alone on every resize.
+    derived: Option<(Follow, (u32, u32))>,
     present: Option<PresentSize>,
 }
 
@@ -316,7 +353,12 @@ impl Embedded {
         surface: Option<Surface>,
         options: StartOptions,
     ) -> Result<Embedded, Diagnostic> {
-        let (prep, scene, record_path, derived_extent, layout) = match source {
+        let start_size = surface
+            .as_ref()
+            .map(|s| (s.width, s.height))
+            .or(options.size)
+            .unwrap_or((0, 0));
+        let (prep, scene, record_path, derived, layout) = match source {
             Source::Game { builder, roots } => {
                 // A replay starts from the scene's initial state, which a restored world is not.
                 if options.restore.is_some() && options.record.is_some() {
@@ -337,12 +379,23 @@ impl Embedded {
                 )?;
                 let explicit_size =
                     ludion_engine::resolve_startup_render_size(options.render_size.as_deref())?;
-                // An explicit extent wins; otherwise a host's safe area chooses one.
-                let derived_extent = match (explicit_size, options.safe_rect) {
-                    (None, Some(safe)) => Some(safe_render_extent(safe.width, safe.height)),
+                // A named extent (option, environment or the builder's own call) wins; otherwise a
+                // host's safe area, or a following window, chooses one.
+                let named = explicit_size.or(builder.render_size_hint());
+                let derived = match (named, options.safe_rect) {
+                    (None, Some(safe)) => Some((
+                        Follow::SafeArea,
+                        safe_render_extent(safe.width, safe.height),
+                    )),
+                    // A recording never silently departs from the default extent: `record` pins it.
+                    (None, None) if options.follow_surface && options.record.is_none() => {
+                        window_render_extent(start_size.0, start_size.1)
+                            .map(|extent| (Follow::Surface, extent))
+                    }
                     _ => None,
                 };
-                let render_size = explicit_size.or(derived_extent);
+                // The builder's own extent applies at build.
+                let render_size = explicit_size.or(derived.map(|(_, extent)| extent));
 
                 // The named scene, else the builder's own default, resolved against the content root:
                 // a builder with neither cannot be hosted.
@@ -369,7 +422,7 @@ impl Embedded {
                     #[cfg(feature = "wire")]
                     roots: argv_roots,
                 };
-                (prep, scene, options.record.clone(), derived_extent, layout)
+                (prep, scene, options.record.clone(), derived, layout)
             }
             #[cfg(feature = "wire")]
             Source::Built {
@@ -387,15 +440,10 @@ impl Embedded {
 
         let (intake_tx, intake_rx) = crossbeam_channel::unbounded();
         let (stopper, stop) = stop_pair(&options);
-        let start_size = surface
-            .as_ref()
-            .map(|s| (s.width, s.height))
-            .or(options.size)
-            .unwrap_or((0, 0));
         let resize = Arc::new(Mutex::new(ResizeSlot {
             size: start_size,
             safe: options.safe_rect,
-            derived_extent,
+            derived,
             present: None,
         }));
         // Held by the boot thread for its whole life: it disconnects when the host ends on its own.
@@ -492,19 +540,44 @@ impl Embedded {
             present.set(width, height);
             present.set_rect(safe);
         }
-        let Some(current) = slot.derived_extent else {
+        if !matches!(slot.derived, Some((Follow::SafeArea, _))) {
+            return;
+        }
+        let Some(safe) = safe else { return };
+        self.move_derived_extent(
+            &mut slot,
+            Follow::SafeArea,
+            safe_render_extent(safe.width, safe.height),
+        );
+    }
+
+    /// Moves a render extent that follows the surface to the surface's physical size `w`×`h`
+    /// ([`window_render_extent`]) with a `render.size` through the intake, as any client's would. A
+    /// zero size (a minimized window) and an extent that was named or pinned leave it alone. The
+    /// host debounces a drag before calling this.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn follow_surface(&self, w: u32, h: u32) {
+        let Some(wanted) = window_render_extent(w, h) else {
             return;
         };
-        let Some(safe) = safe else { return };
-        let wanted = safe_render_extent(safe.width, safe.height);
-        if wanted != current {
-            slot.derived_extent = Some(wanted);
-            let (stamped, _reply) = StampedCommand::new(Command::RenderSize(RenderSizeParams {
-                width: Some(wanted.0),
-                height: Some(wanted.1),
-            }));
-            let _ = self.intake.send(stamped);
+        let mut slot = lock(&self.resize);
+        self.move_derived_extent(&mut slot, Follow::Surface, wanted);
+    }
+
+    /// Sends `render.size` for `wanted` when `rule` derived the extent and it differs.
+    fn move_derived_extent(&self, slot: &mut ResizeSlot, rule: Follow, wanted: (u32, u32)) {
+        let Some((current_rule, current)) = slot.derived else {
+            return;
+        };
+        if current_rule != rule || current == wanted {
+            return;
         }
+        slot.derived = Some((rule, wanted));
+        let (stamped, _reply) = StampedCommand::new(Command::RenderSize(RenderSizeParams {
+            width: Some(wanted.0),
+            height: Some(wanted.1),
+        }));
+        let _ = self.intake.send(stamped);
     }
 
     /// Pauses the sim, blocking until the sim thread confirms. A paused engine advances no frame, so
@@ -1719,6 +1792,241 @@ mod tests {
         named.resize(2000, 1000, Some(square));
         assert_eq!(render_extent(&named), (960, 540));
         assert_eq!(named.stop(), ExitCode::SUCCESS);
+
+        // The builder's own call names an extent too, and beats the safe rect.
+        let pinned = Embedded::start(
+            builder().render_size(960, 540),
+            roots(&content),
+            None,
+            StartOptions {
+                safe_rect: Some(iphone_safe_rect()),
+                ..paused()
+            },
+        )
+        .unwrap_or_else(|d| panic!("{d}"));
+        pinned.resize(2000, 1000, Some(square));
+        assert_eq!(render_extent(&pinned), (960, 540));
+        assert_eq!(pinned.stop(), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn the_window_rule_keeps_the_window_height_and_the_16_9_floor() {
+        assert_eq!(window_render_extent(2560, 1440), Some((2560, 1440)));
+        assert_eq!(
+            window_render_extent(3024, 1964),
+            Some((3492, 1964)),
+            "a taller-than-16:9 window floors at 16:9 and letterboxes"
+        );
+        assert_eq!(
+            window_render_extent(5120, 1440),
+            Some((5120, 1440)),
+            "ultrawide"
+        );
+        assert_eq!(window_render_extent(1920, 1200), Some((2133, 1200)));
+        assert_eq!(
+            window_render_extent(10000, 5000),
+            Some((
+                ludion_engine::MAX_RENDER_WIDTH,
+                ludion_engine::MAX_RENDER_HEIGHT
+            )),
+            "both caps"
+        );
+        assert_eq!(window_render_extent(0, 700), None);
+        assert_eq!(window_render_extent(700, 0), None);
+        assert_eq!(window_render_extent(1, 1), Some((2, 1)));
+    }
+
+    fn windowed(content: &Path, builder: EngineBuilder, render_size: Option<&str>) -> Embedded {
+        Embedded::start(
+            builder,
+            roots(content),
+            None,
+            StartOptions {
+                follow_surface: true,
+                size: Some((2560, 1440)),
+                render_size: render_size.map(Into::into),
+                ..paused()
+            },
+        )
+        .unwrap_or_else(|d| panic!("{d}"))
+    }
+
+    /// A following window chooses the render extent when nothing names one; the option, the
+    /// environment and the builder's own call all count as naming it.
+    #[test]
+    fn a_window_derives_the_render_extent_unless_one_is_named() {
+        let content = content_root("window-extent");
+        let derived = windowed(&content, builder(), None);
+        assert_eq!(render_extent(&derived), (2560, 1440));
+        assert_eq!(derived.stop(), ExitCode::SUCCESS);
+
+        let option = windowed(&content, builder(), Some("960x540"));
+        assert_eq!(render_extent(&option), (960, 540));
+        assert_eq!(option.stop(), ExitCode::SUCCESS);
+
+        let call = windowed(&content, builder().render_size(960, 540), None);
+        assert_eq!(render_extent(&call), (960, 540));
+        assert_eq!(call.stop(), ExitCode::SUCCESS);
+
+        let today = Embedded::start(
+            builder(),
+            roots(&content),
+            None,
+            StartOptions {
+                size: Some((2560, 1440)),
+                ..paused()
+            },
+        )
+        .unwrap_or_else(|d| panic!("{d}"));
+        assert_eq!(render_extent(&today), (1280, 720), "no follow, no change");
+        assert_eq!(today.stop(), ExitCode::SUCCESS);
+    }
+
+    /// `follow_surface` moves a derived extent, ignores a minimize, and never moves a named one; a
+    /// plain `resize` alone never does.
+    #[test]
+    fn follow_surface_moves_a_derived_extent_and_leaves_a_named_one() {
+        let content = content_root("window-follow");
+        let derived = windowed(&content, builder(), None);
+        derived.resize(1920, 1200, None);
+        assert_eq!(
+            render_extent(&derived),
+            (2560, 1440),
+            "resize alone never moves it"
+        );
+        derived.follow_surface(1920, 1200);
+        assert_eq!(render_extent(&derived), (2133, 1200));
+        derived.follow_surface(0, 0);
+        assert_eq!(
+            render_extent(&derived),
+            (2133, 1200),
+            "a minimize leaves it"
+        );
+        assert_eq!(derived.stop(), ExitCode::SUCCESS);
+
+        for named in [
+            windowed(&content, builder(), Some("960x540")),
+            windowed(&content, builder().render_size(960, 540), None),
+        ] {
+            named.follow_surface(1920, 1200);
+            assert_eq!(render_extent(&named), (960, 540));
+            assert_eq!(named.stop(), ExitCode::SUCCESS);
+        }
+    }
+
+    /// The live hash after `ticks` cumulative stepped ticks equals the replay's hash at frame
+    /// `ticks - 1` (the last tick's own frame),
+    /// and the live hashes differ from one another, so a match by frame is not a match by accident.
+    fn assert_replays_to(
+        hashes: &[(crate::prelude::FrameIndex, crate::prelude::WorldHash)],
+        live: &[(u64, WireHash)],
+    ) {
+        for (i, (ticks, hash)) in live.iter().enumerate() {
+            let replayed = hashes
+                .iter()
+                .find(|(frame, _)| frame.as_u64() + 1 == *ticks)
+                .unwrap_or_else(|| panic!("the replay has a hash at frame {ticks}"));
+            assert_eq!(
+                WireHash::from_u64(replayed.1.as_u64()),
+                *hash,
+                "the replay hash at frame {ticks} is the live one"
+            );
+            assert!(
+                live[..i].iter().all(|(_, earlier)| earlier != hash),
+                "the live hashes differ frame to frame"
+            );
+        }
+    }
+
+    /// A recording keeps the default extent while the window resizes, and replays to the live hashes.
+    #[test]
+    fn a_recording_pins_the_default_extent_while_the_window_resizes() {
+        let content = content_root("window-record");
+        let replay = content.join("session.lrp");
+        let embedded = Embedded::start(
+            builder(),
+            roots(&content),
+            None,
+            StartOptions {
+                follow_surface: true,
+                size: Some((2560, 1440)),
+                record: Some(replay.clone()),
+                ..paused()
+            },
+        )
+        .unwrap_or_else(|d| panic!("{d}"));
+        assert_eq!(render_extent(&embedded), (1280, 720));
+        let mut live = vec![(2, step_hash(&embedded, 2))];
+        embedded.follow_surface(3024, 1964);
+        embedded.resize(3024, 1964, None);
+        set_mover_x(&embedded, 4.0);
+        live.push((4, step_hash(&embedded, 2)));
+        embedded.follow_surface(5120, 1440);
+        set_mover_x(&embedded, 6.0);
+        live.push((6, step_hash(&embedded, 2)));
+        assert_eq!(render_extent(&embedded), (1280, 720));
+        assert_eq!(embedded.stop(), ExitCode::SUCCESS);
+
+        let bytes = std::fs::read(&replay).expect("the recording reached disk");
+        let hashes = ludion_engine::replay_hashes_with(builder(), &bytes, content.join("scenes"))
+            .expect("the flushed recording is a whole session");
+        assert_replays_to(&hashes, &live);
+    }
+
+    /// A session whose extent moves replays to the same hashes, with the extent coming from the
+    /// recorded `render.size` alone.
+    #[test]
+    fn a_recording_made_while_the_extent_moves_replays_to_the_same_hashes() {
+        let content = content_root("safe-record");
+        let replay = content.join("session.lrp");
+        let embedded = Embedded::start(
+            builder(),
+            roots(&content),
+            None,
+            StartOptions {
+                safe_rect: Some(iphone_safe_rect()),
+                record: Some(replay.clone()),
+                ..paused()
+            },
+        )
+        .unwrap_or_else(|d| panic!("{d}"));
+        let square = HostRect {
+            x: 0,
+            y: 0,
+            width: 2000,
+            height: 1000,
+        };
+        let mut live = vec![(2, step_hash(&embedded, 2))];
+        embedded.resize(2000, 1000, Some(square));
+        set_mover_x(&embedded, 4.0);
+        live.push((4, step_hash(&embedded, 2)));
+        assert_eq!(render_extent(&embedded), (1440, 720));
+        embedded.resize(2391, 1170, Some(iphone_safe_rect()));
+        set_mover_x(&embedded, 6.0);
+        live.push((6, step_hash(&embedded, 2)));
+        assert_eq!(embedded.stop(), ExitCode::SUCCESS);
+
+        let bytes = std::fs::read(&replay).expect("the recording reached disk");
+        let hashes = ludion_engine::replay_hashes_with(builder(), &bytes, content.join("scenes"))
+            .expect("the flushed recording is a whole session");
+        assert_replays_to(&hashes, &live);
+        let mut extents = Vec::new();
+        let engine =
+            ludion_engine::replay_with(builder(), &bytes, content.join("scenes"), |engine, _| {
+                extents.push(engine.render_size());
+                Ok(std::ops::ControlFlow::Continue(()))
+            })
+            .expect("the recording drives to its end");
+        assert!(
+            extents.contains(&(1440, 720)),
+            "the replay passes through the recorded render.size"
+        );
+        assert_eq!(
+            extents.first(),
+            Some(&(1385, 720)),
+            "the header's start extent"
+        );
+        assert_eq!(engine.render_size(), (1385, 720));
     }
 
     #[cfg(feature = "wire")]

@@ -59,15 +59,12 @@ use serde::de::DeserializeOwned;
 
 use crate::builtin_registry;
 use crate::docs::{DocKind, DocValidator};
-use crate::engine::{Engine, SystemSpec};
+use crate::engine::{DEFAULT_RENDER_SIZE, Engine, SystemSpec};
 use crate::player_profile::ProfileKind;
 
 /// The `kind:` a game's projectile-pattern documents declare — the one engine kind registered as a
 /// doc store.
 pub(crate) const PATTERN_KIND: &str = "pattern";
-
-/// The default screenshot resolution a builder-made engine starts with (matches [`Engine::new`]).
-const DEFAULT_RENDER_SIZE: (u32, u32) = (1280, 720);
 
 /// One game-component registration: a closure run against the registry that already holds the
 /// built-ins. `FnOnce` because it runs exactly once, at [`build`](EngineBuilder::build) time; `Send`
@@ -105,7 +102,7 @@ pub struct EngineBuilder {
     observe_load: bool,
     category_gains: CategoryGains,
     plane: Plane,
-    render_size: (u32, u32),
+    render_size: Option<(u32, u32)>,
     anti_aliasing: AntiAliasing,
     title: Option<String>,
     fullscreen: bool,
@@ -138,7 +135,7 @@ impl EngineBuilder {
             observe_load: false,
             category_gains: CategoryGains::default(),
             plane: Plane::default(),
-            render_size: DEFAULT_RENDER_SIZE,
+            render_size: None,
             anti_aliasing: AntiAliasing::default(),
             title: None,
             fullscreen: false,
@@ -246,9 +243,11 @@ impl EngineBuilder {
     }
 
     /// Sets the default screenshot resolution (used when a `render.screenshot` omits dimensions).
+    /// Naming one pins the render extent: a host that would follow its window or safe area keeps
+    /// this one, letterboxed.
     #[must_use]
     pub fn render_size(mut self, width: u32, height: u32) -> Self {
-        self.render_size = (width, height);
+        self.render_size = Some((width, height));
         self
     }
 
@@ -767,6 +766,12 @@ impl EngineBuilder {
         self.title.as_deref()
     }
 
+    /// The extent named by [`render_size`](EngineBuilder::render_size), if any — read by a window or
+    /// safe-area host before it consumes the builder.
+    pub fn render_size_hint(&self) -> Option<(u32, u32)> {
+        self.render_size
+    }
+
     /// The default recorded by [`fullscreen`](EngineBuilder::fullscreen).
     pub fn fullscreen_hint(&self) -> bool {
         self.fullscreen
@@ -814,7 +819,7 @@ impl EngineBuilder {
             self.profile_kind,
             profile_rel_path,
             project_root,
-            self.render_size,
+            self.render_size.unwrap_or(DEFAULT_RENDER_SIZE),
         );
         engine.save_root = self.save_root;
         // Before `install_profile`: the boot load decides on it whether an unloadable save is renamed.
@@ -1053,6 +1058,15 @@ mod tests {
         assert_eq!(set.title_hint(), Some("Game"));
         assert!(set.fullscreen_hint());
         assert_eq!(set.cursor_hint(), CursorMode::Visible);
+    }
+
+    #[test]
+    fn the_render_size_hint_is_none_until_one_is_named() {
+        assert_eq!(Engine::builder().render_size_hint(), None);
+        assert_eq!(
+            Engine::builder().render_size(960, 540).render_size_hint(),
+            Some((960, 540))
+        );
     }
 
     #[test]

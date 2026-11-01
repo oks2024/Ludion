@@ -1,5 +1,6 @@
 //! Window chrome shared by every windowed host: the fullscreen chord, the idle-cursor timer, the
-//! HiDPI-aware first window size, the `LUDION_FULLSCREEN` knob and window titles.
+//! resize debounce, the HiDPI-aware first window size, the `LUDION_FULLSCREEN` knob and window
+//! titles.
 //!
 //! Everything here is pure (time arrives as a parameter, the platform as a value) so the rules are
 //! testable without a window. All of it is host state: nothing reaches the sim, the `WorldHash`, a
@@ -147,6 +148,38 @@ impl CursorAutoHide {
     /// When the next [`poll`](Self::poll) may hide the cursor; `None` when disabled or already hidden.
     pub fn deadline(&self) -> Option<Instant> {
         (self.enabled && !self.hidden).then(|| self.last_motion + CURSOR_IDLE)
+    }
+}
+
+/// How long a window must sit at one size before the render extent follows it.
+pub const EXTENT_SETTLE: Duration = Duration::from_millis(200);
+
+/// Debounces drag-resizes on the trailing edge: a drag yields one size, [`EXTENT_SETTLE`] after the
+/// last resize.
+#[derive(Debug, Default)]
+pub struct ExtentDebounce {
+    pending: Option<((u32, u32), Instant)>,
+}
+
+impl ExtentDebounce {
+    /// The window became `size` at `now`; restarts the clock.
+    pub fn on_resize(&mut self, size: (u32, u32), now: Instant) {
+        self.pending = Some((size, now));
+    }
+
+    /// The settled size, once, when [`EXTENT_SETTLE`] has passed since the last resize.
+    pub fn poll(&mut self, now: Instant) -> Option<(u32, u32)> {
+        let (size, last) = self.pending?;
+        if now >= last + EXTENT_SETTLE {
+            self.pending = None;
+            return Some(size);
+        }
+        None
+    }
+
+    /// When the next [`poll`](Self::poll) may yield; `None` when idle.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.pending.map(|(_, last)| last + EXTENT_SETTLE)
     }
 }
 
@@ -435,6 +468,28 @@ mod tests {
         assert_eq!(cursor.on_motion(t1), None, "already shown");
         assert_eq!(cursor.deadline(), Some(t1 + CURSOR_IDLE));
         assert_eq!(cursor.poll(t1 + CURSOR_IDLE), Some(false));
+    }
+
+    #[test]
+    fn a_burst_of_resizes_yields_only_the_last_size_once() {
+        let t0 = Instant::now();
+        let mut debounce = ExtentDebounce::default();
+        assert_eq!(debounce.deadline(), None);
+        assert_eq!(debounce.poll(t0), None, "idle yields nothing");
+
+        let step = Duration::from_millis(50);
+        debounce.on_resize((800, 600), t0);
+        debounce.on_resize((900, 700), t0 + step);
+        debounce.on_resize((1000, 800), t0 + step * 2);
+        let last = t0 + step * 2;
+        assert_eq!(debounce.deadline(), Some(last + EXTENT_SETTLE));
+        assert_eq!(
+            debounce.poll(last + EXTENT_SETTLE - Duration::from_millis(1)),
+            None
+        );
+        assert_eq!(debounce.poll(last + EXTENT_SETTLE), Some((1000, 800)));
+        assert_eq!(debounce.poll(last + EXTENT_SETTLE * 2), None, "yields once");
+        assert_eq!(debounce.deadline(), None);
     }
 
     #[test]

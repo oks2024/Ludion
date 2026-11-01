@@ -11,6 +11,9 @@
 //! wire subscriber asks for frames, and out of the same rendered texture, so what a human sees and what
 //! an agent's `render.screenshot` returns are the same pixels by construction.
 //!
+//! Unless an extent is named, the render extent follows the window's size (debounced drag-resizes)
+//! as an ordinary `render.size`; the blit letterboxes whatever the window's aspect leaves over.
+//!
 //! The listener binds exactly as it does headless, so an agent, `ludion profile --attach` and the
 //! editor attach to a windowed game unchanged. The out-of-process viewer stays `ludion dev
 //! --window`'s: that window must outlive a restarting child process, which is a different role, not
@@ -45,7 +48,8 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::CursorMode;
 use ludion_engine::live::SIM_STOP_GRACE;
 use ludion_window::chrome::{
-    self, CursorAutoHide, FullscreenChord, HostPlatform, KeyRoute, dev_title, game_title,
+    self, CursorAutoHide, ExtentDebounce, FullscreenChord, HostPlatform, KeyRoute, dev_title,
+    game_title,
 };
 use ludion_window::keymap::KeyMapper;
 use ludion_window::mouse;
@@ -168,6 +172,7 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions) -> ExitCode {
         modifiers: ModifiersState::empty(),
         chord: FullscreenChord::default(),
         cursor: None,
+        extent: ExtentDebounce::default(),
     };
     let loop_result = event_loop.run_app(&mut app);
 
@@ -258,6 +263,8 @@ struct App {
     chord: FullscreenChord,
     /// Built with the window.
     cursor: Option<CursorAutoHide>,
+    /// Settles drag-resizes before the render extent follows the window.
+    extent: ExtentDebounce,
 }
 
 /// The window title a game shows: the builder's, else the manifest's `name`, else `Ludion`. The
@@ -278,9 +285,10 @@ impl App {
     // The window host owns the wall clock; the cursor timer never touches the sim.
     #[allow(clippy::disallowed_methods)]
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<(), Diagnostic> {
-        let (Some(source), Some(options)) = (self.source.take(), self.options.take()) else {
+        let (Some(source), Some(mut options)) = (self.source.take(), self.options.take()) else {
             return Ok(()); // a previous `resumed` already started (or failed); never start twice
         };
+        options.follow_surface = true;
         let mut attributes = Window::default_attributes()
             .with_title(game_title(self.title_hint.as_deref(), None))
             .with_inner_size(chrome::first_window_size(
@@ -428,9 +436,15 @@ impl ApplicationHandler<HostEvent> for App {
         {
             window.set_cursor_visible(visible);
         }
+        if let Some((w, h)) = self.extent.poll(now)
+            && let Some(embedded) = &self.embedded
+        {
+            embedded.follow_surface(w, h);
+        }
         let next = [
             self.stop_timer.deadline(),
             self.cursor.as_ref().and_then(CursorAutoHide::deadline),
+            self.extent.deadline(),
         ]
         .into_iter()
         .flatten()
@@ -452,8 +466,11 @@ impl ApplicationHandler<HostEvent> for App {
                 self.surface_size = (size.width, size.height);
                 // The render thread reconfigures the swapchain on its next present; nothing to
                 // redraw here, since the sim thread — not this one — paints the window.
+                // The render extent follows once the drag settles (`about_to_wait`).
                 if let Some(embedded) = &self.embedded {
                     embedded.resize(size.width, size.height, None);
+                    self.extent
+                        .on_resize((size.width, size.height), Instant::now());
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
