@@ -75,12 +75,12 @@ pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
     let target = input.target?;
     let sampler = input.path?;
 
-    let stale_blend = rig
+    let bad_blend = rig
         .state
         .blend
         .as_ref()
-        .is_some_and(|blend| blend.started > input.game_frame);
-    let snapped = rig.state.snap || rig.state.last_applied.is_none() || stale_blend;
+        .is_some_and(|blend| unusable_blend(blend, input.game_frame));
+    let snapped = rig.state.snap || rig.state.last_applied.is_none() || bad_blend;
     if snapped {
         snap(rig, target, sampler);
     } else if rig.state.last_applied.as_ref() != Some(&rig.rig) {
@@ -93,6 +93,18 @@ pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
     let pose = blended_pose(rig, input);
     rig.state.pose = Some(pose.clone());
     Some(output(rig, &pose))
+}
+
+/// A rewound or hand-edited blend snaps; `switch` only ever writes `seconds > 0`.
+fn unusable_blend(blend: &Blend, frame: FrameIndex) -> bool {
+    let from = &blend.from;
+    blend.started > frame
+        || !(blend.seconds > 0.0 && blend.seconds.is_finite())
+        || from.eye.iter().any(|v| !v.is_finite())
+        || !from.yaw_deg.is_finite()
+        || !from.pitch_deg.is_finite()
+        || from.fov_y_deg.is_some_and(|v| !v.is_finite())
+        || blend.yaw_span.is_some_and(|v| !v.is_finite())
 }
 
 /// Re-initialises the projection and the springs at rest on the desired pose of the current config.

@@ -383,3 +383,35 @@ fn folded_modifier_keys_inject_and_edge_like_any_key() {
     }));
     assert!(refused.is_err(), "there is no per-side modifier key");
 }
+
+#[test]
+fn non_finite_or_out_of_range_analogs_are_refused_and_leave_input_unchanged() {
+    let dir = fresh_dir("analog-validation");
+    let mut engine = booted(&dir);
+    let stick =
+        |bits: u32| json!({ "kind": "gamepad_axis", "axis": "left_stick_x", "value_bits": bits });
+    let refused = [
+        stick(f32::NAN.to_bits()),
+        stick(1.5f32.to_bits()),
+        json!({
+            "kind": "mouse_move",
+            "position_bits": [f32::INFINITY.to_bits(), 0.0f32.to_bits()],
+        }),
+    ];
+    for event in refused {
+        let error = engine
+            .execute(Command::InputInject(InputInjectParams {
+                frame: None,
+                event,
+            }))
+            .unwrap_err();
+        assert_eq!(error.code, ludion_core::codes::code::PROTOCOL_INVALID_INPUT);
+    }
+    engine.advance_live();
+    assert_eq!(input(&engine).gamepad().left_stick(), [0.0, 0.0]);
+    assert_eq!(input(&engine).mouse().position(), [0.0, 0.0]);
+
+    inject(&mut engine, None, stick(1.0f32.to_bits()));
+    engine.advance_live();
+    assert_eq!(input(&engine).gamepad().left_stick(), [1.0, 0.0]);
+}

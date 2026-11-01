@@ -77,7 +77,8 @@ pub(crate) fn hash(engine: &mut Engine) -> Result<ResponseBody, Diagnostic> {
 }
 
 /// `input.inject` — deserialize the value into a sim input event and inject it (`L3005` if the value
-/// is not a valid input event, or `frame` has already run).
+/// is not a valid input event, an analog value is non-finite or out of range, or `frame` has
+/// already run).
 pub(crate) fn inject(
     engine: &mut Engine,
     params: InputInjectParams,
@@ -89,6 +90,7 @@ pub(crate) fn inject(
         )
         .with_help("use e.g. {\"kind\": \"key_down\", \"key\": \"W\"} — see L3005 for the shape")
     })?;
+    event.validate()?;
     engine
         .driver_mut()
         .inject_input(params.frame, event)

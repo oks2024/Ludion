@@ -1745,7 +1745,8 @@ pub mod code {
     pub const PROTOCOL_MALFORMED_FRAME: DiagnosticCode = DiagnosticCode::new("L3004");
 
     /// `L3005` — an `input.inject` command carried an `event` value that does not deserialize into a
-    /// sim input event, or a `frame` the sim has already run. Raised by `ludion-engine`'s dispatch.
+    /// sim input event, an analog value that is non-finite or out of range, or a `frame` the sim has
+    /// already run. Raised by `ludion-engine`'s dispatch.
     pub const PROTOCOL_INVALID_INPUT: DiagnosticCode = DiagnosticCode::new("L3005");
 
     /// `L3006` — a `component.get` or `component.remove` named an entity that is alive and a
@@ -8487,13 +8488,17 @@ An `input.inject` command carried an `event` value that could not be interpreted
 event.
 
 The engine deserializes the opaque `event` JSON in an `input.inject` request into the simulation's
-input-event type — currently a key transition of the form:
+input-event type — a key, mouse or gamepad event, for example:
 
   {\"kind\": \"key_down\", \"key\": \"W\"}
-  {\"kind\": \"key_up\",   \"key\": \"Left\"}
+  {\"kind\": \"gamepad_axis\", \"axis\": \"left_stick_x\", \"value_bits\": 1056964608}
 
 This diagnostic means the value was not one of those shapes: a missing or unknown `kind`, a missing
 `key`, or a key name the engine does not define. The message includes the underlying serde error.
+
+Analog values travel as IEEE-754 bit patterns in `value_bits`, `position_bits` and `delta_bits`.
+They must decode to finite numbers; a stick axis must lie in [-1, 1] and a trigger in [0, 1]
+(`1.0` is `1065353216`). Anything else is refused here rather than clamped.
 
 The same code refuses an `input.inject` whose `frame` the sim has already run — the input could
 not take effect there, and clamping it to now would acknowledge a frame that never saw it. Nothing

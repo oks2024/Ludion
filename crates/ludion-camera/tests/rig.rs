@@ -1,8 +1,8 @@
 //! The rig pipeline, tick by tick, on hand-built paths.
 
 use ludion_camera::{
-    BlendCurve, BlendIn, CameraRig, LookAhead, RigConfig, RigInput, RigMode, RigOutput, Springs,
-    TrackRig, add_trauma, camera_relative, camera_relative_yaw, snap_rig, step_rig,
+    Blend, BlendCurve, BlendIn, CameraRig, LookAhead, RigConfig, RigInput, RigMode, RigOutput,
+    Springs, TrackRig, add_trauma, camera_relative, camera_relative_yaw, snap_rig, step_rig,
 };
 use ludion_core::math::{euler_xyz_degrees_to_quat, quat_rotate};
 use ludion_core::time::FrameIndex;
@@ -373,6 +373,34 @@ fn a_blend_stamped_in_the_future_snaps_instead_of_freezing() {
     let out = tick(&mut reloaded, &path, target, 0);
     assert!(reloaded.state.blend.is_none(), "the stale blend is dropped");
     assert!(near(out.translation, [6.0, 1.5, -20.0], 1e-3), "{out:?}");
+}
+
+#[test]
+fn an_unusable_blend_snaps_instead_of_freezing() {
+    let path = straight();
+    let target = [0.0, 1.0, -20.0];
+    type Corrupt = fn(&mut Blend);
+    let corruptions: [(&str, Corrupt); 4] = [
+        ("negative seconds", |b| b.seconds = -1.0),
+        ("zero seconds", |b| b.seconds = 0.0),
+        ("NaN seconds", |b| b.seconds = f32::NAN),
+        ("infinite from.eye", |b| b.from.eye[0] = f32::INFINITY),
+    ];
+    for (name, corrupt) in corruptions {
+        let mut rig = rig_with(blended_cfg([0.0, 2.2, 4.5], 1.0));
+        tick(&mut rig, &path, target, 0);
+        rig.rig = blended_cfg([6.0, 1.5, 0.0], 1.0);
+        for frame in 1..4 {
+            tick(&mut rig, &path, target, frame);
+        }
+        corrupt(rig.state.blend.as_mut().expect("a blend is running"));
+        let out = tick(&mut rig, &path, target, 4);
+        assert!(rig.state.blend.is_none(), "{name}: the blend is dropped");
+        assert!(
+            near(out.translation, [6.0, 1.5, -20.0], 1e-3),
+            "{name}: {out:?}"
+        );
+    }
 }
 
 #[test]

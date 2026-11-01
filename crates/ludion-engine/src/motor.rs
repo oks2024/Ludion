@@ -300,11 +300,17 @@ entities:
     }
 
     /// The `motor` segments after `ticks` ticks of `system` on `scene`.
-    fn drawn(scene: &str, system: fn(&mut World, &SystemCtx), ticks: usize) -> Vec<DebugSegment> {
-        let dir = std::env::temp_dir().join(format!("ludion-motor-draw-{}", std::process::id()));
+    fn drawn(
+        test: &str,
+        scene: &str,
+        system: fn(&mut World, &SystemCtx),
+        ticks: usize,
+    ) -> Vec<DebugSegment> {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-motor-draw-{}-{test}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut engine = Engine::builder()
-            .project_root(dir)
+            .project_root(&dir)
             .system("motor", system)
             .build()
             .expect("boots");
@@ -312,7 +318,10 @@ entities:
         for _ in 0..ticks {
             engine.advance_live();
         }
-        segments(engine.world(), &DebugCategories::parse("motor"))
+        let drawn = segments(engine.world(), &DebugCategories::parse("motor"));
+        drop(engine);
+        let _ = std::fs::remove_dir_all(&dir);
+        drawn
     }
 
     fn of(drawn: &[DebugSegment], colour: [f32; 4]) -> Vec<&DebugSegment> {
@@ -326,7 +335,7 @@ entities:
 
     #[test]
     fn an_airborne_tick_draws_an_orange_capsule_and_a_two_skin_probe() {
-        let drawn = drawn(&scene(2.0, ""), fall, 3);
+        let drawn = drawn("airborne", &scene(2.0, ""), fall, 3);
         assert!(!of(&drawn, MOTOR_AIRBORNE).is_empty());
         assert!(of(&drawn, MOTOR_GROUNDED).is_empty());
         assert!(of(&drawn, MOTOR_GROUND_NORMAL).is_empty());
@@ -337,7 +346,7 @@ entities:
 
     #[test]
     fn a_grounded_tick_draws_a_green_capsule_a_ground_normal_and_a_snap_probe() {
-        let drawn = drawn(&scene(0.0, ""), fall, 30);
+        let drawn = drawn("grounded", &scene(0.0, ""), fall, 30);
         assert!(!of(&drawn, MOTOR_GROUNDED).is_empty());
         assert!(of(&drawn, MOTOR_AIRBORNE).is_empty());
         let normals = of(&drawn, MOTOR_GROUND_NORMAL);
@@ -354,7 +363,7 @@ entities:
     #[test]
     fn walking_into_a_wall_draws_one_wall_ray() {
         let wall = boxed("wall", [1.5, 1.0, 0.0], [0.5, 2.0, 5.0]);
-        let drawn = drawn(&scene(0.0, &wall), into_wall, 40);
+        let drawn = drawn("wall", &scene(0.0, &wall), into_wall, 40);
         assert_eq!(of(&drawn, MOTOR_WALL).len(), 1);
     }
 
@@ -365,7 +374,7 @@ entities:
 
     #[test]
     fn a_ground_probe_draws_one_line_of_step_snap_and_skin() {
-        let drawn = drawn(&scene(0.0, ""), probe_at_origin, 3);
+        let drawn = drawn("probe-line", &scene(0.0, ""), probe_at_origin, 3);
         let probe = of(&drawn, MOTOR_PROBE);
         assert_eq!(probe.len(), 1);
         let motor = CharacterMotor::default();
@@ -374,7 +383,7 @@ entities:
     }
 
     /// A `ghost` box under `[0, 5, 0]` with no floor near it; the hero's motor sits on `layer`.
-    fn ghost_probe(layer: Option<&str>) -> Option<GroundProbe> {
+    fn ghost_probe(test: &str, layer: Option<&str>) -> Option<GroundProbe> {
         let ghost = boxed("ghost", [0.0, 4.5, 0.0], [0.5, 0.5, 0.5])
             .replace("body: static\n", "body: static\n        layer: ghost\n");
         let mut text = scene(0.0, &ghost).replace(
@@ -387,10 +396,11 @@ entities:
                 &format!("        height: 0.9\n        layer: {layer}\n"),
             );
         }
-        let dir = std::env::temp_dir().join(format!("ludion-motor-probe-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ludion-motor-probe-{}-{test}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut engine = Engine::builder()
-            .project_root(dir)
+            .project_root(&dir)
             .system("motor", fall)
             .build()
             .expect("boots");
@@ -400,13 +410,17 @@ entities:
         }
         let world = engine.world_mut();
         let hero = hero(world);
-        probe_character_ground(world, hero, [0.0, 5.0, 0.0]).expect("a motor")
+        let probe = probe_character_ground(world, hero, [0.0, 5.0, 0.0]).expect("a motor");
+        drop(engine);
+        let _ = std::fs::remove_dir_all(&dir);
+        probe
     }
 
     #[test]
     fn the_ground_probe_honours_the_motors_layer_filter() {
-        assert!(ghost_probe(Some("walker")).is_none());
-        let hit = ghost_probe(None).expect("the ghost box is ground without a layer");
+        assert!(ghost_probe("layer-filter-walker", Some("walker")).is_none());
+        let hit = ghost_probe("layer-filter-none", None)
+            .expect("the ghost box is ground without a layer");
         assert!(hit.rest_y.is_some());
     }
 
@@ -414,7 +428,7 @@ entities:
     fn a_crushed_motor_draws_a_red_capsule() {
         let walls = boxed("left", [0.7, 1.0, 0.0], [0.5, 2.0, 5.0])
             + &boxed("right", [-0.7, 1.0, 0.0], [0.5, 2.0, 5.0]);
-        let drawn = drawn(&scene(0.0, &walls), fall, 5);
+        let drawn = drawn("crushed", &scene(0.0, &walls), fall, 5);
         assert!(!of(&drawn, MOTOR_STUCK).is_empty());
         assert!(of(&drawn, MOTOR_GROUNDED).is_empty());
         assert!(of(&drawn, MOTOR_AIRBORNE).is_empty());

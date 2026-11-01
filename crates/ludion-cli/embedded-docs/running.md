@@ -95,6 +95,8 @@ within 5 s is reported as `L4022` and the host exits non-zero. Peers attach to t
 **Scripted input over the wire** is `input.inject` — the same command the sim-assertion test uses,
 carrying `{"kind": "key_down", "key": "Right"}`. Inject at a frame, step, screenshot, assert.
 A `frame` the sim has already run is refused (`L3005`); omit it to apply at the next tick.
+Analog values (sent as bit patterns in `value_bits`/`position_bits`/`delta_bits`) must be finite,
+sticks in `[-1, 1]` and triggers in `[0, 1]`, or the inject is refused (`L3005`).
 
 **Verify what you drew — without a screenshot.** `render.bounds` (MCP tool `render_bounds`) is the
 text-legible answer to "did my sprite land where I meant". It returns, for every renderable entity

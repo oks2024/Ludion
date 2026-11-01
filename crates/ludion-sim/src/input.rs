@@ -12,7 +12,9 @@
 //! replay format unchanged.
 
 use core::f32::consts::FRAC_1_SQRT_2;
+use ludion_core::codes::code;
 use ludion_core::collections::StableSet;
+use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math;
 use ludion_core::time::FrameIndex;
 use serde::{Deserialize, Serialize};
@@ -179,6 +181,58 @@ pub enum GamepadButton {
     /// The right trigger, pressed while its analog value is at or past [`TRIGGER_THRESHOLD`];
     /// synthesised from [`GamepadAxis::RightTrigger`].
     RightTrigger,
+}
+
+impl InputEvent {
+    /// Checks the analog payload of a wire-supplied event: mouse positions and wheel deltas must
+    /// be finite, a gamepad axis finite and inside its range (sticks `[-1, 1]`, triggers
+    /// `[0, 1]`, bounds inclusive; `-0.0` is valid). Key and button events are always valid.
+    ///
+    /// # Errors
+    /// Returns an `L3005` diagnostic naming the event, field, value and allowed range.
+    pub fn validate(&self) -> Result<(), Diagnostic> {
+        match *self {
+            InputEvent::MouseMove { position } => {
+                check_finite("mouse_move", "position_bits", position)
+            }
+            InputEvent::MouseWheel { delta } => check_finite("mouse_wheel", "delta_bits", delta),
+            InputEvent::GamepadAxis { axis, value } => {
+                let (low, range) = match axis {
+                    GamepadAxis::LeftTrigger | GamepadAxis::RightTrigger => (0.0, "[0, 1]"),
+                    _ => (-1.0, "[-1, 1]"),
+                };
+                if value.is_finite() && (low..=1.0).contains(&value) {
+                    Ok(())
+                } else {
+                    let name = serde_json::to_value(axis)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| format!("{axis:?}"));
+                    Err(invalid_input(format!(
+                        "gamepad_axis `{name}` `value_bits` decodes to {value:?}, which is not \
+                         a finite value in {range}"
+                    )))
+                }
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+fn check_finite(kind: &str, field: &str, value: [f32; 2]) -> Result<(), Diagnostic> {
+    if value.iter().all(|v| v.is_finite()) {
+        Ok(())
+    } else {
+        Err(invalid_input(format!(
+            "{kind} `{field}` decodes to {value:?}, which is not finite"
+        )))
+    }
+}
+
+fn invalid_input(message: String) -> Diagnostic {
+    Diagnostic::new(code::PROTOCOL_INVALID_INPUT, message).with_help(
+        "send the IEEE-754 bit pattern of a finite, in-range value, e.g. 1.0 is 1065353216",
+    )
 }
 
 /// A gamepad analog axis, as an abstract name. Each [`InputEvent::GamepadAxis`] names one of
@@ -430,7 +484,19 @@ pub struct MouseState {
     wheel: [f32; 2],
 }
 
+fn all_zero_bits(values: &[f32]) -> bool {
+    values.iter().all(|v| v.to_bits() == 0)
+}
+
 impl MouseState {
+    fn is_idle(&self) -> bool {
+        self.held.is_empty()
+            && self.pressed.is_empty()
+            && self.released.is_empty()
+            && all_zero_bits(&self.position)
+            && all_zero_bits(&self.wheel)
+    }
+
     /// The current position, in render-target pixels (origin top-left, +Y down).
     pub fn position(&self) -> [f32; 2] {
         self.position
@@ -498,6 +564,15 @@ fn is_trigger_button(button: GamepadButton) -> bool {
 }
 
 impl GamepadState {
+    fn is_idle(&self) -> bool {
+        self.held.is_empty()
+            && self.pressed.is_empty()
+            && self.released.is_empty()
+            && all_zero_bits(&self.left_stick)
+            && all_zero_bits(&self.right_stick)
+            && all_zero_bits(&[self.left_trigger, self.right_trigger])
+    }
+
     /// Stores a trigger's level and keeps its button in step: held exactly while the value is
     /// at or past [`TRIGGER_THRESHOLD`].
     fn set_trigger(&mut self, button: GamepadButton, value: f32) {
@@ -665,9 +740,14 @@ impl InputState {
     /// Whether the state equals the default — what a snapshot omits.
     ///
     /// Counts held keys, analogs and the cursor position, so a parked cursor keeps it false. It is
-    /// not a "press anything" test: use [`any_pressed`](InputState::any_pressed).
+    /// not a "press anything" test: use [`any_pressed`](InputState::any_pressed). A `-0.0` analog
+    /// counts as set, so its sign survives a snapshot.
     pub fn is_idle(&self) -> bool {
-        *self == Self::default()
+        self.held.is_empty()
+            && self.pressed.is_empty()
+            && self.released.is_empty()
+            && self.mouse.is_idle()
+            && self.gamepad.is_idle()
     }
 
     /// Whether `key` is currently down.
@@ -1406,5 +1486,67 @@ mod tests {
         assert!(input.action_released(&JUMP));
         input.begin_tick();
         assert!(!input.action_released(&JUMP));
+    }
+
+    #[test]
+    fn validate_refuses_bad_analogs_with_l3005() {
+        let stick = GamepadAxis::LeftStickX;
+        let trigger = GamepadAxis::RightTrigger;
+        let bad = [
+            axis(stick, f32::NAN),
+            axis(stick, f32::INFINITY),
+            axis(stick, f32::NEG_INFINITY),
+            axis(stick, 1.000_000_1),
+            axis(stick, -1.5),
+            axis(trigger, -0.1),
+            axis(trigger, 1.5),
+            InputEvent::MouseMove {
+                position: [f32::NAN, 0.0],
+            },
+            InputEvent::MouseWheel {
+                delta: [0.0, f32::INFINITY],
+            },
+        ];
+        for event in bad {
+            let err = event.validate().expect_err("must be refused");
+            assert_eq!(err.code, code::PROTOCOL_INVALID_INPUT, "{event:?}");
+            assert!(err.message.contains("_bits"), "{}", err.message);
+        }
+        let err = axis(GamepadAxis::LeftStickX, f32::NAN)
+            .validate()
+            .unwrap_err();
+        assert!(err.message.contains("left_stick_x"), "{}", err.message);
+        {}
+    }
+
+    #[test]
+    fn validate_accepts_in_range_analogs() {
+        let ok = [
+            axis(GamepadAxis::LeftStickY, 1.0),
+            axis(GamepadAxis::LeftStickY, -1.0),
+            axis(GamepadAxis::LeftStickY, 0.0),
+            axis(GamepadAxis::LeftStickY, -0.0),
+            axis(GamepadAxis::LeftTrigger, 1.0),
+            axis(GamepadAxis::LeftTrigger, -0.0),
+            InputEvent::MouseMove {
+                position: [-12.5, 40.0],
+            },
+            InputEvent::MouseWheel { delta: [-1.0, 3.0] },
+            InputEvent::KeyDown { key: Key::W },
+        ];
+        for event in ok {
+            assert!(event.validate().is_ok(), "{event:?}");
+        }
+    }
+
+    #[test]
+    fn negative_zero_analog_is_not_idle_and_round_trips() {
+        let mut input = InputState::default();
+        assert!(input.is_idle());
+        input.apply(axis(GamepadAxis::LeftStickX, -0.0));
+        assert!(!input.is_idle());
+        let json = serde_json::to_value(&input).unwrap();
+        let back: InputState = serde_json::from_value(json).unwrap();
+        assert_eq!(back.gamepad().left_stick()[0].to_bits(), 0x8000_0000);
     }
 }
