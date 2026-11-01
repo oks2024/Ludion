@@ -72,6 +72,13 @@ else median-cuts to the clamped target and reports the loss.
   no glyph. Without the filter an op targets what is currently opaque — except `blur`, which targets
   the whole frame, because the spread into transparency is the glow. Change this and two ops naming
   one glyph silently mean different sets.
+- **The bake carries a current-glyph plane beside the authored grid** (ramp ops read and write it;
+  `dither` writes it; texels an `outline`/`shadow` created hold none). `RampTable` (built once per bake
+  from `doc.ramps`) maps a glyph to its ramp and position; `bayer_steps` resolves a fractional gradient
+  position through the 4×4 matrix. The plane is only valid if every ramp-mode op runs before every
+  colour op — a colour op repaints texels without updating it, so a later ramp op would step stale
+  glyphs. `validate_ramp_effects` (`ludion-scene`) enforces the order as `L1154`; relax it and the bake
+  silently steps the wrong glyphs.
 - **The packer's order is a total order.** Height desc, then width desc, then **name** asc; names are
   unique by construction, so no two entries compare equal and sort stability is never relied on.
   Position follows from size and name and nothing else, so a layout change is readable in a diff. A

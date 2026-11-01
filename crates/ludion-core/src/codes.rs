@@ -4550,7 +4550,9 @@ exactly the palette an equivalent inline document would, so the two bake to byte
 This code covers the palette document's own text (a missing or wrong-typed key, an unrecognized key,
 a bad palette entry, a colour that is not `\"#rrggbb\"`/`\"#rrggbbaa\"`) and the sprite include's reference (`from` missing or wrong-typed, an
 unrecognized key in the include block, a `from` naming a file that cannot be read or that is not a
-`kind: palette` document). A glyph a frame or effect uses that is still undefined *after* the include
+`kind: palette` document). A palette document's `ramps:` list is checked here too: a ramp of fewer
+than two glyphs, a repeated glyph, or a ramp glyph the palette lacks (`ludion docs sprite-format`).
+A glyph a frame or effect uses that is still undefined *after* the include
 resolves is the ordinary `L1153` — by then the sprite has a concrete palette like any inline one, and
 the defect is a sprite that does not agree with itself.
 
@@ -4572,7 +4574,7 @@ keys, types, or cross-references do not agree with each other. It covers both pa
 list, a colour that is not `\"#rrggbb\"`/`\"#rrggbbaa\"`) and *semantics* (a frame's `rows` not
 matching `size` exactly, a glyph naming no palette entry, a duplicate frame or region name, a pivot
 outside its frame, a region rect outside the packed image, a mirrored frame's rows not matching its
-kept half, a patch outside its frame, a `base` naming no `rows:` frame, `mirror` on a patched frame,
+kept half, a patch outside its frame, a `base` naming no `rows:` frame, `mirror` on a patched frame, a sprite's `ramps:` list with a one-glyph ramp, a repeated glyph or a glyph the palette lacks (`ludion docs sprite-format --section \"Ramps\"`),
 an input path that names no file, a `hold` list a different length from its flipbook's
 `frames`). `generate-atlas --check` drift — a committed atlas that no longer matches what its source
 regenerates — reports under this code too, since the defect is the same one: a document that does
@@ -4775,6 +4777,11 @@ This code covers: an unrecognized `op`; an unknown key inside an entry; a requir
 `1..=8`, a `light` or `shadow` `offset` of `[0, 0]`, which would make the op a no-op); a `glyphs:`
 entry that is not a single glyph the document's `palette` defines; a `frames:` entry naming no frame
 of the document; and a `dither` whose `glyphs:` is not exactly two.
+
+Ramp mode (`mode: ramp` on `shade`/`gradient`, with a signed whole-number `steps`) adds its own cases:
+no `ramps` to step along, a target glyph that is in no ramp, a ramp-mode op placed after a colour-mode
+op (every ramp-mode op comes first; `dither` may sit anywhere), and a colour key (`from`, `to`,
+`blend`, `strength`) on a ramp op (`ludion docs sprite-effects --section \"Ramp mode\"`).
 
 The JSON Pointer names the entry and the field: `/effects/2/glyphs/0`, `/effects/0/from`.
 

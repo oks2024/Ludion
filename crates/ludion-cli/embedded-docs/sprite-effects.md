@@ -32,6 +32,40 @@ silently skipped entry. Every op is CPU-baked and deterministic, and every chann
 flow sequence anywhere in a document is `L1005` (`ludion docs sprite-format --section "Format"`).
 Colours are quoted hex strings, `"#rrggbb"` or `"#rrggbbaa"` (`ludion docs sprite-format --section "Hex colours"`).
 
+## Ramp mode
+
+`shade` and `gradient` take `mode: ramp` (default `color`) and a signed whole-number `steps`, and
+repaint each texel along the palette's `ramps:` (`ludion docs sprite-format --section "Ramps"`) — the
+output is always a palette colour, never a blend. A ramp op takes none of `from`/`to`/`blend`/`strength`.
+
+- **`shade`** moves lit edge texels `+steps` and shadowed ones `-steps` along their ramp; a negative
+  `steps` swaps them.
+- **`gradient`** moves each texel from `0` steps at the start of its direction to `steps` at the end.
+  Where that position falls between two steps, the 4×4 Bayer matrix picks per texel, so a `steps: -1`
+  fade is a dithered band, not a seam. Stepping clamps at a ramp's ends.
+- **The current-glyph plane.** The bake carries a glyph per texel beside the authored grid the filters
+  test. Ramp ops read and write that plane, so a second ramp op steps what the first left; `dither`
+  writes it too. A texel an `outline` or `shadow` created has no glyph and is skipped.
+- **Ordering:** every ramp-mode op comes before every colour-mode op (`dither` may sit anywhere), since
+  a colour op leaves the plane stale. Otherwise `L1154`, as are: no `ramps`, a target glyph in no
+  ramp (narrow the op with `glyphs:`), and a colour key on a ramp op.
+
+```yaml
+effects:
+  - op: shade
+    mode: ramp
+    steps: 1
+  - op: gradient
+    mode: ramp
+    steps: -1
+    direction: vertical
+  - op: outline
+    color: "#1b1d2b"
+```
+
+`hull-ramp.sprite.yaml` and its colour-mode twin `hull-color.sprite.yaml` are the pair
+(`sprite-ramps` gallery scene). `--set`/`--sweep` address `/effects/<i>/steps`.
+
 ## The two filters
 
 - **`glyphs:`** — the texels whose **authored** glyph is one of these; that identity never changes,
@@ -66,7 +100,7 @@ effects:
 
 ## Rules
 
-- **`L1154`** — one `effects:` entry is invalid: an unknown `op` or key (with a nearest match), a
+- **`L1154`** — one `effects:` entry is invalid, ramp-mode cases included (above): an unknown `op` or key (with a nearest match), a
   missing required parameter, a value out of range, or a `glyphs:`/`frames:` name this document does
   not define. The JSON Pointer names the entry and the field (`/effects/2/glyphs/0`,
   `/effects/0/from`). `ludion explain L1154` prints the full rule.

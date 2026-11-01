@@ -1,0 +1,42 @@
+# The colour-mode twin of `hull-ramp.sprite.yaml`: the same rows and palette include, with a colour
+# `shade` and a multiplying `gradient` chosen to approximate it. Colour mode blends freely, so its
+# texels leave the palette; the ramp twin's never do.
+format: 1
+kind: sprite
+name: hull-color
+size:
+  - 16
+  - 16
+palette:
+  from: ramps.palette.yaml
+frames:
+  idle:
+    mirror: x
+    rows:
+      - "........"
+      - ".....sss"
+      - "...ssstt"
+      - "..sssstt"
+      - "..srrrrr"
+      - ".ssrssss"
+      - ".ssrsbbb"
+      - ".ssrsbbc"
+      - ".ssrsbbc"
+      - ".ssrsbbb"
+      - ".ssrssss"
+      - "..srrrrr"
+      - "..sssssS"
+      - "...sssSS"
+      - ".....SSS"
+      - "........"
+effects:
+  - op: shade
+    strength: 0.25
+  - op: gradient
+    from: "#ffffff"
+    to: "#8a8f9c"
+    direction: vertical
+    blend: multiply
+  - op: outline
+    color: "#1b1d2b"
+    side: outside

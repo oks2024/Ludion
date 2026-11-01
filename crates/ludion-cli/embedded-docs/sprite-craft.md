@@ -36,6 +36,10 @@ Give each material a hand-chosen dark-to-light run of **two to four** palette co
 reads as a painting rather than pixel art, and the extra colours blur the silhouette the first rule
 protects. Choose the run in the palette, not with per-texel tweaks.
 
+Declare each run as a **ramp** (`ramps:`, `ludion docs sprite-format --section "Ramps"`), so shading can
+step along it. Use `mode: ramp` on `shade`/`gradient` when the result must stay on the palette (pixel
+art at native scale); keep colour mode for soft effects and glows, whose blended texels leave it.
+
 ## Mnemonic glyphs
 
 Name glyphs so the grid reads without the palette beside it: lowercase is the light shade and

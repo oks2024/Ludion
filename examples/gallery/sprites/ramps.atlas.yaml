@@ -1,0 +1,25 @@
+format: 1
+kind: atlas
+generated_from: ramps.atlas-source.yaml
+pixels_per_unit: 16.0
+maps:
+  color: ramps.png
+regions:
+  hull-color/idle:
+    rect:
+      - 1
+      - 1
+      - 16
+      - 16
+    pivot:
+      - 8.0
+      - 8.0
+  hull-ramp/idle:
+    rect:
+      - 1
+      - 19
+      - 16
+      - 16
+    pivot:
+      - 8.0
+      - 8.0

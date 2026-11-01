@@ -1,0 +1,49 @@
+# Feature: sprite ramps — `mode: ramp` shade/gradient beside the colour-mode twin (`sprites/ramps.atlas.yaml`).
+# - left: `hull-ramp`, every texel stepped along a palette ramp and repainted from the palette, so the
+#   whole sprite stays on the palette's ten colours (the dither-free, native-scale pixel-art result).
+# - right: `hull-color`, the same rows and palette include with a colour-mode shade and multiply
+#   gradient, whose blended texels leave the palette.
+# Each quad's size derives from its 16x16 region at 16 px/unit (1 u); `Transform.scale` 4 fills the
+# frame. Orthographic, unlit, no post-process and no Environment: what lands on screen is the baked atlas.
+format: 1
+name: "sprite-ramps - Sprite: ramp mode vs colour mode"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 6.0
+  - name: hull-ramp
+    components:
+      Transform:
+        translation:
+          - -2.2
+          - 0.0
+          - 0.0
+        scale:
+          - 4.0
+          - 4.0
+          - 1.0
+      Sprite:
+        atlas: sprites/ramps.atlas.yaml
+        frame: hull-ramp/idle
+  - name: hull-color
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.0
+          - 0.0
+        scale:
+          - 4.0
+          - 4.0
+          - 1.0
+      Sprite:
+        atlas: sprites/ramps.atlas.yaml
+        frame: hull-color/idle

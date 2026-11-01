@@ -1,0 +1,43 @@
+# A 16x16 hull in ramp mode, beside its colour-mode twin `hull-color.sprite.yaml` (same rows, same
+# palette include). `shade` and `gradient` here use `mode: ramp`: each texel steps along the ramp that
+# lists its glyph and is repainted from the palette, so every texel is a palette colour. Ramp-mode ops
+# come first; the colour-mode `outline` after them is the ordering rule.
+format: 1
+kind: sprite
+name: hull-ramp
+size:
+  - 16
+  - 16
+palette:
+  from: ramps.palette.yaml
+frames:
+  idle:
+    mirror: x
+    rows:
+      - "........"
+      - ".....sss"
+      - "...ssstt"
+      - "..sssstt"
+      - "..srrrrr"
+      - ".ssrssss"
+      - ".ssrsbbb"
+      - ".ssrsbbc"
+      - ".ssrsbbc"
+      - ".ssrsbbb"
+      - ".ssrssss"
+      - "..srrrrr"
+      - "..sssssS"
+      - "...sssSS"
+      - ".....SSS"
+      - "........"
+effects:
+  - op: shade
+    mode: ramp
+    steps: 1
+  - op: gradient
+    mode: ramp
+    steps: -1
+    direction: vertical
+  - op: outline
+    color: "#1b1d2b"
+    side: outside

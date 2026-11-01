@@ -72,7 +72,7 @@ one-shot holds `c`, a loop wraps back to `a`.
 
 ## Scrolling and tiling
 
-`uv_repeat` repeats the frame across the quad; `uv_scroll` slides it, in frame widths per second. An
+`uv_repeat` repeats the frame across the quad; `uv_scroll` slides it, in UV units per second (`1.0` is one frame width). An
 endless parallax band is then one entity — no wrap point, no second copy. Either field off its
 default wraps the quad's region instead of clamping it, and the offset is derived from sim time at
 extract, so nothing enters the world hash. A linear filter blends the column where a tile restarts

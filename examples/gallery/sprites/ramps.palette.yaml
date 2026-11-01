@@ -1,0 +1,33 @@
+# A shared palette whose materials are dark-to-light *ramps*: `steel`, `trim` and `glass` each run
+# three shades behind one shared darkest glyph `K`. The sprites that include this document inherit the
+# `ramps:` list, so a `mode: ramp` shade or gradient steps a texel along its ramp and repaints it from
+# the palette (every output texel stays a palette colour). Uppercase is the dark shade, lowercase the
+# light one. See `hull-ramp.sprite.yaml` and its colour-mode twin `hull-color.sprite.yaml`.
+format: 1
+kind: palette
+name: ramps
+palette:
+  K:
+    color: "#1b1d2b"
+  S:
+    color: "#4d576a"
+  s:
+    color: "#7a869c"
+  t:
+    color: "#a8b4c8"
+  R:
+    color: "#7a2e2e"
+  r:
+    color: "#c04a3a"
+  p:
+    color: "#f08a6a"
+  B:
+    color: "#1f5f78"
+  b:
+    color: "#3fa3c4"
+  c:
+    color: "#9ee6f5"
+ramps:
+  - "KSst"
+  - "KRrp"
+  - "KBbc"

@@ -58,13 +58,14 @@ offending node (`--> /size/0`) and telling you to write one element per line; on
 | `palette` | required, non-empty: an inline glyph map, or a `{ from, overrides }` include (below). Key = **exactly one** printable-ASCII character (`!` to `~`), never the reserved `.` |
 | `palette/<glyph>/color` | required quoted `"#rrggbb"` or `"#rrggbbaa"` (below); the legacy `[r, g, b, a]` linear floats still load |
 | `palette/<glyph>/emissive` | optional, finite, `>= 0` |
+| `ramps` | optional list of glyph strings, each a dark-to-light run (below); a `kind: palette` document may carry it too |
 | `frames` | required, non-empty, **authored order** — the order an atlas mints region names in. A name is unique, non-empty and free of `/` (a region is `<doc>/<frame>`, so a `/` would make it ambiguous) |
 | `frames/<name>/pivot` | optional `[px, py]` in texels from the frame's top-left, each inside `0..=size`; absent is the frame's centre |
 | `frames/<name>/rows` | required unless `base`: exactly `size[1]` quoted strings of exactly `size[0]` characters, top-down; `.` transparent. Under `mirror`, only the kept half |
 | `frames/<name>/mirror` | optional `x`, `y` or `xy` — author one half (below) |
 | `frames/<name>/base` | optional name of another frame, instead of `rows` — the frame is that one plus `patches` |
 | `frames/<name>/patches` | with `base`: each `{ at: [x, y], rows }` (below) |
-| `effects` | optional; ops in application order |
+| `effects` | optional; ops in application order. `shade`/`gradient` take `mode: color\|ramp` and, in ramp mode, a signed whole-number `steps` (`ludion docs sprite-effects --section "Ramp mode"`) |
 
 **Emissive is palette data, not colour-map data.** The bake paints from `color` alone and an atlas
 carries one `color` entry under `maps:`; `emissive` records the intensity a glyph is authored at, so it travels
@@ -170,6 +171,24 @@ palette:
   bakes byte-identically to the same sprite with that palette inlined.
 - `ludion check-scene palettes/orrery.palette.yaml` checks a palette alone.
 - `examples/gallery/sprites/emblem.*` is the worked pair: palette, sprite, and the committed atlas.
+
+## Ramps
+
+A **ramp** is one quoted string of palette glyphs, darkest first: `"KSst"`. A ramp-mode `shade` or
+`gradient` steps a texel along the ramp that lists its glyph and repaints it from the palette, so the
+result is always a palette colour. A sprite or a `kind: palette` document declares them:
+
+```yaml
+ramps:
+  - "KSst"
+  - "KRrp"
+```
+
+- Each ramp has **at least two** glyphs, none repeated, every one defined in the merged palette
+  (`L1153` in a sprite, `L1147` in a palette document). Quote it so a digit glyph stays a string.
+- A sprite's own `ramps:` **replace** an included palette's; with none authored it inherits them. A
+  glyph in several ramps steps along the **first** ramp that lists it.
+- `examples/gallery/sprites/ramps.palette.yaml` with `hull-ramp`/`hull-color` is the worked pair.
 
 ## Rules
 
