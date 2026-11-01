@@ -288,7 +288,7 @@ pub(crate) fn create(
 /// .unwrap();
 ///
 /// let mut engine = Engine::builder().project_root(&root).build().unwrap();
-/// let ids = spawn_prefab(engine.world_mut(), "crate.prefab.yaml", None, Some("crate-1")).unwrap();
+/// let ids = spawn_prefab(engine.world_mut(), "crate.prefab.yaml", None, Some("crate-1"), false).unwrap();
 /// let parts = unpack_prefab(engine.world_mut(), ids[0]).unwrap();
 /// assert_eq!(parts, ids);
 /// assert!(engine.world_mut().get::<PrefabInstance>(ids[0]).unwrap().is_none());
@@ -478,7 +478,7 @@ enum Write {
 /// .unwrap();
 ///
 /// let mut engine = Engine::builder().project_root(&root).build().unwrap();
-/// let ids = spawn_prefab(engine.world_mut(), "lamp.prefab.yaml", None, Some("lamp-1")).unwrap();
+/// let ids = spawn_prefab(engine.world_mut(), "lamp.prefab.yaml", None, Some("lamp-1"), false).unwrap();
 /// let moved = Transform { translation: [0.0, 5.0, 0.0], rotation: [0.0; 3], scale: [1.0; 3] };
 /// engine.world_mut().insert(ids[1], moved).unwrap();
 ///

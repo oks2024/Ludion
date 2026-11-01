@@ -53,7 +53,7 @@ order, the first being the instance's first part, which every part's `PrefabInst
 ```
 
 `name` makes the parts `a/<part>` (omitted, they keep their bare names) and `transform` is baked onto
-every root part. The spawn is all-or-nothing: a bad path (`L3040`), a missing file (`L1230`) or an
+every root part. `presentation: true` spawns every part presentation (`L1320` for a sim-only component). The spawn is all-or-nothing: a bad path (`L3040`), a missing file (`L1230`) or an
 invalid prefab changes nothing. The prefab's text is recorded inline with the command, so a replay
 survives later edits to the file.
 

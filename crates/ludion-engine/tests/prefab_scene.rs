@@ -268,6 +268,7 @@ fn spawn_prefab_expands_a_nested_instance() {
         "turret.prefab.yaml",
         Some(placement),
         Some("t"),
+        false,
     )
     .expect("spawns");
     assert_eq!(ids.len(), 3);
@@ -297,10 +298,11 @@ fn spawn_prefab_expands_a_nested_instance() {
 fn a_nested_prefab_uses_the_text_the_library_already_holds() {
     let root = root("held");
     let mut engine = Engine::builder().project_root(&root).build().unwrap();
-    spawn_prefab(engine.world_mut(), "barrel.prefab.yaml", None, None).expect("spawns");
+    spawn_prefab(engine.world_mut(), "barrel.prefab.yaml", None, None, false).expect("spawns");
     let edited = format!("{BARREL}  - name: cap\n    components:\n      Transform: {{}}\n");
     std::fs::write(root.join("barrel.prefab.yaml"), edited).unwrap();
-    let ids = spawn_prefab(engine.world_mut(), "turret.prefab.yaml", None, None).expect("spawns");
+    let ids =
+        spawn_prefab(engine.world_mut(), "turret.prefab.yaml", None, None, false).expect("spawns");
     assert_eq!(
         ids.len(),
         3,

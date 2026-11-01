@@ -160,9 +160,9 @@ fn launch(world: &mut World, ctx: &SystemCtx) {
         })
     };
     let ids = match ctx.frame.0 {
-        0 => spawn_prefab(world, ARM_PATH, placed(-2.0), Some("arm-1")),
-        10 => spawn_prefab(world, ARM_PATH, placed(2.0), Some("arm-2")),
-        20 => spawn_prefab(world, STICK_PATH, None, None),
+        0 => spawn_prefab(world, ARM_PATH, placed(-2.0), Some("arm-1"), false),
+        10 => spawn_prefab(world, ARM_PATH, placed(2.0), Some("arm-2"), false),
+        20 => spawn_prefab(world, STICK_PATH, None, None, false),
         _ => return,
     }
     .expect("the prefab spawns");

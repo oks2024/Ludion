@@ -118,7 +118,7 @@ fn spawner(world: &mut World, ctx: &SystemCtx) {
         2 | 6 => {
             let name = if ctx.frame.as_u64() == 2 { "a" } else { "b" };
             // A refused spawn (a replay whose record is missing) is a no-op, not a panic.
-            if let Ok(ids) = spawn_prefab(world, PATH, None, Some(name)) {
+            if let Ok(ids) = spawn_prefab(world, PATH, None, Some(name), false) {
                 let mut spawned = world.remove_resource::<Spawned>().unwrap_or_default();
                 spawned.0.push(ids);
                 world.insert_resource(spawned);
@@ -339,6 +339,7 @@ fn wire_spawn(engine: &mut Engine, path: &str, name: &str) -> Vec<EntityId> {
             path: path.to_owned(),
             transform: None::<Placement>,
             name: Some(name.to_owned()),
+            presentation: false,
         }))
         .unwrap();
     match reply.body {
@@ -450,7 +451,7 @@ fn a_same_frame_reload_between_two_wire_spawns_replays_in_order() {
 /// Spawns once, at frame 3.
 fn spawn_at_three(world: &mut World, ctx: &SystemCtx) {
     if ctx.frame.as_u64() == 3 {
-        spawn_prefab(world, PATH, None, Some("late")).expect("the prefab is readable");
+        spawn_prefab(world, PATH, None, Some("late"), false).expect("the prefab is readable");
     }
 }
 
@@ -541,7 +542,7 @@ entities:
 fn nested_spawner(world: &mut World, ctx: &SystemCtx) {
     if ctx.frame.as_u64() == 2 {
         // A refused spawn (a replay whose record is missing) is a no-op, not a panic.
-        let _ = spawn_prefab(world, "outer.prefab.yaml", None, Some("o"));
+        let _ = spawn_prefab(world, "outer.prefab.yaml", None, Some("o"), false);
     }
 }
 
@@ -802,7 +803,7 @@ fn twice_spawner(world: &mut World, ctx: &SystemCtx) {
         6 => "second",
         _ => return,
     };
-    let _ = spawn_prefab(world, "outer.prefab.yaml", None, Some(name));
+    let _ = spawn_prefab(world, "outer.prefab.yaml", None, Some(name), false);
 }
 
 /// The translation of the entity named `name`.

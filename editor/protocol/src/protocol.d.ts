@@ -1501,6 +1501,7 @@ export interface EntityIdSchema2 {
  *     path: "prefabs/crate.prefab.yaml".into(),
  *     transform: Some(Placement { translation: [5.0, 0.0, 0.0], rotation: [0.0; 3], scale: [1.0; 3] }),
  *     name: Some("a".into()),
+ *     presentation: false,
  * };
  * assert_eq!(serde_json::to_value(&params).unwrap()["name"], "a");
  * ```
@@ -1514,6 +1515,11 @@ export interface PrefabSpawnParams {
    * The prefab file, relative to the content root.
    */
   path: string;
+  /**
+   * Spawn every part from the presentation allocator, nested instances included; a sim-only
+   * component is `L1320`. Omitted, each part keeps its prefab's kind.
+   */
+  presentation?: boolean;
   /**
    * A pose baked onto every root part of the prefab; omitted, the parts keep their authored pose.
    */
@@ -2603,6 +2609,7 @@ export interface EntityIdSchema10 {
  *     root: EntityId::new(3, 0),
  *     prefab: "lamp.prefab.yaml".into(),
  *     name: Some("lamp".into()),
+ *     presentation: false,
  *     placement_differs: false,
  *     overrides: BTreeMap::from([("bulb".to_owned(), vec!["/Transform/translation".to_owned()])]),
  *     removed: Vec::new(),
@@ -2638,6 +2645,10 @@ export interface PrefabInstanceOverrides {
    * The prefab file, relative to the content root.
    */
   prefab: string;
+  /**
+   * Whether the saved entry carries `presentation: true`.
+   */
+  presentation?: boolean;
   /**
    * The part paths the instance dropped from its prefab.
    */

@@ -10,7 +10,7 @@ description: Prefabs — kind: prefab entity groups spawned at runtime from a sy
 
 1. Author `prefabs/goblin.prefab.yaml` under the content root.
 2. Check it: `ludion check-scene prefabs/goblin.prefab.yaml` — the scene's own codes plus `L1226`–`L1229`.
-3. Spawn it from a sim system: `spawn_prefab(world, "prefabs/goblin.prefab.yaml", Some(placement), Some("goblin-1"))` (`use ludion::prelude::*`), or over the wire with `prefab.spawn`.
+3. Spawn it from a sim system: `spawn_prefab(world, "prefabs/goblin.prefab.yaml", Some(placement), Some("goblin-1"), false)` (`use ludion::prelude::*`), or over the wire with `prefab.spawn`.
 4. Observe: the returned ids, `query.entities`, the `WorldHash` — a spawn is ordinary hashed sim state.
 
 The runnable version — a goblin launched twice and a dynamite stick, self-checking the remap — is `crates/ludion/examples/prefab_spawn.rs` (`cargo run -p ludion --example prefab_spawn`).

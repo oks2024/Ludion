@@ -119,7 +119,7 @@ fn a_preloaded_first_spawn_reads_no_file() {
     warm.load_inline_scene(&scene(&[PREFAB_PATH])).unwrap();
     std::fs::remove_file(root.join(PREFAB_PATH)).unwrap();
     std::fs::remove_file(root.join(MESH_PATH)).unwrap();
-    let ids = spawn_prefab(warm.world_mut(), PREFAB_PATH, None, None)
+    let ids = spawn_prefab(warm.world_mut(), PREFAB_PATH, None, None, false)
         .expect("a preloaded prefab spawns with its files gone");
     assert_eq!(bone_translation(warm.world(), &ids), [0.0, 1.0, 0.0]);
 
@@ -129,7 +129,7 @@ fn a_preloaded_first_spawn_reads_no_file() {
     cold.load_inline_scene(&scene(&[])).unwrap();
     std::fs::remove_file(root.join(PREFAB_PATH)).unwrap();
     std::fs::remove_file(root.join(MESH_PATH)).unwrap();
-    let refused = spawn_prefab(cold.world_mut(), PREFAB_PATH, None, None).unwrap_err();
+    let refused = spawn_prefab(cold.world_mut(), PREFAB_PATH, None, None, false).unwrap_err();
     assert!(
         refused.iter().any(|d| d.code == code::PREFAB_UNRESOLVED),
         "{refused:?}"
@@ -220,7 +220,7 @@ fn a_district_switch_warms_its_preloads() {
         .unwrap();
     std::fs::remove_file(root.join(PREFAB_PATH)).unwrap();
     std::fs::remove_file(root.join(MESH_PATH)).unwrap();
-    let ids = spawn_prefab(engine.world_mut(), PREFAB_PATH, None, None)
+    let ids = spawn_prefab(engine.world_mut(), PREFAB_PATH, None, None, false)
         .expect("the district's preload warmed the library");
     assert_eq!(bone_translation(engine.world(), &ids), [0.0, 1.0, 0.0]);
 
@@ -290,7 +290,7 @@ impl std::io::Write for SharedSink {
 
 fn spawner(world: &mut World, ctx: &SystemCtx) {
     if ctx.frame.as_u64() == 2 {
-        let _ = spawn_prefab(world, PREFAB_PATH, None, Some("a"));
+        let _ = spawn_prefab(world, PREFAB_PATH, None, Some("a"), false);
     }
 }
 
@@ -404,7 +404,7 @@ fn first_spawn_cost_with_and_without_preload() {
         let load_ms = start.elapsed().as_secs_f64() * 1e3;
         let timed = |engine: &mut Engine| {
             let start = std::time::Instant::now();
-            spawn_prefab(engine.world_mut(), PREFAB_PATH, None, None).expect("spawns");
+            spawn_prefab(engine.world_mut(), PREFAB_PATH, None, None, false).expect("spawns");
             start.elapsed().as_secs_f64() * 1e3
         };
         let first = timed(&mut engine);

@@ -71,8 +71,9 @@ fn spawner(world: &mut World, ctx: &SystemCtx) {
     if ctx.frame.as_u64() != 1 {
         return;
     }
-    let first = spawn_prefab(world, PATH, Some(at(10.0, 0.0)), Some("goblin-a")).expect("spawns");
-    let second = spawn_prefab(world, PATH, Some(at(0.0, 5.0)), None).expect("spawns");
+    let first =
+        spawn_prefab(world, PATH, Some(at(10.0, 0.0)), Some("goblin-a"), false).expect("spawns");
+    let second = spawn_prefab(world, PATH, Some(at(0.0, 5.0)), None, false).expect("spawns");
     world.insert_resource(Spawned(vec![first, second]));
 }
 
@@ -174,12 +175,19 @@ fn a_spawn_moves_the_hash_and_a_fresh_engine_reproduces_it() {
     let root = fixture_root("hash");
     let mut left = engine(&root, false);
     let before = left.world_hash().unwrap();
-    spawn_prefab(left.world_mut(), PATH, Some(at(2.0, 0.0)), Some("g")).expect("spawns");
+    spawn_prefab(left.world_mut(), PATH, Some(at(2.0, 0.0)), Some("g"), false).expect("spawns");
     let after = left.world_hash().unwrap();
     assert_ne!(before, after, "the spawned parts are hashed");
 
     let mut right = engine(&root, false);
-    spawn_prefab(right.world_mut(), PATH, Some(at(2.0, 0.0)), Some("g")).expect("spawns");
+    spawn_prefab(
+        right.world_mut(),
+        PATH,
+        Some(at(2.0, 0.0)),
+        Some("g"),
+        false,
+    )
+    .expect("spawns");
     assert_eq!(right.world_hash().unwrap(), after);
 
     let (mut a, mut b) = (engine(&root, true), engine(&root, true));
@@ -227,14 +235,14 @@ fn asset_reload_refreshes_a_held_prefab_and_keeps_it_on_a_bad_edit() {
     // Nothing has loaded the prefab yet: the reload ignores it.
     assert_eq!(reload(&mut engine, PATH), Ok(Vec::new()));
 
-    let first = spawn_prefab(engine.world_mut(), PATH, None, None).expect("spawns");
+    let first = spawn_prefab(engine.world_mut(), PATH, None, None, false).expect("spawns");
     assert_eq!(first.len(), 2);
 
     let one_part =
         "format: 1\nkind: prefab\nname: goblin\nentities:\n  - name: pelvis\n    components: {}\n";
     std::fs::write(root.join(PATH), one_part).unwrap();
     assert_eq!(reload(&mut engine, PATH), Ok(vec![PATH.to_owned()]));
-    let second = spawn_prefab(engine.world_mut(), PATH, None, None).expect("spawns");
+    let second = spawn_prefab(engine.world_mut(), PATH, None, None, false).expect("spawns");
     assert_eq!(second.len(), 1, "the next spawn uses the new text");
     assert_eq!(
         engine.world().entity_count(),
@@ -245,7 +253,8 @@ fn asset_reload_refreshes_a_held_prefab_and_keeps_it_on_a_bad_edit() {
     let broken = "format: 1\nkind: prefab\nname: goblin\nentities:\n  - name: eye\n    components:\n      Camera: {}\n";
     std::fs::write(root.join(PATH), broken).unwrap();
     assert_eq!(reload(&mut engine, PATH), Err("L1229".to_owned()));
-    let third = spawn_prefab(engine.world_mut(), PATH, None, None).expect("the old entry holds");
+    let third =
+        spawn_prefab(engine.world_mut(), PATH, None, None, false).expect("the old entry holds");
     assert_eq!(third.len(), 1, "a bad edit keeps the old text");
 
     // An unrelated path and a missing file are no-ops.
@@ -273,7 +282,7 @@ fn a_prefab_with_an_atlas_crossfade_lint_still_spawns() {
     )
     .unwrap();
     let mut engine = engine(&root, false);
-    let ids = spawn_prefab(engine.world_mut(), "fader.prefab.yaml", None, None)
+    let ids = spawn_prefab(engine.world_mut(), "fader.prefab.yaml", None, None, false)
         .expect("a lint must not refuse the spawn");
     assert_eq!(ids.len(), 1);
     assert!(reload(&mut engine, "fader.prefab.yaml").is_ok());

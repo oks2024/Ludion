@@ -2253,13 +2253,15 @@ impl Engine {
     }
 
     /// Declares what a presentation system may touch on the new world: the diagnostics and audio
-    /// outboxes (the only resources it may write), and `Name` as the label its refusals quote.
+    /// outboxes and the prefab library (the only resources it may write, the library only through
+    /// `spawn_prefab`), and `Name` as the label its refusals quote.
     /// Called after every world (re)build — the [`install_audio_queue`](Engine::install_audio_queue)
     /// mold.
     fn install_presentation_rules(&mut self) {
         let world = self.driver.world_mut();
         world.allow_presentation_writes::<crate::Diagnostics>();
         world.allow_presentation_writes::<AudioQueue>();
+        world.allow_presentation_writes::<crate::prefab::PrefabLibrary>();
         world.set_entity_label::<crate::components::Name>();
     }
 
@@ -2994,7 +2996,7 @@ impl Engine {
     /// .unwrap();
     ///
     /// let mut engine = Engine::builder().project_root(&root).build().unwrap();
-    /// let ids = spawn_prefab(engine.world_mut(), "lamp.prefab.yaml", None, Some("lamp-1")).unwrap();
+    /// let ids = spawn_prefab(engine.world_mut(), "lamp.prefab.yaml", None, Some("lamp-1"), false).unwrap();
     /// let moved = Transform { translation: [0.0, 5.0, 0.0], rotation: [0.0; 3], scale: [1.0; 3] };
     /// engine.world_mut().insert(ids[1], moved).unwrap();
     ///

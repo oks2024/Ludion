@@ -162,6 +162,8 @@ These rules keep `Plan/transform-hierarchy-and-prefabs.md` compatible:
   allocator never reaches the hash.
 - A prefab entity may carry `presentation: true`. `instantiate_into` spawns it from the presentation
   allocator.
+- An instance entry may carry `presentation: true`: every part, nested included, spawns presentation
+  (sticky); a sim-only component is `L1320`; `spawn_prefab`/`prefab.spawn` take the same flag.
 
 ## Subtasks
 
@@ -170,7 +172,7 @@ These rules keep `Plan/transform-hierarchy-and-prefabs.md` compatible:
 2. **Engine wiring:** `EngineBuilder::presentation_system`, the outbox allowlist, extract and bounds
    over both ranges, snapshot and restore fields, keyframe verify and bisection on sim only, and a
    external-game-shaped integration test.
-3. **Scene and docs:** the `presentation: true` key (parse, emit, validate, load, save), the
+3. **Scene and docs:** the `presentation: true` key (parse, emit, validate, load, save) on entities and instance entries, the
    sim→presentation reference error, the inspector listing, the `docs/` game topic and its mirror,
    and this Status.
 
@@ -194,3 +196,4 @@ No re-record step: nothing committed moves.
   crossed); `frame_total` -1.3%. Every engine rtx3090 budget passes. Vigil's `fire` and
   `spatial_rebuild` were already over their E6 ceilings on the baseline: `Plan/owed.md`.
 - 2026-10-01: scene and docs shipped. Entities take `presentation: true` (parse, emit after `name:`, load via `spawn_presentation`; `ludion_scene::instantiated_ids` maps document position to id); a sim→presentation reference is `L1036` (scene) / `L1018` (save); `scene.save` writes presentation entities last; `query.entities` lists them; `ludion docs presentation`.
+- 2026-11-01: instance entries take presentation: true (external request 0031): load, save collapse, spawn_prefab/prefab.spawn flag, presentation-system prefab spawns, prefab.overrides field; L1320.

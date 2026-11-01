@@ -601,9 +601,12 @@ pub(crate) fn read_prefab_text(root: &std::path::Path, key: &str) -> Result<Stri
 /// `placement` is baked onto every root of the group — a part with no `Parent` — as
 /// `placement ∘ local`; `None` leaves the poses as authored. `name` prefixes every part's
 /// [`Name`](crate::Name) as `name/part`; without it the parts carry their bare names. Each part
-/// gets a [`PrefabInstance`], and entity references between parts point at this copy's ids. Call it
-/// from a sim system; a presentation part spawned from a sim system is refused with `L0028`, and a
-/// presentation system cannot spawn a prefab at all, since the prefab library is a sim resource.
+/// gets a [`PrefabInstance`], and entity references between parts point at this copy's ids.
+///
+/// `presentation` spawns every part from the presentation allocator, like an instance entry's
+/// `presentation: true`; a part carrying a sim-only component is refused with `L1320`. Without it each
+/// part keeps its prefab's kind. A sim system may spawn only sim parts and a presentation system only
+/// presentation parts; the other way round is refused with `L0028`.
 ///
 /// The prefab is read and validated once per path per world: later spawns reuse the result, and
 /// `asset.reload` refreshes it. Live instances never change when the file does.
@@ -611,8 +614,8 @@ pub(crate) fn read_prefab_text(root: &std::path::Path, key: &str) -> Result<Stri
 /// # Errors
 /// `L1230` if `path` is absolute, the file cannot be read or `world` has no prefab library (it was
 /// not built by an engine); the prefab's own diagnostics (`L1226`–`L1229`, `L1221`/`L1222`, `L1186`/`L1187`,
-/// `L1151`/`L1152`/`L1209`, `L1194`–`L1197`, component errors) when it is invalid; `L0028` when the
-/// spawn crosses the phase boundary. Nothing is spawned on any error.
+/// `L1151`/`L1152`/`L1209`, `L1194`–`L1197`, component errors) when it is invalid; `L1320` for a
+/// `presentation` spawn of a sim-only component; `L0028` when the spawn crosses the phase boundary. Nothing is spawned on any error.
 ///
 /// # Example
 /// ```
@@ -627,7 +630,7 @@ pub(crate) fn read_prefab_text(root: &std::path::Path, key: &str) -> Result<Stri
 /// .unwrap();
 ///
 /// let mut engine = Engine::builder().project_root(&root).build().unwrap();
-/// let ids = spawn_prefab(engine.world_mut(), "crate.prefab.yaml", None, Some("crate-1")).unwrap();
+/// let ids = spawn_prefab(engine.world_mut(), "crate.prefab.yaml", None, Some("crate-1"), false).unwrap();
 /// assert_eq!(ids.len(), 1);
 /// # std::fs::remove_dir_all(&root).ok();
 /// ```
@@ -636,6 +639,7 @@ pub fn spawn_prefab(
     path: &str,
     placement: Option<Transform>,
     name: Option<&str>,
+    presentation: bool,
 ) -> Result<Vec<EntityId>, Vec<Diagnostic>> {
     let key = prefab_key(path)?;
     let Some(library) = world.resource_mut::<PrefabLibrary>() else {
@@ -649,9 +653,18 @@ pub fn spawn_prefab(
     };
     let ready = library.ready(&key)?;
     let registry = Arc::clone(&library.registry);
+    let presentation_copy = if presentation {
+        Some(ludion_scene::presentation_copy(
+            &ready.expanded,
+            &registry,
+            &key,
+        )?)
+    } else {
+        None
+    };
     let ids = ludion_scene::instantiate_expanded(
         world,
-        &ready.expanded,
+        presentation_copy.as_ref().unwrap_or(&ready.expanded),
         &registry,
         &InstantiateOptions {
             placement: placement.as_ref().map(level_trs),
@@ -740,7 +753,7 @@ mod tests {
             world.allocator_state(),
             world.presentation_allocator_state(),
         );
-        let errors = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap_err();
+        let errors = spawn_prefab(&mut world, "p.prefab.yaml", None, None, false).unwrap_err();
         assert!(
             errors.iter().any(|d| d.code == expected),
             "{expected}: {errors:?}"
@@ -766,9 +779,9 @@ mod tests {
         )
         .unwrap();
         let mut world = world(&root);
-        let keeper = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap()[0];
+        let keeper = spawn_prefab(&mut world, "p.prefab.yaml", None, None, false).unwrap()[0];
         for _ in 0..1000 {
-            let ids = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap();
+            let ids = spawn_prefab(&mut world, "p.prefab.yaml", None, None, false).unwrap();
             world.despawn(ids[0]).unwrap();
         }
         let library = world.resource::<PrefabLibrary>().unwrap();
@@ -861,9 +874,9 @@ mod tests {
         )
         .unwrap();
         let mut world = world(&root);
-        let first = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap_err();
+        let first = spawn_prefab(&mut world, "p.prefab.yaml", None, None, false).unwrap_err();
         std::fs::remove_file(&file).unwrap();
-        let second = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap_err();
+        let second = spawn_prefab(&mut world, "p.prefab.yaml", None, None, false).unwrap_err();
         assert_eq!(first, second);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -878,7 +891,7 @@ mod tests {
         .unwrap();
         let mut world = world(&root);
         for path in ["./p.prefab.yaml", ".\\p.prefab.yaml", "p.prefab.yaml"] {
-            let ids = spawn_prefab(&mut world, path, None, None).unwrap();
+            let ids = spawn_prefab(&mut world, path, None, None, false).unwrap();
             let instance = world.get::<PrefabInstance>(ids[0]).unwrap().unwrap();
             assert_eq!(instance.source, "p.prefab.yaml", "{path}");
         }
@@ -901,7 +914,8 @@ mod tests {
         .unwrap();
         let mut world = world(&root);
         let absolute = root.join("p.prefab.yaml");
-        let errors = spawn_prefab(&mut world, absolute.to_str().unwrap(), None, None).unwrap_err();
+        let errors =
+            spawn_prefab(&mut world, absolute.to_str().unwrap(), None, None, false).unwrap_err();
         assert_eq!(errors[0].code, code::PREFAB_UNRESOLVED);
         assert_eq!(world.entity_count(), 0);
         let _ = std::fs::remove_dir_all(&root);
@@ -913,11 +927,11 @@ mod tests {
         let file = root.join("p.prefab.yaml");
         std::fs::write(&file, prefab("  - name: a\n    components: {}\n")).unwrap();
         let mut world = world(&root);
-        let first = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap()[0];
+        let first = spawn_prefab(&mut world, "p.prefab.yaml", None, None, false).unwrap()[0];
         let library = world.resource_mut::<PrefabLibrary>().unwrap();
         let edited = prefab("  - name: a\n    components: {}\n  - name: b\n    components: {}\n");
         library.replace("p.prefab.yaml", &edited).unwrap();
-        let second = spawn_prefab(&mut world, "p.prefab.yaml", None, None).unwrap()[0];
+        let second = spawn_prefab(&mut world, "p.prefab.yaml", None, None, false).unwrap()[0];
         let library = world.resource_mut::<PrefabLibrary>().unwrap();
         assert_eq!(library.expanded_from(first, "p.prefab.yaml"), Some(0));
         assert_eq!(library.expanded_from(second, "p.prefab.yaml"), Some(1));
@@ -944,11 +958,13 @@ mod tests {
     fn a_missing_file_and_a_missing_library_are_l1230() {
         let root = root("missing");
         let mut with_library = world(&root);
-        let errors = spawn_prefab(&mut with_library, "nope.prefab.yaml", None, None).unwrap_err();
+        let errors =
+            spawn_prefab(&mut with_library, "nope.prefab.yaml", None, None, false).unwrap_err();
         assert_eq!(errors[0].code, code::PREFAB_UNRESOLVED);
         assert!(errors[0].message.contains("nope.prefab.yaml"));
 
-        let errors = spawn_prefab(&mut World::new(), "nope.prefab.yaml", None, None).unwrap_err();
+        let errors =
+            spawn_prefab(&mut World::new(), "nope.prefab.yaml", None, None, false).unwrap_err();
         assert_eq!(errors[0].code, code::PREFAB_UNRESOLVED);
         let _ = std::fs::remove_dir_all(&root);
     }

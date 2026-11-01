@@ -571,6 +571,28 @@ pub fn instantiate_expanded(
     expand::instantiate_expanded(world, expanded, registry, options)
 }
 
+/// A copy of `expanded` whose every part spawns from the presentation allocator, for a runtime
+/// `presentation` spawn of the prefab named `prefab`.
+///
+/// # Errors
+/// `L1320` for each sim part carrying a sim-only component (see `Registry::mark_sim_only`).
+///
+/// # Example
+/// ```
+/// let registry = ludion_ecs::Registry::new();
+/// let scene = ludion_scene::parse("format: 1\nentities:\n  - components: {}\n").unwrap();
+/// let expanded = ludion_scene::expand(&scene, &registry, &mut |_| unreachable!()).unwrap();
+/// let copy = ludion_scene::presentation_copy(&expanded, &registry, "p.prefab.yaml").unwrap();
+/// assert!(copy.scene.entities[0].presentation);
+/// ```
+pub fn presentation_copy(
+    expanded: &ExpandedScene,
+    registry: &Registry,
+    prefab: &str,
+) -> Result<ExpandedScene, Vec<Diagnostic>> {
+    expand::presentation_copy(expanded, registry, prefab)
+}
+
 /// The [`EntityId`] [`instantiate`] gives each scene entity of a *fresh* world, indexed by document
 /// position.
 ///

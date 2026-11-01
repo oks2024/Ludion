@@ -150,6 +150,7 @@ fn spawn_command(path: &str, name: Option<&str>, translation: Option<[f32; 3]>) 
             scale: [1.0; 3],
         }),
         name: name.map(str::to_owned),
+        presentation: false,
     })
 }
 

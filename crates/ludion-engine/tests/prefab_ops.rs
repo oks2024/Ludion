@@ -246,7 +246,7 @@ fn create_writes_a_prefab_that_spawns_the_same_values() {
     let text = std::fs::read_to_string(root.join(&key)).unwrap();
     assert_eq!(text, canonical(SET_PREFAB));
 
-    let parts = spawn_prefab(engine.world_mut(), &key, None, Some("set-1")).expect("spawns");
+    let parts = spawn_prefab(engine.world_mut(), &key, None, Some("set-1"), false).expect("spawns");
     let world = engine.world_mut();
     assert_eq!(translation(world, parts[0]), [1.0, 0.0, 0.0]);
     assert_eq!(world.get::<Parent>(parts[1]).unwrap().unwrap().0, parts[0]);
@@ -733,7 +733,7 @@ entities:
             "the applied edit reaches b at the next load"
         );
 
-        let spawned = spawn_prefab(engine.world_mut(), PAIR_FILE, None, Some("c")).unwrap();
+        let spawned = spawn_prefab(engine.world_mut(), PAIR_FILE, None, Some("c"), false).unwrap();
         assert_eq!(spawned.len(), 2);
         assert_eq!(translation(engine.world(), spawned[1]), [0.0, 3.0, 0.0]);
         let _ = std::fs::remove_dir_all(&root);
@@ -743,7 +743,7 @@ entities:
     fn an_unnamed_spawn_applies() {
         let root = root("apply-unnamed");
         let mut engine = loaded(&root, "format: 1\nname: s\nentities: []\n");
-        let parts = spawn_prefab(engine.world_mut(), PAIR_FILE, None, None).unwrap();
+        let parts = spawn_prefab(engine.world_mut(), PAIR_FILE, None, None, false).unwrap();
         set_pose(&mut engine, parts[1], 4.0);
         let report = applied(&mut engine, parts[2], None);
         assert_eq!(report.parts, vec!["arm".to_string()]);
@@ -981,7 +981,14 @@ entities:
     fn a_rotated_multi_root_spawn_applies_at_its_recorded_placement() {
         let root = split_root("apply-split-spawn");
         let mut engine = loaded(&root, "format: 1\nname: e\nentities: []\n");
-        spawn_prefab(engine.world_mut(), SPLIT_FILE, Some(placed()), Some("s")).unwrap();
+        spawn_prefab(
+            engine.world_mut(),
+            SPLIT_FILE,
+            Some(placed()),
+            Some("s"),
+            false,
+        )
+        .unwrap();
         split_applies_at_its_placement(&root, &mut engine);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1019,8 +1026,14 @@ entities:
         let doc = prefab_doc(&root, "outer.prefab.yaml");
         assert_eq!(doc.entities.len(), 1, "the sub entry is gone");
         let mut engine = loaded(&root, "format: 1\nname: e\nentities: []\n");
-        let spawned =
-            spawn_prefab(engine.world_mut(), "outer.prefab.yaml", None, Some("n")).unwrap();
+        let spawned = spawn_prefab(
+            engine.world_mut(),
+            "outer.prefab.yaml",
+            None,
+            Some("n"),
+            false,
+        )
+        .unwrap();
         assert_eq!(spawned.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1096,8 +1109,14 @@ name: e
 entities: []
 ",
         );
-        let spawned =
-            spawn_prefab(engine.world_mut(), "outer.prefab.yaml", None, Some("n")).unwrap();
+        let spawned = spawn_prefab(
+            engine.world_mut(),
+            "outer.prefab.yaml",
+            None,
+            Some("n"),
+            false,
+        )
+        .unwrap();
         assert_eq!(spawned.len(), 2, "base and sub/x remain");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1227,6 +1246,7 @@ entities: []
                 scale: [1.0; 3],
             }),
             name: Some("c".to_owned()),
+            presentation: false,
         });
         let spawned = engine.execute(command).unwrap().body;
         assert!(
@@ -1303,7 +1323,8 @@ fn create_writes_asset_paths_relative_to_the_prefab() {
     assert!(text.contains("meshes/l.mesh.yaml"), "{text}");
     assert!(!text.contains("kits/meshes"), "{text}");
 
-    let parts = spawn_prefab(engine.world_mut(), &key, None, Some("lamp-1")).expect("spawns");
+    let parts =
+        spawn_prefab(engine.world_mut(), &key, None, Some("lamp-1"), false).expect("spawns");
     assert_eq!(
         mesh_asset(engine.world_mut(), parts[0]).as_deref(),
         Some("kits/meshes/l.mesh.yaml")
@@ -1357,7 +1378,8 @@ fn a_lane_path_is_prefab_relative_on_disk_and_content_root_live() {
     assert!(text.contains("paths/c.path.yaml"), "{text}");
     assert!(!text.contains("kits/paths"), "{text}");
 
-    let parts = spawn_prefab(engine.world_mut(), &key, None, Some("lane-1")).expect("spawns");
+    let parts =
+        spawn_prefab(engine.world_mut(), &key, None, Some("lane-1"), false).expect("spawns");
     let spawned = engine
         .world_mut()
         .get::<ludion_engine::LaneConstraint>(parts[0])

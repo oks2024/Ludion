@@ -51,6 +51,7 @@ pub(crate) fn spawn(
         &params.path,
         placement,
         params.name.as_deref(),
+        params.presentation,
     );
     // Drain on the error path too: the text was read, and the Command record follows this one.
     engine.drain_prefab_texts();
@@ -134,6 +135,7 @@ pub(crate) fn overrides(
                 root: held.root,
                 prefab: held.prefab,
                 name: None,
+                presentation: false,
                 placement_differs: false,
                 overrides: BTreeMap::new(),
                 removed: Vec::new(),
@@ -143,6 +145,7 @@ pub(crate) fn overrides(
             match held.result {
                 Ok(Some(diff)) => {
                     out.name = Some(diff.name);
+                    out.presentation = diff.entry.presentation;
                     out.placement_differs = diff.placement_differs;
                     out.removed = diff.entry.removed;
                     for (part, components) in &diff.entry.overrides {

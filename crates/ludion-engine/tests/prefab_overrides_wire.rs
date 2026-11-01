@@ -141,6 +141,7 @@ fn spawn(engine: &mut Engine, name: Option<&str>, placement: Option<Placement>) 
         path: "pair.prefab.yaml".to_owned(),
         transform: placement,
         name: name.map(str::to_owned),
+        presentation: false,
     });
     match engine.execute(command).unwrap().body {
         ResponseBody::PrefabSpawned { entities } => entities,

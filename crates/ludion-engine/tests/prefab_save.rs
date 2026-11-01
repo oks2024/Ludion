@@ -463,6 +463,7 @@ fn a_named_spawn_saves_as_an_entry() {
         "pair.prefab.yaml",
         Some(placement),
         Some("p"),
+        false,
     )
     .expect("spawns");
     let saved = engine.scene_text().expect("saves");
@@ -481,7 +482,7 @@ fn a_named_spawn_saves_as_an_entry() {
 fn an_unnamed_spawn_saves_and_reloads() {
     let root = root("unnamed");
     let mut engine = loaded(&root, "format: 1\nentities: []\n");
-    spawn_prefab(engine.world_mut(), "pair.prefab.yaml", None, None).expect("spawns");
+    spawn_prefab(engine.world_mut(), "pair.prefab.yaml", None, None, false).expect("spawns");
     let saved = engine.scene_text().expect("an unnamed spawn saves flat");
     assert!(saved.contains("PrefabInstance:"), "{saved}");
 
@@ -530,7 +531,14 @@ fn what_an_entry_cannot_express_is_refused_with_l1234() {
 
     let mut engine = loaded(&root, "format: 1\nentities: []\n");
     for _ in 0..2 {
-        spawn_prefab(engine.world_mut(), "pair.prefab.yaml", None, Some("p")).expect("spawns");
+        spawn_prefab(
+            engine.world_mut(),
+            "pair.prefab.yaml",
+            None,
+            Some("p"),
+            false,
+        )
+        .expect("spawns");
     }
     let error = engine.scene_text().unwrap_err();
     assert_eq!(error.code, code::PREFAB_INSTANCE_SAVE);
@@ -595,7 +603,14 @@ fn an_untouched_instance_saves_clean_after_an_apply_and_gets_the_edit_on_reload(
 fn an_external_edit_and_reload_leaves_a_spawned_instance_clean() {
     let root = root("external");
     let mut engine = loaded(&root, "format: 1\nentities: []\n");
-    spawn_prefab(engine.world_mut(), "pair.prefab.yaml", None, Some("x")).expect("spawns");
+    spawn_prefab(
+        engine.world_mut(),
+        "pair.prefab.yaml",
+        None,
+        Some("x"),
+        false,
+    )
+    .expect("spawns");
     std::fs::write(
         root.join("pair.prefab.yaml"),
         PAIR.replace("intensity: 2.0", "intensity: 5.0"),
@@ -685,7 +700,14 @@ fn an_unplaced_spawn_without_a_root_transform_saves_and_applies() {
     )
     .unwrap();
     let mut engine = loaded(&root, "format: 1\nentities: []\n");
-    let ids = spawn_prefab(engine.world_mut(), "bare.prefab.yaml", None, Some("n")).unwrap();
+    let ids = spawn_prefab(
+        engine.world_mut(),
+        "bare.prefab.yaml",
+        None,
+        Some("n"),
+        false,
+    )
+    .unwrap();
     let saved = engine.scene_text().expect("saves");
     assert_eq!(
         saved,
@@ -895,7 +917,8 @@ fn a_nested_root_under_a_turned_placement_settles_after_one_save() {
 fn an_unnamed_spawn_whose_first_part_died_saves_with_the_next_part_as_root() {
     let root = root("unnamed-first-died");
     let mut engine = loaded(&root, "format: 1\nentities: []\n");
-    let ids = spawn_prefab(engine.world_mut(), "split.prefab.yaml", None, None).expect("spawns");
+    let ids =
+        spawn_prefab(engine.world_mut(), "split.prefab.yaml", None, None, false).expect("spawns");
     engine.world_mut().despawn(ids[0]).unwrap();
     let saved = engine.scene_text().expect("saves");
     let mut again = loaded(&root, &saved);

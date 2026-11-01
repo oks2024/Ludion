@@ -132,6 +132,7 @@ fn spawn(engine: &mut Engine, name: &str) -> Vec<EntityId> {
         path: PATH.to_owned(),
         transform: None,
         name: Some(name.to_owned()),
+        presentation: false,
     });
     match engine.execute(command).unwrap().body {
         ResponseBody::PrefabSpawned { entities } => entities,

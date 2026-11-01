@@ -47,7 +47,7 @@ struct Spawns(Vec<Spawn>);
 /// Spawns `path` and records what came back. A refused prefab is a content bug: report its
 /// diagnostics and spawn nothing.
 fn spawn(world: &mut World, path: &str, placement: Option<Transform>, name: Option<&'static str>) {
-    let ids = match spawn_prefab(world, path, placement, name) {
+    let ids = match spawn_prefab(world, path, placement, name, false) {
         Ok(ids) => ids,
         Err(diagnostics) => {
             for diagnostic in diagnostics {

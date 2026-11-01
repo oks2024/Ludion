@@ -235,6 +235,7 @@ fn spawn(engine: &mut Engine, path: &str, name: &str) -> Vec<EntityId> {
             scale: [1.0; 3],
         }),
         name: Some(name.to_owned()),
+        presentation: false,
     });
     match engine.execute(command).unwrap().body {
         ResponseBody::PrefabSpawned { entities } => entities,
@@ -429,7 +430,7 @@ fn spawner(world: &mut World, _ctx: &SystemCtx) {
     if world.resource::<Outcome>().is_some() {
         return;
     }
-    let result = spawn_prefab(world, "lamp.prefab.yaml", None, Some("sys"))
+    let result = spawn_prefab(world, "lamp.prefab.yaml", None, Some("sys"), false)
         .map(|ids| ids.len())
         .map_err(|found| found.iter().map(|d| d.code.to_string()).collect());
     world.insert_resource(Outcome(Some(result)));
@@ -936,5 +937,190 @@ fn prefab_overrides_reports_the_override_of_a_presentation_instance() {
         prop.overrides.get("child"),
         Some(&vec!["/Mesh/color".to_owned()])
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn spawn_flagged(
+    engine: &mut Engine,
+    path: &str,
+    name: &str,
+    presentation: bool,
+) -> Result<Vec<EntityId>, ludion_core::diagnostics::Diagnostic> {
+    let reply = engine.execute(Command::PrefabSpawn(PrefabSpawnParams {
+        path: path.to_owned(),
+        transform: None,
+        name: Some(name.to_owned()),
+        presentation,
+    }))?;
+    match reply.body {
+        ResponseBody::PrefabSpawned { entities } => Ok(entities),
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
+fn overrides_of(
+    engine: &mut Engine,
+    name: &str,
+) -> ludion_protocol::response::PrefabInstanceOverrides {
+    let reply = engine
+        .execute(Command::PrefabOverrides(PrefabOverridesParams {
+            instances: None,
+        }))
+        .unwrap();
+    let ResponseBody::PrefabOverrides { instances } = reply.body else {
+        panic!("unexpected reply");
+    };
+    instances
+        .into_iter()
+        .find(|i| i.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no instance `{name}`"))
+}
+
+#[test]
+fn a_wire_presentation_spawn_never_touches_the_hash_and_overrides_reports_it() {
+    let dir = root_with("wire-flag", &[("imported.prefab.yaml", IMPORTED)]);
+    let control_dir = root_with("wire-flag-control", &[]);
+    let mut engine = loaded(&dir, GROUND);
+    let mut control = loaded(&control_dir, GROUND);
+    let (mut a, mut b) = (start(&mut engine), start(&mut control));
+    step(&mut engine, 2, &mut a);
+    step(&mut control, 2, &mut b);
+
+    let flagged = spawn_flagged(&mut engine, "imported.prefab.yaml", "prop", true).unwrap();
+    let plain = spawn_flagged(&mut engine, "imported.prefab.yaml", "plain", false).unwrap();
+    assert_eq!(flagged.len(), 2);
+    assert!(flagged.iter().all(|&id| is_presentation(id)));
+    assert!(plain.iter().all(|&id| !is_presentation(id)));
+    assert!(overrides_of(&mut engine, "prop").presentation);
+    assert!(!overrides_of(&mut engine, "plain").presentation);
+
+    // Drop the plain sim copy's effect from the comparison by comparing a flagged-only session.
+    let mut engine = loaded(&dir, GROUND);
+    let mut a = start(&mut engine);
+    step(&mut engine, 2, &mut a);
+    spawn_flagged(&mut engine, "imported.prefab.yaml", "prop", true).unwrap();
+    a.push((engine.frame(), engine.world_hash().unwrap()));
+    b.push((control.frame(), control.world_hash().unwrap()));
+    step(&mut engine, 3, &mut a);
+    step(&mut control, 3, &mut b);
+    assert_eq!(a, b, "a presentation spawn moved the hash trace");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&control_dir);
+}
+
+static PRESENTATION_FLAG_TRUE: Mutex<Vec<Result<usize, Vec<String>>>> = Mutex::new(Vec::new());
+static PRESENTATION_FLAG_FALSE: Mutex<Vec<Result<usize, Vec<String>>>> = Mutex::new(Vec::new());
+static SIM_FLAG_TRUE: Mutex<Vec<Result<usize, Vec<String>>>> = Mutex::new(Vec::new());
+
+/// Spawns `path` once into `world`, recording the outcome in `out`.
+fn spawn_once(
+    world: &mut World,
+    out: &Mutex<Vec<Result<usize, Vec<String>>>>,
+    path: &str,
+    presentation: bool,
+) {
+    let mut out = out.lock().unwrap();
+    if !out.is_empty() {
+        return;
+    }
+    out.push(
+        spawn_prefab(world, path, None, Some("sys"), presentation)
+            .map(|ids| ids.len())
+            .map_err(|found| {
+                found
+                    .iter()
+                    .map(|d| format!("{} {}", d.code, d.message))
+                    .collect()
+            }),
+    );
+}
+
+fn presentation_spawner(world: &mut World, _ctx: &SystemCtx) {
+    spawn_once(world, &PRESENTATION_FLAG_TRUE, "imported.prefab.yaml", true);
+}
+
+#[test]
+fn a_presentation_system_spawns_a_prefab_as_presentation_and_replays() {
+    let dir = root_with("pres-system", &[("imported.prefab.yaml", IMPORTED)]);
+    let control_dir = root_with("pres-system-control", &[]);
+    let build = || game(&dir).presentation_system("dressing", presentation_spawner);
+    let mut engine = build().build().unwrap();
+    engine.load_inline_scene(GROUND).unwrap();
+    let mut control = loaded(&control_dir, GROUND);
+    let sink = SharedSink::default();
+    let mut trace = start(&mut engine);
+    let mut control_trace = start(&mut control);
+    engine.set_recording(sink.clone()).unwrap();
+    step(&mut engine, 5, &mut trace);
+    step(&mut control, 5, &mut control_trace);
+    engine.stop_recording().unwrap();
+
+    assert_eq!(
+        PRESENTATION_FLAG_TRUE.lock().unwrap().as_slice(),
+        &[Ok(2)],
+        "the presentation system's spawn"
+    );
+    let ids = index(&mut engine);
+    assert!(is_presentation(ids["sys/root"]) && is_presentation(ids["sys/child"]));
+    assert_eq!(trace, control_trace, "the spawn moved the sim hash trace");
+
+    let bytes = sink.0.lock().unwrap().clone();
+    PRESENTATION_FLAG_TRUE.lock().unwrap().clear();
+    let replayed = replay_hashes_with(build(), &bytes, &dir).unwrap();
+    assert_eq!(replayed, trace);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&control_dir);
+}
+
+#[test]
+fn the_phase_of_the_spawn_must_match_the_flag_l0028() {
+    let dir = root_with("pres-system-sim", &[("imported.prefab.yaml", IMPORTED)]);
+    let mut engine = game(&dir)
+        .presentation_system("dressing", |world: &mut World, _: &SystemCtx| {
+            spawn_once(
+                world,
+                &PRESENTATION_FLAG_FALSE,
+                "imported.prefab.yaml",
+                false,
+            );
+        })
+        .system("sim-dressing", |world: &mut World, _: &SystemCtx| {
+            spawn_once(world, &SIM_FLAG_TRUE, "imported.prefab.yaml", true);
+        })
+        .build()
+        .unwrap();
+    engine.load_inline_scene(GROUND).unwrap();
+    let before = index(&mut engine).len();
+    let mut trace = Vec::new();
+    step(&mut engine, 1, &mut trace);
+    for out in [&PRESENTATION_FLAG_FALSE, &SIM_FLAG_TRUE] {
+        let out = out.lock().unwrap();
+        let [Err(found)] = out.as_slice() else {
+            panic!("expected one refusal, got {out:?}");
+        };
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().all(|d| d.starts_with("L0028")), "{found:?}");
+    }
+    assert_eq!(
+        index(&mut engine).len(),
+        before,
+        "a refused spawn left entities"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_presentation_spawn_of_a_collider_part_is_l1320_and_spawns_nothing() {
+    let dir = root("pres-spawn-l1320", LAMP_SIM);
+    let mut engine = loaded(&dir, GROUND);
+    let before = index(&mut engine).len();
+    let refusal = spawn_flagged(&mut engine, "lamp.prefab.yaml", "pole", true).unwrap_err();
+    assert_eq!(refusal.code.as_str(), "L1320");
+    assert!(
+        refusal.message.contains("`post`") && refusal.message.contains("`Collider`"),
+        "{}",
+        refusal.message
+    );
+    assert_eq!(index(&mut engine).len(), before);
     let _ = std::fs::remove_dir_all(&dir);
 }

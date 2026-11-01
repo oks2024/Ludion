@@ -338,6 +338,7 @@ pub struct DestroyedEntity {
 ///     root: EntityId::new(3, 0),
 ///     prefab: "lamp.prefab.yaml".into(),
 ///     name: Some("lamp".into()),
+///     presentation: false,
 ///     placement_differs: false,
 ///     overrides: BTreeMap::from([("bulb".to_owned(), vec!["/Transform/translation".to_owned()])]),
 ///     removed: Vec::new(),
@@ -355,6 +356,9 @@ pub struct PrefabInstanceOverrides {
     pub prefab: String,
     /// The instance's name, `null` for an unnamed spawn (which a save leaves as plain entities).
     pub name: Option<String>,
+    /// Whether the saved entry carries `presentation: true`.
+    #[serde(default)]
+    pub presentation: bool,
     /// Whether the saved `transform` differs, bit for bit, from the placement the instance was
     /// spawned or loaded at.
     pub placement_differs: bool,
@@ -567,6 +571,7 @@ mod tests {
                     removed: vec!["lid".into()],
                     root_parts: vec!["base".into()],
                     diagnostic: None,
+                    presentation: false,
                 }],
             },
             ResponseBody::ComponentSet {

@@ -864,6 +864,40 @@ fn a_presentation_instance_refuses_an_authored_sim_only_part_l1320() {
 }
 
 #[test]
+fn a_runtime_presentation_copy_turns_sim_parts_and_refuses_sim_only_ones_l1320() {
+    let files = Files::new(&[("barrel.prefab.yaml", BARREL), ("lamp.prefab.yaml", LAMP)]);
+    let place = |path: &str| {
+        format!(
+            "format: 1
+entities:
+  - name: b
+    prefab: {path}
+"
+        )
+    };
+    let expanded = files.expand(&place("barrel.prefab.yaml")).unwrap();
+    let copy = ludion_scene::presentation_copy(&expanded, &registry(), "b.prefab.yaml").unwrap();
+    assert!(copy.scene.entities.iter().all(|e| e.presentation));
+    assert!(expanded.scene.entities.iter().any(|e| !e.presentation));
+
+    let expanded = files.expand(&place("lamp.prefab.yaml")).unwrap();
+    let errors =
+        ludion_scene::presentation_copy(&expanded, &registry(), "lamp.prefab.yaml").unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1320");
+    assert_eq!(
+        errors[0].path.as_deref(),
+        Some("/entities/0/components/Health")
+    );
+    assert!(
+        errors[0]
+            .message
+            .starts_with("presentation spawn of `lamp.prefab.yaml`: part `b/post`"),
+        "{}",
+        errors[0].message
+    );
+}
+
+#[test]
 fn a_presentation_instance_refuses_a_sim_only_override_l1320() {
     let files = Files::new(&[("barrel.prefab.yaml", BARREL)]);
     let source = "format: 1\nentities:\n  - name: b\n    prefab: barrel.prefab.yaml\n    presentation: true\n    overrides:\n      tube:\n        Health: 1\n";

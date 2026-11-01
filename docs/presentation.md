@@ -47,7 +47,7 @@ Crossing the boundary is `L0028`, in every direction:
 | sim system | `spawn_presentation` | panic `L0028` | spawn from a presentation system |
 | presentation system | `get_mut`/`insert`/`remove`/`despawn` on a sim entity | `L0028` error | read it (`get`, read-only query) and write your own entity |
 | presentation system | `spawn` | panic `L0028` | `spawn_presentation` |
-| presentation system | `resource_mut`/`insert_resource` on a resource | panic `L0028` | only the outboxes `Diagnostics` and `AudioQueue` are writable; `DebugDraw` panics |
+| presentation system | `resource_mut`/`insert_resource` on a resource | panic `L0028` | only the outboxes `Diagnostics` and `AudioQueue` (and the prefab library, through `spawn_prefab`) are writable; `DebugDraw` panics |
 
 - Randomness: `DeterministicRng::derived(seed, frame, entity)`, never the master `DeterministicRng`.
 - **Stays sim:** a camera the sim unprojects through (the external game's grab, a twin-stick game's aim; a `CameraRig` camera is sim, `ludion docs camera`) and anything with a `Collider`. Making it presentation turns every sim read of it into `L0028`.
@@ -56,7 +56,8 @@ Crossing the boundary is `L0028`, in every direction:
 
 ## Set dressing
 
-Static visuals stay out of the hash: a prop's prefab marks its parts `presentation: true`; a prop that
+Static visuals stay out of the hash: a prop's prefab marks its parts `presentation: true`, or you place any
+prefab — an import included — with an instance entry's `presentation: true`; a prop that
 needs a `Collider` keeps that part sim, **first**, and parents its visual parts to it.
 
 ```yaml
@@ -85,8 +86,9 @@ entities:
         generation: 0
 ```
 
-- **Sim part first** (`L1036`): every part's hashed `PrefabInstance.root` names the first part, so a presentation first part with a sim one after it would hash a presentation id. All-presentation prefabs are fine; an instance takes its parts' kind from the prefab (it has no `presentation` key).
-- **Spawn from the scene or `prefab.spawn`.** A sim system's `spawn_prefab` refuses presentation parts (`L0028`).
+- **Sim part first** (`L1036`): every part's hashed `PrefabInstance.root` names the first part, so a presentation first part with a sim one after it would hash a presentation id. All-presentation prefabs are fine.
+- **`presentation: true` on an instance entry** spawns every part presentation, nested instances included (sticky; an inner entry cannot turn it back). A sim-only component (`Collider`, `Velocity`, joints, the character motor, `PathFollower`, `CameraRig`; a game marks its own with `Registry::mark_sim_only`) is `L1320`. For a sim `Collider` post with a visual body, keep the post sim and parent a presentation instance to it through `overrides`.
+- **Spawn from the scene or `prefab.spawn`** (`presentation` param). `spawn_prefab(world, path, at, name, presentation)` works from either system kind: a presentation system spawns presentation parts (`true`, or an all-presentation prefab), a sim system sim parts; the other way round is `L0028`.
 - **Ground is one `MeshGrid` entity** with `presentation: true`, not a tile entity per cell (`ludion docs mesh-grids`).
 - **`Fade` on the root fades the children**: a mesh with no `Fade` of its own takes its nearest ancestor's.
 

@@ -535,6 +535,7 @@ pub struct Placement {
 ///     path: "prefabs/crate.prefab.yaml".into(),
 ///     transform: Some(Placement { translation: [5.0, 0.0, 0.0], rotation: [0.0; 3], scale: [1.0; 3] }),
 ///     name: Some("a".into()),
+///     presentation: false,
 /// };
 /// assert_eq!(serde_json::to_value(&params).unwrap()["name"], "a");
 /// ```
@@ -548,6 +549,10 @@ pub struct PrefabSpawnParams {
     /// An instance name: the parts become `<name>/<part>`; omitted, they keep their bare part names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Spawn every part from the presentation allocator, nested instances included; a sim-only
+    /// component is `L1320`. Omitted, each part keeps its prefab's kind.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub presentation: bool,
 }
 
 /// Parameters for `prefab.create`.
@@ -1293,6 +1298,7 @@ mod tests {
                 path: "a.prefab.yaml".into(),
                 transform: None,
                 name: None,
+                presentation: false,
             }),
             Command::PrefabCreate(PrefabCreateParams {
                 entities: vec![entity],

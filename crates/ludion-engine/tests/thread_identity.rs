@@ -254,7 +254,7 @@ fn churn(world: &mut World, ctx: &SystemCtx) {
         rotation: [0.0, step * 20.0, 0.0],
         ..Transform::default()
     };
-    let ids = spawn_prefab(world, PREFAB_PATH, Some(placement), Some("chain"))
+    let ids = spawn_prefab(world, PREFAB_PATH, Some(placement), Some("chain"), false)
         .expect("the chain prefab spawns");
     world.resource_mut::<Instances>().unwrap().0.push(ids[0]);
 }

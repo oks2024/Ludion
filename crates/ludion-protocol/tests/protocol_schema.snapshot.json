@@ -402,7 +402,7 @@
         "type": "object"
       },
       "PrefabSpawnParams": {
-        "description": "Parameters for `prefab.spawn`.\n\n# Example\n```\nuse ludion_protocol::command::{Placement, PrefabSpawnParams};\n\nlet params = PrefabSpawnParams {\n    path: \"prefabs/crate.prefab.yaml\".into(),\n    transform: Some(Placement { translation: [5.0, 0.0, 0.0], rotation: [0.0; 3], scale: [1.0; 3] }),\n    name: Some(\"a\".into()),\n};\nassert_eq!(serde_json::to_value(&params).unwrap()[\"name\"], \"a\");\n```",
+        "description": "Parameters for `prefab.spawn`.\n\n# Example\n```\nuse ludion_protocol::command::{Placement, PrefabSpawnParams};\n\nlet params = PrefabSpawnParams {\n    path: \"prefabs/crate.prefab.yaml\".into(),\n    transform: Some(Placement { translation: [5.0, 0.0, 0.0], rotation: [0.0; 3], scale: [1.0; 3] }),\n    name: Some(\"a\".into()),\n    presentation: false,\n};\nassert_eq!(serde_json::to_value(&params).unwrap()[\"name\"], \"a\");\n```",
         "properties": {
           "name": {
             "description": "An instance name: the parts become `<name>/<part>`; omitted, they keep their bare part names.",
@@ -414,6 +414,10 @@
           "path": {
             "description": "The prefab file, relative to the content root.",
             "type": "string"
+          },
+          "presentation": {
+            "description": "Spawn every part from the presentation allocator, nested instances included; a sim-only\ncomponent is `L1320`. Omitted, each part keeps its prefab's kind.",
+            "type": "boolean"
           },
           "transform": {
             "anyOf": [
@@ -2598,7 +2602,7 @@
         "type": "object"
       },
       "PrefabSpawnParams": {
-        "description": "Parameters for `prefab.spawn`.\n\n# Example\n```\nuse ludion_protocol::command::{Placement, PrefabSpawnParams};\n\nlet params = PrefabSpawnParams {\n    path: \"prefabs/crate.prefab.yaml\".into(),\n    transform: Some(Placement { translation: [5.0, 0.0, 0.0], rotation: [0.0; 3], scale: [1.0; 3] }),\n    name: Some(\"a\".into()),\n};\nassert_eq!(serde_json::to_value(&params).unwrap()[\"name\"], \"a\");\n```",
+        "description": "Parameters for `prefab.spawn`.\n\n# Example\n```\nuse ludion_protocol::command::{Placement, PrefabSpawnParams};\n\nlet params = PrefabSpawnParams {\n    path: \"prefabs/crate.prefab.yaml\".into(),\n    transform: Some(Placement { translation: [5.0, 0.0, 0.0], rotation: [0.0; 3], scale: [1.0; 3] }),\n    name: Some(\"a\".into()),\n    presentation: false,\n};\nassert_eq!(serde_json::to_value(&params).unwrap()[\"name\"], \"a\");\n```",
         "properties": {
           "name": {
             "description": "An instance name: the parts become `<name>/<part>`; omitted, they keep their bare part names.",
@@ -2610,6 +2614,10 @@
           "path": {
             "description": "The prefab file, relative to the content root.",
             "type": "string"
+          },
+          "presentation": {
+            "description": "Spawn every part from the presentation allocator, nested instances included; a sim-only\ncomponent is `L1320`. Omitted, each part keeps its prefab's kind.",
+            "type": "boolean"
           },
           "transform": {
             "anyOf": [
@@ -4152,7 +4160,7 @@
         "type": "object"
       },
       "PrefabInstanceOverrides": {
-        "description": "One prefab instance as `prefab.overrides` reports it: what `scene.save` would write for it.\n\n# Example\n```\nuse ludion_protocol::response::PrefabInstanceOverrides;\nuse ludion_core::ids::EntityId;\nuse std::collections::BTreeMap;\n\nlet o = PrefabInstanceOverrides {\n    root: EntityId::new(3, 0),\n    prefab: \"lamp.prefab.yaml\".into(),\n    name: Some(\"lamp\".into()),\n    placement_differs: false,\n    overrides: BTreeMap::from([(\"bulb\".to_owned(), vec![\"/Transform/translation\".to_owned()])]),\n    removed: Vec::new(),\n    root_parts: vec![\"lamp\".to_owned()],\n    diagnostic: None,\n};\nassert!(serde_json::to_value(&o).unwrap().get(\"diagnostic\").is_none());\n```",
+        "description": "One prefab instance as `prefab.overrides` reports it: what `scene.save` would write for it.\n\n# Example\n```\nuse ludion_protocol::response::PrefabInstanceOverrides;\nuse ludion_core::ids::EntityId;\nuse std::collections::BTreeMap;\n\nlet o = PrefabInstanceOverrides {\n    root: EntityId::new(3, 0),\n    prefab: \"lamp.prefab.yaml\".into(),\n    name: Some(\"lamp\".into()),\n    presentation: false,\n    placement_differs: false,\n    overrides: BTreeMap::from([(\"bulb\".to_owned(), vec![\"/Transform/translation\".to_owned()])]),\n    removed: Vec::new(),\n    root_parts: vec![\"lamp\".to_owned()],\n    diagnostic: None,\n};\nassert!(serde_json::to_value(&o).unwrap().get(\"diagnostic\").is_none());\n```",
         "properties": {
           "diagnostic": {
             "anyOf": [
@@ -4189,6 +4197,11 @@
           "prefab": {
             "description": "The prefab file, relative to the content root.",
             "type": "string"
+          },
+          "presentation": {
+            "default": false,
+            "description": "Whether the saved entry carries `presentation: true`.",
+            "type": "boolean"
           },
           "removed": {
             "description": "The part paths the instance dropped from its prefab.",
@@ -6478,7 +6491,7 @@
         "type": "object"
       },
       "PrefabInstanceOverrides": {
-        "description": "One prefab instance as `prefab.overrides` reports it: what `scene.save` would write for it.\n\n# Example\n```\nuse ludion_protocol::response::PrefabInstanceOverrides;\nuse ludion_core::ids::EntityId;\nuse std::collections::BTreeMap;\n\nlet o = PrefabInstanceOverrides {\n    root: EntityId::new(3, 0),\n    prefab: \"lamp.prefab.yaml\".into(),\n    name: Some(\"lamp\".into()),\n    placement_differs: false,\n    overrides: BTreeMap::from([(\"bulb\".to_owned(), vec![\"/Transform/translation\".to_owned()])]),\n    removed: Vec::new(),\n    root_parts: vec![\"lamp\".to_owned()],\n    diagnostic: None,\n};\nassert!(serde_json::to_value(&o).unwrap().get(\"diagnostic\").is_none());\n```",
+        "description": "One prefab instance as `prefab.overrides` reports it: what `scene.save` would write for it.\n\n# Example\n```\nuse ludion_protocol::response::PrefabInstanceOverrides;\nuse ludion_core::ids::EntityId;\nuse std::collections::BTreeMap;\n\nlet o = PrefabInstanceOverrides {\n    root: EntityId::new(3, 0),\n    prefab: \"lamp.prefab.yaml\".into(),\n    name: Some(\"lamp\".into()),\n    presentation: false,\n    placement_differs: false,\n    overrides: BTreeMap::from([(\"bulb\".to_owned(), vec![\"/Transform/translation\".to_owned()])]),\n    removed: Vec::new(),\n    root_parts: vec![\"lamp\".to_owned()],\n    diagnostic: None,\n};\nassert!(serde_json::to_value(&o).unwrap().get(\"diagnostic\").is_none());\n```",
         "properties": {
           "diagnostic": {
             "anyOf": [
@@ -6515,6 +6528,11 @@
           "prefab": {
             "description": "The prefab file, relative to the content root.",
             "type": "string"
+          },
+          "presentation": {
+            "default": false,
+            "description": "Whether the saved entry carries `presentation: true`.",
+            "type": "boolean"
           },
           "removed": {
             "description": "The part paths the instance dropped from its prefab.",

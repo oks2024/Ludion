@@ -589,6 +589,20 @@ fn expand_level(
     }
 }
 
+const SIM_ONLY_HELP: &str = "drop the `presentation` key and keep the instance sim, or keep that part sim \
+     in a separate instance and parent the presentation body to it through `overrides`";
+
+/// The names of the sim-only components `part` carries.
+fn sim_only_names<'a>(
+    registry: &'a Registry,
+    part: &'a SceneEntity,
+) -> impl Iterator<Item = &'a str> {
+    part.components
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .filter(|name| registry.get(name).is_some_and(ComponentInfo::sim_only))
+}
+
 /// `L1320` for each sim-only component `part` of a presentation instance carries.
 fn check_sim_only(
     registry: &Registry,
@@ -598,25 +612,55 @@ fn check_sim_only(
     entry: usize,
     diagnostics: &mut Vec<Located>,
 ) {
-    for (name, _) in &part.components {
-        if registry.get(name).is_some_and(ComponentInfo::sim_only) {
-            diagnostics.push((
+    for name in sim_only_names(registry, part) {
+        diagnostics.push((
+            Diagnostic::new(
+                code::PRESENTATION_INSTANCE_SIM_COMPONENT,
+                format!(
+                    "presentation instance `{entry_name}`: part `{path}` carries `{name}`, \
+                     which only the sim reads"
+                ),
+            )
+            .with_path(format!("/entities/{entry}/presentation"))
+            .with_help(SIM_ONLY_HELP),
+            false,
+        ));
+    }
+}
+
+/// `expanded` with every sim part turned presentation, for a runtime `presentation` spawn of the
+/// prefab `prefab`.
+pub(crate) fn presentation_copy(
+    expanded: &ExpandedScene,
+    registry: &Registry,
+    prefab: &str,
+) -> Result<ExpandedScene, Vec<Diagnostic>> {
+    let mut copy = expanded.clone();
+    let mut diagnostics = Vec::new();
+    for (k, part) in copy.scene.entities.iter_mut().enumerate() {
+        if part.presentation {
+            continue;
+        }
+        part.presentation = true;
+        for name in sim_only_names(registry, part) {
+            diagnostics.push(
                 Diagnostic::new(
                     code::PRESENTATION_INSTANCE_SIM_COMPONENT,
                     format!(
-                        "presentation instance `{entry_name}`: part `{path}` carries `{name}`, \
-                         which only the sim reads"
+                        "presentation spawn of `{prefab}`: part `{}` carries `{name}`, which only \
+                         the sim reads",
+                        part.name.as_deref().unwrap_or("(unnamed)")
                     ),
                 )
-                .with_path(format!("/entities/{entry}/presentation"))
-                .with_help(
-                    "drop the `presentation` key and keep the instance sim, or keep that part sim \
-                     in a separate instance and parent the presentation body to it through \
-                     `overrides`",
-                ),
-                false,
-            ));
+                .with_path(format!("/entities/{k}/components/{name}"))
+                .with_help(SIM_ONLY_HELP),
+            );
         }
+    }
+    if diagnostics.is_empty() {
+        Ok(copy)
+    } else {
+        Err(diagnostics)
     }
 }
 
