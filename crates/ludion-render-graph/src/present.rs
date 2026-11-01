@@ -117,6 +117,16 @@ fn unpack_rect(packed: u64) -> Option<HostRect> {
     })
 }
 
+/// Whether [`PresentTarget::present`] put a frame on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentOutcome {
+    /// The frame was blitted and queued for display.
+    Presented,
+    /// Nothing was presented — a minimized or occluded window, a timed-out or stale swapchain — and
+    /// the call did not block, so a caller pacing itself on `present` must wait on its own.
+    Skipped,
+}
+
 /// A window surface the render thread blits the frame graph's output into once per frame.
 ///
 /// Built on the main thread with [`PresentTarget::new`] over a surface the caller created (the same
@@ -205,10 +215,14 @@ impl PresentTarget {
     /// `L2007` if acquiring the swapchain image fails validation. That is a permanent condition, not
     /// a transient one: it must end the host rather than paint black forever. The live loop reports
     /// it through `Engine::arm_render_fault_notify`.
-    pub fn present(&mut self, gpu: &Gpu, source: &wgpu::Texture) -> Result<(), Diagnostic> {
+    pub fn present(
+        &mut self,
+        gpu: &Gpu,
+        source: &wgpu::Texture,
+    ) -> Result<PresentOutcome, Diagnostic> {
         let (width, height) = self.requested.get();
         if width == 0 || height == 0 {
-            return Ok(());
+            return Ok(PresentOutcome::Skipped);
         }
         if (width, height) != self.configured {
             self.configure(gpu, width, height);
@@ -218,11 +232,11 @@ impl PresentTarget {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(());
+                return Ok(PresentOutcome::Skipped);
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&gpu.device, &self.config);
-                return Ok(());
+                return Ok(PresentOutcome::Skipped);
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 return Err(blit::surface_unavailable(
@@ -262,7 +276,7 @@ impl PresentTarget {
             .draw(&mut encoder, &view, Some((&bind_group, rect)));
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(surface_texture);
-        Ok(())
+        Ok(PresentOutcome::Presented)
     }
 }
 

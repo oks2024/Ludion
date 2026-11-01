@@ -74,7 +74,7 @@ pub use execute::{
 };
 pub use graph::{PassDecl, PassKind, RenderGraph, ResourceDecl, ResourceKind};
 pub use pass_timing::PassTimingRing;
-pub use present::{PresentSize, PresentTarget};
+pub use present::{PresentOutcome, PresentSize, PresentTarget};
 pub use readback::{FrameSinks, StreamReadback};
 pub use resource::{Extent2d, ResourceId, TextureDesc, TextureFormat, TextureUsage};
 pub use schedule::{Aliasing, PhysicalTexture, Schedule, schedule};

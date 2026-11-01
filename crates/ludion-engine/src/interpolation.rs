@@ -2,7 +2,7 @@
 //!
 //! A windowed host draws between two ticks' poses; an entity that jumps (a teleport, a camera cut)
 //! must not slide across the gap. [`NoInterpolate`] is the marker a game writes; the engine's own
-//! snap sites write the crate-private [`PresentCuts`] resource instead, so a game system that calls
+//! snap sites write the crate-private `PresentCuts` resource instead, so a game system that calls
 //! `teleport_character` gains no undeclared component write.
 
 use std::collections::BTreeSet;

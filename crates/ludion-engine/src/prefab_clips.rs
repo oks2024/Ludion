@@ -28,11 +28,10 @@ pub struct PrefabClipData {
     pub rests: BTreeMap<String, Transform>,
 }
 
-/// Reads the prefab at `root`/`rel` and every clip file it names — [`load_with_sources`] without the
-/// dependency list, for `check-scene`.
+/// Reads the prefab at `root`/`rel` and every clip file it names, for `check-scene`.
 ///
 /// # Errors
-/// As [`load_with_sources`].
+/// As the engine's own loader: `L1101` for an unreadable file and the clip-document diagnostics.
 pub fn load(root: &Path, rel: &str) -> Result<PrefabClipData, Vec<Diagnostic>> {
     load_with_sources(root, rel).map(|(data, _)| data)
 }

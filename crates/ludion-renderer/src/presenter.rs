@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::FrameIndex;
-use ludion_render_graph::{FrameSinks, Gpu, PresentTarget, StreamReadback};
+use ludion_render_graph::{FrameSinks, Gpu, PresentOutcome, PresentTarget, StreamReadback};
 
 use crate::blend::{BlendData, blend};
 use crate::graph::{AntiAliasing, FrameSize};
@@ -34,6 +34,9 @@ use crate::scene::RenderScene;
 /// The longest the loop parks on the mailbox when there is nothing to present (a minimized window,
 /// or no packet yet) — short enough to notice a restore, long enough never to spin.
 const IDLE_WAIT: Duration = Duration::from_millis(100);
+
+/// How long the loop parks after a present that was skipped without blocking.
+const SKIP_WAIT: Duration = Duration::from_millis(4);
 
 /// Presents between two `LUDION_PRESENT_TRACE` summaries.
 const TRACE_INTERVAL: usize = 600;
@@ -105,11 +108,12 @@ pub trait PresentBackend: Send {
     /// Whatever the render raises (`L2007`/`L2011` are fatal to the presenter; anything else is logged).
     fn render(&mut self, packet: &PresentPacket) -> Result<(), Diagnostic>;
     /// Presents the last rendered output; blocks at the display's rate. A no-op before the first
-    /// render.
+    /// render. Returns [`PresentOutcome::Skipped`] when nothing was presented and the call did not
+    /// block, so the loop paces itself instead of spinning.
     ///
     /// # Errors
     /// `L2007` if the surface is permanently unavailable.
-    fn present(&mut self) -> Result<(), Diagnostic>;
+    fn present(&mut self) -> Result<PresentOutcome, Diagnostic>;
     /// The renderer's probe resolve so far, if it has one.
     fn probe_resolve(&self) -> Option<ProbeResolve>;
     /// Hot-reloads one shader on the backend's renderer; returns the new shader generation.
@@ -123,6 +127,8 @@ pub trait PresentBackend: Send {
 
 struct Slot {
     packet: Option<PresentPacket>,
+    /// The first tick whose cuts `packet` carries: its own frame, or an earlier one merged in.
+    covers_from: FrameIndex,
     reloads: Vec<(String, String)>,
     closed: bool,
 }
@@ -151,6 +157,7 @@ impl Presenter {
         let shared = Arc::new(Shared {
             slot: Mutex::new(Slot {
                 packet: None,
+                covers_from: FrameIndex(0),
                 reloads: Vec::new(),
                 closed: false,
             }),
@@ -172,9 +179,17 @@ impl Presenter {
         }
     }
 
-    /// Replaces the mailbox's packet with `packet` and wakes the presenter. Never waits on it.
-    pub fn publish(&self, packet: PresentPacket) {
-        self.shared.lock().packet = Some(packet);
+    /// Replaces the mailbox's packet with `packet` and wakes the presenter. Never waits on it. A packet
+    /// it replaces unseen hands its blend cuts to `packet`, so the presenter still blends across the
+    /// ticks it never saw.
+    pub fn publish(&self, mut packet: PresentPacket) {
+        let mut slot = self.shared.lock();
+        slot.covers_from = match slot.packet.take() {
+            Some(replaced) => merge_replaced(replaced, &mut packet, slot.covers_from),
+            None => packet.frame,
+        };
+        slot.packet = Some(packet);
+        drop(slot);
         self.shared.wake.notify_one();
     }
 
@@ -222,13 +237,18 @@ fn run_loop(
     let mut dead = false;
     let mut last_probes = ProbeResolve::default();
     let mut last_error: Option<String> = None;
+    let mut skipped = false;
     loop {
-        let (packet, reloads) = {
+        let (packet, covers_from, reloads) = {
             let mut slot = shared.lock();
             if slot.closed {
                 return;
             }
-            (slot.packet.take(), std::mem::take(&mut slot.reloads))
+            (
+                slot.packet.take(),
+                slot.covers_from,
+                std::mem::take(&mut slot.reloads),
+            )
         };
         for (path, source) in reloads {
             if let Err(diag) = backend.reload_shader(&path, source) {
@@ -239,18 +259,24 @@ fn run_loop(
             wait(shared, IDLE_WAIT);
             continue;
         }
+        let mut new_tick = false;
         if let Some(packet) = packet
             && current.as_ref().is_none_or(|c| c.frame != packet.frame)
         {
             if let (Some(trace), Some(tick)) = (trace.as_mut(), packet.tick) {
                 trace.note_tick(tick);
             }
-            prev_blend = blend_source(current.as_ref(), &packet);
+            prev_blend = blend_source(current.as_ref(), &packet, covers_from);
             current = Some(packet);
+            new_tick = true;
         }
         let mut blended_now = false;
         let mut failure = None;
-        if let Some(cur) = current.as_ref() {
+        // After a skipped present, only a new tick is worth a render: a blend redrawn for a frame
+        // nobody is acquiring would just burn the GPU.
+        if let Some(cur) = current.as_ref()
+            && (new_tick || !skipped)
+        {
             let blending = match (&prev_blend, &cur.blend) {
                 (Some((prev_scene, prev)), Some(next)) => {
                     let alpha = alpha_at(Instant::now(), cur.tick);
@@ -296,27 +322,73 @@ fn run_loop(
             continue;
         }
         let started = Instant::now();
-        if let Err(diag) = backend.present() {
-            if report(notes, &mut last_error, diag) {
-                dead = true;
+        skipped = false;
+        match backend.present() {
+            Err(diag) => {
+                if report(notes, &mut last_error, diag) {
+                    dead = true;
+                }
             }
-            continue;
-        }
-        if let (Some(trace), Some((frame, _))) = (trace.as_mut(), drawn) {
-            trace.note_present(frame, started.elapsed(), blended_now);
+            Ok(PresentOutcome::Presented) => {
+                if let (Some(trace), Some((frame, _))) = (trace.as_mut(), drawn) {
+                    trace.note_present(frame, started.elapsed(), blended_now);
+                }
+            }
+            // Nothing paced this iteration (occluded, stale or timed-out swapchain): park instead of
+            // re-rendering a blend in a tight loop.
+            Ok(PresentOutcome::Skipped) => {
+                skipped = true;
+                if let Some(trace) = trace.as_mut() {
+                    trace.skips += 1;
+                }
+                wait(shared, SKIP_WAIT);
+            }
         }
     }
 }
 
-/// The previous tick's scene and blend data when `next` can blend toward it: both ticks carry data, `next`
-/// directly follows `current` (a skipped packet lost its cuts) and was not a re-based tick.
+/// Folds the blend cuts of `replaced` — a packet the presenter never took — into `packet`, the
+/// next one published, and returns the first tick whose cuts `packet` now carries (`covers_from` is
+/// `replaced`'s own). A gap in frame numbers means a tick was never published: the chain restarts.
+/// A replaced packet without blend data, or a re-based one, forces a snap.
+fn merge_replaced(
+    replaced: PresentPacket,
+    packet: &mut PresentPacket,
+    covers_from: FrameIndex,
+) -> FrameIndex {
+    if replaced.frame.0 + 1 != packet.frame.0 {
+        return packet.frame;
+    }
+    let rebased = replaced.tick.is_some_and(|tick| tick.rebased);
+    match (&replaced.blend, packet.blend.as_mut()) {
+        (Some(old), Some(new)) => {
+            if !old.snaps.is_empty() {
+                let new = Arc::make_mut(new);
+                new.snaps.extend_from_slice(&old.snaps);
+                new.snaps.sort_unstable();
+                new.snaps.dedup();
+            }
+        }
+        (None, Some(_)) => return packet.frame,
+        _ => {}
+    }
+    if rebased && let Some(tick) = packet.tick.as_mut() {
+        tick.rebased = true;
+    }
+    covers_from
+}
+
+/// The previous tick's scene and blend data when `next` can blend toward it: both ticks carry data, every
+/// tick between them reached the presenter as a merged cut set (`covers_from`) and `next` was not a
+/// re-based tick.
 fn blend_source(
     current: Option<&PresentPacket>,
     next: &PresentPacket,
+    covers_from: FrameIndex,
 ) -> Option<(Arc<RenderScene>, Arc<BlendData>)> {
     let current = current?;
     next.blend.as_ref()?;
-    let contiguous = current.frame.0 + 1 == next.frame.0;
+    let contiguous = current.frame.0 + 1 == covers_from.0;
     let rebased = next.tick.is_some_and(|tick| tick.rebased);
     (contiguous && !rebased)
         .then(|| current.blend.clone().map(|d| (current.scene.clone(), d)))
@@ -372,6 +444,7 @@ struct PresentTrace {
     gaps: u64,
     rebased: usize,
     blended: usize,
+    skips: usize,
     last_frame: Option<FrameIndex>,
     waits_ms: Vec<f64>,
     window_start: Option<Instant>,
@@ -387,6 +460,7 @@ impl PresentTrace {
             gaps: 0,
             rebased: 0,
             blended: 0,
+            skips: 0,
             last_frame: None,
             waits_ms: Vec::with_capacity(TRACE_INTERVAL),
             window_start: None,
@@ -428,13 +502,15 @@ impl PresentTrace {
         };
         eprintln!(
             "present-trace: {:.1} presents/s, {} distinct frames, {} repeats, {} frame-index gaps, \
-             {} rebased ticks, {} blended presents, acquire+present p50 {:.2} ms p99 {:.2} ms",
+             {} rebased ticks, {} blended presents, {} skipped presents, \
+             acquire+present p50 {:.2} ms p99 {:.2} ms",
             self.presents as f64 / elapsed.as_secs_f64().max(1e-9),
             self.distinct,
             self.repeats,
             self.gaps,
             self.rebased,
             self.blended,
+            self.skips,
             at(0.50),
             at(0.99),
         );
@@ -444,6 +520,7 @@ impl PresentTrace {
         self.gaps = 0;
         self.rebased = 0;
         self.blended = 0;
+        self.skips = 0;
         self.waits_ms.clear();
         self.window_start = None;
     }
@@ -511,10 +588,10 @@ impl PresentBackend for WindowBackend {
         Ok(())
     }
 
-    fn present(&mut self) -> Result<(), Diagnostic> {
+    fn present(&mut self) -> Result<PresentOutcome, Diagnostic> {
         match self.ring.as_ref().and_then(StreamReadback::last_output) {
             Some(output) => self.target.present(self.renderer.gpu(), output),
-            None => Ok(()),
+            None => Ok(PresentOutcome::Skipped),
         }
     }
 
@@ -546,6 +623,8 @@ mod tests {
         renders: Vec<u64>,
         /// The x translation of the first mesh at each render, parallel to `renders`.
         xs: Vec<f32>,
+        /// Every mesh's x translation at each render.
+        mesh_xs: Vec<Vec<f32>>,
         presents: usize,
     }
 
@@ -563,12 +642,20 @@ mod tests {
             if let Some(mesh) = packet.scene.meshes.first() {
                 log.xs.push(mesh.model.w_axis.x);
             }
+            log.mesh_xs.push(
+                packet
+                    .scene
+                    .meshes
+                    .iter()
+                    .map(|m| m.model.w_axis.x)
+                    .collect(),
+            );
             Ok(())
         }
-        fn present(&mut self) -> Result<(), Diagnostic> {
+        fn present(&mut self) -> Result<PresentOutcome, Diagnostic> {
             let _ = self.gate.recv();
             self.log.lock().unwrap().presents += 1;
-            Ok(())
+            Ok(PresentOutcome::Presented)
         }
         fn probe_resolve(&self) -> Option<ProbeResolve> {
             None
@@ -599,13 +686,10 @@ mod tests {
     }
 
     const KEY: EntityId = EntityId::new(1, 0);
+    const KEY_B: EntityId = EntityId::new(2, 0);
 
-    /// A one-mesh packet whose entity sits at x = `frame`, with matching blend data, stamped `at`
-    /// with a `period` tick.
-    fn blendable(frame: u64, at: Instant, period: Duration, rebased: bool) -> PresentPacket {
-        let model = Mat4::from_translation(Vec3::new(frame as f32, 0.0, 0.0));
-        let mut scene = RenderScene::empty((16, 16));
-        scene.meshes.push(MeshInstance {
+    fn mesh_at(model: Mat4) -> MeshInstance {
+        MeshInstance {
             shape: MeshShape::Cube,
             model,
             normal_matrix: Mat3::from_mat4(model),
@@ -617,7 +701,110 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+        }
+    }
+
+    /// Two keyed meshes: `KEY` at x = `frame`, `KEY_B` at x = 10 × `frame`; `snaps` names the entities
+    /// cut this tick. A 10 s period keeps alpha near 0 for the whole test.
+    fn pair(frame: u64, now: Instant, snaps: &[EntityId]) -> PresentPacket {
+        let a = Mat4::from_translation(Vec3::new(frame as f32, 0.0, 0.0));
+        let b = Mat4::from_translation(Vec3::new(10.0 * frame as f32, 0.0, 0.0));
+        let mut scene = RenderScene::empty((16, 16));
+        scene.meshes.extend([mesh_at(a), mesh_at(b)]);
+        PresentPacket {
+            scene: Arc::new(scene),
+            tick: Some(TickStamp {
+                at: now,
+                period: Duration::from_secs(10),
+                rebased: false,
+            }),
+            blend: Some(Arc::new(BlendData {
+                poses: vec![(KEY, a), (KEY_B, b)],
+                snaps: snaps.to_vec(),
+                meshes: vec![Some(KEY), Some(KEY_B)],
+                ..BlendData::default()
+            })),
+            ..packet(frame)
+        }
+    }
+
+    /// Frames 1, 2, 3 reach the mailbox while the loop is blocked presenting frame 1, so 2 is
+    /// replaced unseen; returns every mesh's x in the render of frame 3.
+    fn frame_three_xs(snaps_on_two: &[EntityId]) -> Vec<f32> {
+        let (presenter, log, gate_tx) = spawn_fake();
+        let now = Instant::now();
+        presenter.publish(pair(1, now, &[]));
+        until("frame 1 rendered", || {
+            log.lock().unwrap().renders.len() == 1
         });
+        presenter.publish(pair(2, now, snaps_on_two));
+        presenter.publish(pair(3, now, &[]));
+        gate_tx.send(()).unwrap();
+        until("frame 3 rendered", || {
+            log.lock().unwrap().renders.len() >= 2
+        });
+        let log = log.lock().unwrap();
+        assert_eq!(log.renders[1], 3, "frame 2 was replaced unseen");
+        log.mesh_xs[1].clone()
+    }
+
+    #[test]
+    fn a_replaced_packet_keeps_its_cuts_and_the_blend_spans_the_gap() {
+        // The entity cut on the lost tick snaps; the other blends from frame 1 (alpha ~ 0).
+        let xs = frame_three_xs(&[KEY_B]);
+        assert!((xs[0] - 1.0).abs() < 0.01, "{xs:?}");
+        assert_eq!(xs[1], 30.0, "{xs:?}");
+        // No cuts: neither entity snaps.
+        let xs = frame_three_xs(&[]);
+        assert!((xs[0] - 1.0).abs() < 0.01, "{xs:?}");
+        assert!((xs[1] - 10.0).abs() < 0.1, "{xs:?}");
+    }
+
+    #[test]
+    fn a_skipped_present_parks_instead_of_spinning() {
+        struct Skipping(Arc<Mutex<Log>>);
+        impl PresentBackend for Skipping {
+            fn render(&mut self, packet: &PresentPacket) -> Result<(), Diagnostic> {
+                self.0.lock().unwrap().renders.push(packet.frame.0);
+                Ok(())
+            }
+            fn present(&mut self) -> Result<PresentOutcome, Diagnostic> {
+                self.0.lock().unwrap().presents += 1;
+                Ok(PresentOutcome::Skipped)
+            }
+            fn probe_resolve(&self) -> Option<ProbeResolve> {
+                None
+            }
+            fn reload_shader(&mut self, _: &str, _: String) -> Result<u64, Diagnostic> {
+                Ok(0)
+            }
+            fn idle(&self) -> bool {
+                false
+            }
+        }
+        let log = Arc::new(Mutex::new(Log::default()));
+        let presenter = Presenter::spawn(Box::new(Skipping(Arc::clone(&log))));
+        let now = Instant::now();
+        presenter.publish(pair(1, now, &[]));
+        presenter.publish(pair(2, now, &[]));
+        std::thread::sleep(Duration::from_millis(300));
+        drop(presenter);
+        let log = log.lock().unwrap();
+        // 4 ms parks bound the attempts near 75; a spin would be orders of magnitude more.
+        assert!(log.presents < 150, "{} present attempts", log.presents);
+        assert!(
+            log.renders.len() <= 2,
+            "blends re-rendered: {:?}",
+            log.renders
+        );
+    }
+
+    /// A one-mesh packet whose entity sits at x = `frame`, with matching blend data, stamped `at`
+    /// with a `period` tick.
+    fn blendable(frame: u64, at: Instant, period: Duration, rebased: bool) -> PresentPacket {
+        let model = Mat4::from_translation(Vec3::new(frame as f32, 0.0, 0.0));
+        let mut scene = RenderScene::empty((16, 16));
+        scene.meshes.push(mesh_at(model));
         PresentPacket {
             scene: Arc::new(scene),
             tick: Some(TickStamp {
@@ -663,10 +850,9 @@ mod tests {
         let xs = &log.xs[1..];
         assert!(log.renders[1..].iter().all(|&f| f == 2));
         assert!(xs.iter().all(|&x| (1.0..2.0).contains(&x)), "{xs:?}");
-        assert!(
-            xs.windows(2).all(|w| w[0] < w[1]),
-            "strictly rising: {xs:?}"
-        );
+        // Back-to-back renders can land within f32 resolution of alpha, so only require monotone.
+        assert!(xs.windows(2).all(|w| w[0] <= w[1]), "rising: {xs:?}");
+        assert!(xs.last() > xs.first(), "no progress: {xs:?}");
     }
 
     #[test]
@@ -800,9 +986,9 @@ mod tests {
             fn render(&mut self, _: &PresentPacket) -> Result<(), Diagnostic> {
                 Err(Diagnostic::new(code::RENDER_DEVICE_LOST, "lost"))
             }
-            fn present(&mut self) -> Result<(), Diagnostic> {
+            fn present(&mut self) -> Result<PresentOutcome, Diagnostic> {
                 self.0.lock().unwrap().presents += 1;
-                Ok(())
+                Ok(PresentOutcome::Presented)
             }
             fn probe_resolve(&self) -> Option<ProbeResolve> {
                 None

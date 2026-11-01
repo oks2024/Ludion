@@ -15,7 +15,7 @@ use ludion_ecs::{Registry, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{Engine, TickObserver};
 use ludion_protocol::Command;
-use ludion_renderer::{PresentBackend, PresentPacket, ProbeResolve};
+use ludion_renderer::{PresentBackend, PresentOutcome, PresentPacket, ProbeResolve};
 use ludion_sim::WorldHash;
 
 const SCENE: &str =
@@ -60,10 +60,10 @@ impl PresentBackend for Fake {
             .push((packet.frame.0, packet.tick.map(|tick| tick.rebased)));
         Ok(())
     }
-    fn present(&mut self) -> Result<(), Diagnostic> {
+    fn present(&mut self) -> Result<PresentOutcome, Diagnostic> {
         thread::sleep(self.present_for);
         self.presents.fetch_add(1, Ordering::Relaxed);
-        Ok(())
+        Ok(PresentOutcome::Presented)
     }
     fn probe_resolve(&self) -> Option<ProbeResolve> {
         None

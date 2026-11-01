@@ -1,6 +1,6 @@
 # Plan: Display-paced present — a presenter thread, then interpolation between ticks
 
-> Status: **design approved by the engine owner (2026-11-01)**; 01 shipped (presenter module, engine wiring), 02 shipped (r1900 blend, r1902 engine data), 03 shipped (presenter interpolates, `present_interpolation` flag; rev with the Tech Lead), 04 shipped (particles and bullets blend by instance key; rev with the Tech Lead). Trigger:
+> Status: **design approved by the engine owner (2026-11-01)**; 01 shipped (presenter module, engine wiring), 02 shipped (r1900 blend, r1902 engine data), 03 shipped (presenter interpolates, `present_interpolation` flag; rev with the Tech Lead), 04 shipped (particles and bullets blend by instance key; rev with the Tech Lead), 05 shipped (review fixes: a skipped present parks, replaced packets merge their cuts, shader reload builds no renderer). Trigger:
 > Clockout request 0026 (`engine-requests/0026-sim-presentation-boundary-display-paced-present.md`,
 > priority *painful*). Code facts read from the tree on 2026-11-01 (file:line pointers are of that
 > date; re-grep before editing).
@@ -117,7 +117,7 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
     blending tick n−1 → n, so the window shows the world up to one tick late. Only poses and the
     camera (pose, FOV) blend — lerp translation/scale, slerp rotation (via `ludion_core::math`'s
     fixed-order rotation, though it never touches hashed state); everything else takes the newer
-    tick; animation and particle times take the same fractional time. **Snap** (no blend) when an
+    tick; animation, clip and skinned poses stay stepped (decision 15). **Snap** (no blend) when an
     entity has no pose in the previous packet (spawned), was teleported (`teleport_character`), sits
     under a rig `snap_rig` cut, or after a scene load/switch/restore — the engine sets these itself;
     a one-tick render-only `NoInterpolate` marker, cleared by the engine, covers a hand-written
@@ -143,7 +143,11 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
 13. **A re-based deadline is an explicit snap.** When the live loop re-bases its deadline (a whole
     period behind, a speed change, a resume) the tick it then runs is stamped `rebased: true`; part
     2's presenter never blends across a re-based tick (it shows the newer tick at alpha 1). 01
-    carries the stamp so 03 does not touch the tick block again; 01's trace counts rebases.
+    carries the stamp so 03 does not touch the tick block again; 01's trace counts rebases. A
+    packet the presenter never takes (replaced in the mailbox) hands its snap set, and its `rebased`
+    flag, to the packet that replaces it, so the presenter blends from the last tick it drew across
+    the gap rather than snapping; the blend then spans the larger gap, still `(now − t_next) / period`.
+    A gap in published frame numbers, or a replaced packet with no blend data, still snaps.
 14. **Threads named.** The engine process gains a fourth thread in `engine-architecture.md` §3 — the
     presenter, render-only, owning no sim state. The thread-identity gate (`--full`) runs headless,
     so no presenter exists there; its module doc says so, and a live test pins that a presenter

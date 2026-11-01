@@ -89,6 +89,7 @@ pub use local_shadow::{
     LocalShadowStats, is_valid_atlas_edge, local_shadow_marks, local_shadow_stats,
 };
 pub use ludion_font::GlyphQuad;
+pub use ludion_render_graph::PresentOutcome;
 pub use presenter::{
     PresentBackend, PresentPacket, PresentSettings, Presenter, PresenterNote, TickStamp,
     WindowBackend,

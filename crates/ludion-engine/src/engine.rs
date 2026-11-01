@@ -352,6 +352,8 @@ pub struct Engine {
     /// built under inputs the frame no longer had. Recomputed per frame, never latched.
     gi_stale: bool,
     renderer: Option<Renderer>,
+    /// Shader sources reloaded this session, oldest first, for a renderer built later.
+    shader_reloads: Vec<(String, String)>,
     /// Whether a host has enabled dev-only shader hot reload ([`enable_shader_reload`](Engine::enable_shader_reload)).
     /// Default `false`: an `asset.reload` naming a renderer `.wgsl` is an `L2008` structured error, and
     /// no shader is ever read from disk — every shipping/test/golden/`ludion render` path uses the
@@ -748,6 +750,7 @@ impl Engine {
             revalidate_pending: false,
             gi_stale: false,
             renderer: None,
+            shader_reloads: Vec::new(),
             shader_reload: false,
             tick_observer: None,
             stream_ring: None,
@@ -3877,7 +3880,11 @@ impl Engine {
             self.load_begin(LoadPhase::RendererInit);
             let renderer = self.new_renderer();
             self.load_end(LoadPhase::RendererInit);
-            self.renderer = Some(renderer?);
+            let mut renderer = renderer?;
+            for (path, source) in &self.shader_reloads {
+                let _ = renderer.reload_shader(path, source.clone());
+            }
+            self.renderer = Some(renderer);
         }
         let hold = self.gi_hold();
         let store = self.probe_store.clone();
@@ -4005,7 +4012,7 @@ impl Engine {
     /// nothing a snapshot carries.
     ///
     /// # Errors
-    /// `L1101` if the file cannot be read; `L2003`/`L2004` if the renderer has no GPU;
+    /// `L1101` if the file cannot be read;
     /// `L2009` if the WGSL fails validation or the recreated pipeline is layout-incompatible (the last
     /// good pipeline stays live).
     pub(crate) fn reload_shader(&mut self, path: &str) -> Result<u64, Diagnostic> {
@@ -4023,7 +4030,18 @@ impl Engine {
         if let Some(presenter) = self.presenter.as_ref() {
             presenter.reload_shader(path, source.clone());
         }
-        self.renderer_mut()?.reload_shader(path, source)
+        // No sim-side renderer yet: nothing to reload, and building one just for this would cost a
+        // device. It is kept, and the renderer built later compiles from it.
+        let Some(renderer) = self.renderer.as_mut() else {
+            let hash = ludion_assets::content_hash(source.as_bytes());
+            self.shader_reloads.retain(|(p, _)| p != path);
+            self.shader_reloads.push((path.to_owned(), source));
+            return Ok(hash);
+        };
+        let hash = renderer.reload_shader(path, source.clone())?;
+        self.shader_reloads.retain(|(p, _)| p != path);
+        self.shader_reloads.push((path.to_owned(), source));
+        Ok(hash)
     }
 
     /// Brings the asset cache to the world after a rebuild: keeps what the new world names and drops

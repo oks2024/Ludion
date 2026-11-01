@@ -807,7 +807,7 @@ impl Gpu {
         let presented = match sinks.present {
             Some(present) => {
                 let watch = Watch::start(traced);
-                let result = present.present(self, output_texture);
+                let result = present.present(self, output_texture).map(|_| ());
                 ring.trace_segment(Segment::Present, watch);
                 result
             }
