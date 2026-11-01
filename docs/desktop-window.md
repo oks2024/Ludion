@@ -48,7 +48,7 @@ fn main() -> std::process::ExitCode {
 ## Gotchas
 
 - Packaging, icons and export are not provided: `launch` opens a window over directory roots.
-- The 60 Hz wall-clock tick is presented without vsync and without interpolation, so cadence is uneven on 120/144 Hz panels. Display-paced present is tracked as Clockout request 0026.
+- The window is vsync'd and display-paced (no tearing): a presenter thread draws it, so the sim keeps its 60 Hz tick whatever the panel's rate. There is no interpolation yet, so on 120/144 Hz panels each tick shows for two or more refreshes; interpolation is tracked as Clockout request 0026 part 2.
 
 ## Next
 

@@ -2,7 +2,8 @@
 //! corpus — `run.lrp` here, `games/vigil/run.lrp` and `games/vigil/stress.lrp` the other two members
 //! — must replay to bit-identical `WorldHash` sequences no matter how many worker threads
 //! `ludion_core::par` is told to use. Breakout's own systems are sequential, so this gate
-//! guards them and the shared engine `par` paths.
+//! guards them and the shared engine `par` paths. The gate runs headless, so no presenter thread
+//! exists here; the presenter's hash-neutrality is pinned by `ludion-engine/tests/presenter.rs`.
 //!
 //! `#[ignore]`d: driving `run.lrp` three times (once per thread count) is cheap for this small game,
 //! but the gate lives in the same `--full`/CI lane as vigil's heavier corpus members rather than the

@@ -1,6 +1,6 @@
 # Plan: Display-paced present — a presenter thread, then interpolation between ticks
 
-> Status: **design approved by the engine owner (2026-11-01)**; 01 planned, nothing built. Trigger:
+> Status: **design approved by the engine owner (2026-11-01)**; 01 shipped (presenter module, engine wiring; Lore rev with the Tech Lead), 02/03 not started. Trigger:
 > Clockout request 0026 (`engine-requests/0026-sim-presentation-boundary-display-paced-present.md`,
 > priority *painful*). Code facts read from the tree on 2026-11-01 (file:line pointers are of that
 > date; re-grep before editing).

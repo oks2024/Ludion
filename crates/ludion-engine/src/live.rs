@@ -64,6 +64,8 @@ use ludion_protocol::perf::MAX_CAPTURE_WALL_SECONDS;
 use ludion_protocol::{Channel, Command, EventMessage, ResponseBody};
 use ludion_sim::{RunState, Speed};
 
+use ludion_renderer::TickStamp;
+
 use crate::Engine;
 use crate::commands;
 use crate::dispatch::Dispatched;
@@ -312,6 +314,10 @@ fn live_loop(
     // nothing else (the same discipline as the live profiler's `Option<Box<LivePerf>>`). See
     // `TickTrace` for what it measures and why.
     let mut tick_trace = TickTrace::from_env(tick_period(engine));
+    // The newest tick's wall-clock stamp, handed to the presenter with that tick's scene. A deadline
+    // reset, a speed change or a resume from pause marks the next stamp `rebased`.
+    let mut latest_tick: Option<TickStamp> = None;
+    let mut rebase_pending = false;
 
     loop {
         // 1. Drain the commands pending at this frame boundary, up to the cap.
@@ -348,9 +354,12 @@ fn live_loop(
         if engine.speed() != paced_speed {
             paced_speed = engine.speed();
             next_tick = Instant::now() + tick_period(engine);
+            rebase_pending = true;
         }
         let paused = engine.run_state() == RunState::Paused;
-        if !paused {
+        if paused {
+            rebase_pending = true;
+        } else {
             let now = Instant::now();
             if now >= next_tick {
                 // `now` is already read for the deadline check above; the trace reuses it rather
@@ -368,9 +377,16 @@ fn live_loop(
                 // a burst of catch-up ticks — a live view paces by the clock, it does not owe the
                 // sim a fixed tick count (deterministic verification uses lockstep, not this loop).
                 next_tick += period;
-                if next_tick <= now {
+                let reset = next_tick <= now;
+                if reset {
                     next_tick = now + period;
                 }
+                latest_tick = Some(TickStamp {
+                    at: now,
+                    period,
+                    rebased: rebase_pending || reset,
+                });
+                rebase_pending = false;
             }
         }
 
@@ -386,7 +402,7 @@ fn live_loop(
             absorb_render_failure(engine, &mut egress_state, fault);
         }
         if egress.is_some() || engine.present_attached() {
-            emit_egress(engine, egress.as_ref(), &mut egress_state);
+            emit_egress(engine, egress.as_ref(), &mut egress_state, latest_tick);
         }
         shutdown.1.store(ACTIVITY_IDLE, Ordering::Relaxed);
 
@@ -731,9 +747,8 @@ struct EgressInput {
 /// What one egress pass does with the frame: at most one render, plus the ring bookkeeping around it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct EgressPlan {
-    /// Drop the in-flight readbacks first — nothing is watching the stream. With no window attached
-    /// that drops the whole ring; with one it keeps the ring, whose textures the presented frames are
-    /// drawn into (`Engine::discard_stream_ring`).
+    /// Drop the stream ring and its in-flight readbacks first — nothing is watching the stream
+    /// (`Engine::discard_stream_ring`).
     discard: bool,
     /// Render one frame into these sinks, or `None` to submit nothing this pass.
     render: Option<FrameSinkRequest>,
@@ -741,11 +756,13 @@ struct EgressPlan {
     drain: bool,
 }
 
-/// The sinks one planned render asks for; the pair [`Engine::render_frame`] takes.
+/// The consumers one planned frame feeds; the pair [`Engine::render_frame`] takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FrameSinkRequest {
+    /// Render on the sim thread into the stream ring.
     readback: bool,
-    present: bool,
+    /// Hand the extracted scene to the presenter thread.
+    handover: bool,
 }
 
 /// Decides one pass's frame work. Pure, so the rules below are the whole contract and are tested
@@ -774,9 +791,9 @@ fn plan_egress(input: EgressInput) -> EgressPlan {
         }
     }
     let readback = input.stream_wanted && input.stream_changed && input.room;
-    let present = input.present && !input.presented_already;
-    if readback || present {
-        plan.render = Some(FrameSinkRequest { readback, present });
+    let handover = input.present && !input.presented_already;
+    if readback || handover {
+        plan.render = Some(FrameSinkRequest { readback, handover });
     }
     // A pass that files no readback of its own still drains the tail of a burst, whether it rendered
     // for the window or submitted nothing at all.
@@ -809,10 +826,10 @@ fn plan_egress(input: EgressInput) -> EgressPlan {
 /// renders for the measurement alone and discards the image.
 ///
 /// **The window**, when one is attached ([`Engine::attach_surface`]), is a second and independent
-/// consumer of the same frame: [`plan_egress`] decides both sinks in one place, a frame is blitted at
-/// most once, and the present is gated on neither the stream's subscriber nor its slot — so a window
-/// keeps redrawing while a wedged wire client waits, and a windowed host with nobody subscribed
-/// renders without paying a readback at all.
+/// consumer of the same extracted scene: [`plan_egress`] decides both consumers in one place, a scene
+/// is handed to the presenter thread at most once, and the handover is gated on neither the stream's
+/// subscriber nor its slot — so a window keeps redrawing while a wedged wire client waits, and a
+/// windowed host with nobody subscribed pays no sim-side render and no readback at all.
 ///
 /// A lost device (`L2011`) or a dead window surface (`L2007`) latches the same no-render state and
 /// is reported once to an armed host ([`Engine::arm_render_fault_notify`]), which ends the session;
@@ -826,7 +843,12 @@ fn plan_egress(input: EgressInput) -> EgressPlan {
 /// success — or a *different* failure — resets that latch so the next distinct problem, or a
 /// recurrence after recovery, logs again. An ordinary failure leaves the frame dirty for the next
 /// pass, so a transient one self-heals.
-fn emit_egress(engine: &mut Engine, channels: Option<&EgressChannels>, state: &mut EgressState) {
+fn emit_egress(
+    engine: &mut Engine,
+    channels: Option<&EgressChannels>,
+    state: &mut EgressState,
+    tick: Option<TickStamp>,
+) {
     // 1. Events: drain the outbox and fan each out to its channel's subscribers on the ordered,
     //    unbounded event lane — never the latest-wins frame slot, so a pending frame can no longer
     //    displace an event (audit finding 1.3). `send` on an unbounded channel never blocks; it fails
@@ -878,17 +900,17 @@ fn emit_egress(engine: &mut Engine, channels: Option<&EgressChannels>, state: &m
     let collected = match plan.render {
         Some(sinks) => {
             // Submit this frame (pipelined, non-stalling) into whichever sinks were planned.
-            match engine.render_frame(frame, sinks.readback, sinks.present) {
+            match engine.render_frame(frame, sinks.readback, sinks.handover, tick) {
                 Ok(collected) => {
                     if sinks.readback {
                         state.frame_dirty = false;
                         state.last_submitted = Some(frame);
                     }
-                    if sinks.present {
+                    if sinks.handover {
                         state.last_presented = Some(frame);
                     }
                     if plan.drain {
-                        // The render carried no readback of its own (it was the window's), so the
+                        // The pass carried no readback of its own (it was the window's), so the
                         // ring's tail is still drained for the stream.
                         engine.collect_stream_ring()
                     } else {
@@ -1323,8 +1345,8 @@ mod tests {
         presented_already: false,
     };
 
-    fn render(readback: bool, present: bool) -> Option<FrameSinkRequest> {
-        Some(FrameSinkRequest { readback, present })
+    fn render(readback: bool, handover: bool) -> Option<FrameSinkRequest> {
+        Some(FrameSinkRequest { readback, handover })
     }
 
     #[test]
@@ -1340,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    fn a_window_alone_presents_a_new_frame_without_a_readback() {
+    fn a_window_alone_hands_over_a_new_frame_without_a_sim_render() {
         let plan = plan_egress(EgressInput {
             present: true,
             stream_changed: true,
@@ -1348,14 +1370,12 @@ mod tests {
             ..IDLE
         });
         assert_eq!(plan.render, render(false, true));
-        // The ring survives this discard (it holds the graph's textures) — `Engine::discard_stream_ring`
-        // drops only the in-flight readbacks while a present target is attached.
-        assert!(plan.discard);
+        assert!(plan.discard, "the stream ring is dropped");
         assert!(!plan.drain, "nobody is watching the stream");
     }
 
     #[test]
-    fn a_watched_window_renders_once_into_both_sinks() {
+    fn a_watched_window_feeds_both_consumers_once() {
         let plan = plan_egress(EgressInput {
             stream_wanted: true,
             present: true,
@@ -1369,7 +1389,7 @@ mod tests {
     }
 
     #[test]
-    fn a_full_stream_slot_still_presents() {
+    fn a_full_stream_slot_still_hands_over() {
         // The wire client's slot is undrained; the window must not wait on it.
         let plan = plan_egress(EgressInput {
             stream_wanted: true,
@@ -1383,7 +1403,7 @@ mod tests {
     }
 
     #[test]
-    fn one_frame_is_presented_exactly_once() {
+    fn one_frame_is_handed_over_exactly_once() {
         let input = EgressInput {
             present: true,
             stream_changed: true,
@@ -1395,7 +1415,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subscriber_arriving_after_a_present_reads_that_same_frame_back() {
+    fn a_subscriber_arriving_after_a_handover_reads_that_same_frame_back() {
         // A legitimate second render of one frame index — the same class as today's `frame_dirty`
         // re-render: the window has the frame, the stream has never seen it.
         let plan = plan_egress(EgressInput {

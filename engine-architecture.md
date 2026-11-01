@@ -133,12 +133,18 @@ separate, all speaking the protocol.
    thread replies via the oneshot (sync-side send is non-blocking; the bridge is race-free by
    construction).
 3. **notify watcher thread** — asset-change events into the same command intake as everything else.
+4. **Presenter thread** (windowed hosts only) — render-only: owns the window surface and its own
+   renderer, fed latest-wins extracted scenes, and paces itself to the display (`Fifo`). It never
+   touches `World`, `Engine` or a command (`Plan/display-paced-present.md`).
 
-Rendering runs on the sim thread, inside `emit_egress` after the tick; when windowed, the main
-thread runs the winit loop and only forwards input.
+The stream's rendering runs on the sim thread, inside `emit_egress` after the tick; when windowed,
+the main thread runs the winit loop and only forwards input, and the window is drawn by the
+presenter thread, never the sim thread.
 
 **Sim→render handoff:** `extract()` produces a `RenderScene` — transforms, sprites, lights, camera
-as plain data, no ECS references — and hands it straight to the renderer on the same thread;
+as plain data, no ECS references. The sim thread renders it for the frame stream, and publishes the
+same `Arc<RenderScene>` to the presenter as a `PresentPacket` (scene, size, render-side settings,
+tick stamp) through a one-slot mailbox: latest wins, the sim never waits on the window. Stream
 latest-wins happens downstream, at the egress frame slot. The renderer never touches `World`. This
 is the only sim/render coupling.
 
@@ -167,11 +173,12 @@ the bounded(1) egress lane. The server's frame router encodes each frame once pe
 Exception: `render.screenshot` and lockstep mode use `device.poll(Wait)` — a deliberate stall,
 because the answer must correspond to an exact frame index.
 
-**Windowed mode:** the renderer keeps targeting the offscreen texture — the single source of truth
-for goldens, `render.screenshot`, and the frame stream; a present pass additionally blits that same
-texture into a winit surface for a game's own `--window`, so a rendered frame is handed to both sinks
-without a second render or a client round-trip. The winit event loop takes the main thread. Nothing
-else changes — windowed is an append-only feature, not a mode switch.
+**Windowed mode:** the sim-side renderer keeps targeting the offscreen texture — the single source
+of truth for goldens, `render.screenshot`, and the frame stream; for a game's own `--window` the
+presenter thread renders the same extracted scene on its own renderer (same device) and blits it into
+the winit surface at the display's rate, so the window costs the sim thread an extract it already
+paid for and a pointer swap. The winit event loop takes the main thread. Nothing else changes —
+windowed is an append-only feature, not a mode switch.
 
 ---
 

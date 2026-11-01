@@ -52,8 +52,9 @@ use ludion_protocol::replay::{
 use ludion_protocol::response::EntityBounds;
 use ludion_protocol::{Channel, PROTOCOL_VERSION, SubId, schema};
 use ludion_renderer::{
-    AntiAliasing, FrameSinks, FrameSize, Gpu, PresentSize, PresentTarget, ProbeWorld, RenderScale,
-    RenderScene, RenderedImage, Renderer, StreamReadback,
+    AntiAliasing, FrameSinks, FrameSize, Gpu, PresentBackend, PresentPacket, PresentSettings,
+    PresentSize, PresentTarget, Presenter, PresenterNote, ProbeResolve, ProbeWorld, RenderScale,
+    RenderScene, RenderedImage, Renderer, StreamReadback, TickStamp, WindowBackend,
 };
 use ludion_scene::{ExpandedScene, InstanceTransform, Scene, SceneEntity, ScenePhysics};
 use ludion_sim::{InputState, RunState, SimConfig, SimDriver, Speed, WorldHash};
@@ -357,17 +358,17 @@ pub struct Engine {
     /// hashed or snapshotted; `Send` because the engine moves into the live sim thread.
     tick_observer: Option<Box<dyn TickObserver>>,
     /// The live frame stream's persistent 3-deep readback ring (lazily created, recreated on a render
-    /// size change, discarded when no `frames` subscriber remains — unless a present target is
-    /// attached, which renders out of the graph textures the ring holds). `None` outside an active
-    /// stream.
+    /// size change, discarded when no `frames` subscriber remains). `None` outside an active stream.
     stream_ring: Option<StreamReadback<FrameIndex>>,
-    /// The window this host blits each rendered frame into ([`attach_surface`](Engine::attach_surface)),
-    /// or `None` for a headless host — every CLI render, golden, test and served session. Host state
-    /// exactly as [`renderer`](Engine::renderer) and [`stream_ring`](Engine::stream_ring) are: not
-    /// hashed, not snapshotted, not serialized, and invisible to the simulation. A frame drawn with
-    /// one is byte-identical to the same frame drawn without it — the present is an additional sink
-    /// on the finished texture, never a second render.
-    present: Option<PresentTarget>,
+    /// The thread that renders and presents into this host's window
+    /// ([`attach_surface`](Engine::attach_surface)), or `None` for a headless host — every CLI render,
+    /// golden, test and served session. Host state exactly as [`renderer`](Engine::renderer) is: not
+    /// hashed, not snapshotted, not serialized, and invisible to the simulation. The sim thread only
+    /// hands it each tick's extracted scene; it never renders or waits for the window.
+    presenter: Option<Presenter>,
+    /// The surface's GPU context, kept so the sim-side renderer shares the presenter's device
+    /// ([`Gpu::share`]); `None` on a headless host.
+    surface_gpu: Option<Gpu>,
     subscriptions: Subscriptions,
     event_outbox: Vec<Event>,
     recorder: Option<Recorder>,
@@ -740,7 +741,8 @@ impl Engine {
             shader_reload: false,
             tick_observer: None,
             stream_ring: None,
-            present: None,
+            presenter: None,
+            surface_gpu: None,
             subscriptions: Subscriptions::new(),
             event_outbox: Vec::new(),
             recorder: None,
@@ -1238,6 +1240,15 @@ impl Engine {
             return;
         };
         let resolved = renderer.probe_resolve();
+        self.note_probe_resolve(&resolved);
+    }
+
+    /// [`finish_probe_frame`](Engine::finish_probe_frame) over a resolve the caller already holds —
+    /// the sim-side renderer's, or the presenter's.
+    fn note_probe_resolve(&mut self, resolved: &ProbeResolve) {
+        if self.probes != ProbeSource::Store || self.probe_baking {
+            return;
+        }
         if resolved.resolve == self.probe_resolve_seen {
             return;
         }
@@ -3293,8 +3304,27 @@ impl Engine {
         self.queued_render_fault = Some(fault);
     }
 
+    /// The live loop's one drain of render-side trouble: a queued test fault first, then whatever
+    /// the presenter thread reported — probe resolves feed the store warning, non-fatal failures
+    /// become `log` events, and the first fatal fault is returned (the presenter has stopped).
     pub(crate) fn take_queued_render_fault(&mut self) -> Option<Diagnostic> {
-        self.queued_render_fault.take()
+        if let Some(fault) = self.queued_render_fault.take() {
+            return Some(fault);
+        }
+        let notes = self.presenter.as_ref()?.take_notes();
+        let mut fault = None;
+        for note in notes {
+            match note {
+                PresenterNote::Probes(resolved) => self.note_probe_resolve(&resolved),
+                PresenterNote::Log(diag) => {
+                    self.push_event(Event::Log(LogEvent::from_diagnostic(diag)));
+                }
+                PresenterNote::Fault(diag) => {
+                    fault.get_or_insert(diag);
+                }
+            }
+        }
+        fault
     }
 
     /// Reports a fatal render fault to an armed host. A full or closed channel is fine: the host
@@ -3453,10 +3483,12 @@ impl Engine {
         std::mem::take(&mut self.event_outbox)
     }
 
-    /// Renders the current world once, stamped with the given `frame`, into whichever sinks the two
-    /// flags ask for: `readback` files it into the stream ring and non-blocking-collects every
-    /// finished readback and keeps the newest (the live frame-stream production path — see
-    /// [`emit_egress`](crate::live)), `present` blits it into the attached window. Unlike the
+    /// Extracts the current world once, stamped with the given `frame`, and feeds it to whichever
+    /// consumers the two flags ask for: `readback` renders it on this thread, files it into the stream
+    /// ring and non-blocking-collects every finished readback and keeps the newest (the live
+    /// frame-stream production path — see [`emit_egress`](crate::live)); `handover` publishes the
+    /// extracted scene to the presenter thread, which renders and presents it on its own renderer
+    /// (`tick` is the live loop's wall-clock stamp for the presenter's trace). Unlike the
     /// blocking screenshot path (`render.screenshot`) the readback does not stall the sim thread:
     /// it pipelines up to [`StreamReadback::DEPTH`] frames, blocking only when every ring slot is
     /// in flight (it then waits once and drains the ring; ~2 frames is the worst-case latency).
@@ -3467,32 +3499,51 @@ impl Engine {
     /// blocking path, this is a pure read of the world: it never mutates sim state or the
     /// `WorldHash`. The ring is created lazily and recreated when the render size changes.
     ///
-    /// A present-only frame is a rendered frame like any other: it extracts, it advances GI, and the
-    /// profiler measures it — the two flags choose what happens to the finished texture, never
-    /// whether the frame happened.
+    /// A handover-only frame still extracts, advances GI and is measured by the profiler, but it
+    /// creates no sim-side renderer or ring: the sim thread never draws for the window.
     ///
     /// # Errors
     /// `L2003`/`L2004` if no GPU is available; a collapsed extract diagnostic (`L1101`/`L2101`…) if the
-    /// world cannot be extracted; `L2005` on a readback failure; `L2007` if the attached surface has
-    /// failed permanently.
+    /// world cannot be extracted; `L2005` on a readback failure. A dead window surface (`L2007`) or
+    /// lost device (`L2011`) on the presenter arrives through
+    /// [`take_queued_render_fault`](Engine::take_queued_render_fault).
     ///
     /// While the live profiler is armed this also times the two host spans of the frame
-    /// (`extract` and `submit`), arms the frame's per-pass GPU timing, and drains whatever timing
-    /// samples the ring has finished — samples for *earlier* frames, filed by their own stamp.
+    /// (`extract` and the sim-side `submit`), arms the frame's per-pass GPU timing, and drains
+    /// whatever timing samples the ring has finished — samples for *earlier* frames, filed by their
+    /// own stamp.
     pub(crate) fn render_frame(
         &mut self,
         frame: FrameIndex,
         readback: bool,
-        present: bool,
+        handover: bool,
+        tick: Option<TickStamp>,
     ) -> Result<Option<(FrameIndex, RenderedImage)>, Diagnostic> {
         let (width, height) = self.render_size;
         let size = self.frame_size(width, height)?;
         let span = self.perf.is_some().then(Span::start);
         // The stream is the one path the view override moves: a subscriber sees where a human flew.
-        let scene = self
-            .extract_render_scene_through(width, height, true)
-            .map_err(crate::commands::collapse)?;
+        let scene = Arc::new(
+            self.extract_render_scene_through(width, height, true)
+                .map_err(crate::commands::collapse)?,
+        );
         let extract_ms = span.map(Span::ms);
+        if handover && let Some(presenter) = self.presenter.as_ref() {
+            presenter.publish(PresentPacket {
+                frame,
+                scene: Arc::clone(&scene),
+                size,
+                settings: self.present_settings(),
+                tick,
+            });
+        }
+        if !readback {
+            if let Some(perf) = self.perf.as_mut() {
+                perf.record_render(frame, extract_ms, None);
+            }
+            self.finish_gi_frame();
+            return Ok(None);
+        }
         self.renderer()?; // lazily create the renderer before borrowing its ring field disjointly
         // The ring is sized from the *output* extent — the render scale never changes how many bytes
         // come back — so a scale change cannot stale it.
@@ -3504,14 +3555,13 @@ impl Engine {
             let renderer = self.renderer.as_ref().expect("just initialized");
             self.stream_ring = Some(renderer.new_stream_readback(size)?);
         }
-        // Disjoint field borrows: the renderer, the readback ring, the profiler's timing ring, and
-        // the present target.
+        // Disjoint field borrows: the renderer, the readback ring and the profiler's timing ring.
         let renderer = self.renderer.as_ref().expect("renderer initialized");
         let ring = self.stream_ring.as_mut().expect("ring just ensured");
         let timing = self.perf.as_mut().map(|perf| perf.timing_ring(renderer));
         let sinks = FrameSinks {
-            readback,
-            present: if present { self.present.as_mut() } else { None },
+            readback: true,
+            present: None,
         };
         let span = timing.is_some().then(Span::start);
         let collected = renderer.render_frame(&scene, size, ring, frame, timing, sinks);
@@ -3629,19 +3679,8 @@ impl Engine {
     /// Discards the live stream ring and any in-flight readbacks (dropping the wgpu buffers unmaps
     /// them cleanly). Called when the last `frames` subscriber goes away, so no readback is ever
     /// collected for zero subscribers.
-    ///
-    /// With a window attached the ring itself **survives**: it holds the frame graph's physical
-    /// textures, which the presented frames are drawn into, so dropping it every idle pass would
-    /// reallocate a whole frame's textures per frame. Only the in-flight readbacks go, which is the
-    /// entire point of the call.
     pub(crate) fn discard_stream_ring(&mut self) {
-        if self.present.is_none() {
-            self.stream_ring = None;
-            return;
-        }
-        if let (Some(renderer), Some(ring)) = (self.renderer.as_ref(), self.stream_ring.as_mut()) {
-            renderer.discard_streamed(ring);
-        }
+        self.stream_ring = None;
     }
 
     /// The current scene reference (for snapshot / replay headers).
@@ -3836,7 +3875,24 @@ impl Engine {
     /// # Errors
     /// `L2003`/`L2004` if no GPU adapter or device is available.
     fn new_renderer(&self) -> Result<Renderer, Diagnostic> {
-        Ok(self.adopt_renderer(Renderer::new()?))
+        let renderer = match &self.surface_gpu {
+            Some(gpu) => Renderer::from_gpu(gpu.share()?)?,
+            None => Renderer::new()?,
+        };
+        Ok(self.adopt_renderer(renderer))
+    }
+
+    /// The render-side state the presenter's renderer applies each frame: the same values
+    /// [`ensure_renderer`](Engine::ensure_renderer) and [`adopt_renderer`](Engine::adopt_renderer)
+    /// push into the sim-side one.
+    fn present_settings(&self) -> PresentSettings {
+        PresentSettings {
+            quality: self.quality.quality,
+            params: self.quality.params,
+            anti_aliasing: self.anti_aliasing(),
+            gi_hold: self.gi_hold(),
+            probe_store: self.probe_store.clone(),
+        }
     }
 
     /// Hands a freshly built renderer this host's [`quality`](Engine::quality) — the single owner of
@@ -3847,14 +3903,15 @@ impl Engine {
         renderer
     }
 
-    /// Attaches a window `surface` this host presents into, and builds the renderer on the very
-    /// device the surface chose. Returns the [`PresentSize`] handle the window thread writes each
+    /// Attaches a window `surface` this host presents into, and starts the presenter thread that
+    /// renders and presents it. Returns the [`PresentSize`] handle the window thread writes each
     /// resize into.
     ///
     /// A surface is a surface: the caller creates it from whatever window system it has (a winit
     /// window on the desktop, a platform view elsewhere) and this engine neither knows nor asks
-    /// which. From here every rendered frame is *also* blitted into it, after the frame's own
-    /// submit, so the streamed and presented pixels are the same pixels and a headless host's
+    /// which. From here the live loop hands every ticked frame's extracted scene to the presenter,
+    /// which draws it on its own renderer over the surface's device and presents display-paced
+    /// (`Fifo`); the sim thread never renders for, or waits on, the window, and a headless host's
     /// commands are unchanged.
     ///
     /// Must be called **before the first frame**: the renderer owns its device, and a session cannot
@@ -3870,24 +3927,32 @@ impl Engine {
         width: u32,
         height: u32,
     ) -> Result<PresentSize, Diagnostic> {
-        if self.renderer.is_some() {
+        if self.renderer.is_some() || self.presenter.is_some() {
             return Err(Diagnostic::new(
                 code::WINDOW_PRESENTATION_UNAVAILABLE,
                 "a renderer already exists; attach the surface before the first frame",
             ));
         }
         let gpu = Gpu::request_for_surface(instance, &surface)?;
-        let present = PresentTarget::new(&gpu, surface, width, height)?;
-        let size = present.size_handle();
-        self.renderer = Some(self.adopt_renderer(Renderer::from_gpu(gpu)?));
-        self.present = Some(present);
+        let target = PresentTarget::new(&gpu, surface, width, height)?;
+        let size = target.size_handle();
+        let backend = WindowBackend::new(gpu.share()?, target)?;
+        self.presenter = Some(Presenter::spawn(Box::new(backend)));
+        self.surface_gpu = Some(gpu);
         Ok(size)
+    }
+
+    /// Test seam: runs a presenter over `backend` in place of a window, so the sim/presenter
+    /// decoupling is exercised without a surface.
+    #[doc(hidden)]
+    pub fn attach_present_backend(&mut self, backend: Box<dyn PresentBackend>) {
+        self.presenter = Some(Presenter::spawn(backend));
     }
 
     /// Whether a window surface is attached ([`attach_surface`](Engine::attach_surface)) — the live
     /// loop's test for whether a frame is owed to a window even with nothing subscribed.
     pub fn present_attached(&self) -> bool {
-        self.present.is_some()
+        self.presenter.is_some()
     }
 
     /// Enables dev-only shader hot reload for this host: an `asset.reload` naming a renderer `.wgsl`
@@ -3925,6 +3990,9 @@ impl Engine {
                 format!("could not read shader `{}`: {error}", full.display()),
             )
         })?;
+        if let Some(presenter) = self.presenter.as_ref() {
+            presenter.reload_shader(path, source.clone());
+        }
         self.renderer_mut()?.reload_shader(path, source)
     }
 

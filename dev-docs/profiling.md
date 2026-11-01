@@ -142,6 +142,7 @@ four labelled lanes and no overlap warnings.
 
 ## Gotchas
 
+- **Windowed present left the sim thread.** A window is drawn by the presenter thread on its own renderer; the profile report and `--dump-timings` measure the sim-side renderer (the stream's), never the window's.
 - **Debug-build numbers are not comparable to a release budget.** QOI encode in particular is an
   order of magnitude slower unoptimized (see `frame-streaming`). Profile in `--release`, on the
   hardware the budget was calibrated on, at the scale it was calibrated at.
