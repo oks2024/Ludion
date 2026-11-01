@@ -896,8 +896,7 @@ mod tests {
             sleep_after_ticks: None,
             layers: Vec::new(),
         };
-        let schedule =
-            engine.build_schedule(Some(&physics), crate::engine::EngineSystems::default());
+        let schedule = engine.build_schedule(Some(&physics));
         let order: Vec<&str> = schedule.system_names().collect();
         let at = |name: &str| order.iter().position(|n| *n == name).unwrap();
         assert!(at("score") < at(ludion_physics::STEP), "{order:?}");

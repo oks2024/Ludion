@@ -66,6 +66,12 @@
 //! fires that clip's `t = 0` event again on the first walk after the restore. A resource,
 //! invisible to the world hash.
 //!
+//! The **follower motions** (`follower_motions`) ride it too: a `speed: 0` path follower picks its
+//! facing from last tick's `s`, so carrying the last tick's motions makes the first tick after a
+//! restore face as the uninterrupted run did. A session with no posed follower omits it and
+//! serializes byte-identically to before the field existed; an older snapshot restores with none.
+//! A resource, invisible to the world hash.
+//!
 //! **Presentation entities** (`Plan/presentation-state.md`) ride the same way: the `presentation`
 //! entity list and, only when the live set cannot reproduce it, `presentation_allocator`. A world
 //! without presentation entities omits both and serializes byte-identically to before.
@@ -87,6 +93,7 @@ use std::collections::BTreeMap;
 
 use crate::animation_events::AnimationWalk;
 use crate::engine::{Engine, RestoredWorld};
+use crate::path_follow::{FollowerMotionEntry, FollowerMotions};
 
 /// The snapshot document format version (bumped on any breaking shape change).
 const SNAPSHOT_FORMAT: u32 = 1;
@@ -158,6 +165,12 @@ struct SnapshotDoc {
     /// would fail the whole restore); the next `spatial_rebuild` files it again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spatial_index: Option<Vec<ludion_spatial::Entry>>,
+    /// The last `path_follow` tick's per-follower motions, or `None` when no follower has been
+    /// posed. Optional and additive (the `animation_walk` precedent): a `speed: 0` follower picks
+    /// its facing from last tick's `s`, so the first tick after a restore needs it to match the
+    /// uninterrupted run. An entry with a non-finite float is left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    follower_motions: Option<Vec<FollowerMotionEntry>>,
     /// The RNG state — restored verbatim so the sequence continues identically.
     rng: DeterministicRng,
     /// The gameplay clock — how much of the frame count the game had held out of its own time, and
@@ -402,6 +415,11 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
             entries.retain(round_trips);
             entries
         }),
+        follower_motions: engine
+            .world()
+            .resource::<FollowerMotions>()
+            .map(FollowerMotions::entries)
+            .filter(|entries| !entries.is_empty()),
         rng: *engine.rng()?,
         game_clock: engine
             .world()
@@ -769,14 +787,13 @@ pub(crate) fn restore_into(
     if let Some(entries) = doc.spatial_index.take() {
         world.insert_resource(SpatialIndex::from_entries(entries));
     }
+    if let Some(entries) = doc.follower_motions.take() {
+        world.insert_resource(FollowerMotions::from_entries(entries));
+    }
 
     // Rebuilt so a restored engine keeps running its systems — restore resets the world, but the
-    // schedule is engine configuration that must survive it (the same fix as `scene.load`). Built
-    // once the world holds its components: `path_follow` and `camera_rig` install on a world with a follower or a rig.
-    let schedule = engine.build_schedule(
-        scene_physics.as_ref(),
-        crate::engine::EngineSystems::of(&world),
-    );
+    // schedule is engine configuration that must survive it (the same fix as `scene.load`).
+    let schedule = engine.build_schedule(scene_physics.as_ref());
     let driver = ludion_sim::SimDriver::restore(
         world,
         schedule,

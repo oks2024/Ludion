@@ -4,7 +4,7 @@ description: CameraRig — a sim-side camera that rides a kind: path rail after 
 
 # Camera rigs
 
-**Scope:** the `CameraRig` component on a scene's camera entity: the `track` mode (the camera rides a `kind: path` rail after a target), timed blends between configurations, `snap_rig`, trauma shake, `camera_relative` for a stick, the `camera` debug draw and `L1304`–`L1310`. The path document is `ludion docs path`; the gameplay clock is `ludion docs game-clock`; the character the camera follows is `ludion docs motor`.
+**Scope:** the `CameraRig` component on a scene's camera entity: the `track` mode (the camera rides a `kind: path` rail after a target), timed blends between configurations, `snap_rig`, trauma shake, `camera_relative` for a stick, the `camera` debug draw and `L1304`–`L1309`. The path document is `ludion docs path`; the gameplay clock is `ludion docs game-clock`; the character the camera follows is `ludion docs motor`.
 
 A rig is **sim**: it writes the camera's `Transform` (and the perspective `fov_y_deg`) from a system, so the pose is hashed, replayed and safe to unproject through. That is why a `CameraRig` camera is not presentation (`ludion docs presentation`).
 
@@ -95,7 +95,7 @@ The pipeline runs on the **gameplay clock**: a `GameClock::hold` on frame f free
 
 Order per tick: `path_follow` → game systems → physics → `camera_rig` → presentation. The target pose the camera reads is this tick's settled one. A game system runs **before** the rig, so `camera_relative(stick, &rig)` (or `camera_relative_yaw` with a yaw you latched) reads **last tick's** yaw: one tick of latency, and the yaw is pre-shake so a shake never twists the controls. `y` pushes away from the camera.
 
-The system installs only when the world holds a rig at build, restore or scene switch, so a world without one keeps its schedule and hashes. A rig spawned into a world without the system never poses the camera: `L1310`, once per rig; author it in the scene file.
+The system is installed on every schedule and returns at once in a world without a rig, so a rig spawned at runtime poses its camera like an authored one.
 
 ## Debug draw
 
@@ -113,7 +113,6 @@ On `L1304`–`L1307` and `L1309` the rig **holds its pose**; on `L1308` the lowe
 | L1307 | the entity has no `Camera` |
 | L1308 | more than one `CameraRig`; only the lowest entity id runs |
 | L1309 | the camera entity has a `Parent` (the rig writes a world-space pose) |
-| L1310 | a rig exists in a world whose schedule lacks `camera_rig` |
 
 ## Gotchas
 

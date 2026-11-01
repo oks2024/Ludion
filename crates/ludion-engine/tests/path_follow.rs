@@ -1,7 +1,7 @@
 //! Runtime proof for `PathFollower` (`Plan/character-controller.md` decision 10): the engine's
 //! `path_follow` system poses a follower on gameplay time before any game system runs, in all three
-//! modes, degrades an unloadable path to one `L1215`, and installs itself only into a world that
-//! holds a follower (`L1216` for one spawned later). Everything goes through the public surface — a
+//! modes, degrades an unloadable path to one `L1215`, and is installed on every schedule (a follower
+//! spawned at runtime moves like an authored one). Everything goes through the public surface — a
 //! scene document, `EngineBuilder`, the ordinary sim step — over a path file written to a temp root.
 
 use std::path::{Path, PathBuf};
@@ -16,7 +16,9 @@ use ludion_engine::{
     PathOrient, Transform, path_follower_motion,
 };
 use ludion_physics::{ExitCause, PhysicsWorld, SensorEvent, SensorPhase};
-use ludion_protocol::command::{SimStepParams, StreamSubscribeParams, SubscribeMode};
+use ludion_protocol::command::{
+    EngineRestoreParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
+};
 use ludion_protocol::event::{Event, LogEvent};
 use ludion_protocol::frame::FrameFormat;
 use ludion_protocol::{Channel, Command, ResponseBody};
@@ -405,7 +407,7 @@ fn an_unloadable_path_latches_l1215_once_and_the_entity_stays_put() {
 }
 
 #[test]
-fn a_follower_spawned_at_runtime_latches_l1216_once_and_does_not_move() {
+fn a_follower_spawned_at_runtime_moves() {
     let root = fixture_root("late");
     let mut engine = game(&root)
         .system("spawn_follower", spawn_follower)
@@ -414,8 +416,12 @@ fn a_follower_spawned_at_runtime_latches_l1216_once_and_does_not_move() {
     engine
         .load_inline_scene(EMPTY_SCENE)
         .expect("the scene loads");
-    advance(&mut engine, 5);
-    assert_eq!(x_of(&engine, "late"), 3.0, "nothing moves it");
+    advance(&mut engine, 6);
+    assert_eq!(
+        x_of(&engine, "late"),
+        4.0,
+        "the engine system poses it on its path"
+    );
 
     let root = fixture_root("late-live");
     let mut engine = game(&root)
@@ -424,12 +430,9 @@ fn a_follower_spawned_at_runtime_latches_l1216_once_and_does_not_move() {
         .unwrap();
     engine.load_inline_scene(EMPTY_SCENE).unwrap();
     let lines = log_lines(engine, 20);
-    let reported: Vec<&LogEvent> = lines.iter().filter(|l| code_is(l, "L1216")).collect();
-    assert_eq!(reported.len(), 1, "once per entity: {lines:?}");
     assert!(
-        reported[0].message.contains("PathFollower"),
-        "{}",
-        reported[0].message
+        !lines.iter().any(|l| code_is(l, "L1216")),
+        "no uninstalled-system report: {lines:?}"
     );
 }
 
@@ -447,50 +450,45 @@ fn describe_systems(engine: &mut Engine) -> Vec<serde_json::Value> {
 }
 
 #[test]
-fn describe_lists_path_follow_first_only_when_a_follower_is_present() {
+fn describe_lists_path_follow_first_with_and_without_a_follower() {
     let root = fixture_root("describe");
     let mut engine = game(&root)
         .system("rider", rider)
         .build()
         .expect("the game builds");
 
-    engine.load_inline_scene(EMPTY_SCENE).unwrap();
-    let systems = describe_systems(&mut engine);
-    assert_eq!(
-        systems.len(),
-        1,
-        "no follower, no engine system: {systems:?}"
-    );
-    assert_eq!(systems[0]["name"], "rider");
-    assert_eq!(systems[0]["order"], 0);
-
-    // An inert follower is enough to install it.
-    engine
-        .load_inline_scene(
-            "format: 1\nentities:\n  - name: p\n    components:\n      Transform: {}\n      PathFollower: {}\n",
-        )
-        .unwrap();
-    let systems = describe_systems(&mut engine);
-    assert_eq!(systems.len(), 2, "{systems:?}");
-    assert_eq!(systems[0]["name"], "path_follow");
-    assert_eq!(systems[0]["order"], 0);
-    assert!(systems[0]["registered_at"].is_null());
-    assert_eq!(systems[0]["fn_path"], "ludion_engine::path_follow");
-    assert_eq!(systems[1]["name"], "rider");
-    assert_eq!(systems[1]["order"], 1);
+    for scene in [
+        EMPTY_SCENE,
+        "format: 1\nentities:\n  - name: p\n    components:\n      Transform: {}\n      PathFollower: {}\n",
+    ] {
+        engine.load_inline_scene(scene).unwrap();
+        let systems = describe_systems(&mut engine);
+        let names: Vec<&str> = systems
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["path_follow", "rider", "camera_rig"], "{systems:?}");
+        assert_eq!(systems[0]["order"], 0);
+        assert!(systems[0]["registered_at"].is_null());
+        assert_eq!(systems[0]["fn_path"], "ludion_engine::path_follow");
+        assert_eq!(systems[1]["order"], 1);
+    }
     assert_eq!(x_of(&engine, "p"), 0.0);
     advance(&mut engine, 3);
 }
 
 #[test]
-fn a_scene_without_a_follower_runs_no_path_system() {
-    // The world hash of such a scene is whatever the game systems make it: the engine adds nothing.
+fn a_scene_without_a_follower_leaves_the_world_to_the_game_systems() {
+    // The engine systems are no-ops on an empty query: they add no entity, component or motion.
     let root = fixture_root("nofollower");
     let mut engine = game(&root).build().unwrap();
     engine.load_inline_scene(EMPTY_SCENE).unwrap();
-    assert!(describe_systems(&mut engine).is_empty());
+    let names: Vec<String> = describe_systems(&mut engine)
+        .iter()
+        .map(|s| s["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["path_follow", "camera_rig"]);
     advance(&mut engine, 3);
-    assert!(describe_systems(&mut engine).is_empty());
 }
 
 #[test]
@@ -1333,4 +1331,182 @@ fn a_kinematic_path_follower_sensor_enters_then_exits_a_static_body() {
         "{log:?}"
     );
     assert!(log[0].0 < log[1].0);
+}
+
+// ---- snapshot / restore ----
+
+/// Ticks `engine` live, which leaves it running (a `sim.step` leaves it paused, and a paused
+/// engine restored from its snapshot would not tick).
+fn live(engine: &mut Engine, ticks: usize) {
+    for _ in 0..ticks {
+        engine.advance_live();
+    }
+}
+
+/// Per-tick `WorldHash`es of an uninterrupted run of `ticks` ticks.
+fn reference_hashes(engine: &mut Engine, ticks: usize) -> Vec<u64> {
+    (0..ticks)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect()
+}
+
+/// Snapshots `before`, restores it into `resumed`, and asserts `resumed` then reproduces
+/// `reference[at..]` tick for tick. `reference[at - 1]` is the hash at the snapshot.
+fn assert_restore_resumes(before: &mut Engine, resumed: &mut Engine, reference: &[u64], at: usize) {
+    let snapshot = match before.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .expect("the snapshot restores");
+    assert_eq!(resumed.world_hash().unwrap().as_u64(), reference[at - 1]);
+    for (i, expected) in reference[at..].iter().enumerate() {
+        resumed.advance_live();
+        assert_eq!(
+            resumed.world_hash().unwrap().as_u64(),
+            *expected,
+            "tick {} after the restore",
+            i + 1
+        );
+    }
+}
+
+fn late_follower(tag: &str) -> Engine {
+    let mut engine = game(&fixture_root(tag))
+        .system("spawn_follower", spawn_follower)
+        .build()
+        .unwrap();
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+    engine
+}
+
+#[test]
+fn a_restore_after_a_follower_was_spawned_at_runtime_resumes_the_same_hashes() {
+    let mut reference_engine = late_follower("restore-late-ref");
+    let reference = reference_hashes(&mut reference_engine, 12);
+    let mut before = late_follower("restore-late-a");
+    live(&mut before, 4);
+    let mut resumed = late_follower("restore-late-b");
+    assert_restore_resumes(&mut before, &mut resumed, &reference, 4);
+    assert_eq!(x_of(&resumed, "late"), x_of(&reference_engine, "late"));
+    assert_ne!(x_of(&resumed, "late"), 3.0, "it moves in the restored run");
+}
+
+/// Despawns the scene's follower at frame 2 and spawns a late one at frame 4.
+fn swap_followers(world: &mut World, ctx: &SystemCtx) {
+    match ctx.frame.as_u64() {
+        2 => {
+            let platform = world
+                .entities()
+                .find(|&id| world.has::<PathFollower>(id))
+                .unwrap();
+            world.despawn(platform).unwrap();
+        }
+        4 => {
+            let id = world.spawn();
+            world.insert(id, Name("late".to_string())).unwrap();
+            world.insert(id, Transform::default()).unwrap();
+            world
+                .insert(
+                    id,
+                    PathFollower {
+                        path: "lift.path.yaml".to_string(),
+                        speed: METRE_PER_TICK,
+                        ..PathFollower::default()
+                    },
+                )
+                .unwrap();
+        }
+        _ => {}
+    }
+}
+
+fn swapping(tag: &str) -> Engine {
+    let mut engine = game(&fixture_root(tag))
+        .system("swap_followers", swap_followers)
+        .build()
+        .unwrap();
+    engine
+        .load_inline_scene(&scene("lift.path.yaml", METRE_PER_TICK, "loop", 0.0))
+        .unwrap();
+    engine
+}
+
+#[test]
+fn a_restore_after_the_last_follower_despawned_resumes_the_same_hashes() {
+    let mut reference_engine = swapping("restore-swap-ref");
+    let reference = reference_hashes(&mut reference_engine, 12);
+    let mut before = swapping("restore-swap-a");
+    live(&mut before, 3);
+    let mut resumed = swapping("restore-swap-b");
+    assert_restore_resumes(&mut before, &mut resumed, &reference, 3);
+    assert_eq!(x_of(&resumed, "late"), x_of(&reference_engine, "late"));
+    assert_ne!(x_of(&resumed, "late"), 0.0, "the new follower moves");
+}
+
+/// Walks a `speed: 0` follower's `phase` down the path on frames 1..=4 in steps under the teleport slack, then holds it.
+fn descend(world: &mut World, ctx: &SystemCtx) {
+    let frame = ctx.frame.as_u64();
+    if !(1..=4).contains(&frame) {
+        return;
+    }
+    let platform = world
+        .entities()
+        .find(|&id| world.has::<PathFollower>(id))
+        .unwrap();
+    world
+        .get_mut::<PathFollower>(platform)
+        .unwrap()
+        .unwrap()
+        .phase = 8.0 - 0.25 * frame as f32;
+}
+
+fn descending(tag: &str) -> Engine {
+    let mut engine = game(&fixture_root(tag))
+        .system("descend", descend)
+        .build()
+        .unwrap();
+    let scene = scene("lift.path.yaml", 0.0, "loop", 8.0)
+        .replace("        phase: 8", "        orient: yaw\n        phase: 8");
+    engine.load_inline_scene(&scene).unwrap();
+    engine
+}
+
+fn yaw_of(engine: &Engine) -> [f32; 3] {
+    let world = engine.world();
+    let id = world
+        .entities()
+        .find(|&id| world.has::<PathFollower>(id))
+        .unwrap();
+    world.get::<Transform>(id).unwrap().unwrap().rotation
+}
+
+#[test]
+fn a_restore_during_a_held_reverse_keeps_a_speed_zero_followers_facing() {
+    let mut reference_engine = descending("restore-hold-ref");
+    let reference = reference_hashes(&mut reference_engine, 10);
+    let mut before = descending("restore-hold-a");
+    live(&mut before, 7);
+    let facing = yaw_of(&before);
+    let mut resumed = descending("restore-hold-b");
+    assert_restore_resumes(&mut before, &mut resumed, &reference, 7);
+    assert_eq!(yaw_of(&resumed), yaw_of(&reference_engine));
+    assert_eq!(yaw_of(&resumed), facing, "the held facing survives");
+}
+
+#[test]
+fn a_world_without_a_follower_snapshots_without_follower_motions() {
+    let mut engine = game(&fixture_root("no-motions")).build().unwrap();
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+    live(&mut engine, 3);
+    let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let text = serde_json::to_string(&snapshot).unwrap();
+    assert!(!text.contains("follower_motions"), "{text}");
 }

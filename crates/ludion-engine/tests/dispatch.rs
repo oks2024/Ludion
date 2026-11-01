@@ -2203,12 +2203,18 @@ fn engine_describe_carries_ordered_systems() {
     match ok(&mut engine, Command::EngineDescribe) {
         ResponseBody::EngineDescription { description } => {
             let systems = description["systems"].as_array().unwrap();
-            assert_eq!(systems.len(), 2);
-            assert_eq!(systems[0]["name"], "first");
+            // The engine's own systems bracket the game's: `path_follow` first, `camera_rig` last.
+            assert_eq!(systems.len(), 4);
+            assert_eq!(systems[0]["name"], "path_follow");
             assert_eq!(systems[0]["order"], 0);
-            assert_eq!(systems[1]["name"], "second");
+            assert_eq!(systems[1]["name"], "first");
             assert_eq!(systems[1]["order"], 1);
+            assert_eq!(systems[2]["name"], "second");
+            assert_eq!(systems[2]["order"], 2);
+            assert_eq!(systems[3]["name"], "camera_rig");
+            assert_eq!(systems[3]["order"], 3);
             // `fn_path` is now exposed: the Rust module path of the registered fn (this test module).
+            let systems = &systems[1..];
             let fn_path = systems[0]["fn_path"].as_str().unwrap();
             assert!(
                 fn_path.contains("noop_a"),
@@ -2245,19 +2251,21 @@ fn engine_describe_carries_the_physics_triple_after_game_systems() {
     match ok(&mut engine, Command::EngineDescribe) {
         ResponseBody::EngineDescription { description } => {
             let systems = description["systems"].as_array().unwrap();
-            assert_eq!(systems.len(), 5);
-            assert_eq!(systems[0]["name"], "first");
-            assert_eq!(systems[1]["name"], "second");
-            assert_eq!(systems[2]["name"], "physics_write");
-            assert_eq!(systems[2]["order"], 2);
-            assert!(systems[2]["registered_at"].is_null());
-            assert_eq!(systems[3]["name"], "physics_step");
+            assert_eq!(systems.len(), 7);
+            assert_eq!(systems[0]["name"], "path_follow");
+            assert_eq!(systems[1]["name"], "first");
+            assert_eq!(systems[2]["name"], "second");
+            assert_eq!(systems[3]["name"], "physics_write");
             assert_eq!(systems[3]["order"], 3);
             assert!(systems[3]["registered_at"].is_null());
-            assert_eq!(systems[4]["name"], "physics_mirror");
+            assert_eq!(systems[4]["name"], "physics_step");
             assert_eq!(systems[4]["order"], 4);
             assert!(systems[4]["registered_at"].is_null());
-            let mirror_queries = systems[4]["queries"].as_array().unwrap();
+            assert_eq!(systems[5]["name"], "physics_mirror");
+            assert_eq!(systems[5]["order"], 5);
+            assert!(systems[5]["registered_at"].is_null());
+            assert_eq!(systems[6]["name"], "camera_rig");
+            let mirror_queries = systems[5]["queries"].as_array().unwrap();
             assert!(
                 mirror_queries.iter().any(|query| {
                     query["components"]
@@ -2304,7 +2312,7 @@ fn engine_describe_carries_declared_queries() {
         .unwrap();
     match ok(&mut engine, Command::EngineDescribe) {
         ResponseBody::EngineDescription { description } => {
-            let queries = description["systems"][0]["queries"].as_array().unwrap();
+            let queries = description["systems"][1]["queries"].as_array().unwrap();
             assert_eq!(
                 queries.len(),
                 2,
@@ -2350,11 +2358,17 @@ fn declared_query_naming_unregistered_component_fails_build_l1125() {
 }
 
 #[test]
-fn engine_describe_bare_engine_has_empty_systems() {
+fn engine_describe_bare_engine_lists_only_the_engine_systems() {
     let mut engine = engine();
     match ok(&mut engine, Command::EngineDescribe) {
         ResponseBody::EngineDescription { description } => {
-            assert_eq!(description["systems"].as_array().unwrap().len(), 0);
+            let names: Vec<&str> = description["systems"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names, ["path_follow", "camera_rig"]);
         }
         other => panic!("{other:?}"),
     }

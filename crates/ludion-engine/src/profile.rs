@@ -1722,8 +1722,7 @@ mod tests {
             "attaching the schedule observer must not perturb the WorldHash"
         );
         // And the hook actually saw the system each tick.
-        assert_eq!(observer.frame.len(), 1);
-        assert_eq!(observer.frame[0].0, "bump");
+        assert!(observer.frame.iter().any(|(name, _)| *name == "bump"));
     }
 
     /// A one-triangle mesh document binding `../textures/t.png` as its base-colour map.
@@ -2388,10 +2387,10 @@ entities:
         let mut engine = counter_engine();
         engine.load_inline_scene(SCENE).unwrap();
         let (sim, samples) = profile_sim(&mut engine, 4, 1);
-        assert_eq!(sim.systems.len(), 1);
-        assert_eq!(sim.systems[0].name, "bump");
+        let names: Vec<&str> = sim.systems.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["path_follow", "bump", "camera_rig"]);
         assert!(sim.frame_total_median_ms >= 0.0);
-        assert_eq!(samples.system_names, ["bump"]);
+        assert_eq!(samples.system_names, ["path_follow", "bump", "camera_rig"]);
     }
 
     #[test]
@@ -2411,9 +2410,11 @@ entities:
         assert_eq!(
             names,
             [
+                "path_follow",
                 ludion_physics::WRITE,
                 ludion_physics::STEP,
-                ludion_physics::MIRROR
+                ludion_physics::MIRROR,
+                "camera_rig",
             ]
         );
     }
@@ -2455,17 +2456,20 @@ entities:
         for pair in samples.frames.windows(2) {
             assert_eq!(pair[1], pair[0] + 1);
         }
-        assert_eq!(samples.system_names, ["growing"]);
-        assert_eq!(samples.system_ms.len(), 1);
-        assert_eq!(samples.system_ms[0].len(), 6);
+        assert_eq!(
+            samples.system_names,
+            ["path_follow", "growing", "camera_rig"]
+        );
+        assert_eq!(samples.system_ms.len(), 3);
+        assert_eq!(samples.system_ms[1].len(), 6);
         assert_eq!(samples.frame_total_ms.len(), 6);
         // The growing system's later columns must exceed its earlier ones — proof the column is the
         // measured order, not resorted (the median computed alongside it may sort its own copy, but
         // must not perturb this one).
         assert!(
-            samples.system_ms[0][5] > samples.system_ms[0][0],
+            samples.system_ms[1][5] > samples.system_ms[1][0],
             "{:?}",
-            samples.system_ms[0]
+            samples.system_ms[1]
         );
         assert!(samples.frame_total_ms.iter().all(|ms| *ms >= 0.0));
         // Neither offline column this driver cannot fill: absent, not zero, for every frame.
@@ -2474,7 +2478,7 @@ entities:
         // The offline GPU path produces medians only — no per-frame pass columns to carry here.
         assert!(samples.pass_names.is_empty());
         assert!(samples.pass_ms.is_empty());
-        assert_eq!(sim.systems[0].name, "growing");
+        assert_eq!(sim.systems[1].name, "growing");
     }
 
     #[test]
@@ -2489,9 +2493,9 @@ entities:
 
         let samples = report.samples.expect("the offline driver fills samples");
         assert_eq!(samples.frames.len(), 5);
-        assert_eq!(samples.system_names, ["bump"]);
-        assert_eq!(samples.system_ms.len(), 1);
-        assert_eq!(samples.system_ms[0].len(), 5);
+        assert_eq!(samples.system_names, ["path_follow", "bump", "camera_rig"]);
+        assert_eq!(samples.system_ms.len(), 3);
+        assert_eq!(samples.system_ms[1].len(), 5);
         assert_eq!(samples.frame_total_ms.len(), 5);
         assert_eq!(samples.extract_ms, vec![None; 5]);
         assert_eq!(samples.submit_ms, vec![None; 5]);
@@ -3677,7 +3681,7 @@ entities:
             "profiling a replay must not perturb the WorldHash"
         );
         assert_eq!(profiled.frame().as_u64(), 10);
-        assert_eq!(report.sim.systems[0].name, "bump");
+        assert!(report.sim.systems.iter().any(|s| s.name == "bump"));
     }
 
     #[test]
@@ -3939,8 +3943,8 @@ entities:
         }
     }
 
-    /// A schedule rebuilt mid-run (the district switch adds `path_follow`) must not shift one
-    /// system's samples onto another: the late system gets its own column.
+    /// A schedule rebuilt mid-run (the district switch rebuilds it) must not shift one system's
+    /// samples onto another: each system keeps its own column across the rebuild.
     #[test]
     fn a_schedule_rebuilt_mid_replay_keeps_each_systems_samples() {
         let dir = scratch("schedule-rebuild");
@@ -3969,13 +3973,11 @@ entities:
             "the raw matrix stays dense over the measured frames"
         );
 
-        let at = |name: &str| {
-            samples
-                .system_names
-                .iter()
-                .position(|n| n == name)
-                .unwrap_or_else(|| panic!("`{name}` has no column: {:?}", samples.system_names))
-        };
+        assert_eq!(
+            samples.system_names,
+            ["path_follow", "switch_on_frame_two", "camera_rig"],
+            "one column per system, in schedule order, across the rebuild"
+        );
         let switch = report
             .sim
             .systems
@@ -3983,22 +3985,12 @@ entities:
             .find(|timing| timing.name == "switch_on_frame_two")
             .unwrap();
         assert!(switch.tail.is_some());
-        let follow = report
-            .sim
-            .systems
+        let at = samples
+            .system_names
             .iter()
-            .find(|timing| timing.name == "path_follow")
-            .expect("path_follow joined the schedule after the switch");
-        assert!(
-            follow.tail.as_ref().unwrap().max_frame >= 3,
-            "{:?}",
-            follow.tail
-        );
-        // Before the switch landed, `path_follow` did not run: those frames read 0.0.
-        let row = &samples.system_ms[at("path_follow")];
-        assert_eq!(row[0], 0.0);
-        assert_eq!(row[1], 0.0);
-        assert!(samples.system_ms[at("switch_on_frame_two")][0] > 0.0);
+            .position(|n| n == "switch_on_frame_two")
+            .unwrap();
+        assert!(samples.system_ms[at][0] > 0.0);
     }
 
     #[test]

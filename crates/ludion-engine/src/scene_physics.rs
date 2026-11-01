@@ -119,9 +119,9 @@ pub(crate) fn bare_driver(
     ));
     world.insert_resource(crate::FontLibrary::load(project_root));
     let mut schedule = Schedule::new();
-    crate::path_follow::install(&mut schedule, crate::path_follow::present(&world));
+    crate::path_follow::install(&mut schedule);
     install(&mut schedule, scene.physics.as_ref());
-    crate::camera_rig::install(&mut schedule, crate::camera_rig::present(&world));
+    crate::camera_rig::install(&mut schedule);
     SimDriver::new(
         world,
         schedule,

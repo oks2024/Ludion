@@ -1200,8 +1200,12 @@ entities:
                 seen.push((name, WorldHash::compute(world, registry).unwrap()));
             });
 
-            assert_eq!(seen.len(), 1, "one boundary per registered system");
-            assert_eq!(seen[0].0, "regen");
+            let names: Vec<&str> = seen.iter().map(|(name, _)| *name).collect();
+            assert_eq!(
+                names,
+                ["path_follow", "regen", "camera_rig"],
+                "one boundary per scheduled system"
+            );
             assert_eq!(
                 plain.world_hash().unwrap(),
                 probed.world_hash().unwrap(),
@@ -1209,7 +1213,7 @@ entities:
             );
             assert_eq!(plain.frame(), probed.frame());
             assert_eq!(
-                seen[0].1,
+                seen.last().unwrap().1,
                 probed.world_hash().unwrap(),
                 "the last boundary's hash is the frame's hash — nothing runs after the last system"
             );

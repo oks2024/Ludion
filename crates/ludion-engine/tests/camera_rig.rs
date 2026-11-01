@@ -2,7 +2,7 @@
 //! `kind: path` track after a target the game moves (here a `PathFollower`). Each case builds a scene
 //! over paths written to a temp content root and reads the camera `Transform` and the rig's state
 //! back: the track projection end to end, blends and snaps, the held gameplay clock, determinism,
-//! snapshot/restore, install-when-present and the diagnostics of spec §6.
+//! snapshot/restore, always-installed and the diagnostics of spec §6.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -14,7 +14,7 @@ use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
-    Camera, CameraRig, DebugCategories, Egress, EgressChannels, Engine, Name, RigMode, Transform,
+    CameraRig, DebugCategories, Egress, EgressChannels, Engine, Name, RigMode, Transform,
     add_trauma, snap_rig,
 };
 use ludion_protocol::command::{
@@ -531,7 +531,7 @@ fn a_held_rig_draws_nothing() {
     assert!(!engine.debug_draw_drawn().contains(&"camera"));
 }
 
-// ---- install-when-present, drift ----
+// ---- always installed, drift ----
 
 fn describe_systems(engine: &mut Engine) -> Vec<serde_json::Value> {
     match engine
@@ -549,7 +549,7 @@ fn describe_systems(engine: &mut Engine) -> Vec<serde_json::Value> {
 fn noop(_: &mut World, _: &SystemCtx) {}
 
 #[test]
-fn describe_lists_camera_rig_after_the_physics_triple_only_when_a_rig_is_present() {
+fn describe_lists_camera_rig_after_the_physics_triple_with_and_without_a_rig() {
     let mut engine = engine_for(
         "describe-none",
         &[],
@@ -562,7 +562,11 @@ fn describe_lists_camera_rig_after_the_physics_triple_only_when_a_rig_is_present
             .map(|s| s["name"].as_str().unwrap().to_string())
             .collect()
     };
-    assert_eq!(names(&describe_systems(&mut engine)), ["noop"]);
+    assert_eq!(
+        names(&describe_systems(&mut engine)),
+        ["path_follow", "noop", "camera_rig"],
+        "both engine systems are always installed"
+    );
 
     let (files, scene) = track_scene();
     let scene = scene.replacen("seed: 3\n", "seed: 3\nphysics:\n  space: free\n", 1);
@@ -846,29 +850,78 @@ fn a_rust_built_negative_half_life_reports_l1304_once_and_holds() {
     assert!(holds_from(&mut engine, 12));
 }
 
-fn spawn_rig(world: &mut World, ctx: &SystemCtx) {
+/// The scene of a camera and a track follower, with no rig: a game system adds it at frame 1.
+fn rigless_scene() -> (Vec<(&'static str, String)>, String) {
+    let (files, scene) = track_scene();
+    let at = scene.find("      CameraRig:").unwrap();
+    let end = scene.find("  - name: hero").unwrap();
+    let scene = format!("{}{}", &scene[..at], &scene[end..]);
+    (files, scene)
+}
+
+/// Adds the track rig to the camera at frame 1, into a world that held none at load.
+fn add_rig(world: &mut World, ctx: &SystemCtx) {
     if ctx.frame.as_u64() != 1 {
         return;
     }
-    let id = world.spawn();
-    world.insert(id, Name("late".to_string())).unwrap();
-    world.insert(id, Transform::default()).unwrap();
-    world.insert(id, Camera::default()).unwrap();
-    world.insert(id, CameraRig::default()).unwrap();
+    let (cam, hero) = (named(world, "cam"), named(world, "hero"));
+    let mut rig = CameraRig {
+        target: Some(hero),
+        ..CameraRig::default()
+    };
+    let RigMode::Track(track) = &mut rig.rig.mode;
+    track.path = "track.path.yaml".to_string();
+    world.insert(cam, rig).unwrap();
+}
+
+fn late_rig(tag: &str) -> Engine {
+    let (files, scene) = rigless_scene();
+    engine_for(tag, &files, &scene, &[("add_rig", add_rig)])
 }
 
 #[test]
-fn a_rig_spawned_at_runtime_reports_l1310_once() {
-    let scene = "format: 1\nentities:\n  - name: cam\n    components:\n      Transform: {}\n";
-    let engine = engine_for("l1310", &[], scene, &[("spawn", spawn_rig)]);
-    let lines = log_lines(engine, 20);
-    let found = reported(&lines, "L1310");
-    assert_eq!(found.len(), 1, "once: {lines:?}");
+fn a_rig_added_at_runtime_poses_its_camera() {
+    let mut engine = late_rig("late-rig");
+    advance(&mut engine, 30);
+    assert!(rig_of(&engine).state.last_applied.is_some());
     assert!(
-        found[0].message.contains("CameraRig"),
-        "{}",
-        found[0].message
+        distance(eye_of(&engine), [0.0; 3]) > 1.0,
+        "the camera moved"
     );
+}
+
+#[test]
+fn a_snapshot_restore_after_a_rig_was_added_at_runtime_resumes_the_same_hashes() {
+    const AT: usize = 20;
+    const TICKS: usize = 60;
+    let mut engine = late_rig("late-ref");
+    let reference: Vec<u64> = (0..TICKS)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect();
+
+    let mut before = late_rig("late-a");
+    advance(&mut before, AT);
+    let snapshot = match before.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut resumed = late_rig("late-b");
+    resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    assert_eq!(resumed.world_hash().unwrap().as_u64(), reference[AT - 1]);
+    for (i, expected) in reference[AT..].iter().enumerate() {
+        resumed.advance_live();
+        assert_eq!(
+            resumed.world_hash().unwrap().as_u64(),
+            *expected,
+            "tick {} after the restore",
+            i + 1
+        );
+    }
 }
 
 #[test]

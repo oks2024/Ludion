@@ -261,7 +261,7 @@ fn two_configurations_localize_to_the_system_and_component_that_differ() {
         Some("scale"),
         "`bump` is identical on both sides, so the worlds agree at its boundary:\n{report}"
     );
-    assert_eq!(report.systems_probed, 2);
+    assert_eq!(report.systems_probed, 4);
     assert_eq!(report.world.changed_total, 1);
     assert_eq!(report.world.changed[0].components[0].component, "Tag");
 }

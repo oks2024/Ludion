@@ -98,7 +98,7 @@ fn needs_gpu_attach_captures_the_running_hosts_own_systems_and_writes_json() {
             .iter()
             .map(|s| s["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        [SYSTEM],
+        ["path_follow", SYSTEM, "camera_rig"],
     );
 
     let _ = std::fs::remove_file(&json_out);
@@ -258,8 +258,8 @@ fn needs_gpu_offline_perfetto_writes_a_trace_with_the_host_lane() {
         .collect();
     assert!(lane_names.contains(&"host"), "{lane_names:?}");
     assert!(
-        !lane_names.contains(&"sim systems"),
-        "the built-in registry links no game systems: {lane_names:?}"
+        lane_names.contains(&"sim systems"),
+        "the engine's own systems always give the sim lane: {lane_names:?}"
     );
 
     let frame_totals: Vec<&serde_json::Value> = events

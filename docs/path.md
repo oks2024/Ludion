@@ -122,18 +122,15 @@ writing the pose.
 
 ## Rules
 
-- `path_follow` is installed when a scene, snapshot or district is built and the world holds a
-  follower (authored or an inert `PathFollower: {}`). A game that never uses one sees no new system
-  in `engine.describe`, profile or perf output; when installed it lists first, at `order: 0`.
+- `path_follow` is installed on every schedule (scene load, restore, district switch) and lists first
+  in `engine.describe`, at `order: 0`; in a world without a follower it costs one empty query. A
+  follower spawned at runtime moves like an authored one.
 - A path that cannot be read or fails validation raises `L1215` once per entity; the entity stays put.
 - A `speed` or `phase` that is not a finite `f32` (NaN, infinite, or past `f32` range) is `L1269` at `/speed` or `/phase`; built in Rust, the follower is held where it is and `L1269` is raised once per entity.
 - The path library is read at load, restore and district switch and never hashed or snapshotted.
 
 ## Gotchas
 
-- **A follower spawned at runtime into a scene that held none never moves** — `L1216`, once per
-  entity. Author the follower in the scene file, or keep an inert `PathFollower: {}` on any entity so
-  the engine installs the system at load.
 - `asset.reload` does not re-read a path: an edited path takes effect at the next load, restore or
   switch, which keeps a mid-session reload replay-safe.
 - A follower on a `rigid` body has its pose overwritten by the physics mirror every tick. Put it on a

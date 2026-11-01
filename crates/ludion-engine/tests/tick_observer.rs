@@ -129,7 +129,16 @@ fn a_probed_tick_reports_every_system_in_registration_order() {
     step(&mut engine, 2);
     assert_eq!(
         log.lock().unwrap().systems,
-        vec!["first", "second", "first", "second"]
+        vec![
+            "path_follow",
+            "first",
+            "second",
+            "camera_rig",
+            "path_follow",
+            "first",
+            "second",
+            "camera_rig"
+        ]
     );
 }
 

@@ -611,8 +611,7 @@ mod tests {
         // And the seam actually saw the schedule (the test would pass trivially if it had not).
         let windows = armed.perf_take_windows();
         assert!(!windows.is_empty(), "50 ticks close at least one window");
-        assert_eq!(windows[0].systems.len(), 1);
-        assert_eq!(windows[0].systems[0].name, "bump");
+        assert!(windows[0].systems.iter().any(|s| s.name == "bump"));
     }
 
     #[test]

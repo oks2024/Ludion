@@ -1229,11 +1229,6 @@ pub mod code {
     /// `path_follow`.
     pub const PATH_FOLLOWER_UNLOADED: DiagnosticCode = DiagnosticCode::new("L1215");
 
-    /// `L1216` — a `PathFollower` exists in a world whose schedule has no `path_follow`, because it
-    /// was added at runtime to a scene that held none at load. Raised once per entity by
-    /// `ludion-engine`.
-    pub const PATH_FOLLOWER_NOT_INSTALLED: DiagnosticCode = DiagnosticCode::new("L1216");
-
     /// `L1217` — a `kind: generation` recipe declares an `images:` entry that no `inputs:` override
     /// references as `{ image: <name> }`, so the workflow would run its own baked-in image. Raised
     /// by the generation client, offline, before anything is uploaded.
@@ -1510,10 +1505,6 @@ pub mod code {
     /// `L1309` — a `CameraRig` entity has a `Parent`. A rig writes a world-space pose, so the camera
     /// must be a root entity. Raised by `check-scene` and once per entity at runtime.
     pub const CAMERA_RIG_PARENTED: DiagnosticCode = DiagnosticCode::new("L1309");
-
-    /// `L1310` — a `CameraRig` exists in a world whose `camera_rig` system was not installed (the
-    /// rig was spawned after the engine was built without one). Raised once at runtime.
-    pub const CAMERA_RIG_NOT_INSTALLED: DiagnosticCode = DiagnosticCode::new("L1310");
 
     /// `L1311` — an asset path inside a `kind: prefab` document, or a nested `prefab:` entry, is not
     /// a relative path (absolute, drive or scheme prefix, NUL, or a malformed `..` segment). Raised
@@ -6634,18 +6625,6 @@ Fix: run `ludion check-scene <path>` on the document, and check that `PathFollow
 to the content root the game runs from.",
     },
     CodeEntry {
-        code: code::PATH_FOLLOWER_NOT_INSTALLED,
-        severity: Severity::Error,
-        title: "a path follower exists but path_follow is not scheduled",
-        explanation: "\
-A `PathFollower` was added to the world at runtime, but the engine did not install its `path_follow`
-system: it does that when a scene, snapshot or district is built and already holds a follower, so
-one spawned later has nothing to move it. The entity does not move. Raised once per entity.
-
-Fix: author the follower in the scene file, or put an inert `PathFollower: {}` on any entity of the
-scene, so the engine installs `path_follow` at load.",
-    },
-    CodeEntry {
         code: code::HIERARCHY_CYCLE,
         severity: Severity::Warning,
         title: "a Parent chain loops at runtime",
@@ -7556,16 +7535,6 @@ camera's `Transform`, which would be read as local to the parent. At runtime the
 and holds.
 
 Fix: make the camera a root entity.",
-    },
-    CodeEntry {
-        code: code::CAMERA_RIG_NOT_INSTALLED,
-        severity: Severity::Error,
-        title: "a camera rig exists but its system is not installed",
-        explanation: "A `CameraRig` entity exists in a world whose schedule has no `camera_rig` system. The system is
-installed when the world holds a rig at build, restore or scene switch; a rig spawned afterwards by
-game code is never advanced.
-
-Fix: author the rig in the scene so the engine installs the system, instead of spawning it at runtime.",
     },
     CodeEntry {
         code: code::PREFAB_ASSET_PATH,
@@ -10031,6 +10000,15 @@ pub const RETIRED: &[(&str, &str)] = &[
          check already refuses as L1017 on every reachable path",
     ),
     (
+        "L1216",
+        "a `PathFollower` spawned into a world without `path_follow`; the system is now always \
+         installed",
+    ),
+    (
+        "L1310",
+        "a `CameraRig` spawned into a world without `camera_rig`; the system is now always installed",
+    ),
+    (
         "L3012",
         "the refused acked subscribe mode, removed from the wire",
     ),
@@ -10293,7 +10271,6 @@ mod tests {
         code::PATH_DOCUMENT_STRUCTURE,
         code::PATH_DATA_CONSISTENCY,
         code::PATH_FOLLOWER_UNLOADED,
-        code::PATH_FOLLOWER_NOT_INSTALLED,
         code::GENERATION_IMAGE_UNBOUND,
         code::HIERARCHY_CYCLE,
         code::HIERARCHY_PARENT_INVALID,
@@ -10366,7 +10343,6 @@ mod tests {
         code::CAMERA_RIG_WITHOUT_CAMERA,
         code::CAMERA_RIG_DUPLICATE,
         code::CAMERA_RIG_PARENTED,
-        code::CAMERA_RIG_NOT_INSTALLED,
         code::PREFAB_ASSET_PATH,
         code::LOCAL_LIGHT_INVALID_SHADOW,
         code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,

@@ -4,9 +4,8 @@
 //! [`PathFollower`] names a path and carries the arc-length `phase` it is at; [`path_follow`] advances
 //! `phase` on **gameplay** time and poses the entity at `point_at(s)` every tick. It is a sim system
 //! the engine installs itself, **before** every game system, so a rider's system reads the platform's
-//! pose of *this* tick. It installs only into a world that holds a follower when its schedule is
-//! built (scene load, restore, district switch, and the bare `render`/`sweep` hosts), so a game
-//! that never uses one pays nothing and its `engine.describe`, profile and hashes are unchanged.
+//! pose of *this* tick. It is installed on every schedule (scene load, restore, district switch, and
+//! the bare `render`/`sweep` hosts) and costs one empty query in a world without a follower.
 //!
 //! A follower with an [`orient`](PathFollower::orient) also writes `Transform.rotation`, facing travel.
 //!
@@ -14,9 +13,6 @@
 //! **teleport**: a `kinematic` body is snapped to the new pose with zero velocity
 //! ([`teleport_kinematic`](ludion_physics::teleport_kinematic)) instead of driving its riders at the
 //! implied speed. [`path_follower_motion`] reads what the tick did; see [`FollowerMotion`].
-//!
-//! A follower spawned at runtime into a world that had none at load has no system to move it:
-//! [`report_uninstalled`] reports `L1216` once per entity rather than leaving it silently still.
 //!
 //! [`PathLibrary`] loads each named path once, lazily, and is engine configuration derived from
 //! committed content: never hashed, never snapshotted, rebuilt at every load, restore and switch.
@@ -216,8 +212,8 @@ pub struct FollowerMotion {
     pub s: f32,
     /// `-1.0` when the follower runs towards the start of the path, else `1.0`; flips on a
     /// ping-pong's return leg. At `speed` 0 it follows the sign of this tick's change in `s` (a
-    /// game-driven `phase`), keeping the last direction when `s` held, on a teleport and on the
-    /// first tick after a restore (`1.0`).
+    /// game-driven `phase`), keeping the last direction when `s` held and on a teleport (`1.0` on
+    /// a follower's first tick).
     pub direction: f32,
     /// The translation written this tick minus the one it replaced, in the parent's frame.
     pub delta: [f32; 3],
@@ -228,13 +224,74 @@ pub struct FollowerMotion {
 }
 
 /// The per-follower [`FollowerMotion`]s of the last [`path_follow`] run, replaced every run. A
-/// resource, so a restore drops it and it is absent until the next tick.
+/// resource, never hashed; the snapshot carries it ([`entries`](FollowerMotions::entries)) because a
+/// `speed: 0` follower reads last tick's `s` to pick its facing.
 #[derive(Default)]
 pub(crate) struct FollowerMotions(BTreeMap<EntityId, FollowerMotion>);
 
+/// One follower's carried [`FollowerMotion`], as a snapshot holds it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct FollowerMotionEntry {
+    entity: EntityId,
+    s: f32,
+    direction: f32,
+    delta: [f32; 3],
+    velocity: [f32; 3],
+    teleported: bool,
+}
+
+impl FollowerMotionEntry {
+    /// Whether every float is finite — JSON has no other kind of number.
+    fn round_trips(&self) -> bool {
+        self.s.is_finite()
+            && self.direction.is_finite()
+            && self.delta.iter().all(|v| v.is_finite())
+            && self.velocity.iter().all(|v| v.is_finite())
+    }
+}
+
+impl FollowerMotions {
+    /// The carried motions in entity order; an entry with a non-finite float is left out.
+    pub(crate) fn entries(&self) -> Vec<FollowerMotionEntry> {
+        self.0
+            .iter()
+            .map(|(&entity, m)| FollowerMotionEntry {
+                entity,
+                s: m.s,
+                direction: m.direction,
+                delta: m.delta,
+                velocity: m.velocity,
+                teleported: m.teleported,
+            })
+            .filter(FollowerMotionEntry::round_trips)
+            .collect()
+    }
+
+    /// The motions `entries` carries.
+    pub(crate) fn from_entries(entries: Vec<FollowerMotionEntry>) -> Self {
+        Self(
+            entries
+                .into_iter()
+                .map(|e| {
+                    (
+                        e.entity,
+                        FollowerMotion {
+                            s: e.s,
+                            direction: e.direction,
+                            delta: e.delta,
+                            velocity: e.velocity,
+                            teleported: e.teleported,
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+}
+
 /// What the last [`path_follow`] tick did to `entity`, or `None` when it posed nothing: not a
 /// follower, an empty `path`, a path that failed to load, a non-finite `speed` or `phase`, no
-/// `Transform`, or no tick has run since the world was built or restored.
+/// `Transform`, or no tick has run since the world was built.
 ///
 /// Recomputed every tick before any game system, so a system reads this tick's motion.
 ///
@@ -362,18 +419,9 @@ fn load(root: &Path, rel: &str) -> Result<PathSampler, Vec<Diagnostic>> {
     ludion_scene::check_path(text).map(|doc| PathSampler::new(&doc))
 }
 
-/// Whether `world` holds at least one [`PathFollower`] — the key the engine installs
-/// [`path_follow`] on.
-pub(crate) fn present(world: &World) -> bool {
-    world.entities().any(|id| world.has::<PathFollower>(id))
-}
-
-/// Adds [`path_follow`] to `schedule` when the world it is built for holds a follower. Called before
-/// any game system is added.
-pub(crate) fn install(schedule: &mut Schedule, present: bool) {
-    if present {
-        schedule.add_system(SYSTEM_NAME, path_follow);
-    }
+/// Adds [`path_follow`] to `schedule`. Called before any game system is added.
+pub(crate) fn install(schedule: &mut Schedule) {
+    schedule.add_system(SYSTEM_NAME, path_follow);
 }
 
 /// The system's `engine.describe` entry, with no call site to attribute; the caller sets its `order`.
@@ -390,30 +438,6 @@ pub(crate) fn describe_entry() -> Value {
             ],
         }],
     })
-}
-
-/// Reports `L1216` once per [`PathFollower`] in a world whose schedule lacks [`path_follow`].
-pub(crate) fn report_uninstalled(world: &mut World, installed: bool) {
-    if installed {
-        return;
-    }
-    let ids: Vec<EntityId> = world
-        .query_ids::<(&PathFollower,)>()
-        .map(|(id, _)| id)
-        .collect();
-    for id in ids {
-        crate::diagnostics::report(
-            world,
-            code::PATH_FOLLOWER_NOT_INSTALLED,
-            id.to_string(),
-            format!(
-                "{id} has a `PathFollower`, but this world's schedule has no `path_follow`, so it \
-                 never moves: the engine installs it only when a scene, snapshot or district is \
-                 built with a follower already in it (author the follower in the scene file, or \
-                 put an inert `PathFollower: {{}}` on any entity)"
-            ),
-        );
-    }
 }
 
 /// Advances each [`PathFollower`] on gameplay time and poses its entity along its path, in

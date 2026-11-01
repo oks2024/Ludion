@@ -1,9 +1,9 @@
 //! The `camera_rig` system: advances the scene's [`CameraRig`] each tick and writes the result to
 //! the camera entity's `Transform` (and the perspective `fov_y_deg`).
 //!
-//! The system installs only when the world holds a rig at build, restore or scene switch, so a
-//! rig-less world keeps its schedule, describe output and hashes. It runs after the physics triple
-//! and before the presentation systems, so the camera reads this tick's settled target pose.
+//! The system is installed on every schedule and returns at once in a world without a rig. It runs
+//! after the physics triple and before the presentation systems, so the camera reads this tick's
+//! settled target pose.
 //!
 //! The pipeline is [`ludion_camera::step_rig`], run on the gameplay clock: a held clock freezes the
 //! springs, blend and shake and re-poses from the frozen state. A rig whose state has no
@@ -21,7 +21,6 @@
 use ludion_camera::{CameraRig, RigInput, RigMode, invalid_field, rig_focus, step_rig, track_eye};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, Schedule, SystemCtx, World};
 use ludion_scene::PathSampler;
 use serde_json::Value;
@@ -54,17 +53,10 @@ const CROSS: f32 = 0.2;
 /// Spans of the search-window polyline.
 const WINDOW_SPANS: usize = 8;
 
-/// Whether `world` holds at least one [`CameraRig`] — the key the engine installs [`camera_rig`] on.
-pub(crate) fn present(world: &World) -> bool {
-    world.entities().any(|id| world.has::<CameraRig>(id))
-}
-
-/// Adds [`camera_rig`] to `schedule` when the world it is built for holds a rig. Called after the
-/// physics systems and before the presentation systems.
-pub(crate) fn install(schedule: &mut Schedule, present: bool) {
-    if present {
-        schedule.add_system(SYSTEM_NAME, camera_rig);
-    }
+/// Adds [`camera_rig`] to `schedule`. Called after the physics systems and before the presentation
+/// systems.
+pub(crate) fn install(schedule: &mut Schedule) {
+    schedule.add_system(SYSTEM_NAME, camera_rig);
 }
 
 /// The system's `engine.describe` entry, with no call site to attribute; the caller sets its `order`.
@@ -82,29 +74,6 @@ pub(crate) fn describe_entry() -> Value {
             ],
         }],
     })
-}
-
-/// Reports `L1310` once per [`CameraRig`] in a world whose schedule lacks [`camera_rig`].
-pub(crate) fn report_uninstalled(world: &mut World, installed: bool) {
-    if installed {
-        return;
-    }
-    let ids: Vec<EntityId> = world
-        .query_ids::<(&CameraRig,)>()
-        .map(|(id, _)| id)
-        .collect();
-    for id in ids {
-        crate::diagnostics::report(
-            world,
-            code::CAMERA_RIG_NOT_INSTALLED,
-            id.to_string(),
-            format!(
-                "{id} has a `CameraRig`, but this world's schedule has no `camera_rig`, so it never \
-                 poses the camera: the engine installs it only when a scene, snapshot or district is \
-                 built with a rig already in it (author the rig in the scene file)"
-            ),
-        );
-    }
 }
 
 /// Advances the scene's [`CameraRig`] one tick and poses its camera (the module docs have the
