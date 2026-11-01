@@ -409,8 +409,9 @@ const vigilClippyStep = { name: 'vigil-clippy', cmd: 'cargo', args: ['clippy', '
 // On a box carrying the reference GPU they also set `LUDION_REQUIRE_REFERENCE_ADAPTER=1`, so wgpu
 // picking another adapter fails the byte-exact goldens instead of skipping them (`referenceGpuEnv`).
 //
-// Both shapes leave out the fps gates (`fpsGateFilter`): they measure wall-clock fps, which the parallel
-// lanes saturate, so the `fps-gate` step runs them after every lane has finished.
+// Both shapes leave out the exclusive tests (`fpsGateFilter`): the fps gates measure wall-clock fps and the
+// facade's embed/ffi tests wait a wall-clock stop grace (L4022), both of which the parallel lanes saturate,
+// so the `fps-gate` step runs them after every lane has finished.
 // The hosted lane's test step: the `no-gpu` profile with the GPU forbidden (`.github/workflows/ci.yml`).
 const noGpuStep = { name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...SELECT, ...NO_TESTS, '--profile', 'no-gpu', '--no-fail-fast'], log: 'test.log', env: { LUDION_FORBID_GPU: '1' } };
 const referenceGpuEnv = () => {
@@ -422,7 +423,7 @@ const referenceGpuEnv = () => {
       ? { LUDION_REQUIRE_REFERENCE_ADAPTER: '1' } : {};
   } catch { return {}; }
 };
-const nextestStep = (fps) => ({ name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...SELECT, ...NO_TESTS, '--no-fail-fast', ...(fps.expr ? ['-E', `not (${fps.expr})`] : [])], log: 'test.log', env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } });
+const nextestStep = (fps) => ({ name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...SELECT, ...NO_TESTS, '--no-fail-fast', ...(fps.expr ? ['-E', `not (${fps.held})`] : [])], log: 'test.log', env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } });
 // vigil's test lane takes the root lane's shape (the nextest `no-gpu` profile, nextest, or plain `cargo test`) and env.
 const vigilTestStep = (shape) => ({
   name: 'vigil-test', cwd: VIGIL, log: 'vigil-test.log',
@@ -446,7 +447,12 @@ function fpsGateFilter() {
   const prefix = expr.match(/test\(\/\^(\w+)\/\)/)?.[1];
   if (!bin || !prefix) return { error: `filter \`${expr}\` has no binary_id(=crate::binary) / test(/^prefix/) parts` };
   if (expr.includes('"')) return { error: `filter \`${expr}\` contains a double quote, which the Windows spawn cannot pass` };
-  return { expr, crate: bin[1], binary: bin[2], prefix };
+  // Every later exclusive override (the facade's embed/ffi tests) is held out of `test` and run in the
+  // same quiet tail: `@global` isolates only inside one nextest process, not from the parallel lanes.
+  const extra = toml.split('[[profile.default.overrides]]').filter((b) => b !== block && /^threads-required\s*=\s*"num-test-threads"/m.test(b))
+    .map((b) => ({ expr: b.match(/^filter\s*=\s*'([^'\n]+)'/m)?.[1], crate: b.match(/binary_id\(=([\w-]+)/)?.[1] }));
+  if (extra.some((e) => !e.expr || !e.crate || e.expr.includes('"'))) return { error: 'an exclusive `num-test-threads` override after the fps one needs a single-quoted, double-quote-free filter naming binary_id(=crate…)' };
+  return { expr, crate: bin[1], binary: bin[2], prefix, extra, held: [expr, ...extra.map((e) => e.expr)].join(' | ') };
 }
 let fpsGate = {};
 // The mobile feature set (Plan/ios-target.md): the facade with its default `wire` + `window`
@@ -996,7 +1002,7 @@ async function main() {
     const test = results.find((r) => r.name === 'test');
     if (noGpu) {
       results.push(skipped('fps-gate', '--no-gpu'));
-    } else if (scope && !fpsGate.error && !scope.packages.includes(fpsGate.crate)) {
+    } else if (scope && !fpsGate.error && ![fpsGate, ...fpsGate.extra].some((g) => scope.packages.includes(g.crate))) {
       results.push(outOfScope('fps-gate'));
     } else if (test?.skipped) {
       results.push(skipped('fps-gate', test.reason));
@@ -1004,7 +1010,7 @@ async function main() {
       results.push(verdict('fps-gate', 'fps-gate.log', false, `fps-gate: cannot read the filter from .config/nextest.toml: ${fpsGate.error}\nthe exclusive override must stay as scripts/lists-in-step.mjs expects`));
     } else {
       const args = (await hasNextest())
-        ? ['nextest', 'run', ...(scope ? ['-p', fpsGate.crate] : ['--workspace']), '--no-fail-fast', '-E', fpsGate.expr]
+        ? ['nextest', 'run', ...(scope ? [...new Set([fpsGate, ...fpsGate.extra].map((g) => g.crate).filter((c) => scope.packages.includes(c)))].flatMap((c) => ['-p', c]) : ['--workspace']), '--no-fail-fast', '-E', fpsGate.held]
         : ['test', ...(scope ? ['-p', fpsGate.crate] : ['--workspace']), '--test', fpsGate.binary, '--', fpsGate.prefix, '--test-threads=1'];
       results.push(await runStep({ name: 'fps-gate', cmd: 'cargo', args, log: 'fps-gate.log', env: { LUDION_REQUIRE_GPU: '1' } }));
     }
