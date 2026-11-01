@@ -20,6 +20,16 @@ pub struct GroundHit {
     pub distance: f32,
 }
 
+/// What [`probe_character_ground`](crate::probe_character_ground) found.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct GroundProbe {
+    /// The support, walkable or not; `distance` is from the probed feet (negative: above them).
+    pub ground: GroundHit,
+    /// The feet height the motor would settle at on it; `None` when it is not walkable.
+    pub rest_y: Option<f32>,
+}
+
 /// A wall or ceiling the move was blocked by.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceHit {
@@ -172,6 +182,8 @@ pub enum MotorError {
         /// The requested yaw.
         yaw: f32,
     },
+    /// The probed feet position has a non-finite component.
+    NonFiniteFeet([f32; 3]),
 }
 
 impl fmt::Display for MotorError {
@@ -209,6 +221,9 @@ impl fmt::Display for MotorError {
                 f,
                 "the teleport target (feet {feet:?}, yaw {yaw}) is not finite"
             ),
+            MotorError::NonFiniteFeet(feet) => {
+                write!(f, "the probed feet {feet:?} are not finite")
+            }
         }
     }
 }

@@ -8,7 +8,7 @@ use ludion_ecs::World;
 
 use super::carry::{rigid_carry, rotate, rotate_yaw};
 use super::component::{CharacterMotor, CharacterMotorState, PlatformPose, check, height_in_force};
-use super::report::{GroundHit, MotorError, MoveReport, PlatformCarry, SurfaceHit};
+use super::report::{GroundHit, GroundProbe, MotorError, MoveReport, PlatformCarry, SurfaceHit};
 use super::surface::SurfaceVelocity;
 use super::sweep::{Capsule, Contact};
 use crate::pose::PhysicsPose;
@@ -242,6 +242,80 @@ pub fn ground_probe_reach(
         motor.skin_width,
         was_grounded && displacement[1] <= 0.0,
     )
+}
+
+/// Whether the motor on `entity` would stand at `feet`, within walk reach: the motor's own ground
+/// probe at any feet position, cast from `step_height` above over `step_height + snap_distance +
+/// skin_width`, so a ledge one step up or a drop of one snap counts. `Ok(None)` when nothing is
+/// under it, or the support is out of reach (above the step height).
+///
+/// It is pure and deterministic, reads the last completed step, uses the crouched height in force,
+/// does no headroom test (see [`fits_character`](crate::fits_character)), and filters out the
+/// motor's ignored layers and sensors as a move does.
+///
+/// ```no_run
+/// # use ludion_ecs::{SystemCtx, World};
+/// # use ludion_physics::{probe_character_ground, PhysicsPose};
+/// # use ludion_core::ids::EntityId;
+/// fn safe_to_land<P: PhysicsPose>(world: &World, _ctx: &SystemCtx, hero: EntityId) -> bool {
+///     probe_character_ground::<P>(world, hero, [2.0, 0.0, 0.0])
+///         .ok()
+///         .flatten()
+///         .is_some_and(|probe| probe.rest_y.is_some())
+/// }
+/// ```
+pub fn probe_character_ground<P: PhysicsPose>(
+    world: &World,
+    entity: EntityId,
+    feet: [f32; 3],
+) -> Result<Option<GroundProbe>, MotorError> {
+    let motor = world
+        .get::<CharacterMotor>(entity)
+        .ok()
+        .flatten()
+        .cloned()
+        .ok_or(MotorError::NoMotor(entity))?;
+    world
+        .get::<P>(entity)
+        .ok()
+        .flatten()
+        .ok_or(MotorError::NoPose(entity))?;
+    if !feet.iter().all(|c| c.is_finite()) {
+        return Err(MotorError::NonFiniteFeet(feet));
+    }
+    let state = world.get::<CharacterMotorState>(entity).ok().flatten();
+    let checked = CharacterMotor {
+        height: height_in_force(&motor, state),
+        ..motor.clone()
+    };
+    if let Err((pointer, reason)) = check(&checked) {
+        return Err(MotorError::InvalidMotor {
+            entity,
+            reason: format!("{pointer}: {reason}"),
+        });
+    }
+    let physics = world
+        .resource::<PhysicsWorld>()
+        .ok_or(MotorError::NoPhysicsWorld)?;
+    let solver = Solver::new(physics, entity, &checked);
+    let lift = solver.step_height;
+    let origin = [feet[0], feet[1] + lift, feet[2]];
+    let reach = lift + solver.snap + solver.skin;
+    let under = solver.radius + lift + solver.snap + solver.skin;
+    let (ground, grounded, settled) = solver.probe(origin, reach, under, true);
+    let Some(hit) = ground else {
+        return Ok(None);
+    };
+    if solver.above_step(feet[1], hit.point[1]) {
+        return Ok(None);
+    }
+    Ok(Some(GroundProbe {
+        ground: GroundHit {
+            distance: hit.distance - lift,
+            ..hit
+        },
+        rest_y: grounded.then_some(settled[1]),
+    }))
 }
 
 fn probe_reach(snap: f32, skin: f32, snap_allowed: bool) -> f32 {
@@ -558,7 +632,15 @@ impl<'a> Solver<'a> {
             stuck = still_stuck;
         }
 
-        let (ground, grounded) = self.probe(&mut feet, displacement[1], was_grounded);
+        let snap_allowed = was_grounded && displacement[1] <= 0.0;
+        let reach = probe_reach(self.snap, self.skin, snap_allowed);
+        let (ground, grounded, settled) = self.probe(
+            feet,
+            reach,
+            self.radius + self.snap + self.skin,
+            snap_allowed,
+        );
+        feet = settled;
         // A snap back down undoes a climb: only the rise that survived the tick is a step.
         let rise = feet[1] - rise_from;
         slide.stepped = slide.stepped.map(|c| c.min(rise)).filter(|c| *c > 0.0);
@@ -776,7 +858,7 @@ impl<'a> Solver<'a> {
             return None;
         }
         // The obstruction's top, from the floor the capsule stands on (a skin below its feet).
-        if hit.point[1] - (from[1] - self.skin) > self.step_height {
+        if self.above_step(from[1], hit.point[1]) {
             return None;
         }
         let up = [0.0, 1.0, 0.0];
@@ -819,6 +901,12 @@ impl<'a> Solver<'a> {
         let (settled, stuck) = self.depenetrate(pose);
         (climb > 0.0 && climb <= self.step_height && !stuck && settled == pose)
             .then_some((pose, climb))
+    }
+
+    /// Whether a surface point at `point_y` rises above the step height from the floor a skin
+    /// below `floor_feet_y`.
+    fn above_step(&self, floor_feet_y: f32, point_y: f32) -> bool {
+        point_y - (floor_feet_y - self.skin) > self.step_height
     }
 
     /// The leftover after hitting walkable ground: downward motion is spent, and the horizontal
@@ -877,54 +965,55 @@ impl<'a> Solver<'a> {
             .map(|under| normalize(under.normal))
     }
 
-    /// Casts down from `feet` for the support, snapping onto it when allowed. Returns the support
-    /// and whether the motor is grounded on it.
+    /// Casts down from `origin` over `reach` for the support; settles onto it when `settle`.
+    /// `under` is the length of the ray down the axis from a radius above `origin`, used when the
+    /// cast contact is too steep. Returns the support, whether it is ground, and the feet after
+    /// settling (`origin` when not settled).
     fn probe(
         &self,
-        feet: &mut [f32; 3],
-        displacement_y: f32,
-        was_grounded: bool,
-    ) -> (Option<GroundHit>, bool) {
-        let snap_allowed = was_grounded && displacement_y <= 0.0;
-        let reach = probe_reach(self.snap, self.skin, snap_allowed);
-        let Some(hit) = self.cast(*feet, [0.0, -1.0, 0.0], reach, false) else {
-            return (None, false);
+        origin: [f32; 3],
+        reach: f32,
+        under: f32,
+        settle: bool,
+    ) -> (Option<GroundHit>, bool, [f32; 3]) {
+        let mut feet = origin;
+        let Some(hit) = self.cast(feet, [0.0, -1.0, 0.0], reach, false) else {
+            return (None, false, feet);
         };
         if hit.normal[1] <= 0.0 {
-            return (None, false);
+            return (None, false, feet);
         }
         let mut normal = normalize(hit.normal);
         let mut rim = false;
         let mut walkable = normal[1] >= self.cos_limit;
         if !walkable {
             let origin = [feet[0], feet[1] + self.radius, feet[2]];
-            let length = self.radius + self.snap + self.skin;
             if let Some(under) = self
                 .physics
-                .probe_down(origin, length, &self.filter)
+                .probe_down(origin, under, &self.filter)
                 .filter(|under| under.entity == hit.entity && under.normal[1] >= self.cos_limit)
             {
                 normal = normalize(under.normal);
                 rim = true;
                 walkable = true;
-            } else if let Some(face) = self.rim_support(hit.point, *feet, hit.entity) {
+            } else if let Some(face) = self.rim_support(hit.point, feet, hit.entity) {
                 normal = face;
                 rim = true;
                 walkable = true;
             }
         }
         let grounded = walkable && hit.distance <= reach;
-        if grounded && snap_allowed {
+        if grounded && settle {
             let cast_rest = feet[1] - (hit.distance - self.skin).max(0.0);
             // A plane under the axis lower than the cast contact belongs to a lower face of the
             // same collider (a mesh's floor below its own step): resting there sinks the capsule.
             feet[1] = self
-                .plane_rest(*feet, hit.entity, reach)
+                .plane_rest(feet, hit.entity, reach)
                 .filter(|rest| *rest >= cast_rest - self.skin / 2.0)
                 .unwrap_or(cast_rest);
         }
         if !rim {
-            normal = self.refine(*feet, hit.entity, hit.point, normal);
+            normal = self.refine(feet, hit.entity, hit.point, normal);
         }
         (
             Some(GroundHit {
@@ -935,6 +1024,7 @@ impl<'a> Solver<'a> {
                 distance: hit.distance,
             }),
             grounded,
+            feet,
         )
     }
 }

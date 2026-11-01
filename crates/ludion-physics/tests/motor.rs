@@ -14,8 +14,9 @@ use ludion_core::par::with_threads;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, ColliderMeshes, MotorError, MoveConstraint, MoveReport,
-    PhysicsSpace, PhysicsWorld, TriangleMesh, install, move_character, move_character_with,
+    CharacterMotor, CharacterMotorState, ColliderMeshes, GroundProbe, MotorError, MoveConstraint,
+    MoveReport, PhysicsSpace, PhysicsWorld, QueryFilter, TriangleMesh, install, move_character,
+    move_character_with, probe_character_ground, resize_character,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -1200,4 +1201,195 @@ fn running_from_a_mesh_floor_onto_a_box_floor_never_bumps() {
     );
     assert_seamless(&mut rig, 80);
     assert!(rig.feet()[0] > 1.5, "{:?}", rig.feet());
+}
+
+// probe_character_ground
+
+fn idle(_: u64) -> Vec<[f32; 3]> {
+    vec![[0.0, -0.05, 0.0]]
+}
+
+fn probe(rig: &Rig, feet: [f32; 3]) -> Option<GroundProbe> {
+    probe_character_ground::<TestPose>(&rig.world, rig.hero, feet).expect("a probe")
+}
+
+/// A static box floor spanning `x ∈ [from, to]` with its top at `y = 0`.
+fn slab(world: &mut World, from: f32, to: f32) -> EntityId {
+    wall(
+        world,
+        [(from + to) / 2.0, -0.5, 0.0],
+        [(to - from) / 2.0, 0.5, 5.0],
+    )
+}
+
+#[test]
+fn a_probe_at_a_floor_edge_stands_inside_and_finds_nothing_past_the_radius() {
+    let mut rig = Rig::new(
+        |world| {
+            slab(world, -20.0, 2.0);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        idle,
+    );
+    rig.run(4);
+    let inside = probe(&rig, [1.9, 0.0, 0.0]).expect("ground 0.1 m inside the edge");
+    assert!(inside.ground.walkable);
+    assert!(
+        (inside.rest_y.expect("walkable") - SKIN).abs() < 2e-3,
+        "{inside:?}"
+    );
+    assert_eq!(probe(&rig, [2.0 + RADIUS + 0.05, 0.0, 0.0]), None);
+}
+
+#[test]
+fn a_probe_across_a_crack_as_wide_as_the_radius_is_grounded_like_the_walk() {
+    let mut rig = Rig::new(
+        |world| {
+            slab(world, -20.0, 2.0);
+            slab(world, 2.0 + RADIUS, 20.0);
+            hero(world, [1.0, 0.0, 0.0])
+        },
+        run_east,
+    );
+    rig.run(40);
+    assert!(rig.feet()[0] > 2.0 + RADIUS, "{:?}", rig.feet());
+    assert!(rig.reports().iter().all(|r| r.grounded));
+
+    let centre = 2.0 + RADIUS / 2.0;
+    let found = probe(&rig, [centre, 0.0, 0.0]).expect("ground across the crack");
+    assert!(found.ground.walkable && found.rest_y.is_some(), "{found:?}");
+    let ray = rig
+        .physics()
+        .ray_cast(
+            [centre, 0.25, 0.0],
+            [0.0, -1.0, 0.0],
+            0.5,
+            &QueryFilter::new(),
+        )
+        .unwrap();
+    assert!(
+        ray.is_empty(),
+        "the axis ray falls through the crack: {ray:?}"
+    );
+}
+
+#[test]
+fn a_probe_where_the_hero_rests_on_a_rim_matches_its_report() {
+    let mut rig = Rig::new(
+        |world| {
+            slab(world, -20.0, 2.0);
+            hero(world, [2.0 + RADIUS / 2.0, 0.3, 0.0])
+        },
+        fall,
+    );
+    rig.run(20);
+    let last = rig.reports().pop().unwrap();
+    let ground = last.ground.expect("a support");
+    assert!(last.grounded && ground.walkable, "{last:?}");
+    let found = probe(&rig, rig.feet()).expect("the rim support");
+    assert!(found.ground.walkable);
+    assert_eq!(found.ground.entity, ground.entity);
+    assert!(
+        (found.rest_y.expect("walkable") - rig.feet()[1]).abs() < 1e-3,
+        "{found:?} {:?}",
+        rig.feet()
+    );
+}
+
+#[test]
+fn a_probe_over_a_step_answers_either_side_of_the_step_height() {
+    let eps = 0.01;
+    for (top, walkable) in [(0.25 - eps, true), (0.25 + eps, false)] {
+        let mut rig = Rig::new(
+            |world| {
+                floor(world);
+                block(world, 1.5, 6.0, top);
+                hero(world, [0.0, 0.0, 0.0])
+            },
+            idle,
+        );
+        rig.run(4);
+        let found = probe(&rig, [3.0, 0.0, 0.0]);
+        if walkable {
+            let found = found.expect("the block under the step height");
+            assert!(found.ground.walkable);
+            assert!(
+                (found.rest_y.unwrap() - (top + SKIN)).abs() < 2e-3,
+                "{found:?}"
+            );
+        } else {
+            assert_eq!(found, None, "a block over the step height is out of reach");
+        }
+    }
+}
+
+#[test]
+fn a_crouched_motor_still_probes_walkable_on_the_flat() {
+    let mut rig = Rig::new(
+        |world| {
+            floor(world);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        idle,
+    );
+    rig.run(4);
+    resize_character::<TestPose>(&mut rig.world, rig.hero, 0.6).unwrap();
+    let found = probe(&rig, [1.0, 0.0, 0.0]).expect("ground");
+    assert!(found.ground.walkable && found.rest_y.is_some(), "{found:?}");
+}
+
+#[test]
+fn a_probe_changes_nothing() {
+    let mut rig = Rig::new(
+        |world| {
+            floor(world);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        idle,
+    );
+    rig.run(4);
+    let pose = pose_of(&rig.world, rig.hero);
+    let state = rig
+        .world
+        .get::<CharacterMotorState>(rig.hero)
+        .unwrap()
+        .cloned();
+    let first = probe(&rig, [1.0, 0.0, 0.0]);
+    assert_eq!(first, probe(&rig, [1.0, 0.0, 0.0]));
+    assert_eq!(pose_of(&rig.world, rig.hero), pose);
+    assert_eq!(
+        rig.world
+            .get::<CharacterMotorState>(rig.hero)
+            .unwrap()
+            .cloned(),
+        state
+    );
+}
+
+#[test]
+fn the_probe_errors_name_what_is_missing() {
+    let mut rig = Rig::new(
+        |world| {
+            floor(world);
+            hero(world, [0.0, 0.0, 0.0])
+        },
+        idle,
+    );
+    rig.run(3);
+    let nan = [f32::NAN, 0.0, 0.0];
+    assert!(matches!(
+        probe_character_ground::<TestPose>(&rig.world, rig.hero, nan),
+        Err(MotorError::NonFiniteFeet(_))
+    ));
+    let bare = rig.world.spawn();
+    assert_eq!(
+        probe_character_ground::<TestPose>(&rig.world, bare, [0.0; 3]),
+        Err(MotorError::NoMotor(bare))
+    );
+    let poseless = rig.world.spawn();
+    rig.world.insert(poseless, motor()).unwrap();
+    assert_eq!(
+        probe_character_ground::<TestPose>(&rig.world, poseless, [0.0; 3]),
+        Err(MotorError::NoPose(poseless))
+    );
 }
