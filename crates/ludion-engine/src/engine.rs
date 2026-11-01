@@ -5769,14 +5769,16 @@ pub(crate) fn instantiate_expanded_world(
                 .expect("the entity was just instantiated and is alive");
         }
     }
-    crate::skin_bone::apply_spawn_poses(&mut world, &expanded.scene, project_root).map_err(
-        |errors| {
-            errors
-                .into_iter()
-                .map(|d| expanded.locate(d))
-                .collect::<Vec<_>>()
-        },
-    )?;
+    let mut errors =
+        crate::parent_joint::scene_parent_joint_diagnostics(project_root, &expanded.scene);
+    if let Err(pose_errors) =
+        crate::skin_bone::apply_spawn_poses(&mut world, &expanded.scene, project_root)
+    {
+        errors.extend(pose_errors);
+    }
+    if !errors.is_empty() {
+        return Err(errors.into_iter().map(|d| expanded.locate(d)).collect());
+    }
     Ok((world, ids))
 }
 

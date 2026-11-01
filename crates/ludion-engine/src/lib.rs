@@ -66,6 +66,7 @@ pub mod manifest;
 mod mesh_asset;
 pub mod model_sheet;
 mod motor;
+mod parent_joint;
 pub mod particles;
 mod path_follow;
 pub mod patterns;
@@ -127,10 +128,10 @@ pub use components::{
     Anchor, Animation, AudioEmitter, Camera, ClipAnchor, Decal, DecalBlend, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
     GiVolume, GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, Name,
-    PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PointLight, PostProcess,
-    ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight, Sprite, SpriteBlend,
-    Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect, UiText, builtin_registry,
-    crossfade, set_speed,
+    PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter, PointLight,
+    PostProcess, ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight, Sprite,
+    SpriteBlend, Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect, UiText,
+    builtin_registry, crossfade, set_speed,
 };
 pub use cooked_maps::TextureSource;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
@@ -173,6 +174,7 @@ pub use motor::{
     MOTOR_STUCK, MOTOR_WALL, fits_character, move_character, move_character_with,
     probe_character_ground, resize_character, teleport_character,
 };
+pub use parent_joint::scene_parent_joint_diagnostics;
 pub use path_follow::{
     FollowerMotion, PathFollower, PathMode, PathOrient, path_follow, path_follower_motion,
 };

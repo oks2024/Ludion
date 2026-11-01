@@ -277,7 +277,7 @@ fn spawn_pose(skin_transform: Transform, bone_model: &[f64; 16]) -> Transform {
 }
 
 /// `entity`'s `Mesh.shape: asset` path, or `None` when it carries no `Mesh` or a different shape.
-fn skinned_mesh_path(
+pub(crate) fn skinned_mesh_path(
     project_root: &Path,
     entity: &SceneEntity,
 ) -> Option<Result<String, (String, Vec<Diagnostic>)>> {
@@ -310,7 +310,7 @@ pub(crate) fn load_mesh_joints(
 
 /// `entity` (at document position `index`) by its `name:` when it has one, else its bare position —
 /// the ragdoll module's `named_entity` habit, at document time rather than world time.
-fn named(entity: &SceneEntity, index: usize) -> String {
+pub(crate) fn named(entity: &SceneEntity, index: usize) -> String {
     match &entity.name {
         Some(name) => format!("`{name}` (entity {index})"),
         None => format!("entity {index}"),

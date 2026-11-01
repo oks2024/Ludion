@@ -4323,6 +4323,28 @@ pub struct SkinBone {
     pub bone: String,
 }
 
+/// Attaches an entity to one joint of its [`Parent`](ludion_ecs::Parent)'s skeleton: the parent must
+/// be a skinned mesh ([`Mesh`] `shape: asset` naming a mesh document with `joints:`, or `shape:
+/// character`, which resolves to one — the rule [`SkinBone`] uses). The entity's [`Transform`] is
+/// local to the joint's model transform; sim reads compose the joint's rest pose into the chain.
+///
+/// ```yaml
+/// components:
+///   Parent: { index: 0, generation: 0 }
+///   ParentJoint:
+///     joint: hand_r
+/// ```
+///
+/// Two load-time/check-time/prefab-spawn diagnostics refuse a bad link: the parent not a skinned
+/// mesh, or no `Parent` at all (`L1318`), and `joint` naming no joint of it (`L1319`, the help names
+/// the nearest). A runtime miss (a parent that lost its mesh, an unknown joint) composes as a plain
+/// `Parent`, silently. Like any component it is hashed, snapshotted and saved on a sim entity.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct ParentJoint {
+    /// The joint's name, as authored in the parent mesh document's `joints:`.
+    pub joint: String,
+}
+
 /// A looping sound placed in the world: audible within `range` of the listener, louder the nearer it
 /// is. The sound analog of [`PointLight`] — position comes from the entity's [`Transform`], the
 /// falloff is the same `clamp(1 − distance/range, 0, 1)` shape, and a scene may place any number.
@@ -5192,6 +5214,13 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<Decal>("Decal")
         .expect("unique");
+    // `ParentJoint` needs no semantic validator, like `SkinBone`: its checks (the parent's mesh
+    // document, the joint name) need the document on disk, so
+    // `crate::parent_joint::scene_parent_joint_diagnostics` runs them at load and under
+    // `check-scene`. Registered last, per the append-only order above.
+    registry
+        .register::<ParentJoint>("ParentJoint")
+        .expect("unique");
     registry
 }
 
@@ -5753,12 +5782,13 @@ mod tests {
                 "CameraRig",
                 "DropShadow",
                 "Decal",
+                "ParentJoint",
             ]
         );
         assert_eq!(
             registry.len(),
-            42,
-            "appending the decal grows the registry by exactly one"
+            43,
+            "appending ParentJoint grows the registry by exactly one"
         );
     }
 

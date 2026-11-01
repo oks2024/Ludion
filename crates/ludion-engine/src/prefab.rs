@@ -456,6 +456,9 @@ impl PrefabLibrary {
                 Vec::new()
             }
         };
+        diagnostics.extend(crate::parent_joint::scene_parent_joint_diagnostics(
+            &self.root, &body,
+        ));
         // A lint in the body is reported by check-scene on the expanded scene; it must not refuse a spawn.
         diagnostics.retain(|d| d.severity.is_error());
         if !diagnostics.is_empty() {

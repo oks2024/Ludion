@@ -811,6 +811,10 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
         project_root,
         scene,
     ));
+    diagnostics.extend(crate::parent_joint::scene_parent_joint_diagnostics(
+        project_root,
+        scene,
+    ));
     diagnostics.extend(scene_audio_diagnostics(project_root, scene));
     diagnostics.extend(crate::probe_check::scene_probe_diagnostics(scene));
     diagnostics

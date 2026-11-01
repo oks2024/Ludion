@@ -1544,6 +1544,15 @@ pub mod code {
     /// `Animation`'s semantic validator, in files and on the wire; pointer `/hold`.
     pub const ANIMATION_HOLD_ZERO: DiagnosticCode = DiagnosticCode::new("L1317");
 
+    /// `L1318` — a `ParentJoint` component's `Parent` is not a skinned mesh, or the entity has no
+    /// `Parent`. Raised at load, `check-scene` and prefab spawn; pointer
+    /// `/entities/{i}/components/ParentJoint`.
+    pub const PARENT_JOINT_NOT_SKINNED: DiagnosticCode = DiagnosticCode::new("L1318");
+
+    /// `L1319` — a `ParentJoint`'s `joint` names no joint of its parent's mesh document. Pointer
+    /// `/entities/{i}/components/ParentJoint/joint`.
+    pub const PARENT_JOINT_UNKNOWN_JOINT: DiagnosticCode = DiagnosticCode::new("L1319");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7677,6 +7686,35 @@ meaning, so the component is refused rather than read as `1`.
 The JSON Pointer names the field: `/hold`. Fix: a whole number of at least `1`, or remove the field to
 play every tick.",
     },
+    CodeEntry {
+        code: code::PARENT_JOINT_NOT_SKINNED,
+        severity: Severity::Error,
+        title: "ParentJoint's parent is not a skinned mesh",
+        explanation: "\
+A `ParentJoint` component is on an entity whose `Parent` is not a skinned mesh, or that has no
+`Parent` at all.
+
+`ParentJoint` attaches an entity to one joint of its parent's skeleton, so the parent must carry a
+`Mesh` whose `shape` is `asset` naming a mesh document with `joints:`, or `character`, which resolves
+to one (the rule `SkinBone` uses). The message names the reason.
+
+The JSON Pointer names the component: `/entities/{i}/components/ParentJoint`. Fix: point `Parent` at
+the skinned entity, or remove `ParentJoint`.",
+    },
+    CodeEntry {
+        code: code::PARENT_JOINT_UNKNOWN_JOINT,
+        severity: Severity::Error,
+        title: "ParentJoint's joint is not a joint of its parent's skeleton",
+        explanation: "\
+A `ParentJoint` component's `joint` does not name any joint of its parent's mesh document.
+
+The help names the nearest joint name when one is close enough to suggest a typo, or lists every
+joint name the mesh document declares.
+
+The JSON Pointer names the field: `/entities/{i}/components/ParentJoint/joint`. Fix: spell `joint`
+exactly as one of the parent mesh's `joints[].name` entries — `ludion check-scene <mesh> --bounds`
+prints the joint tree.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -10486,6 +10524,8 @@ mod tests {
         code::DOC_SINGLETON_COUNT,
         code::UI_RECT_FILL_IGNORES_PLACEMENT,
         code::ANIMATION_HOLD_ZERO,
+        code::PARENT_JOINT_NOT_SKINNED,
+        code::PARENT_JOINT_UNKNOWN_JOINT,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
