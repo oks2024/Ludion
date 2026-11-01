@@ -1,0 +1,48 @@
+# Feature: sprite self-light — the gallery ship beside its `op: light` twin (`sprites/self-light.atlas.yaml`).
+# - left: `ship`, the plain hull: cockpit and thrusters only recolour their own texels.
+# - right: `ship-lit`, the same rows, palette and colour ops plus a baked light, so the cockpit's cyan lights
+#   the nose and the thrusters' amber lights the rear in `idle`.
+# Each quad's size derives from its 16x12 region at 16 px/unit; `Transform.scale` 4 fills the frame.
+# Orthographic, unlit, no post-process and no Environment: what lands on screen is the baked atlas.
+format: 1
+name: "sprite-self-light - Sprite: baked self-light vs plain ship"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 6.0
+  - name: ship
+    components:
+      Transform:
+        translation:
+          - -2.2
+          - 0.0
+          - 0.0
+        scale:
+          - 4.0
+          - 4.0
+          - 1.0
+      Sprite:
+        atlas: sprites/self-light.atlas.yaml
+        frame: ship/idle
+  - name: ship-lit
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.0
+          - 0.0
+        scale:
+          - 4.0
+          - 4.0
+          - 1.0
+      Sprite:
+        atlas: sprites/self-light.atlas.yaml
+        frame: ship-lit/idle

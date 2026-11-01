@@ -4766,7 +4766,7 @@ to see what is actually answering.",
 One entry of a sprite document's `effects:` list is not a valid effect.
 
 `effects:` is a fixed, enumerated op set — `gradient`, `outline`, `shade`, `shadow`, `dither`,
-`noise`, `blur`, `glow` — applied in list order at bake time. It is deliberately not an expression language
+`noise`, `blur`, `glow`, `light` — applied in list order at bake time. It is deliberately not an expression language
 and not a node graph (`engine-pillars.md`: Rust is the only Turing-complete layer), so every op has
 a closed parameter set that is checked exactly, and an op the set does not name is an error with a
 nearest-match suggestion rather than a silently ignored entry.
@@ -4782,6 +4782,10 @@ Ramp mode (`mode: ramp` on `shade`/`gradient`, with a signed whole-number `steps
 no `ramps` to step along, a target glyph that is in no ramp, a ramp-mode op placed after a colour-mode
 op (every ramp-mode op comes first; `dither` may sit anywhere), and a colour key (`from`, `to`,
 `blend`, `strength`) on a ramp op (`ludion docs sprite-effects --section \"Ramp mode\"`).
+
+`light` adds its own cases: no source (an empty or unknown `sources` glyph, or no `emissive` glyph in
+the palette), a `radius_px` outside `0 < radius_px <= 32`, `bands: 0`, a negative `steps`, and a
+`strength` or `color` on a ramp-mode light (`ludion docs sprite-effects --section \"Self-light\"`).
 
 The JSON Pointer names the entry and the field: `/effects/2/glyphs/0`, `/effects/0/from`.
 

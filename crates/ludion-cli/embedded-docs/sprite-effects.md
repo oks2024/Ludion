@@ -27,6 +27,7 @@ silently skipped entry. Every op is CPU-baked and deterministic, and every chann
 | `noise` | `amount` (required, `0..=1`) | Per-texel RGB jitter in `[-amount, amount]`, a pure function of `(seed, frame index, x, y, channel)`. Alpha is never jittered — a noisy silhouette is a different sprite |
 | `blur` | `radius` (required, `1..=8` texels) | A box blur — the glow primitive. A wider glow is a second sprite, not a bigger radius |
 | `glow` | `radius_px` (required, `0 < radius_px <= 32`, **fractional**), `strength` (required, `>= 0`), `color` (optional hex) | A soft halo grown **outside** the silhouette, leaving the opaque core crisp. Every transparent texel within `radius_px` of an opaque source texel gains alpha from a parabolic `1 - d²/r²` falloff; the halo's colour is `color` when given, else the contribution-weighted average of the sources' own colours (a red bolt glows red). `strength` scales the accumulated alpha, then it clamps to `0..=1`. Unlike `blur`, `radius_px` is fractional, so a bright 4–8 px core keeps its shape with a soft ring instead of dissolving |
+| `light` | `radius_px` (required, `0 < radius_px <= 32`, fractional), `strength` (required in colour mode, `>= 0`), `color` (optional hex), `sources` (optional glyph list), `bands` (optional, `>= 1`), `mode`, `steps` | Bakes a sprite's **own** glow onto itself — see *Self-light* |
 
 `light` and `offset` are block sequences like every other collection in the strict-YAML subset — a
 flow sequence anywhere in a document is `L1005` (`ludion docs sprite-format --section "Format"`).
@@ -65,6 +66,33 @@ effects:
 
 `hull-ramp.sprite.yaml` and its colour-mode twin `hull-color.sprite.yaml` are the pair
 (`sprite-ramps` gallery scene). `--set`/`--sweep` address `/effects/<i>/steps`.
+
+## Self-light
+
+`op: light` lights a sprite's own opaque texels from its light-source glyphs: every glyph with
+`emissive` above zero in the merged palette, or the glyphs named in `sources:` (none, or an unknown
+glyph, is `L1154`). Receivers are the opaque texels within `radius_px` of a source texel, narrowed by
+`glyphs:`; sources are never changed. The falloff is `glow`'s parabola, and the light follows its source
+glyphs in every frame, so mirrored and patched frames light themselves.
+
+- **Colour mode** adds `strength` × falloff of the light colour: `color` when given, else each source
+  lights in its own colour. Overlapping sources combine per channel by **max**, then add to the texel.
+  `bands: N` quantizes the falloff into N crisp rings.
+- **Ramp mode** (`mode: ramp`, `steps >= 0`) steps receivers up their palette ramp by at most `steps`
+  and repaints from the palette; `strength` and `color` there are `L1154`, and the ramp ordering rule above applies.
+- `emissive` only *selects* sources — it is a render intensity and never scales the bake. No occlusion.
+- Order: after the colour ops it must survive, before `outline`.
+
+```yaml
+effects:
+  - op: light
+    radius_px: 3.5
+    strength: 0.45
+    bands: 3
+```
+
+`ship-lit.sprite.yaml` is the worked example, beside `ship.sprite.yaml` (`sprite-self-light` gallery
+scene). `--set`/`--sweep` address `radius_px`, `strength`, `color`, `bands`, `steps`.
 
 ## The two filters
 

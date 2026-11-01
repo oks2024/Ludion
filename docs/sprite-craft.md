@@ -40,6 +40,13 @@ Declare each run as a **ramp** (`ramps:`, `ludion docs sprite-format --section "
 step along it. Use `mode: ramp` on `shade`/`gradient` when the result must stay on the palette (pixel
 art at native scale); keep colour mode for soft effects and glows, whose blended texels leave it.
 
+## Self-light is not scene light
+
+`op: light` bakes a sprite's own emissive parts (a cockpit, an engine) onto its neighbouring texels.
+Light that comes from the world is `PointLight`/`SpotLight` on a `lit: true` sprite; keep baked light
+there to emissive self-light, or the two stack. Place `light` after the colour ops it must survive and
+before `outline` (`ludion docs sprite-effects --section "Self-light"`).
+
 ## Mnemonic glyphs
 
 Name glyphs so the grid reads without the palette beside it: lowercase is the light shade and

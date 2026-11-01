@@ -1,0 +1,85 @@
+# `ship.sprite.yaml`'s twin with `op: light` added: the cockpit and the thrusters (the palette's emissive
+# glyphs) bake their own glow onto the hull around them, so the nose and the rear read as lit from within.
+# Same palette, rows and gradient/shade/outline; the light sits after the colour ops it must survive and
+# before the outline. The `self-light` atlas holds both ships for side-by-side comparison.
+format: 1
+kind: sprite
+name: ship-lit
+size:
+  - 16
+  - 12
+seed: 4211
+palette:
+  "#":
+    color: "#a0aabc"
+  "=":
+    color: "#4d576a"
+  o:
+    color: "#95edff"
+    emissive: 2.5
+  "*":
+    color: "#ffb359"
+    emissive: 3.0
+frames:
+  idle:
+    rows:
+      - "................"
+      - ".......##......."
+      - "......####......"
+      - "......#oo#......"
+      - ".....##oo##....."
+      - "....=######=...."
+      - "...==######==..."
+      - "..===######===.."
+      - ".====######====."
+      - ".====#*##*#====."
+      - ".===..*..*..===."
+      - "................"
+  bank-left:
+    rows:
+      - "................"
+      - "......##........"
+      - ".....####......."
+      - ".....#oo#......."
+      - "....##oo##......"
+      - "....######......"
+      - "...=######=....."
+      - "..==######==...."
+      - ".===######===..."
+      - ".===#*##*#===..."
+      - ".==..*..*..==..."
+      - "................"
+  bank-right:
+    rows:
+      - "................"
+      - "........##......"
+      - ".......####....."
+      - ".......#oo#....."
+      - "......##oo##...."
+      - "......######...."
+      - ".....=######=..."
+      - "....==######==.."
+      - "...===######===."
+      - "...===#*##*#===."
+      - "...==..*..*..==."
+      - "................"
+effects:
+  - op: gradient
+    glyphs:
+      - "#"
+    from: "#ffffff"
+    to: "#b3b8c8"
+    direction: vertical
+    blend: multiply
+  - op: shade
+    light:
+      - -1.0
+      - -1.0
+    strength: 0.35
+  - op: light
+    radius_px: 3.5
+    strength: 0.45
+    bands: 3
+  - op: outline
+    color: "#303045"
+    side: outside
