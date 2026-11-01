@@ -1555,8 +1555,10 @@ pub mod code {
     /// `/entities/{i}/components/ParentJoint/joint`.
     pub const PARENT_JOINT_UNKNOWN_JOINT: DiagnosticCode = DiagnosticCode::new("L1319");
 
-    /// `L1320` — a prefab instance with `presentation: true` has a part carrying a sim-only
-    /// component. Raised at expansion (load, `check-scene`); pointer `/entities/{i}/presentation`.
+    /// `L1320` — a prefab spawned as presentation has a part carrying a sim-only component. Raised
+    /// at expansion (load, `check-scene`; pointer `/entities/{i}/presentation`) and at a runtime
+    /// presentation spawn (`spawn_prefab(.., true)`, `prefab.spawn` with `presentation: true`;
+    /// pointer `/entities/{k}/components/{Component}`).
     pub const PRESENTATION_INSTANCE_SIM_COMPONENT: DiagnosticCode = DiagnosticCode::new("L1320");
 
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
@@ -7735,10 +7737,12 @@ A prefab instance entry with `presentation: true` spawns every part presentation
 parts carries a component that only the sim reads (a `Collider`, a `Velocity`, a joint, a character
 motor, a path follower, a camera rig, or a component a game marked sim-only). A presentation entity
 is outside the sim's world hash and no sim system can see it, so the component would be dead weight.
-The message names the part and the component; an `overrides` entry that adds the component is caught
-too.
+The message names the part and the component. An `overrides` entry that adds the component to a part
+the key turned presentation is caught; a part the prefab already makes presentation is exempt.
 
-The JSON Pointer names the key: `/entities/{i}/presentation`. Fix: drop `presentation: true` and keep
+Raised at expansion (load, `check-scene`) with the pointer `/entities/{i}/presentation`, and at a
+runtime presentation spawn (`spawn_prefab(.., true)`, `prefab.spawn` with `presentation: true`) with
+the pointer `/entities/{k}/components/{Component}`. Fix: drop `presentation: true` and keep
 the instance sim, or keep the sim part in a separate instance and parent the presentation body to it
 through `overrides` (`Parent` on the body's root part).",
     },
