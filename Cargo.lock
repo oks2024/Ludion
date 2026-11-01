@@ -1620,6 +1620,7 @@ dependencies = [
  "ludion-engine",
  "ludion-physics",
  "ludion-protocol",
+ "ludion-render-graph",
  "ludion-scene",
  "ludion-server",
  "ludion-sim",

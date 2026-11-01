@@ -307,7 +307,7 @@ unsafe fn optional_str_arg(raw: *const c_char, name: &str) -> Result<Option<Stri
 unsafe fn uikit_surface(params: &LudionStartParams) -> Result<Surface, Diagnostic> {
     let view =
         NonNull::new(params.view).ok_or_else(|| invalid("`view` is null for a UIKit surface"))?;
-    let instance = wgpu::Instance::default();
+    let instance = ludion_render_graph::Gpu::instance();
     let target = wgpu::SurfaceTargetUnsafe::RawHandle {
         raw_display_handle: Some(RawDisplayHandle::UiKit(UiKitDisplayHandle::new())),
         raw_window_handle: RawWindowHandle::UiKit(UiKitWindowHandle::new(view)),

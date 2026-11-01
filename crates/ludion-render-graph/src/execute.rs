@@ -144,20 +144,61 @@ fn cook_targets_for(features: wgpu::Features) -> Vec<CookTarget> {
         .collect()
 }
 
+fn instance_with(backends: wgpu::Backends) -> wgpu::Instance {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = backends;
+    wgpu::Instance::new(descriptor.with_env())
+}
+
+/// `(backends, allow_software_fallback)`, tried in order; a `WGPU_BACKEND` pin is the only tier.
+fn headless_tiers(pinned: Option<wgpu::Backends>) -> Vec<(wgpu::Backends, bool)> {
+    match pinned {
+        Some(backends) => vec![(backends, true)],
+        None => vec![
+            (wgpu::Backends::VULKAN | wgpu::Backends::METAL, false),
+            (wgpu::Backends::PRIMARY, true),
+            (wgpu::Backends::all(), true),
+        ],
+    }
+}
+
 impl Gpu {
+    /// The one way any host creates a wgpu instance: `Backends::PRIMARY` (Vulkan, Metal, DX12)
+    /// with the `WGPU_*` environment overrides applied. `Instance::default()` enables every
+    /// backend, so GL's initialisation would be paid by every process; a `WGPU_BACKEND` pin
+    /// replaces the set.
+    ///
+    /// # Example
+    /// ```no_run
+    /// let instance = ludion_render_graph::Gpu::instance();
+    /// // Create a surface on `instance`, then `Gpu::request_for_surface(&instance, &surface)`.
+    /// # drop(instance);
+    /// ```
+    pub fn instance() -> wgpu::Instance {
+        instance_with(wgpu::Backends::PRIMARY)
+    }
+
     /// Requests a headless GPU context.
     ///
-    /// Prefers a high-performance hardware adapter; if none is available it retries allowing a
-    /// fallback (software) adapter, so WARP on Windows and llvmpipe on CI still work. No surface is
-    /// requested — use [`Gpu::request_for_surface`] when the process also presents to a window.
+    /// Tries the native backend first (Vulkan or Metal, hardware adapters only: the cheapest
+    /// start-up), then `Backends::PRIMARY` with a fallback (software) adapter allowed so WARP on
+    /// Windows and llvmpipe on CI still work, then every backend (GL-only machines). A
+    /// `WGPU_BACKEND` pin is the only tier. No surface is requested — use
+    /// [`Gpu::request_for_surface`] when the process also presents to a window.
     ///
     /// # Errors
     /// - `L2003` if no adapter can be found at all (headless environment with no GPU and no
     ///   software rasterizer).
     /// - `L2004` if an adapter was found but the device/queue could not be created.
     pub fn request() -> Result<Gpu, Diagnostic> {
-        let instance = wgpu::Instance::default();
-        Gpu::request_from(&instance, None)
+        let mut last = None;
+        for (backends, allow_fallback) in headless_tiers(wgpu::Backends::from_env()) {
+            match Gpu::request_from(&instance_with(backends), None, allow_fallback) {
+                Err(d) if d.code == code::RENDER_NO_ADAPTER => last = Some(d),
+                other => return other,
+            }
+        }
+        Err(last.expect("headless_tiers is never empty"))
     }
 
     /// Requests a GPU context on an adapter that can present to `surface`.
@@ -165,8 +206,8 @@ impl Gpu {
     /// Identical to [`Gpu::request`] in every other respect — same power preference, same
     /// software-rasterizer retry, same device limits — so a windowed process renders on the adapter
     /// a headless one would have picked whenever that adapter can also present. The caller owns the
-    /// instance and the surface: the surface must be created *before* the device, because the
-    /// adapter choice depends on it.
+    /// instance (build it with [`Gpu::instance`]) and the surface: the surface must be created
+    /// *before* the device, because the adapter choice depends on it.
     ///
     /// # Errors
     /// - `L2003` if no adapter compatible with `surface` can be found.
@@ -175,15 +216,17 @@ impl Gpu {
         instance: &wgpu::Instance,
         surface: &wgpu::Surface<'_>,
     ) -> Result<Gpu, Diagnostic> {
-        Gpu::request_from(instance, Some(surface))
+        Gpu::request_from(instance, Some(surface), true)
     }
 
     /// The one adapter-selection and device-creation path, shared by [`Gpu::request`] and
-    /// [`Gpu::request_for_surface`]; `compatible_surface` is the only thing that differs between
-    /// them, so the two shells cannot drift.
+    /// [`Gpu::request_for_surface`]; `compatible_surface` and `allow_fallback` are the only things
+    /// that differ between them, so the two shells cannot drift. Without `allow_fallback` a
+    /// software adapter counts as none (`L2003`), so the caller can widen the backend set.
     fn request_from(
         instance: &wgpu::Instance,
         compatible_surface: Option<&wgpu::Surface<'_>>,
+        allow_fallback: bool,
     ) -> Result<Gpu, Diagnostic> {
         ludion_core::require_gpu::assert_gpu_allowed();
         let (adapter, via_fallback) = pollster::block_on(async {
@@ -196,7 +239,14 @@ impl Gpu {
                 })
                 .await;
             match high_perf {
+                Ok(adapter)
+                    if !allow_fallback
+                        && adapter.get_info().device_type == wgpu::DeviceType::Cpu =>
+                {
+                    Err("only a software adapter is available on these backends".to_string())
+                }
                 Ok(adapter) => Ok((adapter, false)),
+                Err(error) if !allow_fallback => Err(error.to_string()),
                 Err(_) => instance
                     .request_adapter(&wgpu::RequestAdapterOptions {
                         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -205,7 +255,8 @@ impl Gpu {
                         ..Default::default()
                     })
                     .await
-                    .map(|adapter| (adapter, true)),
+                    .map(|adapter| (adapter, true))
+                    .map_err(|error| error.to_string()),
             }
         })
         .map_err(|error| {
@@ -1210,6 +1261,22 @@ fn build_pipelines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headless_tiers_try_native_hardware_first_and_a_pin_alone() {
+        assert_eq!(
+            headless_tiers(None),
+            vec![
+                (wgpu::Backends::VULKAN | wgpu::Backends::METAL, false),
+                (wgpu::Backends::PRIMARY, true),
+                (wgpu::Backends::all(), true),
+            ]
+        );
+        assert_eq!(
+            headless_tiers(Some(wgpu::Backends::DX12)),
+            vec![(wgpu::Backends::DX12, true)]
+        );
+    }
 
     /// A shared context reads the original's fault sink: one handler per device, two views of it.
     #[test]

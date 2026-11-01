@@ -348,7 +348,7 @@ impl App {
         );
         let inner = window.inner_size();
 
-        let instance = wgpu::Instance::default();
+        let instance = ludion_render_graph::Gpu::instance();
         let surface = instance.create_surface(window.clone()).map_err(|e| {
             unavailable(format!(
                 "could not create a GPU surface for the window: {e}"

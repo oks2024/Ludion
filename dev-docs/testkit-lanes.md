@@ -88,7 +88,7 @@ numbers.
   `ludion-server::phase10` — and never reproduced across ~170 targeted executions, including the
   `gpu` group raised to 8 and 32. Any wave that adds a shader or pipeline shifts the test schedule
   and will look guilty: do not accept a small stash/restore A/B as proof of a regression, and do
-  not lower the `gpu` group's `max-threads = 4` in `.config/nextest.toml` in response. A third
+  not lower the `gpu` group's `max-threads = 8` in `.config/nextest.toml` in response. A third
   sighting needs a crash dump: set `HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps`
   with `DumpType=2` (requires admin) — one dump names the faulting module and settles whether this
   is the DX12 driver, wgpu, or engine code.

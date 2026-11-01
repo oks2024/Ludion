@@ -73,6 +73,9 @@ winit = { workspace = true, optional = true }
 # the C ABI uses for a UIKit view; the engine builds its renderer on the device that surface chose.
 # Always in the tree already through `ludion-engine`.
 wgpu = { workspace = true }
+# The one wgpu-instance constructor every host uses (`Gpu::instance`). Already in the tree through
+# `ludion-engine`.
+ludion-render-graph = { path = "../ludion-render-graph", version = "0.1.0" }
 # The playback sink (Phase 8 Wave 4). The facade wires the engine's audio-event sender to this sink;
 # the engine itself never depends on it (audio stays a downstream leaf — architecture §2).
 ludion-audio = { path = "../ludion-audio", version = "0.1.0" }

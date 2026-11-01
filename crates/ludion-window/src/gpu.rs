@@ -61,7 +61,7 @@ impl Presenter {
     /// - `L2003` if no GPU adapter compatible with the surface is available.
     /// - `L2004` if the adapter is found but a device/queue cannot be created.
     pub fn new(window: Arc<Window>) -> Result<Presenter, Diagnostic> {
-        let instance = wgpu::Instance::default();
+        let instance = Gpu::instance();
         let size = window.inner_size();
 
         let surface = instance.create_surface(window).map_err(|e| {

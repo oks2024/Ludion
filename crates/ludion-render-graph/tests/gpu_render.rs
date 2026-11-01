@@ -83,6 +83,23 @@ fn gpu_or_skip(test: &str) -> Option<Gpu> {
     }
 }
 
+/// The headless request lands on a native backend: an `all()` regression would silently re-add GL's
+/// start-up cost, and a backend switch would move goldens.
+#[test]
+fn needs_gpu_request_uses_a_primary_backend() {
+    if std::env::var_os("WGPU_BACKEND").is_some() {
+        return;
+    }
+    let Some(gpu) = gpu_or_skip("request_uses_a_primary_backend") else {
+        return;
+    };
+    assert!(
+        matches!(gpu.adapter_backend(), "Vulkan" | "Dx12" | "Metal"),
+        "headless request picked {}",
+        gpu.adapter_backend()
+    );
+}
+
 /// **Phase 2 determinism criterion.** Rendering the same graph twice in one process produces
 /// byte-identical pixels.
 #[test]

@@ -40,9 +40,9 @@ final-status-level = "slow"
 # subprocess that does (`ludion render`, `ludion test`, `ludion serve`, a spawned game binary).
 # Unbounded concurrency here means N simultaneous devices, N pipeline sets and N font atlases: a
 # real VRAM and driver-contention risk on the pinned GPUs, and outright hostile to CI's fallback
-# software adapters (WARP / llvmpipe). Four is comfortably above the longest GPU test's serial cost
-# and far below anything a 24 GB card or an M4 notices.
-gpu = { max-threads = 4 }
+# software adapters (WARP / llvmpipe). Eight ran soak passes with no device-lost: per-test GPU time
+# grows about 1.5x, wall still falls, and the longest single test becomes the tail.
+gpu = { max-threads = 8 }
 
 # Tests whose assertions are measured against the wall clock. A saturated box makes these lie, and
 # a timing test that lies is a P0 flake. Mutual exclusion is the cheap fix — the group is tiny.
