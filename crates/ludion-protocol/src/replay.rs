@@ -745,6 +745,15 @@ impl<'a> ReplayReader<'a> {
             .collect()
     }
 
+    /// How many non-keyframe records precede the first keyframe (all of them when there is none);
+    /// the index in [`deltas`](Self::deltas) where the post-keyframe records begin. Decodes nothing.
+    pub fn deltas_before_first_keyframe(&self) -> usize {
+        self.scan()
+            .iter()
+            .take_while(|raw| raw.kind != KIND_KEYFRAME)
+            .count()
+    }
+
     /// Finds the latest keyframe at or before `target` and the deltas that reach `target` from it.
     ///
     /// The deltas are the command/input records written after the chosen keyframe in the stream
@@ -1625,6 +1634,40 @@ mod tests {
             .collect();
         assert_eq!(expected.len(), 2);
         assert_eq!(reader.deltas().unwrap(), expected);
+    }
+
+    #[test]
+    fn deltas_before_first_keyframe_counts_the_leading_deltas() {
+        let build = |keyframe_at: Option<usize>| {
+            let mut buffer = Vec::new();
+            let mut writer = ReplayWriter::new(&mut buffer, &header()).unwrap();
+            for i in 0..4usize {
+                if keyframe_at == Some(i) {
+                    writer
+                        .write_keyframe(FrameIndex::new(0), &serde_json::json!({ "k": 0 }))
+                        .unwrap();
+                }
+                writer
+                    .write_command(FrameIndex::new(i as u64), &Command::SimResume)
+                    .unwrap();
+            }
+            writer.into_inner().unwrap();
+            buffer
+        };
+        let with = build(Some(2));
+        assert_eq!(
+            ReplayReader::new(&with)
+                .unwrap()
+                .deltas_before_first_keyframe(),
+            2
+        );
+        let without = build(None);
+        assert_eq!(
+            ReplayReader::new(&without)
+                .unwrap()
+                .deltas_before_first_keyframe(),
+            4
+        );
     }
 
     #[test]

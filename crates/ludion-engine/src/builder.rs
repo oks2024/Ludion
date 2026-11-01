@@ -101,6 +101,7 @@ pub struct EngineBuilder {
     project_root: PathBuf,
     save_root: Option<PathBuf>,
     profile_persistence: bool,
+    profile_off_disk: bool,
     observe_load: bool,
     category_gains: CategoryGains,
     plane: Plane,
@@ -133,6 +134,7 @@ impl EngineBuilder {
             project_root: PathBuf::from("."),
             save_root: None,
             profile_persistence: false,
+            profile_off_disk: false,
             observe_load: false,
             category_gains: CategoryGains::default(),
             plane: Plane::default(),
@@ -182,6 +184,14 @@ impl EngineBuilder {
     #[must_use]
     pub fn persist_profile(mut self) -> Self {
         self.profile_persistence = true;
+        self
+    }
+
+    /// Makes every profile install read the recording or the default, never `save/profile.yaml`.
+    /// Replay-only (`prepare_replay`), so a replay never depends on the developer's save.
+    #[must_use]
+    pub(crate) fn replay_profile(mut self) -> Self {
+        self.profile_off_disk = true;
         self
     }
 
@@ -809,6 +819,7 @@ impl EngineBuilder {
         engine.save_root = self.save_root;
         // Before `install_profile`: the boot load decides on it whether an unloadable save is renamed.
         engine.profile_persistence = self.profile_persistence;
+        engine.profile_off_disk = self.profile_off_disk;
         engine.category_gains = self.category_gains;
         // Set before the mirror: `install_plane` copies the field onto the world, and every later
         // world (re)build re-runs it.

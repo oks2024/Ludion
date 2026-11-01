@@ -2,7 +2,7 @@
 //! root's file docs, takes the same checks, lives for the engine, and travels in a recording.
 
 use ludion_core::time::FrameIndex;
-use ludion_engine::{DocStore, Engine, EngineBuilder, replay_hashes_with};
+use ludion_engine::{DocStore, Engine, EngineBuilder, replay_hashes_with, verify_replay_keyframes};
 use ludion_protocol::command::{AssetReloadParams, EngineRestoreParams, SimStepParams};
 use ludion_protocol::replay::{ReplayReader, ReplayRecord};
 use ludion_protocol::{Command, ResponseBody};
@@ -210,4 +210,75 @@ fn asset_reload_leaves_a_doc_text_override_in_place() {
         .unwrap();
     assert_eq!(store(&engine).get(KEY).unwrap().damage, 99.0);
     assert_eq!(store(&engine).generation(), 0);
+}
+
+const LIVE_KEY: &str = "weapons/axe.yaml";
+
+fn apply_live_weapon(world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {
+    let damage = world
+        .resource::<DocStore<Weapon>>()
+        .and_then(|store| store.get(LIVE_KEY))
+        .map(|weapon| weapon.damage);
+    if let Some(damage) = damage {
+        for (readout,) in world.query::<(&mut DamageReadout,)>() {
+            readout.value = damage;
+        }
+    }
+}
+
+/// A replay that skips keyframes (the plain drive) must classify a `DocReload` exactly as the
+/// keyframe-decoding verify does: ahead of the first keyframe it is a builder doc, after it a live
+/// reload applied at its place in the stream.
+#[test]
+fn skipping_keyframes_classifies_doc_reloads_like_keeping_them() {
+    let dir = fresh_dir("classify");
+    write(&dir, KEY, FILE_DOC);
+    write(&dir, LIVE_KEY, FILE_DOC);
+    let game = |root: &Path| {
+        Engine::builder()
+            .components(|reg| reg.register::<DamageReadout>("DamageReadout"))
+            .system("apply_live_weapon", apply_live_weapon)
+            .doc_kind::<Weapon>("weapon")
+            .project_root(root)
+    };
+    let sink = SharedSink::default();
+    let mut engine = game(&dir).doc_text(KEY, TEXT_DOC).build().unwrap();
+    engine.load_inline_scene(SCENE).unwrap();
+    engine.set_recording(sink.clone()).unwrap();
+    let mut original = vec![(engine.frame(), engine.world_hash().unwrap())];
+    original.push(step(&mut engine));
+    write(&dir, LIVE_KEY, "format: 1\nkind: weapon\ndamage: 5.0\n");
+    engine
+        .execute(Command::AssetReload(AssetReloadParams {
+            path: Some(LIVE_KEY.to_string()),
+        }))
+        .unwrap();
+    original.push(step(&mut engine));
+    original.push(step(&mut engine));
+    engine.stop_recording().unwrap();
+    let bytes = sink.bytes();
+
+    let records = ReplayReader::new(&bytes).unwrap().records().unwrap();
+    let first_keyframe = records
+        .iter()
+        .position(|r| matches!(r, ReplayRecord::Keyframe { .. }))
+        .unwrap();
+    let reloads: Vec<usize> = records
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| matches!(r, ReplayRecord::DocReload { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(reloads.len(), 2, "one inline doc and one live reload");
+    assert!(reloads[0] < first_keyframe && first_keyframe < reloads[1]);
+
+    // The file on disk is back to its boot text, so only a correctly classified live reload
+    // moves the hash at frame 1.
+    write(&dir, LIVE_KEY, FILE_DOC);
+    let skipped = replay_hashes_with(game(&dir), &bytes, &dir).unwrap();
+    assert_eq!(original, skipped);
+    let kept = verify_replay_keyframes(game(&dir), &bytes, &dir).unwrap();
+    assert!(kept.keyframes >= 1);
+    assert_eq!(kept.verified, kept.keyframes);
+    assert!(kept.divergence.is_none());
 }

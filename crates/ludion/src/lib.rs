@@ -447,7 +447,8 @@ pub(crate) struct RunArgs {
 /// frame and every dimensionless `render.screenshot` is produced at that extent, so it is the one
 /// knob that shrinks readback, encode, socket write, decode and blit together. It is spelled
 /// `--render-size` rather than `--width`/`--height` because those two are `--replay-frames`'s. The
-/// extent is render-only — no `WorldHash`, snapshot or recording moves with it — but **a game's mouse
+/// extent is sim input (`RenderExtent`): a recording carries it in its header and every applied
+/// `render.size`, and a game that never reads it hashes identically at every extent — but **a game's mouse
 /// input arrives as render-target pixels**, so a session played at one extent is a different input
 /// trace from the same session played at another. Each replays bit-identically; they are not
 /// comparable with each other. Committed golden-session recordings are made at the default extent:

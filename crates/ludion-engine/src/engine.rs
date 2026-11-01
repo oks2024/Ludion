@@ -196,6 +196,11 @@ pub struct Engine {
     /// which hosts anyone's scene and so skips a foreign `kind:` (an `L1155` in
     /// [`doc_skip_warnings`](Engine::doc_skip_warnings)) where a game's engine fails the boot on it.
     pub(crate) game_doc_kinds: bool,
+    /// The docs the builder holds as text ([`EngineBuilder::doc_text`](crate::EngineBuilder::doc_text)),
+    /// keyed like the content-root walk. Merged over the walk by every
+    /// [`prepare_docs`](crate::docs::prepare_docs), so they outlive `scene.load`, restore and district
+    /// rebuilds; a disk reload of their key is ignored.
+    pub(crate) doc_texts: BTreeMap<String, crate::docs::InlineDoc>,
     /// The game's registered resource movers, in registration order
     /// ([`EngineBuilder::carry_resource`](crate::EngineBuilder::carry_resource)). Run by
     /// [`commit_world`](Engine::commit_world) on a switch alone — a scene switch is the one world rebuild
@@ -693,6 +698,7 @@ impl Engine {
             doc_kinds,
             doc_validators: Vec::new(),
             game_doc_kinds: false,
+            doc_texts: BTreeMap::new(),
             resource_carriers: Vec::new(),
             doc_validation_warnings: Vec::new(),
             doc_skip_warnings: Vec::new(),
@@ -2487,7 +2493,8 @@ impl Engine {
     /// # Errors
     /// Every diagnostic the content-root walk collected: `L1101` for an unreadable file,
     /// `L1119`/`L1120` for a malformed doc (fail-fast across all files), `L1119` for an unregistered
-    /// `kind`; then every `Error` a registered validation pass reported (typically `L1144`).
+    /// `kind`; then every `Error` a registered validation pass reported (typically `L1144`), the
+    /// engine's `L1315` singleton count first.
     /// Before any of that, `L1257` for a registered doc or profile type that declares a top-level
     /// `format`/`kind` field.
     pub(crate) fn install_docs(&mut self) -> Result<(), Vec<Diagnostic>> {
@@ -2501,6 +2508,7 @@ impl Engine {
             &self.doc_kinds,
             self.game_doc_kinds,
             &self.doc_validators,
+            &self.doc_texts,
             &[],
             self.driver.world_mut(),
         )?;
@@ -2524,6 +2532,7 @@ impl Engine {
             &self.doc_kinds,
             self.game_doc_kinds,
             &self.doc_validators,
+            &self.doc_texts,
             reloads,
             world,
         )
@@ -2689,9 +2698,13 @@ impl Engine {
     /// # Errors
     /// `L100x` if the edited doc fails to parse as strict-subset YAML at all, `L1119`/`L1120` if it
     /// parses but is malformed, and any `Error` the registered validators report after the swap that
-    /// they did not report before it (`L1144`, `L1149`–`L1152`, a game's own codes) — each a diagnosed
+    /// they did not report before it (`L1144`, `L1149`–`L1152`, `L1315` for a second doc of a
+    /// `doc_singleton` kind, a game's own codes) — each a diagnosed
     /// error, never a crash or a silent skip; the store keeps its previous contents and generation (a
     /// bad save mid-tune must not wipe state), and nothing is armed for recording.
+    ///
+    /// A key the builder holds as [`doc_text`](crate::EngineBuilder::doc_text) is never reloaded
+    /// from disk (`Ok(None)`): the override wins for the engine's life.
     pub(crate) fn reload_doc_from_disk(&mut self, path: &str) -> Result<Option<u64>, Diagnostic> {
         if self.doc_kinds.is_empty() {
             return Ok(None);
@@ -2699,6 +2712,9 @@ impl Engine {
         let Some((key, source)) = crate::docs::resolve_doc_path(&self.project_root, path) else {
             return Ok(None);
         };
+        if self.doc_texts.contains_key(&key) {
+            return Ok(None);
+        }
         let peeked = crate::docs::peek_reload_kind(&key, &source)?;
         let kind = match peeked {
             Some(kind) if self.doc_kinds.iter().any(|dk| dk.kind == kind) => kind,
@@ -2711,13 +2727,21 @@ impl Engine {
         let fields = crate::docs::check_reload(doc_kinds, &kind, &key, &source)
             .map_err(crate::commands::collapse)?;
         let validators = &self.doc_validators;
-        let before =
-            crate::docs::run_validators(validators, &self.project_root, self.driver.world());
+        let before = crate::docs::run_validators(
+            doc_kinds,
+            validators,
+            &self.project_root,
+            self.driver.world(),
+        );
         let world = self.driver.world_mut();
         let (document, undo) = crate::docs::apply_reload(doc_kinds, world, &kind, &key, fields)
             .map_err(crate::commands::collapse)?;
-        let reported =
-            crate::docs::run_validators(validators, &self.project_root, self.driver.world());
+        let reported = crate::docs::run_validators(
+            doc_kinds,
+            validators,
+            &self.project_root,
+            self.driver.world(),
+        );
         // An error the swap introduced refuses it: the old document goes back before anything is
         // logged, armed or reported. An error that was already there still prints and applies.
         let introduced: Vec<Diagnostic> = reported
@@ -4429,6 +4453,8 @@ impl Engine {
         let writer = ReplayWriter::new(Box::new(sink) as Box<dyn Write + Send>, &header)
             .map_err(io_to_diagnostic)?;
         let mut recorder = Recorder::new(writer, KEYFRAME_INTERVAL, self.frame());
+        crate::recording::write_inline_docs(&mut recorder, self.frame(), &self.doc_texts)
+            .map_err(io_to_diagnostic)?;
         let snapshot = crate::snapshot::capture(self)?;
         crate::recording::write_keyframe(&mut recorder, self.frame(), &snapshot)
             .map_err(io_to_diagnostic)?;

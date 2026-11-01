@@ -9330,8 +9330,8 @@ A write to the replay sink failed mid-session — the sink itself failed (L3010)
 its replay ceiling (L3017) — so the engine stopped recording. The command that triggered the write
 still applied; only the recording ended.
 
-The `.lrp` is valid up to the last successful write: everything before the last keyframe written
-before the failure replays. `Engine::stop_recording` returns this diagnostic once; a second call is
+The `.lrp` is valid up to the last whole record: everything written before the failure replays,
+and a torn final record is dropped with L3052. `Engine::stop_recording` returns this diagnostic once; a second call is
 `Ok`. The message names the frame the recording died at and the underlying cause.
 
 Fix: remove the cause (free disk space, record a smaller scene) and re-record.",
