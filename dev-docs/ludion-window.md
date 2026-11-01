@@ -31,9 +31,9 @@ frame-streaming wire format itself to `frame-streaming`, the protocol/`Client` S
   and `gamepad` stay public as its building blocks.
 - `crates/ludion-window/src/keymap.rs` — physical keycode → the wire's `input.inject` key-event
   shape (`KeyMapper::map`). Stateful only to fold left/right Shift/Ctrl/Alt into one key;
-  `release_modifiers` frees held ones on window focus loss.
+  `KeyMapper::release_held` frees every held key on window focus loss.
 - `crates/ludion-window/src/mouse.rs` — cursor-position → render-target-space mapping
-  (`map_cursor_to_frame`) plus mouse button/wheel → wire event `Value`s.
+  (`map_cursor_to_frame`; `window_to_surface` first scales a window beyond the surface cap) plus mouse button/wheel → wire event `Value`s.
 - `crates/ludion-window/src/gamepad.rs` — `gilrs` axis/button → wire `gamepad_*` event `Value`s
   (pure mapping; capture itself happens in `lib.rs`'s gamepad thread).
 - `ludion_core::letterbox` — the letterbox geometry math shared by the presenter and the cursor
@@ -59,8 +59,8 @@ frame-streaming wire format itself to `frame-streaming`, the protocol/`Client` S
 - **`run` must be called on the process's main thread.** Winit requires the event loop to own it;
   `ludion dev --window` structures its process around this, supervising the child from a worker
   thread (see its module docs for exactly which thread does what).
-- **The stream thread owns the one fatal path.** Only a *permanent* connection loss (the reconnect
-  give-up budget exhausted) or a fatal schema/version mismatch ends the loop with an `Err`; the
+- **The stream thread owns the one fatal path.** Only a fatal schema/version mismatch ends the
+  loop with an `Err` (a lost connection is retried while the window is open); the
   input and gamepad threads are always best-effort and never end the loop themselves — a dropped
   input event during a blink is simply lost, correctly, since the sim is down anyway.
 - **A schema/version mismatch is the one connect error treated as fatal on sight**
@@ -84,8 +84,8 @@ control to `event_loop.run_app`:
   frame stores it in a shared `Arc<Mutex<Option<Arc<DecodedFrame>>>>` slot and wakes the event loop
   via `EventLoopProxy::send_event(FrameReady)`. On a dropped connection it flags `Reconnecting`
   (title changes to "… — reconnecting…"), retries with exponential backoff (100ms → 2s ceiling,
-  30s cumulative give-up budget — sized so a same-port `ludion dev` blink, typically 1–3s, is
-  invisible and only a genuinely dead server times out), and flags `Reconnected` once frames resume.
+  endless — a same-port `ludion dev` blink, typically 1–3s, is invisible, and a dead server is waited
+  out), and flags `Reconnected` once frames resume.
 - **Input thread** — owns a second `Client`; drains one shared channel that already carries
   pre-built `input.inject` event `Value`s from *all* input sources (keyboard, mouse, gamepad — see
   Gotchas) and forwards each as `Command::InputInject`. Reconnects lazily: a dropped connection just
@@ -136,15 +136,14 @@ goldens already cover; this crate's own tests are headless (`run_frame_stream` d
   supervised child would make the window die and reopen on every reload; the persistent window
   lives in the `dev` process itself and reconnects across the child's same-port restart instead.
   Don't expect `--window` on the child side to do anything in dev mode.
-- **A permanently lost connection ends the whole `dev` session.** If the window's connection is
-  lost for good (give-up budget exhausted, or a fatal schema mismatch), `run` returns the
-  diagnostic, the supervisor is signalled and joined, and the child is stopped — a window failure is
-  not a silent fallback to headless supervision.
-- **The reconnect give-up budget (30s) bounds *connection outage*, not build time.** During a long
-  rebuild the *old* child is still serving, so the stream never drops and the budget is never
-  touched; only the gap between the old child's shutdown and the new child's listen counts. A slow
-  `cargo build` and the 30s budget don't fight each other — don't raise the budget to "fix" a slow
-  build.
+- **The window rides any outage while `dev` supervises.** A lost connection, including a child
+  that cannot boot, leaves the window open and flagged "— reconnecting…" until the next good save
+  relaunches the child. Only a fatal schema mismatch or the supervisor ending (dev stops, Ctrl-C,
+  or a supervisor panic) closes it; a window failure is not a silent fallback to headless
+  supervision.
+- **Reconnect time is never build time.** During a long rebuild the *old* child is still serving, so
+  the stream never drops; only the gap between the old child's shutdown and the new child's listen
+  is an outage.
 - **Multi-pad setups only ever drive the first-seen connected gamepad.** A second pad's events are
   silently ignored (`gamepad.rs`); this is a recorded scope limit (`Plan/phase-13-input.md`), not a
   bug to chase.

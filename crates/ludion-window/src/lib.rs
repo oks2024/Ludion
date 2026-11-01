@@ -25,8 +25,9 @@
 //!   with lossy latest-wins delivery, decodes each frame's QOI payload, and drops it into a shared
 //!   latest-wins slot — then wakes the event loop through an [`EventLoopProxy`] so it repaints. It
 //!   **survives a lost connection**: on a drop it holds the last frame, flags the window title, and
-//!   re-subscribes with bounded backoff (the `reconnect` module), giving up only after a long
-//!   outage. This is what lets the window ride `ludion dev`'s reload blink on the same port.
+//!   re-subscribes with backoff (the `reconnect` module), for as long as the window is open. This is
+//!   what lets the window ride `ludion dev`'s reload blink, or a child that fails to boot, on the
+//!   same port.
 //! - **The input thread** owns a second `Client` and forwards mapped input events — keyboard edges
 //!   from the event loop, mouse edges from the event loop, gamepad samples from the gamepad thread,
 //!   all pre-built `input.inject` event `Value`s sharing one channel — as `input.inject` commands. It
@@ -42,9 +43,8 @@
 //! - **A small waiter thread** blocks on the caller's `stop` receiver and, when it fires, asks the
 //!   event loop to exit — this is how a host wires Ctrl-C.
 //!
-//! Closing the window or firing `stop` ends the loop cleanly (no `process::exit`); a *permanently*
-//! lost connection (the reconnect budget exhausted, or a fatal schema mismatch) ends it too, with the
-//! diagnostic. Every thread is then joined with bounded waits before [`run`] returns.
+//! Closing the window or firing `stop` ends the loop cleanly (no `process::exit`); a lost connection
+//! does not end it, but a fatal schema mismatch does, with the diagnostic. Every thread is then joined with bounded waits before [`run`] returns.
 //!
 //! The [`host_input`] router is public because the `ludion` facade's in-process present host calls
 //! the same device-event → `input.inject`-event path directly, without going through a `Client` — so
@@ -132,16 +132,16 @@ pub struct WindowOptions {
     pub height: u32,
 }
 
-/// Opens the viewer window and runs it until the window is closed, `stop` fires, or the server
-/// connection is lost.
+/// Opens the viewer window and runs it until the window is closed, `stop` fires, or a schema
+/// mismatch is seen. A lost connection is retried for as long as the window is open.
 ///
 /// **Must be called on the process's main thread** (a winit requirement). Blocks for the lifetime of
 /// the window. The `stop` receiver is the host's shutdown hook: sending `()` (or dropping every
 /// sender) asks the window to close cleanly, the same way clicking the close button does.
 ///
 /// # Errors
-/// - The connection's diagnostic (typically `L3009`) if the server cannot be reached at startup or
-///   the connection drops while the window is open.
+/// - The handshake's diagnostic (`L3003`, schema mismatch) if a different engine build is on
+///   the port; an unreachable or dropped server is retried, never an error.
 /// - `L2007` if a window / GPU surface could not be created, `L2003` if no compatible GPU adapter is
 ///   available, `L2004` if the GPU device could not be created.
 ///
@@ -185,6 +185,8 @@ pub fn run(options: WindowOptions, stop: Receiver<()>) -> Result<(), Diagnostic>
         input: HostInput::default(),
         presenter: None,
         window: None,
+        window_size: (0, 0),
+        redraw_after_reconfigure: false,
         fatal: None,
     };
     let loop_result = event_loop.run_app(&mut app);
@@ -220,8 +222,7 @@ enum UserEvent {
     Reconnecting,
     /// The stream reconnected and resubscribed; restore the title.
     Reconnected,
-    /// A connection was *permanently* lost (reconnect budget exhausted, or a fatal schema mismatch).
-    /// Carries the diagnostic to surface.
+    /// The stream hit a fatal schema mismatch. Carries the diagnostic to surface.
     ConnectionLost(Diagnostic),
     /// The caller's `stop` fired; exit the loop cleanly.
     Shutdown,
@@ -236,6 +237,11 @@ struct App {
     input: HostInput,
     presenter: Option<Presenter>,
     window: Option<Arc<Window>>,
+    /// The window's inner size in physical pixels; the surface may be smaller (the texture cap).
+    window_size: (u32, u32),
+    /// Set when a reconfigure requested a redraw, cleared by the next successful draw, so a surface
+    /// that stays lost reconfigures without spinning the loop.
+    redraw_after_reconfigure: bool,
     /// Set when a fatal error (lost connection, out-of-memory) ends the loop; becomes `run`'s `Err`.
     fatal: Option<Diagnostic>,
 }
@@ -270,23 +276,38 @@ impl App {
             return;
         };
         let frame = self.slot.lock().expect("frame slot poisoned").clone();
-        match presenter.render(frame.as_deref()) {
-            Ok(()) => {}
-            Err(RenderError::Reconfigure) => presenter.reconfigure(),
+        match presenter.render(frame) {
+            Ok(()) => self.redraw_after_reconfigure = false,
+            Err(RenderError::Reconfigure) => {
+                presenter.reconfigure();
+                if !self.redraw_after_reconfigure {
+                    self.redraw_after_reconfigure = true;
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
             Err(RenderError::Fatal(diagnostic)) => self.fail(event_loop, diagnostic),
         }
     }
 }
 
-/// Maps a cursor position in window-surface physical pixels to render-target pixels, against the
-/// presenter's current surface size and the latest decoded frame's size — the same two dimensions
-/// [`App::redraw`] letterboxes against. `None` before a window/presenter exists or before any frame
-/// has been decoded yet.
-fn map_cursor(presenter: Option<&Presenter>, slot: &FrameSlot, x: f32, y: f32) -> Option<[f32; 2]> {
+/// Maps a cursor position in window physical pixels to render-target pixels: first into the
+/// presenter's surface space (the surface is capped below an oversized window), then through the
+/// letterbox against the latest decoded frame's size — the same dimensions [`App::redraw`] draws
+/// with. `None` before a window/presenter exists or before any frame has been decoded yet.
+fn map_cursor(
+    presenter: Option<&Presenter>,
+    slot: &FrameSlot,
+    window_size: (u32, u32),
+    x: f32,
+    y: f32,
+) -> Option<[f32; 2]> {
     let (surface_w, surface_h) = presenter?.size();
     let frame = slot.lock().expect("frame slot poisoned").clone()?;
+    let cursor = mouse::window_to_surface((x, y), window_size, (surface_w, surface_h));
     mouse::map_cursor_to_frame(
-        (x, y),
+        cursor,
         frame.width,
         frame.height,
         surface_w,
@@ -325,6 +346,8 @@ impl ApplicationHandler<UserEvent> for App {
         match Presenter::new(window.clone()) {
             Ok(presenter) => {
                 self.presenter = Some(presenter);
+                let size = window.inner_size();
+                self.window_size = (size.width, size.height);
                 self.window = Some(window);
             }
             Err(diagnostic) => self.fail(event_loop, diagnostic),
@@ -354,6 +377,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
+                self.window_size = (size.width, size.height);
                 if let Some(presenter) = self.presenter.as_mut() {
                     presenter.resize(size.width, size.height);
                 }
@@ -364,7 +388,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             event => self.input.route(
                 &event,
-                |x, y| map_cursor(self.presenter.as_ref(), &self.slot, x, y),
+                |x, y| map_cursor(self.presenter.as_ref(), &self.slot, self.window_size, x, y),
                 // Best-effort: if the input thread has gone, the game just stops receiving
                 // input — never a reason to tear the window down.
                 |value| {

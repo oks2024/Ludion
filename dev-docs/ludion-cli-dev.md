@@ -97,8 +97,9 @@ so its `clock` module carries the one documented denylist `allow`.
 **`--window`** hosts one persistent native window *in the dev process itself* across every restart:
 the supervision loop moves to a worker thread so winit keeps the main thread, and the window connects
 to the first child's concrete `ws://` URL. Every reload rebinds that URL, so the window rides the
-blink via `ludion-window`'s bounded reconnect. The child is always headless — launching it with
+blink via `ludion-window`'s endless reconnect. The child is always headless — launching it with
 `--window` would make the window die and reopen every reload. The blink is shutdown + boot + restore, so
 a slow rebuild never lengthens it: the old child serves until the build has succeeded and its snapshot
-is on disk, which is why dev's build time and the window's ~30 s give-up budget never fight. A child
-that cannot boot leaves the window nothing to reconnect to; it closes after the budget, which ends dev.
+is on disk, which is why dev's build time and the window's reconnect never fight. A child that
+cannot boot leaves the window open, flagged "— reconnecting…", until the next good save relaunches
+it; the window closes when dev stops.

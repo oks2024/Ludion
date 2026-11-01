@@ -34,11 +34,11 @@ pub struct DecodedFrame {
 /// rejects, an LZ4 block that fails to decompress or decompresses to a length other than
 /// `width * height * 4`, or a raw payload whose length is not exactly that. The code matches the one
 /// `ludion-client` already uses for malformed/unknown frame content.
-pub(crate) fn decode_frame(frame: &ReceivedFrame) -> Result<DecodedFrame, Diagnostic> {
+pub(crate) fn decode_frame(frame: ReceivedFrame) -> Result<DecodedFrame, Diagnostic> {
     match frame.header.format {
         FrameFormat::Qoi => decode_qoi(&frame.payload),
         FrameFormat::Lz4Rgba => decode_lz4(&frame.payload, frame.header.width, frame.header.height),
-        FrameFormat::RawRgba => decode_raw(&frame.payload, frame.header.width, frame.header.height),
+        FrameFormat::RawRgba => decode_raw(frame.payload, frame.header.width, frame.header.height),
     }
 }
 
@@ -94,7 +94,7 @@ fn decode_lz4(payload: &[u8], width: u32, height: u32) -> Result<DecodedFrame, D
 /// its length agrees with the header's dimensions before it is handed on as an image. A short or
 /// long payload is rejected rather than padded or truncated — the header and the bytes disagreeing
 /// is a framing bug, and a silently padded frame would show as garbage rows instead of an error.
-fn decode_raw(payload: &[u8], width: u32, height: u32) -> Result<DecodedFrame, Diagnostic> {
+fn decode_raw(payload: Vec<u8>, width: u32, height: u32) -> Result<DecodedFrame, Diagnostic> {
     let expected = width as usize * height as usize * 4;
     if payload.len() != expected {
         return Err(Diagnostic::new(
@@ -108,7 +108,7 @@ fn decode_raw(payload: &[u8], width: u32, height: u32) -> Result<DecodedFrame, D
     Ok(DecodedFrame {
         width,
         height,
-        rgba: payload.to_vec(),
+        rgba: payload,
     })
 }
 
@@ -154,7 +154,7 @@ mod tests {
             100, 110, 120, 255,
         ];
         let payload = qoi::encode_to_vec(&src, 2, 2).unwrap();
-        let decoded = decode_frame(&received(FrameFormat::Qoi, payload, 2, 2)).unwrap();
+        let decoded = decode_frame(received(FrameFormat::Qoi, payload, 2, 2)).unwrap();
         assert_eq!(decoded.width, 2);
         assert_eq!(decoded.height, 2);
         assert_eq!(decoded.rgba, src);
@@ -171,7 +171,7 @@ mod tests {
             100, 110, 120, 255,
         ];
         let payload = lz4_flex::block::compress(&src);
-        let decoded = decode_frame(&received(FrameFormat::Lz4Rgba, payload, 2, 2)).unwrap();
+        let decoded = decode_frame(received(FrameFormat::Lz4Rgba, payload, 2, 2)).unwrap();
         assert_eq!(decoded.width, 2);
         assert_eq!(decoded.height, 2);
         assert_eq!(decoded.rgba, src);
@@ -187,7 +187,7 @@ mod tests {
             70, 80, 90, 255, //
             100, 110, 120, 255,
         ];
-        let decoded = decode_frame(&received(FrameFormat::RawRgba, src.clone(), 2, 2)).unwrap();
+        let decoded = decode_frame(received(FrameFormat::RawRgba, src.clone(), 2, 2)).unwrap();
         assert_eq!(decoded.width, 2);
         assert_eq!(decoded.height, 2);
         assert_eq!(decoded.rgba, src);
@@ -198,16 +198,16 @@ mod tests {
         // One pixel of payload against 2x2 dimensions (16 bytes expected): a raw payload that
         // under-fills what its header promises must be rejected, never zero-padded.
         let short =
-            decode_frame(&received(FrameFormat::RawRgba, vec![1, 2, 3, 4], 2, 2)).unwrap_err();
+            decode_frame(received(FrameFormat::RawRgba, vec![1, 2, 3, 4], 2, 2)).unwrap_err();
         assert_eq!(short.code, code::PROTOCOL_MALFORMED_FRAME);
         // And an over-long one is equally a disagreement, not a frame with slack to ignore.
-        let long = decode_frame(&received(FrameFormat::RawRgba, vec![0; 20], 2, 2)).unwrap_err();
+        let long = decode_frame(received(FrameFormat::RawRgba, vec![0; 20], 2, 2)).unwrap_err();
         assert_eq!(long.code, code::PROTOCOL_MALFORMED_FRAME);
     }
 
     #[test]
     fn rejects_garbage_lz4_payload() {
-        let err = decode_frame(&received(FrameFormat::Lz4Rgba, vec![0xff; 16], 1, 1)).unwrap_err();
+        let err = decode_frame(received(FrameFormat::Lz4Rgba, vec![0xff; 16], 1, 1)).unwrap_err();
         assert_eq!(err.code, code::PROTOCOL_MALFORMED_FRAME);
     }
 
@@ -216,13 +216,13 @@ mod tests {
         // Compress a payload for one pixel (4 bytes) but claim 2x2 dimensions (16 bytes expected):
         // a block that under-fills what its header promises must be rejected, not zero-padded.
         let payload = lz4_flex::block::compress(&[1, 2, 3, 4]);
-        let err = decode_frame(&received(FrameFormat::Lz4Rgba, payload, 2, 2)).unwrap_err();
+        let err = decode_frame(received(FrameFormat::Lz4Rgba, payload, 2, 2)).unwrap_err();
         assert_eq!(err.code, code::PROTOCOL_MALFORMED_FRAME);
     }
 
     #[test]
     fn rejects_garbage_payload() {
-        let err = decode_frame(&received(FrameFormat::Qoi, vec![1, 2, 3, 4, 5], 1, 1)).unwrap_err();
+        let err = decode_frame(received(FrameFormat::Qoi, vec![1, 2, 3, 4, 5], 1, 1)).unwrap_err();
         assert_eq!(err.code, code::PROTOCOL_MALFORMED_FRAME);
     }
 
@@ -230,7 +230,7 @@ mod tests {
     fn expands_rgb_to_opaque_rgba() {
         let src = vec![1, 2, 3, 4, 5, 6]; // two RGB pixels
         let payload = qoi::encode_to_vec(&src, 2, 1).unwrap();
-        let decoded = decode_frame(&received(FrameFormat::Qoi, payload, 2, 1)).unwrap();
+        let decoded = decode_frame(received(FrameFormat::Qoi, payload, 2, 1)).unwrap();
         assert_eq!(decoded.rgba, vec![1, 2, 3, 255, 4, 5, 6, 255]);
     }
 }

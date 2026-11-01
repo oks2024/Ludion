@@ -865,12 +865,11 @@ fn run_headless(
 /// Windowed dev (`--window`): host one persistent window on the main thread while the supervision
 /// loop runs on a worker thread. The window connects to the first child's concrete `ws://` URL and,
 /// because every reload rebinds that same URL, rides each reload's blink via `ludion-window`'s
-/// bounded reconnect. The blink is shutdown → boot → restore (seconds); a slow rebuild does not
-/// lengthen it because the *old* child keeps serving until the build has succeeded and its snapshot
-/// is on disk — so dev's build time and the window's reconnect give-up budget never fight (see
-/// `ludion-window`'s `reconnect` module docs). A child that cannot boot leaves the window with
-/// nothing to reconnect to; it gives up after its budget (~30 s) and closes, which stops dev. The
-/// snapshot stays on disk.
+/// reconnect. The blink is shutdown → boot → restore (seconds); a slow rebuild does not lengthen it
+/// because the *old* child keeps serving until the build has succeeded and its snapshot is on disk.
+/// A child that cannot boot leaves the window showing "— reconnecting…" until the next good save
+/// relaunches it; the window closes when dev stops (the supervisor ending closes it). The snapshot
+/// stays on disk.
 fn run_windowed(
     project: PathBuf,
     addr: String,
@@ -893,7 +892,11 @@ fn run_windowed(
     // Supervision moves to a worker thread so the main thread can host winit (its event loop must
     // live on the main thread). The worker owns the child + both watchers and prints the same status
     // lines.
+    let close_window = CloseOnDrop(window_stop_tx.clone());
     let supervisor = std::thread::spawn(move || {
+        // Dropped last, on any exit including a panic: the window follows the supervisor down. An
+        // explicit send, because the Ctrl-C fan-out holds the other senders for the process lifetime.
+        let _close_window = close_window;
         let mut child = child;
         let mut watches = watches;
         supervise_loop(
@@ -930,6 +933,15 @@ fn run_windowed(
             eprintln!("{diagnostic}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Closes the viewer window when dropped, so the supervisor thread ending for any reason ends it.
+struct CloseOnDrop(Sender<()>);
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.try_send(());
     }
 }
 

@@ -57,8 +57,8 @@ state `failed` (with the `L0013` and `snapshot`), and keeps watching. Fix the ca
 reload launches and restores the kept snapshot. The boot scene is not loaded when the snapshot
 restores, so a component it uses that you renamed or removed does not fail the boot: the restore drops
 it and reports it (`L3015`, below). With
-`--window` the window gives up reconnecting after ~30 s without a child and closes, which ends `dev`;
-the snapshot stays on disk.
+`--window` the window stays open, flagged "— reconnecting…", until the next good save relaunches
+the child; it closes when `dev` stops. The snapshot stays on disk.
 
 **A child that cannot hand over its world is replaced, never kept.** Every call `dev` makes has a
 timeout. A child that has exited, or that does not answer `engine.snapshot` within 10 s (a system

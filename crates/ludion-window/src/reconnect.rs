@@ -7,16 +7,12 @@
 //! factored out of the window's stream thread so it can be exercised without opening a window (the
 //! integration test drives it against a real `ludion serve` it kills and restarts).
 //!
-//! # Bounds (the build-vs-blink reasoning)
+//! # Bounds
 //!
-//! Retries start quick (the same-port blink is ~1–3 s) and back off, giving up only after
-//! [`GIVE_UP_BUDGET`] of *continuous* failure — a genuinely dead server, not a reload. This budget
-//! is deliberately about **connection** duration, not build duration: during a long rebuild (even a
-//! cold one over 30 s) the *old* child is still serving, so the stream never drops and the budget is
-//! never touched; the socket only drops for the seconds between the old child's shutdown and the new
-//! child's listen. So a slow build and a short give-up budget do not fight — the window gives up only
-//! when nothing is listening for [`GIVE_UP_BUDGET`], which under `ludion dev` means the supervisor
-//! itself failed, not that a build is slow.
+//! Retries start quick (the same-port blink is ~1–3 s), double up to a 2 s ceiling, and continue
+//! forever while the caller keeps running: the viewer's owner (under `ludion dev`, the supervisor)
+//! decides when the session ends, and a child that cannot boot is something to wait out, not a reason
+//! to close the window.
 //!
 //! A schema/version mismatch is the one connect error treated as fatal on sight ([`is_fatal`]): it
 //! means a *different engine build* is now on the port, never a transient blink, so retrying would
@@ -36,49 +32,37 @@ use crate::frame::{DecodedFrame, decode_frame};
 const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(100);
 /// The ceiling each backoff step approaches, so late retries stay responsive without busy-spinning.
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(2);
-/// Total cumulative retry wait before giving up and surfacing the connection as permanently lost.
-/// See the module docs: this bounds *connection outage*, not build time.
-const GIVE_UP_BUDGET: Duration = Duration::from_secs(30);
 /// How long one streaming read (or one slice of a backoff sleep) blocks before re-checking the
 /// caller's stop signal, so teardown never waits longer than this on a quiet stream or a long sleep.
 const STREAM_POLL: Duration = Duration::from_millis(200);
 
-/// An exponential backoff with a give-up budget. Pure and clock-free (it only produces the *sequence*
-/// of sleep durations and decides when to stop), so the schedule is unit-testable without sleeping.
+/// An exponential backoff, endless. Pure and clock-free (it only produces the *sequence* of sleep
+/// durations), so the schedule is unit-testable without sleeping.
 pub(crate) struct Backoff {
     /// The delay the next failure will hand out.
     delay: Duration,
-    /// Cumulative delay already handed out this outage — compared against [`GIVE_UP_BUDGET`].
-    spent: Duration,
 }
 
 impl Backoff {
-    /// A fresh schedule, starting at [`INITIAL_RETRY_DELAY`] with an empty spend.
+    /// A fresh schedule, starting at [`INITIAL_RETRY_DELAY`].
     pub(crate) fn new() -> Backoff {
         Backoff {
             delay: INITIAL_RETRY_DELAY,
-            spent: Duration::ZERO,
         }
     }
 
-    /// The delay to wait before the next reconnect attempt, or `None` once the cumulative wait has
-    /// reached [`GIVE_UP_BUDGET`] — at which point the caller treats the connection as permanently
-    /// lost. Each call doubles the delay (capped at [`MAX_RETRY_DELAY`]) and adds it to the spend.
-    pub(crate) fn next_delay(&mut self) -> Option<Duration> {
-        if self.spent >= GIVE_UP_BUDGET {
-            return None;
-        }
+    /// The delay to wait before the next reconnect attempt. Each call doubles the delay, capped at
+    /// [`MAX_RETRY_DELAY`].
+    pub(crate) fn next_delay(&mut self) -> Duration {
         let delay = self.delay;
-        self.spent += delay;
         self.delay = (self.delay * 2).min(MAX_RETRY_DELAY);
-        Some(delay)
+        delay
     }
 
-    /// Resets the schedule after a successful (re)connect, so a later outage gets the full budget
-    /// and the quick first retries again.
+    /// Resets the schedule after a successful (re)connect, so a later outage starts with the quick
+    /// first retries again.
     pub(crate) fn reset(&mut self) {
         self.delay = INITIAL_RETRY_DELAY;
-        self.spent = Duration::ZERO;
     }
 }
 
@@ -107,8 +91,8 @@ pub trait StreamSink {
 }
 
 /// Runs the reconnecting frame stream against `url`, driving `sink`, until `sink.keep_running()`
-/// goes false (returns `None`, a clean stop) or the connection is *permanently* lost — the give-up
-/// budget is exhausted, or a fatal schema mismatch is seen (returns `Some(diagnostic)`).
+/// goes false (returns `None`, a clean stop) or a fatal schema mismatch is seen (returns
+/// `Some(diagnostic)`). A lost connection is retried forever.
 ///
 /// On every successful (re)establish it resets the backoff and calls [`StreamSink::reconnected`]; on
 /// a drop it silently re-establishes (flagging [`StreamSink::reconnecting`] only once it actually has
@@ -127,13 +111,8 @@ pub fn run_frame_stream(url: &str, sink: &impl StreamSink) -> Option<Diagnostic>
                     return Some(diagnostic); // a different engine build: never a retry.
                 }
                 sink.reconnecting();
-                match backoff.next_delay() {
-                    Some(delay) => {
-                        interruptible_sleep(delay, sink);
-                        continue 'reconnect;
-                    }
-                    None => return Some(diagnostic), // gave up after the outage budget.
-                }
+                interruptible_sleep(backoff.next_delay(), sink);
+                continue 'reconnect;
             }
         };
         backoff.reset();
@@ -148,7 +127,7 @@ pub fn run_frame_stream(url: &str, sink: &impl StreamSink) -> Option<Diagnostic>
             match client.next_frame(STREAM_POLL) {
                 Ok(Some(received)) => {
                     // A malformed frame is dropped; latest-wins means the next good one lands.
-                    if let Ok(decoded) = decode_frame(&received) {
+                    if let Ok(decoded) = decode_frame(received) {
                         sink.frame(decoded);
                     }
                 }
@@ -224,58 +203,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backoff_starts_quick_then_doubles_to_the_ceiling() {
+    fn backoff_starts_quick_then_doubles_to_the_ceiling_forever() {
         let mut backoff = Backoff::new();
-        assert_eq!(backoff.next_delay(), Some(Duration::from_millis(100)));
-        assert_eq!(backoff.next_delay(), Some(Duration::from_millis(200)));
-        assert_eq!(backoff.next_delay(), Some(Duration::from_millis(400)));
-        assert_eq!(backoff.next_delay(), Some(Duration::from_millis(800)));
-        assert_eq!(backoff.next_delay(), Some(Duration::from_millis(1600)));
-        // Capped at the ceiling from here on.
-        assert_eq!(backoff.next_delay(), Some(MAX_RETRY_DELAY));
-        assert_eq!(backoff.next_delay(), Some(MAX_RETRY_DELAY));
+        for ms in [100, 200, 400, 800, 1600] {
+            assert_eq!(backoff.next_delay(), Duration::from_millis(ms));
+        }
+        // Capped at the ceiling from here on, with no end.
+        for _ in 0..1000 {
+            assert_eq!(backoff.next_delay(), MAX_RETRY_DELAY);
+        }
     }
 
     #[test]
-    fn backoff_gives_up_after_the_budget_and_covers_a_multi_second_blink_first() {
+    fn reset_restarts_the_quick_sequence() {
         let mut backoff = Backoff::new();
-        let mut total = Duration::ZERO;
-        let mut steps = 0u32;
-        while let Some(delay) = backoff.next_delay() {
-            total += delay;
-            steps += 1;
-            assert!(steps < 100, "backoff must terminate well within 100 steps");
-        }
-        // It kept retrying until at least the give-up budget of cumulative wait.
-        assert!(
-            total >= GIVE_UP_BUDGET,
-            "must retry for at least the give-up budget, got {total:?}",
-        );
-        // And the first few retries alone cover a several-second same-port blink.
-        let mut quick = Backoff::new();
-        let mut early = Duration::ZERO;
-        for _ in 0..5 {
-            early += quick.next_delay().expect("early retries exist");
-        }
-        assert!(
-            early >= Duration::from_secs(3),
-            "the first five retries should span a multi-second blink, got {early:?}",
-        );
-    }
-
-    #[test]
-    fn reset_restores_the_full_budget_and_quick_start() {
-        let mut backoff = Backoff::new();
-        // Burn most of the budget.
         for _ in 0..30 {
             backoff.next_delay();
         }
         backoff.reset();
-        assert_eq!(
-            backoff.next_delay(),
-            Some(INITIAL_RETRY_DELAY),
-            "after a successful reconnect the schedule starts over",
-        );
+        assert_eq!(backoff.next_delay(), INITIAL_RETRY_DELAY);
+        assert_eq!(backoff.next_delay(), INITIAL_RETRY_DELAY * 2);
     }
 
     #[test]

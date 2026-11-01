@@ -54,6 +54,27 @@ pub fn map_cursor_to_frame(
     Some([x, y])
 }
 
+/// Scales a cursor position from window physical pixels into the surface's pixel space. The
+/// surface is the window's size capped at the texture limit, so above it the two differ; equal sizes
+/// map to the identity. A zero window side returns the cursor unscaled (nothing to scale against).
+pub fn window_to_surface(
+    cursor: (f32, f32),
+    window: (u32, u32),
+    surface: (u32, u32),
+) -> (f32, f32) {
+    let scale = |value: f32, window: u32, surface: u32| {
+        if window == 0 {
+            value
+        } else {
+            value * surface as f32 / window as f32
+        }
+    };
+    (
+        scale(cursor.0, window.0, surface.0),
+        scale(cursor.1, window.1, surface.1),
+    )
+}
+
 /// Builds the `input.inject` event `Value` for a new mouse position, in the Wave 1 pinned shape:
 /// `{"kind": "mouse_move", "position_bits": [<u32>, <u32>]}`.
 pub fn mouse_move_event(position: [f32; 2]) -> serde_json::Value {
@@ -130,6 +151,32 @@ pub fn mouse_wheel_event(delta: MouseScrollDelta) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_to_surface_is_the_identity_at_equal_sizes() {
+        assert_eq!(
+            window_to_surface((12.5, 40.0), (800, 600), (800, 600)),
+            (12.5, 40.0)
+        );
+    }
+
+    #[test]
+    fn window_to_surface_scales_a_window_beyond_the_surface_cap() {
+        let (window, surface) = ((10240, 2160), (8192, 1728));
+        assert_eq!(
+            window_to_surface((10240.0, 2160.0), window, surface),
+            (8192.0, 1728.0)
+        );
+        assert_eq!(
+            window_to_surface((5120.0, 1080.0), window, surface),
+            (4096.0, 864.0)
+        );
+    }
+
+    #[test]
+    fn window_to_surface_leaves_a_zero_window_side_unscaled() {
+        assert_eq!(window_to_surface((3.0, 4.0), (0, 0), (8, 8)), (3.0, 4.0));
+    }
 
     #[test]
     fn exact_aspect_scales_uniformly_with_no_bars() {

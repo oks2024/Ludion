@@ -48,6 +48,8 @@ pub(crate) struct Presenter {
     /// The format each frame's swapchain view is created with: the sRGB variant of the surface's.
     view_format: wgpu::TextureFormat,
     uploaded: Option<Uploaded>,
+    /// The frame last copied into `uploaded`, so an unchanged frame (a plain redraw) is not re-sent.
+    last_upload: Option<Arc<DecodedFrame>>,
 }
 
 impl Presenter {
@@ -82,6 +84,7 @@ impl Presenter {
             blit,
             view_format: setup.view_format,
             uploaded: None,
+            last_upload: None,
         })
     }
 
@@ -113,9 +116,16 @@ impl Presenter {
     /// retries) and [`RenderError::Fatal`] on an unrecoverable surface failure or a device fault (a
     /// lost device, a GPU validation error). A timed-out or occluded acquire is not an error — the
     /// frame is silently skipped (`Ok`).
-    pub fn render(&mut self, frame: Option<&DecodedFrame>) -> Result<(), RenderError> {
+    pub fn render(&mut self, frame: Option<Arc<DecodedFrame>>) -> Result<(), RenderError> {
         if let Some(frame) = frame {
-            self.upload(frame);
+            let unchanged = self
+                .last_upload
+                .as_ref()
+                .is_some_and(|last| Arc::ptr_eq(last, &frame));
+            if !unchanged {
+                self.upload(&frame);
+                self.last_upload = Some(frame);
+            }
         }
 
         let surface_texture = match self.surface.get_current_texture() {
