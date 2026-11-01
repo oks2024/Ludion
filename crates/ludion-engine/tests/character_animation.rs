@@ -379,6 +379,59 @@ fn a_crossfade_blends_then_lands_exactly_on_the_incoming_clip() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// `set_speed` on every animated entity at gameplay `tick`.
+fn set_speeds(engine: &mut Engine, speed: f32, tick: u64) {
+    let now = SimTime::from_ticks(tick, TickRate::DEFAULT);
+    for (_, (animation,)) in engine
+        .world_mut()
+        .query_ids::<(&mut ludion_engine::Animation,)>()
+    {
+        ludion_engine::set_speed(animation, speed, now);
+    }
+}
+
+/// A speed change between two steps leaves a held pose alone until the next step.
+#[test]
+fn a_set_speed_between_steps_keeps_the_held_skin_pose() {
+    let root = fixture_project("hold-set-speed");
+    let scene = FADE_SCENE.replace("Animation:\n", "Animation:\n        hold: 5\n");
+    let mut engine = engine_at(&root, &scene);
+    let snapshot = palettes_at(&engine, 10);
+    set_speeds(&mut engine, 0.25, 12);
+    for tick in 12..=14 {
+        assert_eq!(palettes_at(&engine, tick), snapshot, "tick {tick}");
+    }
+    let next = palettes_at(&engine, 15);
+    for entity in 0..3 {
+        assert!(
+            !close(&snapshot[entity], &next[entity]),
+            "entity {entity} must step at tick 15"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A speed written every tick still steps the pose only on the grid, mid-crossfade included.
+#[test]
+fn a_set_speed_every_tick_steps_the_skin_pose_only_on_the_grid() {
+    let root = fixture_project("hold-set-speed-every-tick");
+    let scene = FADE_SCENE.replace("Animation:\n", "Animation:\n        hold: 5\n");
+    let mut engine = engine_at(&root, &scene);
+    let mut poses = Vec::new();
+    for tick in 10..25 {
+        set_speeds(&mut engine, if tick % 2 == 0 { 0.5 } else { 2.0 }, tick);
+        poses.push(palettes_at(&engine, tick));
+    }
+    for period in poses.chunks(5) {
+        for pose in period {
+            assert_eq!(pose, &period[0]);
+        }
+    }
+    assert_ne!(poses[0], poses[5]);
+    assert_ne!(poses[5], poses[10]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `hold: 5` on a plain clip and on a mid-crossfade character: ticks 10..=14 pose identically, tick
 /// 15 is the next pose.
 #[test]

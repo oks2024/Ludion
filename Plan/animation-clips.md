@@ -193,7 +193,8 @@ the clip.
     clip clocks and the fade weight at extract, on a global grid (`ticks − ticks % hold`); the default 1
     is byte-identical to today. Events and the ragdoll pose keep the exact tick. **Why:** Clockout 0027,
     stop-motion 'on twos' with crossfades included; per-entity only, no scene-wide resource. Rejected:
-    `pose_hz` (not exact at 60 Hz), per-entity phase.
+    `pose_hz` (not exact at 60 Hz), per-entity phase. `set_speed` between two steps
+    stores the grid tick's clock in the anchor (`grid_ticks`), so the pose moves only on the grid.
 
 ## The formats
 

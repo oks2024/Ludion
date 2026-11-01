@@ -4186,6 +4186,13 @@ pub struct ClipAnchor {
     /// `ticks` × seconds-per-tick (before any character binding speed).
     #[schemars(range(min = 0.0))]
     pub ticks: f64,
+    /// The clip ticks the pose showed at the last grid tick before `frame`, under the speed before the
+    /// change. Written only when `Animation.hold > 1` and `frame` is off the grid; default is none.
+    /// Extract reads it for a held tick before `frame`, so a speed change between two steps leaves the
+    /// pose alone until the next step. (A `hold` changed mid-period leaves it on the old grid until the
+    /// next step.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_ticks: Option<f64>,
 }
 
 /// Switches `animation` to `clip` with a crossfade of `seconds` from what it was playing: the
@@ -4233,7 +4240,8 @@ pub fn crossfade(animation: &mut Animation, clip: &str, seconds: f32, now: Frame
 ///
 /// It takes `now` as [`SimTime`] (`ctx.game_time`), not a frame. It moves the incoming side only:
 /// during a crossfade the outgoing clip keeps the rate and anchor it had when the fade began.
-/// Writing `speed` directly is only right together with a new `started`.
+/// Writing `speed` directly is only right together with a new `started`. Under a `hold`, a call between
+/// two steps changes the pose only from the next step.
 ///
 /// ```
 /// use ludion_core::time::{SimTime, TickRate};
@@ -4257,10 +4265,13 @@ pub fn set_speed(animation: &mut Animation, speed: f32, now: SimTime) {
     if now.ticks() <= animation.started.as_u64() {
         animation.anchor = None;
     } else {
+        let grid = crate::extract::held(animation, now);
+        let grid_ticks = (grid != now).then(|| crate::extract::clip_ticks(animation, grid));
         animation.anchor = Some(ClipAnchor {
             started: animation.started,
             frame: FrameIndex::new(now.ticks()),
             ticks: crate::extract::clip_ticks(animation, now),
+            grid_ticks,
         });
     }
     animation.speed = speed;
@@ -5209,6 +5220,7 @@ mod tests {
             started: FrameIndex(30),
             frame: FrameIndex(50),
             ticks: 15.0,
+            grid_ticks: None,
         };
         let animation = Animation {
             clip: "run".into(),
@@ -5267,6 +5279,87 @@ mod tests {
             let back: Animation = serde_json::from_str(&text).unwrap();
             assert_eq!(back, animation, "tick {n}: {text}");
         }
+        for n in 1..400u64 {
+            let mut animation = Animation {
+                hold: 5,
+                ..playing()
+            };
+            set_speed(&mut animation, 0.5, at(n));
+            let text = serde_json::to_string(&animation).unwrap();
+            let back: Animation = serde_json::from_str(&text).unwrap();
+            assert_eq!(back, animation, "hold 5, tick {n}: {text}");
+        }
+    }
+
+    fn held_pose(animation: &Animation, t: u64) -> f64 {
+        crate::extract::clip_ticks(animation, crate::extract::held(animation, at(t)))
+    }
+
+    #[test]
+    fn set_speed_between_steps_keeps_the_held_pose() {
+        let mut animation = Animation {
+            hold: 5,
+            ..playing()
+        };
+        let pose = held_pose(&animation, 10);
+        set_speed(&mut animation, 0.25, at(12));
+        assert_eq!(animation.anchor.unwrap().grid_ticks, Some(10.0));
+        for t in 12..=14 {
+            assert_eq!(held_pose(&animation, t), pose, "tick {t}");
+        }
+        assert_eq!(held_pose(&animation, 15), 12.0 + 3.0 * 0.25);
+        assert_eq!(crate::extract::clip_ticks(&animation, at(13)), 12.25);
+    }
+
+    #[test]
+    fn set_speed_every_tick_still_steps_on_the_grid() {
+        let mut animation = Animation {
+            hold: 5,
+            ..playing()
+        };
+        let mut exact = 0.0_f64;
+        let mut previous = held_pose(&animation, 0);
+        for t in 1..=40u64 {
+            // The speed in force over tick t - 1 -> t is the one set at t - 1.
+            exact += animation.speed as f64;
+            set_speed(&mut animation, if t % 2 == 0 { 0.5 } else { 2.0 }, at(t));
+            let got = crate::extract::clip_ticks(&animation, at(t));
+            assert!((got - exact).abs() < 1e-9, "tick {t}: {got} vs {exact}");
+            let pose = held_pose(&animation, t);
+            if t % 5 == 0 {
+                assert_ne!(pose, previous, "tick {t} should step");
+            } else {
+                assert_eq!(pose, previous, "tick {t} must not step");
+            }
+            previous = pose;
+        }
+    }
+
+    #[test]
+    fn hold_one_never_writes_grid_ticks() {
+        let mut animation = playing();
+        for t in 1..=20u64 {
+            set_speed(&mut animation, if t % 2 == 0 { 0.5 } else { 2.0 }, at(t));
+            assert_eq!(animation.anchor.unwrap().grid_ticks, None);
+            let json = serde_json::to_value(animation.anchor.unwrap()).unwrap();
+            assert!(json.get("grid_ticks").is_none());
+        }
+    }
+
+    #[test]
+    fn a_crossfade_carries_the_grid_clock_to_the_outgoing_side() {
+        use crate::extract::{clip_elapsed, from_clip_elapsed, held};
+        let mut animation = Animation {
+            hold: 5,
+            ..playing()
+        };
+        let speed_one = clip_elapsed(&playing(), at(10));
+        set_speed(&mut animation, 0.5, at(12));
+        crossfade(&mut animation, "run", 0.25, FrameIndex(13));
+        assert_eq!(
+            from_clip_elapsed(&animation, held(&animation, at(13))).to_bits(),
+            speed_one.to_bits()
+        );
     }
 
     #[test]

@@ -485,6 +485,62 @@ fn a_hold_steps_the_pose_on_a_global_grid() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// `set_speed` on every animated entity at gameplay `tick`.
+fn set_speeds(engine: &mut Engine, speed: f32, tick: u64) {
+    let now = SimTime::from_ticks(tick, TickRate::DEFAULT);
+    for (_, (animation,)) in engine
+        .world_mut()
+        .query_ids::<(&mut ludion_engine::Animation,)>()
+    {
+        ludion_engine::set_speed(animation, speed, now);
+    }
+}
+
+/// A speed change between two steps leaves a held pose alone until the next step.
+#[test]
+fn a_set_speed_between_steps_keeps_the_held_pose() {
+    let root = fixture_project("hold-set-speed");
+    let mut engine = engine_with(&root, HOLD_SCENE);
+    let fives = |engine: &Engine, tick| models(&posed_at(engine, tick))[..2 * PARTS].to_vec();
+    let snapshot = fives(&engine, 10);
+    set_speeds(&mut engine, 0.25, 12);
+    for tick in 12..=14 {
+        assert_eq!(fives(&engine, tick), snapshot, "tick {tick}");
+    }
+    let next = fives(&engine, 15);
+    for entity in [0, PARTS] {
+        assert_ne!(
+            snapshot[entity + 1],
+            next[entity + 1],
+            "entity {entity} must step at tick 15"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A speed written every tick still steps the pose only on the grid, mid-crossfade included.
+#[test]
+fn a_set_speed_every_tick_steps_the_pose_only_on_the_grid() {
+    let root = fixture_project("hold-set-speed-every-tick");
+    let mut engine = engine_with(&root, HOLD_SCENE);
+    let mut poses = Vec::new();
+    for tick in 10..25 {
+        set_speeds(&mut engine, if tick % 2 == 0 { 0.5 } else { 2.0 }, tick);
+        poses.push(models(&posed_at(&engine, tick))[..2 * PARTS].to_vec());
+    }
+    for period in poses.chunks(5) {
+        for pose in period {
+            assert_eq!(pose, &period[0]);
+        }
+    }
+    for pair in [(0, 5), (5, 10)] {
+        for entity in [0, PARTS] {
+            assert_ne!(poses[pair.0][entity + 1], poses[pair.1][entity + 1]);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `hold: 1` and an absent field are the same world: identical poses and an identical hash.
 #[test]
 fn hold_one_is_the_absent_field() {

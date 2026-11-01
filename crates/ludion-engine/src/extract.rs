@@ -4319,9 +4319,32 @@ fn held_for(world: &World, id: EntityId, now: SimTime) -> SimTime {
     get::<Animation>(world, id).map_or(now, |animation| held(animation, now))
 }
 
+/// [`clock_ticks`] as a pose reads it at a held `now`: before the frame of an anchor written between two
+/// grid ticks, the clock is that anchor's `grid_ticks`, the pose the grid tick showed. Exact-tick reads
+/// (`now >= anchor.frame`) never take that branch.
+fn pose_clock_ticks(
+    now: SimTime,
+    started: FrameIndex,
+    speed: f32,
+    anchor: Option<&ClipAnchor>,
+) -> f64 {
+    if let Some(&ClipAnchor {
+        started: s,
+        frame,
+        grid_ticks: Some(grid),
+        ..
+    }) = anchor
+        && s == started
+        && now.ticks() < frame.as_u64()
+    {
+        return grid;
+    }
+    clock_ticks(now, started, speed, anchor)
+}
+
 /// The incoming clip's clock in ticks (before any character binding speed).
 pub(crate) fn clip_ticks(animation: &Animation, now: SimTime) -> f64 {
-    clock_ticks(
+    pose_clock_ticks(
         now,
         animation.started,
         animation.speed,
@@ -4331,22 +4354,22 @@ pub(crate) fn clip_ticks(animation: &Animation, now: SimTime) -> f64 {
 
 /// The incoming clip's elapsed seconds (before any character binding speed).
 pub(crate) fn clip_elapsed(animation: &Animation, now: SimTime) -> f64 {
-    clock_elapsed(
+    pose_clock_ticks(
         now,
         animation.started,
         animation.speed,
         animation.anchor.as_ref(),
-    )
+    ) * now.rate().seconds_per_tick()
 }
 
 /// The outgoing clip's elapsed seconds.
 pub(crate) fn from_clip_elapsed(animation: &Animation, now: SimTime) -> f64 {
-    clock_elapsed(
+    pose_clock_ticks(
         now,
         animation.from_started,
         animation.from_speed,
         animation.from_anchor.as_ref(),
-    )
+    ) * now.rate().seconds_per_tick()
 }
 
 /// Where every part of `assembly` sits inside the assembly's own frame: per part, in authored order,
@@ -6556,6 +6579,7 @@ mod tests {
                 started: FrameIndex::new(10),
                 frame: FrameIndex::new(40),
                 ticks: 30.0,
+                grid_ticks: None,
             };
             let anchored =
                 |started| clock_ticks(at(100), FrameIndex::new(started), 0.5, Some(&anchor));

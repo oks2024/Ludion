@@ -606,6 +606,18 @@ fn ramp(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
     }
 }
 
+/// [`ramp`] at frames 22 and 53, both between two steps of a `hold: 5` grid.
+fn ramp_off_grid(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+    let speed = match ctx.game_frame.as_u64() {
+        22 => 0.5,
+        53 => 3.0,
+        _ => return,
+    };
+    for (_, (animation,)) in world.query_ids::<(&mut Animation,)>() {
+        ludion_engine::set_speed(animation, speed, ctx.game_time);
+    }
+}
+
 /// Speed 0.25 at game frame 60.
 fn slow_at_sixty(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
     if ctx.game_frame.as_u64() == 60 {
@@ -753,6 +765,24 @@ fn set_speed_mid_loop_fires_each_crossing_exactly_once_on_either_side_of_the_wal
                 "{name}: event at {at} fired at {tick}, due {first}: {log:?}"
             );
         }
+    }
+}
+
+/// A `hold` poses on a grid; events stay on the exact tick, so the fired log is the same with and
+/// without one, even when the speed changes between two steps.
+#[test]
+fn a_hold_leaves_the_event_log_on_the_exact_tick_under_an_off_grid_set_speed() {
+    let held = RUN_SCENE.replace("clip: run\n", "clip: run\n        hold: 5\n");
+    assert_ne!(held, RUN_SCENE);
+    for (name, early, late) in [
+        ("ramp-off-grid-early", Some(ramp_off_grid as Driver), None),
+        ("ramp-off-grid-late", None, Some(ramp_off_grid as Driver)),
+    ] {
+        let (mut plain, _) = built(name, RUN_SCENE, early, late);
+        let (mut stepped, _) = built(&format!("{name}-held"), &held, early, late);
+        let plain = log_after(&mut plain, 101);
+        assert!(!plain.is_empty(), "{name}: the run fires events");
+        assert_eq!(log_after(&mut stepped, 101), plain, "{name}");
     }
 }
 
