@@ -41,6 +41,29 @@ pub struct BlendData {
     pub drop_shadows: Vec<Option<EntityId>>,
     /// Keys parallel to [`RenderScene::decals`].
     pub decals: Vec<Option<EntityId>>,
+    /// Instance keys parallel to [`RenderScene::particles`], ascending; empty when uncollected.
+    /// An unsorted or length-mismatched list is treated as unkeyed.
+    pub particles: Vec<InstanceKey>,
+    /// Volley bullets: each key with its index into [`RenderScene::sprites`], ascending by key.
+    /// The matching `sprites` key entries stay `None`.
+    pub bullets: Vec<(InstanceKey, u32)>,
+}
+
+/// The identity of one particle or bullet across ticks.
+///
+/// The field order is the sort order, so continuous particles (`burst == false`) sort before burst
+/// ones, matching emission order. A bullet uses `burst: false` and its index in the volley; a
+/// particle's `index` is its stream index, negative for an endless emitter's past.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct InstanceKey {
+    /// The emitting or firing entity.
+    pub owner: EntityId,
+    /// When the emitter or volley started, in its own units.
+    pub started: u64,
+    /// Whether the particle belongs to a burst stream.
+    pub burst: bool,
+    /// The stream or bullet index.
+    pub index: i64,
 }
 
 /// What [`blend`] needs to re-derive the camera between two ticks.
@@ -64,18 +87,21 @@ pub struct CameraBlend {
 /// described by `next_data`).
 ///
 /// Returns `next.clone()` bit-exactly when `alpha >= 1`, when the epochs differ, or when `prev` holds
-/// no poses. Each keyed item moves by the delta that takes its entity's newer pose to the pose
-/// interpolated (scale and translation lerped, rotation slerped) between the two ticks; a snapped,
-/// newly spawned, unmoved or degenerate key gets no delta. Everything not pose-driven comes from
-/// `next`. A keyed list whose length differs from its scene list is treated as unkeyed.
+/// no poses and no instance keys. Each keyed item moves by the delta that takes its entity's newer
+/// pose to the pose interpolated (scale and translation lerped, rotation slerped) between the two
+/// ticks; a snapped, newly spawned, unmoved or degenerate key gets no delta. A particle or bullet
+/// found in both ticks by [`InstanceKey`] is lerped between its two samples; a birth or death takes
+/// the newer tick. Everything not pose-driven comes from `next`. A keyed list whose length differs
+/// from its scene list is treated as unkeyed.
 ///
 /// ```
 /// use ludion_renderer::{BlendData, RenderScene, blend};
 /// let scene = RenderScene::empty((64, 64));
-/// let out = blend(&BlendData::default(), &scene, &BlendData::default(), 0.5);
+/// let out = blend(&scene, &BlendData::default(), &scene, &BlendData::default(), 0.5);
 /// assert_eq!(out, scene);
 /// ```
 pub fn blend(
+    prev_scene: &RenderScene,
     prev: &BlendData,
     next: &RenderScene,
     next_data: &BlendData,
@@ -86,7 +112,10 @@ pub fn blend(
     } else {
         alpha.clamp(0.0, 1.0)
     };
-    if alpha >= 1.0 || prev.epoch != next_data.epoch || prev.poses.is_empty() {
+    if alpha >= 1.0
+        || prev.epoch != next_data.epoch
+        || (prev.poses.is_empty() && prev.particles.is_empty() && prev.bullets.is_empty())
+    {
         return next.clone();
     }
     let delta = |key: Option<EntityId>| -> Option<Mat4> { delta_for(prev, next_data, key?, alpha) };
@@ -174,6 +203,9 @@ pub fn blend(
         }
     }
 
+    blend_particles(prev_scene, prev, next, next_data, alpha, &mut out);
+    blend_bullets(prev_scene, prev, next_data, alpha, &mut out);
+
     if let (Some(p), Some(n)) = (&prev.camera, &next_data.camera)
         && p.key == n.key
         && next_data.snaps.binary_search(&n.key).is_err()
@@ -194,6 +226,96 @@ pub fn blend(
 }
 
 const DET_EPS: f32 = 1e-12;
+
+fn sorted<T>(list: &[T], key: impl Fn(&T) -> InstanceKey) -> bool {
+    list.windows(2).all(|w| key(&w[0]) < key(&w[1]))
+}
+
+/// Calls `f(prev_index, next_index)` for each key present in both sorted lists, skipping snapped
+/// owners; does nothing when either list is unsorted.
+fn matched<T>(
+    prev: &[T],
+    next: &[T],
+    key: impl Fn(&T) -> InstanceKey,
+    snaps: &[EntityId],
+    mut f: impl FnMut(usize, usize),
+) {
+    if !sorted(prev, &key) || !sorted(next, &key) {
+        return;
+    }
+    let (mut i, mut j) = (0, 0);
+    while i < prev.len() && j < next.len() {
+        let (a, b) = (key(&prev[i]), key(&next[j]));
+        match a.cmp(&b) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                if snaps.binary_search(&b.owner).is_err() {
+                    f(i, j);
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+}
+
+fn blend_particles(
+    prev_scene: &RenderScene,
+    prev: &BlendData,
+    next: &RenderScene,
+    next_data: &BlendData,
+    alpha: f32,
+    out: &mut RenderScene,
+) {
+    if prev.particles.len() != prev_scene.particles.len()
+        || next_data.particles.len() != next.particles.len()
+    {
+        return;
+    }
+    matched(
+        &prev.particles,
+        &next_data.particles,
+        |k| *k,
+        &next_data.snaps,
+        |i, j| {
+            let (a, b) = (&prev_scene.particles[i], &next.particles[j]);
+            let o = &mut out.particles[j];
+            o.center = a.center.lerp(b.center, alpha);
+            o.size = a.size + (b.size - a.size) * alpha;
+            for c in 0..4 {
+                o.color[c] = a.color[c] + (b.color[c] - a.color[c]) * alpha;
+            }
+        },
+    );
+}
+
+fn blend_bullets(
+    prev_scene: &RenderScene,
+    prev: &BlendData,
+    next_data: &BlendData,
+    alpha: f32,
+    out: &mut RenderScene,
+) {
+    let in_range =
+        |list: &[(InstanceKey, u32)], len: usize| list.iter().all(|(_, s)| (*s as usize) < len);
+    if !in_range(&prev.bullets, prev_scene.sprites.len())
+        || !in_range(&next_data.bullets, out.sprites.len())
+    {
+        return;
+    }
+    matched(
+        &prev.bullets,
+        &next_data.bullets,
+        |(k, _)| *k,
+        &next_data.snaps,
+        |i, j| {
+            let a = prev_scene.sprites[prev.bullets[i].1 as usize].center;
+            let o = &mut out.sprites[next_data.bullets[j].1 as usize];
+            o.center = a.lerp(o.center, alpha);
+        },
+    );
+}
 
 /// The keys for a list of `len` items: the parallel list when it matches, otherwise all unkeyed.
 fn keys(list: &[Option<EntityId>], len: usize) -> impl Iterator<Item = Option<EntityId>> + '_ {
@@ -414,17 +536,17 @@ mod tests {
     fn midpoint_lands_halfway() {
         let (_, p) = world(0.0);
         let (s, n) = world(1.0);
-        assert_x(&blend(&p, &s, &n, 0.5), 0.5);
+        assert_x(&blend(&s, &p, &s, &n, 0.5), 0.5);
     }
 
     #[test]
     fn alpha_one_is_next_and_zero_is_previous() {
         let (_, p) = world(0.0);
         let (s, n) = world(1.0);
-        assert_eq!(blend(&p, &s, &n, 1.0), s);
-        assert_eq!(blend(&p, &s, &n, 3.0), s);
-        assert_x(&blend(&p, &s, &n, 0.0), 0.0);
-        assert_x(&blend(&p, &s, &n, -1.0), 0.0);
+        assert_eq!(blend(&s, &p, &s, &n, 1.0), s);
+        assert_eq!(blend(&s, &p, &s, &n, 3.0), s);
+        assert_x(&blend(&s, &p, &s, &n, 0.0), 0.0);
+        assert_x(&blend(&s, &p, &s, &n, -1.0), 0.0);
     }
 
     #[test]
@@ -432,17 +554,17 @@ mod tests {
         let (_, p) = world(0.0);
         let (s, mut n) = world(1.0);
         n.snaps = vec![E1];
-        assert_eq!(blend(&p, &s, &n, 0.5), s);
+        assert_eq!(blend(&s, &p, &s, &n, 0.5), s);
 
         let (_, mut p2) = world(0.0);
         p2.poses = vec![(E2, at(0.0))];
         let (_, n2) = world(1.0);
-        assert_eq!(blend(&p2, &s, &n2, 0.5), s);
+        assert_eq!(blend(&s, &p2, &s, &n2, 0.5), s);
 
         let (_, mut p3) = world(0.0);
         p3.epoch = 0;
         let (_, n3) = world(1.0);
-        assert_eq!(blend(&p3, &s, &n3, 0.5), s);
+        assert_eq!(blend(&s, &p3, &s, &n3, 0.5), s);
     }
 
     #[test]
@@ -453,7 +575,7 @@ mod tests {
         n.meshes.push(None);
         s.meshes[0].color = [0.0, 1.0, 0.0, 1.0];
         s.meshes[0].fade = 0.25;
-        let out = blend(&p, &s, &n, 0.5);
+        let out = blend(&s, &p, &s, &n, 0.5);
         assert_eq!(out.meshes[1], s.meshes[1]);
         assert_eq!(out.meshes[0].color, [0.0, 1.0, 0.0, 1.0]);
         assert_eq!(out.meshes[0].fade, 0.25);
@@ -477,7 +599,7 @@ mod tests {
             meshes: vec![Some(E1)],
             ..BlendData::default()
         };
-        let out = blend(&p, &s, &n, 0.5);
+        let out = blend(&s, &p, &s, &n, 0.5);
         let want = Mat4::from_rotation_y(45f32.to_radians());
         assert!(out.meshes[0].model.abs_diff_eq(want, 1e-5));
         assert!(
@@ -505,7 +627,7 @@ mod tests {
             ground_markers: vec![Some(E1)],
             ..BlendData::default()
         };
-        let out = blend(&p, &s, &n, 0.5);
+        let out = blend(&s, &p, &s, &n, 0.5);
         assert_eq!(out.ground_markers[0].model.x_axis, m.model.x_axis);
         assert_eq!(out.ground_markers[0].model.w_axis.x, 0.5);
     }
@@ -514,7 +636,7 @@ mod tests {
     fn decal_inverse_follows_the_blended_box() {
         let (_, p) = world(0.0);
         let (s, n) = world(1.0);
-        let out = blend(&p, &s, &n, 0.5);
+        let out = blend(&s, &p, &s, &n, 0.5);
         let d = &out.decals[0];
         assert!((d.world_to_box * d.box_to_world).abs_diff_eq(Mat4::IDENTITY, 1e-6));
     }
@@ -539,6 +661,7 @@ mod tests {
     fn camera_midpoint_position_and_fov() {
         let s = RenderScene::empty((64, 64));
         let out = blend(
+            &s,
             &camera_data(0.0, 60.0, E1),
             &s,
             &camera_data(2.0, 90.0, E1),
@@ -554,6 +677,7 @@ mod tests {
     fn a_different_camera_key_takes_next() {
         let s = RenderScene::empty((64, 64));
         let out = blend(
+            &s,
             &camera_data(0.0, 60.0, E1),
             &s,
             &camera_data(2.0, 90.0, E2),
@@ -568,9 +692,88 @@ mod tests {
         let (mut s, mut n) = world(1.0);
         s.meshes.push(mesh(at(1.0)));
         assert_eq!(n.meshes.len(), 1);
-        let out = blend(&p, &s, &n, 0.5);
+        let out = blend(&s, &p, &s, &n, 0.5);
         assert_eq!(out.meshes, s.meshes);
         n.meshes.clear();
-        assert_eq!(blend(&p, &s, &n, 0.5).meshes, s.meshes);
+        assert_eq!(blend(&s, &p, &s, &n, 0.5).meshes, s.meshes);
+    }
+
+    fn key(owner: EntityId, index: i64) -> InstanceKey {
+        InstanceKey {
+            owner,
+            started: 0,
+            burst: false,
+            index,
+        }
+    }
+
+    fn particle(x: f32, alpha: f32) -> crate::scene::ParticleInstance {
+        crate::scene::ParticleInstance {
+            center: Vec3::new(x, 0.0, 0.0),
+            right: Vec3::X,
+            up: Vec3::Y,
+            size: 1.0,
+            color: [1.0, 1.0, 1.0, alpha],
+            softness: 0.0,
+            additive: false,
+        }
+    }
+
+    fn particles(items: &[(InstanceKey, f32, f32)]) -> (RenderScene, BlendData) {
+        let mut s = RenderScene::empty((64, 64));
+        let mut d = BlendData {
+            epoch: 1,
+            ..BlendData::default()
+        };
+        for (k, x, a) in items {
+            s.particles.push(particle(*x, *a));
+            d.particles.push(*k);
+        }
+        (s, d)
+    }
+
+    #[test]
+    fn particles_found_in_both_ticks_lerp_and_births_deaths_step() {
+        let (ps, pd) = particles(&[(key(E1, 4), 0.0, 1.0), (key(E1, 5), 0.0, 1.0)]);
+        let (ns, nd) = particles(&[(key(E1, 5), 1.0, 0.0), (key(E1, 6), 3.0, 1.0)]);
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        assert_eq!(out.particles.len(), 2);
+        assert_eq!(out.particles[0].center.x, 0.5);
+        assert_eq!(out.particles[0].color[3], 0.5);
+        assert_eq!(out.particles[1], ns.particles[1]);
+        assert_eq!(blend(&ps, &pd, &ns, &nd, 1.0), ns);
+    }
+
+    #[test]
+    fn a_snapped_or_unsorted_particle_list_is_untouched() {
+        let (ps, pd) = particles(&[(key(E1, 5), 0.0, 1.0)]);
+        let (ns, mut nd) = particles(&[(key(E1, 5), 1.0, 1.0)]);
+        nd.snaps = vec![E1];
+        assert_eq!(blend(&ps, &pd, &ns, &nd, 0.5), ns);
+
+        let (ps, pd) = particles(&[(key(E1, 6), 0.0, 1.0), (key(E1, 5), 0.0, 1.0)]);
+        let (ns, nd) = particles(&[(key(E1, 5), 1.0, 1.0)]);
+        assert_eq!(blend(&ps, &pd, &ns, &nd, 0.5), ns);
+    }
+
+    #[test]
+    fn a_bullet_sprite_lerps_and_an_entity_sprite_does_not() {
+        let build = |x: f32| {
+            let mut s = RenderScene::empty((64, 64));
+            s.sprites.push(sprite(Vec3::new(x, 0.0, 0.0)));
+            s.sprites.push(sprite(Vec3::new(x, 1.0, 0.0)));
+            let d = BlendData {
+                epoch: 1,
+                sprites: vec![None, None],
+                bullets: vec![(key(E1, 0), 1)],
+                ..BlendData::default()
+            };
+            (s, d)
+        };
+        let (ps, pd) = build(0.0);
+        let (ns, nd) = build(2.0);
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        assert_eq!(out.sprites[1].center.x, 1.0);
+        assert_eq!(out.sprites[0], ns.sprites[0]);
     }
 }

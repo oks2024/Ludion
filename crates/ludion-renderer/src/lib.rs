@@ -76,7 +76,7 @@ mod voxel_bake;
 mod shader_gen;
 mod smaa_lut;
 
-pub use blend::{BlendData, CameraBlend, blend};
+pub use blend::{BlendData, CameraBlend, InstanceKey, blend};
 pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
 pub use debug_view::{DebugView, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE};

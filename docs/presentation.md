@@ -94,8 +94,8 @@ entities:
 
 A window draws from a presenter thread at the display's refresh rate; the sim never waits on it. By default each tick's image is drawn once and repeated. `Engine::builder().present_interpolation(true)` instead draws every refresh blended between the last two ticks (the window lags up to one tick). Render-only: the sim, `WorldHash`, replays, screenshot, stream and goldens never blend.
 
-- **Blends:** the pose of meshes, sprites, lights, text, ground markers, drop-shadow anchors, decals, and the camera's pose and field of view.
-- **Takes the newer tick:** fade, visibility, materials, UI, particles, bullets, animation.
+- **Blends:** the pose of meshes, sprites, lights, text, ground markers, drop-shadow anchors, decals, and the camera's pose and field of view; particles (position, size, colour) and volley bullets (position), matched across ticks by a stable per-instance key. Births and deaths still appear at a tick.
+- **Takes the newer tick:** fade, visibility, materials, UI, animation (clips and skinned poses stay stepped).
 - **Snaps:** a spawn, `teleport_character`, `snap_rig`, a scene load, switch or restore, and a re-based or skipped tick.
 - **A hand-written teleport** (writing `Transform` far from last tick) slides unless you `world.insert(id, NoInterpolate)` in the tick that writes it. Children follow; the marker lasts one tick and is never hashed.
 

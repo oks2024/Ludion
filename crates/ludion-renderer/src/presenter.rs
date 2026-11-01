@@ -216,7 +216,7 @@ fn run_loop(
     mut trace: Option<PresentTrace>,
 ) {
     let mut current: Option<PresentPacket> = None;
-    let mut prev_blend: Option<Arc<BlendData>> = None;
+    let mut prev_blend: Option<(Arc<RenderScene>, Arc<BlendData>)> = None;
     // The last drawn frame, and whether it was drawn at alpha 1 (a settled image needs no redraw).
     let mut drawn: Option<(FrameIndex, bool)> = None;
     let mut dead = false;
@@ -252,17 +252,17 @@ fn run_loop(
         let mut failure = None;
         if let Some(cur) = current.as_ref() {
             let blending = match (&prev_blend, &cur.blend) {
-                (Some(prev), Some(next)) => {
+                (Some((prev_scene, prev)), Some(next)) => {
                     let alpha = alpha_at(Instant::now(), cur.tick);
-                    (alpha < 1.0).then_some((prev, next, alpha))
+                    (alpha < 1.0).then_some((prev_scene, prev, next, alpha))
                 }
                 _ => None,
             };
             let settled = blending.is_none();
             if !(settled && drawn == Some((cur.frame, true))) {
                 let result = match blending {
-                    Some((prev, next, alpha)) => backend.render(&PresentPacket {
-                        scene: Arc::new(blend(prev, &cur.scene, next, alpha)),
+                    Some((prev_scene, prev, next, alpha)) => backend.render(&PresentPacket {
+                        scene: Arc::new(blend(prev_scene, prev, &cur.scene, next, alpha)),
                         ..cur.clone()
                     }),
                     None => backend.render(cur),
@@ -308,15 +308,18 @@ fn run_loop(
     }
 }
 
-/// The previous tick's blend data when `next` can blend toward it: both ticks carry data, `next`
+/// The previous tick's scene and blend data when `next` can blend toward it: both ticks carry data, `next`
 /// directly follows `current` (a skipped packet lost its cuts) and was not a re-based tick.
-fn blend_source(current: Option<&PresentPacket>, next: &PresentPacket) -> Option<Arc<BlendData>> {
+fn blend_source(
+    current: Option<&PresentPacket>,
+    next: &PresentPacket,
+) -> Option<(Arc<RenderScene>, Arc<BlendData>)> {
     let current = current?;
     next.blend.as_ref()?;
     let contiguous = current.frame.0 + 1 == next.frame.0;
     let rebased = next.tick.is_some_and(|tick| tick.rebased);
     (contiguous && !rebased)
-        .then(|| current.blend.clone())
+        .then(|| current.blend.clone().map(|d| (current.scene.clone(), d)))
         .flatten()
 }
 

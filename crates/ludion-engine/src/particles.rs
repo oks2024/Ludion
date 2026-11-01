@@ -23,6 +23,7 @@
 
 use std::ops::Range;
 
+use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Quat, Vec3};
 use ludion_core::math::{cos, exp, powf, sin, sqrt};
 use ludion_core::rng::DeterministicRng;
@@ -340,7 +341,7 @@ impl CameraBasis {
 
 /// Which of an emitter's two streams a particle belongs to, and its index within that stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Stream {
+pub(crate) enum Stream {
     /// Continuous particle `i`, released at `started + i / rate`. Negative for an endless emitter's
     /// steady state.
     Continuous(i64),
@@ -434,6 +435,17 @@ pub fn evaluate(
     density: f32,
     basis: CameraBasis,
 ) -> impl Iterator<Item = ParticleInstance> {
+    evaluate_keyed(emitter, transform, now, density, basis).map(|(_, particle)| particle)
+}
+
+/// [`evaluate`] with each particle's stream, for the presenter's cross-tick correspondence.
+pub(crate) fn evaluate_keyed(
+    emitter: &ParticleEmitter,
+    transform: &Transform,
+    now: SimTime,
+    density: f32,
+    basis: CameraBasis,
+) -> impl Iterator<Item = (Stream, ParticleInstance)> {
     let emitter = thinned(emitter, density);
     let (continuous, burst) = live_window(&emitter, now);
     let context = EmitterContext::new(emitter, transform, now, basis);
@@ -441,7 +453,25 @@ pub fn evaluate(
     continuous
         .map(Stream::Continuous)
         .chain((0..i64::from(burst)).map(Stream::Burst))
-        .filter_map(move |stream| context.particle(stream))
+        .filter_map(move |stream| context.particle(stream).map(|p| (stream, p)))
+}
+
+/// The presenter's identity for one particle of `owner`'s emitter that started on `started`.
+pub(crate) fn instance_key(
+    owner: EntityId,
+    started: FrameIndex,
+    stream: Stream,
+) -> ludion_renderer::InstanceKey {
+    let (burst, index) = match stream {
+        Stream::Continuous(i) => (false, i),
+        Stream::Burst(j) => (true, j),
+    };
+    ludion_renderer::InstanceKey {
+        owner,
+        started: started.0,
+        burst,
+        index,
+    }
 }
 
 /// An upper bound on how many particles [`evaluate`] yields for the same arguments: the live

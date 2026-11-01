@@ -1,6 +1,6 @@
 # Plan: Display-paced present — a presenter thread, then interpolation between ticks
 
-> Status: **design approved by the engine owner (2026-11-01)**; 01 shipped (presenter module, engine wiring), 02 shipped (r1900 blend, r1902 engine data), 03 shipped (presenter interpolates, `present_interpolation` flag; rev with the Tech Lead), 04 fractional time not started. Trigger:
+> Status: **design approved by the engine owner (2026-11-01)**; 01 shipped (presenter module, engine wiring), 02 shipped (r1900 blend, r1902 engine data), 03 shipped (presenter interpolates, `present_interpolation` flag; rev with the Tech Lead), 04 shipped (particles and bullets blend by instance key; rev with the Tech Lead). Trigger:
 > Clockout request 0026 (`engine-requests/0026-sim-presentation-boundary-display-paced-present.md`,
 > priority *painful*). Code facts read from the tree on 2026-11-01 (file:line pointers are of that
 > date; re-grep before editing).
@@ -148,6 +148,8 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
     presenter, render-only, owning no sim state. The thread-identity gate (`--full`) runs headless,
     so no presenter exists there; its module doc says so, and a live test pins that a presenter
     leaves the per-frame `WorldHash` sequence unchanged.
+15. **Particles and bullets blend by stable instance key (correspondence).** Clip and skinned poses keep
+    the newer tick because games step them deliberately (Clockout 0027); revisit if a game asks.
 
 ## Phasing
 

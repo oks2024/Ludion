@@ -30,11 +30,11 @@ use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
     BlendData, CameraBlend, DebugSegment, DecalBlend, DecalInstance, DecalMaps, DecalReceivers,
     DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
-    GroundMarkerInstance, LocalShadowData, MAX_SUN_CASCADES, MapImage, MeshData, MeshInstance,
-    MeshShape, MeshTexture, ParticleInstance, PointLightData, PostData, ProbeData, ProbeVolume,
-    QualityParams, RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance,
-    SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap, UiInstance, WorldVoxelGrid,
-    aspect_ratio,
+    GroundMarkerInstance, InstanceKey, LocalShadowData, MAX_SUN_CASCADES, MapImage, MeshData,
+    MeshInstance, MeshShape, MeshTexture, ParticleInstance, PointLightData, PostData, ProbeData,
+    ProbeVolume, QualityParams, RenderCamera, RenderScene, SkinJoint, SpotLightData,
+    SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap, UiInstance,
+    WorldVoxelGrid, aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -713,6 +713,7 @@ fn extract_inner(
     let mut sprites = Vec::with_capacity(placed.sprites.len());
     // The entity behind each sprite, parallel to `sprites` (blend data only).
     let mut sprite_keys: Vec<Option<EntityId>> = Vec::new();
+    let mut bullet_keys: Vec<(InstanceKey, u32)> = Vec::new();
     for sprite in &placed.sprites {
         if collect {
             sprite_keys.push(Some(sprite.id));
@@ -813,8 +814,9 @@ fn extract_inner(
         now,
         CameraBasis::from_view(camera.view),
         &mut sprites,
+        collect.then_some(&mut bullet_keys),
     );
-    // Volley bullets are unkeyed: they take the newer tick.
+    // Volley bullets carry no entity key: they blend by instance key (`bullet_keys`).
     sprite_keys.resize(if collect { sprites.len() } else { 0 }, None);
 
     // `pixel_snap` (extract-only, hash-neutral): when the single orthographic camera opts in and a
@@ -832,6 +834,7 @@ fn extract_inner(
         pixel_snapped = true;
         // Blending would undo the texel snap: the sprites and the camera take the newer tick.
         sprite_keys.clear();
+        bullet_keys.clear();
         let aspect = aspect_ratio(viewport);
         let snapped_height = snap_view_height(height, viewport.1, ppu);
         let half_h = snapped_height * 0.5;
@@ -1323,6 +1326,7 @@ fn extract_inner(
         (Vec::new(), Vec::new())
     };
 
+    let mut particle_keys: Vec<InstanceKey> = Vec::new();
     let scene = RenderScene {
         camera,
         ambient,
@@ -1342,6 +1346,7 @@ fn extract_inner(
             now,
             particle_density,
             CameraBasis::from_view(camera.view),
+            collect.then_some(&mut particle_keys),
         ),
         lights: extract_lights(placed.lights),
         spot_lights: extract_spot_lights(placed.spot_lights),
@@ -1377,6 +1382,8 @@ fn extract_inner(
                 ground_markers: ground_marker_ids,
                 drop_shadows: drop_shadow_ids,
                 decals: decal_ids,
+                particles: particle_keys,
+                bullets: bullet_keys,
             },
         );
     }
@@ -1393,6 +1400,8 @@ struct BlendKeys {
     ground_markers: Vec<EntityId>,
     drop_shadows: Vec<EntityId>,
     decals: Vec<EntityId>,
+    particles: Vec<InstanceKey>,
+    bullets: Vec<(InstanceKey, u32)>,
 }
 
 /// Fills `blend` from the keys extract collected: the pose table over every unique key, the snap
@@ -1415,6 +1424,14 @@ fn fill_blend(
     blend.ground_markers = some(keys.ground_markers);
     blend.drop_shadows = some(keys.drop_shadows);
     blend.decals = some(keys.decals);
+    let instance_owners: BTreeSet<EntityId> = keys
+        .particles
+        .iter()
+        .chain(keys.bullets.iter().map(|(key, _)| key))
+        .map(|key| key.owner)
+        .collect();
+    blend.particles = keys.particles;
+    blend.bullets = keys.bullets;
 
     let unique: BTreeSet<EntityId> = [
         &blend.meshes,
@@ -1433,7 +1450,14 @@ fn fill_blend(
         .iter()
         .map(|&id| (id, render_pose(world, poses, id).model()))
         .collect();
-    blend.snaps = crate::interpolation::snap_set(world, unique.iter().copied().chain(camera_key));
+    blend.snaps = crate::interpolation::snap_set(
+        world,
+        unique
+            .iter()
+            .copied()
+            .chain(instance_owners)
+            .chain(camera_key),
+    );
     blend.camera = camera_key.map(|key| {
         let cam = get::<Camera>(world, key).copied().unwrap_or_default();
         let (near, far) = cam.depth_range();
@@ -1924,6 +1948,7 @@ fn extract_particles(
     now: SimTime,
     particle_density: f32,
     basis: CameraBasis,
+    keys: Option<&mut Vec<InstanceKey>>,
 ) -> Vec<ParticleInstance> {
     let mut emitters = Vec::new();
     let mut live = 0;
@@ -1933,14 +1958,42 @@ fn extract_particles(
         };
         let pose = render_pose(world, poses, id);
         live += particles::live_bound(emitter, now, particle_density);
-        emitters.push((emitter, pose.transform()));
+        emitters.push((id, emitter, pose.transform()));
+    }
+
+    // The keyed path pairs each particle with its instance key; the plain path is unchanged.
+    if let Some(keys) = keys {
+        let evaluate = || {
+            par::par_map_chunks(&emitters, PARTICLE_PAR_CHUNK, |_, chunk| {
+                chunk
+                    .iter()
+                    .flat_map(|(id, emitter, transform)| {
+                        particles::evaluate_keyed(emitter, transform, now, particle_density, basis)
+                            .map(|(stream, p)| {
+                                (particles::instance_key(*id, emitter.started, stream), p)
+                            })
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+        let lists = if live < PARTICLE_PAR_MIN_LIVE {
+            par::with_threads(1, evaluate)
+        } else {
+            evaluate()
+        };
+        let mut out = Vec::with_capacity(lists.iter().map(Vec::len).sum());
+        for (key, particle) in lists.into_iter().flatten() {
+            keys.push(key);
+            out.push(particle);
+        }
+        return out;
     }
 
     let evaluate = || {
         par::par_map_chunks(&emitters, PARTICLE_PAR_CHUNK, |_, chunk| {
             chunk
                 .iter()
-                .flat_map(|(emitter, transform)| {
+                .flat_map(|(_, emitter, transform)| {
                     particles::evaluate(emitter, transform, now, particle_density, basis)
                 })
                 .collect::<Vec<_>>()
@@ -1994,6 +2047,7 @@ fn extract_volleys(
     now: SimTime,
     basis: CameraBasis,
     out: &mut Vec<SpriteInstance>,
+    mut bullet_keys: Option<&mut Vec<(InstanceKey, u32)>>,
 ) {
     let Some(store) = world.resource::<DocStore<PatternDoc>>() else {
         return;
@@ -2049,6 +2103,17 @@ fn extract_volleys(
         for bullet in 0..volley.count {
             if !patterns::bullet_is_alive(volley, kind, bullet, now) {
                 continue;
+            }
+            if let Some(keys) = bullet_keys.as_deref_mut() {
+                keys.push((
+                    InstanceKey {
+                        owner: id,
+                        started: volley.started.0,
+                        burst: false,
+                        index: i64::from(bullet),
+                    },
+                    out.len() as u32,
+                ));
             }
             out.push(SpriteInstance {
                 center: patterns::bullet_motion(volley, origin, kind, bullet, plane, now.rate())
