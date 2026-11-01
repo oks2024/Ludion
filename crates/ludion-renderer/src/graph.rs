@@ -308,7 +308,7 @@ pub mod pass {
     /// full-resolution round trip of its own (`Plan/post-process-pipeline.md` decision 2).
     pub const COMPOSITE: &str = "composite";
     /// SMAA luma edge detection over `aa_input` into `smaa_edges`. Only with
-    /// [`PostChain::smaa_scheduled`].
+    /// [`PostChain::smaa_scheduled`](super::PostChain::smaa_scheduled).
     pub const SMAA_EDGES: &str = "smaa_edges";
     /// SMAA blending weights from `smaa_edges`, looked up in the AreaTex and SearchTex tables.
     pub const SMAA_WEIGHTS: &str = "smaa_weights";

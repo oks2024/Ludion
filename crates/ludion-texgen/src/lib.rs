@@ -12,7 +12,7 @@
 //! Module map, in pipeline order: [`recipe`] parses one document and resolves its step graph;
 //! [`ops`] holds the typed op set and field reader; [`resolve`] loads sub-recipes through a
 //! [`Resolver`] (or the embedded [`stdlib`]) and types every step; [`eval`] evaluates the graph over [`Image`]s built from
-//! [`noise`], [`adjust`] and [`filter`]; [`encode`] writes the PNGs. The crate reads no file on
+//! [`noise`], [`adjust`] and [`filter`]; [`mod@encode`] writes the PNGs. The crate reads no file on
 //! its own — a [`Resolver`] does.
 //!
 //! # Example

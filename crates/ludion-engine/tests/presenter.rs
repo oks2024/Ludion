@@ -154,18 +154,23 @@ fn a_slow_display_never_slows_the_tick() {
     let ticks = ticks.load(Ordering::Relaxed);
     let presents = counts.presents.load(Ordering::Relaxed);
     let renders = counts.renders.load(Ordering::Relaxed);
-    assert!(ticks >= 45, "the sim kept its pace: {ticks} ticks");
+    // A sim coupled to the 20 Hz display would reach ~24 ticks in 1.2 s, about one per present;
+    // the floor and the ratio sit between that and the nominal 72, so a loaded box still passes.
+    assert!(
+        ticks >= 36,
+        "the sim kept its pace: {ticks} ticks, {presents} presents, {renders} renders"
+    );
     assert!(
         presents <= 30,
-        "the display ran at its own rate: {presents}"
+        "the display ran at its own rate: {ticks} ticks, {presents} presents, {renders} renders"
     );
     assert!(
         renders <= presents + 1,
-        "{renders} renders, {presents} presents"
+        "{ticks} ticks, {renders} renders, {presents} presents"
     );
     assert!(
-        ticks as f64 > 1.5 * presents as f64,
-        "{ticks} ticks against {presents} presents"
+        ticks as f64 > 2.0 * presents as f64,
+        "{ticks} ticks, {presents} presents, {renders} renders"
     );
 }
 
