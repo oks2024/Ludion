@@ -206,13 +206,13 @@ fn new_scaffolds_the_expected_files() {
 
     // The wrapper builds this checkout's CLI into the project's own target dir.
     let wrapper = read("scripts/ludion.mjs");
-    let manifest_path = format!(
-        "{}/Cargo.toml",
-        engine_root().to_string_lossy().replace('\\', "/")
+    let root_literal = format!(
+        "const engineRoot = {};",
+        serde_json::to_string(&engine_root().to_string_lossy().replace('\\', "/")).unwrap()
     );
     assert!(
-        wrapper.contains(&manifest_path),
-        "wrapper lacks the engine manifest:\n{wrapper}"
+        wrapper.contains(&root_literal),
+        "wrapper lacks the engine root literal:\n{wrapper}"
     );
     assert!(
         wrapper.contains("ludion-cli"),

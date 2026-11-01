@@ -118,7 +118,7 @@ fn needs_gpu_the_last_frames_of_a_replay_render_with_debug_lines() {
     let mut rendered: Vec<u64> = Vec::new();
     let result = replay_with(breakout::game(), &bytes, scenes_dir(), |engine, frame| {
         let frame = frame.as_u64();
-        if frame >= N - 120 {
+        if frame >= N.saturating_sub(120) {
             engine.set_debug_draw(DebugCategories::parse("colliders"));
             let png = engine.render_png(320, 180)?;
             assert!(
@@ -136,7 +136,7 @@ fn needs_gpu_the_last_frames_of_a_replay_render_with_debug_lines() {
 
     match result {
         Ok(engine) => {
-            assert_eq!(rendered, ((N - 120)..=N).collect::<Vec<_>>());
+            assert_eq!(rendered, (N.saturating_sub(120)..=N).collect::<Vec<_>>());
             assert_eq!(engine.frame().as_u64(), N);
         }
         Err(diagnostic)

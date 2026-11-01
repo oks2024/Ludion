@@ -57,4 +57,19 @@ fn help_explain_and_rustdoc_name_the_same_unsupported_set() {
             );
         }
     }
+    // Old phrasings of the set: a text that still says one has gone stale.
+    for stale in [
+        "a non-point light",
+        "a texture,",
+        "non-OPAQUE",
+        "a doubleSided",
+    ] {
+        for (name, text) in &texts {
+            assert!(
+                !text.contains(stale),
+                "{name} still carries the stale unsupported-feature phrasing \"{stale}\"; \
+                 update it to match `ludion_import::UNSUPPORTED_FEATURES`"
+            );
+        }
+    }
 }

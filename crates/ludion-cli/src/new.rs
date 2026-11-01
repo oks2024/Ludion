@@ -186,6 +186,9 @@ pub fn run(name: &str) -> ExitCode {
     // A bundle identifier allows no `_`.
     let name_bundle = name.replace('_', "-");
     let deps = engine_dependencies(&engine_root);
+    // A JSON string literal is a valid JS string literal, so a quote in the path cannot break the script.
+    let engine_root_literal = serde_json::to_string(&forward_slash_root(&engine_root))
+        .expect("a string serializes to JSON");
 
     let substitute = |body: &str| -> String {
         body.replace("{{name_ident}}", &name_ident)
@@ -194,7 +197,7 @@ pub fn run(name: &str) -> ExitCode {
             .replace("{{ludion_testkit_dep}}", &deps.ludion_testkit)
             .replace("{{ludion_engine_dep}}", &deps.ludion_engine)
             .replace("{{ludion_core_dep}}", &deps.ludion_core)
-            .replace("{{engine_root}}", &forward_slash_root(&engine_root))
+            .replace("{{engine_root}}", &engine_root_literal)
             .replace("{{name}}", name)
     };
 
@@ -459,8 +462,8 @@ pub(crate) fn stale_guide_warning(cwd: &Path) -> Option<Diagnostic> {
             ),
         )
         .with_help(
-            "run `ludion new --refresh-guide` from the project to rewrite it; `CLAUDE.md` is never \
-             touched",
+            "run `ludion new --refresh-guide` (or `node scripts/ludion.mjs new --refresh-guide`) \
+             from the project to rewrite it; `CLAUDE.md` is never touched",
         ),
     )
 }
@@ -474,10 +477,13 @@ pub fn refresh_guide() -> ExitCode {
             eprintln!(
                 "{}",
                 Diagnostic::new(
-                    code::SCENE_IO,
+                    code::OUTPUT_IO,
                     format!("could not read the current directory: {err}")
                 )
-                .with_help("run `ludion new` from a directory that still exists and is readable")
+                .with_help(
+                    "run `ludion new --refresh-guide` from a directory that still exists and is \
+                     readable"
+                )
             );
             return ExitCode::FAILURE;
         }

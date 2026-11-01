@@ -20,7 +20,7 @@ panic!("the ball left the arena at frame {}", engine.frame().as_u64());
 
 ```rust
 replay_with(game(), &bytes, scenes_dir, |engine, frame| {
-    if frame.as_u64() >= N - 120 {
+    if frame.as_u64() >= N.saturating_sub(120) {
         engine.set_debug_draw(DebugCategories::parse("colliders"));
         let png = engine.render_png(320, 180)?;
         // write frame-{frame}.png
