@@ -132,6 +132,10 @@
 //! ([`PhaseReport`]). Asking for `0.4` on the 60 Hz clock gets tick 24, i.e. `0.4` exactly; asking
 //! for `0.401` gets the same tick, and the report says so rather than pretending otherwise.
 //!
+//! **`hold`** ([`ModelSheetRequest::hold`]) snaps each phase's tick down to a multiple of N through
+//! extract's own `held_ticks`, so a strip shows the poses a game running `Animation.hold: N` shows
+//! and neighbouring phases may repeat one.
+//!
 //! **`strip`** renders `n` evenly spaced phases into one cell, laid out by the lineup machinery —
 //! the same model, `n` times, each entity carrying its own `started` frame so one extract at one
 //! `now` produces `n` different poses. Spacing depends on the clip's own `loop:` flag:
@@ -426,6 +430,10 @@ pub struct ModelSheetRequest<'a> {
     /// weight — [`DEFAULT_CROSSFADE_PHASES`] of them unless [`strip`](Self::strip) says otherwise.
     /// Assembly, character and prefab documents, a single model, and no [`clip`](Self::clip).
     pub crossfade: Option<CrossfadeSpec<'a>>,
+    /// Show each phase at the pose a game shows with `Animation.hold` = N: the phase tick snaps down
+    /// to a multiple of N, the clip or fade taken to begin on a grid tick. `None` and `Some(1)` are
+    /// every tick. Needs [`clip`](Self::clip) or [`crossfade`](Self::crossfade); `Some(0)` is `L1317`.
+    pub hold: Option<u32>,
     /// Frame every view on this named part of a `kind: sculpt` model instead of the whole model,
     /// keeping the rest of the model in the picture. A single model only.
     pub part: Option<&'a str>,
@@ -452,6 +460,7 @@ impl<'a> ModelSheetRequest<'a> {
             time: None,
             strip: None,
             crossfade: None,
+            hold: None,
             part: None,
             isolate: false,
             channel: None,
@@ -567,6 +576,8 @@ pub struct ClipOutcome {
     pub crossfade: Option<ClipCrossfade>,
     /// The tick rate clip time was quantized against ([`TickRate::DEFAULT`]), in hertz.
     pub hz: u32,
+    /// The pose cadence the phases were snapped to, in ticks (`1` when the request had none).
+    pub hold: u32,
     /// One entry per rendered phase, in render (left-to-right) order. A single posed sheet has
     /// exactly one.
     pub phases: Vec<PhaseReport>,
@@ -976,6 +987,7 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
             duration: posed.duration,
             looped: posed.looped,
             hz: TickRate::DEFAULT.hz(),
+            hold: request.hold.unwrap_or(1),
             phases: posed.reports,
         }),
     })
@@ -1041,11 +1053,21 @@ fn check_clip_flags(request: &ModelSheetRequest) -> Result<(), Vec<Diagnostic>> 
              of two",
         ));
     }
+    if request.hold == Some(0) {
+        return Err(vec![
+            Diagnostic::new(
+                code::ANIMATION_HOLD_ZERO,
+                "`--hold 0` is not a pose cadence: hold is a whole number of ticks ≥ 1",
+            )
+            .with_help("no flag, or `--hold 1`, plays every tick; 5 is 12 poses/s at 60 Hz"),
+        ]);
+    }
     if request.clip.is_none() && request.crossfade.is_none() {
-        let orphan = match (request.time, request.strip) {
-            (Some(_), _) => "`--time`",
-            (None, Some(_)) => "`--strip`",
-            (None, None) => return Ok(()),
+        let orphan = match (request.time, request.strip, request.hold) {
+            (Some(_), _, _) => "`--time`",
+            (None, Some(_), _) => "`--strip`",
+            (None, None, Some(_)) => "`--hold`",
+            (None, None, None) => return Ok(()),
         };
         return Err(refuse_clip(
             format!(
@@ -2180,9 +2202,11 @@ fn resolve_clip(
     let (clip, factor) = source.bound(name);
 
     let rate = TickRate::DEFAULT;
+    let hold = request.hold.unwrap_or(1);
     let ticks: Vec<u64> = phase_times(clip.duration, clip.looped, request.strip, request.time)
         .into_iter()
         .map(|time| quantize(time / factor, rate))
+        .map(|tick| crate::extract::held_ticks(hold, tick))
         .collect();
     let now = ticks.iter().copied().max().unwrap_or(0);
     let mut reports = Vec::with_capacity(ticks.len());
@@ -2238,9 +2262,11 @@ fn resolve_crossfade(
     let rate = TickRate::DEFAULT;
     let seconds = f64::from(spec.seconds);
     let phases = request.strip.unwrap_or(DEFAULT_CROSSFADE_PHASES);
+    let hold = request.hold.unwrap_or(1);
     let fade_ticks: Vec<u64> = phase_times(seconds, false, Some(phases), None)
         .into_iter()
         .map(|time| quantize(time, rate))
+        .map(|tick| crate::extract::held_ticks(hold, tick))
         .collect();
     let lead = quantize(request.time.unwrap_or(0.0) / from_factor, rate);
     let now = fade_ticks.iter().copied().max().unwrap_or(0) + lead;

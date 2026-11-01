@@ -86,6 +86,7 @@ clips:
 - The incoming clock, the outgoing clock and the crossfade weight step together, so a fade is stepped too.
 - Visual-only: `AnimationEvents` and the ragdoll pose keep the exact tick, and `set_speed` works as
   usual (the grid does not drift).
+- Review a stepped strip with `ludion render --model <x>.character.yaml --crossfade run:idle:0.5 --strip 8 --hold 5`: each phase snaps to the grid, so neighbouring phases repeat a pose, and the output name gains `-hold5`.
 - Stepping *inside* a clip is the clip's own `ease: step` keys (`ludion docs voxel-animation` §Format).
 
 ## AnimationEvents

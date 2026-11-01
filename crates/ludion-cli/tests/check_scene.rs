@@ -146,6 +146,40 @@ fn bounds_json_prints_one_object() {
     );
 }
 
+/// An `Animation.hold` above 1 is echoed once, in text before the `OK` line; the entity at the
+/// default hold is not.
+#[test]
+fn a_stepped_animation_is_echoed_in_text() {
+    let output = run_check_scene("stepped.yaml");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stepped: Vec<&str> = stdout.lines().filter(|l| l.contains("stepped:")).collect();
+    assert_eq!(stepped.len(), 1, "stdout was: {stdout}");
+    assert!(
+        stepped[0].contains("stepped: hero hold 5"),
+        "stdout was: {stdout}"
+    );
+}
+
+/// Under `--bounds --json` the stepped entities are a `stepped` array; a scene with no hold has no
+/// such key.
+#[test]
+fn stepped_animations_are_in_the_json_only_when_present() {
+    let output = run_check_scene_args("stepped.yaml", &["--bounds", "--json"]);
+    assert!(output.status.success());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is one JSON object");
+    assert_eq!(
+        value["stepped"],
+        serde_json::json!([{ "entity": 0, "name": "hero", "hold": 5 }])
+    );
+
+    let output = run_check_scene_args("good.yaml", &["--bounds", "--json"]);
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is one JSON object");
+    assert!(value.get("stepped").is_none(), "{value}");
+}
+
 /// A scene that declares no layers says so instead of printing a matrix.
 #[test]
 fn bounds_on_an_unlayered_scene_says_none_declared() {

@@ -1956,6 +1956,98 @@ fn needs_gpu_a_character_crossfade_strip_reports_its_weights_and_is_deterministi
     );
 }
 
+/// `hold: 5` snaps each phase tick of a 0.5 s fade (ticks 0,4,9,13,17,21,26,30 at eight phases) down
+/// to the 5-tick grid, and the weights follow the snapped ticks.
+#[test]
+fn needs_gpu_a_held_crossfade_strip_snaps_its_phases_to_the_grid() {
+    let path = mannequin();
+    let models = [path.as_path()];
+    let Some(outcome) = pose_or_skip(
+        "character_crossfade_hold",
+        &ModelSheetRequest {
+            crossfade: spec("run:idle:0.5"),
+            strip: Some(8),
+            hold: Some(5),
+            ..plain(&models, 480, 270)
+        },
+    ) else {
+        return;
+    };
+    let clip = outcome.clip.expect("a crossfade reports its clip");
+    assert_eq!(clip.hold, 5);
+    assert_eq!(
+        clip.phases
+            .iter()
+            .map(|phase| phase.tick)
+            .collect::<Vec<_>>(),
+        vec![0, 0, 5, 10, 15, 20, 25, 30]
+    );
+    for (phase, want) in clip.phases.iter().zip([
+        0.0,
+        0.0,
+        1.0 / 6.0,
+        1.0 / 3.0,
+        0.5,
+        2.0 / 3.0,
+        5.0 / 6.0,
+        1.0,
+    ]) {
+        let weight = phase.weight.expect("a crossfade phase has a weight");
+        assert!(
+            (weight - want).abs() < 1e-6,
+            "tick {}: {weight} vs {want}",
+            phase.tick
+        );
+    }
+}
+
+/// A hold of 1 is every tick: the sheet is byte-identical to one with no hold.
+#[test]
+fn needs_gpu_a_hold_of_one_changes_nothing() {
+    let path = mannequin();
+    let models = [path.as_path()];
+    let request = ModelSheetRequest {
+        clip: Some("run"),
+        strip: Some(4),
+        ..plain(&models, 480, 270)
+    };
+    let Some(none) = pose_or_skip("character_hold_none", &request) else {
+        return;
+    };
+    let one = pose_or_skip(
+        "character_hold_one",
+        &ModelSheetRequest {
+            hold: Some(1),
+            ..request
+        },
+    )
+    .expect("adapter");
+    assert_eq!(sheet_bytes(&none), sheet_bytes(&one));
+}
+
+/// `--hold` misuse needs no GPU: zero is `L1317`, and a hold with no clip or crossfade is `L1117`.
+#[test]
+fn hold_request_errors_are_readable() {
+    let path = mannequin();
+    let models = [path.as_path()];
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        crossfade: spec("run:idle:0.25"),
+        hold: Some(0),
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1317");
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        hold: Some(5),
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1117");
+    assert!(errors[0].message.contains("--hold"), "{errors:?}");
+}
+
 /// A crossfade on an assembly reports the gap analysis for every phase.
 #[test]
 fn needs_gpu_an_assembly_crossfade_keeps_its_gap_analysis() {

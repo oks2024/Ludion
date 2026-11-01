@@ -1,0 +1,11 @@
+format: 1
+entities:
+  - name: hero
+    components:
+      Animation:
+        clip: run
+        hold: 5
+  - name: idler
+    components:
+      Animation:
+        clip: idle

@@ -352,9 +352,22 @@ fn run_scene(
     if bounds {
         fields["layers"] = layers_json(scene);
     }
+    let stepped = stepped_animations(scene);
+    if !stepped.is_empty() {
+        fields["stepped"] = stepped
+            .iter()
+            .map(|&(entity, name, hold)| {
+                serde_json::json!({ "entity": entity, "name": name, "hold": hold })
+            })
+            .collect();
+    }
     reporter.ok(fields, || {
         if bounds {
             print!("{}", render_layer_matrix(scene));
+        }
+        for &(entity, name, hold) in &stepped {
+            let who = name.map_or_else(|| format!("entity {entity}"), str::to_string);
+            println!("  stepped: {who} hold {hold} (a new pose every {hold} ticks)");
         }
         if let Some((report, options)) = &placement_report {
             println!("{}", report.summary(options));
@@ -366,6 +379,24 @@ fn run_scene(
             if components == 1 { "" } else { "s" }
         );
     })
+}
+
+/// Every entity whose `Animation.hold` is above the default, as `(index, name, hold)`: the entities
+/// that show a new pose only every `hold` ticks.
+fn stepped_animations(scene: &Scene) -> Vec<(usize, Option<&str>, u64)> {
+    scene
+        .entities
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entity)| {
+            let (_, value) = entity
+                .components
+                .iter()
+                .find(|(name, _)| name == "Animation")?;
+            let hold = value["hold"].as_u64().filter(|&hold| hold > 1)?;
+            Some((index, entity.name.as_deref(), hold))
+        })
+        .collect()
 }
 
 /// Prints a pass's diagnostics through the reporter: `Some(FAILURE)` when one is an error, else each

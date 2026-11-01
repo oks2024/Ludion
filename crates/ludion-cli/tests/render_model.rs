@@ -1908,6 +1908,100 @@ fn needs_gpu_a_character_crossfade_names_its_output_and_prints_weights() {
     );
 }
 
+/// `--hold 0` is `L1317`, before any render. No GPU.
+#[test]
+fn hold_zero_is_l1317() {
+    let dir = target_tmpdir().join("hold_zero");
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            mannequin().to_str().unwrap(),
+            "--crossfade",
+            "run:idle:0.4",
+            "--hold",
+            "0",
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1317"), "{stderr}");
+}
+
+/// `--hold` with no `--clip` or `--crossfade` is `L1117`, naming the flag. No GPU.
+#[test]
+fn an_orphan_hold_is_l1117() {
+    let dir = target_tmpdir().join("hold_orphan");
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            mannequin().to_str().unwrap(),
+            "--hold",
+            "5",
+        ],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1117"), "{stderr}");
+    assert!(stderr.contains("--hold"), "{stderr}");
+}
+
+/// `--hold` is a `--model` flag: beside `--scene` it is a clap conflict.
+#[test]
+fn hold_with_scene_is_a_clap_error() {
+    let output = run_ludion(&["render", "--scene", "x.scene.yaml", "--hold", "5"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot be used with"), "{stderr}");
+}
+
+/// A held crossfade strip names its output `-hold<N>` and the report says how long a pose is held.
+#[test]
+fn needs_gpu_a_held_crossfade_names_its_output_and_reports_the_hold() {
+    let dir = target_tmpdir().join("crossfade_hold");
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            mannequin().to_str().unwrap(),
+            "--crossfade",
+            "run:idle:0.5",
+            "--hold",
+            "5",
+            "--strip",
+            "8",
+            "--width",
+            "480",
+            "--height",
+            "270",
+        ],
+    );
+    if !output.status.success() {
+        if is_no_adapter(&output) {
+            eprintln!("SKIPPED a_held_crossfade_names_its_output: no GPU adapter");
+            return;
+        }
+        panic!(
+            "render --crossfade --hold failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(
+        dir.join("mannequin-run-idle-crossfade-hold5.png").exists(),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("held 5 ticks per pose"), "{stdout}");
+}
+
 /// A character `--clip` strip defaults to `<name>-<clip>-strip.png`.
 #[test]
 fn needs_gpu_a_character_clip_strip_names_its_output() {

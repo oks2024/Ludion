@@ -170,6 +170,8 @@ pub struct Request<'a> {
     pub strip: Option<u32>,
     /// `--crossfade` (model mode): the `<from>:<to>:<seconds>` spec, parsed in `run_model`.
     pub crossfade: Option<&'a str>,
+    /// `--hold` (model mode, with `--clip` or `--crossfade`): snap each phase to a multiple of N ticks.
+    pub hold: Option<u32>,
     /// `--part` (model mode, a sculpt): frame the sheet on this named part.
     pub part: Option<&'a str>,
     /// `--isolate` (model mode, with `--part`): hide everything but the part.
@@ -840,6 +842,7 @@ fn run_model(request: &Request, model: &Path) -> ExitCode {
         time: request.time,
         strip: request.strip,
         crossfade,
+        hold: request.hold,
         part: request.part,
         isolate: request.isolate,
         channel: request.channel,
@@ -890,9 +893,14 @@ fn run_model(request: &Request, model: &Path) -> ExitCode {
 /// `connectivity owners:` attribution block `check-scene` prints over the rest pose. One `grep`
 /// over a strip's output answers "does this clip pull the model apart, and where".
 fn print_clip_report(clip: &ludion_engine::ClipOutcome) {
+    let held = if clip.hold > 1 {
+        format!(", held {} ticks per pose", clip.hold)
+    } else {
+        String::new()
+    };
     if let Some(fade) = &clip.crossfade {
         println!(
-            "crossfade {} -> {} over {}s, {} phases quantized to {} Hz ticks",
+            "crossfade {} -> {} over {}s, {} phases quantized to {} Hz ticks{held}",
             fade.from,
             clip.name,
             fade.seconds as f32,
@@ -901,7 +909,7 @@ fn print_clip_report(clip: &ludion_engine::ClipOutcome) {
         );
     }
     println!(
-        "clip {}: duration {}, loop {}, {} phase{} quantized to {} Hz ticks",
+        "clip {}: duration {}, loop {}, {} phase{} quantized to {} Hz ticks{held}",
         clip.name,
         clip.duration,
         clip.looped,
@@ -963,7 +971,8 @@ fn join_owners(owners: &[String]) -> String {
 /// A posed render names what it shows instead, since a rest sheet and a pose of the same model are
 /// different images: `<name>-<clip>-strip.png` for a strip, `<name>-<clip>-t<seconds>.png` for one
 /// instant (`figure.assembly.yaml --clip wave --time 0.4` -> `figure-wave-t0.4.png`), and a
-/// crossfade `<name>-<from>-<to>-crossfade.png`. The seconds
+/// crossfade `<name>-<from>-<to>-crossfade.png`; a `--hold` above 1 adds `-hold<N>` before the
+/// `.png` of all three (`figure-wave-strip-hold5.png`). The seconds
 /// are the *requested* ones — the file name is chosen before the render quantizes them, and a name
 /// that silently disagreed with the flag that produced it would be worse than one that rounds. A
 /// part sheet likewise names its part: `idol.sculpt.yaml --part head` -> `idol-head.sheet.png`, and
@@ -988,17 +997,24 @@ fn default_sheet_out(model: &Path, request: &Request) -> PathBuf {
     if let Some(channel) = request.channel {
         return PathBuf::from(format!("{name}-{}.sheet.png", channel.name()));
     }
+    let hold = match request.hold {
+        Some(hold) if hold > 1 => format!("-hold{hold}"),
+        _ => String::new(),
+    };
     // A malformed spec never reaches here: `run_model` refuses it first.
     if let Some(spec) = request
         .crossfade
         .and_then(|spec| ludion_engine::parse_crossfade(spec).ok())
     {
-        return PathBuf::from(format!("{name}-{}-{}-crossfade.png", spec.from, spec.to));
+        return PathBuf::from(format!(
+            "{name}-{}-{}-crossfade{hold}.png",
+            spec.from, spec.to
+        ));
     }
     match (request.clip, request.strip, request.part) {
-        (Some(clip), Some(_), _) => PathBuf::from(format!("{name}-{clip}-strip.png")),
+        (Some(clip), Some(_), _) => PathBuf::from(format!("{name}-{clip}-strip{hold}.png")),
         (Some(clip), None, _) => PathBuf::from(format!(
-            "{name}-{clip}-t{}.png",
+            "{name}-{clip}-t{}{hold}.png",
             request.time.unwrap_or(0.0).max(0.0)
         )),
         (None, _, Some(part)) if request.isolate => {

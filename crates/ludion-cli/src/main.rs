@@ -393,8 +393,8 @@ enum Command {
         // other side — see the clap 4.6 note on `--views`.
         #[arg(long, value_name = "DOC", conflicts_with_all = [
             "scene", "model", "atlas", "rig", "views", "dump_timings", "dump_voxels", "dump_gi",
-            "dump_probes", "frames", "clip", "time", "strip", "onion", "true_size", "part", "isolate",
-            "channel",
+            "dump_probes", "frames", "clip", "time", "strip", "hold", "onion", "true_size", "part",
+            "isolate", "channel",
         ])]
         sprite: Option<PathBuf>,
         /// Overview sheet of a `kind: atlas` document: the packed image upscaled, every region
@@ -655,6 +655,12 @@ enum Command {
         /// when the fade begins. Conflicts with `--clip`; one model only.
         #[arg(long, value_name = "FROM:TO:SECONDS", conflicts_with_all = ["scene", "clip", "atlas", "sprite"])]
         crossfade: Option<String>,
+        /// Under `--model`, show each `--clip`/`--crossfade` phase at the pose a game shows with
+        /// `Animation.hold: N`: the phase snaps down to the last multiple of N ticks, so
+        /// neighbouring phases can repeat a pose. 1 (the default) is every tick; 0 is `L1317`.
+        /// `ludion docs character-animation` § Stepped playback.
+        #[arg(long, value_name = "N", conflicts_with_all = ["scene", "atlas", "sprite"])]
+        hold: Option<u32>,
         /// Frame the `--model` sheet on one named part of a `.sculpt.yaml` model: every view is
         /// fitted to that part's meshed bounds while the rest of the model stays in the picture, so
         /// "does the eye sit in the socket" is one image. An unknown part, or one that meshes to no
@@ -2065,6 +2071,7 @@ fn main() -> std::process::ExitCode {
             time,
             strip,
             crossfade,
+            hold,
             part,
             isolate,
             channel,
@@ -2182,6 +2189,7 @@ fn main() -> std::process::ExitCode {
                 time,
                 strip,
                 crossfade: crossfade.as_deref(),
+                hold,
                 part: part.as_deref(),
                 isolate,
                 channel: channel.map(Into::into),

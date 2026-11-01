@@ -4305,8 +4305,13 @@ pub(crate) fn clock_elapsed(
 /// `now` snapped down to the animation's pose grid: the last tick that is a multiple of `hold`
 /// (a 0 reads as 1). Applied only where extract poses; events and the ragdoll keep the exact tick.
 pub(crate) fn held(animation: &Animation, now: SimTime) -> SimTime {
-    let hold = u64::from(animation.hold.max(1));
-    SimTime::from_ticks(now.ticks() - now.ticks() % hold, now.rate())
+    SimTime::from_ticks(held_ticks(animation.hold, now.ticks()), now.rate())
+}
+
+/// `ticks` snapped down to the last multiple of `hold` (a 0 reads as 1) — the pose grid itself.
+pub(crate) fn held_ticks(hold: u32, ticks: u64) -> u64 {
+    let hold = u64::from(hold.max(1));
+    ticks - ticks % hold
 }
 
 /// [`held`] for an entity's own `Animation`; `now` unchanged when it has none.
@@ -6228,6 +6233,13 @@ mod tests {
         use crate::assembly_mesh::{AssemblyClipData, AssemblyData, AssemblyPartData};
         use ludion_renderer::MeshData;
         use ludion_scene::{AnimationDocument, AnimationTrack, Ease, Keyframe};
+
+        #[test]
+        fn held_ticks_snaps_down_to_the_grid() {
+            assert_eq!(held_ticks(5, 14), 10);
+            assert_eq!(held_ticks(5, 15), 15);
+            assert_eq!(held_ticks(0, 7), 7);
+        }
 
         /// An empty mesh — the evaluator never reads geometry, only `offset`/`pivot`/`parent`.
         fn mesh() -> Arc<MeshData> {
