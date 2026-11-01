@@ -42,7 +42,7 @@ hash, the `frame` LFR1 format) is `ludion devdocs ludion-protocol`; the WS host 
 - `crates/ludion-engine/src/manifest.rs` — the `ludion.toml` reader (`load`, `find`, `Manifest::voice_caps`, `L0023`/`L5004`); read by `export`, `sync` and every game host.
 - `crates/ludion-engine/src/base64.rs` — a tiny RFC 4648 encoder for the `render.screenshot` payload, so `ludion-protocol` needs no base64 dep.
 - `crates/ludion-engine/src/live.rs`, `crates/ludion-engine/src/egress.rs`, `crates/ludion-engine/src/diagnostics.rs` — `ludion devdocs engine-live-loop`.
-- `crates/ludion-engine/src/components.rs` — `ludion devdocs engine-components`.
+- `crates/ludion-components/src/lib.rs` — `ludion devdocs engine-components`.
 - `crates/ludion-engine/src/render_extent.rs`, `crates/ludion-engine/src/render_size.rs`, `crates/ludion-engine/src/render_view.rs` — `ludion devdocs engine-present`.
 - `crates/ludion-engine/src/perf_live.rs`, `crates/ludion-engine/src/profile.rs` — `ludion devdocs profiling`.
 - `crates/ludion-engine/src/recording.rs`, `crates/ludion-engine/src/replay.rs`, `crates/ludion-engine/src/snapshot.rs`, `crates/ludion-engine/src/bisect.rs` — `ludion devdocs engine-replay`.

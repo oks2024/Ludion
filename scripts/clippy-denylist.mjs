@@ -117,6 +117,7 @@ export const CRATES = {
   'crates/ludion-cli': 'strict',
   'crates/ludion-cli/templates': 'sim',
   'crates/ludion-client': 'permissive',
+  'crates/ludion-components': 'sim',
   'crates/ludion-cook': 'strict',
   'crates/ludion-core': 'strict',
   'crates/ludion-ecs': 'sim',

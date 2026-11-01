@@ -27,7 +27,7 @@ Register each on top of the built-ins (see `register` in `src/lib.rs`); a name/t
 ## Built-in components: scene and render
 
 Your game composes what is drawn from these; game logic lives in your own components. Fields and
-defaults (from `crates/ludion-engine/src/components.rs`):
+defaults (from `crates/ludion-components/src/lib.rs`):
 
 | Component | Fields (default) |
 |---|---|

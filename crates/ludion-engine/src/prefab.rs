@@ -21,8 +21,8 @@ use ludion_ecs::{Registry, World};
 use ludion_scene::{
     ExpandedScene, InstanceHooks, InstanceTransform, InstantiateOptions, ScenePhysics,
 };
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+
+pub use ludion_components::prefab::PrefabInstance;
 
 use crate::components::Transform;
 use crate::hierarchy::level_trs;
@@ -32,22 +32,6 @@ use crate::scene_check::{
     scene_layer_diagnostics, scene_motor_diagnostics, scene_sensor_diagnostics,
 };
 use crate::skin_bone::{BonePose, apply_bone_poses, spawn_poses};
-
-/// Where a prefab part came from: written onto every named part by [`spawn_prefab`], hashed and
-/// snapshotted like any component.
-///
-/// `root` is the instance's first part — a prefab's parts are one group, and the group's identity is
-/// its first id — so it remaps like [`Joint`](ludion_spatial::Joint)'s `a`.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
-pub struct PrefabInstance {
-    /// The prefab file, relative to the content root, normalized: forward slashes, no `.` segments.
-    pub source: String,
-    /// The part's name in the prefab, without the instance prefix.
-    pub part: String,
-    /// The instance's first part; the first part names itself.
-    #[schemars(with = "ludion_ecs::EntityRefSelfSchema")]
-    pub root: EntityId,
-}
 
 /// A prefab that passed every spawn-time pass: its parts and the resolved skin-bone poses.
 pub(crate) struct Ready {

@@ -27,7 +27,7 @@ denylist's reason, so a silent denylist regression fails CI loudly. It never wri
 
 The mechanical denylist covers rules 1, 2 and 4 and rule 5's thread ban. The thread entries are on the
 **pure-sim** crates only (the `sim` tier) — `ludion-ecs`, `ludion-sim`, `ludion-spatial`, `ludion-scene`,
-`ludion-physics`, `ludion-mesh-edit`, `ludion-sculpt`, `ludion-sprite`, `ludion-font`, and every game crate — with two deliberate carve-outs: **`ludion-core` owns `par`**, so it cannot ban the primitive
+`ludion-physics`, `ludion-components`, `ludion-mesh-edit`, `ludion-sculpt`, `ludion-sprite`, `ludion-font`, and every game crate — with two deliberate carve-outs: **`ludion-core` owns `par`**, so it cannot ban the primitive
 it implements, and the **host-side** crates (`ludion-engine`, `ludion`, `ludion-cli`, `ludion-assets`,
 `ludion-server`, `ludion-window`, …) have legitimate thread seams — the live sim thread, the dev
 supervisor, frame-stream pumps. A test that drives two whole engines side by side is orchestration,

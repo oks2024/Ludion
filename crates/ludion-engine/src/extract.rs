@@ -19,7 +19,7 @@ use ludion_assets::Image;
 use ludion_assets::cooked::ColorSpace;
 use ludion_core::codes::code;
 use ludion_core::collections::StableMap;
-use ludion_core::diagnostics::Diagnostic;
+use ludion_core::diagnostics::{Diagnostic, pointer_token};
 use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat3, Mat4, Quat, Vec3};
 use ludion_core::math::{Affine3, Trs, euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
@@ -46,7 +46,7 @@ use crate::components::{
     DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
     GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, ParentJoint, ParticleEmitter,
     PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite,
-    SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
+    SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText,
 };
 use crate::docs::DocStore;
 use crate::fonts::FontLibrary;
@@ -4610,6 +4610,51 @@ pub(crate) fn clip_ticks(animation: &Animation, now: SimTime) -> f64 {
         animation.speed,
         animation.anchor.as_ref(),
     )
+}
+
+/// Changes `animation`'s playback rate mid-clip without a jump: the clip time reached at `now` is
+/// kept (pose and events both read it) and `speed` covers the ticks after it. A negative or
+/// non-finite `speed` freezes (`0.0`); the current speed is a no-op, so a per-tick caller does not
+/// churn the world hash. Before the clip has played a tick (`now` at or before `started`) the rate
+/// simply applies from `started`.
+///
+/// It takes `now` as [`SimTime`] (`ctx.game_time`), not a frame. It moves the incoming side only:
+/// during a crossfade the outgoing clip keeps the rate and anchor it had when the fade began.
+/// Writing `speed` directly is only right together with a new `started`. Under a `hold`, a call between
+/// two steps changes the pose only from the next step.
+///
+/// ```
+/// use ludion_core::time::{SimTime, TickRate};
+/// use ludion_engine::{Animation, set_speed};
+///
+/// let mut animation = Animation { clip: "walk".into(), ..Animation::default() };
+/// set_speed(&mut animation, 0.5, SimTime::from_ticks(60, TickRate::DEFAULT));
+/// assert_eq!(animation.speed, 0.5);
+/// assert_eq!(animation.anchor.unwrap().ticks, 60.0);
+/// ```
+pub fn set_speed(animation: &mut Animation, speed: f32, now: SimTime) {
+    let speed = if speed.is_finite() && speed >= 0.0 {
+        speed
+    } else {
+        0.0
+    };
+    #[allow(clippy::float_cmp)]
+    if speed == animation.speed {
+        return;
+    }
+    if now.ticks() <= animation.started.as_u64() {
+        animation.anchor = None;
+    } else {
+        let grid = held(animation, now);
+        let grid_ticks = (grid != now).then(|| clip_ticks(animation, grid));
+        animation.anchor = Some(crate::components::ClipAnchor {
+            started: animation.started,
+            frame: ludion_core::time::FrameIndex::new(now.ticks()),
+            ticks: clip_ticks(animation, now),
+            grid_ticks,
+        });
+    }
+    animation.speed = speed;
 }
 
 /// The incoming clip's elapsed seconds (before any character binding speed).

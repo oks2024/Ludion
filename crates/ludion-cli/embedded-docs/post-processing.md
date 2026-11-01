@@ -62,7 +62,7 @@ scene pays only for what it authors. Two shipped defaults are deliberately *not*
 is `1.3` and the dither is on — because both are the engine's imaging chain rather than an authored
 effect.
 
-This is the orientation map; `PostProcess`'s rustdoc in `crates/ludion-engine/src/components.rs` is
+This is the orientation map; `PostProcess`'s rustdoc in `crates/ludion-components/src/lib.rs` is
 the reference, and records why each default is the number it is.
 
 **Bloom, exposure, output**

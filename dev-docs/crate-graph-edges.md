@@ -21,12 +21,13 @@ ludion-cook          → core, assets                    [intel_tex_2, ctt-astce
 ludion-texgen        → core, scene                     [png, serde_json]
 ludion-font          → core, scene                     []
 ludion-camera        → core, ecs, scene                [schemars, serde, serde_json]
+ludion-components    → core, ecs, scene, spatial, physics, camera, sim  [schemars, serde, serde_json]
 ludion-sim           → core, ecs                       [serde, serde_json, xxhash-rust]
 ludion-spatial       → core, ecs                       [schemars, serde, serde_json]
 ludion-protocol      → core                            [schemars, serde, serde_json, xxhash-rust, zstd]
 ludion-render-graph  → core                            [wgpu, pollster, png, serde_json]
 ludion-renderer      → core, render-graph, assets, font [wgpu, bytemuck]
-ludion-engine        → core, ecs, scene, sculpt, assets, font, sim, spatial, camera, renderer, protocol
+ludion-engine        → core, ecs, scene, sculpt, assets, font, sim, spatial, camera, components, renderer, protocol
                                                        [crossbeam-channel, schemars, serde, serde_json]
 ludion-server        → core, engine, assets†, protocol [tokio, tokio-tungstenite, futures-util,
                                                         crossbeam-channel, serde_json]

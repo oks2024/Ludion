@@ -112,7 +112,7 @@ move_and_slide×500) and asserts their sum fits the recorded 1.5 ms sub-budget
 
 - **`builtin_registry()` is append-only.** World hashes key on registration index, so inserting or
   reordering a component (`Collider` included) silently re-keys every hash — the pinned-hash test in
-  `ludion-engine`'s `components.rs` trips if this happens. Register new components at the end.
+  `ludion-components`' `lib.rs` trips if this happens. Register new components at the end.
 - Queries read a **snapshot**: after `rebuild`, moving an entity's `Transform` does not move its
   index entry until the next rebuild. `move_and_slide` reads the mover's *current* position but
   sweeps against the *indexed* statics — statics don't move, so this is exact; a "static" the game

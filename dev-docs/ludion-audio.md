@@ -30,7 +30,7 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   push into, with `play`, `play_at`/`push_at` (positional one-shots) and `loop_start`/`loop_set_gain`/`loop_stop`, `music_play`/`music_play_once`/`music_stop`), `AudioLogEntry` (the
   frame-stamped log the engine drains into, independent of whether a sink is attached), and
   `emitter_gain`/`audible_gain`/`AUDIBILITY_EPSILON`, the falloff and audibility rule the emitters and `play_at` share.
-- `crates/ludion-engine/src/components.rs` + `engine.rs` — the declarative path: the `AudioEmitter`
+- `crates/ludion-components/src/lib.rs` + `engine.rs` — the declarative path: the `AudioEmitter`
   component (`L1136`: `range` must be positive and finite) and `Engine::sync_audio_emitters`, the
   frame-boundary step beside `drain_audio`.
 - `crates/ludion-assets/src/lib.rs` — `AudioPcm` + `load_wav`/`decode_wav`, the WAV decode this cache

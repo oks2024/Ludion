@@ -20,6 +20,7 @@ the strict/permissive clippy split that rides on this graph is in `determinism`.
 - `crates/ludion-texgen/` — procedural textures: parses a `kind: texture` recipe and evaluates it on the CPU into the PBR map set as PNG bytes, bit-exact across architectures. Only `ludion-cli` links it. Depends on core + scene.
 - `crates/ludion-sprite/` — offline sprite baking: `kind: sprite` grids + the seven CPU effects → pixels, the deterministic atlas packer, PNG → sprite-document import. Depends on core + scene + assets; GPU-free, does no IO.
 - `crates/ludion-font/` — font faces: `FontFace` (glyph, advance, kerning lookups over a `kind: font` document) and the embedded 8×8 face. Depends on core + scene; pure, no IO, ships PNG bytes without decoding.
+- `crates/ludion-components/` — the registered components, `builtin_registry()`, and the scene validators over them (`validators.rs`). Depends on core + ecs + scene + spatial + physics + camera + sim; sim-side, no renderer, assets or protocol. `ludion-engine::components` re-exports it.
 - `crates/ludion-camera/` — camera rigs: the `CameraRig` component and the pure per-tick pipeline that poses a camera (path track, springs, look-ahead, vertical anchor, timed blends, seeded trauma shake). Depends on core + ecs + scene; sim-side, GPU-free.
 - `crates/ludion-sculpt/` — the sculpt mesher: exact signed distances for the six primitives and the polynomial smooth min/max that fold them. Depends on core + scene; GPU-free, does no IO.
 - `crates/ludion-mesh-edit/` — deliberate, replayable edits to a mesh's texture maps: region algebra, UV rasterisation, linear-light paint, a CPU ray cast, the derived-tree reader/writer/checker. Depends on core + scene + assets; GPU-free. `ludion-cli` supplies the one thing it deliberately does not own: the model-sheet camera a pick reuses.
@@ -31,7 +32,7 @@ the strict/permissive clippy split that rides on this graph is in `determinism`.
 - `crates/ludion-protocol/` — wire types: envelope, `Command` surface, replay format, schema hash.
 - `crates/ludion-render-graph/` — headless wgpu frame graph, dump-graph/timings JSON.
 - `crates/ludion-renderer/` — the render pipeline over the frame graph, offscreen target.
-- `crates/ludion-engine/` — builtin components, `extract()`, lockstep `render_scene`, `Engine` + `dispatch.rs`, recording/replay, snapshot/restore, the live driver.
+- `crates/ludion-engine/` — `extract()`, lockstep `render_scene`, `Engine` + `dispatch.rs`, recording/replay, snapshot/restore, the live driver.
 - `crates/ludion-server/` — the WebSocket host: tokio transport feeding the one command queue.
 - `crates/ludion-client/` — sync (blocking) Rust SDK over the wire protocol.
 - `crates/ludion-mcp/` — stdio MCP adapter; a peer client (`→ client, protocol, core`) whose tool catalog is derived from `protocol_schema()`.
@@ -110,11 +111,11 @@ runs live in `ci/scripts/`. `.github/workflows/ci.yml` is the public definition 
   need `ludion-sim` types — don't move testkit down the graph to "fix" that.
 - `examples/gallery/` is not a workspace member (only `crates/*` are); its scenes are exercised
   through `ludion-testkit`'s gallery test and `ludion test --dir examples/gallery`.
-- The **`ludion-engine → ludion-spatial`** edge runs one way only. `ludion-engine`'s
-  `builtin_registry()` names `Collider` to register it, so it depends on `ludion-spatial`; the
+- The **`ludion-engine → ludion-spatial`** edge runs one way only. `builtin_registry()`
+  (in `ludion-components`, which `ludion-engine` re-exports) names `Collider` to register it, so `ludion-components` depends on `ludion-spatial`; the
   reverse is forbidden (it would drag the renderer/wgpu into a content-speed crate). Because
-  `Transform` lives in `ludion-engine`, `ludion-spatial` cannot name it: `spatial::rebuild` is
-  generic over a `GroundPosition` position component, and `ludion-engine` implements
+  `Transform` lives in `ludion-components`, `ludion-spatial` cannot name it: `spatial::rebuild` is
+  generic over a `GroundPosition` position component, and `ludion-components` implements
   `GroundPosition for Transform` (collider position is `(translation.x, translation.z)`). Like every
   sim-side crate, `ludion-spatial` carries its own generated `clippy.toml` (it does not inherit the
   workspace root — see `determinism`).

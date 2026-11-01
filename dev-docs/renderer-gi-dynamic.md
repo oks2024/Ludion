@@ -27,7 +27,7 @@ ludion-render-graph`.
 - `crates/ludion-renderer/src/gi_bake.rs` — the hit cache's writer and packing constants (`HIT_RAYS`,
   `HIT_FACE_SHIFT`/`_BOUNDARY`/`_ESCAPED`), and `static_lights`/`premultiplied`, which
   `dynamic_lights` mirrors.
-- `crates/ludion-engine/src/components.rs` — `GiDynamic`; `extract.rs` — `PointLightData.dynamic`
+- `crates/ludion-components/src/lib.rs` — `GiDynamic`; `extract.rs` — `PointLightData.dynamic`
   and the mesh-side exclusion (`ludion devdocs engine-voxelizer`).
 - `crates/ludion-renderer/src/quality.rs` — `Quality::gi_dynamic`; `graph.rs` —
   `PostChain::gi_inject`/`masked`, the scheduling seam.

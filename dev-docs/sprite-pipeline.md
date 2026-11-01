@@ -22,7 +22,7 @@ convention are `ludion devdocs ludion-assets`. This topic owns the seams *betwee
   re-enters through), and `flipbook_frame_name` (an entity's `Animation` clip resolved against the
   atlas's flipbooks, beside `animation_pose`'s assembly twin). `asset_cache.rs` is the hosted
   per-frame twin.
-- `crates/ludion-engine/src/components.rs` — `Sprite`, `TileAppearance`, and
+- `crates/ludion-components/src/lib.rs` — `Sprite`, `TileAppearance`, and
   `atlas_reference_diagnostics`, the one home of the three `L1151` rules.
 - `crates/ludion-renderer/src/render.rs` — `SpriteInstanceRaw`, `build_sprite_draws`;
   `shaders/sprite.wgsl` — the unlit/lit branch.
@@ -106,7 +106,7 @@ The texel is premultiplied, so the tint's alpha scales colour as well as coverag
 ## Where each code is raised
 | Code | Site |
 |---|---|
-| `L1151` | `components.rs::atlas_reference_diagnostics` (schema semantics, `Sprite` + `UiRect` + legend), `extract.rs::atlas_unresolved`/`atlas_without_frame` (unreadable or unparseable atlas) |
+| `L1151` | `ludion-components/src/lib.rs::atlas_reference_diagnostics` (schema semantics, `Sprite` + `UiRect` + legend), `extract.rs::atlas_unresolved`/`atlas_without_frame` (unreadable or unparseable atlas) |
 | `L1152` | `extract.rs::frame_unknown`, suggestion from `AtlasDocument::nearest_region_name` |
 | `L1153` | `scene/sprite.rs` + `scene/atlas.rs` (text), `ludion-sprite::structure_error` (defects only the bake sees), `cli/check_scene.rs::run_atlas` (colour map missing, rect outside the image), `cli/generate_atlas.rs` (`DRIFT`, and the emit self-check) |
 | `L1154` | `scene/sprite.rs` — everything under `/effects/<i>` |

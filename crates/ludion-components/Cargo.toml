@@ -1,0 +1,22 @@
+[package]
+name = "ludion-components"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The built-in components of the Ludion game engine: their serde/schemars types, builtin_registry, and the scene validators that need no renderer or assets."
+keywords = ["ludion", "components", "ecs", "game-engine"]
+categories = ["game-engines"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
+ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
+ludion-physics = { path = "../ludion-physics", version = "0.1.0" }
+ludion-camera = { path = "../ludion-camera", version = "0.1.0" }
+ludion-sim = { path = "../ludion-sim", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true

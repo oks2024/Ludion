@@ -4,7 +4,7 @@ description: The built-in components and builtin_registry() — the append-only 
 
 # The built-in component set
 
-**Scope:** `components.rs` and `builtin_registry()` — what ships registered, in what order, and why
+**Scope:** `ludion-components`'s `lib.rs` (re-exported as `ludion_engine::components`) and `builtin_registry()` — what ships registered, in what order, and why
 that order cannot move. Declaring a component in *game* code is `ludion docs components`; the
 registry machinery and `register_validated` are `ludion devdocs ludion-ecs`; the schema hash a
 registration moves is `ludion devdocs protocol-evolution`; the crate at large is
@@ -12,7 +12,7 @@ registration moves is `ludion devdocs protocol-evolution`; the crate at large is
 
 ## Layout
 
-- `crates/ludion-engine/src/components.rs` — the built-in components: `Transform`, `Sprite`, `Mesh` (+`Primitive`), `PointLight`, `Camera` (+`Projection`), `Text`, plus screen-space `Anchor` (nine-point, every variant doc-commented for the inspector dropdown), `UiRect` and `UiText` (both `register_validated`, `L1118`: size must be positive and finite). `builtin_registry()` lives beside them.
+- `crates/ludion-components/src/lib.rs` — the built-in components: `Transform`, `Sprite`, `Mesh` (+`Primitive`), `PointLight`, `Camera` (+`Projection`), `Text`, plus screen-space `Anchor` (nine-point, every variant doc-commented for the inspector dropdown), `UiRect` and `UiText` (both `register_validated`, `L1118`: size must be positive and finite). `builtin_registry()` lives beside them.
 
 ## Rules
 
@@ -31,7 +31,7 @@ registration moves is `ludion devdocs protocol-evolution`; the crate at large is
 ## Gotchas
 
 - `Parent` is registered in `builtin_registry()` but lives in `ludion-ecs`, not
-  `components.rs` — don't look for it in this crate.
+  `lib.rs` — don't look for it in this crate.
 - The extract-side consequence of *not* registering a component — typed access hiding it, so it
   never renders — is in `ludion devdocs ludion-engine`'s `## Gotchas`, which owns the extract traps
   for the whole crate.

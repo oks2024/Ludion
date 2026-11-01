@@ -131,7 +131,7 @@ pub use components::{
     PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter, PointLight,
     PostProcess, ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight, Sprite,
     SpriteBlend, Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect, UiText,
-    Visibility, builtin_registry, crossfade, set_speed,
+    Visibility, builtin_registry, crossfade,
 };
 pub use cooked_maps::TextureSource;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
@@ -142,6 +142,7 @@ pub use dispatch::{Dispatched, dispatch};
 pub use docs::{DocStore, content_root_yaml, is_engine_kind};
 pub use egress::{Egress, EgressChannels, EgressEvent, EgressFrame};
 pub use engine::{ENGINE_VERSION, Engine, GiRebakeMode, KEYFRAME_INTERVAL};
+pub use extract::set_speed;
 pub use extract::{check_atlas_reference, extract, extract_at, mesh_grid_cell};
 pub use font_sheet::render_font_sheet;
 pub use fonts::FontLibrary;
@@ -256,5 +257,7 @@ pub use ludion_renderer::{
     RenderScale, dump_frame_graph_json,
 };
 
+#[cfg(test)]
+mod animation_clock_tests;
 #[cfg(test)]
 mod snapshot_integrity_tests;

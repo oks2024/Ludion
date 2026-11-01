@@ -1719,6 +1719,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ludion-components"
+version = "0.1.0"
+dependencies = [
+ "ludion-camera",
+ "ludion-core",
+ "ludion-ecs",
+ "ludion-physics",
+ "ludion-scene",
+ "ludion-sim",
+ "ludion-spatial",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ludion-cook"
 version = "0.1.0"
 dependencies = [
@@ -1759,6 +1775,7 @@ dependencies = [
  "crossbeam-channel",
  "ludion-assets",
  "ludion-camera",
+ "ludion-components",
  "ludion-cook",
  "ludion-core",
  "ludion-ecs",
