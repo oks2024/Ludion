@@ -66,6 +66,7 @@ use std::path::{Path, PathBuf};
 
 use ludion_assets::Image;
 use ludion_core::codes::code;
+use ludion_core::color::{hex_of_linear, parse_hex};
 use ludion_core::diagnostics::{Diagnostic, value_phrase};
 use ludion_scene::{
     AppliedOverride, AtlasDocument, AtlasRegion, Flipbook, GradientBlend, GradientDirection,
@@ -663,10 +664,11 @@ fn sweep_size_error(pointer: &str, message: impl Into<String>, help: &str) -> Di
 
 /// The legal pointer shapes, listed verbatim in every `L4008` this applier raises.
 const SPRITE_POINTER_SHAPES: &str = "a sprite override addresses one of `/seed`, \
-     `/palette/<glyph>/color/<0..3>`, `/palette/<glyph>/emissive`, `/frames/<name>/pivot/<0|1>`, \
-     `/effects/<i>/<param>` (a scalar or an enum keyword) or `/effects/<i>/<param>/<j>` (one \
-     component of `from`, `to`, `light`, `offset` or `color`) — e.g. \
-     `/palette/A/color/0=0.12`, `/effects/1/strength=0.4`, `/effects/0/from/3=0.5`";
+     `/palette/<glyph>/color` (a hex string), `/palette/<glyph>/emissive`, \
+     `/frames/<name>/pivot/<0|1>`, `/effects/<i>/<param>` (a scalar, an enum keyword or a hex \
+     colour — `from`, `to`, `color`) or `/effects/<i>/<param>/<j>` (one component of `light` or \
+     `offset`) — e.g. `/palette/A/color=#3a7bd5`, `/effects/1/strength=0.4`, \
+     `/effects/0/from=#ffffff80`";
 
 /// Applies render-time overrides to a parsed sprite document, in order, returning what each changed.
 ///
@@ -745,7 +747,7 @@ fn apply_one(
     })
 }
 
-/// `/palette/<glyph>/color/<0..3>` and `/palette/<glyph>/emissive`.
+/// `/palette/<glyph>/color` (a whole hex string) and `/palette/<glyph>/emissive`.
 fn write_palette(
     doc: &mut SpriteDocument,
     segments: &[String],
@@ -763,15 +765,10 @@ fn write_palette(
     };
     let entry = &mut doc.palette[index];
     match (segments[2].as_str(), segments.len()) {
-        ("color", 4) => {
-            let channel = segments[3]
-                .parse::<usize>()
-                .ok()
-                .filter(|i| *i < entry.color.len())
-                .ok_or_else(|| bad_index(pointer, &segments[3], "a colour is four channels"))?;
-            let number = as_number(pointer, value)?;
-            let from = Value::from(entry.color[channel]);
-            entry.color[channel] = number;
+        ("color", 3) => {
+            let color = as_hex(pointer, value)?;
+            let from = colour_value(entry.color);
+            entry.color = color;
             Ok(Some(from))
         }
         ("emissive", 3) => {
@@ -861,6 +858,10 @@ enum EffectSlot<'a> {
     /// Any of the `f64` parameters: a colour channel, a light component, a strength, a density, an
     /// amount.
     Number(&'a mut f64),
+    /// A whole colour, written from a hex string.
+    Color(&'a mut [f64; 4]),
+    /// A `glow` tint, which may be unset (derived from the source).
+    GlowColor(&'a mut Option<[f64; 4]>),
     /// A `shadow` offset component: whole texels, so it takes an integer.
     Offset(&'a mut i32),
     /// A `blur` radius: whole texels, non-negative.
@@ -888,14 +889,14 @@ fn effect_slot<'a>(
             direction,
             blend,
         } => match (param, component) {
-            ("from", Some(i)) => from.get_mut(i).map(EffectSlot::Number),
-            ("to", Some(i)) => to.get_mut(i).map(EffectSlot::Number),
+            ("from", None) => Some(EffectSlot::Color(from)),
+            ("to", None) => Some(EffectSlot::Color(to)),
             ("direction", None) => Some(EffectSlot::Direction(direction)),
             ("blend", None) => Some(EffectSlot::Blend(blend)),
             _ => None,
         },
         SpriteEffectOp::Outline { color, side } => match (param, component) {
-            ("color", Some(i)) => color.get_mut(i).map(EffectSlot::Number),
+            ("color", None) => Some(EffectSlot::Color(color)),
             ("side", None) => Some(EffectSlot::Side(side)),
             _ => None,
         },
@@ -906,7 +907,7 @@ fn effect_slot<'a>(
         },
         SpriteEffectOp::Shadow { offset, color } => match (param, component) {
             ("offset", Some(i)) => offset.get_mut(i).map(EffectSlot::Offset),
-            ("color", Some(i)) => color.get_mut(i).map(EffectSlot::Number),
+            ("color", None) => Some(EffectSlot::Color(color)),
             _ => None,
         },
         SpriteEffectOp::Dither { density } => match (param, component) {
@@ -926,12 +927,7 @@ fn effect_slot<'a>(
             radius_px,
             strength,
         } => match (param, component) {
-            // A colour component is writable only when the halo has an explicit tint to write into;
-            // an untinted glow derives its colour, so there is no channel to set.
-            ("color", Some(i)) => color
-                .as_mut()
-                .and_then(|c| c.get_mut(i))
-                .map(EffectSlot::Number),
+            ("color", None) => Some(EffectSlot::GlowColor(color)),
             ("radius_px", None) => Some(EffectSlot::Number(radius_px)),
             ("strength", None) => Some(EffectSlot::Number(strength)),
             _ => None,
@@ -946,6 +942,18 @@ fn write_slot(
     value: &Value,
 ) -> Result<Option<Value>, Diagnostic> {
     let from = match slot {
+        EffectSlot::Color(target) => {
+            let color = as_hex(pointer, value)?;
+            let from = colour_value(*target);
+            *target = color;
+            from
+        }
+        EffectSlot::GlowColor(target) => {
+            let color = as_hex(pointer, value)?;
+            let from = target.map(colour_value);
+            *target = Some(color);
+            return Ok(from);
+        }
         EffectSlot::Number(target) => {
             let number = as_number(pointer, value)?;
             let from = Value::from(*target);
@@ -1007,6 +1015,25 @@ fn as_number(pointer: &str, value: &Value) -> Result<f64, Diagnostic> {
     value
         .as_f64()
         .ok_or_else(|| wrong_value(pointer, "a number", value))
+}
+
+/// The linear colour a hex-string override decodes to — what the reader makes of the same spelling.
+fn as_hex(pointer: &str, value: &Value) -> Result<[f64; 4], Diagnostic> {
+    value
+        .as_str()
+        .and_then(parse_hex)
+        .map(|c| c.map(f64::from))
+        .ok_or_else(|| wrong_value(pointer, "a hex colour \"#rrggbb\" or \"#rrggbbaa\"", value))
+}
+
+/// A held colour as an override echo spells it: hex when exact, else the float list.
+fn colour_value(color: [f64; 4]) -> Value {
+    hex_of_linear(color).map_or_else(|| Value::from(color.to_vec()), Value::String)
+}
+
+/// A held colour as the effect echo spells it: hex when exact, else the float list.
+fn colour_text(color: &[f64; 4]) -> String {
+    hex_of_linear(*color).unwrap_or_else(|| number_list(color))
 }
 
 /// The enum keyword an override must carry, checked against the op's own choice list.
@@ -1149,13 +1176,13 @@ fn op_params(op: &SpriteEffectOp) -> String {
             blend,
         } => format!(
             "from={} to={} direction={} blend={}",
-            number_list(from),
-            number_list(to),
+            colour_text(from),
+            colour_text(to),
             direction_keyword(*direction),
             blend_keyword(*blend)
         ),
         SpriteEffectOp::Outline { color, side } => {
-            format!("color={} side={}", number_list(color), side_keyword(*side))
+            format!("color={} side={}", colour_text(color), side_keyword(*side))
         }
         SpriteEffectOp::Shade { light, strength } => {
             format!("light={} strength={strength}", number_list(light))
@@ -1164,7 +1191,7 @@ fn op_params(op: &SpriteEffectOp) -> String {
             "offset=[{}, {}] color={}",
             offset[0],
             offset[1],
-            number_list(color)
+            colour_text(color)
         ),
         SpriteEffectOp::Dither { density } => format!("density={density}"),
         SpriteEffectOp::Noise { amount } => format!("amount={amount}"),
@@ -1175,7 +1202,7 @@ fn op_params(op: &SpriteEffectOp) -> String {
             strength,
         } => format!(
             "color={} radius_px={radius_px} strength={strength}",
-            color.map_or_else(|| "source".to_string(), |c| number_list(&c))
+            color.map_or_else(|| "source".to_string(), |c| colour_text(&c))
         ),
     }
 }
@@ -1251,7 +1278,7 @@ fn footer_lines(effects: &[String], applied: &[AppliedOverride]) -> Vec<String> 
 fn cell_label(pointer: &str, value: &Value) -> (String, String) {
     let segments: Vec<&str> = pointer.rsplit('/').take(2).collect();
     let leaf = match segments.as_slice() {
-        // An array component's own leaf is a bare index (`…/color/0`), which names nothing on its
+        // An array component's own leaf is a bare index (`…/light/0`), which names nothing on its
         // own — the parameter it indexes rides along.
         [last, parent] if last.chars().all(|ch| ch.is_ascii_digit()) => format!("{parent}/{last}"),
         [last, ..] => (*last).to_string(),
@@ -2783,7 +2810,7 @@ effects:
         assert!(lines[0].starts_with("0. outline"), "{}", lines[0]);
         assert!(lines[0].contains("glyphs: all"), "{}", lines[0]);
         assert!(lines[0].contains("frames: all"), "{}", lines[0]);
-        assert!(lines[0].contains("color=[0, 0, 0, 1]"), "{}", lines[0]);
+        assert!(lines[0].contains("color=#000000"), "{}", lines[0]);
         assert!(lines[1].starts_with("1. noise"), "{}", lines[1]);
         assert!(lines[1].contains("amount=0.1"), "{}", lines[1]);
     }
@@ -2802,10 +2829,10 @@ effects:
             &mut sprite,
             &[
                 over("/seed=9"),
-                over("/palette/A/color/0=0.25"),
+                over("/palette/A/color=#400000"),
                 over("/palette/A/emissive=2.0"),
                 over("/frames/idle/pivot/1=0.0"),
-                over("/effects/0/color/3=0.5"),
+                over("/effects/0/color=#ffffff80"),
                 over("/effects/0/side=inside"),
                 over("/effects/1/amount=0.4"),
             ],
@@ -2813,7 +2840,10 @@ effects:
         .expect("every pointer is a supported shape");
 
         assert_eq!(sprite.seed, Some(9));
-        assert_eq!(sprite.palette[0].color[0], 0.25);
+        assert_eq!(
+            sprite.palette[0].color,
+            parse_hex("#400000").unwrap().map(f64::from)
+        );
         assert_eq!(sprite.palette[0].emissive, Some(2.0));
         assert_eq!(sprite.frames[0].pivot, Some([2.0, 0.0]));
         assert!(matches!(
@@ -2828,7 +2858,8 @@ effects:
             SpriteEffectOp::Noise { amount } if amount == 0.4
         ));
 
-        assert_eq!(applied[1].from, Some(Value::from(1.0)));
+        assert_eq!(applied[1].from, Some(Value::from("#ff0000")));
+        assert_eq!(applied[4].from, Some(Value::from("#000000")));
         assert_eq!(applied[2].from, None, "`emissive` was not in the file");
         assert_eq!(applied[3].from, None, "`pivot` was not in the file");
         assert_eq!(applied[5].from, Some(Value::from("outside")));
@@ -2841,8 +2872,12 @@ effects:
         for spec in [
             "/size/0=8",
             "/frames/idle/rows/0=AAAA",
-            "/palette/Z/color/0=1.0",
-            "/palette/A/color/4=1.0",
+            "/palette/Z/color=#ffffff",
+            "/palette/A/color/0=1.0",
+            "/palette/A/color=red",
+            "/palette/A/color=#fff",
+            "/palette/A/color=1.0",
+            "/effects/0/color/3=0.5",
             "/frames/walk/pivot/0=1.0",
             "/effects/9/amount=0.2",
             "/effects/1/radius=2",
@@ -2856,14 +2891,32 @@ effects:
         }
     }
 
-    /// Range is the document validator's job, not the applier's — so an in-shape, out-of-range
-    /// write is accepted here and rejected there, exactly as the same edit to the file would be.
+    /// A glow with no tint derives its colour: writing the whole tint materializes it and echoes
+    /// `unset`; a held non-hex float colour echoes as the float list.
     #[test]
-    fn an_out_of_range_value_is_left_to_the_documents_own_validator() {
-        let mut sprite = doc();
-        apply_sprite_overrides(&mut sprite, &[over("/palette/A/color/0=4.0")])
-            .expect("the shape is legal");
-        assert!(!ludion_scene::validate_sprite(&sprite).is_empty());
+    fn a_glow_tint_materializes_and_a_legacy_colour_echoes_as_floats() {
+        let source = SPRITE.replace(
+            "  - op: noise\n    amount: 0.1\n",
+            "  - op: glow\n    radius_px: 2\n    strength: 1\n  - op: shadow\n    offset:\n      - 1\n      - 1\n    color:\n      - 0.5\n      - 0.0\n      - 0.0\n      - 1.0\n",
+        );
+        let mut sprite = ludion_scene::check_sprite(&source).expect("the glow fixture is valid");
+        let lines = effect_lines(&sprite.effects);
+        assert!(lines[1].contains("color=source"), "{}", lines[1]);
+        assert!(lines[2].contains("color=[0.5, 0, 0, 1]"), "{}", lines[2]);
+        let applied = apply_sprite_overrides(
+            &mut sprite,
+            &[
+                over("/effects/1/color=#00ff00"),
+                over("/effects/2/color=#00ff00"),
+            ],
+        )
+        .expect("both are whole-colour pointers");
+        assert_eq!(applied[0].from, None);
+        assert_eq!(
+            applied[1].from,
+            Some(serde_json::json!([0.5, 0.0, 0.0, 1.0]))
+        );
+        assert!(effect_lines(&sprite.effects)[1].contains("color=#00ff00"));
     }
 
     /// A keyword parameter takes only its op's own keywords.
@@ -2883,9 +2936,12 @@ effects:
         let source = SPRITE.replace('A', "/").replace("  /:", "  \"/\":");
         let mut sprite =
             ludion_scene::check_sprite(&source).expect("a `/` glyph is a legal palette key");
-        apply_sprite_overrides(&mut sprite, &[over("/palette/~1/color/1=0.5")])
+        apply_sprite_overrides(&mut sprite, &[over("/palette/~1/color=#008000")])
             .expect("the escaped segment resolves");
-        assert_eq!(sprite.palette[0].color[1], 0.5);
+        assert_eq!(
+            sprite.palette[0].color,
+            parse_hex("#008000").unwrap().map(f64::from)
+        );
     }
 
     /// The near-square grid and the reserved ruler band follow from the layout formula alone.

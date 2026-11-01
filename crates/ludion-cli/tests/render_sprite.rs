@@ -120,12 +120,12 @@ fn set_edits_the_palette_and_is_echoed() {
         "--out",
         edited.to_str().unwrap(),
         "--set",
-        "/palette/#/color/0=0.0",
+        "/palette/#/color=#000000",
     ]);
     assert!(second.status.success(), "stderr: {}", stderr(&second));
 
     let text = stdout(&second);
-    assert!(text.contains("set /palette/#/color/0"), "stdout: {text}");
+    assert!(text.contains("set /palette/#/color"), "stdout: {text}");
 
     let (_, _, before) = decoded(&plain);
     let (_, _, after) = decoded(&edited);
@@ -148,7 +148,7 @@ fn sweep_renders_one_cell_per_value() {
         "--out",
         out.to_str().unwrap(),
         "--sweep",
-        "/effects/0/color/0=0.1,0.9",
+        "/effects/0/color=#1a1a1a,#e6e6e6",
     ]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let (width, height, _) = decoded(&out);

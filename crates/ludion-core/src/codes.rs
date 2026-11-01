@@ -4765,7 +4765,7 @@ This code covers: an unrecognized `op`; an unknown key inside an entry; a requir
 entry that is not a single glyph the document's `palette` defines; a `frames:` entry naming no frame
 of the document; and a `dither` whose `glyphs:` is not exactly two.
 
-The JSON Pointer names the entry and the field: `/effects/2/glyphs/0`, `/effects/0/from/3`.
+The JSON Pointer names the entry and the field: `/effects/2/glyphs/0`, `/effects/0/from`.
 
 Fix: correct the named field. If the effect you want has no op, that is a gap in the op set to
 record, not something to paint into the glyph grid by hand — a gradient, glow, shadow or shading

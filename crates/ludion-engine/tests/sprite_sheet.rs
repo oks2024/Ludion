@@ -198,7 +198,7 @@ fn a_palette_override_repaints_the_sheet_and_is_echoed() {
     let plain = render_sprite_sheet(&SpriteSheetRequest::new(doc.clone())).expect("the base bakes");
 
     let request = SpriteSheetRequest {
-        set: vec![over("/palette/A/color/0=0.0")],
+        set: vec![over("/palette/A/color=#000000")],
         ..SpriteSheetRequest::new(doc)
     };
     let overridden = render_sprite_sheet(&request).expect("the override bakes");
@@ -214,9 +214,9 @@ fn a_palette_override_repaints_the_sheet_and_is_echoed() {
     assert_ne!(plain.image.rgba, overridden.image.rgba);
 
     assert_eq!(overridden.applied.len(), 1);
-    assert_eq!(overridden.applied[0].pointer, "/palette/A/color/0");
-    assert_eq!(overridden.applied[0].from, Some(json!(1.0)));
-    assert_eq!(overridden.applied[0].to, json!(0.0));
+    assert_eq!(overridden.applied[0].pointer, "/palette/A/color");
+    assert_eq!(overridden.applied[0].from, Some(json!("#ff0000")));
+    assert_eq!(overridden.applied[0].to, json!("#000000"));
 }
 
 /// A pointer into the document's *shape* rather than its values is `L4008`, with the legal shapes in
@@ -231,7 +231,26 @@ fn an_illegal_override_pointer_is_refused() {
     let diagnostics = render_sprite_sheet(&request).expect_err("rows are shape, not a knob");
     assert_eq!(diagnostics[0].code.as_str(), "L4008");
     let help = diagnostics[0].help.as_deref().unwrap();
-    assert!(help.contains("/palette/<glyph>/color/"), "{help}");
+    assert!(help.contains("/palette/<glyph>/color"), "{help}");
+
+    for pointer in [
+        "/palette/A/color/0=0.5",
+        "/effects/1/to/3=0.5",
+        "/palette/A/color=red",
+        "/palette/A/color=#fff",
+    ] {
+        let request = SpriteSheetRequest {
+            set: vec![over(pointer)],
+            ..SpriteSheetRequest::new(write_sprite(&dir))
+        };
+        let diagnostics = render_sprite_sheet(&request).expect_err(pointer);
+        assert_eq!(diagnostics[0].code.as_str(), "L4008", "{pointer}");
+        let help = diagnostics[0].help.as_deref().unwrap();
+        assert!(
+            help.contains("/effects/<i>/<param>/<j>") && help.contains("#3a7bd5"),
+            "{help}"
+        );
+    }
 }
 
 /// A sweep draws one cell per value in a near-square grid: three values fill three of a 2×2 grid's
@@ -245,8 +264,8 @@ fn a_sweep_draws_one_cell_per_value() {
 
     let request = SpriteSheetRequest {
         sweep: Some((
-            "/effects/1/to/0".to_string(),
-            vec![json!(0.0), json!(0.5), json!(1.0)],
+            "/effects/1/to".to_string(),
+            vec![json!("#000000"), json!("#808080"), json!("#ffffff")],
         )),
         ..SpriteSheetRequest::new(doc)
     };
@@ -290,9 +309,9 @@ fn a_sweep_draws_one_cell_per_value() {
 #[test]
 fn an_oversized_sweep_is_refused() {
     let dir = temp_dir("sweep-cap");
-    let values: Vec<serde_json::Value> = (0..17).map(|i| json!(f64::from(i) / 17.0)).collect();
+    let values: Vec<serde_json::Value> = (0..17).map(|i| json!(format!("#0000{i:02x}"))).collect();
     let request = SpriteSheetRequest {
-        sweep: Some(("/effects/1/to/0".to_string(), values)),
+        sweep: Some(("/effects/1/to".to_string(), values)),
         ..SpriteSheetRequest::new(write_sprite(&dir))
     };
     let diagnostics = render_sprite_sheet(&request).expect_err("seventeen cells do not fit");
@@ -474,7 +493,7 @@ fn a_set_over_an_inherited_glyph_repaints_the_sheet() {
     let dir = temp_dir("include-set");
     let doc = write_include_sprite(&dir);
     let request = SpriteSheetRequest {
-        set: vec![over("/palette/A/color/0=0.0")],
+        set: vec![over("/palette/A/color=#000000")],
         ..SpriteSheetRequest::new(doc)
     };
     let overridden = render_sprite_sheet(&request).expect("the override bakes");
@@ -486,7 +505,7 @@ fn a_set_over_an_inherited_glyph_repaints_the_sheet() {
         [0, 0, 0, 255],
         "clearing the red channel repaints every `A` texel, glyph `A` being the shared palette's"
     );
-    assert_eq!(overridden.applied[0].from, Some(json!(1.0)));
+    assert_eq!(overridden.applied[0].from, Some(json!("#ff0000")));
     assert_eq!(
         std::fs::read_to_string(dir.join("shared.palette.yaml")).expect("the palette still reads"),
         SHARED_PALETTE,
@@ -646,7 +665,7 @@ fn the_steps_sheet_draws_a_row_per_frame() {
 fn steps_honour_set() {
     let dir = temp_dir("steps-set");
     let request = SpriteSheetRequest {
-        set: vec![over("/palette/A/color/1=1.0")],
+        set: vec![over("/palette/A/color=#ffff00")],
         ..steps_request(write_sprite(&dir), None)
     };
     let sheet = render_sprite_sheet(&request).expect("steps compose");
@@ -673,7 +692,7 @@ fn the_steps_refusals_are_l4008() {
     );
 
     let both = SpriteSheetRequest {
-        sweep: Some(("/effects/1/to/0".to_string(), vec![json!(0.5)])),
+        sweep: Some(("/effects/1/to".to_string(), vec![json!("#808080")])),
         ..steps_request(path, None)
     };
     let both = render_sprite_sheet(&both).expect_err("steps and a sweep");

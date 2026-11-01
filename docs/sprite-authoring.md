@@ -182,11 +182,11 @@ The first echoes `set /effects/1/strength: 0.35 -> 0.5` per override (a field le
 `unset -> …`); the second bakes once per value into a labelled grid, at most 16 cells.
 
 The domain is the tunable values alone: `/seed` (a non-negative integer, `null` to unseed),
-`/palette/<glyph>/color/<0..3>`, `/palette/<glyph>/emissive`, `/frames/<name>/pivot/<0|1>`,
-`/effects/<i>/<param>` (a scalar or an enum keyword — `strength`, `density`, `amount`, `radius`,
-`radius_px`, `direction`, `blend`, `side`), and `/effects/<i>/<param>/<j>` (one component of `from`,
-`to`, `light`, `offset` or `color` — a `glow`'s `color` only when it authored one to write into). A glyph that is itself `/` or `~` is escaped RFC 6901 style
-(`/palette/~1/color/0`).
+`/palette/<glyph>/color` (a hex string), `/palette/<glyph>/emissive`, `/frames/<name>/pivot/<0|1>`,
+`/effects/<i>/<param>` (a scalar, an enum keyword or a hex colour — `strength`, `density`, `amount`,
+`radius`, `radius_px`, `direction`, `blend`, `side`, `from`, `to`, `color`), and
+`/effects/<i>/<param>/<j>` (one component of `light` or `offset`). A glyph that is itself `/` or `~`
+is escaped RFC 6901 style (`/palette/~1/color`).
 
 Anything else is `L4008`, listing those shapes: `size`, a frame's `rows` and an effect's
 `op`/`glyphs`/`frames` are the document's **shape**, not a knob, and a pointer that could rewrite
