@@ -54,6 +54,7 @@ The runnable version — a turret yawing on a moving platform, a prop grabbed by
 | `reparent` that closes a loop | Refused, nothing changes — `L1224` |
 | `reparent` past depth 64 | Refused, nothing changes — `L1260` |
 | `ParentJoint` under a skinned `Parent` | `Transform` is local to the joint: sim reads compose its rest pose, the draw its posed pose (`ludion docs character-animation`); a non-skin parent `L1318`, an unknown joint `L1319` |
+| `Visibility` on an ancestor | Folds by AND down `Parent`/`ParentJoint`: a hidden ancestor always wins, a part's own `visible: true` does not show it; `cast_shadows` folds the same way (`ludion docs presentation`) |
 | a scene whose links form a loop | `L1035` at load and `check-scene`; `scene.save` refuses to write one — `L1018` |
 
 `L1221` and `L1222` are reported by `check-scene` as well as at runtime, so a bad scene fails before it runs.

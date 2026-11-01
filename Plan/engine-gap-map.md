@@ -36,7 +36,7 @@ settled plan, nothing built; **rejected** — closed by design.
   `ludion_scene::instantiate` builds a whole `World`. `instantiate_into` exists only as a design in
   `Plan/world-streaming.md` W2.
 - **Culling and LOD** — deferred (`Plan/world-streaming.md`, W0/W1 need no trigger). Extract walks
-  every entity; no frustum or distance culling, no visibility flag, no voxel LOD; the asset cache
+  every entity; no frustum or distance culling, no voxel LOD (the visibility flag shipped: `Visibility`); the asset cache
   never evicts.
 - **Async loading and streaming** — deferred (`Plan/world-streaming.md` W2+). Loading is synchronous;
   one district at a time (`docs/scene-transitions.md`).
@@ -149,7 +149,7 @@ it raise the number of autonomous agent iterations (the North Star)?
    - Transform propagation plus runtime template instantiation (prefabs). The platformer's moving
      platforms and held props, world-streaming W2, and editor prefabs all sit on it. Grill the
      sim-side-versus-extract question first.
-   - Frustum culling and a visibility flag (world-streaming W0/W1, no trigger needed; budgets gate it).
+   - Frustum culling (the visibility flag shipped) (world-streaming W0/W1, no trigger needed; budgets gate it).
    - Font assets (TTF/OTF into a glyph atlas) — prerequisite for localization, menus and any
      shipped game.
 4. **The platformer as the next vertical slice** (`Plan/character-controller.md`). Let it pull the

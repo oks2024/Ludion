@@ -80,6 +80,8 @@ Existing agent calls, tests and CLI paths keep the game's own framing while a hu
 {"v": 1, "id": 7, "method": "render.bounds", "params": {"camera": "view"}}
 ```
 
+An entity hidden by `Visibility` is still reported, with `hidden: true` (absent otherwise).
+
 ## What the game draws for debugging: `render.debug`
 
 Games record world-space debug lines (a character's motor, a platform's path) under named categories.

@@ -1323,3 +1323,170 @@ fn needs_gpu_a_multiply_decal_over_half_covered_normal_mapped_paint_keeps_full_s
         "a black multiply decal over half-covered paint must blacken the floor: {p:?}"
     );
 }
+
+const VISIBILITY_BASE: &str = r#"format: 1
+name: "visibility-proof"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 5.0
+          - 9.0
+        rotation:
+          - -28.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: sun
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.5
+          - -0.8
+          - -0.3
+        intensity: 2.0
+  - name: floor
+    components:
+      Transform:
+        scale:
+          - 20.0
+          - 1.0
+          - 20.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.5
+          - 0.5
+          - 0.5
+          - 1.0
+  - name: prop
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 0.6
+          - 0.0
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.6
+          - 0.4
+          - 1.0
+"#;
+
+/// The tree, appended last so no other entity index moves: a root (index 4), two meshes and a
+/// shadowed point light. `{visible}` is the root's `Visibility.visible`.
+const VISIBILITY_TREE: &str = r#"  - name: tree
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 0.0
+          - 0.0
+      Visibility:
+        visible: {visible}
+  - name: tree-pillar
+    components:
+      Parent:
+        index: 4
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 0.0
+        scale:
+          - 0.8
+          - 2.0
+          - 0.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.6
+          - 0.9
+          - 1.0
+  - name: tree-ball
+    components:
+      Parent:
+        index: 4
+        generation: 0
+      Transform:
+        translation:
+          - 1.4
+          - 0.5
+          - 0.5
+      Mesh:
+        shape: sphere
+        color:
+          - 0.9
+          - 0.3
+          - 0.3
+          - 1.0
+  - name: tree-lamp
+    components:
+      Parent:
+        index: 4
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 1.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.5
+        intensity: 12.0
+        range: 9.0
+        cast_shadows: true
+"#;
+
+/// **Visibility acceptance.** A frame with a hidden tree (meshes plus a shadowed point light, under a
+/// sun) is byte-identical to the frame with the tree despawned; shown, the same tree changes the frame.
+#[test]
+fn needs_gpu_a_hidden_tree_renders_exactly_like_a_despawned_one() {
+    let dir = std::env::temp_dir().join(format!("ludion-visibility-proof-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let render = |name: &str, visible: Option<bool>| {
+        let path = dir.join(name);
+        let mut doc = VISIBILITY_BASE.to_string();
+        if let Some(visible) = visible {
+            doc.push_str(&VISIBILITY_TREE.replace("{visible}", &visible.to_string()));
+        }
+        std::fs::write(&path, doc).unwrap();
+        render_scene(&path, FrameSize::native(240, 135), false)
+    };
+    let despawned = match render("despawned.yaml", None) {
+        Ok(outcome) => outcome,
+        Err(errors) if no_adapter(&errors) => {
+            eprintln!("[visibility] SKIPPED: no GPU adapter available");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        Err(errors) => panic!("[visibility] render failed: {errors:?}"),
+    };
+    let hidden = render("hidden.yaml", Some(false)).unwrap();
+    let shown = render("shown.yaml", Some(true)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        hidden.image, despawned.image,
+        "a hidden tree must leave no pixel, shadow or light pool"
+    );
+    assert_ne!(
+        shown.image, despawned.image,
+        "the same tree, shown, must draw and cast"
+    );
+}

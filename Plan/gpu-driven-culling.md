@@ -187,7 +187,7 @@ A way for game code and scenes to say "do not draw this", independent of culling
   Absent means visible and casting. It applies uniformly to `Mesh`, `Sprite`, `Text`, particle
   emitters and ground markers on the same entity. It matches the `visible: bool` convention
   `UiRect` and the UI components already use. `cast_shadows: false` gives decals-like props that do
-  not shadow. `visible: false, cast_shadows: true` gives a shadow-only proxy.
+  not shadow. `visible: false` always wins over `cast_shadows` (decision 6), so there is no shadow-only proxy.
 - **Option 0b: a `Hidden` marker** (zero-size, presence means hidden). Smallest possible surface,
   and insert/remove is the toggle. It cannot express shadow-only or no-shadow, which would need a
   second marker later.
@@ -200,12 +200,11 @@ A way for game code and scenes to say "do not draw this", independent of culling
 - Culling is **render state**: never hashed.
 - Extract honours the flag before any cull test, so a hidden entity costs no placement work beyond
   the flag read.
-- Propagation to children waits on the transform-hierarchy grilling. Until then, `Parent` stays a
-  link and a hidden parent hides only itself.
+- Propagation: an AND down `Parent` (and so `ParentJoint`); a hidden ancestor always wins (decision 3).
 - `render.bounds` still reports a hidden entity, with a new `hidden` marker. Selection and picking
   in the editor must still find it.
 - The GI voxelizer ignores the flag. A hidden wall still occludes sky light, and the bake signature
-  must not move when a prop is toggled. **This is a real choice** (question G4).
+  must not move when a prop is toggled. Settled as recommended (decision 5).
 
 ### Rung 1 — CPU frustum culling in extract
 
@@ -643,11 +642,18 @@ Each carries the recommended answer; the user's rulings become the Decisions sec
 
 ## Decisions
 
-None yet. The grilling fills this section.
+Rung 0 decisions, amended by the owner (Clockout 0030); the rest of the grilling is still to come.
+
+1. Rung 0 ships ahead of the grilling.
+2. G3 is settled as option 0a, the `Visibility` component.
+3. Propagation is an AND through `Parent` and `ParentJoint`: a hidden ancestor always wins, and a part's own `visible: true` never shows it. `cast_shadows` folds by AND the same way, down the `Parent` chain. This replaces the "hides only itself" rule.
+4. The flag covers point and spot lights, decals, `DropShadow`, ground markers, particles, volleys, prepasses, every shadow pass and probe captures.
+5. G4 as recommended: the static GI bake ignores the flag, dynamic injection honours it.
+6. Q3 reversal: `visible: false, cast_shadows: true` is **not** a shadow-only proxy, because `visible: false` always wins. Revisit when a consumer asks for a shadow-only proxy: add an explicit mode, never a reinterpretation.
 
 ## Status
 
-Design written 2026-09-30. Nothing built. Awaiting the grilling.
+Design written 2026-09-30. Rung 0 shipped (Clockout 0030; `Visibility`, `examples/gallery/visibility.yaml`). Nothing else built. Awaiting the grilling.
 
 **A real consumer exists (2026-10-02).** vigil's environment moves to Blender-authored mesh kits
 (a private plan). The first dressed set, a 40 × 42 m walled square, draws 605 mesh

@@ -90,6 +90,13 @@ entities:
 - **Ground is one `MeshGrid` entity** with `presentation: true`, not a tile entity per cell (`ludion docs mesh-grids`).
 - **`Fade` on the root fades the children**: a mesh with no `Fade` of its own takes its nearest ancestor's.
 
+## Hide versus fade
+
+- **`Visibility { visible: false }` hides**: the entity and its `Parent` descendants leave every pass, shadows and lights included. A part's own `visible: true` never shows it under a hidden root. `cast_shadows: false` keeps it on screen without shadows.
+- **`Fade` dithers** for camera occlusion: beauty pass only; shadows and point/spot lights ignore it, and a mesh without one takes its nearest ancestor's.
+- A toggle on a presentation entity is presentation state: `sim.hash` does not move. Under present interpolation a hidden-to-shown entity snaps in like a spawn. `render.bounds` still reports a hidden entity, with `hidden: true`. A hidden emitter's playback is untouched.
+- `examples/gallery/visibility.yaml` is the golden.
+
 ## Frame pacing
 
 A window draws from a presenter thread at the display's refresh rate; the sim never waits on it. By default each tick's image is drawn once and repeated. `Engine::builder().present_interpolation(true)` instead draws every refresh blended between the last two ticks (the window lags up to one tick). Render-only: the sim, `WorldHash`, replays, screenshot, stream and goldens never blend.

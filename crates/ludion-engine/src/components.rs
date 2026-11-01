@@ -1316,6 +1316,8 @@ fn color_component_diagnostic(
 /// A mesh without its own `Fade` takes its nearest ancestor's through `Parent`, so fading a prefab's
 /// root fades its parts; a part's own `Fade` wins.
 ///
+/// Beauty pass only: shadows and point/spot lights ignore `Fade`; hide an entity with [`Visibility`].
+///
 /// `Mesh.color`'s alpha is **deliberately not repurposed** for this: that alpha is a tint channel
 /// (currently unblended on the opaque path) and stays so — fade rides its own instance lane.
 ///

@@ -148,6 +148,10 @@ change — some fragments of the instance simply aren't written.
 A mesh with no `Fade` of its own takes its nearest ancestor's through `Parent`, so fading a prefab's
 root fades its parts.
 
+`Fade` is **beauty-only**: shadows (sun, cascades, local atlas, drop-shadow occlusion) and point/spot
+lights ignore it, so a faded wall still casts a full shadow and a faded lamp still lights. To hide an
+entity from every pass, use `Visibility` (`ludion docs components`; `ludion docs presentation`).
+
 `Fade` is deliberately **not** the `Mesh.color` alpha channel — that field stays a tint (unblended on
 the opaque path) and `Fade` rides its own instance lane, so tinting and occlusion fade never fight
 over one number. The engine never decides *who* fades or *when* — that is entirely game policy. The
