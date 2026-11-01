@@ -117,7 +117,7 @@ pub use bisect::{
     RunConfig, WorldCapture, WorldDiff, bisect_divergence, first_divergent_frame,
     localize_divergence, verify_replay_keyframes, world_diff,
 };
-pub use builder::EngineBuilder;
+pub use builder::{CursorMode, EngineBuilder};
 pub use character::{
     CharacterClipData, CharacterData, ClipContact, JointHeight, contact_heights,
     load as load_character,

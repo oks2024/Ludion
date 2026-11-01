@@ -152,7 +152,7 @@
 pub use ludion_engine::{
     Anchor, Animation, AnimationEvents, AntiAliasing, AssemblyData, AudioCategory, AudioEmitter,
     AudioEvent, AudioQueue, BlendCurve, BlendIn, BulletKind, Camera, CameraRig, CategoryGains,
-    ClipAnchor, ClipEvent, DebugCategories, DebugPen, Decal, DecalBlend, DecalMap,
+    ClipAnchor, ClipEvent, CursorMode, DebugCategories, DebugPen, Decal, DecalBlend, DecalMap,
     DecalReceiverSet, Diagnostics, DirectionalLight, DocStore, DropShadow, EmitShape, Engine,
     EngineBuilder, Environment, Fade, FollowerMotion, FontLibrary, GiDynamic, GroundMarker,
     GroundMarkerShape, Keep, LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF,

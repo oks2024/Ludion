@@ -68,6 +68,9 @@ pub struct StartOptions {
     /// restore fails. A recording cannot arm on a restored world (`L3047`), so this and `record`
     /// together are refused. Honored for a game source only.
     pub restore: Option<PathBuf>,
+    /// The host's `--fullscreen` flag: a window host opens borderless fullscreen. Ignored with no
+    /// window.
+    pub fullscreen: bool,
     /// Bind the wire listener on this `host:port`. `None` hosts with no listener, even in a wire
     /// build.
     #[cfg(feature = "wire")]

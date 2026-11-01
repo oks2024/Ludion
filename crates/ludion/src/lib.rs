@@ -174,6 +174,10 @@ pub(crate) struct RunArgs {
     /// default `window` feature; a build without it refuses the flag (`L0018`).
     #[arg(long)]
     window: bool,
+    /// Open the window borderless fullscreen (Alt+Enter or F11 toggles it; Ctrl+Cmd+F on macOS).
+    /// `LUDION_FULLSCREEN=1` or `0` sets the default; this flag beats it.
+    #[arg(long, requires = "window")]
+    fullscreen: bool,
     /// Instead of hosting, profile this game's scene: drive a warmup then N measured frames with the
     /// game's own systems running, print the `ProfileReport` JSON to stdout, and exit. Run in
     /// `--release` for numbers comparable to a budget.
@@ -443,8 +447,7 @@ pub(crate) struct RunArgs {
 /// frame and every dimensionless `render.screenshot` is produced at that extent, so it is the one
 /// knob that shrinks readback, encode, socket write, decode and blit together. It is spelled
 /// `--render-size` rather than `--width`/`--height` because those two are `--replay-frames`'s. The
-/// extent is sim input (`RenderExtent`): a recording carries it in its header and every applied
-/// `render.size`, and a game that never reads it hashes identically at every extent — but **a game's mouse
+/// extent is render-only — no `WorldHash`, snapshot or recording moves with it — but **a game's mouse
 /// input arrives as render-target pixels**, so a session played at one extent is a different input
 /// trace from the same session played at another. Each replays bit-identically; they are not
 /// comparable with each other. Committed golden-session recordings are made at the default extent:
@@ -522,6 +525,7 @@ pub fn run(builder: EngineBuilder) -> ExitCode {
         paused: args.paused,
         record: args.record,
         restore: args.restore,
+        fullscreen: args.fullscreen,
         listen: Some(args.addr),
         scene: Some(scene),
         threads: args.threads,
@@ -1678,7 +1682,7 @@ fn run_bake_probes(
 ///
 /// The build also runs every [`EngineBuilder::validate_docs`] pass the game registered — the
 /// cross-reference rules (a quest's district, a ware's id, a spawn's enemy) schema validation cannot
-/// see. An `Error` one of those passes reports (typically `L1144`) takes the same collapsed-error
+/// see, after the engine's own `doc_singleton` count (`L1315`). An `Error` one of those passes reports (typically `L1144`) takes the same collapsed-error
 /// path as a malformed doc, so a broken reference fails `--check-docs` the way a broken file does;
 /// its `Warning`s survive on the built engine and are printed here, before the summary, without
 /// failing the run.
@@ -1974,6 +1978,28 @@ mod check_docs_tests {
         let builder = EngineBuilder::new().doc_kind::<Weapon>("weapon");
         let code = run_check_docs(builder, &dir.join("scene.yaml"));
         assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    /// A `doc_singleton` kind with two docs on disk fails `--check-docs` with the engine's `L1315`.
+    #[test]
+    fn a_second_singleton_doc_fails_check_docs() {
+        let dir = fresh_dir("singleton-two");
+        write(&dir, "scene.yaml", SCENE);
+        write(&dir, "weapons/crossbow.yaml", CROSSBOW);
+        write(&dir, "weapons/axe.yaml", AXE);
+
+        let builder = EngineBuilder::new().doc_singleton::<Weapon>("weapon");
+        let code = run_check_docs(builder, &dir.join("scene.yaml"));
+        assert_eq!(code, ExitCode::FAILURE);
+
+        let builder = EngineBuilder::new().doc_singleton::<Weapon>("weapon");
+        let err = match builder.load_scene_file(&dir.join("scene.yaml")) {
+            Ok(_) => panic!("two singleton docs must fail the build"),
+            Err(diagnostic) => diagnostic,
+        };
+        let rendered = err.to_string();
+        assert!(rendered.contains("L1315"), "{rendered}");
+        assert!(rendered.contains("weapons/axe.yaml"), "{rendered}");
     }
 
     /// Two independently-broken docs (one envelope error, one schema error) both fail the build, and

@@ -69,6 +69,7 @@
 //! # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
 //! ```
 
+pub mod chrome;
 mod frame;
 pub mod gamepad;
 mod gpu;
@@ -89,7 +90,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_protocol::Command;
 use ludion_protocol::command::InputInjectParams;
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
+use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::PhysicalKey;
@@ -123,9 +124,9 @@ pub struct WindowOptions {
     pub url: String,
     /// The window title.
     pub title: String,
-    /// Initial inner width in physical pixels (a typical value is 1280).
+    /// Initial inner width in logical pixels (points; a typical value is 1280), shrunk to fit the monitor.
     pub width: u32,
-    /// Initial inner height in physical pixels (a typical value is 720).
+    /// Initial inner height in logical pixels (points; a typical value is 720), shrunk to fit the monitor.
     pub height: u32,
 }
 
@@ -300,7 +301,13 @@ impl ApplicationHandler<UserEvent> for App {
         }
         let attributes = Window::default_attributes()
             .with_title(self.options.title.clone())
-            .with_inner_size(PhysicalSize::new(self.options.width, self.options.height));
+            .with_inner_size(chrome::first_window_size(
+                LogicalSize::new(
+                    f64::from(self.options.width),
+                    f64::from(self.options.height),
+                ),
+                chrome::monitor_logical_size(event_loop),
+            ));
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(e) => {

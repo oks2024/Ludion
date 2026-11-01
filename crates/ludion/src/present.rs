@@ -32,6 +32,7 @@
 //! boot deadlocks it. So a close or Ctrl-C only asks the core to stop, and the loop keeps running
 //! until the boot has ended.
 
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,21 +42,26 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
+use ludion_engine::CursorMode;
 use ludion_engine::live::SIM_STOP_GRACE;
+use ludion_window::chrome::{
+    self, CursorAutoHide, FullscreenChord, HostPlatform, KeyRoute, dev_title, game_title,
+};
 use ludion_window::keymap::KeyMapper;
 use ludion_window::mouse;
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
+use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::PhysicalKey;
-use winit::window::{Window, WindowId};
+use winit::keyboard::{ModifiersState, PhysicalKey};
+use winit::window::{Fullscreen, Window, WindowId};
 
 use crate::embed::{Embedded, Injector, Source, StartOptions, Surface};
 use crate::host;
 
-/// The window's initial inner size in physical pixels, matching the viewer's — the default stream
-/// extent, so the first frame lands 1:1 with no letterbox margin.
+/// The window's requested initial inner size in logical pixels (points), matching the viewer's — the
+/// default stream extent on a 1x display. [`chrome::first_window_size`] shrinks it to the monitor;
+/// `surface_size` is always read back from the window in physical pixels.
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 720;
 
@@ -78,6 +84,10 @@ impl StopTimer {
 
     fn expired(&self, now: Instant) -> bool {
         self.0.is_some_and(|deadline| now >= deadline)
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.0
     }
 }
 
@@ -107,6 +117,23 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions) -> ExitCode {
         }
     };
     event_loop.set_control_flow(ControlFlow::Wait);
+    let (title_hint, fullscreen_default, cursor) = match &source {
+        Source::Game { builder, .. } => (
+            builder.title_hint().map(str::to_owned),
+            builder.fullscreen_hint(),
+            builder.cursor_hint(),
+        ),
+        #[cfg(feature = "wire")]
+        Source::Built { .. } => (None, false, CursorMode::default()),
+    };
+    let fullscreen =
+        match chrome::resolve_startup_fullscreen(options.fullscreen, fullscreen_default) {
+            Ok(fullscreen) => fullscreen,
+            Err(diagnostic) => {
+                eprintln!("{diagnostic}");
+                return ExitCode::FAILURE;
+            }
+        };
     let proxy = event_loop.create_proxy();
 
     let running = Arc::new(AtomicBool::new(true));
@@ -134,6 +161,13 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions) -> ExitCode {
         fatal: None,
         stop_timer: StopTimer::default(),
         stuck: false,
+        title_hint,
+        fullscreen,
+        cursor_enabled: cursor == CursorMode::AutoHide,
+        platform: HostPlatform::current(),
+        modifiers: ModifiersState::empty(),
+        chord: FullscreenChord::default(),
+        cursor: None,
     };
     let loop_result = event_loop.run_app(&mut app);
 
@@ -212,18 +246,50 @@ struct App {
     stop_timer: StopTimer,
     /// Set when the loop exited because the stop timer ran out, not because the boot ended.
     stuck: bool,
+    /// The builder's window title, if the game set one.
+    title_hint: Option<String>,
+    /// Whether the window opens borderless fullscreen (flag, environment or builder default).
+    fullscreen: bool,
+    /// Whether an idle cursor hides ([`CursorMode::AutoHide`]).
+    cursor_enabled: bool,
+    platform: HostPlatform,
+    /// The latest modifier state, for the fullscreen chord.
+    modifiers: ModifiersState,
+    chord: FullscreenChord,
+    /// Built with the window.
+    cursor: Option<CursorAutoHide>,
+}
+
+/// The window title a game shows: the builder's, else the manifest's `name`, else `Ludion`. The
+/// manifest is looked up from the scene's directory; any failure falls back silently, since the
+/// title is cosmetic and export/sync report a bad manifest.
+pub(crate) fn game_title_for(builder_title: Option<&str>, scene: &Path) -> String {
+    let manifest_name = std::path::absolute(scene)
+        .ok()
+        .and_then(|scene| scene.parent().and_then(ludion_engine::manifest::find))
+        .and_then(|root| ludion_engine::manifest::load(&root).ok())
+        .map(|manifest| manifest.name);
+    game_title(builder_title, manifest_name.as_deref())
 }
 
 impl App {
     /// Creates the window and its surface, starts the core with them, and starts the workers — in
     /// that order, because the core's boot thread must take the surface before it builds a renderer.
+    // The window host owns the wall clock; the cursor timer never touches the sim.
+    #[allow(clippy::disallowed_methods)]
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<(), Diagnostic> {
         let (Some(source), Some(options)) = (self.source.take(), self.options.take()) else {
             return Ok(()); // a previous `resumed` already started (or failed); never start twice
         };
-        let attributes = Window::default_attributes()
-            .with_title("Ludion")
-            .with_inner_size(PhysicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT));
+        let mut attributes = Window::default_attributes()
+            .with_title(game_title(self.title_hint.as_deref(), None))
+            .with_inner_size(chrome::first_window_size(
+                LogicalSize::new(f64::from(WINDOW_WIDTH), f64::from(WINDOW_HEIGHT)),
+                chrome::monitor_logical_size(event_loop),
+            ));
+        if self.fullscreen {
+            attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
@@ -247,9 +313,11 @@ impl App {
             }),
             options,
         )?;
-        if let Some(name) = embedded.scene().file_name() {
-            window.set_title(&format!("Ludion — {}", name.to_string_lossy()));
-        }
+        let file = embedded.scene().file_name().map(|n| n.to_string_lossy());
+        window.set_title(&dev_title(
+            &game_title_for(self.title_hint.as_deref(), embedded.scene()),
+            file.as_deref(),
+        ));
 
         let input_rx = self
             .input_rx
@@ -273,6 +341,7 @@ impl App {
         ));
 
         self.surface_size = (inner.width, inner.height);
+        self.cursor = Some(CursorAutoHide::new(self.cursor_enabled, Instant::now()));
         self.embedded = Some(embedded);
         self.window = Some(window);
         Ok(())
@@ -285,11 +354,10 @@ impl App {
     /// Arms the stop timer: a sim that never ends the boot must not hang the window forever.
     // The window host owns the wall clock; the stop deadline never touches the sim.
     #[allow(clippy::disallowed_methods)]
-    fn request_stop(&mut self, event_loop: &ActiveEventLoop) {
+    fn request_stop(&mut self) {
         if let Some(embedded) = &self.embedded {
             embedded.request_stop();
-            let deadline = self.stop_timer.arm(Instant::now());
-            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+            self.stop_timer.arm(Instant::now());
         }
     }
 
@@ -335,32 +403,51 @@ impl ApplicationHandler<HostEvent> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: HostEvent) {
         match event {
-            HostEvent::Stop => self.request_stop(event_loop),
+            HostEvent::Stop => self.request_stop(),
             HostEvent::RenderFault(diagnostic) => {
                 self.record_fatal(diagnostic);
-                self.request_stop(event_loop);
+                self.request_stop();
             }
             HostEvent::Ended => event_loop.exit(),
         }
     }
 
-    // Runs when the `WaitUntil` deadline passes (and after every other wake); only the stop timer acts.
+    // Runs when the `WaitUntil` deadline passes (and after every other wake); the one place control
+    // flow is set: the stop timer and the idle-cursor timer share it.
     #[allow(clippy::disallowed_methods)]
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.stop_timer.expired(Instant::now()) {
+        let now = Instant::now();
+        if self.stop_timer.expired(now) {
             self.stuck = true;
             event_loop.exit();
+            return;
         }
+        if let Some(cursor) = &mut self.cursor
+            && let Some(visible) = cursor.poll(now)
+            && let Some(window) = &self.window
+        {
+            window.set_cursor_visible(visible);
+        }
+        let next = [
+            self.stop_timer.deadline(),
+            self.cursor.as_ref().and_then(CursorAutoHide::deadline),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        event_loop.set_control_flow(next.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
+    // The window host owns the wall clock; the cursor timer never touches the sim.
+    #[allow(clippy::disallowed_methods)]
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         _window_id: WindowId,
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => self.request_stop(event_loop),
+            WindowEvent::CloseRequested => self.request_stop(),
             WindowEvent::Resized(size) => {
                 self.surface_size = (size.width, size.height);
                 // The render thread reconfigures the swapchain on its next present; nothing to
@@ -369,11 +456,35 @@ impl ApplicationHandler<HostEvent> for App {
                     embedded.resize(size.width, size.height, None);
                 }
             }
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::KeyboardInput {
                 event,
                 is_synthetic: false,
                 ..
             } => {
+                if let PhysicalKey::Code(key_code) = event.physical_key {
+                    match self.chord.on_key(
+                        self.platform,
+                        key_code,
+                        self.modifiers,
+                        event.state,
+                        event.repeat,
+                    ) {
+                        KeyRoute::Toggle => {
+                            if let Some(window) = &self.window {
+                                let next = if window.fullscreen().is_some() {
+                                    None
+                                } else {
+                                    Some(Fullscreen::Borderless(None))
+                                };
+                                window.set_fullscreen(next);
+                            }
+                            return;
+                        }
+                        KeyRoute::Swallow => return,
+                        KeyRoute::Forward => {}
+                    }
+                }
                 if let PhysicalKey::Code(key_code) = event.physical_key
                     && let Some(wire) = self.keys.map(key_code, event.state, event.repeat)
                 {
@@ -389,6 +500,12 @@ impl ApplicationHandler<HostEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                if let Some(cursor) = &mut self.cursor
+                    && let Some(visible) = cursor.on_motion(Instant::now())
+                    && let Some(window) = &self.window
+                {
+                    window.set_cursor_visible(visible);
+                }
                 if let Some(pos) = self.map_cursor(position.x as f32, position.y as f32) {
                     let _ = self.input_tx.send(mouse::mouse_move_event(pos));
                 }
@@ -489,5 +606,6 @@ mod tests {
             deadline,
             "a second request never extends it"
         );
+        assert_eq!(timer.deadline(), Some(deadline));
     }
 }
