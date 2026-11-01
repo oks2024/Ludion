@@ -198,12 +198,27 @@ fn hinge_strip_test(clip: &str) -> GoldenTest {
     test
 }
 
-/// Renders the hinge strip for `clip` and compares it against the committed golden at exactly SSIM
-/// 1.0, or (re)writes the golden under `LUDION_BLESS`. Skips with no GPU adapter.
-fn check_hinge_strip(clip: &str) {
-    let test = hinge_strip_test(clip);
-    let label = format!("hinge_{clip}_strip");
+/// The mannequin character crossfading `run` into `idle` over eight phases at `hold: 5`: the fade
+/// steps on the pose grid, so the first two cells repeat.
+fn mannequin_crossfade_hold_test() -> GoldenTest {
+    let mut test = GoldenTest::new(
+        gallery_dir()
+            .join("characters")
+            .join("mannequin.character.yaml"),
+        os_goldens().join("mannequin-run-idle-crossfade-hold5.png"),
+    );
+    test.width = 900;
+    test.height = 600;
+    test.crossfade = Some("run:idle:0.5".to_string());
+    test.strip = Some(8);
+    test.hold = Some(5);
+    test.ssim_threshold = 1.0;
+    test
+}
 
+/// Renders a 900×600 strip test and compares it against the committed golden at exactly SSIM 1.0,
+/// or (re)writes the golden under `LUDION_BLESS`. Skips with no GPU adapter.
+fn check_strip(test: GoldenTest, label: &str) {
     if bless_requested() {
         match test.bless() {
             Ok(GoldenOutcome::Blessed { .. }) => {}
@@ -239,13 +254,22 @@ fn check_hinge_strip(clip: &str) {
 /// The hinge's `snap` strip: stepped keys hold each pose on twos.
 #[test]
 fn needs_gpu_hinge_snap_strip_matches_committed_golden_at_exactly_one() {
-    check_hinge_strip("snap");
+    check_strip(hinge_strip_test("snap"), "hinge_snap_strip");
 }
 
 /// The hinge's `open` strip: the lid swings smoothly across the four phases.
 #[test]
 fn needs_gpu_hinge_open_strip_matches_committed_golden_at_exactly_one() {
-    check_hinge_strip("open");
+    check_strip(hinge_strip_test("open"), "hinge_open_strip");
+}
+
+/// A crossfade at `hold: 5`: the fade steps on the pose grid, so the first two phases repeat.
+#[test]
+fn needs_gpu_mannequin_crossfade_hold_strip_matches_committed_golden_at_exactly_one() {
+    check_strip(
+        mannequin_crossfade_hold_test(),
+        "mannequin_crossfade_hold_strip",
+    );
 }
 
 /// The gallery's `ui-hud.yaml` scene rendered at 1920×1080 (the discovery pairing already covers it

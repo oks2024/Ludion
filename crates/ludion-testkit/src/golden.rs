@@ -84,6 +84,13 @@ pub struct GoldenTest {
     /// Render this many evenly spaced clip phases side by side instead of one instant — a *strip*
     /// golden. Needs [`clip`](Self::clip).
     pub strip: Option<u32>,
+    /// For an assembly, character or prefab source: render the blend of two bound clips as a strip
+    /// of phases, exactly `ludion render --crossfade FROM:TO:SECONDS` (five phases unless
+    /// [`strip`](Self::strip) says otherwise). Conflicts with [`clip`](Self::clip).
+    pub crossfade: Option<String>,
+    /// Hold each pose for this many sim ticks (stepped cadence), exactly `ludion render --hold N`.
+    /// `None` is every tick.
+    pub hold: Option<u32>,
     /// For a scene (not a model document): tick this many times before extracting, exactly what
     /// `ludion render --frames N` does. `0` (the default) extracts at tick 0 — every golden that
     /// existed before this field did. This is how a `Sprite`'s flipbook or a `ParticleEmitter`'s
@@ -135,6 +142,8 @@ impl std::fmt::Debug for GoldenTest {
             .field("clip", &self.clip)
             .field("time", &self.time)
             .field("strip", &self.strip)
+            .field("crossfade", &self.crossfade)
+            .field("hold", &self.hold)
             .field("frames", &self.frames)
             .field("debug_draw", &self.debug_draw)
             .field("debug_view", &self.debug_view)
@@ -192,6 +201,8 @@ impl GoldenTest {
             clip: None,
             time: None,
             strip: None,
+            crossfade: None,
+            hold: None,
             frames: 0,
             debug_draw: ludion_engine::DebugCategories::None,
             debug_view: None,
@@ -429,11 +440,19 @@ impl GoldenTest {
             (Some(kind), _)
                 if ludion_scene::kind_entry(kind).is_some_and(|entry| entry.model_sheet) =>
             {
+                let crossfade = self
+                    .crossfade
+                    .as_deref()
+                    .map(ludion_engine::parse_crossfade)
+                    .transpose()
+                    .map_err(|d| vec![d])?;
                 let outcome =
                     ludion_engine::render_model_sheet(&ludion_engine::ModelSheetRequest {
                         clip: self.clip.as_deref(),
                         time: self.time,
                         strip: self.strip,
+                        crossfade,
+                        hold: self.hold,
                         ..ludion_engine::ModelSheetRequest::new(
                             &[self.scene.as_path()],
                             self.width,

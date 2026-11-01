@@ -117,7 +117,7 @@ pub const KINDS: &[KindEntry] = &[
         noun: "a skinned character",
         check: KindCheck::Here(|s| crate::check_character(s).map(drop)),
         doc_store: false,
-        model_sheet: false,
+        model_sheet: true,
     },
     // The registry half runs in `ludion check-scene`'s prefab arm.
     KindEntry {
