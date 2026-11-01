@@ -135,7 +135,7 @@ struct Session {
     gains: CategoryGains,
     caps: VoiceCaps,
     seconds_per_tick: f64,
-    /// Dropped when the session ends, which is what [`AudioSink::wait`] waits on.
+    /// Dropped when the session ends, which is what [`AudioSink::wait_timeout`] waits on.
     done: Sender<()>,
 }
 
@@ -186,11 +186,14 @@ impl AudioSink {
         AudioSink { done }
     }
 
-    /// Blocks until the session has ended and its thread is idle again. A host never needs it:
-    /// dropping the sink detaches, and the session ends by itself once the engine's sender is gone.
-    pub fn wait(self) {
+    /// Waits at most `timeout` for the session to end and its thread to go idle; `true` once it has.
+    /// A host waits before it lets the process exit, so no thread is still opening the device then.
+    pub fn wait_timeout(self, timeout: Duration) -> bool {
         // Disconnects once the session's `done` sender drops; no message is ever sent.
-        let _ = self.done.recv();
+        !matches!(
+            self.done.recv_timeout(timeout),
+            Err(RecvTimeoutError::Timeout)
+        )
     }
 }
 
@@ -208,7 +211,7 @@ fn spawn_playback_thread(first: Session) {
                     session.caps,
                     session.seconds_per_tick,
                 );
-                // Idle before the sink hears the end, so a restart after `wait` reuses this thread (one started
+                // Idle before the sink hears the end, so a restart after `wait_timeout` reuses this thread (one started
                 // before the old session ends takes a new pooled thread).
                 idle_threads().push(sessions_tx.clone());
                 drop(session.done);
@@ -3361,7 +3364,26 @@ mod tests {
             1.0 / 60.0,
         );
         drop(tx); // disconnect; the thread must notice and exit
-        sink.wait(); // completes rather than hanging
+        // completes rather than hanging
+        assert!(
+            sink.wait_timeout(Duration::from_secs(10)),
+            "the session ends once its sender drops"
+        );
+    }
+
+    #[test]
+    fn a_sink_wait_times_out_while_its_sender_lives() {
+        let _pool = POOL.lock().unwrap_or_else(PoisonError::into_inner);
+        let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
+        let sink = AudioSink::spawn(
+            rx,
+            std::env::temp_dir(),
+            CategoryGains::default(),
+            VoiceCaps::default(),
+            1.0 / 60.0,
+        );
+        assert!(!sink.wait_timeout(Duration::from_millis(50)));
+        drop(tx); // the session then ends on its own
     }
 
     #[test]
@@ -3398,7 +3420,10 @@ mod tests {
                 1.0 / 60.0,
             );
             drop(tx);
-            sink.wait();
+            assert!(
+                sink.wait_timeout(Duration::from_secs(10)),
+                "the session ends once its sender drops"
+            );
             assert!(
                 !idle_threads().is_empty(),
                 "the thread that opened the device outlives its session"

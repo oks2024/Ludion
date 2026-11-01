@@ -22,7 +22,6 @@ use std::path::PathBuf;
 #[cfg(any(feature = "wire", not(feature = "window"), test))]
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(feature = "wire")]
 use std::time::Duration;
 
 #[cfg(all(feature = "wire", not(feature = "window")))]
@@ -289,8 +288,13 @@ fn second_press(pressed: &AtomicBool) -> bool {
     pressed.swap(true, Ordering::Relaxed)
 }
 
-/// Wires `engine`'s audio-event sender to a playback sink rooted at `project_root`. The sink is
-/// detached: its session ends by itself once the engine's sender is gone.
+/// How long a stopping host waits for its audio session to end. Well inside `SIM_STOP_GRACE`,
+/// which also bounds the boot thread that waits.
+pub(crate) const AUDIO_STOP_GRACE: Duration = Duration::from_secs(2);
+
+/// Wires `engine`'s audio-event sender to a playback sink rooted at `project_root` and returns the
+/// sink. Its session ends by itself once the engine's sender is gone; a stopping host waits for that
+/// (bounded by [`AUDIO_STOP_GRACE`]) before the process can exit.
 ///
 /// The engine emits `AudioEvent`s on the channel's sending half; the sink resolves and plays them
 /// under the content root, mixed down through the game's authored bus balance
@@ -304,17 +308,17 @@ pub(crate) fn wire_audio(
     engine: &mut Engine,
     project_root: PathBuf,
     caps: ludion_audio::VoiceCaps,
-) {
+) -> ludion_audio::AudioSink {
     let gains = engine.category_gains();
     let (audio_tx, audio_rx) = crossbeam_channel::unbounded();
     engine.set_audio_sender(audio_tx);
-    drop(ludion_audio::AudioSink::spawn(
+    ludion_audio::AudioSink::spawn(
         audio_rx,
         project_root,
         gains,
         caps,
         engine.seconds_per_tick(),
-    ));
+    )
 }
 
 /// The voice caps a game at `scene_dir` plays under: the `[audio]` table of the nearest `ludion.toml`

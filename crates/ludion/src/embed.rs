@@ -932,7 +932,7 @@ fn run_boot(boot: Boot) -> bool {
         Ok(caps) => caps,
         Err(diagnostic) => return fail(diagnostic),
     };
-    host::wire_audio(&mut engine, project_root.clone(), caps);
+    let audio = host::wire_audio(&mut engine, project_root.clone(), caps);
 
     // From here the boot only serves its intake: transitions are answered, not queued.
     running.store(true, Ordering::Release);
@@ -945,7 +945,7 @@ fn run_boot(boot: Boot) -> bool {
                 .listen
                 .as_deref()
                 .expect("a listener host names its address");
-            return host_listener(
+            let ended_well = host_listener(
                 engine,
                 addr,
                 host::HostOptions {
@@ -960,6 +960,7 @@ fn run_boot(boot: Boot) -> bool {
                 &stop,
                 &project_root,
             );
+            return after_audio(audio, ended_well);
         }
         StopWait::Sim(shutdown) => shutdown,
     };
@@ -969,10 +970,19 @@ fn run_boot(boot: Boot) -> bool {
     #[cfg(not(feature = "wire"))]
     let _ = (record_path, attached);
     // No listener, so no transport: the loop still presents into an attached surface.
-    match run_live(engine, intake, shutdown, None) {
+    let ended_well = match run_live(engine, intake, shutdown, None) {
         Ok(()) => true,
         Err(diagnostic) => fail(diagnostic),
-    }
+    };
+    after_audio(audio, ended_well)
+}
+
+/// Waits (bounded) for the audio session to end, then passes `ended_well` through. The process may
+/// exit right after the stop, and exiting while the audio thread is opening the device can deadlock
+/// the exit on Windows.
+fn after_audio(audio: ludion_audio::AudioSink, ended_well: bool) -> bool {
+    audio.wait_timeout(host::AUDIO_STOP_GRACE);
+    ended_well
 }
 
 /// The process argv as [`run`](crate::run)'s arguments. Foreign arguments (Xcode's
