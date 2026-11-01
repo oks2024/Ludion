@@ -1,6 +1,6 @@
 # Plan: Display-paced present — a presenter thread, then interpolation between ticks
 
-> Status: **design approved by the engine owner (2026-11-01)**; 01 shipped (presenter module, engine wiring), 02 shipped (r1900 blend, r1902 engine data), 03 shipped (presenter interpolates, `present_interpolation` flag; rev with the Tech Lead), 04 shipped (particles and bullets blend by instance key; rev with the Tech Lead), 05 shipped (review fixes: a skipped present parks, replaced packets merge their cuts, shader reload builds no renderer). Trigger:
+> Status: **mechanized (2026-11-01)** — every wave shipped, gates green; closes when its owed live checks pass (`Plan/owed.md`: windowed smoke on both pinned boxes, a 120 Hz Mac trace and look, the iOS M3 stall re-read). 01 presenter module + engine wiring r1898–r1899 (test de-flake r1901); 02 blend r1900, engine blend data r1902; 03 presenter interpolates + `present_interpolation` r1903; 04 particles/bullets by instance key r1904; 05 review fixes r1905. Trigger:
 > Clockout request 0026 (`engine-requests/0026-sim-presentation-boundary-display-paced-present.md`,
 > priority *painful*). Code facts read from the tree on 2026-11-01 (file:line pointers are of that
 > date; re-grep before editing).
