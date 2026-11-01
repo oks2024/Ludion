@@ -158,7 +158,7 @@ pub use ludion_engine::{
     GroundMarkerShape, Keep, LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF,
     LANE_ON, LANE_PATH, LaneConstraint, LaneEnds, LaneInput, LookAhead, MOTOR_AIRBORNE,
     MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE, MOTOR_STUCK,
-    MOTOR_WALL, MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name,
+    MOTOR_WALL, MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name, NoInterpolate,
     PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PathDocument, PathFollower,
     PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler, PatternDoc,
     PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance, PrefabReverted,

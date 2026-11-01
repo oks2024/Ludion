@@ -30,6 +30,12 @@ the crate at large is `ludion devdocs ludion-engine`.
   handover-only frame creates no sim renderer or ring. The presenter is host state exactly as `renderer` and `stream_ring` are — never hashed,
   snapshotted or serialized — and a host without one takes exactly the calls it always did, which is
   what keeps goldens, screenshots and the frame stream byte-identical.
+- **The presenter blends per refresh when packets carry `BlendData`** (`EngineBuilder::present_interpolation`; off
+  collects none and draws once per frame). `alpha = (now − tick.at) / period`, clamped, never extrapolated. A packet
+  blends only toward the directly preceding frame's data: a skipped frame index, a `rebased` stamp or missing data
+  snaps to the newer scene (a skipped packet lost its `PresentCuts`). `Instant::now` stays inside `run_loop`.
+- **Blended re-renders reuse the frame index**, so per-render renderer state (GI inject) advances per refresh, not
+  per tick. Accepted because it is render-only; the sim-side renderer, which feeds every verification path, never blends.
 
 ## Verify
 

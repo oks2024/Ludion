@@ -3,7 +3,8 @@
 //!
 //! The sim thread extracts a [`RenderScene`] once per tick and [`publish`](Presenter::publish)es it as
 //! a [`PresentPacket`] into a one-slot mailbox — latest wins, the sim never waits beyond a pointer
-//! swap. The presenter thread renders a packet it has not seen, then presents the last output; under
+//! swap. The presenter thread renders a packet it has not seen (or, when the packet carries blend data,
+//! every refresh at the alpha between the last two ticks), then presents the last output; under
 //! `Fifo` the present blocks in swapchain acquire, so the loop runs at the display's refresh rate and
 //! a 120 Hz panel re-presents each tick's image without re-rendering it. Faults and the renderer's
 //! probe resolve come back as [`PresenterNote`]s the sim thread drains.
@@ -23,7 +24,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::FrameIndex;
 use ludion_render_graph::{FrameSinks, Gpu, PresentTarget, StreamReadback};
 
-use crate::blend::BlendData;
+use crate::blend::{BlendData, blend};
 use crate::graph::{AntiAliasing, FrameSize};
 use crate::probe_capture::ProbeResolve;
 use crate::quality::{Quality, QualityParams};
@@ -214,7 +215,10 @@ fn run_loop(
     notes: &Sender<PresenterNote>,
     mut trace: Option<PresentTrace>,
 ) {
-    let mut rendered: Option<FrameIndex> = None;
+    let mut current: Option<PresentPacket> = None;
+    let mut prev_blend: Option<Arc<BlendData>> = None;
+    // The last drawn frame, and whether it was drawn at alpha 1 (a settled image needs no redraw).
+    let mut drawn: Option<(FrameIndex, bool)> = None;
     let mut dead = false;
     let mut last_probes = ProbeResolve::default();
     let mut last_error: Option<String> = None;
@@ -236,30 +240,58 @@ fn run_loop(
             continue;
         }
         if let Some(packet) = packet
-            && rendered != Some(packet.frame)
+            && current.as_ref().is_none_or(|c| c.frame != packet.frame)
         {
             if let (Some(trace), Some(tick)) = (trace.as_mut(), packet.tick) {
                 trace.note_tick(tick);
             }
-            match backend.render(&packet) {
-                Ok(()) => {
-                    rendered = Some(packet.frame);
-                    if let Some(probes) = backend.probe_resolve()
-                        && probes != last_probes
-                    {
-                        last_probes = probes.clone();
-                        let _ = notes.send(PresenterNote::Probes(probes));
-                    }
+            prev_blend = blend_source(current.as_ref(), &packet);
+            current = Some(packet);
+        }
+        let mut blended_now = false;
+        let mut failure = None;
+        if let Some(cur) = current.as_ref() {
+            let blending = match (&prev_blend, &cur.blend) {
+                (Some(prev), Some(next)) => {
+                    let alpha = alpha_at(Instant::now(), cur.tick);
+                    (alpha < 1.0).then_some((prev, next, alpha))
                 }
-                Err(diag) => {
-                    if report(notes, &mut last_error, diag) {
-                        dead = true;
-                        continue;
+                _ => None,
+            };
+            let settled = blending.is_none();
+            if !(settled && drawn == Some((cur.frame, true))) {
+                let result = match blending {
+                    Some((prev, next, alpha)) => backend.render(&PresentPacket {
+                        scene: Arc::new(blend(prev, &cur.scene, next, alpha)),
+                        ..cur.clone()
+                    }),
+                    None => backend.render(cur),
+                };
+                match result {
+                    Ok(()) => {
+                        drawn = Some((cur.frame, settled));
+                        blended_now = !settled;
+                        if let Some(probes) = backend.probe_resolve()
+                            && probes != last_probes
+                        {
+                            last_probes = probes.clone();
+                            let _ = notes.send(PresenterNote::Probes(probes));
+                        }
                     }
+                    Err(diag) => failure = Some(diag),
                 }
             }
         }
-        if backend.idle() || rendered.is_none() {
+        if let Some(diag) = failure {
+            // Not retried: the failed packet is dropped and the last good image keeps presenting.
+            current = None;
+            prev_blend = None;
+            if report(notes, &mut last_error, diag) {
+                dead = true;
+                continue;
+            }
+        }
+        if backend.idle() || drawn.is_none() {
             wait(shared, IDLE_WAIT);
             continue;
         }
@@ -270,10 +302,32 @@ fn run_loop(
             }
             continue;
         }
-        if let (Some(trace), Some(frame)) = (trace.as_mut(), rendered) {
-            trace.note_present(frame, started.elapsed());
+        if let (Some(trace), Some((frame, _))) = (trace.as_mut(), drawn) {
+            trace.note_present(frame, started.elapsed(), blended_now);
         }
     }
+}
+
+/// The previous tick's blend data when `next` can blend toward it: both ticks carry data, `next`
+/// directly follows `current` (a skipped packet lost its cuts) and was not a re-based tick.
+fn blend_source(current: Option<&PresentPacket>, next: &PresentPacket) -> Option<Arc<BlendData>> {
+    let current = current?;
+    next.blend.as_ref()?;
+    let contiguous = current.frame.0 + 1 == next.frame.0;
+    let rebased = next.tick.is_some_and(|tick| tick.rebased);
+    (contiguous && !rebased)
+        .then(|| current.blend.clone())
+        .flatten()
+}
+
+/// How far `now` is through `tick`'s period, clamped to `0..=1`; `1.0` with no tick, a zero period
+/// or a `now` before the tick. Takes `now` so it is not a clock site.
+fn alpha_at(now: Instant, tick: Option<TickStamp>) -> f32 {
+    let Some(tick) = tick else { return 1.0 };
+    if tick.period.is_zero() || now < tick.at {
+        return 1.0;
+    }
+    (now.duration_since(tick.at).as_secs_f32() / tick.period.as_secs_f32()).clamp(0.0, 1.0)
 }
 
 /// Sends `diag` as a fault or a deduplicated log note; true when it was fatal.
@@ -314,6 +368,7 @@ struct PresentTrace {
     repeats: usize,
     gaps: u64,
     rebased: usize,
+    blended: usize,
     last_frame: Option<FrameIndex>,
     waits_ms: Vec<f64>,
     window_start: Option<Instant>,
@@ -328,6 +383,7 @@ impl PresentTrace {
             repeats: 0,
             gaps: 0,
             rebased: 0,
+            blended: 0,
             last_frame: None,
             waits_ms: Vec::with_capacity(TRACE_INTERVAL),
             window_start: None,
@@ -341,10 +397,11 @@ impl PresentTrace {
     }
 
     #[allow(clippy::disallowed_methods)]
-    fn note_present(&mut self, frame: FrameIndex, wait: Duration) {
+    fn note_present(&mut self, frame: FrameIndex, wait: Duration, blended: bool) {
         let now = Instant::now();
         let start = *self.window_start.get_or_insert(now - wait);
         self.presents += 1;
+        self.blended += usize::from(blended);
         match self.last_frame {
             Some(last) if last == frame => self.repeats += 1,
             Some(last) => {
@@ -368,12 +425,13 @@ impl PresentTrace {
         };
         eprintln!(
             "present-trace: {:.1} presents/s, {} distinct frames, {} repeats, {} frame-index gaps, \
-             {} rebased ticks, acquire+present p50 {:.2} ms p99 {:.2} ms",
+             {} rebased ticks, {} blended presents, acquire+present p50 {:.2} ms p99 {:.2} ms",
             self.presents as f64 / elapsed.as_secs_f64().max(1e-9),
             self.distinct,
             self.repeats,
             self.gaps,
             self.rebased,
+            self.blended,
             at(0.50),
             at(0.99),
         );
@@ -382,6 +440,7 @@ impl PresentTrace {
         self.repeats = 0;
         self.gaps = 0;
         self.rebased = 0;
+        self.blended = 0;
         self.waits_ms.clear();
         self.window_start = None;
     }
@@ -471,12 +530,19 @@ impl PresentBackend for WindowBackend {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // tests stamp ticks on the wall clock
 mod tests {
     use super::*;
+
+    use crate::scene::{MeshInstance, MeshShape};
+    use ludion_core::ids::EntityId;
+    use ludion_core::math::glam::{Mat3, Mat4, Vec3};
 
     #[derive(Default)]
     struct Log {
         renders: Vec<u64>,
+        /// The x translation of the first mesh at each render, parallel to `renders`.
+        xs: Vec<f32>,
         presents: usize,
     }
 
@@ -489,7 +555,11 @@ mod tests {
 
     impl PresentBackend for Fake {
         fn render(&mut self, packet: &PresentPacket) -> Result<(), Diagnostic> {
-            self.log.lock().unwrap().renders.push(packet.frame.0);
+            let mut log = self.log.lock().unwrap();
+            log.renders.push(packet.frame.0);
+            if let Some(mesh) = packet.scene.meshes.first() {
+                log.xs.push(mesh.model.w_axis.x);
+            }
             Ok(())
         }
         fn present(&mut self) -> Result<(), Diagnostic> {
@@ -523,6 +593,153 @@ mod tests {
             tick: None,
             blend: None,
         }
+    }
+
+    const KEY: EntityId = EntityId::new(1, 0);
+
+    /// A one-mesh packet whose entity sits at x = `frame`, with matching blend data, stamped `at`
+    /// with a `period` tick.
+    fn blendable(frame: u64, at: Instant, period: Duration, rebased: bool) -> PresentPacket {
+        let model = Mat4::from_translation(Vec3::new(frame as f32, 0.0, 0.0));
+        let mut scene = RenderScene::empty((16, 16));
+        scene.meshes.push(MeshInstance {
+            shape: MeshShape::Cube,
+            model,
+            normal_matrix: Mat3::from_mat4(model),
+            color: [1.0; 4],
+            material: [0.5, 0.0, 0.0],
+            use_vertex_material: false,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            bone_offset: 0,
+        });
+        PresentPacket {
+            scene: Arc::new(scene),
+            tick: Some(TickStamp {
+                at,
+                period,
+                rebased,
+            }),
+            blend: Some(Arc::new(BlendData {
+                poses: vec![(KEY, model)],
+                meshes: vec![Some(KEY)],
+                ..BlendData::default()
+            })),
+            ..packet(frame)
+        }
+    }
+
+    fn spawn_fake() -> (Presenter, Arc<Mutex<Log>>, mpsc::Sender<()>) {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let (gate_tx, gate) = mpsc::channel();
+        let presenter = Presenter::spawn(Box::new(Fake {
+            log: Arc::clone(&log),
+            gate,
+        }));
+        (presenter, log, gate_tx)
+    }
+
+    #[test]
+    fn a_packet_blends_between_ticks_and_never_extrapolates() {
+        let (presenter, log, gate_tx) = spawn_fake();
+        let far = Duration::from_secs(10);
+        let now = Instant::now();
+        presenter.publish(blendable(1, now, far, false));
+        until("frame 1 rendered", || {
+            log.lock().unwrap().renders.len() == 1
+        });
+        presenter.publish(blendable(2, now, far, false));
+        for _ in 0..4 {
+            gate_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        until("blended renders", || log.lock().unwrap().renders.len() >= 4);
+        let log = log.lock().unwrap();
+        let xs = &log.xs[1..];
+        assert!(log.renders[1..].iter().all(|&f| f == 2));
+        assert!(xs.iter().all(|&x| (1.0..2.0).contains(&x)), "{xs:?}");
+        assert!(
+            xs.windows(2).all(|w| w[0] < w[1]),
+            "strictly rising: {xs:?}"
+        );
+    }
+
+    #[test]
+    fn a_rebased_tick_and_a_gap_snap_to_the_newer_pose() {
+        for (second, rebased) in [(2, true), (3, false)] {
+            let (presenter, log, gate_tx) = spawn_fake();
+            let far = Duration::from_secs(10);
+            let now = Instant::now();
+            presenter.publish(blendable(1, now, far, false));
+            until("frame 1 rendered", || {
+                log.lock().unwrap().renders.len() == 1
+            });
+            presenter.publish(blendable(second, now, far, rebased));
+            for _ in 0..3 {
+                gate_tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(15));
+            }
+            until("presents", || log.lock().unwrap().presents >= 3);
+            let log = log.lock().unwrap();
+            assert_eq!(log.xs, [1.0, second as f32], "one snapped render");
+        }
+    }
+
+    #[test]
+    fn a_settled_blend_stops_re_rendering() {
+        let (presenter, log, gate_tx) = spawn_fake();
+        let now = Instant::now();
+        let tick = Duration::from_millis(1);
+        presenter.publish(blendable(1, now, tick, false));
+        until("frame 1 rendered", || {
+            log.lock().unwrap().renders.len() == 1
+        });
+        presenter.publish(blendable(2, now, tick, false));
+        std::thread::sleep(Duration::from_millis(30));
+        for _ in 0..3 {
+            gate_tx.send(()).unwrap();
+        }
+        until("presents", || log.lock().unwrap().presents >= 3);
+        let settled = log.lock().unwrap().renders.len();
+        for _ in 0..5 {
+            gate_tx.send(()).unwrap();
+        }
+        until("more presents", || log.lock().unwrap().presents >= 8);
+        let log = log.lock().unwrap();
+        assert_eq!(log.renders.len(), settled, "no re-render once alpha is 1");
+        assert_eq!(*log.xs.last().unwrap(), 2.0);
+    }
+
+    #[test]
+    fn alpha_tracks_the_tick_and_clamps() {
+        let at = Instant::now();
+        let period = Duration::from_millis(100);
+        let stamp = |period| {
+            Some(TickStamp {
+                at,
+                period,
+                rebased: false,
+            })
+        };
+        assert_eq!(alpha_at(at, None), 1.0);
+        assert_eq!(alpha_at(at + period, stamp(Duration::ZERO)), 1.0);
+        assert_eq!(alpha_at(at, stamp(period)), 0.0);
+        assert_eq!(alpha_at(at + period / 2, stamp(period)), 0.5);
+        assert_eq!(alpha_at(at + period * 3, stamp(period)), 1.0);
+        let later = at + period;
+        assert_eq!(
+            alpha_at(
+                at,
+                Some(TickStamp {
+                    at: later,
+                    period,
+                    rebased: false
+                })
+            ),
+            1.0
+        );
     }
 
     fn until(what: &str, mut done: impl FnMut() -> bool) {

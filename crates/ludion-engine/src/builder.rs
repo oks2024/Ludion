@@ -106,6 +106,7 @@ pub struct EngineBuilder {
     anti_aliasing: AntiAliasing,
     title: Option<String>,
     fullscreen: bool,
+    present_interpolation: bool,
     cursor: CursorMode,
     registrations: Vec<Registration>,
     systems: Vec<SystemSpec>,
@@ -139,6 +140,7 @@ impl EngineBuilder {
             anti_aliasing: AntiAliasing::default(),
             title: None,
             fullscreen: false,
+            present_interpolation: false,
             cursor: CursorMode::default(),
             registrations: Vec::new(),
             systems: Vec::new(),
@@ -289,6 +291,23 @@ impl EngineBuilder {
     #[must_use]
     pub fn fullscreen(mut self, fullscreen: bool) -> Self {
         self.fullscreen = fullscreen;
+        self
+    }
+
+    /// Sets whether a windowed host draws every display refresh blended between the last two ticks
+    /// (default off: one draw per tick). Render-only: the sim, hashes, replays, screenshot, stream
+    /// and goldens are unchanged. Snaps and what blends are in `ludion docs presentation`
+    /// § Frame pacing.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// assert!(Engine::builder().present_interpolation(true).present_interpolation_hint());
+    /// ```
+    #[must_use]
+    pub fn present_interpolation(mut self, on: bool) -> Self {
+        self.present_interpolation = on;
         self
     }
 
@@ -777,6 +796,11 @@ impl EngineBuilder {
         self.fullscreen
     }
 
+    /// The flag recorded by [`present_interpolation`](EngineBuilder::present_interpolation).
+    pub fn present_interpolation_hint(&self) -> bool {
+        self.present_interpolation
+    }
+
     /// The mode recorded by [`cursor`](EngineBuilder::cursor).
     pub fn cursor_hint(&self) -> CursorMode {
         self.cursor
@@ -830,6 +854,7 @@ impl EngineBuilder {
         // world (re)build re-runs it.
         engine.plane = self.plane;
         engine.anti_aliasing_default = self.anti_aliasing;
+        engine.present_interpolation = self.present_interpolation;
         engine.install_plane();
         // Set before `install_docs`, which runs them: the passes are engine configuration derived
         // from the game, re-run on every world the engine builds.
@@ -1049,6 +1074,7 @@ mod tests {
         let defaults = Engine::builder();
         assert_eq!(defaults.title_hint(), None);
         assert!(!defaults.fullscreen_hint());
+        assert!(!defaults.present_interpolation_hint());
         assert_eq!(defaults.cursor_hint(), CursorMode::AutoHide);
 
         let set = Engine::builder()

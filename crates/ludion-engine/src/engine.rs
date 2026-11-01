@@ -290,6 +290,10 @@ pub struct Engine {
     /// weakest of the three sources; see [`anti_aliasing`](Engine::anti_aliasing). A client setting,
     /// never sim state: not hashed, not snapshotted, and invisible to `extract()`.
     pub(crate) anti_aliasing_default: AntiAliasing,
+    /// Whether a handover collects `BlendData` for the presenter to blend per refresh
+    /// ([`EngineBuilder::present_interpolation`](crate::EngineBuilder::present_interpolation)).
+    /// Render-only; never hashed or snapshotted.
+    pub(crate) present_interpolation: bool,
     /// The host's explicit mode ([`set_anti_aliasing`](Engine::set_anti_aliasing)), if it named one.
     /// Same status as `anti_aliasing_default`.
     anti_aliasing_override: Option<AntiAliasing>,
@@ -726,6 +730,7 @@ impl Engine {
             debug_view: None,
             render_scale_override: None,
             anti_aliasing_default: AntiAliasing::Off,
+            present_interpolation: false,
             anti_aliasing_override: None,
             anti_aliasing_game: None,
             quality: QualitySetting::default(),
@@ -3544,21 +3549,22 @@ impl Engine {
         let size = self.frame_size(width, height)?;
         let span = self.perf.is_some().then(Span::start);
         // The stream is the one path the view override moves: a subscriber sees where a human flew.
-        let collect = handover && self.presenter.is_some();
+        let publish = handover && self.presenter.is_some();
+        let collect = publish && self.present_interpolation;
         let mut blend = BlendData::default();
         let scene = Arc::new(
             self.extract_render_scene_blend(width, height, true, collect.then_some(&mut blend))
                 .map_err(crate::commands::collapse)?,
         );
         let extract_ms = span.map(Span::ms);
-        if collect && let Some(presenter) = self.presenter.as_ref() {
+        if publish && let Some(presenter) = self.presenter.as_ref() {
             presenter.publish(PresentPacket {
                 frame,
                 scene: Arc::clone(&scene),
                 size,
                 settings: self.present_settings(),
                 tick,
-                blend: Some(Arc::new(blend)),
+                blend: collect.then(|| Arc::new(blend)),
             });
         }
         if !readback {

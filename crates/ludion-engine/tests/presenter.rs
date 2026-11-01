@@ -24,17 +24,36 @@ const SCENE: &str =
 /// Each render's frame index and whether its tick stamp was re-based.
 type Stamps = Arc<Mutex<Vec<(u64, Option<bool>)>>>;
 
+/// Each render's frame index and the x translation of its first mesh.
+type Poses = Arc<Mutex<Vec<(u64, f32)>>>;
+
+/// A cube a builder system marches +1 m along x every tick.
+const CUBE_SCENE: &str = "format: 1\nentities:\n  - name: cam\n    components:\n      Transform: {}\n      Camera: {}\n  - name: cube\n    components:\n      Transform: {}\n      Mesh: {}\n";
+
+fn march(world: &mut World, _ctx: &ludion_ecs::SystemCtx) {
+    for (transform,) in world.query::<(&mut ludion_engine::Transform,)>() {
+        transform.translation[0] += 1.0;
+    }
+}
+
 /// Counts renders and presents; `present` sleeps `present_for`, standing in for a display's refresh.
 struct Fake {
     renders: Arc<AtomicU64>,
     presents: Arc<AtomicU64>,
     stamps: Stamps,
+    poses: Poses,
     present_for: Duration,
 }
 
 impl PresentBackend for Fake {
     fn render(&mut self, packet: &PresentPacket) -> Result<(), Diagnostic> {
         self.renders.fetch_add(1, Ordering::Relaxed);
+        if let Some(mesh) = packet.scene.meshes.first() {
+            self.poses
+                .lock()
+                .unwrap()
+                .push((packet.frame.0, mesh.model.w_axis.x));
+        }
         self.stamps
             .lock()
             .unwrap()
@@ -61,22 +80,46 @@ struct Counts {
     renders: Arc<AtomicU64>,
     presents: Arc<AtomicU64>,
     stamps: Stamps,
+    poses: Poses,
 }
 
 /// An engine over [`SCENE`], with a fake presenter attached when `present_for` is given.
 fn engine(present_for: Option<Duration>) -> (Engine, Counts) {
-    let mut engine = Engine::builder().build().unwrap();
-    engine.load_inline_scene(SCENE).unwrap();
+    attach(
+        Engine::builder().build().unwrap(),
+        SCENE,
+        present_for.map(|d| (d, false)),
+    )
+}
+
+/// An engine over [`CUBE_SCENE`] with the marching system; `interpolate` is the builder flag.
+fn marching(present_for: Option<Duration>, interpolate: bool) -> (Engine, Counts) {
+    let engine = Engine::builder()
+        .present_interpolation(interpolate)
+        .system("march", march)
+        .build()
+        .unwrap();
+    attach(engine, CUBE_SCENE, present_for.map(|d| (d, interpolate)))
+}
+
+fn attach(
+    mut engine: Engine,
+    scene: &str,
+    presenter: Option<(Duration, bool)>,
+) -> (Engine, Counts) {
+    engine.load_inline_scene(scene).unwrap();
     let counts = Counts {
         renders: Arc::default(),
         presents: Arc::default(),
         stamps: Arc::default(),
+        poses: Arc::default(),
     };
-    if let Some(present_for) = present_for {
+    if let Some((present_for, _)) = presenter {
         engine.attach_present_backend(Box::new(Fake {
             renders: Arc::clone(&counts.renders),
             presents: Arc::clone(&counts.presents),
             stamps: Arc::clone(&counts.stamps),
+            poses: Arc::clone(&counts.poses),
             present_for,
         }));
     }
@@ -222,4 +265,93 @@ fn a_rebased_deadline_is_stamped() {
             .any(|(_, rebased)| *rebased == Some(false)),
         "steady ticks are not"
     );
+}
+
+/// The x offset of each render from its frame index: constant while every render shows a whole
+/// tick pose, within one tick's step while blended.
+fn offsets(counts: &Counts) -> Vec<f32> {
+    counts
+        .poses
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(frame, x)| x - *frame as f32)
+        .collect()
+}
+
+fn ticks_in_a_second_of(engine: Engine) -> u64 {
+    let ticks = Arc::new(AtomicU64::new(0));
+    let mut engine = engine;
+    engine.set_tick_observer(Ticks(Arc::clone(&ticks)));
+    let live = run(engine);
+    thread::sleep(Duration::from_millis(1200));
+    live.stop();
+    ticks.load(Ordering::Relaxed)
+}
+
+#[test]
+fn interpolation_draws_between_ticks() {
+    let (engine, counts) = marching(Some(Duration::from_millis(4)), true);
+    let ticks = ticks_in_a_second_of(engine);
+    assert!(ticks >= 36, "the sim kept its pace: {ticks} ticks");
+    let offsets = offsets(&counts);
+    let (lo, hi) = offsets
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(lo, hi), o| (lo.min(*o), hi.max(*o)));
+    assert!(
+        hi - lo <= 1.0 + 1e-3,
+        "no extrapolation: offsets span {lo}..{hi}"
+    );
+    assert!(
+        offsets.iter().any(|o| (o - hi).abs() > 1e-3),
+        "at least one render sits between two poses: {} renders",
+        offsets.len()
+    );
+    let presents = counts.presents.load(Ordering::Relaxed);
+    assert!(
+        counts.renders.load(Ordering::Relaxed) > ticks.min(presents) / 2,
+        "renders happen per refresh"
+    );
+}
+
+#[test]
+fn without_interpolation_every_render_is_a_whole_tick_pose() {
+    let (engine, counts) = marching(Some(Duration::from_millis(4)), false);
+    let _ = ticks_in_a_second_of(engine);
+    let offsets = offsets(&counts);
+    assert!(!offsets.is_empty());
+    assert!(
+        offsets.iter().all(|o| *o == offsets[0]),
+        "whole poses only: {offsets:?}"
+    );
+    let renders = counts.renders.load(Ordering::Relaxed);
+    let presents = counts.presents.load(Ordering::Relaxed);
+    assert!(
+        renders <= presents + 1,
+        "{renders} renders, {presents} presents"
+    );
+}
+
+#[test]
+fn interpolation_leaves_the_world_hash_unchanged() {
+    let hashes = |interpolate| {
+        let (mut engine, _) = marching(Some(Duration::from_millis(4)), interpolate);
+        let seen = Arc::new(Mutex::new(BTreeMap::new()));
+        engine.set_tick_observer(Hashes(Arc::clone(&seen)));
+        let live = run(engine);
+        thread::sleep(Duration::from_millis(600));
+        live.stop();
+        Arc::try_unwrap(seen).unwrap().into_inner().unwrap()
+    };
+    let on = hashes(true);
+    let off = hashes(false);
+    let common: Vec<_> = on.keys().filter(|f| off.contains_key(f)).collect();
+    assert!(
+        common.len() >= 10,
+        "the runs overlap on {} frames",
+        common.len()
+    );
+    for frame in common {
+        assert_eq!(on[frame], off[frame], "frame {frame} diverged");
+    }
 }
