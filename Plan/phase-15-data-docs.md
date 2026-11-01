@@ -8,6 +8,7 @@
 > fixed in rev 178; Wave 4 found no serve/profile smoke precedent in check.mjs and added the
 > `check-docs` smoke as its own step via hello-paddle's zero-kinds path).
 > Amendment A1 (2026-11-01, Clockout request 0021): typed `parse_doc::<T>` added (decision 3).
+> Amendment B (2026-11-01, Clockout request 0021): singleton kinds (decision 6).
 >
 > Originally: authored 2026-07-16, ready to start. This is the wave-level plan for wave **E4** of
 > the first-game arc; its brief is `Plan/engine-first-game.md` §"E4 — Game data-doc facility" plus
@@ -224,6 +225,13 @@
    `doc_kind` is the one seam G4 consumes, and it must own the content-root walk, which a bare
    resource insert cannot express); inserting the store once at `build` (it would vanish on the first
    `scene.load` or `restore`).
+
+   **Amendment B (2026-11-01, Clockout request 0021):** `doc_singleton::<T>(kind)` registers a kind
+   that must hold exactly one doc. The engine counts at every validator point (build, `scene.load`/
+   `restore`/district switch, `--check-docs`, live `asset.reload`), chained ahead of the game's
+   passes: zero or two-or-more is `L1315`, and a reload that adds a second doc is refused with the
+   store and generation untouched. `DocStore::single()` reads the one doc on any store. No wire
+   command, no hash surface.
 
 7. **`--check-docs` on `ludion::run`, short-circuiting hosting — settling the flagged decision.**
    `run()` resolves `--scene`, then `if args.check_docs { return run_check_docs(builder, &scene) }`

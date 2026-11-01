@@ -33,6 +33,7 @@ report `L0008` from a game project.
 - `ludion docs fonts` — baked TrueType faces and the `font` field.
 - `ludion docs audio` — sound as frame-stamped events, verified in text.
 - `ludion docs data-docs` — a game's declarative data as validated `kind:`-tagged files.
+- `ludion docs data-docs-checks` — `--check-docs`, cross-doc rules, one-doc kinds.
 - `ludion docs map-authoring` — districts as text maps: `kind: map`/`map-kit`, generate and check.
 - `ludion docs map-check` — reading the report: occupancy, `--traverse`, lints.
 - `ludion docs player-profiles` — persistent save state, its migration and its replay.

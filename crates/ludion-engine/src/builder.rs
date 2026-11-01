@@ -375,7 +375,8 @@ impl EngineBuilder {
     /// world-hash surface: the store is a resource a game's systems read (`world.resource::<DocStore<T>>()`),
     /// and its numbers reach the hash only through the components those systems derive from it.
     ///
-    /// Register several kinds with repeated calls; a malformed doc fails the build (or `scene.load`)
+    /// Register several kinds with repeated calls (use [`doc_singleton`](EngineBuilder::doc_singleton)
+    /// for a kind that must hold exactly one doc); a malformed doc fails the build (or `scene.load`)
     /// with an `L1119`/`L1120` diagnostic, exactly as a bad scene does.
     ///
     /// # Example
@@ -401,6 +402,40 @@ impl EngineBuilder {
         self.doc_kind_engine_owned::<T>(kind)
     }
 
+    /// Registers a game data-doc kind that must hold **exactly one** doc — a `rules` or `tuning`
+    /// file, not a set.
+    ///
+    /// Everything else is [`doc_kind`](EngineBuilder::doc_kind): the same [`DocStore`](crate::DocStore),
+    /// schema check, live reload and recording. In addition the engine counts the kind's docs at
+    /// every point the validators run (build, `scene.load`/`restore`/district switch, `--check-docs`,
+    /// live `asset.reload`): zero or two-or-more is an `L1315` error. A reload that would add a second
+    /// doc is refused and the store keeps its contents and generation. Read the doc with
+    /// [`DocStore::single`](crate::DocStore::single).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
+    /// struct Rules {
+    ///     lives: u32,
+    /// }
+    ///
+    /// let builder = Engine::builder().doc_singleton::<Rules>("rules");
+    /// # let _ = builder;
+    /// ```
+    #[must_use]
+    pub fn doc_singleton<T>(mut self, kind: &str) -> Self
+    where
+        T: Serialize + DeserializeOwned + JsonSchema + 'static + Send + Sync,
+    {
+        self.game_doc_kinds = true;
+        self.doc_kinds.push(DocKind::new::<T>(kind, true));
+        self
+    }
+
     /// Registers a kind the *engine* owns, without claiming the content root the way
     /// [`doc_kind`](EngineBuilder::doc_kind) does.
     ///
@@ -413,7 +448,7 @@ impl EngineBuilder {
     where
         T: Serialize + DeserializeOwned + JsonSchema + 'static + Send + Sync,
     {
-        self.doc_kinds.push(DocKind::new::<T>(kind));
+        self.doc_kinds.push(DocKind::new::<T>(kind, false));
         self
     }
 
@@ -425,6 +460,9 @@ impl EngineBuilder {
     /// [`DocStore`](crate::DocStore) is installed, so a rule may read across kinds, and returns one
     /// [`Diagnostic`] per broken reference. Register it more than once to split the rules by kind:
     /// the passes run in registration order and their results concatenate into one report.
+    ///
+    /// The engine's own [`doc_singleton`](EngineBuilder::doc_singleton) count runs first, at the same
+    /// moments, and a game with only singleton kinds needs no validator for it.
     ///
     /// The engine runs the passes at three moments: at build and at every `scene.load`/`restore`/
     /// district switch (an `Error` refuses the load exactly as a malformed doc's `L1119` does; a
@@ -1139,6 +1177,74 @@ damage: 60.0
         assert!(
             logs[0].message.contains("help: lower the damage"),
             "{logs:?}"
+        );
+    }
+
+    /// A live reload that would leave a `doc_singleton` kind with two docs is refused by the engine's
+    /// count alone (no `validate_docs`), with the store and generation untouched and nothing logged.
+    #[test]
+    fn a_reload_that_adds_a_second_singleton_doc_is_refused() {
+        use serde::Deserialize;
+
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
+        struct Weapon {
+            damage: f32,
+        }
+
+        let root = fresh_dir("singleton-reload");
+        std::fs::create_dir_all(root.join("weapons")).unwrap();
+        let a = root.join("weapons/a.yaml");
+        std::fs::write(&a, "format: 1\nkind: weapon\ndamage: 12.0\n").unwrap();
+
+        let mut engine = Engine::builder()
+            .project_root(&root)
+            .doc_singleton::<Weapon>("weapon")
+            .build()
+            .unwrap();
+        let stored = |engine: &Engine| {
+            let store = engine
+                .world()
+                .resource::<crate::DocStore<Weapon>>()
+                .unwrap();
+            (
+                store
+                    .iter()
+                    .map(|(k, w)| (k.clone(), w.damage))
+                    .collect::<Vec<_>>(),
+                store.generation(),
+            )
+        };
+        let (_, generation) = stored(&engine);
+
+        std::fs::write(
+            root.join("weapons/b.yaml"),
+            "format: 1\nkind: weapon\ndamage: 5.0\n",
+        )
+        .unwrap();
+        let refused = engine
+            .reload_doc_from_disk("weapons/b.yaml")
+            .expect_err("a second singleton doc is refused");
+        let rendered = refused.to_string();
+        assert!(rendered.contains("L1315"), "{rendered}");
+        assert_eq!(
+            stored(&engine),
+            (vec![("weapons/a.yaml".to_string(), 12.0)], generation),
+            "the store moved"
+        );
+        engine.advance_live();
+        let logged = engine
+            .take_events()
+            .into_iter()
+            .any(|event| matches!(event, ludion_protocol::event::Event::Log(_)));
+        assert!(!logged, "a refused reload logged");
+
+        std::fs::write(&a, "format: 1\nkind: weapon\ndamage: 60.0\n").unwrap();
+        engine
+            .reload_doc_from_disk("weapons/a.yaml")
+            .expect("editing the one doc applies");
+        assert_eq!(
+            stored(&engine),
+            (vec![("weapons/a.yaml".to_string(), 60.0)], generation + 1)
         );
     }
 

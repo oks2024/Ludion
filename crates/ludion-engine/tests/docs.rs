@@ -154,6 +154,94 @@ fn build_output_directories_are_not_content() {
     assert_eq!(keys, ["weapons/crossbow.yaml"]);
 }
 
+/// A builder registering `weapon` as a single-doc kind, rooted at `root`.
+fn singleton_game(root: &Path) -> EngineBuilder {
+    Engine::builder()
+        .doc_singleton::<Weapon>("weapon")
+        .project_root(root)
+}
+
+#[test]
+fn a_singleton_kind_with_one_doc_boots_and_single_is_some() {
+    let dir = fresh_dir("singleton-one");
+    write(&dir, "weapons/crossbow.yaml", CROSSBOW);
+    let engine = singleton_game(&dir).build().expect("one doc boots");
+    let store = engine.world().resource::<DocStore<Weapon>>().unwrap();
+    assert_eq!(store.len(), 1);
+    assert_eq!(
+        store.single(),
+        store.get("weapons/crossbow.yaml"),
+        "single() is the one doc"
+    );
+    assert!(store.single().is_some());
+}
+
+#[test]
+fn a_second_singleton_doc_fails_the_build_naming_both() {
+    let dir = fresh_dir("singleton-two");
+    write(&dir, "a.yaml", CROSSBOW);
+    write(&dir, "rules.yaml", AXE);
+    let err = build_err(singleton_game(&dir));
+    let mut all = vec![err.clone()];
+    all.extend(err.related.iter().cloned());
+    let primary = all
+        .iter()
+        .find(|d| d.code.as_str() == "L1315" && d.path.as_deref() == Some("weapon"))
+        .unwrap_or_else(|| panic!("no L1315 at `weapon`: {all:?}"));
+    assert!(
+        primary.message.contains("`a.yaml`") && primary.message.contains("`rules.yaml`"),
+        "{}",
+        primary.message
+    );
+    let paths: Vec<_> = primary
+        .related
+        .iter()
+        .map(|d| d.path.as_deref().unwrap())
+        .collect();
+    assert_eq!(paths, ["a.yaml", "rules.yaml"]);
+}
+
+#[test]
+fn a_missing_singleton_doc_fails_the_build() {
+    let dir = fresh_dir("singleton-none");
+    let err = build_err(singleton_game(&dir));
+    assert_eq!(err.code.as_str(), "L1315");
+    assert!(
+        err.message.contains("no doc declares it"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn scene_load_refuses_a_second_singleton_doc() {
+    let dir = fresh_dir("singleton-scene-load");
+    write(&dir, "weapons/crossbow.yaml", CROSSBOW);
+    let mut engine = singleton_game(&dir).build().expect("boots");
+    write(&dir, "weapons/axe.yaml", AXE);
+    let err = match engine.load_inline_scene("format: 1\nentities: []\n") {
+        Ok(_) => panic!("the scene load should be refused"),
+        Err(err) => err,
+    };
+    assert!(format!("{err:?}").contains("L1315"), "{err:?}");
+}
+
+#[test]
+fn single_is_none_unless_exactly_one() {
+    let count = |name: &str, files: &[(&str, &str)]| {
+        let dir = fresh_dir(name);
+        for (rel, text) in files {
+            write(&dir, rel, text);
+        }
+        let engine = weapon_game(&dir).build().unwrap();
+        let store = engine.world().resource::<DocStore<Weapon>>().unwrap();
+        store.single().cloned()
+    };
+    assert!(count("single-zero", &[]).is_none());
+    assert!(count("single-two", &[("a.yaml", CROSSBOW), ("b.yaml", AXE)]).is_none());
+    assert!(count("single-one", &[("a.yaml", CROSSBOW)]).is_some());
+}
+
 #[test]
 fn two_broken_docs_both_appear_in_the_diagnostics() {
     let dir = fresh_dir("broken");

@@ -113,6 +113,15 @@ impl<T> DocStore<T> {
         self.docs.is_empty()
     }
 
+    /// The one doc, when the store holds exactly one; `None` for zero or several. Works on any
+    /// store; for a `doc_singleton` kind the engine already refused any other count.
+    pub fn single(&self) -> Option<&T> {
+        match self.docs.len() {
+            1 => self.docs.values().next(),
+            _ => None,
+        }
+    }
+
     /// The "something changed" signal a system compares against a cached value: 0 at every fresh
     /// boot (`scene.load`/`restore` rebuild the store at 0), incremented by a live reload.
     pub fn generation(&self) -> u64 {
@@ -137,22 +146,73 @@ impl<T> DocStore<T> {
 /// or an `enemy:` is a well-typed string and only the game knows what it must name.
 pub type DocValidator = Box<dyn Fn(&World) -> Vec<Diagnostic> + Send + Sync>;
 
-/// Runs every registered validator in registration order and concatenates what they return, so a
-/// game may split its rules across several passes (one per kind) and still get one report. The
-/// engine's own root-aware pass — bullet-kind atlas references — runs last.
+/// Runs the engine's singleton count, then every registered validator in registration order, and
+/// concatenates what they return, so a game may split its rules across several passes (one per kind)
+/// and still get one report. The engine's own root-aware pass — bullet-kind atlas references — runs
+/// last.
 pub(crate) fn run_validators(
+    doc_kinds: &[DocKind],
     validators: &[DocValidator],
     project_root: &Path,
     world: &World,
 ) -> Vec<Diagnostic> {
-    validators
-        .iter()
-        .flat_map(|validate| validate(world))
+    singleton_counts(doc_kinds, world)
+        .into_iter()
+        .chain(validators.iter().flat_map(|validate| validate(world)))
         .chain(crate::patterns::validate_bullet_atlases(
             project_root,
             world,
         ))
         .collect()
+}
+
+/// One `L1315` per `doc_singleton` kind whose store does not hold exactly one doc. Deterministic
+/// (registration order, store key order): the reload gate compares before/after reports with `==`.
+fn singleton_counts(doc_kinds: &[DocKind], world: &World) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for doc_kind in doc_kinds.iter().filter(|dk| dk.singleton) {
+        let keys = (doc_kind.keys)(world);
+        let kind = &doc_kind.kind;
+        match keys.len() {
+            1 => {}
+            0 => out.push(
+                Diagnostic::new(
+                    code::DOC_SINGLETON_COUNT,
+                    format!("`kind: {kind}` is a single-doc kind but no doc declares it"),
+                )
+                .with_path(kind.clone())
+                .with_help(format!(
+                    "add one `kind: {kind}` doc under the content root, or register the kind with doc_kind if it may be absent"
+                )),
+            ),
+            n => {
+                let listed = keys
+                    .iter()
+                    .map(|key| format!("`{key}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut diagnostic = Diagnostic::new(
+                    code::DOC_SINGLETON_COUNT,
+                    format!("`kind: {kind}` is a single-doc kind but {n} docs declare it: {listed}"),
+                )
+                .with_path(kind.clone())
+                .with_help(
+                    "delete or rename the stray copy, or register the kind with doc_kind if a set was meant",
+                );
+                for key in &keys {
+                    diagnostic = diagnostic.with_related(
+                        Diagnostic::new(
+                            code::DOC_SINGLETON_COUNT,
+                            format!("`{key}` declares `kind: {kind}`"),
+                        )
+                        .with_path(key.clone()),
+                    );
+                }
+                out.push(diagnostic);
+            }
+        }
+    }
+    out
 }
 
 /// What [`prepare_docs`] hands the engine's commit: the walk's skips and the validators' warnings,
@@ -168,11 +228,12 @@ pub(crate) struct PreparedDocs {
 /// and reports nothing: the warnings ride back in [`PreparedDocs`].
 ///
 /// The validators run before the reapply (the order every rebuild has always had). A game with no
-/// registered validator pays nothing, the engine's own bullet-atlas pass included.
+/// registered validator and no `doc_singleton` kind pays nothing, the engine's own bullet-atlas
+/// pass included.
 ///
 /// # Errors
-/// Every collected walk diagnostic (see [`load_doc_stores`]); else every `Error` a validator
-/// reported, in registration order; else the first `L1119`/`L1120` a logged reload fails with
+/// Every collected walk diagnostic (see [`load_doc_stores`]); else every `Error` the singleton
+/// count (`L1315`) or a validator reported, the count first, then registration order; else the first `L1119`/`L1120` a logged reload fails with
 /// against the current schema.
 pub(crate) fn prepare_docs(
     root: &Path,
@@ -184,10 +245,11 @@ pub(crate) fn prepare_docs(
 ) -> Result<PreparedDocs, Vec<Diagnostic>> {
     let skips = load_doc_stores(root, doc_kinds, game_kinds, world)?;
     let mut warnings = Vec::new();
-    if !validators.is_empty() {
-        let (errors, reported): (Vec<_>, Vec<_>) = run_validators(validators, root, world)
-            .into_iter()
-            .partition(|d| d.severity == Severity::Error);
+    if !validators.is_empty() || doc_kinds.iter().any(|dk| dk.singleton) {
+        let (errors, reported): (Vec<_>, Vec<_>) =
+            run_validators(doc_kinds, validators, root, world)
+                .into_iter()
+                .partition(|d| d.severity == Severity::Error);
         if !errors.is_empty() {
             return Err(errors);
         }
@@ -239,17 +301,23 @@ pub(crate) type DocUndo = Box<dyn FnOnce(&mut World) + Send>;
 ///
 /// A type with a top-level `format` or `kind` field is refused when the engine is built (`L1257`):
 /// it would collide with the doc envelope.
+///
+/// A `singleton` kind must hold exactly one doc: the engine's count rule (`L1315`) runs with the
+/// validators, reading the store through the monomorphized `keys`.
 pub(crate) struct DocKind {
     pub(crate) kind: String,
     pub(crate) schema: Value,
+    pub(crate) singleton: bool,
     install: DocInstaller,
     reload: DocReloader,
+    keys: fn(&World) -> Vec<String>,
 }
 
 impl DocKind {
     /// Captures a kind's `(name, schema, monomorphized loader/reloader)` — the value
-    /// [`EngineBuilder::doc_kind`](crate::EngineBuilder::doc_kind) pushes onto the registration list.
-    pub(crate) fn new<T>(kind: &str) -> Self
+    /// [`EngineBuilder::doc_kind`](crate::EngineBuilder::doc_kind) (or `doc_singleton`, with
+    /// `singleton` set) pushes onto the registration list.
+    pub(crate) fn new<T>(kind: &str, singleton: bool) -> Self
     where
         T: DeserializeOwned + Send + Sync + 'static + schemars::JsonSchema,
     {
@@ -257,10 +325,24 @@ impl DocKind {
             kind: kind.to_string(),
             schema: serde_json::to_value(schemars::schema_for!(T))
                 .expect("a schemars JSON Schema always serializes to a JSON value"),
+            singleton,
             install: install_doc_store::<T>,
             reload: reload_doc_store::<T>,
+            keys: doc_store_keys::<T>,
         }
     }
+}
+
+/// The keys of `DocStore<T>` in store order; empty when the store is absent. The monomorphized body
+/// of every [`DocKind::keys`].
+fn doc_store_keys<T>(world: &World) -> Vec<String>
+where
+    T: Send + Sync + 'static,
+{
+    world
+        .resource::<DocStore<T>>()
+        .map(|store| store.docs.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// Deserializes the collected field maps into `DocStore<T>` and inserts it as a world resource. The

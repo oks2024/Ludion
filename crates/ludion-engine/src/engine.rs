@@ -2482,7 +2482,8 @@ impl Engine {
     /// # Errors
     /// Every diagnostic the content-root walk collected: `L1101` for an unreadable file,
     /// `L1119`/`L1120` for a malformed doc (fail-fast across all files), `L1119` for an unregistered
-    /// `kind`; then every `Error` a registered validation pass reported (typically `L1144`).
+    /// `kind`; then every `Error` a registered validation pass reported (typically `L1144`), the
+    /// engine's `L1315` singleton count first.
     /// Before any of that, `L1257` for a registered doc or profile type that declares a top-level
     /// `format`/`kind` field.
     pub(crate) fn install_docs(&mut self) -> Result<(), Vec<Diagnostic>> {
@@ -2680,7 +2681,8 @@ impl Engine {
     /// # Errors
     /// `L100x` if the edited doc fails to parse as strict-subset YAML at all, `L1119`/`L1120` if it
     /// parses but is malformed, and any `Error` the registered validators report after the swap that
-    /// they did not report before it (`L1144`, `L1149`–`L1152`, a game's own codes) — each a diagnosed
+    /// they did not report before it (`L1144`, `L1149`–`L1152`, `L1315` for a second doc of a
+    /// `doc_singleton` kind, a game's own codes) — each a diagnosed
     /// error, never a crash or a silent skip; the store keeps its previous contents and generation (a
     /// bad save mid-tune must not wipe state), and nothing is armed for recording.
     pub(crate) fn reload_doc_from_disk(&mut self, path: &str) -> Result<Option<u64>, Diagnostic> {
@@ -2702,13 +2704,21 @@ impl Engine {
         let fields = crate::docs::check_reload(doc_kinds, &kind, &key, &source)
             .map_err(crate::commands::collapse)?;
         let validators = &self.doc_validators;
-        let before =
-            crate::docs::run_validators(validators, &self.project_root, self.driver.world());
+        let before = crate::docs::run_validators(
+            doc_kinds,
+            validators,
+            &self.project_root,
+            self.driver.world(),
+        );
         let world = self.driver.world_mut();
         let (document, undo) = crate::docs::apply_reload(doc_kinds, world, &kind, &key, fields)
             .map_err(crate::commands::collapse)?;
-        let reported =
-            crate::docs::run_validators(validators, &self.project_root, self.driver.world());
+        let reported = crate::docs::run_validators(
+            doc_kinds,
+            validators,
+            &self.project_root,
+            self.driver.world(),
+        );
         // An error the swap introduced refuses it: the old document goes back before anything is
         // logged, armed or reported. An error that was already there still prints and applies.
         let introduced: Vec<Diagnostic> = reported
