@@ -48,7 +48,7 @@ fn main() -> ExitCode {
         env!("CARGO_MANIFEST_DIR"),
         "/../../examples/gallery"
     ));
-    let library = FontLibrary::load(root);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(root));
 
     let text = "Wave To Yo";
     let body = text_width(&library, Some("body"), text, 24.0);

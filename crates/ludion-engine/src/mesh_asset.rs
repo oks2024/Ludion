@@ -10,7 +10,6 @@
 //! The texture maps a document references are the one part that needs the filesystem, so they are
 //! [`load`]'s half, not [`decode`]'s: a document alone cannot say what its PNGs contain.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use ludion_assets::cooked::ColorSpace;
@@ -45,7 +44,10 @@ const DEFAULT_BONES: [u32; 4] = [0, 0, 0, 0];
 ///
 /// All diagnostics carry a JSON Pointer into the *mesh document*; the caller ([`extract`](crate::extract))
 /// re-points them at the referencing `Mesh` component.
-pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> {
+pub(crate) fn load(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<MeshData, Vec<Diagnostic>> {
     let (doc, hash) = read_document(root, rel)?;
     // One decode per path whatever the roles asking for it.
     let mut decoded: StableMap<String, Arc<TextureImage>> = StableMap::new();
@@ -101,7 +103,10 @@ pub(crate) fn assemble(
 ///
 /// # Errors
 /// `L1101`/`L1102` if the file cannot be read or decoded.
-pub(crate) fn decode_map(root: &Path, resolved: &str) -> Result<Arc<TextureImage>, Diagnostic> {
+pub(crate) fn decode_map(
+    root: ludion_assets::AssetRoot<'_>,
+    resolved: &str,
+) -> Result<Arc<TextureImage>, Diagnostic> {
     map_from_bytes(&ludion_assets::load_bytes(root, resolved)?, resolved)
 }
 
@@ -146,7 +151,7 @@ pub(crate) fn map_paths(rel: &str, doc: &MeshDocument) -> Vec<(String, ColorSpac
 
 /// Reads and validates the mesh document at `root`/`rel`, returning it with its bytes' content hash.
 pub(crate) fn read_document(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
 ) -> Result<(MeshDocument, u64), Vec<Diagnostic>> {
     with_mesh_source(root, rel, ludion_scene::check_mesh)
@@ -155,7 +160,7 @@ pub(crate) fn read_document(
 /// Loads `root`/`rel`, decodes it as UTF-8 and hands the text to `read` without copying it, returning
 /// what `read` made with the bytes' content hash.
 pub(crate) fn with_mesh_source<T>(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
     read: impl FnOnce(&str) -> Result<T, Vec<Diagnostic>>,
 ) -> Result<(T, u64), Vec<Diagnostic>> {
@@ -732,7 +737,11 @@ mod tests {
             &[("t.png", base.clone()), ("n.png", png(200))],
         );
 
-        let data = load(&dir, "meshes/x.mesh.yaml").expect("a textured mesh loads");
+        let data = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect("a textured mesh loads");
         let textures = data.textures.expect("the document references maps");
         let base_color = textures
             .base_color
@@ -772,7 +781,11 @@ mod tests {
                     occlusion_texture:\n  path: ../textures/missing.png\n";
         let dir = project("missing", &textured_doc(keys), &[]);
 
-        let errors = load(&dir, "meshes/x.mesh.yaml").expect_err("a missing map fails the load");
+        let errors = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect_err("a missing map fails the load");
         assert_eq!(errors.len(), 2, "one diagnostic per distinct failing path");
         assert!(errors.iter().all(|d| d.code == code::ASSET_FILE_IO));
         assert_eq!(errors[0].path.as_deref(), Some("/base_color_texture"));
@@ -787,7 +800,11 @@ mod tests {
     fn load_stores_the_base_color_maps_mean() {
         let keys = "base_color_texture:\n  path: ../textures/t.png\n";
         let dir = project("mean", &textured_doc(keys), &[("t.png", png(128))]);
-        let data = load(&dir, "meshes/x.mesh.yaml").expect("a textured mesh loads");
+        let data = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect("a textured mesh loads");
         let want = [
             ludion_assets::decode_srgb(128),
             ludion_assets::decode_srgb(20),
@@ -802,7 +819,11 @@ mod tests {
 
         let keys = "normal_texture:\n  path: ../textures/n.png\n";
         let dir = project("mean-normal", &textured_doc(keys), &[("n.png", png(128))]);
-        let data = load(&dir, "meshes/x.mesh.yaml").expect("a normal-mapped mesh loads");
+        let data = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect("a normal-mapped mesh loads");
         assert_eq!(data.base_color_mean, [1.0; 4]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -812,7 +833,11 @@ mod tests {
     #[test]
     fn load_of_an_untextured_mesh_binds_no_textures() {
         let dir = project("untextured", &textured_doc(""), &[]);
-        let data = load(&dir, "meshes/x.mesh.yaml").expect("an untextured mesh loads");
+        let data = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect("an untextured mesh loads");
         assert!(data.textures.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -823,13 +848,21 @@ mod tests {
         let keys = "base_color_texture:\n  path: ../textures/t.png\n\
                     alpha_mode: mask\nalpha_cutoff: 0.3\n";
         let dir = project("mask", &textured_doc(keys), &[("t.png", png(128))]);
-        let data = load(&dir, "meshes/x.mesh.yaml").expect("a textured mask loads");
+        let data = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect("a textured mask loads");
         let textures = data.textures.expect("the document references a map");
         assert_eq!(textures.alpha_cutoff, Some(0.3));
         let _ = std::fs::remove_dir_all(&dir);
 
         let dir = project("mask-bare", &textured_doc("alpha_mode: mask\n"), &[]);
-        let data = load(&dir, "meshes/x.mesh.yaml").expect("a map-less mask loads");
+        let data = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect("a map-less mask loads");
         let textures = data.textures.expect("a mask binds a set even without maps");
         assert!(textures.base_color.is_none() && textures.normal.is_none());
         assert!(textures.metallic_roughness.is_none() && textures.occlusion.is_none());

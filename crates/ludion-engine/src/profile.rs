@@ -1904,7 +1904,7 @@ entities:
         let cold = crate::extract::extract_through(
             engine.world(),
             (320, 180),
-            &dir,
+            ludion_assets::AssetRoot::content(&dir),
             &mut crate::asset_cache::AssetCache::new(),
             ludion_core::time::SimTime::from_ticks(0, ludion_core::time::TickRate::DEFAULT),
             ludion_renderer::QualityParams::FULL.particle_density,

@@ -97,8 +97,18 @@ fn scene_world() -> World {
 #[test]
 fn extract_is_deterministic() {
     let world = scene_world();
-    let a = extract(&world, (320, 180), Path::new(".")).unwrap();
-    let b = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let a = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    let b = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(
         a, b,
         "extract must be a deterministic function of the world"
@@ -141,7 +151,12 @@ fn sprite_extents_are_full_size_and_honor_scale() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     let instance = &scene.sprites[0];
     assert!(
         (instance.right.length() - 6.0).abs() < 1e-6,
@@ -164,7 +179,12 @@ fn multiple_cameras_is_l2101() {
     let b = world.spawn();
     world.insert(b, Camera::default()).unwrap();
 
-    let errors = extract(&world, (320, 180), Path::new(".")).unwrap_err();
+    let errors = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L2101");
     // The pointer names the *second* camera (entity index 1).
@@ -212,7 +232,12 @@ fn tilemap_expands_row_major_into_sprites() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
 
     // 2×2 grid, row-major: (0,0)#, (1,0)., (0,1)., (1,1)#.
     let centers: Vec<[f32; 3]> = scene.sprites.iter().map(|s| s.center.to_array()).collect();
@@ -235,7 +260,12 @@ fn tilemap_expands_row_major_into_sprites() {
     }
 
     // Extraction is a deterministic function of the world.
-    let again = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let again = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene, again);
 }
 
@@ -246,7 +276,12 @@ fn empty_tilemap_renders_nothing() {
     let grid = world.spawn();
     world.insert(grid, Tilemap::default()).unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(
         scene.sprites.is_empty(),
         "an empty tilemap draws no sprites"
@@ -291,7 +326,7 @@ fn asset_meshes_dedup_and_extract_deterministically() {
             .unwrap();
     }
 
-    let a = extract(&world, (320, 180), &dir).unwrap();
+    let a = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(
         a.mesh_assets.len(),
         1,
@@ -305,7 +340,7 @@ fn asset_meshes_dedup_and_extract_deterministically() {
         vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
     );
 
-    let b = extract(&world, (320, 180), &dir).unwrap();
+    let b = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(a, b, "extract of asset meshes must be deterministic");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -392,7 +427,7 @@ fn skinned_instances_extract_with_offset_rest_palettes() {
             .unwrap();
     }
 
-    let a = extract(&world, (320, 180), &dir).unwrap();
+    let a = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     let offsets: Vec<u32> = a.meshes.iter().map(|m| m.bone_offset).collect();
     assert_eq!(offsets, vec![1, 0, 3], "entity order gives these offsets");
 
@@ -412,7 +447,7 @@ fn skinned_instances_extract_with_offset_rest_palettes() {
         "each skinned instance gets its own copy of the asset's rest palette"
     );
 
-    let b = extract(&world, (320, 180), &dir).unwrap();
+    let b = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(a, b, "extract of skinned meshes must be deterministic");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -438,7 +473,7 @@ fn missing_asset_mesh_is_l1101_at_the_mesh_component() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1101");
     assert_eq!(
@@ -504,7 +539,7 @@ fn voxel_meshes_dedup_and_extract_deterministically() {
             .unwrap();
     }
 
-    let a = extract(&world, (320, 180), &dir).unwrap();
+    let a = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(
         a.mesh_assets.len(),
         1,
@@ -516,7 +551,7 @@ fn voxel_meshes_dedup_and_extract_deterministically() {
     assert_eq!(a.mesh_assets[0].positions.len(), 24 * 3);
     assert_eq!(a.mesh_assets[0].colors.len(), 24 * 4);
 
-    let b = extract(&world, (320, 180), &dir).unwrap();
+    let b = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(a, b, "extract of voxel meshes must be deterministic");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -549,7 +584,7 @@ fn broken_voxel_doc_surfaces_at_the_mesh_component() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1114");
     assert_eq!(
@@ -596,7 +631,7 @@ fn broken_sculpt_doc_surfaces_at_the_mesh_component() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert!(!errors.is_empty());
     for error in &errors {
         assert_eq!(error.code.as_str(), "L1157");
@@ -636,7 +671,7 @@ fn missing_voxel_doc_is_l1101_at_the_mesh_component() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1101");
     assert_eq!(
@@ -738,7 +773,7 @@ fn assembly_expands_to_one_instance_per_part_at_rest() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(
         scene.mesh_assets.len(),
         2,
@@ -822,7 +857,7 @@ fn assembly_parts_dedup_and_extract_deterministically() {
             .unwrap();
     }
 
-    let a = extract(&world, (320, 180), &dir).unwrap();
+    let a = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(
         a.mesh_assets.len(),
         2,
@@ -844,7 +879,7 @@ fn assembly_parts_dedup_and_extract_deterministically() {
     assert_eq!(a.meshes[0].model.transform_point3(Vec3::ZERO).x, -5.0);
     assert_eq!(a.meshes[2].model.transform_point3(Vec3::ZERO).x, 3.0);
 
-    let b = extract(&world, (320, 180), &dir).unwrap();
+    let b = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(a, b, "extract of assemblies must be deterministic");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -875,7 +910,7 @@ fn broken_assembly_part_surfaces_at_the_mesh_component() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1140");
     assert_eq!(
@@ -914,7 +949,7 @@ fn missing_assembly_is_l1101_at_the_mesh_component() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1101");
     assert_eq!(
@@ -958,7 +993,7 @@ fn assembly_part_draws_one_instance_at_the_entitys_own_transform() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(
         scene.mesh_assets.len(),
         2,
@@ -1012,7 +1047,7 @@ fn assembly_part_shares_the_whole_assembly_dedup_run() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(
         scene.mesh_assets.len(),
         2,
@@ -1050,7 +1085,7 @@ fn unknown_assembly_part_is_l1185_at_its_pointer() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1185");
     assert_eq!(
@@ -1093,7 +1128,7 @@ fn missing_assembly_part_document_is_l1101_at_its_pointer() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1101");
     assert_eq!(
@@ -1111,7 +1146,12 @@ fn zero_cameras_uses_default_framing() {
     let mesh = world.spawn();
     world.insert(mesh, Mesh::default()).unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.camera, RenderCamera::default_framing((320, 180)));
 }
 
@@ -1162,7 +1202,12 @@ fn ui_instances_are_sorted_by_order_then_entity_id() {
         )
         .unwrap();
 
-    let scene = extract(&world, (1920, 1080), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ui.len(), 3, "one UiRect/UiText each ⇒ 3 instances");
 
     match &scene.ui[0] {
@@ -1180,7 +1225,12 @@ fn ui_instances_are_sorted_by_order_then_entity_id() {
 
     // Two extractions of a UI-carrying world are byte-equal (the extract-determinism contract
     // extended to UI).
-    let again = extract(&world, (1920, 1080), Path::new(".")).unwrap();
+    let again = extract(
+        &world,
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(
         scene, again,
         "extract of UI components must be deterministic"
@@ -1208,7 +1258,12 @@ fn ui_rect_resolves_through_extract_exactly_like_the_pure_function() {
     world.insert(e, rect.clone()).unwrap();
 
     let viewport = (1920, 1080);
-    let scene = extract(&world, viewport, Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ui.len(), 1);
     let expected_px =
         ludion_engine::ui::resolve_ui_rect(rect.anchor, rect.offset, rect.size, viewport);
@@ -1252,7 +1307,12 @@ fn a_filled_ui_rect_extracts_as_the_whole_viewport() {
         )
         .unwrap();
     for viewport in [(1440, 1080), (1920, 1080), (2520, 1080), (2560, 1080)] {
-        let scene = extract(&world, viewport, Path::new(".")).unwrap();
+        let scene = extract(
+            &world,
+            viewport,
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap();
         match &scene.ui[..] {
             [UiInstance::Rect { rect_px, uv, .. }] => {
                 assert_eq!(*rect_px, [0.0, 0.0, viewport.0 as f32, viewport.1 as f32]);
@@ -1302,8 +1362,18 @@ fn transform_on_a_ui_entity_is_ignored() {
         .unwrap();
 
     let viewport = (1920, 1080);
-    let plain = extract(&world_plain, viewport, Path::new(".")).unwrap();
-    let with_transform = extract(&world_with_transform, viewport, Path::new(".")).unwrap();
+    let plain = extract(
+        &world_plain,
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    let with_transform = extract(
+        &world_with_transform,
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(
         plain.ui, with_transform.ui,
         "a Transform on a UI entity must not change its resolved geometry"
@@ -1343,7 +1413,7 @@ fn ui_rect_texture_dedups_against_a_sprite_using_the_same_path() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(
         scene.textures.len(),
         1,
@@ -1379,7 +1449,7 @@ fn missing_ui_rect_texture_is_l1101_at_the_ui_rect_component() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1101");
     assert_eq!(
@@ -1409,7 +1479,12 @@ fn ui_text_resolves_through_extract_exactly_like_the_measured_block() {
     world.insert(e, text.clone()).unwrap();
 
     let viewport = (1920, 1080);
-    let scene = extract(&world, viewport, Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ui.len(), 1);
     let block = ludion_engine::ui::measure_ui_text(
         ludion_font::FontFace::embedded(),
@@ -1441,7 +1516,12 @@ fn empty_ui_text_still_emits_an_instance() {
     let e = world.spawn();
     world.insert(e, UiText::default()).unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ui.len(), 1, "an empty UiText still emits an instance");
 }
 
@@ -1465,7 +1545,12 @@ fn hidden_ui_rect_emits_no_instance_and_skips_texture_resolution() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(
         scene.ui.len(),
         1,
@@ -1492,7 +1577,12 @@ fn hidden_ui_text_emits_no_instance() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(
         scene.ui.len(),
         1,
@@ -1544,8 +1634,18 @@ fn environment_and_fade_extract_deterministically() {
         )
         .unwrap();
 
-    let a = extract(&world, (320, 180), Path::new(".")).unwrap();
-    let b = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let a = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    let b = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(a, b, "extract of Environment/Fade must be deterministic");
 
     let env = a.environment.expect("an environment is present");
@@ -1596,7 +1696,12 @@ fn a_child_mesh_inherits_its_nearest_ancestors_fade() {
     mesh(Some(own), None);
     mesh(None, None);
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     let fades: Vec<(f32, f32)> = scene
         .meshes
         .iter()
@@ -1667,7 +1772,12 @@ fn a_hidden_root_extracts_none_of_its_tree() {
     let mut world = visibility_world(Some(hidden()));
     let part = world.entities().last().unwrap();
     world.insert(part, Visibility::default()).unwrap();
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(scene.meshes.is_empty());
     assert!(scene.lights.is_empty());
     assert!(scene.spot_lights.is_empty());
@@ -1679,8 +1789,18 @@ fn a_hidden_root_extracts_none_of_its_tree() {
 
     let root = world.entities().nth(1).unwrap();
     world.insert(root, Visibility::default()).unwrap();
-    let shown = extract(&world, (320, 180), Path::new(".")).unwrap();
-    let plain = extract(&visibility_world(None), (320, 180), Path::new(".")).unwrap();
+    let shown = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    let plain = extract(
+        &visibility_world(None),
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(shown, plain, "an all-default Visibility changes nothing");
     assert!(!shown.meshes.is_empty() && !shown.lights.is_empty());
 }
@@ -1698,14 +1818,24 @@ fn shadowless() -> Visibility {
 #[test]
 fn a_visibility_free_world_extracts_unchanged() {
     let world = visibility_world(None);
-    let a = extract(&world, (320, 180), Path::new(".")).unwrap();
-    let b = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let a = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    let b = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(a, b);
     assert!(a.meshes.iter().all(|m| m.cast_shadows));
     let c = extract(
         &visibility_world(Some(shadowless())),
         (320, 180),
-        Path::new("."),
+        ludion_assets::AssetRoot::content(Path::new(".")),
     )
     .unwrap();
     assert_eq!(a.meshes.len(), c.meshes.len());
@@ -1741,7 +1871,7 @@ fn cast_shadows_inherits_to_children_and_assembly_parts() {
     let plain = world.spawn();
     world.insert(plain, Transform::default()).unwrap();
     world.insert(plain, Mesh::default()).unwrap();
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(
         scene.meshes.len(),
         3,
@@ -1759,7 +1889,7 @@ fn cast_shadows_inherits_to_children_and_assembly_parts() {
             },
         )
         .unwrap();
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(scene.meshes.len(), 1, "hidden wins over the shadow flag");
     assert!(scene.meshes[0].cast_shadows);
 }
@@ -1772,10 +1902,20 @@ fn a_hidden_gi_dynamic_light_is_not_extracted() {
     world.insert(light, Transform::default()).unwrap();
     world.insert(light, PointLight::default()).unwrap();
     world.insert(light, GiDynamic::default()).unwrap();
-    let shown = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let shown = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(shown.lights.len(), 1);
     world.insert(light, hidden()).unwrap();
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(scene.lights.is_empty());
 }
 
@@ -1831,7 +1971,12 @@ fn absent_environment_and_fade_are_the_defaults() {
     let mesh = world.spawn();
     world.insert(mesh, Mesh::default()).unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(scene.environment.is_none(), "no Environment ⇒ None");
     assert!(scene.post.is_none(), "no PostProcess ⇒ None");
     assert_eq!(scene.meshes[0].fade, 1.0);
@@ -1869,7 +2014,7 @@ fn missing_tilemap_cell_texture_is_l1101_at_the_escaped_legend_entry() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1101");
     assert_eq!(
@@ -1902,7 +2047,7 @@ fn missing_texture_suggests_a_transposed_filename() {
         )
         .unwrap();
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(
         errors[0].path.as_deref(),
@@ -1950,7 +2095,12 @@ fn a_marked_light_carries_the_dynamic_flag_and_the_light_list_is_unperturbed() {
     world.insert(marked, PointLight::default()).unwrap();
     world.insert(marked, GiDynamic::default()).unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.lights.len(), 2, "both lights reach the render scene");
     assert_eq!(
         scene.lights[0].position.x, -2.0,
@@ -2020,7 +2170,12 @@ fn ground_marker_dimensions_are_scaled_into_world_units() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(
         scene.ground_markers[0].shape,
         RendererMarkerShape::Disc { radius: 1.0 },
@@ -2053,7 +2208,12 @@ fn ground_marker_model_is_rigid_and_lifted() {
         .unwrap();
     world.insert(id, GroundMarker::default()).unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     let model = scene.ground_markers[0].model;
 
     let (scale, _, translation) = model.to_scale_rotation_translation();
@@ -2107,7 +2267,12 @@ fn ground_markers_extract_in_ascending_entity_order_with_their_color() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ground_markers.len(), 2);
     assert_eq!(scene.ground_markers[0].color, [2.5, 0.2, 0.1, 0.55]);
     assert_eq!(scene.ground_markers[1].color, [0.1, 0.9, 0.3, 1.0]);
@@ -2121,7 +2286,12 @@ fn a_marker_free_world_extracts_no_ground_markers() {
     let mesh = world.spawn();
     world.insert(mesh, Mesh::default()).unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(scene.ground_markers.is_empty());
 }
 
@@ -2173,7 +2343,12 @@ fn ui_list_emits_its_background_then_its_lines_in_order() {
     let viewport = (1920, 1080); // scale 1.0
     let world = world_with(list.clone());
 
-    let scene = extract(&world, viewport, Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ui.len(), 5, "1 panel + title + 3 items");
 
     let layout =
@@ -2214,7 +2389,12 @@ fn ui_list_emits_its_background_then_its_lines_in_order() {
         }
     }
 
-    let again = extract(&world, viewport, Path::new(".")).unwrap();
+    let again = extract(
+        &world,
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene, again, "extract of a UiList must be deterministic");
 }
 
@@ -2223,7 +2403,12 @@ fn ui_list_emits_its_background_then_its_lines_in_order() {
 #[test]
 fn ui_list_applies_the_normal_selected_and_disabled_colors() {
     let list = shop_list();
-    let scene = extract(&world_with(list.clone()), (1920, 1080), Path::new(".")).unwrap();
+    let scene = extract(
+        &world_with(list.clone()),
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
 
     let color_of = |index: usize| match &scene.ui[index] {
         UiInstance::Text { color, .. } => *color,
@@ -2243,7 +2428,12 @@ fn a_disabled_item_under_the_cursor_stays_disabled() {
         selected: 1, // the RELIC line, `enabled: false`
         ..shop_list()
     };
-    let scene = extract(&world_with(list.clone()), (1920, 1080), Path::new(".")).unwrap();
+    let scene = extract(
+        &world_with(list.clone()),
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     match &scene.ui[3] {
         UiInstance::Text { color, .. } => assert_eq!(*color, list.disabled_color),
         other => panic!("expected the RELIC Text, got {other:?}"),
@@ -2258,7 +2448,12 @@ fn a_selected_past_the_end_clamps_to_the_last_item() {
         selected: 999,
         ..shop_list()
     };
-    let scene = extract(&world_with(list.clone()), (1920, 1080), Path::new(".")).unwrap();
+    let scene = extract(
+        &world_with(list.clone()),
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     match &scene.ui[4] {
         UiInstance::Text { color, text, .. } => {
             assert_eq!(text, "LEAVE");
@@ -2277,7 +2472,12 @@ fn an_empty_ui_list_emits_nothing() {
         background: [0.0, 0.0, 0.0, 1.0],
         ..UiList::default()
     };
-    let scene = extract(&world_with(empty), (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world_with(empty),
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(
         scene.ui.is_empty(),
         "an empty list draws nothing at all: {:?}",
@@ -2294,7 +2494,12 @@ fn hidden_ui_list_emits_nothing() {
         visible: false,
         ..shop_list()
     };
-    let scene = extract(&world_with(hidden), (1920, 1080), Path::new(".")).unwrap();
+    let scene = extract(
+        &world_with(hidden),
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(
         scene.ui.is_empty(),
         "a hidden list draws nothing at all: {:?}",
@@ -2309,7 +2514,12 @@ fn a_transparent_background_draws_no_panel() {
         background: [0.2, 0.2, 0.2, 0.0],
         ..shop_list()
     };
-    let scene = extract(&world_with(list), (1920, 1080), Path::new(".")).unwrap();
+    let scene = extract(
+        &world_with(list),
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ui.len(), 4, "title + 3 items, no panel");
     assert!(
         matches!(scene.ui[0], UiInstance::Text { .. }),
@@ -2325,7 +2535,12 @@ fn an_untitled_list_starts_at_its_first_item() {
         title: String::new(),
         ..shop_list()
     };
-    let scene = extract(&world_with(list), (1920, 1080), Path::new(".")).unwrap();
+    let scene = extract(
+        &world_with(list),
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ui.len(), 4, "1 panel + 3 items");
     match &scene.ui[1] {
         UiInstance::Text { text, .. } => assert_eq!(text, "SALVE"),
@@ -2362,7 +2577,12 @@ fn ui_list_instances_sort_with_the_other_ui_components() {
         )
         .unwrap();
 
-    let scene = extract(&world, (1920, 1080), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ui.len(), 6, "5 list instances + 1 UiText");
     assert!(
         matches!(scene.ui[0], UiInstance::Rect { .. }),
@@ -2392,7 +2612,12 @@ fn a_wrapped_ui_text_emits_one_instance_laid_out_at_the_wrapped_blocks_origin() 
     let e = world.spawn();
     world.insert(e, text.clone()).unwrap();
 
-    let scene = extract(&world, viewport, Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(
         scene.ui.len(),
         1,
@@ -2453,7 +2678,12 @@ fn ui_text_quads_fill_the_measured_block() {
     let mut world = World::new();
     let e = world.spawn();
     world.insert(e, text.clone()).unwrap();
-    let scene = extract(&world, viewport, Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     let UiInstance::Text { quads, .. } = &scene.ui[0] else {
         panic!("expected Text");
     };
@@ -2501,7 +2731,12 @@ fn an_unwrapped_ui_text_lowers_exactly_as_before() {
     let e = world.spawn();
     world.insert(e, unwrapped.clone()).unwrap();
 
-    let scene = extract(&world, viewport, Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     let rect =
         ludion_engine::ui::resolve_ui_text(ludion_font::FontFace::embedded(), &unwrapped, viewport);
     let (origin_px, cell_px) = ([rect[0], rect[1]], unwrapped.size);
@@ -2541,7 +2776,12 @@ fn a_windowed_ui_list_draws_its_window_with_item_keyed_colors() {
         ..UiList::default()
     };
     let viewport = (1920, 1080); // scale 1.0
-    let scene = extract(&world_with(list.clone()), viewport, Path::new(".")).unwrap();
+    let scene = extract(
+        &world_with(list.clone()),
+        viewport,
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.ui.len(), 7, "1 panel + title + 5 windowed items");
 
     // The cursor sits mid-list, so the window is centred on it: items 5..10.
@@ -2601,7 +2841,7 @@ fn only_sprite_at(world: &World, tick: u64) -> ludion_renderer::SpriteInstance {
     let scene = extract_at(
         world,
         (320, 180),
-        Path::new("."),
+        ludion_assets::AssetRoot::content(Path::new(".")),
         SimTime::from_ticks(tick, TickRate::DEFAULT),
         QualityParams::FULL.particle_density,
     )
@@ -2755,7 +2995,12 @@ fn text_font(scene: &ludion_renderer::RenderScene, at: usize) -> Option<ludion_r
 #[test]
 fn a_named_face_draws_from_its_own_atlas() {
     let root = font_root("named");
-    let body = extract(&ui_text_world(Some("body")), (640, 360), &root).unwrap();
+    let body = extract(
+        &ui_text_world(Some("body")),
+        (640, 360),
+        ludion_assets::AssetRoot::content(&root),
+    )
+    .unwrap();
     let font = text_font(&body, 0).expect("a table face names its atlas");
     assert!(font.sdf);
     let image = &body.textures[font.texture];
@@ -2764,7 +3009,12 @@ fn a_named_face_draws_from_its_own_atlas() {
         atlas_size(&root, "fonts/inter.font.yaml")
     );
 
-    let pixel = extract(&ui_text_world(Some("pixel")), (640, 360), &root).unwrap();
+    let pixel = extract(
+        &ui_text_world(Some("pixel")),
+        (640, 360),
+        ludion_assets::AssetRoot::content(&root),
+    )
+    .unwrap();
     let font = text_font(&pixel, 0).expect("a bitmap face names its atlas");
     assert!(!font.sdf);
     let image = &pixel.textures[font.texture];
@@ -2777,8 +3027,18 @@ fn a_named_face_draws_from_its_own_atlas() {
 #[test]
 fn text_without_a_face_or_with_an_unknown_one_draws_the_embedded_atlas() {
     let root = font_root("embedded");
-    let plain = extract(&ui_text_world(None), (640, 360), &root).unwrap();
-    let unknown = extract(&ui_text_world(Some("nope")), (640, 360), &root).unwrap();
+    let plain = extract(
+        &ui_text_world(None),
+        (640, 360),
+        ludion_assets::AssetRoot::content(&root),
+    )
+    .unwrap();
+    let unknown = extract(
+        &ui_text_world(Some("nope")),
+        (640, 360),
+        ludion_assets::AssetRoot::content(&root),
+    )
+    .unwrap();
     for scene in [&plain, &unknown] {
         assert_eq!(text_font(scene, 0), None);
         assert!(scene.textures.is_empty());
@@ -2809,7 +3069,12 @@ fn text_without_a_face_or_with_an_unknown_one_draws_the_embedded_atlas() {
 fn a_named_face_with_a_missing_atlas_is_an_extract_error() {
     let root = font_root("missing");
     std::fs::remove_file(root.join("fonts/inter.png")).unwrap();
-    let errors = extract(&ui_text_world(Some("body")), (640, 360), &root).unwrap_err();
+    let errors = extract(
+        &ui_text_world(Some("body")),
+        (640, 360),
+        ludion_assets::AssetRoot::content(&root),
+    )
+    .unwrap_err();
     let error = errors
         .iter()
         .find(|d| d.code.as_str() == "L1101")
@@ -2828,7 +3093,12 @@ fn an_atlas_of_the_wrong_size_is_l1255_and_not_drawn() {
         root.join("fonts/inter.png"),
     )
     .unwrap();
-    let errors = extract(&ui_text_world(Some("body")), (640, 360), &root).unwrap_err();
+    let errors = extract(
+        &ui_text_world(Some("body")),
+        (640, 360),
+        ludion_assets::AssetRoot::content(&root),
+    )
+    .unwrap_err();
     let error = errors
         .iter()
         .find(|d| d.code.as_str() == "L1255")
@@ -2864,7 +3134,7 @@ fn a_ui_list_names_its_face_on_every_line() {
             },
         )
         .unwrap();
-    let scene = extract(&world, (640, 360), &root).unwrap();
+    let scene = extract(&world, (640, 360), ludion_assets::AssetRoot::content(&root)).unwrap();
     let lines: Vec<_> = scene
         .ui
         .iter()
@@ -2896,12 +3166,12 @@ fn world_text_carries_its_face_and_the_laid_out_extent() {
             },
         )
         .unwrap();
-    let scene = extract(&world, (640, 360), &root).unwrap();
+    let scene = extract(&world, (640, 360), ludion_assets::AssetRoot::content(&root)).unwrap();
     let run = &scene.texts[0];
     let font = run.font.expect("a table face names its atlas");
     assert!(font.sdf);
     assert!(font.texture < scene.textures.len());
-    let library = ludion_engine::FontLibrary::load(&root);
+    let library = ludion_engine::FontLibrary::load(ludion_assets::AssetRoot::content(&root));
     let expected =
         ludion_font::layout(library.face(Some("body")), "Hello world", 2.0, 0.0).extent();
     assert_eq!(run.extent, expected);
@@ -2930,7 +3200,12 @@ fn shadow_entity(
 /// A scene with no `DropShadow` extracts an empty list.
 #[test]
 fn a_scene_without_drop_shadows_extracts_none() {
-    let scene = extract(&scene_world(), (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &scene_world(),
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(scene.drop_shadows.is_empty());
 }
 
@@ -2976,7 +3251,12 @@ fn a_drop_shadow_anchors_at_its_world_position_with_scaled_dimensions() {
     let disc = shadow_entity(&mut world, None, Transform::default(), false);
     world.insert(disc, DropShadow::default()).unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.drop_shadows.len(), 2);
     let shadow = &scene.drop_shadows[0];
     assert!((shadow.anchor - Vec3::new(12.0, 0.0, -3.0)).length() < 1e-5);
@@ -3018,9 +3298,13 @@ fn a_drop_shadow_segment_takes_only_the_yaw_of_its_rotation() {
             false,
         );
         world.insert(e, DropShadow::default()).unwrap();
-        extract(&world, (320, 180), Path::new("."))
-            .unwrap()
-            .drop_shadows[0]
+        extract(
+            &world,
+            (320, 180),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap()
+        .drop_shadows[0]
             .yaw
     };
     // A +Y rotation by +45 degrees carries +X toward -Z; `atan2(-z, x)` reads that back as +pi/4,
@@ -3047,7 +3331,12 @@ fn a_drop_shadow_excludes_its_casters_hierarchy_but_not_other_meshes() {
     let solo = shadow_entity(&mut world, None, Transform::default(), true); // mesh 3
     world.insert(solo, DropShadow::default()).unwrap();
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.meshes.len(), 4);
     assert_eq!(scene.drop_shadows.len(), 2);
     assert_eq!(scene.drop_shadows[0].exclude, [1, 2]);
@@ -3070,7 +3359,12 @@ fn decal_entity(
 /// A scene with no `Decal` extracts an empty list.
 #[test]
 fn a_scene_without_decals_extracts_none() {
-    let scene = extract(&scene_world(), (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &scene_world(),
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(scene.decals.is_empty());
 }
 
@@ -3102,7 +3396,12 @@ fn a_parented_scaled_decal_carries_its_box_matrices() {
         },
     );
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.decals.len(), 1);
     let decal = &scene.decals[0];
     // The child sits at local +X 1, which the root's 90 degree yaw carries to world -Z 2 (scale 2);
@@ -3140,7 +3439,12 @@ fn a_zero_scale_decal_is_skipped() {
         Decal::default(),
     );
     decal_entity(&mut world, None, Transform::default(), Decal::default());
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert_eq!(scene.decals.len(), 1);
 }
 
@@ -3166,7 +3470,12 @@ fn decals_extract_in_layer_then_descending_id_order() {
     let _a = spawn(1, 1.0);
     let _b = spawn(0, 2.0);
     let _c = spawn(0, 3.0);
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     let order: Vec<f32> = scene
         .decals
         .iter()
@@ -3241,7 +3550,7 @@ fn decal_receivers_follow_the_skin_and_the_hierarchy() {
     );
     decal_entity(&mut world, None, Transform::default(), Decal::default());
 
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(scene.meshes.len(), 4);
     assert_eq!(scene.meshes[3].bone_offset, 1, "mesh 3 is the skinned one");
     // Hierarchy decal has the lower id and so draws last.
@@ -3283,7 +3592,7 @@ fn decal_maps_resolve_with_wrap_and_normal_scale() {
             ..Decal::default()
         },
     );
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     let maps = &scene.decals[0].maps;
     let base = maps.base_color.as_ref().expect("base colour map");
     assert_eq!(base.wrap, TextureWrap::Repeat);
@@ -3315,7 +3624,7 @@ fn a_missing_decal_map_is_l1101_at_the_map_path() {
             ..Decal::default()
         },
     );
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1101");
     let pointer = errors[0].path.as_deref().unwrap();
@@ -3368,7 +3677,12 @@ entities:
     let engine = ludion_engine::Engine::builder()
         .load_scene_file(&dir.join("scene.yaml"))
         .expect("the scene loads");
-    let scene = extract(engine.world(), (320, 180), &dir).unwrap();
+    let scene = extract(
+        engine.world(),
+        (320, 180),
+        ludion_assets::AssetRoot::content(&dir),
+    )
+    .unwrap();
     assert_eq!(scene.decals.len(), 1);
     assert!(scene.decals[0].maps.base_color.is_some());
     let _ = std::fs::remove_dir_all(&dir);

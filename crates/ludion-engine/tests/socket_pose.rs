@@ -143,7 +143,7 @@ fn extract(engine: &Engine, tick: u64) -> ludion_renderer::RenderScene {
     extract_at(
         engine.world(),
         (320, 180),
-        engine.project_root(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
         at(tick),
         QualityParams::FULL.particle_density,
     )

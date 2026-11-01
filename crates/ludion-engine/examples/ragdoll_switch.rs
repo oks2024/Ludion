@@ -195,7 +195,10 @@ fn main() -> ExitCode {
         engine.advance_live();
     }
 
-    let data = match load_assembly(engine.project_root(), "models/puppet.assembly.yaml") {
+    let data = match load_assembly(
+        ludion_assets::AssetRoot::content(engine.project_root()),
+        "models/puppet.assembly.yaml",
+    ) {
         Ok(data) => data,
         Err(diagnostics) => {
             for diagnostic in diagnostics {

@@ -269,7 +269,11 @@ fn map_hits(
         let Some(reference) = read(&mesh.textures) else {
             continue;
         };
-        let image = ludion_assets::load_png(dir, &reference.path).map_err(|mut error| {
+        let image = ludion_assets::load_png(
+            ludion_assets::AssetRoot::local_document_unconfined(dir),
+            &reference.path,
+        )
+        .map_err(|mut error| {
             error.message = format!("the mesh's `{map}` map: {}", error.message);
             error
         })?;
@@ -307,7 +311,10 @@ fn base_color_texel(mesh_path: &Path, maps: &[MapHit]) -> Result<Option<[u8; 4]>
         return Ok(None);
     };
     let dir = mesh_path.parent().unwrap_or_else(|| Path::new("."));
-    let image = ludion_assets::load_png(dir, &hit.path)?;
+    let image = ludion_assets::load_png(
+        ludion_assets::AssetRoot::local_document_unconfined(dir),
+        &hit.path,
+    )?;
     let base = ((texel[1] as usize) * (image.width as usize) + texel[0] as usize) * 4;
     Ok(image
         .rgba

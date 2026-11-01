@@ -346,10 +346,14 @@ fn a_parent_joint_child_is_hidden_with_its_skin() {
         .load_inline_scene(&scene(&skin, &child))
         .expect("the scene loads");
     let drawn = |engine: &Engine| {
-        ludion_engine::extract(engine.world(), (320, 180), &dir)
-            .expect("the scene extracts")
-            .meshes
-            .len()
+        ludion_engine::extract(
+            engine.world(),
+            (320, 180),
+            ludion_assets::AssetRoot::content(&dir),
+        )
+        .expect("the scene extracts")
+        .meshes
+        .len()
     };
     assert_eq!(drawn(&engine), 0, "the child hides with its hidden skin");
 

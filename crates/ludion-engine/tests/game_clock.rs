@@ -288,7 +288,7 @@ fn drawn(engine: &Engine) -> RenderScene {
     extract_at(
         engine.world(),
         (320, 180),
-        engine.project_root(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
         SimTime::from_ticks(engine.frame().as_u64(), TICK),
         QualityParams::FULL.particle_density,
     )

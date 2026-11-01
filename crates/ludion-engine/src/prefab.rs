@@ -449,7 +449,7 @@ impl PrefabLibrary {
         diagnostics.extend(scene_sensor_diagnostics(&body));
         diagnostics.extend(scene_motor_diagnostics(&body));
         diagnostics.extend(scene_atlas_diagnostics(&self.root, &body));
-        let poses = match spawn_poses(&self.root, &body) {
+        let poses = match spawn_poses(ludion_assets::AssetRoot::content(&self.root), &body) {
             Ok(poses) => poses,
             Err(errors) => {
                 diagnostics.extend(errors);
@@ -567,14 +567,19 @@ impl InstanceHooks for PrefabHooks<'_> {
 }
 
 /// The canonical key of a prefab path: forward slashes, no empty or `.` segments, so every spelling
-/// of one file shares a cache entry, a recorded text and an `asset.reload` key. `..` stays verbatim —
-/// the wire refuses it before this, and game code is trusted.
+/// of one file shares a cache entry, a recorded text and an `asset.reload` key. A path that is
+/// absolute, prefixed or climbs out of the content root once its `..` segments fold is refused
+/// ([`ludion_core::paths::content_refusal`]), whoever supplied it: a recorded `PrefabInstance.source`
+/// is document data like any payload.
 pub(crate) fn prefab_key(path: &str) -> Result<String, Vec<Diagnostic>> {
-    if std::path::Path::new(path).is_absolute() || path.starts_with(['/', '\\']) {
+    if let Some(refusal) = ludion_core::paths::content_refusal(path) {
         return Err(vec![
             Diagnostic::new(
                 code::PREFAB_UNRESOLVED,
-                format!("cannot spawn prefab `{path}`: the path is absolute"),
+                format!(
+                    "cannot use prefab `{path}`: the path {}",
+                    refusal.describe()
+                ),
             )
             .with_help(
                 "name the prefab relative to the content root, e.g. `prefabs/crate.prefab.yaml`",
@@ -584,8 +589,10 @@ pub(crate) fn prefab_key(path: &str) -> Result<String, Vec<Diagnostic>> {
     Ok(ludion_scene::normalize_prefab_path(path))
 }
 
-/// The text of the prefab `key` (a [`prefab_key`]) on disk under `root`.
+/// The text of the prefab `key` (a [`prefab_key`]) on disk under `root`. A key that did not come
+/// through [`prefab_key`] (a recorded `PrefabInstance.source`) is confined here, before any read.
 pub(crate) fn read_prefab_text(root: &std::path::Path, key: &str) -> Result<String, Diagnostic> {
+    prefab_key(key).map_err(|mut found| found.swap_remove(0))?;
     std::fs::read_to_string(root.join(key)).map_err(|error| {
         Diagnostic::new(
             code::PREFAB_UNRESOLVED,
@@ -728,6 +735,23 @@ mod tests {
             0,
         ));
         world
+    }
+
+    #[test]
+    fn prefab_keys_refuse_anything_outside_the_content_root() {
+        for path in [
+            "../x.prefab.yaml",
+            "C:x.prefab.yaml",
+            "a/../../x.prefab.yaml",
+            "/abs/x.prefab.yaml",
+            "\\\\h\\s\\x.prefab.yaml",
+        ] {
+            let errors = prefab_key(path).unwrap_err();
+            assert_eq!(errors[0].code, code::PREFAB_UNRESOLVED, "{path}");
+            assert!(errors[0].message.contains(path), "{}", errors[0].message);
+        }
+        assert_eq!(prefab_key("a/../b.prefab.yaml").unwrap(), "b.prefab.yaml");
+        assert_eq!(prefab_key("./a//b.prefab.yaml").unwrap(), "a/b.prefab.yaml");
     }
 
     fn prefab(parts: &str) -> String {

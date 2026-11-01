@@ -58,6 +58,7 @@
 //! A runtime `L1209` rides the same walk: a `Sprite` drawn from an atlas whose `Animation` carries a
 //! `fade` hard-cuts, so the fade would silently do nothing.
 
+use ludion_assets::AssetRoot;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -148,25 +149,30 @@ impl AnimationLibrary {
                 )
             };
             let loaded = match model {
-                Model::Assembly(_) => crate::assembly_mesh::load(&self.root, rel).map(|data| {
-                    data.clips
-                        .iter()
-                        .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
-                        .collect()
-                }),
-                Model::Character(_) => crate::character::load(&self.root, rel).map(|data| {
-                    data.clips
-                        .iter()
-                        .map(|b| timing(&b.name, &b.clip, b.speed, &b.events))
-                        .collect()
-                }),
-                Model::Prefab(_) => {
-                    crate::prefab_clips::load_with_sources(&self.root, rel).map(|(data, _)| {
+                Model::Assembly(_) => {
+                    crate::assembly_mesh::load(AssetRoot::content(&self.root), rel).map(|data| {
                         data.clips
                             .iter()
                             .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
                             .collect()
                     })
+                }
+                Model::Character(_) => crate::character::load(AssetRoot::content(&self.root), rel)
+                    .map(|data| {
+                        data.clips
+                            .iter()
+                            .map(|b| timing(&b.name, &b.clip, b.speed, &b.events))
+                            .collect()
+                    }),
+                Model::Prefab(_) => {
+                    crate::prefab_clips::load_with_sources(AssetRoot::content(&self.root), rel).map(
+                        |(data, _)| {
+                            data.clips
+                                .iter()
+                                .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
+                                .collect()
+                        },
+                    )
                 }
             };
             self.models.insert(model.clone(), loaded);

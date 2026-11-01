@@ -117,7 +117,9 @@ pub(crate) fn bare_driver(
     world.insert_resource(crate::path_follow::PathLibrary::new(
         project_root.to_path_buf(),
     ));
-    world.insert_resource(crate::FontLibrary::load(project_root));
+    world.insert_resource(crate::FontLibrary::load(ludion_assets::AssetRoot::content(
+        project_root,
+    )));
     let mut schedule = Schedule::new();
     crate::path_follow::install(&mut schedule);
     install(&mut schedule, scene.physics.as_ref());

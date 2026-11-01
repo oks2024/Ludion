@@ -62,7 +62,11 @@ pub fn render_font_sheet(doc: &Path) -> Result<Image, Vec<Diagnostic>> {
     })?;
     let parsed = ludion_scene::check_font(&source)?;
     let root = doc.parent().unwrap_or_else(|| Path::new("."));
-    let atlas = ludion_assets::load_png(root, &parsed.image).map_err(|d| vec![d])?;
+    let atlas = ludion_assets::load_png(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        &parsed.image,
+    )
+    .map_err(|d| vec![d])?;
     if (atlas.width, atlas.height) != (parsed.atlas.width, parsed.atlas.height) {
         return Err(vec![
             Diagnostic::new(

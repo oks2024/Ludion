@@ -453,7 +453,7 @@ pub(crate) fn extract_scene_file(
     let mut render_scene = extract_at(
         driver.world(),
         size.output,
-        project_root,
+        ludion_assets::AssetRoot::content(project_root),
         driver.time(),
         particle_density,
     )?;

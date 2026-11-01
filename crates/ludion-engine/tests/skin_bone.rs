@@ -347,7 +347,10 @@ fn assert_raises(scene_text: &str, dir: &Path, expected: ludion_core::diagnostic
 
     let checked_scene = ludion_scene::check(scene_text, &ludion_engine::builtin_registry())
         .unwrap_or_else(|errors| panic!("the fixture is schema-valid: {errors:?}"));
-    let direct = ludion_engine::scene_skin_bone_diagnostics(dir, &checked_scene);
+    let direct = ludion_engine::scene_skin_bone_diagnostics(
+        ludion_assets::AssetRoot::content(dir),
+        &checked_scene,
+    );
     assert!(
         direct.iter().any(|d| d.code == expected),
         "expected {expected:?} among {direct:?}"
@@ -459,7 +462,7 @@ fn bone_palette(engine: &Engine) -> Vec<Mat4> {
     extract_at(
         engine.world(),
         (320, 180),
-        engine.project_root(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
         SimTime::from_ticks(engine.frame().as_u64(), TickRate::DEFAULT),
         QualityParams::FULL.particle_density,
     )

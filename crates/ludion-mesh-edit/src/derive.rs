@@ -723,7 +723,11 @@ fn load_map(
     path: &str,
     map: MeshEditMap,
 ) -> Result<ludion_assets::Image, Vec<Diagnostic>> {
-    ludion_assets::load_png(dir, path).map_err(|mut error| {
+    ludion_assets::load_png(
+        ludion_assets::AssetRoot::local_document_unconfined(dir),
+        path,
+    )
+    .map_err(|mut error| {
         error.message = format!("the source's `{}` map: {}", map.name(), error.message);
         vec![error]
     })

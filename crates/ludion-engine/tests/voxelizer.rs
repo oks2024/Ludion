@@ -240,8 +240,8 @@ fn extract_with_a_gi_volume_is_deterministic() {
         },
     );
 
-    let a = extract(&world, (320, 180), &dir).unwrap();
-    let b = extract(&world, (320, 180), &dir).unwrap();
+    let a = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
+    let b = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
     assert_eq!(a, b, "extract must stay deterministic with a GiVolume");
 
     let grid = a.voxel.as_ref().expect("a GiVolume builds a grid");
@@ -289,8 +289,14 @@ fn voxelizing_the_same_scene_twice_is_bit_identical() {
         },
     );
 
-    let first = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
-    let second = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
+    let first = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
+        .unwrap()
+        .voxel
+        .unwrap();
+    let second = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
+        .unwrap()
+        .voxel
+        .unwrap();
     assert_eq!(
         grid_bits(&first),
         grid_bits(&second),
@@ -353,7 +359,10 @@ fn a_scene_without_asset_meshes_keeps_its_pinned_grid() {
         },
     );
 
-    let grid = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
+    let grid = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
+        .unwrap()
+        .voxel
+        .unwrap();
     assert_eq!(
         grid_fingerprint(&grid),
         16_562_896_631_023_753_224,
@@ -385,10 +394,14 @@ fn an_axis_aligned_cube_fills_exactly_its_analytic_cells() {
     );
     author_gi_volume(&mut world, 0.5);
 
-    let grid = extract(&world, (320, 180), Path::new("."))
-        .unwrap()
-        .voxel
-        .expect("a GiVolume builds a grid");
+    let grid = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap()
+    .voxel
+    .expect("a GiVolume builds a grid");
 
     assert_eq!(grid.origin.to_array(), [0.0, -0.5, -0.5]);
     assert_eq!(grid.extent, [3, 2, 2]);
@@ -431,10 +444,14 @@ fn a_ground_plane_fills_one_cell_row() {
     );
     author_gi_volume(&mut world, 0.5);
 
-    let grid = extract(&world, (320, 180), Path::new("."))
-        .unwrap()
-        .voxel
-        .expect("a GiVolume builds a grid");
+    let grid = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap()
+    .voxel
+    .expect("a GiVolume builds a grid");
 
     assert_eq!(
         grid.extent,
@@ -471,7 +488,7 @@ fn a_voxel_model_deposits_its_palette_under_the_instance_tint() {
     );
     author_gi_volume(&mut world, 0.5);
 
-    let grid = extract(&world, (320, 180), &dir)
+    let grid = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
         .unwrap()
         .voxel
         .expect("a GiVolume builds a grid");
@@ -520,7 +537,7 @@ fn a_voxel_model_with_no_authored_material_deposits_the_components_emissive() {
     );
     author_gi_volume(&mut world, 0.5);
 
-    let grid = extract(&world, (320, 180), &dir)
+    let grid = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
         .unwrap()
         .voxel
         .expect("a GiVolume builds a grid");
@@ -568,10 +585,14 @@ fn overlapping_instances_keep_the_last_writers_channels() {
         }
         author_gi_volume(&mut world, 0.5);
 
-        let grid = extract(&world, (320, 180), Path::new("."))
-            .unwrap()
-            .voxel
-            .expect("a GiVolume builds a grid");
+        let grid = extract(
+            &world,
+            (320, 180),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap()
+        .voxel
+        .expect("a GiVolume builds a grid");
         assert_eq!(grid.extent, [2, 2, 2]);
         assert_eq!(
             filled_cells(&grid).len(),
@@ -617,7 +638,7 @@ fn overlapping_model_cells_keep_the_last_flat_index() {
     // Coarse enough that the model's whole 2 x 1 x 1 box is one cell.
     author_gi_volume(&mut world, 8.0);
 
-    let grid = extract(&world, (320, 180), &dir)
+    let grid = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
         .unwrap()
         .voxel
         .expect("a GiVolume builds a grid");
@@ -659,7 +680,7 @@ fn a_voxel_model_coarser_than_the_cell_size_deposits_a_sparse_lattice() {
             },
         );
         author_gi_volume(&mut world, cell_size);
-        let grid = extract(&world, (320, 180), &dir)
+        let grid = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
             .unwrap()
             .voxel
             .expect("a GiVolume builds a grid");
@@ -688,7 +709,12 @@ fn a_tiny_cell_size_is_l2103_at_the_authored_field() {
     place(&mut world, Transform::default(), Mesh::default());
     author_gi_volume(&mut world, 0.001);
 
-    let errors = extract(&world, (320, 180), Path::new(".")).unwrap_err();
+    let errors = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L2103");
     assert_eq!(
@@ -719,7 +745,12 @@ fn the_probe_lattice_covers_the_grids_world_box() {
     place(&mut world, Transform::default(), Mesh::default());
     author_gi_volume_with(&mut world, 0.5, 0.5);
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     let grid = scene.voxel.as_deref().expect("the GiVolume builds a grid");
     let gi = scene.gi.expect("a grid carries its GI parameters");
 
@@ -763,7 +794,12 @@ fn a_flat_axis_still_carries_the_two_probes_trilinear_needs() {
     );
     author_gi_volume_with(&mut world, 0.5, 8.0);
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     let grid = scene.voxel.as_deref().expect("the GiVolume builds a grid");
     let gi = scene.gi.expect("a grid carries its GI parameters");
 
@@ -788,7 +824,12 @@ fn a_tiny_probe_spacing_is_l2105_at_the_authored_field() {
     place(&mut world, Transform::default(), Mesh::default());
     author_gi_volume_with(&mut world, 0.5, 0.0005);
 
-    let errors = extract(&world, (320, 180), Path::new(".")).unwrap_err();
+    let errors = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L2105");
     assert_eq!(
@@ -829,7 +870,12 @@ fn a_grid_axis_past_the_texture_cap_is_l2103_at_the_authored_field() {
     );
     author_gi_volume(&mut world, 1.0);
 
-    let errors = extract(&world, (320, 180), Path::new(".")).unwrap_err();
+    let errors = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L2103");
     assert_eq!(
@@ -868,7 +914,12 @@ fn a_probe_axis_past_the_texture_cap_is_l2105_at_the_authored_field() {
     );
     author_gi_volume_with(&mut world, 2.0, 1.0);
 
-    let errors = extract(&world, (320, 180), Path::new(".")).unwrap_err();
+    let errors = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L2105");
     assert_eq!(
@@ -909,7 +960,12 @@ fn a_scene_far_from_the_origin_is_l2103_rather_than_a_degenerate_grid() {
     );
     author_gi_volume(&mut world, 0.1);
 
-    let errors = extract(&world, (320, 180), Path::new(".")).unwrap_err();
+    let errors = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L2103");
 }
@@ -921,7 +977,12 @@ fn a_scene_without_a_gi_volume_builds_no_grid() {
     let mut world = World::new();
     place(&mut world, Transform::default(), Mesh::default());
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(scene.voxel.is_none(), "no GiVolume ⇒ no grid");
     assert!(scene.gi.is_none(), "and no grid ⇒ no probe lattice");
     assert_eq!(scene.meshes.len(), 1, "the mesh still renders");
@@ -936,7 +997,12 @@ fn a_gi_volume_over_an_empty_scene_builds_no_grid() {
     world.insert(camera, Camera::default()).unwrap();
     author_gi_volume(&mut world, 0.5);
 
-    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
     assert!(scene.voxel.is_none(), "nothing to bound ⇒ no grid");
     assert!(
         scene.gi.is_none(),
@@ -1002,10 +1068,14 @@ fn a_marked_mesh_neither_occludes_nor_deposits() {
             }
         }
         author_gi_volume(&mut world, 0.5);
-        extract(&world, (320, 180), Path::new("."))
-            .unwrap()
-            .voxel
-            .expect("the flanking cubes alone build a grid")
+        extract(
+            &world,
+            (320, 180),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap()
+        .voxel
+        .expect("the flanking cubes alone build a grid")
     }
 
     let bounds_only = build(None);
@@ -1101,7 +1171,10 @@ fn a_closed_asset_cube_fills_a_shell_not_a_solid() {
     author_gi_volume(&mut world, 0.5);
     place_asset(&mut world, "cube", [0.0; 3], 4.0, Mesh::default());
 
-    let grid = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
+    let grid = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
+        .unwrap()
+        .voxel
+        .unwrap();
     assert_eq!(grid.extent, [8, 8, 8]);
     let mut expected = 0;
     for z in 0..8 {
@@ -1128,7 +1201,10 @@ fn an_open_asset_box_stays_hollow() {
     author_gi_volume(&mut world, 0.5);
     place_asset(&mut world, "box", [0.0; 3], 4.0, Mesh::default());
 
-    let grid = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
+    let grid = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
+        .unwrap()
+        .voxel
+        .unwrap();
     for (x, y, z) in filled_cells(&grid) {
         assert!(on_surface((x, y, z), 8), "({x}, {y}, {z}) is interior");
         let top_interior = y == 7 && (1..7).contains(&x) && (1..7).contains(&z);
@@ -1164,7 +1240,10 @@ fn an_asset_mesh_deposits_instance_colour_and_the_render_paths_emissive() {
     place_asset(&mut world, "plain", [-4.0, 0.0, 0.0], 2.0, tinted.clone());
     place_asset(&mut world, "lit", [4.0, 0.0, 0.0], 2.0, tinted);
 
-    let grid = extract(&world, (320, 180), &dir).unwrap().voxel.unwrap();
+    let grid = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
+        .unwrap()
+        .voxel
+        .unwrap();
     let probe = |x: f32| {
         let index = grid.index([
             ((x - grid.origin.x) / grid.cell_size) as u32,
@@ -1199,7 +1278,14 @@ fn an_asset_mesh_grid_is_bit_identical_across_runs_and_threads() {
     place_asset(&mut world, "cube", [0.3, 0.1, -0.2], 3.0, Mesh::default());
     place_asset(&mut world, "cube", [1.0, 0.5, 0.2], 2.0, Mesh::default());
 
-    let build = || grid_bits(&extract(&world, (320, 180), &dir).unwrap().voxel.unwrap());
+    let build = || {
+        grid_bits(
+            &extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir))
+                .unwrap()
+                .voxel
+                .unwrap(),
+        )
+    };
     let first = build();
     assert_eq!(first, build());
     let one = ludion_core::par::with_threads(1, build);
@@ -1232,7 +1318,12 @@ fn a_lattice_past_the_derived_probe_cap_is_l2105_not_a_gpu_error() {
     );
     author_gi_volume_with(&mut world, 1.0, 1.0);
 
-    let errors = extract(&world, (320, 180), Path::new(".")).unwrap_err();
+    let errors = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L2105");
     assert_eq!(

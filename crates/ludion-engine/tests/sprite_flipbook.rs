@@ -219,7 +219,7 @@ fn sprites_at(engine: &Engine, tick: u64) -> Vec<SpriteInstance> {
     let sprites = extract_at(
         engine.world(),
         (320, 180),
-        engine.project_root(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
         SimTime::from_ticks(tick, TickRate::DEFAULT),
         QualityParams::FULL.particle_density,
     )
@@ -399,7 +399,7 @@ fn a_hold_steps_the_flipbook_on_a_global_grid() {
         let sprites = extract_at(
             engine.world(),
             (320, 180),
-            engine.project_root(),
+            ludion_assets::AssetRoot::content(engine.project_root()),
             SimTime::from_ticks(tick, TickRate::DEFAULT),
             QualityParams::FULL.particle_density,
         )
@@ -469,7 +469,7 @@ fn assert_rates_at(engine: &Engine, tick: u64, num: u64, den: u64) {
     let instances = extract_at(
         engine.world(),
         (320, 180),
-        engine.project_root(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
         SimTime::from_ticks(tick, TickRate::DEFAULT),
         QualityParams::FULL.particle_density,
     )

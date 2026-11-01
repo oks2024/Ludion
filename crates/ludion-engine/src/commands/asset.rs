@@ -16,6 +16,7 @@
 //! entry, that render reads the *new* bytes. Asset bytes never enter the `WorldHash`, so a reload is
 //! sim-invisible and replay-safe.
 
+use ludion_assets::AssetRoot;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_protocol::ResponseBody;
@@ -62,11 +63,16 @@ pub(crate) fn reload(
     }
 
     let root = engine.project_root().to_path_buf();
-    if let Some(key) = engine.asset_cache().resolve_key(&root, &path) {
+    if let Some(key) = engine
+        .asset_cache()
+        .resolve_key(AssetRoot::content(&root), &path)
+    {
         // A cached CPU asset (texture/mesh/voxel): drop the stale entry and re-read from disk. An
         // `L1101`/`L1102` here (the file went missing or is now unreadable) is reported honestly, not
         // faked as a success. This path is render-only and never recorded.
-        let hash = engine.asset_cache_mut().reload(&root, &key)?;
+        let hash = engine
+            .asset_cache_mut()
+            .reload(AssetRoot::content(&root), &key)?;
         engine.probe_world_stale();
         engine.push_event(Event::AssetReloaded(AssetReloadedData {
             path: path.clone(),

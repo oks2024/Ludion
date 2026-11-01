@@ -205,6 +205,13 @@ pub enum Ktx2Error {
         /// Header height.
         height: u32,
     },
+    /// Level 0 has a side over [`crate::MAX_PNG_SIDE`], the largest texture the device takes.
+    TooLarge {
+        /// Header width.
+        width: u32,
+        /// Header height.
+        height: u32,
+    },
     /// The level count is zero or above the full chain.
     BadLevelCount {
         /// The header's level count.
@@ -240,6 +247,13 @@ impl fmt::Display for Ktx2Error {
                 write!(
                     f,
                     "KTX2 level 0 is {width}x{height}; a cooked map is a non-empty multiple of 4 per side"
+                )
+            }
+            Ktx2Error::TooLarge { width, height } => {
+                write!(
+                    f,
+                    "KTX2 level 0 is {width}x{height}; a side is over {}, the largest texture the engine's device takes",
+                    crate::MAX_PNG_SIDE
                 )
             }
             Ktx2Error::BadLevelCount { found, max } => {
@@ -362,6 +376,9 @@ pub fn read_ktx2(
     let (width, height) = (header.pixel_width, header.pixel_height);
     if width == 0 || height == 0 || width % 4 != 0 || height % 4 != 0 {
         return Err(Ktx2Error::BadExtent { width, height });
+    }
+    if width.max(height) > crate::MAX_PNG_SIDE {
+        return Err(Ktx2Error::TooLarge { width, height });
     }
     let max = 32 - width.max(height).leading_zeros();
     if header.level_count == 0 || header.level_count > max {
@@ -832,6 +849,50 @@ mod tests {
         assert!(read_probe_cube(&bytes, 16, 4).is_err());
         assert!(read_probe_cube(&bytes, 8, 3).is_err());
         assert!(read_probe_cube(&bytes, 8, 5).is_err());
+    }
+
+    /// A BC7 sRGB header-only KTX2 file of the given extent, with the exact descriptor `read_ktx2`
+    /// admits and one empty level-index entry.
+    fn bc7_file(width: u32, height: u32) -> Vec<u8> {
+        let region = dfd_region(CompressedFormat::Bc7, true);
+        let header = Header {
+            format: Some(Format::BC7_SRGB_BLOCK),
+            type_size: 1,
+            pixel_width: width,
+            pixel_height: height,
+            pixel_depth: 0,
+            layer_count: 0,
+            face_count: 1,
+            level_count: 1,
+            supercompression_scheme: None,
+            index: Index {
+                dfd_byte_offset: 104,
+                dfd_byte_length: region.len() as u32,
+                kvd_byte_offset: 0,
+                kvd_byte_length: 0,
+                sgd_byte_offset: 0,
+                sgd_byte_length: 0,
+            },
+        };
+        let mut file = header.as_bytes().to_vec();
+        file.extend_from_slice(&[0; 24]);
+        file.extend_from_slice(&region);
+        // The container reader requires the descriptor to end strictly inside the buffer.
+        file.extend_from_slice(&[0; 4]);
+        file
+    }
+
+    #[test]
+    fn a_level_over_the_device_side_is_too_large() {
+        let side = crate::MAX_PNG_SIDE + 4;
+        assert!(matches!(
+            read_ktx2(&bc7_file(side, 4), CookTarget::Desktop, ColorSpace::Srgb),
+            Err(Ktx2Error::TooLarge { .. })
+        ));
+        assert!(matches!(
+            read_ktx2(&bc7_file(4, 2), CookTarget::Desktop, ColorSpace::Srgb),
+            Err(Ktx2Error::BadExtent { .. })
+        ));
     }
 
     #[test]

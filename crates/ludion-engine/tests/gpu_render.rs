@@ -228,7 +228,8 @@ fn gi_lattice(source: &str, dir: &Path) -> Option<[u32; 3]> {
     let checked = ludion_scene::check(source, &registry).expect("the augmented scene validates");
     let world = ludion_scene::instantiate(&checked, &registry).expect("the scene instantiates");
     let extracted =
-        ludion_engine::extract(&world, (160, 90), dir).expect("extract succeeds on the scene");
+        ludion_engine::extract(&world, (160, 90), ludion_assets::AssetRoot::content(dir))
+            .expect("extract succeeds on the scene");
     extracted.voxel.as_ref()?;
     extracted.gi.as_ref().map(|gi| gi.count)
 }

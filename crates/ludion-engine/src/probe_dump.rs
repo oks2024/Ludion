@@ -485,7 +485,11 @@ entities:
             ludion_assets::encode_png(8, 8, &rgba).unwrap(),
         )
         .unwrap();
-        let source = ludion_assets::load_png(&dir, "assets/kit/k/textures/b.png").unwrap();
+        let source = ludion_assets::load_png(
+            ludion_assets::AssetRoot::content(&dir),
+            "assets/kit/k/textures/b.png",
+        )
+        .unwrap();
         let settings = CookSettings {
             target,
             color_space: ColorSpace::Srgb,
@@ -499,13 +503,12 @@ entities:
             ludion_cook::write_ktx2(&ludion_cook::cook(&source, &settings).unwrap()),
         )
         .unwrap();
-        std::fs::create_dir_all(dir.join("scenes")).unwrap();
-        let scene = dir.join("scenes/main.yaml");
+        let scene = dir.join("main.yaml");
         std::fs::write(
             &scene,
             SCENE.replace(
                 "  - name: block\n    components:\n",
-                "  - name: block\n    components:\n      Mesh:\n        shape:\n          asset: ../assets/kit/k/meshes/m.mesh.yaml\n",
+                "  - name: block\n    components:\n      Mesh:\n        shape:\n          asset: assets/kit/k/meshes/m.mesh.yaml\n",
             )
             .replace("      Mesh:\n        shape: cube\n", ""),
         )

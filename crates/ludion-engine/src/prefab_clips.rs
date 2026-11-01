@@ -8,7 +8,6 @@
 //! relative to (`crate::extract`'s `prefab_part_poses`). Nothing here samples or poses anything.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -32,7 +31,10 @@ pub struct PrefabClipData {
 ///
 /// # Errors
 /// As the engine's own loader: `L1101` for an unreadable file and the clip-document diagnostics.
-pub fn load(root: &Path, rel: &str) -> Result<PrefabClipData, Vec<Diagnostic>> {
+pub fn load(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<PrefabClipData, Vec<Diagnostic>> {
     load_with_sources(root, rel).map(|(data, _)| data)
 }
 
@@ -47,7 +49,7 @@ pub fn load(root: &Path, rel: &str) -> Result<PrefabClipData, Vec<Diagnostic>> {
 /// - `L1226` for a prefab that is not UTF-8 text or does not parse.
 /// - `L1141`/`L1142`/`L1198` for a malformed clip document.
 pub(crate) fn load_with_sources(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
 ) -> Result<(PrefabClipData, SourceFiles), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
@@ -108,6 +110,7 @@ pub(crate) fn load_with_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn fixture_root() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-node-clips/expected")
@@ -115,7 +118,11 @@ mod tests {
 
     #[test]
     fn the_hinge_fixture_loads_two_clips_and_three_rests() {
-        let (data, sources) = load_with_sources(&fixture_root(), "model.prefab.yaml").unwrap();
+        let (data, sources) = load_with_sources(
+            ludion_assets::AssetRoot::content(&fixture_root()),
+            "model.prefab.yaml",
+        )
+        .unwrap();
         let names: Vec<&str> = data.clips.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["open", "snap"]);
         assert_eq!(data.rests.len(), 3);
@@ -133,7 +140,11 @@ mod tests {
 
     #[test]
     fn a_missing_prefab_is_an_error_not_a_panic() {
-        let errors = load_with_sources(&fixture_root(), "absent.prefab.yaml").unwrap_err();
+        let errors = load_with_sources(
+            ludion_assets::AssetRoot::content(&fixture_root()),
+            "absent.prefab.yaml",
+        )
+        .unwrap_err();
         assert!(!errors.is_empty());
     }
 }

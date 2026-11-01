@@ -170,7 +170,7 @@ fn low_quality_thins_the_particle_population() {
         ludion_engine::extract_at(
             engine.world(),
             (960, 540),
-            engine.project_root(),
+            ludion_assets::AssetRoot::content(engine.project_root()),
             SimTime::from_ticks(0, TickRate::DEFAULT),
             engine.quality().params.particle_density,
         )

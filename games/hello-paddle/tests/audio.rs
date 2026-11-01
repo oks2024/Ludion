@@ -262,7 +262,8 @@ fn walking_toward_a_placed_emitter_and_away_again_raises_then_lowers_its_gain() 
 #[test]
 fn committed_bounce_wav_decodes() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scenes");
-    let pcm = ludion_assets::load_wav(&root, BOUNCE_SOUND).expect("the committed WAV decodes");
+    let pcm = ludion_assets::load_wav(ludion_assets::AssetRoot::content(&root), BOUNCE_SOUND)
+        .expect("the committed WAV decodes");
     assert_eq!(pcm.channels, 1);
     assert!(!pcm.samples.is_empty());
     assert!(pcm.samples.iter().all(|s| (-1.0..=1.0).contains(s)));

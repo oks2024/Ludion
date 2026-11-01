@@ -1,6 +1,7 @@
 //! Unit tests for the font library (`fonts.rs`).
 
 use super::*;
+use std::path::Path;
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("ludion-fonts-{name}-{}", std::process::id()));
@@ -35,7 +36,7 @@ fn same(a: &FontFace, b: &FontFace) -> bool {
 #[test]
 fn no_table_is_the_embedded_face_without_faults() {
     let dir = scratch("none");
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     assert!(same(library.face(None), FontFace::embedded()));
     assert!(same(library.face(Some("body")), FontFace::embedded()));
     assert_eq!(library.faults().count(), 0);
@@ -47,7 +48,7 @@ fn a_default_entry_replaces_the_embedded_face_for_none() {
     let dir = scratch("default");
     copy_face(&dir, "inter");
     table(&dir, "  default: fonts/inter.font.yaml\n");
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     assert!(!same(library.face(None), FontFace::embedded()));
     assert_eq!(
         library.face(None).document().mode,
@@ -65,7 +66,7 @@ fn a_named_face_resolves_and_paths_are_root_relative() {
         &dir,
         "  body: fonts/inter.font.yaml\n  title: fonts/silkscreen.font.yaml\n",
     );
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     assert_eq!(
         library.face(Some("title")).document().mode,
         ludion_scene::FontMode::Bitmap
@@ -83,7 +84,7 @@ fn an_unknown_name_falls_back() {
     let dir = scratch("unknown");
     copy_face(&dir, "inter");
     table(&dir, "  body: fonts/inter.font.yaml\n");
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     assert!(same(library.face(Some("nope")), FontFace::embedded()));
     assert!(!library.contains("nope"));
 }
@@ -96,7 +97,7 @@ fn a_broken_entry_is_a_fault_with_the_fallback() {
         &dir,
         "  body: fonts/inter.font.yaml\n  gone: fonts/missing.font.yaml\n",
     );
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     let faults: Vec<_> = library.faults().collect();
     assert_eq!(faults.len(), 1);
     assert_eq!(faults[0].0, "fonts/missing.font.yaml");
@@ -110,7 +111,7 @@ fn a_broken_entry_is_a_fault_with_the_fallback() {
 fn a_malformed_table_is_one_table_fault() {
     let dir = scratch("badtable");
     std::fs::write(dir.join("fonts.yaml"), "format: 1\nkind: fonts\nfonts: 3\n").unwrap();
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     let faults: Vec<_> = library.faults().collect();
     assert_eq!(faults.len(), 1);
     assert_eq!(faults[0].0, FONTS_FILE);
@@ -126,7 +127,7 @@ fn two_names_on_one_path_load_once() {
         &dir,
         "  body: fonts/inter.font.yaml\n  default: fonts/inter.font.yaml\n",
     );
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     assert_eq!(library.inner.faces.len(), 1);
     assert!(same(library.face(None), library.face(Some("body"))));
 }
@@ -169,7 +170,7 @@ fn an_unknown_name_falls_back_to_the_default_face() {
     copy_face(&dir, "inter");
     copy_face(&dir, "silkscreen");
     table(&dir, WITH_DEFAULT);
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     assert!(same(library.face(Some("typo")), library.face(None)));
     assert!(!same(library.face(Some("typo")), FontFace::embedded()));
     assert_eq!(library.paths(Some("typo")), library.paths(None));
@@ -187,7 +188,7 @@ fn a_broken_entry_falls_back_to_the_default_face() {
         &dir,
         "  default: fonts/inter.font.yaml\n  gone: fonts/missing.font.yaml\n",
     );
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     assert!(same(library.face(Some("gone")), library.face(None)));
     assert_eq!(library.paths(Some("gone")), library.paths(None));
 }
@@ -201,7 +202,7 @@ fn a_face_that_fails_its_checks_keeps_its_pointer() {
     assert_ne!(bad, doc);
     std::fs::write(dir.join("fonts/inter.font.yaml"), bad).unwrap();
     table(&dir, "  default: fonts/inter.font.yaml\n");
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     let faults: Vec<_> = library.faults().collect();
     assert_eq!(faults.len(), 1);
     assert_eq!(faults[0].0, "fonts/inter.font.yaml");
@@ -213,11 +214,20 @@ fn a_face_that_fails_its_checks_keeps_its_pointer() {
 #[test]
 fn the_table_state_distinguishes_absent_faulted_and_loaded() {
     let dir = scratch("state-none");
-    assert_eq!(FontLibrary::load(&dir).table_state(), TableState::Absent);
+    assert_eq!(
+        FontLibrary::load(ludion_assets::AssetRoot::content(&dir)).table_state(),
+        TableState::Absent
+    );
     let dir = scratch("state-bad");
     std::fs::write(dir.join("fonts.yaml"), "format: 1\nkind: fonts\nfonts: 3\n").unwrap();
-    assert_eq!(FontLibrary::load(&dir).table_state(), TableState::Faulted);
+    assert_eq!(
+        FontLibrary::load(ludion_assets::AssetRoot::content(&dir)).table_state(),
+        TableState::Faulted
+    );
     let dir = scratch("state-ok");
     table(&dir, "  body: fonts/x.font.yaml\n");
-    assert_eq!(FontLibrary::load(&dir).table_state(), TableState::Loaded);
+    assert_eq!(
+        FontLibrary::load(ludion_assets::AssetRoot::content(&dir)).table_state(),
+        TableState::Loaded
+    );
 }

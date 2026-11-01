@@ -467,17 +467,8 @@ fn apply_refuses_an_instance_whose_prefab_lies_outside_the_root() {
     std::fs::create_dir_all(base.join("shared")).unwrap();
     std::fs::write(base.join("shared").join(PATH), V1).unwrap();
     let mut engine = game(&content).build().unwrap();
-    engine
-        .load_inline_scene(&format!(
-            "{SCENE}  - name: o\n    prefab: ../shared/{PATH}\n"
-        ))
-        .unwrap();
-    let root = engine
-        .world_mut()
-        .query::<(&PrefabInstance,)>()
-        .next()
-        .map(|(instance,)| instance.root)
-        .expect("the instance loaded");
+    engine.load_inline_scene(SCENE).unwrap();
+    let root = forged(&mut engine, &format!("../shared/{PATH}"));
     let before = std::fs::read(base.join("shared").join(PATH)).unwrap();
 
     let error = apply(&mut engine, root).unwrap_err();
@@ -486,5 +477,45 @@ fn apply_refuses_an_instance_whose_prefab_lies_outside_the_root() {
         std::fs::read(base.join("shared").join(PATH)).unwrap(),
         before
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Stamps a forged `PrefabInstance` onto a fresh entity: `source` is document data like any other,
+/// so a hand-written value must not be able to read outside the content root.
+fn forged(engine: &mut Engine, source: &str) -> EntityId {
+    let entity = plain(engine, "forged", &[]);
+    engine
+        .execute(Command::ComponentSet(ComponentSetParams {
+            entity,
+            component: "PrefabInstance".to_owned(),
+            value: json!({"source": source, "part": "base", "root": entity}),
+        }))
+        .unwrap();
+    entity
+}
+
+#[test]
+fn a_forged_prefab_source_is_refused_before_any_read() {
+    let base = std::env::temp_dir().join(format!(
+        "ludion-prefab-edit-wire-forged-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let content = base.join("content");
+    std::fs::create_dir_all(&content).unwrap();
+    std::fs::write(base.join("outside.prefab.yaml"), V1).unwrap();
+    let mut engine = game(&content).build().unwrap();
+    engine.load_inline_scene(SCENE).unwrap();
+    for source in [
+        "../outside.prefab.yaml",
+        "C:x.prefab.yaml",
+        "a/../../outside.prefab.yaml",
+    ] {
+        let entity = forged(&mut engine, source);
+        let hash = engine.world_hash().unwrap();
+        let error = revert(&mut engine, entity, None).unwrap_err();
+        assert_eq!(code(&error), "L1230", "{source}: {error:?}");
+        assert_eq!(engine.world_hash().unwrap(), hash, "{source}");
+    }
     let _ = std::fs::remove_dir_all(&base);
 }

@@ -1119,7 +1119,7 @@ fn resolve(
         return decoded.buffer.clone();
     }
     let stamp = Stamped::read(&content_root.join(sound));
-    let buffer = match load_wav(content_root, sound) {
+    let buffer = match load_wav(ludion_assets::AssetRoot::content(content_root), sound) {
         Ok(pcm) => Some(Arc::new(to_device_buffer(&pcm, out_rate, out_channels))),
         Err(diagnostic) => {
             eprintln!("{}", skipped(diagnostic, sound));
@@ -1168,7 +1168,7 @@ fn skipped(diagnostic: Diagnostic, sound: &str) -> Diagnostic {
 pub fn check_message(content_root: &Path, message: &AudioMessage) -> Result<(), Diagnostic> {
     match message {
         AudioMessage::OneShot(AudioEvent { sound, .. }) | AudioMessage::LoopSync { sound, .. } => {
-            load_wav(content_root, sound).map(drop)
+            load_wav(ludion_assets::AssetRoot::content(content_root), sound).map(drop)
         }
         AudioMessage::MusicPlay { track, .. } => music::check_track(content_root, track),
         _ => Ok(()),
@@ -3094,7 +3094,7 @@ mod tests {
             Some(VoiceCommand::LoopSync { voice, .. }) => voice.samples.len(),
             _ => panic!("the loop synced"),
         };
-        let pcm = load_wav(&root, "bed.wav").unwrap();
+        let pcm = load_wav(ludion_assets::AssetRoot::content(&root), "bed.wav").unwrap();
         assert_eq!(old, to_device_buffer(&pcm, 44100, 2).len());
 
         let mut now = t0;

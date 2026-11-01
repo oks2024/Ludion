@@ -317,7 +317,11 @@ pub fn render_atlas_sheet(atlas: &Path) -> Result<Image, Vec<Diagnostic>> {
     let source = read_document(atlas, "atlas")?;
     let doc = ludion_scene::check_atlas(&source)?;
     let root = atlas.parent().unwrap_or_else(|| Path::new("."));
-    let packed = ludion_assets::load_png(root, &doc.color_map).map_err(|d| vec![d])?;
+    let packed = ludion_assets::load_png(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        &doc.color_map,
+    )
+    .map_err(|d| vec![d])?;
     Ok(compose_atlas_sheet(atlas, &doc, &packed))
 }
 
@@ -433,7 +437,11 @@ pub fn render_atlas_clip(request: &AtlasClipRequest) -> Result<AtlasClipOutcome,
         .flipbook(&request.clip)
         .ok_or_else(|| vec![unknown_clip(&request.clip, &doc)])?;
     let root = request.atlas.parent().unwrap_or_else(|| Path::new("."));
-    let packed = ludion_assets::load_png(root, &doc.color_map).map_err(|d| vec![d])?;
+    let packed = ludion_assets::load_png(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        &doc.color_map,
+    )
+    .map_err(|d| vec![d])?;
 
     let title = atlas_title(&request.atlas);
     let (image, phases) = if request.onion {

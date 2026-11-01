@@ -1349,7 +1349,11 @@ fn an_imported_prefab_placed_in_a_subdirectory_finds_its_assets() {
         engine
             .load_inline_scene(&std::fs::read_to_string(&level_path).unwrap())
             .expect("the level loads");
-        ludion_engine::extract(engine.world(), (320, 180), &dir)
+        ludion_engine::extract(
+            engine.world(),
+            (320, 180),
+            ludion_assets::AssetRoot::content(&dir),
+        )
     };
     load().unwrap_or_else(|errors| panic!("every asset resolves: {errors:?}"));
 

@@ -20,7 +20,10 @@ use ludion_engine::load_character;
 
 fn main() -> ExitCode {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
-    let character = match load_character(&root, "characters/mannequin.character.yaml") {
+    let character = match load_character(
+        ludion_assets::AssetRoot::content(&root),
+        "characters/mannequin.character.yaml",
+    ) {
         Ok(character) => character,
         Err(diagnostics) => {
             for diagnostic in diagnostics {

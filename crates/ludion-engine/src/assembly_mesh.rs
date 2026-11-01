@@ -55,7 +55,6 @@
 //! Halves of grid extents and small integers are exact in `f32`, so both formulas are exact for any
 //! realistic model.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use ludion_core::codes::code;
@@ -157,7 +156,10 @@ impl AssemblyData {
 ///   and its path.
 /// - `L1141`/`L1142` for a malformed or inconsistent clip document, its message naming the binding
 ///   and its path.
-pub fn load(root: &Path, rel: &str) -> Result<AssemblyData, Vec<Diagnostic>> {
+pub fn load(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<AssemblyData, Vec<Diagnostic>> {
     load_with_sources(root, rel).map(|(data, _)| data)
 }
 
@@ -168,7 +170,7 @@ pub fn load(root: &Path, rel: &str) -> Result<AssemblyData, Vec<Diagnostic>> {
 /// assemblies were meshed out of it (see [`crate::asset_cache`]). Because a clip file is on the list,
 /// editing a clip re-reads the assembly exactly as editing a part does.
 pub(crate) fn load_with_sources(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
 ) -> Result<(AssemblyData, SourceFiles), Vec<Diagnostic>> {
     let (assembly, parts, hash, mut sources) = load_documents(root, rel)?;
@@ -186,7 +188,7 @@ pub(crate) fn load_with_sources(
 /// never the geometry, so leaving the per-part mesh keys where they are keeps the renderer's GPU
 /// buffers instead of re-uploading every limb for a keyframe nudge.
 fn read_clips(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
     assembly: &AssemblyDocument,
     sources: &mut Vec<(String, u64)>,
@@ -216,7 +218,7 @@ fn read_clips(
 /// a clip document's own pointers (`/tracks/arm/rotation/1/t`) say *where in a file* but never
 /// *which file*, and an assembly names several. Returns the document with its bytes' content hash.
 pub(crate) fn read_clip(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
     name: &str,
 ) -> Result<(AnimationDocument, u64), Vec<Diagnostic>> {
@@ -263,7 +265,10 @@ pub type LoadedAssemblyDocuments = (AssemblyDocument, Vec<PartDocument>, u64, Ve
 /// # Errors
 /// Exactly [`load`]'s: `L1101` per unreadable file, `L1137`/`L1138` for the assembly,
 /// `L1139`/`L1140` for a part.
-pub fn load_documents(root: &Path, rel: &str) -> Result<LoadedAssemblyDocuments, Vec<Diagnostic>> {
+pub fn load_documents(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<LoadedAssemblyDocuments, Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
     let source = std::str::from_utf8(&bytes.bytes).map_err(|_| {
         vec![
@@ -311,7 +316,7 @@ pub fn load_documents(root: &Path, rel: &str) -> Result<LoadedAssemblyDocuments,
 /// pointers (`/slices/2/0`) say *where in a file* but never *which file*, and an assembly is many
 /// files.
 fn read_part(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
     entry: &AssemblyPartEntry,
 ) -> Result<(PartDocument, u64), Vec<Diagnostic>> {
@@ -866,7 +871,7 @@ mod tests {
     }
 
     /// Writes `contents` to `root`/`rel`, creating parent directories.
-    fn write(root: &Path, rel: &str, contents: &str) {
+    fn write(root: &std::path::Path, rel: &str, contents: &str) {
         let path = root.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, contents).unwrap();
@@ -943,7 +948,7 @@ tracks:
 ";
 
     /// Writes the two part files and the clip file `ASSEMBLY_SOURCE` names.
-    fn write_fixture_sources(root: &Path) {
+    fn write_fixture_sources(root: &std::path::Path) {
         write(
             root,
             "models/parts/body.part.yaml",
@@ -966,7 +971,11 @@ tracks:
         write(&root, "models/fixture.assembly.yaml", ASSEMBLY_SOURCE);
         write_fixture_sources(&root);
 
-        let data = load(&root, "models/fixture.assembly.yaml").expect("the assembly loads");
+        let data = load(
+            ludion_assets::AssetRoot::content(&root),
+            "models/fixture.assembly.yaml",
+        )
+        .expect("the assembly loads");
         assert_eq!(
             data.parts
                 .iter()
@@ -988,7 +997,43 @@ tracks:
         assert_eq!(data.clip("attack"), None);
 
         // Loading again reads the same bytes, so the whole result — mesh keys included — is stable.
-        assert_eq!(load(&root, "models/fixture.assembly.yaml").unwrap(), data);
+        assert_eq!(
+            load(
+                ludion_assets::AssetRoot::content(&root),
+                "models/fixture.assembly.yaml"
+            )
+            .unwrap(),
+            data
+        );
+    }
+
+    /// A part or clip file that climbs out of the content root is refused with the general content
+    /// rule, even when a real file sits at the escaped location.
+    #[test]
+    fn a_part_file_climbing_out_of_the_root_is_refused() {
+        let base = fresh_dir("load-escape");
+        let root = base.join("content");
+        write(
+            &root,
+            "models/parts/arm.part.yaml",
+            &part_source([1, 1, 1], &["A"]),
+        );
+        write(&root, "models/anims/walk.anim.yaml", CLIP_SOURCE);
+        write(&base, "outside.part.yaml", &part_source([2, 1, 1], &["AA"]));
+        let source = ASSEMBLY_SOURCE.replace("parts/body.part.yaml", "../../../outside.part.yaml");
+        write(&root, "models/fixture.assembly.yaml", &source);
+
+        let errors = load(
+            ludion_assets::AssetRoot::content(&root),
+            "models/fixture.assembly.yaml",
+        )
+        .expect_err("the part escapes");
+        assert!(
+            errors
+                .iter()
+                .any(|d| d.code == code::CONTENT_PATH_OUTSIDE_ROOT),
+            "{errors:?}"
+        );
     }
 
     /// Every source file the assembly names — its own document, each part, each clip — is on the
@@ -1000,8 +1045,11 @@ tracks:
         write(&root, "models/fixture.assembly.yaml", ASSEMBLY_SOURCE);
         write_fixture_sources(&root);
 
-        let (_, sources) =
-            load_with_sources(&root, "models/fixture.assembly.yaml").expect("the assembly loads");
+        let (_, sources) = load_with_sources(
+            ludion_assets::AssetRoot::content(&root),
+            "models/fixture.assembly.yaml",
+        )
+        .expect("the assembly loads");
         let sources: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
         assert_eq!(
             sources,
@@ -1031,7 +1079,11 @@ tracks:
             &part_source([1, 1, 1], &["A"]),
         );
 
-        let errors = load(&root, "models/fixture.assembly.yaml").expect_err("the clip is gone");
+        let errors = load(
+            ludion_assets::AssetRoot::content(&root),
+            "models/fixture.assembly.yaml",
+        )
+        .expect_err("the clip is gone");
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].code, code::ASSET_FILE_IO);
         assert!(errors[0].message.contains("models/anims/walk.anim.yaml"));
@@ -1052,7 +1104,11 @@ tracks:
             &CLIP_SOURCE.replace("duration: 1.0", "duration: 0.0"),
         );
 
-        let errors = load(&root, "models/fixture.assembly.yaml").expect_err("the clip is invalid");
+        let errors = load(
+            ludion_assets::AssetRoot::content(&root),
+            "models/fixture.assembly.yaml",
+        )
+        .expect_err("the clip is invalid");
         assert!(
             errors
                 .iter()
@@ -1074,7 +1130,11 @@ tracks:
         let root = fresh_dir("load-missing");
         write(&root, "models/fixture.assembly.yaml", ASSEMBLY_SOURCE);
 
-        let errors = load(&root, "models/fixture.assembly.yaml").expect_err("both parts are gone");
+        let errors = load(
+            ludion_assets::AssetRoot::content(&root),
+            "models/fixture.assembly.yaml",
+        )
+        .expect_err("both parts are gone");
         assert_eq!(errors.len(), 2, "one diagnostic per unreadable part file");
         assert!(errors.iter().all(|d| d.code == code::ASSET_FILE_IO));
         assert!(errors[0].message.contains("models/parts/body.part.yaml"));
@@ -1099,7 +1159,11 @@ tracks:
             &part_source([1, 1, 1], &["A"]),
         );
 
-        let errors = load(&root, "models/fixture.assembly.yaml").expect_err("the part is invalid");
+        let errors = load(
+            ludion_assets::AssetRoot::content(&root),
+            "models/fixture.assembly.yaml",
+        )
+        .expect_err("the part is invalid");
         assert!(errors.iter().any(|d| d.code == code::PART_DATA_CONSISTENCY));
         assert!(
             errors[0].message.contains("part `body`")
@@ -1126,7 +1190,11 @@ tracks:
             &part_source([1, 1, 1], &["A"]),
         );
 
-        let errors = load(&root, "models/fixture.assembly.yaml").expect_err("`Z` is undefined");
+        let errors = load(
+            ludion_assets::AssetRoot::content(&root),
+            "models/fixture.assembly.yaml",
+        )
+        .expect_err("`Z` is undefined");
         assert!(
             errors
                 .iter()
@@ -1141,7 +1209,11 @@ tracks:
     #[test]
     fn a_missing_assembly_is_one_asset_diagnostic() {
         let root = fresh_dir("load-missing-assembly");
-        let errors = load(&root, "models/absent.assembly.yaml").expect_err("nothing is there");
+        let errors = load(
+            ludion_assets::AssetRoot::content(&root),
+            "models/absent.assembly.yaml",
+        )
+        .expect_err("nothing is there");
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].code, code::ASSET_FILE_IO);
     }

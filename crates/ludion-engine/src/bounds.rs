@@ -24,7 +24,7 @@
 //! where a render falls back to a default framing — is because a screen rect projected against an
 //! invented viewpoint would silently mislead; see the `L2102` explanation.
 
-use std::path::Path;
+use ludion_assets::AssetRoot;
 use std::sync::Arc;
 
 use ludion_core::codes::code;
@@ -72,7 +72,7 @@ const BEHIND_CAMERA_W: f32 = 1e-6;
 pub(crate) fn compute(
     world: &World,
     render_size: (u32, u32),
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     cache: &mut AssetCache,
     view: Option<&ViewPose>,
 ) -> Result<([u32; 2], Vec<EntityBounds>), Diagnostic> {
@@ -216,7 +216,7 @@ fn mesh_aabb(mesh: &PlacedMesh, extents: &mut Extents) -> Aabb {
 /// The assets a query sizes meshes from: the content root, the engine's cache, and the vertex-extent
 /// boxes already worked out this query (a district repeats one kit mesh hundreds of times).
 struct Extents<'a> {
-    root: &'a Path,
+    root: AssetRoot<'a>,
     cache: &'a mut AssetCache,
     /// Keyed by source kind and path; a document that would not load is memoized as its fallback box.
     vertex_boxes: StableMap<String, (Vec3, Vec3)>,

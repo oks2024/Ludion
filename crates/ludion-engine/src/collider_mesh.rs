@@ -7,6 +7,7 @@
 //! `asset.reload` does not reach it: a collider that changes mid-run without a recorded input would
 //! break replays.
 
+use ludion_assets::AssetRoot;
 use std::path::PathBuf;
 
 use ludion_core::codes::code;
@@ -16,12 +17,12 @@ use ludion_physics::{ColliderMeshes, TriangleMesh};
 /// A library that reads mesh documents relative to `root`, the same paths `Mesh.shape: { asset }`
 /// takes.
 pub(crate) fn library(root: PathBuf) -> ColliderMeshes {
-    ColliderMeshes::new(Box::new(move |rel| load(&root, rel)))
+    ColliderMeshes::new(Box::new(move |rel| load(AssetRoot::content(&root), rel)))
 }
 
 /// Reads and validates the mesh at `rel`. A document with several faults returns the first as the
 /// diagnostic, the rest attached as its `related`.
-fn load(root: &std::path::Path, rel: &str) -> Result<TriangleMesh, Diagnostic> {
+fn load(root: AssetRoot<'_>, rel: &str) -> Result<TriangleMesh, Diagnostic> {
     let (document, hash) = crate::mesh_asset::read_document(root, rel).map_err(|diagnostics| {
         let mut faults = diagnostics.into_iter();
         let first = faults.next().unwrap_or_else(|| {

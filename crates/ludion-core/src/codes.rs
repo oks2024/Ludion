@@ -1561,6 +1561,11 @@ pub mod code {
     /// pointer `/entities/{k}/components/{Component}`).
     pub const PRESENTATION_INSTANCE_SIM_COMPONENT: DiagnosticCode = DiagnosticCode::new("L1320");
 
+    /// `L1321` — the general rule for a content or payload path leaving the content root: absolute,
+    /// prefixed, reserved, or climbing above the root once its `..` segments fold. Raised by
+    /// `ludion_assets::resolve`, so every asset read shares it; the per-kind path codes stay.
+    pub const CONTENT_PATH_OUTSIDE_ROOT: DiagnosticCode = DiagnosticCode::new("L1321");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7757,6 +7762,22 @@ the pointer `/entities/{k}/components/{Component}`. Fix: drop `presentation: tru
 the instance sim, or keep the sim part in a separate instance and parent the presentation body to it
 through `overrides` (`Parent` on the body's root part).",
     },
+    CodeEntry {
+        code: code::CONTENT_PATH_OUTSIDE_ROOT,
+        severity: Severity::Error,
+        title: "a content or payload path leaves the content root",
+        explanation: "\
+The general rule for any path that came from content or a payload and is joined to the content
+root: a component asset field, a path nested in a document, or a recorded prefab source. After its
+`..` segments are folded, the path must be a plain relative path below the root. An absolute path
+(`/dev/zero`, `//host/share`), a drive, scheme or stream prefix (`C:x`), a reserved device name
+(`nul.png`), or a `..` that climbs above the root is refused before any file is opened. A `..` that
+only cancels a segment (`meshes/../t.png`) is fine. The per-kind codes (the fonts table, a prefab
+asset path, a wire outer parameter) stay for the places that check earlier.
+
+Fix: name the file relative to the content root (the directory of the scene the engine was started
+with); a document's own paths may climb with `..` only while they stay inside it.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -10575,6 +10596,7 @@ mod tests {
         code::PARENT_JOINT_NOT_SKINNED,
         code::PARENT_JOINT_UNKNOWN_JOINT,
         code::PRESENTATION_INSTANCE_SIM_COMPONENT,
+        code::CONTENT_PATH_OUTSIDE_ROOT,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

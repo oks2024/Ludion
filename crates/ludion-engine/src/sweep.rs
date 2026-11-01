@@ -350,7 +350,7 @@ pub fn render_frame_strip(
         render_scenes.push(extract_at(
             driver.world(),
             (layout.cell_w, layout.cell_h),
-            project_root,
+            ludion_assets::AssetRoot::content(project_root),
             driver.time(),
             QualityParams::FULL.particle_density,
         )?);
@@ -446,7 +446,11 @@ fn prepare_cell(
     let mut driver = crate::scene_physics::bare_driver(world, &scene, project_root);
     driver.run_ticks(0);
 
-    let scene = extract(driver.world(), (layout.cell_w, layout.cell_h), project_root)?;
+    let scene = extract(
+        driver.world(),
+        (layout.cell_w, layout.cell_h),
+        ludion_assets::AssetRoot::content(project_root),
+    )?;
     Ok(PreparedCell {
         scene,
         applied_base,

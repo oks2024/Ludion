@@ -354,7 +354,8 @@ fn replay_path() -> PathBuf {
 /// `generated_from`. The scene **is** what the switch produces.
 fn generate_scene_text() -> String {
     let gallery = gallery_root();
-    let data = load_assembly(&gallery, ASSEMBLY_REL).expect("the committed assembly loads");
+    let data = load_assembly(ludion_assets::AssetRoot::content(&gallery), ASSEMBLY_REL)
+        .expect("the committed assembly loads");
 
     let mut engine = Engine::with_project_root(&gallery);
     engine

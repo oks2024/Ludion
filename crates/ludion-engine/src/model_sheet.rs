@@ -921,7 +921,7 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
         let mut render_scene = extract_at(
             driver.world(),
             (layout.cell_w, layout.cell_h),
-            root,
+            ludion_assets::AssetRoot::local_document_unconfined(root),
             now,
             QualityParams::FULL.particle_density,
         )?;
@@ -1236,7 +1236,11 @@ fn part_attribution(root: &Path, file_name: &str) -> Result<Vec<Option<u32>>, Ve
         ]
     })?;
     let doc = ludion_scene::check_sculpt(&source)?;
-    let sources = crate::sculpt_mesh::read_sculpt_sources(root, file_name, &doc)?;
+    let sources = crate::sculpt_mesh::read_sculpt_sources(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        file_name,
+        &doc,
+    )?;
     let mesh = ludion_sculpt::mesh_with(&doc, &sources).map_err(|diagnostic| vec![diagnostic])?;
     Ok(mesh.part_of)
 }
@@ -1808,7 +1812,9 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
         Some("sculpt") => {
             let doc = ludion_scene::check_sculpt(&source)?;
             let sources = crate::sculpt_mesh::read_sculpt_sources(
-                model.parent().unwrap_or_else(|| Path::new(".")),
+                ludion_assets::AssetRoot::local_document_unconfined(
+                    model.parent().unwrap_or_else(|| Path::new(".")),
+                ),
                 &file_name,
                 &doc,
             )?;
@@ -1832,7 +1838,9 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
         // document names resolve relative to it. `extract` loads the same character again from the
         // cell's root, the harness's established double-parse.
         Some("character") => {
-            let root = model.parent().unwrap_or_else(|| Path::new("."));
+            let root = ludion_assets::AssetRoot::local_document_unconfined(
+                model.parent().unwrap_or_else(|| Path::new(".")),
+            );
             let data = crate::character::load(root, &file_name)?;
             let mesh = crate::skin_bone::load_mesh_document(root, &data.mesh)?;
             let (min, max) = mesh_aabb(&mesh);
@@ -1851,7 +1859,9 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
         // Rooted at the file's own directory, like a character: the parts' meshes and the clips
         // resolve relative to it. Its bounds are the rest-pose box of one expanded instance.
         Some("prefab") => {
-            let root = model.parent().unwrap_or_else(|| Path::new("."));
+            let root = ludion_assets::AssetRoot::local_document_unconfined(
+                model.parent().unwrap_or_else(|| Path::new(".")),
+            );
             let (data, _) = crate::prefab_clips::load_with_sources(root, &file_name)?;
             let doc = ludion_scene::parse_prefab(&source)?;
             let root_part = doc
@@ -1921,7 +1931,10 @@ fn assembly_aabb(doc: &AssemblyDocument) -> ([f32; 3], [f32; 3]) {
 /// The rest-pose box of one instance of the prefab at `root`/`rel`: the prefab is expanded and
 /// extracted on the CPU, and the box is taken over every mesh the extract drew. A prefab's parts
 /// live in other documents, so no one document holds its bounds.
-fn prefab_aabb(root: &Path, rel: &str) -> Result<([f32; 3], [f32; 3]), Vec<Diagnostic>> {
+fn prefab_aabb(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<([f32; 3], [f32; 3]), Vec<Diagnostic>> {
     /// The corners of the unit primitives: cube, plane and sphere all span ±0.5.
     const UNIT_CORNERS: [[f32; 3]; 8] = [
         [-0.5, -0.5, -0.5],
@@ -1939,7 +1952,7 @@ fn prefab_aabb(root: &Path, rel: &str) -> Result<([f32; 3], [f32; 3]), Vec<Diagn
         quote_yaml(rel)
     );
     let scene = ludion_scene::check(&probe, &registry)?;
-    let (_, world) = crate::render::expanded_world(root, &registry, &scene)?;
+    let (_, world) = crate::render::expanded_world(root.dir(), &registry, &scene)?;
     let rendered = extract_at(
         &world,
         (1, 1),
@@ -2122,7 +2135,9 @@ impl<'a> ClipSource<'a> {
             LoadedExtra::Character(data) => Ok(ClipSource::Character(data)),
             LoadedExtra::Prefab(data) => Ok(ClipSource::Prefab(data)),
             _ => {
-                let root = model.parent().unwrap_or_else(|| Path::new("."));
+                let root = ludion_assets::AssetRoot::local_document_unconfined(
+                    model.parent().unwrap_or_else(|| Path::new(".")),
+                );
                 let rel = loaded.bounds.file_name.as_str();
                 let data = crate::assembly_mesh::load(root, rel)?;
                 let (assembly, parts, ..) = crate::assembly_mesh::load_documents(root, rel)?;
@@ -5017,8 +5032,11 @@ entities:
         let staged = stage_lineup(&sources, &loaded).expect("a `..` part stages");
 
         for (index, width) in [(0, 1), (1, 2)] {
-            let data = crate::assembly_mesh::load(&staged.roots[0], &staged.names[index])
-                .expect("the staged assembly loads from its slot");
+            let data = crate::assembly_mesh::load(
+                ludion_assets::AssetRoot::local_document_unconfined(&staged.roots[0]),
+                &staged.names[index],
+            )
+            .expect("the staged assembly loads from its slot");
             assert_eq!(data.parts[0].size, [width, 1, 1], "slot {index}");
         }
         let mut slots: Vec<String> = std::fs::read_dir(&staged.roots[0])
@@ -5045,7 +5063,11 @@ entities:
         Overridden::Assembly(doc, &a)
             .write(&root, "hero.assembly.yaml")
             .expect("stages");
-        let data = crate::assembly_mesh::load(&root, "hero.assembly.yaml").expect("loads");
+        let data = crate::assembly_mesh::load(
+            ludion_assets::AssetRoot::local_document_unconfined(&root),
+            "hero.assembly.yaml",
+        )
+        .expect("loads");
         assert_eq!(data.parts[0].size, [2, 1, 1]);
         assert!(!dir.join("parts").exists(), "nothing escapes the cell root");
         let _ = std::fs::remove_dir_all(&dir);
@@ -5105,8 +5127,11 @@ entities:
         let sources: Vec<&Path> = vec![&hero];
         let loaded = load_models(&sources).expect("loads");
         let staged = stage_lineup(&sources, &loaded).expect("stages");
-        let data = crate::assembly_mesh::load(&staged.roots[0], &staged.names[0])
-            .expect("the staged assembly loads");
+        let data = crate::assembly_mesh::load(
+            ludion_assets::AssetRoot::local_document_unconfined(&staged.roots[0]),
+            &staged.names[0],
+        )
+        .expect("the staged assembly loads");
         let widths: Vec<u32> = data.parts.iter().map(|part| part.size[0]).collect();
         assert_eq!(widths, [1, 2, 3]);
         let _ = std::fs::remove_dir_all(&dir);

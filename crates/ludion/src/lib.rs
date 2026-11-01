@@ -3041,7 +3041,8 @@ entities:
             Err(diagnostics) => panic!("{diagnostics:?}"),
         }
 
-        let image = ludion_assets::load_png(&dir, "frame.png").unwrap_or_else(|d| panic!("{d}"));
+        let image = ludion_assets::load_png(ludion_assets::AssetRoot::content(&dir), "frame.png")
+            .unwrap_or_else(|d| panic!("{d}"));
         assert_eq!((image.width, image.height), (96, 64));
     }
 }

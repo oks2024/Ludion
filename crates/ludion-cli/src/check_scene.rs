@@ -642,7 +642,11 @@ fn run_sculpt(mut reporter: Reporter, source: &str, views: &SculptViews) -> Exit
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
-    let sources = match ludion_engine::read_sculpt_sources(root, &file_name, &doc) {
+    let sources = match ludion_engine::read_sculpt_sources(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        &file_name,
+        &doc,
+    ) {
         Ok(sources) => sources,
         Err(diagnostics) => return reporter.fail(diagnostics),
     };
@@ -1167,7 +1171,10 @@ fn run_atlas(mut reporter: Reporter, source: &str) -> ExitCode {
     // `maps.color` is written relative to the atlas document's own directory, so the pair moves
     // together — exactly how a `Sprite`'s `atlas:` resolves it at extract.
     let root = path.parent().unwrap_or_else(|| Path::new("."));
-    let image = match ludion_assets::load_png(root, &atlas.color_map) {
+    let image = match ludion_assets::load_png(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        &atlas.color_map,
+    ) {
         Ok(image) => image,
         Err(cause) => {
             let diagnostic = Diagnostic::new(
@@ -1274,15 +1281,21 @@ fn run_assembly(mut reporter: Reporter, source: &str, views: &VoxelViews) -> Exi
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
 
-    let data = match ludion_engine::load_assembly(root, &rel) {
+    let data = match ludion_engine::load_assembly(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        &rel,
+    ) {
         Ok(data) => data,
         Err(diagnostics) => return reporter.fail(diagnostics),
     };
     let assembly = ludion_scene::check_assembly(source)
         .expect("load_assembly already validated this exact document");
 
-    let (grid_assembly, parts, ..) = ludion_engine::load_assembly_documents(root, &rel)
-        .expect("load_assembly already validated this exact document and its parts");
+    let (grid_assembly, parts, ..) = ludion_engine::load_assembly_documents(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        &rel,
+    )
+    .expect("load_assembly already validated this exact document and its parts");
     let grid = ludion_scene::assembly_assembled_grid(&grid_assembly, &parts);
     let owners = Owners {
         assembly: &grid_assembly,
@@ -1399,7 +1412,10 @@ fn run_prefab(mut reporter: Reporter, source: &str) -> ExitCode {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
-        let data = match ludion_engine::load_prefab_clips(root, &rel) {
+        let data = match ludion_engine::load_prefab_clips(
+            ludion_assets::AssetRoot::local_document_unconfined(root),
+            &rel,
+        ) {
             Ok(data) => data,
             Err(diagnostics) => return reporter.fail(diagnostics),
         };
@@ -1533,14 +1549,20 @@ fn run_character(mut reporter: Reporter, source: &str) -> ExitCode {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
 
-    let data = match ludion_engine::load_character(root, &rel) {
+    let data = match ludion_engine::load_character(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        &rel,
+    ) {
         Ok(data) => data,
         Err(diagnostics) => return reporter.fail(diagnostics),
     };
     let name = ludion_scene::check_character(source)
         .expect("load_character already validated this exact document")
         .name;
-    let contacts = match ludion_engine::contact_heights(root, &data) {
+    let contacts = match ludion_engine::contact_heights(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        &data,
+    ) {
         Ok(contacts) => contacts,
         Err(diagnostics) => return reporter.fail(diagnostics),
     };

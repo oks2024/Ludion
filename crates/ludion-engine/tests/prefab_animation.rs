@@ -137,7 +137,7 @@ fn posed_at(engine: &Engine, tick: u64) -> Vec<MeshInstance> {
     extract_at(
         engine.world(),
         (320, 180),
-        engine.project_root(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
         SimTime::from_ticks(tick, TickRate::DEFAULT),
         QualityParams::FULL.particle_density,
     )
@@ -232,7 +232,7 @@ entities:
         extract_at(
             engine.world(),
             (320, 180),
-            engine.project_root(),
+            ludion_assets::AssetRoot::content(engine.project_root()),
             SimTime::from_ticks(tick, TickRate::DEFAULT),
             QualityParams::FULL.particle_density,
         )

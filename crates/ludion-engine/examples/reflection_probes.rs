@@ -78,7 +78,9 @@ fn main() -> ExitCode {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
     let world = ludion_scene::instantiate(&scene, &registry).expect("fixed scene instantiates");
-    let mut probes = extract(&world, (320, 180), &root).expect("extract").probes;
+    let mut probes = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&root))
+        .expect("extract")
+        .probes;
     probes.sort_by(probe_rank);
     for probe in &probes {
         let kind = match probe.volume {

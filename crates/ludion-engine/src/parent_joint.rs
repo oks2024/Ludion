@@ -5,6 +5,7 @@
 //! Two diagnostics (`L1318`, `L1319`); see [`ParentJoint`](crate::components::ParentJoint)'s doc
 //! comment for the rule.
 
+use ludion_assets::AssetRoot;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -68,7 +69,10 @@ pub fn scene_parent_joint_diagnostics(project_root: &Path, scene: &Scene) -> Vec
         }
         let parent_entity = &scene.entities[parent_index];
 
-        let mesh_rel = match skinned_mesh_path(project_root, parent_entity) {
+        let mesh_rel = match skinned_mesh_path(
+            ludion_assets::AssetRoot::content(project_root),
+            parent_entity,
+        ) {
             Some(Ok(path)) => path,
             Some(Err((character, errors))) => {
                 if reported_mesh_errors.insert(format!("character:{character}")) {
@@ -91,9 +95,9 @@ pub fn scene_parent_joint_diagnostics(project_root: &Path, scene: &Scene) -> Vec
             }
         };
 
-        let joints = mesh_cache
-            .entry(mesh_rel.clone())
-            .or_insert_with(|| load_mesh_joints(project_root, &mesh_rel));
+        let joints = mesh_cache.entry(mesh_rel.clone()).or_insert_with(|| {
+            load_mesh_joints(ludion_assets::AssetRoot::content(project_root), &mesh_rel)
+        });
         let joints = match joints {
             Ok(joints) => joints,
             Err(errors) => {
@@ -177,12 +181,12 @@ impl SkinRests {
         let (path, character) = match shape {
             MeshSource::Asset(path) => (path.clone(), None),
             MeshSource::Character(rel) => {
-                let data = crate::character::load(&self.root, rel).ok()?;
+                let data = crate::character::load(AssetRoot::content(&self.root), rel).ok()?;
                 (data.mesh.clone(), Some(Arc::new(data)))
             }
             _ => return None,
         };
-        let skin = crate::skin_bone::load_mesh_document(&self.root, &path)
+        let skin = crate::skin_bone::load_mesh_document(AssetRoot::content(&self.root), &path)
             .ok()?
             .skin?;
         Some(Arc::new(SkinPoseData {
@@ -212,10 +216,12 @@ impl SkinRests {
     fn load(&self, shape: &MeshSource) -> Option<Arc<JointRests>> {
         let path = match shape {
             MeshSource::Asset(path) => path.clone(),
-            MeshSource::Character(path) => crate::character::mesh_path(&self.root, path).ok()?,
+            MeshSource::Character(path) => {
+                crate::character::mesh_path(AssetRoot::content(&self.root), path).ok()?
+            }
             _ => return None,
         };
-        let joints = load_mesh_joints(&self.root, &path).ok()??;
+        let joints = load_mesh_joints(AssetRoot::content(&self.root), &path).ok()??;
         let models = ludion_scene::rest_model_matrices(&joints)?;
         let mut rests = BTreeMap::new();
         for (joint, model) in joints.iter().zip(models) {

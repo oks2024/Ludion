@@ -589,7 +589,7 @@ fn atlas_reference(root: &Path, pointer: &str, value: &serde_json::Value) -> Vec
         return Vec::new();
     };
     crate::check_atlas_reference(
-        root,
+        ludion_assets::AssetRoot::content(root),
         pointer,
         atlas,
         value.get("frame").and_then(serde_json::Value::as_str),
@@ -600,7 +600,7 @@ fn atlas_reference(root: &Path, pointer: &str, value: &serde_json::Value) -> Vec
 /// a face), each paired with the root-relative file it is in; their pointers are into that file,
 /// never the scene.
 pub fn font_table_faults(project_root: &Path) -> Vec<(String, Diagnostic)> {
-    crate::FontLibrary::load(project_root)
+    crate::FontLibrary::load(ludion_assets::AssetRoot::content(project_root))
         .faults()
         .map(|(file, d)| (file.to_string(), d.clone()))
         .collect()
@@ -617,7 +617,7 @@ pub fn font_table_faults(project_root: &Path) -> Vec<(String, Diagnostic)> {
 pub fn scene_font_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnostic> {
     use crate::fonts::TableState;
 
-    let library = crate::FontLibrary::load(project_root);
+    let library = crate::FontLibrary::load(ludion_assets::AssetRoot::content(project_root));
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     for (index, entity) in scene.entities.iter().enumerate() {
         for (name, value) in &entity.components {
@@ -768,7 +768,10 @@ pub fn scene_audio_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagno
         } else {
             decoded
                 .entry(sound.to_string())
-                .or_insert_with(|| ludion_assets::load_wav(project_root, sound).err())
+                .or_insert_with(|| {
+                    ludion_assets::load_wav(ludion_assets::AssetRoot::content(project_root), sound)
+                        .err()
+                })
                 .clone()
         };
         diagnostics.extend(fault.map(|d| d.with_path(pointer)));
@@ -808,7 +811,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_sun_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
     diagnostics.extend(crate::skin_bone::scene_skin_bone_diagnostics(
-        project_root,
+        ludion_assets::AssetRoot::content(project_root),
         scene,
     ));
     diagnostics.extend(crate::parent_joint::scene_parent_joint_diagnostics(

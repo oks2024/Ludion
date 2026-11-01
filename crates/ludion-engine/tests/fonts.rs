@@ -139,7 +139,7 @@ fn a_named_face_reaches_measurement() {
     use ludion_engine::ui::{FontFace, list_hit, measure_ui_text, resolve_ui_list};
 
     let dir = root("measure", true);
-    let lib = FontLibrary::load(&dir);
+    let lib = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     let embedded = FontFace::embedded();
     let body = lib.face(Some("body"));
 
@@ -203,8 +203,12 @@ fn list_hit_matches_the_drawn_rows_of_a_proportional_list() {
     assert_eq!(list.font.as_deref(), Some("body"));
 
     let viewport = (1920, 1080);
-    let render_scene =
-        ludion_engine::extract(world, viewport, scene.parent().unwrap()).expect("extracts");
+    let render_scene = ludion_engine::extract(
+        world,
+        viewport,
+        ludion_assets::AssetRoot::content(scene.parent().unwrap()),
+    )
+    .expect("extracts");
     let layout = resolve_ui_list(face, &list, viewport);
     let scale = viewport.1 as f32 / 1080.0;
 
@@ -267,7 +271,7 @@ fn an_unknown_font_hits_like_the_default() {
         "format: 1\nkind: fonts\nfonts:\n  default: fonts/inter.font.yaml\n",
     )
     .expect("table");
-    let lib = FontLibrary::load(&dir);
+    let lib = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     let list = |font: Option<&str>| UiList {
         anchor: Anchor::TopLeft,
         size: 24.0,
@@ -325,7 +329,12 @@ fn a_line_break_inside_a_ui_list_item_stays_on_its_row() {
         let mut world = World::new();
         let entity = world.spawn();
         world.insert(entity, list.clone()).unwrap();
-        let scene = extract(&world, (1920, 1080), Path::new(".")).unwrap();
+        let scene = extract(
+            &world,
+            (1920, 1080),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap();
         let texts: Vec<_> = scene
             .ui
             .iter()

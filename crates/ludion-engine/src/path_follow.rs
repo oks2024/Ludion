@@ -19,8 +19,9 @@
 //! **`asset.reload` does not invalidate it**, the [`AnimationLibrary`](crate::animation_events)
 //! posture; a path that fails to load raises `L1215` once per entity and the entity stays put.
 
+use ludion_assets::AssetRoot;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::lane::CentreLine;
@@ -335,7 +336,7 @@ impl PathLibrary {
     /// The path `rel`, loading it on first use; `Err` with the loader's diagnostics.
     fn loaded(&mut self, rel: &str) -> Result<&Loaded, &[Diagnostic]> {
         if !self.paths.contains_key(rel) {
-            let loaded = load(&self.root, rel).map(Loaded::new);
+            let loaded = load(AssetRoot::content(&self.root), rel).map(Loaded::new);
             self.paths.insert(rel.to_string(), loaded);
         }
         match &self.paths[rel] {
@@ -402,13 +403,13 @@ impl PathLibrary {
     pub(crate) fn peek(&self, rel: &str) -> Option<Arc<PathSampler>> {
         match self.paths.get(rel) {
             Some(loaded) => loaded.as_ref().ok().map(|l| Arc::clone(&l.sampler)),
-            None => load(&self.root, rel).ok().map(Arc::new),
+            None => load(AssetRoot::content(&self.root), rel).ok().map(Arc::new),
         }
     }
 }
 
 /// Reads and checks the path asset `rel` under `root`.
-fn load(root: &Path, rel: &str) -> Result<PathSampler, Vec<Diagnostic>> {
+fn load(root: ludion_assets::AssetRoot<'_>, rel: &str) -> Result<PathSampler, Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|d| vec![d])?;
     let text = std::str::from_utf8(&bytes.bytes).map_err(|_| {
         vec![Diagnostic::new(

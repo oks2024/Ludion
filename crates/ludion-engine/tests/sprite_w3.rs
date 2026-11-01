@@ -98,7 +98,7 @@ fn sprites_at(root: &Path, scene: &str, tick: u64) -> Vec<SpriteInstance> {
     extract_at(
         engine.world(),
         (320, 180),
-        engine.project_root(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
         SimTime::from_ticks(tick, TickRate::DEFAULT),
         QualityParams::FULL.particle_density,
     )
@@ -243,7 +243,7 @@ fn pixel_snap_extract_writes_nothing_to_the_world() {
                 let _ = extract_at(
                     engine.world(),
                     (320, 180),
-                    engine.project_root(),
+                    ludion_assets::AssetRoot::content(engine.project_root()),
                     SimTime::from_ticks(engine.frame().as_u64(), TickRate::DEFAULT),
                     QualityParams::FULL.particle_density,
                 );

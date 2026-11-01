@@ -186,7 +186,10 @@ pub fn run(images: &[PathBuf], json: bool, check: Option<&Path>) -> ExitCode {
 fn decode(path: &Path) -> Result<DecodedImage, Diagnostic> {
     let root = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let image = ludion_assets::load_png(root, name)?;
+    let image = ludion_assets::load_png(
+        ludion_assets::AssetRoot::local_document_unconfined(root),
+        name,
+    )?;
     Ok(DecodedImage {
         width: image.width,
         height: image.height,

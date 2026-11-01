@@ -110,7 +110,7 @@ fn cook_map(
     space: ColorSpace,
     alpha_cutoff: Option<f32>,
 ) {
-    let source = ludion_assets::load_png(dir, png).unwrap();
+    let source = ludion_assets::load_png(ludion_assets::AssetRoot::content(dir), png).unwrap();
     let settings = CookSettings {
         target,
         color_space: space,

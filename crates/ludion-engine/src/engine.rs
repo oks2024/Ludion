@@ -28,6 +28,7 @@
 //! assert_eq!(dispatched.frame.as_u64(), 0);
 //! ```
 
+use ludion_assets::AssetRoot;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -2396,7 +2397,7 @@ impl Engine {
     /// world (re)build, the [`install_path_library`](Engine::install_path_library) mold: never
     /// hashed, never snapshotted.
     pub(crate) fn install_font_library(&mut self) {
-        let library = crate::FontLibrary::load(&self.project_root);
+        let library = crate::FontLibrary::load(AssetRoot::content(&self.project_root));
         self.driver.world_mut().insert_resource(library);
     }
 
@@ -3018,8 +3019,13 @@ impl Engine {
             // part would pose against the old rest. A failed re-read leaves the entry dropped for
             // the next extract to report.
             let root = self.project_root().to_path_buf();
-            if let Some(key) = self.asset_cache().resolve_key(&root, &applied.path) {
-                let _ = self.asset_cache_mut().reload(&root, &key);
+            if let Some(key) = self
+                .asset_cache()
+                .resolve_key(AssetRoot::content(&root), &applied.path)
+            {
+                let _ = self
+                    .asset_cache_mut()
+                    .reload(AssetRoot::content(&root), &key);
             }
         }
         result
@@ -4074,13 +4080,15 @@ impl Engine {
         if !revalidate && !prefetch {
             return false;
         }
-        let refs = crate::extract::asset_refs(self.driver.world(), &self.project_root);
+        let refs =
+            crate::extract::asset_refs(self.driver.world(), AssetRoot::content(&self.project_root));
         if revalidate {
             self.asset_cache
-                .retain_referenced(&self.project_root, &refs);
+                .retain_referenced(AssetRoot::content(&self.project_root), &refs);
         }
         if prefetch {
-            self.asset_cache.prefetch(&self.project_root, &refs);
+            self.asset_cache
+                .prefetch(AssetRoot::content(&self.project_root), &refs);
         }
         prefetch
     }
@@ -4176,7 +4184,7 @@ impl Engine {
         // and the cache are four separate fields, so this borrows each without aliasing `self`.
         let view = use_view.then_some(self.view_override.as_ref()).flatten();
         let world = self.driver.world();
-        let root = &self.project_root;
+        let root = AssetRoot::content(&self.project_root);
         let cache = &mut self.asset_cache;
         let mut degraded = Vec::new();
         if prefetched {
@@ -4237,7 +4245,7 @@ impl Engine {
         crate::bounds::compute(
             self.driver.world(),
             size,
-            &self.project_root,
+            AssetRoot::content(&self.project_root),
             &mut self.asset_cache,
             view,
         )
@@ -5792,9 +5800,11 @@ pub(crate) fn instantiate_expanded_world(
     }
     let mut errors =
         crate::parent_joint::scene_parent_joint_diagnostics(project_root, &expanded.scene);
-    if let Err(pose_errors) =
-        crate::skin_bone::apply_spawn_poses(&mut world, &expanded.scene, project_root)
-    {
+    if let Err(pose_errors) = crate::skin_bone::apply_spawn_poses(
+        &mut world,
+        &expanded.scene,
+        ludion_assets::AssetRoot::content(project_root),
+    ) {
         errors.extend(pose_errors);
     }
     if !errors.is_empty() {

@@ -115,7 +115,7 @@ pub fn render_voxel_sheet(
     let render_scene = extract_at(
         driver.world(),
         size.output,
-        project_root,
+        ludion_assets::AssetRoot::content(project_root),
         driver.time(),
         QualityParams::FULL.particle_density,
     )?;
@@ -201,7 +201,7 @@ pub fn render_gi_sheet(
     let render_scene = extract_at(
         driver.world(),
         size.output,
-        project_root,
+        ludion_assets::AssetRoot::content(project_root),
         driver.time(),
         QualityParams::FULL.particle_density,
     )?;
@@ -288,7 +288,12 @@ fn empty_grid(
     project_root: &Path,
     now: ludion_core::time::SimTime,
 ) -> Vec<Diagnostic> {
-    match gi_volume_skips(world, camera, project_root, now) {
+    match gi_volume_skips(
+        world,
+        camera,
+        ludion_assets::AssetRoot::content(project_root),
+        now,
+    ) {
         Ok(None) => vec![no_gi_volume(path)],
         Ok(Some((index, skipped))) => vec![gi_volume_empty(path, index, &skipped)],
         Err(diagnostics) => diagnostics,

@@ -169,7 +169,7 @@ fn sprites_at(engine: &Engine, frame: u64) -> Vec<SpriteInstance> {
     extract_at(
         engine.world(),
         (320, 180),
-        engine.project_root(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
         SimTime::from_ticks(frame, TICK),
         QualityParams::FULL.particle_density,
     )

@@ -180,7 +180,8 @@ fn fixture_project(name: &str) -> PathBuf {
 }
 
 fn assembly_data(root: &Path) -> AssemblyData {
-    load_assembly(root, ASSEMBLY_REL).expect("the fixture assembly loads")
+    load_assembly(ludion_assets::AssetRoot::content(root), ASSEMBLY_REL)
+        .expect("the fixture assembly loads")
 }
 
 fn get<T: Component + Clone>(world: &World, id: EntityId) -> Option<T> {
@@ -307,7 +308,7 @@ fn model_matrices(world: &World, root: &Path, now: SimTime) -> Vec<Mat4> {
     let scene = extract_at(
         world,
         (64, 64),
-        root,
+        ludion_assets::AssetRoot::content(root),
         now,
         QualityParams::FULL.particle_density,
     )

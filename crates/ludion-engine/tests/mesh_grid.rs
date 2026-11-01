@@ -241,8 +241,18 @@ fn a_grid_extracts_like_the_equivalent_parented_entities() {
         }
     }
 
-    let from_grid = extract(&grid_world, (320, 180), &dir).unwrap();
-    let by_hand = extract(&hand_world, (320, 180), &dir).unwrap();
+    let from_grid = extract(
+        &grid_world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(&dir),
+    )
+    .unwrap();
+    let by_hand = extract(
+        &hand_world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(&dir),
+    )
+    .unwrap();
     assert_eq!(from_grid.mesh_assets.len(), by_hand.mesh_assets.len());
     assert_eq!(from_grid.meshes.len(), 8, "nine cells minus the hole");
     assert_eq!(from_grid.meshes.len(), by_hand.meshes.len());
@@ -292,7 +302,7 @@ fn a_missing_legend_asset_is_l1101_at_the_legend_entry() {
             },
         )
         .unwrap();
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(
         errors.len(),
         1,
@@ -328,7 +338,12 @@ fn a_presentation_grid_draws_and_does_not_move_the_hash() {
     }
     assert_eq!(with.world_hash().unwrap(), without.world_hash().unwrap());
 
-    let scene = extract(with.world(), (320, 180), &dir).unwrap();
+    let scene = extract(
+        with.world(),
+        (320, 180),
+        ludion_assets::AssetRoot::content(&dir),
+    )
+    .unwrap();
     assert_eq!(scene.meshes.len(), 3, "three non-empty cells draw");
     let _ = std::fs::remove_dir_all(&dir);
 }

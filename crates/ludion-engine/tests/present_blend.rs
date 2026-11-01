@@ -399,7 +399,7 @@ fn key_collection_does_not_change_the_extracted_scene() {
     let plain = extract_at(
         engine.world(),
         engine.render_size(),
-        engine.project_root(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
         SimTime::from_ticks(engine.frame().0, TickRate::DEFAULT),
         QualityParams::FULL.particle_density,
     )

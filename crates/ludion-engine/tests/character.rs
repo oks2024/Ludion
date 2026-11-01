@@ -58,7 +58,7 @@ fn extract(
     extract_at(
         engine.world(),
         (320, 180),
-        root,
+        ludion_assets::AssetRoot::content(root),
         SimTime::from_ticks(0, TickRate::DEFAULT),
         QualityParams::FULL.particle_density,
     )
@@ -66,7 +66,8 @@ fn extract(
 
 #[test]
 fn the_gallery_mannequin_resolves_four_clips_with_effective_overlays() {
-    let data = load_character(&gallery(), CHARACTER).expect("the gallery character loads");
+    let data = load_character(ludion_assets::AssetRoot::content(&gallery()), CHARACTER)
+        .expect("the gallery character loads");
     assert_eq!(data.mesh, "meshes/skin-mannequin.mesh.yaml");
     assert_eq!(data.clips.len(), 4);
     let run = data.clip("run").expect("`run` is bound");
@@ -105,7 +106,7 @@ fn a_character_and_a_plain_asset_of_the_same_mesh_share_one_upload() {
     let scene = extract_at(
         engine.world(),
         (320, 180),
-        &root,
+        ludion_assets::AssetRoot::content(&root),
         SimTime::from_ticks(0, TickRate::DEFAULT),
         QualityParams::FULL.particle_density,
     )

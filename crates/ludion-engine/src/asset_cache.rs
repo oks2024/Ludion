@@ -49,9 +49,9 @@
 //! recorded session — sim-invisible and replay-safe.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 use std::sync::Arc;
 
+use ludion_assets::AssetRoot;
 use ludion_assets::cooked::ColorSpace;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_renderer::{MapImage, MeshData, TextureImage, WorldVoxelGrid};
@@ -156,7 +156,7 @@ enum Decoded {
 /// The recorded hash is that of the bytes the loader decoded, so an edit racing the decode is caught
 /// by the next revalidation.
 fn decode(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     kind: AssetKind,
     rel: &str,
     key: &str,
@@ -453,7 +453,7 @@ impl AssetCache {
     /// [`ludion_assets::load_png`]); a cached entry never errors.
     pub(crate) fn load(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         rel: &str,
     ) -> Result<&Arc<TextureImage>, Diagnostic> {
         let key = normalize_key(rel);
@@ -475,7 +475,7 @@ impl AssetCache {
     /// entry never errors.
     pub(crate) fn load_mesh(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         rel: &str,
     ) -> Result<&Arc<MeshData>, Vec<Diagnostic>> {
         let key = normalize_key(rel);
@@ -498,7 +498,7 @@ impl AssetCache {
     /// entry never errors.
     pub(crate) fn load_voxel(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         rel: &str,
     ) -> Result<&Arc<MeshData>, Vec<Diagnostic>> {
         let key = normalize_key(rel);
@@ -521,7 +521,7 @@ impl AssetCache {
     /// entry never errors.
     pub(crate) fn load_voxel_grid(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         rel: &str,
     ) -> Result<&Arc<VoxelStaticGrid>, Vec<Diagnostic>> {
         let key = normalize_key(rel);
@@ -542,7 +542,7 @@ impl AssetCache {
     /// meshed; a cached entry never errors.
     pub(crate) fn load_sculpt(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         rel: &str,
     ) -> Result<&Arc<MeshData>, Vec<Diagnostic>> {
         let key = normalize_key(rel);
@@ -569,7 +569,7 @@ impl AssetCache {
     /// parsed, or validated; a cached entry never errors.
     pub(crate) fn load_assembly(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         rel: &str,
     ) -> Result<&Arc<AssemblyData>, Vec<Diagnostic>> {
         let key = normalize_key(rel);
@@ -590,7 +590,7 @@ impl AssetCache {
     /// read, parsed, or validated; a cached entry never errors.
     pub(crate) fn load_character(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         rel: &str,
     ) -> Result<&Arc<CharacterData>, Vec<Diagnostic>> {
         let key = normalize_key(rel);
@@ -611,7 +611,7 @@ impl AssetCache {
     /// cached entry never errors.
     pub(crate) fn load_prefab_clips(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         rel: &str,
     ) -> Result<&Arc<PrefabClipData>, Vec<Diagnostic>> {
         let key = normalize_key(rel);
@@ -639,7 +639,7 @@ impl AssetCache {
     /// parsed, or validated; a cached entry never errors.
     pub(crate) fn load_atlas(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         rel: &str,
     ) -> Result<&Arc<AtlasAsset>, Vec<Diagnostic>> {
         let key = normalize_key(rel);
@@ -655,7 +655,7 @@ impl AssetCache {
     /// of. The one place each kind's loader is named: a miss and a reload both run through it.
     fn load_entry(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         kind: AssetKind,
         rel: &str,
     ) -> Result<(), Vec<Diagnostic>> {
@@ -679,7 +679,7 @@ impl AssetCache {
     /// decode over all its files.
     fn report_decoded(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         kind: AssetKind,
         key: &str,
         sources: &SourceFiles,
@@ -703,7 +703,7 @@ impl AssetCache {
             return;
         };
         let len = |src: &(String, u64)| {
-            std::fs::metadata(project_root.join(&src.0)).map_or(0, |m| m.len())
+            std::fs::metadata(project_root.dir().join(&src.0)).map_or(0, |m| m.len())
         };
         if kind == AssetKind::Mesh {
             // The maps report themselves: each is its own entry, shared by every mesh naming it.
@@ -742,7 +742,7 @@ impl AssetCache {
     /// files, not references.
     pub(crate) fn load_map(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         resolved: &str,
         space: ColorSpace,
         alpha_cutoff: Option<f32>,
@@ -761,7 +761,7 @@ impl AssetCache {
     /// Runs `kind`'s loader, inserts the result under `key`, and returns the files it read.
     fn decode_entry(
         &mut self,
-        project_root: &Path,
+        project_root: AssetRoot<'_>,
         kind: AssetKind,
         rel: &str,
         key: &str,
@@ -903,7 +903,7 @@ impl AssetCache {
     /// decodes only what is missing, so a scene that shares assets with the last one pays for none of
     /// them. Nothing is re-read here: a dropped entry is decoded again by the prefetch or the extract
     /// that follows.
-    pub(crate) fn retain_referenced(&mut self, project_root: &Path, refs: &AssetRefs) {
+    pub(crate) fn retain_referenced(&mut self, project_root: AssetRoot<'_>, refs: &AssetRefs) {
         let mut meshes = refs.meshes.clone();
         for key in &refs.characters {
             if let Some(character) = self.characters.get(key) {
@@ -991,7 +991,7 @@ impl AssetCache {
     /// reported as reused. Voxel grids and the volley, particle, UI and font atlases stay lazy.
     ///
     /// Never call the observer from a worker: each stage is bracketed from this thread.
-    pub(crate) fn prefetch(&mut self, project_root: &Path, refs: &AssetRefs) {
+    pub(crate) fn prefetch(&mut self, project_root: AssetRoot<'_>, refs: &AssetRefs) {
         // Stage 1: everything that is one file-set to one value.
         let mut jobs: Vec<(AssetKind, &str)> = Vec::new();
         let others: [(AssetKind, &BTreeSet<String>); 6] = [
@@ -1113,7 +1113,12 @@ impl AssetCache {
 
     /// Decodes `jobs` on the worker pool inside one `phase` bracket, then inserts the successes in
     /// job order and tells the observer about each.
-    fn decode_batch(&mut self, project_root: &Path, phase: LoadPhase, jobs: &[(AssetKind, &str)]) {
+    fn decode_batch(
+        &mut self,
+        project_root: AssetRoot<'_>,
+        phase: LoadPhase,
+        jobs: &[(AssetKind, &str)],
+    ) {
         if jobs.is_empty() {
             return;
         }
@@ -1152,18 +1157,22 @@ impl AssetCache {
     /// An entry resolves under **any** of the files it was read from: the key returned for a part file
     /// (or a texture PNG, or a packed atlas image) is that file's own path, which
     /// [`reload`](AssetCache::reload) expands into every entry built out of it.
-    pub(crate) fn resolve_key(&self, project_root: &Path, incoming: &str) -> Option<String> {
+    pub(crate) fn resolve_key(
+        &self,
+        project_root: AssetRoot<'_>,
+        incoming: &str,
+    ) -> Option<String> {
         let direct = normalize_key(incoming);
         if self.dependents.contains_key(&direct) {
             return Some(direct);
         }
         // Cold path: match by canonical filesystem identity, which handles a host-forwarded absolute
         // path whose textual form differs from the scene's relative one.
-        let target = std::fs::canonicalize(project_root.join(incoming)).ok()?;
+        let target = std::fs::canonicalize(project_root.dir().join(incoming)).ok()?;
         self.dependents
             .keys()
             .find(|rel| {
-                std::fs::canonicalize(project_root.join(rel.as_str()))
+                std::fs::canonicalize(project_root.dir().join(rel.as_str()))
                     .ok()
                     .as_ref()
                     == Some(&target)
@@ -1190,7 +1199,11 @@ impl AssetCache {
     /// entry can no longer be read, decoded, or validated. Every dependent is re-read; the first
     /// failure is returned and each failed entry is left dropped, so a later successful reload (or
     /// the next `extract`) reinstates it.
-    pub(crate) fn reload(&mut self, project_root: &Path, key: &str) -> Result<u64, Diagnostic> {
+    pub(crate) fn reload(
+        &mut self,
+        project_root: AssetRoot<'_>,
+        key: &str,
+    ) -> Result<u64, Diagnostic> {
         // Drop every entry before any re-read: one failing early must not leave a later dependent
         // (a character built on a mesh that just changed) holding the stale copy.
         let dependents = self.drop_dependents(key);
@@ -1320,7 +1333,7 @@ pub(crate) fn fold_source_hashes(own: u64, sources: &[u64]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use ludion_assets::cooked::CookTarget;
 
@@ -1348,18 +1361,27 @@ mod tests {
 
         let mut cache = AssetCache::new();
         // Miss loads.
-        let first = cache.load(&dir, "t.png").unwrap().hash;
+        let first = cache
+            .load(ludion_assets::AssetRoot::content(&dir), "t.png")
+            .unwrap()
+            .hash;
         assert!(cache.contains("t.png"));
         // Hit reuses the same decoded bytes even after the file changes on disk (no re-read).
         write_png(&dir.join("t.png"), [200, 100, 50, 255]);
-        let cached = cache.load(&dir, "t.png").unwrap().hash;
+        let cached = cache
+            .load(ludion_assets::AssetRoot::content(&dir), "t.png")
+            .unwrap()
+            .hash;
         assert_eq!(cached, first, "a hit must not re-read the changed file");
 
         // resolve_key finds the entry from the relative name and from an absolute path.
-        let by_rel = cache.resolve_key(&dir, "t.png");
+        let by_rel = cache.resolve_key(ludion_assets::AssetRoot::content(&dir), "t.png");
         assert_eq!(by_rel.as_deref(), Some("t.png"));
         let abs = dir.join("t.png");
-        let by_abs = cache.resolve_key(&dir, &abs.to_string_lossy());
+        let by_abs = cache.resolve_key(
+            ludion_assets::AssetRoot::content(&dir),
+            &abs.to_string_lossy(),
+        );
         assert_eq!(
             by_abs.as_deref(),
             Some("t.png"),
@@ -1367,11 +1389,46 @@ mod tests {
         );
 
         // Reload drops the entry and re-reads the new bytes → a different hash.
-        let reloaded = cache.reload(&dir, "t.png").unwrap();
+        let reloaded = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), "t.png")
+            .unwrap();
         assert_ne!(reloaded, first, "reload must pick up the changed file");
-        assert_eq!(cache.load(&dir, "t.png").unwrap().hash, reloaded);
+        assert_eq!(
+            cache
+                .load(ludion_assets::AssetRoot::content(&dir), "t.png")
+                .unwrap()
+                .hash,
+            reloaded
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A texture path that climbs out of the content root or is absolute is refused before any read,
+    /// even when a real file sits at the escaped location.
+    #[test]
+    fn a_texture_outside_the_content_root_is_refused() {
+        let base =
+            std::env::temp_dir().join(format!("ludion-asset-cache-escape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("content");
+        std::fs::create_dir_all(&root).unwrap();
+        write_png(&base.join("x.png"), [1, 2, 3, 255]);
+
+        let mut cache = AssetCache::new();
+        let absolute = base.join("x.png").to_string_lossy().into_owned();
+        for path in ["../x.png", "a/../../x.png", absolute.as_str()] {
+            let error = cache
+                .load(ludion_assets::AssetRoot::content(&root), path)
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                ludion_core::codes::code::CONTENT_PATH_OUTSIDE_ROOT,
+                "{path}: {error:?}"
+            );
+            assert!(!cache.contains(path), "{path}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A hot-reloaded texture is premultiplied like the miss path, so a translucent texture does
@@ -1387,13 +1444,22 @@ mod tests {
         write_png(&dir.join("t.png"), [10, 20, 30, 128]);
 
         let mut cache = AssetCache::new();
-        cache.load(&dir, "t.png").unwrap();
+        cache
+            .load(ludion_assets::AssetRoot::content(&dir), "t.png")
+            .unwrap();
         write_png(&dir.join("t.png"), [200, 100, 50, 128]);
-        cache.reload(&dir, "t.png").unwrap();
+        cache
+            .reload(ludion_assets::AssetRoot::content(&dir), "t.png")
+            .unwrap();
 
-        let raw = ludion_assets::load_png(&dir, "t.png").unwrap();
+        let raw =
+            ludion_assets::load_png(ludion_assets::AssetRoot::content(&dir), "t.png").unwrap();
         let expected = raw.clone().premultiplied().rgba;
-        let reloaded = cache.load(&dir, "t.png").unwrap().rgba.clone();
+        let reloaded = cache
+            .load(ludion_assets::AssetRoot::content(&dir), "t.png")
+            .unwrap()
+            .rgba
+            .clone();
         assert_eq!(
             reloaded, expected,
             "reload must premultiply like the miss path"
@@ -1426,33 +1492,49 @@ mod tests {
         std::fs::write(dir.join("a.atlas.yaml"), atlas_doc("8.0")).unwrap();
 
         let mut cache = AssetCache::new();
-        let first = cache.load_atlas(&dir, "a.atlas.yaml").unwrap().texture.hash;
+        let first = cache
+            .load_atlas(ludion_assets::AssetRoot::content(&dir), "a.atlas.yaml")
+            .unwrap()
+            .texture
+            .hash;
         assert!(cache.contains_atlas("a.atlas.yaml"));
 
         // Both source files resolve to the atlas's own key — the colour PNG included, which is the
         // half a texture-only cache would miss.
         assert_eq!(
-            cache.resolve_key(&dir, "a.atlas.yaml").as_deref(),
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), "a.atlas.yaml")
+                .as_deref(),
             Some("a.atlas.yaml")
         );
         assert_eq!(
-            cache.resolve_key(&dir, "a.png").as_deref(),
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), "a.png")
+                .as_deref(),
             Some("a.png"),
             "the packed image is a key of its own, expanded by `reload`"
         );
 
         // A rewritten image, reported under the *image's* key, re-decodes the atlas.
         write_png(&dir.join("a.png"), [200, 100, 50, 255]);
-        cache.reload(&dir, "a.png").unwrap();
-        let after_image = cache.load_atlas(&dir, "a.atlas.yaml").unwrap().texture.hash;
+        cache
+            .reload(ludion_assets::AssetRoot::content(&dir), "a.png")
+            .unwrap();
+        let after_image = cache
+            .load_atlas(ludion_assets::AssetRoot::content(&dir), "a.atlas.yaml")
+            .unwrap()
+            .texture
+            .hash;
         assert_ne!(after_image, first, "the packed image moved");
 
         // A rewritten document, reported under its own key, re-parses it.
         std::fs::write(dir.join("a.atlas.yaml"), atlas_doc("16.0")).unwrap();
-        cache.reload(&dir, "a.atlas.yaml").unwrap();
+        cache
+            .reload(ludion_assets::AssetRoot::content(&dir), "a.atlas.yaml")
+            .unwrap();
         assert_eq!(
             cache
-                .load_atlas(&dir, "a.atlas.yaml")
+                .load_atlas(ludion_assets::AssetRoot::content(&dir), "a.atlas.yaml")
                 .unwrap()
                 .doc
                 .pixels_per_unit,
@@ -1466,7 +1548,13 @@ mod tests {
     fn resolve_key_of_uncached_path_is_none() {
         let dir = std::env::temp_dir();
         let cache = AssetCache::new();
-        assert_eq!(cache.resolve_key(&dir, "ludion-not-cached-xyz.png"), None);
+        assert_eq!(
+            cache.resolve_key(
+                ludion_assets::AssetRoot::content(&dir),
+                "ludion-not-cached-xyz.png"
+            ),
+            None
+        );
     }
 
     /// A mesh document is cached like an image: a miss loads + decodes once, a hit reuses, and
@@ -1487,30 +1575,60 @@ mod tests {
         std::fs::write(dir.join(rel), mesh_doc(0.0)).unwrap();
 
         let mut cache = AssetCache::new();
-        let first = cache.load_mesh(&dir, rel).unwrap().hash;
+        let first = cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
         assert!(cache.contains_mesh(rel));
         // Normals were absent → computed faceted (+Z face) for all three vertices.
         assert_eq!(
-            cache.load_mesh(&dir, rel).unwrap().normals,
+            cache
+                .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .normals,
             vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
         );
 
         // A hit does not re-read a changed file.
         std::fs::write(dir.join(rel), mesh_doc(5.0)).unwrap();
-        assert_eq!(cache.load_mesh(&dir, rel).unwrap().hash, first);
+        assert_eq!(
+            cache
+                .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            first
+        );
 
         // resolve_key finds the mesh from its relative name and from an absolute path.
-        assert_eq!(cache.resolve_key(&dir, rel).as_deref(), Some(rel));
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), rel)
+                .as_deref(),
+            Some(rel)
+        );
         let abs = dir.join(rel);
         assert_eq!(
-            cache.resolve_key(&dir, &abs.to_string_lossy()).as_deref(),
+            cache
+                .resolve_key(
+                    ludion_assets::AssetRoot::content(&dir),
+                    &abs.to_string_lossy()
+                )
+                .as_deref(),
             Some(rel)
         );
 
         // Reload drops the entry and re-reads the changed bytes → a different hash.
-        let reloaded = cache.reload(&dir, rel).unwrap();
+        let reloaded = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap();
         assert_ne!(reloaded, first);
-        assert_eq!(cache.load_mesh(&dir, rel).unwrap().hash, reloaded);
+        assert_eq!(
+            cache
+                .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            reloaded
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1549,30 +1667,61 @@ slices:
         std::fs::write(dir.join(rel), voxel_doc("A")).unwrap();
 
         let mut cache = AssetCache::new();
-        let first = cache.load_voxel(&dir, rel).unwrap().hash;
+        let first = cache
+            .load_voxel(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
         assert!(cache.contains_voxel(rel));
         assert_eq!(
-            cache.load_voxel(&dir, rel).unwrap().positions.len(),
+            cache
+                .load_voxel(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .positions
+                .len(),
             24 * 3,
             "one filled cell meshes to a 24-vertex box"
         );
 
         // A hit does not re-read a changed file.
         std::fs::write(dir.join(rel), voxel_doc("B")).unwrap();
-        assert_eq!(cache.load_voxel(&dir, rel).unwrap().hash, first);
+        assert_eq!(
+            cache
+                .load_voxel(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            first
+        );
 
         // resolve_key finds the voxel from its relative name and from an absolute path.
-        assert_eq!(cache.resolve_key(&dir, rel).as_deref(), Some(rel));
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), rel)
+                .as_deref(),
+            Some(rel)
+        );
         let abs = dir.join(rel);
         assert_eq!(
-            cache.resolve_key(&dir, &abs.to_string_lossy()).as_deref(),
+            cache
+                .resolve_key(
+                    ludion_assets::AssetRoot::content(&dir),
+                    &abs.to_string_lossy()
+                )
+                .as_deref(),
             Some(rel)
         );
 
         // Reload drops the entry and re-reads the changed bytes → a different hash.
-        let reloaded = cache.reload(&dir, rel).unwrap();
+        let reloaded = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap();
         assert_ne!(reloaded, first);
-        assert_eq!(cache.load_voxel(&dir, rel).unwrap().hash, reloaded);
+        assert_eq!(
+            cache
+                .load_voxel(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            reloaded
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1611,25 +1760,58 @@ parts:
         std::fs::write(dir.join(rel), sculpt_doc("0.5")).unwrap();
 
         let mut cache = AssetCache::new();
-        let first = cache.load_sculpt(&dir, rel).unwrap().hash;
+        let first = cache
+            .load_sculpt(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
         assert!(cache.contains_sculpt(rel));
-        assert!(!cache.load_sculpt(&dir, rel).unwrap().positions.is_empty());
+        assert!(
+            !cache
+                .load_sculpt(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .positions
+                .is_empty()
+        );
 
         // A hit does not re-read a changed file.
         std::fs::write(dir.join(rel), sculpt_doc("0.4")).unwrap();
-        assert_eq!(cache.load_sculpt(&dir, rel).unwrap().hash, first);
+        assert_eq!(
+            cache
+                .load_sculpt(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            first
+        );
 
-        assert_eq!(cache.resolve_key(&dir, rel).as_deref(), Some(rel));
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), rel)
+                .as_deref(),
+            Some(rel)
+        );
         let abs = dir.join(rel);
         assert_eq!(
-            cache.resolve_key(&dir, &abs.to_string_lossy()).as_deref(),
+            cache
+                .resolve_key(
+                    ludion_assets::AssetRoot::content(&dir),
+                    &abs.to_string_lossy()
+                )
+                .as_deref(),
             Some(rel)
         );
 
         // Reload drops the entry and re-meshes the changed bytes → a different hash.
-        let reloaded = cache.reload(&dir, rel).unwrap();
+        let reloaded = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap();
         assert_ne!(reloaded, first);
-        assert_eq!(cache.load_sculpt(&dir, rel).unwrap().hash, reloaded);
+        assert_eq!(
+            cache
+                .load_sculpt(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            reloaded
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1691,7 +1873,7 @@ parts:
 
         let mut cache = AssetCache::new();
         let first: Vec<u64> = cache
-            .load_assembly(&dir, rel)
+            .load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
             .unwrap()
             .parts
             .iter()
@@ -1703,7 +1885,10 @@ parts:
 
         // A hit does not re-read a changed part file, and hands back the same `Arc` allocation.
         std::fs::write(dir.join(body), part_doc("  - 2\n  - 1\n  - 1\n", "A.")).unwrap();
-        let held = cache.load_assembly(&dir, rel).unwrap().clone();
+        let held = cache
+            .load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert_eq!(
             held.parts
                 .iter()
@@ -1714,19 +1899,36 @@ parts:
 
         // Both source files resolve — the assembly document and the part — by relative and by
         // absolute path. A part answers with its own key, which `reload` expands to its assemblies.
-        assert_eq!(cache.resolve_key(&dir, rel).as_deref(), Some(rel));
-        assert_eq!(cache.resolve_key(&dir, body).as_deref(), Some(body));
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), rel)
+                .as_deref(),
+            Some(rel)
+        );
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), body)
+                .as_deref(),
+            Some(body)
+        );
         let abs = dir.join(body);
         assert_eq!(
-            cache.resolve_key(&dir, &abs.to_string_lossy()).as_deref(),
+            cache
+                .resolve_key(
+                    ludion_assets::AssetRoot::content(&dir),
+                    &abs.to_string_lossy()
+                )
+                .as_deref(),
             Some(body)
         );
 
         // Reloading the *part* re-reads and re-meshes the assembly that named it: every part's mesh
         // key moves, because the assembly's content hash folds every part file's.
-        let reloaded = cache.reload(&dir, body).unwrap();
+        let reloaded = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), body)
+            .unwrap();
         let after: Vec<u64> = cache
-            .load_assembly(&dir, rel)
+            .load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
             .unwrap()
             .parts
             .iter()
@@ -1738,7 +1940,9 @@ parts:
         );
         assert_eq!(
             reloaded,
-            ludion_assets::load_bytes(&dir, body).unwrap().hash,
+            ludion_assets::load_bytes(ludion_assets::AssetRoot::content(&dir), body)
+                .unwrap()
+                .hash,
             "the reported hash is the changed file's own"
         );
 
@@ -1816,18 +2020,31 @@ tracks:
         std::fs::write(dir.join(clip), clip_source(90.0)).unwrap();
 
         let mut cache = AssetCache::new();
-        let before = cache.load_assembly(&dir, rel).unwrap().clone();
+        let before = cache
+            .load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert_eq!(
             before.clip("walk").unwrap().tracks[0].rotation[1].v[0],
             90.0
         );
 
         // The clip file is a source of the assembly, so it resolves as a reload key.
-        assert_eq!(cache.resolve_key(&dir, clip).as_deref(), Some(clip));
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), clip)
+                .as_deref(),
+            Some(clip)
+        );
 
         std::fs::write(dir.join(clip), clip_source(45.0)).unwrap();
-        let reported = cache.reload(&dir, clip).unwrap();
-        let after = cache.load_assembly(&dir, rel).unwrap().clone();
+        let reported = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), clip)
+            .unwrap();
+        let after = cache
+            .load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert_eq!(
             after.clip("walk").unwrap().tracks[0].rotation[1].v[0],
             45.0,
@@ -1839,7 +2056,9 @@ tracks:
         );
         assert_eq!(
             reported,
-            ludion_assets::load_bytes(&dir, clip).unwrap().hash,
+            ludion_assets::load_bytes(ludion_assets::AssetRoot::content(&dir), clip)
+                .unwrap()
+                .hash,
             "the reported hash is the changed file's own"
         );
 
@@ -1871,17 +2090,33 @@ tracks:
 
         let mut cache = AssetCache::new();
         assert!(!cache.contains_character(rel));
-        let first = cache.load_character(&dir, rel).unwrap().clone();
+        let first = cache
+            .load_character(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert!(cache.contains_character(rel));
         assert_eq!(first.mesh, mesh);
         assert_eq!(first.clip("idle").unwrap().clip.duration, 2.0);
-        let hit = cache.load_character(&dir, rel).unwrap().clone();
+        let hit = cache
+            .load_character(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert!(Arc::ptr_eq(&first, &hit), "a hit reuses the cached entry");
 
         // The mesh document is a source of the character.
-        assert_eq!(cache.resolve_key(&dir, mesh).as_deref(), Some(mesh));
-        cache.reload(&dir, mesh).unwrap();
-        let after_mesh = cache.load_character(&dir, rel).unwrap().clone();
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), mesh)
+                .as_deref(),
+            Some(mesh)
+        );
+        cache
+            .reload(ludion_assets::AssetRoot::content(&dir), mesh)
+            .unwrap();
+        let after_mesh = cache
+            .load_character(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert!(
             !Arc::ptr_eq(&first, &after_mesh),
             "a mesh reload re-reads the character"
@@ -1892,9 +2127,19 @@ tracks:
             .unwrap()
             .replace("duration: 2.0", "duration: 3.0");
         std::fs::write(dir.join(clip), edited).unwrap();
-        assert_eq!(cache.resolve_key(&dir, clip).as_deref(), Some(clip));
-        cache.reload(&dir, clip).unwrap();
-        let after_clip = cache.load_character(&dir, rel).unwrap().clone();
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), clip)
+                .as_deref(),
+            Some(clip)
+        );
+        cache
+            .reload(ludion_assets::AssetRoot::content(&dir), clip)
+            .unwrap();
+        let after_clip = cache
+            .load_character(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert_eq!(after_clip.clip("idle").unwrap().clip.duration, 3.0);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1918,19 +2163,35 @@ tracks:
 
         let mut cache = AssetCache::new();
         assert!(!cache.contains_prefab_clips(rel));
-        let first = cache.load_prefab_clips(&dir, rel).unwrap().clone();
+        let first = cache
+            .load_prefab_clips(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert!(cache.contains_prefab_clips(rel));
         let duration = first.clips[0].clip.duration;
-        let hit = cache.load_prefab_clips(&dir, rel).unwrap().clone();
+        let hit = cache
+            .load_prefab_clips(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert!(Arc::ptr_eq(&first, &hit), "a hit reuses the cached entry");
 
         let edited = std::fs::read_to_string(dir.join(clip))
             .unwrap()
             .replace(&format!("duration: {duration:?}"), "duration: 9.0");
         std::fs::write(dir.join(clip), edited).unwrap();
-        assert_eq!(cache.resolve_key(&dir, clip).as_deref(), Some(clip));
-        cache.reload(&dir, clip).unwrap();
-        let after = cache.load_prefab_clips(&dir, rel).unwrap().clone();
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), clip)
+                .as_deref(),
+            Some(clip)
+        );
+        cache
+            .reload(ludion_assets::AssetRoot::content(&dir), clip)
+            .unwrap();
+        let after = cache
+            .load_prefab_clips(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert!(
             !Arc::ptr_eq(&first, &after),
             "a clip edit re-reads the entry"
@@ -1964,20 +2225,29 @@ tracks:
 
         // The character first, so the mesh's dependents are [Character, Mesh].
         let mut cache = AssetCache::new();
-        cache.load_character(&dir, rel).unwrap();
-        cache.load_mesh(&dir, mesh).unwrap();
+        cache
+            .load_character(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap();
+        cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), mesh)
+            .unwrap();
 
         let renamed = std::fs::read_to_string(dir.join(mesh))
             .unwrap()
             .replace("  - name: head", "  - name: skull");
         std::fs::write(dir.join(mesh), renamed).unwrap();
-        let error = cache.reload(&dir, mesh).unwrap_err();
+        let error = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), mesh)
+            .unwrap_err();
         assert_eq!(error.code.as_str(), "L1200", "{error:?}");
         assert!(
             !cache.contains_character(rel),
             "the failed entry is dropped"
         );
-        let joints = &cache.load_mesh(&dir, mesh).unwrap().skin_joints;
+        let joints = &cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), mesh)
+            .unwrap()
+            .skin_joints;
         assert!(
             joints.iter().any(|joint| joint.name == "skull"),
             "the mesh entry was re-read despite the character failing first"
@@ -2023,7 +2293,10 @@ slices:
         std::fs::write(dir.join(rel), voxel_doc("A")).unwrap();
 
         let mut cache = AssetCache::new();
-        let first = cache.load_voxel_grid(&dir, rel).unwrap().clone();
+        let first = cache
+            .load_voxel_grid(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert!(cache.contains_voxel_grid(rel));
         assert_eq!(first.extent, [1, 1, 1]);
         let cell = first.cells[0].expect("the one cell is filled");
@@ -2032,7 +2305,9 @@ slices:
 
         // A hit does not re-read a changed file, and hands back the same `Arc` allocation.
         std::fs::write(dir.join(rel), voxel_doc("B")).unwrap();
-        let second = cache.load_voxel_grid(&dir, rel).unwrap();
+        let second = cache
+            .load_voxel_grid(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap();
         assert!(Arc::ptr_eq(&first, second), "a hit reuses the cached Arc");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2140,25 +2415,53 @@ parts:
         write_voxel_sculpt(&dir, "A");
 
         let mut cache = AssetCache::new();
-        let first = cache.load_sculpt(&dir, rel).unwrap().hash;
-        assert_ne!(first, ludion_assets::load_bytes(&dir, rel).unwrap().hash);
+        let first = cache
+            .load_sculpt(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
+        assert_ne!(
+            first,
+            ludion_assets::load_bytes(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash
+        );
 
         // The part file resolves — by relative name and by absolute path — to the sculpt's edge.
-        assert_eq!(cache.resolve_key(&dir, part).as_deref(), Some(part));
+        assert_eq!(
+            cache
+                .resolve_key(ludion_assets::AssetRoot::content(&dir), part)
+                .as_deref(),
+            Some(part)
+        );
         let abs = dir.join(part);
         assert_eq!(
-            cache.resolve_key(&dir, &abs.to_string_lossy()).as_deref(),
+            cache
+                .resolve_key(
+                    ludion_assets::AssetRoot::content(&dir),
+                    &abs.to_string_lossy()
+                )
+                .as_deref(),
             Some(part)
         );
 
         write_voxel_sculpt(&dir, "B");
-        let reloaded = cache.reload(&dir, part).unwrap();
+        let reloaded = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), part)
+            .unwrap();
         assert_eq!(
             reloaded,
-            ludion_assets::load_bytes(&dir, part).unwrap().hash
+            ludion_assets::load_bytes(ludion_assets::AssetRoot::content(&dir), part)
+                .unwrap()
+                .hash
         );
         assert!(cache.contains_sculpt(rel));
-        assert_ne!(cache.load_sculpt(&dir, rel).unwrap().hash, first);
+        assert_ne!(
+            cache
+                .load_sculpt(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            first
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2177,24 +2480,43 @@ parts:
         std::fs::write(dir.join("textures/t.png"), png_bytes(10)).unwrap();
 
         let mut cache = AssetCache::new();
-        let first = cache.load_mesh(&dir, rel).unwrap().hash;
-        assert_ne!(first, ludion_assets::load_bytes(&dir, rel).unwrap().hash);
+        let first = cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
+        assert_ne!(
+            first,
+            ludion_assets::load_bytes(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash
+        );
 
         // A watcher reports the canonical absolute path of the PNG.
         let abs = std::fs::canonicalize(dir.join("textures/t.png")).unwrap();
         let key = cache
-            .resolve_key(&dir, &abs.to_string_lossy())
+            .resolve_key(
+                ludion_assets::AssetRoot::content(&dir),
+                &abs.to_string_lossy(),
+            )
             .expect("the mesh's texture is a dependency");
 
         std::fs::write(dir.join("textures/t.png"), png_bytes(200)).unwrap();
-        let reloaded = cache.reload(&dir, &key).unwrap();
+        let reloaded = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), &key)
+            .unwrap();
         assert_eq!(
             reloaded,
-            ludion_assets::load_bytes(&dir, "textures/t.png")
+            ludion_assets::load_bytes(ludion_assets::AssetRoot::content(&dir), "textures/t.png")
                 .unwrap()
                 .hash
         );
-        assert_ne!(cache.load_mesh(&dir, rel).unwrap().hash, first);
+        assert_ne!(
+            cache
+                .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            first
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2213,15 +2535,35 @@ parts:
         std::fs::write(dir.join(png_rel), png_bytes(10)).unwrap();
 
         let mut cache = AssetCache::new();
-        let mesh_first = cache.load_mesh(&dir, rel).unwrap().hash;
-        let image_first = cache.load(&dir, png_rel).unwrap().hash;
+        let mesh_first = cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
+        let image_first = cache
+            .load(ludion_assets::AssetRoot::content(&dir), png_rel)
+            .unwrap()
+            .hash;
 
         std::fs::write(dir.join(png_rel), png_bytes(200)).unwrap();
-        let reloaded = cache.reload(&dir, png_rel).unwrap();
+        let reloaded = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), png_rel)
+            .unwrap();
         assert_ne!(reloaded, image_first);
         assert!(cache.contains(png_rel) && cache.contains_mesh(rel));
-        assert_eq!(cache.load(&dir, png_rel).unwrap().hash, reloaded);
-        assert_ne!(cache.load_mesh(&dir, rel).unwrap().hash, mesh_first);
+        assert_eq!(
+            cache
+                .load(ludion_assets::AssetRoot::content(&dir), png_rel)
+                .unwrap()
+                .hash,
+            reloaded
+        );
+        assert_ne!(
+            cache
+                .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            mesh_first
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2241,23 +2583,50 @@ parts:
         std::fs::write(dir.join(png_rel), png_bytes(10)).unwrap();
 
         let mut cache = AssetCache::new();
-        let mesh_first = cache.load_mesh(&dir, rel).unwrap().hash;
-        let image_first = cache.load(&dir, png_rel).unwrap().hash;
+        let mesh_first = cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
+        let image_first = cache
+            .load(ludion_assets::AssetRoot::content(&dir), png_rel)
+            .unwrap()
+            .hash;
 
         for spelling in ["textures/t.png", "meshes/../textures/t.png"] {
             assert_eq!(
-                cache.resolve_key(&dir, spelling).as_deref(),
+                cache
+                    .resolve_key(ludion_assets::AssetRoot::content(&dir), spelling)
+                    .as_deref(),
                 Some(png_rel),
                 "{spelling}"
             );
         }
 
         std::fs::write(dir.join(png_rel), png_bytes(200)).unwrap();
-        let key = cache.resolve_key(&dir, "meshes/../textures/t.png").unwrap();
-        let reloaded = cache.reload(&dir, &key).unwrap();
+        let key = cache
+            .resolve_key(
+                ludion_assets::AssetRoot::content(&dir),
+                "meshes/../textures/t.png",
+            )
+            .unwrap();
+        let reloaded = cache
+            .reload(ludion_assets::AssetRoot::content(&dir), &key)
+            .unwrap();
         assert_ne!(reloaded, image_first);
-        assert_eq!(cache.load(&dir, png_rel).unwrap().hash, reloaded);
-        assert_ne!(cache.load_mesh(&dir, rel).unwrap().hash, mesh_first);
+        assert_eq!(
+            cache
+                .load(ludion_assets::AssetRoot::content(&dir), png_rel)
+                .unwrap()
+                .hash,
+            reloaded
+        );
+        assert_ne!(
+            cache
+                .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            mesh_first
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2312,8 +2681,20 @@ parts:
             Arc::clone(&log),
             Default::default(),
         ))));
-        let a = cache.load_mesh(&dir, "meshes/a.mesh.yaml").unwrap().clone();
-        let b = cache.load_mesh(&dir, "meshes/b.mesh.yaml").unwrap().clone();
+        let a = cache
+            .load_mesh(
+                ludion_assets::AssetRoot::content(&dir),
+                "meshes/a.mesh.yaml",
+            )
+            .unwrap()
+            .clone();
+        let b = cache
+            .load_mesh(
+                ludion_assets::AssetRoot::content(&dir),
+                "meshes/b.mesh.yaml",
+            )
+            .unwrap()
+            .clone();
         let textures = log
             .lock()
             .unwrap()
@@ -2329,11 +2710,16 @@ parts:
         ));
 
         std::fs::write(dir.join("textures/t.png"), png_bytes(200)).unwrap();
-        cache.reload(&dir, "textures/t.png").unwrap();
+        cache
+            .reload(ludion_assets::AssetRoot::content(&dir), "textures/t.png")
+            .unwrap();
         assert!(cache.contains_mesh_map("textures/t.png"));
         for (rel, before) in [("meshes/a.mesh.yaml", &a), ("meshes/b.mesh.yaml", &b)] {
             assert_ne!(
-                cache.load_mesh(&dir, rel).unwrap().hash,
+                cache
+                    .load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+                    .unwrap()
+                    .hash,
                 before.hash,
                 "{rel}"
             );
@@ -2394,7 +2780,7 @@ parts:
         space: ColorSpace,
         cap: Option<u32>,
     ) -> PathBuf {
-        let source = ludion_assets::load_png(dir, png).unwrap();
+        let source = ludion_assets::load_png(ludion_assets::AssetRoot::content(dir), png).unwrap();
         let settings = ludion_assets::cooked::CookSettings {
             target,
             color_space: space,
@@ -2455,7 +2841,9 @@ parts:
             Arc::clone(&cooked),
         ))));
         cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
-        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
 
         assert!(cooked_image(&cache, KIT_BASE, ColorSpace::Srgb).image.srgb);
         let normal = cooked_image(&cache, KIT_NORMAL, ColorSpace::Linear);
@@ -2483,11 +2871,17 @@ parts:
 
             let mut cooked = AssetCache::new();
             cooked.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
-            let from_cook = cooked.load_mesh(&dir, KIT_MESH).unwrap().base_color_mean;
+            let from_cook = cooked
+                .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+                .unwrap()
+                .base_color_mean;
             cooked_image(&cooked, KIT_BASE, ColorSpace::Srgb);
 
             let mut plain = AssetCache::new();
-            let from_png = plain.load_mesh(&dir, KIT_MESH).unwrap().base_color_mean;
+            let from_png = plain
+                .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+                .unwrap()
+                .base_color_mean;
             assert!(matches!(
                 plain.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
                 Some(MapImage::Source(_))
@@ -2516,7 +2910,9 @@ parts:
         );
         let mut cache = AssetCache::new();
         cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
-        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
 
         assert!(matches!(
             cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
@@ -2538,7 +2934,9 @@ parts:
         std::fs::write(&base, b"not a ktx2 file at all").unwrap();
         let mut cache = AssetCache::new();
         cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
-        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
 
         assert!(matches!(
             cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
@@ -2559,7 +2957,9 @@ parts:
         store_both(&dir, None);
         let mut uncapped = AssetCache::new();
         uncapped.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
-        uncapped.load_mesh(&dir, KIT_MESH).unwrap();
+        uncapped
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
         assert_eq!(
             uncapped.cook_misses().len(),
             2,
@@ -2569,7 +2969,9 @@ parts:
         store_both(&dir, Some(4));
         let mut capped = AssetCache::new();
         capped.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
-        capped.load_mesh(&dir, KIT_MESH).unwrap();
+        capped
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
         assert!(capped.cook_misses().is_empty());
         assert_eq!(
             cooked_image(&capped, KIT_BASE, ColorSpace::Srgb)
@@ -2587,7 +2989,9 @@ parts:
         store_both(&dir, None);
         let mut cache = AssetCache::new();
         cache.set_cook(lookup(&dir, None));
-        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
 
         assert!(matches!(
             cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
@@ -2617,7 +3021,12 @@ parts:
         std::fs::write(dir.join("textures/o.png"), png8(50)).unwrap();
         let mut cache = AssetCache::new();
         cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
-        cache.load_mesh(&dir, "meshes/o.mesh.yaml").unwrap();
+        cache
+            .load_mesh(
+                ludion_assets::AssetRoot::content(&dir),
+                "meshes/o.mesh.yaml",
+            )
+            .unwrap();
 
         assert!(matches!(
             cache.mesh_map_image("textures/o.png", ColorSpace::Srgb),
@@ -2639,12 +3048,21 @@ parts:
         let expected = fold_source_hashes(ludion_assets::content_hash(&doc), &pngs);
 
         let mut source = AssetCache::new();
-        let source_hash = source.load_mesh(&dir, KIT_MESH).unwrap().hash;
+        let source_hash = source
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap()
+            .hash;
         assert_eq!(source_hash, expected);
 
         let mut cooked = AssetCache::new();
         cooked.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
-        assert_ne!(cooked.load_mesh(&dir, KIT_MESH).unwrap().hash, source_hash);
+        assert_ne!(
+            cooked
+                .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+                .unwrap()
+                .hash,
+            source_hash
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2666,7 +3084,9 @@ parts:
         let prefetched = |threads: usize| {
             let mut cache = AssetCache::new();
             cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
-            ludion_core::par::with_threads(threads, || cache.prefetch(&dir, &refs));
+            ludion_core::par::with_threads(threads, || {
+                cache.prefetch(ludion_assets::AssetRoot::content(&dir), &refs)
+            });
             cache
         };
         let one = prefetched(1);
@@ -2684,7 +3104,9 @@ parts:
         let dir = cook_project("toggle", None);
         store_both(&dir, None);
         let mut cache = AssetCache::new();
-        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
         assert!(matches!(
             cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
             Some(MapImage::Source(_))
@@ -2692,7 +3114,9 @@ parts:
 
         cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
         assert!(!cache.contains_mesh(KIT_MESH) && !cache.contains_mesh_map(KIT_BASE));
-        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
         cooked_image(&cache, KIT_BASE, ColorSpace::Srgb);
 
         cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
@@ -2703,7 +3127,9 @@ parts:
 
         cache.set_cook(None);
         assert!(!cache.contains_mesh(KIT_MESH));
-        cache.load_mesh(&dir, KIT_MESH).unwrap();
+        cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
         assert!(matches!(
             cache.mesh_map_image(KIT_BASE, ColorSpace::Srgb),
             Some(MapImage::Source(_))
@@ -2833,7 +3259,9 @@ parts:
         let (dir, refs) = prefetch_fixture("invariant");
         let prefetched = |threads: usize| {
             let mut cache = AssetCache::new();
-            ludion_core::par::with_threads(threads, || cache.prefetch(&dir, &refs));
+            ludion_core::par::with_threads(threads, || {
+                cache.prefetch(ludion_assets::AssetRoot::content(&dir), &refs)
+            });
             cache
         };
         let one = prefetched(1);
@@ -2844,26 +3272,37 @@ parts:
         for rel in &refs.meshes {
             assert_eq!(
                 one.meshes[rel].hash,
-                lazy.load_mesh(&dir, rel).unwrap().hash,
+                lazy.load_mesh(ludion_assets::AssetRoot::content(&dir), rel)
+                    .unwrap()
+                    .hash,
                 "{rel}"
             );
         }
         for rel in &refs.voxels {
             assert_eq!(
                 one.voxels[rel].hash,
-                lazy.load_voxel(&dir, rel).unwrap().hash
+                lazy.load_voxel(ludion_assets::AssetRoot::content(&dir), rel)
+                    .unwrap()
+                    .hash
             );
         }
         for rel in &refs.atlases {
             assert_eq!(
                 one.atlases[rel].texture.hash,
-                lazy.load_atlas(&dir, rel).unwrap().texture.hash
+                lazy.load_atlas(ludion_assets::AssetRoot::content(&dir), rel)
+                    .unwrap()
+                    .texture
+                    .hash
             );
         }
         for rel in &refs.assemblies {
             assert_eq!(
                 one.assemblies[rel].parts[0].mesh.hash,
-                lazy.load_assembly(&dir, rel).unwrap().parts[0].mesh.hash
+                lazy.load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
+                    .unwrap()
+                    .parts[0]
+                    .mesh
+                    .hash
             );
         }
         assert!(one.contains("textures/s.png"));
@@ -2877,19 +3316,28 @@ parts:
     fn retain_referenced_drops_orphan_maps_and_prunes_edges() {
         let (dir, refs) = prefetch_fixture("retain");
         let mut cache = AssetCache::new();
-        cache.prefetch(&dir, &refs);
+        cache.prefetch(ludion_assets::AssetRoot::content(&dir), &refs);
         assert!(cache.contains_mesh_map("textures/u.png"));
 
         let keep = AssetRefs {
             meshes: ["meshes/a.mesh.yaml".to_string()].into_iter().collect(),
             ..AssetRefs::default()
         };
-        cache.retain_referenced(&dir, &keep);
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &keep);
 
         assert!(cache.contains_mesh("meshes/a.mesh.yaml"));
         assert!(cache.contains_mesh_map("textures/t.png"));
-        assert_eq!(cache.resolve_key(&dir, "textures/u.png"), None);
-        assert_eq!(cache.resolve_key(&dir, "meshes/c.mesh.yaml"), None);
+        assert_eq!(
+            cache.resolve_key(ludion_assets::AssetRoot::content(&dir), "textures/u.png"),
+            None
+        );
+        assert_eq!(
+            cache.resolve_key(
+                ludion_assets::AssetRoot::content(&dir),
+                "meshes/c.mesh.yaml"
+            ),
+            None
+        );
         assert!(!cache.contains("textures/s.png"));
         assert!(!cache.contains_voxel("voxels/v.voxel.yaml"));
         assert!(!cache.contains_atlas("a.atlas.yaml"));
@@ -2918,34 +3366,54 @@ parts:
         // (a) Loaded with no mesh involved.
         let mut cache = AssetCache::new();
         let (_, first) = cache
-            .load_map(&dir, png_rel, ColorSpace::Srgb, None)
+            .load_map(
+                ludion_assets::AssetRoot::content(&dir),
+                png_rel,
+                ColorSpace::Srgb,
+                None,
+            )
             .unwrap();
         assert!(cache.contains_mesh_map(png_rel));
         assert!(cache.mesh_map_image(png_rel, ColorSpace::Srgb).is_some());
 
         // (b) Kept while a decal names it, evicted once none does.
-        cache.retain_referenced(&dir, &named);
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &named);
         assert!(cache.contains_mesh_map(png_rel));
-        cache.retain_referenced(&dir, &AssetRefs::default());
+        cache.retain_referenced(
+            ludion_assets::AssetRoot::content(&dir),
+            &AssetRefs::default(),
+        );
         assert!(!cache.contains_mesh_map(png_rel));
 
         // (c) A reload of the PNG re-reads it under the same key.
         cache
-            .load_map(&dir, png_rel, ColorSpace::Srgb, None)
+            .load_map(
+                ludion_assets::AssetRoot::content(&dir),
+                png_rel,
+                ColorSpace::Srgb,
+                None,
+            )
             .unwrap();
         std::fs::write(dir.join(png_rel), png_bytes(200)).unwrap();
-        cache.reload(&dir, png_rel).unwrap();
+        cache
+            .reload(ludion_assets::AssetRoot::content(&dir), png_rel)
+            .unwrap();
         let (_, reloaded) = cache
-            .load_map(&dir, png_rel, ColorSpace::Srgb, None)
+            .load_map(
+                ludion_assets::AssetRoot::content(&dir),
+                png_rel,
+                ColorSpace::Srgb,
+                None,
+            )
             .unwrap();
         assert_ne!(reloaded, first);
 
         // (d) The prefetch decodes it, and a second one leaves the held entry alone.
         let mut fresh = AssetCache::new();
-        fresh.prefetch(&dir, &named);
+        fresh.prefetch(ludion_assets::AssetRoot::content(&dir), &named);
         assert!(fresh.contains_mesh_map(png_rel));
         let held = fresh.mesh_map_image(png_rel, ColorSpace::Srgb).unwrap();
-        fresh.prefetch(&dir, &named);
+        fresh.prefetch(ludion_assets::AssetRoot::content(&dir), &named);
         assert_eq!(
             fresh
                 .mesh_map_image(png_rel, ColorSpace::Srgb)
@@ -3068,10 +3536,17 @@ parts:
         };
 
         let mut cache = AssetCache::new();
-        let first = cache.load_assembly(&dir, rel).unwrap().parts[0].mesh.hash;
-        cache.load_assembly(&dir, other).unwrap();
+        let first = cache
+            .load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .parts[0]
+            .mesh
+            .hash;
+        cache
+            .load_assembly(ludion_assets::AssetRoot::content(&dir), other)
+            .unwrap();
         write_assembly(&dir, "fixture", "A.", false);
-        cache.retain_referenced(&dir, &refs);
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &refs);
 
         assert!(!cache.contains_assembly(rel), "its part changed on disk");
         assert!(
@@ -3079,7 +3554,12 @@ parts:
             "an untouched assembly stays"
         );
         assert_ne!(
-            cache.load_assembly(&dir, rel).unwrap().parts[0].mesh.hash,
+            cache
+                .load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .parts[0]
+                .mesh
+                .hash,
             first
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -3097,13 +3577,18 @@ parts:
         };
 
         let mut cache = AssetCache::new();
-        let first = cache.load_assembly(&dir, rel).unwrap().clone();
+        let first = cache
+            .load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
         assert_eq!(first.clip("walk").unwrap().tracks[0].rotation[1].v[0], 90.0);
         write_walk_clip(&dir, 45.0);
-        cache.retain_referenced(&dir, &refs);
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &refs);
 
         assert!(!cache.contains_assembly(rel), "its clip changed on disk");
-        let after = cache.load_assembly(&dir, rel).unwrap();
+        let after = cache
+            .load_assembly(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap();
         assert_eq!(after.clip("walk").unwrap().tracks[0].rotation[1].v[0], 45.0);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3119,13 +3604,24 @@ parts:
         };
 
         let mut cache = AssetCache::new();
-        let first = cache.load_atlas(&dir, rel).unwrap().texture.hash;
+        let first = cache
+            .load_atlas(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .texture
+            .hash;
         assert!(cache.contains_atlas(rel));
         write_png(&dir.join("a.png"), [200, 100, 50, 255]);
-        cache.retain_referenced(&dir, &refs);
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &refs);
 
         assert!(!cache.contains_atlas(rel), "its colour PNG changed on disk");
-        assert_ne!(cache.load_atlas(&dir, rel).unwrap().texture.hash, first);
+        assert_ne!(
+            cache
+                .load_atlas(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .texture
+                .hash,
+            first
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3139,19 +3635,23 @@ parts:
         };
 
         let mut cache = AssetCache::new();
-        let first = cache.load_character(&dir, CHARACTER).unwrap();
+        let first = cache
+            .load_character(ludion_assets::AssetRoot::content(&dir), CHARACTER)
+            .unwrap();
         assert_eq!(first.clip("idle").unwrap().clip.duration, 2.0);
         let edited = std::fs::read_to_string(dir.join(CHARACTER_CLIP))
             .unwrap()
             .replace("duration: 2.0", "duration: 3.0");
         write_file(&dir, CHARACTER_CLIP, &edited);
-        cache.retain_referenced(&dir, &refs);
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &refs);
 
         assert!(
             !cache.contains_character(CHARACTER),
             "its clip changed on disk"
         );
-        let after = cache.load_character(&dir, CHARACTER).unwrap();
+        let after = cache
+            .load_character(ludion_assets::AssetRoot::content(&dir), CHARACTER)
+            .unwrap();
         assert_eq!(after.clip("idle").unwrap().clip.duration, 3.0);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3167,16 +3667,34 @@ parts:
         };
 
         let mut cache = AssetCache::new();
-        let mesh = cache.load_voxel(&dir, rel).unwrap().hash;
-        let grid = cache.load_voxel_grid(&dir, rel).unwrap().hash;
+        let mesh = cache
+            .load_voxel(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
+        let grid = cache
+            .load_voxel_grid(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
         assert!(cache.contains_voxel(rel) && cache.contains_voxel_grid(rel));
         write_voxel(&dir, "B");
-        cache.retain_referenced(&dir, &refs);
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &refs);
 
         assert!(!cache.contains_voxel(rel));
         assert!(!cache.contains_voxel_grid(rel));
-        assert_ne!(cache.load_voxel(&dir, rel).unwrap().hash, mesh);
-        assert_ne!(cache.load_voxel_grid(&dir, rel).unwrap().hash, grid);
+        assert_ne!(
+            cache
+                .load_voxel(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            mesh
+        );
+        assert_ne!(
+            cache
+                .load_voxel_grid(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            grid
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3191,15 +3709,24 @@ parts:
         };
 
         let mut cache = AssetCache::new();
-        let first = cache.load_sculpt(&dir, rel).unwrap().hash;
+        let first = cache
+            .load_sculpt(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .hash;
         write_voxel_sculpt(&dir, "B");
-        cache.retain_referenced(&dir, &refs);
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &refs);
 
         assert!(
             !cache.contains_sculpt(rel),
             "its voxel part changed on disk"
         );
-        assert_ne!(cache.load_sculpt(&dir, rel).unwrap().hash, first);
+        assert_ne!(
+            cache
+                .load_sculpt(ludion_assets::AssetRoot::content(&dir), rel)
+                .unwrap()
+                .hash,
+            first
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3224,15 +3751,37 @@ parts:
         };
 
         let mut cache = AssetCache::new();
-        cache.load_atlas(&dir, "a.atlas.yaml").unwrap();
-        cache.load_voxel(&dir, "voxels/v.voxel.yaml").unwrap();
-        cache.load_voxel_grid(&dir, "voxels/v.voxel.yaml").unwrap();
-        cache.load_sculpt(&dir, "sculpts/hull.sculpt.yaml").unwrap();
         cache
-            .load_assembly(&dir, "models/fixture.assembly.yaml")
+            .load_atlas(ludion_assets::AssetRoot::content(&dir), "a.atlas.yaml")
             .unwrap();
-        cache.load_character(&dir, CHARACTER).unwrap();
-        cache.retain_referenced(&dir, &refs);
+        cache
+            .load_voxel(
+                ludion_assets::AssetRoot::content(&dir),
+                "voxels/v.voxel.yaml",
+            )
+            .unwrap();
+        cache
+            .load_voxel_grid(
+                ludion_assets::AssetRoot::content(&dir),
+                "voxels/v.voxel.yaml",
+            )
+            .unwrap();
+        cache
+            .load_sculpt(
+                ludion_assets::AssetRoot::content(&dir),
+                "sculpts/hull.sculpt.yaml",
+            )
+            .unwrap();
+        cache
+            .load_assembly(
+                ludion_assets::AssetRoot::content(&dir),
+                "models/fixture.assembly.yaml",
+            )
+            .unwrap();
+        cache
+            .load_character(ludion_assets::AssetRoot::content(&dir), CHARACTER)
+            .unwrap();
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &refs);
 
         assert!(cache.contains_atlas("a.atlas.yaml"));
         assert!(cache.contains_voxel("voxels/v.voxel.yaml"));

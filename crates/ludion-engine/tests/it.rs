@@ -8,6 +8,7 @@ mod animation_events;
 mod anti_aliasing_host;
 mod applied_recording;
 mod assembly_animation;
+mod asset_root_confinement;
 mod audio;
 mod bisect;
 mod bounds;

@@ -26,7 +26,7 @@
 //! ```no_run
 //! use std::path::Path;
 //! // Load a texture referenced by a scene, resolving it against the scene's directory.
-//! let image = ludion_assets::load_png(Path::new("examples/gallery"), "assets/brick.png")?;
+//! let image = ludion_assets::load_png(ludion_assets::AssetRoot::content(Path::new("examples/gallery")), "assets/brick.png")?;
 //! assert_eq!(image.rgba.len(), (image.width * image.height * 4) as usize);
 //! # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
 //! ```
@@ -220,32 +220,137 @@ pub fn content_hash(bytes: &[u8]) -> u64 {
     xxh3_64(bytes)
 }
 
-/// Resolves `relative` against `root` (the caller's project root).
-fn resolve(root: &Path, relative: &str) -> PathBuf {
-    root.join(relative)
+/// The largest asset file a load reads, 512 MiB; a bigger file or a device that never ends (a
+/// payload naming `/dev/zero`) is refused instead of filling memory.
+pub const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// The directory an asset path is joined to, and whether the join is confined to it.
+///
+/// [`content`](AssetRoot::content) is the engine's content root: every path that came from content
+/// or a payload must stay below it. [`local_document_unconfined`](AssetRoot::local_document_unconfined)
+/// is for a file the local author named, whose document-relative paths may climb above its own
+/// directory. Both refuse an absolute or prefixed path and keep the bounded read.
+#[derive(Clone, Copy, Debug)]
+pub struct AssetRoot<'a> {
+    dir: &'a Path,
+    confined: bool,
 }
 
-/// Reads the asset at `root`/`relative` to bytes and computes its content hash.
+impl<'a> AssetRoot<'a> {
+    /// The engine's content root: a path that climbs out of `dir` is refused.
+    pub fn content(dir: &'a Path) -> Self {
+        AssetRoot {
+            dir,
+            confined: true,
+        }
+    }
+
+    /// A file the local author named on the command line: its document-relative paths may climb
+    /// above `dir` with `..`. For CLI harnesses only, never the engine, the server or the wire.
+    pub fn local_document_unconfined(dir: &'a Path) -> Self {
+        AssetRoot {
+            dir,
+            confined: false,
+        }
+    }
+
+    /// The directory paths are joined to.
+    pub fn dir(&self) -> &'a Path {
+        self.dir
+    }
+}
+
+/// Resolves `relative` against `root`, refusing a path that is not a plain relative path once its
+/// `..` segments are folded ([`ludion_core::paths::content_refusal`]); an unconfined root lets a
+/// climbing `..` through and refuses everything else.
 ///
 /// # Errors
-/// `L1101` if the file cannot be read (missing, a directory, or permission-denied).
-pub fn load_bytes(root: &Path, relative: &str) -> Result<AssetBytes, Diagnostic> {
-    let path = resolve(root, relative);
-    let bytes = std::fs::read(&path).map_err(|error| {
+/// `L1321` for an absolute, prefixed, reserved-name or (confined) escaping path.
+///
+/// # Example
+/// ```
+/// use std::path::Path;
+/// use ludion_assets::AssetRoot;
+/// let dir = Path::new("project");
+/// let root = AssetRoot::content(dir);
+/// assert!(ludion_assets::resolve(root, "meshes/../a.png").is_ok());
+/// assert!(ludion_assets::resolve(root, "../a.png").is_err());
+/// assert!(ludion_assets::resolve(AssetRoot::local_document_unconfined(dir), "../a.png").is_ok());
+/// ```
+pub fn resolve(root: AssetRoot<'_>, relative: &str) -> Result<PathBuf, Diagnostic> {
+    let refusal = if root.confined {
+        ludion_core::paths::content_refusal(relative)
+    } else {
+        ludion_core::paths::sibling_refusal(relative)
+    };
+    match refusal {
+        None => Ok(root.dir.join(ludion_core::paths::normalize(relative))),
+        Some(refusal) => Err(Diagnostic::new(
+            code::CONTENT_PATH_OUTSIDE_ROOT,
+            format!("asset path `{relative}` {}", refusal.describe()),
+        )
+        .with_help(
+            "name the file relative to the content root (the directory of the scene the engine \
+             was started with); a document's own paths may climb with `..` only while they stay \
+             inside it",
+        )),
+    }
+}
+
+/// Reads `reader` to its end, or `Ok(None)` when it holds more than `cap` bytes. The read is cut at
+/// `cap + 1` so a source whose length metadata lies, or that never ends, cannot fill memory.
+fn read_capped(reader: impl std::io::Read, cap: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    reader.take(cap.saturating_add(1)).read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= cap).then_some(bytes))
+}
+
+/// Opens `path` and reads it whole with the [`MAX_ASSET_BYTES`] bound; `label` names it in errors.
+fn read_bounded(path: &Path, label: &str) -> Result<AssetBytes, Diagnostic> {
+    let io_error = |why: String| {
         Diagnostic::new(
             code::ASSET_FILE_IO,
             format!(
-                "could not read asset `{relative}` (at `{}`): {error}",
+                "could not read asset `{label}` (at `{}`): {why}",
                 path.display()
             ),
         )
         .with_help("check the path is correct and names a file that exists relative to the project")
-    })?;
-    let hash = content_hash(&bytes);
-    Ok(AssetBytes { bytes, hash })
+    };
+    let file = std::fs::File::open(path).map_err(|error| io_error(error.to_string()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| io_error(error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(io_error("not a regular file".to_string()));
+    }
+    match read_capped(file, MAX_ASSET_BYTES) {
+        Ok(Some(bytes)) => {
+            let hash = content_hash(&bytes);
+            Ok(AssetBytes { bytes, hash })
+        }
+        Ok(None) => Err(io_error(format!(
+            "larger than the {} MiB asset limit",
+            MAX_ASSET_BYTES / (1024 * 1024)
+        ))),
+        Err(error) => Err(io_error(error.to_string())),
+    }
 }
 
-/// Reads and decodes the PNG at `root`/`relative` to a top-to-bottom RGBA8 [`Image`].
+/// Reads the asset at `root`/`relative` to bytes and computes its content hash. `relative` is
+/// resolved by [`resolve`] and the read is bounded ([`MAX_ASSET_BYTES`]).
+///
+/// # Errors
+/// - `L1321` if `relative` is absolute, prefixed or (on a confined root) climbs out of it.
+/// - `L1101` if the file cannot be read (missing, not a regular file, over the size limit, or
+///   permission-denied).
+pub fn load_bytes(root: AssetRoot<'_>, relative: &str) -> Result<AssetBytes, Diagnostic> {
+    read_bounded(&resolve(root, relative)?, relative)
+}
+
+/// Reads and decodes the PNG at `root`/`relative` to a top-to-bottom RGBA8 [`Image`]; the path is
+/// resolved by [`resolve`].
 ///
 /// Accepts 8-bit grayscale, grayscale+alpha, RGB, RGBA, and palette PNGs; 16-bit channels are
 /// narrowed to 8-bit. The decoded pixels are always RGBA8, so the renderer has one texture format to
@@ -254,7 +359,7 @@ pub fn load_bytes(root: &Path, relative: &str) -> Result<AssetBytes, Diagnostic>
 /// # Errors
 /// - `L1101` if the file cannot be read.
 /// - `L1102` if the bytes are not a decodable PNG, or declare a side over 8192.
-pub fn load_png(root: &Path, relative: &str) -> Result<Image, Diagnostic> {
+pub fn load_png(root: AssetRoot<'_>, relative: &str) -> Result<Image, Diagnostic> {
     let asset = load_bytes(root, relative)?;
     decode_png(&asset.bytes, relative).map(|(width, height, rgba)| Image {
         width,
@@ -410,7 +515,7 @@ pub struct AudioPcm {
 /// # Errors
 /// - `L1101` if the file cannot be read.
 /// - `L1104` if the bytes are not a decodable 16-bit PCM WAV.
-pub fn load_wav(root: &Path, relative: &str) -> Result<AudioPcm, Diagnostic> {
+pub fn load_wav(root: AssetRoot<'_>, relative: &str) -> Result<AudioPcm, Diagnostic> {
     let asset = load_bytes(root, relative)?;
     decode_wav(&asset.bytes, relative)
 }
@@ -697,9 +802,69 @@ mod tests {
     }
 
     #[test]
+    fn escaping_and_absolute_paths_are_refused_with_the_content_code() {
+        let root = std::env::temp_dir();
+        for path in [
+            "../x.png",
+            "a/../../x.png",
+            "/dev/zero",
+            "C:x.png",
+            "//h/s/x.png",
+        ] {
+            let error = load_bytes(AssetRoot::content(&root), path).unwrap_err();
+            assert_eq!(error.code, code::CONTENT_PATH_OUTSIDE_ROOT, "{path}");
+            assert!(error.message.contains(path), "{}", error.message);
+        }
+        assert!(resolve(AssetRoot::content(&root), "meshes/../t.png").is_ok());
+    }
+
+    #[test]
+    fn a_directory_is_l1101() {
+        let dir = std::env::temp_dir().join(format!("ludion-assets-dir-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let error = load_bytes(AssetRoot::content(&dir), "sub").unwrap_err();
+        assert_eq!(error.code, code::ASSET_FILE_IO);
+        assert!(error.message.contains("regular file"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_read_past_the_cap_is_refused_and_one_at_it_is_kept() {
+        assert_eq!(read_capped(&[7u8; 4][..], 4).unwrap(), Some(vec![7; 4]));
+        assert_eq!(read_capped(&[7u8; 5][..], 4).unwrap(), None);
+        // A source that never ends stops at the cap instead of filling memory.
+        assert_eq!(read_capped(std::io::repeat(0), 16).unwrap(), None);
+    }
+
+    #[test]
+    fn an_unconfined_root_climbs_but_still_refuses_absolute_paths() {
+        let dir = std::env::temp_dir().join(format!("ludion-assets-rf-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::write(dir.join("x.bin"), b"abc").unwrap();
+        let sub = dir.join("a");
+        let root = AssetRoot::local_document_unconfined(&sub);
+        assert_eq!(load_bytes(root, "../x.bin").unwrap().bytes, b"abc");
+        for path in ["/dev/zero", "C:x.bin", "..\\..\\nul.bin"] {
+            let error = load_bytes(root, path).unwrap_err();
+            assert_eq!(error.code, code::CONTENT_PATH_OUTSIDE_ROOT, "{path}");
+        }
+        assert_eq!(
+            load_bytes(AssetRoot::content(&sub), "../x.bin")
+                .unwrap_err()
+                .code,
+            code::CONTENT_PATH_OUTSIDE_ROOT
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn missing_file_is_l1101() {
         let root = std::env::temp_dir();
-        let error = load_png(&root, "ludion-definitely-missing-42.png").unwrap_err();
+        let error = load_png(
+            AssetRoot::content(&root),
+            "ludion-definitely-missing-42.png",
+        )
+        .unwrap_err();
         assert_eq!(error.code.as_str(), "L1101");
     }
 
@@ -884,7 +1049,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let png = tiny_png(1, 1, &[10, 20, 30, 40]);
         std::fs::write(dir.join("ludion_hash_probe.png"), &png).unwrap();
-        let image = load_png(&dir, "ludion_hash_probe.png").unwrap();
+        let image = load_png(AssetRoot::content(&dir), "ludion_hash_probe.png").unwrap();
         assert_eq!(image.hash, content_hash(&png));
         assert_eq!(image.rgba, vec![10, 20, 30, 40]);
     }

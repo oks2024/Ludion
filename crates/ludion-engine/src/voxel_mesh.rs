@@ -24,8 +24,6 @@
 //! nothing today. Grid→model space is bottom-center, 1 voxel = 1 unit: cell `(x, y, z)` spans
 //! `[x−sx/2, x+1−sx/2] × [y, y+1] × [z−sz/2, z+1−sz/2]`.
 
-use std::path::Path;
-
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::Vec3;
@@ -52,7 +50,10 @@ const FACES: [(usize, bool); 6] = [
 ///
 /// All diagnostics carry a JSON Pointer into the *voxel document*; the caller ([`extract`](crate::extract))
 /// re-points them at the referencing `Mesh` component.
-pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> {
+pub(crate) fn load(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<MeshData, Vec<Diagnostic>> {
     let (doc, hash) = read_document(root, rel)?;
     Ok(mesh(&doc, hash))
 }
@@ -64,7 +65,10 @@ pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> 
 ///
 /// # Errors
 /// `L1101`/`L1113`/`L1114`, same as [`load`].
-pub(crate) fn load_grid(root: &Path, rel: &str) -> Result<VoxelStaticGrid, Vec<Diagnostic>> {
+pub(crate) fn load_grid(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<VoxelStaticGrid, Vec<Diagnostic>> {
     let (doc, hash) = read_document(root, rel)?;
     Ok(static_grid(&doc, hash))
 }
@@ -73,7 +77,7 @@ pub(crate) fn load_grid(root: &Path, rel: &str) -> Result<VoxelStaticGrid, Vec<D
 /// content hash — the read+parse step shared by [`load`], [`load_grid`] and the sculpt loader, whose
 /// `shape: voxel` parts read their field out of a voxel document ([`crate::sculpt_mesh`]).
 pub(crate) fn read_document(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
 ) -> Result<(VoxelDocument, u64), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
@@ -402,6 +406,7 @@ mod tests {
     use super::*;
     use ludion_scene::PaletteEntry;
     use proptest::prelude::*;
+    use std::path::Path;
 
     /// A palette entry with a single glyph and an opaque color.
     fn entry(glyph: &str, color: [f64; 4]) -> PaletteEntry {

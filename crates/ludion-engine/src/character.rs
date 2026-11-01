@@ -11,8 +11,6 @@
 //! The character draws through its mesh path exactly like a plain `Mesh.shape: asset`: nothing here
 //! meshes or samples anything.
 
-use std::path::Path;
-
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::Vec3;
@@ -72,7 +70,10 @@ impl CharacterData {
 /// - `L1199`/`L1200` for a malformed or inconsistent character, including a mesh with no skin, an
 ///   overlay on a clip that has its own events, and a clip track naming a joint the mesh lacks.
 /// - `L1141`/`L1142`/`L1198` for a malformed clip document.
-pub fn load(root: &Path, rel: &str) -> Result<CharacterData, Vec<Diagnostic>> {
+pub fn load(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<CharacterData, Vec<Diagnostic>> {
     load_with_sources(root, rel).map(|(data, _)| data)
 }
 
@@ -82,7 +83,7 @@ pub fn load(root: &Path, rel: &str) -> Result<CharacterData, Vec<Diagnostic>> {
 /// dependency set (see [`crate::asset_cache`]). The mesh's own texture PNGs stay under the mesh
 /// entry's edges.
 pub(crate) fn load_with_sources(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
 ) -> Result<(CharacterData, SourceFiles), Vec<Diagnostic>> {
     let (doc, doc_hash) = read_character(root, rel)?;
@@ -190,7 +191,7 @@ pub struct ClipContact {
 /// # Errors
 /// The mesh's own load diagnostics.
 pub fn contact_heights(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     data: &CharacterData,
 ) -> Result<Vec<ClipContact>, Vec<Diagnostic>> {
     let mesh = crate::mesh_asset::load(root, &data.mesh)?;
@@ -289,13 +290,19 @@ pub fn contact_heights(
 
 /// The character's mesh path alone, reading and parsing only the character document — what
 /// `SkinBone` needs to find a character's skin without loading its clips.
-pub(crate) fn mesh_path(root: &Path, rel: &str) -> Result<String, Vec<Diagnostic>> {
+pub(crate) fn mesh_path(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<String, Vec<Diagnostic>> {
     read_character(root, rel).map(|(doc, _)| sibling(rel, &doc.mesh))
 }
 
 /// Reads and validates the character document at `root`/`rel`, returning it with its bytes' content
 /// hash.
-fn read_character(root: &Path, rel: &str) -> Result<(CharacterDocument, u64), Vec<Diagnostic>> {
+fn read_character(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<(CharacterDocument, u64), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
     let source = std::str::from_utf8(&bytes.bytes).map_err(|_| {
         vec![

@@ -12,9 +12,9 @@
 use std::any::TypeId;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 use std::sync::Arc;
 
+use ludion_assets::AssetRoot;
 use ludion_assets::Image;
 use ludion_assets::cooked::ColorSpace;
 use ludion_core::codes::code;
@@ -134,7 +134,7 @@ pub(crate) trait SceneAssets {
 /// copy (`Plan/voxel-artist-scale.md`: a streamed voxel model's `MeshData` runs to
 /// megabytes).
 struct CachedAssets<'a> {
-    root: &'a Path,
+    root: AssetRoot<'a>,
     cache: &'a mut AssetCache,
 }
 
@@ -327,7 +327,10 @@ impl AtlasCache {
 ///
 /// # Errors
 /// `L1101` if the file cannot be read, `L1102` if the PNG cannot be decoded.
-pub(crate) fn load_texture(root: &Path, rel: &str) -> Result<Arc<TextureImage>, Diagnostic> {
+pub(crate) fn load_texture(
+    root: AssetRoot<'_>,
+    rel: &str,
+) -> Result<Arc<TextureImage>, Diagnostic> {
     let image = ludion_assets::load_png(root, rel).map(Image::premultiplied)?;
     Ok(Arc::new(TextureImage {
         width: image.width,
@@ -347,14 +350,14 @@ pub(crate) fn load_texture(root: &Path, rel: &str) -> Result<Arc<TextureImage>, 
 /// # Errors
 /// `L1101` if either file cannot be read, `L1102` if the PNG cannot be decoded, `L1153` if the
 /// document does not parse or validate as a `kind: atlas`.
-pub(crate) fn load_atlas(root: &Path, rel: &str) -> Result<AtlasAsset, Vec<Diagnostic>> {
+pub(crate) fn load_atlas(root: AssetRoot<'_>, rel: &str) -> Result<AtlasAsset, Vec<Diagnostic>> {
     load_atlas_with_sources(root, rel).map(|(asset, _)| asset)
 }
 
 /// [`load_atlas`], additionally reporting the two files it read — the document, then the colour PNG —
 /// each with the content hash of the bytes it decoded.
 pub(crate) fn load_atlas_with_sources(
-    root: &Path,
+    root: AssetRoot<'_>,
     rel: &str,
 ) -> Result<(AtlasAsset, SourceFiles), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
@@ -396,7 +399,7 @@ pub(crate) fn load_atlas_with_sources(
 /// land on its `/atlas` and `/frame`. This is `check-scene`'s entry point into the same resolution
 /// `extract` performs — one home for the rules, so a scene that checks clean cannot fail to draw.
 pub fn check_atlas_reference(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     pointer: &str,
     atlas_rel: &str,
     frame: Option<&str>,
@@ -416,7 +419,7 @@ pub fn check_atlas_reference(
 /// The `L1151` an unreadable or unparseable atlas reports, carrying the underlying messages as its
 /// help — the [`resolve_texture`] precedent, nearest-filename suggestion included.
 fn atlas_unresolved(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     rel: &str,
     pointer: &str,
     causes: Vec<Diagnostic>,
@@ -496,18 +499,19 @@ fn frame_unknown(doc: &AtlasDocument, rel: &str, frame: &str, pointer: &str) -> 
 /// # Example
 /// ```
 /// use ludion_ecs::World;
+/// use ludion_assets::AssetRoot;
 /// use std::path::Path;
 ///
 /// let registry = ludion_engine::builtin_registry();
 /// let scene = ludion_scene::check("format: 1\nentities: []\n", &registry).unwrap();
 /// let world = ludion_scene::instantiate(&scene, &registry).unwrap();
-/// let render_scene = ludion_engine::extract(&world, (1280, 720), Path::new(".")).unwrap();
+/// let render_scene = ludion_engine::extract(&world, (1280, 720), AssetRoot::content(Path::new("."))).unwrap();
 /// assert!(render_scene.meshes.is_empty());
 /// ```
 pub fn extract(
     world: &World,
     viewport: (u32, u32),
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
     extract_at(
         world,
@@ -560,7 +564,7 @@ pub fn extract(
 pub fn extract_at(
     world: &World,
     viewport: (u32, u32),
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     now: SimTime,
     particle_density: f32,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
@@ -593,7 +597,7 @@ pub fn extract_at(
 pub(crate) fn extract_through(
     world: &World,
     viewport: (u32, u32),
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     cache: &mut AssetCache,
     now: SimTime,
     particle_density: f32,
@@ -619,7 +623,7 @@ pub(crate) fn extract_through(
 pub(crate) fn extract_through_blend(
     world: &World,
     viewport: (u32, u32),
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     cache: &mut AssetCache,
     now: SimTime,
     particle_density: f32,
@@ -660,7 +664,7 @@ pub(crate) fn extract_through_blend(
 fn extract_inner(
     world: &World,
     viewport: (u32, u32),
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     assets: &mut dyn SceneAssets,
     now: SimTime,
     particle_density: f32,
@@ -1541,7 +1545,7 @@ fn extract_gi_volume(world: &World, ids: &[EntityId]) -> Option<(usize, GiVolume
 pub(crate) fn gi_volume_skips(
     world: &World,
     camera: &RenderCamera,
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     now: SimTime,
 ) -> Result<Option<(usize, crate::voxelizer::SkipReport)>, Vec<Diagnostic>> {
     let ids: Vec<EntityId> = world
@@ -1816,7 +1820,7 @@ fn extract_decals(
     poses: &mut WorldAffines,
     meshes: &[MeshInstance],
     mesh_owners: &[EntityId],
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     assets: &mut dyn SceneAssets,
     errors: &mut Vec<Diagnostic>,
 ) -> (Vec<DecalInstance>, Vec<EntityId>) {
@@ -1924,7 +1928,7 @@ fn extract_decals(
 /// Resolves one of a decal's maps, or `None` when the decal authors none or the load failed (the
 /// diagnostic is pushed onto `errors` at `/entities/{index}/components/Decal/{field}/path`).
 fn decal_map(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     assets: &mut dyn SceneAssets,
     errors: &mut Vec<Diagnostic>,
     index: usize,
@@ -2079,7 +2083,7 @@ fn extract_volleys(
     world: &World,
     ids: &[EntityId],
     visibility: &FrameVisibility,
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     assets: &mut dyn SceneAssets,
     atlases: &mut AtlasCache,
     poses: &mut WorldAffines,
@@ -2187,7 +2191,7 @@ fn extract_volleys(
 /// failing the frame.
 #[allow(clippy::too_many_arguments)]
 fn bullet_texture(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     kind: &BulletKind,
     (pattern, name): (&str, &str),
     site: TextureSite,
@@ -2891,7 +2895,7 @@ pub(crate) fn place_uncached<'w>(
     world: &'w World,
     ids: &[EntityId],
     camera: &RenderCamera,
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     now: SimTime,
 ) -> Placed<'w> {
     let fonts = font_library(world, project_root);
@@ -2978,7 +2982,7 @@ impl SceneAssets for RefLoader {
 /// presentation ones included, a grid's or a tilemap's cells expanded), so a reference can never be
 /// extracted without having been collected. The camera is a placeholder: no source depends on it, and
 /// a world with several cameras must not fail the walk.
-pub(crate) fn asset_refs(world: &World, project_root: &Path) -> AssetRefs {
+pub(crate) fn asset_refs(world: &World, project_root: AssetRoot<'_>) -> AssetRefs {
     let ids: Vec<EntityId> = world
         .entities()
         .chain(world.presentation_entities())
@@ -3919,7 +3923,7 @@ pub(crate) fn build_camera(world: &World, id: EntityId, viewport: (u32, u32)) ->
 /// The font table extract resolves faces through: the world's own [`FontLibrary`] when the engine
 /// built one, else the table loaded from `project_root` — one loader, so a bare `extract()` over an
 /// instantiated world sees what a hosted engine does.
-pub(crate) fn font_library(world: &World, project_root: &Path) -> FontLibrary {
+pub(crate) fn font_library(world: &World, project_root: AssetRoot<'_>) -> FontLibrary {
     world
         .resource::<FontLibrary>()
         .cloned()
@@ -3953,7 +3957,7 @@ fn placed_font(fonts: &FontLibrary, name: Option<&str>) -> Option<PlacedFont> {
 /// whose glyphs the proportional layout was not measured with. An atlas whose size disagrees with
 /// the face document is `L1255` and is not drawn: its UVs would sample the wrong texels.
 fn resolve_font(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     font: Option<&PlacedFont>,
     site: TextureSite,
     assets: &mut dyn SceneAssets,
@@ -3998,7 +4002,7 @@ fn resolve_font(
 /// dedups within one extract so a texture shared by several sprites is one entry in the
 /// `RenderScene`.
 fn resolve_texture(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     rel: &str,
     site: TextureSite,
     assets: &mut dyn SceneAssets,
@@ -4037,7 +4041,7 @@ fn resolve_texture(
 /// texture load is; only the read behind it is shared.
 #[allow(clippy::too_many_arguments)]
 fn resolve_atlas_frame(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     rel: &str,
     frame: Option<&str>,
     site: TextureSite,
@@ -4860,8 +4864,8 @@ pub(crate) fn mesh_error(
 /// is a plausible typo. Goes through [`ludion_core::suggest::nearest`] — the one nearest-match
 /// helper every other diagnostic in the engine uses — so a transposed letter (`lantren` for
 /// `lantern`) suggests here exactly as it does for a misspelled component or field name.
-fn suggest_asset(project_root: &Path, rel: &str) -> Option<String> {
-    let joined = project_root.join(rel);
+fn suggest_asset(project_root: AssetRoot<'_>, rel: &str) -> Option<String> {
+    let joined = project_root.dir().join(rel);
     let dir = joined.parent()?;
     let target = joined.file_name()?.to_string_lossy().to_string();
     let entries = std::fs::read_dir(dir).ok()?;
@@ -4876,6 +4880,7 @@ fn suggest_asset(project_root: &Path, rel: &str) -> Option<String> {
 mod tests {
     use super::*;
     use ludion_scene::{AnimationDocument, AnimationTrack, Ease, Keyframe};
+    use std::path::Path;
 
     /// Frame 0 at the default tick rate — what every test that does not care about clip time passes
     /// for `now`, and exactly what the three-argument [`extract`] passes.
@@ -4916,7 +4921,7 @@ mod tests {
             extract_through(
                 &world,
                 (320, 180),
-                &root,
+                ludion_assets::AssetRoot::content(&root),
                 &mut cache,
                 tick_zero(),
                 ludion_renderer::QualityParams::FULL.particle_density,
@@ -4983,9 +4988,9 @@ mod tests {
         let scene = extract_inner(
             &world,
             (320, 180),
-            &root,
+            ludion_assets::AssetRoot::content(&root),
             &mut CachedAssets {
-                root: &root,
+                root: ludion_assets::AssetRoot::content(&root),
                 cache: &mut AssetCache::new(),
             },
             tick_zero(),
@@ -6377,7 +6382,12 @@ mod tests {
         let last = at(&mut world, 7.0);
         world.insert(last, SpotLight::default()).unwrap();
 
-        let with_spots = extract(&world, (320, 180), Path::new(".")).unwrap();
+        let with_spots = extract(
+            &world,
+            (320, 180),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap();
         assert_eq!(
             with_spots
                 .spot_lights
@@ -6391,7 +6401,12 @@ mod tests {
 
         world.remove::<SpotLight>(first).unwrap();
         world.remove::<SpotLight>(last).unwrap();
-        let without = extract(&world, (320, 180), Path::new(".")).unwrap();
+        let without = extract(
+            &world,
+            (320, 180),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap();
         assert!(without.spot_lights.is_empty());
         assert_eq!(
             with_spots.lights, without.lights,
@@ -6441,7 +6456,12 @@ mod tests {
             )
             .unwrap();
 
-        let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+        let scene = extract(
+            &world,
+            (320, 180),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap();
         assert_eq!(scene.probes.len(), 2);
         assert_eq!(scene.probes[0].entity, root);
         assert_eq!(scene.probes[0].position, Vec3::new(5.0, 0.0, 0.0));
@@ -6458,7 +6478,12 @@ mod tests {
 
         world.remove::<ReflectionProbe>(root).unwrap();
         world.remove::<ReflectionProbe>(child).unwrap();
-        let none = extract(&world, (320, 180), Path::new(".")).unwrap();
+        let none = extract(
+            &world,
+            (320, 180),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap();
         assert!(none.probes.is_empty());
     }
 
@@ -6929,7 +6954,7 @@ mod tests {
             extract_through(
                 world,
                 (320, 180),
-                Path::new("."),
+                ludion_assets::AssetRoot::content(Path::new(".")),
                 cache,
                 tick_zero(),
                 QualityParams::FULL.particle_density,
@@ -6951,7 +6976,7 @@ mod tests {
                 extract_at(
                     &world,
                     (320, 180),
-                    Path::new("."),
+                    ludion_assets::AssetRoot::content(Path::new(".")),
                     tick_zero(),
                     QualityParams::FULL.particle_density,
                 )
@@ -7015,11 +7040,18 @@ mod tests {
                 .unwrap();
 
             let density = QualityParams::FULL.particle_density;
-            let one_shot = extract_at(&world, (320, 180), &dir, tick_zero(), density).unwrap();
+            let one_shot = extract_at(
+                &world,
+                (320, 180),
+                ludion_assets::AssetRoot::content(&dir),
+                tick_zero(),
+                density,
+            )
+            .unwrap();
             let live = extract_through(
                 &world,
                 (320, 180),
-                &dir,
+                ludion_assets::AssetRoot::content(&dir),
                 &mut AssetCache::new(),
                 tick_zero(),
                 density,
@@ -7148,7 +7180,7 @@ mod tests {
             let hidden = extract_through(
                 &world,
                 (320, 180),
-                Path::new("."),
+                ludion_assets::AssetRoot::content(Path::new(".")),
                 &mut cache,
                 tick_zero(),
                 QualityParams::FULL.particle_density,
@@ -7351,7 +7383,7 @@ mod tests {
             extract_through(
                 world,
                 (320, 180),
-                dir,
+                ludion_assets::AssetRoot::content(dir),
                 cache,
                 tick_zero(),
                 QualityParams::FULL.particle_density,
@@ -7378,7 +7410,12 @@ mod tests {
             assert!(Arc::ptr_eq(&first, &again));
 
             write_prop(&dir, 2.0);
-            cache.reload(&dir, "meshes/prop.mesh.yaml").unwrap();
+            cache
+                .reload(
+                    ludion_assets::AssetRoot::content(&dir),
+                    "meshes/prop.mesh.yaml",
+                )
+                .unwrap();
             let edited = voxelize_in(&world, &dir, &mut cache);
             assert_eq!(
                 rasterization_count() - before,
@@ -7452,10 +7489,16 @@ mod tests {
             let ids: Vec<_> = world.entities().collect();
             let camera = single_camera(&world, &ids).unwrap().unwrap();
             let camera = build_camera(&world, camera, (320, 180));
-            let placed = place_uncached(&world, &ids, &camera, &dir, tick_zero());
+            let placed = place_uncached(
+                &world,
+                &ids,
+                &camera,
+                ludion_assets::AssetRoot::content(&dir),
+                tick_zero(),
+            );
             let mut cache = AssetCache::new();
             let mut assets = CachedAssets {
-                root: &dir,
+                root: ludion_assets::AssetRoot::content(&dir),
                 cache: &mut cache,
             };
             let voxelized = crate::voxelizer::voxelize(&placed.meshes, 0.5, &mut assets).unwrap();
@@ -7495,7 +7538,7 @@ mod tests {
             let scene = extract_through(
                 &world,
                 (320, 180),
-                Path::new("."),
+                ludion_assets::AssetRoot::content(Path::new(".")),
                 &mut cache,
                 tick_zero(),
                 QualityParams::FULL.particle_density,

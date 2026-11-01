@@ -524,13 +524,26 @@ fn write_feedback(
 
     let (mut rendered, mut skipped, mut render_ms) = (None, None, 0.0);
     if preview.render {
-        let at = |name: &str| relative(&dir, &out_dir.join(name));
+        // The preview scene is rooted at `dir`, and a content path cannot climb out of its root: the
+        // maps are copied beside it and named bare.
+        let at = |name: &str| -> Result<String, Vec<Diagnostic>> {
+            if std::path::absolute(&dir).ok() != std::path::absolute(out_dir).ok() {
+                ludion_core::atomic::copy_atomic(&out_dir.join(name), &dir.join(name))
+                    .map_err(|e| vec![io_error(e.to_string())])?;
+            }
+            Ok(name.to_string())
+        };
         let refs = texture_preview::MapRefs {
-            base_color: at("base_color.png"),
-            metallic_roughness: at("metallic_roughness.png"),
-            normal: at("normal.png"),
-            occlusion: at("occlusion.png"),
-            emissive: built.set.emissive.as_ref().map(|_| at("emissive.png")),
+            base_color: at("base_color.png")?,
+            metallic_roughness: at("metallic_roughness.png")?,
+            normal: at("normal.png")?,
+            occlusion: at("occlusion.png")?,
+            emissive: built
+                .set
+                .emissive
+                .as_ref()
+                .map(|_| at("emissive.png"))
+                .transpose()?,
         };
         let timer = Stopwatch::start();
         match texture_preview::render(&dir, &relative(&dir, recipe), &refs)? {

@@ -8,8 +8,8 @@
 //! [`SkinBone`](crate::components::SkinBone)'s doc comment for the rule and `Plan/skeletal-animation.md`
 //! decisions 5–7 for why.
 
+use ludion_assets::AssetRoot;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -35,7 +35,7 @@ use crate::components::{Mesh, MeshSource, SkinBone, Transform};
 pub(crate) fn apply_spawn_poses(
     world: &mut World,
     scene: &Scene,
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
 ) -> Result<(), Vec<Diagnostic>> {
     let poses = spawn_poses(project_root, scene)?;
     apply_bone_poses(world, &ludion_scene::instantiated_ids(scene), &poses);
@@ -101,7 +101,7 @@ pub(crate) struct BonePose {
 /// (the [`crate::scene_check::scene_layer_diagnostics`] contract) — `Err` when any part is
 /// misconfigured, in which case the returned poses are meaningless and never read.
 pub(crate) fn spawn_poses(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     scene: &Scene,
 ) -> Result<Vec<BonePose>, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
@@ -227,7 +227,7 @@ pub(crate) fn spawn_poses(
 /// filesystem-reading half of a `SkinBone` check, run by both `scene.load`
 /// (via `spawn_poses`) and `ludion check-scene`/a game's `--check-scene`
 /// (the [`crate::scene_check::scene_atlas_diagnostics`] precedent).
-pub fn scene_skin_bone_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnostic> {
+pub fn scene_skin_bone_diagnostics(project_root: AssetRoot<'_>, scene: &Scene) -> Vec<Diagnostic> {
     spawn_poses(project_root, scene).err().unwrap_or_default()
 }
 
@@ -278,7 +278,7 @@ fn spawn_pose(skin_transform: Transform, bone_model: &[f64; 16]) -> Transform {
 
 /// `entity`'s `Mesh.shape: asset` path, or `None` when it carries no `Mesh` or a different shape.
 pub(crate) fn skinned_mesh_path(
-    project_root: &Path,
+    project_root: AssetRoot<'_>,
     entity: &SceneEntity,
 ) -> Option<Result<String, (String, Vec<Diagnostic>)>> {
     let (_, value) = entity.components.iter().find(|(name, _)| name == "Mesh")?;
@@ -294,14 +294,17 @@ pub(crate) fn skinned_mesh_path(
 
 /// Reads, decodes and validates the mesh document at `root`/`rel` — [`crate::mesh_asset`]'s
 /// `load_with_sources` shape, minus the texture half a bone-pose resolution never needs.
-pub(crate) fn load_mesh_document(root: &Path, rel: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
+pub(crate) fn load_mesh_document(
+    root: AssetRoot<'_>,
+    rel: &str,
+) -> Result<MeshDocument, Vec<Diagnostic>> {
     crate::mesh_asset::read_document(root, rel).map(|(doc, _)| doc)
 }
 
 /// The skin joints of the mesh document at `root`/`rel` (`None` without a skin), without parsing
 /// its vertex data — what a bone-pose or joint-name lookup needs.
 pub(crate) fn load_mesh_joints(
-    root: &Path,
+    root: AssetRoot<'_>,
     rel: &str,
 ) -> Result<Option<Vec<MeshJoint>>, Vec<Diagnostic>> {
     crate::mesh_asset::with_mesh_source(root, rel, ludion_scene::read_mesh_joints)
@@ -392,6 +395,7 @@ fn animated_skin(skin_index: usize, skin_entity: &SceneEntity) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn identity_bone(
         name: &str,
@@ -484,7 +488,8 @@ mod tests {
             ],
             ..Scene::default()
         };
-        let found = scene_skin_bone_diagnostics(Path::new("."), &scene);
+        let found =
+            scene_skin_bone_diagnostics(ludion_assets::AssetRoot::content(Path::new(".")), &scene);
         let matches = found
             .iter()
             .filter(|d| d.code == code::ASSET_FILE_IO)
@@ -536,7 +541,7 @@ mod tests {
             ],
             ..Scene::default()
         };
-        let poses = spawn_poses(&root, &scene);
+        let poses = spawn_poses(ludion_assets::AssetRoot::content(&root), &scene);
         let _ = std::fs::remove_dir_all(&root);
         let poses = poses.expect("joints are valid");
         assert_eq!(poses.len(), 1);

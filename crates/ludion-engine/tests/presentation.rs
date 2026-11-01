@@ -366,7 +366,12 @@ fn presentation_sprites_are_bounded_and_extracted() {
     };
     assert!(entities.iter().any(|e| e.entity == popup));
 
-    let scene = extract(engine.world(), (256, 256), &fresh_dir("extract")).unwrap();
+    let scene = extract(
+        engine.world(),
+        (256, 256),
+        ludion_assets::AssetRoot::content(&fresh_dir("extract")),
+    )
+    .unwrap();
     assert_eq!(scene.sprites.len(), presentation_ids(&engine).len());
 }
 

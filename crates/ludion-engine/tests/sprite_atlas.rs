@@ -145,7 +145,7 @@ fn one_atlas_is_one_texture_with_exact_uvs_and_derived_sizes() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
 
     // One entry per *atlas path*, not per quad: four quads of one atlas, one texture, one batch.
     assert_eq!(scene.textures.len(), 2, "the atlas and the loose PNG");
@@ -202,7 +202,7 @@ fn an_unknown_frame_is_l1152_with_a_suggestion() {
     let mut world = World::new();
     spawn_sprite(&mut world, atlas_sprite("ship/idel", None));
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1152");
     assert_eq!(
@@ -233,7 +233,7 @@ fn a_missing_atlas_is_l1151_at_the_atlas_field() {
         },
     );
 
-    let errors = extract(&world, (320, 180), &dir).unwrap_err();
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].code.as_str(), "L1151");
     assert_eq!(
@@ -267,7 +267,7 @@ fn the_shared_reference_check_answers_for_a_scene() {
 
     assert!(
         ludion_engine::check_atlas_reference(
-            &dir,
+            ludion_assets::AssetRoot::content(&dir),
             pointer,
             "art/ship.atlas.yaml",
             Some("ship/idle")
@@ -277,7 +277,7 @@ fn the_shared_reference_check_answers_for_a_scene() {
     );
 
     let unknown = ludion_engine::check_atlas_reference(
-        &dir,
+        ludion_assets::AssetRoot::content(&dir),
         pointer,
         "art/ship.atlas.yaml",
         Some("ship/idel"),
@@ -290,7 +290,7 @@ fn the_shared_reference_check_answers_for_a_scene() {
     );
 
     let missing = ludion_engine::check_atlas_reference(
-        Path::new("."),
+        ludion_assets::AssetRoot::content(Path::new(".")),
         pointer,
         "art/absent.atlas.yaml",
         Some("ship/idle"),
@@ -336,7 +336,7 @@ fn a_ui_rect_atlas_reference_resolves_to_the_region_uv() {
         )
         .unwrap();
 
-    let scene = extract(&world, (320, 180), &dir).unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
 
     let atlas_index = scene.sprites[0].texture.unwrap();
     // The atlas sprite and the atlas UI rect share one texture entry; the loose PNG is its own.

@@ -80,6 +80,22 @@ pub fn relative_refusal(text: &str) -> Option<PathRefusal> {
         .then_some(PathRefusal::Reserved)
 }
 
+/// `None` when `text`, after [`normalize`]'s lexical `..` folding, is a plain relative path below
+/// its base: the one rule for a path that came from content or a payload and is joined to the
+/// content root. A `..` that cancels a segment is fine; one that escapes the base is refused.
+///
+/// ```
+/// use ludion_core::paths::{content_refusal, PathRefusal};
+///
+/// assert_eq!(content_refusal("meshes/../t.png"), None);
+/// assert_eq!(content_refusal("a/../../x"), Some(PathRefusal::ParentDir));
+/// assert_eq!(content_refusal("C:x"), Some(PathRefusal::Prefixed));
+/// assert_eq!(content_refusal("/dev/zero"), Some(PathRefusal::Absolute));
+/// ```
+pub fn content_refusal(text: &str) -> Option<PathRefusal> {
+    relative_refusal(&normalize(text))
+}
+
 /// Whether one path segment names a Windows device (`con`, `NUL .png`, `com1.tar.gz`, `Aux.`),
 /// which Win32 resolves to the device whatever the extension.
 pub fn is_reserved_device(segment: &str) -> bool {
@@ -294,6 +310,28 @@ mod tests {
         ];
         for (text, expected) in cases {
             assert_eq!(relative_refusal(text), Some(expected), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn content_refusal_folds_inside_dots_and_refuses_escapes() {
+        let cases = [
+            ("meshes/../t.png", None),
+            ("a/../b.png", None),
+            ("./a.png", None),
+            ("../x", Some(PathRefusal::ParentDir)),
+            ("a/../../x", Some(PathRefusal::ParentDir)),
+            ("C:x", Some(PathRefusal::Prefixed)),
+            ("//h/s", Some(PathRefusal::Absolute)),
+            ("\\\\?\\x", Some(PathRefusal::Absolute)),
+            ("/dev/zero", Some(PathRefusal::Absolute)),
+            ("...", Some(PathRefusal::ParentDir)),
+            ("nul.png", Some(PathRefusal::Reserved)),
+            ("a/..", None),
+            ("", Some(PathRefusal::Empty)),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(content_refusal(text), expected, "{text:?}");
         }
     }
 

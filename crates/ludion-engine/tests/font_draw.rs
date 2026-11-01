@@ -75,7 +75,7 @@ fn needs_gpu_baked_faces_draw_inside_their_resolved_rects() {
         }
         Err(errors) => panic!("render failed: {errors:?}"),
     };
-    let library = FontLibrary::load(&dir);
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     for (font, offset, size) in [("body", [40.0, 60.0], 48.0), ("pixel", [40.0, 300.0], 40.0)] {
         let text = "Hamburg";
         let drawn = render("text.yaml", &scene_with(&[(font, text, offset, size)]))

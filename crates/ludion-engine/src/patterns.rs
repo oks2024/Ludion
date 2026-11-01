@@ -1233,7 +1233,7 @@ pub(crate) fn bullet_atlas_diagnostics(
         let base = format!("pattern/{key}/bullets/{name}");
         match (&kind.atlas, &kind.frame) {
             (Some(atlas), frame) => out.extend(crate::check_atlas_reference(
-                project_root,
+                ludion_assets::AssetRoot::content(project_root),
                 &base,
                 atlas,
                 frame.as_deref(),

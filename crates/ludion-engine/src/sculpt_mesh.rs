@@ -11,8 +11,6 @@
 //! `shape: voxel` or `shape: mesh` part names: [`read_sculpt_sources`] is that half, and it is what
 //! makes this module the sculpt path's only file reader.
 
-use std::path::Path;
-
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_renderer::MeshData;
@@ -34,7 +32,10 @@ pub use ludion_sculpt::SculptStats;
 /// All diagnostics carry a JSON Pointer into the *sculpt document*; the caller
 /// ([`extract`](crate::extract)) re-points them at the referencing `Mesh` component.
 #[cfg(test)]
-pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> {
+pub(crate) fn load(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<MeshData, Vec<Diagnostic>> {
     load_with_sources(root, rel).map(|(data, _)| data)
 }
 
@@ -44,7 +45,7 @@ pub(crate) fn load(root: &Path, rel: &str) -> Result<MeshData, Vec<Diagnostic>> 
 /// sculpt's reload dependency set ([`crate::asset_cache`]), and those files' hashes are folded into
 /// [`MeshData::hash`], so an edited part re-keys the GPU mesh even when the sculpt is untouched.
 pub(crate) fn load_with_sources(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
 ) -> Result<(MeshData, SourceFiles), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
@@ -82,7 +83,7 @@ pub(crate) fn load_with_sources(
 /// one that does not check (`L1113`/`L1114` for a voxel model, `L1110`/`L1111` for a mesh) — each
 /// re-pointed at `/parts/<i>/path` of the *sculpt*, the document whose author can act on it.
 pub fn read_sculpt_sources(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
     doc: &SculptDocument,
 ) -> Result<SculptSources, Vec<Diagnostic>> {
@@ -92,7 +93,7 @@ pub fn read_sculpt_sources(
 /// [`read_sculpt_sources`], additionally returning each distinct file it read as a `(resolved path,
 /// content hash)` pair, in document order.
 pub(crate) fn read_sculpt_sources_with_files(
-    root: &Path,
+    root: ludion_assets::AssetRoot<'_>,
     rel: &str,
     doc: &SculptDocument,
 ) -> Result<(SculptSources, SourceFiles), Vec<Diagnostic>> {
@@ -222,7 +223,8 @@ parts:
         let rel = "sculpts/ball.sculpt.yaml";
         std::fs::write(dir.join(rel), BALL).unwrap();
 
-        let data = load(&dir, rel).unwrap_or_else(|d| panic!("{d:?}"));
+        let data =
+            load(ludion_assets::AssetRoot::content(&dir), rel).unwrap_or_else(|d| panic!("{d:?}"));
         let vertices = data.positions.len() / 3;
         assert!(vertices > 0 && !data.indices.is_empty());
         assert_eq!(data.normals.len(), vertices * 3);
@@ -276,8 +278,10 @@ slices:
             std::fs::write(dir.join(folder).join("hull.voxel.yaml"), voxel(glyph)).unwrap();
         }
 
-        let a = load(&dir, "a/x.sculpt.yaml").unwrap_or_else(|d| panic!("{d:?}"));
-        let b = load(&dir, "b/x.sculpt.yaml").unwrap_or_else(|d| panic!("{d:?}"));
+        let a = load(ludion_assets::AssetRoot::content(&dir), "a/x.sculpt.yaml")
+            .unwrap_or_else(|d| panic!("{d:?}"));
+        let b = load(ludion_assets::AssetRoot::content(&dir), "b/x.sculpt.yaml")
+            .unwrap_or_else(|d| panic!("{d:?}"));
         assert_ne!(a.hash, b.hash);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -296,12 +300,20 @@ slices:
         )
         .unwrap();
 
-        let errors = load(&dir, "sculpts/bad.sculpt.yaml").unwrap_err();
+        let errors = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "sculpts/bad.sculpt.yaml",
+        )
+        .unwrap_err();
         assert!(
             errors.iter().all(|d| d.code == code::SCULPT_DOCUMENT_DATA),
             "{errors:?}"
         );
-        let missing = load(&dir, "sculpts/nope.sculpt.yaml").unwrap_err();
+        let missing = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "sculpts/nope.sculpt.yaml",
+        )
+        .unwrap_err();
         assert_eq!(missing[0].code.as_str(), "L1101");
 
         let _ = std::fs::remove_dir_all(&dir);

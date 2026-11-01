@@ -8,7 +8,6 @@
 //! libraries it is never hashed or snapshotted; faults are kept for `report_font_faults`, which
 //! raises each once per session.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use ludion_core::codes::code;
@@ -59,9 +58,9 @@ pub struct FontLibrary {
 impl FontLibrary {
     /// Loads `fonts.yaml` and every face it lists under `root`. Never fails: a missing table is the
     /// empty library, and a bad table or face is kept as a fault with the embedded fallback.
-    pub fn load(root: &Path) -> FontLibrary {
+    pub fn load(root: ludion_assets::AssetRoot<'_>) -> FontLibrary {
         let mut inner = Inner::default();
-        let table_path = root.join(FONTS_FILE);
+        let table_path = root.dir().join(FONTS_FILE);
         if !table_path.is_file() {
             return FontLibrary {
                 inner: Arc::new(inner),
@@ -222,9 +221,13 @@ fn fault(file: &str, why: &str, checked: Vec<Diagnostic>) -> Diagnostic {
     diagnostic
 }
 
-fn load_face(root: &Path, path: &str) -> Result<Loaded, Diagnostic> {
-    let source = std::fs::read_to_string(root.join(path))
-        .map_err(|error| fault(path, &format!("cannot read: {error}"), Vec::new()))?;
+fn load_face(root: ludion_assets::AssetRoot<'_>, path: &str) -> Result<Loaded, Diagnostic> {
+    let source = ludion_assets::load_bytes(root, path)
+        .map_err(|d| fault(path, &d.message, Vec::new()))
+        .and_then(|asset| {
+            String::from_utf8(asset.bytes)
+                .map_err(|error| fault(path, &format!("cannot read: {error}"), Vec::new()))
+        })?;
     let doc = ludion_scene::check_font(&source).map_err(|d| fault(path, "", d))?;
     let image_path = ludion_core::paths::sibling(path, &doc.image);
     let face = FontFace::new(doc).map_err(|d| fault(path, "", d))?;
