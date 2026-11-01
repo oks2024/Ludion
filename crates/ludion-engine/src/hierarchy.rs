@@ -3,7 +3,9 @@
 //! [`Transform`] is local to its [`Parent`] when the entity has one, else world space; a root's
 //! stored value *is* its world pose, bit for bit. [`world_transform`] composes root→leaf with
 //! [`Trs::mul_trs`] (the sim result: shear under a non-uniform scale is dropped);
-//! [`world_affine`] folds the exact [`Affine3`] per level (what render draws).
+//! [`world_affine`] folds the exact [`Affine3`] per level (what render draws). An entity carrying
+//! `ParentJoint` folds its parent skin's joint rest model transform as one more level before its own
+//! `Transform`; a miss composes as a plain `Parent`.
 //!
 //! Three malformed chains degrade the queried entity instead of hanging or panicking, and
 //! `report_hierarchy_faults` names each once: a `Parent` loop (`L1218`), a dead or presentation
@@ -127,9 +129,8 @@ pub(crate) fn chain_pose(world: &World, entity: EntityId) -> Option<WorldPose> {
     let (ids, _) = chain(world, entity);
     let mut acc: Option<Trs> = None;
     let mut sheared = false;
-    for transform in ids.iter().filter_map(|id| local(world, *id)) {
-        let level = level_trs(&transform);
-        acc = Some(match acc {
+    let mut fold = |acc: &mut Option<Trs>, level: Trs| {
+        *acc = Some(match *acc {
             None => level,
             Some(parent) => {
                 let uniform =
@@ -138,6 +139,16 @@ pub(crate) fn chain_pose(world: &World, entity: EntityId) -> Option<WorldPose> {
                 parent.mul_trs(&level)
             }
         });
+    };
+    for (at, id) in ids.iter().enumerate() {
+        if at > 0
+            && let Some(joint) = crate::parent_joint::joint_rest(world, *id)
+        {
+            fold(&mut acc, joint);
+        }
+        if let Some(transform) = local(world, *id) {
+            fold(&mut acc, level_trs(&transform));
+        }
     }
     acc.map(|trs| WorldPose { trs, sheared })
 }
@@ -147,12 +158,21 @@ pub fn world_affine(world: &World, entity: EntityId) -> Option<Affine3> {
     local(world, entity)?;
     let (ids, _) = chain(world, entity);
     let mut acc: Option<Affine3> = None;
-    for transform in ids.iter().filter_map(|id| local(world, *id)) {
-        let level = level_trs(&transform).to_affine();
-        acc = Some(match acc {
+    let fold = |acc: &mut Option<Affine3>, level: Affine3| {
+        *acc = Some(match *acc {
             None => level,
             Some(parent) => parent.mul_affine(&level),
         });
+    };
+    for (at, id) in ids.iter().enumerate() {
+        if at > 0
+            && let Some(joint) = crate::parent_joint::joint_rest(world, *id)
+        {
+            fold(&mut acc, joint.to_affine());
+        }
+        if let Some(transform) = local(world, *id) {
+            fold(&mut acc, level_trs(&transform).to_affine());
+        }
     }
     acc
 }
@@ -297,6 +317,17 @@ impl WorldAffines {
         }
         let mut acc = base.and_then(|(acc, _)| acc);
         for (step, node) in stack[..len].iter().rev().enumerate() {
+            // The joint level needs the node's parent in the folded chain: not the top of a walk
+            // that broke off at a root or an invalid parent.
+            if (step > 0 || base.is_some())
+                && let Some(joint) = crate::parent_joint::joint_rest(world, *node)
+            {
+                let joint = joint.to_affine();
+                acc = Some(match acc {
+                    None => joint,
+                    Some(parent) => parent.mul_affine(&joint),
+                });
+            }
             if let Some(level) = self.level(world, *node) {
                 let level = level.to_affine();
                 acc = Some(match acc {
@@ -846,6 +877,40 @@ mod tests {
                 assert_eq!(got, None);
             }
         }
+    }
+
+    /// A `ParentJoint` chain over a real rig: `parented` equals `world_affine` bit for bit, with the
+    /// skin queried first so the child's walk resumes from the memo.
+    #[test]
+    fn memoized_affines_equal_world_affine_bitwise_through_a_joint() {
+        let dir = crate::parent_joint::tests::rig_dir("memo");
+        let mut world = World::new();
+        let (skin, child) = crate::parent_joint::tests::skin_and_child(&mut world, "child");
+        let grandchild = spawn(&mut world, at(0.25), Some(child));
+        // The skin is parented too, so querying it memoizes it and the child's walk resumes there.
+        let anchor = spawn(&mut world, at(3.0), None);
+        world.insert(skin, Parent(anchor)).unwrap();
+        crate::parent_joint::install(&mut world, &dir);
+        let plain = world_affine(&world, grandchild).unwrap();
+        for query_skin_first in [true, false] {
+            let mut poses = WorldAffines::new();
+            if query_skin_first {
+                let _ = poses.parented(&world, skin);
+            }
+            for id in [grandchild, child] {
+                let expected = world_affine(&world, id);
+                assert_eq!(
+                    poses.parented(&world, id).map(|a| a.cols),
+                    expected.map(|a| a.cols),
+                    "{id} skin first: {query_skin_first}"
+                );
+            }
+        }
+        world
+            .remove::<crate::components::ParentJoint>(child)
+            .unwrap();
+        assert_ne!(world_affine(&world, grandchild).unwrap().cols, plain.cols);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -5,6 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use ludion_core::codes::code;
+use ludion_core::math::euler_xyz_degrees_to_quat;
+use ludion_core::math::glam::{DMat4, DQuat, DVec3};
 use ludion_engine::Engine;
 use ludion_scene::{JointRest, MeshDocument, MeshJoint, MeshSkin};
 
@@ -26,22 +28,34 @@ fn identity16() -> [f64; 16] {
 
 /// Writes `meshes/rig.mesh.yaml`: a two-joint skin, `root` then `child`.
 fn write_rig(dir: &Path) {
-    let joint = |name: &str, parent: Option<u32>, translation: [f64; 3]| MeshJoint {
-        name: name.to_string(),
-        parent,
-        rest: JointRest {
-            translation,
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            scale: [1.0, 1.0, 1.0],
-        },
-        inverse_bind: identity16(),
-    };
+    let half = 22.5f64.to_radians();
+    let joint =
+        |name: &str, parent: Option<u32>, translation: [f64; 3], rotation: [f64; 4]| MeshJoint {
+            name: name.to_string(),
+            parent,
+            rest: JointRest {
+                translation,
+                rotation,
+                scale: [1.0, 1.0, 1.0],
+            },
+            inverse_bind: identity16(),
+        };
     let doc = MeshDocument {
         positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
         skin: Some(MeshSkin {
             joints: vec![
-                joint("root", None, [0.0, 0.0, 0.0]),
-                joint("child", Some(0), [0.0, 1.0, 0.0]),
+                joint("root", None, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]),
+                joint(
+                    "child",
+                    Some(0),
+                    [0.0, 1.0, 0.0],
+                    [
+                        0.0,
+                        0.0,
+                        ludion_core::math::f64::sin(half),
+                        ludion_core::math::f64::cos(half),
+                    ],
+                ),
             ],
             weights: vec![1.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             bone_indices: vec![0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
@@ -176,4 +190,156 @@ fn a_parent_joint_child_loads_and_round_trips() {
         .load_inline_scene(&text)
         .expect("the saved text re-loads");
     assert_eq!(reloaded.world_hash().unwrap(), hash);
+}
+
+const SKIN_TRANSFORM: &str = "      Transform:
+        translation:
+          - 2.0
+          - 0.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 90.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+";
+const CHILD_LOCAL: &str = "      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.25
+        rotation:
+          - 0.0
+          - 30.0
+          - 0.0
+";
+const GRANDCHILD_LOCAL: &str = "      Transform:
+        translation:
+          - 0.5
+          - 0.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 20.0
+          - 0.0
+";
+
+fn local_model(translation: [f64; 3], euler_degrees: [f32; 3]) -> DMat4 {
+    let q = euler_xyz_degrees_to_quat(euler_degrees);
+    DMat4::from_rotation_translation(
+        DQuat::from_xyzw(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64),
+        DVec3::from_array(translation),
+    )
+}
+
+fn assert_pose(pose: ludion_engine::WorldPose, expected: DMat4, what: &str) {
+    let (scale, rotation, translation) = expected.to_scale_rotation_translation();
+    for axis in 0..3 {
+        assert!(
+            (pose.trs.translation[axis] as f64 - translation[axis]).abs() < 1e-5,
+            "{what} translation {:?} vs {translation:?}",
+            pose.trs.translation
+        );
+        assert!(
+            (pose.trs.scale[axis] as f64 - scale[axis]).abs() < 1e-5,
+            "{what} scale {:?} vs {scale:?}",
+            pose.trs.scale
+        );
+    }
+    let q = pose.trs.rotation;
+    let dot = DQuat::from_xyzw(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64)
+        .dot(rotation)
+        .abs();
+    assert!((dot - 1.0).abs() < 1e-4, "{what} rotation dot {dot}");
+}
+
+/// A child under a skin with `ParentJoint` lands at `skin x joint rest x local`, and a grandchild
+/// composes on top; `world_affine` agrees.
+#[test]
+fn a_parent_joint_child_composes_the_joint_rest() {
+    let (mut engine, _dir) = engine_with_rig("compose");
+    let child = format!("{PARENT_OF_SKIN}{}{CHILD_LOCAL}", parent_joint("child"));
+    let mut text = scene(&format!("{SKIN_MESH}{SKIN_TRANSFORM}"), &child);
+    text.push_str(
+        "  - name: grandchild
+    components:
+      Parent:
+        index: 1
+        generation: 0
+",
+    );
+    text.push_str(GRANDCHILD_LOCAL);
+    engine.load_inline_scene(&text).expect("the scene loads");
+
+    let skin_model = DMat4::from_scale_rotation_translation(
+        DVec3::splat(2.0),
+        {
+            let q = euler_xyz_degrees_to_quat([0.0, 90.0, 0.0]);
+            DQuat::from_xyzw(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64)
+        },
+        DVec3::new(2.0, 0.0, 0.0),
+    );
+    let half = 22.5f64.to_radians();
+    let bone_model = DMat4::from_rotation_translation(
+        DQuat::from_xyzw(
+            0.0,
+            0.0,
+            ludion_core::math::f64::sin(half),
+            ludion_core::math::f64::cos(half),
+        ),
+        DVec3::new(0.0, 1.0, 0.0),
+    );
+    let child_model = skin_model * bone_model * local_model([0.0, 0.5, 0.25], [0.0, 30.0, 0.0]);
+    let grand_model = child_model * local_model([0.5, 0.0, 0.0], [0.0, 20.0, 0.0]);
+
+    let world = engine.world();
+    let child_id = ludion_core::ids::EntityId::new(1, 0);
+    let grand_id = ludion_core::ids::EntityId::new(2, 0);
+    assert_pose(
+        ludion_engine::world_transform(world, child_id).unwrap(),
+        child_model,
+        "child",
+    );
+    assert_pose(
+        ludion_engine::world_transform(world, grand_id).unwrap(),
+        grand_model,
+        "grandchild",
+    );
+    for (id, model) in [(child_id, child_model), (grand_id, grand_model)] {
+        let affine = ludion_engine::world_affine(world, id).unwrap();
+        let cols = model.to_cols_array();
+        for (c, col) in affine.cols.iter().enumerate() {
+            for (r, v) in col.iter().enumerate() {
+                assert!(
+                    (*v as f64 - cols[c * 4 + r]).abs() < 1e-4,
+                    "{id} affine {affine:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A presentation `ParentJoint` child is never hashed: the scene with and without it hashes equal.
+#[test]
+fn a_presentation_parent_joint_child_does_not_move_the_hash() {
+    let (mut alone, _dir) = engine_with_rig("hash-alone");
+    let skin = format!("{SKIN_MESH}{SKIN_TRANSFORM}");
+    alone.load_inline_scene(&scene(&skin, CHILD_LOCAL)).unwrap();
+    let (mut with, _dir2) = engine_with_rig("hash-with");
+    let mut text = scene(&skin, CHILD_LOCAL);
+    text.push_str(
+        "  - name: fx
+    presentation: true
+    components:
+      Parent:
+        index: 0
+        generation: 0
+",
+    );
+    text.push_str(&parent_joint("child"));
+    with.load_inline_scene(&text).expect("the scene loads");
+    assert_eq!(with.world_hash().unwrap(), alone.world_hash().unwrap());
 }

@@ -797,6 +797,7 @@ impl Engine {
         engine.install_render_extent();
         engine.install_plane();
         engine.install_animation_library();
+        engine.install_skin_rests();
         engine.install_path_library();
         engine.install_font_library();
         engine.install_prefab_library();
@@ -2355,6 +2356,14 @@ impl Engine {
     pub(crate) fn install_plane(&mut self) {
         let plane = self.plane;
         self.driver.world_mut().insert_resource(plane);
+    }
+
+    /// Installs an empty [`SkinRests`](crate::parent_joint::SkinRests) over the project root after
+    /// every world (re)build, the [`install_animation_library`](Engine::install_animation_library)
+    /// mold: filled lazily from committed content, never hashed or snapshotted.
+    pub(crate) fn install_skin_rests(&mut self) {
+        let root = self.project_root.clone();
+        crate::parent_joint::install(self.driver.world_mut(), &root);
     }
 
     /// Installs an empty [`AnimationLibrary`](crate::animation_events::AnimationLibrary) over the
@@ -5575,6 +5584,7 @@ impl Engine {
         self.install_render_extent();
         self.install_plane();
         self.install_animation_library();
+        self.install_skin_rests();
         self.install_path_library();
         self.install_font_library();
         if self.replay_prefab_text.is_some() {
@@ -5779,6 +5789,7 @@ pub(crate) fn instantiate_expanded_world(
     if !errors.is_empty() {
         return Err(errors.into_iter().map(|d| expanded.locate(d)).collect());
     }
+    crate::parent_joint::install(&mut world, project_root);
     Ok((world, ids))
 }
 
