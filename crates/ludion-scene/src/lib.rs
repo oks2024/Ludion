@@ -152,7 +152,7 @@ pub use assembly::{
 };
 pub use atlas::{
     ATLAS_FORMAT_VERSION, ATLAS_SOURCE_FORMAT_VERSION, AtlasDocument, AtlasFilter, AtlasRegion,
-    AtlasSourceDocument, Flipbook,
+    AtlasSourceDocument, AtlasSourceInput, Flipbook,
 };
 pub use character::{CHARACTER_FORMAT_VERSION, CharacterClip, CharacterDocument};
 pub use clip_eval::{
@@ -1632,6 +1632,16 @@ pub fn resolve_sprite_include(
     palette::resolve(doc, palette_source)
 }
 
+/// Merges `overrides` into `palette` with the include's semantics: a glyph the palette defines is
+/// replaced, one it does not is added, and the result is sorted by glyph. A sprite's `palette: {
+/// from, overrides }` and an atlas-source input's `palette` both apply through this one function.
+pub fn apply_sprite_palette_overrides(
+    palette: &mut Vec<SpritePaletteEntry>,
+    overrides: &[SpritePaletteEntry],
+) {
+    palette::apply_overrides(palette, overrides);
+}
+
 // --- Atlas documents (`*.atlas-source.yaml` / `*.atlas.yaml`) -----------------------------------
 //
 // An atlas source lists the sprite documents and loose PNGs one packed image is built from, plus
@@ -1648,7 +1658,8 @@ pub fn parse_atlas_source(source: &str) -> Result<AtlasSourceDocument, Vec<Diagn
 }
 
 /// Validates semantic invariants of `doc`: `pixels_per_unit` finite and positive, a non-empty
-/// `inputs` list of non-empty paths, and well-shaped flipbooks.
+/// `inputs` list of non-empty paths whose `name` is one plain segment and whose `palette` is valid
+/// (and absent on a loose PNG), and well-shaped flipbooks.
 ///
 /// Flipbook frame names are deliberately **not** resolved: an atlas source has not read the sprite
 /// documents its inputs name, so it cannot know which frames exist — that is the bake's check.

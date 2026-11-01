@@ -30,6 +30,9 @@ use serde_json::Value;
 use crate::envelope;
 use crate::fields::parse_number;
 use crate::scalar::{format_float, scalar_string};
+use crate::sprite::{
+    SpritePaletteEntry, emit_palette_entries, parse_palette_entries_map, validate_palette_entries,
+};
 use crate::yaml::{self, MapEntry, Node, NodeValue, pointer_token};
 
 /// The atlas-source document format version this crate reads and writes.
@@ -60,6 +63,7 @@ const ATLAS_KEYS: [&str; 8] = [
 ];
 
 const MAPS_KEYS: [&str; 1] = ["color"];
+const INPUT_KEYS: [&str; 3] = ["path", "name", "palette"];
 const FLIPBOOK_KEYS: [&str; 5] = ["name", "frames", "fps", "loop", "hold"];
 const REGION_KEYS: [&str; 2] = ["rect", "pivot"];
 const FILTERS: [&str; 2] = ["nearest", "linear"];
@@ -123,9 +127,37 @@ pub struct AtlasSourceDocument {
     pub filter: AtlasFilter,
     /// The inputs to pack, as paths relative to this file's directory: a `kind: sprite` document
     /// contributes one region per frame, a loose PNG contributes one region named by its file stem.
-    pub inputs: Vec<String>,
+    pub inputs: Vec<AtlasSourceInput>,
     /// The flipbooks to carry onto the generated atlas, in authored order.
     pub flipbooks: Vec<Flipbook>,
+}
+
+/// One `inputs:` entry. A plain path string is `name: None` and an empty `palette`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AtlasSourceInput {
+    /// Relative to the atlas source's directory.
+    pub path: String,
+    /// The minted region prefix in place of the sprite document's `name`/stem (or a PNG's stem).
+    pub name: Option<String>,
+    /// Glyph overrides on the sprite's resolved palette, with a palette include's `overrides`
+    /// semantics; glyph-sorted.
+    pub palette: Vec<SpritePaletteEntry>,
+}
+
+impl AtlasSourceInput {
+    /// An input with no options: just a path.
+    pub fn plain(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            name: None,
+            palette: Vec::new(),
+        }
+    }
+
+    /// Whether this input writes as the plain path string.
+    fn is_plain(&self) -> bool {
+        self.name.is_none() && self.palette.is_empty()
+    }
 }
 
 /// One packed region of an atlas: where it sits in the image, and what it rotates about.
@@ -268,7 +300,7 @@ pub(crate) fn parse_source(source: &str) -> Result<AtlasSourceDocument, Vec<Diag
             }
             "inputs" => {
                 inputs_seen = true;
-                doc.inputs = parse_string_list(&entry.node, "/inputs", "inputs", &mut diagnostics);
+                doc.inputs = parse_inputs(&entry.node, &mut diagnostics);
             }
             "flipbooks" => {
                 doc.flipbooks = parse_flipbooks(entry, &mut diagnostics);
@@ -547,6 +579,149 @@ fn parse_filter(node: &Node, diagnostics: &mut Vec<Diagnostic>) -> Option<AtlasF
             None
         }
     }
+}
+
+const INPUT_FORMS_HELP: &str = "write each input as a path or as keys under one `-`:\n    inputs:\n      \
+     - ship.sprite.yaml\n      - path: ship.sprite.yaml\n        name: ship-red\n        palette:\n          \
+     o:\n            color: \"#ff2020\"";
+
+/// Parses `inputs`: a sequence of plain path strings and `{path, name?, palette?}` mappings.
+fn parse_inputs(node: &Node, diagnostics: &mut Vec<Diagnostic>) -> Vec<AtlasSourceInput> {
+    let NodeValue::Sequence(items) = &node.value else {
+        diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!(
+                    "`inputs` must be a sequence, found {} (line {})",
+                    node.value.type_phrase(),
+                    node.line
+                ),
+            )
+            .with_path("/inputs")
+            .with_help(INPUT_FORMS_HELP),
+        );
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let pointer = format!("/inputs/{index}");
+        match &item.value {
+            NodeValue::Scalar(Value::String(path)) => out.push(AtlasSourceInput::plain(path)),
+            NodeValue::Mapping(entries) => {
+                if let Some(input) = parse_input(entries, item.line, &pointer, diagnostics) {
+                    out.push(input);
+                }
+            }
+            other => diagnostics.push(
+                Diagnostic::new(
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    format!(
+                        "`inputs[{index}]` must be a path string or a mapping with `path`, found \
+                         {} (line {})",
+                        other.type_phrase(),
+                        item.line
+                    ),
+                )
+                .with_path(pointer)
+                .with_help(INPUT_FORMS_HELP),
+            ),
+        }
+    }
+    out
+}
+
+/// Parses one mapping-form input.
+fn parse_input(
+    entries: &[MapEntry],
+    line: usize,
+    pointer: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<AtlasSourceInput> {
+    let mut path = None;
+    let mut name = None;
+    let mut palette = Vec::new();
+    let mut ok = true;
+    for sub in entries {
+        match sub.key.as_str() {
+            "path" => {
+                path = envelope::expect_string(
+                    &sub.node,
+                    &format!("{pointer}/path"),
+                    "an input's `path`",
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    diagnostics,
+                );
+                ok &= path.is_some();
+            }
+            "name" => {
+                name = envelope::expect_string(
+                    &sub.node,
+                    &format!("{pointer}/name"),
+                    "an input's `name`",
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    diagnostics,
+                );
+                ok &= name.is_some();
+            }
+            "palette" => {
+                let NodeValue::Mapping(palette_entries) = &sub.node.value else {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            code::SPRITE_DOCUMENT_STRUCTURE,
+                            format!(
+                                "an input's `palette` must be a mapping of glyphs to colors, found \
+                                 {} (line {})",
+                                sub.node.value.type_phrase(),
+                                sub.node.line
+                            ),
+                        )
+                        .with_path(format!("{pointer}/palette"))
+                        .with_help(
+                            "write `palette` as glyph keys, each mapping to a `color`, exactly like \
+                             an inline palette",
+                        ),
+                    );
+                    ok = false;
+                    continue;
+                };
+                palette = parse_palette_entries_map(
+                    palette_entries,
+                    &format!("{pointer}/palette"),
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    diagnostics,
+                );
+            }
+            unknown => {
+                ok = false;
+                diagnostics.push(envelope::unknown_key(
+                    unknown,
+                    sub,
+                    pointer,
+                    "an input",
+                    INPUT_KEYS,
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                ));
+            }
+        }
+    }
+    let Some(path) = path else {
+        if !entries.iter().any(|sub| sub.key == "path") {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    format!("an input mapping is missing `path` (line {line})"),
+                )
+                .with_path(pointer.to_string())
+                .with_help(INPUT_FORMS_HELP),
+            );
+        }
+        return None;
+    };
+    ok.then_some(AtlasSourceInput {
+        path,
+        name,
+        palette,
+    })
 }
 
 /// Parses a sequence of strings.
@@ -1066,8 +1241,9 @@ fn parse_hold(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -> 
 // --- Validate -----------------------------------------------------------------------------------
 
 /// Validates semantic invariants of an already-parsed [`AtlasSourceDocument`] (`L1153`):
-/// `pixels_per_unit` finite and positive, a `name` that is a plain file stem, a non-empty `inputs` list of non-empty paths, and
-/// well-shaped flipbooks.
+/// `pixels_per_unit` finite and positive, a `name` that is a plain file stem, a non-empty `inputs`
+/// list of non-empty paths whose optional `name` is one plain segment and whose optional `palette`
+/// is valid (and absent on a loose PNG), and well-shaped flipbooks.
 ///
 /// Flipbook frame *names* are deliberately not resolved here: an atlas source has not read the
 /// sprite documents its inputs name, so it cannot know which frames exist. That check belongs to the
@@ -1098,19 +1274,63 @@ pub(crate) fn validate_source(doc: &AtlasSourceDocument) -> Vec<Diagnostic> {
         );
     }
     for (index, input) in doc.inputs.iter().enumerate() {
-        if input.is_empty() {
-            diagnostics.push(
-                Diagnostic::new(
-                    code::SPRITE_DOCUMENT_STRUCTURE,
-                    format!("input {index} is an empty path"),
-                )
-                .with_path(format!("/inputs/{index}"))
-                .with_help("name a `.sprite.yaml` document or a `.png`, relative to this file"),
-            );
-        }
+        validate_input(input, index, &mut diagnostics);
     }
     validate_flipbooks(&doc.flipbooks, None, &mut diagnostics);
     diagnostics
+}
+
+/// Validates one input: a non-empty path, a `name` that is one plain segment, valid palette entries,
+/// and no palette on a loose PNG.
+fn validate_input(input: &AtlasSourceInput, index: usize, diagnostics: &mut Vec<Diagnostic>) {
+    let pointer = format!("/inputs/{index}");
+    if input.path.is_empty() {
+        diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!("input {index} is an empty path"),
+            )
+            .with_path(pointer.clone())
+            .with_help("name a `.sprite.yaml` document or a `.png`, relative to this file"),
+        );
+    }
+    if let Some(name) = &input.name
+        && (name.is_empty() || name.contains('/'))
+    {
+        diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!("input {index}'s `name` `{name}` is empty or contains `/`"),
+            )
+            .with_path(format!("{pointer}/name"))
+            .with_help(
+                "the prefix is joined to each frame name with `/`, so it is one plain segment \
+                 such as `ship-red`",
+            ),
+        );
+    }
+    validate_palette_entries(
+        &input.palette,
+        &format!("{pointer}/palette"),
+        code::SPRITE_DOCUMENT_STRUCTURE,
+        diagnostics,
+    );
+    if !input.palette.is_empty() && input.path.to_ascii_lowercase().ends_with(".png") {
+        diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!(
+                    "input {index} is a loose PNG with a `palette`; a loose PNG has no glyphs to \
+                     recolour"
+                ),
+            )
+            .with_path(format!("{pointer}/palette"))
+            .with_help(
+                "remove the `palette`, or point the input at a `.sprite.yaml` document; `name` \
+                 alone is fine on a PNG",
+            ),
+        );
+    }
 }
 
 /// Validates semantic invariants of an already-parsed [`AtlasDocument`] (`L1153`): a non-empty
@@ -1377,8 +1597,23 @@ pub(crate) fn emit_source(doc: &AtlasSourceDocument) -> String {
         out.push_str("inputs:\n");
         for input in &doc.inputs {
             out.push_str("  - ");
-            out.push_str(&scalar_string(input));
+            if input.is_plain() {
+                out.push_str(&scalar_string(&input.path));
+                out.push('\n');
+                continue;
+            }
+            out.push_str("path: ");
+            out.push_str(&scalar_string(&input.path));
             out.push('\n');
+            if let Some(name) = &input.name {
+                out.push_str("    name: ");
+                out.push_str(&scalar_string(name));
+                out.push('\n');
+            }
+            if !input.palette.is_empty() {
+                out.push_str("    palette:\n");
+                emit_palette_entries(&mut out, &input.palette, "      ");
+            }
         }
     }
 
@@ -1491,6 +1726,14 @@ pixels_per_unit: 16.0
 filter: linear
 inputs:
   - sprites/ship.sprite.yaml
+  - path: sprites/ship.sprite.yaml
+    name: ship-red
+    palette:
+      o:
+        color: \"#ff2020\"
+      x:
+        color: \"#00ff00\"
+        emissive: 2.0
   - fx/explosion.png
 flipbooks:
   - name: ship/fly
@@ -1598,6 +1841,88 @@ regions:
     fn the_good_source_round_trips_byte_identically() {
         let doc = check_source(GOOD_SOURCE).expect("the atlas source is valid");
         assert_eq!(emit_source(&doc), GOOD_SOURCE);
+    }
+
+    #[test]
+    fn a_mapping_input_parses_its_name_and_palette() {
+        let doc = check_source(GOOD_SOURCE).expect("the atlas source is valid");
+        assert_eq!(
+            doc.inputs[0],
+            AtlasSourceInput::plain("sprites/ship.sprite.yaml")
+        );
+        let variant = &doc.inputs[1];
+        assert_eq!(variant.name.as_deref(), Some("ship-red"));
+        assert_eq!(variant.palette.len(), 2);
+        assert_eq!(variant.palette[0].glyph, "o");
+        assert_eq!(variant.palette[0].emissive, None);
+        assert_eq!(variant.palette[1].emissive, Some(2.0));
+    }
+
+    #[test]
+    fn a_path_only_mapping_emits_as_the_plain_string() {
+        let source = GOOD_SOURCE.replace(
+            "  - sprites/ship.sprite.yaml\n  - path",
+            "  - path: sprites/ship.sprite.yaml\n  - path",
+        );
+        let doc = check_source(&source).expect("the atlas source is valid");
+        assert_eq!(emit_source(&doc), GOOD_SOURCE);
+    }
+
+    #[test]
+    fn a_mapping_input_without_a_path_is_rejected() {
+        let source =
+            GOOD_SOURCE.replace("  - path: sprites/ship.sprite.yaml\n    name", "  - name");
+        let diagnostics = source_errors(&source);
+        assert_eq!(find(&diagnostics, "/inputs/1").code.as_str(), "L1153");
+    }
+
+    #[test]
+    fn an_unknown_input_key_suggests_the_nearest() {
+        let source = GOOD_SOURCE.replace("    name: ship-red", "    nmae: ship-red");
+        let diagnostics = source_errors(&source);
+        let diagnostic = find(&diagnostics, "/inputs/1/nmae");
+        assert_eq!(diagnostic.help.as_deref(), Some("nearest match is `name`"));
+    }
+
+    #[test]
+    fn a_non_mapping_input_palette_is_rejected() {
+        let source = GOOD_SOURCE.replace(
+            "    palette:\n      o:\n        color: \"#ff2020\"\n      x:\n        color: \"#00ff00\"\n        emissive: 2.0\n",
+            "    palette: red\n",
+        );
+        let diagnostics = source_errors(&source);
+        assert_eq!(
+            find(&diagnostics, "/inputs/1/palette").code.as_str(),
+            "L1153"
+        );
+    }
+
+    #[test]
+    fn an_input_name_with_a_slash_is_rejected() {
+        let diagnostics = source_errors(&GOOD_SOURCE.replace("name: ship-red", "name: a/b"));
+        assert_eq!(find(&diagnostics, "/inputs/1/name").code.as_str(), "L1153");
+    }
+
+    #[test]
+    fn a_palette_on_a_png_input_is_rejected() {
+        let source = GOOD_SOURCE.replace(
+            "  - fx/explosion.png\n",
+            "  - path: fx/explosion.PNG\n    palette:\n      o:\n        color: \"#ff2020\"\n",
+        );
+        let diagnostics = source_errors(&source);
+        assert_eq!(
+            find(&diagnostics, "/inputs/2/palette").code.as_str(),
+            "L1153"
+        );
+    }
+
+    #[test]
+    fn a_two_character_input_palette_glyph_is_rejected() {
+        let diagnostics = source_errors(&GOOD_SOURCE.replace("      o:\n", "      oo:\n"));
+        assert_eq!(
+            find(&diagnostics, "/inputs/1/palette/oo").code.as_str(),
+            "L1153"
+        );
     }
 
     #[test]

@@ -7,8 +7,9 @@
 //! [`ludion_font::bake::bake`] into `<stem>.font.yaml`; a `kind: atlas-source` document is the
 //! sprite path below.
 //!
-//! The atlas path reads a `kind: atlas-source` document, resolves each `inputs:` entry **relative to the source file's
-//! directory**, bakes every sprite document and decodes every loose PNG, hands them to the pure,
+//! The atlas path reads a `kind: atlas-source` document, resolves each `inputs:` entry (a path, or a
+//! `{ path, name?, palette? }` variant that renames its regions and recolours glyphs) **relative to
+//! the source file's directory**, bakes every sprite document and decodes every loose PNG, hands them to the pure,
 //! IO-free [`ludion_sprite::pack`], and writes the committed pair — `<stem>.png` beside
 //! `<stem>.atlas.yaml`. Deterministic: the same inputs write byte-identical files, which is the
 //! property the drift gate (`scripts/atlas-drift.mjs`) leans on.
@@ -25,7 +26,7 @@ use ludion_assets::Image;
 use ludion_core::atomic::write_all_atomic;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
-use ludion_scene::{AtlasSourceDocument, FontMode};
+use ludion_scene::{AtlasSourceDocument, AtlasSourceInput, FontMode};
 use ludion_sprite::{AtlasInput, AtlasInputFrame, FrameImage};
 
 use crate::diagnostic;
@@ -339,7 +340,7 @@ fn load_inputs(
     let mut diagnostics = Vec::new();
 
     for (index, entry) in doc.inputs.iter().enumerate() {
-        let path = source_dir.join(entry);
+        let path = source_dir.join(&entry.path);
         let pointer = format!("/inputs/{index}");
         let extension = path
             .extension()
@@ -347,8 +348,8 @@ fn load_inputs(
             .unwrap_or_default();
 
         let loaded = match extension.as_str() {
-            "yaml" | "yml" => load_sprite(&path, &pointer),
-            "png" => load_png(&path, &pointer),
+            "yaml" | "yml" => load_sprite(&path, entry, &pointer),
+            "png" => load_png(&path, entry, &pointer),
             _ => Err(vec![unsupported_input(&path, &pointer)]),
         };
         match loaded {
@@ -367,7 +368,11 @@ fn load_inputs(
 /// Bakes one `kind: sprite` input. Its diagnostics point into the *sprite* document, not the atlas
 /// source, so each message is prefixed with the input file that raised it — otherwise a pointer
 /// like `/frames/idle` would read as a pointer into the source being compiled.
-fn load_sprite(path: &Path, pointer: &str) -> Result<AtlasInput, Vec<Diagnostic>> {
+fn load_sprite(
+    path: &Path,
+    input: &AtlasSourceInput,
+    pointer: &str,
+) -> Result<AtlasInput, Vec<Diagnostic>> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| vec![missing_input(path, pointer, &error)])?;
     let doc =
@@ -375,15 +380,23 @@ fn load_sprite(path: &Path, pointer: &str) -> Result<AtlasInput, Vec<Diagnostic>
     // A `palette: { from }` include is resolved into a concrete inline palette before the bake sees
     // it — so an included and an equivalent inline sprite bake to byte-identical frames, and the bake
     // stays unaware includes exist. The resolved document faces `bake`'s own full re-validation next.
-    let doc = ludion_engine::resolve_sprite_palette(path, doc)
+    let mut doc = ludion_engine::resolve_sprite_palette(path, doc)
         .map_err(|diagnostics| from_input(path, diagnostics))?;
+    // A variant recolours the resolved palette. The rows are fixed, so a glyph the palette lacks is a
+    // typo; the include merge would add it silently, so it is refused first.
+    let dead = dead_glyphs(&doc, input, path, pointer);
+    if !dead.is_empty() {
+        return Err(dead);
+    }
+    ludion_scene::apply_sprite_palette_overrides(&mut doc.palette, &input.palette);
     let frames = ludion_sprite::bake(&doc).map_err(|diagnostics| from_input(path, diagnostics))?;
 
-    let base = doc
-        .name
-        .as_deref()
-        .filter(|name| !name.is_empty())
-        .map_or_else(|| document_stem(path, ".sprite"), str::to_string);
+    let base = input.name.clone().unwrap_or_else(|| {
+        doc.name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .map_or_else(|| document_stem(path, ".sprite"), str::to_string)
+    });
     Ok(AtlasInput {
         base,
         frames: frames
@@ -397,9 +410,59 @@ fn load_sprite(path: &Path, pointer: &str) -> Result<AtlasInput, Vec<Diagnostic>
     })
 }
 
+/// One `L1153` per `input.palette` glyph the sprite's resolved palette does not define, pointing at the
+/// override in the atlas source (not prefixed by `from_input`: the pointer is into the source).
+fn dead_glyphs(
+    doc: &ludion_scene::SpriteDocument,
+    input: &AtlasSourceInput,
+    path: &Path,
+    pointer: &str,
+) -> Vec<Diagnostic> {
+    let have: Vec<&str> = doc
+        .palette
+        .iter()
+        .map(|entry| entry.glyph.as_str())
+        .collect();
+    input
+        .palette
+        .iter()
+        .filter(|over| !have.contains(&over.glyph.as_str()))
+        .map(|over| {
+            let glyphs = have
+                .iter()
+                .map(|glyph| format!("`{glyph}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let nearest = ludion_core::suggest::nearest(&over.glyph, have.iter().copied())
+                .map_or_else(String::new, |glyph| format!("did you mean `{glyph}`? "));
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!(
+                    "the variant recolours `{}`, but `{}`'s palette has no `{}`",
+                    over.glyph,
+                    path.display(),
+                    over.glyph
+                ),
+            )
+            .with_path(format!(
+                "{pointer}/palette/{}",
+                ludion_core::diagnostics::pointer_token(&over.glyph)
+            ))
+            .with_help(format!(
+                "{nearest}the sprite's palette has the glyphs {glyphs}; a variant recolours \
+                 existing glyphs, it cannot add one"
+            ))
+        })
+        .collect()
+}
+
 /// Decodes one loose-PNG input: its whole image is a single region named by the file stem, pivoted
 /// at its centre (the packer's default anchor — a PNG carries no authored pivot).
-fn load_png(path: &Path, pointer: &str) -> Result<AtlasInput, Vec<Diagnostic>> {
+fn load_png(
+    path: &Path,
+    input: &AtlasSourceInput,
+    pointer: &str,
+) -> Result<AtlasInput, Vec<Diagnostic>> {
     let bytes = std::fs::read(path).map_err(|error| vec![missing_input(path, pointer, &error)])?;
     let label = path.display().to_string();
     let (width, height, rgba) =
@@ -411,10 +474,11 @@ fn load_png(path: &Path, pointer: &str) -> Result<AtlasInput, Vec<Diagnostic>> {
         hash: ludion_assets::content_hash(&bytes),
     };
     Ok(AtlasInput {
-        base: path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+        base: input.name.clone().unwrap_or_else(|| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        }),
         frames: vec![AtlasInputFrame {
             name: None,
             pivot: [f64::from(width) / 2.0, f64::from(height) / 2.0],

@@ -1,6 +1,8 @@
 //! The atlas packer: its pinned layout, its geometric invariants, and the document it derives.
 
-use ludion_scene::{AtlasFilter, AtlasSourceDocument, Flipbook, check_atlas, emit_atlas};
+use ludion_scene::{
+    AtlasFilter, AtlasSourceDocument, AtlasSourceInput, Flipbook, check_atlas, emit_atlas,
+};
 use ludion_sprite::{AtlasBake, AtlasInput, AtlasInputFrame, FrameImage, pack};
 
 /// A frame filled with one opaque colour, so a gutter's provenance is readable from its bytes.
@@ -35,9 +37,9 @@ fn source(flipbooks: Vec<Flipbook>) -> AtlasSourceDocument {
         pixels_per_unit: 16.0,
         filter: AtlasFilter::Nearest,
         inputs: vec![
-            "a.sprite.yaml".to_string(),
-            "b.sprite.yaml".to_string(),
-            "c.png".to_string(),
+            AtlasSourceInput::plain("a.sprite.yaml"),
+            AtlasSourceInput::plain("b.sprite.yaml"),
+            AtlasSourceInput::plain("c.png"),
         ],
         flipbooks,
     }

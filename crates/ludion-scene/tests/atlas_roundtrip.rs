@@ -10,9 +10,9 @@
 use std::collections::BTreeMap;
 
 use ludion_scene::{
-    AtlasDocument, AtlasFilter, AtlasRegion, AtlasSourceDocument, Flipbook, check_atlas,
-    check_atlas_source, emit_atlas, emit_atlas_source, parse_atlas, parse_atlas_source,
-    validate_atlas, validate_atlas_source,
+    AtlasDocument, AtlasFilter, AtlasRegion, AtlasSourceDocument, AtlasSourceInput, Flipbook,
+    SpritePaletteEntry, check_atlas, check_atlas_source, emit_atlas, emit_atlas_source,
+    parse_atlas, parse_atlas_source, validate_atlas, validate_atlas_source,
 };
 use proptest::prelude::*;
 #[path = "support/deterministic.rs"]
@@ -177,6 +177,66 @@ fn atlas_doc() -> impl Strategy<Value = AtlasDocument> {
         )
 }
 
+/// A hex-exact colour (written as hex) or arbitrary unit floats (written as the legacy sequence),
+/// so both writer branches run.
+fn color() -> impl Strategy<Value = [f64; 4]> {
+    prop_oneof![
+        (0.0f64..=1.0, 0.0f64..=1.0, 0.0f64..=1.0, 0.0f64..=1.0)
+            .prop_map(|(r, g, b, a)| [r, g, b, a]),
+        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(r, g, b, a)| {
+            let hex = format!("#{r:02x}{g:02x}{b:02x}{a:02x}");
+            ludion_core::color::parse_hex(&hex)
+                .expect("eight hex digits")
+                .map(f64::from)
+        }),
+    ]
+}
+
+/// A glyph-sorted, glyph-unique override palette of 0–2 entries.
+fn override_palette() -> impl Strategy<Value = Vec<SpritePaletteEntry>> {
+    proptest::collection::btree_map(
+        prop_oneof![Just("a"), Just("o"), Just("#")],
+        (color(), proptest::option::of(0.0f64..4.0)),
+        0..3,
+    )
+    .prop_map(|entries| {
+        entries
+            .into_iter()
+            .map(|(glyph, (color, emissive))| SpritePaletteEntry {
+                glyph: glyph.to_string(),
+                color,
+                emissive,
+            })
+            .collect()
+    })
+}
+
+/// A plain input, or a PNG with an optional `name`, or a sprite document variant. A variant with no
+/// name and no palette is a plain input, so it is generated as one.
+fn source_input() -> impl Strategy<Value = AtlasSourceInput> {
+    prop_oneof![
+        portable("[a-z]{1,5}/[a-z]{1,5}[.]png").prop_map(AtlasSourceInput::plain),
+        (
+            portable("[a-z]{1,5}/[a-z]{1,5}[.]png"),
+            portable("[a-z-]{1,6}"),
+        )
+            .prop_map(|(path, name)| AtlasSourceInput {
+                name: Some(name),
+                ..AtlasSourceInput::plain(path)
+            }),
+        (
+            portable("[a-z]{1,5}/[a-z]{1,5}[.]sprite[.]yaml"),
+            proptest::option::of(portable("[a-z-]{1,6}")),
+            override_palette(),
+        )
+            .prop_map(|(path, name, palette)| AtlasSourceInput {
+                path,
+                name,
+                palette,
+            }),
+    ]
+}
+
 /// A consistent [`AtlasSourceDocument`]. Flipbook frame names are unconstrained here on purpose:
 /// this family deliberately does not resolve them (only the bake has read the inputs).
 fn atlas_source_doc() -> impl Strategy<Value = AtlasSourceDocument> {
@@ -184,7 +244,7 @@ fn atlas_source_doc() -> impl Strategy<Value = AtlasSourceDocument> {
         proptest::option::of(portable("[a-z]{1,6}")),
         0.5f64..64.0,
         filter(),
-        proptest::collection::vec(portable("[a-z]{1,5}/[a-z]{1,5}[.]png"), 1..4),
+        proptest::collection::vec(source_input(), 1..4),
         proptest::collection::vec(portable("[a-z]{1,5}/[a-z]{1,5}"), 1..4),
         any::<bool>(),
     )

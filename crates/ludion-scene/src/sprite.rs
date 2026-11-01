@@ -1217,9 +1217,7 @@ fn parse_patches(
                             format!("patch {index} is missing its required `at`"),
                         )
                         .with_path(item_pointer.clone())
-                        .with_help(
-                            "add the patch's top-left texel:\n  at:\n    - <x>\n    - <y>",
-                        ),
+                        .with_help("add the patch's top-left texel:\n  at:\n    - <x>\n    - <y>"),
                     );
                 }
                 if rows.is_none() {
@@ -2867,15 +2865,23 @@ fn emit_palette_include(out: &mut String, include: &SpritePaletteInclude) {
         return;
     }
     out.push_str("  overrides:\n");
-    let mut overrides = include.overrides.clone();
-    overrides.sort_by(|a, b| a.glyph.cmp(&b.glyph));
-    for entry in &overrides {
-        out.push_str("    ");
+    emit_palette_entries(out, &include.overrides, "    ");
+}
+
+/// Writes palette entries glyph-sorted, each glyph key at `indent` and its `color`/`emissive` two
+/// spaces deeper.
+pub(crate) fn emit_palette_entries(out: &mut String, entries: &[SpritePaletteEntry], indent: &str) {
+    let mut entries = entries.to_vec();
+    entries.sort_by(|a, b| a.glyph.cmp(&b.glyph));
+    let inner = format!("{indent}  ");
+    for entry in &entries {
+        out.push_str(indent);
         out.push_str(&scalar_string(&entry.glyph));
         out.push_str(":\n");
-        emit_color_value(out, "      ", "color", entry.color);
+        emit_color_value(out, &inner, "color", entry.color);
         if let Some(emissive) = entry.emissive {
-            out.push_str("      emissive: ");
+            out.push_str(&inner);
+            out.push_str("emissive: ");
             out.push_str(&format_float(emissive));
             out.push('\n');
         }
@@ -2888,19 +2894,7 @@ pub(crate) fn emit_palette(out: &mut String, palette: &[SpritePaletteEntry]) {
         return;
     }
     out.push_str("palette:\n");
-    let mut palette = palette.to_vec();
-    palette.sort_by(|a, b| a.glyph.cmp(&b.glyph));
-    for entry in &palette {
-        out.push_str("  ");
-        out.push_str(&scalar_string(&entry.glyph));
-        out.push_str(":\n");
-        emit_color_value(out, "    ", "color", entry.color);
-        if let Some(emissive) = entry.emissive {
-            out.push_str("    emissive: ");
-            out.push_str(&format_float(emissive));
-            out.push('\n');
-        }
-    }
+    emit_palette_entries(out, palette, "  ");
 }
 
 fn emit_frames(out: &mut String, frames: &[SpriteFrame]) {

@@ -1052,7 +1052,7 @@ fn run_atlas_source(mut reporter: Reporter, source: &str) -> ExitCode {
         "name": atlas.name,
         "pixels_per_unit": atlas.pixels_per_unit,
         "filter": filter_keyword(atlas.filter),
-        "inputs": atlas.inputs,
+        "inputs": atlas.inputs.iter().map(|input| input.path.as_str()).collect::<Vec<_>>(),
         "flipbooks": atlas.flipbooks.len(),
     });
     reporter.ok(fields, || {
@@ -1071,7 +1071,10 @@ fn run_atlas_source(mut reporter: Reporter, source: &str) -> ExitCode {
             if atlas.flipbooks.len() == 1 { "" } else { "s" },
         );
         for input in &atlas.inputs {
-            println!("  input {input}");
+            match &input.name {
+                Some(name) => println!("  input {} as {name}", input.path),
+                None => println!("  input {}", input.path),
+            }
         }
     })
 }

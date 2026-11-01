@@ -78,12 +78,35 @@ flipbooks:
 |---|---|
 | `pixels_per_unit` | required, finite and `> 0` — how many texels of this art span one world unit, the way a voxel model declares `scale:` |
 | `filter` | `nearest` (default) or `linear`. Point sampling is the default because a linear filter on pixel art is the commonest way crisp source art arrives on screen blurred |
-| `inputs` | required, non-empty, each path relative to this file. A `.yaml`/`.yml` **sprite document** contributes one region per frame; a `.png` contributes its whole image as one region, pivoted at its centre. Any other extension is refused |
+| `inputs` | required, non-empty, each path relative to this file. A `.yaml`/`.yml` **sprite document** contributes one region per frame; a `.png` contributes its whole image as one region, pivoted at its centre. Any other extension is refused. An entry may be a mapping `{ path, name?, palette? }` — see *Recolour variants* |
 | `flipbooks` | optional. `name` (unique), `frames` (non-empty, region names), `fps` (`> 0`), `loop` (default `true`), optional `hold` — one integer `>= 1` per frame, so tick quantization is exact |
 
 **A region's name is minted, not authored:** `<sprite document name>/<frame name>` for a sprite
 document (the document's `name:`, else its file stem), and the file stem alone for a loose PNG. Two
 inputs minting the same name is `L1153` at the offending `/inputs/<i>`.
+
+**Recolour variants.** One sprite document may be an input any number of times; `name` replaces the
+minted prefix and `palette` overrides glyph colours on top of the sprite's own (resolved) palette,
+exactly like a sprite's `palette: { from, overrides }`:
+
+```yaml
+inputs:
+  - ship.sprite.yaml
+  - path: ship.sprite.yaml
+    name: ship-red          # mints ship-red/idle, ship-red/bank-left
+    palette:
+      o:
+        color: "#ff2020"
+flipbooks:
+  - name: ship-red/fly      # a variant's clips are ordinary entries
+    frames:
+      - ship-red/idle
+      - ship-red/bank-left
+    fps: 8.0
+```
+
+`name` is one plain segment (no `/`). A glyph the sprite's palette lacks is `L1153` at
+`/inputs/<i>/palette/<glyph>` — the rows are fixed, so it is a typo. A `palette` on a `.png` is `L1153`.
 
 **Flipbooks are data the atlas carries.** They are parsed, checked against the regions the inputs
 actually produce (a name that resolves to nothing is `L1153` with a nearest match), and written onto

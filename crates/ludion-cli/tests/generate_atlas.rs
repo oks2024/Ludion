@@ -331,3 +331,100 @@ fn an_included_palette_bakes_to_the_inline_bytes() {
         "and a byte-identical atlas document"
     );
 }
+
+/// Rewrites the staged atlas source's `inputs:` to `inputs_yaml` (a block of `  - …` lines) and
+/// optionally appends `extra` (more top-level keys), keeping the rest of the fixture.
+fn with_inputs(source: &Path, inputs_yaml: &str, extra: &str) {
+    let text = std::fs::read_to_string(source).unwrap();
+    let head = text.split("inputs:").next().unwrap();
+    std::fs::write(source, format!("{head}inputs:\n{inputs_yaml}{extra}")).unwrap();
+}
+
+/// The texels of the region `name` in the baked `ship.png`.
+fn region_texels(dir: &Path, name: &str) -> (u32, u32, Vec<[u8; 4]>) {
+    let doc =
+        ludion_scene::check_atlas(&std::fs::read_to_string(dir.join("ship.atlas.yaml")).unwrap())
+            .expect("the generated atlas validates");
+    let [x, y, w, h] = doc
+        .region(name)
+        .unwrap_or_else(|| panic!("no region {name}"))
+        .rect;
+    let png = std::fs::read(dir.join("ship.png")).unwrap();
+    let (width, _, rgba) = ludion_assets::decode_png(&png, "ship.png").unwrap();
+    let mut out = Vec::new();
+    for row in y..y + h {
+        for col in x..x + w {
+            let at = ((row * width + col) * 4) as usize;
+            out.push([rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]);
+        }
+    }
+    (w, h, out)
+}
+
+/// A variant input mints its own region prefix and recolours only the glyph it overrides: the plain
+/// and the recoloured region are the same size, and every texel that differs is a recoloured one.
+#[test]
+fn a_variant_mints_its_own_prefix_and_recolours() {
+    let source = staged("atlas_variant");
+    let dir = source.parent().unwrap().to_path_buf();
+    // The fixture's outline and shadow effects repaint the `o` texels (they sit on the silhouette
+    // edge), so the scratch copy drops the effects to make the recolour exactly visible.
+    let sprite_path = dir.join("ship.sprite.yaml");
+    let sprite = std::fs::read_to_string(&sprite_path).unwrap();
+    std::fs::write(&sprite_path, sprite.split("effects:").next().unwrap()).unwrap();
+    with_inputs(
+        &source,
+        "  - ship.sprite.yaml\n  - path: ship.sprite.yaml\n    name: ship-red\n    palette:\n      o:\n        color: \"#ff0000\"\n",
+        "flipbooks:\n  - name: ship-red/fly\n    frames:\n      - ship-red/idle\n      - ship-red/bank-left\n    fps: 8.0\n",
+    );
+    let output = generate(&source);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let (w, h, plain) = region_texels(&dir, "ship/idle");
+    let (rw, rh, red) = region_texels(&dir, "ship-red/idle");
+    assert_eq!((w, h), (rw, rh), "a variant is the same size as its base");
+    let differing: Vec<usize> = (0..plain.len()).filter(|&i| plain[i] != red[i]).collect();
+    let width = w as usize;
+    // The idle frame's last row is `..o..o..`: those two texels, and only those, change.
+    assert_eq!(
+        differing,
+        vec![5 * width + 2, 5 * width + 5],
+        "exactly the `o` texels recolour"
+    );
+    let atlas = std::fs::read_to_string(dir.join("ship.atlas.yaml")).unwrap();
+    let atlas = ludion_scene::check_atlas(&atlas).unwrap();
+    assert!(atlas.flipbook("ship-red/fly").is_some());
+}
+
+/// A second input of the same document without a distinct `name` collides on the minted regions.
+#[test]
+fn a_variant_without_a_name_collides_with_the_plain_input() {
+    let source = staged("atlas_variant_collision");
+    with_inputs(
+        &source,
+        "  - ship.sprite.yaml\n  - path: ship.sprite.yaml\n    palette:\n      o:\n        color: \"#ff0000\"\n",
+        "",
+    );
+    let output = generate(&source);
+    assert!(!output.status.success());
+    let text = stderr(&output);
+    assert!(text.contains("L1153"), "stderr was: {text}");
+    assert!(text.contains("/inputs/1"), "stderr was: {text}");
+    assert!(text.contains("ship/idle"), "stderr was: {text}");
+}
+
+/// A variant recolouring a glyph the sprite's palette lacks is a typo, not an addition.
+#[test]
+fn a_variant_recolouring_an_absent_glyph_is_refused() {
+    let source = staged("atlas_variant_dead_glyph");
+    with_inputs(
+        &source,
+        "  - ship.sprite.yaml\n  - path: ship.sprite.yaml\n    name: ship-red\n    palette:\n      z:\n        color: \"#ff0000\"\n",
+        "",
+    );
+    let output = generate(&source);
+    assert!(!output.status.success());
+    let text = stderr(&output);
+    assert!(text.contains("L1153"), "stderr was: {text}");
+    assert!(text.contains("/inputs/1/palette/z"), "stderr was: {text}");
+}

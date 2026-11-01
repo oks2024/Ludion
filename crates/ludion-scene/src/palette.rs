@@ -220,6 +220,22 @@ pub(crate) fn validate(doc: &PaletteDocument) -> Vec<Diagnostic> {
 
 // --- Resolve ------------------------------------------------------------------------------------
 
+/// Merges `overrides` into `palette`: a glyph the palette defines is replaced, one it does not is
+/// added, and the result is sorted by glyph. The one merge behind a sprite's `palette: { from,
+/// overrides }` include and an atlas source's per-input `palette`.
+pub(crate) fn apply_overrides(
+    palette: &mut Vec<SpritePaletteEntry>,
+    overrides: &[SpritePaletteEntry],
+) {
+    for over in overrides {
+        match palette.iter_mut().find(|entry| entry.glyph == over.glyph) {
+            Some(entry) => *entry = over.clone(),
+            None => palette.push(over.clone()),
+        }
+    }
+    palette.sort_by(|a, b| a.glyph.cmp(&b.glyph));
+}
+
 /// Resolves a sprite document's shared-palette include against the palette document `palette_source`:
 /// the referenced palette with the sprite's local `overrides` applied on top (a glyph the referenced
 /// palette defines is replaced, one it does not is added), producing an ordinary inline sprite
@@ -245,13 +261,7 @@ pub(crate) fn resolve(
     }
 
     let mut merged = palette_doc.palette;
-    for over in &include.overrides {
-        match merged.iter_mut().find(|entry| entry.glyph == over.glyph) {
-            Some(entry) => *entry = over.clone(),
-            None => merged.push(over.clone()),
-        }
-    }
-    merged.sort_by(|a, b| a.glyph.cmp(&b.glyph));
+    apply_overrides(&mut merged, &include.overrides);
 
     let mut resolved = doc.clone();
     resolved.palette = merged;

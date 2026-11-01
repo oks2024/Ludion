@@ -190,7 +190,8 @@ fn collect<'a>(inputs: &'a [AtlasInput], diagnostics: &mut Vec<Diagnostic>) -> V
                     format!("two inputs both produce the region `{name}`"),
                     format!("/inputs/{index}"),
                     "region names are `<sprite document>/<frame>` or a PNG's file stem; rename \
-                     one of the two inputs, or give the sprite document a distinct `name:`",
+                     one of the two inputs, or give one a distinct `name:` (`- { path: …, name: … }` \
+                     on the atlas source, or the sprite's own `name:`)",
                 ));
                 continue;
             }
