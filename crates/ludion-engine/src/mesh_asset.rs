@@ -423,7 +423,7 @@ pub(crate) fn decode(doc: &MeshDocument, hash: u64) -> MeshData {
 /// TRS (mirrors [`MeshSkin::rest_model_matrices`]'s per-joint `local`, narrowed here instead of
 /// composed with a parent), `rest` is [`MeshSkin::rest_palette`] (`rest_model × inverse_bind`,
 /// already `f64`-composed).
-fn decode_skin_joints(skin: &MeshSkin) -> Vec<SkinJoint> {
+pub(crate) fn decode_skin_joints(skin: &MeshSkin) -> Vec<SkinJoint> {
     let narrow = |m: [f64; 16]| Mat4::from_cols_array(&m.map(|v| v as f32));
     skin.joints
         .iter()

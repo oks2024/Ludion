@@ -174,7 +174,7 @@ pub use motor::{
     MOTOR_STUCK, MOTOR_WALL, fits_character, move_character, move_character_with,
     probe_character_ground, resize_character, teleport_character,
 };
-pub use parent_joint::scene_parent_joint_diagnostics;
+pub use parent_joint::{posed_joint_world, scene_parent_joint_diagnostics};
 pub use path_follow::{
     FollowerMotion, PathFollower, PathMode, PathOrient, path_follow, path_follower_motion,
 };

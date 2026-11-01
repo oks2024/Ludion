@@ -13,12 +13,16 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::math::Trs;
-use ludion_core::math::glam::DMat4;
+use ludion_core::math::glam::{DMat4, Mat4, Vec3};
 use ludion_core::suggest;
-use ludion_ecs::{Parent, World};
+use ludion_core::time::{GameClock, SimTime};
+use ludion_ecs::{Parent, Phase, World};
+use ludion_renderer::SkinJoint;
 use ludion_scene::{MeshJoint, Scene, SceneEntity};
 
-use crate::components::{Mesh, MeshSource, ParentJoint};
+use crate::character::CharacterData;
+use crate::components::{Mesh, MeshSource, ParentJoint, SkinBone};
+use crate::hierarchy::{WorldPose, world_affine};
 use crate::skin_bone::{load_mesh_joints, named, skinned_mesh_path};
 
 /// Every `L1318`/`L1319` a scene's `ParentJoint` entities raise, collected across the whole scene
@@ -135,6 +139,16 @@ pub(crate) struct SkinRests {
     /// Keyed `asset:<path>` / `character:<path>`; `None` is a mesh with no skin or one that failed
     /// to load, cached as such.
     meshes: Mutex<BTreeMap<String, Option<Arc<JointRests>>>>,
+    /// The same keys: the decoded joints and the character's clips, for [`posed_joint_world`].
+    /// Separate from `meshes`, so a broken clip can never change a sim-side rest read.
+    posed: Mutex<BTreeMap<String, Option<Arc<SkinPoseData>>>>,
+}
+
+/// What the presentation read of a posed joint needs beyond the rest table: the skin's decoded
+/// joints (what the asset cache decodes) and its character, when it is one.
+struct SkinPoseData {
+    joints: Vec<SkinJoint>,
+    character: Option<Arc<CharacterData>>,
 }
 
 impl SkinRests {
@@ -142,7 +156,39 @@ impl SkinRests {
         Self {
             root,
             meshes: Mutex::new(BTreeMap::new()),
+            posed: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    fn pose_data(&self, shape: &MeshSource) -> Option<Arc<SkinPoseData>> {
+        let key = match shape {
+            MeshSource::Asset(path) => format!("asset:{path}"),
+            MeshSource::Character(path) => format!("character:{path}"),
+            _ => return None,
+        };
+        let mut posed = self.posed.lock().unwrap_or_else(PoisonError::into_inner);
+        posed
+            .entry(key)
+            .or_insert_with(|| self.load_pose_data(shape))
+            .clone()
+    }
+
+    fn load_pose_data(&self, shape: &MeshSource) -> Option<Arc<SkinPoseData>> {
+        let (path, character) = match shape {
+            MeshSource::Asset(path) => (path.clone(), None),
+            MeshSource::Character(rel) => {
+                let data = crate::character::load(&self.root, rel).ok()?;
+                (data.mesh.clone(), Some(Arc::new(data)))
+            }
+            _ => return None,
+        };
+        let skin = crate::skin_bone::load_mesh_document(&self.root, &path)
+            .ok()?
+            .skin?;
+        Some(Arc::new(SkinPoseData {
+            joints: crate::mesh_asset::decode_skin_joints(&skin),
+            character,
+        }))
     }
 
     /// `joint`'s rest model transform in the skin `shape` names; `None` for any miss. The rest shear
@@ -218,6 +264,120 @@ pub(crate) fn joint_rest(world: &World, node: EntityId) -> Option<Trs> {
     world
         .resource::<SkinRests>()?
         .rest(&mesh.shape, &joint.joint)
+}
+
+/// `joint`'s world pose on skin `skin` at `now`, as extract draws a `ParentJoint` child's joint
+/// level this frame: the skin's world transform times the joint's model transform in the pose the
+/// skin's palette shows (its `Animation` clip and crossfade, `hold` included, and any `SkinBone`
+/// followers). A skin with no `Animation` and no followers returns the rest pose. Compose the
+/// result with a local transform to place a presentation entity on a hand or a socket.
+///
+/// `Ok(None)` when `skin` is dead, has no `Transform`, is not a skinned mesh, or names no such
+/// joint. `now` is sim time; the world's `GameClock` maps it as extract does. Only the
+/// presentation and host phases may read it: a sim system is refused with `L0028`, because the
+/// answer comes from render-side arithmetic that is not part of the hashed state.
+///
+/// # Errors
+/// `L0028` when called from a sim system.
+///
+/// # Examples
+///
+/// ```
+/// use ludion_core::time::{SimTime, TickRate};
+/// use ludion_ecs::World;
+/// use ludion_engine::posed_joint_world;
+///
+/// let mut world = World::new();
+/// let not_a_skin = world.spawn();
+/// let now = SimTime::from_ticks(0, TickRate::DEFAULT);
+/// assert!(posed_joint_world(&world, not_a_skin, "hand", now).unwrap().is_none());
+/// ```
+#[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
+pub fn posed_joint_world(
+    world: &World,
+    skin: EntityId,
+    joint: &str,
+    now: SimTime,
+) -> Result<Option<WorldPose>, Diagnostic> {
+    if world.phase() == Phase::Sim {
+        return Err(Diagnostic::new(
+            code::PRESENTATION_BOUNDARY,
+            "`posed_joint_world` is a presentation read and cannot be called from a sim system",
+        )
+        .with_help("call it from a presentation system, or from the host after a step"));
+    }
+    if !world.is_alive(skin) {
+        return Ok(None);
+    }
+    let Some(mesh) = world.get::<Mesh>(skin).ok().flatten() else {
+        return Ok(None);
+    };
+    let Some(rests) = world.resource::<SkinRests>() else {
+        return Ok(None);
+    };
+    let Some(data) = rests.pose_data(&mesh.shape) else {
+        return Ok(None);
+    };
+    let Some(skin_affine) = world_affine(world, skin) else {
+        return Ok(None);
+    };
+    if !data.joints.iter().any(|j| j.name == joint) {
+        return Ok(None);
+    }
+    let now = world
+        .resource::<GameClock>()
+        .map_or(now, |clock| clock.game_time(now));
+    let skin_model = affine_mat4(&skin_affine);
+
+    let mut parts: Vec<(&str, Mat4)> = Vec::new();
+    for id in world.entities().chain(world.presentation_entities()) {
+        if !world.has::<SkinBone>(id) {
+            continue;
+        }
+        let Some(part) = world.get::<SkinBone>(id).ok().flatten() else {
+            continue;
+        };
+        if part.skin != skin || parts.iter().any(|(name, _)| *name == part.bone) {
+            continue;
+        }
+        if let Some(affine) = world_affine(world, id) {
+            parts.push((part.bone.as_str(), affine_mat4(&affine)));
+        }
+    }
+
+    let posed = crate::extract::posed_joint_model(
+        world,
+        skin,
+        &data.joints,
+        data.character.as_deref(),
+        skin_model,
+        Some(parts.as_slice()),
+        now,
+        joint,
+    );
+    let affine = match posed {
+        Some(model) => skin_affine.mul_affine(&crate::extract::mat4_affine(model)),
+        None => {
+            let Some(rest) = rests.rest(&mesh.shape, joint) else {
+                return Ok(None);
+            };
+            skin_affine.mul_affine(&rest.to_affine())
+        }
+    };
+    let cols = affine.cols.map(Vec3::from);
+    let perpendicular = |u: Vec3, v: Vec3| u.dot(v).abs() <= 1e-5 * u.length() * v.length();
+    Ok(Some(WorldPose {
+        trs: affine.to_trs_lossy(),
+        sheared: !(perpendicular(cols[0], cols[1])
+            && perpendicular(cols[1], cols[2])
+            && perpendicular(cols[2], cols[0])),
+    }))
+}
+
+/// An affine as a matrix: [`crate::extract::mat4_affine`]'s inverse.
+fn affine_mat4(affine: &ludion_core::math::Affine3) -> Mat4 {
+    let [x, y, z, t] = affine.cols.map(Vec3::from);
+    Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), t.extend(1.0))
 }
 
 /// `L1318` — the entity's `Parent` is not a skinned mesh, or it has none.

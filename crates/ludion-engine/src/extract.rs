@@ -44,9 +44,9 @@ use crate::character::CharacterData;
 use crate::components::{
     Animation, Camera, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
-    GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, ParticleEmitter, PointLight,
-    PostProcess, ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite, SpriteBlend,
-    Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
+    GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, ParentJoint, ParticleEmitter,
+    PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite,
+    SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText, pointer_token,
 };
 use crate::docs::DocStore;
 use crate::fonts::FontLibrary;
@@ -1037,23 +1037,6 @@ fn extract_inner(
     // per assembly path — the index of its first part — is the whole dedup index.
     let mut assembly_part_base: StableMap<String, usize> = StableMap::new();
 
-    // Every `SkinBone` part, grouped by the skin entity it names, in ascending entity order — so the
-    // first part naming a `(skin, bone)` pair wins if two ever do (the `L1196` case slipping past a
-    // hand-built world). A stale skin id, an unknown bone name, or a skin with no joints is never
-    // checked here: an entry the mesh loop's asset has no matching joint for is simply never matched
-    // by `posed_palette`, the documented runtime degrade to rest.
-    let mut skin_followers: StableMap<EntityId, Vec<(&str, Mat4)>> = StableMap::new();
-    for &id in &ids {
-        let Some(skin_bone) = get::<SkinBone>(world, id) else {
-            continue;
-        };
-        let part_world = render_pose(world, &mut poses, id).model();
-        let entries = skin_followers.entry(skin_bone.skin).or_default();
-        if !entries.iter().any(|(name, _)| *name == skin_bone.bone) {
-            entries.push((skin_bone.bone.as_str(), part_world));
-        }
-    }
-
     let mut meshes = Vec::with_capacity(placed.meshes.len());
     // The owning entity of each `meshes` entry, parallel to it: a drop shadow's caster exclusion.
     let mut mesh_owners: Vec<EntityId> = Vec::with_capacity(placed.meshes.len());
@@ -1211,31 +1194,17 @@ fn extract_inner(
                 MeshShape::Asset(idx) if !mesh_assets[idx].skin_joints.is_empty() => {
                     // Entry 0 is the renderer's identity, so an asset's own entries start at 1.
                     let offset = 1 + bone_palette.len() as u32;
-                    let joints = &mesh_assets[idx].skin_joints;
-                    let (pose, crossfade) = character.as_deref().map_or((None, None), |data| {
-                        character_pose(world, mesh.id, data, held_for(world, mesh.id, now))
-                    });
-                    match skin_followers.get(&mesh.id) {
-                        Some(followed) if !followed.is_empty() => {
-                            posed_palette(
-                                joints,
-                                mesh.model,
-                                followed,
-                                &mut palette_scratch,
-                                &mut bone_palette,
-                            );
-                        }
-                        _ if pose.is_none() && crossfade.is_none() => {
-                            bone_palette.extend(joints.iter().map(|joint| joint.rest));
-                        }
-                        _ => sampled_palette(
-                            joints,
-                            pose,
-                            crossfade.as_ref(),
-                            &mut palette_scratch,
-                            &mut bone_palette,
-                        ),
-                    }
+                    skin_palette(
+                        world,
+                        mesh.id,
+                        &mesh_assets[idx].skin_joints,
+                        character.as_deref(),
+                        mesh.model,
+                        placed.skin_followers.get(&mesh.id).map(Vec::as_slice),
+                        now,
+                        &mut palette_scratch,
+                        &mut bone_palette,
+                    );
                     offset
                 }
                 _ => 0,
@@ -1405,6 +1374,30 @@ struct BlendKeys {
     bullets: Vec<(InstanceKey, u32)>,
 }
 
+/// The entity whose blend delta moves `id`: the outermost parent across a resolved `ParentJoint`
+/// on the way up, else `id` itself. Only guards by presence, so a world without sockets records no
+/// access.
+fn socket_key(world: &World, id: EntityId) -> EntityId {
+    let mut key = id;
+    let mut node = id;
+    for _ in 0..=crate::hierarchy::MAX_HIERARCHY_DEPTH {
+        if !world.has::<ludion_ecs::Parent>(node) {
+            break;
+        }
+        let Some(&ludion_ecs::Parent(parent)) = get::<ludion_ecs::Parent>(world, node) else {
+            break;
+        };
+        if !world.is_alive(parent) {
+            break;
+        }
+        if crate::parent_joint::joint_rest(world, node).is_some() {
+            key = parent;
+        }
+        node = parent;
+    }
+    key
+}
+
 /// Fills `blend` from the keys extract collected: the pose table over every unique key, the snap
 /// set, and the camera. Reads the same `render_pose` the extract drew with.
 fn fill_blend(
@@ -1415,13 +1408,23 @@ fn fill_blend(
     camera_key: Option<EntityId>,
     keys: BlendKeys,
 ) {
-    let some =
-        |ids: Vec<EntityId>| -> Vec<Option<EntityId>> { ids.into_iter().map(Some).collect() };
+    // A socket child and its descendants take their skin's blend delta, never their own: the
+    // presenter then moves `skin_new × J × L` by the skin's delta, exactly as it moves the skin.
+    let some = |ids: Vec<EntityId>| -> Vec<Option<EntityId>> {
+        ids.into_iter()
+            .map(|id| Some(socket_key(world, id)))
+            .collect()
+    };
+    let optional = |ids: Vec<Option<EntityId>>| -> Vec<Option<EntityId>> {
+        ids.into_iter()
+            .map(|id| id.map(|id| socket_key(world, id)))
+            .collect()
+    };
     blend.meshes = some(keys.meshes);
-    blend.sprites = keys.sprites;
+    blend.sprites = optional(keys.sprites);
     blend.lights = some(keys.lights);
     blend.spot_lights = some(keys.spot_lights);
-    blend.texts = keys.texts;
+    blend.texts = optional(keys.texts);
     blend.ground_markers = some(keys.ground_markers);
     blend.drop_shadows = some(keys.drop_shadows);
     blend.decals = some(keys.decals);
@@ -2526,6 +2529,12 @@ pub(crate) struct Placed<'w> {
     pub(crate) lights: Vec<(EntityId, PointLightData)>,
     /// Spot lights, collected like `lights` and handed on in the same ascending-`EntityId` order.
     pub(crate) spot_lights: Vec<(EntityId, SpotLightData)>,
+    /// Every `SkinBone` part, grouped by the skin entity it names, in ascending entity order — so the
+    /// first part naming a `(skin, bone)` pair wins if two ever do (the `L1196` case slipping past a
+    /// hand-built world). A stale skin id, an unknown bone name, or a skin with no joints is never
+    /// checked here: an entry the mesh loop's asset has no matching joint for is simply never matched
+    /// by `posed_palette`, the documented runtime degrade to rest.
+    pub(crate) skin_followers: StableMap<EntityId, Vec<(&'w str, Mat4)>>,
 }
 
 /// One placed mesh: its entity, world transform, flat color, and unresolved geometry source. Like a
@@ -3031,9 +3040,22 @@ pub(crate) fn place<'w>(
         texts: Vec::new(),
         lights: Vec::new(),
         spot_lights: Vec::new(),
+        skin_followers: StableMap::new(),
     };
 
     prefab_part_poses(world, ids, assets, now, poses);
+
+    for &id in ids {
+        let Some(skin_bone) = get::<SkinBone>(world, id) else {
+            continue;
+        };
+        let part_world = render_pose(world, poses, id).model();
+        let entries = placed.skin_followers.entry(skin_bone.skin).or_default();
+        if !entries.iter().any(|(name, _)| *name == skin_bone.bone) {
+            entries.push((skin_bone.bone.as_str(), part_world));
+        }
+    }
+    pose_sockets(world, ids, assets, poses, &placed.skin_followers, now);
 
     for (index, &id) in ids.iter().enumerate() {
         let pose = render_pose(world, poses, id);
@@ -3361,6 +3383,154 @@ fn transform_matrix(xform: &Transform) -> Mat4 {
         rotation_quat(xform.rotation),
         Vec3::from(xform.translation),
     )
+}
+
+/// Appends skin `skin`'s bone-palette entries for this frame to `out`: the `SkinBone` followers'
+/// pose when `followed` names any ([`posed_palette`]), else its character's `Animation` clip and
+/// crossfade at the held `now` ([`sampled_palette`]), else each joint's precomposed rest entry.
+/// Returns whether `scratch` then holds the joints' posed model matrices (false on the rest path).
+/// The mesh loop and the socket pre-pass both call it, so a socket child and the skin it rides can
+/// never read two evaluations of one pose.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn skin_palette(
+    world: &World,
+    skin: EntityId,
+    joints: &[SkinJoint],
+    character: Option<&CharacterData>,
+    skin_model: Mat4,
+    followed: Option<&[(&str, Mat4)]>,
+    now: SimTime,
+    scratch: &mut Vec<Mat4>,
+    out: &mut Vec<Mat4>,
+) -> bool {
+    let (pose, crossfade) = character.map_or((None, None), |data| {
+        character_pose(world, skin, data, held_for(world, skin, now))
+    });
+    match followed {
+        Some(followed) if !followed.is_empty() => {
+            posed_palette(joints, skin_model, followed, scratch, out);
+            true
+        }
+        _ if pose.is_none() && crossfade.is_none() => {
+            out.extend(joints.iter().map(|joint| joint.rest));
+            false
+        }
+        _ => {
+            sampled_palette(joints, pose, crossfade.as_ref(), scratch, out);
+            true
+        }
+    }
+}
+
+/// `joint`'s posed model matrix in skin `skin`'s model space (the space of the joint's rest model
+/// transform), as [`skin_palette`] poses it this frame; `None` on the rest path or for an unknown
+/// joint, where the caller keeps the rest level.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn posed_joint_model(
+    world: &World,
+    skin: EntityId,
+    joints: &[SkinJoint],
+    character: Option<&CharacterData>,
+    skin_model: Mat4,
+    followed: Option<&[(&str, Mat4)]>,
+    now: SimTime,
+    joint: &str,
+) -> Option<Mat4> {
+    let index = joints.iter().position(|j| j.name == joint)?;
+    let (mut scratch, mut out) = (Vec::new(), Vec::new());
+    skin_palette(
+        world,
+        skin,
+        joints,
+        character,
+        skin_model,
+        followed,
+        now,
+        &mut scratch,
+        &mut out,
+    )
+    .then(|| scratch[index])
+}
+
+/// A matrix as the affine the hierarchy folds compose; [`RenderPose::world`]'s inverse.
+pub(crate) fn mat4_affine(m: Mat4) -> Affine3 {
+    Affine3 {
+        cols: [m.x_axis, m.y_axis, m.z_axis, m.w_axis].map(|c| [c.x, c.y, c.z]),
+    }
+}
+
+/// Poses every `ParentJoint` child's joint level in `poses` with the skin's posed joint model, so
+/// the child and everything below it draw at `skin world × posed joint × local`. Outer skins first
+/// (by ancestor depth), so a skin that is itself a socket child reads its parent's override. Silent
+/// on every miss: the mesh loop reports load errors, and a miss keeps the joint's rest level.
+///
+/// A node some lookup memoized before this pass keeps the rest level (a `SkinBone` part under a
+/// socket child, since the followers are built first).
+fn pose_sockets(
+    world: &World,
+    ids: &[EntityId],
+    assets: &mut dyn SceneAssets,
+    poses: &mut WorldAffines,
+    followers: &StableMap<EntityId, Vec<(&str, Mat4)>>,
+    now: SimTime,
+) {
+    let mut sockets: Vec<(usize, EntityId, EntityId)> = Vec::new();
+    for &id in ids {
+        if !world.has::<ParentJoint>(id) || !world.has::<ludion_ecs::Parent>(id) {
+            continue;
+        }
+        let Some(&ludion_ecs::Parent(skin)) = get::<ludion_ecs::Parent>(world, id) else {
+            continue;
+        };
+        let mut depth = 0;
+        let mut node = skin;
+        while depth <= crate::hierarchy::MAX_HIERARCHY_DEPTH
+            && world.has::<ludion_ecs::Parent>(node)
+        {
+            let Some(&ludion_ecs::Parent(up)) = get::<ludion_ecs::Parent>(world, node) else {
+                break;
+            };
+            depth += 1;
+            node = up;
+        }
+        sockets.push((depth, id, skin));
+    }
+    sockets.sort_by_key(|&(depth, id, _)| (depth, id));
+    for (_, id, skin) in sockets {
+        if !world.is_alive(skin) {
+            continue;
+        }
+        let Some(joint) = get::<ParentJoint>(world, id) else {
+            continue;
+        };
+        let Some(mesh) = get::<Mesh>(world, skin) else {
+            continue;
+        };
+        let (mesh_rel, character) = match &mesh.shape {
+            MeshSource::Asset(rel) => (rel.clone(), None),
+            MeshSource::Character(rel) => match assets.character(rel) {
+                Ok(data) => (data.mesh.clone(), Some(data)),
+                Err(_) => continue,
+            },
+            _ => continue,
+        };
+        let Ok(data) = assets.mesh(&mesh_rel) else {
+            continue;
+        };
+        let skin_model = render_pose(world, poses, skin).model();
+        if let Some(model) = posed_joint_model(
+            world,
+            skin,
+            &data.skin_joints,
+            character.as_deref(),
+            skin_model,
+            followers.get(&skin).map(Vec::as_slice),
+            now,
+            &joint.joint,
+        ) {
+            poses.set_posed_joint(id, mat4_affine(model));
+        }
+    }
 }
 
 /// Appends one skinned instance's bone-palette entries to `out`, one per `joints` entry

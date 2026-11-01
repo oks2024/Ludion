@@ -246,10 +246,13 @@ type Memo = (Option<Affine3>, u32);
 /// set before the first lookup of a batch (a memo would hold the stale fold). Only the batch that
 /// owns the table sees them: the extract batch (point and spot lights, rendered probes, decals,
 /// particles) follows, while a camera, the sun, the `probes` debug lines and colliders are built
-/// with a fresh table and draw from the stored pose.
+/// with a fresh table and draw from the stored pose. A `ParentJoint` child may likewise carry a
+/// **posed joint** ([`set_posed_joint`](WorldAffines::set_posed_joint)) that replaces its rest
+/// joint level, under the same set-before-first-lookup rule.
 pub(crate) struct WorldAffines {
     memo: SlotTable<Memo>,
     posed: SlotTable<Trs>,
+    posed_joint: SlotTable<Affine3>,
 }
 
 impl WorldAffines {
@@ -257,7 +260,13 @@ impl WorldAffines {
         Self {
             memo: SlotTable::new(),
             posed: SlotTable::new(),
+            posed_joint: SlotTable::new(),
         }
+    }
+
+    /// Poses `entity`'s `ParentJoint` level as `joint` for this batch, in place of the joint's rest.
+    pub(crate) fn set_posed_joint(&mut self, entity: EntityId, joint: Affine3) {
+        self.posed_joint.set(entity, joint);
     }
 
     /// Poses `entity`'s local transform as `trs` for this batch, in place of its stored `Transform`.
@@ -320,9 +329,10 @@ impl WorldAffines {
             // The joint level needs the node's parent in the folded chain: not the top of a walk
             // that broke off at a root or an invalid parent.
             if (step > 0 || base.is_some())
-                && let Some(joint) = crate::parent_joint::joint_rest(world, *node)
+                && let Some(joint) = self.posed_joint.get(*node).or_else(|| {
+                    crate::parent_joint::joint_rest(world, *node).map(|rest| rest.to_affine())
+                })
             {
-                let joint = joint.to_affine();
                 acc = Some(match acc {
                     None => joint,
                     Some(parent) => parent.mul_affine(&joint),
