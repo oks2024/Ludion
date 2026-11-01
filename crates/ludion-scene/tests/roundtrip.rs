@@ -117,20 +117,24 @@ fn instance_entity() -> impl Strategy<Value = SceneEntity> {
         .prop_map(|set| set.into_iter().collect::<Vec<_>>());
     (
         "[a-z]{1,6}/[a-z]{1,6}\\.prefab\\.yaml",
+        any::<bool>(),
         placement,
         overrides,
         removed,
     )
-        .prop_map(|(prefab, transform, overrides, removed)| SceneEntity {
-            name: Some("inst".to_string()),
-            instance: Some(Box::new(InstanceEntry {
-                prefab,
-                transform,
-                overrides,
-                removed,
-            })),
-            ..Default::default()
-        })
+        .prop_map(
+            |(prefab, presentation, transform, overrides, removed)| SceneEntity {
+                name: Some("inst".to_string()),
+                instance: Some(Box::new(InstanceEntry {
+                    prefab,
+                    presentation,
+                    transform,
+                    overrides,
+                    removed,
+                })),
+                ..Default::default()
+            },
+        )
 }
 
 const LAYER_POOL: [&str; 4] = ["dummy", "sling", "wall", "ghost"];

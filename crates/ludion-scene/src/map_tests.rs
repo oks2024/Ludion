@@ -1380,6 +1380,7 @@ fn instance_with_parent_override(name: &str, index: u64) -> SceneEntity {
     SceneEntity {
         instance: Some(Box::new(crate::InstanceEntry {
             prefab: "prefabs/p.yaml".to_string(),
+            presentation: false,
             transform: crate::InstanceTransform::default(),
             overrides: [(
                 "part".to_string(),

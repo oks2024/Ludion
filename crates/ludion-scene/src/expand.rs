@@ -22,13 +22,13 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::math::Trs;
 use ludion_core::suggest;
-use ludion_ecs::{Registry, World};
+use ludion_ecs::{ComponentInfo, Registry, World};
 use serde_json::Value;
 
 use crate::instantiate::{InstantiateOptions, instantiate_into, links_into};
 use crate::prefab::PrefabDocument;
 use crate::schema::SchemaCursor;
-use crate::validate::{Checker, Subject, cycle_diagnostic, hierarchy_cycles};
+use crate::validate::{Checker, Subject, cycle_diagnostic, hierarchy_cycles, presentation_refs};
 use crate::yaml::pointer_token;
 use crate::{InstanceEntry, Scene, SceneEntity, normalize_prefab_path, prefab};
 
@@ -118,10 +118,15 @@ pub(crate) fn expand(
     };
     // A loop closed across levels (an override parenting a part under an entity that parents back)
     // is invisible to either document alone.
-    let cycles: Vec<Diagnostic> = hierarchy_cycles(&expanded.scene, registry)
+    let mut cycles: Vec<Diagnostic> = hierarchy_cycles(&expanded.scene, registry)
         .iter()
         .map(|cycle| expanded.locate(cycle_diagnostic(&expanded.scene, cycle)))
         .collect();
+    cycles.extend(
+        presentation_refs(&expanded.scene, registry)
+            .into_iter()
+            .map(|refusal| expanded.locate(refusal)),
+    );
     if cycles.is_empty() {
         Ok(expanded)
     } else {
@@ -502,6 +507,8 @@ fn expand_level(
                 .then(|| offset + r.compact[position])
         };
         let mut paths = Vec::with_capacity(r.span);
+        // Flat positions this entry's `presentation: true` turned from sim to presentation.
+        let mut forced: Vec<usize> = Vec::new();
         for (k, part) in r
             .sub
             .entities
@@ -514,6 +521,10 @@ fn expand_level(
                 remap_positions(context.registry, name, value, &intrinsic);
             }
             part.name = Some(format!("{entry_name}/{}", r.names[k]));
+            if instance.presentation && !part.presentation {
+                part.presentation = true;
+                forced.push(flat.len());
+            }
             paths.push(r.names[k].clone());
             flat.push(part);
             entry_of.push(index);
@@ -527,6 +538,16 @@ fn expand_level(
             &mut flat,
             &mut diagnostics,
         );
+        for &position in &forced {
+            check_sim_only(
+                context.registry,
+                &flat[position],
+                &paths[position - offset],
+                &entry_name,
+                index,
+                &mut diagnostics,
+            );
+        }
         for nested in &r.sub.instances {
             let (from, to) = (r.before[nested.parts.start], r.before[nested.parts.end]);
             if from == to {
@@ -565,6 +586,37 @@ fn expand_level(
         })
     } else {
         Err(diagnostics)
+    }
+}
+
+/// `L1320` for each sim-only component `part` of a presentation instance carries.
+fn check_sim_only(
+    registry: &Registry,
+    part: &SceneEntity,
+    path: &str,
+    entry_name: &str,
+    entry: usize,
+    diagnostics: &mut Vec<Located>,
+) {
+    for (name, _) in &part.components {
+        if registry.get(name).is_some_and(ComponentInfo::sim_only) {
+            diagnostics.push((
+                Diagnostic::new(
+                    code::PRESENTATION_INSTANCE_SIM_COMPONENT,
+                    format!(
+                        "presentation instance `{entry_name}`: part `{path}` carries `{name}`, \
+                         which only the sim reads"
+                    ),
+                )
+                .with_path(format!("/entities/{entry}/presentation"))
+                .with_help(
+                    "drop the `presentation` key and keep the instance sim, or keep that part sim \
+                     in a separate instance and parent the presentation body to it through \
+                     `overrides`",
+                ),
+                false,
+            ));
+        }
     }
 }
 

@@ -1555,6 +1555,10 @@ pub mod code {
     /// `/entities/{i}/components/ParentJoint/joint`.
     pub const PARENT_JOINT_UNKNOWN_JOINT: DiagnosticCode = DiagnosticCode::new("L1319");
 
+    /// `L1320` — a prefab instance with `presentation: true` has a part carrying a sim-only
+    /// component. Raised at expansion (load, `check-scene`); pointer `/entities/{i}/presentation`.
+    pub const PRESENTATION_INSTANCE_SIM_COMPONENT: DiagnosticCode = DiagnosticCode::new("L1320");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -6835,9 +6839,10 @@ system running in an engine.",
         title: "a prefab-instance entry is malformed",
         explanation: "An entity entry with a `prefab:` key is a prefab instance. It takes `name` (required,
 non-empty, no `/`), `prefab` (a path relative to the content root), and optionally `transform`
-(`translation`, `rotation` in Euler XYZ degrees, `scale`; each three numbers), `overrides` (part path
-to component changes) and `removed` (part paths). It takes no `components:` or `presentation:`, and
-two instances in one document cannot share a name.
+(`translation`, `rotation` in Euler XYZ degrees, `scale`; each three numbers), `presentation` (a
+boolean; `true` spawns every part presentation), `overrides` (part path to component changes) and
+`removed` (part paths). It takes no `components:`, and two instances in one document cannot share a
+name.
 
 Fix: name the instance and use only those keys; put component changes under
 `overrides: <part>: <Component>:`.",
@@ -7720,6 +7725,22 @@ joint name the mesh document declares.
 The JSON Pointer names the field: `/entities/{i}/components/ParentJoint/joint`. Fix: spell `joint`
 exactly as one of the parent mesh's `joints[].name` entries — `ludion check-scene <mesh> --bounds`
 prints the joint tree.",
+    },
+    CodeEntry {
+        code: code::PRESENTATION_INSTANCE_SIM_COMPONENT,
+        severity: Severity::Error,
+        title: "a presentation prefab instance has a part only the sim reads",
+        explanation: "\
+A prefab instance entry with `presentation: true` spawns every part presentation, but one of its
+parts carries a component that only the sim reads (a `Collider`, a `Velocity`, a joint, a character
+motor, a path follower, a camera rig, or a component a game marked sim-only). A presentation entity
+is outside the sim's world hash and no sim system can see it, so the component would be dead weight.
+The message names the part and the component; an `overrides` entry that adds the component is caught
+too.
+
+The JSON Pointer names the key: `/entities/{i}/presentation`. Fix: drop `presentation: true` and keep
+the instance sim, or keep the sim part in a separate instance and parent the presentation body to it
+through `overrides` (`Parent` on the body's root part).",
     },
     // --- L2xxx: render ---
     CodeEntry {
@@ -10538,6 +10559,7 @@ mod tests {
         code::ANIMATION_HOLD_ZERO,
         code::PARENT_JOINT_NOT_SKINNED,
         code::PARENT_JOINT_UNKNOWN_JOINT,
+        code::PRESENTATION_INSTANCE_SIM_COMPONENT,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

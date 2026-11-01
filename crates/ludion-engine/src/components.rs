@@ -5283,12 +5283,56 @@ pub fn builtin_registry() -> Registry {
     registry
         .register::<Visibility>("Visibility")
         .expect("unique");
+    // Read only by a sim system: physics, path_follow, camera_rig.
+    for name in SIM_ONLY_COMPONENTS {
+        registry.mark_sim_only(name).expect("registered above");
+    }
     registry
 }
+
+/// The built-ins whose engine-owned consumer is a sim-phase system.
+const SIM_ONLY_COMPONENTS: [&str; 10] = [
+    "Collider",
+    "Velocity",
+    "Joint",
+    "JointMotor",
+    "CharacterMotor",
+    "CharacterMotorState",
+    "SurfaceVelocity",
+    "LaneConstraint",
+    "PathFollower",
+    "CameraRig",
+];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Exactly these built-ins are sim-only; a guard that the list above grows on purpose.
+    #[test]
+    fn the_sim_only_set_is_pinned() {
+        let registry = builtin_registry();
+        let mut marked: Vec<&str> = registry
+            .iter()
+            .filter(|info| info.sim_only())
+            .map(|info| info.name())
+            .collect();
+        marked.sort_unstable();
+        let mut expected = [
+            "Collider",
+            "Velocity",
+            "Joint",
+            "JointMotor",
+            "CharacterMotor",
+            "CharacterMotorState",
+            "SurfaceVelocity",
+            "LaneConstraint",
+            "PathFollower",
+            "CameraRig",
+        ];
+        expected.sort_unstable();
+        assert_eq!(marked, expected);
+    }
 
     /// A default `Animation` keeps its three-key text; the crossfade fields are omitted at rest.
     #[test]

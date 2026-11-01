@@ -320,24 +320,12 @@ fn check_entity_ref(
                 }),
             );
         } else if !scene.entities[entity_index].presentation && scene.entities[index].presentation {
-            let label = |position: usize| match &scene.entities[position].name {
-                Some(name) => format!("{position} (`{name}`)"),
-                None => position.to_string(),
-            };
-            diagnostics.push(
-                Diagnostic::new(
-                    code::SCENE_PRESENTATION_REF,
-                    format!(
-                        "{noun} on sim entity {} names presentation entity {}; the sim would hash a presentation id",
-                        label(entity_index),
-                        label(index)
-                    ),
-                )
-                .with_path(format!("{field_pointer}/index"))
-                .with_help(
-                    "point the reference at a sim entity, or make the carrier `presentation: true` too",
-                ),
-            );
+            diagnostics.push(presentation_ref_diagnostic(
+                scene,
+                (entity_index, index),
+                &noun,
+                &field_pointer,
+            ));
         }
     }
     if let Some(generation) = object.get("generation").and_then(Value::as_u64)
@@ -356,6 +344,84 @@ fn check_entity_ref(
             }),
         );
     }
+}
+
+/// `L1036`: sim entity `carrier` holds a reference to presentation entity `target`.
+fn presentation_ref_diagnostic(
+    scene: &Scene,
+    (carrier, target): (usize, usize),
+    noun: &str,
+    field_pointer: &str,
+) -> Diagnostic {
+    let label = |position: usize| match &scene.entities[position].name {
+        Some(name) => format!("{position} (`{name}`)"),
+        None => position.to_string(),
+    };
+    Diagnostic::new(
+        code::SCENE_PRESENTATION_REF,
+        format!(
+            "{noun} on sim entity {} names presentation entity {}; the sim would hash a presentation id",
+            label(carrier),
+            label(target)
+        ),
+    )
+    .with_path(format!("{field_pointer}/index"))
+    .with_help("point the reference at a sim entity, or make the carrier `presentation: true` too")
+}
+
+/// `L1036` for every in-range reference a sim entity of the (expanded) `scene` holds to a
+/// presentation entity. Instance expansion can turn an entry's parts presentation after the
+/// document-level check ran.
+pub(crate) fn presentation_refs(scene: &Scene, registry: &Registry) -> Vec<Diagnostic> {
+    let mut found = Vec::new();
+    for (carrier, entity) in scene
+        .entities
+        .iter()
+        .enumerate()
+        .filter(|(_, entity)| !entity.presentation)
+    {
+        for (name, value) in &entity.components {
+            let Some(info) = registry.get(name) else {
+                continue;
+            };
+            for field in info.entity_refs() {
+                let reference = if field.suffix.is_empty() {
+                    Some(value)
+                } else {
+                    value.pointer(&field.suffix)
+                };
+                let Some(target) = reference
+                    .and_then(|object| object.get("index"))
+                    .and_then(Value::as_u64)
+                    .and_then(|index| usize::try_from(index).ok())
+                    .filter(|&index| index < scene.entities.len() && index != carrier)
+                else {
+                    continue;
+                };
+                if !scene.entities[target].presentation {
+                    continue;
+                }
+                let field_name = field.suffix.trim_start_matches('/');
+                let noun = if field_name.is_empty() {
+                    format!("`{name}`")
+                } else {
+                    format!("`{name}`'s `{field_name}`")
+                };
+                let pointer = format!(
+                    "/entities/{carrier}/components/{}{}",
+                    pointer_token(name),
+                    field.suffix
+                );
+                found.push(presentation_ref_diagnostic(
+                    scene,
+                    (carrier, target),
+                    &noun,
+                    &pointer,
+                ));
+            }
+        }
+    }
+    found
 }
 
 fn reserved_component(name: &str, pointer: String) -> Diagnostic {

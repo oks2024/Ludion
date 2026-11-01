@@ -644,6 +644,8 @@ struct Collapser<'a> {
     removed: Vec<Vec<String>>,
     /// Per group, the path of its first surviving part.
     first: Vec<String>,
+    /// Per group, whether the entry needs `presentation: true` to reproduce its parts' allocator.
+    presentation: Vec<bool>,
     /// The plain entities by slot, references in document space.
     plain: Vec<Option<SceneEntity>>,
     /// Per group, the library snapshot its instance was expanded from; `None` resolves from disk.
@@ -793,6 +795,7 @@ impl<'a> Collapser<'a> {
             labels,
             removed: Vec::new(),
             first: Vec::new(),
+            presentation: Vec::new(),
             plain: Vec::new(),
             versions,
             disk: RefCell::new(BTreeMap::new()),
@@ -896,12 +899,13 @@ impl<'a> Collapser<'a> {
         let expanded =
             expand_scene_with(self.live.registry, &probe, &mut |path| self.resolve(path))
                 .map_err(|found| unloadable(&found))?;
-        let (mut first, mut removed) = (Vec::new(), Vec::new());
+        let (mut first, mut removed, mut presentation) = (Vec::new(), Vec::new(), Vec::new());
         for (group, entry) in self.groups.iter().zip(0..) {
-            let full = expanded
+            let instance = expanded
                 .instances
                 .iter()
-                .find(|instance| instance.depth == 0 && instance.entry == entry)
+                .find(|instance| instance.depth == 0 && instance.entry == entry);
+            let full = instance
                 .map(|instance| instance.paths.clone())
                 .unwrap_or_default();
             for (position, path) in &group.parts {
@@ -920,6 +924,41 @@ impl<'a> Collapser<'a> {
                     ));
                 }
             }
+            // (position, live is presentation, the prefab's part is presentation) per live part.
+            let kinds: Vec<(usize, bool, bool)> = group
+                .parts
+                .iter()
+                .filter_map(|(position, path)| {
+                    let at = full.iter().position(|held| held == path)?;
+                    let own = expanded.scene.entities[instance?.parts.start + at].presentation;
+                    Some((
+                        *position,
+                        ludion_ecs::is_presentation(self.ids[*position]),
+                        own,
+                    ))
+                })
+                .collect();
+            // The entry's flag moves every part at once; a partial move would save without the key
+            // and reload as the prefab's kinds.
+            let flag = kinds.iter().any(|(_, live, own)| live != own);
+            if flag && kinds.iter().any(|(_, live, _)| !live) {
+                if let Some((position, live, own)) = kinds.iter().find(|(_, live, own)| live != own)
+                {
+                    let kind =
+                        |presentation: bool| if presentation { "presentation" } else { "sim" };
+                    return Err(refuse_at(
+                        group.root,
+                        format!(
+                            "{} is {}, but `{}` makes it {}: an instance entry cannot express the mix",
+                            self.labels[*position],
+                            kind(*live),
+                            group.source,
+                            kind(*own)
+                        ),
+                    ));
+                }
+            }
+            presentation.push(flag);
             let live_paths = |path: &String| group.parts.iter().any(|(_, held)| held == path);
             first.push(
                 full.iter()
@@ -936,6 +975,7 @@ impl<'a> Collapser<'a> {
         }
         self.first = first;
         self.removed = removed;
+        self.presentation = presentation;
         self.prepare_plain()
     }
 
@@ -1057,6 +1097,7 @@ impl<'a> Collapser<'a> {
         }
         InstanceEntry {
             prefab: prefab.to_owned(),
+            presentation: self.presentation[group],
             transform: setting.transform.clone(),
             overrides,
             removed: self.removed[group].clone(),

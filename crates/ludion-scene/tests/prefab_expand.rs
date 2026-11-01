@@ -46,6 +46,7 @@ fn registry() -> Registry {
     registry.register::<ludion_ecs::Parent>("Parent").unwrap();
     registry.register::<Glow>("Glow").unwrap();
     registry.register::<Mesh>("Mesh").unwrap();
+    registry.mark_sim_only("Health").unwrap();
     registry
 }
 
@@ -766,6 +767,144 @@ fn removing_the_sim_first_part_can_leave_a_presentation_root_l1036() {
     let strips = "format: 1\nentities:\n  - name: d\n    prefab: dressed.prefab.yaml\n    removed:\n      - post\n";
     let diagnostics = files.expand(strips).unwrap_err();
     assert!(has(&diagnostics, "L1036", "/entities/0"));
+}
+
+const INSTANCE_BARREL: &str = "\
+format: 1
+entities:
+  - name: b
+    prefab: barrel.prefab.yaml
+";
+
+const POST_AND_BARREL: &str = "\
+format: 1
+kind: prefab
+entities:
+  - name: base
+    components: {}
+  - name: gun
+    prefab: barrel.prefab.yaml
+";
+
+const POST_AND_PRESENTATION_BARREL: &str = "\
+format: 1
+kind: prefab
+entities:
+  - name: base
+    components: {}
+  - name: gun
+    prefab: barrel.prefab.yaml
+    presentation: true
+";
+
+fn presentation_flags(expanded: &ExpandedScene) -> Vec<bool> {
+    expanded
+        .scene
+        .entities
+        .iter()
+        .map(|entity| entity.presentation)
+        .collect()
+}
+
+#[test]
+fn a_presentation_instance_spawns_every_part_presentation() {
+    let files = Files::new(&[("barrel.prefab.yaml", BARREL)]);
+    let source = format!("{INSTANCE_BARREL}    presentation: true\n");
+    let expanded = files.expand(&source).unwrap();
+    assert_eq!(presentation_flags(&expanded), [true, true]);
+}
+
+#[test]
+fn an_omitted_presentation_key_leaves_every_part_sim() {
+    let files = Files::new(&[("barrel.prefab.yaml", BARREL)]);
+    let expanded = files.expand(INSTANCE_BARREL).unwrap();
+    assert_eq!(presentation_flags(&expanded), [false, false]);
+    let source = format!("{INSTANCE_BARREL}    presentation: false\n");
+    let expanded = files.expand(&source).unwrap();
+    assert_eq!(presentation_flags(&expanded), [false, false]);
+}
+
+#[test]
+fn an_outer_presentation_flag_is_sticky_over_nested_instances() {
+    let files = Files::new(&[
+        ("barrel.prefab.yaml", BARREL),
+        ("turret.prefab.yaml", POST_AND_BARREL),
+    ]);
+    let source = "format: 1\nentities:\n  - name: t\n    prefab: turret.prefab.yaml\n    presentation: true\n";
+    let expanded = files.expand(source).unwrap();
+    assert_eq!(presentation_flags(&expanded), [true, true, true]);
+}
+
+#[test]
+fn an_inner_presentation_flag_marks_only_the_inner_parts() {
+    let files = Files::new(&[
+        ("barrel.prefab.yaml", BARREL),
+        ("turret.prefab.yaml", POST_AND_PRESENTATION_BARREL),
+    ]);
+    let source = "format: 1\nentities:\n  - name: t\n    prefab: turret.prefab.yaml\n";
+    let expanded = files.expand(source).unwrap();
+    assert_eq!(presentation_flags(&expanded), [false, true, true]);
+}
+
+#[test]
+fn a_presentation_instance_refuses_an_authored_sim_only_part_l1320() {
+    let files = Files::new(&[("lamp.prefab.yaml", LAMP)]);
+    let source =
+        "format: 1\nentities:\n  - name: l\n    prefab: lamp.prefab.yaml\n    presentation: true\n";
+    let diagnostics = files.expand(source).unwrap_err();
+    assert!(
+        has(&diagnostics, "L1320", "/entities/0/presentation"),
+        "{diagnostics:?}"
+    );
+    let message = &diagnostics[0].message;
+    assert!(
+        message.contains("`post`") && message.contains("`Health`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_presentation_instance_refuses_a_sim_only_override_l1320() {
+    let files = Files::new(&[("barrel.prefab.yaml", BARREL)]);
+    let source = "format: 1\nentities:\n  - name: b\n    prefab: barrel.prefab.yaml\n    presentation: true\n    overrides:\n      tube:\n        Health: 1\n";
+    let diagnostics = files.expand(source).unwrap_err();
+    assert!(
+        has(&diagnostics, "L1320", "/entities/0/presentation"),
+        "{diagnostics:?}"
+    );
+    let message = &diagnostics[0].message;
+    assert!(
+        message.contains("`tube`") && message.contains("`Health`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_sim_only_part_the_prefab_marks_presentation_itself_is_not_l1320() {
+    let prefab = "\
+format: 1
+kind: prefab
+entities:
+  - name: post
+    presentation: true
+    components:
+      Health: 3
+";
+    let files = Files::new(&[("odd.prefab.yaml", prefab)]);
+    let source =
+        "format: 1\nentities:\n  - name: o\n    prefab: odd.prefab.yaml\n    presentation: true\n";
+    assert!(files.expand(source).is_ok());
+}
+
+#[test]
+fn a_sim_entity_referencing_a_presentation_instance_is_l1036() {
+    let files = Files::new(&[("barrel.prefab.yaml", BARREL)]);
+    let source = "format: 1\nentities:\n  - name: s\n    components:\n      Parent:\n        index: 1\n        generation: 0\n  - name: b\n    prefab: barrel.prefab.yaml\n    presentation: true\n";
+    let diagnostics = files.expand(source).unwrap_err();
+    assert!(
+        has(&diagnostics, "L1036", "/entities/0/components/Parent/index"),
+        "{diagnostics:?}"
+    );
 }
 
 const SIGN: &str = "\

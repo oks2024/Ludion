@@ -121,6 +121,8 @@ pub struct ComponentInfo {
     /// exactly one authoring channel (the regularity pillar). Reserved components are still ordinary
     /// registered components everywhere else: they enter the world hash and snapshots normally.
     reserved: bool,
+    /// Set by [`Registry::mark_sim_only`].
+    sim_only: bool,
     serialize_fn: fn(&World, EntityId) -> Result<Option<Value>, Diagnostic>,
     serialize_erased_fn: SerializeErasedFn,
     deserialize_insert_fn: fn(&Value, &mut World, EntityId) -> Result<(), Diagnostic>,
@@ -175,6 +177,11 @@ impl ComponentInfo {
     /// component is world content like any other).
     pub fn reserved(&self) -> bool {
         self.reserved
+    }
+
+    /// Whether only the sim reads this component (see [`Registry::mark_sim_only`]).
+    pub fn sim_only(&self) -> bool {
+        self.sim_only
     }
 
     /// Serializes this component off `entity` to a JSON value, or `Ok(None)` if the entity does not
@@ -356,6 +363,7 @@ impl Registry {
             entity_refs,
             asset_paths,
             reserved,
+            sim_only: false,
             serialize_fn: erased_serialize::<T>,
             serialize_erased_fn: erased_serialize_ref::<T>,
             deserialize_insert_fn: erased_deserialize_insert::<T>,
@@ -365,6 +373,37 @@ impl Registry {
         });
         self.by_name.insert(name.to_string(), index);
         self.by_type.insert(type_id, index);
+        Ok(())
+    }
+
+    /// Marks the registered component `name` **sim-only**: the sim must see it, so a presentation
+    /// entity carrying it would be dead weight — no sim system can read it (`L0028`); a presentation
+    /// prefab instance refuses it (`L1320`). Games mark their own sim-only components the same way.
+    ///
+    /// # Errors
+    /// `L0004` if `name` is not registered.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_ecs::Registry;
+    /// use serde::{Deserialize, Serialize};
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Body(u32);
+    ///
+    /// let mut registry = Registry::new();
+    /// registry.register::<Body>("Body").unwrap();
+    /// assert!(!registry.get("Body").unwrap().sim_only());
+    /// registry.mark_sim_only("Body").unwrap();
+    /// assert!(registry.get("Body").unwrap().sim_only());
+    /// assert!(registry.mark_sim_only("Nope").is_err());
+    /// ```
+    pub fn mark_sim_only(&mut self, name: &str) -> Result<(), Diagnostic> {
+        let Some(&index) = self.by_name.get(name) else {
+            return Err(self.unknown_component(name));
+        };
+        self.entries[index].sim_only = true;
         Ok(())
     }
 

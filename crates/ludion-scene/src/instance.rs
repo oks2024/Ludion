@@ -22,7 +22,14 @@ use crate::scalar::{format_f32_float, scalar_string};
 use crate::schema::SchemaCursor;
 use crate::yaml::{MapEntry, Node, NodeValue, pointer_token};
 
-const INSTANCE_KEYS: [&str; 5] = ["name", "prefab", "transform", "overrides", "removed"];
+const INSTANCE_KEYS: [&str; 6] = [
+    "name",
+    "prefab",
+    "presentation",
+    "transform",
+    "overrides",
+    "removed",
+];
 const TRANSFORM_KEYS: [&str; 3] = ["translation", "rotation", "scale"];
 
 /// A prefab instance: one entry of a scene's or prefab's `entities:` list with a `prefab:` key.
@@ -33,6 +40,8 @@ const TRANSFORM_KEYS: [&str; 3] = ["translation", "rotation", "scale"];
 pub struct InstanceEntry {
     /// The prefab path as written, relative to the content root (see [`normalize_prefab_path`]).
     pub prefab: String,
+    /// Every part of the instance, nested instances included, spawns presentation.
+    pub presentation: bool,
     /// Where the instance's root sits.
     pub transform: InstanceTransform,
     /// Part path to `(component name, partial value)` pairs, merged over the prefab's part.
@@ -153,21 +162,29 @@ pub(crate) fn parse_entry(
                     "write `prefab: props/lamp.prefab.yaml`, relative to the content root",
                 ),
             },
+            "presentation" => match &entry.node.value {
+                NodeValue::Scalar(Value::Bool(flag)) => instance.presentation = *flag,
+                _ => bad(
+                    diagnostics,
+                    pointer,
+                    format!(
+                        "`presentation` must be a boolean (line {})",
+                        entry.node.line
+                    ),
+                    "write `presentation: true`",
+                ),
+            },
             "transform" => parse_transform(&entry.node, &pointer, &mut instance, diagnostics),
             "overrides" => parse_overrides(&entry.node, &pointer, &mut instance, diagnostics),
             "removed" => parse_removed(&entry.node, &pointer, &mut instance, diagnostics),
-            "components" | "presentation" => bad(
+            "components" => bad(
                 diagnostics,
                 pointer,
                 format!(
-                    "an instance does not take `{}` (line {})",
-                    entry.key, entry.key_line
+                    "an instance does not take `components` (line {})",
+                    entry.key_line
                 ),
-                if entry.key == "presentation" {
-                    "mark the parts `presentation: true` in the prefab; an instance takes its parts' kind from the prefab"
-                } else {
-                    "an instance takes component changes under `overrides: <part>:`"
-                },
+                "an instance takes component changes under `overrides: <part>:`",
             ),
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
@@ -385,6 +402,10 @@ pub(crate) fn emit_fields(
     out.push_str("prefab: ");
     out.push_str(&scalar_string(&instance.prefab));
     out.push('\n');
+    if instance.presentation {
+        out.push_str(lead);
+        out.push_str("presentation: true\n");
+    }
     let default = InstanceTransform::default();
     let transform = &instance.transform;
     let bits = |value: [f64; 3]| value.map(f64::to_bits);

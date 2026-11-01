@@ -222,6 +222,48 @@ fn components_beside_prefab_is_l1231() {
 }
 
 #[test]
+fn a_presentation_instance_round_trips_and_false_is_not_written() {
+    let registry = registry();
+    let written = "\
+format: 1
+entities:
+  - name: lamp
+    prefab: lamp.prefab.yaml
+    presentation: true
+    transform:
+      scale:
+        - 2.0
+        - 2.0
+        - 2.0
+  - name: other
+    prefab: lamp.prefab.yaml
+    presentation: false
+";
+    let scene = check(written, &registry).unwrap();
+    assert!(scene.entities[0].instance.as_ref().unwrap().presentation);
+    assert!(!scene.entities[1].instance.as_ref().unwrap().presentation);
+    let emitted = emit(&scene, &registry);
+    assert_eq!(emitted, written.replace("    presentation: false\n", ""));
+    assert_eq!(
+        emit(&check(&emitted, &registry).unwrap(), &registry),
+        emitted
+    );
+}
+
+#[test]
+fn a_non_boolean_instance_presentation_is_l1231() {
+    let diagnostics = parse_errors("  - name: a\n    prefab: a.prefab.yaml\n    presentation: 3\n");
+    assert!(has(&diagnostics, "L1231", "/entities/0/presentation"));
+    assert!(
+        diagnostics[0]
+            .help
+            .as_deref()
+            .unwrap()
+            .contains("presentation: true")
+    );
+}
+
+#[test]
 fn bad_transform_arity_is_l1231() {
     let diagnostics = parse_errors(
         "  - name: a\n    prefab: a.prefab.yaml\n    transform:\n      translation:\n        - 1.0\n        - 2.0\n",
