@@ -24,8 +24,8 @@ streamed or preloaded loading, no cross-scene queries, one district at a time
 (`docs/scene-transitions.md`). Around that single-world assumption sit five structures that scale
 with the whole world rather than with what is near the player:
 
-- **Extract walks every entity every frame** and every `Mesh` becomes an instance unconditionally:
-  no camera-frustum culling, no distance culling, no visibility flag (`crates/ludion-engine/src/extract.rs`,
+- **Extract walks every entity every frame** and every `Mesh` not hidden by the authored `Visibility`
+  flag becomes an instance: no camera-frustum culling, no distance culling (`crates/ludion-engine/src/extract.rs`,
   `place`). Instance buffers are rebuilt from scratch every frame (`render.rs`, `prepare_frame`).
 - **The GI grid is world-anchored** to the scene's bounds with a hard cell cap (`MAX_GI_CELLS`,
   `crates/ludion-engine/src/voxelizer.rs`); at vigil's `cell_size: 0.5` a 320 u district is already
