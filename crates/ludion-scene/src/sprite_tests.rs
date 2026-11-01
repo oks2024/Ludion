@@ -2,6 +2,7 @@
 //! and the canonical emitter's minimality rule.
 
 use super::*;
+use crate::check_sprite;
 
 /// A full-featured document: both optional envelope keys, an emissive palette entry, a pivot, two
 /// frames, and every effect op exactly once with every optional parameter set to a **non-default**
@@ -577,4 +578,63 @@ fn the_effects_key_itself_is_a_document_defect() {
         "effects: {}\nunused:\n  - op: gradient",
     ));
     assert_eq!(find(&diagnostics, "/effects").code.as_str(), "L1153");
+}
+
+/// A blank sprite document `width`x`height` with one frame, `idle`, of `.`-only rows.
+fn blank(width: usize, height: usize) -> SpriteDocument {
+    let rows: String = (0..height)
+        .map(|_| format!("      - \"{}\"\n", ".".repeat(width)))
+        .collect();
+    let source = format!(
+        "format: 1\nkind: sprite\nsize:\n  - {width}\n  - {height}\npalette:\n  A:\n    color:\n      \
+         - 1.0\n      - 1.0\n      - 1.0\n      - 1.0\nframes:\n  idle:\n    rows:\n{rows}"
+    );
+    check_sprite(&source).expect("the blank sprite is valid")
+}
+
+#[test]
+fn frame_rows_equals_the_authored_rows() {
+    let sprite = check_sprite(GOOD).expect("GOOD is valid");
+    let frame = sprite.frame("idle").expect("idle exists");
+    assert_eq!(sprite.frame_rows(frame).as_ref(), frame.rows.as_slice());
+}
+
+#[test]
+fn render_frame_rows_has_a_units_ruler_and_row_labels() {
+    let sprite = blank(4, 2);
+    let frame = sprite.frame("idle").expect("idle exists");
+    assert_eq!(
+        sprite.render_frame_rows(frame),
+        "   0123\n0  ....\n1  ....\n"
+    );
+}
+
+#[test]
+fn render_frame_rows_adds_a_tens_line_over_wide_frames() {
+    let sprite = blank(12, 1);
+    let frame = sprite.frame("idle").expect("idle exists");
+    let text = sprite.render_frame_rows(frame);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "             11");
+    assert_eq!(lines[1], "   012345678901");
+}
+
+#[test]
+fn render_frame_rows_adds_a_hundreds_line_past_100_columns() {
+    let sprite = blank(101, 1);
+    let frame = sprite.frame("idle").expect("idle exists");
+    let text = sprite.render_frame_rows(frame);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[0].trim_start(), "1");
+    assert_eq!(lines[0].len(), 3 + 101);
+    assert!(lines.iter().all(|line| !line.ends_with(' ')));
+}
+
+#[test]
+fn render_frame_rows_right_aligns_labels_of_tall_frames() {
+    let sprite = blank(2, 12);
+    let frame = sprite.frame("idle").expect("idle exists");
+    let text = sprite.render_frame_rows(frame);
+    assert!(text.contains("\n 9  ..\n10  ..\n"), "{text}");
 }

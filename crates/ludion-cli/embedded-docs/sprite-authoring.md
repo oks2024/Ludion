@@ -10,7 +10,8 @@ the CPU contact sheet you judge it by. It is the 2D sibling of a voxel model
 transparent texel, one `size` every frame shares, and a differently sized pose is a different
 document. The ordered `effects:` list baked on top is `ludion docs sprite-effects`; packing the
 frames is `ludion docs sprite-sheets`; the grid component that spends the same atlas per cell is
-`ludion docs tilemaps`. The hub over all of them is `ludion docs sprites`.
+`ludion docs tilemaps`. The hub over all of them is `ludion docs sprites`. What makes a sprite *read* at game scale is
+`ludion docs sprite-craft`.
 
 ## The loop
 
@@ -21,6 +22,11 @@ frames is `ludion docs sprite-sheets`; the grid component that spends the same a
    ```
    prints `OK (ship, 16x12, 4 palette glyphs, 3 frames, 3 effects)` and one `idle: pivot (8, 6)`
    line per frame — the *resolved* pivot, so a defaulted one reads without arithmetic.
+   `--rows` adds every frame's glyph grid, with a column ruler and row numbers, before the `OK` line:
+   ```
+   ludion check-scene examples/gallery/sprites/ship.sprite.yaml --rows
+   ```
+   It is cheaper than an image for an exact texel fix, and it is the grid the bake reads.
 3. **Bake it and look:**
    ```
    ludion render --sprite examples/gallery/sprites/ship.sprite.yaml --scale 4 --out target/ship.sheet.png
@@ -246,6 +252,7 @@ Then read the document and fix the palette where the merge shows.
 ## Next
 
 - `ludion docs sprites` — the hub: the sprite layer's documents, verbs and components at a glance.
+- `ludion docs sprite-craft` — what makes a sprite read at game scale: silhouette, marks, shades, glyphs.
 - `ludion docs sprite-effects` — the eight ops, their parameters, and their gotchas.
 - `ludion docs sprite-sheets` — packing frames into a `kind: atlas` and drawing one.
 - `ludion docs sprite-animation` — cycling packed frames with `Animation`'s atlas flipbooks.

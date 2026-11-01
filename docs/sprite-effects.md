@@ -114,5 +114,6 @@ effects:
 ## Next
 
 - `ludion docs sprite-authoring` — the document these ops bake onto, and the contact sheet.
+- `ludion docs sprite-craft` — what makes a sprite read: marks with a cause, few shades, ops over paint.
 - `ludion docs sprites` — the sprite layer end to end: documents, verbs, components.
 - `ludion docs sprite-sheets` — packing baked frames into a committed `kind: atlas`.

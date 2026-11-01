@@ -129,8 +129,9 @@ impl<'a> Reporter<'a> {
 }
 
 /// Runs `ludion check-scene <path> [--mirror-x] [--slice <y|all>] [--column <x,z>] [--exposure]
-/// [--bounds [--json]] [--placement]`. `placement` (scenes only, a usage error on any other kind)
-/// adds the placement lint's warnings and summary line.
+/// [--bounds [--json]] [--placement] [--rows]`. `rows` (sprites only, a usage error on any other
+/// kind) prints each frame's grid before the `OK` line. `placement` (scenes only, a usage error on
+/// any other kind) adds the placement lint's warnings and summary line.
 ///
 /// Dispatches on the document's top-level `kind:` key through the `ludion_scene::KINDS` table: a
 /// document declaring `kind: mesh`/`voxel`/`part`/`animation`/`palette`/`atlas-source`/`sculpt`/`prefab` is
@@ -159,6 +160,7 @@ pub fn run(
     views: &VoxelViews,
     sculpt_views: &SculptViews,
     placement: Option<PlacementOptions>,
+    rows: bool,
 ) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
@@ -176,6 +178,15 @@ pub fn run(
         return diagnostic::usage_error(format_args!(
             "--placement applies only to scenes; this document is a {kind}"
         ));
+    }
+    if rows && kind.as_deref() != Some("sprite") {
+        return diagnostic::usage_error(format_args!(
+            "--rows applies only to sprite documents (kind: sprite); this document is a {}",
+            kind.as_deref().unwrap_or("scene")
+        ));
+    }
+    if rows && sculpt_views.json {
+        return diagnostic::usage_error("--json prints the summary object; --rows is a text view");
     }
     if sculpt_views.json {
         match kind.as_deref() {
@@ -235,7 +246,7 @@ pub fn run(
         }
         Some(kind) if kind == "part" => run_part(reporter, &source),
         Some(kind) if kind == "animation" => clip_report::run(reporter, &source),
-        Some(kind) if kind == "sprite" => run_sprite(reporter, &source),
+        Some(kind) if kind == "sprite" => run_sprite(reporter, &source, rows),
         Some(kind) if kind == "palette" => run_palette(reporter, &source),
         Some(kind) if kind == "atlas-source" => run_atlas_source(reporter, &source),
         Some(kind) if kind == "atlas" => run_atlas(reporter, &source),
@@ -939,7 +950,7 @@ fn run_part(mut reporter: Reporter, source: &str) -> ExitCode {
 /// [`run_part`] shape: one summary line naming the extent, the palette, and the effect list, then one
 /// line per frame. Nothing here bakes — the pixels an effect list produces are `generate-atlas`'s
 /// business, and `render --sprite` is where they are looked at.
-fn run_sprite(mut reporter: Reporter, source: &str) -> ExitCode {
+fn run_sprite(mut reporter: Reporter, source: &str, rows: bool) -> ExitCode {
     let path = reporter.path;
     let base = match ludion_scene::check_sprite(source) {
         Ok(sprite) => sprite,
@@ -977,6 +988,12 @@ fn run_sprite(mut reporter: Reporter, source: &str) -> ExitCode {
         "effects": sprite.effects.len(),
     });
     reporter.ok(fields, || {
+        if rows {
+            for frame in &sprite.frames {
+                println!("-- {} --", frame.name);
+                print!("{}", sprite.render_frame_rows(frame));
+            }
+        }
         let name = match &sprite.name {
             Some(name) => format!("{name}, "),
             None => String::new(),

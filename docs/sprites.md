@@ -1,5 +1,5 @@
 ---
-description: Index of the sprite layer — its document kinds, its CLI verbs, its components, and its six spokes
+description: Index of the sprite layer: its document kinds, CLI verbs, components, and seven spokes
 ---
 
 # Sprites
@@ -21,7 +21,8 @@ to change.
 
 ## The verbs
 
-- `ludion check-scene <doc>` — checks a sprite, palette or atlas document alone, no GPU.
+- `ludion check-scene <doc>` — checks a sprite, palette or atlas document alone, no GPU; `--rows` on a
+  sprite prints every frame's glyph grid with a ruler.
 - `ludion render --sprite <doc> --scale 8` — the contact sheet: every frame, ruled and pivot-marked.
 - `ludion render --atlas <doc>` — the packing overview; `--clip <flipbook>` with `--time`/`--strip
   N`/`--onion` draws the animation instead (add `--scale 8`, or 16 px frames are unreadable).
@@ -72,6 +73,7 @@ Sprite:
 ## The spokes
 
 - `ludion docs sprite-authoring` — the `kind: sprite` grid, palette includes, pivots, the contact sheet.
+- `ludion docs sprite-craft` — what makes a sprite read at game scale, as checkable rules.
 - `ludion docs sprite-effects` — the eight baked ops, their parameters, and their traps.
 - `ludion docs sprite-sheets` — `generate-atlas`, the committed pair, the drift gate, drawing a region.
 - `ludion docs sprite-animation` — flipbooks and `Animation` over a `Sprite`.

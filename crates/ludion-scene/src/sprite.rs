@@ -313,6 +313,50 @@ impl SpriteDocument {
         self.frames.iter().find(|frame| frame.name == name)
     }
 
+    /// The frame's glyph grid as the bake reads it, one string per texel row, top-down.
+    ///
+    /// # Example
+    /// ```
+    /// let source = "format: 1\nkind: sprite\nsize:\n  - 2\n  - 1\npalette:\n  A:\n    color:\n\
+    ///               \x20     - 1.0\n      - 1.0\n      - 1.0\n      - 1.0\nframes:\n  idle:\n    \
+    ///               rows:\n      - \"A.\"\n";
+    /// let sprite = ludion_scene::check_sprite(source).expect("the sprite is valid");
+    /// let frame = sprite.frame("idle").expect("the frame exists");
+    /// assert_eq!(sprite.frame_rows(frame).as_ref(), &["A.".to_string()][..]);
+    /// ```
+    pub fn frame_rows<'a>(&'a self, frame: &'a SpriteFrame) -> std::borrow::Cow<'a, [String]> {
+        std::borrow::Cow::Borrowed(&frame.rows)
+    }
+
+    /// The frame's grid with a column ruler above (hundreds and tens lines only when the width
+    /// needs them, then units) and the row index right-aligned down the left. Every line ends in
+    /// `\n` and none ends in a space.
+    pub fn render_frame_rows(&self, frame: &SpriteFrame) -> String {
+        let [width, height] = self.size;
+        let label_w = (height.saturating_sub(1).to_string().len()).max(1);
+        let pad = " ".repeat(label_w + 2);
+        let digit = |value: u32| char::from_digit(value % 10, 10).unwrap_or('?');
+        let ruler = |show: bool, cell: &dyn Fn(u32) -> char| -> String {
+            if !show {
+                return String::new();
+            }
+            let line: String = (0..width).map(cell).collect();
+            format!("{pad}{}\n", line.trim_end())
+        };
+        let mut out = String::new();
+        out.push_str(&ruler(width > 100, &|c| {
+            if c >= 100 { digit(c / 100) } else { ' ' }
+        }));
+        out.push_str(&ruler(width > 10, &|c| {
+            if c >= 10 { digit(c / 10) } else { ' ' }
+        }));
+        out.push_str(&ruler(true, &|c| digit(c)));
+        for (y, row) in self.frame_rows(frame).iter().enumerate() {
+            out.push_str(&format!("{y:>label_w$}  {row}\n"));
+        }
+        out
+    }
+
     /// The palette entry `glyph` names, or `None` for the transparent glyph and for any glyph the
     /// palette does not define.
     pub fn palette_entry(&self, glyph: char) -> Option<&SpritePaletteEntry> {

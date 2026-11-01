@@ -69,6 +69,67 @@ fn broken_sprite_reports_l1153() {
     );
 }
 
+fn check_rows(name: &str, extra: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ludion"))
+        .arg("check-scene")
+        .arg(fixture(name))
+        .arg("--rows")
+        .args(extra)
+        .output()
+        .expect("failed to run the ludion binary")
+}
+
+/// `--rows` prints each frame's grid (header, units ruler, numbered rows) before the `OK` line.
+#[test]
+fn rows_prints_every_frame_grid_before_the_ok_line() {
+    let output = check_rows("good.sprite.yaml", &[]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let idle = stdout.find("-- idle --\n   0123\n0  .##.\n1  ####\n2  .oo.\n3  .##.\n");
+    let spent = stdout.find("-- spent --\n   0123\n0  ....\n1  .##.\n");
+    let ok = stdout.find("OK (");
+    let (Some(idle), Some(spent), Some(ok)) = (idle, spent, ok) else {
+        panic!("missing grid or OK line in: {stdout}");
+    };
+    assert!(idle < spent && spent < ok, "stdout was: {stdout}");
+}
+
+/// `--rows` on a non-sprite document is a usage error naming the kind.
+#[test]
+fn rows_on_a_palette_is_a_usage_error() {
+    let output = check_rows("shared.palette.yaml", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--rows applies only to sprite"),
+        "stderr was: {stderr}"
+    );
+}
+
+/// `--rows` is a text view, so `--json` refuses it.
+#[test]
+fn rows_with_json_is_refused() {
+    let output = check_rows("good.sprite.yaml", &["--json"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--rows is a text view"),
+        "stderr was: {stderr}"
+    );
+}
+
+/// `--rows` prints the grids of a sprite whose palette include resolved.
+#[test]
+fn rows_prints_grids_for_an_included_palette() {
+    let output = check_rows("include.sprite.yaml", &[]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("-- idle --\n   01\n0  AB\n1  CB\n"),
+        "stdout was: {stdout}"
+    );
+}
+
 // --- kind: atlas-source ---------------------------------------------------------------------
 
 /// A valid atlas source checks clean and echoes its inputs — the list the bake will read.

@@ -213,8 +213,9 @@ fn palette_lookup(doc: &SpriteDocument) -> [Option<[f32; 4]>; 128] {
 fn glyph_grid(doc: &SpriteDocument, frame: &SpriteFrame) -> Vec<Option<char>> {
     let [width, height] = doc.size;
     let mut grid = vec![None; (width as usize) * (height as usize)];
+    let rows = doc.frame_rows(frame);
     for y in 0..height as usize {
-        let Some(row) = frame.rows.get(y) else {
+        let Some(row) = rows.get(y) else {
             continue;
         };
         for (x, glyph) in row.chars().take(width as usize).enumerate() {

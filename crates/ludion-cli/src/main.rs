@@ -214,7 +214,8 @@ enum Command {
     /// where it prints the resolved symmetric collision-layer matrix (`--json` for one JSON object
     /// on any document; a `kind: animation` clip's report also re-imports its `generated_from`
     /// glTF). On a scene, `--placement` lints the placed props: floating, sunk, or overlapping
-    /// colliders (warnings only).
+    /// colliders (warnings only). For a `kind: sprite`, `--rows` prints every frame's glyph grid with
+    /// a column ruler and row numbers.
     CheckScene {
         /// Path to the scene file (strict-subset YAML).
         file: PathBuf,
@@ -276,6 +277,10 @@ enum Command {
         /// (`--placement`) Metres a prop may sit below the ground before `L1241`; default 0.1.
         #[arg(long, value_name = "M", requires = "placement")]
         sink: Option<f64>,
+        /// (sprite only) Print each frame's glyph grid under a `-- <frame> --` header, with a column
+        /// ruler above and row numbers down the left, before the `OK` line.
+        #[arg(long)]
+        rows: bool,
     },
     /// Instantiate a scene, run it for a fixed number of ticks, and print the final world hash
     /// (16 hex digits). Two runs with the same inputs always print the same hash.
@@ -2028,6 +2033,7 @@ fn main() -> std::process::ExitCode {
             ground_y,
             tolerance,
             sink,
+            rows,
         } => check_scene::run(
             &file,
             &check_scene::VoxelViews {
@@ -2039,6 +2045,7 @@ fn main() -> std::process::ExitCode {
             },
             &check_scene::SculptViews { bounds, json },
             placement.then(|| placement::PlacementOptions::new(ground_y, tolerance, sink)),
+            rows,
         ),
         Command::SimHash {
             scene,
