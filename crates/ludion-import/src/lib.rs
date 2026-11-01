@@ -143,6 +143,10 @@ pub const UNSUPPORTED_FEATURES: &[&str] = &[
     "any other required extension",
 ];
 
+/// A hash of the importer's dependency closure, derived at build time: `ludion sync` re-imports
+/// when it changes. See `build/fingerprint.rs`.
+pub const IMPORTER_FINGERPRINT: &str = env!("LUDION_IMPORTER_FINGERPRINT");
+
 /// The prefab file written at the root of the output tree.
 pub const PREFAB_FILE: &str = "model.prefab.yaml";
 /// The subdirectory (under `--out`) mesh documents are written to.

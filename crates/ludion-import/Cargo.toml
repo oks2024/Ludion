@@ -19,3 +19,10 @@ glam.workspace = true
 gltf = { version = "1", default-features = false, features = ["utils", "names", "extras", "KHR_lights_punctual", "KHR_materials_emissive_strength"] }
 ryu.workspace = true
 serde_json.workspace = true
+
+[build-dependencies]
+serde_json.workspace = true
+xxhash-rust.workspace = true
+
+[dev-dependencies]
+xxhash-rust.workspace = true

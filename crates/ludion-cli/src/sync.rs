@@ -4,12 +4,14 @@
 //! Each `[[import]]` table in `ludion.toml` names glTF sources (`from`, a glob) and a derived root
 //! (`to`); a match `<dir>/<stem>.gltf` compiles into `<to>/<stem>/` exactly as `ludion import` would.
 //! An entry is fresh when its glTF's directory (every file's size and mtime match the record, else
-//! the content hash does) and the importer itself (this binary's bytes) are unchanged since the
-//! last sync and every file it wrote is still there, recorded in `<to>/.ludion-sync.json`. The record
-//! is also ownership: a `to` holding files without it, or a record that does not parse, is refused
-//! (`L1245`) and the sync deletes only the stems its record names, plus its own `.sync-`/`.old-`
-//! staging debris. An import compiles into `<to>/.sync-<stem>` and is swapped in whole: never a
-//! partially written tree, though for an instant during the swap none at all. The sync holds
+//! the content hash does) and the importer's source fingerprint
+//! (`ludion_import::IMPORTER_FINGERPRINT`, its dependency closure hashed at build time) are
+//! unchanged since the last sync and every file it wrote is still there, recorded in
+//! `<to>/.ludion-sync.json`. The record is also ownership: a `to` holding files without it, or a
+//! record that does not parse, is refused (`L1245`) and the sync deletes only the stems its record
+//! names, plus its own `.sync-`/`.old-` staging debris. An import compiles into `<to>/.sync-<stem>`
+//! and is swapped in whole: never a partially written tree, though for an instant during the swap
+//! none at all. The sync holds
 //! `<to>/.ludion-sync.lock`; a second sync waits for it (saying so on stderr), then re-reads the
 //! record and re-decides ownership under the lock. Each table writes an intent record (every stem it
 //! is about to import, with no outputs) before its first swap, so a sync killed midway leaves stems
@@ -23,10 +25,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ludion_assets::content_hash;
 use ludion_assets::import_sync::{
     FileStamp, LOCK_FILE, RECORD_FILE, SyncRecord as Record, SyncRecordEntry as RecordEntry,
-    collect_files, directory_fingerprint, expand_import_sources, hex, source_hash,
+    collect_files, directory_fingerprint, expand_import_sources, source_hash,
 };
 use ludion_core::atomic::write_atomic;
 use ludion_core::codes::code::{IMPORT_OUTPUT_IO, IMPORT_SYNC_REFUSED};
@@ -139,12 +140,7 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
             format!("could not resolve `{}`: {error}", project.display()),
         )]
     })?;
-    let importer = importer_fingerprint().map_err(|error| {
-        vec![Diagnostic::new(
-            IMPORT_OUTPUT_IO,
-            format!("could not fingerprint the running `ludion` binary: {error}"),
-        )]
-    })?;
+    let importer = ludion_import::IMPORTER_FINGERPRINT;
 
     let mut tables = Vec::new();
     let mut refusals = Vec::new();
@@ -183,7 +179,7 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
     }
     let mut outcome = Outcome::default();
     for table in &tables {
-        sync_table(&root, table, &importer, &mut outcome);
+        sync_table(&root, table, importer, &mut outcome);
     }
     let cook_textures = manifest
         .cook
@@ -503,12 +499,6 @@ fn print_json(ok: bool, outcome: &Outcome, warmed: &Warmed, rendered: &[Diagnost
     });
     let envelope = serde_json::Value::Object(diagnostic::json_envelope(ok, fields, rendered));
     println!("{envelope}");
-}
-
-/// xxh3 of the running binary: never stale, unlike a version constant someone must bump.
-fn importer_fingerprint() -> std::io::Result<String> {
-    let bytes = std::fs::read(std::env::current_exe()?)?;
-    Ok(hex(content_hash(&bytes)))
 }
 
 fn refused(message: String, help: &str) -> Diagnostic {

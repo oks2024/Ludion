@@ -1838,6 +1838,7 @@ dependencies = [
  "ludion-scene",
  "ryu",
  "serde_json",
+ "xxhash-rust",
 ]
 
 [[package]]

@@ -142,3 +142,4 @@ cargo run -p ludion-cli -- explain L1202      # and L1201, L1203, L1206
   non-empty `path`) but never opens the referenced PNGs — that happens only at load, in
   `ludion-engine`'s `mesh_asset::load` (`L1101`/`L1102`). A path that validates but points nowhere
   passes `check-scene` and fails only when the scene is actually rendered.
+- **`IMPORTER_FINGERPRINT`** (`build.rs`, `build/fingerprint.rs`) hashes the dependency closure derived from `cargo metadata`; `ludion sync` re-imports when it moves. Never list the closure by hand.
