@@ -104,6 +104,7 @@ pub struct EngineBuilder {
     /// engine skip a foreign `kind:` instead of refusing the boot.
     game_doc_kinds: bool,
     doc_validators: Vec<DocValidator>,
+    doc_texts: std::collections::BTreeMap<String, String>,
     resource_carriers: Vec<ResourceCarrier>,
     profile_kind: Option<ProfileKind>,
     profile_path: Option<PathBuf>,
@@ -128,6 +129,7 @@ impl EngineBuilder {
             doc_kinds: Vec::new(),
             game_doc_kinds: false,
             doc_validators: Vec::new(),
+            doc_texts: std::collections::BTreeMap::new(),
             resource_carriers: Vec::new(),
             profile_kind: None,
             profile_path: None,
@@ -436,6 +438,44 @@ impl EngineBuilder {
         self
     }
 
+    /// Supplies a data-doc as text, replacing the file doc at `key` or adding one — a test's variant
+    /// of a content file without writing it to disk.
+    ///
+    /// `key` is content-root-relative, like the walk's (`weather/rain.yaml`; `\` is read as `/`); a
+    /// key that is absolute, has a `..` segment or does not end in `.yaml` is an `L1119`. The text goes
+    /// through the same kind dispatch, schema check and [`validate_docs`](EngineBuilder::validate_docs)
+    /// passes as a file doc (`L1119`/`L1120`, and `L1315` for a [`doc_singleton`](EngineBuilder::doc_singleton)
+    /// kind), and fails [`build`](EngineBuilder::build) the same way. A shadowed file is not read, so
+    /// the text also wins over a malformed file. A second call with the same key replaces the first.
+    ///
+    /// The doc lives as long as the engine: it is reinstalled on every `scene.load`, restore and
+    /// district rebuild, and a live `asset.reload` of its key is ignored. Replacing a singleton's file
+    /// keeps its count at one; a new key makes two (`L1315`). A recording armed on the engine carries
+    /// it ahead of the first keyframe, so a replay reproduces it. Builder-only: there is no live
+    /// setter, and the content root is still walked (use an empty scratch root to keep it unread).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
+    /// struct Weapon {
+    ///     damage: f32,
+    /// }
+    ///
+    /// let builder = Engine::builder()
+    ///     .doc_kind::<Weapon>("weapon")
+    ///     .doc_text("weapons/crossbow.yaml", "format: 1\nkind: weapon\ndamage: 99\n");
+    /// # let _ = builder;
+    /// ```
+    #[must_use]
+    pub fn doc_text(mut self, key: &str, text: &str) -> Self {
+        self.doc_texts.insert(key.to_owned(), text.to_owned());
+        self
+    }
+
     /// Registers a kind the *engine* owns, without claiming the content root the way
     /// [`doc_kind`](EngineBuilder::doc_kind) does.
     ///
@@ -675,6 +715,7 @@ impl EngineBuilder {
         let profile_rel_path = self
             .profile_path
             .unwrap_or_else(crate::player_profile::default_profile_rel_path);
+        let doc_texts = crate::docs::resolve_doc_texts(&self.doc_kinds, self.doc_texts)?;
         let mut engine = Engine::from_parts(
             registry,
             self.systems,
@@ -699,6 +740,8 @@ impl EngineBuilder {
         // Set before `install_docs` too: it decides whether a foreign `kind:` in the content root
         // refuses the boot or is skipped with a warning.
         engine.game_doc_kinds = self.game_doc_kinds;
+        // Set before `install_docs`, which merges them over the content-root walk.
+        engine.doc_texts = doc_texts;
         engine.resource_carriers = self.resource_carriers;
         // Populate the data-doc stores into the initial (pre-scene-load) world so a game driven
         // before any `scene.load` still sees its docs; a malformed doc — or a broken cross-reference

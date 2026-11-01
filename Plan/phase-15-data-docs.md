@@ -9,6 +9,7 @@
 > `check-docs` smoke as its own step via hello-paddle's zero-kinds path).
 > Amendment A1 (2026-11-01, Clockout request 0021): typed `parse_doc::<T>` added (decision 3).
 > Amendment B (2026-11-01, Clockout request 0021): singleton kinds (decision 6).
+> Amendment A2 (2026-11-01, Clockout request 0021): builder doc_text (decision 4).
 >
 > Originally: authored 2026-07-16, ready to start. This is the wave-level plan for wave **E4** of
 > the first-game arc; its brief is `Plan/engine-first-game.md` §"E4 — Game data-doc facility" plus
@@ -200,6 +201,14 @@
    *Rejected:* lazy per-system load (non-deterministic load order; a bad doc would not fail fast);
    mandating `*.<kind>.yaml` filenames or a per-kind directory (G4 uses `weapons/crossbow.yaml`; the
    in-doc kind already disambiguates, as it does for mesh/voxel).
+
+   **Amendment A2 (2026-11-01, Clockout request 0021):** `EngineBuilder::doc_text(key, text)` hands a
+   doc in as text, merged over the walk by key (it replaces the file at that key or adds one; a
+   shadowed file is not read). It takes the same kind dispatch, schema check, `validate_docs` and
+   `L1315` count as a file doc, lives for the engine's life (reinstalled on `scene.load`, restore and
+   district rebuild) and is builder-only. A recording carries each as a `DocReload` record ahead of
+   the arm keyframe, which replay folds back into the builder (no format change); a live
+   `asset.reload` of that key is ignored.
 
 5. **`DocStore<T>` = `{ docs: BTreeMap<String, T>, generation: u64 }`, keyed by slash-normalized
    root-relative path.** `BTreeMap` satisfies the determinism denylist and pins iteration order (the

@@ -156,6 +156,21 @@ let weapon = parse_doc::<Weapon>(&std::fs::read_to_string(path)?, "weapon")
 `validate_docs` does not run here — it needs a `World` and runs at boot, `scene.load` and live
 reload; a cross-doc rule needs the engine. No count rule applies either.
 
+## A variant doc in a test
+
+```rust
+vigil::game().project_root(&empty_root)
+    .doc_text("weather/rain.yaml", &text)
+    .build()?
+```
+
+`doc_text(key, text)` replaces the file doc at that content-root-relative key, or adds one. It takes
+the same kind dispatch, schema check and `validate_docs` as a file, and fails `build()` the same way;
+a `doc_singleton` kind stays at one doc if the key matches, and a new key gives `L1315`. It lives for
+the engine (surviving `scene.load` and restore) and is recorded, so replays reproduce it. An
+`asset.reload` of that key is ignored. The root is still walked: use an empty scratch root when the
+real tree must not load.
+
 ## Writing docs back canonically
 
 A tool that *generates or rewrites* docs (an importer, a balance script) emits canonical text with

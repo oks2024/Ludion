@@ -235,15 +235,18 @@ pub(crate) struct PreparedDocs {
 /// Every collected walk diagnostic (see [`load_doc_stores`]); else every `Error` the singleton
 /// count (`L1315`) or a validator reported, the count first, then registration order; else the first `L1119`/`L1120` a logged reload fails with
 /// against the current schema.
+///
+/// `inline` is the engine's builder-supplied docs, merged over the walk by key.
 pub(crate) fn prepare_docs(
     root: &Path,
     doc_kinds: &[DocKind],
     game_kinds: bool,
     validators: &[DocValidator],
+    inline: &BTreeMap<String, InlineDoc>,
     reloads: &[(String, String, String)],
     world: &mut World,
 ) -> Result<PreparedDocs, Vec<Diagnostic>> {
-    let skips = load_doc_stores(root, doc_kinds, game_kinds, world)?;
+    let skips = load_doc_stores(root, doc_kinds, game_kinds, inline, world)?;
     let mut warnings = Vec::new();
     if !validators.is_empty() || doc_kinds.iter().any(|dk| dk.singleton) {
         let (errors, reported): (Vec<_>, Vec<_>) =
@@ -261,6 +264,62 @@ pub(crate) fn prepare_docs(
             .map_err(|d| vec![d])?;
     }
     Ok(PreparedDocs { skips, warnings })
+}
+
+/// A doc the builder holds as text ([`doc_text`](crate::EngineBuilder::doc_text)), its kind resolved
+/// once at build.
+#[derive(Debug, Clone)]
+pub(crate) struct InlineDoc {
+    pub(crate) kind: String,
+    pub(crate) text: String,
+}
+
+/// Resolves the builder's `doc_text` entries, in key order: normalizes each key and reads the text's
+/// `kind:`. Fails on the first offender.
+///
+/// # Errors
+/// `L1119` for a key that is not a content-root-relative `*.yaml` path, for a text with no `kind:`,
+/// or for a kind no registered doc kind owns; the `L100x` error for text the strict-YAML reader
+/// rejects.
+pub(crate) fn resolve_doc_texts(
+    doc_kinds: &[DocKind],
+    texts: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, InlineDoc>, Diagnostic> {
+    let mut out = BTreeMap::new();
+    for (raw_key, text) in texts {
+        let key = raw_key.replace('\\', "/");
+        let bad_key = key.is_empty()
+            || key.starts_with('/')
+            || key.contains(':')
+            || key.split('/').any(|segment| segment == "..")
+            || !key.ends_with(".yaml");
+        if bad_key {
+            return Err(Diagnostic::new(
+                code::DOC_ENVELOPE_INVALID,
+                format!("doc_text key `{raw_key}` is not a content-root-relative `*.yaml` path"),
+            )
+            .with_help(
+                "a doc_text key is a content-root-relative `*.yaml` path, e.g. `weapons/crossbow.yaml`",
+            ));
+        }
+        let kind = match ludion_scene::peek_kind_checked(&text) {
+            Err(diagnostic) => return Err(prefix_file(diagnostic, &key)),
+            Ok(None) => {
+                return Err(Diagnostic::new(
+                    code::DOC_ENVELOPE_INVALID,
+                    format!("{key}: doc_text declares no `kind:`"),
+                )
+                .with_path("/kind")
+                .with_help("a data-doc starts with `kind: <registered kind>`"));
+            }
+            Ok(Some(kind)) => kind,
+        };
+        if !doc_kinds.iter().any(|dk| dk.kind == kind) {
+            return Err(unregistered_kind(&key, &kind, doc_kinds));
+        }
+        out.insert(key, InlineDoc { kind, text });
+    }
+    Ok(out)
 }
 
 /// Refuses every registered doc kind, and the profile type, whose schema declares a top-level
@@ -564,17 +623,23 @@ fn doc_key(root: &Path, abs: &Path) -> Option<String> {
 /// Every collected diagnostic: `L1101` for an unreadable file, `L100x` for a file the strict-YAML
 /// reader rejects, `L1119`/`L1120` for a malformed doc (each prefixed with the offending file's
 /// path), `L1119` for an unregistered `kind` on an engine a game registered a kind on.
+///
+/// `inline` (the builder's [`doc_text`](crate::EngineBuilder::doc_text) docs, keyed like the walk)
+/// replaces the file at the same key and is checked the same way after the walk's files.
 pub(crate) fn load_doc_stores(
     root: &Path,
     doc_kinds: &[DocKind],
     game_kinds: bool,
+    inline: &BTreeMap<String, InlineDoc>,
     world: &mut World,
 ) -> Result<DocSkips, Vec<Diagnostic>> {
-    if doc_kinds.is_empty() {
+    if doc_kinds.is_empty() && inline.is_empty() {
         return Ok(DocSkips::default());
     }
 
-    let files = content_root_yaml(root);
+    // A shadowed file is not even read, so an inline doc also wins over a malformed file.
+    let mut files = content_root_yaml(root);
+    files.retain(|(key, _)| !inline.contains_key(key));
 
     let mut per_kind: BTreeMap<&str, BTreeMap<String, Value>> = BTreeMap::new();
     let mut diagnostics = Vec::new();
@@ -620,6 +685,20 @@ pub(crate) fn load_doc_stores(
                     warnings.push(skipped_kind(key, &kind));
                 }
             },
+        }
+    }
+    for (key, doc) in inline {
+        let Some(dk) = doc_kinds.iter().find(|dk| dk.kind == doc.kind) else {
+            continue;
+        };
+        match ludion_scene::check_doc(&doc.text, &doc.kind, &dk.schema) {
+            Ok(fields) => {
+                per_kind
+                    .entry(dk.kind.as_str())
+                    .or_default()
+                    .insert(key.clone(), fields);
+            }
+            Err(errors) => diagnostics.extend(errors.into_iter().map(|d| prefix_file(d, key))),
         }
     }
 

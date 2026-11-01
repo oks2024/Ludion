@@ -19,7 +19,9 @@
 //!
 //! Keyframes (`engine.snapshot` documents, at the start, every
 //! [`KEYFRAME_INTERVAL`](crate::engine::KEYFRAME_INTERVAL) frames and at the stop) are written by the engine around
-//! [`write_delta`]; the seek machinery in `ludion-protocol` uses them.
+//! [`write_delta`]; the seek machinery in `ludion-protocol` uses them. An engine holding builder
+//! `doc_text` docs writes them first, as `DocReload` records ahead of the arm keyframe
+//! ([`write_inline_docs`]); replay folds those back into its builder.
 
 use std::io::{self, Write};
 
@@ -219,6 +221,22 @@ pub(crate) fn write_keyframe(
 ) -> io::Result<()> {
     recorder.writer.write_keyframe(frame, snapshot)?;
     recorder.last_keyframe = frame;
+    recorder.records_at_mark = recorder.writer.records_written();
+    Ok(())
+}
+
+/// Writes one `DocReload` per builder inline doc (`doc_text`), in key order at `frame`. They sit
+/// between the header and the arm keyframe, which is how replay tells them from a live reload.
+pub(crate) fn write_inline_docs(
+    recorder: &mut Recorder,
+    frame: FrameIndex,
+    docs: &std::collections::BTreeMap<String, crate::docs::InlineDoc>,
+) -> io::Result<()> {
+    for (key, doc) in docs {
+        recorder
+            .writer
+            .write_doc_reload(frame, &doc.kind, key, &doc.text)?;
+    }
     recorder.records_at_mark = recorder.writer.records_written();
     Ok(())
 }

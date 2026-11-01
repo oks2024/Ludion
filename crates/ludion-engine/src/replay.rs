@@ -727,31 +727,13 @@ impl DriveHook for RenderHook<'_, '_> {
 /// # Errors
 /// Every error [`replay_hashes_with`] can raise.
 pub(crate) fn prepare_replay(
-    builder: EngineBuilder,
+    mut builder: EngineBuilder,
     bytes: &[u8],
     project_root: impl AsRef<Path>,
 ) -> Result<(Engine, Vec<ReplayAction>), Diagnostic> {
     let reader = ReplayReader::new(bytes)?;
     check_compatible(reader.header())?;
 
-    let mut engine = builder.build_at(project_root.as_ref().to_path_buf())?;
-    // The extent is sim input (a game unprojects the cursor through it), so it is installed before the
-    // scene loads — with `render.size`'s validity check, which refuses a hostile header value, but not
-    // the host's render-scale check. A header without one is a pre-field `.lrp`, recorded at the
-    // default extent.
-    if let Some(extent) = &reader.header().render_extent {
-        let params = RenderSizeParams {
-            width: Some(extent.width),
-            height: Some(extent.height),
-        };
-        render::apply_recorded(&mut engine, &params).map_err(|mut diagnostic| {
-            diagnostic.message = format!("replay header render_extent: {}", diagnostic.message);
-            if let Some(path) = &diagnostic.path {
-                diagnostic.path = Some(path.replace("/params/", "/render_extent/"));
-            }
-            diagnostic
-        })?;
-    }
     // Reconstruct the action list from the delta records; keyframes are kept as inert actions, the
     // verifier's alignment marker.
     // A `SceneLoad` record replays from its inline text, never its path. `SceneSwitch` records are
@@ -765,6 +747,10 @@ pub(crate) fn prepare_replay(
     let mut prefabs = PrefabScan::default();
     // The last tick of the `sim.step` record just before this one — what a `SystemPanic` must name.
     let mut step_end: Option<FrameIndex> = None;
+    // A `DocReload` ahead of the first keyframe is a builder `doc_text` doc the recorder wrote at
+    // arm time, not a live reload: it rebuilds into the builder so the engine holds it from frame 0.
+    let mut seen_keyframe = false;
+    let mut inline_docs: Vec<(String, String)> = Vec::new();
     for record in reader.records()? {
         actions.extend(prefabs.observe(&record));
         let prior_step_end = step_end.take();
@@ -800,11 +786,17 @@ pub(crate) fn prepare_replay(
                 path,
                 document,
                 ..
-            } => actions.push(ReplayAction::DocReload {
-                kind: doc_kind,
-                path,
-                document,
-            }),
+            } => {
+                if seen_keyframe {
+                    actions.push(ReplayAction::DocReload {
+                        kind: doc_kind,
+                        path,
+                        document,
+                    });
+                } else {
+                    inline_docs.push((path, document));
+                }
+            }
             ReplayRecord::SceneLoad {
                 frame,
                 path,
@@ -844,6 +836,7 @@ pub(crate) fn prepare_replay(
             // Kept in record order — inert for a plain drive, and the alignment marker a keyframe
             // verifier needs (`crate::bisect`): the state right here is what the keyframe captured.
             ReplayRecord::Keyframe { frame, snapshot } => {
+                seen_keyframe = true;
                 actions.push(ReplayAction::Keyframe { frame, snapshot });
             }
             // Pre-scan the target text (last write wins if a district is visited more than once); the
@@ -858,6 +851,27 @@ pub(crate) fn prepare_replay(
             // Filed or driven by `PrefabScan` above.
             ReplayRecord::PrefabText { .. } => {}
         }
+    }
+    for (path, document) in inline_docs {
+        builder = builder.doc_text(&path, &document);
+    }
+    let mut engine = builder.build_at(project_root.as_ref().to_path_buf())?;
+    // The extent is sim input (a game unprojects the cursor through it), so it is installed before the
+    // scene loads — with `render.size`'s validity check, which refuses a hostile header value, but not
+    // the host's render-scale check. A header without one is a pre-field `.lrp`, recorded at the
+    // default extent.
+    if let Some(extent) = &reader.header().render_extent {
+        let params = RenderSizeParams {
+            width: Some(extent.width),
+            height: Some(extent.height),
+        };
+        render::apply_recorded(&mut engine, &params).map_err(|mut diagnostic| {
+            diagnostic.message = format!("replay header render_extent: {}", diagnostic.message);
+            if let Some(path) = &diagnostic.path {
+                diagnostic.path = Some(path.replace("/params/", "/render_extent/"));
+            }
+            diagnostic
+        })?;
     }
     engine.install_replay_scene_text(scene_text);
     // Always installed, even empty: a replay never reads a prefab off disk — the header scene's own

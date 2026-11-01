@@ -196,6 +196,11 @@ pub struct Engine {
     /// which hosts anyone's scene and so skips a foreign `kind:` (an `L1155` in
     /// [`doc_skip_warnings`](Engine::doc_skip_warnings)) where a game's engine fails the boot on it.
     pub(crate) game_doc_kinds: bool,
+    /// The docs the builder holds as text ([`EngineBuilder::doc_text`](crate::EngineBuilder::doc_text)),
+    /// keyed like the content-root walk. Merged over the walk by every
+    /// [`prepare_docs`](crate::docs::prepare_docs), so they outlive `scene.load`, restore and district
+    /// rebuilds; a disk reload of their key is ignored.
+    pub(crate) doc_texts: BTreeMap<String, crate::docs::InlineDoc>,
     /// The game's registered resource movers, in registration order
     /// ([`EngineBuilder::carry_resource`](crate::EngineBuilder::carry_resource)). Run by
     /// [`commit_world`](Engine::commit_world) on a switch alone — a scene switch is the one world rebuild
@@ -689,6 +694,7 @@ impl Engine {
             doc_kinds,
             doc_validators: Vec::new(),
             game_doc_kinds: false,
+            doc_texts: BTreeMap::new(),
             resource_carriers: Vec::new(),
             doc_validation_warnings: Vec::new(),
             doc_skip_warnings: Vec::new(),
@@ -2497,6 +2503,7 @@ impl Engine {
             &self.doc_kinds,
             self.game_doc_kinds,
             &self.doc_validators,
+            &self.doc_texts,
             &[],
             self.driver.world_mut(),
         )?;
@@ -2520,6 +2527,7 @@ impl Engine {
             &self.doc_kinds,
             self.game_doc_kinds,
             &self.doc_validators,
+            &self.doc_texts,
             reloads,
             world,
         )
@@ -2685,6 +2693,9 @@ impl Engine {
     /// `doc_singleton` kind, a game's own codes) — each a diagnosed
     /// error, never a crash or a silent skip; the store keeps its previous contents and generation (a
     /// bad save mid-tune must not wipe state), and nothing is armed for recording.
+    ///
+    /// A key the builder holds as [`doc_text`](crate::EngineBuilder::doc_text) is never reloaded
+    /// from disk (`Ok(None)`): the override wins for the engine's life.
     pub(crate) fn reload_doc_from_disk(&mut self, path: &str) -> Result<Option<u64>, Diagnostic> {
         if self.doc_kinds.is_empty() {
             return Ok(None);
@@ -2692,6 +2703,9 @@ impl Engine {
         let Some((key, source)) = crate::docs::resolve_doc_path(&self.project_root, path) else {
             return Ok(None);
         };
+        if self.doc_texts.contains_key(&key) {
+            return Ok(None);
+        }
         let peeked = crate::docs::peek_reload_kind(&key, &source)?;
         let kind = match peeked {
             Some(kind) if self.doc_kinds.iter().any(|dk| dk.kind == kind) => kind,
@@ -4430,6 +4444,8 @@ impl Engine {
         let writer = ReplayWriter::new(Box::new(sink) as Box<dyn Write + Send>, &header)
             .map_err(io_to_diagnostic)?;
         let mut recorder = Recorder::new(writer, KEYFRAME_INTERVAL, self.frame());
+        crate::recording::write_inline_docs(&mut recorder, self.frame(), &self.doc_texts)
+            .map_err(io_to_diagnostic)?;
         let snapshot = crate::snapshot::capture(self)?;
         crate::recording::write_keyframe(&mut recorder, self.frame(), &snapshot)
             .map_err(io_to_diagnostic)?;
