@@ -77,6 +77,17 @@ clips:
   rate it had. Write `speed` directly only together with a new `started`.
 - A sprite flipbook cannot crossfade: `L1209`.
 
+## Stepped playback
+
+- `hold: N` on `Animation` shows each pose for `N` sim ticks (default `1`, every tick): `2` is 30 poses
+  a second at 60 Hz, `5` is 12 — stop-motion "on twos" at 24 fps. `0` is `L1317`, in files and on the wire.
+- The grid is global: the pose is evaluated at the last tick that is a multiple of `N`, so every entity
+  with the same `hold` changes pose on the same ticks, whenever its clip started.
+- The incoming clock, the outgoing clock and the crossfade weight step together, so a fade is stepped too.
+- Visual-only: `AnimationEvents` and the ragdoll pose keep the exact tick, and `set_speed` works as
+  usual (the grid does not drift).
+- Stepping *inside* a clip is the clip's own `ease: step` keys (`ludion docs voxel-animation` §Format).
+
 ## AnimationEvents
 
 - Register `animation_events` **before** the system that reads the resource, declaring

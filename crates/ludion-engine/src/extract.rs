@@ -1162,7 +1162,8 @@ fn extract_inner(
                 ) else {
                     continue;
                 };
-                let (pose, crossfade) = animation_pose(world, mesh.id, &data, now);
+                let (pose, crossfade) =
+                    animation_pose(world, mesh.id, &data, held_for(world, mesh.id, now));
                 for (part, (local, local_normal)) in
                     part_placements_faded(&data, pose, crossfade.as_ref())
                         .into_iter()
@@ -1212,7 +1213,7 @@ fn extract_inner(
                     let offset = 1 + bone_palette.len() as u32;
                     let joints = &mesh_assets[idx].skin_joints;
                     let (pose, crossfade) = character.as_deref().map_or((None, None), |data| {
-                        character_pose(world, mesh.id, data, now)
+                        character_pose(world, mesh.id, data, held_for(world, mesh.id, now))
                     });
                     match skin_followers.get(&mesh.id) {
                         Some(followed) if !followed.is_empty() => {
@@ -4108,6 +4109,7 @@ fn prefab_part_poses(
         let Some(animation) = get::<Animation>(world, id) else {
             continue;
         };
+        let now = held(animation, now);
         let Some(instance) = get::<PrefabInstance>(world, id).filter(|i| i.root == id) else {
             continue;
         };
@@ -4251,6 +4253,7 @@ fn flipbook_frame_name(
     if animation.clip.is_empty() {
         return None;
     }
+    let now = held(animation, now);
     let asset = atlases.resolve(assets, atlas).ok()?;
     let flipbook = asset.doc.flipbook(&animation.clip)?;
     let frame = ludion_scene::flipbook_frame(
@@ -4294,6 +4297,18 @@ pub(crate) fn clock_elapsed(
     anchor: Option<&ClipAnchor>,
 ) -> f64 {
     clock_ticks(now, started, speed, anchor) * now.rate().seconds_per_tick()
+}
+
+/// `now` snapped down to the animation's pose grid: the last tick that is a multiple of `hold`
+/// (a 0 reads as 1). Applied only where extract poses; events and the ragdoll keep the exact tick.
+pub(crate) fn held(animation: &Animation, now: SimTime) -> SimTime {
+    let hold = u64::from(animation.hold.max(1));
+    SimTime::from_ticks(now.ticks() - now.ticks() % hold, now.rate())
+}
+
+/// [`held`] for an entity's own `Animation`; `now` unchanged when it has none.
+fn held_for(world: &World, id: EntityId, now: SimTime) -> SimTime {
+    get::<Animation>(world, id).map_or(now, |animation| held(animation, now))
 }
 
 /// The incoming clip's clock in ticks (before any character binding speed).

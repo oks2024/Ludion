@@ -1540,6 +1540,10 @@ pub mod code {
     /// semantic validator; the JSON Pointer names the ignored field (`/offset`, `/size`).
     pub const UI_RECT_FILL_IGNORES_PLACEMENT: DiagnosticCode = DiagnosticCode::new("L1316");
 
+    /// `L1317` — an `Animation` component's `hold` is `0`; it must be at least one tick. Raised by
+    /// `Animation`'s semantic validator, in files and on the wire; pointer `/hold`.
+    pub const ANIMATION_HOLD_ZERO: DiagnosticCode = DiagnosticCode::new("L1317");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7659,6 +7663,20 @@ matter. Fix: delete the `offset` or `size` from the filled rect, or drop `fill: 
 rect by its anchor again. (`anchor` is not checked: the default is indistinguishable from an
 authored `top_left`.)",
     },
+    CodeEntry {
+        code: code::ANIMATION_HOLD_ZERO,
+        severity: Severity::Error,
+        title: "Animation hold is zero",
+        explanation: "\
+An `Animation` component's `hold` is `0`.
+
+`hold` is how many sim ticks each pose is shown: `1` (the default) poses every tick, `2` gives 30 poses
+per second at 60 Hz, `5` gives 12 (stop-motion \"on twos\" at 24 fps). Zero ticks per pose has no
+meaning, so the component is refused rather than read as `1`.
+
+The JSON Pointer names the field: `/hold`. Fix: a whole number of at least `1`, or remove the field to
+play every tick.",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -10467,6 +10485,7 @@ mod tests {
         code::PREFAB_CLIP_TARGET,
         code::DOC_SINGLETON_COUNT,
         code::UI_RECT_FILL_IGNORES_PLACEMENT,
+        code::ANIMATION_HOLD_ZERO,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

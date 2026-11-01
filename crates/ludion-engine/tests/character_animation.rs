@@ -378,3 +378,24 @@ fn a_crossfade_blends_then_lands_exactly_on_the_incoming_clip() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// `hold: 5` on a plain clip and on a mid-crossfade character: ticks 10..=14 pose identically, tick
+/// 15 is the next pose.
+#[test]
+fn a_hold_steps_the_skin_pose_on_a_global_grid() {
+    let root = fixture_project("hold-grid");
+    let scene = FADE_SCENE.replace("Animation:\n", "Animation:\n        hold: 5\n");
+    let engine = engine_at(&root, &scene);
+    let held = palettes_at(&engine, 10);
+    for tick in 11..=14 {
+        assert_eq!(palettes_at(&engine, tick), held, "tick {tick}");
+    }
+    let next = palettes_at(&engine, 15);
+    for (entity, name) in [(0, "fading"), (1, "plain jump"), (2, "plain run")] {
+        assert!(
+            !close(&held[entity], &next[entity]),
+            "{name} must step at tick 15"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -397,3 +397,28 @@ fn a_crossfade_blends_then_lands_exactly_on_the_incoming_clip() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// `hold: 5` on a prefab root, plain and mid-crossfade: ticks 10..=14 pose identically, tick 15 is
+/// the next pose.
+#[test]
+fn a_hold_steps_the_prefab_pose_on_a_global_grid() {
+    let root = fixture_project("hold-grid");
+    let scene = FADE_SCENE.replace("Animation:\n", "Animation:\n          hold: 5\n");
+    let engine = engine_with(&root, &scene);
+    let held = posed_at(&engine, 10);
+    for tick in 11..=14 {
+        let posed = posed_at(&engine, tick);
+        for (a, b) in held.iter().zip(&posed) {
+            assert_eq!(a.model, b.model, "tick {tick}");
+        }
+    }
+    let next = posed_at(&engine, 15);
+    for entity in 0..3 {
+        let lid = entity * PARTS + LID;
+        assert_ne!(
+            held[lid].model, next[lid].model,
+            "instance {entity} must step at tick 15"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

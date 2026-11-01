@@ -189,6 +189,11 @@ the clip.
     whole-value `component.set` is exactly what `crossfade()` writes. Rejected: an `animation.*` wire
     method — a second way to write what `component.set` already writes, and a new method is the
     user's decision (`editor/CLAUDE.md`).
+19. **Playback cadence is a per-entity tick hold.** `Animation.hold` (ticks, default 1) is applied to the
+    clip clocks and the fade weight at extract, on a global grid (`ticks − ticks % hold`); the default 1
+    is byte-identical to today. Events and the ragdoll pose keep the exact tick. **Why:** Clockout 0027,
+    stop-motion 'on twos' with crossfades included; per-entity only, no scene-wide resource. Rejected:
+    `pose_hz` (not exact at 60 Hz), per-entity phase.
 
 ## The formats
 

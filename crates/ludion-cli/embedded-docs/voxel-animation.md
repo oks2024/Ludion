@@ -137,12 +137,15 @@ events:
 ## Playback
 
 `Animation` is a built-in component: `clip` (the short name, default `""`), `started` (the
-`FrameIndex` playback is measured from, default `0`), `speed` (default `1.0`, `>= 0`).
+`FrameIndex` playback is measured from, default `0`), `speed` (default `1.0`, `>= 0`), `hold` (ticks
+each pose is shown, default `1`, `>= 1`).
 
 - **The pose is visual-only, a hard line.** The pose is a pure function of `(clip, sim time)`
   derived at the render boundary and written back nowhere. The entity keeps its one `Transform` and
   collision footprint; pausing freezes the pose. No limb hitboxes. Once a game registers
   `animation_events`, clip timing is sim input (`ludion docs character-animation`).
+- **`hold: N` steps the pose** every `N` ticks ("on twos"); assemblies, prefab clips and flipbooks all
+  honour it. See `ludion docs character-animation` §Stepped playback.
 - **Write the component only when the choice changes.** Re-stamping `started` every frame restarts
   the clip every frame (and churns the world hash for a `String` that did not change). The component
   is ordinary hashed sim state: it snapshots, and it rides a scene transition.

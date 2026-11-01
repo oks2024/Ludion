@@ -4093,6 +4093,8 @@ fn ui_element_non_positive_size(value: f64, pointer: &str) -> Diagnostic {
 /// clip ticks consumed at the frame it was called, after which the new `speed` covers the ticks
 /// since.
 ///
+/// `hold` steps the pose cadence ("on twos"): the pose changes only every `hold` ticks.
+///
 /// On an entity that binds nothing under `clip` — a `Mesh.shape` that is not an assembly or a character, an
 /// assembly or atlas with no such clip, a `Sprite` drawn from a loose `texture:` — this component is
 /// inert: the model renders at its rest pose and the sprite shows its authored `frame`. An unknown
@@ -4143,6 +4145,13 @@ pub struct Animation {
     #[serde(default, skip_serializing_if = "is_zero")]
     #[schemars(range(min = 0.0))]
     pub fade: f32,
+    /// Sim ticks each pose is shown (default `1`, every tick; `0` is refused, `L1317`): `2` is 30
+    /// poses a second at 60 Hz, `5` is 12. The grid is global — every entity with the same `hold`
+    /// changes pose on the same ticks — and covers the incoming clock, the outgoing clock and the
+    /// crossfade weight. Visual-only: events and the ragdoll pose keep the exact tick. A `0` written
+    /// from Rust reads as `1`.
+    #[serde(default = "one_u32", skip_serializing_if = "is_one_u32")]
+    pub hold: u32,
 }
 
 impl Default for Animation {
@@ -4158,6 +4167,7 @@ impl Default for Animation {
             from_anchor: None,
             fade_started: FrameIndex::ZERO,
             fade: 0.0,
+            hold: 1,
         }
     }
 }
@@ -4380,6 +4390,28 @@ impl SemanticValidate for AudioEmitter {
         }
         out
     }
+}
+
+impl SemanticValidate for Animation {
+    /// Rejects `hold: 0` (`L1317`), pointer `/hold`. The schema cannot say it: a schemars lower
+    /// bound would surface on the wire as the generic `L1014` before this runs.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        if value.get("hold").and_then(Value::as_u64) == Some(0) {
+            out.push(animation_hold_zero("/hold"));
+        }
+        out
+    }
+}
+
+/// `L1317` — an `Animation`'s `hold` is zero ticks.
+fn animation_hold_zero(pointer: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::ANIMATION_HOLD_ZERO,
+        "Animation hold 0 is not valid; it is how many sim ticks each pose is shown, at least 1",
+    )
+    .with_path(pointer.to_string())
+    .with_help("write a whole number of at least 1, or remove hold to pose every tick")
 }
 
 /// `L1136` — an `AudioEmitter`'s audible radius is not strictly positive and finite.
@@ -4756,6 +4788,14 @@ fn frame_zero() -> FrameIndex {
     FrameIndex::ZERO
 }
 
+fn one_u32() -> u32 {
+    1
+}
+
+fn is_one_u32(value: &u32) -> bool {
+    *value == 1
+}
+
 fn one() -> f32 {
     1.0
 }
@@ -5024,11 +5064,14 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<UiList>("UiList")
         .expect("unique");
-    // `Animation` (which assembly clip an entity plays) needs no semantic validator: `clip` is a
-    // free-form short name resolved at render time (an unknown one is a documented silent degrade,
-    // not an error), and `speed`'s lower bound is a schemars `range`, so a bad value there is the
-    // ordinary `L1014` at the field — the `GiVolume` posture.
-    registry.register::<Animation>("Animation").expect("unique");
+    // `Animation` (which assembly clip an entity plays) carries a semantic validator for one
+    // invariant: `hold` is at least one tick (`L1317`). `hold` has no schemars lower bound on
+    // purpose — the wire runs the schema check first, so an `L1014` would hide the specific code.
+    // `clip` is a free-form short name resolved at render time (an unknown one is a documented
+    // silent degrade, not an error), and `speed`'s lower bound is a schemars `range`.
+    registry
+        .register_validated::<Animation>("Animation")
+        .expect("unique");
     // `AudioEmitter` (the positional looping sound) carries a semantic validator for the one
     // invariant its schema cannot express, the `Collider` case exactly: a strictly positive, finite
     // `range` (`L1136`). `gain` rides its own schemars lower bound, and `sound`/`category` cannot be
@@ -5181,6 +5224,7 @@ mod tests {
             }),
             fade_started: FrameIndex(30),
             fade: 0.25,
+            hold: 3,
         };
         let json = serde_json::to_value(&animation).unwrap();
         assert_eq!(
@@ -5678,6 +5722,54 @@ mod tests {
                 && d.path.as_deref() == Some("/entities/0/components/Animation/speed")),
             "expected an L1014 at Animation/speed: {diagnostics:?}"
         );
+    }
+
+    /// `hold: 0` is `L1317` at the field through the real scene checker; a positive hold validates.
+    #[test]
+    fn zero_animation_hold_is_l1317() {
+        let registry = builtin_registry();
+        let bad = "format: 1\nentities:\n  - components:\n      Animation:\n        hold: 0\n";
+        let diagnostics = ludion_scene::check(bad, &registry).unwrap_err();
+        assert!(
+            diagnostics.iter().any(|d| d.code.as_str() == "L1317"
+                && d.path.as_deref() == Some("/entities/0/components/Animation/hold")),
+            "expected an L1317 at Animation/hold: {diagnostics:?}"
+        );
+        let good = "format: 1\nentities:\n  - components:\n      Animation:\n        hold: 5\n";
+        ludion_scene::check(good, &registry).expect("a positive hold validates");
+    }
+
+    /// A default `Animation` omits `hold`; a non-default one round-trips.
+    #[test]
+    fn animation_hold_is_omitted_at_one_and_round_trips() {
+        let json = serde_json::to_value(Animation::default()).unwrap();
+        assert!(json.get("hold").is_none());
+        let held = Animation {
+            hold: 5,
+            ..Animation::default()
+        };
+        let json = serde_json::to_value(&held).unwrap();
+        assert_eq!(json["hold"], serde_json::json!(5));
+        assert_eq!(serde_json::from_value::<Animation>(json).unwrap(), held);
+    }
+
+    /// `held` snaps down onto the global grid; a zero reads as one.
+    #[test]
+    fn held_snaps_to_the_hold_grid() {
+        use crate::extract::held;
+        let five = Animation {
+            hold: 5,
+            ..Animation::default()
+        };
+        for ticks in 10..=14 {
+            assert_eq!(held(&five, at(ticks)), at(10));
+        }
+        assert_eq!(held(&five, at(15)), at(15));
+        let zero = Animation {
+            hold: 0,
+            ..Animation::default()
+        };
+        assert_eq!(held(&zero, at(13)), at(13));
     }
 
     // --- AudioEmitter, L1136 ---

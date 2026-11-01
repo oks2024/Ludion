@@ -424,3 +424,116 @@ fn a_crossfade_blends_then_lands_exactly_on_the_incoming_clip() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A mid-crossfade entity and a plain clip entity, both `hold: 5`, and a third on `hold: 3`:
+/// `[fading body, fading arm, walk body, walk arm, raise body, raise arm]`.
+const HOLD_SCENE: &str = "format: 1
+seed: 1
+entities:
+  - name: fading
+    components:
+      Mesh:
+        shape:
+          assembly: models/fixture.assembly.yaml
+      Animation:
+        clip: raise
+        from: walk
+        fade: 1.0
+        hold: 5
+  - name: walk
+    components:
+      Mesh:
+        shape:
+          assembly: models/fixture.assembly.yaml
+      Animation:
+        clip: walk
+        hold: 5
+  - name: raise
+    components:
+      Mesh:
+        shape:
+          assembly: models/fixture.assembly.yaml
+      Animation:
+        clip: raise
+        hold: 3
+";
+
+fn models(posed: &[MeshInstance]) -> Vec<ludion_core::math::glam::Mat4> {
+    posed.iter().map(|instance| instance.model).collect()
+}
+
+/// `hold: 5` poses on a global grid: ticks 10..=14 are one pose, tick 15 the next — for a plain
+/// clip and for a crossfade (whose weight steps with the clocks).
+#[test]
+fn a_hold_steps_the_pose_on_a_global_grid() {
+    let root = fixture_project("hold-grid");
+    let engine = engine_with(&root, HOLD_SCENE);
+    // Only the two hold-5 entities; the hold-3 one steps on its own grid.
+    let fives = |tick| models(&posed_at(&engine, tick))[..2 * PARTS].to_vec();
+    let held = fives(10);
+    for tick in 11..=14 {
+        assert_eq!(fives(tick), held, "tick {tick}");
+    }
+    let next = fives(15);
+    for (entity, name) in [(0, "fading"), (PARTS, "walk")] {
+        assert_ne!(
+            held[entity + 1],
+            next[entity + 1],
+            "{name} must step at tick 15"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `hold: 1` and an absent field are the same world: identical poses and an identical hash.
+#[test]
+fn hold_one_is_the_absent_field() {
+    let root = fixture_project("hold-one");
+    let with = HOLD_SCENE.replace("hold: 5", "hold: 1");
+    let without = HOLD_SCENE.replace("        hold: 5\n", "");
+    let (mut with, mut without) = (engine_with(&root, &with), engine_with(&root, &without));
+    for tick in [0, 7, 13, 30] {
+        assert_eq!(
+            models(&posed_at(&with, tick)),
+            models(&posed_at(&without, tick))
+        );
+    }
+    assert_eq!(with.world_hash().unwrap(), without.world_hash().unwrap());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn extracting_a_held_run_changes_neither_its_hashes_nor_its_recording() {
+    assert_extraction_is_hash_neutral("hash-neutral-hold", HOLD_SCENE);
+}
+
+/// On the wire, `hold: 0` is `L1317` and inserts nothing; `hold: 5` sets cleanly.
+#[test]
+fn component_set_rejects_a_zero_hold() {
+    let mut engine = Engine::new();
+    engine
+        .load_inline_scene("format: 1\nentities: []\n")
+        .unwrap();
+    let entity = engine.world_mut().spawn();
+    let set = |engine: &mut Engine, value| {
+        ludion_engine::dispatch(
+            engine,
+            Command::ComponentSet(command::ComponentSetParams {
+                entity,
+                component: "Animation".to_string(),
+                value,
+            }),
+        )
+    };
+    let error = set(&mut engine, serde_json::json!({ "hold": 0 }))
+        .expect_err("a zero hold must be rejected");
+    assert_eq!(error.code.as_str(), "L1317");
+    assert!(
+        !ludion_engine::builtin_registry()
+            .get("Animation")
+            .unwrap()
+            .has(engine.world(), entity),
+        "a rejected component.set must not insert the component"
+    );
+    set(&mut engine, serde_json::json!({ "hold": 5 })).expect("a positive hold sets cleanly");
+}
