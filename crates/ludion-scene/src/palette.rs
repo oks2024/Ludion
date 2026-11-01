@@ -21,15 +21,15 @@ use ludion_core::diagnostics::Diagnostic;
 use crate::envelope;
 use crate::scalar::scalar_string;
 use crate::sprite::{
-    SpriteDocument, SpritePaletteEntry, emit_palette, parse_palette_entries_map,
-    validate_palette_entries,
+    SpriteDocument, SpritePaletteEntry, emit_palette, emit_ramps, parse_palette_entries_map,
+    parse_ramps, validate_palette_entries, validate_ramps,
 };
 use crate::yaml::{self, MapEntry, NodeValue};
 
 /// The palette document format version this crate reads and writes.
 pub const PALETTE_FORMAT_VERSION: u64 = 1;
 
-const PALETTE_KEYS: [&str; 4] = ["format", "kind", "name", "palette"];
+const PALETTE_KEYS: [&str; 5] = ["format", "kind", "name", "palette", "ramps"];
 
 /// A parsed `kind: palette` document: a name and the palette entries, sorted by glyph.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -38,6 +38,8 @@ pub struct PaletteDocument {
     pub name: Option<String>,
     /// The palette, sorted by glyph — the same entry shape a sprite document's inline palette uses.
     pub palette: Vec<SpritePaletteEntry>,
+    /// Dark-to-light glyph strings a sprite including this palette inherits unless it authors its own.
+    pub ramps: Vec<String>,
 }
 
 // --- Parse --------------------------------------------------------------------------------------
@@ -117,6 +119,14 @@ pub(crate) fn parse(source: &str) -> Result<PaletteDocument, Vec<Diagnostic>> {
             "palette" => {
                 palette_seen = true;
                 doc.palette = parse_palette_map(entry, &mut diagnostics);
+            }
+            "ramps" => {
+                doc.ramps = parse_ramps(
+                    &entry.node,
+                    "/ramps",
+                    code::SPRITE_PALETTE_STRUCTURE,
+                    &mut diagnostics,
+                );
             }
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
@@ -209,9 +219,15 @@ pub(crate) fn validate(doc: &PaletteDocument) -> Vec<Diagnostic> {
             ),
         );
     }
-    validate_palette_entries(
+    let known = validate_palette_entries(
         &doc.palette,
         "/palette",
+        code::SPRITE_PALETTE_STRUCTURE,
+        &mut diagnostics,
+    );
+    validate_ramps(
+        &doc.ramps,
+        Some(&known),
         code::SPRITE_PALETTE_STRUCTURE,
         &mut diagnostics,
     );
@@ -266,6 +282,9 @@ pub(crate) fn resolve(
     let mut resolved = doc.clone();
     resolved.palette = merged;
     resolved.palette_include = None;
+    if resolved.ramps.is_empty() {
+        resolved.ramps = palette_doc.ramps;
+    }
     Ok(resolved)
 }
 
@@ -283,6 +302,7 @@ pub(crate) fn emit(doc: &PaletteDocument) -> String {
         out.push('\n');
     }
     emit_palette(&mut out, &doc.palette);
+    emit_ramps(&mut out, &doc.ramps);
     out
 }
 
@@ -377,5 +397,23 @@ palette:
             diagnostic.help.as_deref(),
             Some("nearest match is `palette`")
         );
+    }
+
+    #[test]
+    fn ramps_round_trip_after_the_palette() {
+        let source = format!("{GOOD}ramps:\n  - \"#o\"\n");
+        let doc = check(&source).expect("the palette is valid");
+        assert_eq!(doc.ramps, vec!["#o".to_string()]);
+        assert_eq!(emit(&doc), source);
+    }
+
+    #[test]
+    fn a_ramp_glyph_the_palette_lacks_is_l1147() {
+        let diagnostics = errors(&format!("{GOOD}ramps:\n  - \"#z\"\n"));
+        let found = diagnostics
+            .iter()
+            .find(|d| d.path.as_deref() == Some("/ramps/0"))
+            .expect("a /ramps/0 diagnostic");
+        assert_eq!(found.code.as_str(), "L1147");
     }
 }

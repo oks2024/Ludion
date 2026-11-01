@@ -9,9 +9,9 @@
 //! - every semantic rule of the broken fixture is reported with its JSON Pointer.
 
 use ludion_scene::{
-    GradientBlend, GradientDirection, OutlineSide, SpriteDocument, SpriteEffect, SpriteEffectOp,
-    SpriteFrame, SpriteFrameGrid, SpriteMirror, SpritePaletteEntry, SpritePaletteInclude,
-    SpritePatch, check_sprite, emit_sprite, parse_sprite, validate_sprite,
+    GradientBlend, GradientDirection, GradientMode, OutlineSide, SpriteDocument, SpriteEffect,
+    SpriteEffectOp, SpriteFrame, SpriteFrameGrid, SpriteMirror, SpritePaletteEntry,
+    SpritePaletteInclude, SpritePatch, check_sprite, emit_sprite, parse_sprite, validate_sprite,
 };
 use proptest::prelude::*;
 #[path = "support/deterministic.rs"]
@@ -238,10 +238,8 @@ fn effect_op() -> impl Strategy<Value = SpriteEffectOp> {
             prop_oneof![Just(GradientBlend::Replace), Just(GradientBlend::Multiply)],
         )
             .prop_map(|(from, to, direction, blend)| SpriteEffectOp::Gradient {
-                from,
-                to,
+                mode: GradientMode::Color { from, to, blend },
                 direction,
-                blend,
             }),
         (
             color(),
@@ -412,6 +410,7 @@ fn sprite_doc() -> impl Strategy<Value = SpriteDocument> {
                     seed,
                     palette,
                     palette_include: None,
+                    ramps: Vec::new(),
                     frames,
                     effects,
                 }

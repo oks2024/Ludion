@@ -70,7 +70,8 @@ use ludion_core::color::{hex_of_linear, parse_hex};
 use ludion_core::diagnostics::{Diagnostic, value_phrase};
 use ludion_scene::{
     AppliedOverride, AtlasDocument, AtlasRegion, Flipbook, GradientBlend, GradientDirection,
-    OutlineSide, SceneOverride, SpriteDocument, SpriteEffect, SpriteEffectOp,
+    GradientMode, OutlineSide, SceneOverride, ShadeMode, SpriteDocument, SpriteEffect,
+    SpriteEffectOp,
 };
 use ludion_sprite::BakedFrame;
 use serde_json::Value;
@@ -667,8 +668,9 @@ const SPRITE_POINTER_SHAPES: &str = "a sprite override addresses one of `/seed`,
      `/palette/<glyph>/color` (a hex string), `/palette/<glyph>/emissive`, \
      `/frames/<name>/pivot/<0|1>`, `/effects/<i>/<param>` (a scalar, an enum keyword or a hex \
      colour — `from`, `to`, `color`) or `/effects/<i>/<param>/<j>` (one component of `light` or \
-     `offset`) — e.g. `/palette/A/color=#3a7bd5`, `/effects/1/strength=0.4`, \
-     `/effects/0/from=#ffffff80`";
+     `offset`) — `steps` of a `mode: ramp` op is a whole number — e.g. \
+     `/palette/A/color=#3a7bd5`, `/effects/1/strength=0.4`, `/effects/0/from=#ffffff80`, \
+     `/effects/2/steps=3`";
 
 /// Applies render-time overrides to a parsed sprite document, in order, returning what each changed.
 ///
@@ -866,6 +868,8 @@ enum EffectSlot<'a> {
     Offset(&'a mut i32),
     /// A `blur` radius: whole texels, non-negative.
     Radius(&'a mut u32),
+    /// A ramp-mode op's `steps`: a signed whole number of ramp positions.
+    Steps(&'a mut i32),
     /// A `gradient` direction keyword.
     Direction(&'a mut GradientDirection),
     /// A `gradient` blend keyword.
@@ -883,16 +887,12 @@ fn effect_slot<'a>(
     component: Option<usize>,
 ) -> Option<EffectSlot<'a>> {
     match op {
-        SpriteEffectOp::Gradient {
-            from,
-            to,
-            direction,
-            blend,
-        } => match (param, component) {
-            ("from", None) => Some(EffectSlot::Color(from)),
-            ("to", None) => Some(EffectSlot::Color(to)),
-            ("direction", None) => Some(EffectSlot::Direction(direction)),
-            ("blend", None) => Some(EffectSlot::Blend(blend)),
+        SpriteEffectOp::Gradient { mode, direction } => match (mode, param, component) {
+            (GradientMode::Color { from, .. }, "from", None) => Some(EffectSlot::Color(from)),
+            (GradientMode::Color { to, .. }, "to", None) => Some(EffectSlot::Color(to)),
+            (GradientMode::Color { blend, .. }, "blend", None) => Some(EffectSlot::Blend(blend)),
+            (GradientMode::Ramp { steps }, "steps", None) => Some(EffectSlot::Steps(steps)),
+            (_, "direction", None) => Some(EffectSlot::Direction(direction)),
             _ => None,
         },
         SpriteEffectOp::Outline { color, side } => match (param, component) {
@@ -900,9 +900,10 @@ fn effect_slot<'a>(
             ("side", None) => Some(EffectSlot::Side(side)),
             _ => None,
         },
-        SpriteEffectOp::Shade { light, strength } => match (param, component) {
-            ("light", Some(i)) => light.get_mut(i).map(EffectSlot::Number),
-            ("strength", None) => Some(EffectSlot::Number(strength)),
+        SpriteEffectOp::Shade { light, mode } => match (mode, param, component) {
+            (_, "light", Some(i)) => light.get_mut(i).map(EffectSlot::Number),
+            (ShadeMode::Color { strength }, "strength", None) => Some(EffectSlot::Number(strength)),
+            (ShadeMode::Ramp { steps }, "steps", None) => Some(EffectSlot::Steps(steps)),
             _ => None,
         },
         SpriteEffectOp::Shadow { offset, color } => match (param, component) {
@@ -965,6 +966,15 @@ fn write_slot(
                 .as_i64()
                 .and_then(|raw| i32::try_from(raw).ok())
                 .ok_or_else(|| wrong_value(pointer, "a whole number of texels", value))?;
+            let from = Value::from(*target);
+            *target = number;
+            from
+        }
+        EffectSlot::Steps(target) => {
+            let number = value
+                .as_i64()
+                .and_then(|raw| i32::try_from(raw).ok())
+                .ok_or_else(|| wrong_value(pointer, "a whole number of ramp steps", value))?;
             let from = Value::from(*target);
             *target = number;
             from
@@ -1170,10 +1180,8 @@ fn side_keyword(side: OutlineSide) -> &'static str {
 fn op_params(op: &SpriteEffectOp) -> String {
     match op {
         SpriteEffectOp::Gradient {
-            from,
-            to,
+            mode: GradientMode::Color { from, to, blend },
             direction,
-            blend,
         } => format!(
             "from={} to={} direction={} blend={}",
             colour_text(from),
@@ -1181,12 +1189,24 @@ fn op_params(op: &SpriteEffectOp) -> String {
             direction_keyword(*direction),
             blend_keyword(*blend)
         ),
+        SpriteEffectOp::Gradient {
+            mode: GradientMode::Ramp { steps },
+            direction,
+        } => format!(
+            "mode=ramp steps={steps} direction={}",
+            direction_keyword(*direction)
+        ),
         SpriteEffectOp::Outline { color, side } => {
             format!("color={} side={}", colour_text(color), side_keyword(*side))
         }
-        SpriteEffectOp::Shade { light, strength } => {
-            format!("light={} strength={strength}", number_list(light))
-        }
+        SpriteEffectOp::Shade {
+            light,
+            mode: ShadeMode::Color { strength },
+        } => format!("light={} strength={strength}", number_list(light)),
+        SpriteEffectOp::Shade {
+            light,
+            mode: ShadeMode::Ramp { steps },
+        } => format!("light={} mode=ramp steps={steps}", number_list(light)),
         SpriteEffectOp::Shadow { offset, color } => format!(
             "offset=[{}, {}] color={}",
             offset[0],
@@ -2917,6 +2937,61 @@ effects:
             Some(serde_json::json!([0.5, 0.0, 0.0, 1.0]))
         );
         assert!(effect_lines(&sprite.effects)[1].contains("color=#00ff00"));
+    }
+
+    /// A ramp sprite: `A` and `B` on one ramp, a ramp-mode gradient and shade ahead of a colour shade.
+    fn ramp_doc() -> SpriteDocument {
+        let source = SPRITE
+            .replace(
+                "frames:\n",
+                "  B:\n    color:\n      - 0.0\n      - 0.0\n      - 1.0\n      - 1.0\nramps:\n  - AB\nframes:\n",
+            )
+            .replace(
+                "effects:\n  - op: outline\n    color:\n      - 0.0\n      - 0.0\n      - 0.0\n      - 1.0\n  - op: noise\n    amount: 0.1\n",
+                "effects:\n  - op: gradient\n    mode: ramp\n    steps: 1\n  - op: shade\n    mode: ramp\n    steps: 2\n  - op: shade\n    strength: 0.5\n",
+            );
+        ludion_scene::check_sprite(&source).expect("the ramp fixture is valid")
+    }
+
+    #[test]
+    fn a_ramp_ops_steps_pointer_writes_and_echoes() {
+        let mut sprite = ramp_doc();
+        let applied = apply_sprite_overrides(
+            &mut sprite,
+            &[over("/effects/0/steps=3"), over("/effects/1/steps=-2")],
+        )
+        .expect("`steps` is a ramp-mode parameter");
+        assert_eq!(applied[0].from, Some(Value::from(1)));
+        assert_eq!(sprite.effects[0].op.ramp_steps(), Some(3));
+        assert_eq!(sprite.effects[1].op.ramp_steps(), Some(-2));
+        let lines = effect_lines(&sprite.effects);
+        assert!(
+            lines[0].contains("mode=ramp steps=3 direction=vertical"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("light=[-1, -1] mode=ramp steps=-2"),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[2].contains("strength=0.5"), "{}", lines[2]);
+    }
+
+    /// A parameter belongs to one mode: `steps` on a colour op and `from` on a ramp op are `L4008`.
+    #[test]
+    fn a_parameter_of_the_other_mode_is_refused() {
+        for spec in [
+            "/effects/2/steps=1",
+            "/effects/0/from=#ffffff",
+            "/effects/1/strength=0.2",
+            "/effects/0/steps=1.5",
+        ] {
+            let mut sprite = ramp_doc();
+            let diagnostics = apply_sprite_overrides(&mut sprite, &[over(spec)])
+                .expect_err("the pointer does not fit the op's mode");
+            assert_eq!(diagnostics[0].code.as_str(), "L4008", "{spec}");
+        }
     }
 
     /// A keyword parameter takes only its op's own keywords.

@@ -166,3 +166,32 @@ fn a_malformed_palette_document_is_l1147() {
         "a malformed palette reference must be L1147: {diagnostics:#?}"
     );
 }
+
+/// The include sprite with a ramp-mode `shade` ahead of its outline, so the resolved ramps matter.
+fn ramp_include(own_ramps: &str) -> String {
+    INCLUDE
+        .replace("frames:\n", &format!("{own_ramps}frames:\n"))
+        .replace(
+            "effects:\n",
+            "effects:\n  - op: shade\n    glyphs:\n      - \"#\"\n    mode: ramp\n    steps: 1\n",
+        )
+}
+
+#[test]
+fn a_resolved_sprite_inherits_the_palette_documents_ramps() {
+    let palette = format!("{PALETTE}ramps:\n  - \"#o\"\n");
+    let include = check_sprite(&ramp_include("")).expect("membership waits for resolution");
+    assert!(include.ramps.is_empty());
+    let resolved = resolve_sprite_include(&include, &palette).expect("the include resolves");
+    assert_eq!(resolved.ramps, vec!["#o".to_string()]);
+    bake(&resolved).expect("the inherited ramp bakes");
+}
+
+#[test]
+fn a_sprites_own_ramps_replace_the_palette_documents() {
+    let palette = format!("{PALETTE}ramps:\n  - \"#o\"\n");
+    let include = check_sprite(&ramp_include("ramps:\n  - \"#O\"\n")).expect("the sprite parses");
+    let resolved = resolve_sprite_include(&include, &palette).expect("the include resolves");
+    assert_eq!(resolved.ramps, vec!["#O".to_string()]);
+    bake(&resolved).expect("the own ramp bakes");
+}

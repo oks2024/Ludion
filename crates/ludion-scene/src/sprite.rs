@@ -50,8 +50,8 @@ pub const SPRITE_MAX_SIZE: u32 = 1024;
 /// [`code::SPRITE_IMPORT_QUANTIZED`].
 pub const SPRITE_GLYPH_BUDGET: usize = 93;
 
-const SPRITE_KEYS: [&str; 8] = [
-    "format", "kind", "name", "size", "seed", "palette", "frames", "effects",
+const SPRITE_KEYS: [&str; 9] = [
+    "format", "kind", "name", "size", "seed", "palette", "ramps", "frames", "effects",
 ];
 
 /// The palette-entry keys this format recognizes, in the order suggestions should prefer.
@@ -70,9 +70,20 @@ const EFFECT_OPS: [&str; 8] = [
     "gradient", "outline", "shade", "shadow", "dither", "noise", "blur", "glow",
 ];
 
-const GRADIENT_KEYS: [&str; 7] = ["op", "glyphs", "frames", "from", "to", "direction", "blend"];
+const GRADIENT_KEYS: [&str; 8] = [
+    "op",
+    "glyphs",
+    "frames",
+    "mode",
+    "from",
+    "to",
+    "direction",
+    "blend",
+];
+const GRADIENT_RAMP_KEYS: [&str; 6] = ["op", "glyphs", "frames", "mode", "steps", "direction"];
 const OUTLINE_KEYS: [&str; 5] = ["op", "glyphs", "frames", "color", "side"];
-const SHADE_KEYS: [&str; 5] = ["op", "glyphs", "frames", "light", "strength"];
+const SHADE_KEYS: [&str; 6] = ["op", "glyphs", "frames", "mode", "light", "strength"];
+const SHADE_RAMP_KEYS: [&str; 6] = ["op", "glyphs", "frames", "mode", "light", "steps"];
 const SHADOW_KEYS: [&str; 5] = ["op", "glyphs", "frames", "offset", "color"];
 const DITHER_KEYS: [&str; 4] = ["op", "glyphs", "frames", "density"];
 const NOISE_KEYS: [&str; 4] = ["op", "glyphs", "frames", "amount"];
@@ -305,19 +316,51 @@ pub enum OutlineSide {
     Inside,
 }
 
-/// One effect op and its parameters. The set is closed: a document naming anything else is `L1154`.
+/// How a `gradient` produces its output.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SpriteEffectOp {
-    /// A linear or radial ramp between two linear RGBA colors, in texel coordinates.
-    Gradient {
+pub enum GradientMode {
+    /// A linear RGBA ramp between two colors.
+    Color {
         /// The color at the ramp's start.
         from: [f64; 4],
         /// The color at the ramp's end.
         to: [f64; 4],
-        /// Which way the ramp runs.
-        direction: GradientDirection,
         /// How the ramp combines with what it covers.
         blend: GradientBlend,
+    },
+    /// Steps texels along their palette ramp: 0 at the start, `steps` at the end.
+    Ramp {
+        /// The signed step count reached at the ramp's end; a fractional position resolves through
+        /// the 4×4 Bayer matrix.
+        steps: i32,
+    },
+}
+
+/// How a `shade` produces its output.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShadeMode {
+    /// Darkens and lightens the texel's colour by `strength`.
+    Color {
+        /// How far the shading pushes, in `0..=1`.
+        strength: f64,
+    },
+    /// Steps lit edge texels `+steps` and shadowed ones `-steps` along their palette ramp.
+    Ramp {
+        /// The signed step count; a negative value swaps lit and shadowed.
+        steps: i32,
+    },
+}
+
+/// One effect op and its parameters. The set is closed: a document naming anything else is `L1154`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpriteEffectOp {
+    /// A linear or radial ramp, in texel coordinates, either between two linear RGBA colors or along
+    /// the palette's glyph ramps.
+    Gradient {
+        /// What the ramp produces.
+        mode: GradientMode,
+        /// Which way the ramp runs.
+        direction: GradientDirection,
     },
     /// A one-texel border along the silhouette.
     Outline {
@@ -330,8 +373,8 @@ pub enum SpriteEffectOp {
     Shade {
         /// The light direction in texel space (`+x` right, `+y` down); never `[0, 0]`.
         light: [f64; 2],
-        /// How far the shading pushes, in `0..=1`.
-        strength: f64,
+        /// What the shading produces.
+        mode: ShadeMode,
     },
     /// An offset copy of the silhouette painted underneath it.
     Shadow {
@@ -373,6 +416,24 @@ pub enum SpriteEffectOp {
     },
 }
 
+impl SpriteEffectOp {
+    /// `Some(steps)` for an op in `mode: ramp` — the one question ordering, validation and the bake
+    /// ask.
+    pub fn ramp_steps(&self) -> Option<i32> {
+        match self {
+            Self::Gradient {
+                mode: GradientMode::Ramp { steps },
+                ..
+            }
+            | Self::Shade {
+                mode: ShadeMode::Ramp { steps },
+                ..
+            } => Some(*steps),
+            _ => None,
+        }
+    }
+}
+
 /// One entry of a document's `effects:` list: an op plus the glyph and frame filters that scope it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpriteEffect {
@@ -407,6 +468,9 @@ pub struct SpriteDocument {
     /// rather than an inline palette map, `None` for an inline palette or an already-resolved include.
     /// Mutually exclusive with a non-empty [`palette`](Self::palette).
     pub palette_include: Option<SpritePaletteInclude>,
+    /// Dark-to-light glyph strings the ramp-mode ops step along. Empty means none authored (an
+    /// include's palette document may supply them); after resolve it holds the effective ramps.
+    pub ramps: Vec<String>,
     /// The frames in authored order, which is the order the atlas bake mints region names in.
     pub frames: Vec<SpriteFrame>,
     /// The effect list in authored order, which is application order at bake.
@@ -616,6 +680,14 @@ pub(crate) fn parse(source: &str) -> Result<SpriteDocument, Vec<Diagnostic>> {
             "palette" => {
                 palette_seen = true;
                 parse_palette_field(entry, &mut doc, &mut diagnostics);
+            }
+            "ramps" => {
+                doc.ramps = parse_ramps(
+                    &entry.node,
+                    "/ramps",
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    &mut diagnostics,
+                );
             }
             "frames" => {
                 frames_seen = true;
@@ -1613,6 +1685,59 @@ fn parse_name_list(
     Some(out)
 }
 
+/// Parses `ramps`: a non-empty sequence of strings, each a dark-to-light run of palette glyphs.
+/// Shared by a sprite document (`L1153`) and a `kind: palette` document (`L1147`) through `code`.
+pub(crate) fn parse_ramps(
+    node: &Node,
+    pointer: &str,
+    code: DiagnosticCode,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<String> {
+    let NodeValue::Sequence(items) = &node.value else {
+        diagnostics.push(
+            Diagnostic::new(
+                code,
+                format!(
+                    "`ramps` must be a sequence of glyph strings, found {} (line {})",
+                    node.value.type_phrase(),
+                    node.line
+                ),
+            )
+            .with_path(pointer.to_string())
+            .with_help("write one quoted dark-to-light string per ramp:\n  ramps:\n    - \"abc\""),
+        );
+        return Vec::new();
+    };
+    if items.is_empty() {
+        diagnostics.push(
+            Diagnostic::new(code, "`ramps` is an empty list")
+                .with_path(pointer.to_string())
+                .with_help(
+                    "list at least one ramp, or remove the key to inherit the included palette's",
+                ),
+        );
+    }
+    let mut out = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        match &item.value {
+            NodeValue::Scalar(Value::String(s)) => out.push(s.clone()),
+            other => diagnostics.push(
+                Diagnostic::new(
+                    code,
+                    format!(
+                        "`ramps[{index}]` must be a string of glyphs, found {} (line {})",
+                        other.type_phrase(),
+                        item.line
+                    ),
+                )
+                .with_path(format!("{pointer}/{index}"))
+                .with_help("quote the ramp so digit glyphs stay a string, e.g. `- \"123\"`"),
+            ),
+        }
+    }
+    out
+}
+
 /// Parses one of a fixed set of keyword strings, with a nearest-match suggestion on a miss.
 fn parse_choice(
     node: &Node,
@@ -1696,6 +1821,7 @@ struct EffectFields {
     side: Option<OutlineSide>,
     light: Option<[f64; 2]>,
     strength: Option<f64>,
+    steps: Option<i32>,
     offset: Option<[i32; 2]>,
     density: Option<f64>,
     amount: Option<f64>,
@@ -1749,19 +1875,55 @@ fn parse_effect(
         diagnostics,
     )?;
 
-    let valid: &[&'static str] = match op_name {
-        "gradient" => &GRADIENT_KEYS,
-        "outline" => &OUTLINE_KEYS,
-        "shade" => &SHADE_KEYS,
-        "shadow" => &SHADOW_KEYS,
-        "dither" => &DITHER_KEYS,
-        "noise" => &NOISE_KEYS,
-        "glow" => &GLOW_KEYS,
+    // `mode` decides a gradient's or shade's key set the way `op` decides the entry's, so it is read
+    // before the fields.
+    let mode = if matches!(op_name, "gradient" | "shade") {
+        match entries.iter().find(|sub| sub.key == "mode") {
+            Some(entry) => Some(parse_choice(
+                &entry.node,
+                &format!("{pointer}/mode"),
+                "mode",
+                &["color", "ramp"],
+                code::SPRITE_EFFECT_INVALID,
+                diagnostics,
+            )?),
+            None => Some("color"),
+        }
+    } else {
+        None
+    };
+    let ramp = mode == Some("ramp");
+    let valid: &[&'static str] = match (op_name, ramp) {
+        ("gradient", false) => &GRADIENT_KEYS,
+        ("gradient", true) => &GRADIENT_RAMP_KEYS,
+        ("outline", _) => &OUTLINE_KEYS,
+        ("shade", false) => &SHADE_KEYS,
+        ("shade", true) => &SHADE_RAMP_KEYS,
+        ("shadow", _) => &SHADOW_KEYS,
+        ("dither", _) => &DITHER_KEYS,
+        ("noise", _) => &NOISE_KEYS,
+        ("glow", _) => &GLOW_KEYS,
         _ => &BLUR_KEYS,
     };
-    let fields = parse_effect_fields(entries, &pointer, op_name, valid, diagnostics);
+    let fields = parse_effect_fields(entries, &pointer, op_name, mode, valid, diagnostics);
 
     let op = match op_name {
+        "gradient" if ramp => {
+            if fields.steps.is_none() {
+                diagnostics.push(missing_effect_field(
+                    &pointer,
+                    "gradient",
+                    "steps",
+                    "the signed number of ramp steps reached at the gradient's end",
+                ));
+            }
+            SpriteEffectOp::Gradient {
+                mode: GradientMode::Ramp {
+                    steps: fields.steps?,
+                },
+                direction: fields.direction.unwrap_or(GRADIENT_DIRECTION_DEFAULT),
+            }
+        }
         "gradient" => {
             if fields.from.is_none() {
                 diagnostics.push(missing_effect_field(
@@ -1780,10 +1942,12 @@ fn parse_effect(
                 ));
             }
             SpriteEffectOp::Gradient {
-                from: fields.from?,
-                to: fields.to?,
+                mode: GradientMode::Color {
+                    from: fields.from?,
+                    to: fields.to?,
+                    blend: fields.blend.unwrap_or(GRADIENT_BLEND_DEFAULT),
+                },
                 direction: fields.direction.unwrap_or(GRADIENT_DIRECTION_DEFAULT),
-                blend: fields.blend.unwrap_or(GRADIENT_BLEND_DEFAULT),
             }
         }
         "outline" => {
@@ -1800,9 +1964,27 @@ fn parse_effect(
                 side: fields.side.unwrap_or(OUTLINE_SIDE_DEFAULT),
             }
         }
+        "shade" if ramp => {
+            if fields.steps.is_none() {
+                diagnostics.push(missing_effect_field(
+                    &pointer,
+                    "shade",
+                    "steps",
+                    "the signed number of ramp steps lit edges move up and shadowed edges down",
+                ));
+            }
+            SpriteEffectOp::Shade {
+                light: fields.light.unwrap_or(SHADE_LIGHT_DEFAULT),
+                mode: ShadeMode::Ramp {
+                    steps: fields.steps?,
+                },
+            }
+        }
         "shade" => SpriteEffectOp::Shade {
             light: fields.light.unwrap_or(SHADE_LIGHT_DEFAULT),
-            strength: fields.strength.unwrap_or(SHADE_STRENGTH_DEFAULT),
+            mode: ShadeMode::Color {
+                strength: fields.strength.unwrap_or(SHADE_STRENGTH_DEFAULT),
+            },
         },
         "shadow" => SpriteEffectOp::Shadow {
             offset: fields.offset.unwrap_or(SHADOW_OFFSET_DEFAULT),
@@ -1885,6 +2067,7 @@ fn parse_effect_fields(
     entries: &[MapEntry],
     pointer: &str,
     op: &str,
+    mode: Option<&str>,
     valid: &[&'static str],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> EffectFields {
@@ -1900,9 +2083,15 @@ fn parse_effect_fields(
                 ),
             )
             .with_path(format!("{pointer}/{}", pointer_token(key)));
-            diagnostic = match suggest::nearest(key, valid.iter().copied()) {
-                Some(candidate) => diagnostic.with_help(format!("nearest match is `{candidate}`")),
-                None => diagnostic.with_help(format!(
+            diagnostic = match (
+                other_mode_help(op, mode, key),
+                suggest::nearest(key, valid.iter().copied()),
+            ) {
+                (Some(help), _) => diagnostic.with_help(help),
+                (None, Some(candidate)) => {
+                    diagnostic.with_help(format!("nearest match is `{candidate}`"))
+                }
+                (None, None) => diagnostic.with_help(format!(
                     "the `{op}` effect's keys are: {}",
                     valid.join(", ")
                 )),
@@ -1912,7 +2101,10 @@ fn parse_effect_fields(
         }
         let field_pointer = format!("{pointer}/{key}");
         match key {
-            "op" => {}
+            "op" | "mode" => {}
+            "steps" => {
+                fields.steps = parse_steps(&sub.node, &field_pointer, diagnostics);
+            }
             "glyphs" => {
                 fields.glyphs = parse_name_list(&sub.node, &field_pointer, "glyphs", diagnostics);
             }
@@ -2043,6 +2235,46 @@ fn parse_effect_fields(
     fields
 }
 
+/// The specific help for a key that belongs to the op's other mode, so a `from` on a ramp gradient
+/// names the mode rather than offering a spelling fix.
+fn other_mode_help(op: &str, mode: Option<&str>, key: &str) -> Option<String> {
+    match (op, mode, key) {
+        ("gradient", Some("ramp"), "from" | "to" | "blend")
+        | ("shade", Some("ramp"), "strength") => Some(format!(
+            "`{key}` is a `mode: color` key; a `mode: ramp` {op} repaints from the ramps and \
+                 takes `steps`"
+        )),
+        ("gradient" | "shade", Some("color"), "steps") => {
+            Some("`steps` belongs to `mode: ramp`; add `mode: ramp` or remove it".to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Parses a ramp op's `steps`: a signed whole number that fits `i32`. Stepping clamps at the ramp's
+/// ends, so there is no range to check.
+fn parse_steps(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -> Option<i32> {
+    let value = match &node.value {
+        NodeValue::Scalar(Value::Number(n)) => n.as_i64().and_then(|v| i32::try_from(v).ok()),
+        _ => None,
+    };
+    if value.is_none() {
+        diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_EFFECT_INVALID,
+                format!(
+                    "`steps` must be a whole number, found {} (line {})",
+                    node.value.type_phrase(),
+                    node.line
+                ),
+            )
+            .with_path(pointer.to_string())
+            .with_help("steps is a signed count of ramp positions, e.g. `steps: 2` or `steps: -1`"),
+        );
+    }
+    value
+}
+
 /// Parses `blur`'s `radius`: a non-negative integer. The `1..=8` range is checked by [`validate`].
 fn parse_radius(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -> Option<u32> {
     let value = match &node.value {
@@ -2093,9 +2325,82 @@ pub(crate) fn validate(doc: &SpriteDocument) -> Vec<Diagnostic> {
             None
         }
     };
+    validate_ramps(
+        &doc.ramps,
+        known.as_deref(),
+        code::SPRITE_DOCUMENT_STRUCTURE,
+        &mut diagnostics,
+    );
     validate_frames(doc, known.as_deref(), &mut diagnostics);
     validate_effects(doc, known.as_deref(), &mut diagnostics);
     diagnostics
+}
+
+/// Validates a `ramps:` list at `/ramps/<i>`: each ramp has at least two glyphs, every glyph is a
+/// palette glyph and none repeats within a ramp, and — when the palette is known (`known`) — each
+/// glyph exists in it. An unresolved include passes `None` and defers membership. An authored empty
+/// list is reported by [`parse_ramps`]. Shared by a sprite (`L1153`) and a `kind: palette`
+/// document (`L1147`) through `code`.
+pub(crate) fn validate_ramps(
+    ramps: &[String],
+    known: Option<&[char]>,
+    code: DiagnosticCode,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (index, ramp) in ramps.iter().enumerate() {
+        let pointer = format!("/ramps/{index}");
+        let glyphs: Vec<char> = ramp.chars().collect();
+        if glyphs.len() < 2 {
+            diagnostics.push(
+                Diagnostic::new(
+                    code,
+                    format!(
+                        "the ramp `{ramp}` has {} glyph{}; a ramp needs at least two to step along",
+                        glyphs.len(),
+                        if glyphs.len() == 1 { "" } else { "s" }
+                    ),
+                )
+                .with_path(pointer.clone())
+                .with_help("write a ramp dark to light, e.g. `\"abc\"`"),
+            );
+        }
+        let mut seen: Vec<char> = Vec::with_capacity(glyphs.len());
+        for ch in glyphs {
+            if !is_palette_glyph(ch) {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code,
+                        format!("the ramp glyph `{ch}` is not a palette glyph (printable ASCII except `.`)"),
+                    )
+                    .with_path(pointer.clone())
+                    .with_help("a ramp lists palette glyphs, dark to light"),
+                );
+            } else if seen.contains(&ch) {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code,
+                        format!("the ramp `{ramp}` lists `{ch}` more than once"),
+                    )
+                    .with_path(pointer.clone())
+                    .with_help("each glyph appears once per ramp, at one brightness"),
+                );
+            } else if let Some(known) = known
+                && !known.contains(&ch)
+            {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code,
+                        format!("the ramp glyph `{ch}` names no palette glyph"),
+                    )
+                    .with_path(pointer.clone())
+                    .with_help("add the glyph to the palette, or remove it from the ramp"),
+                );
+            }
+            if !seen.contains(&ch) {
+                seen.push(ch);
+            }
+        }
+    }
 }
 
 fn validate_size(doc: &SpriteDocument, diagnostics: &mut Vec<Diagnostic>) {
@@ -2649,18 +2954,135 @@ fn validate_effects(
         }
         validate_effect_op(effect, &pointer, diagnostics);
     }
+    validate_ramp_effects(doc, known, diagnostics);
+}
+
+/// The ramp-mode rules across the effect list: ordering (always), and — once the palette is resolved —
+/// that ramps exist and cover every glyph a ramp-mode op can touch.
+fn validate_ramp_effects(
+    doc: &SpriteDocument,
+    known: Option<&[char]>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut first_colour_op: Option<usize> = None;
+    for (index, effect) in doc.effects.iter().enumerate() {
+        if effect.op.ramp_steps().is_none() {
+            if !matches!(effect.op, SpriteEffectOp::Dither { .. }) {
+                first_colour_op.get_or_insert(index);
+            }
+            continue;
+        }
+        let pointer = format!("/effects/{index}");
+        let op = op_name(&effect.op);
+        if let Some(colour) = first_colour_op {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SPRITE_EFFECT_INVALID,
+                    format!(
+                        "the ramp-mode `{op}` at effect {index} comes after the colour op at \
+                         effect {colour}, which would leave the glyph plane it reads stale"
+                    ),
+                )
+                .with_path(format!("{pointer}/mode"))
+                .with_help(format!(
+                    "every ramp-mode op comes before every colour op (`dither` may sit anywhere) \
+                     — move it above `/effects/{colour}`"
+                )),
+            );
+        }
+        let Some(known) = known else { continue };
+        if doc.ramps.is_empty() {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SPRITE_EFFECT_INVALID,
+                    format!("the ramp-mode `{op}` has no `ramps` to step along"),
+                )
+                .with_path(format!("{pointer}/mode"))
+                .with_help(
+                    "add a top-level `ramps:` list (or take one from the included palette), or \
+                     use `mode: color`",
+                ),
+            );
+            continue;
+        }
+        let in_ramp = |ch: char| doc.ramps.iter().any(|ramp| ramp.contains(ch));
+        let mut missing: Vec<(char, String)> = Vec::new();
+        let mut note = |ch: char, at: String| {
+            if !in_ramp(ch) && !missing.iter().any(|(seen, _)| *seen == ch) {
+                missing.push((ch, at));
+            }
+        };
+        let mut candidates: Vec<char> = Vec::new();
+        if let Some(filter) = &effect.glyphs {
+            for (slot, glyph) in filter.iter().enumerate() {
+                if let Some(ch) = single_glyph(glyph).filter(|ch| known.contains(ch)) {
+                    candidates.push(ch);
+                    note(ch, format!("{pointer}/glyphs/{slot}"));
+                }
+            }
+        } else {
+            let names: Vec<&str> = match &effect.frames {
+                Some(frames) => frames.iter().map(String::as_str).collect(),
+                None => doc.frames.iter().map(|f| f.name.as_str()).collect(),
+            };
+            for frame in names.iter().filter_map(|name| doc.frame(name)) {
+                for row in doc.frame_rows(frame).iter() {
+                    for ch in row.chars().filter(|ch| is_palette_glyph(*ch)) {
+                        if !candidates.contains(&ch) {
+                            candidates.push(ch);
+                            note(ch, pointer.clone());
+                        }
+                    }
+                }
+            }
+        }
+        // A `dither` before this op paints its second glyph where the first stood.
+        for earlier in &doc.effects[..index] {
+            if let (SpriteEffectOp::Dither { .. }, Some(pair)) = (earlier.op, &earlier.glyphs)
+                && let [first, second] = pair.as_slice()
+                && let (Some(a), Some(b)) = (single_glyph(first), single_glyph(second))
+                && candidates.contains(&a)
+                && known.contains(&b)
+                && !candidates.contains(&b)
+            {
+                candidates.push(b);
+                note(b, pointer.clone());
+            }
+        }
+        for (ch, at) in missing {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SPRITE_EFFECT_INVALID,
+                    format!(
+                        "the glyph `{ch}` is in no ramp, so the ramp-mode `{op}` cannot step it"
+                    ),
+                )
+                .with_path(at)
+                .with_help(format!(
+                    "add `{ch}` to a ramp (dark to light), or narrow the op with `glyphs:`"
+                )),
+            );
+        }
+    }
 }
 
 fn validate_effect_op(effect: &SpriteEffect, pointer: &str, diagnostics: &mut Vec<Diagnostic>) {
     match effect.op {
-        SpriteEffectOp::Gradient { from, to, .. } => {
+        SpriteEffectOp::Gradient {
+            mode: GradientMode::Color { from, to, .. },
+            ..
+        } => {
             validate_effect_color(from, pointer, "from", diagnostics);
             validate_effect_color(to, pointer, "to", diagnostics);
         }
+        SpriteEffectOp::Gradient {
+            mode: GradientMode::Ramp { .. },
+            ..
+        } => {}
         SpriteEffectOp::Outline { color, .. } => {
             validate_effect_color(color, pointer, "color", diagnostics);
         }
-        SpriteEffectOp::Shade { light, strength } => {
+        SpriteEffectOp::Shade { light, mode } => {
             if !light.iter().all(|v| v.is_finite()) || light == [0.0, 0.0] {
                 diagnostics.push(
                     Diagnostic::new(
@@ -2677,7 +3099,9 @@ fn validate_effect_op(effect: &SpriteEffect, pointer: &str, diagnostics: &mut Ve
                     ),
                 );
             }
-            validate_unit_range(strength, pointer, "strength", diagnostics);
+            if let ShadeMode::Color { strength } = mode {
+                validate_unit_range(strength, pointer, "strength", diagnostics);
+            }
         }
         SpriteEffectOp::Shadow { offset, color } => {
             if offset == [0, 0] {
@@ -2850,6 +3274,7 @@ pub(crate) fn emit(doc: &SpriteDocument) -> String {
         Some(include) => emit_palette_include(&mut out, include),
         None => emit_palette(&mut out, &doc.palette),
     }
+    emit_ramps(&mut out, &doc.ramps);
     emit_frames(&mut out, &doc.frames);
     emit_effects(&mut out, &doc.effects);
     out
@@ -2885,6 +3310,19 @@ pub(crate) fn emit_palette_entries(out: &mut String, entries: &[SpritePaletteEnt
             out.push_str(&format_float(emissive));
             out.push('\n');
         }
+    }
+}
+
+/// Writes `ramps:` — one quoted string per ramp — or nothing when none are authored.
+pub(crate) fn emit_ramps(out: &mut String, ramps: &[String]) {
+    if ramps.is_empty() {
+        return;
+    }
+    out.push_str("ramps:\n");
+    for ramp in ramps {
+        out.push_str("  - ");
+        out.push_str(&scalar_string(ramp));
+        out.push('\n');
     }
 }
 
@@ -2974,14 +3412,17 @@ fn emit_effects(out: &mut String, effects: &[SpriteEffect]) {
             emit_name_list(out, "frames", frames);
         }
         match effect.op {
-            SpriteEffectOp::Gradient {
-                from,
-                to,
-                direction,
-                blend,
-            } => {
-                emit_color(out, "from", from);
-                emit_color(out, "to", to);
+            SpriteEffectOp::Gradient { mode, direction } => {
+                match mode {
+                    GradientMode::Color { from, to, .. } => {
+                        emit_color(out, "from", from);
+                        emit_color(out, "to", to);
+                    }
+                    GradientMode::Ramp { steps } => {
+                        out.push_str("    mode: ramp\n");
+                        out.push_str(&format!("    steps: {steps}\n"));
+                    }
+                }
                 if direction != GRADIENT_DIRECTION_DEFAULT {
                     out.push_str("    direction: ");
                     out.push_str(match direction {
@@ -2991,7 +3432,9 @@ fn emit_effects(out: &mut String, effects: &[SpriteEffect]) {
                     });
                     out.push('\n');
                 }
-                if blend != GRADIENT_BLEND_DEFAULT {
+                if let GradientMode::Color { blend, .. } = mode
+                    && blend != GRADIENT_BLEND_DEFAULT
+                {
                     out.push_str("    blend: ");
                     out.push_str(match blend {
                         GradientBlend::Replace => "replace",
@@ -3011,7 +3454,10 @@ fn emit_effects(out: &mut String, effects: &[SpriteEffect]) {
                     out.push('\n');
                 }
             }
-            SpriteEffectOp::Shade { light, strength } => {
+            SpriteEffectOp::Shade { light, mode } => {
+                if matches!(mode, ShadeMode::Ramp { .. }) {
+                    out.push_str("    mode: ramp\n");
+                }
                 if light != SHADE_LIGHT_DEFAULT {
                     out.push_str("    light:\n");
                     for component in light {
@@ -3020,10 +3466,16 @@ fn emit_effects(out: &mut String, effects: &[SpriteEffect]) {
                         out.push('\n');
                     }
                 }
-                if strength != SHADE_STRENGTH_DEFAULT {
-                    out.push_str("    strength: ");
-                    out.push_str(&format_float(strength));
-                    out.push('\n');
+                match mode {
+                    ShadeMode::Color { strength } if strength != SHADE_STRENGTH_DEFAULT => {
+                        out.push_str("    strength: ");
+                        out.push_str(&format_float(strength));
+                        out.push('\n');
+                    }
+                    ShadeMode::Color { .. } => {}
+                    ShadeMode::Ramp { steps } => {
+                        out.push_str(&format!("    steps: {steps}\n"));
+                    }
                 }
             }
             SpriteEffectOp::Shadow { offset, color } => {

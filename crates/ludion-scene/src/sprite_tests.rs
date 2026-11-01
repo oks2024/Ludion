@@ -963,3 +963,216 @@ fn mirror_and_patches_round_trip_through_the_writer() {
     assert_eq!(emitted, source, "{emitted}");
     assert_eq!(parse(&emitted).expect("re-parses"), doc);
 }
+
+// --- Ramps and ramp mode ------------------------------------------------------------------------
+
+const RAMP_PALETTE: &str =
+    "  a:\n    color: \"#101010\"\n  b:\n    color: \"#808080\"\n  c:\n    color: \"#f0f0f0\"\n";
+
+/// A 3×2 sprite over the `a`/`b`/`c` palette with `ramps` (a whole `ramps:` block, or empty) and the
+/// given `effects` list body.
+fn ramp_source(ramps: &str, rows: [&str; 2], effects: &str) -> String {
+    let effects = if effects.is_empty() {
+        String::new()
+    } else {
+        format!("effects:\n{effects}")
+    };
+    format!(
+        "format: 1\nkind: sprite\nsize:\n  - 3\n  - 2\npalette:\n{RAMP_PALETTE}{ramps}frames:\n  \
+         idle:\n    rows:\n      - {}\n      - {}\n{effects}",
+        rows[0], rows[1]
+    )
+}
+
+const RAMP_EFFECTS: &str = "  - op: gradient\n    glyphs:\n      - b\n    mode: ramp\n    steps: 2\n    \
+                            direction: horizontal\n  - op: shade\n    mode: ramp\n    light:\n      - 1.0\n      \
+                            - -1.0\n    steps: -1\n";
+
+#[test]
+fn ramps_and_ramp_mode_ops_round_trip_byte_identically() {
+    let source = ramp_source("ramps:\n  - abc\n  - cb\n", ["bbb", "bbb"], RAMP_EFFECTS);
+    let doc = check(&source).expect("the sprite is valid");
+    assert_eq!(doc.ramps, vec!["abc".to_string(), "cb".to_string()]);
+    assert_eq!(
+        doc.effects[0].op,
+        SpriteEffectOp::Gradient {
+            mode: GradientMode::Ramp { steps: 2 },
+            direction: GradientDirection::Horizontal,
+        }
+    );
+    assert_eq!(doc.effects[0].op.ramp_steps(), Some(2));
+    assert_eq!(doc.effects[1].op.ramp_steps(), Some(-1));
+    let emitted = emit(&doc);
+    assert_eq!(emitted, source, "{emitted}");
+}
+
+#[test]
+fn a_spelled_out_color_mode_re_emits_without_it() {
+    let spelled = "  - op: shade\n    mode: color\n    strength: 0.4\n  - op: gradient\n    mode: color\n    \
+                   from: \"#000000\"\n    to: \"#ffffff\"\n";
+    let doc = check(&ramp_source("", ["bbb", "bbb"], spelled)).expect("the sprite is valid");
+    let emitted = emit(&doc);
+    assert!(!emitted.contains("mode:"), "{emitted}");
+    assert_eq!(parse(&emitted).expect("re-parses"), doc);
+    assert_eq!(emit(&parse(&emitted).unwrap()), emitted);
+}
+
+#[test]
+fn a_one_glyph_ramp_is_l1153() {
+    let diagnostics = errors(&ramp_source("ramps:\n  - a\n", ["bbb", "bbb"], ""));
+    let found = find(&diagnostics, "/ramps/0");
+    assert_eq!(found.code.as_str(), "L1153");
+    assert!(found.message.contains("at least two"), "{}", found.message);
+}
+
+#[test]
+fn a_ramp_glyph_the_palette_lacks_is_l1153() {
+    let diagnostics = errors(&ramp_source("ramps:\n  - abz\n", ["bbb", "bbb"], ""));
+    let found = find(&diagnostics, "/ramps/0");
+    assert_eq!(found.code.as_str(), "L1153");
+    assert!(found.message.contains('z'), "{}", found.message);
+}
+
+#[test]
+fn a_repeated_ramp_glyph_is_l1153() {
+    let diagnostics = errors(&ramp_source("ramps:\n  - aba\n", ["bbb", "bbb"], ""));
+    let found = find(&diagnostics, "/ramps/0");
+    assert_eq!(found.code.as_str(), "L1153");
+    assert!(
+        found.message.contains("more than once"),
+        "{}",
+        found.message
+    );
+}
+
+#[test]
+fn an_authored_empty_ramps_list_is_l1153() {
+    let Err(diagnostics) = parse(&ramp_source("ramps: []\n", ["bbb", "bbb"], "")) else {
+        panic!("expected a parse failure");
+    };
+    let found = find(&diagnostics, "/ramps");
+    assert_eq!(found.code.as_str(), "L1153");
+    assert!(
+        found.help.as_deref().unwrap().contains("inherit"),
+        "{found:?}"
+    );
+}
+
+fn ramp_effect_errors(ramps: &str, rows: [&str; 2], effects: &str) -> Vec<Diagnostic> {
+    errors(&ramp_source(ramps, rows, effects))
+}
+
+const RAMP_SHADE: &str = "  - op: shade\n    mode: ramp\n    steps: 1\n";
+
+#[test]
+fn a_ramp_mode_op_with_no_ramps_is_l1154() {
+    let diagnostics = ramp_effect_errors("", ["bbb", "bbb"], RAMP_SHADE);
+    let found = find(&diagnostics, "/effects/0/mode");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(found.message.contains("no `ramps`"), "{}", found.message);
+}
+
+#[test]
+fn a_filter_glyph_in_no_ramp_is_l1154() {
+    let effects = "  - op: shade\n    glyphs:\n      - c\n    mode: ramp\n    steps: 1\n";
+    let diagnostics = ramp_effect_errors("ramps:\n  - ab\n", ["bbb", "bbb"], effects);
+    let found = find(&diagnostics, "/effects/0/glyphs/0");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(
+        found.help.as_deref().unwrap().contains("add `c`"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn an_unfiltered_frame_glyph_in_no_ramp_is_l1154() {
+    let diagnostics = ramp_effect_errors("ramps:\n  - ab\n", ["bbc", "bbb"], RAMP_SHADE);
+    let found = find(&diagnostics, "/effects/0");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(found.message.contains('c'), "{}", found.message);
+}
+
+#[test]
+fn a_ramp_op_after_a_colour_op_is_l1154_naming_both() {
+    let effects = "  - op: outline\n    color: \"#000000\"\n".to_string() + RAMP_SHADE;
+    let diagnostics = ramp_effect_errors("ramps:\n  - abc\n", ["bbb", "bbb"], &effects);
+    let found = find(&diagnostics, "/effects/1/mode");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(found.message.contains("effect 1") && found.message.contains("effect 0"));
+    assert!(found.help.as_deref().unwrap().contains("/effects/0"));
+}
+
+#[test]
+fn a_ramp_op_after_a_dither_is_accepted() {
+    let effects = "  - op: dither\n    glyphs:\n      - a\n      - b\n".to_string() + RAMP_SHADE;
+    check(&ramp_source("ramps:\n  - abc\n", ["bbb", "aab"], &effects))
+        .expect("dither may precede a ramp-mode op");
+}
+
+#[test]
+fn a_dithered_second_glyph_must_be_in_a_ramp() {
+    // `a` dithers to `c`; `c` is in no ramp, so the later ramp shade cannot step what it produced.
+    let effects = "  - op: dither\n    glyphs:\n      - a\n      - c\n".to_string() + RAMP_SHADE;
+    let diagnostics = ramp_effect_errors("ramps:\n  - ab\n", ["aab", "bbb"], &effects);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.path.as_deref() == Some("/effects/1") && d.message.contains('c')),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn a_colour_key_on_a_ramp_gradient_names_the_mode() {
+    let effects = "  - op: gradient\n    mode: ramp\n    steps: 1\n    from: \"#000000\"\n";
+    let Err(diagnostics) = parse(&ramp_source("ramps:\n  - ab\n", ["bbb", "bbb"], effects)) else {
+        panic!("expected a parse failure");
+    };
+    let found = find(&diagnostics, "/effects/0/from");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(
+        found.help.as_deref().unwrap().contains("`mode: color` key"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn steps_without_a_mode_names_the_mode() {
+    let effects = "  - op: shade\n    steps: 2\n";
+    let Err(diagnostics) = parse(&ramp_source("", ["bbb", "bbb"], effects)) else {
+        panic!("expected a parse failure");
+    };
+    let found = find(&diagnostics, "/effects/0/steps");
+    assert!(
+        found.help.as_deref().unwrap().contains("add `mode: ramp`"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_ramp_mode_op_without_steps_is_l1154() {
+    let effects = "  - op: gradient\n    mode: ramp\n";
+    let Err(diagnostics) = parse(&ramp_source("ramps:\n  - ab\n", ["bbb", "bbb"], effects)) else {
+        panic!("expected a parse failure");
+    };
+    let found = find(&diagnostics, "/effects/0");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(found.message.contains("`steps`"), "{}", found.message);
+}
+
+#[test]
+fn mode_on_an_op_without_modes_is_an_unknown_key() {
+    let effects = "  - op: outline\n    mode: ramp\n    color: \"#000000\"\n";
+    let Err(diagnostics) = parse(&ramp_source("", ["bbb", "bbb"], effects)) else {
+        panic!("expected a parse failure");
+    };
+    find(&diagnostics, "/effects/0/mode");
+}
+
+#[test]
+fn an_include_sprite_defers_ramp_membership_until_resolved() {
+    let source = "format: 1\nkind: sprite\nsize:\n  - 1\n  - 1\npalette:\n  from: shared.palette.yaml\n\
+                  ramps:\n  - az\nframes:\n  idle:\n    rows:\n      - b\neffects:\n  - op: shade\n    \
+                  mode: ramp\n    steps: 1\n";
+    check(source).expect("membership waits for the resolved palette");
+}

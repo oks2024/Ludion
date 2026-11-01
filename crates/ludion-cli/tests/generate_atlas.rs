@@ -303,6 +303,7 @@ fn an_included_palette_bakes_to_the_inline_bytes() {
         ludion_scene::emit_palette(&ludion_scene::PaletteDocument {
             name: Some("ship".to_string()),
             palette: doc.palette.clone(),
+            ramps: Vec::new(),
         }),
     )
     .unwrap();

@@ -115,6 +115,7 @@ pub fn import_png(
             seed: None,
             palette,
             palette_include: None,
+            ramps: Vec::new(),
             frames: vec![SpriteFrame {
                 name: IMPORT_FRAME.to_string(),
                 pivot: None,

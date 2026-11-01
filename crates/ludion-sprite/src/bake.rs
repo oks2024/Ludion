@@ -9,8 +9,8 @@
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math;
 use ludion_scene::{
-    GradientBlend, GradientDirection, OutlineSide, SpriteDocument, SpriteEffect, SpriteEffectOp,
-    SpriteFrame,
+    GradientBlend, GradientDirection, GradientMode, OutlineSide, ShadeMode, SpriteDocument,
+    SpriteEffect, SpriteEffectOp, SpriteFrame,
 };
 
 use crate::image::FrameImage;
@@ -45,9 +45,10 @@ pub fn bake(doc: &SpriteDocument) -> Result<Vec<BakedFrame>, Vec<Diagnostic>> {
     }
 
     let palette = palette_lookup(doc);
+    let ramps = RampTable::new(&doc.ramps);
     let mut baked = Vec::with_capacity(doc.frames.len());
     for (frame_index, frame) in doc.frames.iter().enumerate() {
-        let image = bake_frame(doc, &palette, frame_index, frame, |_, _| {});
+        let image = bake_frame(doc, &palette, &ramps, frame_index, frame, |_, _| {});
         baked.push(BakedFrame {
             name: frame.name.clone(),
             image,
@@ -137,17 +138,25 @@ pub fn bake_steps(doc: &SpriteDocument) -> Result<Vec<FrameSteps>, Vec<Diagnosti
     }
 
     let palette = palette_lookup(doc);
+    let ramps = RampTable::new(&doc.ramps);
     let mut out = Vec::with_capacity(doc.frames.len());
     for (frame_index, frame) in doc.frames.iter().enumerate() {
         let glyphs = glyph_grid(doc, frame);
         let paint = paint(doc, &glyphs, &palette);
         let mut steps = Vec::new();
-        bake_frame(doc, &palette, frame_index, frame, |effect, image| {
-            steps.push(BakeStep {
-                effect,
-                image: image.clone(),
-            });
-        });
+        bake_frame(
+            doc,
+            &palette,
+            &ramps,
+            frame_index,
+            frame,
+            |effect, image| {
+                steps.push(BakeStep {
+                    effect,
+                    image: image.clone(),
+                });
+            },
+        );
         out.push(FrameSteps {
             name: frame.name.clone(),
             pivot: frame.pivot.unwrap_or_else(|| doc.default_pivot()),
@@ -162,12 +171,16 @@ pub fn bake_steps(doc: &SpriteDocument) -> Result<Vec<FrameSteps>, Vec<Diagnosti
 fn bake_frame(
     doc: &SpriteDocument,
     palette: &[Option<[f32; 4]>; 128],
+    ramps: &RampTable,
     frame_index: usize,
     frame: &SpriteFrame,
     mut on_step: impl FnMut(usize, &FrameImage),
 ) -> FrameImage {
     let glyphs = glyph_grid(doc, frame);
     let mut image = paint(doc, &glyphs, palette);
+    // The mutable counterpart of `glyphs`: the glyph each texel currently stands as, which ramp ops
+    // step and `dither` rewrites.
+    let mut plane = glyphs.clone();
     for (index, effect) in doc.effects.iter().enumerate() {
         if !applies_to(effect, &frame.name) {
             continue;
@@ -175,7 +188,9 @@ fn bake_frame(
         apply(
             effect,
             &glyphs,
+            &mut plane,
             palette,
+            ramps,
             doc.seed.unwrap_or(0),
             frame_index,
             &mut image,
@@ -209,7 +224,8 @@ fn palette_lookup(doc: &SpriteDocument) -> [Option<[f32; 4]>; 128] {
 /// This grid is the *identity* an effect's `glyphs:` filter tests against, and it never changes: a
 /// texel an earlier effect repainted keeps the glyph it was authored as, and a texel an effect
 /// created out of transparency (outline, shadow, blur) belongs to no glyph at all. Without that
-/// rule, two effects naming the same glyph would silently mean different sets.
+/// rule, two effects naming the same glyph would silently mean different sets. The mutable
+/// counterpart is the current-glyph plane `bake_frame` clones from it, which ramp ops step.
 fn glyph_grid(doc: &SpriteDocument, frame: &SpriteFrame) -> Vec<Option<char>> {
     let [width, height] = doc.size;
     let mut grid = vec![None; (width as usize) * (height as usize)];
@@ -283,10 +299,13 @@ fn target_mask(effect: &SpriteEffect, glyphs: &[Option<char>], image: &FrameImag
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply(
     effect: &SpriteEffect,
     glyphs: &[Option<char>],
+    plane: &mut [Option<char>],
     palette: &[Option<[f32; 4]>; 128],
+    ramps: &RampTable,
     seed: u64,
     frame_index: usize,
     image: &mut FrameImage,
@@ -294,16 +313,32 @@ fn apply(
     let mask = target_mask(effect, glyphs, image);
     match effect.op {
         SpriteEffectOp::Gradient {
-            from,
-            to,
+            mode: GradientMode::Color { from, to, blend },
             direction,
-            blend,
         } => gradient(image, &mask, from, to, direction, blend),
+        SpriteEffectOp::Gradient {
+            mode: GradientMode::Ramp { steps },
+            direction,
+        } => gradient_ramp(image, plane, palette, ramps, &mask, direction, steps),
         SpriteEffectOp::Outline { color, side } => outline(image, &mask, color, side),
-        SpriteEffectOp::Shade { light, strength } => shade(image, &mask, light, strength),
+        SpriteEffectOp::Shade {
+            light,
+            mode: ShadeMode::Color { strength },
+        } => shade(image, &mask, light, strength),
+        SpriteEffectOp::Shade {
+            light,
+            mode: ShadeMode::Ramp { steps },
+        } => shade_ramp(image, plane, palette, ramps, &mask, light, steps),
         SpriteEffectOp::Shadow { offset, color } => shadow(image, &mask, offset, color),
         SpriteEffectOp::Dither { density } => {
-            dither(image, glyphs, palette, effect.glyphs.as_deref(), density);
+            dither(
+                image,
+                glyphs,
+                plane,
+                palette,
+                effect.glyphs.as_deref(),
+                density,
+            );
         }
         SpriteEffectOp::Noise { amount } => noise(image, &mask, seed, frame_index, amount),
         SpriteEffectOp::Blur { radius } => blur(image, &mask, radius),
@@ -342,6 +377,47 @@ fn bounding_box(image: &FrameImage, mask: &[bool]) -> Option<[u32; 4]> {
     bounds
 }
 
+/// The target set's box and the derived numbers a gradient position `t` is measured from.
+struct GradientSpan {
+    left: f32,
+    top: f32,
+    span_x: f32,
+    span_y: f32,
+    centre_x: f32,
+    centre_y: f32,
+    half_diagonal: f32,
+}
+
+impl GradientSpan {
+    fn new([left, top, right, bottom]: [u32; 4]) -> Self {
+        let span_x = (right - left) as f32;
+        let span_y = (bottom - top) as f32;
+        Self {
+            left: left as f32,
+            top: top as f32,
+            span_x,
+            span_y,
+            centre_x: (left as f32 + right as f32) / 2.0,
+            centre_y: (top as f32 + bottom as f32) / 2.0,
+            half_diagonal: 0.5 * math::sqrt(span_x * span_x + span_y * span_y),
+        }
+    }
+
+    /// The `0..=1` position of texel `(x, y)` along `direction`.
+    fn t(&self, direction: GradientDirection, x: f32, y: f32) -> f32 {
+        match direction {
+            GradientDirection::Vertical if self.span_y > 0.0 => (y - self.top) / self.span_y,
+            GradientDirection::Horizontal if self.span_x > 0.0 => (x - self.left) / self.span_x,
+            GradientDirection::Radial if self.half_diagonal > 0.0 => {
+                let dx = x - self.centre_x;
+                let dy = y - self.centre_y;
+                (math::sqrt(dx * dx + dy * dy) / self.half_diagonal).clamp(0.0, 1.0)
+            }
+            _ => 0.0,
+        }
+    }
+}
+
 /// `gradient`: ramps between two linear RGBA colours across the target set's bounding box.
 ///
 /// `t` runs over the *target set's* box, not the frame's, so a gradient over one glyph fills that
@@ -357,16 +433,12 @@ fn gradient(
     direction: GradientDirection,
     blend: GradientBlend,
 ) {
-    let Some([left, top, right, bottom]) = bounding_box(image, mask) else {
+    let Some(bounds) = bounding_box(image, mask) else {
         return;
     };
     let from = from.map(|component| component as f32);
     let to = to.map(|component| component as f32);
-    let span_x = (right - left) as f32;
-    let span_y = (bottom - top) as f32;
-    let centre_x = (left as f32 + right as f32) / 2.0;
-    let centre_y = (top as f32 + bottom as f32) / 2.0;
-    let half_diagonal = 0.5 * math::sqrt(span_x * span_x + span_y * span_y);
+    let span = GradientSpan::new(bounds);
 
     let width = image.width;
     for index in mask
@@ -377,16 +449,7 @@ fn gradient(
     {
         let x = ((index as u32) % width) as f32;
         let y = ((index as u32) / width) as f32;
-        let t = match direction {
-            GradientDirection::Vertical if span_y > 0.0 => (y - top as f32) / span_y,
-            GradientDirection::Horizontal if span_x > 0.0 => (x - left as f32) / span_x,
-            GradientDirection::Radial if half_diagonal > 0.0 => {
-                let dx = x - centre_x;
-                let dy = y - centre_y;
-                (math::sqrt(dx * dx + dy * dy) / half_diagonal).clamp(0.0, 1.0)
-            }
-            _ => 0.0,
-        };
+        let t = span.t(direction, x, y);
         let ramp = [
             from[0] + (to[0] - from[0]) * t,
             from[1] + (to[1] - from[1]) * t,
@@ -407,6 +470,102 @@ fn gradient(
                 }
             }
         }
+    }
+}
+
+/// `gradient` in `mode: ramp`: each target texel moves `t * steps` positions along its palette ramp,
+/// the fractional part resolved by the Bayer matrix ([`bayer_steps`]). `t` is the colour mode's.
+fn gradient_ramp(
+    image: &mut FrameImage,
+    plane: &mut [Option<char>],
+    palette: &[Option<[f32; 4]>; 128],
+    ramps: &RampTable,
+    mask: &[bool],
+    direction: GradientDirection,
+    steps: i32,
+) {
+    let Some(bounds) = bounding_box(image, mask) else {
+        return;
+    };
+    let span = GradientSpan::new(bounds);
+    let width = image.width as usize;
+    for index in mask
+        .iter()
+        .enumerate()
+        .filter(|(_, on)| **on)
+        .map(|(i, _)| i)
+    {
+        let (x, y) = (index % width, index / width);
+        let t = span.t(direction, x as f32, y as f32);
+        let whole = bayer_steps(t * steps as f32, x, y);
+        ramp_repaint(image, plane, palette, ramps, index, whole);
+    }
+}
+
+/// Each glyph's `(ramp, position)` in the first ramp that lists it — the one lookup every ramp-mode
+/// op steps through.
+struct RampTable {
+    ramps: Vec<Vec<char>>,
+    slots: [Option<(usize, usize)>; 128],
+}
+
+impl RampTable {
+    /// A glyph listed by several ramps belongs to the first: later listings never overwrite a slot.
+    fn new(ramps: &[String]) -> Self {
+        let ramps: Vec<Vec<char>> = ramps.iter().map(|ramp| ramp.chars().collect()).collect();
+        let mut slots = [None; 128];
+        for (ramp_index, ramp) in ramps.iter().enumerate() {
+            for (position, glyph) in ramp.iter().enumerate() {
+                if let Some(slot) = slots.get_mut(*glyph as usize)
+                    && slot.is_none()
+                {
+                    *slot = Some((ramp_index, position));
+                }
+            }
+        }
+        Self { ramps, slots }
+    }
+
+    /// The glyph `steps` positions from `glyph` along its ramp, clamped to the ramp's ends; `None`
+    /// when `glyph` is in no ramp.
+    fn step(&self, glyph: char, steps: i32) -> Option<char> {
+        let (ramp_index, position) = (*self.slots.get(glyph as usize)?)?;
+        let ramp = &self.ramps[ramp_index];
+        let target = (position as i64 + i64::from(steps)).clamp(0, ramp.len() as i64 - 1);
+        Some(ramp[target as usize])
+    }
+}
+
+/// Whole steps for a fractional count: the floor, plus one where the 4×4 Bayer threshold at `(x, y)`
+/// falls under the fraction — `dither`'s own `(threshold + 0.5) / 16 < density` test.
+fn bayer_steps(value: f32, x: usize, y: usize) -> i32 {
+    let floor = value.floor();
+    let fraction = value - floor;
+    let threshold = BAYER_4X4[y % 4][x % 4];
+    let bump = i32::from((threshold as f32 + 0.5) / 16.0 < fraction);
+    floor as i32 + bump
+}
+
+/// Moves texel `index` `steps` along its current glyph's ramp and repaints it, full RGBA, from the
+/// palette. A texel with no current glyph, or one in no ramp, is left alone.
+fn ramp_repaint(
+    image: &mut FrameImage,
+    plane: &mut [Option<char>],
+    palette: &[Option<[f32; 4]>; 128],
+    ramps: &RampTable,
+    index: usize,
+    steps: i32,
+) {
+    let Some(current) = plane[index] else { return };
+    let Some(next) = ramps.step(current, steps) else {
+        return;
+    };
+    if next == current {
+        return;
+    }
+    if let Some(color) = palette.get(next as usize).copied().flatten() {
+        image.texels[index] = color;
+        plane[index] = Some(next);
     }
 }
 
@@ -443,6 +602,26 @@ fn outline(image: &mut FrameImage, mask: &[bool], color: [f64; 4], side: Outline
     }
 }
 
+/// Which side of the silhouette a texel sits on relative to the light.
+#[derive(Clone, Copy, PartialEq)]
+enum Edge {
+    Lit,
+    Shadowed,
+    Interior,
+}
+
+/// Classifies texel `(x, y)` from the silhouette as it stood in `before`: with `d` the light's
+/// per-axis sign, transparent at `p + d` is a lit edge, else transparent at `p - d` is a shadowed one.
+fn classify_edge(before: &FrameImage, x: i32, y: i32, dx: i32, dy: i32) -> Edge {
+    if before.get(x + dx, y + dy)[3] == 0.0 {
+        Edge::Lit
+    } else if before.get(x - dx, y - dy)[3] == 0.0 {
+        Edge::Shadowed
+    } else {
+        Edge::Interior
+    }
+}
+
 /// `shade`: a cheap silhouette-derived bevel — lighten the edge facing the light, darken the one
 /// away from it.
 ///
@@ -467,15 +646,52 @@ fn shade(image: &mut FrameImage, mask: &[bool], light: [f64; 2], strength: f64) 
         let x = (index as i32) % width;
         let y = (index as i32) / width;
         let texel = &mut image.texels[index];
-        if before.get(x + dx, y + dy)[3] == 0.0 {
-            for channel in &mut texel[0..3] {
-                *channel += (1.0 - *channel) * strength;
+        match classify_edge(&before, x, y, dx, dy) {
+            Edge::Lit => {
+                for channel in &mut texel[0..3] {
+                    *channel += (1.0 - *channel) * strength;
+                }
             }
-        } else if before.get(x - dx, y - dy)[3] == 0.0 {
-            for channel in &mut texel[0..3] {
-                *channel *= 1.0 - strength;
+            Edge::Shadowed => {
+                for channel in &mut texel[0..3] {
+                    *channel *= 1.0 - strength;
+                }
             }
+            Edge::Interior => {}
         }
+    }
+}
+
+/// `shade` in `mode: ramp`: the same edge classification, but a lit edge moves `+steps` along its
+/// palette ramp and a shadowed one `-steps`.
+fn shade_ramp(
+    image: &mut FrameImage,
+    plane: &mut [Option<char>],
+    palette: &[Option<[f32; 4]>; 128],
+    ramps: &RampTable,
+    mask: &[bool],
+    light: [f64; 2],
+    steps: i32,
+) {
+    let before = image.clone();
+    let dx = signum(light[0]);
+    let dy = signum(light[1]);
+    let width = image.width as i32;
+
+    for index in mask
+        .iter()
+        .enumerate()
+        .filter(|(_, on)| **on)
+        .map(|(i, _)| i)
+    {
+        let x = (index as i32) % width;
+        let y = (index as i32) / width;
+        let moved = match classify_edge(&before, x, y, dx, dy) {
+            Edge::Lit => steps,
+            Edge::Shadowed => steps.saturating_neg(),
+            Edge::Interior => continue,
+        };
+        ramp_repaint(image, plane, palette, ramps, index, moved);
     }
 }
 
@@ -525,6 +741,7 @@ fn shadow(image: &mut FrameImage, mask: &[bool], offset: [i32; 2], color: [f64; 
 fn dither(
     image: &mut FrameImage,
     glyphs: &[Option<char>],
+    plane: &mut [Option<char>],
     palette: &[Option<[f32; 4]>; 128],
     names: Option<&[String]>,
     density: f64,
@@ -549,6 +766,7 @@ fn dither(
         let threshold = BAYER_4X4[(index / width) % 4][(index % width) % 4];
         if (threshold as f32 + 0.5) / 16.0 < density {
             image.texels[index] = color;
+            plane[index] = Some(to);
         }
     }
 }
