@@ -7,7 +7,8 @@
 // back-pressure. Three limits:
 //
 //   whole file          ≤ 20 KB    the operational summary, rules included
-//   ## Current state    ≤  5 KB    one line per active plan — the section that regrows
+//   ## Current state    ≤  5 KB    active plans grouped by what gates them, short tags of what
+//                                  exists, no narrative — the section that regrows
 //   any single line     ≤ 1200 ch  a line that long is a paragraph hiding in a bullet
 //   a nested CLAUDE.md  ≤ 12 KB    games/<game>/CLAUDE.md, editor/CLAUDE.md, … — loaded on demand when
 //                                  an agent reads a file in that subtree; same line limit. They regrow
