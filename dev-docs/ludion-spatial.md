@@ -33,11 +33,10 @@ it needs only the guide chapter.
   `(Transform.translation.x, .z)`; height, rotation, and scale are ignored. `half_extents` is a
   2-vector — there is no vertical extent.
 - **This crate never names `Transform`** (that would need a spatial→engine edge, the forbidden
-  direction). `rebuild`/`move_and_slide` are generic over `GroundPosition`; `ludion-engine` owns
-  `impl GroundPosition for Transform`. Games call `spatial::rebuild::<Transform>`.
-  `GroundPosition::derived_ground_position` is the same seam as physics's `derived_world_pose`: the
-  default `None` reads the stored position, and the `Transform` impl returns the composed world
-  centre for a parented entity, so `rebuild` and `move_and_slide` see world space.
+  direction). `rebuild`/`move_and_slide` are generic over `GroundPosition` (the in-plane mapping
+  only) and `R: ParentPose`; `ludion-engine` owns `impl GroundPosition for Transform` and
+  `TransformHierarchy`. Games call `spatial::rebuild::<Transform, TransformHierarchy>`. A parented
+  entity's center is `R::world_pose` projected on `Plane::axes`; `NoParent` reads the stored position.
 - **`SpatialIndex` is derived, never hashed.** It is a non-`Serialize` resource outside `WorldHash`,
   rebuilt from world content each frame by the explicitly-scheduled `rebuild` system. Determinism
   comes from rebuild being a pure function of world content visited in `EntityId` order. A snapshot
@@ -59,7 +58,7 @@ registers it at a chosen schedule position (no hidden systems). It joins `query_
 (ascending `EntityId`) and files one `Entry { entity, center, shape, body }` per collider into the
 `SpatialIndex`, skipping every `is_solver_owned` collider (a 3D shape or a `rigid` body is
 `ludion-physics`'s, never in the 2D index); once any `Parent` exists, a second pass replaces each
-center with the entity's world pose (`P::derived_ground_position`). The index holds two independent
+center with the entity's world pose (`R::world_pose`). The index holds two independent
 `HalfIndex`es keyed by `Body` (`statics` and `dynamics`, the latter holding the kinematic
 entries), each with its own cell grid, `max_reach`, and occupied bounds. Within a half, an entry
 is filed under the single grid cell containing its center (`floor(coord /

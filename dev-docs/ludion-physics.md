@@ -32,7 +32,7 @@ Gravity defaults to `[0, -9.81, 0]`; a top-down `Plane::Xz` game zeroes it throu
 
 ## The install verb
 
-`install::<Transform>(&mut schedule, settings)` (`settings: impl Into<PhysicsSettings>` — a bare
+`install::<Transform, TransformHierarchy>(&mut schedule, settings)` (`settings: impl Into<PhysicsSettings>` — a bare
 `PhysicsSpace` still converts) appends `physics_write`, `physics_step`, `physics_mirror` in that
 order at the position it is called. **One verb, not three**: the order is load-bearing and a wrong
 order fails silently — mirror before step writes back last tick's pose, write after step throws
@@ -96,13 +96,13 @@ touching after the rebuild emits nothing. An untouched `Collider` costs one comp
 
 ## The pose trait and the Euler convention
 
-`PhysicsPose` has four required methods: `translation`/`set_translation` and
-`rotation_quat`/`set_rotation_quat`, the rotation a quaternion `[x, y, z, w]`. A fifth,
-`derived_world_pose`, defaults to `None` (the stored pose is world space); the engine's `Transform`
-impl returns the composed pose for a parented entity, and the write pass feeds it to kinematic bodies
-in place of the stored one. A rigid or static body under a parent gets no body (`L1221`/`L1222`), and
+`PhysicsPose` is four field accessors: `translation`/`set_translation` and
+`rotation_quat`/`set_rotation_quat`, the rotation a quaternion `[x, y, z, w]`. Hierarchy reaches the
+solver through the `R: ParentPose` parameter (`NoParent`, or the engine's `TransformHierarchy`), so
+`Transform`'s impl holds no engine code; the write pass feeds `R::world_pose` to kinematic bodies
+instead of the stored pose. A rigid or static body under a parent gets no body (`L1221`/`L1222`), and
 `L1223` is raised once per entity for a kinematic body under a sheared chain. A quaternion at the
-boundary keeps every Euler question in one place, the implementor, not on each side of the mirror.
+boundary keeps every Euler question in the implementor.
 The engine's convention is **Euler XYZ degrees, intrinsic** (the product `qx · qy · qz`).
 `ludion_core::math::euler_xyz_degrees_to_quat` and `quat_to_euler_xyz_degrees` are that convention
 with the transcendentals on pure-Rust libm, never glam's own, whose platform C library differs in

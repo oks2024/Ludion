@@ -11,7 +11,7 @@ The motor moves the character; the **moveset owns gravity, velocity and jump** �
 ## The loop
 
 1. Author the capsule in the scene (`CharacterMotor` on a root entity, a `physics:` block in the scene) and `ludion check-scene <scene>` — L1294–L1299 below.
-2. Call `move_character::<Transform>(world, hero, displacement)` (`ludion_engine::move_character` is the same call plus the `motor` draw) from a game system registered **before** the engine's physics systems; the report is stamped with the frame the physics write pass runs in next. The physics world does not exist until that pass runs, so a world's first tick returns `MotorError::NoPhysicsWorld`.
+2. Call `move_character::<Transform, TransformHierarchy>(world, hero, displacement)` (`ludion_engine::move_character` is the same call plus the `motor` draw) from a game system registered **before** the engine's physics systems; the report is stamped with the frame the physics write pass runs in next. The physics world does not exist until that pass runs, so a world's first tick returns `MotorError::NoPhysicsWorld`.
 3. Assert in a game test on a `MoveReport` sequence (`grounded`, `landed`, `stepped`, `platform`), or print the numbers: `ludion docs verify-loop --section "Numeric trace"` (`<game> --trace`, `trace_with` in `cargo test`; run twice and diff).
 4. Look: the game binary with `--debug-draw motor` (`ludion docs debug-draw`).
 

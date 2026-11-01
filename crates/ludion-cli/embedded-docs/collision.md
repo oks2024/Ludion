@@ -103,16 +103,27 @@ not by `asset.reload` (a collider changing mid-run would break replays): edit th
 reload the scene or restore.
 
 **The index is rebuilt by a system you schedule.** Nothing is hidden: register
-`spatial::rebuild::<Transform>` at an explicit position — before any system that queries — and the
+`spatial::rebuild::<Transform, TransformHierarchy>` at an explicit position — before any system that queries — and the
 schedule stays readable in your `game()`:
 
 ```rust,ignore
 fn game() -> EngineBuilder {
     Engine::builder()
-        .system("spatial_rebuild", spatial::rebuild::<Transform>)
+        .system("spatial_rebuild", spatial::rebuild::<Transform, TransformHierarchy>)
         .system("enemy_ai", enemy_ai)        // queries see this frame's positions
         .system("move_player", move_player)
 }
+```
+
+**The second type parameter is the parent resolver.** A `Transform` game passes `TransformHierarchy`
+(an entity under a `Parent` is indexed and swept at its composed world position); a custom pose
+component with no hierarchy passes `NoParent`. The generic calls take `::<P, R>`: `spatial::rebuild`,
+`spatial::move_and_slide`, physics `install`, `move_character` and `move_character_with` (old form
+`::<P>`). `probe_character_ground`, `resize_character`, `fits_character` and `teleport_character`
+take `::<P>` only.
+
+```rust,ignore
+.system("spatial_rebuild", spatial::rebuild::<Transform, TransformHierarchy>) // was ::<Transform>
 ```
 
 Before the first rebuild (or in a world with no colliders) every query returns empty/`None` and
@@ -132,7 +143,7 @@ Before the first rebuild (or in a world with no colliders) every query returns e
 - `spatial::raycast(world, origin, dir, body_filter) -> Option<RayHit>` — the nearest in-plane
   hit (`RayHit { entity, t, point }`, hit point = `origin + t * dir`). Line of sight,
   projectile-vs-wall.
-- `spatial::move_and_slide::<Transform>(world, entity, delta) -> [f32; 2]` (3D characters with a physics world: `ludion docs motor`) — the resolved delta for
+- `spatial::move_and_slide::<Transform, TransformHierarchy>(world, entity, delta) -> [f32; 2]` (3D characters with a physics world: `ludion docs motor`) — the resolved delta for
   a kinematic move swept against **static** colliders only (never kinematic or rigid bodies — mover-vs-mover
   response is your logic, built on `k_nearest`). Axis-separated: sliding along a wall keeps the
   tangential component and cancels the normal one; a corner resolves to zero. Exact contact (a
@@ -162,7 +173,7 @@ fn move_player(world: &mut World, ctx: &SystemCtx) {
     if input.is_held(Key::Down)  { wish[1] += 6.0 * ctx.dt; }
 
     let Some((player, _)) = world.query_ids::<(&Player,)>().next() else { return };
-    let resolved = spatial::move_and_slide::<Transform>(world, player, wish);
+    let resolved = spatial::move_and_slide::<Transform, TransformHierarchy>(world, player, wish);
     let transform = world.get_mut::<Transform>(player).unwrap().unwrap();
     transform.translation[0] += resolved[0]; // the only hashed write, in YOUR code
     transform.translation[2] += resolved[1];
