@@ -34,9 +34,9 @@ use ludion_core::diagnostics::Diagnostic;
 
 use crate::cook::{CookOutcome, CookRequest, CookTree, cook_project};
 use crate::diagnostic;
-use crate::import::import_gltf;
 use ludion_assets::cooked::CookTarget;
 use ludion_engine::manifest::{self, ImportSection};
+use ludion_import::import_gltf;
 
 use crate::bake_probes::{self, Warmed};
 

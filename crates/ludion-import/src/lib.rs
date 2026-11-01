@@ -106,9 +106,11 @@ mod animation;
 mod convert;
 mod diagnostics;
 mod document;
+mod provenance;
 mod skin;
 mod sources;
 mod tangents;
+mod tree;
 
 use accessors::check_accessor;
 pub use animation::{ClipReport, JointError, KeyCounts, SeamError, TrackReport};
@@ -122,10 +124,12 @@ use diagnostics::{
     node_under_joint, output_io, unsupported, unweighted_vertices,
 };
 use document::check_structure;
+pub use provenance::relative_to;
 use skin::{SkinBinding, bind_skin, map_weights};
 use sources::{Buffers, resolve_image};
 pub use tangents::compute_tangents;
 use tangents::faceted_normals;
+pub use tree::{GltfImported, import_gltf};
 
 /// The glTF features that are an `L1202`, as short phrases. `ludion import --help`, the `L1202`
 /// explain text and this crate's rustdoc each name exactly this set (a `ludion-cli` test pins it).

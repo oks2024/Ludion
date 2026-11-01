@@ -738,6 +738,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ludion-components"
+version = "0.1.0"
+dependencies = [
+ "ludion-camera",
+ "ludion-core",
+ "ludion-ecs",
+ "ludion-physics",
+ "ludion-scene",
+ "ludion-sim",
+ "ludion-spatial",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ludion-core"
 version = "0.1.0"
 dependencies = [
@@ -766,6 +782,7 @@ dependencies = [
  "crossbeam-channel",
  "ludion-assets",
  "ludion-camera",
+ "ludion-components",
  "ludion-core",
  "ludion-ecs",
  "ludion-font",
@@ -821,6 +838,7 @@ dependencies = [
  "glam 0.30.10",
  "gltf",
  "ludion-assets",
+ "ludion-components",
  "ludion-core",
  "ludion-scene",
  "ryu",

@@ -13,6 +13,7 @@ categories = ["game-development", "parser-implementations", "encoding"]
 ludion-core = { path = "../ludion-core", version = "0.1.0" }
 ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
 ludion-assets = { path = "../ludion-assets", version = "0.1.0" }
+ludion-components = { path = "../ludion-components", version = "0.1.0" }
 base64.workspace = true
 glam.workspace = true
 gltf = { version = "1", default-features = false, features = ["utils", "names", "extras", "KHR_lights_punctual", "KHR_materials_emissive_strength"] }

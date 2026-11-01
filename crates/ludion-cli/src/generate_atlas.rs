@@ -19,7 +19,7 @@
 //! gate would just fail forever on a file no edit could fix. Re-parsing and re-emitting before the
 //! write proves the pair is canonical and re-readable, and refuses to write when it is not.
 
-use std::path::{Component, Path, PathBuf, Prefix, PrefixComponent};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ludion_assets::Image;
@@ -202,7 +202,7 @@ fn bake_atlas_source(
     let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
     let dir = out_dir.map_or_else(|| source_dir.to_path_buf(), Path::to_path_buf);
     let stem = output_stem(&doc, source_path);
-    let generated_from = relative_to(&dir, source_path, code::OUTPUT_IO)
+    let generated_from = ludion_import::relative_to(&dir, source_path, code::OUTPUT_IO)
         .map_err(|diagnostic| diagnostic::report(source_path, &[diagnostic]))?;
 
     let inputs = load_inputs(&doc, source_dir)
@@ -248,7 +248,7 @@ fn bake_font_source(
         Some(name) => name.to_string(),
         None => document_stem(source_path, ".font-source"),
     };
-    let generated_from = relative_to(&dir, source_path, code::OUTPUT_IO)
+    let generated_from = ludion_import::relative_to(&dir, source_path, code::OUTPUT_IO)
         .map_err(|diagnostic| diagnostic::report(source_path, &[diagnostic]))?;
 
     let face_path = source_dir.join(&doc.file);
@@ -582,115 +582,4 @@ fn document_stem(path: &Path, suffix: &str) -> String {
         .or_else(|| name.strip_suffix(".yml"))
         .unwrap_or(&name);
     stem.strip_suffix(suffix).unwrap_or(stem).to_string()
-}
-
-/// `file` expressed relative to `dir` with forward slashes — the `generated_from:` provenance the
-/// drift gate rediscovers the pair through. In the default layout (the pair written beside its
-/// source) this is just the file name.
-///
-/// # Errors
-/// `code` when `dir` and `file` are on different drives: no relative path exists, and an absolute
-/// one would not be portable.
-pub(crate) fn relative_to(
-    dir: &Path,
-    file: &Path,
-    code: DiagnosticCode,
-) -> Result<String, Diagnostic> {
-    let file_name = || {
-        file.file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    };
-    let (Ok(dir), Ok(file)) = (std::path::absolute(dir), std::path::absolute(file)) else {
-        return Ok(file_name());
-    };
-    let mut left = dir.components().peekable();
-    let mut right = file.components().peekable();
-    if let (Some(Component::Prefix(left_prefix)), Some(Component::Prefix(right_prefix))) =
-        (left.peek().copied(), right.peek().copied())
-    {
-        let drive = |prefix: PrefixComponent| match prefix.kind() {
-            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
-                Some(letter.to_ascii_uppercase())
-            }
-            _ => None,
-        };
-        let same = match (drive(left_prefix), drive(right_prefix)) {
-            (Some(a), Some(b)) => a == b,
-            _ => left_prefix == right_prefix,
-        };
-        if !same {
-            return Err(Diagnostic::new(
-                code,
-                format!(
-                    "`{}` is on a different drive from the output `{}`: `generated_from` cannot name it relatively",
-                    file.display(),
-                    dir.display()
-                ),
-            )
-            .with_help(format!(
-                "write the output on the source's drive (`{}`), e.g. `--out` inside the project",
-                right_prefix.as_os_str().to_string_lossy()
-            )));
-        }
-        // `\\?\C:` and `C:` name one drive but differ as components: step past both.
-        left.next();
-        right.next();
-    }
-    while left.peek().is_some() && left.peek() == right.peek() {
-        left.next();
-        right.next();
-    }
-    let mut parts: Vec<String> = vec!["..".to_string(); left.count()];
-    parts.extend(right.map(|part| part.as_os_str().to_string_lossy().into_owned()));
-    if parts.is_empty() {
-        return Ok(file_name());
-    }
-    Ok(parts.join("/"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_source_on_another_drive_has_no_relative_path() {
-        if !Path::new(r"C:\a").is_absolute() {
-            return;
-        }
-        let err = relative_to(
-            Path::new(r"Q:\out"),
-            Path::new(r"C:\src\x.gltf"),
-            code::OUTPUT_IO,
-        )
-        .unwrap_err();
-        assert_eq!(err.code, code::OUTPUT_IO);
-        assert!(err.message.contains("different drive"), "{}", err.message);
-        assert_eq!(
-            relative_to(
-                Path::new(r"c:\out"),
-                Path::new(r"C:\src\x.gltf"),
-                code::OUTPUT_IO
-            )
-            .unwrap(),
-            "../src/x.gltf"
-        );
-        assert_eq!(
-            relative_to(
-                Path::new(r"\\?\C:\out"),
-                Path::new(r"C:\src\x.gltf"),
-                code::OUTPUT_IO
-            )
-            .unwrap(),
-            "../src/x.gltf"
-        );
-        assert!(
-            relative_to(
-                Path::new(r"\\?\Q:\out"),
-                Path::new(r"C:\src\x.gltf"),
-                code::OUTPUT_IO
-            )
-            .is_err()
-        );
-    }
 }
