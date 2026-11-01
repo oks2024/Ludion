@@ -219,3 +219,12 @@ Place **Reflection probe** from the Level Designer palette inside a room with a 
 
 ## Held-input release (Clockout 0025)
 Play mode, focus the viewer, hold D (the hero runs), Alt-Tab (Windows) / Cmd-Tab (M4) away and back: the hero stands. Same in the perf preview. Same with a held left mouse button. Hold D, then play → edit → play: the hero stands.
+
+## Host path confinement (audit 2026-10-31 33/L3)
+With vigil (in the repo) and a project outside the repo, no view shows an "outside the engine checkout" refusal:
+- Switch between the two projects: every view still loads.
+- Game Designer: edit and save a value.
+- Voxel Artist and Models: browse the libraries.
+- Generation: the candidates grid shows thumbnails.
+- Terminal drawer: the status line still updates.
+- Performance: save.

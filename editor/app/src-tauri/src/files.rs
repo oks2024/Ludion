@@ -3,8 +3,8 @@
 //! The Voxel Artist view walks `<content-root>/voxels/**` and treats the directory tree *as* the
 //! taxonomy (`Plan/editor-voxel-artist.md`), so the host needs a listing primitive next to the
 //! `read`/`stat`/`write_editor_file` trio in [`crate::pty`]. Path handling matches those commands:
-//! the frontend passes an absolute path and the host does not sandbox it — the editor is a local
-//! tool running as the user, and a guard here would be a fence with no field around it.
+//! the frontend passes an absolute path, confined by [`crate::confine`] to the repo or a Ludion
+//! project.
 
 use std::path::Path;
 
@@ -111,6 +111,7 @@ fn walk(dir: &Path, prefix: &str, ext: &str, depth: usize, out: &mut Vec<DirEntr
 /// Errors are readable, not io-speak: a missing root names the path and says what was expected.
 #[tauri::command(async)]
 pub fn list_editor_dir(path: String, ext: Option<String>) -> Result<Vec<DirEntry>, String> {
+    crate::confine::check(&path)?;
     let root = Path::new(&path);
     let meta = std::fs::metadata(root).map_err(|e| {
         format!("cannot list `{path}`: {e}. Expected a directory of assets — switch project from the title bar.")
@@ -142,6 +143,11 @@ mod tests {
             ));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("ludion.toml"),
+                "name = \"t\"\ndefault_scene = \"scenes/main.yaml\"\n",
+            )
+            .unwrap();
             Tree(dir)
         }
         fn file(&self, rel: &str) {
@@ -218,7 +224,15 @@ mod tests {
         t.file("sub/b.bin");
         let out = list_editor_dir(t.path(), None).unwrap();
         let rels: Vec<&str> = out.iter().map(|e| e.rel_path.as_str()).collect();
-        assert_eq!(rels, vec!["sub", "sub/b.bin", "a.txt"]);
+        assert_eq!(rels, vec!["sub", "sub/b.bin", "a.txt", "ludion.toml"]);
+    }
+
+    #[test]
+    fn a_root_outside_every_project_is_refused() {
+        let t = Tree::new("confined");
+        std::fs::remove_file(t.0.join("ludion.toml")).unwrap();
+        let err = list_editor_dir(t.path(), None).unwrap_err();
+        assert!(err.contains("outside the engine checkout"), "{err}");
     }
 
     #[test]

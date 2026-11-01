@@ -68,8 +68,8 @@ pub struct GenResult {
 ///
 /// # Errors
 /// `verb` outside [`GEN_VERBS`], or an `args` entry that would fight this function for control of
-/// the two flags it owns (`--json`, `--url`) — the address has exactly one route in, and the output
-/// format is not the caller's to choose.
+/// the two flags it owns (`--json`, `--url`), or a bare `--` that would make them positionals — the
+/// address has exactly one route in, and the output format is not the caller's to choose.
 pub fn gen_args(verb: &str, args: &[String], url: Option<&str>) -> Result<Vec<String>, String> {
     if !GEN_VERBS.contains(&verb) {
         return Err(format!(
@@ -78,6 +78,13 @@ pub fn gen_args(verb: &str, args: &[String], url: Option<&str>) -> Result<Vec<St
         ));
     }
     for arg in args {
+        if arg == "--" {
+            return Err(
+                "`--` is not allowed in `args`: the host appends `--url` and `--json` after \
+                 them, and a `--` would turn those into positionals."
+                    .to_string(),
+            );
+        }
         let flag = arg.split('=').next().unwrap_or(arg);
         if flag == "--json" || flag == "--url" {
             return Err(format!(
@@ -227,6 +234,7 @@ pub fn gen_invoke(
     ticket: Option<String>,
 ) -> Result<GenResult, String> {
     let argv = gen_args(&verb, &args, url.as_deref())?;
+    crate::confine::check(&project_dir)?;
     let project = Path::new(&project_dir);
     if !project.is_dir() {
         return Err(format!(
@@ -305,6 +313,7 @@ pub fn gen_deadline(args: &[String]) -> Duration {
 /// `render.screenshot` from. A run folder is scratch, so nothing here is cached.
 #[tauri::command(async)]
 pub fn read_editor_image(path: String) -> Result<String, String> {
+    crate::confine::check(&path)?;
     let file = Path::new(&path);
     let media = image_media_type(file).ok_or_else(|| {
         format!(
@@ -335,6 +344,7 @@ pub fn read_editor_image(path: String) -> Result<String, String> {
 /// the mtime the editing sessions poll on and nothing else.
 #[tauri::command(async)]
 pub fn editor_file_size(path: String) -> Result<u64, String> {
+    crate::confine::check(&path)?;
     std::fs::metadata(Path::new(&path))
         .map(|meta| meta.len())
         .map_err(|e| format!("cannot read `{path}`: {e}."))
@@ -500,6 +510,8 @@ mod tests {
             let err = gen_args("run", &args(&["r.gen.yaml", stolen]), None).unwrap_err();
             assert!(err.contains("is set by the host"), "`{stolen}`: {err}");
         }
+        let err = gen_args("run", &args(&["r.gen.yaml", "--"]), None).unwrap_err();
+        assert!(err.contains("`--` is not allowed"), "{err}");
         // A verb's own flags are untouched — the guard is two names, not a general filter.
         assert!(
             gen_args(
@@ -572,17 +584,53 @@ mod tests {
 
     #[test]
     fn a_refused_image_names_the_path_and_what_was_expected() {
-        let err = read_editor_image("0000.glb".to_string()).unwrap_err();
+        let dir = std::env::temp_dir().join(format!("ludion-gen-refused-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("ludion.toml"),
+            "name = \"t\"\ndefault_scene = \"scenes/main.yaml\"\n",
+        )
+        .unwrap();
+        let glb = dir.join("0000.glb").to_string_lossy().into_owned();
+        let err = read_editor_image(glb).unwrap_err();
         assert!(err.contains("0000.glb"), "{err}");
         assert!(err.contains(".png"), "{err}");
-        let err = read_editor_image("no-such-candidate.png".to_string()).unwrap_err();
+        let missing = dir
+            .join("no-such-candidate.png")
+            .to_string_lossy()
+            .into_owned();
+        let err = read_editor_image(missing).unwrap_err();
         assert!(err.contains("cannot read"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_and_size_reads_outside_every_root_are_refused() {
+        let dir = std::env::temp_dir().join(format!("ludion-gen-outside-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("0000.png").to_string_lossy().into_owned();
+        assert!(
+            read_editor_image(path.clone())
+                .unwrap_err()
+                .contains("outside the engine checkout")
+        );
+        assert!(
+            editor_file_size(path)
+                .unwrap_err()
+                .contains("outside the engine checkout")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn an_image_round_trips_as_a_data_url_and_its_size_is_readable() {
         let dir = std::env::temp_dir().join(format!("ludion-gen-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("ludion.toml"),
+            "name = \"t\"\ndefault_scene = \"scenes/main.yaml\"\n",
+        )
+        .unwrap();
         let path = dir.join("0000.png");
         std::fs::write(&path, b"\x89PNG\r\n").unwrap();
         let name = path.to_string_lossy().into_owned();

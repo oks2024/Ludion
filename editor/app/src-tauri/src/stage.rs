@@ -1713,6 +1713,14 @@ pub fn stages(app: tauri::AppHandle, repo_root: PathBuf) -> AppStages {
     }
 }
 
+/// Confines the scene and project paths a stage command was handed.
+fn confine_opts(opts: &StageOpts) -> Result<(), String> {
+    crate::confine::check(&opts.scene)?;
+    opts.project
+        .as_deref()
+        .map_or(Ok(()), crate::confine::check)
+}
+
 #[tauri::command(async)]
 pub fn stage_start(
     state: tauri::State<'_, AppStages>,
@@ -1720,6 +1728,7 @@ pub fn stage_start(
     opts: StageOpts,
     replace: Option<bool>,
 ) -> Result<StageStatus, String> {
+    confine_opts(&opts)?;
     state.get(slot).start(opts, replace.unwrap_or(false))
 }
 
@@ -1734,6 +1743,7 @@ pub fn stage_restart(
     slot: StageSlot,
     opts: StageOpts,
 ) -> Result<StageStatus, String> {
+    confine_opts(&opts)?;
     state.get(slot).restart(opts)
 }
 
@@ -1750,6 +1760,7 @@ pub fn run_check_scene(
     state: tauri::State<'_, AppStages>,
     path: String,
 ) -> Result<CheckSceneResult, String> {
+    crate::confine::check(&path)?;
     check_scene(&state.children, &state.repo_root, &path)
 }
 

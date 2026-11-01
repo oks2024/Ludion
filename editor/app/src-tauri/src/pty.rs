@@ -551,6 +551,7 @@ pub fn pty_list(state: tauri::State<'_, AppPtyRegistry>) -> Vec<String> {
 /// bridge). Temp-file-then-rename so a reader never sees a half-written file.
 #[tauri::command]
 pub fn write_editor_context(cwd: String, json: String) -> Result<(), String> {
+    crate::confine::check(&cwd)?;
     let dir = Path::new(&cwd).join(".ludion");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let target = dir.join("editor-context.json");
@@ -566,6 +567,7 @@ pub fn write_editor_context(cwd: String, json: String) -> Result<(), String> {
 /// string the caller treats as "no payload yet", never a crash.
 #[tauri::command]
 pub fn read_editor_file(path: String) -> Result<String, String> {
+    crate::confine::check(&path)?;
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
@@ -593,6 +595,7 @@ fn file_mtime_ms(path: &Path) -> Result<f64, String> {
 /// crash.
 #[tauri::command]
 pub fn stat_editor_file(path: String) -> Result<FileStat, String> {
+    crate::confine::check(&path)?;
     file_mtime_ms(Path::new(&path)).map(|mtime_ms| FileStat { mtime_ms })
 }
 
@@ -602,6 +605,7 @@ pub fn stat_editor_file(path: String) -> Result<FileStat, String> {
 /// Missing parent directories are created first.
 #[tauri::command]
 pub fn write_editor_file(path: String, text: String) -> Result<FileStat, String> {
+    crate::confine::check(&path)?;
     let target = Path::new(&path);
     if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
@@ -901,11 +905,14 @@ mod tests {
         assert!(matches!(reg.kill("ghost"), Err(PtyError::NoSession(_))));
     }
 
+    const TEST_MANIFEST: &str = "name = \"t\"\ndefault_scene = \"scenes/main.yaml\"\n";
+
     #[test]
     fn write_editor_context_writes_atomically() {
         let dir = std::env::temp_dir().join(format!("ludion-pty-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ludion.toml"), TEST_MANIFEST).unwrap();
         let cwd = dir.to_string_lossy().to_string();
 
         write_editor_context(cwd.clone(), r#"{"a":1}"#.to_string()).unwrap();
@@ -951,6 +958,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ludion-file-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ludion.toml"), TEST_MANIFEST).unwrap();
         let path = dir.join("movement.rs");
         let path_s = path.to_string_lossy().into_owned();
 
@@ -980,9 +988,24 @@ mod tests {
     fn write_editor_file_creates_missing_parent_dirs() {
         let dir = std::env::temp_dir().join(format!("ludion-file-parent-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ludion.toml"), TEST_MANIFEST).unwrap();
         let path = dir.join("a").join("b").join("file.txt");
         write_editor_file(path.to_string_lossy().into_owned(), "hi\n".to_string()).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hi\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_editor_file_outside_every_root_is_refused_and_creates_nothing() {
+        let dir = std::env::temp_dir().join(format!("ludion-file-outside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a").join("file.txt");
+        let err =
+            write_editor_file(path.to_string_lossy().into_owned(), "x".to_string()).unwrap_err();
+        assert!(err.contains("outside the engine checkout"), "{err}");
+        assert!(!dir.join("a").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1,4 +1,5 @@
 mod children;
+mod confine;
 mod files;
 // `gen` is a reserved keyword in Rust 2024, so the module spells out what it drives.
 mod generation;
