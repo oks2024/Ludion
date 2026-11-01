@@ -13,10 +13,10 @@ use ludion_engine::{Engine, ProbeBakeReport, ProbeOutcome, QualitySetting};
 
 use crate::diagnostic;
 
-/// The `.yaml` scenes under `dir` that can hold a probe: those with a top-level `entities:` line and
-/// no top-level `kind:` line, sorted. A tree with no `ReflectionProbe` anywhere gives an empty list
-/// without parsing a document, so a project without probes pays only a read of its text. A probe
-/// inside a prefab trips that check, so the list is complete; a scene without a probe bakes empty.
+/// The `.yaml` scenes under `dir` that can hold a probe, sorted. A tree with no `ReflectionProbe`
+/// anywhere gives an empty list without parsing a document. When only scenes name it, just those are
+/// listed; when a non-scene document (a prefab or any `kind:` doc) names it, a probe can reach any
+/// scene indirectly, so every scene is listed. A document outside `dir` is not seen.
 pub(crate) fn probe_scenes(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_yaml(dir, &mut files);
@@ -24,22 +24,26 @@ pub(crate) fn probe_scenes(dir: &Path) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(|path| std::fs::read_to_string(&path).ok().map(|text| (path, text)))
         .collect();
-    if !texts
-        .iter()
-        .any(|(_, text)| text.contains("ReflectionProbe"))
-    {
+    let names_probe = |text: &str| text.contains("ReflectionProbe");
+    if !texts.iter().any(|(_, text)| names_probe(text)) {
         return Vec::new();
     }
+    let indirect = texts
+        .iter()
+        .any(|(_, text)| !is_scene(text) && names_probe(text));
     let mut scenes: Vec<PathBuf> = texts
         .into_iter()
-        .filter(|(_, text)| {
-            text.lines().any(|line| line.starts_with("entities:"))
-                && !text.lines().any(|line| line.starts_with("kind:"))
-        })
+        .filter(|(_, text)| is_scene(text) && (indirect || names_probe(text)))
         .map(|(path, _)| path)
         .collect();
     scenes.sort();
     scenes
+}
+
+/// A scene has a top-level `entities:` line and no top-level `kind:` line.
+fn is_scene(text: &str) -> bool {
+    text.lines().any(|line| line.starts_with("entities:"))
+        && !text.lines().any(|line| line.starts_with("kind:"))
 }
 
 /// Every `.yaml` under `dir`, recursively, skipping dot-directories (`.ludion` holds derived files).
@@ -249,5 +253,41 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["a/b.yaml", "z.yaml"]);
+    }
+
+    fn relative(dir: &tempfile_dir::Dir) -> Vec<String> {
+        probe_scenes(dir.path())
+            .iter()
+            .map(|p| {
+                p.strip_prefix(dir.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn only_scenes_naming_a_probe_are_listed() {
+        let dir = tree(&[
+            ("a.yaml", PROBE_SCENE),
+            ("b.yaml", SCENE),
+            ("c/d.yaml", PROBE_SCENE),
+        ]);
+        assert_eq!(relative(&dir), ["a.yaml", "c/d.yaml"]);
+    }
+
+    #[test]
+    fn a_probe_in_a_prefab_lists_every_scene() {
+        let prefab =
+            "format: 1\nkind: prefab\nentities:\n  - components:\n      ReflectionProbe: {}\n";
+        let dir = tree(&[("p.yaml", prefab), ("a.yaml", SCENE), ("b.yaml", SCENE)]);
+        assert_eq!(relative(&dir), ["a.yaml", "b.yaml"]);
+    }
+
+    #[test]
+    fn a_non_yaml_mention_does_not_widen_the_list() {
+        let dir = tree(&[("notes.txt", PROBE_SCENE), ("a.yaml", SCENE)]);
+        assert!(relative(&dir).is_empty());
     }
 }

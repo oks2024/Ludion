@@ -79,6 +79,19 @@ fn a_scene_the_cli_cannot_load_is_named_not_failed() {
 }
 
 #[test]
+fn a_scene_without_a_probe_is_not_loaded() {
+    let dir = project("mixed", &["gamey.yaml", "plain.yaml"]);
+    let output = sync(&dir);
+    assert!(output.status.success(), "{output:?}");
+    let report = json(&output);
+    assert_eq!(
+        report["probe_scenes_skipped"],
+        serde_json::json!(["scenes/gamey.yaml"])
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn a_project_without_probes_does_no_probe_work() {
     let dir = project("none", &["plain.yaml"]);
     let output = sync(&dir);
