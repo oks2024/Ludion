@@ -84,9 +84,10 @@
 //!   [`HostOptions`], the argv modes (`--profile`, `--trace`, `--check-docs`, `--replay-frames`,
 //!   `--replay-verify`), and `ludion-server` (tokio) in the tree. Off, the embedding core hosts the
 //!   same engine with no listener.
-//! - **`window`** (implies `wire`) — the game's own window `run --window` opens, with the engine
-//!   presenting its rendered frame into it in process: winit, wgpu and `ludion-window`'s
-//!   device-event builders in the tree. Off, `--window` is refused with `L0018`.
+//! - **`window`** — the game's own window, with the engine presenting its rendered frame into it
+//!   in process: winit, wgpu and `ludion-window`'s device-event builders in the tree. `run --window`
+//!   opens it beside the listener, and [`launch`] opens it as the player window. Without `wire` it
+//!   is the desktop player shape: no listener, no argv shell. Off, `--window` is refused with `L0018`.
 //!
 //! The asset watcher (`notify`) rides neither: it is `ludion-assets`' opt-in `watch` feature, enabled
 //! only by `ludion-server` and `ludion-cli`, so the feature-less tree carries none of the four.
@@ -544,7 +545,7 @@ pub fn run(builder: EngineBuilder) -> ExitCode {
 
     #[cfg(feature = "window")]
     if args.window {
-        return present::host_windowed(source, options);
+        return present::host_windowed(source, options, present::WindowRole::Dev);
     }
     match embed::Embedded::start_from(source, None, options) {
         Ok(embedded) => {
@@ -778,14 +779,19 @@ pub(crate) const LAUNCH_ADDR: &str = "127.0.0.1:9411";
 /// The scene is the builder's [`default_scene`](EngineBuilder::default_scene) resolved against
 /// `roots.content`; a builder without one is an error, since no flag can supply it. The three
 /// per-machine settings still arrive from the environment on exactly `run`'s terms — `LUDION_THREADS`,
-/// `LUDION_QUALITY`, `LUDION_RENDER_SIZE` — so a malformed value refuses to start (`L0014`, `L0016`,
-/// `L0017`) before anything is built.
+/// `LUDION_QUALITY`, `LUDION_RENDER_SIZE`, `LUDION_FULLSCREEN` — so a malformed value refuses to
+/// start (`L0014`, `L0016`, `L0017`, `L0037`) before anything is built.
 ///
-/// It is the [embedding core](embed) with no surface: `start`, then wait for Ctrl-C. With the default
-/// `wire` feature the core binds the wire protocol at the loopback address `run` defaults to — the
-/// listener an agent or a viewer attaches to. Built without `wire` it hosts the same engine with no
-/// listener at all: the sim thread runs alone until Ctrl-C, then shuts down cleanly, flushing any
-/// armed recording.
+/// With the `window` feature it is the desktop player: the game's own window, titled with the game's
+/// title alone, opening in the builder's fullscreen and cursor mode, its render extent following the
+/// window. It must be called from the process's main thread, and closing the window, Ctrl-C or a
+/// `Shutdown` request stops it gracefully. On a box with no display it fails `L2007`. Without `window`
+/// it is the [embedding core](embed) with no surface: `start`, then wait for Ctrl-C.
+///
+/// With the default `wire` feature the core also binds the wire protocol at the loopback address `run`
+/// defaults to — the listener an agent or a viewer attaches to. Built without `wire` it hosts the same
+/// engine with no listener at all: the sim thread runs alone until it is stopped, then shuts down
+/// cleanly, flushing any armed recording.
 ///
 /// On any failure (no default scene, a bad scene, a failed bind) it prints a diagnostic to stderr and
 /// returns a non-zero code.
@@ -795,6 +801,23 @@ pub fn launch(builder: EngineBuilder, roots: LaunchRoots) -> ExitCode {
         listen: Some(LAUNCH_ADDR.to_string()),
         ..embed::StartOptions::default()
     };
+    #[cfg(feature = "window")]
+    return present::host_windowed(
+        embed::Source::Game { builder, roots },
+        options,
+        present::WindowRole::Player,
+    );
+
+    #[cfg(not(feature = "window"))]
+    launch_headless(builder, roots, options)
+}
+
+#[cfg(not(feature = "window"))]
+fn launch_headless(
+    builder: EngineBuilder,
+    roots: LaunchRoots,
+    options: embed::StartOptions,
+) -> ExitCode {
     let embedded = match embed::Embedded::start(builder, roots, None, options) {
         Ok(embedded) => embedded,
         Err(diagnostic) => {

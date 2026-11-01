@@ -5,7 +5,7 @@
 // device with no desktop turns them off (`default-features = false`) and hosts through
 // `ludion::launch` alone — and nothing else gates that build: the workspace clippy runs
 // `--all-features`, so a feature-off `cfg` branch would rot unseen until the first cross-compile.
-// Five checks on the host target (every crate gated out is target-independent), and a sixth on iOS:
+// Six checks on the host target (every crate gated out is target-independent), and a seventh on iOS:
 //
 //   1. clippy `-D warnings` on the facade and `ludion-assets` with every feature off — the shipped
 //      shape: no listener, no viewer, no watcher (`ludion-assets`' opt-in `watch` feature stays off
@@ -13,15 +13,17 @@
 //      of the tree is compiled, not linted, so this costs one check-build, not a second clippy run.
 //   2. the same on the facade with `wire` alone — the debug-build shape: a listener the agent
 //      attaches to, still no viewer.
-//   3. clippy on vigil's lib in both shapes — the game a native host links: its features forward to
+//   3. the same on the facade with `window` alone — the desktop player shape: `launch` opens the
+//      window, with no listener and no argv shell.
+//   4. clippy on vigil's lib in both shapes — the game a native host links: its features forward to
 //      the facade's, so the shipped build is `--no-default-features` and the debug build is `wire`.
 //      vigil is its own workspace (run from games/vigil/); every vigil check is skipped, with a
 //      printed reason, where that directory is absent.
-//   4. `cargo tree` of the feature-less facade and of feature-less vigil must name none of the
+//   5. `cargo tree` of the feature-less facade and of feature-less vigil must name none of the
 //      desktop-only crates below.
-//   5. the facade's lib tests in the shipped and the debug shape: the `#[cfg(not(feature = "wire"))]`
+//   6. the facade's lib tests in the shipped and the debug shape: the `#[cfg(not(feature = "wire"))]`
 //      `start`/`try_start` paths in `crates/ludion/src/ffi.rs` run here and nowhere else.
-//   6. vigil's lib linted and its tree checked for `aarch64-apple-ios` in the shipped shape, wherever
+//   7. vigil's lib linted and its tree checked for `aarch64-apple-ios` in the shipped shape, wherever
 //      vigil is present and that target and the iPhoneOS SDK are installed (`coreaudio-sys` runs
 //      bindgen against the SDK, so the target alone is not enough); elsewhere it is skipped with a
 //      printed reason (Plan/ios-target.md, decision 11).
@@ -56,6 +58,10 @@ const LINT_STEPS = [
   {
     what: 'debug shape (wire, no window)',
     args: ['clippy', '-p', 'ludion', '--no-default-features', '--features', 'wire', '--no-deps', '--', '-D', 'warnings'],
+  },
+  {
+    what: 'desktop player shape (window, no wire)',
+    args: ['clippy', '-p', 'ludion', '--no-default-features', '--features', 'window', '--no-deps', '--', '-D', 'warnings'],
   },
   {
     what: "vigil's lib in the shipped shape (no wire, no window)",

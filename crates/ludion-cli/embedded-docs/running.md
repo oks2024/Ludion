@@ -13,6 +13,7 @@ cargo run -- --scene scenes/main.yaml --record run.lrp   # record the session fo
 cargo run -- --scene scenes/main.yaml --restore snap.json   # boot from an engine.snapshot file instead of the scene; prints `restored frame=<N> report=<JSON>` (or `restore failed: …`, then loads the scene) before `listening on`
 cargo run -- --scene scenes/main.yaml --addr 127.0.0.1:0 # OS-chosen port (printed on the first line)
 cargo run -- --scene scenes/main.yaml --window           # also open a native window on this scene
+cargo run -- --scene scenes/main.yaml --window --fullscreen  # ...borderless fullscreen (needs --window)
 cargo run --release -- --profile 60                      # profile 60 frames headless, print the report, exit
 cargo run --release -- --profile 60 --profile-check budgets/pinned.toml  # ...and gate on a TOML budget
 cargo run --release -- --replay-frames run.lrp --frames-out clip/ --from 0 --to 1800  # render a replay to a PNG sequence
@@ -31,7 +32,8 @@ within 5 s is reported as `L4022` and the host exits non-zero. Peers attach to t
 - **`--window`** opens the game's own native OS window in-process instead: the render thread blits
   the same offscreen frame any viewer streams straight into that window's surface (no protocol
   round-trip), while the listener still binds so a peer can attach alongside it; keyboard/mouse/
-  gamepad still feed back as `input.inject`. Closing the window (or Ctrl-C) stops the host.
+  gamepad still feed back as `input.inject`. Closing the window (or Ctrl-C) stops the host. Title, size,
+  extent, fullscreen and cursor: `ludion docs desktop-window`.
 - **`--profile <N>`** does not host at all: it drives the scene headless for a warmup then `N`
   measured frames **with your game's own systems running**, prints one `ProfileReport` JSON (median
   per-system sim time, per-pass GPU time, and the sim frame total), and exits. This is the in-process
@@ -164,6 +166,7 @@ world state it writes no replay record: the recording ends at that frame, and so
 
 ## Next
 
+- `ludion docs desktop-window` — the game window and the `launch` player host.
 - `ludion docs verify-loop` — the `cargo test` verification loop.
 - `ludion docs dev-loop` — the live reload loop.
 - `ludion docs wire-protocol` — the raw JSON protocol.

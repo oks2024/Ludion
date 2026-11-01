@@ -37,7 +37,7 @@ ludion-testkit       → core, ecs, engine, sim, assets, audio, protocol, scene
 ludion               → core, ecs, sim, spatial, protocol, scene, engine, audio, server*, window**
                                                        [clap*, ctrlc, crossbeam-channel, serde_json,
                                                         winit**, wgpu**]   (facade)
-                       * behind the default `wire` feature   ** behind the default `window` feature (implies `wire`)
+                       * behind the default `wire` feature   ** behind the default `window` feature (independent of `wire`)
                        † `ludion-assets`' opt-in `watch` feature — enabled by server and cli only
 ludion-cli   (bin)   → ludion, core, ecs, engine, assets†, protocol, scene, sim, testkit, window, …
                                                        [clap, serde_json, toml]

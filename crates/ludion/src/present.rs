@@ -14,17 +14,20 @@
 //! Unless an extent is named, the render extent follows the window's size (debounced drag-resizes)
 //! as an ordinary `render.size`; the blit letterboxes whatever the window's aspect leaves over.
 //!
-//! The listener binds exactly as it does headless, so an agent, `ludion profile --attach` and the
-//! editor attach to a windowed game unchanged. The out-of-process viewer stays `ludion dev
+//! With the `wire` feature the listener binds exactly as it does headless, so an agent, `ludion
+//! profile --attach` and the editor attach to a windowed game unchanged; without it the window is the
+//! desktop player and nothing listens. [`WindowRole`] picks the one difference between the two hosts,
+//! the title. The out-of-process viewer stays `ludion dev
 //! --window`'s: that window must outlive a restarting child process, which is a different role, not
 //! a second way to do this one.
 //!
 //! # Threading
 //!
 //! [`host_windowed`] must run on the process's **main thread** — winit requires the event loop to
-//! own it, which is why [`crate::run`] itself must be called from `main`. The main thread makes the
+//! own it, which is why [`crate::run`] and [`crate::launch`] must be called from `main`. The main thread makes the
 //! window and surface and only forwards: device events become `input.inject` commands through the
-//! core's intake. The boot thread owns the engine, builds it, attaches the surface, binds and presents.
+//! core's intake. The boot thread owns the engine, builds it, attaches the surface, binds (with `wire`)
+//! and presents.
 //! Three workers sit beside them: `ludion-window`'s `gilrs` poll (shared with the viewer, so both
 //! windows produce identical pad events), a forwarder draining the one device-event channel into the
 //! core, and a waiter that turns Ctrl-C and a fatal render fault into a stop request and the host
@@ -109,7 +112,7 @@ impl StopTimer {
 /// malformed. A device lost (`L2011`) or a surface that dies (`L2007`) once the game is running
 /// ends it the same graceful way: the diagnostic is printed and the exit code is
 /// [`ExitCode::FAILURE`].
-pub(crate) fn host_windowed(source: Source, options: StartOptions) -> ExitCode {
+pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowRole) -> ExitCode {
     let event_loop = match EventLoop::<HostEvent>::with_user_event().build() {
         Ok(event_loop) => event_loop,
         Err(e) => {
@@ -165,6 +168,7 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions) -> ExitCode {
         fatal: None,
         stop_timer: StopTimer::default(),
         stuck: false,
+        role,
         title_hint,
         fullscreen,
         cursor_enabled: cursor == CursorMode::AutoHide,
@@ -212,6 +216,25 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions) -> ExitCode {
     stopped
 }
 
+/// Which host the window serves; only the title differs.
+#[derive(Clone, Copy)]
+pub(crate) enum WindowRole {
+    /// `run --window` and `host_scene`: the title names the scene file beside the game.
+    #[cfg_attr(not(feature = "wire"), allow(dead_code))]
+    Dev,
+    /// `launch`: the title is the game's alone.
+    Player,
+}
+
+impl WindowRole {
+    fn title(self, game: &str, scene_file: Option<&str>) -> String {
+        match self {
+            Self::Dev => dev_title(game, scene_file),
+            Self::Player => game.to_owned(),
+        }
+    }
+}
+
 /// The one event a worker thread pushes into the loop.
 enum HostEvent {
     /// Ctrl-C fired: ask the host to stop.
@@ -251,6 +274,7 @@ struct App {
     stop_timer: StopTimer,
     /// Set when the loop exited because the stop timer ran out, not because the boot ended.
     stuck: bool,
+    role: WindowRole,
     /// The builder's window title, if the game set one.
     title_hint: Option<String>,
     /// Whether the window opens borderless fullscreen (flag, environment or builder default).
@@ -322,7 +346,7 @@ impl App {
             options,
         )?;
         let file = embedded.scene().file_name().map(|n| n.to_string_lossy());
-        window.set_title(&dev_title(
+        window.set_title(&self.role.title(
             &game_title_for(self.title_hint.as_deref(), embedded.scene()),
             file.as_deref(),
         ));
@@ -602,6 +626,19 @@ fn unavailable(detail: String) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_player_window_is_titled_with_the_game_alone() {
+        assert_eq!(
+            WindowRole::Dev.title("Clockout", Some("main.yaml")),
+            dev_title("Clockout", Some("main.yaml"))
+        );
+        assert_eq!(
+            WindowRole::Player.title("Clockout", Some("main.yaml")),
+            "Clockout"
+        );
+        assert_eq!(WindowRole::Player.title("Clockout", None), "Clockout");
+    }
 
     #[test]
     #[allow(clippy::disallowed_methods)]

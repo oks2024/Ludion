@@ -19,8 +19,9 @@ wire = ["dep:ludion-server", "dep:clap", "dep:ludion-assets"]
 # `ludion-window` for the device-event builders and the gilrs poll thread it shares with the
 # viewer. On by default; a build
 # for a device with no desktop window turns it off, and then `--window` is refused before anything
-# binds (`L0018`). Implies `wire`: the window hosts the listener alongside itself.
-window = ["wire", "dep:ludion-window", "dep:winit"]
+# binds (`L0018`). Independent of `wire`: with both, the window hosts the listener alongside itself;
+# `window` alone is the desktop player shape, where `launch` opens the window with no listener.
+window = ["dep:ludion-window", "dep:winit"]
 
 [dependencies]
 # The command core: `Engine`, `EngineBuilder`, the built-in components, and the recording/replay

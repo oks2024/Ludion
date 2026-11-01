@@ -19,6 +19,7 @@ use std::io::Write;
 #[cfg(feature = "wire")]
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(any(feature = "wire", not(feature = "window"), test))]
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "wire")]
@@ -32,6 +33,7 @@ use ludion_engine::Engine;
 #[cfg(feature = "wire")]
 use ludion_server::Server;
 
+#[cfg(any(feature = "wire", not(feature = "window"), test))]
 use crate::embed::Embedded;
 #[cfg(feature = "wire")]
 use crate::embed::{Source, StartOptions};
@@ -117,7 +119,7 @@ pub fn host_scene(engine: Engine, addr: &str, opts: HostOptions) -> ExitCode {
 
     #[cfg(feature = "window")]
     if opts.window {
-        return crate::present::host_windowed(source, options);
+        return crate::present::host_windowed(source, options, crate::present::WindowRole::Dev);
     }
 
     match Embedded::start_from(source, None, options) {
@@ -135,6 +137,7 @@ pub fn host_scene(engine: Engine, addr: &str, opts: HostOptions) -> ExitCode {
 /// handler, so a host calls it at most once. A `supervisor` message ([`stdin_closed`], or a channel
 /// that never fires) stops it the same way. A fatal render fault (a lost device, a dead surface)
 /// is printed once and stops it with a failure exit code.
+#[cfg(any(feature = "wire", not(feature = "window"), test))]
 pub(crate) fn host_until_stopped(
     embedded: Embedded,
     supervisor: crossbeam_channel::Receiver<()>,
@@ -144,6 +147,7 @@ pub(crate) fn host_until_stopped(
 
 /// [`host_until_stopped`] with the Ctrl-C wait injected, so a test can host without installing the
 /// process's one handler.
+#[cfg(any(feature = "wire", not(feature = "window"), test))]
 pub(crate) fn host_until(
     embedded: Embedded,
     ctrl_c: crossbeam_channel::Receiver<()>,

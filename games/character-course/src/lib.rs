@@ -378,4 +378,5 @@ pub fn game() -> EngineBuilder {
         .system("triggers", triggers)
         .system("controller", controller)
         .default_scene("scenes/main.yaml")
+        .title("Character Course")
 }

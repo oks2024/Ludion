@@ -109,8 +109,10 @@ settled plan, nothing built; **rejected** — closed by design.
 
 ### Shipping
 
-- `ludion export` targets iOS only; no desktop packaging, asset packing or installer. Content is a
-  directory root by ruling (`LaunchRoots`).
+- Desktop window: shipped (Clockout 0023: title, HiDPI size, extent follows the window, fullscreen,
+  cursor hide, `ludion::launch` player host). Packaging, icons, desktop export, asset packing,
+  installer: still deferred, not triggered; `ludion export` targets iOS only. Content is a directory
+  root by ruling (`LaunchRoots`).
 - Linux untested; Android and web ruled out; consoles deferred (`Plan/console-strategy.md`).
 - Networking — none; no plan, no trigger.
 
