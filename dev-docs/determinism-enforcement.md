@@ -15,14 +15,14 @@ comment plus the generated body. A strict/sim file declares `disallowed-types`
 (`std::collections::HashMap`/`HashSet` → `StableMap`/`StableSet`) and `disallowed-methods`
 (`Instant::now`/`SystemTime::now` and their `elapsed` → `SimTime`/`FrameIndex`; the `f32`/`f64`
 transcendental methods → `ludion_core::math`, each reason naming the wrapper; `powi` → multiply
-out; the backend-dependent glam `Quat`/`Vec4` methods → component-wise fixed-order code; and, in
+out; the backend-dependent glam `Quat`/`Vec4` methods, `Vec3A::normalize` and `Mat4::{inverse, determinant}` → component-wise fixed-order code (`ludion_core::math::mat4_*`); and, in
 the `sim` tier only, `std::thread::spawn`/`scope` and `thread::Builder::spawn`/`spawn_scoped` →
 `ludion_core::par`). Tiers: **`sim`** = all of it, **`strict`** = all but the thread ban,
 **`permissive`** = no lists. Edit the script and run `node scripts/clippy-denylist.mjs
 --write` (`check.mjs --fix` does too); `lists-in-step.mjs` fails on drift and on an unclassified crate. CI runs `cargo clippy --workspace --all-targets --all-features -- -D warnings` on
 both OSes, so a violation is a build failure — and the **denylist-canary** job proves the mechanism
 itself works: `ci/scripts/denylist-canary.mjs` lints two scratch crates (four probes) under `target/denylist-canary/` — each carrying a copy of a real crate's
-`clippy.toml` — with a `HashMap` use and an `x.sin()` (the `strict` tier, `ludion-core`) and an `std::thread::spawn` (the `sim` tier, `ludion-ecs`) and every banned glam method (a second `sim` probe, with glam as its one dependency), and asserts clippy *rejects* each, naming the banned path **and** the
+`clippy.toml` — with a `HashMap` use and an `x.sin()` (the `strict` tier, `ludion-core`) and an `std::thread::spawn` (the `sim` tier, `ludion-ecs`) and every banned glam method, `Vec3A::normalize` and `Mat4::{inverse, determinant}` included (a second `sim` probe, with glam as its one dependency), and asserts clippy *rejects* each, naming the banned path **and** the
 denylist's reason, so a silent denylist regression fails CI loudly. It never writes a tracked file.
 
 The mechanical denylist covers rules 1, 2 and 4 and rule 5's thread ban. The thread entries are on the

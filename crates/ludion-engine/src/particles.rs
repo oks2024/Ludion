@@ -330,6 +330,7 @@ pub struct CameraBasis {
 
 impl CameraBasis {
     /// The basis of the camera whose view matrix is `view`: the first two columns of its inverse.
+    #[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
     pub fn from_view(view: Mat4) -> Self {
         let model = view.inverse();
         CameraBasis {

@@ -98,6 +98,7 @@ fn invalid(message: String, field: &str) -> Diagnostic {
 /// which has no field of view to lend) falls back to
 /// [`Camera::default`]'s 60° perspective framing — the override supplies the viewpoint either way,
 /// so a scene without a camera still answers here.
+#[allow(clippy::disallowed_methods)] // render-side: GPU view matrix, never reaches a hash
 pub(crate) fn camera(
     world: &World,
     scene: Option<EntityId>,

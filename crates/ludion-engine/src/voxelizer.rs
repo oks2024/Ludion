@@ -93,6 +93,7 @@ use ludion_core::codes::code;
 use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{Mat4, Vec3};
+use ludion_core::math::{mat4_determinant, mat4_inverse};
 use ludion_renderer::{MAX_GI_TEXTURE_AXIS, MeshData, MeshShape, WorldVoxelGrid, max_gi_probes};
 
 use crate::bounds::{Aabb, transformed_box, union};
@@ -1006,12 +1007,12 @@ fn rasterize(grid: &mut WorldVoxelGrid, instance: &Instance, boxes: &mut MeshBox
 /// fill.
 fn fill_cube(grid: &mut WorldVoxelGrid, instance: &Instance) {
     let world = transformed_box(instance.model, Vec3::splat(-0.5), Vec3::splat(0.5));
-    let determinant = instance.model.determinant();
+    let determinant = mat4_determinant(instance.model);
     if determinant == 0.0 || !determinant.is_finite() {
         fill_range(grid, world, instance.color, instance.emissive);
         return;
     }
-    let inverse = instance.model.inverse();
+    let inverse = mat4_inverse(instance.model);
     let Some((lo, hi)) = cell_range(grid, world) else {
         return;
     };

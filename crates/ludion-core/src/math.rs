@@ -1,7 +1,10 @@
 //! Deterministic math: `glam` re-export plus pure-Rust transcendental wrappers.
 //!
-//! Plain arithmetic and `glam` vector/matrix ops are already deterministic (Rust does not
-//! auto-contract to FMA), so they need no wrapping and are re-exported as-is via [`glam`].
+//! Plain arithmetic and most `glam` vector/matrix ops are deterministic (Rust does not
+//! auto-contract to FMA) and are re-exported as-is via [`glam`]. The exceptions are the methods
+//! whose op order differs between glam's SSE2 and NEON backends (the `Quat`/`Vec4` dot family,
+//! `Vec3A::normalize`, `Mat4::{inverse, determinant}`): every strict `clippy.toml` bans them, and
+//! [`mat4_inverse`] / [`mat4_determinant`] replace the matrix pair.
 //!
 //! Transcendental functions are the hazard: the platform C `libm` implements `sin`, `pow`, etc.
 //! differently on Windows and macOS, so the same expression can produce different last-bit results
@@ -36,11 +39,13 @@
 //! assert!(math::sin(0.0).abs() < 1e-6);
 //! ```
 
+mod mat4;
 mod orbit;
 mod rotation;
 mod rotation_f64;
 mod trs;
 
+pub use mat4::{mat4_determinant, mat4_inverse};
 pub use orbit::Orbit;
 pub use rotation::{euler_xyz_degrees_to_quat, quat_mul, quat_rotate, quat_to_euler_xyz_degrees};
 pub use trs::{Affine3, Trs};

@@ -46,8 +46,8 @@ export const PROBES = [
     crate: 'crates/ludion-ecs',
     deps: ['glam = { version = "=0.30.10", features = ["libm"] }'],
     source: [
-      'use glam::{Quat, Vec4};',
-      'pub fn _glam_canary(q: Quat, r: Quat, v: Vec4, w: Vec4) {',
+      'use glam::{Mat4, Quat, Vec3A, Vec4};',
+      'pub fn _glam_canary(q: Quat, r: Quat, v: Vec4, w: Vec4, a: Vec3A, m: Mat4) {',
       '    let _ = (q.slerp(r, 0.5), q.lerp(r, 0.5), q.normalize(), q.length(), q.length_squared());',
       '    let _ = (q.length_recip(), q.dot(r), q.angle_between(r), q.rotate_towards(r, 0.5));',
       '    let _ = (v.dot(w), v.length(), v.length_squared(), v.length_recip(), v.normalize());',
@@ -56,6 +56,7 @@ export const PROBES = [
       '    let _ = (v.normalize_and_length(), v.is_normalized(), v.project_onto(w), v.project_onto_normalized(w), v.reject_from(w));',
       '    let _ = (v.reject_from_normalized(w), v.clamp_length(0.0, 1.0), v.clamp_length_max(1.0), v.clamp_length_min(0.0));',
       '    let _ = (v.move_towards(w, 0.5), v.reflect(w), v.refract(w, 0.5));',
+      '    let _ = (a.normalize(), m.inverse(), m.determinant());',
       '}',
       '',
     ].join('\n'),
@@ -64,6 +65,9 @@ export const PROBES = [
         .map((n) => `\`glam::Quat::${n}\``),
       ...['dot', 'length', 'length_squared', 'length_recip', 'normalize', 'normalize_or_zero', 'try_normalize', 'distance', 'distance_squared', 'normalize_and_length', 'is_normalized', 'project_onto', 'project_onto_normalized', 'reject_from', 'reject_from_normalized', 'clamp_length', 'clamp_length_max', 'clamp_length_min', 'move_towards', 'reflect', 'refract']
         .map((n) => `\`glam::Vec4::${n}\``),
+      '`glam::Vec3A::normalize`',
+      '`glam::Mat4::inverse`',
+      '`glam::Mat4::determinant`',
       'round this differently',
     ],
   },

@@ -29,7 +29,8 @@
 //! 1, 2, or 8 threads is bit-identical, and that invariance is the whole point of this module.
 //!
 //! Worker count is a process-global default ([`set_threads`]) with a thread-local scoped override
-//! ([`with_threads`]), so concurrent caller threads can hold different counts. Effective parallelism
+//! ([`with_threads`]), so concurrent caller threads can hold different counts. The override covers a
+//! region's workers too: a nested region inside a chunk resolves the same count. Effective parallelism
 //! is `min(count, number of chunks)`; an effective count of `1` runs inline on the calling thread and
 //! spawns nothing, so the sequential path is not a second implementation to keep in step — it is this
 //! one with no workers.
@@ -328,7 +329,8 @@ where
 {
     assert!(chunk_size > 0, "par_chunks: chunk_size must be non-zero");
     let chunk_count = items.len().div_ceil(chunk_size);
-    let workers = threads().min(chunk_count);
+    let count = threads();
+    let workers = count.min(chunk_count);
 
     if workers <= 1 {
         let mut lowest: Option<(PanicPayload, Option<PanicSite>)> = None;
@@ -366,7 +368,7 @@ where
             // The calling thread is one of the workers, so `workers` threads means `workers - 1`
             // spawns and no idle caller.
             for _ in 1..workers {
-                scope.spawn(|| panic_capture::scoped(capturing, drain));
+                scope.spawn(|| with_threads(count, || panic_capture::scoped(capturing, drain)));
             }
             drain();
         });
@@ -487,6 +489,31 @@ mod tests {
     use super::*;
     use crate::rng::DeterministicRng;
     use std::sync::Barrier;
+
+    #[test]
+    fn workers_inherit_the_regions_thread_count() {
+        let mut seen = vec![0usize; 12];
+        with_threads(3, || {
+            par_chunks(&mut seen, 1, |_, slot| {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                slot[0] = threads();
+            });
+        });
+        assert!(seen.iter().all(|&n| n == 3), "{seen:?}");
+    }
+
+    #[test]
+    fn nested_regions_on_workers_see_the_same_count() {
+        let mut outer = vec![0usize; 8];
+        with_threads(2, || {
+            par_chunks(&mut outer, 1, |_, slot| {
+                let mut inner = [0usize; 2];
+                par_chunks(&mut inner, 1, |_, s| s[0] = threads());
+                slot[0] = inner.iter().copied().min().unwrap_or(0).min(threads());
+            });
+        });
+        assert!(outer.iter().all(|&n| n == 2), "{outer:?}");
+    }
 
     /// The counts the whole module is contracted to agree on.
     const COUNTS: [usize; 3] = [1, 2, 8];

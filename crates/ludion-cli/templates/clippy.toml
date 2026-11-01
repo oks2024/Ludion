@@ -102,4 +102,7 @@ disallowed-methods = [
     { path = "glam::Vec4::move_towards", reason = "glam's SSE2 and NEON backends round this differently (4-lane dot order; slerp's sine); write it component by component in a fixed order, as ludion_core::math::rotation does" },
     { path = "glam::Vec4::reflect", reason = "glam's SSE2 and NEON backends round this differently (4-lane dot order; slerp's sine); write it component by component in a fixed order, as ludion_core::math::rotation does" },
     { path = "glam::Vec4::refract", reason = "glam's SSE2 and NEON backends round this differently (4-lane dot order; slerp's sine); write it component by component in a fixed order, as ludion_core::math::rotation does" },
+    { path = "glam::Vec3A::normalize", reason = "glam's SSE2 (divides) and NEON (multiplies by the reciprocal length) backends round this differently; use normalize_or_zero / try_normalize, or Vec3 math" },
+    { path = "glam::Mat4::inverse", reason = "glam's SSE2 and NEON backends round this differently (dot order / SIMD lowering); use ludion_core::math::mat4_inverse, a fixed scalar order" },
+    { path = "glam::Mat4::determinant", reason = "glam's SSE2 and NEON backends round this differently (dot order / SIMD lowering); use ludion_core::math::mat4_determinant, a fixed scalar order" },
 ]

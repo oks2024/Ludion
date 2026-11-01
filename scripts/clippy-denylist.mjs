@@ -15,7 +15,9 @@
 //
 // `sqrt` is not banned: IEEE sqrt is correctly rounded on every platform. `mul_add`, `abs`, `floor`,
 // `to_radians` are exact and stay allowed too. The `glam` group bans the `Quat`/`Vec4` methods whose
-// result depends on glam's SIMD backend (x86_64 SSE2 vs aarch64 NEON); `mul_quat` and `Vec3A` match.
+// result depends on glam's SIMD backend (x86_64 SSE2 vs aarch64 NEON), plus `Vec3A::normalize` and
+// `Mat4::{inverse, determinant}`. Checked and allowed: `mul_quat`, `Vec3A` dot/length/cross/`try_normalize`/
+// `normalize_or*`, and `Mat3A`/`Affine3A`/`Mat2` inverse (same op sequence on both backends).
 //
 // Usage:  node scripts/clippy-denylist.mjs            report drift (exit 1 on any)
 //         node scripts/clippy-denylist.mjs --write    regenerate every strict/sim file
@@ -53,6 +55,8 @@ const CLOCK_REASON = 'no wall clock on the deterministic path; time arrives as S
 const THREAD_REASON = 'sim parallelism only via ludion_core::par deterministic patterns; see dev-docs/determinism.md';
 
 const GLAM_REASON = "glam's SSE2 and NEON backends round this differently (4-lane dot order; slerp's sine); write it component by component in a fixed order, as ludion_core::math::rotation does";
+const VEC3A_NORMALIZE_REASON = "glam's SSE2 (divides) and NEON (multiplies by the reciprocal length) backends round this differently; use normalize_or_zero / try_normalize, or Vec3 math";
+const MAT4_REASON = (fn) => `glam's SSE2 and NEON backends round this differently (dot order / SIMD lowering); use ludion_core::math::mat4_${fn}, a fixed scalar order`;
 const glamEntries = (ty, names) => names.map((name) => ({ path: `glam::${ty}::${name}`, reason: GLAM_REASON }));
 
 const GROUPS = {
@@ -90,6 +94,9 @@ const GROUPS = {
     entries: [
       ...glamEntries('Quat', ['slerp', 'lerp', 'normalize', 'length', 'length_squared', 'length_recip', 'dot', 'angle_between', 'rotate_towards', 'from_rotation_arc', 'from_rotation_arc_colinear', 'is_normalized']),
       ...glamEntries('Vec4', ['dot', 'length', 'length_squared', 'length_recip', 'normalize', 'normalize_or_zero', 'try_normalize', 'distance', 'distance_squared', 'normalize_and_length', 'is_normalized', 'project_onto', 'project_onto_normalized', 'reject_from', 'reject_from_normalized', 'clamp_length', 'clamp_length_max', 'clamp_length_min', 'move_towards', 'reflect', 'refract']),
+      { path: 'glam::Vec3A::normalize', reason: VEC3A_NORMALIZE_REASON },
+      { path: 'glam::Mat4::inverse', reason: MAT4_REASON('inverse') },
+      { path: 'glam::Mat4::determinant', reason: MAT4_REASON('determinant') },
     ],
   },
 };

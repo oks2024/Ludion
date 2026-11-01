@@ -62,8 +62,11 @@ every game crate):
    sine, and the 4-lane `Quat`/`Vec4` dot products sum in a different order from NEON, so
    `Quat::{slerp, lerp, normalize, length*, dot, angle_between, rotate_towards}` and the `Vec4`
    dot-based methods are banned in the `sim` and `strict` tiers — write them component by component
-   in a fixed order, as `ludion_core::math::rotation` does (`mul_quat` and `Vec3A` match across
-   backends and stay allowed). `sqrt` (IEEE, correctly rounded) and the
+   in a fixed order, as `ludion_core::math::rotation` does. Also banned: `Vec3A::normalize` (SSE2
+   divides, NEON multiplies by the reciprocal length) and `Mat4::{inverse, determinant}` (different
+   `dot4` order / SIMD lowering) → `ludion_core::math::mat4_inverse` / `mat4_determinant`. Checked
+   and allowed (same op sequence on both backends): `mul_quat`, `Vec3A` dot/length/cross/
+   `try_normalize`/`normalize_or*`, and `Mat3A`/`Affine3A`/`Mat2` inverse. `sqrt` (IEEE, correctly rounded) and the
    exact ops (`abs`, `floor`, `mul_add`, `to_radians`) stay allowed.
 5. **Systems run sequentially in explicit registration order.** There is no parallel scheduler and no
    system runs concurrently with another. Data parallelism *inside* one system is sanctioned only

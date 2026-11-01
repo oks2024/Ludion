@@ -1777,6 +1777,7 @@ fn extract_drop_shadows(
 /// a mesh's maps. A map that fails to load pushes its diagnostic onto `errors`, pointed at the
 /// decal's map path, and leaves its slot empty.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::disallowed_methods)] // render-side: decal box matrices, never reaches a hash
 fn extract_decals(
     world: &World,
     ids: &[EntityId],
@@ -3366,6 +3367,7 @@ fn transform_matrix(xform: &Transform) -> Mat4 {
 /// fast path for a part-less instance pushes each joint's precomposed [`SkinJoint::rest`] instead, to
 /// stay byte-identical to the render-only rest pose. `posed_model` is the caller's scratch, cleared
 /// on entry, so a frame of instances allocates it once.
+#[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
 fn posed_palette(
     joints: &[SkinJoint],
     skin_model: Mat4,
@@ -3632,6 +3634,7 @@ pub(crate) fn build_camera(world: &World, id: EntityId, viewport: (u32, u32)) ->
     let pose = render_pose(world, &mut WorldAffines::new(), id);
     let translation = Vec3::from(pose.translation());
     let model = Mat4::from_rotation_translation(pose.quat(), translation);
+    #[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
     let view = model.inverse();
     let aspect = aspect_ratio(viewport);
     let projection = match cam.projection {
@@ -5072,6 +5075,7 @@ mod tests {
         out
     }
 
+    #[allow(clippy::disallowed_methods)] // render-side: test rig, never reaches a hash
     fn three_joint_rig() -> Vec<SkinJoint> {
         let mut joints = two_joint_rig();
         let tip_local =

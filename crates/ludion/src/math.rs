@@ -153,6 +153,7 @@ pub struct Ray {
 /// .unwrap();
 /// assert!(ray.dir[1] < 0.0); // pointing at the ground
 /// ```
+#[allow(clippy::disallowed_methods)] // Mat4::inverse's dot4 order differs SSE2 vs NEON; mat4_inverse would change committed replay bits, so it must ride a replay re-record
 pub fn camera_ray(
     cam_translation: [f32; 3],
     cam_rotation_deg: [f32; 3],
@@ -286,6 +287,7 @@ pub fn ray_ground_plane(ray: &Ray) -> Option<[f32; 2]> {
 
 /// Builds the view·projection matrix, or `None` on a degenerate viewport/projection. Shared by
 /// [`camera_ray`] and its round-trip parity test — the one place the deterministic camera is assembled.
+#[allow(clippy::disallowed_methods)] // Mat4::inverse's dot4 order differs SSE2 vs NEON; mat4_inverse would change committed replay bits, so it must ride a replay re-record
 fn view_proj_matrix(
     cam_translation: [f32; 3],
     cam_rotation_deg: [f32; 3],

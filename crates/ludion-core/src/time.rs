@@ -25,7 +25,22 @@ use serde::{Deserialize, Serialize};
 /// assert!((TickRate::DEFAULT.seconds_per_tick() - 1.0 / 60.0).abs() < 1e-12);
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[serde(try_from = "u32")]
 pub struct TickRate(u32);
+
+impl TryFrom<u32> for TickRate {
+    type Error = &'static str;
+
+    /// Refuses `0`, the same invariant [`TickRate::hz_of`] asserts, so a deserialized rate cannot
+    /// bypass it.
+    fn try_from(hz: u32) -> Result<Self, Self::Error> {
+        if hz == 0 {
+            Err("a tick rate must be at least 1 Hz")
+        } else {
+            Ok(TickRate(hz))
+        }
+    }
+}
 
 impl TickRate {
     /// The default 60 Hz tick rate.
@@ -248,6 +263,17 @@ impl GameClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tick_rate_deserialize_refuses_zero_and_round_trips() {
+        let err = serde_json::from_str::<TickRate>("0")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("at least 1 Hz"), "{err}");
+        let rate = serde_json::from_str::<TickRate>("60").unwrap();
+        assert_eq!(rate, TickRate::DEFAULT);
+        assert_eq!(serde_json::to_string(&rate).unwrap(), "60");
+    }
 
     #[test]
     fn default_rate_is_60hz() {

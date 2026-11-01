@@ -2369,6 +2369,7 @@ fn phase_report(
     time: f64,
     tick: u64,
 ) -> Result<PhaseReport, Vec<Diagnostic>> {
+    #[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
     let deltas: Vec<Mat4> = rest
         .iter()
         .zip(posed)
@@ -3450,6 +3451,7 @@ impl ViewRig {
 
         // Euler-XYZ decomposition of the look-at pose, so the extracted camera matches the framing
         // (extract rebuilds the view through the same `ludion_core::math` pair).
+        #[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
         let model = Mat4::look_at_rh(position, target, up).inverse();
         let (_scale, rotation, _translation) = model.to_scale_rotation_translation();
         let (rx, ry, rz) = rotation.to_euler(EulerRot::XYZ);
