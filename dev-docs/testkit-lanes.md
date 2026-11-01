@@ -56,6 +56,18 @@ machine), and a `cargo-build` group (tests that spawn
 Without nextest on PATH the lane falls back to plain `cargo test --workspace` — serial and slower,
 but gating exactly the same set.
 
+### Wall time
+
+The default `check.mjs` run is about 756 s on the reference 32-core box (it was 914 s before the sync
+fingerprint, 2026-11-01). The critical path is roughly the total: import-sync → test → doctest →
+vigil-clippy → vigil-test → mobile → fps-gate. The root test step (~390 s) is the largest.
+`importer_fingerprint` hashes the ludion binary, so every ludion-cli rebuild re-imports all vigil kits
+(~60 s of import-sync); the source-derived fix is owed (`Plan/owed.md`, Engineering debt). Time a run
+only on a tree with no foreign dirty crates: the `ludion-cli` `dev` and `new` tests build a scratch
+game against the live workspace, and another instance's uncommitted engine edits make them recompile
+or time out (root test then reads 500–550 s). `node scripts/check.mjs --history` holds the per-step
+numbers.
+
 ## Gotchas
 
 - `scripts/check.mjs` exits 1 when `LUDION_BLESS` or `BLESS_SCHEMA` is set: a session-wide bless makes
