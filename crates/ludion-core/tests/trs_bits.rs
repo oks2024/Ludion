@@ -199,7 +199,20 @@ mod mat4 {
     #[allow(clippy::disallowed_methods)] // test oracle: compares against glam's own inverse and determinant
     fn mat4_agrees_with_glam_within_tolerance() {
         for (name, m) in fixtures().iter().take(3) {
-            assert!(mat4_inverse(*m).abs_diff_eq(m.inverse(), 1e-4), "{name}");
+            // Relative, like the determinant below: glam's SIMD inverse on x86 rounds differently
+            // from the scalar one, and the perspective inverse has entries near 50.
+            let theirs = m.inverse().to_cols_array();
+            for (i, (a, b)) in mat4_inverse(*m)
+                .to_cols_array()
+                .into_iter()
+                .zip(theirs)
+                .enumerate()
+            {
+                assert!(
+                    (a - b).abs() <= 1e-4 * b.abs().max(1.0),
+                    "{name} inverse[{i}]: {a} vs {b}"
+                );
+            }
             let (a, b) = (mat4_determinant(*m), m.determinant());
             assert!(
                 (a - b).abs() <= 1e-4 * b.abs().max(1.0),
