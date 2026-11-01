@@ -80,3 +80,8 @@ test('scanLeftovers finds rapier-mentioning text, skipping build dirs, the lockf
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a failing ludion-cli test of the merged it binary keys as its module path', () => {
+  const out = '        FAIL [   0.500s] ( 2/9) ludion-cli::it physics::cli_trace_matches\n';
+  assert.deepEqual(parseFailedTests(out), ['physics::cli_trace_matches']);
+});

@@ -97,7 +97,7 @@ the gate's discovery mechanism — there is no manifest.
 ## Verify
 
 ```
-cargo test -p ludion-cli --test voxel_cmd   # the `ludion voxel` verb family
+cargo nextest run -p ludion-cli --test it -E 'test(/^voxel_cmd::/)'   # the `ludion voxel` verb family
 node scripts/voxel-drift.mjs               # committed generated models still match their scripts
 node examples/voxel-gen/brazier.voxel.gen.mjs | cargo run -q -p ludion-cli -- voxel from-json --check examples/voxel-gen/brazier.voxel.yaml # POSIX shells only — a PowerShell pipe re-encodes the bytes (L1135); use `emit({ out })` + `--in` there
 ```

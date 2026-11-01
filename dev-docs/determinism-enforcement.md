@@ -70,7 +70,7 @@ the *gate* is SSIM.
 ```
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p ludion-sim
-cargo test -p ludion-cli --test sim_hash
+cargo nextest run -p ludion-cli --test it -E 'test(/^sim_hash::/)'
 cargo run -p ludion-cli -- sim-hash --scene crates/ludion-cli/tests/fixtures/good.yaml --script crates/ludion-cli/tests/fixtures/script.json --frames 600
 cargo nextest run -E 'binary(thread_identity)' --run-ignored ignored-only
 ```

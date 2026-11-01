@@ -103,7 +103,7 @@ The sweep split on `,` has **no escape** (no comma in a value) and trims no whit
 cargo test -p ludion-scene                                        # round-trip, validation, instantiate, doctests
 cargo run -p ludion-cli -- check-scene examples/scenes/empty.yaml # prints OK
 cargo run -p ludion-cli -- check-scene <broken.yaml>              # L-code + JSON Pointer + suggestion
-cargo test -p ludion-cli --test check_scene                       # CLI-level; family verifies: `ludion devdocs scene-kind-documents`
+cargo nextest run -p ludion-cli --test it -E 'test(/^check_scene::/)'                       # CLI-level; family verifies: `ludion devdocs scene-kind-documents`
 ```
 
 ## Gotchas

@@ -149,7 +149,7 @@ pass list, exactly like `Environment`'s sky and IBL.
 ```
 cargo test -p ludion-renderer                                  # gi_bake unit tests, scene GiData shape
 cargo run -p ludion-cli -- render --scene examples/gallery/gi-interior.yaml --dump-gi target/gi.probes.png
-cargo test -p ludion-cli --test render_gi                      # --dump-gi CLI behavior, requires a GPU adapter
+cargo nextest run -p ludion-cli --test it -E 'test(/^render_gi::/)'                      # --dump-gi CLI behavior, requires a GPU adapter
 cargo run -p ludion-cli -- test --dir examples/gallery          # gi-interior against its committed golden
 ```
 

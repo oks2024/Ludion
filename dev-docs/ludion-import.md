@@ -109,7 +109,7 @@ Skins fold joint nodes into the mesh document's `joints:` (`skin.rs`): `ludion d
 ## Verify
 ```
 cargo test -p ludion-import                    # plan-level: mapping, L1202 surface, clips, determinism
-cargo test -p ludion-cli --test import         # full pipeline incl. the round-trip gate
+cargo nextest run -p ludion-cli --test it -E 'test(/^import::/)'         # full pipeline incl. the round-trip gate
 cargo run -p ludion-cli -- import examples/import/scene.gltf --out target/imported --allow-lossy
 cargo run -p ludion-cli -- explain L1202      # and L1201, L1203, L1206
 ```

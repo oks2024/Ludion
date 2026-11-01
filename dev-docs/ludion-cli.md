@@ -19,7 +19,7 @@ sides of a boundary.
 - `crates/ludion-cli/src/main.rs` — `Cli` (clap `Parser`), `enum Command` (clap `Subcommand`), the exhaustive match. Routing only.
 - `crates/ludion-cli/src/explain.rs` — `ludion explain [CODE]`; the module to mirror for a new subcommand.
 - Per-module map (every verb, `check_scene.rs` included): `ludion devdocs ludion-cli-verbs`.
-- `crates/ludion-cli/tests/` — one integration test per subcommand against the real built binary, plus `fixtures/`.
+- `crates/ludion-cli/tests/` — one integration test file per subcommand against the real built binary, plus `fixtures/`; the files are modules of `tests/it.rs` (declare a new one there), except `dev`, `new`, `phase7` and `profile_attach`.
 
 Every other verb module, what it wraps and its contracts (`--json` shapes, atomic writers, `export` refusal order, `docs` discovery): `ludion devdocs ludion-cli-verbs`. The `dev` supervisor: `ludion devdocs ludion-cli-dev`.
 
@@ -38,7 +38,7 @@ Every other verb module, what it wraps and its contracts (`--json` shapes, atomi
    for defaults, matching the existing variants.
 4. Add the match arm in `main()`: `Command::Name { args... } => name::run(&args...)`. Nothing
    else — the arm is routing only.
-5. Add `crates/ludion-cli/tests/<name>.rs` driving the built binary:
+5. Add `crates/ludion-cli/tests/<name>.rs` (and `mod <name>;` in `tests/it.rs`) driving the built binary:
    `Command::new(env!("CARGO_BIN_EXE_ludion")).args([...]).output()`, asserting on status,
    stdout, and stderr (see `tests/explain.rs`). Put scene fixtures in `tests/fixtures/`. Note
    `tests/test_cmd.rs`: when the subcommand name collides with a Rust keyword or existing test
@@ -94,7 +94,7 @@ cargo run -p ludion-cli -- sim-hash --scene crates/ludion-cli/tests/fixtures/goo
 cargo run -p ludion-cli -- sim-hash --scene crates/ludion-cli/tests/fixtures/good.yaml --record s.lrp
 cargo run -p ludion-cli -- replay s.lrp   # prints the same final hash the recording run printed
 cargo run -p ludion-cli -- docs           # lists every docs/ topic; devdocs lists dev-docs/
-cargo test -p ludion-cli --test voxel_cmd # the voxel family's integration tests
+cargo nextest run -p ludion-cli --test it -E 'test(/^voxel_cmd::/)' # the voxel family's integration tests
 cargo run -p ludion-cli -- serve --scene crates/ludion-cli/tests/fixtures/good.yaml --paused
                                            # prints `listening on ws://...`, then blocks for Ctrl-C
 ```

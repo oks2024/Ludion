@@ -74,7 +74,7 @@ crate; the engine never evaluates a recipe at runtime.
 cargo nextest run -p ludion-texgen
 cargo test --doc -p ludion-texgen
 node scripts/clippy-denylist.mjs
-cargo nextest run -p ludion-cli -E 'binary(texture)'
+cargo nextest run -p ludion-cli --test it -E 'test(/^texture::/)'
 ```
 
 The last is the CLI drift test over `examples/textures/`.

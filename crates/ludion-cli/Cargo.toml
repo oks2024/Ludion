@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# One test crate compiles the shared generics once; dev/new/phase7/profile_attach stay standalone
+# so the cargo-build and wall-clock tests never share a `cargo test` process with the renders.
+autotests = false
 description = "The `ludion` command-line tool: scaffold, validate, import, render, test, and serve Ludion game projects."
 keywords = ["ludion", "cli", "game-engine", "gamedev"]
 categories = ["command-line-utilities", "game-development"]
@@ -83,3 +86,23 @@ toml.workspace = true
 ludion-renderer = { path = "../ludion-renderer", version = "0.1.0" }
 png.workspace = true
 tungstenite.workspace = true
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+[[test]]
+name = "dev"
+path = "tests/dev.rs"
+
+[[test]]
+name = "new"
+path = "tests/new.rs"
+
+[[test]]
+name = "phase7"
+path = "tests/phase7.rs"
+
+[[test]]
+name = "profile_attach"
+path = "tests/profile_attach.rs"

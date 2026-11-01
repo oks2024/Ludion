@@ -11,7 +11,7 @@ use ludion_protocol::Command;
 use ludion_protocol::command::SceneSaveParams;
 use ludion_testkit::{GoldenOutcome, GoldenTest, bless_requested};
 
-mod common;
+use crate::common;
 
 fn import_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/import")

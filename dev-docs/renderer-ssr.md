@@ -43,5 +43,5 @@ Where the trace is fully confident, SSR-only and probe-only frames agree on a ch
 cargo test -p ludion-renderer ssr_pyramid::
 cargo test -p ludion-renderer needs_gpu_ssr
 cargo test -p ludion-renderer needs_gpu_a_debug_view
-cargo test -p ludion-cli --test render debug_view
+cargo nextest run -p ludion-cli --test it -E 'test(/^render::/) & test(/debug_view/)'
 ```

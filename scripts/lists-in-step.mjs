@@ -103,7 +103,7 @@ function scanWorkspace() {
           if (!entry.endsWith('.rs') || statSync(path.join(tests, entry)).isDirectory()) continue;
           const stem = entry.slice(0, -3);
           const full = path.join(tests, entry);
-          if (roots.includes(full) || new RegExp(`^\\s*(pub\\s+)?mod\\s+${stem}\\s*;`, 'm').test(rootText)) continue;
+          if (roots.includes(full) || new RegExp(`^\\s*(pub\\s+)?mod\\s+(r#)?${stem}\\s*;`, 'm').test(rootText)) continue;
           orphans.push(`orphan: ${rel(full)} is neither a [[test]] path in ${rel(manifest)} nor a \`mod ${stem};\` in one of its test roots, so it never compiles, declare it`);
         }
         continue;

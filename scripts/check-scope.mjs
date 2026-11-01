@@ -2,7 +2,7 @@
 // coder's inner loop, never a substitute for the default suite before a commit lands — it gives up
 // everything a path cannot name: the dependents of a changed crate (unless `--deps`), generated
 // files whose generator lives in an engine crate, and the timing baselines of a full run. A `docs/`
-// path builds ludion-cli (the embedded-mirror check) and runs only the `DOCS_TESTS` binaries.
+// path builds ludion-cli (the embedded-mirror check) and runs only the `DOCS_TESTS` tests.
 //
 // Paths are named explicitly, like `commit.mjs`'s: a shared checkout's dirty set mixes several
 // instances' work, so `git status` cannot say whose change this run is for.
@@ -15,11 +15,12 @@ import path from 'node:path';
 const PROSE_ROOTS = ['Plan/', 'Plan-Private/', 'dev-docs/', 'licenses/', 'infra/', 'ci/teamcity/', '.exarch/', '.claude/'];
 const PROSE_FILE = /^[^/]+\.md$|^LICENSE-/;
 
-// [package, test binary] pairs that read `docs/` (or the binary's embedded copy); the guard in
-// check-scope.test.mjs derives the set by grep.
+// [package, test binary, module?] entries that read `docs/` (or the binary's embedded copy); the
+// guard in check-scope.test.mjs derives the set by grep. A module names a file merged into the
+// binary (`tests/it.rs` declares `mod docs;`), so the filter selects `test(/^module::/)` in it.
 export const DOCS_TESTS = [
-  ['ludion-cli', 'docs'],
-  ['ludion-cli', 'explain'],
+  ['ludion-cli', 'it', 'docs'],
+  ['ludion-cli', 'it', 'explain'],
   ['ludion-cli', 'new'],
   ['ludion-scene', 'kind_precheck'],
 ];
@@ -100,7 +101,7 @@ export function classify(paths, { members, fuzzDeps }, { deps = false } = {}) {
 }
 
 // The cargo packages to lint and test for a classified scope, and the nextest filter (or null) that
-// narrows the docs-only packages to their `DOCS_TESTS` binaries.
+// narrows the docs-only packages to their `DOCS_TESTS` tests.
 export function testSelection(scope) {
   const uniq = (a) => [...new Set(a)].sort();
   const whole = new Set(scope.packages);
@@ -111,7 +112,7 @@ export function testSelection(scope) {
   if (partial.length === 0) return { clippy, test, filter: null };
   const terms = [
     ...[...whole].sort().map((p) => `package(=${p})`),
-    ...uniq(partial.map(([p, b]) => `binary_id(=${p}::${b})`)),
+    ...uniq(partial.map(([p, b, m]) => (m ? `(binary_id(=${p}::${b}) & test(/^${m}::/))` : `binary_id(=${p}::${b})`))),
   ];
   return { clippy, test, filter: terms.join(' | ') };
 }

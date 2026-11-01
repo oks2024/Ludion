@@ -113,7 +113,7 @@ instead of re-hashing the grid's contents every frame.
 ```
 cargo test -p ludion-engine                              # voxelizer unit tests (voxelizer.rs), gi_sky_visibility.rs fixtures
 cargo run -p ludion-cli -- render --scene examples/gallery/gi-interior.yaml --dump-voxels target/gi.voxels.png
-cargo test -p ludion-cli --test render_voxels            # --dump-voxels CLI behavior, adapter-free
+cargo nextest run -p ludion-cli --test it -E 'test(/^render_voxels::/)'            # --dump-voxels CLI behavior, adapter-free
 ```
 
 A second `extract` of an unchanged world must rasterize zero instances (the `RASTERIZATIONS` counter

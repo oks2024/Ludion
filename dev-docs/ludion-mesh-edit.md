@@ -136,7 +136,7 @@ algebra, never the sheet's normalized space.
 ```
 cargo test -p ludion-mesh-edit                      # region/raster/paint/ray unit tests + doctests
 cargo test -p ludion-mesh-edit --test derive         # the conformance hash, drift, L1176/L1177 paths
-cargo test -p ludion-cli --test mesh                 # `ludion mesh pick`/`apply` against the built binary
-cargo test -p ludion-cli --test mesh_pick_camera     # render a cell, pick against its own pixels (gpu group)
+cargo nextest run -p ludion-cli --test it -E 'test(/^mesh::/)'                 # `ludion mesh pick`/`apply` against the built binary
+cargo nextest run -p ludion-cli --test it -E 'test(/^mesh_pick_camera::/)'     # render a cell, pick against its own pixels (gpu group)
 node scripts/mesh-edit-drift.mjs                     # committed derived trees still match their edits
 ```

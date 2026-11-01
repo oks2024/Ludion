@@ -11,7 +11,7 @@
 //   2. the resolved-feature gate: `node scripts/physics-features.mjs`. A failure stops the run.
 //   3-4. the physics gates under nextest, all CPU: every ludion-physics test binary, the
 //      ludion-engine physics_* and ragdoll* test modules (of its merged `it` binary), the
-//      ludion-cli `physics` binary, then the
+//      ludion-cli `physics` module (of its merged `it` binary), then the
 //      #[ignore]d thread_identity scenes. Steps 3 (cross-arch traces) and 4 (in-process
 //      determinism) are the same runs: on ONE machine only the in-process tests carry meaning,
 //      because the committed traces and replays were recorded by the previous pin.
@@ -93,7 +93,7 @@ const BLESS_TRACE_TESTS = [
 const STALE_REPLAYS = ['examples/gallery/physics-stress.lrp', 'examples/gallery/ragdoll.lrp'];
 
 const GATE_FILTER =
-  'package(ludion-physics) | (binary_id(=ludion-engine::it) & test(/^(physics_|ragdoll)/)) | (package(ludion-cli) & binary(physics))';
+  'package(ludion-physics) | (binary_id(=ludion-engine::it) & test(/^(physics_|ragdoll)/)) | (binary_id(=ludion-cli::it) & test(/^physics::/))';
 const THREAD_FILTER = 'package(ludion-engine) & binary(thread_identity)';
 
 function usage(msg) {

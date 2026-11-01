@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-mod common;
+use crate::common;
 
 /// The `ludion` binary under test.
 fn ludion() -> &'static str {

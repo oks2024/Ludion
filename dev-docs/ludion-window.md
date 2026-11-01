@@ -113,7 +113,7 @@ GPU-device that could never be created in the first place).
 ## Verify
 ```
 cargo test -p ludion-window                          # title-flag unit test, pure geometry/mapping tests
-cargo test -p ludion-cli --test window_reconnect      # reconnect over a real killed-and-restarted `ludion serve`
+cargo nextest run -p ludion-cli --test it -E 'test(/^window_reconnect::/)'      # reconnect over a real killed-and-restarted `ludion serve`
 cargo run -p ludion-cli -- dev --window              # manual: move/click, then the window rides a live-reload restart
 cargo run -p ludion-cli -- explain L2007
 ```

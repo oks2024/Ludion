@@ -62,8 +62,13 @@ with `cargo nextest run -p ludion-engine --test it -E 'test(/^stem::/)'`. `threa
 own binary because the thread-identity step selects it by binary name. `lists-in-step` fails on a
 `tests/*.rs` that `it.rs` does not declare.
 
+ludion-cli is the same shape: `it` (44 files as modules; `gen` is `r#gen::`) plus four standalone binaries,
+`dev`, `new` and `phase7` (the `cargo-build` group) and `profile_attach` (`wall-clock`). Merged beside
+the GPU renders, those would share a process under plain `cargo test` and run their deadlines on a
+saturated box; kept apart, the nextest groups stay exact by binary id.
+
 `--scope` with a `docs/` (or `embedded-docs/`) path builds ludion-cli (the mirror check) and runs only the
-`DOCS_TESTS` binaries in `scripts/check-scope.mjs`. The classifier test greps integration tests for docs
+`DOCS_TESTS` tests in `scripts/check-scope.mjs` (an entry may name a module of a merged binary). The classifier test greps integration tests for docs
 readers; a src unit test or a vigil test that reads `docs/` is caught only by the default suite.
 `--fail-fast` (scope only, opt-in) stops the cargo chain and nextest at the first red.
 

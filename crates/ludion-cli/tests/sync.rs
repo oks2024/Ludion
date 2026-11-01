@@ -37,8 +37,8 @@ impl Drop for Scratch {
 }
 
 fn scratch(name: &str) -> Scratch {
-    let dir =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}", std::process::id()));
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("sync-{name}-{}", std::process::id()));
     if let Err(e) = std::fs::remove_dir_all(&dir) {
         assert!(
             e.kind() == std::io::ErrorKind::NotFound,

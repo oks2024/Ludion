@@ -55,7 +55,7 @@ test('game assets select the drift gates', () => {
   assert.equal(classify(['games/breakout/src/main.rs'], WS).drift, false);
 });
 
-const DOCS_FILTER = 'binary_id(=ludion-cli::docs) | binary_id(=ludion-cli::explain) | binary_id(=ludion-cli::new) | binary_id(=ludion-scene::kind_precheck)';
+const DOCS_FILTER = '(binary_id(=ludion-cli::it) & test(/^docs::/)) | (binary_id(=ludion-cli::it) & test(/^explain::/)) | binary_id(=ludion-cli::new) | binary_id(=ludion-scene::kind_precheck)';
 
 test('docs/ and its embedded mirror build ludion-cli and run only the docs-reading tests', () => {
   for (const p of ['docs/scenes.md', 'crates/ludion-cli/embedded-docs/x.md']) {
@@ -79,25 +79,46 @@ test('without a docs path the selection is the packages and no filter', () => {
   assert.deepEqual(testSelection(s), { clippy: ['ludion-core'], test: ['ludion-core'], filter: null });
 });
 
+// A package's integration-test targets from its manifest: `[[test]]` tables (name, path defaulting
+// to tests/<name>.rs) and whether `autotests = false` turns auto-discovery off.
+function testTargets(manifest) {
+  const autotests = !/^autotests\s*=\s*false/m.test(manifest);
+  const targets = manifest.split(/^\[\[test\]\]\s*$/m).slice(1).map((table) => {
+    const body = table.split(/^\[/m)[0];
+    const name = /^name\s*=\s*"([^"]+)"/m.exec(body)[1];
+    return { name, path: /^path\s*=\s*"([^"]+)"/m.exec(body)?.[1] ?? `tests/${name}.rs` };
+  });
+  return { autotests, targets };
+}
+
 // Every integration test file that reads docs/ must be in DOCS_TESTS, and no entry may be stale.
+// A file is keyed `pkg::binary`, or `pkg::binary::module` when a [[test]] root declares it as a module.
 test('DOCS_TESTS lists exactly the integration tests that read docs/', () => {
   const rs = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? rs(path.join(dir, e.name)) : e.name.endsWith('.rs') ? [path.join(dir, e.name)] : []));
-  const pkgName = (dir) => /^name\s*=\s*"([^"]+)"/m.exec(readFileSync(path.join(dir, 'Cargo.toml'), 'utf8'))[1];
+  const pkgName = (manifest) => /^name\s*=\s*"([^"]+)"/m.exec(manifest)[1];
   const hits = new Set();
   for (const group of ['crates', 'games', 'examples']) {
     for (const e of readdirSync(path.join(ROOT, group), { withFileTypes: true })) {
       const dir = path.join(ROOT, group, e.name);
       if (!e.isDirectory() || (group === 'games' && e.name === 'vigil') || !existsSync(path.join(dir, 'tests'))) continue;
+      const manifest = readFileSync(path.join(dir, 'Cargo.toml'), 'utf8');
+      const { autotests, targets } = testTargets(manifest);
       for (const file of rs(path.join(dir, 'tests'))) {
         const reads = readFileSync(file, 'utf8').split('\n').some((l) => !l.trim().startsWith('//') && /"docs[/"]|embedded-docs/.test(l));
         if (!reads) continue;
         const rel = path.relative(path.join(dir, 'tests'), file).split(path.sep);
         assert.equal(rel.length, 1, `${file} reads docs/ from a nested test file: map it by hand in DOCS_TESTS in scripts/check-scope.mjs`);
-        hits.add(`${pkgName(dir)}::${rel[0].replace(/\.rs$/, '')}`);
+        const stem = rel[0].replace(/\.rs$/, '');
+        const pkg = pkgName(manifest);
+        const root = targets.find((t) => t.path === `tests/${stem}.rs`);
+        if (autotests || root) { hits.add(`${pkg}::${root ? root.name : stem}`); continue; }
+        const host = targets.find((t) => new RegExp(`^mod (r#)?${stem};`, 'm').test(readFileSync(path.join(dir, t.path), 'utf8')));
+        assert.ok(host, `${file} is not declared in any [[test]] root of ${pkg}`);
+        hits.add(`${pkg}::${host.name}::${stem}`);
       }
     }
   }
-  const listed = new Set(DOCS_TESTS.map(([p, b]) => `${p}::${b}`));
+  const listed = new Set(DOCS_TESTS.map((entry) => entry.join('::')));
   for (const h of hits) assert.ok(listed.has(h), `${h} reads docs/: add it to DOCS_TESTS in scripts/check-scope.mjs`);
   for (const l of listed) assert.ok(hits.has(l), `${l} is in DOCS_TESTS but no longer reads docs/: remove it from scripts/check-scope.mjs`);
 });

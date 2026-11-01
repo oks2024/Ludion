@@ -79,7 +79,7 @@ cargo run -p ludion-cli -- explain L0001      # single lookup (exit success)
 cargo run -p ludion-cli -- explain L1028      # a lint: prints `L1028 [warning]: ...`
 cargo run -p ludion-cli -- explain L9999      # unknown code -> itself an L0001 diagnostic
 cargo run -p ludion-cli -- explain            # lists every code with its severity and title
-cargo test -p ludion-cli --test explain       # CLI behavior tests
+cargo nextest run -p ludion-cli --test it -E 'test(/^explain::/)'       # CLI behavior tests
 ```
 
 ## Gotchas

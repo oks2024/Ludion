@@ -2,7 +2,7 @@
 //! GPU-rendered proofs that baked sky visibility darkens interiors while leaving open sky alone,
 //! respects a doorway, does not leak through a sealed wall, and leaves direct/emissive light
 //! untouched. Tests 1, 7 and 8 are committed elsewhere (`gpu_render.rs`, `voxelizer.rs`,
-//! `components.rs`); test 6 (cross-process bake stability) lives in `ludion-cli::render_gi`, where
+//! `components.rs`); test 6 (cross-process bake stability) lives in `ludion-cli::it render_gi::`, where
 //! `CARGO_BIN_EXE_ludion` hands it a cargo-managed binary — spawning `cargo build` from inside a
 //! test here raced the parallel suite for the `ludion.exe` link target.
 //!
