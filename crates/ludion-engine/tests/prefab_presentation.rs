@@ -706,9 +706,31 @@ fn round_trip(tag: &str, scene: &str) -> String {
     saved
 }
 
+/// `GROUND` as a save writes it: the full `Transform`, so the first save is the canonical source.
+const GROUND_SAVED: &str = "format: 1
+name: s
+seed: 3
+entities:
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+";
+
 fn entry(prefab: &str, key: bool, extra: &str) -> String {
     let flag = if key { "    presentation: true\n" } else { "" };
-    format!("{GROUND}  - name: prop\n    prefab: {prefab}\n{flag}{extra}")
+    format!("{GROUND_SAVED}  - name: prop\n    prefab: {prefab}\n{flag}{extra}")
 }
 
 fn key_count(saved: &str) -> usize {
@@ -751,14 +773,14 @@ fn an_all_presentation_prefab_saves_without_the_key() {
     let keyed = entry("dressing.prefab.yaml", true, "");
     let dir = root_with("save-dressing-keyed", FILES);
     let first = loaded(&dir, &keyed).scene_text().unwrap();
-    assert_eq!(first, canonical(&plain), "the redundant key stays");
+    assert_eq!(first, canonical(&plain), "the redundant key is dropped");
     assert_eq!(loaded(&dir, &first).scene_text().unwrap(), first);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_sim_post_with_a_presentation_body_saves_without_the_outer_key() {
-    let scene = format!("{GROUND}  - name: pole\n    prefab: post.prefab.yaml\n");
+    let scene = format!("{GROUND_SAVED}  - name: pole\n    prefab: post.prefab.yaml\n");
     let saved = round_trip("save-post", &scene);
     assert_eq!(key_count(&saved), 0, "{saved}");
 }
@@ -766,7 +788,7 @@ fn a_sim_post_with_a_presentation_body_saves_without_the_outer_key() {
 #[test]
 fn a_live_sim_presentation_mix_the_prefab_does_not_make_is_l1234() {
     let scene = format!(
-        "{GROUND}  - name: x/root
+        "{GROUND_SAVED}  - name: x/root
     components:
       Transform: {{}}
       PrefabInstance:
@@ -791,11 +813,11 @@ fn a_live_sim_presentation_mix_the_prefab_does_not_make_is_l1234() {
 "
     );
     let dir = root_with("mixed", FILES);
-    let mut engine = loaded(&dir, &scene);
+    let engine = loaded(&dir, &scene);
     let refusal = engine.scene_text().unwrap_err();
     assert_eq!(refusal.code.as_str(), "L1234", "{refusal:?}");
     assert!(
-        refusal.message.contains("x/child")
+        refusal.message.contains("`child`")
             && refusal.message.contains("presentation")
             && refusal.message.contains("sim"),
         "{}",

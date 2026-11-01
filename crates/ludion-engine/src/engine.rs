@@ -4462,9 +4462,9 @@ impl Engine {
     /// `null`.
     ///
     /// A live prefab instance whose parts are all named `<instance>/<part>` is written as one
-    /// instance entry (`prefab`, `transform`, `overrides`, `removed`) that loads back to the same
-    /// world; instances whose parts are not so named stay plain entities carrying their
-    /// `PrefabInstance`. The `L1234` refusals are in the `collapse` module.
+    /// instance entry (`prefab`, `presentation`, `transform`, `overrides`, `removed`) that loads
+    /// back to the same world; instances whose parts are not so named stay plain entities carrying
+    /// their `PrefabInstance`. The `L1234` refusals are in the `collapse` module.
     pub(crate) fn world_to_scene(&self) -> Result<Scene, Diagnostic> {
         let world = self.driver.world();
         let (mut scene, live, authored) = self.save_inputs()?;

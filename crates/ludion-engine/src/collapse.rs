@@ -941,22 +941,21 @@ impl<'a> Collapser<'a> {
             // The entry's flag moves every part at once; a partial move would save without the key
             // and reload as the prefab's kinds.
             let flag = kinds.iter().any(|(_, live, own)| live != own);
-            if flag && kinds.iter().any(|(_, live, _)| !live) {
-                if let Some((position, live, own)) = kinds.iter().find(|(_, live, own)| live != own)
-                {
-                    let kind =
-                        |presentation: bool| if presentation { "presentation" } else { "sim" };
-                    return Err(refuse_at(
-                        group.root,
-                        format!(
-                            "{} is {}, but `{}` makes it {}: an instance entry cannot express the mix",
-                            self.labels[*position],
-                            kind(*live),
-                            group.source,
-                            kind(*own)
-                        ),
-                    ));
-                }
+            if flag
+                && kinds.iter().any(|(_, live, _)| !live)
+                && let Some((position, live, own)) = kinds.iter().find(|(_, live, own)| live != own)
+            {
+                let kind = |presentation: bool| if presentation { "presentation" } else { "sim" };
+                return Err(refuse_at(
+                    group.root,
+                    format!(
+                        "{} is {}, but `{}` makes it {}: an instance entry cannot express the mix",
+                        self.labels[*position],
+                        kind(*live),
+                        group.source,
+                        kind(*own)
+                    ),
+                ));
             }
             presentation.push(flag);
             let live_paths = |path: &String| group.parts.iter().any(|(_, held)| held == path);
