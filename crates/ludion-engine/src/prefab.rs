@@ -723,9 +723,17 @@ mod tests {
 
     /// Spawns `parts` and asserts the refusal carries `expected` with nothing spawned.
     fn refused(tag: &str, parts: &str, expected: ludion_core::diagnostics::DiagnosticCode) {
-        let root = root(tag);
+        refused_in(&root(tag), parts, expected);
+    }
+
+    /// [`refused`] over an existing content `root`, removed afterwards.
+    fn refused_in(
+        root: &std::path::Path,
+        parts: &str,
+        expected: ludion_core::diagnostics::DiagnosticCode,
+    ) {
         std::fs::write(root.join("p.prefab.yaml"), prefab(parts)).unwrap();
-        let mut world = world(&root);
+        let mut world = world(root);
         world.spawn();
         let before = (
             world.entity_count(),
@@ -746,7 +754,7 @@ mod tests {
             ),
             before
         );
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -789,6 +797,45 @@ mod tests {
               - 0.5
               - 0.5\n        body:\n          rigid: {}\n",
             code::HIERARCHY_RIGID_BODY,
+        );
+    }
+
+    #[test]
+    fn a_socket_on_a_part_with_no_skinned_mesh_is_refused_and_spawns_nothing() {
+        refused(
+            "socket-bare",
+            "  - name: base
+    components: {}
+  - name: prop
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      ParentJoint:
+        joint: child
+",
+            code::PARENT_JOINT_NOT_SKINNED,
+        );
+    }
+
+    #[test]
+    fn a_socket_on_an_unknown_joint_is_refused_and_spawns_nothing() {
+        refused_in(
+            &crate::parent_joint::tests::rig_dir("prefab-socket"),
+            "  - name: base
+    components:
+      Mesh:
+        shape:
+          asset: meshes/rig.mesh.yaml
+  - name: prop
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      ParentJoint:
+        joint: chlid
+",
+            code::PARENT_JOINT_UNKNOWN_JOINT,
         );
     }
 

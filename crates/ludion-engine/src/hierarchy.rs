@@ -48,13 +48,17 @@ pub struct WorldPose {
     pub sheared: bool,
 }
 
-/// `entity`'s `Parent`. The presence guard records no access, so a system whose world holds no
-/// hierarchy needs no `Parent` query declared for the query-drift gate.
-fn parent_of(world: &World, entity: EntityId) -> Option<Parent> {
+/// `entity`'s `Parent`. Records no access (neither the presence guard nor the unrecorded read), so
+/// a system calling `world_transform` needs no `Parent` query declared for the query-drift gate.
+pub(crate) fn parent_of(world: &World, entity: EntityId) -> Option<Parent> {
     if !world.has::<Parent>(entity) {
         return None;
     }
-    world.get::<Parent>(entity).ok().flatten().copied()
+    world
+        .get_unrecorded::<Parent>(entity)
+        .ok()
+        .flatten()
+        .copied()
 }
 
 /// The entity's ancestors, root first and ending with the entity, plus the fault that cut the walk.
@@ -248,7 +252,8 @@ type Memo = (Option<Affine3>, u32);
 /// particles) follows, while a camera, the sun, the `probes` debug lines and colliders are built
 /// with a fresh table and draw from the stored pose. A `ParentJoint` child may likewise carry a
 /// **posed joint** ([`set_posed_joint`](WorldAffines::set_posed_joint)) that replaces its rest
-/// joint level, under the same set-before-first-lookup rule.
+/// joint level; one set on an already memoized child is detected by `pose_sockets` (extract.rs),
+/// which clears the memo and reruns.
 pub(crate) struct WorldAffines {
     memo: SlotTable<Memo>,
     posed: SlotTable<Trs>,
@@ -262,6 +267,21 @@ impl WorldAffines {
             posed: SlotTable::new(),
             posed_joint: SlotTable::new(),
         }
+    }
+
+    /// Drops every memoized fold, keeping the posed locals and joints.
+    pub(crate) fn clear_memo(&mut self) {
+        self.memo = SlotTable::new();
+    }
+
+    /// Whether a lookup already memoized `entity`'s fold.
+    pub(crate) fn is_memoized(&self, entity: EntityId) -> bool {
+        self.memo.get(entity).is_some()
+    }
+
+    /// The posed joint level set on `entity`, if any.
+    pub(crate) fn posed_joint(&self, entity: EntityId) -> Option<Affine3> {
+        self.posed_joint.get(entity)
     }
 
     /// Poses `entity`'s `ParentJoint` level as `joint` for this batch, in place of the joint's rest.

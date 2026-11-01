@@ -124,6 +124,9 @@ clips:
 - **Rest vs drawn.** Sim reads (`world_transform`, `world_affine`, physics, `reparent`) compose the joint's
   **rest** pose, so no `WorldHash` depends on clip data. The draw composes the **posed** joint — the clip,
   the crossfade, the held tick of `hold` and any `SkinBone` followers — and the child's descendants ride on it.
+  The sim reads the rest pose from the skin's committed mesh document under the project root; without it
+  (an engine with no root, or a missing mesh) the child composes as a plain `Parent`, so its sim results
+  and hashes differ.
 - Under present interpolation the socket child and its subtree take the skin's blend key, so the prop
   never swims against the body.
 - `posed_joint_world(world, skin, joint, now) -> Result<Option<WorldPose>, Diagnostic>` is presentation

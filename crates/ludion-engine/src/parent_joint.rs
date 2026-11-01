@@ -250,17 +250,22 @@ pub(crate) fn install(world: &mut World, root: &Path) {
 /// The joint rest level `node`'s `ParentJoint` adds between its parent and its own `Transform`, or
 /// `None` when `node` has no `ParentJoint` or any link misses (no `Parent`, a parent without a
 /// skinned `Mesh`, an unknown joint, a mesh that fails to load, no [`SkinRests`]): a miss composes
-/// as a plain `Parent`, silently. The presence guard records no access.
+/// as a plain `Parent`, silently. Records no access: every read is unrecorded, so a system needs no
+/// `ParentJoint`, `Parent` or `Mesh` declaration for the query-drift gate.
 pub(crate) fn joint_rest(world: &World, node: EntityId) -> Option<Trs> {
     if !world.has::<ParentJoint>(node) {
         return None;
     }
-    let joint = world.get::<ParentJoint>(node).ok().flatten()?;
-    let Parent(parent) = world.get::<Parent>(node).ok().flatten().copied()?;
+    let joint = world.get_unrecorded::<ParentJoint>(node).ok().flatten()?;
+    let Parent(parent) = world
+        .get_unrecorded::<Parent>(node)
+        .ok()
+        .flatten()
+        .copied()?;
     if !world.is_alive(parent) {
         return None;
     }
-    let mesh = world.get::<Mesh>(parent).ok().flatten()?;
+    let mesh = world.get_unrecorded::<Mesh>(parent).ok().flatten()?;
     world
         .resource::<SkinRests>()?
         .rest(&mesh.shape, &joint.joint)

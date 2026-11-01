@@ -333,3 +333,79 @@ fn a_socket_child_and_its_descendants_take_the_skins_blend_key() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A second mannequin (index 4) and a cube `rider` (index 5) under the socket that follows one of
+/// its bones.
+const RIDER: &str = r"  - name: skin2
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: rider
+    components:
+      Mesh:
+        shape: cube
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - 0.0
+      Parent:
+        index: 1
+        generation: 0
+      SkinBone:
+        skin:
+          index: 4
+          generation: 0
+        bone: torso
+";
+
+/// A root `driver` (index 4) that follows `upper_arm_l` of the skin at index 0.
+const DRIVER: &str = r"  - name: driver
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 3.0
+          - -2.0
+      SkinBone:
+        skin:
+          index: 0
+          generation: 0
+        bone: upper_arm_l
+";
+
+#[test]
+fn a_skin_bone_part_under_a_socket_child_draws_at_the_posed_joint() {
+    let root = fixture_project("rider");
+    let engine = engine_at(&root, &format!("{}{RIDER}", scene(&animation(""))));
+    for tick in [0, 7, 30] {
+        let child = assert_drawn_follows_palette(&engine, &root, tick);
+        let scene = extract(&engine, tick);
+        assert_close(
+            scene.meshes[5].model,
+            child * Mat4::from_translation(Vec3::new(0.0, 0.5, 0.0)),
+            &format!("rider at tick {tick}"),
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_part_following_a_bone_moves_the_socket_through_the_posed_palette() {
+    let root = fixture_project("driver");
+    let driven = engine_at(&root, &format!("{}{DRIVER}", scene("")));
+    let rest = engine_at(&root, &scene(""));
+    let drawn = assert_drawn_follows_palette(&driven, &root, 0);
+    assert_ne!(
+        drawn,
+        extract(&rest, 0).meshes[1].model,
+        "the follower moved the joint"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

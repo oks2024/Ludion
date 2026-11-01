@@ -1375,16 +1375,13 @@ struct BlendKeys {
 }
 
 /// The entity whose blend delta moves `id`: the outermost parent across a resolved `ParentJoint`
-/// on the way up, else `id` itself. Only guards by presence, so a world without sockets records no
-/// access.
+/// on the way up, else `id` itself. Reads through the unrecorded hierarchy accessors (`parent_of`,
+/// `joint_rest`), so it records no access.
 fn socket_key(world: &World, id: EntityId) -> EntityId {
     let mut key = id;
     let mut node = id;
     for _ in 0..=crate::hierarchy::MAX_HIERARCHY_DEPTH {
-        if !world.has::<ludion_ecs::Parent>(node) {
-            break;
-        }
-        let Some(&ludion_ecs::Parent(parent)) = get::<ludion_ecs::Parent>(world, node) else {
+        let Some(ludion_ecs::Parent(parent)) = crate::hierarchy::parent_of(world, node) else {
             break;
         };
         if !world.is_alive(parent) {
@@ -3045,17 +3042,7 @@ pub(crate) fn place<'w>(
 
     prefab_part_poses(world, ids, assets, now, poses);
 
-    for &id in ids {
-        let Some(skin_bone) = get::<SkinBone>(world, id) else {
-            continue;
-        };
-        let part_world = render_pose(world, poses, id).model();
-        let entries = placed.skin_followers.entry(skin_bone.skin).or_default();
-        if !entries.iter().any(|(name, _)| *name == skin_bone.bone) {
-            entries.push((skin_bone.bone.as_str(), part_world));
-        }
-    }
-    pose_sockets(world, ids, assets, poses, &placed.skin_followers, now);
+    placed.skin_followers = pose_sockets(world, ids, assets, poses, now);
 
     for (index, &id) in ids.iter().enumerate() {
         let pose = render_pose(world, poses, id);
@@ -3459,21 +3446,46 @@ pub(crate) fn mat4_affine(m: Mat4) -> Affine3 {
     }
 }
 
-/// Poses every `ParentJoint` child's joint level in `poses` with the skin's posed joint model, so
-/// the child and everything below it draw at `skin world × posed joint × local`. Outer skins first
-/// (by ancestor depth), so a skin that is itself a socket child reads its parent's override. Silent
-/// on every miss: the mesh loop reports load errors, and a miss keeps the joint's rest level.
+/// The part world poses that drive each skin's bones: `SkinBone` parts grouped by skin, the first
+/// part per bone winning.
+fn skin_followers<'w>(
+    world: &'w World,
+    ids: &[EntityId],
+    poses: &mut WorldAffines,
+) -> StableMap<EntityId, Vec<(&'w str, Mat4)>> {
+    let mut followers: StableMap<EntityId, Vec<(&'w str, Mat4)>> = StableMap::new();
+    for &id in ids {
+        let Some(skin_bone) = get::<SkinBone>(world, id) else {
+            continue;
+        };
+        let part_world = render_pose(world, poses, id).model();
+        let entries = followers.entry(skin_bone.skin).or_default();
+        if !entries.iter().any(|(name, _)| *name == skin_bone.bone) {
+            entries.push((skin_bone.bone.as_str(), part_world));
+        }
+    }
+    followers
+}
+
+/// Builds the skin followers and poses every `ParentJoint` child's joint level in `poses` with the
+/// skin's posed joint model, so the child and everything below it draw at
+/// `skin world × posed joint × local`; returns the followers. Outer skins first (by ancestor depth),
+/// so a skin that is itself a socket child reads its parent's override. Silent on every miss: the
+/// mesh loop reports load errors, and a miss keeps the joint's rest level.
 ///
-/// A node some lookup memoized before this pass keeps the rest level (a `SkinBone` part under a
-/// socket child, since the followers are built first).
-fn pose_sockets(
-    world: &World,
+/// A `SkinBone` part under a socket child memoizes that child before its posed joint exists, and a
+/// follower on a skin feeds that skin's palette, so the two depend on each other. A pass that sets a
+/// differing posed joint on an already memoized child is stale: the memo is cleared and the pass
+/// reruns, at most `sockets + 1` times (an acyclic nesting gains a level per pass). A cycle (a part
+/// under a skin's own socket that drives that same skin) settles at the cap with the last pass,
+/// deterministically. A scene with no part or skin under a socket runs one pass.
+fn pose_sockets<'w>(
+    world: &'w World,
     ids: &[EntityId],
     assets: &mut dyn SceneAssets,
     poses: &mut WorldAffines,
-    followers: &StableMap<EntityId, Vec<(&str, Mat4)>>,
     now: SimTime,
-) {
+) -> StableMap<EntityId, Vec<(&'w str, Mat4)>> {
     let mut sockets: Vec<(usize, EntityId, EntityId)> = Vec::new();
     for &id in ids {
         if !world.has::<ParentJoint>(id) || !world.has::<ludion_ecs::Parent>(id) {
@@ -3496,7 +3508,29 @@ fn pose_sockets(
         sockets.push((depth, id, skin));
     }
     sockets.sort_by_key(|&(depth, id, _)| (depth, id));
-    for (_, id, skin) in sockets {
+    for pass in 0..=sockets.len() {
+        let followers = skin_followers(world, ids, poses);
+        let stale = pose_each(world, &sockets, assets, poses, &followers, now);
+        if !stale || pass == sockets.len() {
+            return followers;
+        }
+        poses.clear_memo();
+    }
+    unreachable!("the loop returns on its last pass")
+}
+
+/// One pass of [`pose_sockets`]: poses each socket child's joint; true when it set a differing
+/// value on a child a lookup had already memoized (compared bit for bit, so a NaN cannot loop).
+fn pose_each(
+    world: &World,
+    sockets: &[(usize, EntityId, EntityId)],
+    assets: &mut dyn SceneAssets,
+    poses: &mut WorldAffines,
+    followers: &StableMap<EntityId, Vec<(&str, Mat4)>>,
+    now: SimTime,
+) -> bool {
+    let mut stale = false;
+    for &(_, id, skin) in sockets {
         if !world.is_alive(skin) {
             continue;
         }
@@ -3528,9 +3562,21 @@ fn pose_sockets(
             now,
             &joint.joint,
         ) {
-            poses.set_posed_joint(id, mat4_affine(model));
+            let posed = mat4_affine(model);
+            if poses.is_memoized(id) {
+                let same = poses.posed_joint(id).is_some_and(|old| {
+                    old.cols
+                        .iter()
+                        .flatten()
+                        .zip(posed.cols.iter().flatten())
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+                });
+                stale |= !same;
+            }
+            poses.set_posed_joint(id, posed);
         }
     }
+    stale
 }
 
 /// Appends one skinned instance's bone-palette entries to `out`, one per `joints` entry

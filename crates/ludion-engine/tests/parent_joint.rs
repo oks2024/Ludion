@@ -5,9 +5,12 @@
 use std::path::{Path, PathBuf};
 
 use ludion_core::codes::code;
+use ludion_core::ids::EntityId;
 use ludion_core::math::euler_xyz_degrees_to_quat;
 use ludion_core::math::glam::{DMat4, DQuat, DVec3};
-use ludion_engine::Engine;
+use ludion_engine::{Engine, Transform};
+use ludion_protocol::command::{EngineRestoreParams, SimStepParams};
+use ludion_protocol::{Command, ResponseBody};
 use ludion_scene::{JointRest, MeshDocument, MeshJoint, MeshSkin};
 
 fn fresh_dir(name: &str) -> PathBuf {
@@ -256,11 +259,8 @@ fn assert_pose(pose: ludion_engine::WorldPose, expected: DMat4, what: &str) {
     assert!((dot - 1.0).abs() < 1e-4, "{what} rotation dot {dot}");
 }
 
-/// A child under a skin with `ParentJoint` lands at `skin x joint rest x local`, and a grandchild
-/// composes on top; `world_affine` agrees.
-#[test]
-fn a_parent_joint_child_composes_the_joint_rest() {
-    let (mut engine, _dir) = engine_with_rig("compose");
+/// A skin, its `ParentJoint` child (index 1) and the child's own child (index 2).
+fn compose_scene() -> String {
     let child = format!("{PARENT_OF_SKIN}{}{CHILD_LOCAL}", parent_joint("child"));
     let mut text = scene(&format!("{SKIN_MESH}{SKIN_TRANSFORM}"), &child);
     text.push_str(
@@ -272,7 +272,17 @@ fn a_parent_joint_child_composes_the_joint_rest() {
 ",
     );
     text.push_str(GRANDCHILD_LOCAL);
-    engine.load_inline_scene(&text).expect("the scene loads");
+    text
+}
+
+/// A child under a skin with `ParentJoint` lands at `skin x joint rest x local`, and a grandchild
+/// composes on top; `world_affine` agrees.
+#[test]
+fn a_parent_joint_child_composes_the_joint_rest() {
+    let (mut engine, _dir) = engine_with_rig("compose");
+    engine
+        .load_inline_scene(&compose_scene())
+        .expect("the scene loads");
 
     let skin_model = DMat4::from_scale_rotation_translation(
         DVec3::splat(2.0),
@@ -342,4 +352,63 @@ fn a_presentation_parent_joint_child_does_not_move_the_hash() {
     text.push_str(&parent_joint("child"));
     with.load_inline_scene(&text).expect("the scene loads");
     assert_eq!(with.world_hash().unwrap(), alone.world_hash().unwrap());
+}
+
+/// Reads `world_transform` of the socket child and its child without declaring `Parent`,
+/// `ParentJoint` or `Mesh`.
+fn read_world(world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {
+    for index in [1, 2] {
+        ludion_engine::world_transform(world, EntityId::new(index, 0)).unwrap();
+    }
+}
+
+/// The hierarchy walk and the joint rest read record no `Parent`, `ParentJoint` or `Mesh` access.
+#[test]
+fn world_transform_on_a_socket_child_passes_the_query_drift_gate() {
+    let dir = fresh_dir("drift");
+    write_rig(&dir);
+    let mut engine = Engine::builder()
+        .project_root(&dir)
+        .system("read_world", read_world)
+        .query::<(&Transform,)>()
+        .build()
+        .expect("the game builds");
+    engine
+        .load_inline_scene(&compose_scene())
+        .expect("the scene loads");
+    let report = ludion_engine::check_query_drift_with(&mut engine, |e| {
+        e.execute(Command::SimStep(SimStepParams {
+            ticks: 2,
+            hash: false,
+        }))
+        .map(|_| ())
+    })
+    .unwrap();
+    assert!(report.is_clean(), "{report}");
+}
+
+/// The rest pose comes back from a snapshot restored into a fresh engine, bit for bit.
+#[test]
+fn a_restored_socket_child_composes_the_same_world_transform() {
+    let (mut engine, dir) = engine_with_rig("restore");
+    engine
+        .load_inline_scene(&compose_scene())
+        .expect("the scene loads");
+    let child = EntityId::new(1, 0);
+    let before = ludion_engine::world_transform(engine.world(), child).unwrap();
+    let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut fresh = Engine::with_project_root(&dir);
+    match fresh
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    let after = ludion_engine::world_transform(fresh.world(), child).unwrap();
+    assert_eq!(before, after);
 }

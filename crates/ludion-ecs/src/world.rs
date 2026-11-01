@@ -609,6 +609,36 @@ impl World {
     /// presentation entity (see [`Phase`]).
     pub fn get<T: Component>(&self, entity: EntityId) -> Result<Option<&T>, Diagnostic> {
         self.record_component_access::<T>(false);
+        self.get_unrecorded(entity)
+    }
+
+    /// [`get`](World::get) without the query-recorder entry, for engine walks (the hierarchy fold)
+    /// that the query-drift gate must not attribute to the calling system. Game code uses `get`.
+    ///
+    /// # Errors
+    /// The same as [`get`](World::get).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_ecs::World;
+    /// use serde::{Deserialize, Serialize};
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Health(u32);
+    ///
+    /// let mut world = World::new();
+    /// let e = world.spawn();
+    /// world.insert(e, Health(3)).unwrap();
+    ///
+    /// world.begin_query_recording();
+    /// world.set_recording_system("regen");
+    /// assert_eq!(world.get_unrecorded::<Health>(e).unwrap().unwrap().0, 3);
+    ///
+    /// let observed = world.take_query_recording().unwrap();
+    /// assert_eq!(observed.shapes("regen").count(), 0);
+    /// ```
+    pub fn get_unrecorded<T: Component>(&self, entity: EntityId) -> Result<Option<&T>, Diagnostic> {
         self.ensure_access(entity, false, "get", std::any::type_name::<T>)?;
         match self.storage_opt::<T>() {
             Some(s) => Ok(s.get(entity.index)),

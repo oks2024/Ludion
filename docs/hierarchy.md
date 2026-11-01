@@ -64,7 +64,7 @@ The runnable version — a turret yawing on a moving platform, a prop grabbed by
 - **`Keep::World` keeps the world position exactly; only a shear is lossy.** A rotated child under a non-uniform accumulated scale has a world transform no `Transform` can hold (`WorldPose::sheared`), so its rotation and scale come out as the closest rigid pose (`Keep::World` and the physics pose both use it). Author uniform scales on a parent that rotates its children.
 - **Raw `Parent` writes teleport.** Only `reparent` keeps the world pose; setting `Parent` by `component.set` moves the entity to wherever its old local `Transform` lands under the new parent.
 - **`move_and_slide` answers in world coordinates.** For a mover under a `Parent`, convert the returned delta into the parent's frame before adding it to the local `Transform`, or keep movers as roots (`ludion docs collision`).
-- **Systems need no `Parent` declaration to call `world_transform`** — the walk is not recorded as a component access.
+- **Systems need no `Parent`, `ParentJoint` or `Mesh` declaration to call `world_transform`** — the walk is not recorded; the `Transform` reads along it are, as `&Transform`.
 - **Never hashed means never a replay input.** Gameplay that decides from a world pose is deterministic because the local `Transform` and `Parent` links are; do not cache a world pose across ticks.
 
 ## Next
