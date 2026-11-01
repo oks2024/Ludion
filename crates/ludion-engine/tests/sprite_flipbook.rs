@@ -373,6 +373,52 @@ fn hold_counts_stretch_a_frame() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// One sprite playing the one-frame-per-tick `f60` flipbook with `hold: 5`.
+const HOLD_SCENE: &str = "\
+format: 1
+seed: 1
+entities:
+  - name: held
+    components:
+      Sprite:
+        atlas: art/fixture.atlas.yaml
+        frame: wide
+      Animation:
+        clip: f60
+        hold: 5
+";
+
+/// `hold: 5` shows a new flipbook frame only on multiples of 5: ticks 11..=14 draw tick 10's frame
+/// (`tall`), and tick 15 turns over to `wide`.
+#[test]
+fn a_hold_steps_the_flipbook_on_a_global_grid() {
+    let root = fixture_project("hold-grid");
+    let mut engine = Engine::with_project_root(&root);
+    engine.load_inline_scene(HOLD_SCENE).expect("scene loads");
+    let at = |tick: u64| {
+        let sprites = extract_at(
+            engine.world(),
+            (320, 180),
+            engine.project_root(),
+            SimTime::from_ticks(tick, TickRate::DEFAULT),
+            QualityParams::FULL.particle_density,
+        )
+        .expect("the hold world extracts")
+        .sprites;
+        assert_eq!(sprites.len(), 1);
+        sprites[0]
+    };
+    let held = at(10);
+    assert_eq!(held.uv, region_uv(10));
+    for tick in 11..=14 {
+        assert_eq!(at(tick), held, "tick {tick} still shows tick 10's frame");
+    }
+    let next = at(15);
+    assert_ne!(next, held, "tick 15 turns over");
+    assert_eq!(next.uv, region_uv(15));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A clip name the atlas binds no flipbook to is a silent degrade to the authored frame —
 /// byte-identical to the sprite carrying no `Animation` at all, and never a diagnostic (the extract
 /// above would have returned `Err`). Clip names are chosen at runtime, so an unknown one cannot be

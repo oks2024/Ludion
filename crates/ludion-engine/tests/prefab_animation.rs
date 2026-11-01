@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use ludion_core::time::{SimTime, TickRate};
 use ludion_engine::{Engine, QualityParams, Transform, extract_at};
 use ludion_protocol::{Command, command};
-use ludion_renderer::MeshInstance;
+use ludion_renderer::{BlendData, MeshInstance, RenderScene};
 
 /// How many parts one hinge instance contributes to `RenderScene.meshes`: `[base, lid, latch]`.
 const PARTS: usize = 3;
@@ -395,6 +395,70 @@ fn a_crossfade_blends_then_lands_exactly_on_the_incoming_clip() {
         }
     }
 
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+const HINGE: &str = "\
+format: 1
+seed: 1
+entities:
+  - name: opening
+    prefab: hinge/model.prefab.yaml
+    overrides:
+      base:
+        Animation:
+          clip: open
+";
+
+/// Two consecutive presented ticks of the lone hinge, mid-clip so the lid moves between them.
+fn presented_pair(engine: &mut Engine) -> [(RenderScene, BlendData); 2] {
+    engine.execute(step(18)).expect("the sim steps");
+    let first = engine.extract_present_scene().expect("tick extracts");
+    engine.execute(step(1)).expect("the sim steps");
+    let second = engine.extract_present_scene().expect("tick extracts");
+    [first, second]
+}
+
+/// Under present interpolation a prefab part's clip pose takes the newer tick (display-paced-present
+/// decision 15): blending two ticks leaves the lid exactly at the newer tick's pose.
+#[test]
+fn the_presenter_keeps_a_prefab_clip_pose_at_the_newer_tick() {
+    let root = fixture_project("present-clip");
+    let mut engine = engine_with(&root, HINGE);
+    let [(s0, d0), (s1, d1)] = presented_pair(&mut engine);
+    assert_ne!(
+        lid_degrees(&s0.meshes[LID]),
+        lid_degrees(&s1.meshes[LID]),
+        "the clip moved the lid between the two ticks"
+    );
+    let mid = ludion_renderer::blend(&s0, &d0, &s1, &d1, 0.5);
+    assert_eq!(mid.meshes[LID].model, s1.meshes[LID].model);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Root motion still blends: the instance root moved +1 in x between ticks lands at the midpoint.
+#[test]
+fn the_presenter_still_blends_an_animated_prefabs_root_motion() {
+    let root = fixture_project("present-root");
+    let mut engine = engine_with(&root, HINGE);
+    engine.execute(step(18)).expect("the sim steps");
+    let (s0, d0) = engine.extract_present_scene().expect("tick extracts");
+    let id = d0.meshes[BASE].expect("base is keyed");
+    engine
+        .world_mut()
+        .get_mut::<Transform>(id)
+        .unwrap()
+        .unwrap()
+        .translation[0] += 1.0;
+    engine.execute(step(1)).expect("the sim steps");
+    let (s1, d1) = engine.extract_present_scene().expect("tick extracts");
+    let mid = ludion_renderer::blend(&s0, &d0, &s1, &d1, 0.5);
+    let (x0, x1) = (
+        s0.meshes[BASE].model.w_axis.x,
+        s1.meshes[BASE].model.w_axis.x,
+    );
+    assert!((x1 - x0 - 1.0).abs() < 1e-5, "the root moved a metre");
+    assert!((mid.meshes[BASE].model.w_axis.x - (x0 + 0.5)).abs() < 1e-5);
     let _ = std::fs::remove_dir_all(&root);
 }
 

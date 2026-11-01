@@ -153,7 +153,8 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
     so no presenter exists there; its module doc says so, and a live test pins that a presenter
     leaves the per-frame `WorldHash` sequence unchanged.
 15. **Particles and bullets blend by stable instance key (correspondence).** Clip and skinned poses keep
-    the newer tick because games step them deliberately (Clockout 0027); revisit if a game asks.
+    the newer tick because games step them deliberately (Clockout 0027); revisit if a game asks. The pose
+    table holds stored transforms, so a prefab part's clip offset (like an assembly part's) takes the newer tick.
 
 ## Phasing
 

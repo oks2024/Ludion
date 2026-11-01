@@ -1447,9 +1447,12 @@ fn fill_blend(
     .into_iter()
     .flat_map(|list| list.iter().flatten().copied())
     .collect();
+    // Clip poses keep the newer tick (display-paced-present decision 15), so the pose table holds
+    // stored transforms, not the clip-posed ones in `poses`.
+    let mut stored = WorldAffines::new();
     blend.poses = unique
         .iter()
-        .map(|&id| (id, render_pose(world, poses, id).model()))
+        .map(|&id| (id, render_pose(world, &mut stored, id).model()))
         .collect();
     blend.snaps = crate::interpolation::snap_set(
         world,
