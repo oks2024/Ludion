@@ -114,7 +114,7 @@ function warnIfDepsBloated() {
 // `path_flag_outside_repo_is_l0008` and `devdocs_outside_a_checkout_is_l0008_for_every_form`) need
 // scratch outside any checkout. Only these steps: build tools keep the real temp dir.
 const TEST_TEMP = path.join(os.tmpdir(), `ludion-check-${createHash('sha256').update(REPO_ROOT).digest('hex').slice(0, 8)}${SCOPED ? `-scope-${process.pid}` : ''}`);
-const TEST_TEMP_STEPS = new Set(['test', 'doctest', 'vigil-test', 'vigil-doctest', 'fps-gate', 'tauri-test', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak', 'mobile']);
+const TEST_TEMP_STEPS = new Set(['test', 'doctest', 'vigil-test', 'vigil-doctest', 'fps-gate', 'tauri-test', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak', 'mobile', 'mobile-exclusive']);
 const IS_WINDOWS = process.platform === 'win32';
 const EXE = IS_WINDOWS ? '.exe' : '';
 const VIGIL = 'games/vigil';
@@ -461,7 +461,13 @@ let fpsGate = {};
 // aarch64-apple-ios where that target and the iPhoneOS SDK are installed; the facade's lib tests run in
 // the shipped and debug shapes too. Cargo-lock bound, so it rides
 // the cargo chain. Mirrors the `mobile feature set` step in .github/workflows/ci.yml.
-const mobileStep = { name: 'mobile', cmd: 'node', args: ['scripts/mobile-check.mjs'], log: 'mobile.log' };
+// Its facade lib tests hold out the exclusive embed/ffi ones (L4022 under load); `mobile-exclusive`
+// runs them in the quiet tail, from the same nextest override prefixes.
+const mobilePrefixes = () => fpsGate.extra.filter((e) => e.crate === 'ludion').flatMap((e) => [...e.expr.matchAll(/test\(\/\^([\w:]+)\/\)/g)].map((m) => m[1]));
+const mobileStep = () => {
+  const held = fpsGate.error ? [] : mobilePrefixes();
+  return { name: 'mobile', cmd: 'node', args: ['scripts/mobile-check.mjs', ...(held.length ? [`--hold=${held.join(',')}`] : [])], log: 'mobile.log' };
+};
 
 // The binaries the drift gates and the check-docs smoke run. Built once, then copied out of
 // `target/` so the gates can run beside clippy and the test build: nothing they run holds cargo's
@@ -690,7 +696,7 @@ async function cargoChain(syncDone) {
   const synced = await syncDone;
   if (noGpu && !useNextest) {
     const missing = verdict('test', 'test.log', false, '--no-gpu runs the nextest `no-gpu` profile: install cargo-nextest (`cargo install cargo-nextest --locked`)');
-    return [clippy, synced, missing, skipped('doctest', 'no cargo-nextest'), ...VIGIL_CARGO_STEPS.map((n) => (hasVigil ? skipped(n, 'no cargo-nextest') : vigilAbsent(n))), await runStep(mobileStep)];
+    return [clippy, synced, missing, skipped('doctest', 'no cargo-nextest'), ...VIGIL_CARGO_STEPS.map((n) => (hasVigil ? skipped(n, 'no cargo-nextest') : vigilAbsent(n))), await runStep(mobileStep())];
   }
   const out = [clippy, synced];
   if (root) {
@@ -700,7 +706,7 @@ async function cargoChain(syncDone) {
     out.push(outOfScope('test'), outOfScope('doctest'));
   }
   out.push(...(inScope('vigil') ? await vigilChain(useNextest) : VIGIL_CARGO_STEPS.map(outOfScope)));
-  out.push(inScope('mobile') ? await runStep(mobileStep) : outOfScope('mobile'));
+  out.push(inScope('mobile') ? await runStep(mobileStep()) : outOfScope('mobile'));
   return out;
 }
 
@@ -842,7 +848,7 @@ function printHistory() {
 }
 
 // ── reporting ───────────────────────────────────────────────────────────────
-const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
+const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'mobile-exclusive', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
 const YELLOW = '\x1b[33m'; const GREEN = '\x1b[32m'; const RED = '\x1b[31m'; const DIM = '\x1b[2m'; const BOLD = '\x1b[1m'; const RST = '\x1b[0m';
 
 function line(r) {
@@ -1013,6 +1019,15 @@ async function main() {
         ? ['nextest', 'run', ...(scope ? [...new Set([fpsGate, ...fpsGate.extra].map((g) => g.crate).filter((c) => scope.packages.includes(c)))].flatMap((c) => ['-p', c]) : ['--workspace']), '--no-fail-fast', '-E', fpsGate.held]
         : ['test', ...(scope ? ['-p', fpsGate.crate] : ['--workspace']), '--test', fpsGate.binary, '--', fpsGate.prefix, '--test-threads=1'];
       results.push(await runStep({ name: 'fps-gate', cmd: 'cargo', args, log: 'fps-gate.log', env: { LUDION_REQUIRE_GPU: '1' } }));
+    }
+
+    // The mobile build's share of the held tests, in the same quiet tail; it still runs after a failed `mobile`.
+    const mobile = results.find((r) => r.name === 'mobile');
+    const held = fpsGate.error ? [] : mobilePrefixes();
+    if (!mobile || mobile.skipped || held.length === 0) {
+      results.push(skipped('mobile-exclusive', mobile?.skipped ? mobile.reason : 'nothing held'));
+    } else {
+      results.push(await runStep({ name: 'mobile-exclusive', cmd: 'node', args: ['scripts/mobile-check.mjs', `--only=${held.join(',')}`], log: 'mobile-exclusive.log' }));
     }
   }
 
