@@ -9,7 +9,8 @@
 // held key produces exactly one `key_down` edge, mirroring the engine's own no-repeat semantics.
 //
 // Shift, Ctrl and Alt are folded: left and right are one engine key, held while either side is down.
-// `ModifierFold` remembers the sides so a second side or one of two releases sends no spurious edge.
+// `HeldKeys` remembers the sides so a second side or one of two releases sends no spurious edge, and
+// records every forwarded key still down so a focus loss can release exactly those (`release()`).
 
 import type { InputInjectParams } from '@ludion/protocol';
 
@@ -45,7 +46,7 @@ const NAMED: Readonly<Record<string, EngineKey>> = {
 /**
  * Translates a `KeyboardEvent.code` to the engine's abstract key name, or `null` if the engine has
  * no such key. Handles the four families the milestone set covers: `KeyA`–`KeyZ`, `Digit0`–`Digit9`,
- * the four arrows, Space/Enter/Escape, and either side of Shift/Ctrl/Alt (folded by `ModifierFold`).
+ * the four arrows, Space/Enter/Escape, and either side of Shift/Ctrl/Alt (folded by `HeldKeys`).
  */
 export function codeToEngineKey(code: string): EngineKey | null {
   if (/^Key[A-Z]$/.test(code)) {
@@ -65,9 +66,31 @@ export interface KeyEdge {
   readonly repeat: boolean;
 }
 
-/** Tracks which physical sides of each modifier are down, so left and right fold into one key. */
-export class ModifierFold {
+/**
+ * The editor's held-key record. Tracks which physical sides of each modifier are down, so left and
+ * right fold into one key, and which engine keys were forwarded down and not yet up, so a focus loss
+ * (`release()`) can send the up edges the browser will never deliver.
+ */
+export class HeldKeys {
   private readonly down = new Map<string, Set<string>>();
+  private readonly held = new Set<EngineKey>();
+
+  /** Bookkeeping for a forwarded edge; never filters what is forwarded. */
+  note(key: EngineKey, kind: 'key_down' | 'key_up'): void {
+    if (kind === 'key_down') {
+      this.held.add(key);
+    } else {
+      this.held.delete(key);
+    }
+  }
+
+  /** The key_up injects for everything still held; forgets the keys and the modifier sides. */
+  release(): InputInjectParams[] {
+    const params = keyReleaseInjects(this.held);
+    this.held.clear();
+    this.down.clear();
+    return params;
+  }
 
   /** Whether this edge changes the folded key: the first side down, or the last side up. */
   changes(key: EngineKey, code: string, type: 'keydown' | 'keyup'): boolean {
@@ -91,7 +114,7 @@ const MODIFIER_KEYS: ReadonlySet<EngineKey> = new Set<EngineKey>(['Shift', 'Ctrl
  * edge, so forwarding repeats would be pure noise), or a modifier edge that leaves the folded key
  * unchanged. The event carries no `frame`, so the engine applies it at the next tick boundary.
  */
-export function keyEdgeToInject(edge: KeyEdge, fold: ModifierFold): InputInjectParams | null {
+export function keyEdgeToInject(edge: KeyEdge, fold: HeldKeys): InputInjectParams | null {
   if (edge.type === 'keydown' && edge.repeat) {
     return null;
   }
@@ -103,7 +126,14 @@ export function keyEdgeToInject(edge: KeyEdge, fold: ModifierFold): InputInjectP
     return null;
   }
   const kind = edge.type === 'keydown' ? 'key_down' : 'key_up';
+  fold.note(key, kind);
   return { event: { kind, key } };
+}
+
+/** The key-up injects that release a set of held keys, in iteration order — sent when the viewer or
+ *  preview loses focus or play mode ends mid-hold so the engine's held-state can't stick down. */
+export function keyReleaseInjects(held: Iterable<EngineKey>): InputInjectParams[] {
+  return [...held].map((key) => ({ event: { kind: 'key_up', key } }));
 }
 
 /**

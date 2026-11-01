@@ -35,7 +35,8 @@ import {
 import type { InputInjectParams } from '@ludion/protocol';
 import type { EditorMode } from '../App';
 import type { ProtocolClient } from '../protocol/client';
-import { keyEdgeToInject, ModifierFold } from '../viewer/keymap';
+import { keyEdgeToInject, HeldKeys } from '../viewer/keymap';
+import { useFocusLoss } from '../viewer/useFocusLoss';
 import { createLagProbe, formatLag, type LagProbe } from '../viewer/lagProbe';
 import {
   mouseButtonInject,
@@ -78,8 +79,9 @@ export function PreviewPanel({ client, mode, onFrameStatus }: PreviewPanelProps)
   // The buttons the engine still thinks are held, and the move coalescer: one `mouse_move` per
   // animation frame at most, so a high-Hz pointer can't flood the very connection being measured.
   const heldButtonsRef = useRef<Set<EngineMouseButton>>(new Set());
-  // Folds left/right modifier keys into one engine key across key events.
-  const modifierFoldRef = useRef(new ModifierFold());
+  // Folds left/right modifier keys into one engine key and records the keys held down, so a focus
+  // loss or mode exit can release them.
+  const heldKeysRef = useRef(new HeldKeys());
   const pendingMoveRef = useRef<{ x: number; y: number } | null>(null);
   const moveRafRef = useRef<number | null>(null);
 
@@ -99,6 +101,15 @@ export function PreviewPanel({ client, mode, onFrameStatus }: PreviewPanelProps)
     heldButtonsRef.current.clear();
   }, [inject]);
 
+  // Release held buttons and held keys. Pointer-leave stays buttons-only: a key outlives the pointer.
+  const releaseHeldInput = useCallback((): void => {
+    releaseHeld();
+    for (const params of heldKeysRef.current.release()) {
+      inject(params);
+    }
+  }, [releaseHeld, inject]);
+  useFocusLoss(releaseHeldInput);
+
   // Edit mode pauses the sim by convention; keystrokes are gameplay input and stay play-mode only.
   const handleKey = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -108,7 +119,7 @@ export function PreviewPanel({ client, mode, onFrameStatus }: PreviewPanelProps)
       if (mode !== 'play') {
         return;
       }
-      const params = keyEdgeToInject({ code: event.code, type: event.type as 'keydown' | 'keyup', repeat: event.repeat }, modifierFoldRef.current);
+      const params = keyEdgeToInject({ code: event.code, type: event.type as 'keydown' | 'keyup', repeat: event.repeat }, heldKeysRef.current);
       if (params === null) {
         return;
       }
@@ -200,21 +211,21 @@ export function PreviewPanel({ client, mode, onFrameStatus }: PreviewPanelProps)
   );
 
   // Leaving play mode, losing the client (preview off), and unmounting all end the same way: release
-  // whatever is held — through the client that was live when it was pressed, since the cleanup runs
+  // whatever is held, keys and buttons — through the client that was live when it was pressed, since the cleanup runs
   // with the previous closure — and drop a queued move so no rAF fires into a dead panel.
   useEffect(() => {
     if (mode !== 'play') {
-      releaseHeld();
+      releaseHeldInput();
     }
     return () => {
-      releaseHeld();
+      releaseHeldInput();
       if (moveRafRef.current !== null) {
         cancelAnimationFrame(moveRafRef.current);
         moveRafRef.current = null;
       }
       pendingMoveRef.current = null;
     };
-  }, [mode, releaseHeld]);
+  }, [mode, releaseHeldInput]);
 
   if (client === null) {
     return (
@@ -239,6 +250,7 @@ export function PreviewPanel({ client, mode, onFrameStatus }: PreviewPanelProps)
       onPointerCancel={handlePointerUp}
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
+      onBlur={releaseHeldInput}
       onContextMenu={handleContextMenu}
     >
       <canvas ref={canvasRef} className="viewport-canvas" />

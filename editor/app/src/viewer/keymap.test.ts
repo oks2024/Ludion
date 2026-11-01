@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codeToEngineKey, keyEdgeToInject, ModifierFold } from './keymap';
+import { codeToEngineKey, HeldKeys, keyEdgeToInject, keyReleaseInjects } from './keymap';
 
 describe('codeToEngineKey', () => {
   it('maps letter codes by stripping the Key prefix', () => {
@@ -46,39 +46,80 @@ describe('codeToEngineKey', () => {
 
 describe('keyEdgeToInject', () => {
   it('builds a key_down inject for a fresh press', () => {
-    expect(keyEdgeToInject({ code: 'KeyW', type: 'keydown', repeat: false }, new ModifierFold())).toEqual({
+    expect(keyEdgeToInject({ code: 'KeyW', type: 'keydown', repeat: false }, new HeldKeys())).toEqual({
       event: { kind: 'key_down', key: 'W' },
     });
   });
 
   it('builds a key_up inject for a release', () => {
-    expect(keyEdgeToInject({ code: 'ArrowLeft', type: 'keyup', repeat: false }, new ModifierFold())).toEqual({
+    expect(keyEdgeToInject({ code: 'ArrowLeft', type: 'keyup', repeat: false }, new HeldKeys())).toEqual({
       event: { kind: 'key_up', key: 'Left' },
     });
   });
 
   it('suppresses OS auto-repeat keydowns', () => {
-    expect(keyEdgeToInject({ code: 'KeyD', type: 'keydown', repeat: true }, new ModifierFold())).toBeNull();
+    expect(keyEdgeToInject({ code: 'KeyD', type: 'keydown', repeat: true }, new HeldKeys())).toBeNull();
   });
 
   it('still forwards a keyup even if flagged repeat (releases never repeat, but be safe)', () => {
-    expect(keyEdgeToInject({ code: 'KeyD', type: 'keyup', repeat: true }, new ModifierFold())).toEqual({
+    expect(keyEdgeToInject({ code: 'KeyD', type: 'keyup', repeat: true }, new HeldKeys())).toEqual({
       event: { kind: 'key_up', key: 'D' },
     });
   });
 
   it('returns null for an unmapped key regardless of edge', () => {
-    expect(keyEdgeToInject({ code: 'Tab', type: 'keydown', repeat: false }, new ModifierFold())).toBeNull();
-    expect(keyEdgeToInject({ code: 'Tab', type: 'keyup', repeat: false }, new ModifierFold())).toBeNull();
+    expect(keyEdgeToInject({ code: 'Tab', type: 'keydown', repeat: false }, new HeldKeys())).toBeNull();
+    expect(keyEdgeToInject({ code: 'Tab', type: 'keyup', repeat: false }, new HeldKeys())).toBeNull();
   });
 
   it('folds two shift sides into one held key', () => {
-    const fold = new ModifierFold();
+    const fold = new HeldKeys();
     const edge = (code: string, type: 'keydown' | 'keyup') => keyEdgeToInject({ code, type, repeat: false }, fold);
     expect(edge('ShiftLeft', 'keydown')).toEqual({ event: { kind: 'key_down', key: 'Shift' } });
     expect(edge('ShiftRight', 'keydown')).toBeNull();
     expect(edge('ShiftLeft', 'keyup')).toBeNull();
     expect(edge('ShiftRight', 'keyup')).toEqual({ event: { kind: 'key_up', key: 'Shift' } });
     expect(edge('ShiftRight', 'keyup')).toBeNull();
+  });
+});
+
+describe('focus-loss release', () => {
+  const press = (held: HeldKeys, code: string, type: 'keydown' | 'keyup' = 'keydown') =>
+    keyEdgeToInject({ code, type, repeat: false }, held);
+  const up = (key: string) => ({ event: { kind: 'key_up', key } });
+
+  it('keyReleaseInjects gives one key_up per key in order', () => {
+    expect(keyReleaseInjects(['W', 'Space'])).toEqual([up('W'), up('Space')]);
+  });
+
+  it('keyReleaseInjects of nothing is empty', () => {
+    expect(keyReleaseInjects([])).toEqual([]);
+  });
+
+  it('releases the held keys once', () => {
+    const held = new HeldKeys();
+    press(held, 'KeyW');
+    press(held, 'Space');
+    expect(held.release()).toEqual([up('W'), up('Space')]);
+    expect(held.release()).toEqual([]);
+  });
+
+  it('releases nothing when nothing is pressed', () => {
+    expect(new HeldKeys().release()).toEqual([]);
+  });
+
+  it('does not re-release a key already released', () => {
+    const held = new HeldKeys();
+    press(held, 'KeyW');
+    press(held, 'KeyW', 'keyup');
+    expect(held.release()).toEqual([]);
+  });
+
+  it('releases both shift sides as one key_up and clears the side map', () => {
+    const held = new HeldKeys();
+    press(held, 'ShiftLeft');
+    press(held, 'ShiftRight');
+    expect(held.release()).toEqual([up('Shift')]);
+    expect(press(held, 'ShiftLeft')).toEqual({ event: { kind: 'key_down', key: 'Shift' } });
   });
 });

@@ -5,7 +5,7 @@
 // focus do keyboard edges become `input.inject` commands (so typing into the inspector or the URL bar
 // never leaks into the game). A small indicator shows when capture is live. Presses/releases are
 // mirrored honestly (keydown -> key_down, keyup -> key_up) and OS auto-repeat is suppressed, matching
-// the engine's own no-repeat edge semantics.
+// the engine's own no-repeat edge semantics. A focus loss releases every key still held.
 //
 // `mode` gates that same input path: edit mode pauses the sim (App's mode toggle), and a paused sim
 // shouldn't also be receiving keystrokes meant for gameplay, so `input.inject` is play-mode only.
@@ -16,8 +16,9 @@
 // offered to `injectCoalescer.ts`'s latest-wins gate, which self-paces sends to the server's reply rate
 // rather than the animation-frame rate), and button edges become `mouse_down`/`mouse_up`. Edges flush
 // any parked move first, so an aim update is never overtaken on the wire by the click it preceded. Held
-// buttons are released (an up edge) when the pointer leaves the viewport or play mode ends mid-hold so
-// the engine's held-state can't stick. All of this is inert in edit mode, where the mouse drives
+// buttons are released (an up edge) when the pointer leaves the viewport, and held keys and buttons
+// both when focus is lost (element or window blur, page hidden) or play mode ends mid-hold, so the
+// engine's held-state can't stick. Nothing is re-pressed on refocus. All of this is inert in edit mode, where the mouse drives
 // selection/gizmos below and never reaches the sim.
 //
 // Click-picking (edit mode) and the selection overlay are the second half of the story (Plan/phase-6-
@@ -64,7 +65,8 @@ import { toDiagnostic, type DiagnosticView } from './diagnostic';
 import { DiagnosticBanner } from './DiagnosticBanner';
 import { entityKey } from './Inspector';
 import { createInjectCoalescer, type InjectCoalescer } from './injectCoalescer';
-import { keyEdgeToInject, isTextEditingTarget, ModifierFold } from './keymap';
+import { keyEdgeToInject, isTextEditingTarget, HeldKeys } from './keymap';
+import { useFocusLoss } from './useFocusLoss';
 import { createLagProbe, formatLag, type LagProbe } from './lagProbe';
 import { mouseButtonInject, mouseMoveInject, pointerButtonName, releaseInjects, type EngineMouseButton } from './mousemap';
 import {
@@ -379,8 +381,9 @@ export function Viewport({
   // latest-wins gate, which self-paces sends to the server's reply rate instead of rAF rate (this
   // feature's whole point — see injectCoalescer.ts's header).
   const heldButtonsRef = useRef<Set<EngineMouseButton>>(new Set());
-  // Folds left/right modifier keys into one engine key across key events.
-  const modifierFoldRef = useRef(new ModifierFold());
+  // Folds left/right modifier keys into one engine key and records the keys held down, so a focus
+  // loss or mode exit can release them.
+  const heldKeysRef = useRef(new HeldKeys());
 
   // Mirrors `client` every render so the coalescer's `send` (bound once, below) never closes over a
   // stale client after a reconnect swaps the prop (App recreates `ProtocolClient` on reconnect).
@@ -583,6 +586,15 @@ export function Viewport({
     heldButtonsRef.current.clear();
   }, [injectMouse, coalescer]);
 
+  // Release held buttons and held keys. Pointer-leave stays buttons-only: a key outlives the pointer.
+  const releaseHeldInput = useCallback((): void => {
+    releaseHeldButtons();
+    for (const params of heldKeysRef.current.release()) {
+      injectMouse(params);
+    }
+  }, [releaseHeldButtons, injectMouse]);
+  useFocusLoss(releaseHeldInput);
+
   const handleKey = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       // Read the clock before anything else: the gap to the event's own timestamp IS the main
@@ -592,7 +604,7 @@ export function Viewport({
       if (mode !== 'play') {
         return;
       }
-      const inject = keyEdgeToInject({ code: event.code, type: event.type as 'keydown' | 'keyup', repeat: event.repeat }, modifierFoldRef.current);
+      const inject = keyEdgeToInject({ code: event.code, type: event.type as 'keydown' | 'keyup', repeat: event.repeat }, heldKeysRef.current);
       if (inject === null) {
         return;
       }
@@ -1218,15 +1230,14 @@ export function Viewport({
     [mode],
   );
 
-  // Leaving play mode mid-hold: release any still-held buttons, so a paused sim doesn't keep a button
-  // stuck down. (`releaseHeldButtons` flushes any parked move first, so it isn't silently dropped.) The
-  // keyboard path has no equivalent blur/mode-exit release — a held key on mode-exit is a pre-existing
-  // gap this doesn't touch.
+  // Leaving play mode mid-hold, like a focus loss, releases every held key and button, so a paused sim
+  // doesn't keep one stuck down. (`releaseHeldButtons` flushes any parked move first, so it isn't
+  // silently dropped.)
   useEffect(() => {
     if (mode !== 'play') {
-      releaseHeldButtons();
+      releaseHeldInput();
     }
-  }, [mode, releaseHeldButtons]);
+  }, [mode, releaseHeldInput]);
 
   // Escape cancels a live drag: restore the mousedown value and snap the overlay back to it. Handled
   // window-level (the capture can carry the pointer anywhere) and only while a drag is in flight.
@@ -1365,7 +1376,10 @@ export function Viewport({
         onWheel={camera.handlers.onWheel}
         onContextMenu={handleContextMenu}
         onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
+        onBlur={() => {
+          setFocused(false);
+          releaseHeldInput();
+        }}
       >
         <canvas ref={canvasRef} className="viewport-canvas" />
         {connection === 'live' && !status.receiving && <div className="viewport-waiting">waiting for frames…</div>}
