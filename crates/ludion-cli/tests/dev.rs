@@ -216,6 +216,20 @@ fn set_player_speed(components: &Path, from: &str, to: &str) {
     std::fs::write(components, updated).expect("write components.rs");
 }
 
+/// Builds the scaffold with the invocation, target dir and profile `ludion dev` uses, so the engine
+/// dependencies are compiled before the "first listening" clock starts and dev's own build is left
+/// with the game crate alone. A cold or contended build can take many minutes; the wait is unbounded
+/// and a failed build fails the test with cargo's own stderr.
+fn prebuild(project: &Path, target_dir: &Path) {
+    let status = Command::new("cargo")
+        .arg("build")
+        .current_dir(project)
+        .env("CARGO_TARGET_DIR", target_dir)
+        .status()
+        .expect("run `cargo build` on the scaffold");
+    assert!(status.success(), "pre-building the scaffold failed");
+}
+
 #[test]
 fn dev_reloads_and_preserves_state_across_a_real_edit() {
     let (base, _lock) = common::stable_scratch("dev_session");
@@ -247,7 +261,9 @@ fn dev_reloads_and_preserves_state_across_a_real_edit() {
     text.push_str("\n[[import]]\nfrom = \"art/*/export/*.gltf\"\nto = \"assets/derived\"\n");
     std::fs::write(&manifest, text).expect("write the scaffold manifest");
 
-    // Start dev on an OS-chosen port; it builds the scaffold (slow) then serves. Wrapped in a
+    prebuild(&project, &target_dir);
+
+    // Start dev on an OS-chosen port; it builds the scaffold then serves. Wrapped in a
     // `DevGuard` so a `wait_line` panic still reaps the dev + game process tree (see `DevGuard`).
     let mut dev = DevGuard(
         Command::new(env!("CARGO_BIN_EXE_ludion"))
@@ -559,6 +575,8 @@ fn dev_keeps_the_snapshot_through_failed_boots() {
         "register::<Player>(\"Transform\")",
     );
     assert_ne!(broken_lib, good_lib, "expected to collide the registration");
+
+    prebuild(&project, &target_dir);
 
     let mut dev = DevGuard(
         Command::new(env!("CARGO_BIN_EXE_ludion"))
