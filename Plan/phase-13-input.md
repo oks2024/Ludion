@@ -375,6 +375,11 @@ wave is independently landable, one commit.
   headless engine (no window) leaves `InputState` at default after ticks (the clean-degrade proof).
   `node scripts/check.mjs` green (note: a live end-to-end mouse/pad-through-a-window check is the M2
   human gate, not a mechanized test — hardware-bound, like the windowed-viewer criteria).
+- **Held-input release (Clockout 0025):** on focus loss both hosts release every forwarded key and
+  mouse button (`KeyMapper`/`MouseButtons::release_held`); a primary-pad unplug zeroes its non-zero
+  axes, releases its buttons and promotes the next connected pad (`gamepad::on_disconnect`). All are
+  ordinary recorded `input.inject` events. A focus/connection signal to games stays out of scope;
+  trigger: a game that needs pause-on-focus-loss or pause-on-unplug.
 
 ### Wave 5 — facade surface, example, docs, degrade-nowhere, exit
 - `ludion::prelude` re-exports the new input types (`MouseState`/`GamepadState`/`MouseButton`/

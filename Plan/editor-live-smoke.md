@@ -216,3 +216,6 @@ Under StrictMode `tauri dev`, the engine's `stream.subscribe` count shows **one 
 
 ## Reflection probe archetype
 Place **Reflection probe** from the Level Designer palette inside a room with a glossy floor: after the capture, the floor's reflection shows the room's walls instead of the sky. Edit `extent` in the inspector: the reflection's parallax follows, with no rebake prompt.
+
+## Held-input release (Clockout 0025)
+Play mode, focus the viewer, hold D (the hero runs), Alt-Tab (Windows) / Cmd-Tab (M4) away and back: the hero stands. Same in the perf preview. Same with a held left mouse button. Hold D, then play → edit → play: the hero stands.

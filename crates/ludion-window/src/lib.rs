@@ -34,7 +34,8 @@
 //!   down) and it reconnects lazily on the next event — and it never ends the loop; the stream thread
 //!   owns the fatal path.
 //! - **The gamepad thread** owns a [`gilrs::Gilrs`] instance and polls it (`next_event_blocking` with
-//!   a short timeout, so it wakes promptly to check for shutdown) for the first connected pad only,
+//!   a short timeout, so it wakes promptly to check for shutdown) for the first connected pad only
+//!   (when it unplugs, it releases what that pad held and promotes the next one),
 //!   translating axis/button samples into `gamepad_*` event `Value`s onto the same channel the input
 //!   thread drains (`gamepad.rs` holds the pure mapping; capture is out-of-sim by construction — the
 //!   sim only ever sees what this thread injects).
@@ -101,6 +102,7 @@ pub use crate::reconnect::{StreamSink, run_frame_stream};
 
 use crate::gpu::{Presenter, RenderError};
 use crate::keymap::KeyMapper;
+use crate::mouse::MouseButtons;
 
 /// How the streamed frames are decoded to RGBA and handed between threads: a latest-wins slot that
 /// the stream thread replaces and the main thread reads. `Arc` so a redraw clones only a pointer,
@@ -181,6 +183,7 @@ pub fn run(options: WindowOptions, stop: Receiver<()>) -> Result<(), Diagnostic>
         slot,
         input_tx,
         keys: KeyMapper::default(),
+        mouse: MouseButtons::default(),
         presenter: None,
         window: None,
         fatal: None,
@@ -230,8 +233,10 @@ struct App {
     options: WindowOptions,
     slot: FrameSlot,
     input_tx: Sender<serde_json::Value>,
-    /// Folds left/right modifiers into one engine key across events.
+    /// Folds left/right modifiers into one engine key and remembers every key forwarded as down.
     keys: KeyMapper,
+    /// Remembers every mouse button forwarded as down.
+    mouse: MouseButtons,
     presenter: Option<Presenter>,
     window: Option<Arc<Window>>,
     /// Set when a fatal error (lost connection, out-of-memory) ends the loop; becomes `run`'s `Err`.
@@ -374,10 +379,13 @@ impl ApplicationHandler<UserEvent> for App {
                     let _ = self.input_tx.send(wire.to_value());
                 }
             }
-            // A modifier let go while another window had focus never gets a key-up.
+            // A key or button let go while another window had focus never gets a release.
             WindowEvent::Focused(false) => {
-                for wire in self.keys.release_modifiers() {
+                for wire in self.keys.release_held() {
                     let _ = self.input_tx.send(wire.to_value());
+                }
+                for value in self.mouse.release_held() {
+                    let _ = self.input_tx.send(value);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -386,7 +394,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if let Some(value) = mouse::mouse_button_event(button, state) {
+                if let Some(value) = self.mouse.map(button, state) {
                     let _ = self.input_tx.send(value);
                 }
             }
@@ -488,8 +496,9 @@ fn spawn_input_thread(url: String, input_rx: Receiver<serde_json::Value>) -> Joi
 /// as a machine with the backend but no pad plugged in, which just never yields an event. Polls with
 /// a bounded timeout (rather than an unbounded block) so the thread notices `running` going false and
 /// exits promptly on teardown, without busy-waiting between samples. Only the first-seen connected
-/// pad's events are forwarded (multi-pad is out of scope, `Plan/phase-13-input.md`); a `Disconnected`
-/// from that pad clears it so a later reconnect can become primary again.
+/// pad's events are forwarded (multi-pad is out of scope, `Plan/phase-13-input.md`). A `Disconnected`
+/// from that pad first sends the releases for everything it held (axes to zero, buttons up), then
+/// promotes the next still-connected pad, if any.
 pub fn spawn_gamepad_thread(
     input_tx: Sender<serde_json::Value>,
     running: Arc<AtomicBool>,
@@ -500,6 +509,7 @@ pub fn spawn_gamepad_thread(
             Err(_) => return, // no gamepad backend on this machine: nothing to poll, ever
         };
         let mut primary: Option<GamepadId> = gilrs.gamepads().next().map(|(id, _)| id);
+        let mut held = gamepad::PadHeld::default();
         while running.load(Ordering::Relaxed) {
             let Some(event) = gilrs.next_event_blocking(Some(Duration::from_millis(100))) else {
                 continue; // timed out with no event: loop back and re-check `running`
@@ -512,8 +522,11 @@ pub fn spawn_gamepad_thread(
                     continue;
                 }
                 gilrs::EventType::Disconnected => {
-                    if primary == Some(event.id) {
-                        primary = None;
+                    let connected = gilrs.gamepads().map(|(id, _)| id);
+                    for value in
+                        gamepad::on_disconnect(&mut primary, event.id, &mut held, connected)
+                    {
+                        let _ = input_tx.send(value);
                     }
                     continue;
                 }
@@ -522,13 +535,7 @@ pub fn spawn_gamepad_thread(
             if primary != Some(event.id) {
                 continue; // a second pad: out of scope, ignore its events
             }
-            let mapped = match event.event {
-                gilrs::EventType::AxisChanged(axis, value, _) => gamepad::axis_event(axis, value),
-                gilrs::EventType::ButtonPressed(button, _) => gamepad::button_down_event(button),
-                gilrs::EventType::ButtonReleased(button, _) => gamepad::button_up_event(button),
-                _ => None,
-            };
-            if let Some(value) = mapped {
+            if let Some(value) = held.forward(&event.event) {
                 let _ = input_tx.send(value);
             }
         }

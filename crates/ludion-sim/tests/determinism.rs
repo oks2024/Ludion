@@ -16,8 +16,8 @@ use ludion_core::rng::DeterministicRng;
 use ludion_core::time::FrameIndex;
 use ludion_ecs::{Registry, Schedule, SystemCtx, World};
 use ludion_sim::{
-    GamepadAxis, InputEvent, InputScript, InputState, Key, RunState, SimConfig, SimDriver, Speed,
-    WorldHash,
+    GamepadAxis, GamepadButton, InputEvent, InputScript, InputState, Key, MouseButton, RunState,
+    SimConfig, SimDriver, Speed, WorldHash,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -473,6 +473,77 @@ fn analog_bit_patterns_replay_identically_across_two_runs() {
     );
     // Sanity: the analog fields actually reach the hashed component (not a vacuous pass).
     assert_ne!(hashes_a.first(), hashes_a.last());
+}
+
+/// What a desktop host injects when the window loses focus mid-hold (and the primary pad is
+/// unplugged): every held key, mouse button, axis and button released. The right trigger's button
+/// is synthesised from its axis, so the host never sends a trigger button.
+fn held_then_released_script() -> InputScript {
+    let mut script = InputScript::new();
+    let at = FrameIndex::new;
+    for key in [Key::W, Key::Space] {
+        script.push(at(0), InputEvent::KeyDown { key });
+        script.push(at(5), InputEvent::KeyUp { key });
+    }
+    script.push(
+        at(0),
+        InputEvent::MouseDown {
+            button: MouseButton::Left,
+        },
+    );
+    script.push(
+        at(5),
+        InputEvent::MouseUp {
+            button: MouseButton::Left,
+        },
+    );
+    for (axis, down, up) in [
+        (GamepadAxis::LeftStickX, 1.0, 0.0),
+        (GamepadAxis::RightTrigger, 0.8, 0.0),
+    ] {
+        script.push(at(0), InputEvent::GamepadAxis { axis, value: down });
+        script.push(at(5), InputEvent::GamepadAxis { axis, value: up });
+    }
+    script.push(
+        at(0),
+        InputEvent::GamepadButtonDown {
+            button: GamepadButton::South,
+        },
+    );
+    script.push(
+        at(5),
+        InputEvent::GamepadButtonUp {
+            button: GamepadButton::South,
+        },
+    );
+    script
+}
+
+#[test]
+fn host_releases_leave_no_input_held_and_replay_identically() {
+    let registry = aim_registry();
+    let (mut a, _) = aim_fixture(held_then_released_script());
+    let (mut b, _) = aim_fixture(held_then_released_script());
+
+    let hashes_a = hash_sequence(&mut a, &registry, 10);
+    assert_eq!(hashes_a, hash_sequence(&mut b, &registry, 10));
+    // Non-vacuous: the stick X the release zeroes is hashed, so the trace moves at frame 5.
+    assert_ne!(hashes_a[4], hashes_a[5]);
+
+    let (mut c, _) = aim_fixture(held_then_released_script());
+    c.run_ticks(1);
+    let held = c.world().resource::<InputState>().unwrap();
+    assert!(held.is_held(Key::W) && held.is_held(Key::Space));
+    assert!(held.mouse().is_held(MouseButton::Left));
+    assert!(held.gamepad().is_held(GamepadButton::RightTrigger));
+
+    let input = a.world().resource::<InputState>().unwrap();
+    assert!(!input.is_held(Key::W) && !input.is_held(Key::Space));
+    assert!(!input.mouse().any_held());
+    assert!(!input.gamepad().any_held());
+    assert!(!input.gamepad().is_held(GamepadButton::RightTrigger));
+    assert_eq!(input.gamepad().left_stick(), [0.0, 0.0]);
+    assert_eq!(input.gamepad().right_trigger(), 0.0);
 }
 
 #[test]

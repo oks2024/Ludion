@@ -37,8 +37,9 @@ left and right are one key, held while either is down; Cmd/Super is not mapped).
 
 ## Gamepad — `input.gamepad()`
 
-Player one's pad (the capture layer forwards the first connected
-pad only). Sticks and triggers are **level analog**; buttons are edges like keys.
+Player one's pad (the capture layer forwards the first connected pad only; when it unplugs, the
+next connected pad becomes player one). Sticks and triggers are **level analog**; buttons are edges
+like keys.
 
 - `input.gamepad().left_stick()` / `.right_stick()` — `[f32; 2]`, each axis in `[-1, 1]`. **+Y is
   up** (the capture layer normalizes to that convention), so pushing a stick up gives `+y` — most
@@ -101,6 +102,15 @@ default — mouse at `[0, 0]`, no buttons, zero sticks. A game reading input hea
 action. That is the correct degrade, and it is what every golden/CI run relies on. Drive input in a
 test by scripting it (an `InputScript`, or `input.inject` over the wire) — the same data the window
 records, so a test and a live session run the identical path.
+
+## Focus loss and unplug
+
+When the window loses focus it releases every key and mouse button it had forwarded as down, so
+an Alt-Tab mid-hold never leaves the hero walking; a key still held on return resumes on its next
+real press. When player one's pad unplugs, the capture layer zeroes every non-zero axis (the trigger
+buttons release with their axes) and releases held buttons. These releases are ordinary recorded
+`input.inject` events, so a replay reproduces them. A game cannot yet *see* focus or pad connection
+(no pause-on-focus-loss signal); a game that needs one would get it as new recorded events.
 
 ## Aim recipe — cursor/stick to the ground plane
 

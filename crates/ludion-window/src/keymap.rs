@@ -10,7 +10,8 @@
 //!
 //! The modifiers (`"Shift"`, `"Ctrl"`, `"Alt"`) are folded: left and right are one engine key, held
 //! while either side is down. That makes [`KeyMapper`] the one stateful piece — it remembers which
-//! sides are down so a second side or the release of one of two never sends a spurious edge.
+//! sides are down so a second side or the release of one of two never sends a spurious edge, and
+//! which other keys it forwarded as down so a focus loss can release them all.
 
 use winit::event::ElementState;
 use winit::keyboard::KeyCode;
@@ -34,7 +35,7 @@ impl WireKey {
     }
 }
 
-/// The three folded modifiers, in the order `release_modifiers` reports them.
+/// The three folded modifiers, in the order `release_held` reports them.
 const MODIFIERS: [&str; 3] = ["Shift", "Ctrl", "Alt"];
 
 /// The modifier a [`KeyCode`] belongs to (index into [`MODIFIERS`]) and which physical side it is.
@@ -50,13 +51,16 @@ fn modifier_side(code: KeyCode) -> Option<(usize, usize)> {
     })
 }
 
-/// Translates physical key transitions into the wire events to inject. Stateful only for the
-/// modifiers: left and right fold into one engine key, so the mapper tracks which sides are down and
-/// emits an edge only when the folded key changes (releasing one of two held Shifts sends nothing).
+/// Translates physical key transitions into the wire events to inject. Stateful for what a focus
+/// loss must release: the modifiers (left and right fold into one engine key, so the mapper tracks
+/// which sides are down and emits an edge only when the folded key changes — releasing one of two
+/// held Shifts sends nothing) and the other keys it forwarded as down.
 #[derive(Default)]
 pub struct KeyMapper {
     /// Per modifier (Shift, Ctrl, Alt), whether its left / right side is down.
     down: [[bool; 2]; 3],
+    /// The non-modifier keys forwarded as down, in press order.
+    keys: Vec<&'static str>,
 }
 
 impl KeyMapper {
@@ -86,13 +90,21 @@ impl KeyMapper {
             });
         }
         let key = key_name(code)?;
+        if pressed {
+            if !self.keys.contains(&key) {
+                self.keys.push(key);
+            }
+        } else {
+            self.keys.retain(|&held| held != key);
+        }
         let kind = if pressed { "key_down" } else { "key_up" };
         Some(WireKey { kind, key })
     }
 
-    /// Releases every held modifier (window focus lost: the OS delivers no key-up for a key let go
-    /// elsewhere, e.g. Alt-Tab) and forgets the sides, one `key_up` per folded key.
-    pub fn release_modifiers(&mut self) -> Vec<WireKey> {
+    /// Releases every held key (window focus lost: the OS delivers no key-up for a key let go
+    /// elsewhere, e.g. Alt-Tab) and forgets them: one `key_up` per held folded modifier, then one per
+    /// held key in press order.
+    pub fn release_held(&mut self) -> Vec<WireKey> {
         let mut out = Vec::new();
         for (modifier, sides) in self.down.iter_mut().enumerate() {
             if sides.iter().any(|&down| down) {
@@ -103,6 +115,10 @@ impl KeyMapper {
             }
             *sides = [false; 2];
         }
+        out.extend(self.keys.drain(..).map(|key| WireKey {
+            kind: "key_up",
+            key,
+        }));
         out
     }
 }
@@ -211,7 +227,7 @@ mod tests {
         keys.map(KeyCode::ShiftLeft, ElementState::Pressed, false);
         keys.map(KeyCode::AltRight, ElementState::Pressed, false);
         assert_eq!(
-            keys.release_modifiers(),
+            keys.release_held(),
             vec![
                 WireKey {
                     kind: "key_up",
@@ -227,7 +243,45 @@ mod tests {
             keys.map(KeyCode::AltRight, ElementState::Released, false),
             None
         );
-        assert!(keys.release_modifiers().is_empty());
+        assert!(keys.release_held().is_empty());
+    }
+
+    #[test]
+    fn focus_loss_releases_held_keys_in_press_order() {
+        let mut keys = KeyMapper::default();
+        keys.map(KeyCode::KeyW, ElementState::Pressed, false);
+        keys.map(KeyCode::Space, ElementState::Pressed, false);
+        assert_eq!(
+            keys.release_held(),
+            vec![
+                WireKey {
+                    kind: "key_up",
+                    key: "W"
+                },
+                WireKey {
+                    kind: "key_up",
+                    key: "Space"
+                }
+            ]
+        );
+        assert!(keys.release_held().is_empty());
+    }
+
+    #[test]
+    fn a_key_released_before_focus_loss_is_not_released_again() {
+        let mut keys = KeyMapper::default();
+        keys.map(KeyCode::KeyW, ElementState::Pressed, false);
+        keys.map(KeyCode::KeyW, ElementState::Released, false);
+        assert!(keys.release_held().is_empty());
+    }
+
+    #[test]
+    fn focus_loss_releases_modifiers_before_keys() {
+        let mut keys = KeyMapper::default();
+        keys.map(KeyCode::KeyD, ElementState::Pressed, false);
+        keys.map(KeyCode::ControlLeft, ElementState::Pressed, false);
+        let names: Vec<_> = keys.release_held().iter().map(|k| k.key).collect();
+        assert_eq!(names, ["Ctrl", "D"]);
     }
 
     #[test]

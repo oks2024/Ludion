@@ -158,6 +158,7 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
         running: running.clone(),
         input_tx,
         keys: KeyMapper::default(),
+        mouse_buttons: mouse::MouseButtons::default(),
         input_rx: Some(input_rx),
         internal_stop_rx: Some(internal_stop_rx),
         window: None,
@@ -255,8 +256,10 @@ struct App {
     proxy: EventLoopProxy<HostEvent>,
     running: Arc<AtomicBool>,
     input_tx: Sender<serde_json::Value>,
-    /// Folds left/right modifiers into one engine key across events.
+    /// Folds left/right modifiers into one engine key and remembers every key forwarded as down.
     keys: KeyMapper,
+    /// Remembers every mouse button forwarded as down.
+    mouse_buttons: mouse::MouseButtons,
     /// Handed to the forwarder thread on `resumed`.
     input_rx: Option<Receiver<serde_json::Value>>,
     /// Handed to the waiter thread on `resumed`.
@@ -534,10 +537,13 @@ impl ApplicationHandler<HostEvent> for App {
                     let _ = self.input_tx.send(wire.to_value());
                 }
             }
-            // A modifier let go while another window had focus never gets a key-up.
+            // A key or button let go while another window had focus never gets a release.
             WindowEvent::Focused(false) => {
-                for wire in self.keys.release_modifiers() {
+                for wire in self.keys.release_held() {
                     let _ = self.input_tx.send(wire.to_value());
+                }
+                for value in self.mouse_buttons.release_held() {
+                    let _ = self.input_tx.send(value);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -552,7 +558,7 @@ impl ApplicationHandler<HostEvent> for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if let Some(value) = mouse::mouse_button_event(button, state) {
+                if let Some(value) = self.mouse_buttons.map(button, state) {
                     let _ = self.input_tx.send(value);
                 }
             }

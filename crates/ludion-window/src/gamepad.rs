@@ -15,9 +15,9 @@
 //! unmapped: the engine has no d-pad axis, only d-pad buttons, and the button path is what every
 //! platform this crate targets (XInput on Windows, IOKit on macOS) actually reports.
 //!
-//! Only the first connected pad is forwarded (a settled out-of-scope, `Plan/phase-13-input.md`); this
-//! module maps a single sample at a time and has no notion of which pad is "first" — that bookkeeping
-//! is the poll loop's job in `lib.rs`.
+//! Only the first connected pad is forwarded (a settled out-of-scope, `Plan/phase-13-input.md`); the
+//! poll loop in `lib.rs` owns which pad that is. When it unplugs, [`on_disconnect`] releases whatever
+//! it held (the OS reports no release for an unplugged pad) and promotes the next connected pad.
 
 use gilrs::{Axis, Button};
 
@@ -74,33 +74,217 @@ fn button_name(button: Button) -> Option<&'static str> {
     }
 }
 
-/// Builds the `input.inject` event `Value` for an axis sample, in the Wave 1 pinned shape, or `None`
-/// for an axis the engine has no name for.
-pub fn axis_event(axis: Axis, value: f32) -> Option<serde_json::Value> {
-    let name = axis_name(axis)?;
-    let clamped = clamp_axis_value(axis, value);
-    Some(serde_json::json!({
+/// The engine axis name and the clamped value for a `gilrs` axis sample, or `None` for an unmapped axis.
+fn axis_sample(axis: Axis, value: f32) -> Option<(&'static str, f32)> {
+    Some((axis_name(axis)?, clamp_axis_value(axis, value)))
+}
+
+/// The `input.inject` event `Value` for an axis level, in the Wave 1 pinned shape.
+fn axis_value(name: &str, value: f32) -> serde_json::Value {
+    serde_json::json!({
         "kind": "gamepad_axis",
         "axis": name,
-        "value_bits": clamped.to_bits(),
-    }))
+        "value_bits": value.to_bits(),
+    })
 }
 
-/// Builds the `input.inject` event `Value` for a button press, or `None` for an unmapped button.
-pub fn button_down_event(button: Button) -> Option<serde_json::Value> {
-    let name = button_name(button)?;
-    Some(serde_json::json!({"kind": "gamepad_button_down", "button": name}))
+/// The `input.inject` event `Value` for a button edge (`kind` is `gamepad_button_down`/`_up`).
+fn button_value(kind: &str, name: &str) -> serde_json::Value {
+    serde_json::json!({"kind": kind, "button": name})
 }
 
-/// Builds the `input.inject` event `Value` for a button release, or `None` for an unmapped button.
-pub fn button_up_event(button: Button) -> Option<serde_json::Value> {
-    let name = button_name(button)?;
-    Some(serde_json::json!({"kind": "gamepad_button_up", "button": name}))
+/// The axes and buttons the primary pad last forwarded as non-neutral, so an unplug (the OS reports
+/// no release for what the pad was holding) can neutralise them. Trigger buttons are not tracked: the
+/// sim synthesises them from the trigger axis, so zeroing the axis releases them.
+#[derive(Default)]
+pub struct PadHeld {
+    /// The last forwarded (clamped) value per engine axis name.
+    axes: Vec<(&'static str, f32)>,
+    /// The buttons forwarded as down, in press order.
+    buttons: Vec<&'static str>,
+}
+
+impl PadHeld {
+    /// Maps a primary-pad `gilrs` event to the event `Value` to inject (`None`: nothing to forward)
+    /// and records what it leaves held.
+    pub fn forward(&mut self, event: &gilrs::EventType) -> Option<serde_json::Value> {
+        match *event {
+            gilrs::EventType::AxisChanged(axis, value, _) => {
+                let (name, clamped) = axis_sample(axis, value)?;
+                match self.axes.iter_mut().find(|(n, _)| *n == name) {
+                    Some(slot) => slot.1 = clamped,
+                    None => self.axes.push((name, clamped)),
+                }
+                Some(axis_value(name, clamped))
+            }
+            gilrs::EventType::ButtonPressed(button, _) => {
+                let name = button_name(button)?;
+                if !self.buttons.contains(&name) {
+                    self.buttons.push(name);
+                }
+                Some(button_value("gamepad_button_down", name))
+            }
+            gilrs::EventType::ButtonReleased(button, _) => {
+                let name = button_name(button)?;
+                self.buttons.retain(|&held| held != name);
+                Some(button_value("gamepad_button_up", name))
+            }
+            _ => None,
+        }
+    }
+
+    /// A zero for every axis last forwarded non-zero (fixed vocabulary order), then a `button_up` per
+    /// held button in press order; forgets them all.
+    fn release(&mut self) -> Vec<serde_json::Value> {
+        const ORDER: [&str; 6] = [
+            "left_stick_x",
+            "left_stick_y",
+            "right_stick_x",
+            "right_stick_y",
+            "left_trigger",
+            "right_trigger",
+        ];
+        let mut out = Vec::new();
+        for name in ORDER {
+            if self
+                .axes
+                .iter()
+                .any(|&(axis, value)| axis == name && value != 0.0)
+            {
+                out.push(axis_value(name, 0.0));
+            }
+        }
+        self.axes.clear();
+        out.extend(
+            self.buttons
+                .drain(..)
+                .map(|name| button_value("gamepad_button_up", name)),
+        );
+        out
+    }
+}
+
+/// Handles pad `gone` disconnecting. When it is the primary, returns the releases for everything it
+/// held and promotes the first `connected` pad other than `gone` (or none); any other pad changes
+/// nothing. Generic over the pad id so tests need no real `gilrs::GamepadId`.
+pub fn on_disconnect<Id: Copy + PartialEq>(
+    primary: &mut Option<Id>,
+    gone: Id,
+    held: &mut PadHeld,
+    connected: impl IntoIterator<Item = Id>,
+) -> Vec<serde_json::Value> {
+    if *primary != Some(gone) {
+        return Vec::new();
+    }
+    let releases = held.release();
+    *primary = connected.into_iter().find(|&id| id != gone);
+    releases
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gilrs::EventType;
+    use gilrs::ev::Code;
+
+    /// `PadHeld` ignores the raw code; any constructible one will do.
+    fn code() -> Code {
+        Button::South.to_nec().unwrap()
+    }
+
+    fn axis(axis: Axis, value: f32) -> EventType {
+        EventType::AxisChanged(axis, value, code())
+    }
+
+    // The mapping, observed through the one production path.
+    fn axis_event(a: Axis, value: f32) -> Option<serde_json::Value> {
+        PadHeld::default().forward(&axis(a, value))
+    }
+
+    fn button_down_event(button: Button) -> Option<serde_json::Value> {
+        PadHeld::default().forward(&EventType::ButtonPressed(button, code()))
+    }
+
+    fn button_up_event(button: Button) -> Option<serde_json::Value> {
+        PadHeld::default().forward(&EventType::ButtonReleased(button, code()))
+    }
+
+    fn zero(name: &str) -> serde_json::Value {
+        axis_value(name, 0.0)
+    }
+
+    /// A pad holding stick X full right, the right trigger at 0.8 and South.
+    fn busy_pad() -> PadHeld {
+        let mut held = PadHeld::default();
+        held.forward(&axis(Axis::LeftStickX, 1.0));
+        held.forward(&axis(Axis::RightZ, 0.8));
+        held.forward(&EventType::ButtonPressed(Button::South, code()));
+        held
+    }
+
+    #[test]
+    fn primary_unplug_zeroes_axes_then_releases_buttons() {
+        let mut held = busy_pad();
+        let mut primary = Some(1);
+        let out = on_disconnect(&mut primary, 1, &mut held, [1, 2]);
+        assert_eq!(
+            out,
+            vec![
+                zero("left_stick_x"),
+                zero("right_trigger"),
+                serde_json::json!({"kind": "gamepad_button_up", "button": "south"}),
+            ]
+        );
+        assert_eq!(primary, Some(2));
+        assert!(held.release().is_empty());
+    }
+
+    #[test]
+    fn a_non_primary_unplug_changes_nothing() {
+        let mut held = busy_pad();
+        let mut primary = Some(1);
+        assert!(on_disconnect(&mut primary, 2, &mut held, [1, 2]).is_empty());
+        assert_eq!(primary, Some(1));
+        assert_eq!(held.release().len(), 3);
+    }
+
+    #[test]
+    fn promotion_is_none_when_no_pad_is_left() {
+        let mut held = PadHeld::default();
+        let mut primary = Some(1);
+        on_disconnect(&mut primary, 1, &mut held, [1]);
+        assert_eq!(primary, None);
+    }
+
+    #[test]
+    fn an_axis_returned_to_zero_is_not_resent() {
+        let mut held = PadHeld::default();
+        held.forward(&axis(Axis::LeftStickX, 1.0));
+        held.forward(&axis(Axis::LeftStickX, 0.0));
+        let mut primary = Some(1);
+        assert!(on_disconnect(&mut primary, 1, &mut held, []).is_empty());
+    }
+
+    #[test]
+    fn a_released_button_is_not_released_again() {
+        let mut held = PadHeld::default();
+        held.forward(&EventType::ButtonPressed(Button::East, code()));
+        held.forward(&EventType::ButtonReleased(Button::East, code()));
+        assert!(held.release().is_empty());
+    }
+
+    #[test]
+    fn trigger_buttons_are_never_forwarded_or_released() {
+        let mut held = PadHeld::default();
+        assert_eq!(
+            held.forward(&EventType::ButtonPressed(Button::RightTrigger2, code())),
+            None
+        );
+        held.forward(&axis(Axis::LeftZ, 1.0));
+        let out = held.release();
+        assert_eq!(out, vec![zero("left_trigger")]);
+        assert!(out.iter().all(|e| e["kind"] == "gamepad_axis"));
+    }
 
     #[test]
     fn stick_axes_map_to_the_pinned_shape() {

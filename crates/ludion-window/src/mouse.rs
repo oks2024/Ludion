@@ -74,15 +74,41 @@ fn button_name(button: MouseButton) -> Option<&'static str> {
     }
 }
 
-/// Builds the `input.inject` event `Value` for a mouse button transition, or `None` for an unmapped
-/// button.
-pub fn mouse_button_event(button: MouseButton, state: ElementState) -> Option<serde_json::Value> {
-    let name = button_name(button)?;
-    let kind = match state {
-        ElementState::Pressed => "mouse_down",
-        ElementState::Released => "mouse_up",
-    };
-    Some(serde_json::json!({"kind": kind, "button": name}))
+/// Translates mouse button transitions into the `input.inject` events to inject, remembering which
+/// buttons it forwarded as down so a focus loss (the OS delivers no release for a button let go in
+/// another window) can release them.
+#[derive(Default)]
+pub struct MouseButtons {
+    /// The buttons forwarded as down, in press order.
+    held: Vec<&'static str>,
+}
+
+impl MouseButtons {
+    /// The event `Value` for a button transition, or `None` for an unmapped button.
+    pub fn map(&mut self, button: MouseButton, state: ElementState) -> Option<serde_json::Value> {
+        let name = button_name(button)?;
+        let kind = match state {
+            ElementState::Pressed => {
+                if !self.held.contains(&name) {
+                    self.held.push(name);
+                }
+                "mouse_down"
+            }
+            ElementState::Released => {
+                self.held.retain(|&held| held != name);
+                "mouse_up"
+            }
+        };
+        Some(serde_json::json!({"kind": kind, "button": name}))
+    }
+
+    /// A `mouse_up` per held button in press order, forgetting them.
+    pub fn release_held(&mut self) -> Vec<serde_json::Value> {
+        self.held
+            .drain(..)
+            .map(|name| serde_json::json!({"kind": "mouse_up", "button": name}))
+            .collect()
+    }
 }
 
 /// Builds the `input.inject` event `Value` for a wheel motion, folding a `PixelDelta` into the same
@@ -181,30 +207,47 @@ mod tests {
 
     #[test]
     fn button_events_map_to_the_pinned_shape() {
+        let mut buttons = MouseButtons::default();
         assert_eq!(
-            mouse_button_event(MouseButton::Left, ElementState::Pressed),
+            buttons.map(MouseButton::Left, ElementState::Pressed),
             Some(serde_json::json!({"kind": "mouse_down", "button": "left"}))
         );
         assert_eq!(
-            mouse_button_event(MouseButton::Right, ElementState::Released),
+            buttons.map(MouseButton::Right, ElementState::Released),
             Some(serde_json::json!({"kind": "mouse_up", "button": "right"}))
         );
         assert_eq!(
-            mouse_button_event(MouseButton::Middle, ElementState::Pressed),
+            buttons.map(MouseButton::Middle, ElementState::Pressed),
             Some(serde_json::json!({"kind": "mouse_down", "button": "middle"}))
         );
     }
 
     #[test]
-    fn unmapped_buttons_are_ignored() {
+    fn unmapped_buttons_are_ignored_and_untracked() {
+        let mut buttons = MouseButtons::default();
+        assert_eq!(buttons.map(MouseButton::Back, ElementState::Pressed), None);
         assert_eq!(
-            mouse_button_event(MouseButton::Back, ElementState::Pressed),
+            buttons.map(MouseButton::Other(4), ElementState::Pressed),
             None
         );
+        assert!(buttons.release_held().is_empty());
+    }
+
+    #[test]
+    fn focus_loss_releases_held_buttons_in_press_order_once() {
+        let mut buttons = MouseButtons::default();
+        buttons.map(MouseButton::Left, ElementState::Pressed);
+        buttons.map(MouseButton::Right, ElementState::Pressed);
+        buttons.map(MouseButton::Middle, ElementState::Pressed);
+        buttons.map(MouseButton::Middle, ElementState::Released);
         assert_eq!(
-            mouse_button_event(MouseButton::Other(4), ElementState::Pressed),
-            None
+            buttons.release_held(),
+            vec![
+                serde_json::json!({"kind": "mouse_up", "button": "left"}),
+                serde_json::json!({"kind": "mouse_up", "button": "right"}),
+            ]
         );
+        assert!(buttons.release_held().is_empty());
     }
 
     #[test]
