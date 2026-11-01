@@ -135,14 +135,15 @@ fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
         tinted, original,
         "the tint edit must actually change the shader source"
     );
-    let scratch = root.join("composite.wgsl");
+    let scratch_name = "composite.wgsl";
+    let scratch = root.join(scratch_name);
     std::fs::write(&scratch, &tinted).unwrap();
 
     // Edit → pixels latency: reload over the wire, then read the changed frame.
     let started = Instant::now();
     client
         .call(Command::AssetReload(AssetReloadParams {
-            path: Some(scratch.to_string_lossy().into_owned()),
+            path: Some(scratch_name.into()),
         }))
         .expect("a valid shader reload succeeds");
     let tinted_shot = client
@@ -174,7 +175,7 @@ fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
     std::fs::write(&scratch, &binding_change).unwrap();
     let err = client
         .call(Command::AssetReload(AssetReloadParams {
-            path: Some(scratch.to_string_lossy().into_owned()),
+            path: Some(scratch_name.into()),
         }))
         .expect_err("a binding-shape change must be rejected, not crash the session");
     assert_eq!(
@@ -196,7 +197,7 @@ fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
     std::fs::write(&scratch, "this is not valid wgsl {{{").unwrap();
     let err = client
         .call(Command::AssetReload(AssetReloadParams {
-            path: Some(scratch.to_string_lossy().into_owned()),
+            path: Some(scratch_name.into()),
         }))
         .expect_err("a broken shader reload must be a structured error");
     assert_eq!(err.code.as_str(), "L2009", "bad WGSL is L2009: {err}");
@@ -266,13 +267,14 @@ fn needs_gpu_dev_host_reloads_a_snippet_and_rebuilds_all_dependents() {
         mirrored, original,
         "the UV-mirror edit must change the snippet"
     );
-    let scratch = root.join("fullscreen_vs.wgsl");
+    let scratch_name = "fullscreen_vs.wgsl";
+    let scratch = root.join(scratch_name);
     std::fs::write(&scratch, &mirrored).unwrap();
 
     let started = Instant::now();
     client
         .call(Command::AssetReload(AssetReloadParams {
-            path: Some(scratch.to_string_lossy().into_owned()),
+            path: Some(scratch_name.into()),
         }))
         .expect("a valid snippet reload succeeds (all dependents rebuilt)");
     let mirrored_shot = client
@@ -294,7 +296,7 @@ fn needs_gpu_dev_host_reloads_a_snippet_and_rebuilds_all_dependents() {
     std::fs::write(&scratch, "this is not valid wgsl {{{").unwrap();
     let err = client
         .call(Command::AssetReload(AssetReloadParams {
-            path: Some(scratch.to_string_lossy().into_owned()),
+            path: Some(scratch_name.into()),
         }))
         .expect_err("a broken snippet reload must be a structured error");
     assert_eq!(
@@ -347,4 +349,35 @@ fn non_dev_host_refuses_a_shader_reload_with_l2008() {
 
     server.shutdown_clean();
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// An absolute `.wgsl` outside both the project root and the renderer's shader dir is refused with
+/// `L1321` before any read. No GPU needed.
+#[test]
+fn an_absolute_shader_path_outside_both_roots_is_refused() {
+    let root = temp_project("escape");
+    let outside = temp_project("escape-outside");
+    let stray = outside.join("composite.wgsl");
+    std::fs::write(&stray, "this is not valid wgsl {{{").unwrap();
+
+    let mut engine = Engine::with_project_root(&root).with_render_size(64, 64);
+    engine.load_inline_scene(LIT_SCENE).unwrap();
+    engine.enable_shader_reload();
+    let server = serve(engine);
+    let mut client = ludion_client::Client::connect(&server.url()).unwrap();
+
+    for path in [
+        stray.to_string_lossy().into_owned(),
+        "../composite.wgsl".to_owned(),
+    ] {
+        let err = client
+            .call(Command::AssetReload(AssetReloadParams { path: Some(path) }))
+            .expect_err("a shader path outside the roots must be refused");
+        // A read of the stray file would have been L2009 (invalid WGSL), never L1321.
+        assert_eq!(err.code.as_str(), "L1321", "{err}");
+    }
+
+    server.shutdown_clean();
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&outside);
 }

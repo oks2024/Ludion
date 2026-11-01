@@ -19,7 +19,7 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, DiagnosticCode, value_phrase};
 use ludion_core::suggest;
-use ludion_ecs::Registry;
+use ludion_ecs::{ComponentInfo, Registry};
 use serde_json::Value;
 
 use crate::schema::SchemaCursor;
@@ -108,8 +108,69 @@ pub(crate) fn check_component(name: &str, value: &Value, registry: &Registry) ->
             "",
             &mut diagnostics,
         );
+        if diagnostics.is_empty() {
+            check_asset_paths(info, name, value, "", &mut diagnostics);
+        }
     }
     diagnostics
+}
+
+/// Refuses every asset path in the scene's own components that would leave the content root
+/// (`L1321`). A separate pass from [`validate`]: a prefab body is checked by its own sibling-relative
+/// pass, not this one. Components that fail their schema are skipped — that is already reported.
+pub(crate) fn check_scene_asset_paths(scene: &Scene, registry: &Registry) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (index, entity) in scene.entities.iter().enumerate() {
+        for (name, value) in &entity.components {
+            let Some(info) = registry.get(name).filter(|info| !info.reserved()) else {
+                continue;
+            };
+            let pointer = format!("/entities/{index}/components/{}", pointer_token(name));
+            let mut schema = Vec::new();
+            Checker {
+                subject: Subject::Component(name),
+            }
+            .check(
+                value,
+                SchemaCursor::new(info.schema()),
+                &pointer,
+                &mut schema,
+            );
+            if schema.is_empty() {
+                check_asset_paths(info, name, value, &pointer, &mut diagnostics);
+            }
+        }
+    }
+    diagnostics
+}
+
+/// Refuses every asset path in `value` that would leave the content root (`L1321`), pointing at
+/// the field. Run only on a schema-clean value.
+fn check_asset_paths(
+    info: &ComponentInfo,
+    name: &str,
+    value: &Value,
+    pointer: &str,
+    out: &mut Vec<Diagnostic>,
+) {
+    let mut value = value.clone();
+    info.for_each_asset_path(&mut value, &mut |field, path| {
+        if path.is_empty() {
+            return;
+        }
+        if let Some(refusal) = ludion_core::paths::content_refusal(path) {
+            out.push(
+                Diagnostic::new(
+                    code::CONTENT_PATH_OUTSIDE_ROOT,
+                    format!("`{name}` path `{path}` {}", refusal.describe()),
+                )
+                .with_path(format!("{pointer}{field}"))
+                .with_help(
+                    "an asset path is relative to the content root (the scene's own directory) and must stay inside it",
+                ),
+            );
+        }
+    });
 }
 
 /// Name and entity-reference checks on an instance's override components. The partials are not
@@ -1219,5 +1280,37 @@ mod tests {
             1
         );
         assert!(check_schema(&max, serde_json::json!(0.5)).is_empty());
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct TestSkin {
+        #[schemars(with = "ludion_ecs::AssetPathSchema")]
+        texture: String,
+    }
+
+    fn skin_scene(texture: &str) -> Scene {
+        crate::parse(&format!(
+            "format: 1\nentities:\n  - name: e\n    components:\n      Skin:\n        texture: \"{texture}\"\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_asset_path_leaving_the_content_root_is_refused_at_its_field() {
+        let mut registry = Registry::new();
+        registry.register::<TestSkin>("Skin").unwrap();
+        for path in ["../x.png", "/etc/x.png", "C:x.png"] {
+            let diagnostics = check_scene_asset_paths(&skin_scene(path), &registry);
+            assert_eq!(diagnostics.len(), 1, "{path}: {diagnostics:?}");
+            assert_eq!(diagnostics[0].code, code::CONTENT_PATH_OUTSIDE_ROOT);
+            assert_eq!(
+                diagnostics[0].path.as_deref(),
+                Some("/entities/0/components/Skin/texture")
+            );
+            let wire = check_component("Skin", &serde_json::json!({ "texture": path }), &registry);
+            assert_eq!(wire.len(), 1, "{path}: {wire:?}");
+            assert_eq!(wire[0].path.as_deref(), Some("/texture"));
+        }
+        assert!(check_scene_asset_paths(&skin_scene("a/../b.png"), &registry).is_empty());
     }
 }

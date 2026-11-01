@@ -341,7 +341,12 @@ proptest! {
         prop_assert!(!text.contains('\r'), "canonical output must use LF only");
         prop_assert!(text.ends_with('\n'), "canonical output ends with a newline");
         let parsed = parse(&text).expect("canonical output must parse cleanly");
-        let diagnostics = validate(&parsed, &registry);
+        // The generator's arbitrary texture strings exercise the writer's quoting; whether a path
+        // stays inside the content root (`L1321`) is not a property of the canonical form.
+        let diagnostics: Vec<_> = validate(&parsed, &registry)
+            .into_iter()
+            .filter(|d| d.code.as_str() != "L1321")
+            .collect();
         prop_assert!(
             diagnostics.is_empty(),
             "canonical output of a well-typed scene must validate: {:?}",

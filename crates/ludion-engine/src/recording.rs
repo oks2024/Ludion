@@ -302,6 +302,7 @@ pub(crate) fn write_delta(
             let Command::SceneLoad(params) = command else {
                 unreachable!("record_kind returns SceneLoad only for SceneLoad");
             };
+            portable(&params.path)?;
             flush_pending_ticks(recorder, drain_frame)?;
             match scene_text {
                 Some(text) => recorder
@@ -316,6 +317,21 @@ pub(crate) fn write_delta(
                 }
             }
         }
+    }
+}
+
+/// Refuses a path a replay could not carry between machines: absolute, drive-prefixed or escaping.
+/// Upstream validation already refuses these; this is the backstop that keeps one out of a `.lrp`.
+fn portable(path: &str) -> io::Result<()> {
+    match ludion_core::paths::content_refusal(path) {
+        Some(refusal) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to record the non-portable path `{path}`: it {}",
+                refusal.describe()
+            ),
+        )),
+        None => Ok(()),
     }
 }
 
@@ -337,6 +353,7 @@ pub(crate) fn write_scene_switch(
     scene_path: &str,
     document: &str,
 ) -> io::Result<()> {
+    portable(scene_path)?;
     recorder
         .writer
         .write_scene_switch(frame, scene_path, document)
@@ -351,6 +368,7 @@ pub(crate) fn write_prefab_text(
     document: &str,
     reload: bool,
 ) -> io::Result<()> {
+    portable(path)?;
     flush_pending_ticks(recorder, frame)?;
     recorder
         .writer
@@ -365,6 +383,50 @@ mod tests {
         ComponentGetParams, ComponentRemoveParams, EntitySpawnParams, InputInjectParams,
         RenderSizeParams, SceneLoadParams,
     };
+
+    fn recorder() -> Recorder {
+        let header = ludion_protocol::replay::ReplayHeader {
+            format_version: ludion_protocol::replay::REPLAY_FORMAT_VERSION,
+            engine_version: "0.0.0".into(),
+            protocol_version: ludion_protocol::PROTOCOL_VERSION,
+            schema_hash: ludion_protocol::schema::schema_hash(),
+            scene: ludion_protocol::replay::SceneRef::Inline {
+                document: "format: 1\n".into(),
+            },
+            seed: 0,
+            profile: None,
+            render_extent: None,
+        };
+        let sink = Box::new(Vec::new()) as Box<dyn Write + Send>;
+        let writer = ludion_protocol::replay::ReplayWriter::new(sink, &header).unwrap();
+        Recorder::new(writer, 60, FrameIndex::ZERO)
+    }
+
+    #[test]
+    fn a_non_portable_path_is_never_written_to_a_replay() {
+        for path in ["/abs/x.yaml", "C:x.yaml"] {
+            let mut recorder = recorder();
+            let before = recorder.writer.records_written();
+            let load = Command::SceneLoad(SceneLoadParams { path: path.into() });
+            let errors = [
+                write_delta(
+                    &mut recorder,
+                    Some(&load),
+                    FrameIndex::ZERO,
+                    None,
+                    Some("x"),
+                ),
+                write_scene_switch(&mut recorder, FrameIndex::ZERO, path, "x"),
+                write_prefab_text(&mut recorder, FrameIndex::ZERO, path, "x", false),
+            ];
+            for error in errors {
+                let error = error.expect_err(path);
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{path}");
+                assert!(error.to_string().contains(path), "{error}");
+            }
+            assert_eq!(recorder.writer.records_written(), before, "{path}");
+        }
+    }
 
     #[test]
     fn reads_are_never_recorded() {

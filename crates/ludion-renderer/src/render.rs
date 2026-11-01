@@ -6922,6 +6922,9 @@ fn builtin_composed(id: ShaderId) -> String {
     parts.join("\n")
 }
 
+/// Where `ludion dev`'s WGSL fast path watches; an absolute reload path must lie under it.
+pub const SHADER_SOURCE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/shaders");
+
 /// Whether `path` names a reloadable renderer shader or shared snippet (matched by file name) — the
 /// membership test the engine's `asset.reload` handler uses to route a `.wgsl` to the shader path
 /// instead of the texture/mesh/doc paths, and to raise `L2008` when the host has no dev flag.

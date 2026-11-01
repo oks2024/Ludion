@@ -316,7 +316,9 @@ pub fn parse(source: &str) -> Result<Scene, Vec<Diagnostic>> {
 /// assert_eq!(diagnostics[0].path.as_deref(), Some("/entities/0/components/Health/hp"));
 /// ```
 pub fn validate(scene: &Scene, registry: &Registry) -> Vec<Diagnostic> {
-    validate::validate(scene, registry)
+    let mut diagnostics = validate::validate(scene, registry);
+    diagnostics.extend(validate::check_scene_asset_paths(scene, registry));
+    diagnostics
 }
 
 /// Schema-checks one component value — the `L1014` check [`validate`] runs per scene component, for

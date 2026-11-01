@@ -2147,6 +2147,13 @@ impl Engine {
             },
             // Live: read the target from disk.
             None => {
+                if let Some(refusal) = ludion_core::paths::content_refusal(&switch.scene_path) {
+                    self.report_transition(Some(target_outside_root(
+                        &switch.scene_path,
+                        refusal.describe(),
+                    )));
+                    return;
+                }
                 let path = self.project_root.join(&switch.scene_path);
                 match std::fs::read_to_string(&path) {
                     Ok(text) => text,
@@ -4032,21 +4039,20 @@ impl Engine {
     }
 
     /// Reloads a renderer shader from disk into the live renderer (the dev-only `asset.reload` shader
-    /// branch). Reads `path` (absolute, or resolved against the project root), hands the source to the
+    /// branch). Reads `path` — relative to the project root and confined to it, or absolute and inside
+    /// the renderer's shader source dir ([`ludion_renderer::SHADER_SOURCE_DIR`]) — hands the source to the
     /// renderer for naga validation + dependent-pipeline recreation, and returns the reloaded source's
     /// content hash for the `asset.reloaded` event. Render-side only — no world state, no `WorldHash`,
     /// nothing a snapshot carries.
     ///
     /// # Errors
+    /// `L1321` if a relative path leaves the project root or an absolute path lies outside the shader
+    /// source dir (nothing is read);
     /// `L1101` if the file cannot be read;
     /// `L2009` if the WGSL fails validation or the recreated pipeline is layout-incompatible (the last
     /// good pipeline stays live).
     pub(crate) fn reload_shader(&mut self, path: &str) -> Result<u64, Diagnostic> {
-        let full = if Path::new(path).is_absolute() {
-            PathBuf::from(path)
-        } else {
-            self.project_root.join(path)
-        };
+        let full = self.shader_path(path)?;
         let source = std::fs::read_to_string(&full).map_err(|error| {
             Diagnostic::new(
                 code::ASSET_FILE_IO,
@@ -4068,6 +4074,37 @@ impl Engine {
         self.shader_reloads.retain(|(p, _)| p != path);
         self.shader_reloads.push((path.to_owned(), source));
         Ok(hash)
+    }
+
+    /// Resolves a shader reload path: root-relative through the content-root rule, or absolute
+    /// only inside the renderer's shader source dir.
+    fn shader_path(&self, path: &str) -> Result<PathBuf, Diagnostic> {
+        let refuse = |why: &str| {
+            Diagnostic::new(
+                code::CONTENT_PATH_OUTSIDE_ROOT,
+                format!("shader path `{path}` {why}"),
+            )
+            .with_help(
+                "reload a shader by its project-root-relative path, or by an absolute path inside the renderer's shader source directory",
+            )
+        };
+        if !Path::new(path).is_absolute() {
+            if let Some(refusal) = ludion_core::paths::content_refusal(path) {
+                return Err(refuse(refusal.describe()));
+            }
+            return Ok(self.project_root.join(path));
+        }
+        let inside = std::fs::canonicalize(path)
+            .ok()
+            .zip(std::fs::canonicalize(ludion_renderer::SHADER_SOURCE_DIR).ok())
+            .is_some_and(|(file, dir)| file.starts_with(dir));
+        if inside {
+            Ok(PathBuf::from(path))
+        } else {
+            Err(refuse(
+                "lies outside the renderer's shader source directory",
+            ))
+        }
     }
 
     /// Brings the asset cache to the world after a rebuild: keeps what the new world names and drops
@@ -5171,6 +5208,17 @@ fn target_unresolved_on_disk(path: &Path, error: &std::io::Error) -> Diagnostic 
     .with_help(
         "check the district's scene file exists under the project root and is readable; the switch \
          was rejected and the sim continues in the current district",
+    )
+}
+
+/// `L1321` for a live switch whose target path would leave the project root.
+fn target_outside_root(scene_path: &str, why: &str) -> Diagnostic {
+    Diagnostic::new(
+        ludion_core::codes::code::CONTENT_PATH_OUTSIDE_ROOT,
+        format!("the scene-switch target `{scene_path}` {why}"),
+    )
+    .with_help(
+        "a gate's `target` names a scene relative to the project root and must stay inside it",
     )
 }
 

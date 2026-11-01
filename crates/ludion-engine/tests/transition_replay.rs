@@ -139,6 +139,20 @@ fn switch_to_next(world: &mut World, ctx: &SystemCtx) {
     }
 }
 
+/// Requests a switch to a real district that lies outside the project root.
+fn switch_outside_root(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() != 2 {
+        return;
+    }
+    if let Some(switch) = world.resource_mut::<ludion_engine::SceneSwitch>() {
+        switch.request(
+            format!("../ludion-outside-{}.yaml", std::process::id()),
+            "gate-from-start".to_string(),
+            Vec::new(),
+        );
+    }
+}
+
 // --- Harness ----------------------------------------------------------------------------------
 
 fn fresh_dir(name: &str) -> PathBuf {
@@ -220,6 +234,33 @@ fn scene_switch_records(bytes: &[u8]) -> Vec<(String, String)> {
 }
 
 // --- Tests ------------------------------------------------------------------------------------
+
+#[test]
+fn a_switch_target_outside_the_project_root_is_rejected_and_never_recorded() {
+    let dir = fresh_dir("outside-root");
+    let outside = dir
+        .parent()
+        .unwrap()
+        .join(format!("ludion-outside-{}.yaml", std::process::id()));
+    std::fs::write(&outside, NEXT).unwrap();
+    let sink = SharedSink::default();
+    let mut engine = base_game(&dir)
+        .system("switch_outside_root", switch_outside_root)
+        .build()
+        .unwrap();
+    engine.load_inline_scene(START).unwrap();
+    engine.set_recording(sink.clone()).unwrap();
+    run_recorded(&mut engine, 6);
+    engine.stop_recording().unwrap();
+    let _ = std::fs::remove_file(&outside);
+
+    let error = engine
+        .last_transition_error()
+        .expect("an escaping target is reported");
+    assert_eq!(error.code.as_str(), "L1321");
+    assert_eq!(engine.world().entity_count(), 1, "the world is unchanged");
+    assert!(scene_switch_records(&sink.bytes()).is_empty());
+}
 
 #[test]
 fn a_recorded_switch_session_reproduces_its_worldhash_trace_twice() {

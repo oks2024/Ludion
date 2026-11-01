@@ -143,3 +143,17 @@ fn name_must_be_a_plain_stem() {
         assert_eq!(d.path.as_deref(), Some("/name"), "{bad}");
     }
 }
+
+#[test]
+fn file_must_stay_beside_or_below_the_document() {
+    let file = SDF
+        .lines()
+        .find_map(|line| line.strip_prefix("file: "))
+        .expect("the fixture names a file");
+    for bad in ["../x.ttf", "/abs/x.ttf", "'C:x.ttf'"] {
+        let d = first(&SDF.replace(&format!("file: {file}"), &format!("file: {bad}")));
+        assert_eq!(d.path.as_deref(), Some("/file"), "{bad}");
+    }
+    let nested = SDF.replace(&format!("file: {file}"), "file: faces/x.ttf");
+    assert!(validate(&parse(&nested).unwrap()).is_empty());
+}

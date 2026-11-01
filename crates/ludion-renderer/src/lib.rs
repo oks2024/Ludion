@@ -103,7 +103,7 @@ pub use projector::{
     decal_stats, footprint_bound, occlusion_atlas, occlusion_bias, occlusion_view,
 };
 pub use quality::{MAX_SUN_CASCADES, Quality, QualityParams};
-pub use render::{GpuUploads, Renderer, is_renderer_shader};
+pub use render::{GpuUploads, Renderer, SHADER_SOURCE_DIR, is_renderer_shader};
 pub use scene::{
     CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment, DecalBlend,
     DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData, FontDraw,

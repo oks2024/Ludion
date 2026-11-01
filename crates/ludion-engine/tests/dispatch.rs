@@ -466,6 +466,41 @@ fn spawn_with_name_and_name_component_is_l3014() {
 }
 
 #[test]
+fn an_escaping_asset_path_is_refused_on_spawn_and_component_set() {
+    let mut engine = engine();
+    let mut components = BTreeMap::new();
+    components.insert("Sprite".to_string(), json!({ "texture": "../outside.png" }));
+    assert_eq!(
+        err_code(
+            &mut engine,
+            Command::EntitySpawn(EntitySpawnParams {
+                name: None,
+                components,
+            }),
+        ),
+        "L1321",
+    );
+    assert_eq!(engine.world().entity_count(), 0);
+
+    let entity = spawn_one(&mut engine, "Sprite", json!({ "texture": "ok.png" }));
+    let diagnostic = dispatch(
+        &mut engine,
+        Command::ComponentSet(ComponentSetParams {
+            entity,
+            component: "Sprite".into(),
+            value: json!({ "texture": "/etc/x.png" }),
+        }),
+    )
+    .expect_err("an absolute asset path must be refused");
+    assert_eq!(diagnostic.code.as_str(), "L1321");
+    assert_eq!(diagnostic.path.as_deref(), Some("/texture"));
+    assert_eq!(
+        component_value(&mut engine, entity, "Sprite")["texture"],
+        json!("ok.png")
+    );
+}
+
+#[test]
 fn spawn_without_name_carries_no_name_component() {
     let mut engine = engine();
     let entity = spawn_one(&mut engine, "Transform", json!({}));

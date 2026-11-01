@@ -411,6 +411,12 @@ pub(crate) fn validate(doc: &FontSourceDocument) -> Vec<Diagnostic> {
             "`file` is empty".to_string(),
             "name the .ttf or .otf face, relative to this document",
         ));
+    } else if let Some(refusal) = ludion_core::paths::relative_refusal(&doc.file) {
+        out.push(diag(
+            "/file",
+            format!("`file` {}", refusal.describe()),
+            "name the .ttf or .otf face beside this document or below it",
+        ));
     }
     if doc.em_px == 0 || doc.em_px > MAX_EM_PX {
         out.push(diag(
