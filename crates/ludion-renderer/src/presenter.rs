@@ -705,7 +705,8 @@ mod tests {
     }
 
     /// Two keyed meshes: `KEY` at x = `frame`, `KEY_B` at x = 10 × `frame`; `snaps` names the entities
-    /// cut this tick. A 10 s period keeps alpha near 0 for the whole test.
+    /// cut this tick. The period is so long that alpha stays ~0 however long a loaded box deschedules the
+    /// test thread (a tick stamped in the future would read as alpha 1).
     fn pair(frame: u64, now: Instant, snaps: &[EntityId]) -> PresentPacket {
         let a = Mat4::from_translation(Vec3::new(frame as f32, 0.0, 0.0));
         let b = Mat4::from_translation(Vec3::new(10.0 * frame as f32, 0.0, 0.0));
@@ -715,7 +716,7 @@ mod tests {
             scene: Arc::new(scene),
             tick: Some(TickStamp {
                 at: now,
-                period: Duration::from_secs(10),
+                period: Duration::from_secs(1_000_000_000),
                 rebased: false,
             }),
             blend: Some(Arc::new(BlendData {
