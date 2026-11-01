@@ -19,12 +19,9 @@ palette:
       emissive: 2.0
 frames:
   crest:
+    mirror: xy
     rows:
-      - "..####.."
-      - ".#oooo#."
-      - "#ooOOoo#"
-      - "#oO**Oo#"
-      - "#oO**Oo#"
-      - "#ooOOoo#"
-      - ".#oooo#."
-      - "..####.."
+      - "..##"
+      - ".#oo"
+      - "#ooO"
+      - "#oO*"

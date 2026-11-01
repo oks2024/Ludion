@@ -1,10 +1,62 @@
 # Plan: Sprite authoring tools — less to write, palette discipline, baked self-light
 
-> Status: **planned 2026-10-31. Design settled 2026-10-31 (grilled, three rounds); no wave
-> started.** A follow-on to `Plan/sprite-engine.md` (W1–W4 mechanized): that plan built the sprite
-> layer, and this one makes the `kind: sprite` document cheaper to write and its bake truer to
-> pixel-art practice. All four waves run now, in order. This line becomes the shipping log as
-> waves land.
+> Status: **Exit mechanized 2026-11-01; human look verdict owed** (Plan/owed.md, "Sprite ramp and
+> self-light look"). A follow-on to `Plan/sprite-engine.md`: that plan built the sprite layer, and this
+> one makes the `kind: sprite` document cheaper to write and its bake truer to pixel-art practice.
+
+## Status
+
+- **W1** shipped (revs 1927, 1931): `render --steps`, `check-scene --rows`, the contact sheet's checkerboard
+  and texel grid, the `sprite-craft` topic.
+- **W2** shipped (revs 1934 hex colours, 1938 hex pointers, 1939 gallery hex migration, 1943 `mirror` and
+  patches, 1946 variants, 1948 docs: the `sprite-format` topic).
+- **W3** shipped (revs 1958 `ramps` and ramp mode with the glyph plane, 1959 the `sprite-ramps` twin).
+- **W4** shipped (revs 1962 `op: light`, 1963 the `sprite-self-light` scene and the light docs).
+- **Exit** (2026-11-01): the gallery's sprite documents re-authored with the shipped tools; all five
+  atlases re-baked by `generate-atlas`, byte-identical to before; no golden moved.
+
+**Rulings**
+- The hex writer emits hex only for a hex-exact colour, else the legacy floats (Pillar 4); every colour
+  that was ever hex stays hex.
+- Test fixtures and the fuzz corpus stay on the legacy float spelling, which is the alias's coverage.
+- A variant `palette:` override naming a glyph the sprite has no texel of is a dead override, `L1153`.
+- Ramps: stepping clamps at a ramp's ends; the 4x4 Bayer matrix splits a fractional step.
+- `dither` may sit anywhere in the order; ramp ops take none of `from`/`to`/`blend`/`strength`.
+- A negative `shade` `steps` swaps lit and shadowed.
+- Light: overlapping sources combine per channel by max, then add; with no `color` each source lights
+  in its own colour.
+- Ramp-mode light takes `steps >= 0` and refuses `strength`/`color` (`L1154`); `emissive` only selects
+  sources.
+
+**Line counts** (`examples/gallery/sprites/`, `wc -l`)
+
+| Document | Before | After | Tools used |
+|---|---|---|---|
+| `ship` | 80 | 72 | palette include, `mirror: x` on `idle` |
+| `ship-lit` | 85 | 77 | palette include, `mirror: x` on `idle` |
+| `ship.palette` | (new) | 16 | `kind: palette`, shared by both ships |
+| `explosion` | 105 | 77 | `mirror: xy` on all four frames |
+| `tiles` | 114 | 112 | `mirror: xy` on `floor`, `mirror: x` on `crate` |
+| `bullet` | 51 | 45 | `mirror: xy` on both frames |
+| `glow-bullet` | 32 | 29 | `mirror: xy` |
+| `emblem` | 30 | 27 | `mirror: xy` |
+| `emblem.palette` | 13 | 13 | unchanged (already a shared include) |
+| `hull-color` | 42 | 42 | unchanged (palette include, `mirror: x`) |
+| `hull-ramp` | 43 | 43 | unchanged (palette include, `mirror: x`, ramps) |
+| `ramps.palette` | 33 | 33 | unchanged (shared by the ramp twins) |
+| **Total** | 628 | 586 | |
+
+**Tiles ramp trial: rejected.** `tiles` in ramp mode (`ramps: "gdrm"`, `shade` `steps: 1` on
+`wall`/`wall-top`) clamps the wall-top's lit top edge at `m`, so it merges into the `m` cap and the
+bevel is lost there; the original `shade` effects are restored and `gallery` re-bakes byte-identical.
+`wall`, `wall-top` and `hazard` are asymmetric, so mirror does not apply to them, and a `wall-top` patch
+over `wall` costs as many lines as its rows.
+
+**Open items** (tool gaps the round found)
+- A frame expressed as another frame flipped: `ship`'s `bank-right` is `bank-left` mirrored, but every
+  frame must still be written in full.
+- Twin documents (`ship`/`ship-lit`, `hull-ramp`/`hull-color`) repeat their rows, because only the
+  palette can be shared across documents.
 
 ## Problem
 

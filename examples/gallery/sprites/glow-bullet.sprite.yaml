@@ -17,15 +17,12 @@ palette:
     emissive: 1.5
 frames:
   bolt:
+    mirror: xy
     rows:
-      - "........"
-      - "...oo..."
-      - "..oOOo.."
-      - ".oOOOOo."
-      - ".oOOOOo."
-      - "..oOOo.."
-      - "...oo..."
-      - "........"
+      - "...."
+      - "...o"
+      - "..oO"
+      - ".oOO"
 effects:
   - op: glow
     radius_px: 2.5

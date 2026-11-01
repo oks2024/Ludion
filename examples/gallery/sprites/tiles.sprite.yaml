@@ -28,15 +28,12 @@ palette:
     color: "#4d3f1d"
 frames:
   floor:
+    mirror: xy
     rows:
-      - "gggggggg"
-      - "gggggggg"
-      - "gggggggg"
-      - "gggggggg"
-      - "gggggggg"
-      - "gggggggg"
-      - "gggggggg"
-      - "gggggggg"
+      - "gggg"
+      - "gggg"
+      - "gggg"
+      - "gggg"
   wall:
     rows:
       - "rrrrrrrr"
@@ -58,15 +55,16 @@ frames:
       - "rrrrrdrr"
       - "rrrrrrrr"
   crate:
+    mirror: x
     rows:
-      - "bbbbbbbb"
-      - "bwwwwwwb"
-      - "bwwwwwwb"
-      - "bbbbbbbb"
-      - "bwwwwwwb"
-      - "bwwwwwwb"
-      - "bwwwwwwb"
-      - "bbbbbbbb"
+      - "bbbb"
+      - "bwww"
+      - "bwww"
+      - "bbbb"
+      - "bwww"
+      - "bwww"
+      - "bwww"
+      - "bbbb"
   hazard:
     rows:
       - "hhkkhhkk"

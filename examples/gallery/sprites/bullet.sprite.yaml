@@ -23,25 +23,19 @@ palette:
     emissive: 3.0
 frames:
   player:
+    mirror: xy
     rows:
-      - "...."
-      - ".oo."
-      - ".**."
-      - ".**."
-      - ".**."
-      - ".**."
-      - ".oo."
-      - "...."
+      - ".."
+      - ".o"
+      - ".*"
+      - ".*"
   enemy:
+    mirror: xy
     rows:
-      - "...."
-      - "...."
-      - ".yy."
-      - ".xx."
-      - ".xx."
-      - ".yy."
-      - "...."
-      - "...."
+      - ".."
+      - ".."
+      - ".y"
+      - ".x"
 effects:
   - op: blur
     radius: 1

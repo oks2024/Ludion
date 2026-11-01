@@ -1,0 +1,16 @@
+# The player ship's four-colour palette, shared by `ship.sprite.yaml` and `ship-lit.sprite.yaml`: the
+# hull and its shadowed flank, plus the cockpit and the thruster glyphs that emit light.
+format: 1
+kind: palette
+name: ship
+palette:
+  "#":
+    color: "#a0aabc"
+  "=":
+    color: "#4d576a"
+  o:
+    color: "#95edff"
+    emissive: 2.5
+  "*":
+    color: "#ffb359"
+    emissive: 3.0
