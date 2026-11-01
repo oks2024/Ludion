@@ -1518,11 +1518,7 @@ pub fn check_sprite(source: &str) -> Result<SpriteDocument, Vec<Diagnostic>> {
 ///   - 1
 /// palette:
 ///   A:
-///     color:
-///       - 1.0
-///       - 1.0
-///       - 1.0
-///       - 1.0
+///     color: \"#ffffff\"
 /// frames:
 ///   idle:
 ///     rows:
@@ -1576,11 +1572,7 @@ pub fn validate_palette(doc: &PaletteDocument) -> Vec<Diagnostic> {
 /// kind: palette
 /// palette:
 ///   A:
-///     color:
-///       - 1.0
-///       - 0.0
-///       - 0.0
-///       - 1.0
+///     color: \"#ff0000\"
 /// ";
 /// let palette = ludion_scene::check_palette(source).expect("the palette is valid");
 /// assert_eq!(palette.palette.len(), 1);

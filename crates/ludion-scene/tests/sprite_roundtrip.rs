@@ -54,11 +54,7 @@ size:
   - 1
 palette:
   A:
-    color:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 1.0
+    color: \"#ffffff\"
 frames:
   idle:
     rows:
@@ -114,11 +110,7 @@ palette:
   from: palettes/world.palette.yaml
   overrides:
     A:
-      color:
-        - 1.0
-        - 0.0
-        - 0.0
-        - 1.0
+      color: \"#ff0000\"
       emissive: 2.0
     B:
       color:
@@ -183,11 +175,7 @@ palette:
   from: \"\"
   overrides:
     AB:
-      color:
-        - 1.0
-        - 1.0
-        - 1.0
-        - 1.0
+      color: \"#ffffff\"
 frames:
   idle:
     rows:
@@ -220,8 +208,18 @@ fn unit_f64() -> impl Strategy<Value = f64> {
     0.0f64..=1.0f64
 }
 
+/// Arbitrary unit floats (written back as the legacy sequence) or a hex-exact colour (written as
+/// hex), so both writer branches run.
 fn color() -> impl Strategy<Value = [f64; 4]> {
-    (unit_f64(), unit_f64(), unit_f64(), unit_f64()).prop_map(|(r, g, b, a)| [r, g, b, a])
+    prop_oneof![
+        (unit_f64(), unit_f64(), unit_f64(), unit_f64()).prop_map(|(r, g, b, a)| [r, g, b, a]),
+        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(r, g, b, a)| {
+            let hex = format!("#{r:02x}{g:02x}{b:02x}{a:02x}");
+            ludion_core::color::parse_hex(&hex)
+                .expect("eight hex digits")
+                .map(f64::from)
+        }),
+    ]
 }
 
 /// Effect ops whose parameters are valid for any document: no glyph or frame filter is attached, so

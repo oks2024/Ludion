@@ -145,17 +145,6 @@ pub fn srgb_decode(encoded: f32) -> f32 {
     }
 }
 
-/// The `f64` mirror of [`srgb_decode`], for the importer's palette: a sprite document stores colours
-/// at `f64` because that is the width its text round-trips losslessly at.
-pub fn srgb_decode_f64(encoded: f64) -> f64 {
-    let x = encoded.clamp(0.0, 1.0);
-    if x <= 0.040_45 {
-        x / 12.92
-    } else {
-        math::f64::powf((x + 0.055) / 1.055, 2.4)
-    }
-}
-
 /// Quantizes a `0..=1` value to a `u8` code by round-half-away-from-zero.
 fn quantize(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8

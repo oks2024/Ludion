@@ -15,8 +15,8 @@ use ludion_scene::{
     SpritePaletteEntry,
 };
 
-use crate::image::srgb_decode_f64;
 use crate::structure_error;
+use ludion_core::color::srgb_to_linear;
 
 /// The glyphs an import hands out, in order: the most-used colour takes the first.
 ///
@@ -327,10 +327,10 @@ fn palette(glyphs: &BTreeMap<[u8; 4], char>) -> Vec<SpritePaletteEntry> {
         .map(|(color, glyph)| SpritePaletteEntry {
             glyph: glyph.to_string(),
             color: [
-                srgb_decode_f64(f64::from(color[0]) / 255.0),
-                srgb_decode_f64(f64::from(color[1]) / 255.0),
-                srgb_decode_f64(f64::from(color[2]) / 255.0),
-                f64::from(color[3]) / 255.0,
+                f64::from(srgb_to_linear(f32::from(color[0]) / 255.0)),
+                f64::from(srgb_to_linear(f32::from(color[1]) / 255.0)),
+                f64::from(srgb_to_linear(f32::from(color[2]) / 255.0)),
+                f64::from(f32::from(color[3]) / 255.0),
             ],
             emissive: None,
         })

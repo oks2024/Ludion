@@ -644,7 +644,7 @@ fn parse_palette_field(
             .with_path("/palette")
             .with_help(
                 "write `palette` as glyph keys, each mapping to a `color`:\n  palette:\n    \"#\":\n\
-                 \x20     color:\n        - 1.0\n        - 0.0\n        - 0.0\n        - 1.0\n  or \
+                 \x20     color: \"#ff0000\"\n  or \
                  reference a shared `kind: palette` document:\n  palette:\n    from: shared.palette.yaml",
             ),
         );
@@ -768,10 +768,7 @@ pub(crate) fn parse_palette_entry(
                 ),
             )
             .with_path(pointer.to_string())
-            .with_help(
-                "give the glyph a color:\n      color:\n        - 1.0\n        - 1.0\n        \
-                 - 1.0\n        - 1.0",
-            ),
+            .with_help("give the glyph a color:\n      color: \"#ffffff\""),
         );
         return None;
     };
@@ -807,7 +804,7 @@ pub(crate) fn parse_palette_entry(
         diagnostics.push(
             Diagnostic::new(code, "a palette entry is missing its required `color`")
                 .with_path(pointer.to_string())
-                .with_help("add a `color` with four numbers: red, green, blue, alpha"),
+                .with_help("add a `color`, e.g. `color: \"#ff8800\"`"),
         );
     }
     color.map(|color| SpritePaletteEntry {
@@ -959,25 +956,65 @@ fn parse_rows(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -> 
     out
 }
 
-/// Parses a four-number linear RGBA color.
+fn bad_hex_colour(
+    text: &str,
+    line: usize,
+    pointer: &str,
+    code: ludion_core::diagnostics::DiagnosticCode,
+) -> Diagnostic {
+    let short = text
+        .strip_prefix('#')
+        .filter(|d| matches!(d.len(), 3 | 4) && d.bytes().all(|b| b.is_ascii_hexdigit()));
+    let help = match short {
+        Some(digits) => {
+            let expanded: String = digits.chars().flat_map(|c| [c, c]).collect();
+            format!("write all digits out: `\"#{expanded}\"` for `{text}`")
+        }
+        None => "write the colour as `\"#rrggbb\"` or `\"#rrggbbaa\"`, e.g. `\"#ff8800\"`".into(),
+    };
+    Diagnostic::new(
+        code,
+        format!(
+            "a colour is \"#rrggbb\" or \"#rrggbbaa\" (sRGB hex), found `{text}` (line {line})"
+        ),
+    )
+    .with_path(pointer.to_string())
+    .with_help(help)
+}
+
+/// Parses a colour: an sRGB hex string (`"#rrggbb"` / `"#rrggbbaa"`) or the legacy sequence of four
+/// linear RGBA numbers.
 fn parse_color(
     node: &Node,
     pointer: &str,
     structure_code: ludion_core::diagnostics::DiagnosticCode,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<[f64; 4]> {
+    if let NodeValue::Scalar(Value::String(text)) = &node.value {
+        let parsed = ludion_core::color::parse_hex(text);
+        if parsed.is_none() {
+            diagnostics.push(bad_hex_colour(text, node.line, pointer, structure_code));
+        }
+        return parsed.map(|c| c.map(f64::from));
+    }
     let NodeValue::Sequence(items) = &node.value else {
+        let help = if matches!(node.value, NodeValue::Scalar(Value::Null)) {
+            "a `#` starts a YAML comment, so an unquoted hex colour reads as empty — quote it: \
+             `color: \"#ff0000\"`"
+        } else {
+            "write the colour as a quoted hex string, e.g. `color: \"#ff8800\"` (\"#rrggbbaa\" adds alpha)"
+        };
         diagnostics.push(
             Diagnostic::new(
                 structure_code,
                 format!(
-                    "a color must be a sequence of four numbers, found {} (line {})",
+                    "a color must be a hex string such as \"#ff8800\", found {} (line {})",
                     node.value.type_phrase(),
                     node.line
                 ),
             )
             .with_path(pointer.to_string())
-            .with_help("write four numbers (red, green, blue, alpha), one per line"),
+            .with_help(help),
         );
         return None;
     };
@@ -1251,7 +1288,7 @@ fn parse_effects(entry: &MapEntry, diagnostics: &mut Vec<Diagnostic>) -> Vec<Spr
             .with_path("/effects")
             .with_help(
                 "write one entry per op, in application order:\n  effects:\n    - op: outline\n\
-                 \x20     color:\n        - 0.0\n        - 0.0\n        - 0.0\n        - 1.0",
+                 \x20     color: \"#000000\"",
             ),
         );
         return Vec::new();
@@ -1349,7 +1386,7 @@ fn parse_effect(
                     &pointer,
                     "gradient",
                     "from",
-                    "the color the ramp starts at, four numbers",
+                    "the color the ramp starts at, a hex string",
                 ));
             }
             if fields.to.is_none() {
@@ -1357,7 +1394,7 @@ fn parse_effect(
                     &pointer,
                     "gradient",
                     "to",
-                    "the color the ramp ends at, four numbers",
+                    "the color the ramp ends at, a hex string",
                 ));
             }
             SpriteEffectOp::Gradient {
@@ -1373,7 +1410,7 @@ fn parse_effect(
                     &pointer,
                     "outline",
                     "color",
-                    "the border's color, four numbers",
+                    "the border's color, a hex string",
                 ));
             }
             SpriteEffectOp::Outline {
@@ -2211,7 +2248,8 @@ fn validate_unit_range(value: f64, pointer: &str, field: &str, diagnostics: &mut
 ///
 /// **Minimal by rule:** an effect field whose value equals its default is not written, and an empty
 /// `effects` list is written as nothing at all. So a document that spells a default out loud is not
-/// canonical and re-emits shorter; emitting an already-emitted document is byte-identical.
+/// canonical and re-emits shorter; emitting an already-emitted document is byte-identical. A colour is
+/// written as quoted `"#rrggbb[aa]"` when it is exactly a hex colour, else as four floats.
 pub(crate) fn emit(doc: &SpriteDocument) -> String {
     let mut out = String::new();
     out.push_str("format: 1\n");
@@ -2259,12 +2297,8 @@ fn emit_palette_include(out: &mut String, include: &SpritePaletteInclude) {
     for entry in &overrides {
         out.push_str("    ");
         out.push_str(&scalar_string(&entry.glyph));
-        out.push_str(":\n      color:\n");
-        for component in entry.color {
-            out.push_str("        - ");
-            out.push_str(&format_float(component));
-            out.push('\n');
-        }
+        out.push_str(":\n");
+        emit_color_value(out, "      ", "color", entry.color);
         if let Some(emissive) = entry.emissive {
             out.push_str("      emissive: ");
             out.push_str(&format_float(emissive));
@@ -2284,12 +2318,8 @@ pub(crate) fn emit_palette(out: &mut String, palette: &[SpritePaletteEntry]) {
     for entry in &palette {
         out.push_str("  ");
         out.push_str(&scalar_string(&entry.glyph));
-        out.push_str(":\n    color:\n");
-        for component in entry.color {
-            out.push_str("      - ");
-            out.push_str(&format_float(component));
-            out.push('\n');
-        }
+        out.push_str(":\n");
+        emit_color_value(out, "    ", "color", entry.color);
         if let Some(emissive) = entry.emissive {
             out.push_str("    emissive: ");
             out.push_str(&format_float(emissive));
@@ -2478,11 +2508,24 @@ fn emit_name_list(out: &mut String, key: &str, names: &[String]) {
 }
 
 fn emit_color(out: &mut String, key: &str, color: [f64; 4]) {
-    out.push_str("    ");
+    emit_color_value(out, "    ", key, color);
+}
+
+/// Writes one colour field: the quoted lowercase hex when the colour is hex-exact, else the legacy
+/// four-float sequence (so the writer never quantizes).
+fn emit_color_value(out: &mut String, indent: &str, key: &str, color: [f64; 4]) {
+    out.push_str(indent);
     out.push_str(key);
+    if let Some(hex) = ludion_core::color::hex_of_linear(color) {
+        out.push_str(": \"");
+        out.push_str(&hex);
+        out.push_str("\"\n");
+        return;
+    }
     out.push_str(":\n");
     for component in color {
-        out.push_str("      - ");
+        out.push_str(indent);
+        out.push_str("  - ");
         out.push_str(&format_float(component));
         out.push('\n');
     }

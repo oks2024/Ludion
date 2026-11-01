@@ -5,7 +5,7 @@ use std::io::Cursor;
 use ludion_core::par;
 
 use crate::image::Image;
-use crate::ops::srgb_to_linear;
+use ludion_core::color::srgb_to_linear;
 
 /// The largest side of a decodable PNG, in pixels.
 pub const MAX_SIDE: u32 = 8192;

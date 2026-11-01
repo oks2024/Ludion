@@ -36,6 +36,7 @@ pub mod audio;
 pub mod bless;
 pub mod codes;
 pub mod collections;
+pub mod color;
 pub mod diagnostics;
 pub mod ids;
 pub mod letterbox;

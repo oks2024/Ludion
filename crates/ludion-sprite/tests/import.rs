@@ -40,6 +40,10 @@ fn a_lossless_import_bakes_back_to_the_source_pixels() {
 
     // The document survives a trip through the canonical text form...
     let text = emit_sprite(&imported.doc);
+    assert!(
+        text.contains("color: \"#"),
+        "palette colours are written as hex:\n{text}"
+    );
     let parsed = check_sprite(&text).expect("the imported document is valid");
     assert_eq!(parsed, imported.doc);
     assert_eq!(

@@ -50,24 +50,12 @@ effects:
       - \"#\"
     frames:
       - idle
-    from:
-      - 0.0
-      - 0.0
-      - 0.0
-      - 1.0
-    to:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 1.0
+    from: \"#000000\"
+    to: \"#ffffff\"
     direction: radial
     blend: multiply
   - op: outline
-    color:
-      - 0.0
-      - 0.0
-      - 0.0
-      - 1.0
+    color: \"#000000\"
     side: inside
   - op: shade
     light:
@@ -102,11 +90,7 @@ size:
   - 1
 palette:
   A:
-    color:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 1.0
+    color: \"#ffffff\"
 frames:
   idle:
     rows:
@@ -166,11 +150,7 @@ size:
   - 1
 palette:
   A:
-    color:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 1.0
+    color: \"#ffffff\"
 frames:
   idle:
     rows:
@@ -637,4 +617,128 @@ fn render_frame_rows_right_aligns_labels_of_tall_frames() {
     let frame = sprite.frame("idle").expect("idle exists");
     let text = sprite.render_frame_rows(frame);
     assert!(text.contains("\n 9  ..\n10  ..\n"), "{text}");
+}
+
+// --- Hex colours --------------------------------------------------------------------------------
+
+fn sprite_with_color(color: &str) -> String {
+    format!(
+        "format: 1\nkind: sprite\nsize:\n  - 1\n  - 1\npalette:\n  A:\n    color:{}{color}\nframes:\n  idle:\n    rows:\n      - A\n",
+        if color.starts_with('\n') { "" } else { " " }
+    )
+}
+
+fn sprite_with_effect_color(color: &str) -> String {
+    format!(
+        "format: 1\nkind: sprite\nsize:\n  - 1\n  - 1\npalette:\n  A:\n    color: \"#ffffff\"\nframes:\n  idle:\n    rows:\n      - A\neffects:\n  - op: outline\n    color: {color}\n"
+    )
+}
+
+#[test]
+fn hex_colours_parse_in_either_case() {
+    let upper = check(&sprite_with_color("\"#3A7BD5\"")).expect("valid");
+    let lower = check(&sprite_with_color("\"#3a7bd5\"")).expect("valid");
+    assert_eq!(upper.palette[0].color, lower.palette[0].color);
+    assert_eq!(upper.palette[0].color[3], 1.0);
+}
+
+#[test]
+fn hex_alpha_is_a_byte_over_255() {
+    let doc = check(&sprite_with_color("\"#ff000080\"")).expect("valid");
+    assert_eq!(doc.palette[0].color[3], f64::from(128.0f32 / 255.0));
+    let doc = check(&sprite_with_effect_color("\"#ffffff80\"")).expect("valid");
+    let SpriteEffectOp::Outline { color, .. } = &doc.effects[0].op else {
+        panic!("an outline");
+    };
+    assert_eq!(color[3], f64::from(128.0f32 / 255.0));
+}
+
+#[test]
+fn a_short_hex_palette_colour_is_refused_with_the_expansion() {
+    let diagnostics = parse(&sprite_with_color("\"#f80\"")).expect_err("short hex");
+    assert_eq!(diagnostics[0].code, code::SPRITE_DOCUMENT_STRUCTURE);
+    assert_eq!(diagnostics[0].path.as_deref(), Some("/palette/A/color"));
+    assert!(
+        diagnostics[0].message.contains("\"#rrggbb\""),
+        "{:?}",
+        diagnostics[0]
+    );
+    assert!(
+        diagnostics[0]
+            .help
+            .as_deref()
+            .is_some_and(|h| h.contains("#ff8800")),
+        "{:?}",
+        diagnostics[0]
+    );
+}
+
+#[test]
+fn a_short_hex_effect_colour_is_an_effect_error() {
+    let diagnostics = parse(&sprite_with_effect_color("\"#fff\"")).expect_err("short hex");
+    assert_eq!(diagnostics[0].code, code::SPRITE_EFFECT_INVALID);
+}
+
+#[test]
+fn a_non_hex_string_is_refused() {
+    let diagnostics = parse(&sprite_with_color("red")).expect_err("a name");
+    assert_eq!(diagnostics[0].code, code::SPRITE_DOCUMENT_STRUCTURE);
+    assert!(
+        diagnostics[0].message.contains("`red`"),
+        "{:?}",
+        diagnostics[0]
+    );
+}
+
+#[test]
+fn an_unquoted_hash_colour_names_the_yaml_comment() {
+    let diagnostics = parse(&sprite_with_color("#ff0000")).expect_err("a comment");
+    let help = diagnostics[0].help.as_deref().expect("help");
+    assert!(help.contains("YAML comment"), "{help}");
+}
+
+#[test]
+fn a_palette_document_takes_hex_and_keeps_its_own_code() {
+    let ok = "format: 1\nkind: palette\npalette:\n  A:\n    color: \"#102030\"\n";
+    let doc = crate::check_palette(ok).expect("valid");
+    assert_eq!(crate::emit_palette(&doc), ok);
+    let bad = ok.replace("#102030", "#123");
+    let diagnostics = crate::parse_palette(&bad).expect_err("short hex");
+    assert_eq!(diagnostics[0].code, code::SPRITE_PALETTE_STRUCTURE);
+}
+
+#[test]
+fn legacy_float_colours_still_load_silently() {
+    let source = sprite_with_color("\n      - 0.5\n      - 0.25\n      - 0.125\n      - 1.0");
+    let doc = check(&source).expect("legacy floats load");
+    assert_eq!(doc.palette[0].color, [0.5, 0.25, 0.125, 1.0]);
+}
+
+#[test]
+fn a_hex_document_is_an_emit_fixed_point() {
+    let source = sprite_with_color("\"#3a7bd5\"");
+    let doc = check(&source).expect("valid");
+    assert_eq!(emit(&doc), source);
+    let translucent = sprite_with_color("\"#3a7bd580\"");
+    assert_eq!(emit(&check(&translucent).expect("valid")), translucent);
+}
+
+#[test]
+fn an_inexact_legacy_channel_keeps_its_float_spelling() {
+    let source = sprite_with_color("\n      - 0.5\n      - 0.0\n      - 0.0\n      - 1.0");
+    assert_eq!(emit(&check(&source).expect("valid")), source);
+}
+
+#[test]
+fn an_exact_legacy_colour_re_emits_as_hex() {
+    let source = sprite_with_color("\n      - 0.0\n      - 0.0\n      - 0.0\n      - 1.0");
+    assert_eq!(
+        emit(&check(&source).expect("valid")),
+        sprite_with_color("\"#000000\"")
+    );
+}
+
+#[test]
+fn the_writer_quotes_a_hex_colour() {
+    assert_eq!(crate::scalar::scalar_string("#ff0000"), "\"#ff0000\"");
 }

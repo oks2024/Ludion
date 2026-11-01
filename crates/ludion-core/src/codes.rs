@@ -4531,7 +4531,7 @@ A `kind: palette` document does not hold together, or a `kind: sprite` document'
 include cannot be resolved.
 
 A palette document is a standalone glyph palette — `format: 1`, `kind: palette`, an optional `name`,
-and a `palette:` map of single-glyph keys to `{ color: [r, g, b, a], emissive? }`, exactly the shape
+and a `palette:` map of single-glyph keys to `{ color: \"#rrggbb\", emissive? }` (the legacy four-float `[r, g, b, a]` spelling still loads), exactly the shape
 a sprite document's own inline `palette:` uses. A sprite can reference one instead of inlining a
 palette by writing `palette: { from: <path to a kind: palette document>, overrides?: { … } }`; the
 `from` path resolves relative to the sprite document's own directory, and the include is resolved at
@@ -4539,7 +4539,7 @@ bake/generate time — the referenced palette with the local `overrides` applied
 exactly the palette an equivalent inline document would, so the two bake to byte-identical images.
 
 This code covers the palette document's own text (a missing or wrong-typed key, an unrecognized key,
-a bad palette entry) and the sprite include's reference (`from` missing or wrong-typed, an
+a bad palette entry, a colour that is not `\"#rrggbb\"`/`\"#rrggbbaa\"`) and the sprite include's reference (`from` missing or wrong-typed, an
 unrecognized key in the include block, a `from` naming a file that cannot be read or that is not a
 `kind: palette` document). A glyph a frame or effect uses that is still undefined *after* the include
 resolves is the ordinary `L1153` — by then the sprite has a concrete palette like any inline one, and
@@ -4560,7 +4560,7 @@ generated output).
 The three share one code because they share one shape and one failure mode — a text document whose
 keys, types, or cross-references do not agree with each other. It covers both passes: *structure*
 (a missing or wrong-typed key, an unrecognized key with a nearest-match suggestion, a malformed
-list) and *semantics* (a frame's `rows` not matching `size` exactly, a glyph naming no palette
+list, a colour that is not `\"#rrggbb\"`/`\"#rrggbbaa\"`) and *semantics* (a frame's `rows` not matching `size` exactly, a glyph naming no palette
 entry, a duplicate frame or region name, a pivot outside its frame, a region rect outside the packed
 image, an input path that names no file, a `hold` list a different length from its flipbook's
 `frames`). `generate-atlas --check` drift — a committed atlas that no longer matches what its source
@@ -4760,7 +4760,7 @@ nearest-match suggestion rather than a silently ignored entry.
 
 This code covers: an unrecognized `op`; an unknown key inside an entry; a required parameter absent
 (`gradient`'s `from`/`to`, `outline`'s `color`, `noise`'s `amount`, `blur`'s `radius`, `dither`'s
-`glyphs`); a parameter outside its range (`strength`, `density` and `amount` in `0..=1`, `radius` in
+`glyphs`); a colour that is not `\"#rrggbb\"`/`\"#rrggbbaa\"`; a parameter outside its range (`strength`, `density` and `amount` in `0..=1`, `radius` in
 `1..=8`, a `light` or `shadow` `offset` of `[0, 0]`, which would make the op a no-op); a `glyphs:`
 entry that is not a single glyph the document's `palette` defines; a `frames:` entry naming no frame
 of the document; and a `dither` whose `glyphs:` is not exactly two.

@@ -7,7 +7,7 @@ use ludion_core::diagnostics::{Diagnostic, pointer_token, value_phrase};
 use ludion_core::suggest::nearest;
 use serde_json::{Map, Value, json};
 
-use crate::ops::{Op, ParamValue, Scope, parse_hex, parse_step};
+use crate::ops::{Op, ParamValue, Scope, hex_rgb, parse_step};
 
 /// The map an `outputs` entry feeds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,7 +167,7 @@ fn read_params(value: Option<&Value>, diags: &mut Vec<Diagnostic>) -> Vec<(Strin
     for (name, v) in map {
         let parsed = match v {
             Value::Number(n) => n.as_f64().filter(|x| x.is_finite()).map(ParamValue::Number),
-            Value::String(s) => parse_hex(s).map(ParamValue::Color),
+            Value::String(s) => hex_rgb(s).map(ParamValue::Color),
             _ => None,
         };
         match parsed {

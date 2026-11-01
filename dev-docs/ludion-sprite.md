@@ -16,7 +16,7 @@ document). The *text* halves of all three families live in `ludion-scene`
   `structure_error`, the `L1153` this crate raises for the defects only a bake can see (a duplicate
   region name, an unresolvable flipbook frame, an image too large to be a sprite).
 - `crates/ludion-sprite/src/image.rs` — `FrameImage`, the working format, and the one sRGB transfer
-  pair (`srgb_encode`/`srgb_decode`, plus `srgb_decode_f64` for the importer's `f64` palette).
+  pair (`srgb_encode`/`srgb_decode`).
 - `crates/ludion-sprite/src/bake.rs` — painting the glyph grid and the seven ops, one private
   function each, plus `texel_random`/`splitmix64`.
 - `crates/ludion-sprite/src/pack.rs` — `AtlasInput`/`AtlasInputFrame` in, `AtlasBake` out: name

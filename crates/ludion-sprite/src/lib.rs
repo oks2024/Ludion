@@ -66,7 +66,7 @@ mod import;
 mod pack;
 
 pub use bake::{BakeStep, BakedFrame, FrameSteps, bake, bake_steps};
-pub use image::{FrameImage, srgb_decode, srgb_decode_f64, srgb_encode};
+pub use image::{FrameImage, srgb_decode, srgb_encode};
 pub use import::{IMPORT_GLYPHS, ImportedSprite, QuantizeReport, import_png};
 pub use pack::{AtlasBake, AtlasInput, AtlasInputFrame, pack};
 

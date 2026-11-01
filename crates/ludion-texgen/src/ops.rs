@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use ludion_core::codes::code;
+use ludion_core::color;
 use ludion_core::diagnostics::{Diagnostic, pointer_token, value_phrase};
-use ludion_core::math::powf;
 use ludion_core::suggest::nearest;
 use serde_json::{Map, Value};
 
@@ -566,25 +566,10 @@ impl Op {
     }
 }
 
-/// Decodes `#rrggbb` (sRGB) to linear RGB.
-pub fn parse_hex(text: &str) -> Option<[f32; 3]> {
-    let digits = text.strip_prefix('#')?;
-    if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    let channel = |i: usize| {
-        let byte = u8::from_str_radix(&digits[i * 2..i * 2 + 2], 16).ok()?;
-        Some(srgb_to_linear(f32::from(byte) / 255.0))
-    };
-    Some([channel(0)?, channel(1)?, channel(2)?])
-}
-
-pub(crate) fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        powf((c + 0.055) / 1.055, 2.4)
-    }
+/// Decodes `#rrggbb` to linear RGB; a colour carrying alpha is refused rather than dropped.
+pub(crate) fn hex_rgb(text: &str) -> Option<[f32; 3]> {
+    let [r, g, b, a] = color::parse_hex(text)?;
+    (a == 1.0).then_some([r, g, b])
 }
 
 /// A field-reading failure; the diagnostic is already recorded.
@@ -676,7 +661,7 @@ impl<'a> Reader<'a> {
                     ))
                 }
             },
-            Value::String(s) => match parse_hex(s) {
+            Value::String(s) => match hex_rgb(s) {
                 Some(c) => Ok(Some(Scalar::Color(c))),
                 None => Err(self.data(
                     field,
@@ -891,7 +876,7 @@ impl<'a> Reader<'a> {
                 self.known.push(field);
                 Ok(None)
             }
-            Some(Value::String(s)) if !s.starts_with('$') && parse_hex(s).is_none() => {
+            Some(Value::String(s)) if !s.starts_with('$') && hex_rgb(s).is_none() => {
                 self.known.push(field);
                 Ok(Some(Slot::Step(s.clone())))
             }
@@ -1790,7 +1775,7 @@ fn recipe_params(r: &mut Reader<'_>) -> Read<Vec<(String, ParamValue)>> {
         let resolved = match v {
             Value::Number(n) => Some(ParamValue::Number(n.as_f64().unwrap_or(f64::NAN))),
             Value::String(s) if s.starts_with('$') => r.scope.get(&s[1..]).copied(),
-            Value::String(s) => parse_hex(s).map(ParamValue::Color),
+            Value::String(s) => hex_rgb(s).map(ParamValue::Color),
             _ => None,
         };
         match resolved {
@@ -1812,20 +1797,4 @@ fn recipe_params(r: &mut Reader<'_>) -> Read<Vec<(String, ParamValue)>> {
         }
     }
     if failed { Err(Failed) } else { Ok(out) }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hex_decodes_to_linear() {
-        assert_eq!(parse_hex("#000000"), Some([0.0, 0.0, 0.0]));
-        assert_eq!(parse_hex("#ffffff"), Some([1.0, 1.0, 1.0]));
-        assert!(parse_hex("#fff").is_none());
-        assert!(parse_hex("ffffff").is_none());
-        assert!(parse_hex("#gggggg").is_none());
-        let mid = parse_hex("#808080").unwrap()[0];
-        assert!((mid - 0.2158605).abs() < 1e-5);
-    }
 }
