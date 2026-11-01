@@ -194,6 +194,7 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         _ => None,
     };
     let mut rig = rig;
+    let cut = rig.state.snap || rig.state.last_applied.is_none();
     let output = step_rig(
         &mut rig,
         &RigInput {
@@ -214,6 +215,9 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
     let Some(output) = output else {
         return;
     };
+    if cut {
+        crate::interpolation::cut_presentation(world, entity);
+    }
     if let Ok(Some(transform)) = world.get_mut::<Transform>(entity) {
         transform.translation = output.translation;
         transform.rotation = output.rotation_deg;

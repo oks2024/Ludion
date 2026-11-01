@@ -172,7 +172,10 @@ pub fn report_full(world: &mut World, key: impl Into<String>, diagnostic: Diagno
 pub(crate) fn report_unregistered(world: &mut World, registry: &Registry) {
     let mut names: Vec<&'static str> = world
         .component_types()
-        .filter(|(id, _)| registry.get_by_type_id(*id).is_none())
+        .filter(|(id, _)| {
+            registry.get_by_type_id(*id).is_none()
+                && *id != std::any::TypeId::of::<crate::NoInterpolate>()
+        })
         .map(|(_, name)| name)
         .collect();
     if names.is_empty() {

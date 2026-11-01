@@ -58,6 +58,7 @@ mod font_sheet;
 pub mod fonts;
 pub mod hierarchy;
 mod instantiate;
+pub mod interpolation;
 mod lane;
 pub mod live;
 mod load_observer;
@@ -148,6 +149,7 @@ pub use hierarchy::{
     world_pose_transform, world_transform,
 };
 pub use instantiate::EngineHooks;
+pub use interpolation::NoInterpolate;
 pub use lane::{
     LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH,
     LaneConstraint, LaneEnds, LaneInput, lane_error_colour, lane_frame, lane_relative,

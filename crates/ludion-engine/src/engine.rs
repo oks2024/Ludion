@@ -52,9 +52,10 @@ use ludion_protocol::replay::{
 use ludion_protocol::response::EntityBounds;
 use ludion_protocol::{Channel, PROTOCOL_VERSION, SubId, schema};
 use ludion_renderer::{
-    AntiAliasing, FrameSinks, FrameSize, Gpu, PresentBackend, PresentPacket, PresentSettings,
-    PresentSize, PresentTarget, Presenter, PresenterNote, ProbeResolve, ProbeWorld, RenderScale,
-    RenderScene, RenderedImage, Renderer, StreamReadback, TickStamp, WindowBackend,
+    AntiAliasing, BlendData, FrameSinks, FrameSize, Gpu, PresentBackend, PresentPacket,
+    PresentSettings, PresentSize, PresentTarget, Presenter, PresenterNote, ProbeResolve,
+    ProbeWorld, RenderScale, RenderScene, RenderedImage, Renderer, StreamReadback, TickStamp,
+    WindowBackend,
 };
 use ludion_scene::{ExpandedScene, InstanceTransform, Scene, SceneEntity, ScenePhysics};
 use ludion_sim::{InputState, RunState, SimConfig, SimDriver, Speed, WorldHash};
@@ -369,6 +370,10 @@ pub struct Engine {
     /// The surface's GPU context, kept so the sim-side renderer shares the presenter's device
     /// ([`Gpu::share`]); `None` on a headless host.
     surface_gpu: Option<Gpu>,
+    /// Bumped when the world is replaced (load, switch, restore): a [`BlendData`] stamp, so a
+    /// display-rate blend never slides an entity across a rebuild. A counter rather than a flag,
+    /// because the presenter's mailbox is latest-wins and a flag on a dropped packet would be lost.
+    present_epoch: u64,
     subscriptions: Subscriptions,
     event_outbox: Vec<Event>,
     recorder: Option<Recorder>,
@@ -743,6 +748,7 @@ impl Engine {
             stream_ring: None,
             presenter: None,
             surface_gpu: None,
+            present_epoch: 0,
             subscriptions: Subscriptions::new(),
             event_outbox: Vec::new(),
             recorder: None,
@@ -1124,10 +1130,25 @@ impl Engine {
         self.probe_world = if self.named_probes().is_empty() {
             None
         } else {
-            self.extract_render_scene_inner(self.render_size.0, self.render_size.1, false)
+            self.extract_render_scene_inner(self.render_size.0, self.render_size.1, false, None)
                 .ok()
                 .map(ProbeWorld::new)
         };
+    }
+
+    /// Everything that must happen before a tick runs: the probe world freeze, and, only when a tick
+    /// will actually run, the clearing of last tick's presentation cuts. A paused loop keeps its
+    /// marks until a frame hands them over.
+    fn before_tick(&mut self) {
+        self.freeze_probe_world_before_tick();
+        let will_tick = match self.driver.run_state() {
+            RunState::Running => true,
+            RunState::Stepping { remaining } => remaining > 0,
+            _ => false,
+        };
+        if will_tick {
+            crate::interpolation::clear_cuts(self.driver.world_mut());
+        }
     }
 
     /// The scene's `ReflectionProbe` entities with their `Name`s, in entity order.
@@ -1448,7 +1469,7 @@ impl Engine {
     /// A [`TickObserver`] set with [`set_tick_observer`](Engine::set_tick_observer) watches here, so
     /// it sees every tick `sim.step` and the live loop perform.
     pub fn advance_live(&mut self) -> bool {
-        self.freeze_probe_world_before_tick();
+        self.before_tick();
         let Some(mut observer) = self.tick_observer.take() else {
             return self.advance_live_unwatched();
         };
@@ -1745,7 +1766,7 @@ impl Engine {
         &mut self,
         observer: &mut dyn ludion_ecs::ScheduleObserver,
     ) -> bool {
-        self.freeze_probe_world_before_tick();
+        self.before_tick();
         let frame = self.driver.frame();
         let ran = self.driver.advance_observed(observer);
         if ran {
@@ -1762,7 +1783,7 @@ impl Engine {
     /// enters sim state, so the tick — and the resulting [`WorldHash`](Engine::world_hash) — is
     /// bit-identical to [`advance_live`](Engine::advance_live)'s.
     pub(crate) fn advance_probed(&mut self, probe: &mut crate::bisect::SystemProbe<'_>) -> bool {
-        self.freeze_probe_world_before_tick();
+        self.before_tick();
         let frame = self.driver.frame();
         // Disjoint field borrows: the registry is read by the probe while the driver ticks.
         let registry = &self.registry;
@@ -3523,18 +3544,21 @@ impl Engine {
         let size = self.frame_size(width, height)?;
         let span = self.perf.is_some().then(Span::start);
         // The stream is the one path the view override moves: a subscriber sees where a human flew.
+        let collect = handover && self.presenter.is_some();
+        let mut blend = BlendData::default();
         let scene = Arc::new(
-            self.extract_render_scene_through(width, height, true)
+            self.extract_render_scene_blend(width, height, true, collect.then_some(&mut blend))
                 .map_err(crate::commands::collapse)?,
         );
         let extract_ms = span.map(Span::ms);
-        if handover && let Some(presenter) = self.presenter.as_ref() {
+        if collect && let Some(presenter) = self.presenter.as_ref() {
             presenter.publish(PresentPacket {
                 frame,
                 scene: Arc::clone(&scene),
                 size,
                 settings: self.present_settings(),
                 tick,
+                blend: Some(Arc::new(blend)),
             });
         }
         if !readback {
@@ -4029,6 +4053,22 @@ impl Engine {
         self.extract_render_scene_through(width, height, false)
     }
 
+    /// The scene a windowed host hands the presenter, with the blend data that rides beside it: the
+    /// extract at the render size through the view override. A test seam; the engine collects the
+    /// same pair itself on handover.
+    ///
+    /// # Errors
+    /// The extract's collapsed diagnostic.
+    #[doc(hidden)]
+    pub fn extract_present_scene(&mut self) -> Result<(RenderScene, BlendData), Diagnostic> {
+        let (width, height) = self.render_size;
+        let mut blend = BlendData::default();
+        let scene = self
+            .extract_render_scene_blend(width, height, true, Some(&mut blend))
+            .map_err(crate::commands::collapse)?;
+        Ok((scene, blend))
+    }
+
     /// [`extract_render_scene`](Engine::extract_render_scene), through the view override when
     /// `use_view` is set and one is in force.
     ///
@@ -4040,7 +4080,23 @@ impl Engine {
         height: u32,
         use_view: bool,
     ) -> Result<RenderScene, Vec<Diagnostic>> {
-        let mut scene = self.extract_render_scene_inner(width, height, use_view)?;
+        self.extract_render_scene_blend(width, height, use_view, None)
+    }
+
+    /// [`extract_render_scene_through`](Engine::extract_render_scene_through), also filling `blend`
+    /// when given. The scene is identical either way.
+    fn extract_render_scene_blend(
+        &mut self,
+        width: u32,
+        height: u32,
+        use_view: bool,
+        mut blend: Option<&mut BlendData>,
+    ) -> Result<RenderScene, Vec<Diagnostic>> {
+        let mut scene =
+            self.extract_render_scene_inner(width, height, use_view, blend.as_deref_mut())?;
+        if let Some(blend) = blend {
+            blend.epoch = self.present_epoch;
+        }
         if !scene.probes.is_empty() {
             if self.probe_world_pending || self.probe_world.is_none() {
                 self.probe_world = Some(ProbeWorld::new(scene.clone()));
@@ -4057,6 +4113,7 @@ impl Engine {
         width: u32,
         height: u32,
         use_view: bool,
+        blend: Option<&mut BlendData>,
     ) -> Result<RenderScene, Vec<Diagnostic>> {
         // The CPU half of the rebake lever, applied where every cached extract passes: the same
         // answer `ensure_renderer` gives the bake, since nothing between them can move the lever
@@ -4090,7 +4147,7 @@ impl Engine {
                 ));
             }
         }
-        let scene = crate::extract::extract_through(
+        let scene = crate::extract::extract_through_blend(
             world,
             (width, height),
             root,
@@ -4099,6 +4156,7 @@ impl Engine {
             particle_density,
             view,
             &mut degraded,
+            blend,
         )
         .map(|mut scene| {
             scene.debug_lines = crate::debug_draw::segments(world, &self.debug_draw);
@@ -5583,6 +5641,7 @@ impl Engine {
         // frame runs unheld, so both GI caches rebuild and become the new baseline.
         self.gi_rebake_force = true;
         self.probe_world_stale();
+        self.present_epoch = self.present_epoch.wrapping_add(1);
         // Prefetched at the first extract, not here: headless rebuilds (replay verification, sim
         // hashing) never draw, and must not pay the decode bill.
         self.prefetch_pending = true;

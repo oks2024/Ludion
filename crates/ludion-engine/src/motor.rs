@@ -167,6 +167,7 @@ pub fn teleport_character(
     if let Ok(Some(lane)) = world.get_mut::<crate::lane::LaneConstraint>(entity) {
         lane.s = None;
     }
+    crate::interpolation::cut_presentation(world, entity);
     Ok(())
 }
 

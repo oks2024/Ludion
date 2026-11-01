@@ -28,12 +28,13 @@ use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
 use ludion_ecs::World;
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::{
-    DebugSegment, DecalBlend, DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance,
-    EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, LocalShadowData,
-    MAX_SUN_CASCADES, MapImage, MeshData, MeshInstance, MeshShape, MeshTexture, ParticleInstance,
-    PointLightData, PostData, ProbeData, ProbeVolume, QualityParams, RenderCamera, RenderScene,
-    SkinJoint, SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage,
-    TextureWrap, UiInstance, WorldVoxelGrid, aspect_ratio,
+    BlendData, CameraBlend, DebugSegment, DecalBlend, DecalInstance, DecalMaps, DecalReceivers,
+    DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
+    GroundMarkerInstance, LocalShadowData, MAX_SUN_CASCADES, MapImage, MeshData, MeshInstance,
+    MeshShape, MeshTexture, ParticleInstance, PointLightData, PostData, ProbeData, ProbeVolume,
+    QualityParams, RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance,
+    SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap, UiInstance, WorldVoxelGrid,
+    aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -599,6 +600,33 @@ pub(crate) fn extract_through(
     view: Option<&ViewPose>,
     degraded: &mut Vec<(String, Diagnostic)>,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
+    extract_through_blend(
+        world,
+        viewport,
+        project_root,
+        cache,
+        now,
+        particle_density,
+        view,
+        degraded,
+        None,
+    )
+}
+
+/// [`extract_through`], also recording the poses and per-item keys a display-rate blend needs into
+/// `blend` when given. The returned scene is identical either way.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn extract_through_blend(
+    world: &World,
+    viewport: (u32, u32),
+    project_root: &Path,
+    cache: &mut AssetCache,
+    now: SimTime,
+    particle_density: f32,
+    view: Option<&ViewPose>,
+    degraded: &mut Vec<(String, Diagnostic)>,
+    blend: Option<&mut BlendData>,
+) -> Result<RenderScene, Vec<Diagnostic>> {
     // The cache owns the decoded bytes; `extract`'s `RenderScene` gets a handle, so a hit reads out
     // of the cache instead of touching disk. Every asset is `Arc`-shared (a hit is a refcount bump,
     // textures included), and the renderer's content-hash GPU caches skip re-uploading unchanged
@@ -621,6 +649,7 @@ pub(crate) fn extract_through(
         particle_density,
         view,
         degraded,
+        blend,
     )
 }
 
@@ -637,6 +666,7 @@ fn extract_inner(
     particle_density: f32,
     view: Option<&ViewPose>,
     degraded: &mut Vec<(String, Diagnostic)>,
+    blend: Option<&mut BlendData>,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
     // Gameplay time, read once: every closed form below — a volley's bullets, a particle emitter's
     // live window, a clip's phase — measures `now − started`, so reading the world's `GameClock`
@@ -679,8 +709,14 @@ fn extract_inner(
     let mut path_index: StableMap<String, usize> = StableMap::new();
     let mut errors: Vec<Diagnostic> = Vec::new();
 
+    let collect = blend.is_some();
     let mut sprites = Vec::with_capacity(placed.sprites.len());
+    // The entity behind each sprite, parallel to `sprites` (blend data only).
+    let mut sprite_keys: Vec<Option<EntityId>> = Vec::new();
     for sprite in &placed.sprites {
+        if collect {
+            sprite_keys.push(Some(sprite.id));
+        }
         let mut uv = sprite.uv;
         // Geometry is already final (`place` applied the region size); all that is resolved here is
         // where the pixels come from. An atlas dedups through the same `path_index` a loose texture
@@ -778,6 +814,8 @@ fn extract_inner(
         CameraBasis::from_view(camera.view),
         &mut sprites,
     );
+    // Volley bullets are unkeyed: they take the newer tick.
+    sprite_keys.resize(if collect { sprites.len() } else { 0 }, None);
 
     // `pixel_snap` (extract-only, hash-neutral): when the single orthographic camera opts in and a
     // sprite names an atlas whose `pixels_per_unit` defines a texel grid, snap the view height so one
@@ -786,10 +824,14 @@ fn extract_inner(
     // `render.bounds` and the world hash never see it.
     // Skipped while a view override is in force: the override is a perspective camera, and the snap
     // would overwrite its projection with the scene camera's orthographic one.
+    let mut pixel_snapped = false;
     if view.is_none()
         && let Some((height, near, far)) = orthographic_pixel_snap(world, &ids)
         && let Some(ppu) = pixel_snap_ppu(&placed.sprites, assets, &mut atlases)
     {
+        pixel_snapped = true;
+        // Blending would undo the texel snap: the sprites and the camera take the newer tick.
+        sprite_keys.clear();
         let aspect = aspect_ratio(viewport);
         let snapped_height = snap_view_height(height, viewport.1, ppu);
         let half_h = snapped_height * 0.5;
@@ -957,6 +999,11 @@ fn extract_inner(
 
     // World text resolves its face's atlas here, after the UI, so a face shared by a `UiText` and a
     // `Text` is one `textures` entry.
+    let text_keys: Vec<Option<EntityId>> = if collect {
+        placed.texts.iter().map(|text| Some(text.0)).collect()
+    } else {
+        Vec::new()
+    };
     let texts: Vec<TextRun> = std::mem::take(&mut placed.texts)
         .into_iter()
         .map(|(_, mut run, font, index)| {
@@ -1206,7 +1253,7 @@ fn extract_inner(
         }
     }
 
-    let decals = extract_decals(
+    let (decals, decal_ids) = extract_decals(
         world,
         &ids,
         &mut poses,
@@ -1264,15 +1311,27 @@ fn extract_inner(
         }
     };
 
-    Ok(RenderScene {
+    let (ground_markers, ground_marker_ids) = extract_ground_markers(world, &ids, &mut poses);
+    let (drop_shadows, drop_shadow_ids) =
+        extract_drop_shadows(world, &ids, &mut poses, &mesh_owners);
+    let (light_ids, spot_light_ids): (Vec<EntityId>, Vec<EntityId>) = if collect {
+        (
+            placed.lights.iter().map(|(id, _)| *id).collect(),
+            placed.spot_lights.iter().map(|(id, _)| *id).collect(),
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
+    let scene = RenderScene {
         camera,
         ambient,
         textures,
         mesh_assets,
         meshes,
         sprites,
-        ground_markers: extract_ground_markers(world, &ids, &mut poses),
-        drop_shadows: extract_drop_shadows(world, &ids, &mut poses, &mesh_owners),
+        ground_markers,
+        drop_shadows,
         decals,
         debug_lines: Vec::new(),
         debug_view: None,
@@ -1296,7 +1355,101 @@ fn extract_inner(
         voxel,
         gi,
         bone_palette,
-    })
+    };
+    if let Some(blend) = blend {
+        let camera_key = if view.is_none() && !pixel_snapped {
+            single_camera(world, &ids).ok().flatten()
+        } else {
+            None
+        };
+        fill_blend(
+            blend,
+            world,
+            &mut poses,
+            viewport,
+            camera_key,
+            BlendKeys {
+                meshes: mesh_owners,
+                sprites: sprite_keys,
+                lights: light_ids,
+                spot_lights: spot_light_ids,
+                texts: text_keys,
+                ground_markers: ground_marker_ids,
+                drop_shadows: drop_shadow_ids,
+                decals: decal_ids,
+            },
+        );
+    }
+    Ok(scene)
+}
+
+/// The entities behind each keyed `RenderScene` list, as extract collected them.
+struct BlendKeys {
+    meshes: Vec<EntityId>,
+    sprites: Vec<Option<EntityId>>,
+    lights: Vec<EntityId>,
+    spot_lights: Vec<EntityId>,
+    texts: Vec<Option<EntityId>>,
+    ground_markers: Vec<EntityId>,
+    drop_shadows: Vec<EntityId>,
+    decals: Vec<EntityId>,
+}
+
+/// Fills `blend` from the keys extract collected: the pose table over every unique key, the snap
+/// set, and the camera. Reads the same `render_pose` the extract drew with.
+fn fill_blend(
+    blend: &mut BlendData,
+    world: &World,
+    poses: &mut WorldAffines,
+    viewport: (u32, u32),
+    camera_key: Option<EntityId>,
+    keys: BlendKeys,
+) {
+    let some =
+        |ids: Vec<EntityId>| -> Vec<Option<EntityId>> { ids.into_iter().map(Some).collect() };
+    blend.meshes = some(keys.meshes);
+    blend.sprites = keys.sprites;
+    blend.lights = some(keys.lights);
+    blend.spot_lights = some(keys.spot_lights);
+    blend.texts = keys.texts;
+    blend.ground_markers = some(keys.ground_markers);
+    blend.drop_shadows = some(keys.drop_shadows);
+    blend.decals = some(keys.decals);
+
+    let unique: BTreeSet<EntityId> = [
+        &blend.meshes,
+        &blend.sprites,
+        &blend.lights,
+        &blend.spot_lights,
+        &blend.texts,
+        &blend.ground_markers,
+        &blend.drop_shadows,
+        &blend.decals,
+    ]
+    .into_iter()
+    .flat_map(|list| list.iter().flatten().copied())
+    .collect();
+    blend.poses = unique
+        .iter()
+        .map(|&id| (id, render_pose(world, poses, id).model()))
+        .collect();
+    blend.snaps = crate::interpolation::snap_set(world, unique.iter().copied().chain(camera_key));
+    blend.camera = camera_key.map(|key| {
+        let cam = get::<Camera>(world, key).copied().unwrap_or_default();
+        let (near, far) = cam.depth_range();
+        let pose = render_pose(world, poses, key);
+        CameraBlend {
+            key,
+            model: Mat4::from_rotation_translation(pose.quat(), Vec3::from(pose.translation())),
+            fov_y_deg: match cam.projection {
+                Projection::Perspective { fov_y_deg } => Some(fov_y_deg),
+                Projection::Orthographic { .. } => None,
+            },
+            near,
+            far,
+            aspect: aspect_ratio(viewport),
+        }
+    });
 }
 
 /// The renderer's [`GiData`] for a finished grid: the authored knobs verbatim, plus the probe
@@ -1499,20 +1652,23 @@ fn extract_ground_markers(
     world: &World,
     ids: &[EntityId],
     poses: &mut WorldAffines,
-) -> Vec<GroundMarkerInstance> {
+) -> (Vec<GroundMarkerInstance>, Vec<EntityId>) {
     ids.iter()
         .filter_map(|&id| {
             let marker = get::<GroundMarker>(world, id)?;
             let pose = render_pose(world, poses, id);
             let shape = scaled_shape(marker.shape, pose.scale()[0]);
             let translation = Vec3::from(pose.translation()) + Vec3::Y * GROUND_MARKER_LIFT;
-            Some(GroundMarkerInstance {
-                shape,
-                model: Mat4::from_rotation_translation(pose.quat(), translation),
-                color: marker.color,
-            })
+            Some((
+                GroundMarkerInstance {
+                    shape,
+                    model: Mat4::from_rotation_translation(pose.quat(), translation),
+                    color: marker.color,
+                },
+                id,
+            ))
         })
-        .collect()
+        .unzip()
 }
 
 /// A component shape in final world units: every dimension times `scale`. A negative scale has no
@@ -1549,7 +1705,7 @@ fn extract_drop_shadows(
     ids: &[EntityId],
     poses: &mut WorldAffines,
     mesh_owners: &[EntityId],
-) -> Vec<DropShadowInstance> {
+) -> (Vec<DropShadowInstance>, Vec<EntityId>) {
     let mut children = None;
     ids.iter()
         .filter_map(|&id| {
@@ -1566,18 +1722,21 @@ fn extract_drop_shadows(
                 .map(|(index, _)| index as u32)
                 .collect();
             let along_x = pose.quat() * Vec3::X;
-            Some(DropShadowInstance {
-                shape: scaled_shape(shadow.shape, pose.scale()[0]),
-                anchor: Vec3::from(pose.translation()),
-                yaw: ludion_core::math::atan2(-along_x.z, along_x.x),
-                opacity: shadow.opacity,
-                softness: shadow.softness,
-                max_distance: shadow.max_distance,
-                fade_distance: shadow.fade_distance,
-                exclude,
-            })
+            Some((
+                DropShadowInstance {
+                    shape: scaled_shape(shadow.shape, pose.scale()[0]),
+                    anchor: Vec3::from(pose.translation()),
+                    yaw: ludion_core::math::atan2(-along_x.z, along_x.x),
+                    opacity: shadow.opacity,
+                    softness: shadow.softness,
+                    max_distance: shadow.max_distance,
+                    fade_distance: shadow.fade_distance,
+                    exclude,
+                },
+                id,
+            ))
         })
-        .collect()
+        .unzip()
 }
 
 /// Every [`Decal`] in the world, resolved into the renderer's [`DecalInstance`] in draw order:
@@ -1603,7 +1762,7 @@ fn extract_decals(
     project_root: &Path,
     assets: &mut dyn SceneAssets,
     errors: &mut Vec<Diagnostic>,
-) -> Vec<DecalInstance> {
+) -> (Vec<DecalInstance>, Vec<EntityId>) {
     let skinned = |index: usize| meshes.get(index).is_some_and(|mesh| mesh.bone_offset != 0);
     let mut skinned_indices: Option<Vec<u32>> = None;
     let mut children = None;
@@ -1698,8 +1857,8 @@ fn extract_decals(
     decals.sort_by_key(|(layer, id, _)| (*layer, std::cmp::Reverse(*id)));
     decals
         .into_iter()
-        .map(|(_, _, instance)| instance)
-        .collect()
+        .map(|(_, id, instance)| (instance, id))
+        .unzip()
 }
 
 /// Resolves one of a decal's maps, or `None` when the decal authors none or the load failed (the
@@ -4463,6 +4622,7 @@ mod tests {
             ludion_renderer::QualityParams::FULL.particle_density,
             None,
             &mut degraded,
+            None,
         )
         .expect("the world extracts");
 

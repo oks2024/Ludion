@@ -23,6 +23,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::FrameIndex;
 use ludion_render_graph::{FrameSinks, Gpu, PresentTarget, StreamReadback};
 
+use crate::blend::BlendData;
 use crate::graph::{AntiAliasing, FrameSize};
 use crate::probe_capture::ProbeResolve;
 use crate::quality::{Quality, QualityParams};
@@ -79,6 +80,9 @@ pub struct PresentPacket {
     pub settings: PresentSettings,
     /// The tick's wall-clock stamp, when the live loop supplies one.
     pub tick: Option<TickStamp>,
+    /// The poses and keys that let a display-rate frame blend toward this tick, when the host
+    /// collected them.
+    pub blend: Option<Arc<BlendData>>,
 }
 
 /// What the presenter sends back to the sim thread.
@@ -387,7 +391,6 @@ impl PresentTrace {
 /// the window's [`PresentTarget`].
 pub struct WindowBackend {
     renderer: Renderer,
-    gpu: Gpu,
     ring: Option<StreamReadback<FrameIndex>>,
     ring_size: Option<FrameSize>,
     target: PresentTarget,
@@ -395,16 +398,16 @@ pub struct WindowBackend {
 }
 
 impl WindowBackend {
-    /// Builds a backend over `gpu` (the surface's context) and the window's `target`. The renderer
-    /// runs on a [`Gpu::share`] of `gpu`; `gpu` itself serves the blit.
+    /// Builds a backend over `gpu` and the window's `target`. The renderer is built on `gpu`
+    /// itself, and the blit to the window goes through the renderer's context; the caller passes a
+    /// [`Gpu::share`] when it keeps its own handle.
     ///
     /// # Errors
-    /// Whatever [`Gpu::share`] or [`Renderer::from_gpu`] raises.
+    /// Whatever [`Renderer::from_gpu`] raises.
     pub fn new(gpu: Gpu, target: PresentTarget) -> Result<WindowBackend, Diagnostic> {
-        let renderer = Renderer::from_gpu(gpu.share()?)?;
+        let renderer = Renderer::from_gpu(gpu)?;
         Ok(WindowBackend {
             renderer,
-            gpu,
             ring: None,
             ring_size: None,
             target,
@@ -448,7 +451,7 @@ impl PresentBackend for WindowBackend {
 
     fn present(&mut self) -> Result<(), Diagnostic> {
         match self.ring.as_ref().and_then(StreamReadback::last_output) {
-            Some(output) => self.target.present(&self.gpu, output),
+            Some(output) => self.target.present(self.renderer.gpu(), output),
             None => Ok(()),
         }
     }
@@ -518,6 +521,7 @@ mod tests {
                 probe_store: None,
             },
             tick: None,
+            blend: None,
         }
     }
 

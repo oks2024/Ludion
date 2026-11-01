@@ -312,6 +312,20 @@ fn a_new_rig_blends_in_over_its_seconds_and_a_snap_cuts() {
     );
 }
 
+#[test]
+fn a_rig_snap_marks_the_camera_cut_for_the_presenter() {
+    let (files, scene) = track_scene();
+    let mut engine = engine_for("present-cut", &files, &scene, &[("edit", edit_then_snap)]);
+    let cam = named(engine.world(), "cam");
+    advance(&mut engine, SNAP_AT as usize);
+    let (_, before) = engine.extract_present_scene().unwrap();
+    assert!(!before.snaps.contains(&cam), "a blending rig is not a cut");
+    engine.advance_live();
+    let (_, after) = engine.extract_present_scene().unwrap();
+    assert_eq!(after.camera.map(|camera| camera.key), Some(cam));
+    assert!(after.snaps.contains(&cam), "snap_rig cuts the camera");
+}
+
 // ---- the gameplay clock ----
 
 const HOLD_FROM: u64 = 30;
