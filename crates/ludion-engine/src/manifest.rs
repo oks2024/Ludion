@@ -9,6 +9,7 @@ use ludion_assets::cooked::CookTarget;
 use ludion_core::audio::VoiceCaps;
 use ludion_core::codes::code::{AUDIO_VOICE_CAPS_INVALID, MANIFEST_INVALID};
 use ludion_core::diagnostics::Diagnostic;
+use ludion_core::paths;
 use serde::Deserialize;
 
 /// The parsed `ludion.toml`.
@@ -84,8 +85,9 @@ pub struct IosSection {
 ///
 /// # Errors
 /// `L0023` for a missing or unreadable file, malformed TOML, an unknown or missing key, a `name`
-/// outside `A-Z a-z 0-9 _ -`, or a `default_scene` that is absolute, holds a `.` or `..` component,
-/// or has no parent directory; `L5004` for an invalid `[audio]` table.
+/// outside `A-Z a-z 0-9 _ -`, or a `default_scene` that is not a project-relative path in its one
+/// spelling (absolute, escaping, `.`, `..` or empty segments, reserved names) or has no parent
+/// directory; `L5004` for an invalid `[audio]` table.
 pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
     let path = project_dir.join("ludion.toml");
     let invalid = |message: String, help: &str| {
@@ -117,16 +119,10 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
             "the name becomes the Xcode project and app name",
         ));
     }
-    let confined = manifest
-        .default_scene
-        .components()
-        .all(|part| matches!(part, std::path::Component::Normal(_)));
-    if !confined {
+    let scene = manifest.default_scene.to_string_lossy();
+    if let Some(reason) = path_refusal(&scene) {
         return Err(invalid(
-            format!(
-                "`default_scene` = `{}` must be a relative path inside the project, with no `.` or `..`",
-                manifest.default_scene.display()
-            ),
+            format!("`default_scene` = `{scene}` {reason}"),
             "the scene's directory is copied into the app: write it as `scenes/main.yaml`",
         ));
     }
@@ -147,7 +143,7 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
         invalid(
             message,
             "an `[[import]]` table is `from = \"art/*/export/*.gltf\"` and `to = \"assets/derived\"`: \
-             relative paths inside the project, with no `.` or `..`, one `to` per table, no `to` inside another, and no `to` inside a `from` directory",
+             relative paths inside the project in one spelling (no `.`, `..` or `\\`), one `to` per table, no `to` inside another, and no `to` inside a `from` directory",
         )
     })?;
     validate_cook(&manifest).map_err(|message| {
@@ -225,25 +221,34 @@ fn starts_with_ignore_case(path: &Path, prefix: &Path) -> bool {
     })
 }
 
+/// Why a manifest path is not a project-relative path in its one spelling, as a phrase that
+/// finishes "… `x`": `paths::content_refusal`, plus `normalize`'s spelling (no `.`, empty
+/// segment or `\`), and never the project directory itself.
+fn path_refusal(text: &str) -> Option<String> {
+    if let Some(refusal) = paths::content_refusal(text) {
+        return Some(refusal.describe().to_string());
+    }
+    let canonical = paths::normalize(text);
+    if canonical == "." {
+        return Some("names the project directory itself".into());
+    }
+    (canonical != text).then(|| format!("is not in its one spelling: write `{canonical}`"))
+}
+
 fn validate_imports(imports: &[ImportSection]) -> Result<(), String> {
-    let confined = |path: &Path| {
-        path.components()
-            .all(|part| matches!(part, std::path::Component::Normal(_)))
-    };
     for (index, table) in imports.iter().enumerate() {
-        let from = Path::new(&table.from);
-        if table.from.is_empty() || !confined(from) {
+        if let Some(reason) = path_refusal(&table.from) {
             return Err(format!(
-                "`[[import]]` #{} `from` = `{}` must be a non-empty relative path inside the project, with no `.` or `..`",
+                "`[[import]]` #{} `from` = `{}` {reason}",
                 index + 1,
                 table.from
             ));
         }
-        if table.to.as_os_str().is_empty() || !confined(&table.to) {
+        let to = table.to.to_string_lossy();
+        if let Some(reason) = path_refusal(&to) {
             return Err(format!(
-                "`[[import]]` #{} `to` = `{}` must be a non-empty relative path inside the project, with no `.` or `..`",
-                index + 1,
-                table.to.display()
+                "`[[import]]` #{} `to` = `{to}` {reason}",
+                index + 1
             ));
         }
         for source in imports {
@@ -267,7 +272,9 @@ fn validate_imports(imports: &[ImportSection]) -> Result<(), String> {
                 source.from
             ));
         }
-        if let Some(first) = imports[..index].iter().position(|t| t.to == table.to) {
+        let same =
+            |a: &Path, b: &Path| starts_with_ignore_case(a, b) && starts_with_ignore_case(b, a);
+        if let Some(first) = imports[..index].iter().position(|t| same(&t.to, &table.to)) {
             return Err(format!(
                 "`[[import]]` #{} and #{} share `to` = `{}`",
                 first + 1,
@@ -276,9 +283,9 @@ fn validate_imports(imports: &[ImportSection]) -> Result<(), String> {
             ));
         }
         for (other_index, other) in imports.iter().enumerate().take(index) {
-            let (inner, outer) = if table.to.starts_with(&other.to) {
+            let (inner, outer) = if starts_with_ignore_case(&table.to, &other.to) {
                 (index, other_index)
-            } else if other.to.starts_with(&table.to) {
+            } else if starts_with_ignore_case(&other.to, &table.to) {
                 (other_index, index)
             } else {
                 continue;
@@ -521,10 +528,15 @@ mod tests {
             "../scenes/a.yaml",
             "s/../a.yaml",
             "./s/a.yaml",
+            "C:x/a.yaml",
+            "s/nul.yaml",
+            "s//a.yaml",
+            "s\\\\a.yaml",
         ] {
             let err = parse(&format!("name = \"a\"\ndefault_scene = \"{scene}\"\n")).unwrap_err();
             assert_eq!(err.code, MANIFEST_INVALID, "{scene}");
-            assert!(err.message.contains(scene), "{}", err.message);
+            let shown = scene.replace("\\\\", "\\");
+            assert!(err.message.contains(&shown), "{}", err.message);
         }
     }
 
@@ -564,6 +576,11 @@ mod tests {
             ("/abs/*.gltf", "out"),
             ("../k/*.gltf", "out"),
             ("", "out"),
+            ("k/*.gltf", "..."),
+            ("k/*.gltf", "nul"),
+            ("k/*.gltf", "."),
+            ("k/*.gltf", "a/../b"),
+            ("k/*.gltf", "C:x"),
         ] {
             let err = parse(&table(from, to)).unwrap_err();
             assert_eq!(err.code, MANIFEST_INVALID, "{from} -> {to}");
@@ -574,13 +591,24 @@ mod tests {
         );
         let err = parse(&twice).unwrap_err();
         assert!(err.message.contains("share"), "{}", err.message);
+        let err = parse(&format!(
+            "{}[[import]]\nfrom = \"o/*.gltf\"\nto = \"Out\"\n",
+            table("k/*.gltf", "out")
+        ))
+        .unwrap_err();
+        assert!(err.message.contains("share"), "{}", err.message);
         let both = |first: &str, second: &str| {
             format!(
                 "{}[[import]]\nfrom = \"o/*.gltf\"\nto = \"{second}\"\n",
                 table("k/*.gltf", first)
             )
         };
-        for (first, second) in [("assets", "assets/town"), ("assets/town", "assets")] {
+        for (first, second) in [
+            ("assets", "assets/town"),
+            ("assets/town", "assets"),
+            ("assets", "Assets/derived"),
+            ("assets/models", "Assets/models/rocks"),
+        ] {
             let err = parse(&both(first, second)).unwrap_err();
             assert!(err.message.contains("lies inside"), "{}", err.message);
         }

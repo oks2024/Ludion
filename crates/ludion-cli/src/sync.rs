@@ -5,16 +5,17 @@
 //! (`to`); a match `<dir>/<stem>.gltf` compiles into `<to>/<stem>/` exactly as `ludion import` would.
 //! An entry is fresh when its glTF's directory (every file's size and mtime match the record, else
 //! the content hash does) and the importer itself (this binary's bytes) are unchanged since the
-//! last sync and every file it wrote is still there,
-//! recorded in `<to>/.ludion-sync.json`. The record is also ownership: a `to` holding files without
-//! it, or a record that does not parse, is refused (`L1245`) and the sync only ever deletes
-//! directories under a root that carries it. An import compiles into `<to>/.sync-<stem>` and is
-//! swapped in whole: never a partially written tree, though for an instant during the swap none at
-//! all. The sync holds `<to>/.ludion-sync.lock`; a second sync waits for it (saying so on stderr),
-//! then re-reads the record and re-decides ownership under the lock. A provisional empty record is
-//! written before the first swap, so a first sync killed midway leaves a root the next run recovers
-//! from. After the import stage, still under the locks, the cook stage (`cook.rs`) compresses the
-//! imported meshes' maps into `.ludion/cooked/`; a cook failure never undoes an import.
+//! last sync and every file it wrote is still there, recorded in `<to>/.ludion-sync.json`. The record
+//! is also ownership: a `to` holding files without it, or a record that does not parse, is refused
+//! (`L1245`) and the sync deletes only the stems its record names, plus its own `.sync-`/`.old-`
+//! staging debris. An import compiles into `<to>/.sync-<stem>` and is swapped in whole: never a
+//! partially written tree, though for an instant during the swap none at all. The sync holds
+//! `<to>/.ludion-sync.lock`; a second sync waits for it (saying so on stderr), then re-reads the
+//! record and re-decides ownership under the lock. Each table writes an intent record (every stem it
+//! is about to import, with no outputs) before its first swap, so a sync killed midway leaves stems
+//! the next run owns and re-imports. After the import stage, still under the locks, the cook stage
+//! (`cook.rs`) compresses the imported meshes' maps into `.ludion/cooked/`; a cook failure never
+//! undoes an import.
 
 use std::collections::BTreeMap;
 use std::fs::{File, TryLockError};
@@ -159,8 +160,7 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
 
     // Wait, never refuse: the check gate, `ludion dev` and the editor's game slot sync the same
     // project concurrently, and a waiter reads the record and re-decides ownership under the lock,
-    // so it finds what the first sync wrote fresh. The provisional record, written before any swap,
-    // is what makes a killed first run recoverable. Manifest order is the same in every process
+    // so it finds what the first sync wrote fresh. Manifest order is the same in every process
     // and nested roots are refused, so the locks cannot deadlock.
     let mut locks = Vec::new();
     for table in &tables {
@@ -181,15 +181,6 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
     if !refusals.is_empty() {
         return Err(refusals);
     }
-    for table in tables.iter().filter(|table| table.previous.is_none()) {
-        let provisional = Record {
-            importer: importer.clone(),
-            entries: BTreeMap::new(),
-        };
-        write_record(&table.to, &provisional)
-            .map_err(|error| vec![io_failure("write", &table.to.join(RECORD_FILE), &error)])?;
-    }
-
     let mut outcome = Outcome::default();
     for table in &tables {
         sync_table(&root, table, &importer, &mut outcome);
@@ -628,31 +619,49 @@ fn sync_table(root: &Path, table: &Table, importer: &str, outcome: &mut Outcome)
         },
     );
     let mut removed: Vec<String> = plan.remove.clone();
-    // A failed import leaves no record entry; a source deleted after that must still go.
+    // Ownership is the record's: a directory goes only when a record entry names it. What a
+    // killed run leaves is covered because the intent record below names every stem before its
+    // swap; staging debris is swept by name.
+    let mut debris: Vec<String> = Vec::new();
     if let Ok(read) = table.to.read_dir() {
-        let mut leftovers: Vec<String> = read
+        debris = read
             .filter_map(Result::ok)
             .filter(|entry| entry.path().is_dir())
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .filter(|name| !table.found.iter().any(|entry| &entry.stem == name))
-            .filter(|name| !removed.contains(name))
+            .filter(|name| name.starts_with(".sync-") || name.starts_with(".old-"))
             .collect();
-        leftovers.sort();
-        removed.extend(leftovers);
-        removed.sort();
+        debris.sort();
     }
-    // Staging and swap debris from a crashed run is not a stem: swept, never reported.
-    let debris: Vec<String> = removed
-        .iter()
-        .filter(|name| name.starts_with('.'))
-        .cloned()
-        .collect();
-    removed.retain(|name| !name.starts_with('.'));
+    removed.sort();
     if let Err(error) = std::fs::create_dir_all(&table.to) {
         let failure = io_failure("create", &table.to, &error);
         outcome
             .failed
             .push((table.to.display().to_string(), vec![failure]));
+        return;
+    }
+    let mut intent = Record {
+        importer: importer.to_string(),
+        entries: table
+            .previous
+            .as_ref()
+            .map(|previous| previous.entries.clone())
+            .unwrap_or_default(),
+    };
+    for entry in table
+        .found
+        .iter()
+        .filter(|entry| plan.import.contains(&entry.stem))
+    {
+        intent
+            .entries
+            .insert(entry.stem.clone(), record_entry(entry, Vec::new()));
+    }
+    if let Err(error) = write_record(&table.to, &intent) {
+        let failure = io_failure("write", &table.to.join(RECORD_FILE), &error);
+        outcome
+            .failed
+            .push((RECORD_FILE.to_string(), vec![failure]));
         return;
     }
     for name in debris {
@@ -714,7 +723,12 @@ fn sync_table(root: &Path, table: &Table, importer: &str, outcome: &mut Outcome)
                     .insert(entry.stem.clone(), record_entry(entry, outputs));
                 imported_ok.push(&entry.stem);
             }
-            Err(diagnostics) => outcome.failed.push((entry.stem.clone(), diagnostics)),
+            Err(diagnostics) => {
+                record
+                    .entries
+                    .insert(entry.stem.clone(), record_entry(entry, Vec::new()));
+                outcome.failed.push((entry.stem.clone(), diagnostics));
+            }
         }
     }
     for entry in &table.found {

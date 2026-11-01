@@ -490,7 +490,8 @@ fn a_sync_waits_for_a_first_sync_that_has_swapped_a_stem() {
 }
 
 /// True when a sync of `dir` was killed while still running, after its first stem was swapped in
-/// and before its final record: the record still has no entries and a stem directory exists.
+/// and before its final record: the record is still the intent record (no entry has outputs) and a
+/// stem directory exists.
 fn kill_between_first_swap_and_final_record(dir: &Path) -> bool {
     let derived = dir.join("assets/derived");
     let mut child = spawn_sync(dir);
@@ -521,7 +522,13 @@ fn kill_between_first_swap_and_final_record(dir: &Path) -> bool {
     let provisional = record
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .is_some_and(|record| record["entries"].as_object().is_some_and(|e| e.is_empty()));
+        .is_some_and(|record| {
+            record["entries"].as_object().is_some_and(|entries| {
+                entries
+                    .values()
+                    .all(|entry| entry["outputs"].as_array().is_some_and(Vec::is_empty))
+            })
+        });
     running && provisional && stem
 }
 
@@ -553,7 +560,7 @@ fn a_killed_first_sync_leaves_a_record_and_the_next_sync_recovers() {
 }
 
 #[test]
-fn a_provisional_record_with_stems_and_debris_recovers() {
+fn an_intent_record_with_stems_and_debris_recovers() {
     let dir = project("sync-provisional");
     let derived = dir.join("assets/derived");
     for leftover in ["a", ".sync-b", "gone"] {
@@ -562,7 +569,10 @@ fn a_provisional_record_with_stems_and_debris_recovers() {
     std::fs::write(derived.join("a/junk.txt"), "x").unwrap();
     std::fs::write(derived.join(".sync-b/x"), "x").unwrap();
     std::fs::write(derived.join(".ludion-sync.lock"), "").unwrap();
-    std::fs::write(derived.join(".ludion-sync.json"), PROVISIONAL).unwrap();
+    let entry = r#"{"source":"x","hash":"x","outputs":[]}"#;
+    let intent =
+        format!(r#"{{"importer":"other","entries":{{"a":{entry},"b":{entry},"gone":{entry}}}}}"#);
+    std::fs::write(derived.join(".ludion-sync.json"), intent).unwrap();
 
     let (ok, json, stderr) = sync(&dir);
     assert!(ok, "{stderr}");
@@ -573,6 +583,39 @@ fn a_provisional_record_with_stems_and_debris_recovers() {
     for stem in ["a", "b"] {
         assert_matches_hand_import(&dir, stem);
     }
+}
+
+#[test]
+fn a_directory_no_record_names_survives_a_sync() {
+    let dir = project("sync-hand-added");
+    let derived = dir.join("assets/derived");
+    let (ok, _, stderr) = sync(&dir);
+    assert!(ok, "{stderr}");
+    std::fs::create_dir_all(derived.join("sounds")).unwrap();
+    std::fs::write(derived.join("sounds/x.ogg"), "x").unwrap();
+
+    let (ok, json, stderr) = sync(&dir);
+    assert!(ok, "{stderr}");
+    assert!(derived.join("sounds/x.ogg").is_file());
+    assert!(stems(&json, "removed").is_empty(), "{json}");
+}
+
+#[test]
+fn a_failed_import_keeps_its_stem_owned_until_the_source_goes() {
+    let dir = project("sync-failed-then-deleted");
+    let derived = dir.join("assets/derived");
+    let (ok, _, stderr) = sync(&dir);
+    assert!(ok, "{stderr}");
+    std::fs::write(dir.join("kits/a/export/a.gltf"), "not a gltf").unwrap();
+    let (ok, _, _) = sync(&dir);
+    assert!(!ok);
+    assert!(derived.join("a").exists(), "a failed import keeps the tree");
+
+    std::fs::remove_dir_all(dir.join("kits/a")).unwrap();
+    let (ok, json, stderr) = sync(&dir);
+    assert!(ok, "{stderr}");
+    assert_eq!(stems(&json, "removed"), ["a"]);
+    assert!(!derived.join("a").exists());
 }
 
 #[test]
