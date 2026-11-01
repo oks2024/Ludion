@@ -1176,3 +1176,220 @@ fn an_include_sprite_defers_ramp_membership_until_resolved() {
                   mode: ramp\n    steps: 1\n";
     check(source).expect("membership waits for the resolved palette");
 }
+
+// --- `light` ------------------------------------------------------------------------------------
+
+const LIGHT_PALETTE: &str = "  a:\n    color: \"#101010\"\n  b:\n    color: \"#808080\"\n  c:\n    color: \
+                             \"#f0f0f0\"\n  e:\n    color: \"#ff8000\"\n    emissive: 2.0\n";
+
+/// A 3×2 sprite over the `a`/`b`/`c`/`e` palette (`e` emissive), the given `ramps:` block and
+/// `effects:` body.
+fn light_source(ramps: &str, effects: &str) -> String {
+    format!(
+        "format: 1\nkind: sprite\nsize:\n  - 3\n  - 2\npalette:\n{LIGHT_PALETTE}{ramps}frames:\n  \
+         idle:\n    rows:\n      - bbe\n      - bbb\neffects:\n{effects}"
+    )
+}
+
+const LIGHT_EFFECTS: &str = "  - op: light\n    mode: ramp\n    sources:\n      - e\n    radius_px: \
+                             3.5\n    bands: 2\n    steps: 2\n  - op: light\n    glyphs:\n      - b\n    \
+                             sources:\n      - e\n    radius_px: 2.5\n    strength: 0.75\n    color: \
+                             \"#ffcc00\"\n    bands: 3\n  - op: light\n    radius_px: 1.5\n    \
+                             strength: 1.0\n";
+
+#[test]
+fn light_ops_round_trip_byte_identically() {
+    let source = light_source("ramps:\n  - abc\n", LIGHT_EFFECTS);
+    let doc = check(&source).expect("the sprite is valid");
+    let SpriteEffectOp::Light {
+        sources,
+        radius_px,
+        bands,
+        mode,
+    } = &doc.effects[1].op
+    else {
+        panic!("a light");
+    };
+    assert_eq!(sources.as_deref(), Some(&["e".to_string()][..]));
+    assert_eq!((*radius_px, *bands), (2.5, Some(3)));
+    assert!(matches!(
+        mode,
+        LightMode::Color {
+            color: Some(_),
+            strength
+        } if *strength == 0.75
+    ));
+    assert_eq!(doc.effects[0].op.ramp_steps(), Some(2));
+    assert_eq!(doc.effects[2].op.ramp_steps(), None);
+    let emitted = emit(&doc);
+    assert_eq!(emitted, source, "{emitted}");
+}
+
+#[test]
+fn a_spelled_out_light_color_mode_re_emits_without_it() {
+    let effects = "  - op: light\n    mode: color\n    radius_px: 2.0\n    strength: 1.0\n";
+    let doc = check(&light_source("", effects)).expect("the sprite is valid");
+    let emitted = emit(&doc);
+    assert!(!emitted.contains("mode:"), "{emitted}");
+    assert_eq!(emit(&parse(&emitted).unwrap()), emitted);
+}
+
+fn light_errors(ramps: &str, effects: &str) -> Vec<Diagnostic> {
+    errors(&light_source(ramps, effects))
+}
+
+fn light_parse_errors(effects: &str) -> Vec<Diagnostic> {
+    let Err(diagnostics) = parse(&light_source("ramps:\n  - abc\n", effects)) else {
+        panic!("expected a parse failure");
+    };
+    diagnostics
+}
+
+#[test]
+fn a_light_radius_outside_its_range_is_l1154() {
+    for radius in ["0.0", "40.0"] {
+        let effects = format!("  - op: light\n    radius_px: {radius}\n    strength: 1.0\n");
+        let diagnostics = light_errors("", &effects);
+        let found = find(&diagnostics, "/effects/0/radius_px");
+        assert_eq!(found.code.as_str(), "L1154");
+        assert!(
+            found.message.contains("0 < radius_px <= 32"),
+            "{}",
+            found.message
+        );
+    }
+}
+
+#[test]
+fn a_negative_light_strength_is_l1154() {
+    let effects = "  - op: light\n    radius_px: 2.0\n    strength: -0.5\n";
+    let diagnostics = light_errors("", effects);
+    assert_eq!(
+        find(&diagnostics, "/effects/0/strength").code.as_str(),
+        "L1154"
+    );
+}
+
+#[test]
+fn zero_bands_is_l1154_with_the_flat_disc_hint() {
+    let effects = "  - op: light\n    radius_px: 2.0\n    strength: 1.0\n    bands: 0\n";
+    let diagnostics = light_errors("", effects);
+    let found = find(&diagnostics, "/effects/0/bands");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(found.help.as_deref().unwrap().contains("one flat disc"));
+}
+
+#[test]
+fn a_negative_ramp_light_steps_is_l1154() {
+    let effects = "  - op: light\n    mode: ramp\n    radius_px: 2.0\n    steps: -1\n";
+    let diagnostics = light_errors("ramps:\n  - abc\n", effects);
+    let found = find(&diagnostics, "/effects/0/steps");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(found.help.as_deref().unwrap().contains("only brightens"));
+}
+
+#[test]
+fn an_empty_sources_list_is_l1154() {
+    let effects = "  - op: light\n    sources: []\n    radius_px: 2.0\n    strength: 1.0\n";
+    let diagnostics = light_errors("", effects);
+    assert_eq!(
+        find(&diagnostics, "/effects/0/sources").code.as_str(),
+        "L1154"
+    );
+}
+
+#[test]
+fn a_source_glyph_the_palette_lacks_is_l1154() {
+    let effects = "  - op: light\n    sources:\n      - z\n    radius_px: 2.0\n    strength: 1.0\n";
+    let diagnostics = light_errors("", effects);
+    assert_eq!(
+        find(&diagnostics, "/effects/0/sources/0").code.as_str(),
+        "L1154"
+    );
+}
+
+#[test]
+fn no_sources_and_no_emissive_glyph_is_l1154() {
+    let source = ramp_source(
+        "",
+        ["bbb", "bbb"],
+        "  - op: light\n    radius_px: 2.0\n    strength: 1.0\n",
+    );
+    let diagnostics = errors(&source);
+    let found = find(&diagnostics, "/effects/0");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(
+        found.help.as_deref().unwrap().contains("`emissive:`"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_colour_key_on_a_ramp_light_names_the_mode() {
+    for key in ["strength: 1.0", "color: \"#ffffff\""] {
+        let effects =
+            format!("  - op: light\n    mode: ramp\n    radius_px: 2.0\n    steps: 1\n    {key}\n");
+        let diagnostics = light_parse_errors(&effects);
+        let name = key.split(':').next().unwrap();
+        let found = find(&diagnostics, &format!("/effects/0/{name}"));
+        assert!(
+            found.help.as_deref().unwrap().contains("`mode: color` key"),
+            "{found:?}"
+        );
+    }
+}
+
+#[test]
+fn steps_on_a_colour_light_names_the_mode() {
+    let effects = "  - op: light\n    radius_px: 2.0\n    strength: 1.0\n    steps: 1\n";
+    let diagnostics = light_parse_errors(effects);
+    let found = find(&diagnostics, "/effects/0/steps");
+    assert!(
+        found.help.as_deref().unwrap().contains("add `mode: ramp`"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn missing_light_fields_are_l1154() {
+    for (effects, field) in [
+        ("  - op: light\n    strength: 1.0\n", "radius_px"),
+        ("  - op: light\n    radius_px: 2.0\n", "strength"),
+        (
+            "  - op: light\n    mode: ramp\n    radius_px: 2.0\n",
+            "steps",
+        ),
+    ] {
+        let diagnostics = light_parse_errors(effects);
+        let found = find(&diagnostics, "/effects/0");
+        assert_eq!(found.code.as_str(), "L1154");
+        assert!(
+            found.message.contains(&format!("`{field}`")),
+            "{}",
+            found.message
+        );
+    }
+}
+
+#[test]
+fn a_ramp_light_after_an_outline_is_l1154() {
+    let effects = "  - op: outline\n    color: \"#000000\"\n  - op: light\n    mode: ramp\n    \
+                   radius_px: 2.0\n    steps: 1\n";
+    let diagnostics = light_errors("ramps:\n  - abc\n", effects);
+    assert_eq!(find(&diagnostics, "/effects/1/mode").code.as_str(), "L1154");
+}
+
+#[test]
+fn a_ramp_light_does_not_need_its_emissive_source_in_a_ramp() {
+    // `e` is in no ramp and the frame holds it, yet it is a source and is never stepped.
+    let effects = "  - op: light\n    mode: ramp\n    radius_px: 2.0\n    steps: 1\n";
+    check(&light_source("ramps:\n  - abc\n", effects)).expect("sources need no ramp");
+}
+
+#[test]
+fn an_include_sprite_defers_light_source_checks_until_resolved() {
+    let source = "format: 1\nkind: sprite\nsize:\n  - 1\n  - 1\npalette:\n  from: shared.palette.yaml\n\
+                  frames:\n  idle:\n    rows:\n      - b\neffects:\n  - op: light\n    sources:\n      - z\n    \
+                  radius_px: 2.0\n    strength: 1.0\n";
+    check(source).expect("source membership waits for the resolved palette");
+}

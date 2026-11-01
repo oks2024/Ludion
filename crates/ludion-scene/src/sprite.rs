@@ -66,8 +66,8 @@ const FRAME_KEYS: [&str; 5] = ["base", "mirror", "patches", "pivot", "rows"];
 const PATCH_KEYS: [&str; 2] = ["at", "rows"];
 
 /// Every effect `op` name, in the order the format documents them.
-const EFFECT_OPS: [&str; 8] = [
-    "gradient", "outline", "shade", "shadow", "dither", "noise", "blur", "glow",
+const EFFECT_OPS: [&str; 9] = [
+    "gradient", "outline", "shade", "shadow", "dither", "noise", "blur", "glow", "light",
 ];
 
 const GRADIENT_KEYS: [&str; 8] = [
@@ -89,6 +89,27 @@ const DITHER_KEYS: [&str; 4] = ["op", "glyphs", "frames", "density"];
 const NOISE_KEYS: [&str; 4] = ["op", "glyphs", "frames", "amount"];
 const BLUR_KEYS: [&str; 4] = ["op", "glyphs", "frames", "radius"];
 const GLOW_KEYS: [&str; 6] = ["op", "glyphs", "frames", "color", "radius_px", "strength"];
+const LIGHT_KEYS: [&str; 9] = [
+    "op",
+    "glyphs",
+    "frames",
+    "mode",
+    "sources",
+    "radius_px",
+    "strength",
+    "color",
+    "bands",
+];
+const LIGHT_RAMP_KEYS: [&str; 8] = [
+    "op",
+    "glyphs",
+    "frames",
+    "mode",
+    "sources",
+    "radius_px",
+    "bands",
+    "steps",
+];
 
 /// The `gradient` op's default `direction`, omitted by [`emit`] when it is the authored value.
 const GRADIENT_DIRECTION_DEFAULT: GradientDirection = GradientDirection::Vertical;
@@ -108,10 +129,11 @@ const SHADOW_COLOR_DEFAULT: [f64; 4] = [0.0, 0.0, 0.0, 0.5];
 const DITHER_DENSITY_DEFAULT: f64 = 0.5;
 /// The inclusive `blur` radius range, in texels.
 const BLUR_RADIUS_RANGE: (u32, u32) = (1, 8);
-/// The largest `glow` halo radius, in texels. Fractional and unbounded below by an integer floor —
+/// The largest `glow` or `light` radius, in texels. Fractional and unbounded below by an integer floor —
 /// the point of the op — but capped so a halo wider than a large sprite is authored as its own
 /// sprite rather than a runaway radius, the same rule `blur` states for its integer ceiling.
-const GLOW_RADIUS_MAX: f64 = 32.0;
+/// `light` shares the cap.
+const RADIUS_PX_MAX: f64 = 32.0;
 
 /// One palette entry: a glyph and the linear RGBA color it paints.
 ///
@@ -351,8 +373,26 @@ pub enum ShadeMode {
     },
 }
 
-/// One effect op and its parameters. The set is closed: a document naming anything else is `L1154`.
+/// How a `light` brightens its receivers.
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LightMode {
+    /// Adds `strength` × the falloff × the source's (or `color`'s) RGB.
+    Color {
+        /// The light added at a source texel's own position, `>= 0` and finite.
+        strength: f64,
+        /// A forced light colour (alpha ignored). `None` takes each source texel's own colour.
+        color: Option<[f64; 4]>,
+    },
+    /// Steps receivers up their palette ramp by at most `steps`.
+    Ramp {
+        /// The step count a receiver at a source's position would climb, `>= 0`; a fractional
+        /// position resolves through the 4×4 Bayer matrix.
+        steps: i32,
+    },
+}
+
+/// One effect op and its parameters. The set is closed: a document naming anything else is `L1154`.
+#[derive(Clone, Debug, PartialEq)]
 pub enum SpriteEffectOp {
     /// A linear or radial ramp, in texel coordinates, either between two linear RGBA colors or along
     /// the palette's glyph ramps.
@@ -414,6 +454,22 @@ pub enum SpriteEffectOp {
         /// clamped to `0..=1`, so a value above 1 pushes the near-core halo toward opaque.
         strength: f64,
     },
+    /// Baked self-light: the frame's light-source texels brighten the nearby receiver texels.
+    ///
+    /// A source is a texel whose authored glyph is in `sources` (default: every palette glyph with
+    /// `emissive > 0`) and that is opaque before the op; it is never written. A receiver within
+    /// `radius_px` gains light weighted by the parabolic falloff `1 - d²/r²`, so the light follows its
+    /// glyphs through every frame, mirror and patch.
+    Light {
+        /// The source glyphs; `None` means every emissive palette glyph.
+        sources: Option<Vec<String>>,
+        /// The light's reach in texels, `0 < radius_px <= 32`.
+        radius_px: f64,
+        /// Quantizes the falloff into this many crisp rings (`>= 1`); `None` is smooth.
+        bands: Option<u32>,
+        /// What the light adds.
+        mode: LightMode,
+    },
 }
 
 impl SpriteEffectOp {
@@ -427,6 +483,10 @@ impl SpriteEffectOp {
             }
             | Self::Shade {
                 mode: ShadeMode::Ramp { steps },
+                ..
+            }
+            | Self::Light {
+                mode: LightMode::Ramp { steps },
                 ..
             } => Some(*steps),
             _ => None,
@@ -1827,6 +1887,8 @@ struct EffectFields {
     amount: Option<f64>,
     radius: Option<u32>,
     radius_px: Option<f64>,
+    sources: Option<Vec<String>>,
+    bands: Option<u32>,
 }
 
 /// Parses one effect entry. `op` is read first, because it decides the entry's whole key set — a
@@ -1877,7 +1939,7 @@ fn parse_effect(
 
     // `mode` decides a gradient's or shade's key set the way `op` decides the entry's, so it is read
     // before the fields.
-    let mode = if matches!(op_name, "gradient" | "shade") {
+    let mode = if matches!(op_name, "gradient" | "shade" | "light") {
         match entries.iter().find(|sub| sub.key == "mode") {
             Some(entry) => Some(parse_choice(
                 &entry.node,
@@ -1903,6 +1965,8 @@ fn parse_effect(
         ("dither", _) => &DITHER_KEYS,
         ("noise", _) => &NOISE_KEYS,
         ("glow", _) => &GLOW_KEYS,
+        ("light", false) => &LIGHT_KEYS,
+        ("light", true) => &LIGHT_RAMP_KEYS,
         _ => &BLUR_KEYS,
     };
     let fields = parse_effect_fields(entries, &pointer, op_name, mode, valid, diagnostics);
@@ -2027,6 +2091,48 @@ fn parse_effect(
                 color: fields.color,
                 radius_px: fields.radius_px?,
                 strength: fields.strength?,
+            }
+        }
+        "light" => {
+            if fields.radius_px.is_none() {
+                diagnostics.push(missing_effect_field(
+                    &pointer,
+                    "light",
+                    "radius_px",
+                    "the light's reach in texels, 0 < radius_px <= 32",
+                ));
+            }
+            let mode = if ramp {
+                if fields.steps.is_none() {
+                    diagnostics.push(missing_effect_field(
+                        &pointer,
+                        "light",
+                        "steps",
+                        "how many ramp steps a receiver at a source climbs, a whole number >= 0",
+                    ));
+                }
+                LightMode::Ramp {
+                    steps: fields.steps?,
+                }
+            } else {
+                if fields.strength.is_none() {
+                    diagnostics.push(missing_effect_field(
+                        &pointer,
+                        "light",
+                        "strength",
+                        "how much light is added at a source, a number >= 0",
+                    ));
+                }
+                LightMode::Color {
+                    strength: fields.strength?,
+                    color: fields.color,
+                }
+            };
+            SpriteEffectOp::Light {
+                sources: fields.sources,
+                radius_px: fields.radius_px?,
+                bands: fields.bands,
+                mode,
             }
         }
         _ => {
@@ -2227,9 +2333,16 @@ fn parse_effect_fields(
                     diagnostics,
                 );
             }
-            _ => {
-                fields.radius = parse_radius(&sub.node, &field_pointer, diagnostics);
+            "sources" => {
+                fields.sources = parse_name_list(&sub.node, &field_pointer, "sources", diagnostics);
             }
+            "bands" => {
+                fields.bands = parse_count(&sub.node, &field_pointer, "bands", diagnostics);
+            }
+            "radius" => {
+                fields.radius = parse_count(&sub.node, &field_pointer, "radius", diagnostics);
+            }
+            _ => {}
         }
     }
     fields
@@ -2244,7 +2357,11 @@ fn other_mode_help(op: &str, mode: Option<&str>, key: &str) -> Option<String> {
             "`{key}` is a `mode: color` key; a `mode: ramp` {op} repaints from the ramps and \
                  takes `steps`"
         )),
-        ("gradient" | "shade", Some("color"), "steps") => {
+        ("light", Some("ramp"), "strength" | "color") => Some(format!(
+            "`{key}` is a `mode: color` key; a `mode: ramp` light steps receivers along their \
+                 ramps and takes `steps`"
+        )),
+        ("gradient" | "shade" | "light", Some("color"), "steps") => {
             Some("`steps` belongs to `mode: ramp`; add `mode: ramp` or remove it".to_string())
         }
         _ => None,
@@ -2275,8 +2392,14 @@ fn parse_steps(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) ->
     value
 }
 
-/// Parses `blur`'s `radius`: a non-negative integer. The `1..=8` range is checked by [`validate`].
-fn parse_radius(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -> Option<u32> {
+/// Parses an effect's whole-number count (`blur`'s `radius`, `light`'s `bands`): a non-negative
+/// integer. Each op's range is checked by [`validate`].
+fn parse_count(
+    node: &Node,
+    pointer: &str,
+    field: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<u32> {
     let value = match &node.value {
         NodeValue::Scalar(Value::Number(n)) => n.as_u64().filter(|v| *v <= u64::from(u32::MAX)),
         _ => None,
@@ -2284,17 +2407,22 @@ fn parse_radius(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -
     match value {
         Some(v) => Some(v as u32),
         None => {
+            let help = if field == "radius" {
+                "a blur radius is a whole number of texels, 1..=8"
+            } else {
+                "`bands` is a whole number of rings, 1 or more"
+            };
             diagnostics.push(
                 Diagnostic::new(
                     code::SPRITE_EFFECT_INVALID,
                     format!(
-                        "`radius` must be a non-negative whole number, found {} (line {})",
+                        "`{field}` must be a non-negative whole number, found {} (line {})",
                         node.value.type_phrase(),
                         node.line
                     ),
                 )
                 .with_path(pointer.to_string())
-                .with_help("a blur radius is a whole number of texels, 1..=8"),
+                .with_help(help),
             );
             None
         }
@@ -2953,8 +3081,77 @@ fn validate_effects(
             }
         }
         validate_effect_op(effect, &pointer, diagnostics);
+        if let (Some(known), SpriteEffectOp::Light { sources, .. }) = (known, &effect.op) {
+            validate_light_sources(doc, known, sources.as_deref(), &pointer, diagnostics);
+        }
     }
     validate_ramp_effects(doc, known, diagnostics);
+}
+
+/// The resolved-palette checks of a `light`: each `sources` entry is a palette glyph, and without
+/// `sources` the palette marks at least one glyph `emissive`.
+fn validate_light_sources(
+    doc: &SpriteDocument,
+    known: &[char],
+    sources: Option<&[String]>,
+    pointer: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match sources {
+        Some(list) => {
+            for (slot, glyph) in list.iter().enumerate() {
+                if single_glyph(glyph)
+                    .filter(|ch| known.contains(ch))
+                    .is_none()
+                {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            code::SPRITE_EFFECT_INVALID,
+                            format!("`{glyph}` names no palette glyph of this document"),
+                        )
+                        .with_path(format!("{pointer}/sources/{slot}"))
+                        .with_help(
+                            "each entry is one glyph the `palette` defines; remove the `sources` \
+                             key to light from the palette's `emissive` glyphs",
+                        ),
+                    );
+                }
+            }
+        }
+        None => {
+            if light_source_glyphs(doc, None).is_empty() {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::SPRITE_EFFECT_INVALID,
+                        "the `light` effect has no source: no palette glyph is `emissive` and \
+                         `sources` is not set",
+                    )
+                    .with_path(pointer.to_string())
+                    .with_help(
+                        "mark a light-source glyph `emissive:` in the palette, or list it under \
+                         `sources:`",
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// The glyphs a `light` draws from: its `sources` when set, else every glyph of the (resolved)
+/// palette with `emissive > 0`.
+fn light_source_glyphs(doc: &SpriteDocument, sources: Option<&[String]>) -> Vec<char> {
+    match sources {
+        Some(list) => list
+            .iter()
+            .filter_map(|glyph| single_glyph(glyph))
+            .collect(),
+        None => doc
+            .palette
+            .iter()
+            .filter(|entry| entry.emissive.is_some_and(|e| e > 0.0))
+            .filter_map(|entry| single_glyph(&entry.glyph))
+            .collect(),
+    }
 }
 
 /// The ramp-mode rules across the effect list: ordering (always), and — once the palette is resolved —
@@ -2967,7 +3164,7 @@ fn validate_ramp_effects(
     let mut first_colour_op: Option<usize> = None;
     for (index, effect) in doc.effects.iter().enumerate() {
         if effect.op.ramp_steps().is_none() {
-            if !matches!(effect.op, SpriteEffectOp::Dither { .. }) {
+            if !matches!(&effect.op, SpriteEffectOp::Dither { .. }) {
                 first_colour_op.get_or_insert(index);
             }
             continue;
@@ -3012,6 +3209,16 @@ fn validate_ramp_effects(
                 missing.push((ch, at));
             }
         };
+        // A light never steps its own sources, so they need no ramp.
+        let never_stepped = match &effect.op {
+            SpriteEffectOp::Light { sources, .. } => light_source_glyphs(doc, sources.as_deref()),
+            _ => Vec::new(),
+        };
+        let mut note = |ch: char, at: String| {
+            if !never_stepped.contains(&ch) {
+                note(ch, at);
+            }
+        };
         let mut candidates: Vec<char> = Vec::new();
         if let Some(filter) = &effect.glyphs {
             for (slot, glyph) in filter.iter().enumerate() {
@@ -3038,7 +3245,7 @@ fn validate_ramp_effects(
         }
         // A `dither` before this op paints its second glyph where the first stood.
         for earlier in &doc.effects[..index] {
-            if let (SpriteEffectOp::Dither { .. }, Some(pair)) = (earlier.op, &earlier.glyphs)
+            if let (SpriteEffectOp::Dither { .. }, Some(pair)) = (&earlier.op, &earlier.glyphs)
                 && let [first, second] = pair.as_slice()
                 && let (Some(a), Some(b)) = (single_glyph(first), single_glyph(second))
                 && candidates.contains(&a)
@@ -3167,13 +3374,13 @@ fn validate_effect_op(effect: &SpriteEffect, pointer: &str, diagnostics: &mut Ve
             if let Some(color) = color {
                 validate_effect_color(color, pointer, "color", diagnostics);
             }
-            if !(radius_px.is_finite() && radius_px > 0.0 && radius_px <= GLOW_RADIUS_MAX) {
+            if !(radius_px.is_finite() && radius_px > 0.0 && radius_px <= RADIUS_PX_MAX) {
                 diagnostics.push(
                     Diagnostic::new(
                         code::SPRITE_EFFECT_INVALID,
                         format!(
                             "the `glow` radius_px is {radius_px}, outside the valid range \
-                             0 < radius_px <= {GLOW_RADIUS_MAX}"
+                             0 < radius_px <= {RADIUS_PX_MAX}"
                         ),
                     )
                     .with_path(format!("{pointer}/radius_px"))
@@ -3197,6 +3404,90 @@ fn validate_effect_op(effect: &SpriteEffect, pointer: &str, diagnostics: &mut Ve
                          value above 1 pushes the near-core halo toward opaque",
                     ),
                 );
+            }
+        }
+        SpriteEffectOp::Light {
+            ref sources,
+            radius_px,
+            bands,
+            mode,
+        } => {
+            if !(radius_px.is_finite() && radius_px > 0.0 && radius_px <= RADIUS_PX_MAX) {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::SPRITE_EFFECT_INVALID,
+                        format!(
+                            "the `light` radius_px is {radius_px}, outside the valid range \
+                             0 < radius_px <= {RADIUS_PX_MAX}"
+                        ),
+                    )
+                    .with_path(format!("{pointer}/radius_px"))
+                    .with_help(
+                        "a light's reach is a positive number of texels — fractional for a small \
+                         light; a wider one is a second sprite, not a bigger radius",
+                    ),
+                );
+            }
+            if bands == Some(0) {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::SPRITE_EFFECT_INVALID,
+                        "the `light` bands is 0; it must be at least 1",
+                    )
+                    .with_path(format!("{pointer}/bands"))
+                    .with_help("`bands: 1` is one flat disc; remove the key for a smooth falloff"),
+                );
+            }
+            if sources.as_ref().is_some_and(Vec::is_empty) {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::SPRITE_EFFECT_INVALID,
+                        "the `light` effect has an empty `sources` list, so nothing would shine",
+                    )
+                    .with_path(format!("{pointer}/sources"))
+                    .with_help(
+                        "list the source glyphs, or remove `sources` to light from the palette's \
+                         `emissive` glyphs",
+                    ),
+                );
+            }
+            match mode {
+                LightMode::Color { strength, color } => {
+                    if !(strength.is_finite() && strength >= 0.0) {
+                        diagnostics.push(
+                            Diagnostic::new(
+                                code::SPRITE_EFFECT_INVALID,
+                                format!(
+                                    "the `light` strength is {strength}; it must be finite and at \
+                                     least 0"
+                                ),
+                            )
+                            .with_path(format!("{pointer}/strength"))
+                            .with_help(
+                                "strength scales the light added at a source; the result is \
+                                 clamped to 0..=1 per channel",
+                            ),
+                        );
+                    }
+                    if let Some(color) = color {
+                        validate_effect_color(color, pointer, "color", diagnostics);
+                    }
+                }
+                LightMode::Ramp { steps } => {
+                    if steps < 0 {
+                        diagnostics.push(
+                            Diagnostic::new(
+                                code::SPRITE_EFFECT_INVALID,
+                                format!("the `light` steps is {steps}; a light only brightens"),
+                            )
+                            .with_path(format!("{pointer}/steps"))
+                            .with_help(
+                                "a `light` only brightens; use a positive `steps`, or a ramp-mode \
+                                 `gradient`/`shade` to darken",
+                            ),
+                        );
+                    }
+                }
             }
         }
     }
@@ -3523,6 +3814,36 @@ fn emit_effects(out: &mut String, effects: &[SpriteEffect]) {
                 out.push_str(&format_float(strength));
                 out.push('\n');
             }
+            SpriteEffectOp::Light {
+                ref sources,
+                radius_px,
+                bands,
+                mode,
+            } => {
+                if matches!(mode, LightMode::Ramp { .. }) {
+                    out.push_str("    mode: ramp\n");
+                }
+                if let Some(sources) = sources {
+                    emit_name_list(out, "sources", sources);
+                }
+                out.push_str("    radius_px: ");
+                out.push_str(&format_float(radius_px));
+                out.push('\n');
+                if let LightMode::Color { strength, color } = mode {
+                    out.push_str("    strength: ");
+                    out.push_str(&format_float(strength));
+                    out.push('\n');
+                    if let Some(color) = color {
+                        emit_color(out, "color", color);
+                    }
+                }
+                if let Some(bands) = bands {
+                    out.push_str(&format!("    bands: {bands}\n"));
+                }
+                if let LightMode::Ramp { steps } = mode {
+                    out.push_str(&format!("    steps: {steps}\n"));
+                }
+            }
         }
     }
 }
@@ -3538,6 +3859,7 @@ fn op_name(op: &SpriteEffectOp) -> &'static str {
         SpriteEffectOp::Noise { .. } => "noise",
         SpriteEffectOp::Blur { .. } => "blur",
         SpriteEffectOp::Glow { .. } => "glow",
+        SpriteEffectOp::Light { .. } => "light",
     }
 }
 

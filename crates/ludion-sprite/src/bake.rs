@@ -9,8 +9,8 @@
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math;
 use ludion_scene::{
-    GradientBlend, GradientDirection, GradientMode, OutlineSide, ShadeMode, SpriteDocument,
-    SpriteEffect, SpriteEffectOp, SpriteFrame,
+    GradientBlend, GradientDirection, GradientMode, LightMode, OutlineSide, ShadeMode,
+    SpriteDocument, SpriteEffect, SpriteEffectOp, SpriteFrame,
 };
 
 use crate::image::FrameImage;
@@ -46,9 +46,18 @@ pub fn bake(doc: &SpriteDocument) -> Result<Vec<BakedFrame>, Vec<Diagnostic>> {
 
     let palette = palette_lookup(doc);
     let ramps = RampTable::new(&doc.ramps);
+    let emissive = emissive_lookup(doc);
     let mut baked = Vec::with_capacity(doc.frames.len());
     for (frame_index, frame) in doc.frames.iter().enumerate() {
-        let image = bake_frame(doc, &palette, &ramps, frame_index, frame, |_, _| {});
+        let image = bake_frame(
+            doc,
+            &palette,
+            &ramps,
+            &emissive,
+            frame_index,
+            frame,
+            |_, _| {},
+        );
         baked.push(BakedFrame {
             name: frame.name.clone(),
             image,
@@ -139,6 +148,7 @@ pub fn bake_steps(doc: &SpriteDocument) -> Result<Vec<FrameSteps>, Vec<Diagnosti
 
     let palette = palette_lookup(doc);
     let ramps = RampTable::new(&doc.ramps);
+    let emissive = emissive_lookup(doc);
     let mut out = Vec::with_capacity(doc.frames.len());
     for (frame_index, frame) in doc.frames.iter().enumerate() {
         let glyphs = glyph_grid(doc, frame);
@@ -148,6 +158,7 @@ pub fn bake_steps(doc: &SpriteDocument) -> Result<Vec<FrameSteps>, Vec<Diagnosti
             doc,
             &palette,
             &ramps,
+            &emissive,
             frame_index,
             frame,
             |effect, image| {
@@ -172,6 +183,7 @@ fn bake_frame(
     doc: &SpriteDocument,
     palette: &[Option<[f32; 4]>; 128],
     ramps: &RampTable,
+    emissive: &[bool; 128],
     frame_index: usize,
     frame: &SpriteFrame,
     mut on_step: impl FnMut(usize, &FrameImage),
@@ -191,6 +203,7 @@ fn bake_frame(
             &mut plane,
             palette,
             ramps,
+            emissive,
             doc.seed.unwrap_or(0),
             frame_index,
             &mut image,
@@ -214,6 +227,23 @@ fn palette_lookup(doc: &SpriteDocument) -> [Option<[f32; 4]>; 128] {
         let code = glyph as usize;
         if code < lookup.len() {
             lookup[code] = Some(entry.color.map(|component| component as f32));
+        }
+    }
+    lookup
+}
+
+/// The glyphs whose palette entry has `emissive > 0`, indexed by ASCII code — the default light
+/// sources of a `light` with no `sources:`.
+fn emissive_lookup(doc: &SpriteDocument) -> [bool; 128] {
+    let mut lookup = [false; 128];
+    for entry in &doc.palette {
+        let Some(glyph) = entry.glyph.chars().next() else {
+            continue;
+        };
+        if entry.emissive.is_some_and(|e| e > 0.0)
+            && let Some(slot) = lookup.get_mut(glyph as usize)
+        {
+            *slot = true;
         }
     }
     lookup
@@ -306,6 +336,7 @@ fn apply(
     plane: &mut [Option<char>],
     palette: &[Option<[f32; 4]>; 128],
     ramps: &RampTable,
+    emissive: &[bool; 128],
     seed: u64,
     frame_index: usize,
     image: &mut FrameImage,
@@ -347,6 +378,28 @@ fn apply(
             radius_px,
             strength,
         } => glow(image, &mask, color, radius_px, strength),
+        SpriteEffectOp::Light {
+            ref sources,
+            radius_px,
+            bands,
+            mode,
+        } => {
+            let mut is_source = *emissive;
+            if let Some(list) = sources {
+                is_source = [false; 128];
+                for glyph in list.iter().filter_map(|name| name.chars().next()) {
+                    if let Some(slot) = is_source.get_mut(glyph as usize) {
+                        *slot = true;
+                    }
+                }
+            }
+            let lamp = Light {
+                is_source: &is_source,
+                radius_px,
+                bands,
+            };
+            light(image, plane, palette, ramps, glyphs, &mask, &lamp, mode);
+        }
     }
 }
 
@@ -567,6 +620,13 @@ fn ramp_repaint(
         image.texels[index] = color;
         plane[index] = Some(next);
     }
+}
+
+/// The weight `1 - d²/r²` of a source at squared distance `distance_sq` inside a squared reach
+/// `radius_sq`. Squared so it is an exact fraction of integer offsets, with no `sqrt` to disagree
+/// across platforms; `glow` and `light` share it.
+fn parabolic_falloff(distance_sq: f32, radius_sq: f32) -> f32 {
+    1.0 - distance_sq / radius_sq
 }
 
 /// `outline`: a one-texel border along the target set's silhouette.
@@ -924,7 +984,7 @@ fn glow(
                 if !mask[source] || source_alpha <= 0.0 {
                     continue;
                 }
-                let contribution = (1.0 - distance_sq / radius_sq) * source_alpha;
+                let contribution = parabolic_falloff(distance_sq, radius_sq) * source_alpha;
                 weight += contribution;
                 for (accum, &channel) in rgb.iter_mut().zip(&before.texels[source][0..3]) {
                     *accum += contribution * channel;
@@ -937,6 +997,98 @@ fn glow(
                 None => [rgb[0] / weight, rgb[1] / weight, rgb[2] / weight],
             };
             image.texels[index] = [halo[0], halo[1], halo[2], weight * strength];
+        }
+    }
+}
+
+/// The shape parameters of one `light` pass.
+struct Light<'a> {
+    is_source: &'a [bool; 128],
+    radius_px: f64,
+    bands: Option<u32>,
+}
+
+/// `light`: opaque source texels (authored glyph in the source set) brighten the receivers around
+/// them. `mask` is the op's target set; a receiver must also be opaque before the op and not itself
+/// a source, so sources are never written.
+///
+/// Each source weighs `parabolic_falloff` (quantized by `bands`) with no `sqrt` and no occlusion. In
+/// colour mode the sources' contributions combine by per-channel max, so overlapping lights never
+/// sum, and the result is added to the receiver; in ramp mode the strongest weight times `steps`
+/// moves the receiver up its ramp, the fraction resolving through the Bayer matrix.
+#[allow(clippy::too_many_arguments)]
+fn light(
+    image: &mut FrameImage,
+    plane: &mut [Option<char>],
+    palette: &[Option<[f32; 4]>; 128],
+    ramps: &RampTable,
+    glyphs: &[Option<char>],
+    mask: &[bool],
+    lamp: &Light,
+    mode: LightMode,
+) {
+    let before = image.clone();
+    let radius_sq = (lamp.radius_px as f32) * (lamp.radius_px as f32);
+    let bound = lamp.radius_px.ceil() as i32;
+    let width = image.width as i32;
+    let is_source = |index: usize| {
+        before.texels[index][3] > 0.0
+            && glyphs[index].is_some_and(|glyph| lamp.is_source.get(glyph as usize) == Some(&true))
+    };
+
+    for (index, &targeted) in mask.iter().enumerate() {
+        if !targeted || before.texels[index][3] <= 0.0 || is_source(index) {
+            continue;
+        }
+        let rx = (index as i32) % width;
+        let ry = (index as i32) / width;
+        let mut strongest = 0.0f32;
+        let mut light_rgb = [0.0f32; 3];
+        for oy in -bound..=bound {
+            for ox in -bound..=bound {
+                let distance_sq = (ox * ox + oy * oy) as f32;
+                if distance_sq >= radius_sq {
+                    continue;
+                }
+                let Some(source) = image.index(rx + ox, ry + oy) else {
+                    continue;
+                };
+                if !is_source(source) {
+                    continue;
+                }
+                let mut weight = parabolic_falloff(distance_sq, radius_sq);
+                if let Some(bands) = lamp.bands {
+                    let n = bands as f32;
+                    weight = (weight * n).ceil() / n;
+                }
+                strongest = strongest.max(weight);
+                if let LightMode::Color { strength, color } = mode {
+                    let tint = match color {
+                        Some(c) => [c[0] as f32, c[1] as f32, c[2] as f32],
+                        None => {
+                            let t = before.texels[source];
+                            [t[0], t[1], t[2]]
+                        }
+                    };
+                    for (accum, channel) in light_rgb.iter_mut().zip(tint) {
+                        *accum = accum.max(weight * strength as f32 * channel);
+                    }
+                }
+            }
+        }
+        if strongest <= 0.0 {
+            continue;
+        }
+        match mode {
+            LightMode::Color { .. } => {
+                for (channel, add) in image.texels[index].iter_mut().zip(light_rgb) {
+                    *channel += add;
+                }
+            }
+            LightMode::Ramp { steps } => {
+                let whole = bayer_steps(strongest * steps as f32, rx as usize, ry as usize);
+                ramp_repaint(image, plane, palette, ramps, index, whole);
+            }
         }
     }
 }

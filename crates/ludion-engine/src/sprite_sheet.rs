@@ -70,7 +70,7 @@ use ludion_core::color::{hex_of_linear, parse_hex};
 use ludion_core::diagnostics::{Diagnostic, value_phrase};
 use ludion_scene::{
     AppliedOverride, AtlasDocument, AtlasRegion, Flipbook, GradientBlend, GradientDirection,
-    GradientMode, OutlineSide, SceneOverride, ShadeMode, SpriteDocument, SpriteEffect,
+    GradientMode, LightMode, OutlineSide, SceneOverride, ShadeMode, SpriteDocument, SpriteEffect,
     SpriteEffectOp,
 };
 use ludion_sprite::BakedFrame;
@@ -668,7 +668,7 @@ const SPRITE_POINTER_SHAPES: &str = "a sprite override addresses one of `/seed`,
      `/palette/<glyph>/color` (a hex string), `/palette/<glyph>/emissive`, \
      `/frames/<name>/pivot/<0|1>`, `/effects/<i>/<param>` (a scalar, an enum keyword or a hex \
      colour — `from`, `to`, `color`) or `/effects/<i>/<param>/<j>` (one component of `light` or \
-     `offset`) — `steps` of a `mode: ramp` op is a whole number — e.g. \
+     `offset`) — `steps` of a `mode: ramp` op and `bands` are whole numbers — e.g. \
      `/palette/A/color=#3a7bd5`, `/effects/1/strength=0.4`, `/effects/0/from=#ffffff80`, \
      `/effects/2/steps=3`";
 
@@ -862,8 +862,10 @@ enum EffectSlot<'a> {
     Number(&'a mut f64),
     /// A whole colour, written from a hex string.
     Color(&'a mut [f64; 4]),
-    /// A `glow` tint, which may be unset (derived from the source).
-    GlowColor(&'a mut Option<[f64; 4]>),
+    /// An optional tint (`glow`, `light`); unset = derived from the source.
+    OptionalColor(&'a mut Option<[f64; 4]>),
+    /// A `light`'s `bands`: a non-negative whole number, unset for a smooth falloff.
+    Bands(&'a mut Option<u32>),
     /// A `shadow` offset component: whole texels, so it takes an integer.
     Offset(&'a mut i32),
     /// A `blur` radius: whole texels, non-negative.
@@ -928,9 +930,26 @@ fn effect_slot<'a>(
             radius_px,
             strength,
         } => match (param, component) {
-            ("color", None) => Some(EffectSlot::GlowColor(color)),
+            ("color", None) => Some(EffectSlot::OptionalColor(color)),
             ("radius_px", None) => Some(EffectSlot::Number(radius_px)),
             ("strength", None) => Some(EffectSlot::Number(strength)),
+            _ => None,
+        },
+        SpriteEffectOp::Light {
+            radius_px,
+            bands,
+            mode,
+            ..
+        } => match (mode, param, component) {
+            (_, "radius_px", None) => Some(EffectSlot::Number(radius_px)),
+            (_, "bands", None) => Some(EffectSlot::Bands(bands)),
+            (LightMode::Color { strength, .. }, "strength", None) => {
+                Some(EffectSlot::Number(strength))
+            }
+            (LightMode::Color { color, .. }, "color", None) => {
+                Some(EffectSlot::OptionalColor(color))
+            }
+            (LightMode::Ramp { steps }, "steps", None) => Some(EffectSlot::Steps(steps)),
             _ => None,
         },
     }
@@ -949,10 +968,19 @@ fn write_slot(
             *target = color;
             from
         }
-        EffectSlot::GlowColor(target) => {
+        EffectSlot::OptionalColor(target) => {
             let color = as_hex(pointer, value)?;
             let from = target.map(colour_value);
             *target = Some(color);
+            return Ok(from);
+        }
+        EffectSlot::Bands(target) => {
+            let number = value
+                .as_u64()
+                .and_then(|raw| u32::try_from(raw).ok())
+                .ok_or_else(|| wrong_value(pointer, "a non-negative whole number", value))?;
+            let from = target.map(Value::from);
+            *target = Some(number);
             return Ok(from);
         }
         EffectSlot::Number(target) => {
@@ -1148,6 +1176,7 @@ fn op_name(op: &SpriteEffectOp) -> &'static str {
         SpriteEffectOp::Noise { .. } => "noise",
         SpriteEffectOp::Blur { .. } => "blur",
         SpriteEffectOp::Glow { .. } => "glow",
+        SpriteEffectOp::Light { .. } => "light",
     }
 }
 
@@ -1224,6 +1253,28 @@ fn op_params(op: &SpriteEffectOp) -> String {
             "color={} radius_px={radius_px} strength={strength}",
             color.map_or_else(|| "source".to_string(), |c| colour_text(&c))
         ),
+        SpriteEffectOp::Light {
+            sources,
+            radius_px,
+            bands,
+            mode,
+        } => {
+            let sources = sources
+                .as_deref()
+                .map_or_else(|| "emissive".to_string(), |list| list.join(", "));
+            let bands = bands.map_or_else(String::new, |n| format!(" bands={n}"));
+            match mode {
+                LightMode::Color { strength, color } => format!(
+                    "sources={sources} radius_px={radius_px} strength={strength} color={}{bands}",
+                    color.map_or_else(|| "source".to_string(), |c| colour_text(&c))
+                ),
+                LightMode::Ramp { steps } => {
+                    format!(
+                        "sources={sources} radius_px={radius_px} mode=ramp steps={steps}{bands}"
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -2990,6 +3041,82 @@ effects:
             let mut sprite = ramp_doc();
             let diagnostics = apply_sprite_overrides(&mut sprite, &[over(spec)])
                 .expect_err("the pointer does not fit the op's mode");
+            assert_eq!(diagnostics[0].code.as_str(), "L4008", "{spec}");
+        }
+    }
+
+    /// An emissive `A` lighting a colour `light` and a ramp-mode `light`.
+    fn light_doc() -> SpriteDocument {
+        let source = SPRITE
+            .replace(
+                "      - 1.0\nframes:\n",
+                "      - 1.0\n    emissive: 1.0\n  B:\n    color:\n      - 0.0\n      - 0.0\n      - 1.0\n      - 1.0\nramps:\n  - AB\nframes:\n",
+            )
+            .replace(
+                "effects:\n  - op: outline\n    color:\n      - 0.0\n      - 0.0\n      - 0.0\n      - 1.0\n  - op: noise\n    amount: 0.1\n",
+                "effects:\n  - op: light\n    mode: ramp\n    radius_px: 2.0\n    steps: 2\n  - op: light\n    radius_px: 2.0\n    strength: 1.0\n",
+            );
+        ludion_scene::check_sprite(&source).expect("the light fixture is valid")
+    }
+
+    #[test]
+    fn a_light_writes_its_knobs_and_echoes_both_modes() {
+        let mut sprite = light_doc();
+        let lines = effect_lines(&sprite.effects);
+        assert!(
+            lines[1].contains("sources=emissive radius_px=2 strength=1 color=source"),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[0].contains("sources=emissive radius_px=2 mode=ramp steps=2"),
+            "{}",
+            lines[0]
+        );
+        let applied = apply_sprite_overrides(
+            &mut sprite,
+            &[
+                over("/effects/1/radius_px=3"),
+                over("/effects/1/strength=0.5"),
+                over("/effects/1/color=#ff8000"),
+                over("/effects/1/bands=3"),
+                over("/effects/0/steps=4"),
+                over("/effects/0/bands=2"),
+            ],
+        )
+        .expect("every pointer is a light knob");
+        assert_eq!(applied[0].from, Some(Value::from(2.0)));
+        assert_eq!(applied[2].from, None, "an unset tint is `unset -> n`");
+        assert_eq!(applied[3].from, None, "unset bands is `unset -> n`");
+        assert_eq!(applied[4].from, Some(Value::from(2)));
+        let lines = effect_lines(&sprite.effects);
+        assert!(
+            lines[1].contains("radius_px=3 strength=0.5 color=#ff8000 bands=3"),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[0].contains("mode=ramp steps=4 bands=2"),
+            "{}",
+            lines[0]
+        );
+    }
+
+    /// `sources` is shape, and each knob belongs to one mode.
+    #[test]
+    fn a_light_refuses_shape_and_the_other_modes_knobs() {
+        for spec in [
+            "/effects/1/sources/0=A",
+            "/effects/1/sources=A",
+            "/effects/0/strength=0.2",
+            "/effects/0/color=#ffffff",
+            "/effects/1/steps=1",
+            "/effects/1/bands=1.5",
+            "/effects/1/bands=-1",
+        ] {
+            let mut sprite = light_doc();
+            let diagnostics = apply_sprite_overrides(&mut sprite, &[over(spec)])
+                .expect_err("the pointer does not fit the light");
             assert_eq!(diagnostics[0].code.as_str(), "L4008", "{spec}");
         }
     }

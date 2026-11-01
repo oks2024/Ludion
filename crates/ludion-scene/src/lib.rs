@@ -202,7 +202,7 @@ pub use sculpt::{
     SculptTaper, SculptTurn, apply_sculpt_overrides,
 };
 pub use sprite::{
-    GradientBlend, GradientDirection, GradientMode, OutlineSide, SPRITE_EMPTY_GLYPH,
+    GradientBlend, GradientDirection, GradientMode, LightMode, OutlineSide, SPRITE_EMPTY_GLYPH,
     SPRITE_FORMAT_VERSION, SPRITE_GLYPH_BUDGET, SPRITE_MAX_SIZE, ShadeMode, SpriteDocument,
     SpriteEffect, SpriteEffectOp, SpriteFrame, SpriteFrameGrid, SpriteMirror, SpritePaletteEntry,
     SpritePaletteInclude, SpritePatch,

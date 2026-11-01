@@ -9,8 +9,8 @@
 //! - every semantic rule of the broken fixture is reported with its JSON Pointer.
 
 use ludion_scene::{
-    GradientBlend, GradientDirection, GradientMode, OutlineSide, SpriteDocument, SpriteEffect,
-    SpriteEffectOp, SpriteFrame, SpriteFrameGrid, SpriteMirror, SpritePaletteEntry,
+    GradientBlend, GradientDirection, GradientMode, LightMode, OutlineSide, SpriteDocument,
+    SpriteEffect, SpriteEffectOp, SpriteFrame, SpriteFrameGrid, SpriteMirror, SpritePaletteEntry,
     SpritePaletteInclude, SpritePatch, check_sprite, emit_sprite, parse_sprite, validate_sprite,
 };
 use proptest::prelude::*;
@@ -255,6 +255,20 @@ fn effect_op() -> impl Strategy<Value = SpriteEffectOp> {
                 strength,
             }
         ),
+        (
+            0.001f64..=32.0,
+            proptest::option::of(1u32..=8),
+            0.0f64..=4.0,
+            proptest::option::of(color()),
+        )
+            .prop_map(
+                |(radius_px, bands, strength, color)| SpriteEffectOp::Light {
+                    sources: None,
+                    radius_px,
+                    bands,
+                    mode: LightMode::Color { strength, color },
+                }
+            ),
     ]
 }
 
@@ -325,6 +339,14 @@ fn sprite_doc() -> impl Strategy<Value = SpriteDocument> {
         })
         .prop_map(
             |(glyphs, size, name, seed, frame_count, ops, colors, cells, pivots, shapes)| {
+                // A `light` with no `sources` needs one emissive glyph to shine from.
+                let needs_source = ops
+                    .iter()
+                    .any(|op| matches!(op, SpriteEffectOp::Light { sources: None, .. }));
+                let mut colors = colors;
+                if needs_source && !colors.iter().any(|(_, e)| e.is_some_and(|e| e > 0.0)) {
+                    colors[0].1 = Some(1.0);
+                }
                 let palette = glyphs
                     .iter()
                     .zip(colors)
