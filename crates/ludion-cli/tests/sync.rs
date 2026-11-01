@@ -181,6 +181,32 @@ fn sync_imports_skips_reimports_changed_and_removes_vanished() {
 }
 
 #[test]
+fn a_record_without_fingerprints_still_skips_and_is_refreshed() {
+    let dir = project("sync-old-record");
+    let record_path = dir.join("assets/derived/.ludion-sync.json");
+    let (ok, _, stderr) = sync(&dir);
+    assert!(ok, "{stderr}");
+
+    let mut record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&record_path).unwrap()).unwrap();
+    for entry in record["entries"].as_object_mut().unwrap().values_mut() {
+        entry.as_object_mut().unwrap().remove("fingerprint");
+    }
+    std::fs::write(&record_path, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+
+    let (ok, second, stderr) = sync(&dir);
+    assert!(ok, "{stderr}");
+    assert!(stems(&second, "imported").is_empty());
+    assert_eq!(stems(&second, "skipped"), ["a", "b"]);
+
+    let refreshed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&record_path).unwrap()).unwrap();
+    for entry in refreshed["entries"].as_object().unwrap().values() {
+        assert!(!entry["fingerprint"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn a_to_the_sync_does_not_own_is_refused_and_untouched() {
     let dir = project("sync-unowned");
     let derived = dir.join("assets/derived");

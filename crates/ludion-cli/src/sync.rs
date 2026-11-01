@@ -3,8 +3,9 @@
 //!
 //! Each `[[import]]` table in `ludion.toml` names glTF sources (`from`, a glob) and a derived root
 //! (`to`); a match `<dir>/<stem>.gltf` compiles into `<to>/<stem>/` exactly as `ludion import` would.
-//! An entry is fresh when the content of its glTF's directory and the importer itself (this
-//! binary's bytes) are unchanged since the last sync and every file it wrote is still there,
+//! An entry is fresh when its glTF's directory (every file's size and mtime match the record, else
+//! the content hash does) and the importer itself (this binary's bytes) are unchanged since the
+//! last sync and every file it wrote is still there,
 //! recorded in `<to>/.ludion-sync.json`. The record is also ownership: a `to` holding files without
 //! it, or a record that does not parse, is refused (`L1245`) and the sync only ever deletes
 //! directories under a root that carries it. An import compiles into `<to>/.sync-<stem>` and is
@@ -23,8 +24,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ludion_assets::content_hash;
 use ludion_assets::import_sync::{
-    LOCK_FILE, RECORD_FILE, SyncRecord as Record, SyncRecordEntry as RecordEntry, collect_files,
-    directory_hash, expand_import_sources, hex,
+    FileStamp, LOCK_FILE, RECORD_FILE, SyncRecord as Record, SyncRecordEntry as RecordEntry,
+    collect_files, directory_fingerprint, expand_import_sources, hex, source_hash,
 };
 use ludion_core::atomic::write_atomic;
 use ludion_core::codes::code::{IMPORT_OUTPUT_IO, IMPORT_SYNC_REFUSED};
@@ -43,7 +44,11 @@ use crate::bake_probes::{self, Warmed};
 struct Entry {
     stem: String,
     source: String,
+    /// Empty until `resolve_hashes` fills it under the lock.
     hash: String,
+    /// The glTF's directory, absolute.
+    dir: PathBuf,
+    fingerprint: Vec<FileStamp>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -166,6 +171,11 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
         match claim(&table.to) {
             Ok(previous) => table.previous = previous,
             Err(diagnostic) => refusals.push(diagnostic),
+        }
+    }
+    for table in &mut tables {
+        if let Err(diagnostic) = resolve_hashes(table) {
+            refusals.push(diagnostic);
         }
     }
     if !refusals.is_empty() {
@@ -514,7 +524,36 @@ fn refused(message: String, help: &str) -> Diagnostic {
     Diagnostic::new(IMPORT_SYNC_REFUSED, message).with_help(help.to_string())
 }
 
-/// Expands a table's `from`, hashes each source, and checks the `to` tree is the sync's to write.
+/// The refusal for a source directory the walk could not read: a link, or an I/O error.
+fn source_refusal(dir: &Path, error: std::io::Error) -> Diagnostic {
+    if error.kind() == std::io::ErrorKind::InvalidInput {
+        return refused(
+            error.to_string(),
+            "replace the link with the files, or move it out of the glTF's directory",
+        );
+    }
+    refused(
+        format!("could not read `{}`: {error}", dir.display()),
+        "check the path and permissions",
+    )
+}
+
+/// Fills each entry's hash: the recorded one when its fingerprint matches, else the content hash.
+/// Runs under the lock, once `previous` is known.
+fn resolve_hashes(table: &mut Table) -> Result<(), Diagnostic> {
+    for entry in &mut table.found {
+        let recorded = table
+            .previous
+            .as_ref()
+            .and_then(|record| record.entries.get(&entry.stem))
+            .filter(|old| old.source == entry.source);
+        entry.hash = source_hash(&entry.dir, &entry.fingerprint, recorded)
+            .map_err(|error| source_refusal(&entry.dir, error))?;
+    }
+    Ok(())
+}
+
+/// Expands a table's `from`, fingerprints each source, and checks the `to` tree is the sync's to write.
 fn discover(root: &Path, section: &ImportSection) -> Result<Table, Diagnostic> {
     let sources = expand_import_sources(root, &section.from);
     if sources.is_empty() {
@@ -547,19 +586,15 @@ fn discover(root: &Path, section: &ImportSection) -> Result<Table, Diagnostic> {
             ));
         }
         let dir = root.join(Path::new(&source).parent().unwrap_or(Path::new("")));
-        let hash = hex(directory_hash(&dir).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::InvalidInput {
-                return refused(
-                    error.to_string(),
-                    "replace the link with the files, or move it out of the glTF's directory",
-                );
-            }
-            refused(
-                format!("could not read `{}`: {error}", dir.display()),
-                "check the path and permissions",
-            )
-        })?);
-        found.push(Entry { stem, source, hash });
+        let fingerprint =
+            directory_fingerprint(&dir).map_err(|error| source_refusal(&dir, error))?;
+        found.push(Entry {
+            stem,
+            source,
+            hash: String::new(),
+            dir,
+            fingerprint,
+        });
     }
     found.sort_by(|a, b| a.stem.cmp(&b.stem));
 
@@ -740,6 +775,7 @@ fn record_entry(entry: &Entry, outputs: Vec<String>) -> RecordEntry {
         source: entry.source.clone(),
         hash: entry.hash.clone(),
         outputs,
+        fingerprint: entry.fingerprint.clone(),
     }
 }
 
@@ -831,6 +867,8 @@ mod tests {
             stem: stem.into(),
             source: format!("k/{stem}.gltf"),
             hash: hash.into(),
+            dir: PathBuf::new(),
+            fingerprint: Vec::new(),
         }
     }
 
@@ -846,6 +884,7 @@ mod tests {
                             source: format!("k/{stem}.gltf"),
                             hash: (*hash).into(),
                             outputs: vec!["m.yaml".into()],
+                            fingerprint: Vec::new(),
                         },
                     )
                 })

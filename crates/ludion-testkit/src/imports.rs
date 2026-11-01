@@ -5,10 +5,12 @@
 //! gate passes vacuously; a tree built from sources since edited is the same lie. A suite calls [`require_derived_imports`] in its content-root helper so
 //! the missing tree fails loudly with the command that fixes it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use ludion_assets::import_sync::{
-    RECORD_FILE, SyncRecord, directory_hash, expand_import_sources, hex,
+    RECORD_FILE, SyncRecord, directory_fingerprint, expand_import_sources, source_hash,
 };
 
 /// The `[[import]]` outputs of `project/ludion.toml` that are not synced, joined to `project`: the
@@ -47,7 +49,9 @@ pub fn missing_derived_imports(project: &Path) -> Vec<PathBuf> {
                     let source_dir =
                         project.join(Path::new(&source).parent().unwrap_or(Path::new("")));
                     entry.source == source
-                        && directory_hash(&source_dir).is_ok_and(|hash| hex(hash) == entry.hash)
+                        && directory_fingerprint(&source_dir)
+                            .and_then(|fp| source_hash(&source_dir, &fp, Some(entry)))
+                            .is_ok_and(|hash| hash == entry.hash)
                 });
             if unpopulated(&dir) || !fresh {
                 missing.push(dir);
@@ -57,13 +61,29 @@ pub fn missing_derived_imports(project: &Path) -> Vec<PathBuf> {
     missing
 }
 
-/// Panics, one line per directory, when [`missing_derived_imports`] is non-empty.
+/// Panics, one line per directory, when [`missing_derived_imports`] is non-empty. Memoized per
+/// process (the missing list, so a stale tree keeps failing): a test that edits sources between
+/// calls uses [`missing_derived_imports`].
 ///
 /// ```no_run
 /// ludion_testkit::require_derived_imports(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
 /// ```
 pub fn require_derived_imports(project: &Path) {
-    let missing = missing_derived_imports(project);
+    static MEMO: OnceLock<Mutex<BTreeMap<PathBuf, Vec<PathBuf>>>> = OnceLock::new();
+    let key = std::fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
+    let memo = MEMO.get_or_init(Mutex::default);
+    let cached = memo
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&key)
+        .cloned();
+    let missing = cached.unwrap_or_else(|| {
+        let missing = missing_derived_imports(project);
+        memo.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, missing.clone());
+        missing
+    });
     if missing.is_empty() {
         return;
     }
@@ -84,7 +104,7 @@ pub fn require_derived_imports(project: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ludion_assets::import_sync::SyncRecordEntry;
+    use ludion_assets::import_sync::{SyncRecordEntry, directory_hash, hex};
 
     struct Scratch(PathBuf);
 
@@ -159,6 +179,7 @@ mod tests {
                     source,
                     hash,
                     outputs: vec!["mesh.yaml".into()],
+                    fingerprint: directory_fingerprint(&s.0.join("src")).unwrap(),
                 },
             );
         }
@@ -191,18 +212,37 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "missing or stale")]
     fn a_source_edited_after_the_sync_is_stale() {
         let s = Scratch::new("stale");
         s.manifest(IMPORT);
         sync(&s, &["a"]);
-        require_derived_imports(&s.0);
+        assert!(missing_derived_imports(&s.0).is_empty());
         std::fs::write(s.0.join("src/a.gltf"), "{\"edited\":1}").unwrap();
         assert_eq!(
             missing_derived_imports(&s.0),
             vec![s.0.join("assets/town/a")]
         );
+    }
+
+    #[test]
+    fn require_is_memoized_per_process() {
+        let s = Scratch::new("memo");
+        s.manifest(IMPORT);
+        sync(&s, &["a"]);
         require_derived_imports(&s.0);
+        std::fs::write(s.0.join("src/a.gltf"), "{\"edited\":1}").unwrap();
+        require_derived_imports(&s.0);
+        assert_eq!(
+            missing_derived_imports(&s.0),
+            vec![s.0.join("assets/town/a")]
+        );
+
+        let unsynced = Scratch::new("memo-unsynced");
+        unsynced.manifest(IMPORT);
+        for _ in 0..2 {
+            let panicked = std::panic::catch_unwind(|| require_derived_imports(&unsynced.0));
+            assert!(panicked.is_err());
+        }
     }
 
     #[test]
