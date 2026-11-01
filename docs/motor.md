@@ -79,6 +79,7 @@ A motor that ended its last call grounded on a `static` or `kinematic` support (
 - `resize_character(world, hero, height)` → `ResizeReport { height, blocked_by }`. Shrinking always succeeds with the feet planted. Growing is tested first against a skin-lifted capsule at the feet: when something is inside it the height stays and `blocked_by` names the lowest-id blocker. A height the motor would reject (below `2 * radius + 0.001`, non-finite, not above `step_height`) is `MotorError::InvalidHeight`; growing past the authored `height` is allowed.
 - `fits_character(world, hero, height)` → `Result<bool, MotorError>` is that test without changing anything. A non-finite overlap query counts as "fits".
 - The test reads the last completed step: a ceiling despawned in tick N still blocks in N and is gone in N + 1.
+- `probe_character_ground(world, hero, feet)` → `Result<Option<GroundProbe>, MotorError>` runs the motor's own ground probe, cast from `step_height` above `feet` over `step_height + snap_distance + skin_width`. The result is `ground` plus `rest_y` (the feet height the motor would settle at); `None` means no ground a walk could reach, including an obstacle above the step. It uses the crouched height and the motor's layer filter, does no headroom test, and moves nothing. It draws `MOTOR_PROBE`.
 - `teleport_character(world, hero, feet, yaw)` places the feet and yaw **without driving the capsule**: no prop on the way is pushed, and none near the old or new spot is launched. It clears grounded, ground, platform and the carry tick (no carry next tick) and restores the authored height when it fits at the new spot, and nulls a `LaneConstraint`'s `s` so the lane re-acquires globally (`blend` kept). A sleeping prop beside either spot is woken and shows one gravity step of speed before it settles — a wake, not a launch. A plain `Transform` write is a **move**: it drives the capsule and pushes props (`ludion docs physics` §Teleports for rigid bodies).
 
 ## Freshness
@@ -87,7 +88,7 @@ Casts and overlaps see the last completed physics step. A press or wall coming a
 
 ## Debug draw
 
-Category `motor` (`DebugCategories::parse("motor")`), drawn only by `ludion_engine::move_character`, hash-neutral. Colours are consts in the prelude so a game can match them:
+Category `motor` (`DebugCategories::parse("motor")`), drawn only by `ludion_engine::move_character` and `probe_character_ground`, hash-neutral. Colours are consts in the prelude so a game can match them:
 
 | const | draws |
 | --- | --- |
@@ -95,7 +96,7 @@ Category `motor` (`DebugCategories::parse("motor")`), drawn only by `ludion_engi
 | `MOTOR_GROUND_NORMAL` | the ground normal at the contact |
 | `MOTOR_WALL` / `MOTOR_CEILING` | each wall normal / a cross and ray at the ceiling |
 | `MOTOR_CARRY` | the carry vector |
-| `MOTOR_PROBE` | the ground probe, `ground_probe_reach` long |
+| `MOTOR_PROBE` | the ground probe, `ground_probe_reach` long; from `probe_character_ground`, from `step_height` above the probed feet down over snap + skin |
 
 ## Diagnostics
 

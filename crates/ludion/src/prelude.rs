@@ -170,9 +170,9 @@ pub use ludion_engine::{
     add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
     bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
     fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly, move_character,
-    move_character_with, path_follow, path_follower_motion, play_patterns, reparent,
-    report_diagnostic, report_full_diagnostic, resize_character, revert_prefab, set_speed,
-    snap_rig, spawn_prefab, switch_to_ragdoll, teleport_character, unpack_prefab,
+    move_character_with, path_follow, path_follower_motion, play_patterns, probe_character_ground,
+    reparent, report_diagnostic, report_full_diagnostic, resize_character, revert_prefab,
+    set_speed, snap_rig, spawn_prefab, switch_to_ragdoll, teleport_character, unpack_prefab,
     validate_pattern_docs, volley_hits, world_transform,
 };
 
@@ -194,10 +194,10 @@ pub use single::SingleExt;
 
 pub use ludion_physics::{
     Blast, BlastHit, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase, ExitCause,
-    Falloff, GroundHit, JointBroken, LaneEnd, LaneFrame, LaneReport, MotorError, MoveConstraint,
-    MoveReport, PhysicsError, PhysicsWorld, PlatformCarry, PlatformPose, QueryFilter, QueryHit,
-    ResizeReport, SensorEvent, SensorPhase, SurfaceHit, SurfaceVelocity, height_in_force,
-    teleport_kinematic,
+    Falloff, GroundHit, GroundProbe, JointBroken, LaneEnd, LaneFrame, LaneReport, MotorError,
+    MoveConstraint, MoveReport, PhysicsError, PhysicsWorld, PlatformCarry, PlatformPose,
+    QueryFilter, QueryHit, ResizeReport, SensorEvent, SensorPhase, SurfaceHit, SurfaceVelocity,
+    height_in_force, teleport_kinematic,
 };
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,

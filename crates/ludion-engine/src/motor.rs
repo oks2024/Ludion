@@ -1,12 +1,12 @@
 //! The character motor on the engine's [`Transform`]: `ludion_physics::move_character` bound to
-//! the pose component, which is what a game calls. The move wrappers draw the `motor` debug
-//! category after each successful call.
+//! the pose component, which is what a game calls. The move wrappers and the ground probe draw
+//! the `motor` debug category after each successful call.
 
 use ludion_core::ids::EntityId;
 use ludion_ecs::World;
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, MotorError, MoveConstraint, MoveReport, ResizeReport,
-    ground_probe_reach,
+    CharacterMotor, CharacterMotorState, GroundProbe, MotorError, MoveConstraint, MoveReport,
+    ResizeReport, ground_probe_reach,
 };
 
 use crate::components::Transform;
@@ -27,7 +27,8 @@ pub const MOTOR_WALL: [f32; 4] = [0.9, 0.2, 0.9, 1.0];
 pub const MOTOR_CEILING: [f32; 4] = [1.0, 0.9, 0.1, 1.0];
 /// The platform carry (translation plus surface displacement), from the feet.
 pub const MOTOR_CARRY: [f32; 4] = [0.2, 0.3, 1.0, 1.0];
-/// The ground probe: the line the snap looks along below the feet.
+/// The ground probe: the line the snap looks along below the feet; `probe_character_ground` draws
+/// its own, from the step height above the probed feet.
 pub const MOTOR_PROBE: [f32; 4] = [0.8, 0.8, 0.8, 1.0];
 /// Length of the drawn surface normals, in metres.
 const NORMAL_LENGTH: f32 = 0.25;
@@ -116,6 +117,32 @@ pub fn resize_character(
 /// ```
 pub fn fits_character(world: &World, entity: EntityId, height: f32) -> Result<bool, MotorError> {
     ludion_physics::fits_character::<Transform>(world, entity, height)
+}
+
+/// The ground the motor would find with its feet at `feet`, without moving anything; see
+/// [`ludion_physics::probe_character_ground`]. Draws the probe line in the `motor` category.
+///
+/// ```no_run
+/// # use ludion_core::ids::EntityId;
+/// # use ludion_engine::probe_character_ground;
+/// # use ludion_ecs::{SystemCtx, World};
+/// fn ledge_ahead(world: &mut World, _ctx: &SystemCtx, hero: EntityId) -> bool {
+///     matches!(probe_character_ground(world, hero, [1.0, 0.0, 0.0]), Ok(None))
+/// }
+/// ```
+pub fn probe_character_ground(
+    world: &mut World,
+    entity: EntityId,
+    feet: [f32; 3],
+) -> Result<Option<GroundProbe>, MotorError> {
+    let probe = ludion_physics::probe_character_ground::<Transform>(world, entity, feet)?;
+    if let Some(motor) = world.get::<CharacterMotor>(entity).ok().flatten().cloned() {
+        let from = [feet[0], feet[1] + motor.step_height, feet[2]];
+        let reach = ground_probe_reach(&motor, true, [0.0; 3]);
+        let to = [feet[0], feet[1] - reach, feet[2]];
+        debug_draw(world, CATEGORY).line(from, to, MOTOR_PROBE);
+    }
+    Ok(probe)
 }
 
 /// Places the feet and yaw without driving the capsule; see [`ludion_physics::teleport_character`].
@@ -328,6 +355,58 @@ entities:
         let wall = boxed("wall", [1.5, 1.0, 0.0], [0.5, 2.0, 5.0]);
         let drawn = drawn(&scene(0.0, &wall), into_wall, 40);
         assert_eq!(of(&drawn, MOTOR_WALL).len(), 1);
+    }
+
+    fn probe_at_origin(world: &mut World, _ctx: &SystemCtx) {
+        let hero = hero(world);
+        let _ = probe_character_ground(world, hero, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_ground_probe_draws_one_line_of_step_snap_and_skin() {
+        let drawn = drawn(&scene(0.0, ""), probe_at_origin, 3);
+        let probe = of(&drawn, MOTOR_PROBE);
+        assert_eq!(probe.len(), 1);
+        let motor = CharacterMotor::default();
+        let want = motor.step_height + motor.snap_distance + motor.skin_width;
+        assert!((length(probe[0]) - want).abs() < 1e-5);
+    }
+
+    /// A `ghost` box under `[0, 5, 0]` with no floor near it; the hero's motor sits on `layer`.
+    fn ghost_probe(layer: Option<&str>) -> Option<GroundProbe> {
+        let ghost = boxed("ghost", [0.0, 4.5, 0.0], [0.5, 0.5, 0.5])
+            .replace("body: static\n", "body: static\n        layer: ghost\n");
+        let mut text = scene(0.0, &ghost).replace(
+            "  space: free\n",
+            "  space: free\n  layers:\n    - name: walker\n      ignores:\n        - ghost\n    - name: ghost\n",
+        );
+        if let Some(layer) = layer {
+            text = text.replace(
+                "        height: 0.9\n",
+                &format!("        height: 0.9\n        layer: {layer}\n"),
+            );
+        }
+        let dir = std::env::temp_dir().join(format!("ludion-motor-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut engine = Engine::builder()
+            .project_root(dir)
+            .system("motor", fall)
+            .build()
+            .expect("boots");
+        engine.load_inline_scene(&text).unwrap();
+        for _ in 0..3 {
+            engine.advance_live();
+        }
+        let world = engine.world_mut();
+        let hero = hero(world);
+        probe_character_ground(world, hero, [0.0, 5.0, 0.0]).expect("a motor")
+    }
+
+    #[test]
+    fn the_ground_probe_honours_the_motors_layer_filter() {
+        assert!(ghost_probe(Some("walker")).is_none());
+        let hit = ghost_probe(None).expect("the ghost box is ground without a layer");
+        assert!(hit.rest_y.is_some());
     }
 
     #[test]

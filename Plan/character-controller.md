@@ -106,7 +106,11 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
    for conveyors; `teleport_character`; the report gains `stepped`, `platform` (incl. `yaw` and
    `surface`), `moved`, `stuck` and `height`; a platform's yaw also turns the rider. Settled: the carry
    is applied after the slide and ground probe (casts see the support at its last-step pose); no carry
-   from `rigid` supports; the engine defaults are human scale (the 1 m preset is authored).
+   from `rigid` supports; the engine defaults are human scale (the 1 m preset is authored). From the
+   external platformer's request 0022: `probe_character_ground`, the motor's ground probe at an
+   arbitrary feet position, read-only, at walk reach (step-up above, snap below), returning the hit
+   and the rest height. A sweep variant (ground all along a segment) is a possible follow-up; trigger:
+   a caller probes more than one point per tick.
 7. **`move_and_slide` stays, split by domain.** `move_and_slide` serves planar games without a physics
    world (vigil moves hundreds of enemies through it), and the motor serves 3D. Each crate's docs point
    to the other. **Why:** these are different domains, not two ways to do one task, so each domain
@@ -369,7 +373,6 @@ collapsed.
 - **Motor modes beyond ground and air** (swimming, ladders, ledge grab, wall jump). **Trigger:** a GDD
   asks. New modes extend `MoveReport`.
 - **Dynamic bodies pushing the character.** **Trigger:** a moveset needs knockback from physics.
-- **A ledge or edge query.** **Trigger:** an edge animation or enemy AI asks.
 - **Tilting platforms** (pitch and roll riding). **Trigger:** a level needs one.
 - **More rig variants:** a framing dead zone, a static look-at rig, a guide-plus-camera track.
   **Trigger:** a level or game the shipped modes plus `manual` can't serve without repetition.
