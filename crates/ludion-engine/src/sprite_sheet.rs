@@ -15,7 +15,8 @@
 //! - **block A**, every frame nearest-upscaled to legibility ([`crate::voxel_sheet::upscale_factor`])
 //!   and laid out near-square, each labelled, each carrying its pivot as a cross — and the first one
 //!   carrying a **texel ruler** along its top and left edges, so texels can be *counted* on screen
-//!   rather than estimated;
+//!   rather than estimated; a checkerboard shows behind every transparent texel, and at an upscale
+//!   of [`GRID_MIN_UPSCALE`] or more a texel grid (every eighth line darker) separates the texels;
 //! - **block B**, every frame at the authored game scale in one row — the "is it readable at the
 //!   size it ships at" half, which no amount of upscaling can answer;
 //! - a **footer** echoing the effect list that was applied, in application order, and what each
@@ -25,6 +26,10 @@
 //! With a `sweep` the sheet becomes a near-square grid of *candidates* instead: one cell per swept
 //! value, each cell that document's frames in a row, labelled with the value. Same footer, same
 //! header, one baked document per cell.
+//!
+//! With `steps` the sheet becomes a **steps sheet** instead: one row per frame, the authored paint
+//! first and then the image after each effect that applies to it, cumulatively, each cell captioned
+//! with that effect's echo line — "which op made this change".
 //!
 //! # The atlas overview ([`render_atlas_sheet`])
 //!
@@ -144,6 +149,15 @@ const ATLAS_MAX_UPSCALE: u32 = 16;
 /// is a property of what can be compared in one image, not of what is being swept.
 const MAX_SPRITE_SWEEP_CELLS: usize = crate::sweep::MAX_SWEEP_CELLS;
 
+/// Block A draws a texel grid only at an upscale of at least this many sheet pixels per texel: below
+/// it the grid lines would eat the texels they separate.
+const GRID_MIN_UPSCALE: u32 = 6;
+/// Every this-many'th grid line is drawn darker, so texels can be counted in blocks.
+const GRID_MAJOR_EVERY: u32 = 8;
+/// The checkerboard squares behind a transparent texel, both distinct from [`BACKGROUND`].
+const CHECKER_DARK: [u8; 4] = [44, 46, 52, 255];
+const CHECKER_LIGHT: [u8; 4] = [62, 65, 72, 255];
+
 /// The fewest phases one flipbook strip lays out. One phase is the plain instant a `--time` alone
 /// already renders, spelled the long way.
 const MIN_CLIP_PHASES: u32 = 2;
@@ -180,6 +194,16 @@ pub struct SpriteSheetRequest {
     /// A pointer and the values to try at it, one cell per value. `None` renders the ordinary
     /// two-block contact sheet; `Some` renders the candidate grid instead.
     pub sweep: Option<(String, Vec<Value>)>,
+    /// Render the steps sheet (paint, then the image after each effect) instead of the contact
+    /// sheet. Refused together with a [`sweep`](Self::sweep).
+    pub steps: Option<SpriteSteps>,
+}
+
+/// What a steps sheet draws.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SpriteSteps {
+    /// Draw only this frame's row; `None` draws every frame.
+    pub frame: Option<String>,
 }
 
 impl SpriteSheetRequest {
@@ -190,6 +214,7 @@ impl SpriteSheetRequest {
             scale: 1,
             set: Vec::new(),
             sweep: None,
+            steps: None,
         }
     }
 }
@@ -207,6 +232,9 @@ pub struct SpriteSheetOutcome {
     /// text the footer burns in, but in the authored letter case. Empty when the document has no
     /// effects (the footer then says so).
     pub effects: Vec<String>,
+    /// In steps mode, one line per drawn row — `<frame>: paint, 0, 1` (effect indices); empty
+    /// otherwise.
+    pub steps: Vec<String>,
 }
 
 /// Bakes the sprite document at [`SpriteSheetRequest::doc`] and composes its contact sheet.
@@ -222,7 +250,9 @@ pub struct SpriteSheetOutcome {
 ///   override applier checks shape, and the document's own validator checks meaning.
 /// - `L4008` for an override pointer outside the supported shapes (the `SPRITE_POINTER_SHAPES` list,
 ///   echoed in every such diagnostic's help),
-///   and for a sweep of more than [`crate::sweep::MAX_SWEEP_CELLS`] values or of none.
+///   and for a sweep of more than [`crate::sweep::MAX_SWEEP_CELLS`] values or of none; for a sweep
+///   together with steps, a `steps` frame the document does not carry, and a steps sheet of more
+///   than [`crate::sweep::MAX_SWEEP_CELLS`] cells.
 pub fn render_sprite_sheet(
     request: &SpriteSheetRequest,
 ) -> Result<SpriteSheetOutcome, Vec<Diagnostic>> {
@@ -239,12 +269,24 @@ pub fn render_sprite_sheet(
     let effects = effect_lines(&doc.effects);
     let title = document_title(&doc, &request.doc);
 
-    let image = match &request.sweep {
-        None => {
+    let mut step_lines = Vec::new();
+    let image = match (&request.sweep, &request.steps) {
+        (Some(_), Some(_)) => {
+            return Err(vec![clip_refusal(
+                "`steps` and a sweep are two different sheets".to_string(),
+                "render one or the other: drop the sweep to see the steps, or drop the steps",
+            )]);
+        }
+        (None, Some(steps)) => {
+            let rows = bake_steps_checked(&doc, steps)?;
+            step_lines = rows.iter().map(step_line).collect();
+            compose_steps_sheet(&title, &doc, &rows, &effects, &applied)
+        }
+        (None, None) => {
             let frames = bake_checked(&doc)?;
             compose_contact_sheet(&title, &doc, &frames, request.scale, &effects, &applied)
         }
-        Some((pointer, values)) => {
+        (Some((pointer, values)), None) => {
             let cells = bake_sweep(&doc, pointer, values)?;
             compose_sweep_sheet(&title, &doc, pointer, &cells, &effects, &applied)
         }
@@ -254,6 +296,7 @@ pub fn render_sprite_sheet(
         image,
         applied,
         effects,
+        steps: step_lines,
     })
 }
 
@@ -507,6 +550,57 @@ fn document_title(doc: &SpriteDocument, path: &Path) -> String {
 /// Bakes a document, forwarding the bake's own diagnostics.
 fn bake_checked(doc: &SpriteDocument) -> Result<Vec<BakedFrame>, Vec<Diagnostic>> {
     ludion_sprite::bake(doc)
+}
+
+/// Bakes the stepped frames, narrows them to the requested frame and enforces the cell cap.
+fn bake_steps_checked(
+    doc: &SpriteDocument,
+    steps: &SpriteSteps,
+) -> Result<Vec<ludion_sprite::FrameSteps>, Vec<Diagnostic>> {
+    let mut rows = ludion_sprite::bake_steps(doc)?;
+    let names: Vec<String> = rows.iter().map(|row| row.name.clone()).collect();
+    if let Some(wanted) = &steps.frame {
+        rows.retain(|row| &row.name == wanted);
+        if rows.is_empty() {
+            return Err(vec![clip_refusal(
+                format!("`--frame {wanted}` names a frame this document does not carry"),
+                &format!("this document carries `{}`", names.join("`, `")),
+            )]);
+        }
+    }
+    let cells: usize = rows.iter().map(|row| 1 + row.steps.len()).sum();
+    if cells > MAX_SPRITE_SWEEP_CELLS {
+        let one_fits = rows
+            .iter()
+            .all(|row| row.steps.len() < MAX_SPRITE_SWEEP_CELLS);
+        let help = if rows.len() > 1 && one_fits {
+            format!(
+                "draw one frame per sheet with `--frame <name>`; this document carries `{}`",
+                names.join("`, `")
+            )
+        } else {
+            "split the effect list: past sixteen cells the frames are too small to judge, which \
+             is the only thing a sheet is for"
+                .to_string()
+        };
+        return Err(vec![clip_refusal(
+            format!(
+                "a steps sheet of {cells} cells does not fit; at most {MAX_SPRITE_SWEEP_CELLS} are \
+                 drawn"
+            ),
+            &help,
+        )]);
+    }
+    Ok(rows)
+}
+
+/// One steps row's echo: `<frame>: paint, 0, 1` — the effect indices that produced a cell.
+fn step_line(row: &ludion_sprite::FrameSteps) -> String {
+    let mut line = format!("{}: paint", row.name);
+    for step in &row.steps {
+        line.push_str(&format!(", {}", step.effect));
+    }
+    line
 }
 
 /// One sweep cell: the value that produced it and the frames it baked to.
@@ -1338,7 +1432,7 @@ fn compose_contact_sheet(
         let cell_y =
             layout.block_a_y + BLOCK_TITLE_H + (index as u32 / layout.cols) * layout.cell_a.1;
         let tile = (cell_x + RULER_BAND, cell_y + RULER_BAND);
-        draw_frame(&mut rgba, width, height, tile, frame, layout.upscale);
+        draw_legible_tile(&mut rgba, width, height, tile, &frame.image, layout.upscale);
         draw_pivot(&mut rgba, width, height, tile, frame, layout.upscale);
         if index == 0 {
             draw_ruler(&mut rgba, width, height, tile, doc.size, layout.upscale);
@@ -1490,6 +1584,156 @@ fn compose_sweep_sheet(
     finish(width, height, rgba)
 }
 
+/// Wraps a cell caption to `cell_w` pixels: fields (split on the echo's two-space separator) fill
+/// greedily, and a field still too wide breaks on single spaces.
+fn wrap_caption(caption: &str, cell_w: u32) -> Vec<String> {
+    let fits = |text: &str| text_px(text, CLIP_LABEL_SCALE) <= cell_w;
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for field in caption.split("  ").filter(|field| !field.is_empty()) {
+        let joined = if current.is_empty() {
+            field.to_string()
+        } else {
+            format!("{current}  {field}")
+        };
+        if fits(&joined) {
+            current = joined;
+            continue;
+        }
+        if !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+        }
+        if fits(field) {
+            current = field.to_string();
+            continue;
+        }
+        for word in field.split(' ').filter(|word| !word.is_empty()) {
+            let joined = if current.is_empty() {
+                word.to_string()
+            } else {
+                format!("{current} {word}")
+            };
+            if fits(&joined) {
+                current = joined;
+            } else {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                }
+                current = word.to_string();
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Composes the steps sheet: one row per frame, the paint then each applicable effect's result.
+fn compose_steps_sheet(
+    title: &str,
+    doc: &SpriteDocument,
+    rows: &[ludion_sprite::FrameSteps],
+    effects: &[String],
+    applied: &[AppliedOverride],
+) -> Image {
+    let footer = footer_lines(effects, applied);
+    let footer_px = text_width(&footer, LABEL_SCALE);
+    let [fw, fh] = doc.size;
+
+    // Each row's captions, in cell order.
+    let captions: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            std::iter::once(format!("{}  paint", row.name))
+                .chain(row.steps.iter().map(|step| effects[step.effect].clone()))
+                .collect()
+        })
+        .collect();
+    let widest_token = captions
+        .iter()
+        .flatten()
+        .flat_map(|caption| caption.split_whitespace())
+        .map(|token| text_px(token, CLIP_LABEL_SCALE))
+        .max()
+        .unwrap_or(0);
+    let cols = captions.iter().map(Vec::len).max().unwrap_or(1) as u32;
+    let row_count = rows.len().max(1) as u32;
+
+    let top = upscale_factor(fw, fh);
+    let mut upscale = top;
+    let (cell_w, cell_h, width, height) = loop {
+        let cell_w = (fw * upscale + CELL_GAP).max(widest_token);
+        let max_lines = captions
+            .iter()
+            .flatten()
+            .map(|caption| wrap_caption(caption, cell_w).len() as u32)
+            .max()
+            .unwrap_or(1);
+        let cell_h = fh * upscale + LABEL_MARGIN + max_lines * CLIP_LABEL_H + CELL_GAP;
+        let width = (cols * cell_w + CELL_GAP).max(footer_px).min(MAX_SHEET_PX);
+        let height = SHEET_HEADER_H
+            + row_count * cell_h
+            + CELL_GAP
+            + BLOCK_GAP
+            + footer.len() as u32 * FOOTER_LINE_H
+            + 2 * LABEL_MARGIN;
+        if (width <= MAX_SHEET_PX && height <= MAX_SHEET_PX) || upscale == 1 {
+            break (cell_w, cell_h, width, height);
+        }
+        upscale -= 1;
+    };
+    let clamped = upscale < top;
+
+    let mut rgba = vec![0u8; (width as usize) * (height as usize) * 4];
+    fill(&mut rgba, width, height, BACKGROUND);
+    let header = format!(
+        "{title}  {fw}x{fh} texels  {} frames  seed {}  steps{}",
+        doc.frames.len(),
+        doc.seed.unwrap_or(0),
+        if clamped { "  (clamped)" } else { "" }
+    );
+    stamp_text(
+        &mut rgba,
+        width,
+        height,
+        LABEL_MARGIN,
+        LABEL_MARGIN,
+        &header,
+        HEADER_SCALE,
+        TITLE_COLOR,
+    );
+
+    for (row_index, row) in rows.iter().enumerate() {
+        let cell_y = SHEET_HEADER_H + row_index as u32 * cell_h;
+        let images = std::iter::once(&row.paint).chain(row.steps.iter().map(|step| &step.image));
+        for (col, image) in images.enumerate() {
+            let cell_x = col as u32 * cell_w;
+            draw_legible_tile(&mut rgba, width, height, (cell_x, cell_y), image, upscale);
+            let label_y = cell_y + fh * upscale + LABEL_MARGIN;
+            for (line_index, line) in wrap_caption(&captions[row_index][col], cell_w)
+                .iter()
+                .enumerate()
+            {
+                stamp_text(
+                    &mut rgba,
+                    width,
+                    height,
+                    cell_x,
+                    label_y + line_index as u32 * CLIP_LABEL_H,
+                    line,
+                    CLIP_LABEL_SCALE,
+                    LABEL_COLOR,
+                );
+            }
+        }
+    }
+
+    let footer_y = SHEET_HEADER_H + row_count * cell_h + CELL_GAP + BLOCK_GAP;
+    draw_footer(&mut rgba, width, height, footer_y, &footer);
+    finish(width, height, rgba)
+}
+
 /// Stamps the footer block, one line per entry.
 fn draw_footer(buffer: &mut [u8], width: u32, height: u32, y0: u32, lines: &[String]) {
     for (index, line) in lines.iter().enumerate() {
@@ -1561,6 +1805,82 @@ fn draw_frame(
                 scale,
                 over_straight(texel, BACKGROUND),
             );
+        }
+    }
+}
+
+/// Draws a frame image for reading texels: each texel is composited over a checkerboard instead of
+/// the flat background, so a transparent texel is visibly *not* a texel; at an upscale of
+/// [`GRID_MIN_UPSCALE`] or more a one-pixel grid darkens every texel boundary (every
+/// [`GRID_MAJOR_EVERY`]th one more).
+///
+/// Checker squares are `(upscale / 2).max(1)` px with their phase anchored at `origin`, so every
+/// transparent texel shows a 2×2 checker. The grid darkens the pixels already drawn — integer
+/// arithmetic, alpha untouched — so the art's hue stays readable under a line.
+fn draw_legible_tile(
+    buffer: &mut [u8],
+    width: u32,
+    height: u32,
+    origin: (u32, u32),
+    image: &ludion_sprite::FrameImage,
+    upscale: u32,
+) {
+    let image = image.to_srgb8_straight();
+    let square = (upscale / 2).max(1);
+    for y in 0..image.height {
+        for x in 0..image.width {
+            let index = ((y * image.width + x) * 4) as usize;
+            let texel: [u8; 4] = image.rgba[index..index + 4]
+                .try_into()
+                .expect("a four-byte RGBA texel");
+            for dy in 0..upscale {
+                for dx in 0..upscale {
+                    let checker = if ((x * upscale + dx) / square + (y * upscale + dy) / square)
+                        .is_multiple_of(2)
+                    {
+                        CHECKER_DARK
+                    } else {
+                        CHECKER_LIGHT
+                    };
+                    fill_block(
+                        buffer,
+                        width,
+                        height,
+                        origin.0 + x * upscale + dx,
+                        origin.1 + y * upscale + dy,
+                        1,
+                        1,
+                        over_straight(texel, checker),
+                    );
+                }
+            }
+        }
+    }
+    if upscale < GRID_MIN_UPSCALE {
+        return;
+    }
+    let darken = |buffer: &mut [u8], x: u32, y: u32, major: bool| {
+        let mut pixel = pixel_at(buffer, width, height, x, y);
+        for channel in &mut pixel[..3] {
+            *channel = if major {
+                *channel / 2
+            } else {
+                (u16::from(*channel) * 3 / 4) as u8
+            };
+        }
+        fill_block(buffer, width, height, x, y, 1, 1, pixel);
+    };
+    let (span_w, span_h) = (image.width * upscale, image.height * upscale);
+    for k in 0..=image.width {
+        let major = k % GRID_MAJOR_EVERY == 0;
+        for y in 0..span_h {
+            darken(buffer, origin.0 + k * upscale, origin.1 + y, major);
+        }
+    }
+    for k in 0..=image.height {
+        let major = k % GRID_MAJOR_EVERY == 0;
+        for x in 0..span_w {
+            darken(buffer, origin.0 + x, origin.1 + k * upscale, major);
         }
     }
 }

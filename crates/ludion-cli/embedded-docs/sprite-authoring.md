@@ -28,7 +28,8 @@ frames is `ludion docs sprite-sheets`; the grid component that spends the same a
    The sheet is composed on the CPU — no adapter is requested, so it answers on a machine with no
    GPU. A header (document, texel size, frame count, seed); **block A**, every frame
    nearest-upscaled and labelled, pivot crossed in magenta, the first tile ruled along its top and
-   left edges so texels can be *counted*; **block B**, every frame again at `--scale N` whole sheet
+   left edges so texels can be *counted*, a checkerboard behind every transparent texel and, from 6
+   sheet pixels per texel up, a 1-px texel grid (every 8th line darker); **block B**, every frame again at `--scale N` whole sheet
    pixels per texel — the "readable at the size it ships at" half no upscaling can answer; and a
    **footer echoing the effect list that was applied**, in order. The same echo goes to stdout, so a
    session that never opens the image still reads what produced it:
@@ -140,6 +141,25 @@ palette:
 `effects:` applies ops from a closed set of eight — `gradient`, `outline`, `shade`, `shadow`,
 `dither`, `noise`, `blur`, `glow` — in list order, each scoped by an optional `glyphs:`/`frames:`
 filter. Parameters, ranges and traps: `ludion docs sprite-effects`.
+
+## Seeing what each effect did: `--steps`
+
+```
+ludion render --sprite examples/gallery/sprites/ship.sprite.yaml --steps [--frame idle]
+```
+
+A **steps sheet** instead of the contact sheet: one row per frame, the authored paint first and then
+the image after each effect that applies to that frame, cumulatively, each cell captioned with that
+effect's echo line (the glow, outline or shade that made the change). Same checker and grid as block
+A, no ruler or pivot. `--out` defaults to `<stem>.steps.png` (`<stem>-<frame>.steps.png` with
+`--frame`); stdout adds one `steps` line per row, listing the effect indices that produced its cells:
+
+```
+  steps idle: paint, 0, 1
+```
+
+`--set` applies; `--sweep` is refused by clap. At most 16 cells in all: past that `L4008` names
+`--frame <name>` (or says to split the effect list). `--frame` without `--steps` is `L4008`.
 
 ## Tuning: `--set` and `--sweep`
 

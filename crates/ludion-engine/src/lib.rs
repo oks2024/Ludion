@@ -229,7 +229,7 @@ pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use shutdown::Shutdown;
 pub use skin_bone::scene_skin_bone_diagnostics;
 pub use sprite_sheet::{
-    AtlasClipOutcome, AtlasClipRequest, SpriteSheetOutcome, SpriteSheetRequest,
+    AtlasClipOutcome, AtlasClipRequest, SpriteSheetOutcome, SpriteSheetRequest, SpriteSteps,
     check_atlas_clip_flags, render_atlas_clip, render_atlas_sheet, render_sprite_sheet,
     resolve_sprite_palette,
 };

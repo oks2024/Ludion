@@ -387,7 +387,8 @@ enum Command {
         /// 1), the applied `effects:` echoed in the footer. `--set POINTER=VALUE` edits the palette
         /// (`/palette/<glyph>/color/<i>`, `/palette/<glyph>/emissive`), `/seed`, a frame pivot, or an
         /// effect parameter (`/effects/<i>/<param>[/<j>]`) before baking; `--sweep POINTER=V,V,…`
-        /// renders one cell per value. Needs no GPU adapter.
+        /// renders one cell per value; `--steps` draws the paint and the image after each effect
+        /// instead. Needs no GPU adapter.
         //
         // Every flag this mode cannot honour is listed here rather than declared `requires` on the
         // other side — see the clap 4.6 note on `--views`.
@@ -518,6 +519,19 @@ enum Command {
         /// `--dump-timings` — a sheet is many renders, not the one instrumented render that times.
         #[arg(long, value_name = "POINTER=V,V,…", conflicts_with = "dump_timings")]
         sweep: Option<String>,
+        /// (`--sprite` only) A steps sheet instead of the contact sheet: one row per frame, the
+        /// authored paint then the image after each effect that applies to it, cumulatively, each
+        /// cell captioned with that effect's echo line. At most 16 cells; narrow it with `--frame`.
+        /// `--set` applies; `--sweep` is refused. Defaults `--out` to `<name>.steps.png`.
+        #[arg(long, conflicts_with_all = ["scene", "model", "atlas", "font", "sweep"])]
+        steps: bool,
+        /// (`--sprite --steps` only) Draw only this frame's row of the steps sheet.
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with_all = ["scene", "model", "atlas", "font", "sweep"]
+        )]
+        frame: Option<String>,
         /// Tick the built-in schedule before extracting, so a burst particle emitter or an assembly
         /// clip is judged in motion instead of frozen at tick 0 — a burst is invisible at tick 0. A
         /// single value (`--frames 90`) ticks that many times, then renders one PNG exactly as
@@ -2056,6 +2070,8 @@ fn main() -> std::process::ExitCode {
             dump_probes,
             set,
             sweep,
+            steps,
+            frame,
             frames,
             debug_draw,
             debug_view,
@@ -2172,6 +2188,8 @@ fn main() -> std::process::ExitCode {
                 dump_probes: dump_probes.as_deref(),
                 set: &set,
                 sweep: sweep.as_deref(),
+                steps,
+                frame: frame.as_deref(),
                 frames: &frames,
                 debug_draw: debug_draw.as_deref(),
                 debug_view: debug_view.map(Into::into),

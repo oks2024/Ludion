@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ludion_engine::{SpriteSheetRequest, render_atlas_sheet, render_sprite_sheet};
+use ludion_engine::{SpriteSheetRequest, SpriteSteps, render_atlas_sheet, render_sprite_sheet};
 use ludion_scene::{AtlasDocument, AtlasRegion, SceneOverride};
 use serde_json::json;
 
@@ -129,9 +129,10 @@ fn the_contact_sheet_draws_art_a_ruler_and_the_effect_echo() {
         .expect("the fixture bakes and composes");
 
     let (tx, ty) = first_tile();
-    // Texel (0, 0) of `idle` is glyph `A` — opaque pure red, untouched by either effect.
+    // Texel (0, 0) of `idle` is glyph `A` — opaque pure red, untouched by either effect. Probed at
+    // the texel's centre: its corner sits on a (major) grid line.
     assert_eq!(
-        pixel(&sheet.image, tx, ty),
+        pixel(&sheet.image, tx + UPSCALE / 2, ty + UPSCALE / 2),
         [255, 0, 0, 255],
         "the first tile draws the baked frame"
     );
@@ -203,6 +204,7 @@ fn a_palette_override_repaints_the_sheet_and_is_echoed() {
     let overridden = render_sprite_sheet(&request).expect("the override bakes");
 
     let (tx, ty) = first_tile();
+    let (tx, ty) = (tx + UPSCALE / 2, ty + UPSCALE / 2);
     assert_eq!(pixel(&plain.image, tx, ty), [255, 0, 0, 255]);
     assert_eq!(
         pixel(&overridden.image, tx, ty),
@@ -478,6 +480,7 @@ fn a_set_over_an_inherited_glyph_repaints_the_sheet() {
     let overridden = render_sprite_sheet(&request).expect("the override bakes");
 
     let (tx, ty) = first_tile();
+    let (tx, ty) = (tx + UPSCALE / 2, ty + UPSCALE / 2);
     assert_eq!(
         pixel(&overridden.image, tx, ty),
         [0, 0, 0, 255],
@@ -517,4 +520,176 @@ frames:
         .expect_err("the palette file does not exist");
     assert_eq!(diagnostics[0].code.as_str(), "L1147");
     assert_eq!(diagnostics[0].path.as_deref(), Some("/palette/from"));
+}
+
+/// A one-frame, effect-free sprite `width`×`height` texels: a row of opaque red `A`, then `.`.
+fn plain_sprite(width: u32, height: u32, first_row: &str) -> String {
+    let rows: String = (0..height)
+        .map(|y| {
+            let row = if y == 0 {
+                first_row.to_string()
+            } else {
+                "A".repeat(width as usize)
+            };
+            format!("      - \"{row}\"\n")
+        })
+        .collect();
+    format!(
+        "format: 1\nkind: sprite\nsize:\n  - {width}\n  - {height}\npalette:\n  A:\n    color:\n      \
+         - 1.0\n      - 0.0\n      - 0.0\n      - 1.0\nframes:\n  idle:\n    rows:\n{rows}"
+    )
+}
+
+fn write_plain(dir: &Path, source: &str) -> PathBuf {
+    let path = dir.join("plain.sprite.yaml");
+    std::fs::write(&path, source).expect("the fixture writes");
+    path
+}
+
+const CHECKER_DARK: [u8; 4] = [44, 46, 52, 255];
+const CHECKER_LIGHT: [u8; 4] = [62, 65, 72, 255];
+
+/// A transparent texel in block A shows both checker colours, never the flat background.
+#[test]
+fn a_transparent_texel_shows_a_checkerboard() {
+    let dir = temp_dir("checker");
+    // 8×6 → upscale 16, checker squares of 8 px; texel (1, 0) is transparent.
+    let source = plain_sprite(8, 6, "A.AAAAAA");
+    let sheet = render_sprite_sheet(&SpriteSheetRequest::new(write_plain(&dir, &source)))
+        .expect("the fixture composes");
+    let (tx, ty) = first_tile();
+    // Off the grid lines (x = 16 is a texel boundary): offsets 2 and 10 land in different squares.
+    let left = pixel(&sheet.image, tx + UPSCALE + 2, ty + 2);
+    let right = pixel(&sheet.image, tx + UPSCALE + 10, ty + 2);
+    assert_eq!(left, CHECKER_DARK);
+    assert_eq!(right, CHECKER_LIGHT);
+    for dx in 2..UPSCALE {
+        assert_ne!(
+            pixel(&sheet.image, tx + UPSCALE + dx, ty + 2),
+            BACKGROUND,
+            "a transparent texel is never the flat background"
+        );
+    }
+}
+
+/// The grid darkens each texel boundary a quarter, every 8th a half; below upscale 6 there is none.
+#[test]
+fn the_texel_grid_is_minor_and_major_and_absent_when_small() {
+    let dir = temp_dir("grid");
+    // 16×4 → upscale 8: grid on.
+    let source = plain_sprite(16, 4, &"A".repeat(16));
+    let sheet = render_sprite_sheet(&SpriteSheetRequest::new(write_plain(&dir, &source)))
+        .expect("the fixture composes");
+    let (tx, ty) = first_tile();
+    assert_eq!(
+        pixel(&sheet.image, tx + 8, ty + 3),
+        [191, 0, 0, 255],
+        "minor line"
+    );
+    assert_eq!(
+        pixel(&sheet.image, tx + 64, ty + 3),
+        [127, 0, 0, 255],
+        "major line"
+    );
+    assert_eq!(
+        pixel(&sheet.image, tx + 12, ty + 3),
+        [255, 0, 0, 255],
+        "texel body"
+    );
+
+    // 32×4 → upscale 4: no grid, the boundary pixel is the plain texel.
+    let source = plain_sprite(32, 4, &"A".repeat(32));
+    let sheet = render_sprite_sheet(&SpriteSheetRequest::new(write_plain(&dir, &source)))
+        .expect("the fixture composes");
+    assert_eq!(pixel(&sheet.image, tx + 4, ty + 1), [255, 0, 0, 255]);
+    assert_eq!(pixel(&sheet.image, tx + 32, ty + 1), [255, 0, 0, 255]);
+}
+
+fn steps_request(path: PathBuf, frame: Option<&str>) -> SpriteSheetRequest {
+    SpriteSheetRequest {
+        steps: Some(SpriteSteps {
+            frame: frame.map(str::to_string),
+        }),
+        ..SpriteSheetRequest::new(path)
+    }
+}
+
+/// The steps sheet has one row per frame, each `paint` then every applicable effect's index.
+#[test]
+fn the_steps_sheet_draws_a_row_per_frame() {
+    let dir = temp_dir("steps");
+    let path = write_sprite(&dir);
+    let sheet = render_sprite_sheet(&steps_request(path.clone(), None)).expect("steps compose");
+    assert_eq!(
+        sheet.steps,
+        vec![
+            "idle: paint, 0, 1".to_string(),
+            "walk: paint, 0, 1".to_string()
+        ]
+    );
+    assert_eq!(sheet.effects.len(), 2);
+    // The paint cell is the first cell of the first row, drawn at the upscale of 16.
+    assert_eq!(
+        pixel(&sheet.image, UPSCALE / 2, SHEET_HEADER_H + UPSCALE / 2),
+        [255, 0, 0, 255]
+    );
+    let again = render_sprite_sheet(&steps_request(path.clone(), None)).expect("steps compose");
+    assert_eq!(sheet.image, again.image, "composing twice is bit-identical");
+
+    let walk = render_sprite_sheet(&steps_request(path, Some("walk"))).expect("one row composes");
+    assert_eq!(walk.steps, vec!["walk: paint, 0, 1".to_string()]);
+    assert!(walk.image.height < sheet.image.height);
+}
+
+/// Steps honour `--set`: a palette override changes the paint cell.
+#[test]
+fn steps_honour_set() {
+    let dir = temp_dir("steps-set");
+    let request = SpriteSheetRequest {
+        set: vec![over("/palette/A/color/1=1.0")],
+        ..steps_request(write_sprite(&dir), None)
+    };
+    let sheet = render_sprite_sheet(&request).expect("steps compose");
+    assert_eq!(
+        pixel(&sheet.image, UPSCALE / 2, SHEET_HEADER_H + UPSCALE / 2),
+        [255, 255, 0, 255]
+    );
+    assert_eq!(sheet.applied.len(), 1);
+}
+
+/// An unknown frame, steps with a sweep, and a document of more than sixteen cells are `L4008`.
+#[test]
+fn the_steps_refusals_are_l4008() {
+    let dir = temp_dir("steps-refuse");
+    let path = write_sprite(&dir);
+
+    let unknown =
+        render_sprite_sheet(&steps_request(path.clone(), Some("jump"))).expect_err("no such frame");
+    assert_eq!(unknown[0].code.as_str(), "L4008");
+    assert!(
+        unknown[0].help.as_deref().unwrap_or("").contains("idle"),
+        "the help lists the frames: {:?}",
+        unknown[0].help
+    );
+
+    let both = SpriteSheetRequest {
+        sweep: Some(("/effects/1/to/0".to_string(), vec![json!(0.5)])),
+        ..steps_request(path, None)
+    };
+    let both = render_sprite_sheet(&both).expect_err("steps and a sweep");
+    assert_eq!(both[0].code.as_str(), "L4008");
+
+    let mut source = plain_sprite(8, 6, "AAAAAAAA");
+    source.push_str("effects:\n");
+    for _ in 0..16 {
+        source.push_str("  - op: noise\n    amount: 0.1\n");
+    }
+    let overflow = render_sprite_sheet(&steps_request(write_plain(&dir, &source), None))
+        .expect_err("seventeen cells do not fit");
+    assert_eq!(overflow[0].code.as_str(), "L4008");
+    assert!(
+        overflow[0].message.contains("17"),
+        "{}",
+        overflow[0].message
+    );
 }

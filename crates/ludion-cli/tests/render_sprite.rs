@@ -502,3 +502,82 @@ fn the_two_default_names_do_not_collide_on_a_shared_stem() {
         "the two defaults must name two files, so neither sheet is the other"
     );
 }
+
+/// `--steps` writes `<stem>.steps.png` by default and echoes one `steps` line per row.
+#[test]
+fn steps_writes_the_steps_sheet_at_its_default_name() {
+    let dir = scratch("render-sprite-steps");
+    let doc = sprite_doc();
+    let output = run_ludion_in(
+        &dir,
+        &["render", "--sprite", doc.to_str().unwrap(), "--steps"],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    decoded(&dir.join("ship.steps.png"));
+    let text = stdout(&output);
+    assert!(text.contains("steps idle: paint, 0, 1"), "stdout: {text}");
+    assert!(
+        text.contains("steps bank-left: paint, 0, 1"),
+        "stdout: {text}"
+    );
+
+    let one = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--sprite",
+            doc.to_str().unwrap(),
+            "--steps",
+            "--frame",
+            "idle",
+        ],
+    );
+    assert!(one.status.success(), "stderr: {}", stderr(&one));
+    decoded(&dir.join("ship-idle.steps.png"));
+    assert!(
+        !stdout(&one).contains("bank-left"),
+        "stdout: {}",
+        stdout(&one)
+    );
+}
+
+/// `--frame` alone is `L4008`; `--steps` with `--sweep` is clap's conflict.
+#[test]
+fn steps_flag_misuse_is_refused() {
+    let dir = scratch("render-sprite-steps-refuse");
+    let doc = sprite_doc();
+    let orphan = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--sprite",
+            doc.to_str().unwrap(),
+            "--frame",
+            "idle",
+        ],
+    );
+    assert!(!orphan.status.success());
+    assert!(
+        stderr(&orphan).contains("L4008"),
+        "stderr: {}",
+        stderr(&orphan)
+    );
+
+    let both = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--sprite",
+            doc.to_str().unwrap(),
+            "--steps",
+            "--sweep",
+            "/effects/1/offset/0=1,2",
+        ],
+    );
+    assert_eq!(both.status.code(), Some(2), "stderr: {}", stderr(&both));
+    assert!(
+        stderr(&both).contains("cannot be used with"),
+        "stderr: {}",
+        stderr(&both)
+    );
+}

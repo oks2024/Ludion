@@ -47,22 +47,7 @@ pub fn bake(doc: &SpriteDocument) -> Result<Vec<BakedFrame>, Vec<Diagnostic>> {
     let palette = palette_lookup(doc);
     let mut baked = Vec::with_capacity(doc.frames.len());
     for (frame_index, frame) in doc.frames.iter().enumerate() {
-        let glyphs = glyph_grid(doc, frame);
-        let mut image = paint(doc, &glyphs, &palette);
-        for effect in &doc.effects {
-            if !applies_to(effect, &frame.name) {
-                continue;
-            }
-            apply(
-                effect,
-                &glyphs,
-                &palette,
-                doc.seed.unwrap_or(0),
-                frame_index,
-                &mut image,
-            );
-            clamp(&mut image);
-        }
+        let image = bake_frame(doc, &palette, frame_index, frame, |_, _| {});
         baked.push(BakedFrame {
             name: frame.name.clone(),
             image,
@@ -70,6 +55,135 @@ pub fn bake(doc: &SpriteDocument) -> Result<Vec<BakedFrame>, Vec<Diagnostic>> {
         });
     }
     Ok(baked)
+}
+
+/// One effect's result on one frame: the image after `/effects/<effect>` applied.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BakeStep {
+    /// The effect's index in `doc.effects` (the `/effects/<i>` pointer).
+    pub effect: usize,
+    /// The frame's image right after this effect (and the working-format clamp).
+    pub image: FrameImage,
+}
+
+/// One frame's bake, kept step by step: the authored paint and the image after each effect that
+/// applies to this frame, cumulatively.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameSteps {
+    /// The frame's name, as authored.
+    pub name: String,
+    /// The frame's pivot, resolved as in [`BakedFrame::pivot`].
+    pub pivot: [f64; 2],
+    /// The image before any effect.
+    pub paint: FrameImage,
+    /// One entry per applicable effect, in list order. The last equals [`bake()`]'s frame.
+    pub steps: Vec<BakeStep>,
+}
+
+/// Bakes every frame of `doc` like [`bake()`], keeping the image after each effect.
+///
+/// An effect whose `frames:` filter excludes a frame yields no step for it. The last step of a
+/// frame is byte-identical to [`bake()`]'s frame: both run the same per-frame body.
+///
+/// # Errors
+/// The same diagnostics, from the same validation gate, as [`bake()`].
+///
+/// # Examples
+/// ```
+/// let source = "\
+/// format: 1
+/// kind: sprite
+/// size:
+///   - 1
+///   - 1
+/// palette:
+///   A:
+///     color:
+///       - 1.0
+///       - 1.0
+///       - 1.0
+///       - 1.0
+/// frames:
+///   lit:
+///     rows:
+///       - \"A\"
+///   dark:
+///     rows:
+///       - \"A\"
+/// effects:
+///   - op: gradient
+///     frames:
+///       - dark
+///     from:
+///       - 0.0
+///       - 0.0
+///       - 0.0
+///       - 1.0
+///     to:
+///       - 0.0
+///       - 0.0
+///       - 0.0
+///       - 1.0
+/// ";
+/// let doc = ludion_scene::check_sprite(source).expect("the sprite is valid");
+/// let frames = ludion_sprite::bake_steps(&doc).expect("the sprite bakes");
+/// assert!(frames[0].steps.is_empty(), "the filter excludes `lit`");
+/// assert_eq!(frames[1].steps[0].effect, 0);
+/// ```
+pub fn bake_steps(doc: &SpriteDocument) -> Result<Vec<FrameSteps>, Vec<Diagnostic>> {
+    let diagnostics = ludion_scene::validate_sprite(doc);
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
+    }
+
+    let palette = palette_lookup(doc);
+    let mut out = Vec::with_capacity(doc.frames.len());
+    for (frame_index, frame) in doc.frames.iter().enumerate() {
+        let glyphs = glyph_grid(doc, frame);
+        let paint = paint(doc, &glyphs, &palette);
+        let mut steps = Vec::new();
+        bake_frame(doc, &palette, frame_index, frame, |effect, image| {
+            steps.push(BakeStep {
+                effect,
+                image: image.clone(),
+            });
+        });
+        out.push(FrameSteps {
+            name: frame.name.clone(),
+            pivot: frame.pivot.unwrap_or_else(|| doc.default_pivot()),
+            paint,
+            steps,
+        });
+    }
+    Ok(out)
+}
+
+/// Paints one frame and applies the applicable effects in order, reporting each result.
+fn bake_frame(
+    doc: &SpriteDocument,
+    palette: &[Option<[f32; 4]>; 128],
+    frame_index: usize,
+    frame: &SpriteFrame,
+    mut on_step: impl FnMut(usize, &FrameImage),
+) -> FrameImage {
+    let glyphs = glyph_grid(doc, frame);
+    let mut image = paint(doc, &glyphs, palette);
+    for (index, effect) in doc.effects.iter().enumerate() {
+        if !applies_to(effect, &frame.name) {
+            continue;
+        }
+        apply(
+            effect,
+            &glyphs,
+            palette,
+            doc.seed.unwrap_or(0),
+            frame_index,
+            &mut image,
+        );
+        clamp(&mut image);
+        on_step(index, &image);
+    }
+    image
 }
 
 /// Palette colours indexed by their glyph's ASCII code, so a texel's colour is one array read.

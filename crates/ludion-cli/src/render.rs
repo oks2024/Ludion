@@ -72,7 +72,10 @@
 //! is ever requested, so they answer on a machine that has none. `--sprite` defaults `--out` the way
 //! model mode does (`<stem>.sheet.png`); `--atlas` takes `<stem>.atlas-sheet.png` instead, because a
 //! sprite document and the atlas packed from it share a stem and neither sheet may quietly replace
-//! the other. `--set`/`--sweep` address the sprite document here (palette, seed, pivot, effect
+//! the other. `--steps` swaps the contact sheet for a steps sheet — one row per frame, the paint then
+//! the image after each effect — defaulting `--out` to `<stem>.steps.png` (`<stem>-<frame>.steps.png`
+//! with `--frame`), and prints one `steps <frame>: paint, 0, 1` line per row.
+//! `--set`/`--sweep` address the sprite document here (palette, seed, pivot, effect
 //! parameter); `--scale` is the authored game scale the sheet's second block draws at, in whole
 //! sheet pixels per texel, and a fractional one is refused before anything is baked. The applied
 //! effects and overrides are echoed under the summary line as well as burned into the sheet, so a
@@ -143,6 +146,10 @@ pub struct Request<'a> {
     pub set: &'a [String],
     /// `--sweep`, unparsed.
     pub sweep: Option<&'a str>,
+    /// `--steps` (sprite mode): the steps sheet instead of the contact sheet.
+    pub steps: bool,
+    /// `--frame` (sprite mode): the one frame a steps sheet draws; refused without `--steps`.
+    pub frame: Option<&'a str>,
     /// `--frames` (scene mode): empty renders tick 0 (today's behaviour), one value ticks the world
     /// that many times before the ordinary render, two or more (ascending — `main.rs` checks before
     /// this `Request` is built) render a labelled time strip. Conflicts with `--sweep`/`--model` at
@@ -992,6 +999,12 @@ fn default_sheet_out(model: &Path, request: &Request) -> PathBuf {
         .or_else(|| stem.strip_suffix(".prefab"))
         .or_else(|| stem.strip_suffix(".sprite"))
         .unwrap_or(&stem);
+    if request.steps && request.sprite.is_some() {
+        return match request.frame {
+            Some(frame) => PathBuf::from(format!("{name}-{frame}.steps.png")),
+            None => PathBuf::from(format!("{name}.steps.png")),
+        };
+    }
     // A channel is a different picture of the same subject, so it never lands on the ordinary
     // sheet's name — the two are read side by side.
     if let Some(channel) = request.channel {
@@ -1049,6 +1062,16 @@ fn default_atlas_out(atlas: &Path, kind: &str) -> PathBuf {
 /// Everything the sheet burns in is also printed: the effects that ran and what each `--set`
 /// changed, so a session that never opens the image still reads what produced it.
 fn run_sprite(request: &Request, doc: &Path) -> ExitCode {
+    if request.frame.is_some() && !request.steps {
+        return report(
+            doc,
+            &[ludion_core::diagnostics::Diagnostic::new(
+                ludion_core::codes::code::SCENE_OVERRIDE_INVALID,
+                "`--frame` needs `--steps`: a contact sheet already draws every frame",
+            )
+            .with_help("add `--steps`, e.g. `--sprite ship.sprite.yaml --steps --frame idle`")],
+        );
+    }
     let scale = match sprite_scale(request.scale) {
         Ok(scale) => scale,
         Err(message) => {
@@ -1074,6 +1097,9 @@ fn run_sprite(request: &Request, doc: &Path) -> ExitCode {
         scale,
         set: overrides,
         sweep: swept,
+        steps: request.steps.then(|| ludion_engine::SpriteSteps {
+            frame: request.frame.map(str::to_string),
+        }),
     }) {
         Ok(outcome) => {
             if let Err(diagnostic) = write_sheet(&outcome.image, &out) {
@@ -1088,6 +1114,9 @@ fn run_sprite(request: &Request, doc: &Path) -> ExitCode {
             );
             for effect in &outcome.effects {
                 println!("  effect {effect}");
+            }
+            for line in &outcome.steps {
+                println!("  steps {line}");
             }
             for applied in &outcome.applied {
                 println!(
