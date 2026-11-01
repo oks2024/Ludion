@@ -295,13 +295,27 @@ fn interpolation_draws_between_ticks() {
     let ticks = ticks_in_a_second_of(engine);
     assert!(ticks >= 36, "the sim kept its pace: {ticks} ticks");
     let offsets = offsets(&counts);
-    let (lo, hi) = offsets
-        .iter()
-        .fold((f32::MAX, f32::MIN), |(lo, hi), o| (lo.min(*o), hi.max(*o)));
-    assert!(
-        hi - lo <= 1.0 + 1e-3,
-        "no extrapolation: offsets span {lo}..{hi}"
-    );
+    let hi = offsets.iter().fold(f32::MIN, |hi, o| hi.max(*o));
+    // A render blends from the last pose the presenter saw, which is at most as many ticks back as
+    // the frames the presenter skipped since its previous render (a loaded box skips some): it
+    // never draws past its own tick, nor before the previous render's tick.
+    assert!(hi <= 1e-3, "no extrapolation: a render drew {hi} past its tick");
+    let frames: Vec<u64> = counts.poses.lock().unwrap().iter().map(|p| p.0).collect();
+    let mut earlier = 0; // the last distinct frame rendered; a re-render of one frame re-blends it
+    let mut current = 0;
+    for (i, offset) in offsets.iter().enumerate() {
+        if frames[i] != current {
+            earlier = current;
+            current = frames[i];
+        }
+        let gap = frames[i] - earlier;
+        assert!(
+            *offset >= hi - gap as f32 - 1e-3,
+            "no extrapolation: render {i} (frame {}) sits {} ticks before its pose, over a {gap}-frame gap",
+            frames[i],
+            hi - offset
+        );
+    }
     assert!(
         offsets.iter().any(|o| (o - hi).abs() > 1e-3),
         "at least one render sits between two poses: {} renders",
