@@ -60,13 +60,16 @@ checked). `L1112` is the non-fatal vertex-count budget above
 `doc.rs` is the **generic, type-agnostic** doc machinery a game reaches through `ludion-engine`'s
 `doc_kind::<T>`. Where `mesh.rs`/`voxel.rs` hand-roll one fixed type each, these two functions
 validate and emit *any* type by taking its schema as a `Value` argument — so the crate stays true to
-"never names a concrete component," and the typed side lives engine-side:
+"never names a concrete component." `parse_doc::<T>(source, kind)` adds a typed entry over them (generic
+`T`, still no concrete type named): `schema_for!(T)` → `check_doc` → `deserialize_doc`. The engine's
+install and reload call the same `deserialize_doc`, so a test parse and the boot parse give the same
+value and the same `L1120` text.
 
 - `check_doc(source, kind, schema)` — strict-YAML → `Value`, then **envelope** validation (`format ==
   1`, `kind` matches the argument, no stray top-level envelope key → `L1119`, with a nearest match
   over `format`/`kind`), then strips the envelope and runs the shared `Checker` on the remaining field
-  map (`L1120`, JSON Pointer + `suggest::nearest`). Returns the validated field map for the caller to
-  `from_value::<T>()`.
+  map (`L1120`, JSON Pointer + `suggest::nearest`). Returns the validated field map, which
+  `deserialize_doc::<T>` turns into `T`.
 - `emit_doc(kind, value, schema)` — writes the envelope, then the field map in schema-declaration
   order via the same generic value emitter scenes use. Byte-idempotent, property-tested in
   `tests/doc.rs` over a hand-built schema.

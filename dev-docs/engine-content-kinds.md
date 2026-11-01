@@ -56,6 +56,11 @@ compares to react to reloads. Every registered kind's captured `schema_for!(T)` 
 registered none) — the *same* document `check_doc` validates against, so a client that builds an
 authoring form from it cannot disagree with the validator.
 
+A kind registered with `doc_singleton` must hold exactly one doc (`L1315`, checked wherever the doc
+validators run; `DocStore::single`). `EngineBuilder::doc_text(key, text)` supplies a doc inline, through
+the same dispatch and validators as a file; it is reinstalled on every scene load, restore and district
+rebuild, and a recording writes it as a `DocReload` record ahead of the first keyframe.
+
 **The doc-reload recording seam** is the one place `asset.reload` is recorded. `commands/asset.rs`'s
 `resolve_doc_path` routes an incoming path: a `*.yaml` under the root whose `kind:` is registered
 takes the doc branch — `reload_doc` re-validates and upserts, bumps `generation`, pushes
