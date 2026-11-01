@@ -4,7 +4,7 @@
 
 use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Engine, EngineBuilder, Transform, move_character};
+use ludion_engine::{Engine, EngineBuilder, Transform, TransformHierarchy, move_character};
 use ludion_physics::{CharacterMotor, CharacterMotorState};
 use ludion_protocol::command::EngineRestoreParams;
 use ludion_protocol::{Command, ResponseBody};
@@ -179,7 +179,11 @@ fn walk_bare(world: &mut World, _ctx: &SystemCtx) {
         .next()
         .map(|(entity, _)| entity)
         .expect("the scene has a motor");
-    let _ = ludion_physics::move_character::<Transform>(world, hero, [0.05, -0.1, 0.02]);
+    let _ = ludion_physics::move_character::<Transform, TransformHierarchy>(
+        world,
+        hero,
+        [0.05, -0.1, 0.02],
+    );
 }
 
 #[test]

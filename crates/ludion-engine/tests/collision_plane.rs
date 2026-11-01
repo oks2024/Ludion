@@ -8,7 +8,7 @@
 use ludion_core::ids::EntityId;
 use ludion_core::time::{FrameIndex, TickRate};
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Engine, Transform};
+use ludion_engine::{Engine, Transform, TransformHierarchy};
 use ludion_spatial::{Body, Collider, Plane, Shape, spatial};
 
 fn ctx() -> SystemCtx {
@@ -48,7 +48,7 @@ fn the_xy_plane_separates_colliders_the_ground_plane_stacks() {
     let mut ground = World::new();
     let near = spawn(&mut ground, [0.0, 0.0, 0.0], Body::new_static());
     let above = spawn(&mut ground, [0.0, 5.0, 0.0], Body::new_static());
-    spatial::rebuild::<Transform>(&mut ground, &ctx());
+    spatial::rebuild::<Transform, TransformHierarchy>(&mut ground, &ctx());
     let stacked = spatial::overlaps(&ground, Shape::Circle { radius: 1.0 }, [0.0, 0.0], None);
     assert_eq!(stacked, vec![near, above], "x/z ignores the y separation");
 
@@ -56,7 +56,7 @@ fn the_xy_plane_separates_colliders_the_ground_plane_stacks() {
     sprites.insert_resource(Plane::Xy);
     let near = spawn(&mut sprites, [0.0, 0.0, 0.0], Body::new_static());
     let _above = spawn(&mut sprites, [0.0, 5.0, 0.0], Body::new_static());
-    spatial::rebuild::<Transform>(&mut sprites, &ctx());
+    spatial::rebuild::<Transform, TransformHierarchy>(&mut sprites, &ctx());
     let hits = spatial::overlaps(&sprites, Shape::Circle { radius: 1.0 }, [0.0, 0.0], None);
     assert_eq!(hits, vec![near], "x/y reads the y separation");
 }
@@ -92,9 +92,10 @@ fn move_and_slide_slides_along_y_on_the_xy_plane() {
             },
         )
         .unwrap();
-    spatial::rebuild::<Transform>(&mut world, &ctx());
+    spatial::rebuild::<Transform, TransformHierarchy>(&mut world, &ctx());
 
-    let resolved = spatial::move_and_slide::<Transform>(&world, mover, [0.5, 1.0]);
+    let resolved =
+        spatial::move_and_slide::<Transform, TransformHierarchy>(&world, mover, [0.5, 1.0]);
     assert_eq!(
         resolved,
         [0.5, 0.0],

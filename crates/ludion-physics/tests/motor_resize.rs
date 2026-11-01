@@ -13,9 +13,9 @@ use ludion_core::math::sin_cos;
 use ludion_core::par::with_threads;
 use ludion_ecs::{Schedule, SystemCtx, World};
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, MotorError, MoveReport, PhysicsSpace, PlatformCarry,
-    QueryFilter, ResizeReport, fits_character, install, move_character, resize_character,
-    teleport_character,
+    CharacterMotor, CharacterMotorState, MotorError, MoveReport, NoParent, PhysicsSpace,
+    PlatformCarry, QueryFilter, ResizeReport, fits_character, install, move_character,
+    resize_character, teleport_character,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -123,7 +123,7 @@ fn rig(
         "test-script",
         Arc::new(move |world: &mut World, ctx: &SystemCtx| script(world, ctx.frame.as_u64())),
     );
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     (world, schedule)
 }
 
@@ -191,7 +191,7 @@ fn an_open_resize_keeps_the_feet_and_rebuilds_the_capsule() {
                 .push((frame, top.point[1] - feet[1]));
         }
         let displacement = if resized.is_some() { [0.0; 3] } else { FALL };
-        let report = move_character::<TestPose>(world, hero, displacement).ok();
+        let report = move_character::<TestPose, NoParent>(world, hero, displacement).ok();
         sink.lock()
             .unwrap()
             .push((frame, feet, resized, report.map(|r| r.height)));
@@ -244,7 +244,7 @@ fn a_low_slab_blocks_standing_until_it_is_gone() {
             world.despawn(slab).unwrap();
         }
         if frame < 20 {
-            let _ = move_character::<TestPose>(world, hero, FALL);
+            let _ = move_character::<TestPose, NoParent>(world, hero, FALL);
             return;
         }
         let report = resize_character::<TestPose>(world, hero, HEIGHT).unwrap();
@@ -253,7 +253,7 @@ fn a_low_slab_blocks_standing_until_it_is_gone() {
         sink.lock()
             .unwrap()
             .push((frame, report.blocked_by, report.height, tall, low));
-        let _ = move_character::<TestPose>(world, hero, FALL);
+        let _ = move_character::<TestPose, NoParent>(world, hero, FALL);
     });
     run(&mut world, &mut schedule, 60);
 
@@ -360,7 +360,7 @@ fn teleport_rig(at: u64) -> (World, Schedule, Teleport) {
             teleport_character::<TestPose>(world, hero, [10.0, 0.5, 0.0], 1.0).unwrap();
             return;
         }
-        if let Ok(report) = move_character::<TestPose>(world, hero, FALL) {
+        if let Ok(report) = move_character::<TestPose, NoParent>(world, hero, FALL) {
             sink.lock().unwrap().push((frame, report));
         }
     });
@@ -461,7 +461,7 @@ fn a_teleport_restores_the_height_only_where_it_fits() {
             teleport_character::<TestPose>(world, hero_low, [5.0, 0.0, 0.0], 0.0).unwrap();
         }
         let report = |world: &mut World, hero| {
-            move_character::<TestPose>(world, hero, FALL)
+            move_character::<TestPose, NoParent>(world, hero, FALL)
                 .map(|r| r.height)
                 .unwrap_or(0.0)
         };
@@ -516,7 +516,7 @@ fn determinism_run() -> Vec<([u32; 3], [u32; 4], Option<u32>)> {
         } else {
             FALL
         };
-        let _ = move_character::<TestPose>(world, hero, step);
+        let _ = move_character::<TestPose, NoParent>(world, hero, step);
         let pose = pose_of(world, hero);
         let state = world.get::<CharacterMotorState>(hero).ok().flatten();
         sink.lock().unwrap().push((

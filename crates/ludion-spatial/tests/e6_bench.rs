@@ -24,7 +24,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::rng::DeterministicRng;
 use ludion_core::time::{FrameIndex, TickRate};
 use ludion_ecs::{SystemCtx, World};
-use ludion_spatial::{Body, Collider, GroundPosition, Plane, Shape, spatial};
+use ludion_spatial::{Body, Collider, GroundPosition, NoParent, Plane, Shape, spatial};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -240,7 +240,7 @@ fn e6_mix_fits_the_spatial_sub_budget() {
         drift(&mut world, &movers); // sim work, outside every timed span
 
         let start = now();
-        spatial::rebuild::<Pos>(&mut world, &ctx);
+        spatial::rebuild::<Pos, NoParent>(&mut world, &ctx);
         let rebuild_span = lap(start);
 
         // 500 k_nearest: separation/targeting-shaped — small k, modest radius, movers only.
@@ -272,7 +272,8 @@ fn e6_mix_fits_the_spatial_sub_budget() {
         let start = now();
         let mut slid = [0.0f32; 2];
         for (i, &seeker) in seekers.iter().enumerate() {
-            let resolved = spatial::move_and_slide::<Pos>(&world, seeker, movers[i].velocity);
+            let resolved =
+                spatial::move_and_slide::<Pos, NoParent>(&world, seeker, movers[i].velocity);
             slid[0] += resolved[0];
             slid[1] += resolved[1];
         }

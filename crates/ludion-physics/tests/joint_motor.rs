@@ -9,7 +9,7 @@ use common::{TestPose, pose_of, tick};
 use ludion_core::ids::EntityId;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
-use ludion_physics::{PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
+use ludion_physics::{NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
 use ludion_spatial::{Body, Collider, Joint, JointKind, JointMotor, RigidBody, Shape, Velocity};
 
 /// A link's radius, and its mass (`RigidBody::default`); it hangs `LEVER` from its anchor.
@@ -80,7 +80,7 @@ fn motor_world(gravity: [f32; 3]) -> (World, Schedule, EntityId) {
 
 fn physics_schedule(gravity: [f32; 3]) -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(
+    install::<TestPose, NoParent>(
         &mut schedule,
         PhysicsSettings {
             gravity,

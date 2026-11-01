@@ -1,5 +1,5 @@
 //! Facade smoke for the spatial module (Phase 12 Wave 5): everything a game needs — `Collider`
-//! authoring in a scene, `spatial::rebuild::<Transform>` registered as an ordinary system through
+//! authoring in a scene, `spatial::rebuild::<Transform, TransformHierarchy>` registered as an ordinary system through
 //! `Engine::builder().system(...)`, and each query + `move_and_slide` — reachable through
 //! `use ludion::prelude::*` alone.
 
@@ -7,7 +7,10 @@ use ludion::prelude::*;
 
 /// The game: the rebuild system at an explicit schedule position, exactly as the guide shows.
 fn game() -> EngineBuilder {
-    Engine::builder().system("spatial_rebuild", spatial::rebuild::<Transform>)
+    Engine::builder().system(
+        "spatial_rebuild",
+        spatial::rebuild::<Transform, TransformHierarchy>,
+    )
 }
 
 /// Two colliders authored in a scene: a static wall AABB ahead of a dynamic circle mover.
@@ -95,6 +98,7 @@ fn spatial_module_works_end_to_end_through_the_facade() {
     assert!((hit.t - 1.5).abs() < 1e-5, "t was {}", hit.t);
 
     // move_and_slide: the mover heading diagonally into the wall keeps only the tangential axis.
-    let resolved = spatial::move_and_slide::<Transform>(world, mover, [3.0, 1.0]);
+    let resolved =
+        spatial::move_and_slide::<Transform, TransformHierarchy>(world, mover, [3.0, 1.0]);
     assert_eq!(resolved, [0.0, 1.0], "x blocked by the wall, z preserved");
 }

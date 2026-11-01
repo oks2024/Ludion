@@ -10,8 +10,8 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, SystemCtx, World};
 use ludion_physics::{
-    Blast, BlastHit, CollisionLayers, Falloff, PhysicsError, PhysicsSettings, PhysicsSpace,
-    PhysicsWorld, QueryFilter, install,
+    Blast, BlastHit, CollisionLayers, Falloff, NoParent, PhysicsError, PhysicsSettings,
+    PhysicsSpace, PhysicsWorld, QueryFilter, install,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -24,7 +24,7 @@ fn zero_gravity() -> PhysicsSettings {
 
 fn schedule_with(settings: PhysicsSettings) -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, settings);
+    install::<TestPose, NoParent>(&mut schedule, settings);
     schedule
 }
 
@@ -679,7 +679,7 @@ fn scatter(world: &mut World) {
 fn cadence_schedule() -> Schedule {
     let mut schedule = Schedule::new();
     schedule.add_system("fire_on_cadence", fire_on_cadence);
-    install::<TestPose>(&mut schedule, PhysicsSettings::new(PhysicsSpace::Free));
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSettings::new(PhysicsSpace::Free));
     schedule
 }
 

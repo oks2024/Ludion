@@ -7,7 +7,8 @@ use common::{TestPose, pose_of, tick};
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    ColliderMeshes, PhysicsSpace, PhysicsWorld, TriangleMesh, WireBody, feature_edges, install,
+    ColliderMeshes, NoParent, PhysicsSpace, PhysicsWorld, TriangleMesh, WireBody, feature_edges,
+    install,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape};
 
@@ -40,7 +41,7 @@ fn cube_box() -> Shape {
 
 fn schedule() -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     schedule
 }
 

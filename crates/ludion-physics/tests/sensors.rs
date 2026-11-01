@@ -10,7 +10,7 @@ use ludion_core::par::with_threads;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, SystemCtx, World};
 use ludion_physics::{
-    CollisionLayers, ExitCause, PhysicsSettings, PhysicsSpace, PhysicsWorld, QueryFilter,
+    CollisionLayers, ExitCause, NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld, QueryFilter,
     SensorEvent, SensorPhase, install, teleport_kinematic,
 };
 use ludion_spatial::{Body, Collider, CompoundPart, RigidBody, Shape};
@@ -19,7 +19,7 @@ const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 fn schedule() -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     schedule
 }
 
@@ -282,7 +282,7 @@ fn record(world: &mut World, _ctx: &SystemCtx) {
 fn recording_schedule(settings: PhysicsSettings) -> Schedule {
     let mut schedule = Schedule::new();
     schedule.add_system("record", record);
-    install::<TestPose>(&mut schedule, settings);
+    install::<TestPose, NoParent>(&mut schedule, settings);
     schedule
 }
 

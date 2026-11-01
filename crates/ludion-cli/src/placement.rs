@@ -16,7 +16,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::Affine3;
 use ludion_core::time::{FrameIndex, TickRate};
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Mesh, MeshGrid, MeshSource, Transform};
+use ludion_engine::{Mesh, MeshGrid, MeshSource, Transform, TransformHierarchy};
 use ludion_scene::{ExpandedScene, InstantiateOptions, Scene, SceneEntity, instantiate_expanded};
 use ludion_spatial::{Body, Collider, Shape};
 use serde_json::Value;
@@ -115,7 +115,7 @@ pub(crate) fn lint(
     ) else {
         return empty();
     };
-    ludion_spatial::spatial::rebuild::<Transform>(
+    ludion_spatial::spatial::rebuild::<Transform, TransformHierarchy>(
         &mut world,
         &SystemCtx::new(FrameIndex::ZERO, TickRate::DEFAULT),
     );

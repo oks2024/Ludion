@@ -57,7 +57,7 @@ pub enum SensorPhase {
 /// ```
 /// use ludion_core::time::{FrameIndex, TickRate};
 /// use ludion_ecs::{Schedule, SystemCtx, World};
-/// use ludion_physics::{PhysicsPose, PhysicsSpace, PhysicsWorld, SensorPhase, install};
+/// use ludion_physics::{NoParent, PhysicsPose, PhysicsSpace, PhysicsWorld, SensorPhase, install};
 /// use ludion_spatial::{Body, Collider, Shape};
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
@@ -90,7 +90,7 @@ pub enum SensorPhase {
 ///     .unwrap();
 ///
 /// let mut schedule = Schedule::new();
-/// install::<Transform>(&mut schedule, PhysicsSpace::Free);
+/// install::<Transform, NoParent>(&mut schedule, PhysicsSpace::Free);
 /// let ctx = |frame| SystemCtx::new(FrameIndex::new(frame), TickRate::DEFAULT);
 /// schedule.run(&mut world, &ctx(0));
 /// let events = world.resource::<PhysicsWorld>().unwrap().sensor_events();

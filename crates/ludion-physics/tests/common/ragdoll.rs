@@ -5,12 +5,14 @@
 use crate::common::TestPose;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Schedule, World};
-use ludion_physics::{ContactPhase, PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
+use ludion_physics::{
+    ContactPhase, NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld, install,
+};
 use ludion_spatial::{Body, Collider, Joint, JointKind, RigidBody, Shape, Velocity};
 
 pub fn schedule_with(settings: PhysicsSettings) -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, settings);
+    install::<TestPose, NoParent>(&mut schedule, settings);
     schedule
 }
 

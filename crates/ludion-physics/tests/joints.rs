@@ -9,7 +9,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    DEFAULT_SOLVER_ITERATIONS, PhysicsSettings, PhysicsSpace, PhysicsWorld, install,
+    DEFAULT_SOLVER_ITERATIONS, NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld, install,
 };
 use ludion_spatial::{Body, Collider, Joint, JointKind, RigidBody, Shape, Velocity};
 
@@ -60,7 +60,7 @@ fn joint_world_with_iterations(solver_iterations: u32) -> (World, Schedule) {
         solver_iterations,
         ..PhysicsSettings::new(PhysicsSpace::Free)
     };
-    install::<TestPose>(&mut schedule, settings);
+    install::<TestPose, NoParent>(&mut schedule, settings);
     (world, schedule)
 }
 
@@ -608,7 +608,7 @@ fn build_hinge_chain(world: &mut World) -> (EntityId, EntityId, EntityId) {
 
 fn chain_schedule() -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     schedule
 }
 

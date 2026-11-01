@@ -80,7 +80,7 @@
 //!   `ordered_reduce` are the engine's only sanctioned way onto more than one sim thread; results are
 //!   thread-count invariant by construction. Re-exported as a module, like [`math`] and [`spatial`].
 //! - **Collision / spatial queries** — [`Collider`] (+ [`Shape`], [`Body`]) and the [`spatial`]
-//!   module: a game registers `spatial::rebuild::<Transform>` as an ordinary system at an explicit
+//!   module: a game registers `spatial::rebuild::<Transform, TransformHierarchy>` as an ordinary system at an explicit
 //!   schedule position, then calls `spatial::{overlaps, raycast, k_nearest, move_and_slide}`.
 //!   [`GroundPosition`] is the seam a custom position component implements to feed the index
 //!   (the engine already implements it for [`Transform`]).
@@ -165,15 +165,15 @@ pub use ludion_engine::{
     ProbeShape, Profile, Projection, RampSpec, ReflectionProbe, RenderExtent, RenderSettings,
     Residue, ResidueStore, RigConfig, RigMode, RigState, SceneSwitch, ShakeConfig, Shutdown,
     SpotLight, Springs, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance, Tilemap,
-    TimelineEntry, TrackRig, Transform, TurnSpec, UiList, UiListItem, UiRect, UiText,
-    VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Volley, VolleyCenter, VolleyShape, WorldPose,
-    add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
-    bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
-    fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly, move_character,
-    move_character_with, path_follow, path_follower_motion, play_patterns, posed_joint_world,
-    probe_character_ground, reparent, report_diagnostic, report_full_diagnostic, resize_character,
-    revert_prefab, set_speed, snap_rig, spawn_prefab, switch_to_ragdoll, teleport_character,
-    unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
+    TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect,
+    UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Volley, VolleyCenter, VolleyShape,
+    WorldPose, add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age,
+    bullet_is_alive, bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade,
+    debug_draw, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
+    move_character, move_character_with, path_follow, path_follower_motion, play_patterns,
+    posed_joint_world, probe_character_ground, reparent, report_diagnostic, report_full_diagnostic,
+    resize_character, revert_prefab, set_speed, snap_rig, spawn_prefab, switch_to_ragdoll,
+    teleport_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;
@@ -201,7 +201,7 @@ pub use ludion_physics::{
 };
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,
-    JointKind, JointMotor, Plane, RigidBody, Shape, Velocity, spatial,
+    JointKind, JointMotor, NoParent, ParentPose, Plane, RigidBody, Shape, Velocity, spatial,
 };
 
 pub use ludion_core::codes::code;

@@ -146,8 +146,8 @@ pub use extract::{check_atlas_reference, extract, extract_at, mesh_grid_cell};
 pub use font_sheet::render_font_sheet;
 pub use fonts::FontLibrary;
 pub use hierarchy::{
-    HierarchyFault, Keep, MAX_HIERARCHY_DEPTH, WorldPose, reparent, world_affine,
-    world_pose_transform, world_transform,
+    HierarchyFault, Keep, MAX_HIERARCHY_DEPTH, TransformHierarchy, WorldPose, reparent,
+    world_affine, world_pose_transform, world_transform,
 };
 pub use instantiate::EngineHooks;
 pub use interpolation::NoInterpolate;

@@ -20,7 +20,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::{Affine3, Trs, euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
 use ludion_ecs::{ChildMap, PRESENTATION_BASE, Parent, World, is_presentation};
 use ludion_renderer::DebugSegment;
-use ludion_spatial::{Body, Collider};
+use ludion_spatial::{Body, Collider, ParentPose};
 
 use crate::components::{Fade, Transform, Visibility};
 
@@ -664,6 +664,15 @@ pub(crate) fn parented_world_pose(world: &World, entity: EntityId) -> Option<Wor
         return None;
     }
     world_transform(world, entity)
+}
+
+/// The [`ParentPose`] resolver for `Transform`: composes the world pose through the `Parent` chain.
+pub struct TransformHierarchy;
+
+impl ParentPose for TransformHierarchy {
+    fn world_pose(world: &World, entity: EntityId) -> Option<([f32; 3], [f32; 4])> {
+        parented_world_pose(world, entity).map(|p| (p.trs.translation, p.trs.rotation))
+    }
 }
 
 /// Reports `L1218`–`L1220` once per entity (once per loop for a cycle) through the `Diagnostics`

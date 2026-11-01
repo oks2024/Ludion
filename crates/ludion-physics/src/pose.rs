@@ -1,14 +1,13 @@
 //! [`PhysicsPose`]: the one seam between a game's position component and the solver.
 
-use ludion_core::ids::EntityId;
-use ludion_ecs::{Component, World};
+use ludion_ecs::Component;
 
 /// A game's position component, seen by the solver.
 ///
 /// `ludion-physics` never names a concrete pose type: the engine's `Transform`, a test's stub and a
 /// game's own component all reach the solver through this trait, which is why this crate does not
 /// depend on `ludion-engine`. A game registers the systems for its own pose component once —
-/// [`install::<MyPose>`](crate::install) — and the write/mirror pair reads and writes it through
+/// [`install::<MyPose, NoParent>`](crate::install) — and the write/mirror pair reads and writes it through
 /// these four methods and nothing else.
 ///
 /// # Rotation is a quaternion at this boundary
@@ -35,16 +34,4 @@ pub trait PhysicsPose: Component {
     fn rotation_quat(&self) -> [f32; 4];
     /// Sets the world-space orientation from a unit quaternion, `[x, y, z, w]`.
     fn set_rotation_quat(&mut self, rotation: [f32; 4]);
-
-    /// `entity`'s world pose when its stored pose is relative to an ancestor, `None` when the stored
-    /// value is already world space — the default, and every root.
-    ///
-    /// Only kinematic bodies may have one: [`install`](crate::install)'s write pass gives a rigid or
-    /// static body that does no body at all.
-    fn derived_world_pose(_world: &World, _entity: EntityId) -> Option<([f32; 3], [f32; 4])>
-    where
-        Self: Sized,
-    {
-        None
-    }
 }

@@ -5,6 +5,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::{cos, sqrt};
 use ludion_core::time::FrameIndex;
 use ludion_ecs::World;
+use ludion_spatial::ParentPose;
 
 use super::carry::{rigid_carry, rotate, rotate_yaw};
 use super::component::{CharacterMotor, CharacterMotorState, PlatformPose, check, height_in_force};
@@ -120,27 +121,27 @@ impl MoveConstraint for AxisLock {
 ///
 /// ```no_run
 /// # use ludion_ecs::{SystemCtx, World};
-/// # use ludion_physics::{move_character, PhysicsPose};
+/// # use ludion_physics::{move_character, ParentPose, PhysicsPose};
 /// # use ludion_core::ids::EntityId;
-/// fn walk<P: PhysicsPose>(world: &mut World, _ctx: &SystemCtx, hero: EntityId) {
+/// fn walk<P: PhysicsPose, R: ParentPose>(world: &mut World, _ctx: &SystemCtx, hero: EntityId) {
 ///     let gravity = -0.2;
-///     if let Ok(report) = move_character::<P>(world, hero, [0.05, gravity, 0.0]) {
+///     if let Ok(report) = move_character::<P, R>(world, hero, [0.05, gravity, 0.0]) {
 ///         if report.landed { /* play the thud */ }
 ///     }
 /// }
 /// ```
-pub fn move_character<P: PhysicsPose>(
+pub fn move_character<P: PhysicsPose, R: ParentPose>(
     world: &mut World,
     entity: EntityId,
     displacement: [f32; 3],
 ) -> Result<MoveReport, MotorError> {
-    move_character_with::<P>(world, entity, displacement, None)
+    move_character_with::<P, R>(world, entity, displacement, None)
 }
 
 /// [`move_character`] with a [`MoveConstraint`] shaping every horizontal displacement and adding
 /// its correction.
 /// The same ordering rule applies: call it before [`install`](crate::install)'s systems.
-pub fn move_character_with<P: PhysicsPose>(
+pub fn move_character_with<P: PhysicsPose, R: ParentPose>(
     world: &mut World,
     entity: EntityId,
     displacement: [f32; 3],
@@ -179,7 +180,7 @@ pub fn move_character_with<P: PhysicsPose>(
             .resource::<PhysicsWorld>()
             .ok_or(MotorError::NoPhysicsWorld)?;
         let tick = physics.last_write_frame.map_or(0, |frame| frame + 1);
-        let carry = plan_carry::<P>(world, physics, state, tick);
+        let carry = plan_carry::<P, R>(world, physics, state, tick);
         let solver = Solver::new(physics, entity, &checked);
         let outcome = solver.solve(feet, displacement, was_grounded, constraint, carry.as_ref());
         let platform_now = outcome
@@ -187,7 +188,7 @@ pub fn move_character_with<P: PhysicsPose>(
             .ground
             .filter(|_| outcome.report.grounded)
             .filter(|hit| !physics.is_rigid(hit.entity))
-            .and_then(|hit| world_pose::<P>(world, hit.entity))
+            .and_then(|hit| world_pose::<P, R>(world, hit.entity))
             .map(|(translation, rotation)| PlatformPose {
                 translation,
                 rotation,
@@ -341,12 +342,12 @@ pub(crate) fn motor_filter(
 }
 
 /// `entity`'s world pose from the game's pose component `P`, `None` when it has none.
-fn world_pose<P: PhysicsPose>(world: &World, entity: EntityId) -> Option<([f32; 3], [f32; 4])> {
+fn world_pose<P: PhysicsPose, R: ParentPose>(
+    world: &World,
+    entity: EntityId,
+) -> Option<([f32; 3], [f32; 4])> {
     let pose = world.get::<P>(entity).ok().flatten()?;
-    Some(
-        P::derived_world_pose(world, entity)
-            .unwrap_or_else(|| (pose.translation(), pose.rotation_quat())),
-    )
+    Some(R::world_pose(world, entity).unwrap_or_else(|| (pose.translation(), pose.rotation_quat())))
 }
 
 /// The carry a motor is due this call: it stood on a non-rigid support at the end of its last
@@ -354,7 +355,7 @@ fn world_pose<P: PhysicsPose>(world: &World, entity: EntityId) -> Option<([f32; 
 /// support's motion since, applied rigidly to the feet, plus its surface velocity over the tick's
 /// gameplay time. The poses are kept, not the translation: the feet they act on are the ones
 /// after the slide and probe.
-fn plan_carry<P: PhysicsPose>(
+fn plan_carry<P: PhysicsPose, R: ParentPose>(
     world: &World,
     physics: &PhysicsWorld,
     state: Option<&CharacterMotorState>,
@@ -365,7 +366,7 @@ fn plan_carry<P: PhysicsPose>(
     if physics.is_rigid(ground) {
         return None;
     }
-    let (translation, rotation) = world_pose::<P>(world, ground)?;
+    let (translation, rotation) = world_pose::<P, R>(world, ground)?;
     let surface = world
         .get::<SurfaceVelocity>(ground)
         .ok()

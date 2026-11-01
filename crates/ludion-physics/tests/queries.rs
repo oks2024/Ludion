@@ -9,8 +9,8 @@ use ludion_core::math::euler_xyz_degrees_to_quat;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    CollisionLayers, PhysicsError, PhysicsSettings, PhysicsSpace, PhysicsWorld, QueryFilter,
-    QueryHit, install,
+    CollisionLayers, NoParent, PhysicsError, PhysicsSettings, PhysicsSpace, PhysicsWorld,
+    QueryFilter, QueryHit, install,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -38,7 +38,7 @@ fn spawn_static_box(world: &mut World, x: f32) -> EntityId {
 
 fn free_schedule() -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     schedule
 }
 
@@ -596,7 +596,7 @@ fn layered_row() -> (World, [EntityId; 4]) {
         vec!["default".into(), "dummy".into(), "props".into()],
         vec![0, 0, 0],
     );
-    install::<TestPose>(
+    install::<TestPose, NoParent>(
         &mut schedule,
         PhysicsSettings {
             layers: Some(table),

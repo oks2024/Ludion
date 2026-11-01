@@ -10,7 +10,8 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    ColliderMeshes, PhysicsSpace, PhysicsWorld, QueryFilter, ShapeKind, TriangleMesh, install,
+    ColliderMeshes, NoParent, PhysicsSpace, PhysicsWorld, QueryFilter, ShapeKind, TriangleMesh,
+    install,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape};
 
@@ -74,7 +75,7 @@ fn spawn(world: &mut World, collider: Collider, at: [f32; 3]) -> EntityId {
 
 fn schedule() -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     schedule
 }
 

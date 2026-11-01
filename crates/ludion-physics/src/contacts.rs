@@ -56,7 +56,7 @@ pub enum ContactPhase {
 /// ```
 /// use ludion_core::time::{FrameIndex, TickRate};
 /// use ludion_ecs::{Schedule, SystemCtx, World};
-/// use ludion_physics::{ContactPhase, PhysicsPose, PhysicsSpace, PhysicsWorld, install};
+/// use ludion_physics::{NoParent, ContactPhase, PhysicsPose, PhysicsSpace, PhysicsWorld, install};
 /// use ludion_spatial::{Body, Collider, RigidBody, Shape};
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
@@ -111,7 +111,7 @@ pub enum ContactPhase {
 ///
 /// let mut schedule = Schedule::new();
 /// schedule.add_system("sparks", sparks);
-/// install::<Transform>(&mut schedule, PhysicsSpace::Free);
+/// install::<Transform, NoParent>(&mut schedule, PhysicsSpace::Free);
 /// for frame in 0..90 {
 ///     schedule.run(&mut world, &SystemCtx::new(FrameIndex::new(frame), TickRate::DEFAULT));
 /// }

@@ -20,7 +20,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::rng::DeterministicRng;
 use ludion_core::time::{FrameIndex, TickRate};
 use ludion_ecs::{SystemCtx, World};
-use ludion_spatial::{Body, Collider, GroundPosition, Plane, Shape, spatial};
+use ludion_spatial::{Body, Collider, GroundPosition, NoParent, Plane, Shape, spatial};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -338,7 +338,7 @@ fn probe_centers(rng: &mut DeterministicRng) -> Vec<[f32; 2]> {
 fn overlaps_matches_the_brute_force_oracle() {
     for seed in SEEDS {
         let (mut world, refs) = random_world(seed, WORLD_SIZE);
-        spatial::rebuild::<Pos>(&mut world, &ctx());
+        spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
         let mut rng = DeterministicRng::new_with_stream(seed, 1);
         let probes = [
             Shape::Circle { radius: 0.5 },
@@ -373,7 +373,7 @@ fn overlaps_matches_the_brute_force_oracle() {
 fn k_nearest_matches_the_brute_force_oracle() {
     for seed in SEEDS {
         let (mut world, refs) = random_world(seed, WORLD_SIZE);
-        spatial::rebuild::<Pos>(&mut world, &ctx());
+        spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
         let mut rng = DeterministicRng::new_with_stream(seed, 2);
         for center in probe_centers(&mut rng) {
             for &(k, radius) in &[(1usize, 4.0f32), (8, 6.0), (20, 40.0), (WORLD_SIZE, 500.0)] {
@@ -395,7 +395,7 @@ fn k_nearest_matches_the_brute_force_oracle() {
 fn raycast_matches_the_brute_force_oracle() {
     for seed in SEEDS {
         let (mut world, refs) = random_world(seed, WORLD_SIZE);
-        spatial::rebuild::<Pos>(&mut world, &ctx());
+        spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
         let mut rng = DeterministicRng::new_with_stream(seed, 3);
         let dirs = [
             [1.0, 0.0],
@@ -454,7 +454,7 @@ fn double_run_results_are_bit_identical() {
         let center = [7.0, -13.0];
         let dir = [0.6, 0.8];
 
-        spatial::rebuild::<Pos>(&mut world, &ctx());
+        spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
         let overlaps_1 = spatial::overlaps(&world, probe.clone(), center, None);
         let nearest_1 = spatial::k_nearest(&world, center, 10, 30.0, None);
         let ray_1 = spatial::raycast(&world, center, dir, None);
@@ -470,7 +470,7 @@ fn double_run_results_are_bit_identical() {
         assert_eq!(ray_1, spatial::raycast(&world, center, dir, None));
 
         // … and again after a second rebuild of the same world content.
-        spatial::rebuild::<Pos>(&mut world, &ctx());
+        spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
         assert_eq!(overlaps_1, spatial::overlaps(&world, probe, center, None));
         assert_eq!(
             nearest_1,
@@ -498,7 +498,7 @@ fn co_located_colliders_return_in_entity_id_order() {
             Body::new_kinematic(),
         );
     }
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
     let ids: Vec<EntityId> = refs.iter().map(|r| r.entity).collect();
     assert_eq!(
         spatial::overlaps(&world, shape, [5.0, 5.0], None),
@@ -523,7 +523,7 @@ fn equidistant_k_nearest_orders_by_entity_id() {
     for xz in [[3.0, 0.0], [-3.0, 0.0], [0.0, 3.0], [0.0, -3.0]] {
         spawn(&mut world, &mut refs, xz, shape.clone(), Body::new_static());
     }
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
     let ids: Vec<EntityId> = refs.iter().map(|r| r.entity).collect();
     assert_eq!(spatial::k_nearest(&world, [0.0, 0.0], 4, 10.0, None), ids);
     // A k smaller than the tie group still takes the lowest ids.
@@ -561,7 +561,7 @@ fn raycast_equal_t_tie_breaks_by_entity_id() {
         shape.clone(),
         Body::new_static(),
     );
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
     let first = refs[0].entity;
     let second = refs[1].entity;
@@ -577,7 +577,7 @@ fn raycast_equal_t_tie_breaks_by_entity_id() {
         let mut w = World::new();
         let mut r = Vec::new();
         spawn(&mut w, &mut r, xz, shape.clone(), Body::new_static());
-        spatial::rebuild::<Pos>(&mut w, &ctx());
+        spatial::rebuild::<Pos, NoParent>(&mut w, &ctx());
         spatial::raycast(&w, [0.0, 0.0], [1.0, 0.0], None)
             .unwrap()
             .t
@@ -598,7 +598,7 @@ fn raycast_equal_t_tie_breaks_by_entity_id() {
 fn k_nearest_entries_ids_match_k_nearest_and_centers_are_rebuild_time() {
     for seed in SEEDS {
         let (mut world, refs) = random_world(seed, WORLD_SIZE);
-        spatial::rebuild::<Pos>(&mut world, &ctx());
+        spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
         let mut rng = DeterministicRng::new_with_stream(seed, 4);
         for center in probe_centers(&mut rng) {
             for &(k, radius) in &[(1usize, 4.0f32), (8, 6.0), (20, 40.0), (WORLD_SIZE, 500.0)] {
@@ -633,7 +633,7 @@ fn k_nearest_entries_ids_match_k_nearest_and_centers_are_rebuild_time() {
 // --- move_and_slide_at (J1) ----------------------------------------------------------------------
 
 /// `move_and_slide_at`, given the mover's own live-read center, resolves identically to
-/// `move_and_slide::<Pos>` for the same world and delta — free, single-axis-blocked (slide), and
+/// `move_and_slide::<Pos, NoParent>` for the same world and delta — free, single-axis-blocked (slide), and
 /// corner-blocked (both axes) cases, the same wall placements `tests/slide.rs` uses to pin the
 /// frozen fn's own behavior.
 #[test]
@@ -664,11 +664,11 @@ fn move_and_slide_at_matches_move_and_slide_across_blocked_and_unblocked_cases()
                 Body::new_static(),
             );
         }
-        spatial::rebuild::<Pos>(&mut world, &ctx());
+        spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
         let center = world.get::<Pos>(mover).unwrap().unwrap().xz;
         assert_eq!(center, mover_start);
-        let via_p = spatial::move_and_slide::<Pos>(&world, mover, delta);
+        let via_p = spatial::move_and_slide::<Pos, NoParent>(&world, mover, delta);
         let via_at = spatial::move_and_slide_at(&world, mover, center, delta);
         assert_eq!(
             via_at, via_p,
@@ -723,7 +723,7 @@ fn move_and_slide_at_matches_move_and_slide_across_blocked_and_unblocked_cases()
 fn rebuilt_empty_world_returns_empty_results() {
     let mut world = World::new();
     world.spawn(); // an entity with no Collider must not disturb anything
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
     assert!(spatial::overlaps(&world, Shape::default(), [0.0, 0.0], None).is_empty());
     assert!(spatial::k_nearest(&world, [0.0, 0.0], 5, 100.0, None).is_empty());
     assert!(spatial::raycast(&world, [0.0, 0.0], [1.0, 0.0], None).is_none());

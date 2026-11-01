@@ -8,7 +8,7 @@ mod common;
 use common::{TestPose, pose_of, tick};
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Schedule, SemanticValidate, SystemCtx, World};
-use ludion_physics::{PhysicsSettings, PhysicsSpace, PhysicsWorld, ShapeKind, install};
+use ludion_physics::{NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld, ShapeKind, install};
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
 fn zero_gravity() -> PhysicsSettings {
@@ -93,7 +93,7 @@ fn impulse_world() -> (World, EntityId, Schedule) {
 
     let mut schedule = Schedule::new();
     schedule.add_system("apply_impulse_at_frame_1", apply_impulse_at_frame_1);
-    install::<TestPose>(&mut schedule, zero_gravity());
+    install::<TestPose, NoParent>(&mut schedule, zero_gravity());
     (world, entity, schedule)
 }
 
@@ -143,7 +143,7 @@ fn a_game_write_wakes_a_sleeping_body() {
         .expect("a fresh entity accepts a velocity");
 
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, zero_gravity());
+    install::<TestPose, NoParent>(&mut schedule, zero_gravity());
 
     let mut frame = 0;
     loop {
@@ -210,7 +210,7 @@ fn shape_kind_of(collider: Collider) -> Option<ShapeKind> {
         .insert(entity, collider)
         .expect("a fresh entity accepts a collider");
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, zero_gravity());
+    install::<TestPose, NoParent>(&mut schedule, zero_gravity());
     tick(&mut world, &mut schedule, 0);
     world
         .resource::<PhysicsWorld>()

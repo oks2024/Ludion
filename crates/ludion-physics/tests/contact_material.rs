@@ -7,7 +7,7 @@ mod common;
 use common::{TestPose, pose_of, tick};
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Schedule, World};
-use ludion_physics::{PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
+use ludion_physics::{NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
 use ludion_spatial::{
     Body, Collider, CombineRule, ContactMaterial, Joint, JointKind, RigidBody, Shape, Velocity,
 };
@@ -16,7 +16,7 @@ const GRAVITY: [f32; 3] = [0.0, -9.81, 0.0];
 
 fn physics_schedule() -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(
+    install::<TestPose, NoParent>(
         &mut schedule,
         PhysicsSettings {
             gravity: GRAVITY,

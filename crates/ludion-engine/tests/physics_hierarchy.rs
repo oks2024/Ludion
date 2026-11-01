@@ -5,7 +5,7 @@
 use ludion_core::ids::EntityId;
 use ludion_core::time::{FrameIndex, TickRate};
 use ludion_ecs::{Parent, Schedule, SystemCtx, World};
-use ludion_engine::{Transform, world_transform};
+use ludion_engine::{Transform, TransformHierarchy, world_transform};
 use ludion_physics::{PhysicsSpace, PhysicsWorld, QueryFilter};
 use ludion_spatial::{Body, Collider, RigidBody, Shape, spatial};
 
@@ -82,7 +82,7 @@ fn a_kinematic_child_tracks_its_moving_parents_world_pose() {
 
     let mut schedule = Schedule::new();
     schedule.add_system("move_platform", move_platform);
-    ludion_physics::install::<Transform>(&mut schedule, PhysicsSpace::Free);
+    ludion_physics::install::<Transform, TransformHierarchy>(&mut schedule, PhysicsSpace::Free);
     run(&mut schedule, &mut world, 10);
 
     let world_pose = world_transform(&world, child).unwrap().trs.translation;
@@ -135,7 +135,7 @@ fn a_rigid_or_static_solver_child_gets_no_body_until_unparented() {
     world.insert(fixed, Parent(parent)).unwrap();
 
     let mut schedule = Schedule::new();
-    ludion_physics::install::<Transform>(&mut schedule, PhysicsSpace::Free);
+    ludion_physics::install::<Transform, TransformHierarchy>(&mut schedule, PhysicsSpace::Free);
     run(&mut schedule, &mut world, 3);
     assert!(has_body(&world, parent));
     assert!(!has_body(&world, rigid));
@@ -177,7 +177,7 @@ fn a_sheared_kinematic_child_still_has_a_body() {
     world.insert(child, Parent(parent)).unwrap();
 
     let mut schedule = Schedule::new();
-    ludion_physics::install::<Transform>(&mut schedule, PhysicsSpace::Free);
+    ludion_physics::install::<Transform, TransformHierarchy>(&mut schedule, PhysicsSpace::Free);
     run(&mut schedule, &mut world, 3);
     assert!(has_body(&world, child));
 }
@@ -201,7 +201,7 @@ fn the_2d_index_files_a_parented_collider_at_its_world_position() {
     );
     world.insert(child, Parent(parent)).unwrap();
 
-    spatial::rebuild::<Transform>(
+    spatial::rebuild::<Transform, TransformHierarchy>(
         &mut world,
         &SystemCtx::new(FrameIndex::ZERO, TickRate::DEFAULT),
     );

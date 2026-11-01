@@ -6971,7 +6971,7 @@ schedule never runs `spatial::rebuild`, so no `SpatialIndex` exists: `overlaps`,
 `move_and_slide` see nothing and every mover passes through every wall. Raised once.
 
 Fix: register the rebuild before the systems that query, e.g.
-`.system(\"spatial_rebuild\", spatial::rebuild::<Transform>)` on the `EngineBuilder`.",
+`.system(\"spatial_rebuild\", spatial::rebuild::<Transform, TransformHierarchy>)` on the `EngineBuilder`.",
     },
     CodeEntry {
         code: code::COLOR_COMPONENT_INVALID,

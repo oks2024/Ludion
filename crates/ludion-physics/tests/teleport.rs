@@ -8,13 +8,14 @@ use common::{TestPose, pose_of, tick};
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    Blast, ContactPhase, Falloff, PhysicsSettings, PhysicsSpace, PhysicsWorld, QueryFilter, install,
+    Blast, ContactPhase, Falloff, NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld,
+    QueryFilter, install,
 };
 use ludion_spatial::{Body, Collider, Joint, JointKind, RigidBody, Shape, Velocity};
 
 fn schedule_with(gravity: [f32; 3]) -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(
+    install::<TestPose, NoParent>(
         &mut schedule,
         PhysicsSettings {
             gravity,

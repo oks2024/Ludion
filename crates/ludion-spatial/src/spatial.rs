@@ -56,7 +56,7 @@ use ludion_ecs::{Component, Parent, SystemCtx, World};
 use serde::{Deserialize, Serialize};
 
 use crate::collider::{Body, Collider, Shape};
-use crate::{GroundPosition, Plane};
+use crate::{GroundPosition, ParentPose, Plane};
 
 /// The uniform grid's cell size, in world units.
 ///
@@ -561,11 +561,17 @@ pub struct RayHit {
     pub point: [f32; 2],
 }
 
+/// `entity`'s ground center from the resolver's world pose, `None` for a root.
+fn parent_ground<R: ParentPose>(world: &World, entity: EntityId, plane: Plane) -> Option<[f32; 2]> {
+    let axes = plane.axes();
+    R::world_pose(world, entity).map(|(t, _)| [t[axes[0]], t[axes[1]]])
+}
+
 /// Rebuilds the [`SpatialIndex`] resource from every entity carrying a [`Collider`] and a position
 /// component `P`.
 ///
 /// A game registers a concrete instantiation directly as a system —
-/// `.system("spatial_rebuild", spatial::rebuild::<Transform>)` — at a chosen schedule position (the
+/// `.system("spatial_rebuild", spatial::rebuild::<Transform, TransformHierarchy>)` — at a chosen schedule position (the
 /// monomorphized function has the exact `fn(&mut World, &SystemCtx)` shape a system requires).
 /// The `(Collider, P)` join is visited in ascending `EntityId` order, so each cell's entries end up
 /// `EntityId`-ascending, and the whole rebuild is a pure function of world content.
@@ -576,7 +582,7 @@ pub struct RayHit {
 /// 0.848 ms at eight — `Plan/deterministic-job-system.md`). The typed join is what survived: it
 /// rides the dense column slices instead of probing two storages per live entity the way the
 /// original `entities()` walk did.
-pub fn rebuild<P: Component + GroundPosition>(world: &mut World, _ctx: &SystemCtx) {
+pub fn rebuild<P: Component + GroundPosition, R: ParentPose>(world: &mut World, _ctx: &SystemCtx) {
     // Read once per rebuild, not per entity: the plane is a game-lifetime constant.
     let plane = Plane::of(world);
     // Hoisted like the plane: a world with no `Parent` pays one probe per rebuild, nothing per entity.
@@ -595,7 +601,7 @@ pub fn rebuild<P: Component + GroundPosition>(world: &mut World, _ctx: &SystemCt
             filed.push((entity, collider.clone(), position.ground_position(plane)));
         }
         for (entity, collider, center) in filed {
-            let center = P::derived_ground_position(world, entity, plane).unwrap_or(center);
+            let center = parent_ground::<R>(world, entity, plane).unwrap_or(center);
             index.file(entity, collider, center);
         }
     } else {
@@ -795,7 +801,7 @@ pub fn k_nearest_entries(
 /// position component's two in-plane axes ([`Plane`]; `Transform.translation` x/z by default)
 /// itself, keeping the only hashed write in game code, on the game's visible schedule. Like
 /// [`rebuild`], the mover's position component is supplied through [`GroundPosition`] — call it as
-/// `move_and_slide::<Transform>(…)`.
+/// `move_and_slide::<Transform, TransformHierarchy>(…)`.
 ///
 /// # Resolution: axis-separated test-and-cancel (exact order of operations)
 ///
@@ -835,7 +841,7 @@ pub fn k_nearest_entries(
 /// delta is in world plane coordinates), then delegates to [`move_and_slide_at`] — one
 /// implementation, two entry points. A caller adding the delta to a parented mover's local
 /// `Transform` must first convert it into the parent's frame (or keep movers as roots).
-pub fn move_and_slide<P: Component + GroundPosition>(
+pub fn move_and_slide<P: Component + GroundPosition, R: ParentPose>(
     world: &World,
     entity: EntityId,
     delta: [f32; 2],
@@ -844,8 +850,8 @@ pub fn move_and_slide<P: Component + GroundPosition>(
         return delta;
     };
     let plane = Plane::of(world);
-    let center = P::derived_ground_position(world, entity, plane)
-        .unwrap_or_else(|| position.ground_position(plane));
+    let center =
+        parent_ground::<R>(world, entity, plane).unwrap_or_else(|| position.ground_position(plane));
     move_and_slide_at(world, entity, center, delta)
 }
 
@@ -1049,6 +1055,7 @@ fn ray_aabb_t(origin: [f32; 2], dir: [f32; 2], center: [f32; 2], he: [f32; 2]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NoParent;
     use crate::collider::RigidBody;
     use ludion_core::time::{FrameIndex, TickRate};
     use schemars::JsonSchema;
@@ -1115,7 +1122,7 @@ mod tests {
             Body::new_static(),
         );
         spawn_collider(&mut world, [-30.0, 5.0], circle(), Body::new_static());
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let original = world.resource::<SpatialIndex>().unwrap().clone();
 
         let mut copy = World::new();
@@ -1164,7 +1171,7 @@ mod tests {
             Shape::default(),
             Body::new_kinematic(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         assert_eq!(world.resource::<SpatialIndex>().unwrap().len(), 2);
     }
 
@@ -1195,7 +1202,7 @@ mod tests {
             Shape::default(),
             Body::Rigid(RigidBody::default()),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let index = world.resource::<SpatialIndex>().unwrap();
         assert_eq!(
             index.len(),
@@ -1229,7 +1236,7 @@ mod tests {
             Shape::default(),
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         // A probe circle at the origin touches a and b (centers 0 and 1 apart, radii sum 2), not far.
         let hits = overlaps(&world, Shape::Circle { radius: 1.0 }, [0.0, 0.0], None);
         assert_eq!(hits, vec![a, b]); // ascending EntityId
@@ -1255,7 +1262,7 @@ mod tests {
             aabb(0.6, 0.6),
             Body::new_kinematic(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let probes = [circle(0.3), circle(0.9), circle(2.5), aabb(0.5, 1.5)];
         let bodies = [None, Some(Body::new_static()), Some(Body::new_kinematic())];
         let (mut hits, mut misses) = (0, 0);
@@ -1300,7 +1307,7 @@ mod tests {
             Shape::Circle { radius: 1.0 },
             Body::new_kinematic(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let hits = overlaps(
             &world,
             Shape::Circle { radius: 1.0 },
@@ -1324,7 +1331,7 @@ mod tests {
         let b = spawn_collider(&mut world, [2.0, 1.0], small.clone(), Body::new_kinematic());
         let c = spawn_collider(&mut world, [3.0, 1.0], small.clone(), Body::new_static());
         let d = spawn_collider(&mut world, [4.0, 1.0], small.clone(), Body::new_kinematic());
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let hits = overlaps(&world, Shape::Circle { radius: 5.0 }, [2.5, 1.0], None);
         assert_eq!(hits, vec![a, b, c, d]);
 
@@ -1338,7 +1345,7 @@ mod tests {
             spawn_collider(&mut world, [20.0, 0.0], small.clone(), Body::new_static());
         let left_static =
             spawn_collider(&mut world, [-20.0, 0.0], small.clone(), Body::new_static());
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let wide = Shape::Aabb {
             half_extents: [30.0, 5.0],
         };
@@ -1369,7 +1376,7 @@ mod tests {
             Shape::Circle { radius: 1.0 },
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let hits = overlaps(&world, Shape::Circle { radius: 3.0 }, [8.0, 8.0], None);
         assert_eq!(hits, vec![long, dynamic, prop]); // all cell (0, 0), ascending EntityId
 
@@ -1398,7 +1405,7 @@ mod tests {
             Shape::Circle { radius: 0.5 },
             Body::new_kinematic(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let hits = overlaps(&world, Shape::Circle { radius: 1.0 }, [0.0, 2.0], None);
         assert_eq!(hits, vec![mover, wall]); // cell (0, 0) before cell (0, 4)
     }
@@ -1414,7 +1421,7 @@ mod tests {
             },
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         // Circle probe reaching the box's near face.
         let hits = overlaps(&world, Shape::Circle { radius: 1.5 }, [0.5, 0.0], None);
         assert_eq!(hits, vec![box_e]);
@@ -1428,7 +1435,7 @@ mod tests {
         let near = spawn_collider(&mut world, [1.0, 0.0], Shape::default(), Body::new_static());
         let mid = spawn_collider(&mut world, [3.0, 0.0], Shape::default(), Body::new_static());
         let far = spawn_collider(&mut world, [9.0, 0.0], Shape::default(), Body::new_static());
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let got = k_nearest(&world, [0.0, 0.0], 2, 100.0, None);
         assert_eq!(got, vec![near, mid]);
         let all = k_nearest(&world, [0.0, 0.0], 10, 100.0, None);
@@ -1445,7 +1452,7 @@ mod tests {
             Shape::default(),
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         assert_eq!(k_nearest(&world, [0.0, 0.0], 10, 5.0, None), vec![near]);
     }
 
@@ -1460,7 +1467,7 @@ mod tests {
             Shape::default(),
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         assert_eq!(k_nearest(&world, [0.0, 0.0], 2, 100.0, None), vec![a, b]);
     }
 
@@ -1479,7 +1486,7 @@ mod tests {
             Shape::Circle { radius: 1.0 },
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let hit = raycast(&world, [0.0, 0.0], [1.0, 0.0], None).unwrap();
         assert_eq!(hit.entity, near);
         assert!((hit.t - 3.0).abs() < 1e-5, "t was {}", hit.t);
@@ -1497,7 +1504,7 @@ mod tests {
             },
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let hit = raycast(&world, [0.0, 0.0], [1.0, 0.0], None).unwrap();
         assert_eq!(hit.entity, box_e);
         assert!((hit.t - 4.0).abs() < 1e-5, "t was {}", hit.t);
@@ -1512,7 +1519,7 @@ mod tests {
             Shape::Circle { radius: 1.0 },
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         // Ray along +x never reaches the collider at z = 10.
         assert!(raycast(&world, [0.0, 0.0], [1.0, 0.0], None).is_none());
     }
@@ -1566,7 +1573,7 @@ mod tests {
             },
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let index = world.resource::<SpatialIndex>().unwrap();
 
         let probes = [
@@ -1638,14 +1645,14 @@ mod tests {
             Shape::default(),
             Body::new_static(),
         );
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let first: Vec<_> = world
             .resource::<SpatialIndex>()
             .unwrap()
             .entries()
             .cloned()
             .collect();
-        rebuild::<Pos>(&mut world, &ctx());
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
         let second: Vec<_> = world
             .resource::<SpatialIndex>()
             .unwrap()

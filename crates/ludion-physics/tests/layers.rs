@@ -13,8 +13,8 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, SystemCtx, World};
 use ludion_physics::{
-    CollisionLayers, ContactEvent, ContactPhase, PhysicsSettings, PhysicsSpace, PhysicsWorld,
-    ShapeRejection, install,
+    CollisionLayers, ContactEvent, ContactPhase, NoParent, PhysicsSettings, PhysicsSpace,
+    PhysicsWorld, ShapeRejection, install,
 };
 use ludion_spatial::{Body, Collider, Joint, JointKind, RigidBody, Shape, Velocity};
 use xxhash_rust::xxh3::Xxh3;
@@ -136,7 +136,7 @@ impl Sim {
     /// triple. The [`PhysicsWorld`] resource persists.
     fn reinstall(&mut self, layers: Option<CollisionLayers>) {
         self.schedule = Schedule::new();
-        install::<TestPose>(&mut self.schedule, settings(layers));
+        install::<TestPose, NoParent>(&mut self.schedule, settings(layers));
     }
 
     fn run(&mut self, ticks: u64) {
@@ -625,7 +625,7 @@ fn kick(world: &mut World, ctx: &SystemCtx) {
 fn trace_schedule(figure_first: bool) -> Schedule {
     let mut schedule = Schedule::new();
     schedule.add_system("kick", kick);
-    install::<TestPose>(&mut schedule, settings(Some(trace_layers(figure_first))));
+    install::<TestPose, NoParent>(&mut schedule, settings(Some(trace_layers(figure_first))));
     schedule
 }
 

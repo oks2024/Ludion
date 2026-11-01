@@ -12,7 +12,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::sin_cos;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    CharacterMotor, MoveConstraint, MoveReport, PhysicsSpace, install, move_character,
+    CharacterMotor, MoveConstraint, MoveReport, NoParent, PhysicsSpace, install, move_character,
     move_character_with,
 };
 use ludion_spatial::{Body, Collider, Shape};
@@ -180,16 +180,21 @@ impl Rig {
                 let report = match shared.as_ref() {
                     Some(lane) => {
                         let mut lane = lane.lock().unwrap();
-                        move_character_with::<TestPose>(world, hero, step, Some(&mut *lane))
+                        move_character_with::<TestPose, NoParent>(
+                            world,
+                            hero,
+                            step,
+                            Some(&mut *lane),
+                        )
                     }
-                    None => move_character::<TestPose>(world, hero, step),
+                    None => move_character::<TestPose, NoParent>(world, hero, step),
                 };
                 if let Ok(report) = report {
                     sink.lock().unwrap().push((frame, report));
                 }
             }),
         );
-        install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+        install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
         Rig {
             world,
             schedule,

@@ -14,8 +14,8 @@ use ludion_core::par::with_threads;
 use ludion_core::time::GameClock;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, ColliderMeshes, MoveReport, PhysicsSpace, PlatformCarry,
-    SurfaceVelocity, TriangleMesh, install, move_character,
+    CharacterMotor, CharacterMotorState, ColliderMeshes, MoveReport, NoParent, PhysicsSpace,
+    PlatformCarry, SurfaceVelocity, TriangleMesh, install, move_character,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape};
 
@@ -177,13 +177,15 @@ impl Rig {
                     } else {
                         [0.0; 3]
                     };
-                    if let Ok(report) = move_character::<TestPose>(world, hero, displacement) {
+                    if let Ok(report) =
+                        move_character::<TestPose, NoParent>(world, hero, displacement)
+                    {
                         sink.lock().unwrap().push((frame, report));
                     }
                 }
             }),
         );
-        install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+        install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
         Rig {
             world,
             schedule,

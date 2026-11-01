@@ -483,7 +483,10 @@ impl Probe {
             probe.names[slot] = entity.name.clone();
         }
         let ctx = SystemCtx::new(FrameIndex::ZERO, TickRate::DEFAULT);
-        ludion_spatial::spatial::rebuild::<ludion_engine::Transform>(&mut probe.world, &ctx);
+        ludion_spatial::spatial::rebuild::<
+            ludion_engine::Transform,
+            ludion_engine::TransformHierarchy,
+        >(&mut probe.world, &ctx);
 
         probe.fill_lattice(grid);
         Ok(probe)

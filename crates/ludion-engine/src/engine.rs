@@ -5251,7 +5251,7 @@ const SYSTEMS_PER_MODULE_WARN_THRESHOLD: usize = 12;
 
 /// The definition *module* of a registered system, derived from `std::any::type_name` of its function
 /// type (a bare `fn` item's type name is its path, e.g. `vigil::movement::move_player`): strip any
-/// generic arguments (truncate at the first `<`, so `spatial::rebuild::<Transform>` and any other
+/// generic arguments (truncate at the first `<`, so `spatial::rebuild::<Transform, TransformHierarchy>` and any other
 /// instantiation group together), then drop the final `::segment` (the function name), leaving the
 /// module path.
 ///
@@ -5893,6 +5893,7 @@ fn audio_listener(world: &mut World) -> Option<[f32; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hierarchy::TransformHierarchy;
     use ludion_ecs::SystemCtx;
     use ludion_protocol::command::EngineRestoreParams;
     use ludion_protocol::{Command, ResponseBody};
@@ -6217,7 +6218,7 @@ entities:
         assert!(reported(Engine::builder().system("game", noop)));
         assert!(!reported(Engine::builder().system(
             "spatial_rebuild",
-            ludion_spatial::spatial::rebuild::<Transform>
+            ludion_spatial::spatial::rebuild::<Transform, TransformHierarchy>
         )));
     }
 

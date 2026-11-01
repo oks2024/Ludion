@@ -60,7 +60,7 @@ impl PhysicsWorld {
     /// use ludion_core::time::{FrameIndex, TickRate};
     /// use ludion_ecs::{Schedule, SystemCtx, World};
     /// use ludion_physics::{
-    ///     Blast, Falloff, PhysicsPose, PhysicsSettings, PhysicsSpace, PhysicsWorld, QueryFilter,
+    ///     Blast, Falloff, NoParent, PhysicsPose, PhysicsSettings, PhysicsSpace, PhysicsWorld, QueryFilter,
     ///     install,
     /// };
     /// use ludion_spatial::{Body, Collider, RigidBody, Shape};
@@ -134,7 +134,7 @@ impl PhysicsWorld {
     ///     gravity: [0.0; 3],
     ///     ..PhysicsSettings::new(PhysicsSpace::Free)
     /// };
-    /// install::<Transform>(&mut schedule, gravityless);
+    /// install::<Transform, NoParent>(&mut schedule, gravityless);
     /// let mut frame = 0;
     /// let mut run = |world: &mut World, frames: u64| {
     ///     for _ in 0..frames {

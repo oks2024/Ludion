@@ -9,7 +9,7 @@
 
 use ludion_core::ids::EntityId;
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Engine, Transform};
+use ludion_engine::{Engine, Transform, TransformHierarchy};
 use ludion_protocol::command::EngineRestoreParams;
 use ludion_protocol::{Command, ResponseBody};
 use ludion_spatial::{Shape, spatial};
@@ -83,7 +83,10 @@ fn engine() -> Engine {
             Ok(())
         })
         .system("reader", reader)
-        .system("spatial_rebuild", spatial::rebuild::<Transform>)
+        .system(
+            "spatial_rebuild",
+            spatial::rebuild::<Transform, TransformHierarchy>,
+        )
         .system("mover", mover)
         .build()
         .expect("boots");
@@ -173,7 +176,10 @@ fn poisoned_engine() -> Engine {
             Ok(())
         })
         .system("poison", poison)
-        .system("spatial_rebuild", spatial::rebuild::<Transform>)
+        .system(
+            "spatial_rebuild",
+            spatial::rebuild::<Transform, TransformHierarchy>,
+        )
         .build()
         .expect("boots");
     engine.load_inline_scene(POISON_SCENE).unwrap();

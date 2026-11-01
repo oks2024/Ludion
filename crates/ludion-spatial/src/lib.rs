@@ -33,6 +33,7 @@
 mod collider;
 mod joint;
 mod joint_motor;
+mod parent_pose;
 mod plane;
 pub mod spatial;
 mod velocity;
@@ -42,6 +43,7 @@ pub use collider::{
 };
 pub use joint::{Joint, JointKind};
 pub use joint_motor::{JointMotor, expected_targets};
+pub use parent_pose::{NoParent, ParentPose};
 pub use plane::Plane;
 pub use spatial::{Entry, RayHit, SpatialIndex};
 pub use velocity::Velocity;
@@ -57,17 +59,4 @@ pub use velocity::Velocity;
 pub trait GroundPosition {
     /// The collider's center on `plane`'s two in-plane axes.
     fn ground_position(&self, plane: Plane) -> [f32; 2];
-
-    /// `entity`'s world center on `plane` when its stored position is relative to an ancestor, `None`
-    /// when the stored value is already world space — the default, and every root.
-    fn derived_ground_position(
-        _world: &ludion_ecs::World,
-        _entity: ludion_core::ids::EntityId,
-        _plane: Plane,
-    ) -> Option<[f32; 2]>
-    where
-        Self: Sized,
-    {
-        None
-    }
 }

@@ -10,7 +10,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::rng::DeterministicRng;
 use ludion_core::time::{FrameIndex, TickRate};
 use ludion_ecs::{Registry, Schedule, SystemCtx, World};
-use ludion_spatial::{Body, Collider, GroundPosition, Plane, Shape, spatial};
+use ludion_spatial::{Body, Collider, GroundPosition, NoParent, Plane, Shape, spatial};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -70,10 +70,10 @@ fn exact_contact_is_not_blocked() {
         },
         Body::new_static(),
     );
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
     assert_eq!(
-        spatial::move_and_slide::<Pos>(&world, mover, [0.0, 0.1]),
+        spatial::move_and_slide::<Pos, NoParent>(&world, mover, [0.0, 0.1]),
         [0.0, 0.1]
     );
 }
@@ -93,9 +93,9 @@ fn slide_along_a_wall_preserves_the_tangential_component() {
         },
         Body::new_static(),
     );
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
-    let resolved = spatial::move_and_slide::<Pos>(&world, mover, [2.0, 1.0]);
+    let resolved = spatial::move_and_slide::<Pos, NoParent>(&world, mover, [2.0, 1.0]);
     assert_eq!(resolved, [0.0, 1.0], "x cancelled, z preserved");
 }
 
@@ -121,9 +121,9 @@ fn corner_blocks_both_axes() {
         },
         Body::new_static(),
     );
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
-    let resolved = spatial::move_and_slide::<Pos>(&world, mover, [2.0, 2.0]);
+    let resolved = spatial::move_and_slide::<Pos, NoParent>(&world, mover, [2.0, 2.0]);
     assert_eq!(resolved, [0.0, 0.0], "both axes blocked at the corner");
 }
 
@@ -141,9 +141,9 @@ fn x_axis_is_preferred_when_both_single_axes_are_free() {
         },
         Body::new_static(),
     );
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
-    let resolved = spatial::move_and_slide::<Pos>(&world, mover, [2.0, 2.0]);
+    let resolved = spatial::move_and_slide::<Pos, NoParent>(&world, mover, [2.0, 2.0]);
     assert_eq!(resolved, [2.0, 0.0], "x-only is tried before z-only");
 }
 
@@ -155,10 +155,13 @@ fn no_static_in_range_returns_the_delta_unchanged() {
     let mut world = World::new();
     let mover = spawn(&mut world, [0.0, 0.0], MOVER, Body::new_kinematic());
     spawn(&mut world, [50.0, 50.0], MOVER, Body::new_static()); // far away
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
     let delta = [0.123, -4.567];
-    assert_eq!(spatial::move_and_slide::<Pos>(&world, mover, delta), delta);
+    assert_eq!(
+        spatial::move_and_slide::<Pos, NoParent>(&world, mover, delta),
+        delta
+    );
 }
 
 /// An entity without a `Collider` is a legal non-colliding mover: delta unchanged.
@@ -168,10 +171,13 @@ fn entity_without_a_collider_returns_the_delta_unchanged() {
     let bare = world.spawn();
     world.insert(bare, Pos { xz: [0.0, 0.0] }).unwrap();
     spawn(&mut world, [0.5, 0.0], MOVER, Body::new_static()); // would block if tested
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
     let delta = [1.0, 1.0];
-    assert_eq!(spatial::move_and_slide::<Pos>(&world, bare, delta), delta);
+    assert_eq!(
+        spatial::move_and_slide::<Pos, NoParent>(&world, bare, delta),
+        delta
+    );
 }
 
 /// Before the first rebuild there is no index: delta unchanged.
@@ -180,7 +186,10 @@ fn pre_rebuild_returns_the_delta_unchanged() {
     let mut world = World::new();
     let mover = spawn(&mut world, [0.0, 0.0], MOVER, Body::new_kinematic());
     let delta = [1.0, 0.0];
-    assert_eq!(spatial::move_and_slide::<Pos>(&world, mover, delta), delta);
+    assert_eq!(
+        spatial::move_and_slide::<Pos, NoParent>(&world, mover, delta),
+        delta
+    );
 }
 
 /// A collider-carrying entity with no position component: delta unchanged (nowhere to sweep from).
@@ -200,10 +209,13 @@ fn entity_without_a_position_returns_the_delta_unchanged() {
         )
         .unwrap();
     spawn(&mut world, [0.5, 0.0], MOVER, Body::new_static());
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
     let delta = [1.0, 0.0];
-    assert_eq!(spatial::move_and_slide::<Pos>(&world, e, delta), delta);
+    assert_eq!(
+        spatial::move_and_slide::<Pos, NoParent>(&world, e, delta),
+        delta
+    );
 }
 
 /// The mover's own index entry never blocks it — excluded by `EntityId`, even when the mover is
@@ -212,12 +224,12 @@ fn entity_without_a_position_returns_the_delta_unchanged() {
 fn mover_never_collides_with_its_own_entry() {
     let mut world = World::new();
     let mover = spawn(&mut world, [0.0, 0.0], MOVER, Body::new_static());
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
     // A small step: the end position still overlaps the mover's own stale entry at the origin.
     let delta = [0.1, 0.0];
     assert_eq!(
-        spatial::move_and_slide::<Pos>(&world, mover, delta),
+        spatial::move_and_slide::<Pos, NoParent>(&world, mover, delta),
         delta,
         "an entity must not be blocked by its own index entry"
     );
@@ -229,10 +241,13 @@ fn dynamic_colliders_never_block() {
     let mut world = World::new();
     let mover = spawn(&mut world, [0.0, 0.0], MOVER, Body::new_kinematic());
     spawn(&mut world, [1.0, 0.0], MOVER, Body::new_kinematic()); // dead ahead, but dynamic
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
 
     let delta = [1.0, 0.0];
-    assert_eq!(spatial::move_and_slide::<Pos>(&world, mover, delta), delta);
+    assert_eq!(
+        spatial::move_and_slide::<Pos, NoParent>(&world, mover, delta),
+        delta
+    );
 }
 
 // --- Determinism and pruning independence ------------------------------------------------------
@@ -246,18 +261,18 @@ fn same_world_and_delta_resolve_identically() {
         let mut out = Vec::new();
         for &m in movers {
             for &d in &deltas {
-                out.push(spatial::move_and_slide::<Pos>(world, m, d));
+                out.push(spatial::move_and_slide::<Pos, NoParent>(world, m, d));
             }
         }
         out
     }
 
     let (mut world, movers, _) = random_world(11);
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
     let first = resolve_all(&world, &movers);
     let second = resolve_all(&world, &movers);
     assert_eq!(first, second);
-    spatial::rebuild::<Pos>(&mut world, &ctx());
+    spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
     let third = resolve_all(&world, &movers);
     assert_eq!(first, third);
 }
@@ -421,7 +436,7 @@ fn oracle_slide(
 fn move_and_slide_matches_the_brute_force_oracle() {
     for seed in [1u64, 2, 42, 0xC0FFEE] {
         let (mut world, movers, refs) = random_world(seed);
-        spatial::rebuild::<Pos>(&mut world, &ctx());
+        spatial::rebuild::<Pos, NoParent>(&mut world, &ctx());
         let deltas = [
             [0.5, 0.0],
             [0.0, -0.5],
@@ -437,7 +452,7 @@ fn move_and_slide_matches_the_brute_force_oracle() {
                 (collider.shape.clone(), pos.xz)
             };
             for &delta in &deltas {
-                let got = spatial::move_and_slide::<Pos>(&world, m, delta);
+                let got = spatial::move_and_slide::<Pos, NoParent>(&world, m, delta);
                 let expected = oracle_slide(&refs, m, &shape, center, delta);
                 assert_eq!(
                     got, expected,
@@ -484,7 +499,7 @@ fn two_run_world_hash_trace_is_identical() {
                 0.15 * (phase - 3.5) * if frame.is_multiple_of(2) { 1.0 } else { -0.5 },
                 0.10 * (3.5 - phase),
             ];
-            let resolved = spatial::move_and_slide::<Pos>(world, e, delta);
+            let resolved = spatial::move_and_slide::<Pos, NoParent>(world, e, delta);
             let pos = world.get_mut::<Pos>(e).unwrap().unwrap();
             pos.xz[0] += resolved[0];
             pos.xz[1] += resolved[1];
@@ -498,7 +513,7 @@ fn two_run_world_hash_trace_is_identical() {
         registry.register::<Collider>("Collider").unwrap();
 
         let mut schedule = Schedule::new();
-        schedule.add_system("spatial_rebuild", spatial::rebuild::<Pos>);
+        schedule.add_system("spatial_rebuild", spatial::rebuild::<Pos, NoParent>);
         schedule.add_system("slide_movers", slide_movers);
 
         let mut trace = Vec::new();

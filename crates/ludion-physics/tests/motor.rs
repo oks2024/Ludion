@@ -15,8 +15,8 @@ use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
     CharacterMotor, CharacterMotorState, ColliderMeshes, GroundProbe, MotorError, MoveConstraint,
-    MoveReport, PhysicsSpace, PhysicsWorld, QueryFilter, TriangleMesh, install, move_character,
-    move_character_with, probe_character_ground, resize_character,
+    MoveReport, NoParent, PhysicsSpace, PhysicsWorld, QueryFilter, TriangleMesh, install,
+    move_character, move_character_with, probe_character_ground, resize_character,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -137,15 +137,20 @@ impl Rig {
                 let frame = ctx.frame.as_u64();
                 for displacement in script(frame) {
                     let result = if zero_x {
-                        move_character_with::<TestPose>(world, hero, displacement, Some(&mut ZeroX))
+                        move_character_with::<TestPose, NoParent>(
+                            world,
+                            hero,
+                            displacement,
+                            Some(&mut ZeroX),
+                        )
                     } else {
-                        move_character::<TestPose>(world, hero, displacement)
+                        move_character::<TestPose, NoParent>(world, hero, displacement)
                     };
                     sink.lock().unwrap().push((frame, result));
                 }
             }),
         );
-        install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+        install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
         Rig {
             world,
             schedule,
@@ -609,13 +614,13 @@ fn the_motor_errors_name_what_is_missing() {
 
     let bare = rig.world.spawn();
     assert_eq!(
-        move_character::<TestPose>(&mut rig.world, bare, [0.0; 3]),
+        move_character::<TestPose, NoParent>(&mut rig.world, bare, [0.0; 3]),
         Err(MotorError::NoMotor(bare))
     );
     let poseless = rig.world.spawn();
     rig.world.insert(poseless, motor()).unwrap();
     assert_eq!(
-        move_character::<TestPose>(&mut rig.world, poseless, [0.0; 3]),
+        move_character::<TestPose, NoParent>(&mut rig.world, poseless, [0.0; 3]),
         Err(MotorError::NoPose(poseless))
     );
     let broken = rig.world.spawn();
@@ -629,7 +634,7 @@ fn the_motor_errors_name_what_is_missing() {
             },
         )
         .unwrap();
-    let error = move_character::<TestPose>(&mut rig.world, broken, [0.0; 3]).unwrap_err();
+    let error = move_character::<TestPose, NoParent>(&mut rig.world, broken, [0.0; 3]).unwrap_err();
     assert!(matches!(error, MotorError::InvalidMotor { .. }), "{error}");
 }
 

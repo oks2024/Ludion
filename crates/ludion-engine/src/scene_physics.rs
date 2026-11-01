@@ -19,6 +19,7 @@ use ludion_spatial::{Body, Collider, Joint};
 use serde_json::Value;
 
 use crate::components::{Name, Transform};
+use crate::hierarchy::TransformHierarchy;
 
 /// The most segments the `colliders` debug category draws in one frame; bodies are drawn in the
 /// physics table's creation order and drawing stops at the cap.
@@ -100,7 +101,7 @@ pub(crate) fn settings(physics: &ScenePhysics) -> PhysicsSettings {
 /// loaded scene declared a `physics:` block — the only opt-in there is. Does nothing for `None`.
 pub(crate) fn install(schedule: &mut Schedule, physics: Option<&ScenePhysics>) {
     if let Some(physics) = physics {
-        ludion_physics::install::<Transform>(schedule, settings(physics));
+        ludion_physics::install::<Transform, TransformHierarchy>(schedule, settings(physics));
     }
 }
 
@@ -429,7 +430,7 @@ pub(crate) fn report_unrun_colliders(
                 format!(
                     "{named} has a 2D collider, but no system builds the `SpatialIndex`, so queries \
                      and `move_and_slide` never see it: register \
-                     `.system(\"spatial_rebuild\", spatial::rebuild::<Transform>)` on the \
+                     `.system(\"spatial_rebuild\", spatial::rebuild::<Transform, TransformHierarchy>)` on the \
                      `EngineBuilder` before the systems that query"
                 ),
             );
@@ -602,7 +603,7 @@ mod tests {
             .expect("a fresh entity accepts a collider");
 
         let mut schedule = Schedule::new();
-        ludion_physics::install::<Transform>(&mut schedule, PhysicsSpace::Free);
+        ludion_physics::install::<Transform, TransformHierarchy>(&mut schedule, PhysicsSpace::Free);
 
         for frame in 0..3 {
             schedule.run(
@@ -877,7 +878,7 @@ mod tests {
             .expect("a fresh entity accepts a collider");
 
         let mut schedule = Schedule::new();
-        ludion_physics::install::<Transform>(
+        ludion_physics::install::<Transform, TransformHierarchy>(
             &mut schedule,
             settings(&physics_with_layers(vec![layer("dummy", &["dummy"])])),
         );
@@ -934,7 +935,7 @@ mod tests {
         }
 
         let mut schedule = Schedule::new();
-        ludion_physics::install::<Transform>(&mut schedule, PhysicsSpace::Free);
+        ludion_physics::install::<Transform, TransformHierarchy>(&mut schedule, PhysicsSpace::Free);
         schedule.run(
             &mut world,
             &SystemCtx::new(FrameIndex::new(0), TickRate::DEFAULT),
@@ -1017,7 +1018,7 @@ mod tests {
             .expect("a fresh entity accepts a joint");
 
         let mut schedule = Schedule::new();
-        ludion_physics::install::<Transform>(&mut schedule, PhysicsSpace::Free);
+        ludion_physics::install::<Transform, TransformHierarchy>(&mut schedule, PhysicsSpace::Free);
         schedule.run(
             &mut world,
             &SystemCtx::new(FrameIndex::new(0), TickRate::DEFAULT),

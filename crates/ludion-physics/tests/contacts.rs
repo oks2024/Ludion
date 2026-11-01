@@ -7,7 +7,7 @@ use common::{TestPose, pose_of, tick};
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Schedule, SystemCtx, World};
 use ludion_physics::{
-    ContactEvent, ContactPhase, PhysicsSettings, PhysicsSpace, PhysicsWorld, install,
+    ContactEvent, ContactPhase, NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld, install,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -72,7 +72,7 @@ fn canonical(a: EntityId, b: EntityId) -> (EntityId, EntityId) {
 
 fn free_schedule() -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     schedule
 }
 
@@ -262,7 +262,7 @@ fn a_reader_sees_last_ticks_events() {
 
     let mut schedule = Schedule::new();
     schedule.add_system("record_events", record_events);
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
 
     let mut after_tick = Vec::with_capacity(TICKS as usize);
     for frame in 0..TICKS {
@@ -303,7 +303,7 @@ fn first_contact(solver_iterations: u32) -> ContactEvent {
         solver_iterations,
         ..PhysicsSettings::new(PhysicsSpace::Free)
     };
-    install::<TestPose>(&mut schedule, settings);
+    install::<TestPose, NoParent>(&mut schedule, settings);
     for frame in 0..150 {
         tick(&mut world, &mut schedule, frame);
         if let Some(event) = events_of(&world)
@@ -429,7 +429,7 @@ fn boxed_start(rotation: [f32; 4], y: f32) -> ContactEvent {
         gravity: [0.0; 3],
         ..PhysicsSettings::new(PhysicsSpace::Free)
     };
-    install::<TestPose>(&mut schedule, settings);
+    install::<TestPose, NoParent>(&mut schedule, settings);
     let events = first_starts(&mut world, &mut schedule);
     assert_eq!(events.len(), 1, "{events:?}");
     events[0]

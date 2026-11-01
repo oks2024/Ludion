@@ -7,7 +7,7 @@ use common::{TestPose, pose_of, tick};
 use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Schedule, World};
-use ludion_physics::{PhysicsSettings, PhysicsSpace, PhysicsWorld, ShapeKind, install};
+use ludion_physics::{NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld, ShapeKind, install};
 use ludion_spatial::{AxisLock, Body, Collider, CompoundPart, Plane, RigidBody, Shape, Velocity};
 
 /// Spawns one entity carrying `collider` at the origin and runs a single tick in `space`, so the
@@ -29,7 +29,7 @@ fn world_with(collider: Collider, plane: Option<Plane>, space: PhysicsSpace) -> 
         .insert(entity, collider)
         .expect("a fresh entity accepts a collider");
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, space);
+    install::<TestPose, NoParent>(&mut schedule, space);
     tick(&mut world, &mut schedule, 0);
     (world, entity)
 }
@@ -139,7 +139,7 @@ fn the_world_appears_only_on_the_tick_that_claims_something() {
         )
         .expect("a fresh entity accepts a collider");
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     tick(&mut world, &mut schedule, 0);
     assert!(world.resource::<PhysicsWorld>().is_none());
 
@@ -280,7 +280,7 @@ fn a_rejected_convex_hull_is_reported_once_and_not_retried() {
         )
         .expect("a fresh entity accepts a collider");
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
 
     for frame in 0..3 {
         tick(&mut world, &mut schedule, frame);
@@ -358,7 +358,7 @@ fn a_compound_with_a_nested_compound_is_rejected_once_without_a_body() {
         )
         .expect("a fresh entity accepts a collider");
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
 
     for frame in 0..3 {
         tick(&mut world, &mut schedule, frame);
@@ -400,7 +400,7 @@ fn a_compound_with_a_non_finite_offset_is_rejected_without_a_body() {
         )
         .expect("a fresh entity accepts a collider");
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
 
     for frame in 0..3 {
         tick(&mut world, &mut schedule, frame);
@@ -440,7 +440,7 @@ fn a_rejected_heightfield_grid_is_reported_once() {
         )
         .expect("a fresh entity accepts a collider");
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
 
     for frame in 0..3 {
         tick(&mut world, &mut schedule, frame);
@@ -573,7 +573,7 @@ fn a_static_body_never_moves_and_a_rigid_one_falls() {
         .expect("a fresh entity accepts a collider");
 
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     for frame in 0..60 {
         tick(&mut world, &mut schedule, frame);
     }
@@ -604,7 +604,7 @@ fn a_kinematic_body_follows_the_ecs_pose() {
         .expect("a fresh entity accepts a collider");
 
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     for frame in 0..10 {
         world
             .get_mut::<TestPose>(entity)
@@ -675,7 +675,7 @@ fn a_body_without_its_own_sleep_ticks_falls_back_to_the_settings_value() {
         .expect("a fresh entity accepts a collider");
 
     let mut schedule = Schedule::new();
-    install::<TestPose>(
+    install::<TestPose, NoParent>(
         &mut schedule,
         PhysicsSettings {
             space: PhysicsSpace::Free,
@@ -715,7 +715,7 @@ fn a_despawned_body_leaves_the_table() {
             .expect("a fresh entity accepts a collider");
     }
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     tick(&mut world, &mut schedule, 0);
     assert_eq!(physics(&world).body_count(), 2);
 
@@ -736,7 +736,7 @@ fn gravity_is_settable_and_a_top_down_game_turns_it_off() {
         .expect("a fresh entity accepts a collider");
 
     let mut schedule = Schedule::new();
-    install::<TestPose>(
+    install::<TestPose, NoParent>(
         &mut schedule,
         PhysicsSettings {
             gravity: [0.0; 3],
@@ -771,7 +771,7 @@ fn an_authored_velocity_reaches_the_solver_and_the_mirror_writes_it_back() {
         .expect("a fresh entity accepts a velocity");
 
     let mut schedule = Schedule::new();
-    install::<TestPose>(
+    install::<TestPose, NoParent>(
         &mut schedule,
         PhysicsSettings {
             gravity: [0.0; 3],

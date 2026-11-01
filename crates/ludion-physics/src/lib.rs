@@ -17,7 +17,7 @@
 //!
 //! ```no_run
 //! # use ludion_ecs::Schedule;
-//! # use ludion_physics::{install, PhysicsPose, PhysicsSpace};
+//! # use ludion_physics::{NoParent, install, PhysicsPose, PhysicsSpace};
 //! # use schemars::JsonSchema;
 //! # use serde::{Deserialize, Serialize};
 //! # #[derive(Serialize, Deserialize, JsonSchema)]
@@ -30,7 +30,7 @@
 //! # }
 //! # let mut schedule = Schedule::new();
 //! // Game systems that write velocities run first; physics then reads, steps and mirrors.
-//! install::<Transform>(&mut schedule, PhysicsSpace::Free);
+//! install::<Transform, NoParent>(&mut schedule, PhysicsSpace::Free);
 //! ```
 //!
 //! [`install`] appends three systems in a fixed order — write, step, mirror — because that order
@@ -183,6 +183,7 @@ mod world;
 pub use contacts::{ContactEvent, ContactPhase};
 pub use impulse::{Blast, BlastHit, Falloff, ImpulseMiss};
 pub use joints::JointBroken;
+pub use ludion_spatial::{NoParent, ParentPose};
 pub use meshes::{ColliderMeshes, MeshLoader, TriangleMesh};
 pub use motor::{
     CharacterMotor, CharacterMotorState, GroundHit, GroundProbe, LaneEnd, LaneFrame, LaneReport,

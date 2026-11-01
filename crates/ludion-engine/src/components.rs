@@ -27,7 +27,7 @@ use ludion_core::math::{euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
 use ludion_core::number::engine_number;
 use ludion_core::text::single_char;
 use ludion_core::time::{FrameIndex, SimTime};
-use ludion_ecs::{Parent, Registry, SemanticValidate, World};
+use ludion_ecs::{Parent, Registry, SemanticValidate};
 use ludion_physics::PhysicsPose;
 use ludion_spatial::{Collider, GroundPosition, Joint, JointMotor, Plane, Velocity};
 
@@ -89,13 +89,6 @@ impl GroundPosition for Transform {
         let axes = plane.axes();
         [self.translation[axes[0]], self.translation[axes[1]]]
     }
-
-    /// The same mapping over the composed world translation, for an entity under a `Parent`.
-    fn derived_ground_position(world: &World, entity: EntityId, plane: Plane) -> Option<[f32; 2]> {
-        let pose = crate::hierarchy::parented_world_pose(world, entity)?;
-        let axes = plane.axes();
-        Some([pose.trs.translation[axes[0]], pose.trs.translation[axes[1]]])
-    }
 }
 
 impl PhysicsPose for Transform {
@@ -120,11 +113,6 @@ impl PhysicsPose for Transform {
 
     fn set_rotation_quat(&mut self, quat: [f32; 4]) {
         self.rotation = quat_to_euler_xyz_degrees(quat);
-    }
-
-    fn derived_world_pose(world: &World, entity: EntityId) -> Option<([f32; 3], [f32; 4])> {
-        let pose = crate::hierarchy::parented_world_pose(world, entity)?;
-        Some((pose.trs.translation, pose.trs.rotation))
     }
 }
 
@@ -5307,6 +5295,7 @@ const SIM_ONLY_COMPONENTS: [&str; 10] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ludion_ecs::World;
 
     /// Exactly these built-ins are sim-only; a guard that the list above grows on purpose.
     #[test]

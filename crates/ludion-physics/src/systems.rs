@@ -15,6 +15,7 @@ use crate::PhysicsPose;
 use crate::meshes::ColliderMeshes;
 use crate::motor::{CharacterMotor, CharacterMotorState, check, height_in_force, motor_invalid};
 use crate::world::{DEFAULT_GRAVITY, MeshInput, PhysicsWorld, ShapeRejection, mesh_hash_of};
+use ludion_spatial::ParentPose;
 
 /// The registration name of the system that pushes authored state into the solver.
 pub const WRITE: &str = "physics_write";
@@ -189,7 +190,7 @@ impl From<PhysicsSpace> for PhysicsSettings {
 /// # Example
 /// ```
 /// use ludion_ecs::Schedule;
-/// use ludion_physics::{install, MIRROR, PhysicsSpace, STEP, WRITE};
+/// use ludion_physics::{NoParent, install, MIRROR, PhysicsSpace, STEP, WRITE};
 /// # use ludion_physics::PhysicsPose;
 /// # use schemars::JsonSchema;
 /// # use serde::{Deserialize, Serialize};
@@ -202,15 +203,20 @@ impl From<PhysicsSpace> for PhysicsSettings {
 /// #     fn set_rotation_quat(&mut self, r: [f32; 4]) { self.rotation = r; }
 /// # }
 /// let mut schedule = Schedule::new();
-/// install::<Pose>(&mut schedule, PhysicsSpace::Free);
+/// install::<Pose, NoParent>(&mut schedule, PhysicsSpace::Free);
 /// assert_eq!(schedule.system_names().collect::<Vec<_>>(), vec![WRITE, STEP, MIRROR]);
 /// ```
-pub fn install<P: PhysicsPose>(schedule: &mut Schedule, settings: impl Into<PhysicsSettings>) {
+pub fn install<P: PhysicsPose, R: ParentPose>(
+    schedule: &mut Schedule,
+    settings: impl Into<PhysicsSettings>,
+) {
     let settings = settings.into();
     schedule
         .add_system_shared(
             WRITE,
-            Arc::new(move |world: &mut World, ctx: &SystemCtx| write::<P>(world, ctx, &settings)),
+            Arc::new(move |world: &mut World, ctx: &SystemCtx| {
+                write::<P, R>(world, ctx, &settings)
+            }),
         )
         .add_system(STEP, step)
         .add_system(MIRROR, mirror::<P>);
@@ -312,7 +318,11 @@ pub fn teleport_kinematic(world: &mut World, entity: EntityId) {
 /// Bodies are created and retired in **ascending entity order** — the typed join's order, which is
 /// a pure function of world content and independent of spawn order — so the creation-order handle
 /// table is reproducible from the scene alone.
-fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsSettings) {
+fn write<P: PhysicsPose, R: ParentPose>(
+    world: &mut World,
+    ctx: &SystemCtx,
+    settings: &PhysicsSettings,
+) {
     // First, before any early return, so the record never outlives the tick it was made in.
     let teleports = world
         .remove_resource::<KinematicTeleports>()
@@ -373,7 +383,7 @@ fn write<P: PhysicsPose>(world: &mut World, ctx: &SystemCtx, settings: &PhysicsS
         .is_some()
     {
         live.retain_mut(|(entity, translation, rotation, _, _)| {
-            let Some((world_translation, world_rotation)) = P::derived_world_pose(world, *entity)
+            let Some((world_translation, world_rotation)) = R::world_pose(world, *entity)
             else {
                 return true;
             };

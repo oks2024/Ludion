@@ -127,7 +127,10 @@ pub fn game() -> EngineBuilder {
         // per-entity accessors the `&mut self` borrow model forces (`get` a read, `insert`/`get_mut`
         // a write), which the world recorder observes too. (`has`, `entities`, `despawn`, and the
         // spatial index record nothing: they name no component value.)
-        .system("spatial_rebuild", spatial::rebuild::<Transform>)
+        .system(
+            "spatial_rebuild",
+            spatial::rebuild::<Transform, TransformHierarchy>,
+        )
         // Reads each collider's shape and placement to refill the index — one typed join, so the
         // pair is the whole observed shape.
         .query::<(&Collider, &Transform)>()

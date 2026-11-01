@@ -953,7 +953,7 @@ impl PhysicsWorld {
     /// ```
     /// use ludion_core::time::{FrameIndex, TickRate};
     /// use ludion_ecs::{Schedule, SystemCtx, World};
-    /// use ludion_physics::{PhysicsPose, PhysicsSettings, PhysicsSpace, PhysicsWorld, QueryFilter, install};
+    /// use ludion_physics::{NoParent, PhysicsPose, PhysicsSettings, PhysicsSpace, PhysicsWorld, QueryFilter, install};
     /// use ludion_spatial::{Body, Collider, RigidBody, Shape};
     /// use schemars::JsonSchema;
     /// use serde::{Deserialize, Serialize};
@@ -1023,7 +1023,7 @@ impl PhysicsWorld {
     ///
     /// let mut schedule = Schedule::new();
     /// schedule.add_system("levitate", levitate);
-    /// install::<Transform>(&mut schedule, PhysicsSettings::new(PhysicsSpace::Free));
+    /// install::<Transform, NoParent>(&mut schedule, PhysicsSettings::new(PhysicsSpace::Free));
     /// let mut run = |world: &mut World, frames: std::ops::Range<u64>| {
     ///     for frame in frames {
     ///         let ctx = SystemCtx::new(FrameIndex::new(frame), TickRate::DEFAULT);
@@ -1050,7 +1050,7 @@ impl PhysicsWorld {
     /// ```
     /// use ludion_core::time::{FrameIndex, TickRate};
     /// use ludion_ecs::{Schedule, SystemCtx, World};
-    /// use ludion_physics::{PhysicsPose, PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
+    /// use ludion_physics::{NoParent, PhysicsPose, PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
     /// use ludion_spatial::{Body, Collider, RigidBody, Shape};
     /// use schemars::JsonSchema;
     /// use serde::{Deserialize, Serialize};
@@ -1076,7 +1076,7 @@ impl PhysicsWorld {
     /// world.insert(ball, collider).unwrap();
     ///
     /// let mut schedule = Schedule::new();
-    /// install::<Transform>(&mut schedule, PhysicsSettings::new(PhysicsSpace::Free));
+    /// install::<Transform, NoParent>(&mut schedule, PhysicsSettings::new(PhysicsSpace::Free));
     /// let mut step = |world: &mut World, frame: u64| {
     ///     let ctx = SystemCtx::new(FrameIndex::new(frame), TickRate::DEFAULT);
     ///     schedule.run(world, &ctx);
@@ -1123,7 +1123,7 @@ impl PhysicsWorld {
     /// ```
     /// use ludion_core::time::{FrameIndex, TickRate};
     /// use ludion_ecs::{Schedule, SystemCtx, World};
-    /// use ludion_physics::{PhysicsPose, PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
+    /// use ludion_physics::{NoParent, PhysicsPose, PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
     /// use ludion_spatial::{Body, Collider, CombineRule, ContactMaterial, RigidBody, Shape};
     /// use schemars::JsonSchema;
     /// use serde::{Deserialize, Serialize};
@@ -1159,7 +1159,7 @@ impl PhysicsWorld {
     /// world.insert(ball, Collider { shape, body: Body::Rigid(bouncy), layer: None, sensor: false }).unwrap();
     ///
     /// let mut schedule = Schedule::new();
-    /// install::<Transform>(&mut schedule, PhysicsSettings::new(PhysicsSpace::Free));
+    /// install::<Transform, NoParent>(&mut schedule, PhysicsSettings::new(PhysicsSpace::Free));
     /// let ctx = SystemCtx::new(FrameIndex::new(0), TickRate::DEFAULT);
     /// schedule.run(&mut world, &ctx);
     /// let physics = world.resource::<PhysicsWorld>().unwrap();

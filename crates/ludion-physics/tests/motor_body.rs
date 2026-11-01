@@ -9,14 +9,14 @@ use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, CollisionLayers, PhysicsSettings, PhysicsSpace,
+    CharacterMotor, CharacterMotorState, CollisionLayers, NoParent, PhysicsSettings, PhysicsSpace,
     PhysicsWorld, QueryFilter, ShapeKind, ShapeRejection, install,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
 fn schedule(layers: Option<CollisionLayers>) -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(
+    install::<TestPose, NoParent>(
         &mut schedule,
         PhysicsSettings {
             layers,

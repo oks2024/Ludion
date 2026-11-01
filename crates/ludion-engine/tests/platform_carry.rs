@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use ludion_core::math::atan2;
 use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Engine, EngineBuilder, Name, Transform, move_character};
-use ludion_physics::PhysicsPose;
+use ludion_engine::{Engine, EngineBuilder, Name, Transform, TransformHierarchy, move_character};
+use ludion_physics::{ParentPose, PhysicsPose};
 use ludion_protocol::command::EngineRestoreParams;
 use ludion_protocol::{Command, ResponseBody};
 
@@ -97,7 +97,7 @@ fn yaw_of(q: [f32; 4]) -> f32 {
 
 /// The platform's world pose: its own `Transform`, or the one derived through a `Parent`.
 fn world_pose(world: &World, id: ludion_core::ids::EntityId) -> ([f32; 3], [f32; 4]) {
-    Transform::derived_world_pose(world, id).unwrap_or_else(|| {
+    TransformHierarchy::world_pose(world, id).unwrap_or_else(|| {
         let pose = world.get::<Transform>(id).unwrap().unwrap();
         (pose.translation(), pose.rotation_quat())
     })

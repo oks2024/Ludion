@@ -11,6 +11,7 @@ use ludion_physics::{
 
 use crate::components::Transform;
 use crate::debug_draw::debug_draw;
+use crate::hierarchy::TransformHierarchy;
 
 const CATEGORY: &str = "motor";
 /// The capsule while the motor stands on walkable ground (linear RGBA).
@@ -81,8 +82,12 @@ pub fn move_character_with(
         .ok()
         .flatten()
         .is_some_and(|state| state.grounded);
-    let report =
-        ludion_physics::move_character_with::<Transform>(world, entity, displacement, constraint)?;
+    let report = ludion_physics::move_character_with::<Transform, TransformHierarchy>(
+        world,
+        entity,
+        displacement,
+        constraint,
+    )?;
     draw(world, entity, was_grounded, displacement, &report);
     Ok(report)
 }

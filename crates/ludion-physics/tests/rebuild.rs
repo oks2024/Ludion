@@ -10,7 +10,7 @@ use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
-use ludion_physics::{ContactPhase, PhysicsSpace, PhysicsWorld, ShapeKind, install};
+use ludion_physics::{ContactPhase, NoParent, PhysicsSpace, PhysicsWorld, ShapeKind, install};
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
 fn rigid(shape: Shape, body: RigidBody) -> Collider {
@@ -33,7 +33,7 @@ fn static_(shape: Shape) -> Collider {
 
 fn free_schedule() -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     schedule
 }
 

@@ -11,8 +11,8 @@ use ludion_core::math::euler_xyz_degrees_to_quat;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
-    Blast, CollisionLayers, ContactPhase, Falloff, PhysicsError, PhysicsSettings, PhysicsSpace,
-    PhysicsWorld, QueryFilter, install,
+    Blast, CollisionLayers, ContactPhase, Falloff, NoParent, PhysicsError, PhysicsSettings,
+    PhysicsSpace, PhysicsWorld, QueryFilter, install,
 };
 use ludion_spatial::{Body, Collider, CompoundPart, Joint, JointKind, RigidBody, Shape, Velocity};
 
@@ -26,7 +26,7 @@ fn settings(gravity: [f32; 3], layers: Option<CollisionLayers>) -> PhysicsSettin
 
 fn schedule_with(settings: PhysicsSettings) -> Schedule {
     let mut schedule = Schedule::new();
-    install::<TestPose>(&mut schedule, settings);
+    install::<TestPose, NoParent>(&mut schedule, settings);
     schedule
 }
 

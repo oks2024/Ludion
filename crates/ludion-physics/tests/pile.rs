@@ -9,7 +9,7 @@ use common::{TestPose, tick};
 use ludion_core::ids::EntityId;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, SystemCtx, World};
-use ludion_physics::{ContactEvent, ContactPhase, PhysicsSpace, PhysicsWorld, install};
+use ludion_physics::{ContactEvent, ContactPhase, NoParent, PhysicsSpace, PhysicsWorld, install};
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 use xxhash_rust::xxh3::Xxh3;
 
@@ -146,7 +146,7 @@ fn pile_schedule() -> Schedule {
     let mut schedule = Schedule::new();
     schedule.add_system("kick", kick);
     // The pile falls and tumbles on every axis, and this world holds no `Plane` anyway.
-    install::<TestPose>(&mut schedule, PhysicsSpace::Free);
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
     schedule
 }
 
