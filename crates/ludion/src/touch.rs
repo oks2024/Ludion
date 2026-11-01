@@ -211,16 +211,8 @@ impl TouchLayout {
     /// control the mapper cannot use, with a JSON Pointer path (`/sticks/0/deadzone`). With several
     /// findings the first is returned and the rest ride along as `related`.
     pub fn parse(source: &str, file: &Path) -> Result<TouchLayout, Diagnostic> {
-        let schema = serde_json::to_value(schemars::schema_for!(TouchLayout))
-            .expect("a schemars JSON Schema always serializes to a JSON value");
-        let fields = ludion_scene::check_doc(source, KIND, &schema).map_err(first_with_related)?;
-        let layout: TouchLayout = serde_json::from_value(fields).map_err(|error| {
-            invalid(
-                file,
-                "",
-                format!("the document does not fit the layout: {error}"),
-            )
-        })?;
+        let layout =
+            ludion_scene::parse_doc::<TouchLayout>(source, KIND).map_err(first_with_related)?;
         let findings = layout.findings(file);
         if findings.is_empty() {
             Ok(layout)

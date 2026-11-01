@@ -6,6 +6,9 @@
 //!   game's registry on top of the built-ins).
 //! - **Game data-docs** — [`DocStore`], the resource a system reads registered `kind:` docs from
 //!   (`world.resource::<DocStore<T>>()`); register a kind with `EngineBuilder::doc_kind::<T>`.
+//!   For tests and tools, [`parse_doc`] reads a doc into its type with the boot loader's checks,
+//!   [`check_doc`]/[`emit_doc`] are the lower-level validate and canonical-write steps, and
+//!   [`code`] names the `L####` diagnostic codes.
 //! - **Player profile** — [`Profile`], the persistent save-state resource a game registers with
 //!   `EngineBuilder::profile::<P>` and mutates via `world.resource_mut::<Profile<P>>()`; call
 //!   `profile.save()` to request persistence.
@@ -201,6 +204,7 @@ pub use ludion_spatial::{
     JointKind, JointMotor, Plane, RigidBody, Shape, Velocity, spatial,
 };
 
+pub use ludion_core::codes::code;
 pub use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 pub use ludion_core::ids::EntityId;
 pub use ludion_core::par;
@@ -208,3 +212,4 @@ pub use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
 pub use ludion_sim::WorldHash;
 
 pub use ludion_protocol::{Command, command};
+pub use ludion_scene::{check_doc, emit_doc, parse_doc};

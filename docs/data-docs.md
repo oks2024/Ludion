@@ -177,15 +177,27 @@ document path (not an RFC 6901 pointer: no leading slash), and the print latch's
 doc reload — where a reload that makes a rule report a new error is refused and the old doc stays
 live, while warnings and errors that were already there print once and the reload applies.
 
+## Reading a doc in a test or tool
+
+`parse_doc::<T>(source, kind)` (in the prelude) reads one doc into its type with the boot loader's
+steps and codes (L1257, L1119, L1120, strict-YAML L100x):
+
+```rust
+let weapon = parse_doc::<Weapon>(&std::fs::read_to_string(path)?, "weapon")
+    .unwrap_or_else(|errors| panic!("{path}: {errors:?}"));
+```
+
+`validate_docs` does not run here — it needs a `World` and runs at boot, `scene.load` and live
+reload; a cross-doc rule needs the engine. No count rule applies either.
+
 ## Writing docs back canonically
 
 A tool that *generates or rewrites* docs (an importer, a balance script) emits canonical text with
 `ludion_scene::emit_doc(kind, &value, &schema)`: the `format`/`kind` envelope, then fields in
 schema-declaration order (an enum variant's fields by the variant the value takes; map keys in byte
 order), ryu-shortest floats (an `f32` field as its shortest f32 decimal), LF endings — byte-idempotent,
-so a git diff stays minimal. `ludion_scene::check_doc(source, kind, &schema)` is the matching reader
-(strict-YAML → validated field map). Hand-authored docs load without being canonical, but the next
-tool-write normalizes the file.
+so a git diff stays minimal. The matching reader is `parse_doc` (see above). Hand-authored docs load
+without being canonical, but the next tool-write normalizes the file.
 
 ## Non-goals (and their triggers)
 

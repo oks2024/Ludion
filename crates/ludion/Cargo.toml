@@ -82,7 +82,7 @@ serde_json.workspace = true
 # of building the engine (`EngineBuilder::build_at`'s `install_docs` step) and needs no extra wiring.
 ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
 
-# The touch layout document (`ludion::touch`): serde reads it, schemars gives `check_doc` its schema.
+# The touch layout document (`ludion::touch`): `parse_doc` reads it through its serde and schemars derives.
 # The crate-level "how to build a game" doctest also defines a component with these derives — a
 # game's own dependencies, since the facade does not re-export the macros.
 serde = { workspace = true }

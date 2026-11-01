@@ -15,7 +15,7 @@ Actual in-workspace edges, from each member's `Cargo.toml` (arrow = depends on):
 ```
 ludion-core          → (none)                          [glam, libm, serde]
 ludion-ecs           → core                            [schemars, serde, serde_json]
-ludion-scene         → core, ecs                       [ryu, saphyr-parser, serde_json]
+ludion-scene         → core, ecs                       [ryu, saphyr-parser, schemars, serde, serde_json]
 ludion-assets        → core                            [png, xxhash-rust, ktx2; watch†: notify, crossbeam-channel]
 ludion-cook          → core, assets                    [intel_tex_2, ctt-astcenc, ktx2]  (encoders confined here)
 ludion-texgen        → core, scene                     [png, serde_json]

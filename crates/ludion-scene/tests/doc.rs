@@ -9,8 +9,10 @@
 //!   ryu-shortest emission);
 //! - the two new codes explain (`ludion explain L1119`/`L1120`).
 
-use ludion_scene::{check_doc, emit_doc};
+use ludion_scene::{check_doc, deserialize_doc, emit_doc, parse_doc};
 use proptest::prelude::*;
+use schemars::JsonSchema;
+use serde::Deserialize;
 #[path = "support/deterministic.rs"]
 mod deterministic;
 use deterministic::deterministic_config;
@@ -359,4 +361,72 @@ fn all_of_part_and_one_of_branch_are_searched() {
 #[should_panic(expected = "duplicate the envelope")]
 fn emit_doc_refuses_an_envelope_key_in_debug_builds() {
     emit_doc("weapon", &json!({ "kind": "x" }), &weapon_schema());
+}
+
+// --- Typed reader (`parse_doc`) -----------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Deserialize, JsonSchema)]
+struct Weapon {
+    name: String,
+    damage: f32,
+}
+
+#[test]
+fn parse_doc_reads_a_valid_doc_into_its_type() {
+    let source = "format: 1\nkind: weapon\nname: crossbow\ndamage: 12.0\n";
+    let weapon: Weapon = parse_doc(source, "weapon").expect("valid weapon doc");
+    assert_eq!(
+        weapon,
+        Weapon {
+            name: "crossbow".into(),
+            damage: 12.0
+        }
+    );
+}
+
+#[test]
+fn parse_doc_wrong_kind_is_l1119() {
+    let source = "format: 1\nkind: armor\nname: crossbow\ndamage: 12.0\n";
+    let errors = parse_doc::<Weapon>(source, "weapon").unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1119");
+}
+
+#[test]
+fn parse_doc_wrong_typed_field_is_l1120_with_pointer() {
+    let source = "format: 1\nkind: weapon\nname: crossbow\ndamage: fast\n";
+    let errors = parse_doc::<Weapon>(source, "weapon").unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1120");
+    assert_eq!(errors[0].path.as_deref(), Some("/damage"));
+}
+
+#[test]
+fn parse_doc_refuses_a_type_with_a_top_level_kind_field() {
+    #[derive(Debug, Deserialize, JsonSchema)]
+    struct Tagged {
+        #[allow(dead_code)]
+        kind: String,
+    }
+    let errors = parse_doc::<Tagged>("format: 1\nkind: tagged\n", "tagged").unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1257");
+}
+
+#[test]
+fn deserialize_doc_failure_is_one_l1120_with_the_shared_help() {
+    let error = deserialize_doc::<Weapon>(json!({ "damage": "x" })).unwrap_err();
+    assert_eq!(error.code.as_str(), "L1120");
+    assert!(
+        error
+            .message
+            .starts_with("passed schema validation but could not be deserialized: "),
+        "{}",
+        error.message
+    );
+    assert!(
+        error
+            .help
+            .as_deref()
+            .is_some_and(|help| help.contains("engine/schema mismatch")),
+        "{:?}",
+        error.help
+    );
 }

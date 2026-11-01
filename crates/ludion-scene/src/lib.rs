@@ -2419,8 +2419,8 @@ pub fn emit_prefab(doc: &PrefabDocument, registry: &Registry) -> String {
 // `Plan/phase-15-data-docs.md` for the design.
 
 /// Parses and validates a game data-doc against `kind`'s JSON `schema`, returning the doc's field
-/// map with the `format`/`kind` envelope stripped — ready for `serde_json::from_value` into the
-/// registered type.
+/// map with the `format`/`kind` envelope stripped — ready for [`deserialize_doc`] into the
+/// registered type (or use [`parse_doc`], which does both).
 ///
 /// The document is `format: 1` + `kind: <kind>` at the top, then the type's own fields flattened at
 /// the top level. The envelope is validated (`L1119`), then the remaining fields are checked against
@@ -2509,6 +2509,66 @@ pub fn emit_doc(kind: &str, value: &Value, schema: &Value) -> String {
 /// ```
 pub fn check_doc_type(kind: &str, schema: &Value) -> Result<(), Diagnostic> {
     doc::check_doc_type(kind, schema)
+}
+
+/// Reads a game data-doc into `T` with the boot loader's steps: the reserved-field check (`L1257`),
+/// the envelope (`L1119`) and schema (`L1120`) check over strict YAML (`L100x`), then the
+/// deserialize (`L1120`).
+///
+/// It enforces no count and does not run the game's `validate_docs`; `kind` is not checked against
+/// the engine's kinds. A test parse and the boot parse give the same value.
+///
+/// # Errors
+/// The diagnostics above, collected for a schema mismatch.
+///
+/// # Example
+/// ```
+/// use schemars::JsonSchema;
+/// use serde::Deserialize;
+///
+/// #[derive(Debug, PartialEq, Deserialize, JsonSchema)]
+/// struct Weapon {
+///     name: String,
+///     damage: f32,
+/// }
+///
+/// let source = "format: 1\nkind: weapon\nname: crossbow\ndamage: 12.0\n";
+/// let weapon: Weapon = ludion_scene::parse_doc(source, "weapon").expect("valid weapon doc");
+/// assert_eq!(weapon, Weapon { name: "crossbow".into(), damage: 12.0 });
+///
+/// let broken = "format: 1\nkind: weapon\nname: crossbow\ndamage: fast\n";
+/// let diagnostics = ludion_scene::parse_doc::<Weapon>(broken, "weapon").unwrap_err();
+/// assert_eq!(diagnostics[0].code.as_str(), "L1120");
+/// assert_eq!(diagnostics[0].path.as_deref(), Some("/damage"));
+/// ```
+pub fn parse_doc<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
+    source: &str,
+    kind: &str,
+) -> Result<T, Vec<Diagnostic>> {
+    doc::parse_doc(source, kind)
+}
+
+/// The step after [`check_doc`]: deserializes a schema-validated field map into `T`. The boot
+/// loader uses it; prefer [`parse_doc`].
+///
+/// # Errors
+/// One `L1120` when serde refuses a map the schema accepted.
+///
+/// # Example
+/// ```
+/// use serde::Deserialize;
+/// use serde_json::json;
+///
+/// #[derive(Debug, Deserialize)]
+/// struct Weapon {
+///     damage: f32,
+/// }
+///
+/// let error = ludion_scene::deserialize_doc::<Weapon>(json!({ "damage": "x" })).unwrap_err();
+/// assert_eq!(error.code.as_str(), "L1120");
+/// ```
+pub fn deserialize_doc<T: serde::de::DeserializeOwned>(fields: Value) -> Result<T, Diagnostic> {
+    doc::deserialize_doc(fields)
 }
 
 // --- Player-profile documents (`save/profile.yaml`, `kind: profile`) ---------------------------

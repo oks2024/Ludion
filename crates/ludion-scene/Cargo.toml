@@ -14,11 +14,10 @@ ludion-core = { path = "../ludion-core", version = "0.1.0" }
 ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
 ryu.workspace = true
 saphyr-parser.workspace = true
+schemars.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-# Tests define their own components, which must derive the same trait bundle a real
-# game component would; proptest drives the round-trip / idempotence properties.
+# proptest drives the round-trip / idempotence properties.
 proptest.workspace = true
-schemars.workspace = true
-serde.workspace = true

@@ -276,24 +276,12 @@ where
     let mut docs = BTreeMap::new();
     let mut diagnostics = Vec::new();
     for (key, value) in field_maps {
-        match serde_json::from_value::<T>(value) {
+        // Should-not-happen after `check_doc`: a schema/serde mismatch, reported rather than silent.
+        match ludion_scene::deserialize_doc::<T>(value) {
             Ok(doc) => {
                 docs.insert(key, doc);
             }
-            // `check_doc` already validated the field map against `schema_for!(T)`, so this is a
-            // should-not-happen schema/serde mismatch rather than authoring error; report it as
-            // L1120 with the file so it is not silent.
-            Err(error) => diagnostics.push(
-                Diagnostic::new(
-                    code::DOC_SCHEMA_MISMATCH,
-                    format!(
-                        "{key}: passed schema validation but could not be deserialized: {error}"
-                    ),
-                )
-                .with_help(
-                    "this is an engine/schema mismatch — report it with the doc that triggered it",
-                ),
-            ),
+            Err(diagnostic) => diagnostics.push(prefix_file(diagnostic, &key)),
         }
     }
     if diagnostics.is_empty() {
@@ -316,20 +304,10 @@ fn reload_doc_store<T>(
 where
     T: DeserializeOwned + Send + Sync + 'static,
 {
-    // `check_doc` validated the field map against `schema_for!(T)`; a failure here is a
-    // should-not-happen schema/serde mismatch, reported as L1120 rather than left silent. The store
-    // is untouched on this path, so a bad reload never wipes prior contents.
-    let doc = serde_json::from_value::<T>(field_map).map_err(|error| {
-        vec![
-            Diagnostic::new(
-                code::DOC_SCHEMA_MISMATCH,
-                format!("{key}: passed schema validation but could not be deserialized: {error}"),
-            )
-            .with_help(
-                "this is an engine/schema mismatch — report it with the doc that triggered it",
-            ),
-        ]
-    })?;
+    // Should-not-happen after `check_doc`: a schema/serde mismatch. The store is untouched on this
+    // path, so a bad reload never wipes prior contents.
+    let doc = ludion_scene::deserialize_doc::<T>(field_map)
+        .map_err(|diagnostic| vec![prefix_file(diagnostic, &key)])?;
     Ok(match world.resource_mut::<DocStore<T>>() {
         Some(store) => {
             let generation = store.generation;

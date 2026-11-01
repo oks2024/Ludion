@@ -64,6 +64,31 @@ const CROSSBOW: &str = "format: 1\nkind: weapon\ndamage: 12.0\ncooldown: 0.8\n";
 const AXE: &str = "format: 1\nkind: weapon\ndamage: 30.0\ncooldown: 1.5\n";
 
 #[test]
+fn parse_doc_matches_the_boot_store() {
+    let dir = fresh_dir("parse-match");
+    write(&dir, "weapons/crossbow.yaml", CROSSBOW);
+    let engine = weapon_game(&dir).build().expect("valid docs boot");
+    let parsed = ludion_scene::parse_doc::<Weapon>(CROSSBOW, "weapon").expect("parses");
+    assert_eq!(
+        weapons(&engine),
+        vec![("weapons/crossbow.yaml".into(), parsed)]
+    );
+}
+
+#[test]
+fn parse_doc_diagnostics_match_the_boot_loader() {
+    let dir = fresh_dir("parse-diag");
+    let bad = "format: 1\nkind: weapon\ndamage: fast\ncooldown: 0.8\n";
+    write(&dir, "bad.yaml", bad);
+    let boot = build_err(weapon_game(&dir));
+    let parsed = ludion_scene::parse_doc::<Weapon>(bad, "weapon").unwrap_err();
+    assert_eq!(boot.code, parsed[0].code);
+    assert_eq!(boot.path, parsed[0].path);
+    assert_eq!(boot.help, parsed[0].help);
+    assert_eq!(boot.message, format!("bad.yaml: {}", parsed[0].message));
+}
+
+#[test]
 fn boots_a_registered_kind_into_a_docstore() {
     let dir = fresh_dir("boot");
     write(&dir, "weapons/crossbow.yaml", CROSSBOW);
@@ -413,10 +438,7 @@ fn voxel_ops_files_are_skipped_not_data_docs() {
     write(
         &dir,
         "ops/skull.yaml",
-        "format: 1
-kind: voxel-ops
-ops: []
-",
+        "format: 1\nkind: voxel-ops\nops: []\n",
     );
     write(&dir, "weapons/crossbow.yaml", CROSSBOW);
 

@@ -27,6 +27,8 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, value_phrase};
 use ludion_core::suggest;
+use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use crate::FORMAT_VERSION;
@@ -76,8 +78,8 @@ pub(crate) fn check_doc_type(kind: &str, schema: &Value) -> Result<(), Diagnosti
 }
 
 /// Parses and validates a game data-doc against `kind`'s JSON `schema`, returning the doc's field
-/// map with the `format`/`kind` envelope stripped (ready for `serde_json::from_value` into the
-/// registered type).
+/// map with the `format`/`kind` envelope stripped (ready for [`deserialize_doc`] into the
+/// registered type, or use [`parse_doc`]).
 ///
 /// # Errors
 /// A strict-YAML syntax or strictness violation surfaces the shared `L1001`–`L1009` codes (fail
@@ -170,6 +172,31 @@ pub(crate) fn check_doc(
 /// value the schema accepts: `emit_doc → check_doc → emit_doc` reproduces the same text.
 pub(crate) fn emit_doc(kind: &str, value: &Value, schema: &Value) -> String {
     crate::emit::emit_doc(kind, value, schema)
+}
+
+/// The step after [`check_doc`]: deserializes a schema-validated field map into `T`. A failure is a
+/// schema/serde mismatch, not an authoring error, so it is one `L1120` with no key prefix.
+pub(crate) fn deserialize_doc<T: DeserializeOwned>(fields: Value) -> Result<T, Diagnostic> {
+    serde_json::from_value::<T>(fields).map_err(|error| {
+        Diagnostic::new(
+            code::DOC_SCHEMA_MISMATCH,
+            format!("passed schema validation but could not be deserialized: {error}"),
+        )
+        .with_help("this is an engine/schema mismatch — report it with the doc that triggered it")
+    })
+}
+
+/// Reads a game data-doc into `T` with the boot loader's steps: the reserved-field check, the
+/// envelope and schema check, then the deserialize.
+pub(crate) fn parse_doc<T: DeserializeOwned + JsonSchema>(
+    source: &str,
+    kind: &str,
+) -> Result<T, Vec<Diagnostic>> {
+    let schema = serde_json::to_value(schemars::schema_for!(T))
+        .expect("a schemars JSON Schema always serializes to a JSON value");
+    check_doc_type(kind, &schema).map_err(|diagnostic| vec![diagnostic])?;
+    let fields = check_doc(source, kind, &schema)?;
+    deserialize_doc(fields).map_err(|diagnostic| vec![diagnostic])
 }
 
 fn check_format(kind: &str, map: &Map<String, Value>, diagnostics: &mut Vec<Diagnostic>) {

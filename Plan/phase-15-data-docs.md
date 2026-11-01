@@ -7,6 +7,7 @@
 > the plan's own (the `--full` doc gate also surfaced two pre-existing Phase-14 rustdoc breaks,
 > fixed in rev 178; Wave 4 found no serve/profile smoke precedent in check.mjs and added the
 > `check-docs` smoke as its own step via hello-paddle's zero-kinds path).
+> Amendment A1 (2026-11-01, Clockout request 0021): typed `parse_doc::<T>` added (decision 3).
 >
 > Originally: authored 2026-07-16, ready to start. This is the wave-level plan for wave **E4** of
 > the first-game arc; its brief is `Plan/engine-first-game.md` §"E4 — Game data-doc facility" plus
@@ -180,6 +181,13 @@
    *Rejected:* nesting `T` under a `data:` key (extra indentation; diverges from the mesh/voxel
    top-level convention); folding `format`/`kind` into `T` (forces every game struct to carry engine
    envelope fields — leaky, and `schemars` would then validate them).
+
+   **Amendment A1 (2026-11-01, Clockout request 0021):** a third, typed entry point
+   `parse_doc::<T>(source, kind) -> Result<T, Vec<Diagnostic>>` runs the boot loader's steps (the
+   L1257 reserved-field check, `check_doc`, then the deserialize) so a test or tool does not copy
+   them. The engine's install/reload share its `deserialize_doc` step, so the boot and the test
+   parse give the same value and the same L1120 help. Re-exported from the `ludion` prelude with
+   `check_doc`, `emit_doc` and `code`.
 
 4. **Discovery: eager load at boot, routed by the in-doc `kind:`.** At each world build the engine
    walks the content root (`engine.project_root()`), and for every `*.yaml` peeks `kind:`
