@@ -3471,6 +3471,20 @@ fn validate_effect_op(effect: &SpriteEffect, pointer: &str, diagnostics: &mut Ve
                     }
                     if let Some(color) = color {
                         validate_effect_color(color, pointer, "color", diagnostics);
+                        if color[3] != 1.0 {
+                            diagnostics.push(
+                                Diagnostic::new(
+                                    code::SPRITE_EFFECT_INVALID,
+                                    format!(
+                                        "the `light` color has alpha {}; light is additive and \
+                                         ignores alpha",
+                                        color[3]
+                                    ),
+                                )
+                                .with_path(format!("{pointer}/color"))
+                                .with_help("write the colour as `#rrggbb`, without an alpha byte"),
+                            );
+                        }
                     }
                 }
                 LightMode::Ramp { steps } => {

@@ -106,7 +106,9 @@ flipbooks:
 ```
 
 `name` is one plain segment (no `/`). A glyph the sprite's palette lacks is `L1153` at
-`/inputs/<i>/palette/<glyph>` — the rows are fixed, so it is a typo. A `palette` on a `.png` is `L1153`.
+`/inputs/<i>/palette/<glyph>` — the rows are fixed, so it is a typo. An override replaces the whole
+entry, so recolouring a glyph that has `emissive` must repeat it (`emissive: 0` drops it on purpose),
+else `L1153`. A `palette` on a `.png` is `L1153`.
 
 **Flipbooks are data the atlas carries.** They are parsed, checked against the regions the inputs
 actually produce (a name that resolves to nothing is `L1153` with a nearest match), and written onto

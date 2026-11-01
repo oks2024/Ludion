@@ -384,7 +384,8 @@ fn load_sprite(
         .map_err(|diagnostics| from_input(path, diagnostics))?;
     // A variant recolours the resolved palette. The rows are fixed, so a glyph the palette lacks is a
     // typo; the include merge would add it silently, so it is refused first.
-    let dead = dead_glyphs(&doc, input, path, pointer);
+    let mut dead = dead_glyphs(&doc, input, path, pointer);
+    dead.extend(dropped_emissive(&doc, input, pointer));
     if !dead.is_empty() {
         return Err(dead);
     }
@@ -452,6 +453,43 @@ fn dead_glyphs(
                 "{nearest}the sprite's palette has the glyphs {glyphs}; a variant recolours \
                  existing glyphs, it cannot add one"
             ))
+        })
+        .collect()
+}
+
+/// One `L1153` per override that replaces an emissive glyph without repeating its `emissive`: the
+/// override swaps the whole entry, so the glyph would silently stop being a light source.
+fn dropped_emissive(
+    doc: &ludion_scene::SpriteDocument,
+    input: &AtlasSourceInput,
+    pointer: &str,
+) -> Vec<Diagnostic> {
+    input
+        .palette
+        .iter()
+        .filter(|over| over.emissive.is_none())
+        .filter_map(|over| {
+            let base = doc.palette.iter().find(|entry| entry.glyph == over.glyph)?;
+            let value = base.emissive.filter(|value| *value > 0.0)?;
+            Some(
+                Diagnostic::new(
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    format!(
+                        "the variant recolours `{glyph}` without `emissive`, which drops the \
+                         sprite's `emissive: {value}`; that changes the sprite's light sources \
+                         and render glow",
+                        glyph = over.glyph
+                    ),
+                )
+                .with_path(format!(
+                    "{pointer}/palette/{}",
+                    ludion_core::diagnostics::pointer_token(&over.glyph)
+                ))
+                .with_help(format!(
+                    "repeat `emissive: {value}` to keep it, or write `emissive: 0` to drop it on \
+                     purpose"
+                )),
+            )
         })
         .collect()
 }

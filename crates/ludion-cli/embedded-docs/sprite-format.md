@@ -65,7 +65,7 @@ offending node (`--> /size/0`) and telling you to write one element per line; on
 | `frames/<name>/mirror` | optional `x`, `y` or `xy` — author one half (below) |
 | `frames/<name>/base` | optional name of another frame, instead of `rows` — the frame is that one plus `patches` |
 | `frames/<name>/patches` | with `base`: each `{ at: [x, y], rows }` (below) |
-| `effects` | optional; ops in application order. `shade`/`gradient` take `mode: color\|ramp` and, in ramp mode, a signed whole-number `steps` (`ludion docs sprite-effects --section "Ramp mode"`) |
+| `effects` | optional; ops in application order. `shade`/`gradient`/`light` take `mode: color\|ramp` and, in ramp mode, a signed whole-number `steps` (`ludion docs sprite-effects --section "Ramp mode"`) |
 
 **Emissive is palette data, not colour-map data.** The bake paints from `color` alone and an atlas
 carries one `color` entry under `maps:`; `emissive` records the intensity a glyph is authored at, so it travels

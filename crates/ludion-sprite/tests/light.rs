@@ -111,14 +111,14 @@ fn a_receiver_at_the_radius_is_untouched() {
 }
 
 #[test]
-fn color_overrides_the_sources_own_colour_and_ignores_its_alpha() {
+fn color_overrides_the_sources_own_colour() {
     let image = one(&document(
         [3, 1],
         &[orange_source(), black()],
         "",
         &frame("f", &["eb."]),
         &color_light(
-            "    strength: 0.5\n    color:\n      - 0.0\n      - 1.0\n      - 0.0\n      - 0.25\n",
+            "    strength: 0.5\n    color:\n      - 0.0\n      - 1.0\n      - 0.0\n      - 1.0\n",
         ),
     ));
     assert_eq!(image.get(1, 0), [0.0, 0.375, 0.0, 1.0]);

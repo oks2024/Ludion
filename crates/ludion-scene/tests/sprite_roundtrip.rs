@@ -259,7 +259,8 @@ fn effect_op() -> impl Strategy<Value = SpriteEffectOp> {
             0.001f64..=32.0,
             proptest::option::of(1u32..=8),
             0.0f64..=4.0,
-            proptest::option::of(color()),
+            // Light is additive and ignores alpha, so an alpha-bearing colour is refused.
+            proptest::option::of(color().prop_map(|[r, g, b, _]| [r, g, b, 1.0])),
         )
             .prop_map(
                 |(radius_px, bands, strength, color)| SpriteEffectOp::Light {

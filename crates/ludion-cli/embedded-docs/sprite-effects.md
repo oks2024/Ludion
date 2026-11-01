@@ -45,10 +45,11 @@ output is always a palette colour, never a blend. A ramp op takes none of `from`
   Where that position falls between two steps, the 4×4 Bayer matrix picks per texel, so a `steps: -1`
   fade is a dithered band, not a seam. Stepping clamps at a ramp's ends.
 - **The current-glyph plane.** The bake carries a glyph per texel beside the authored grid the filters
-  test. Ramp ops read and write that plane, so a second ramp op steps what the first left; `dither`
-  writes it too. A texel an `outline` or `shadow` created has no glyph and is skipped.
-- **Ordering:** every ramp-mode op comes before every colour-mode op (`dither` may sit anywhere), since
-  a colour op leaves the plane stale. Otherwise `L1154`, as are: no `ramps`, a target glyph in no
+  test. Ramp ops read and write that plane, so a second ramp op steps what the first left. `dither`
+  tests and updates the current glyph too, so it may follow ramp ops.
+- **Ordering:** every ramp-mode op comes before every other op except `dither` (`outline`, `shadow`,
+  `glow`, `blur`, `noise` and the colour-mode `gradient`, `shade` and `light` all count), since they leave
+  the plane stale. Otherwise `L1154`, as are: no `ramps`, a target glyph in no
   ramp (narrow the op with `glyphs:`), and a colour key on a ramp op.
 
 ```yaml
@@ -76,7 +77,7 @@ glyph, is `L1154`). Receivers are the opaque texels within `radius_px` of a sour
 glyphs in every frame, so mirrored and patched frames light themselves.
 
 - **Colour mode** adds `strength` × falloff of the light colour: `color` when given, else each source
-  lights in its own colour. Overlapping sources combine per channel by **max**, then add to the texel.
+  lights in its own colour; alpha on `color` is `L1154` (light is additive; write `#rrggbb`). Overlapping sources combine per channel by **max**, then add to the texel.
   `bands: N` quantizes the falloff into N crisp rings.
 - **Ramp mode** (`mode: ramp`, `steps >= 0`) steps receivers up their palette ramp by at most `steps`
   and repaints from the palette; `strength` and `color` there are `L1154`, and the ramp ordering rule above applies.

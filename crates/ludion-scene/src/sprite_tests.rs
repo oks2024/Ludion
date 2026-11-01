@@ -1271,6 +1271,16 @@ fn a_negative_light_strength_is_l1154() {
 }
 
 #[test]
+fn a_light_color_with_alpha_is_l1154() {
+    let effects =
+        "  - op: light\n    radius_px: 2.0\n    strength: 1.0\n    color: \"#ffcc0080\"\n";
+    let diagnostics = light_errors("", effects);
+    let found = find(&diagnostics, "/effects/0/color");
+    assert_eq!(found.code.as_str(), "L1154");
+    assert!(found.help.as_deref().unwrap().contains("#rrggbb"));
+}
+
+#[test]
 fn zero_bands_is_l1154_with_the_flat_disc_hint() {
     let effects = "  - op: light\n    radius_px: 2.0\n    strength: 1.0\n    bands: 0\n";
     let diagnostics = light_errors("", effects);

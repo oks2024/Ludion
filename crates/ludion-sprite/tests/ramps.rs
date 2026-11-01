@@ -171,6 +171,30 @@ fn a_dithered_glyph_is_what_a_later_ramp_op_steps() {
 }
 
 #[test]
+fn dither_after_a_ramp_op_tests_the_stepped_glyph_not_the_authored_one() {
+    let rows = [".....", ".ccc.", ".ccc.", ".ccc.", "....."];
+    let effects =
+        format!("{SHADE}1\n  - op: dither\n    glyphs:\n      - c\n      - a\n    density: 1.0\n");
+    let image = one(&source(&rows, &["abcd"], &effects));
+    // Only the interior texel is still `c` after the shade; the stepped edges are no longer `c`.
+    assert_eq!(
+        image.get(2, 2),
+        grey('a'),
+        "the unmoved interior is dithered"
+    );
+    assert_eq!(
+        image.get(1, 1),
+        grey('d'),
+        "a stepped-up edge is left alone"
+    );
+    assert_eq!(
+        image.get(3, 3),
+        grey('b'),
+        "a stepped-down edge is left alone"
+    );
+}
+
+#[test]
 fn an_outline_after_a_ramp_op_is_not_touched_by_the_plane() {
     let rows = [".....", "..b..", "....."];
     let effects = format!(

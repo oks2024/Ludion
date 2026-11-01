@@ -675,8 +675,8 @@ fn sweep_size_error(pointer: &str, message: impl Into<String>, help: &str) -> Di
 const SPRITE_POINTER_SHAPES: &str = "a sprite override addresses one of `/seed`, \
      `/palette/<glyph>/color` (a hex string), `/palette/<glyph>/emissive`, \
      `/frames/<name>/pivot/<0|1>`, `/effects/<i>/<param>` (a scalar, an enum keyword or a hex \
-     colour — `from`, `to`, `color`) or `/effects/<i>/<param>/<j>` (one component of `light` or \
-     `offset`) — `steps` of a `mode: ramp` op and `bands` are whole numbers — e.g. \
+     colour — `from`, `to`, `color`) or `/effects/<i>/<param>/<j>` (one component of `shade`'s \
+     `light` vector or `offset`) — `steps` of a `mode: ramp` op and `bands` are whole numbers — e.g. \
      `/palette/A/color=#3a7bd5`, `/effects/1/strength=0.4`, `/effects/0/from=#ffffff80`, \
      `/effects/2/steps=3`";
 

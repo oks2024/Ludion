@@ -362,14 +362,7 @@ fn apply(
         } => shade_ramp(image, plane, palette, ramps, &mask, light, steps),
         SpriteEffectOp::Shadow { offset, color } => shadow(image, &mask, offset, color),
         SpriteEffectOp::Dither { density } => {
-            dither(
-                image,
-                glyphs,
-                plane,
-                palette,
-                effect.glyphs.as_deref(),
-                density,
-            );
+            dither(image, plane, palette, effect.glyphs.as_deref(), density);
         }
         SpriteEffectOp::Noise { amount } => noise(image, &mask, seed, frame_index, amount),
         SpriteEffectOp::Blur { radius } => blur(image, &mask, radius),
@@ -800,7 +793,6 @@ fn shadow(image: &mut FrameImage, mask: &[bool], offset: [i32; 2], color: [f64; 
 /// rather than random so the pattern is stable under any edit that does not move the texel.
 fn dither(
     image: &mut FrameImage,
-    glyphs: &[Option<char>],
     plane: &mut [Option<char>],
     palette: &[Option<[f32; 4]>; 128],
     names: Option<&[String]>,
@@ -819,8 +811,8 @@ fn dither(
     let density = density as f32;
     let width = image.width as usize;
 
-    for (index, glyph) in glyphs.iter().enumerate() {
-        if *glyph != Some(from) {
+    for index in 0..plane.len() {
+        if plane[index] != Some(from) {
             continue;
         }
         let threshold = BAYER_4X4[(index / width) % 4][(index % width) % 4];

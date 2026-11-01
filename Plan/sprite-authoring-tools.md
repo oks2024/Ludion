@@ -19,7 +19,10 @@
 - The hex writer emits hex only for a hex-exact colour, else the legacy floats (Pillar 4); every colour
   that was ever hex stays hex.
 - Test fixtures and the fuzz corpus stay on the legacy float spelling, which is the alias's coverage.
-- A variant `palette:` override naming a glyph the sprite has no texel of is a dead override, `L1153`.
+- A variant override naming a glyph not in the sprite's merged palette is `L1153`; so is one that
+  recolours an `emissive` glyph without repeating `emissive` (`emissive: 0` drops it on purpose).
+- `dither` tests and updates the current glyph, so it may follow ramp ops.
+- Alpha on `light`'s `color` is `L1154`.
 - Ramps: stepping clamps at a ramp's ends; the 4x4 Bayer matrix splits a fractional step.
 - `dither` may sit anywhere in the order; ramp ops take none of `from`/`to`/`blend`/`strength`.
 - A negative `shade` `steps` swaps lit and shadowed.

@@ -375,7 +375,7 @@ fn a_variant_mints_its_own_prefix_and_recolours() {
     std::fs::write(&sprite_path, sprite.split("effects:").next().unwrap()).unwrap();
     with_inputs(
         &source,
-        "  - ship.sprite.yaml\n  - path: ship.sprite.yaml\n    name: ship-red\n    palette:\n      o:\n        color: \"#ff0000\"\n",
+        "  - ship.sprite.yaml\n  - path: ship.sprite.yaml\n    name: ship-red\n    palette:\n      o:\n        color: \"#ff0000\"\n        emissive: 2.0\n",
         "flipbooks:\n  - name: ship-red/fly\n    frames:\n      - ship-red/idle\n      - ship-red/bank-left\n    fps: 8.0\n",
     );
     let output = generate(&source);
@@ -403,7 +403,7 @@ fn a_variant_without_a_name_collides_with_the_plain_input() {
     let source = staged("atlas_variant_collision");
     with_inputs(
         &source,
-        "  - ship.sprite.yaml\n  - path: ship.sprite.yaml\n    palette:\n      o:\n        color: \"#ff0000\"\n",
+        "  - ship.sprite.yaml\n  - path: ship.sprite.yaml\n    palette:\n      o:\n        color: \"#ff0000\"\n        emissive: 2.0\n",
         "",
     );
     let output = generate(&source);
@@ -428,4 +428,68 @@ fn a_variant_recolouring_an_absent_glyph_is_refused() {
     let text = stderr(&output);
     assert!(text.contains("L1153"), "stderr was: {text}");
     assert!(text.contains("/inputs/1/palette/z"), "stderr was: {text}");
+}
+
+/// Stages the ship with its effects replaced by one explicitly coloured `light` (so a recoloured
+/// source lights its neighbours identically), plus a plain input and a recoloured `ship-red` variant.
+fn lit_variant(name: &str, override_yaml: &str) -> PathBuf {
+    let source = staged(name);
+    let dir = source.parent().unwrap().to_path_buf();
+    let sprite_path = dir.join("ship.sprite.yaml");
+    let sprite = std::fs::read_to_string(&sprite_path).unwrap();
+    let head = sprite.split("effects:").next().unwrap();
+    std::fs::write(
+        &sprite_path,
+        format!("{head}effects:\n  - op: light\n    radius_px: 2.0\n    strength: 1.0\n    color: \"#ffffff\"\n"),
+    )
+    .unwrap();
+    with_inputs(
+        &source,
+        &format!(
+            "  - ship.sprite.yaml\n  - path: ship.sprite.yaml\n    name: ship-red\n    palette:\n      o:\n        color: \"#ff0000\"\n{override_yaml}"
+        ),
+        "",
+    );
+    source
+}
+
+/// A variant override replaces the whole entry, so recolouring a light source without repeating its
+/// `emissive` would silently drop the light: refused at the override.
+#[test]
+fn a_variant_dropping_an_emissive_glyphs_emissive_is_refused() {
+    let source = lit_variant("atlas_variant_drops_emissive", "");
+    let output = generate(&source);
+    assert!(!output.status.success());
+    let text = stderr(&output);
+    assert!(text.contains("L1153"), "stderr was: {text}");
+    assert!(text.contains("/inputs/1/palette/o"), "stderr was: {text}");
+    assert!(text.contains("emissive: 2"), "stderr was: {text}");
+}
+
+#[test]
+fn a_variant_repeating_emissive_keeps_the_base_light() {
+    let source = lit_variant("atlas_variant_keeps_emissive", "        emissive: 2.0\n");
+    let output = generate(&source);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let dir = source.parent().unwrap();
+    let (w, _, plain) = region_texels(dir, "ship/idle");
+    let (_, _, red) = region_texels(dir, "ship-red/idle");
+    let differing: Vec<usize> = (0..plain.len()).filter(|&i| plain[i] != red[i]).collect();
+    let width = w as usize;
+    assert_eq!(
+        differing,
+        vec![5 * width + 2, 5 * width + 5],
+        "only the source texels recolour; the light it casts is the base's"
+    );
+}
+
+/// `emissive: 0` is the deliberate way to drop a source; with the only source gone the light has
+/// nothing to shine from.
+#[test]
+fn a_variant_dropping_emissive_on_purpose_leaves_the_light_sourceless() {
+    let source = lit_variant("atlas_variant_zero_emissive", "        emissive: 0.0\n");
+    let output = generate(&source);
+    assert!(!output.status.success());
+    let text = stderr(&output);
+    assert!(text.contains("L1154"), "stderr was: {text}");
 }
