@@ -25,6 +25,9 @@ generated `LUDION-GUIDE.md` copy is dropped in favor of its source of truth, `do
   pause menu) (per-OS goldens: `windows`/`macos`, blessed on each pinned platform).
 - `tests/replay.rs` — the committed session replay (`run.lrp`): a fresh recording of the same
   session must replay to the live WorldHash trace, and the committed artifact must still match it.
+- `tests/failing_run.rs` — the `ludion docs failing-run` recipe: a panicking test leaves a replayable
+  recording, the snapshot/restore round trip lands on the same frame and hash, the last 120 frames
+  render with debug lines.
 - `tests/drift.rs` — asserts every component in the registry survives snapshot migration (see
   "Keep components drift-safe" in `docs/components.md`).
 - `clippy.toml` — the sim-side determinism denylist the game code inherits.

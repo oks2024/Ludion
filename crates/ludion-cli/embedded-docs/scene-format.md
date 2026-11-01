@@ -127,6 +127,8 @@ cargo run -p ludion-cli -- sim-hash --scene path/to/scene.yaml --frames 600   # 
 cargo test -p ludion-scene                                    # round-trip + idempotence property tests
 ```
 
+These `cargo run -p ludion-cli -- …` lines work in the engine checkout; from a game project, get the CLI as `ludion docs project-anatomy` § "Getting the ludion CLI" describes.
+
 ## Gotchas
 
 - `seed` must be a non-negative integer (`L1009` otherwise); it configures the sim RNG and therefore changes `sim-hash` output.

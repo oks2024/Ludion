@@ -128,7 +128,7 @@ let score = end.world_mut().query::<(&Score,)>().next().map(|(s,)| s.0);
 its replay expects that panic and only that one (`L3050` if it no longer happens there).
 
 Recordings embed the scene text, so an `.lrp` is self-contained and replays identically anywhere
-(given the same game builder). Worked example: `games/breakout/tests/replay.rs`.
+(given the same game builder). Worked example: `games/breakout/tests/replay.rs`; from a failing test to its frames: `ludion docs failing-run`.
 
 ## Quitting from a system
 

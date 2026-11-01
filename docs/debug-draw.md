@@ -65,6 +65,9 @@ cull (a level under 50k triangles is far below it). Non-`rigid` `circle`/`aabb` 
   `--sweep`.
 - `<game> --scene S --render-out o.png --frames N --debug-draw motor` — the game's binary, which
   runs the game's systems, so its own categories draw.
+- `<game> --replay-frames run.lrp --frames-out clip/ --from A --to B --debug-draw motor` — renders a
+  recorded run's frames with the game's lines; the summary echoes the categories the same way
+  (`ludion docs failing-run`).
 
 The summary line echoes the request: `(debug draw: path)`. A category that drew nothing is named —
 `(debug draw: motr,path; nothing drawn for: motr)` — so a typo shows.
