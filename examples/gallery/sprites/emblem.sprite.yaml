@@ -13,17 +13,9 @@ palette:
   from: emblem.palette.yaml
   overrides:
     O:
-      color:
-        - 0.95
-        - 0.85
-        - 0.55
-        - 1.0
+      color: "#f9edc4"
     "*":
-      color:
-        - 1.0
-        - 1.0
-        - 0.9
-        - 1.0
+      color: "#fffff3"
       emissive: 2.0
 frames:
   crest:

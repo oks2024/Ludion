@@ -10,54 +10,22 @@ size:
 seed: 20260906
 palette:
   g:
-    color:
-      - 0.042
-      - 0.038
-      - 0.055
-      - 1.0
+    color: "#3a3742"
   r:
-    color:
-      - 0.125
-      - 0.116
-      - 0.140
-      - 1.0
+    color: "#636069"
   d:
-    color:
-      - 0.072
-      - 0.066
-      - 0.084
-      - 1.0
+    color: "#4c4952"
   m:
-    color:
-      - 0.215
-      - 0.202
-      - 0.222
-      - 1.0
+    color: "#807c82"
   w:
-    color:
-      - 0.230
-      - 0.120
-      - 0.045
-      - 1.0
+    color: "#84613c"
   b:
-    color:
-      - 0.095
-      - 0.048
-      - 0.018
-      - 1.0
+    color: "#573e24"
   h:
-    color:
-      - 0.90
-      - 0.62
-      - 0.06
-      - 1.0
+    color: "#f3ce45"
     emissive: 1.5
   k:
-    color:
-      - 0.075
-      - 0.050
-      - 0.012
-      - 1.0
+    color: "#4d3f1d"
 frames:
   floor:
     rows:
@@ -128,26 +96,14 @@ effects:
       - b
     frames:
       - crate
-    from:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 1.0
-    to:
-      - 0.40
-      - 0.40
-      - 0.40
-      - 1.0
+    from: "#ffffff"
+    to: "#aaaaaa"
     direction: vertical
     blend: multiply
   - op: outline
     frames:
       - crate
-    color:
-      - 0.030
-      - 0.016
-      - 0.006
-      - 1.0
+    color: "#302212"
     side: inside
   - op: dither
     glyphs:

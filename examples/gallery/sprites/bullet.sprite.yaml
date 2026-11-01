@@ -10,32 +10,16 @@ size:
 seed: 91
 palette:
   o:
-    color:
-      - 0.015
-      - 0.42
-      - 1.0
-      - 1.0
+    color: "#21adff"
     emissive: 1.2
   "*":
-    color:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 1.0
+    color: "#ffffff"
     emissive: 3.0
   y:
-    color:
-      - 1.0
-      - 0.015
-      - 0.18
-      - 1.0
+    color: "#ff2176"
     emissive: 1.2
   x:
-    color:
-      - 1.0
-      - 0.95
-      - 0.98
-      - 1.0
+    color: "#fff9fd"
     emissive: 3.0
 frames:
   player:

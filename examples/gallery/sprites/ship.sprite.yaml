@@ -10,30 +10,14 @@ size:
 seed: 4211
 palette:
   "#":
-    color:
-      - 0.35
-      - 0.40
-      - 0.50
-      - 1.0
+    color: "#a0aabc"
   "=":
-    color:
-      - 0.075
-      - 0.095
-      - 0.145
-      - 1.0
+    color: "#4d576a"
   o:
-    color:
-      - 0.30
-      - 0.85
-      - 1.0
-      - 1.0
+    color: "#95edff"
     emissive: 2.5
   "*":
-    color:
-      - 1.0
-      - 0.45
-      - 0.10
-      - 1.0
+    color: "#ffb359"
     emissive: 3.0
 frames:
   idle:
@@ -82,16 +66,8 @@ effects:
   - op: gradient
     glyphs:
       - "#"
-    from:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 1.0
-    to:
-      - 0.45
-      - 0.48
-      - 0.58
-      - 1.0
+    from: "#ffffff"
+    to: "#b3b8c8"
     direction: vertical
     blend: multiply
   - op: shade
@@ -100,9 +76,5 @@ effects:
       - -1.0
     strength: 0.35
   - op: outline
-    color:
-      - 0.03
-      - 0.03
-      - 0.06
-      - 1.0
+    color: "#303045"
     side: outside

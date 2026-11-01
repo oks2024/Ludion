@@ -10,18 +10,10 @@ size:
 seed: 1307
 palette:
   "#":
-    color:
-      - 1.0
-      - 0.72
-      - 0.24
-      - 1.0
+    color: "#ffdd86"
     emissive: 2.5
   "%":
-    color:
-      - 0.095
-      - 0.072
-      - 0.075
-      - 0.80
+    color: "#574c4dcc"
 frames:
   f0:
     rows:
@@ -99,16 +91,8 @@ effects:
   - op: gradient
     glyphs:
       - "#"
-    from:
-      - 1.0
-      - 0.80
-      - 0.35
-      - 1.0
-    to:
-      - 0.70
-      - 0.0
-      - 0.0
-      - 1.0
+    from: "#ffe7a0"
+    to: "#da0000"
     direction: radial
     blend: replace
   - op: dither

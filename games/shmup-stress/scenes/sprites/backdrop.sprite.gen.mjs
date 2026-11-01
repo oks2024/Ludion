@@ -15,10 +15,10 @@ const SIZE = 40;
 
 // `p` plate, `q` a lighter plate, `l` the grid rule, `s` a star.
 const PALETTE = [
-  ['p', [0.035, 0.04, 0.065]],
-  ['q', [0.055, 0.062, 0.095]],
-  ['l', [0.1, 0.13, 0.2]],
-  ['s', [0.55, 0.6, 0.75]],
+  ['p', '#353848'],
+  ['q', '#424657'],
+  ['l', '#59657c'],
+  ['s', '#c4cbe1'],
 ];
 
 // A fixed, seedless speckle: the plate's lighter flecks are a function of the texel coordinate, so
@@ -64,10 +64,9 @@ out.push(`  - ${SIZE}`);
 out.push(`  - ${SIZE}`);
 out.push('seed: 20260912');
 out.push('palette:');
-for (const [glyph, [r, g, b]] of PALETTE) {
+for (const [glyph, hex] of PALETTE) {
   out.push(`  ${glyph}:`);
-  out.push('    color:');
-  for (const c of [r, g, b, 1.0]) out.push(`      - ${c.toFixed(3)}`);
+  out.push(`    color: "${hex}"`);
 }
 out.push('frames:');
 for (const [name, tile] of Object.entries(TILES)) {

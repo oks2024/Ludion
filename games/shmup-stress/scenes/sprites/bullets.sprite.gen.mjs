@@ -21,14 +21,14 @@ import { writeFileAtomic } from '../../../../scripts/atomic-write.mjs';
 
 const SIZE = 12;
 const HUES = [
-  ['A', [0.9, 0.1, 0.14]],
-  ['B', [0.95, 0.38, 0.06]],
-  ['C', [0.95, 0.82, 0.1]],
-  ['D', [0.22, 0.8, 0.26]],
-  ['E', [0.1, 0.78, 0.88]],
-  ['F', [0.16, 0.36, 0.95]],
-  ['G', [0.55, 0.26, 0.92]],
-  ['H', [0.93, 0.2, 0.66]],
+  ['A', '#f35969'],
+  ['B', '#f9a645'],
+  ['C', '#f9ea59'],
+  ['D', '#81e78b'],
+  ['E', '#59e5f1'],
+  ['F', '#6fa2f9'],
+  ['G', '#c48bf6'],
+  ['H', '#f77cd4'],
 ];
 
 // The five silhouettes, as predicates over the texel's offset from the frame centre. `dx`/`dy` are
@@ -68,10 +68,9 @@ out.push(`  - ${SIZE}`);
 out.push(`  - ${SIZE}`);
 out.push('seed: 20260912');
 out.push('palette:');
-for (const [glyph, [r, g, b]] of HUES) {
+for (const [glyph, hex] of HUES) {
   out.push(`  ${glyph}:`);
-  out.push('    color:');
-  for (const c of [r, g, b, 1.0]) out.push(`      - ${c.toFixed(3)}`);
+  out.push(`    color: "${hex}"`);
 }
 out.push('frames:');
 for (let k = 0; k < SHAPES.length * HUES.length; k += 1) {
@@ -88,11 +87,7 @@ out.push('      - -1.0');
 out.push('      - -1.0');
 out.push('    strength: 0.4');
 out.push('  - op: outline');
-out.push('    color:');
-out.push('      - 0.010');
-out.push('      - 0.008');
-out.push('      - 0.020');
-out.push('      - 0.850');
+out.push('    color: "#191627d9"');
 out.push('    side: outside');
 
 const dest = process.argv[2];
