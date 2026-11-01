@@ -299,7 +299,10 @@ fn interpolation_draws_between_ticks() {
     // A render blends from the last pose the presenter saw, which is at most as many ticks back as
     // the frames the presenter skipped since its previous render (a loaded box skips some): it
     // never draws past its own tick, nor before the previous render's tick.
-    assert!(hi <= 1e-3, "no extrapolation: a render drew {hi} past its tick");
+    assert!(
+        hi <= 1e-3,
+        "no extrapolation: a render drew {hi} past its tick"
+    );
     let frames: Vec<u64> = counts.poses.lock().unwrap().iter().map(|p| p.0).collect();
     let mut earlier = 0; // the last distinct frame rendered; a re-render of one frame re-blends it
     let mut current = 0;
