@@ -1088,6 +1088,119 @@ fn needs_gpu_debug_lines_appear_only_when_their_category_is_enabled() {
     );
 }
 
+/// A replay render draws the debug lines of the categories asked for, `None` renders as an engine that
+/// never heard of debug draw, and turning debug draw on moves no `WorldHash`.
+#[test]
+fn needs_gpu_a_replay_renders_debug_lines_without_moving_its_hashes() {
+    use ludion_engine::{DebugCategories, ReplayFramesRequest};
+    use ludion_protocol::command::{Command, SimStepParams};
+    use std::ops::ControlFlow;
+
+    let project = TempProject::new("debug-draw-replay");
+    let mut live = probe_game()
+        .project_root(&project.0)
+        .build()
+        .expect("the probe game builds");
+    live.load_inline_scene(&probe_scene(false))
+        .expect("the probe scene loads");
+    live.set_recording(std::fs::File::create(project.0.join("run.lrp")).unwrap())
+        .unwrap();
+    ludion_engine::drive_hashes(
+        &mut live,
+        vec![Command::SimStep(SimStepParams {
+            ticks: 3,
+            hash: false,
+        })],
+    )
+    .unwrap();
+    live.stop_recording().unwrap();
+    let bytes = std::fs::read(project.0.join("run.lrp")).unwrap();
+
+    let render = |debug: DebugCategories| {
+        let mut frames: Vec<(u64, Vec<u8>)> = Vec::new();
+        let request = ReplayFramesRequest {
+            from: 1,
+            to: Some(3),
+            width: 160,
+            height: 90,
+            debug,
+        };
+        let outcome = ludion_engine::replay_render_frames(
+            probe_game(),
+            &bytes,
+            &project.0,
+            request,
+            |frame, png| {
+                frames.push((frame, png.to_vec()));
+                Ok(())
+            },
+        );
+        (frames, outcome)
+    };
+
+    let (plain, outcome) = render(DebugCategories::None);
+    let plain_outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) if no_adapter(std::slice::from_ref(&error)) => {
+            eprintln!("[debug-draw] SKIPPED: no GPU adapter available");
+            return;
+        }
+        Err(error) => panic!("[debug-draw] replay render failed: {error}"),
+    };
+    assert_eq!(plain_outcome.rendered, 3, "the window [1, 3] is 3 frames");
+    let (probe, probe_outcome) = render(DebugCategories::parse("probe"));
+    let probe_outcome = probe_outcome.unwrap();
+    let (motor, motor_outcome) = render(DebugCategories::parse("motor"));
+    let motor_outcome = motor_outcome.unwrap();
+
+    assert_ne!(plain, probe, "an enabled category draws its lines");
+    assert_eq!(
+        plain, motor,
+        "a category nothing drew under changes nothing"
+    );
+    assert!(
+        probe_outcome.debug_drawn.contains(&"probe"),
+        "{:?}",
+        probe_outcome.debug_drawn
+    );
+    let summary = DebugCategories::parse("motor")
+        .summary(&motor_outcome.debug_drawn)
+        .expect("a named category has a summary");
+    assert!(summary.contains("motor"), "{summary}");
+
+    // `None` is the frames a replay renders without ever calling `set_debug_draw`.
+    let mut untouched: Vec<(u64, Vec<u8>)> = Vec::new();
+    ludion_engine::replay_with(probe_game(), &bytes, &project.0, |engine, frame| {
+        let frame = frame.as_u64();
+        if (1..=3).contains(&frame) && untouched.last().is_none_or(|(last, _)| *last != frame) {
+            untouched.push((frame, engine.render_png(160, 90)?));
+        }
+        Ok(ControlFlow::Continue(()))
+    })
+    .unwrap();
+    assert_eq!(
+        plain, untouched,
+        "no debug draw leaves the frames identical"
+    );
+
+    // Debug draw is host state: no hash moves with it.
+    let hashes = |debug_on: bool| {
+        let mut hashes = Vec::new();
+        let mut first = true;
+        ludion_engine::replay_with(probe_game(), &bytes, &project.0, |engine, frame| {
+            if first && debug_on {
+                engine.set_debug_draw(DebugCategories::All);
+            }
+            first = false;
+            hashes.push((frame, engine.world_hash()?));
+            Ok(ControlFlow::Continue(()))
+        })
+        .unwrap();
+        hashes
+    };
+    assert_eq!(hashes(false), hashes(true), "debug draw moves no hash");
+}
+
 /// A line behind an opaque mesh still shows (dimmed) — x-ray — but less than the same line in the open.
 #[test]
 fn needs_gpu_a_line_behind_geometry_shows_dimmed() {

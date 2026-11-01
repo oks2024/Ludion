@@ -150,6 +150,7 @@ fn needs_gpu_committed_run_renders_to_a_png_sequence() {
         to: Some(TO),
         width: WIDTH,
         height: HEIGHT,
+        debug: ludion_engine::DebugCategories::None,
     };
 
     let mut written: Vec<u64> = Vec::new();
@@ -167,9 +168,12 @@ fn needs_gpu_committed_run_renders_to_a_png_sequence() {
     );
 
     match result {
-        Ok(rendered) => {
+        Ok(outcome) => {
             // Window [0, 60] inclusive → 61 frames, named by absolute sim frame index.
-            assert_eq!(rendered, 61, "an inclusive [0, 60] window is 61 frames");
+            assert_eq!(
+                outcome.rendered, 61,
+                "an inclusive [0, 60] window is 61 frames"
+            );
             assert_eq!(
                 written,
                 (0..=TO).collect::<Vec<_>>(),

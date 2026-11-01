@@ -405,7 +405,7 @@ where
 
 /// A replay-to-frames render request: the inclusive frame window and the output resolution passed to
 /// [`replay_render_frames`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ReplayFramesRequest {
     /// First sim frame to render (inclusive). Frame 0 is the initial post-load world, before any
     /// `sim.step`.
@@ -417,6 +417,19 @@ pub struct ReplayFramesRequest {
     pub width: u32,
     /// Render height in pixels.
     pub height: u32,
+    /// Debug-draw categories drawn over every rendered frame; `DebugCategories::None` renders
+    /// byte-identically to an engine without debug draw.
+    pub debug: crate::DebugCategories,
+}
+
+/// What [`replay_render_frames`] did: the frames it rendered and the debug categories that drew.
+#[derive(Clone, Debug, Default)]
+pub struct ReplayFramesOutcome {
+    /// Frames rendered and handed to the sink.
+    pub rendered: u64,
+    /// The categories that drew on any rendered frame, whether enabled or not — sorted and
+    /// de-duplicated, the input `DebugCategories::summary` expects.
+    pub debug_drawn: Vec<&'static str>,
 }
 
 /// The resolved (non-optional) window a [`ReplayFramesRequest`] drives against, plus its resolution.
@@ -449,7 +462,8 @@ type FrameSink<'a> = dyn FnMut(u64, &[u8]) -> Result<(), Diagnostic> + 'a;
 /// header's embedded profile-at-start is installed, so the clip reproduces bit-exactly regardless of
 /// the on-disk save.
 ///
-/// Returns the number of frames rendered (and handed to `on_frame`).
+/// Returns a [`ReplayFramesOutcome`]: the number of frames rendered (and handed to `on_frame`) and
+/// the debug-draw categories that drew on them.
 ///
 /// # Errors
 /// - `L3021` if the window falls outside the replay's recorded range (`from > to`, or `to` past the
@@ -460,17 +474,23 @@ type FrameSink<'a> = dyn FnMut(u64, &[u8]) -> Result<(), Diagnostic> + 'a;
 ///
 /// # Example
 /// ```no_run
-/// use ludion_engine::{replay_render_frames, Engine, ReplayFramesRequest};
+/// use ludion_engine::{replay_render_frames, DebugCategories, Engine, ReplayFramesRequest};
 ///
 /// let bytes = std::fs::read("run.lrp").unwrap();
-/// let request = ReplayFramesRequest { from: 0, to: Some(60), width: 1920, height: 1080 };
+/// let request = ReplayFramesRequest {
+///     from: 0,
+///     to: Some(60),
+///     width: 1920,
+///     height: 1080,
+///     debug: DebugCategories::None,
+/// };
 /// // A game passes its own `Engine::builder()...` here; the built-in engine stands in for the doc.
-/// let rendered = replay_render_frames(Engine::builder(), &bytes, ".", request, |frame, png| {
+/// let outcome = replay_render_frames(Engine::builder(), &bytes, ".", request, |frame, png| {
 ///     std::fs::write(format!("frame-{frame:05}.png"), png)
 ///         .map_err(|e| ludion_core::diagnostics::Diagnostic::new(
 ///             ludion_core::codes::code::RENDER_PNG_IO, e.to_string()))
 /// }).unwrap();
-/// eprintln!("rendered {rendered} frames");
+/// eprintln!("rendered {} frames", outcome.rendered);
 /// ```
 pub fn replay_render_frames<F>(
     builder: EngineBuilder,
@@ -478,11 +498,12 @@ pub fn replay_render_frames<F>(
     project_root: impl AsRef<Path>,
     request: ReplayFramesRequest,
     mut on_frame: F,
-) -> Result<u64, Diagnostic>
+) -> Result<ReplayFramesOutcome, Diagnostic>
 where
     F: FnMut(u64, &[u8]) -> Result<(), Diagnostic>,
 {
     let (mut engine, actions) = prepare_replay(builder, bytes, project_root)?;
+    engine.set_debug_draw(request.debug.clone());
 
     require_monotonic_frames("replay-to-frames", &actions)?;
     let total = total_frames(&actions)?;
@@ -499,9 +520,16 @@ where
         on_frame: &mut on_frame,
         rendered: 0,
         last_rendered: None,
+        drawn: Vec::new(),
     };
     drive_actions_with(&mut engine, actions, &mut hook)?;
-    Ok(hook.rendered)
+    let mut debug_drawn = hook.drawn;
+    debug_drawn.sort_unstable();
+    debug_drawn.dedup();
+    Ok(ReplayFramesOutcome {
+        rendered: hook.rendered,
+        debug_drawn,
+    })
 }
 
 /// The action a recorded delta command replays as: a `render.size` skips the host's render-scale
@@ -670,6 +698,7 @@ struct RenderHook<'a, 'b> {
     on_frame: &'a mut FrameSink<'b>,
     rendered: u64,
     last_rendered: Option<u64>,
+    drawn: Vec<&'static str>,
 }
 
 impl DriveHook for RenderHook<'_, '_> {
@@ -683,6 +712,7 @@ impl DriveHook for RenderHook<'_, '_> {
         }
         let png = engine.render_png(self.window.width, self.window.height)?;
         (self.on_frame)(frame, &png)?;
+        self.drawn.extend(engine.debug_draw_drawn());
         self.rendered += 1;
         self.last_rendered = Some(frame);
         Ok(true)

@@ -141,6 +141,7 @@ fn aa_value_parser() -> impl clap::builder::TypedValueParser<Value = ludion_engi
     about = "Host this game's scene live over the Ludion wire protocol",
     long_about = None,
     group(clap::ArgGroup::new("replay_window_mode").args(["replay_frames", "profile_replay"])),
+    group(clap::ArgGroup::new("debug_draw_mode").args(["render_out", "replay_frames"])),
     group(clap::ArgGroup::new("profile_mode").args(["profile", "profile_replay"]))
 )]
 pub(crate) struct RunArgs {
@@ -233,10 +234,11 @@ pub(crate) struct RunArgs {
     /// the game's. Default 0, a static tick-0 frame.
     #[arg(long, value_name = "N", requires = "render_out")]
     frames: Option<u64>,
-    /// With `--render-out`, draw these debug-draw categories (`all` or a comma list, e.g. `path,motor`)
-    /// over the frame: the lines the game's systems drew on the last tick, 1 px wide and dimmed behind
-    /// geometry. `ludion docs debug-draw` has the categories the engine emits.
-    #[arg(long, value_name = "CATEGORIES", requires = "render_out")]
+    /// With `--render-out` or `--replay-frames`, draw these debug-draw categories (`all` or a comma
+    /// list, e.g. `path,motor`) over the frame: the lines the game's systems drew on the last tick,
+    /// 1 px wide and dimmed behind geometry. `ludion docs debug-draw` has the categories the engine
+    /// emits.
+    #[arg(long, value_name = "CATEGORIES", requires = "debug_draw_mode")]
     debug_draw: Option<String>,
     /// Enable dev-only shader hot reload: an `asset.reload` naming a renderer shader (`.wgsl`)
     /// recreates its pipeline live, keeping the last good one on a bad edit. `ludion dev` sets this on
@@ -254,6 +256,7 @@ pub(crate) struct RunArgs {
     /// assemble into a clip. Headless and offline: no window, no audio, no server, and — like a plain
     /// replay — it cannot persist a profile (the replay installs its own profile-at-start). The scene
     /// comes from the replay's header, so `--scene` is not needed. Requires `--frames-out`.
+    /// `--debug-draw` draws its categories over every frame.
     #[arg(
         long,
         value_name = "FILE",
@@ -1040,11 +1043,14 @@ fn run_replay_frames(
 
     let project_root = replay_project_root(scene_arg, builder.default_scene_hint(), replay_path);
 
+    let debug =
+        ludion_engine::DebugCategories::parse(args.debug_draw.as_deref().unwrap_or_default());
     let request = ludion_engine::ReplayFramesRequest {
         from: args.from.unwrap_or(0),
         to: args.to,
         width: args.width.unwrap_or(1920),
         height: args.height.unwrap_or(1080),
+        debug: debug.clone(),
     };
 
     let mut count = 0u64;
@@ -1067,8 +1073,15 @@ fn run_replay_frames(
 
     match ludion_engine::replay_render_frames(builder, &bytes, &project_root, request, write_frame)
     {
-        Ok(rendered) => {
-            println!("rendered {rendered} frame(s) → {}", out_dir.display());
+        Ok(outcome) => {
+            println!(
+                "rendered {} frame(s) → {}{}",
+                outcome.rendered,
+                out_dir.display(),
+                debug
+                    .summary(&outcome.debug_drawn)
+                    .map_or_else(String::new, |clause| format!(" ({clause})"))
+            );
             let _ = std::io::stdout().flush();
             ExitCode::SUCCESS
         }
@@ -2270,6 +2283,32 @@ mod host_diagnostic_tests {
             ];
             assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
         }
+    }
+
+    #[test]
+    fn debug_draw_needs_a_render_or_a_replay_render() {
+        let replay = [
+            "game",
+            "--replay-frames",
+            "r.lrp",
+            "--frames-out",
+            "d",
+            "--debug-draw",
+            "motor",
+        ];
+        assert!(RunArgs::try_parse_from(replay).is_ok());
+        let render = [
+            "game",
+            "--scene",
+            "s.yaml",
+            "--render-out",
+            "o.png",
+            "--debug-draw",
+            "motor",
+        ];
+        assert!(RunArgs::try_parse_from(render).is_ok());
+        let alone = ["game", "--scene", "s.yaml", "--debug-draw", "motor"];
+        assert!(RunArgs::try_parse_from(alone).is_err());
     }
 
     #[test]

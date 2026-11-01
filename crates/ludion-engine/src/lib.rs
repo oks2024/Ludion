@@ -210,8 +210,8 @@ pub use render_size::{
     resolve_startup_render_size,
 };
 pub use replay::{
-    ReplayFramesRequest, drive_hashes, replay_hashes, replay_hashes_with, replay_render_frames,
-    replay_with,
+    ReplayFramesOutcome, ReplayFramesRequest, drive_hashes, replay_hashes, replay_hashes_with,
+    replay_render_frames, replay_with,
 };
 pub use residue_store::ResidueStore;
 pub use scene_check::{

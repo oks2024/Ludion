@@ -3805,6 +3805,7 @@ entities:
                 to: None,
                 width: 64,
                 height: 64,
+                debug: crate::DebugCategories::None,
             },
             |_, _| panic!("a refused replay renders nothing"),
         )
