@@ -214,6 +214,40 @@ impl Import {
         }
         write_file(&out_dir.join(PREFAB_FILE), prefab_yaml.as_bytes())
     }
+
+    /// Files already under `out_dir`'s `meshes/`, `clips/` and `textures/` that this plan would not
+    /// write (a previous import's leftovers), as `"<dir>/<name>"` with forward slashes, sorted. A
+    /// missing directory contributes nothing.
+    pub fn stale_outputs(&self, out_dir: &Path) -> Vec<String> {
+        let planned: std::collections::BTreeSet<&str> = self
+            .meshes
+            .iter()
+            .map(|mesh| mesh.rel_path.as_str())
+            .chain(self.clips.iter().map(|clip| clip.rel_path.as_str()))
+            .chain(
+                self.textures
+                    .iter()
+                    .map(|texture| texture.rel_path.as_str()),
+            )
+            .collect();
+        let mut stale = Vec::new();
+        for dir in [MESH_DIR, CLIP_DIR, TEXTURE_DIR] {
+            let Ok(entries) = std::fs::read_dir(out_dir.join(dir)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                    continue;
+                }
+                let rel = format!("{dir}/{}", entry.file_name().to_string_lossy());
+                if !planned.contains(rel.as_str()) {
+                    stale.push(rel);
+                }
+            }
+        }
+        stale.sort();
+        stale
+    }
 }
 
 /// Creates `dir` (and any missing parents), mapping failure to `L1203`.
@@ -1611,6 +1645,36 @@ mod tests {
             .write(&dir, "format: 1\n")
             .expect_err("the texture path is a directory");
         assert!(!dir.join(PREFAB_FILE).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_outputs_are_the_files_the_plan_would_not_write() {
+        let dir = std::env::temp_dir().join(format!("ludion-import-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let import = Import {
+            prefab: Default::default(),
+            meshes: Vec::new(),
+            textures: vec![TextureArtifact {
+                rel_path: "textures/kept.png".to_string(),
+                png: vec![1],
+            }],
+            clips: Vec::new(),
+            warnings: Vec::new(),
+        };
+        assert!(
+            import.stale_outputs(&dir).is_empty(),
+            "missing dirs are fine"
+        );
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        std::fs::write(dir.join("textures/kept.png"), [1]).unwrap();
+        std::fs::write(dir.join("textures/dead.png"), [2]).unwrap();
+        std::fs::write(dir.join("meshes/old.mesh.yaml"), "x").unwrap();
+        assert_eq!(
+            import.stale_outputs(&dir),
+            ["meshes/old.mesh.yaml", "textures/dead.png"]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

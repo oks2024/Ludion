@@ -171,8 +171,9 @@ pub mod code {
     pub const OPERATION_FAILED_SILENTLY: DiagnosticCode = DiagnosticCode::new("L0029");
 
     /// `L0030` — a create verb (`ludion new`, `voxel new`, `voxel upscale`, `sculpt new`,
-    /// `ludion import <png>` onto an existing sprite document) found its target already present and
-    /// refuses to overwrite it. Raised by `ludion-cli`.
+    /// `ludion import <png>` onto an existing sprite document, or a glTF import whose `--out` holds
+    /// outputs the new import would not write) found its target already present and refuses to
+    /// overwrite it. Raised by `ludion-cli`.
     pub const CREATE_TARGET_EXISTS: DiagnosticCode = DiagnosticCode::new("L0030");
 
     /// `L0031` — `ludion check-scene` was handed a document whose `kind:` another verb validates.
@@ -2738,7 +2739,8 @@ Fix: report it with the command that triggered it.",
         explanation: "\
 `ludion new <name>` scaffolds `./<name>`; `ludion voxel new`, `ludion voxel upscale` and
 `ludion sculpt new` write a new model file; `ludion import <png>` writes the `kind: sprite`
-document beside the image. The path they were given already exists.
+document beside the image. The path they were given already exists. A glTF `ludion import` raises it
+too when its `--out` holds `meshes/`, `clips/` or `textures/` files the new import would not write.
 
 These verbs never overwrite: merging a template into a project someone already has, or replacing a
 hand-edited model, would destroy work silently, and a half-scaffolded tree is harder to recover from

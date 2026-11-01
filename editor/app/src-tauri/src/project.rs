@@ -114,12 +114,19 @@ pub fn add_stage_scenes_from(templates: &Path, project: &Path) -> Result<Vec<Str
     Ok(written)
 }
 
-/// Publishes `body` at `dest` only if `dest` is absent: a temp sibling is written whole, then
+/// The temp file a write to `dest` lands on first: `.{name}.{pid}.{n}.tmp` beside it, so two
+/// concurrent writers never share (or delete) each other's temp.
+fn temp_sibling(dest: &Path) -> std::path::PathBuf {
+    static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = dest.file_name().unwrap_or_default().to_string_lossy();
+    let n = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dest.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()))
+}
+
+/// Publishes `body` at `dest` only if `dest` is absent: a unique temp sibling is written whole, then
 /// hard-linked into place — atomic and no-clobber, so `dest` never exists half-written.
 fn create_new_atomic(dest: &Path, body: &[u8]) -> std::io::Result<()> {
-    let mut tmp_name = dest.file_name().unwrap_or_default().to_os_string();
-    tmp_name.push(".tmp");
-    let tmp = dest.with_file_name(tmp_name);
+    let tmp = temp_sibling(dest);
     if let Err(e) = std::fs::write(&tmp, body) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
@@ -146,6 +153,12 @@ pub fn add_stage_scenes(project: String) -> Result<Vec<String>, String> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn temp_names_for_one_dest_differ() {
+        let dest = Path::new("d/a.yaml");
+        assert_ne!(temp_sibling(dest), temp_sibling(dest));
+    }
 
     fn temp_project_dir() -> std::path::PathBuf {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -293,15 +306,17 @@ mod tests {
     #[test]
     fn a_failed_write_leaves_no_file_at_the_destination() {
         let (templates, project) = scratch_with_templates();
-        std::fs::write(
-            project.join("ludion.toml"),
-            "name = \"p\"\ndefault_scene = \"scenes/main.yaml\"\n",
-        )
-        .unwrap();
-        // A directory where the temp sibling goes makes the temp write fail.
-        std::fs::create_dir_all(project.join("scenes").join("model-stage.yaml.tmp")).unwrap();
-        assert!(add_stage_scenes_from(&templates, &project).is_err());
-        assert!(!project.join("scenes").join("model-stage.yaml").exists());
+        // A regular file where the destination's parent should be makes the temp write fail.
+        let blocker = project.join("blocker");
+        std::fs::write(&blocker, "a file, not a directory").unwrap();
+        let dest = blocker.join("model-stage.yaml");
+        assert!(create_new_atomic(&dest, b"body").is_err());
+        assert!(!dest.exists());
+        assert_eq!(
+            std::fs::read_dir(&project).unwrap().count(),
+            1,
+            "no temp left"
+        );
         let _ = std::fs::remove_dir_all(templates.parent().unwrap());
     }
 

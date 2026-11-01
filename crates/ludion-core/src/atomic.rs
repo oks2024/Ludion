@@ -6,7 +6,8 @@
 //! target may hold the old bytes, the new bytes, or an empty or partial file (the rename can reach
 //! disk before the data). A writer that emits several files puts the document or record that names
 //! the others last, so a kill never leaves a document naming files that do not exist.
-//! [`copy_atomic`] does the same for a file copy.
+//! [`copy_atomic`] does the same for a file copy, and [`create_new_atomic`] is the no-clobber
+//! variant that refuses an existing target.
 //!
 //! # Example
 //!
@@ -79,6 +80,44 @@ pub fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+/// Publishes `bytes` at `path` only if `path` is absent: a [`temp_sibling`] is written whole, then
+/// hard-linked into place, so the check is the write itself and `path` never exists half-written.
+/// Creates missing parent directories. An existing `path` is `ErrorKind::AlreadyExists` and keeps
+/// its bytes; the temp is always removed.
+///
+/// ```
+/// use ludion_core::atomic::create_new_atomic;
+///
+/// let dir = std::env::temp_dir().join(format!("ludion-create-doc-{}", std::process::id()));
+/// let target = dir.join("out.yaml");
+/// create_new_atomic(&target, "a: 1\n").unwrap();
+/// let again = create_new_atomic(&target, "a: 2\n").unwrap_err();
+/// assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists);
+/// assert_eq!(std::fs::read_to_string(&target).unwrap(), "a: 1\n");
+/// std::fs::remove_dir_all(&dir).unwrap();
+/// ```
+pub fn create_new_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    let temp = temp_sibling(path);
+    if let Err(error) = fs::write(&temp, bytes) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    let linked = match fs::hard_link(&temp, path) {
+        Err(error) if error.kind() == io::ErrorKind::Unsupported && !path.exists() => {
+            fs::rename(&temp, path)
+        }
+        other => other,
+    };
+    let _ = fs::remove_file(&temp);
+    linked
 }
 
 /// Writes several files, not all-or-nothing: parents are created and every temp is written before any
@@ -278,6 +317,18 @@ mod tests {
         let dir = scratch("copymissing");
         assert!(copy_atomic(&dir.join("absent"), &dir.join("t.txt")).is_err());
         assert_eq!(entries(&dir), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn create_new_refuses_an_existing_target_and_leaves_no_temp() {
+        let dir = scratch("create-new");
+        let target = dir.join("sub/a.txt");
+        create_new_atomic(&target, "first").unwrap();
+        let error = create_new_atomic(&target, "second").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "first");
+        assert_eq!(entries(&dir.join("sub")), 1);
         fs::remove_dir_all(&dir).unwrap();
     }
 

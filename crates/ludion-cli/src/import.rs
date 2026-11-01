@@ -21,7 +21,7 @@ use std::process::ExitCode;
 
 use crate::diagnostic;
 use ludion_assets::Image;
-use ludion_core::atomic::write_atomic;
+use ludion_core::atomic::create_new_atomic;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_import::Import;
@@ -104,29 +104,31 @@ fn run_png(input: &Path, out: &Path, quantize: Option<usize>, name: Option<Strin
     } else {
         out.to_path_buf()
     };
-    if out_path.exists() {
-        diagnostic::print(
-            &Diagnostic::new(
-                code::CREATE_TARGET_EXISTS,
-                format!(
-                    "`{}` already exists; `import` never overwrites a sprite document",
-                    out_path.display()
-                ),
-            )
-            .with_help("the document is editable: remove it to re-import, or pass another `--out`"),
-        );
-        return ExitCode::FAILURE;
-    }
     let text = ludion_scene::emit_sprite(&imported.doc);
-    if let Err(error) = write_atomic(&out_path, &text) {
-        eprintln!(
-            "{}",
-            Diagnostic::new(
-                code::OUTPUT_IO,
-                format!("could not write `{}`: {error}", out_path.display()),
-            )
-            .with_help("check the destination is writable")
-        );
+    if let Err(error) = create_new_atomic(&out_path, &text) {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            diagnostic::print(
+                &Diagnostic::new(
+                    code::CREATE_TARGET_EXISTS,
+                    format!(
+                        "`{}` already exists; `import` never overwrites a sprite document",
+                        out_path.display()
+                    ),
+                )
+                .with_help(
+                    "the document is editable: remove it to re-import, or pass another `--out`",
+                ),
+            );
+        } else {
+            eprintln!(
+                "{}",
+                Diagnostic::new(
+                    code::OUTPUT_IO,
+                    format!("could not write `{}`: {error}", out_path.display()),
+                )
+                .with_help("check the destination is writable")
+            );
+        }
         return ExitCode::FAILURE;
     }
 
@@ -251,6 +253,25 @@ pub(crate) fn import_gltf(
         clip.doc.generated_from = Some(source.clone());
     }
     validate_clips(&import)?;
+
+    let stale = import.stale_outputs(out);
+    if !stale.is_empty() {
+        return Err(vec![
+            Diagnostic::new(
+                code::CREATE_TARGET_EXISTS,
+                format!(
+                    "`{}` holds files this import would not write: {}",
+                    out.display(),
+                    stale.join(", ")
+                ),
+            )
+            .with_help(format!(
+                "a re-import must not leave stale files beside the new tree: delete `{}` and \
+                 import again (an `[[import]]` table under `ludion sync` does this for you)",
+                out.display()
+            )),
+        ]);
+    }
 
     import
         .write(out, &prefab_yaml)

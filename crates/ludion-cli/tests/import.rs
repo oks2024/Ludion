@@ -161,6 +161,46 @@ fn textured_import_reproduces_committed_tree_in_default_mode() {
     }
 }
 
+/// A re-import over a tree holding a file the new import would not write is `L0030` naming it and
+/// leaves the tree untouched; an identical re-import over its own output still succeeds.
+#[test]
+fn a_reimport_over_stale_outputs_is_refused_and_an_identical_one_succeeds() {
+    let (out, first) = import_beside_copy(
+        "import_stale_outputs",
+        &textured_root().join("scene.gltf"),
+        &[],
+    );
+    assert!(first.status.success());
+    let input = out.parent().unwrap().join("scene.gltf");
+    let reimport = || {
+        run_ludion(&[
+            "import",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+    };
+    assert!(
+        reimport().status.success(),
+        "an identical re-import over its own output"
+    );
+
+    let stale = out.join("meshes/old.mesh.yaml");
+    std::fs::write(&stale, "stale").unwrap();
+    let before = collect_files(&out);
+    let refused = reimport();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success());
+    assert!(stderr.contains("L0030"), "{stderr}");
+    assert!(stderr.contains("meshes/old.mesh.yaml"), "{stderr}");
+    let mut after = collect_files(&out);
+    let mut before = before;
+    before.sort();
+    after.sort();
+    assert_eq!(before, after, "the refusal wrote nothing");
+    assert_eq!(std::fs::read_to_string(&stale).unwrap(), "stale");
+}
+
 /// The tinted-emissive fixture (`examples/import-tinted-emissive/`) imports in **default mode** with
 /// no warning and reproduces its committed tree byte-for-byte: a baked map per tinted material, none
 /// for the proportional control.
