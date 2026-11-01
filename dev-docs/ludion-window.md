@@ -25,6 +25,10 @@ frame-streaming wire format itself to `frame-streaming`, the protocol/`Client` S
 - `crates/ludion-window/src/gpu.rs` — `Presenter`: the wgpu surface (device via
   `Gpu::request_for_surface`), the shared `ludion_render_graph::blit` of the latest decoded frame,
   resize/reconfigure handling; a device fault after a submit is fatal and ends the viewer.
+- `crates/ludion-window/src/host_input.rs` — `HostInput`, the one router both native window hosts
+  (this viewer and the facade's in-process window) call for keyboard, mouse and focus events, so a
+  session recorded through either window carries the same `input.inject` events. `keymap`, `mouse`
+  and `gamepad` stay public as its building blocks.
 - `crates/ludion-window/src/keymap.rs` — physical keycode → the wire's `input.inject` key-event
   shape (`KeyMapper::map`). Stateful only to fold left/right Shift/Ctrl/Alt into one key;
   `release_modifiers` frees held ones on window focus loss.
@@ -41,8 +45,8 @@ frame-streaming wire format itself to `frame-streaming`, the protocol/`Client` S
   in-process through the facade's `host_scene`, like every other windowed game.
 - `crates/ludion-cli/tests/window_reconnect.rs` — drives `run_frame_stream` against a real `ludion
   serve` the test kills and restarts, headlessly (no window opened).
-- `crates/ludion/src/present.rs` — the facade's in-process windowed shell, which reuses this crate's
-  `keymap`/`mouse`/`gamepad` builders but none of its transport: `run --window` and `serve --window`
+- `crates/ludion/src/present.rs` — the facade's in-process windowed shell, which routes input through this
+  crate's `HostInput` (and reuses `gamepad`) but none of its transport: `run --window` and `serve --window`
   present the engine's own frames rather than attaching a viewer. The facade's dependency on this
   crate sits behind its default `window` feature; a build without it refuses `--window` up front
   (`L0018`) instead of hosting headless unasked.
@@ -124,9 +128,8 @@ goldens already cover; this crate's own tests are headless (`run_frame_stream` d
   does. If the picture looks wrong, suspect the frame-streaming/encode path (`frame-streaming`,
   `ludion-renderer`) before suspecting this crate's presenter.
 - **All input — keyboard, mouse, *and* gamepad — is recorded as ordinary `input.inject`,
-  indistinguishably from any other client's injected input.** The input thread's doc comment notes
-  it was generalized in Phase 13 Wave 4 from an earlier keyboard-only `WireKey` channel; today the
-  thread only ever sees pre-built `Value`s and doesn't know or care which device produced them. A
+  indistinguishably from any other client's injected input.** The input thread only ever sees
+  pre-built `Value`s and doesn't know or care which device produced them. A
   session recorded through the window replays identically to one recorded through any other client
   that calls `input.inject` — there is nothing window-specific in the recorded `.lrp`.
 - **`ludion dev --window`'s child is always headless.** Passing `--window` through to the
@@ -145,3 +148,6 @@ goldens already cover; this crate's own tests are headless (`run_frame_stream` d
 - **Multi-pad setups only ever drive the first-seen connected gamepad.** A second pad's events are
   silently ignored (`gamepad.rs`); this is a recorded scope limit (`Plan/phase-13-input.md`), not a
   bug to chase.
+- **AltGr on Windows.** The OS reports AltGr as AltRight plus a ControlLeft press, so the fold sends
+  `Ctrl` and `Alt` down together. A game should not bind a Ctrl chord that a non-US layout types as
+  AltGr.

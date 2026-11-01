@@ -54,7 +54,7 @@ use ludion_window::chrome::{
     self, CursorAutoHide, ExtentDebounce, FullscreenChord, HostPlatform, KeyRoute, dev_title,
     game_title,
 };
-use ludion_window::keymap::KeyMapper;
+use ludion_window::host_input::HostInput;
 use ludion_window::mouse;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -157,8 +157,7 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
         proxy,
         running: running.clone(),
         input_tx,
-        keys: KeyMapper::default(),
-        mouse_buttons: mouse::MouseButtons::default(),
+        input: HostInput::default(),
         input_rx: Some(input_rx),
         internal_stop_rx: Some(internal_stop_rx),
         window: None,
@@ -256,10 +255,8 @@ struct App {
     proxy: EventLoopProxy<HostEvent>,
     running: Arc<AtomicBool>,
     input_tx: Sender<serde_json::Value>,
-    /// Folds left/right modifiers into one engine key and remembers every key forwarded as down.
-    keys: KeyMapper,
-    /// Remembers every mouse button forwarded as down.
-    mouse_buttons: mouse::MouseButtons,
+    /// Maps keyboard, mouse and focus events to `input.inject` events.
+    input: HostInput,
     /// Handed to the forwarder thread on `resumed`.
     input_rx: Option<Receiver<serde_json::Value>>,
     /// Handed to the waiter thread on `resumed`.
@@ -403,30 +400,50 @@ impl App {
         }
     }
 
+    /// Routes a device event to the forwarder channel through the shared router.
+    fn route_input(&mut self, event: &WindowEvent) {
+        let (embedded, surface_size) = (self.embedded.as_ref(), self.surface_size);
+        // Best-effort: if the forwarder has gone, the game just stops receiving input — never a
+        // reason to tear the window down.
+        let input_tx = &self.input_tx;
+        self.input.route(
+            event,
+            |x, y| map_cursor(embedded, surface_size, x, y),
+            |value| {
+                let _ = input_tx.send(value);
+            },
+        );
+    }
+
     /// Records a fatal diagnostic and exits the loop. Only safe while the boot does not yet hold
     /// the surface; a runtime fault goes through [`request_stop`](Self::request_stop) instead.
     fn fail(&mut self, event_loop: &ActiveEventLoop, diagnostic: Diagnostic) {
         self.record_fatal(diagnostic);
         event_loop.exit();
     }
+}
 
-    /// Maps a cursor position in window-surface physical pixels to render-target pixels, against the
-    /// window's current size and the size of the frame the render thread last presented — the same
-    /// two dimensions the blit letterboxes against. `None` before a surface is attached or before
-    /// any frame has been presented, which is exactly when a cursor position has nowhere to land.
-    fn map_cursor(&self, x: f32, y: f32) -> Option<[f32; 2]> {
-        let present_size = self.embedded.as_ref()?.present_size()?;
-        let (frame_width, frame_height) = present_size.frame_size()?;
-        let (surface_width, surface_height) = self.surface_size;
-        mouse::map_cursor_to_frame(
-            (x, y),
-            frame_width,
-            frame_height,
-            surface_width,
-            surface_height,
-            present_size.rect(),
-        )
-    }
+/// Maps a cursor position in window-surface physical pixels to render-target pixels, against the
+/// window's current size and the size of the frame the render thread last presented — the same
+/// two dimensions the blit letterboxes against. `None` before a surface is attached or before
+/// any frame has been presented, which is exactly when a cursor position has nowhere to land.
+fn map_cursor(
+    embedded: Option<&Embedded>,
+    surface_size: (u32, u32),
+    x: f32,
+    y: f32,
+) -> Option<[f32; 2]> {
+    let present_size = embedded?.present_size()?;
+    let (frame_width, frame_height) = present_size.frame_size()?;
+    let (surface_width, surface_height) = surface_size;
+    mouse::map_cursor_to_frame(
+        (x, y),
+        frame_width,
+        frame_height,
+        surface_width,
+        surface_height,
+        present_size.rect(),
+    )
 }
 
 impl ApplicationHandler<HostEvent> for App {
@@ -502,17 +519,17 @@ impl ApplicationHandler<HostEvent> for App {
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::KeyboardInput {
-                event,
+                event: ref key,
                 is_synthetic: false,
                 ..
             } => {
-                if let PhysicalKey::Code(key_code) = event.physical_key {
+                if let PhysicalKey::Code(key_code) = key.physical_key {
                     match self.chord.on_key(
                         self.platform,
                         key_code,
                         self.modifiers,
-                        event.state,
-                        event.repeat,
+                        key.state,
+                        key.repeat,
                     ) {
                         KeyRoute::Toggle => {
                             if let Some(window) = &self.window {
@@ -529,43 +546,18 @@ impl ApplicationHandler<HostEvent> for App {
                         KeyRoute::Forward => {}
                     }
                 }
-                if let PhysicalKey::Code(key_code) = event.physical_key
-                    && let Some(wire) = self.keys.map(key_code, event.state, event.repeat)
-                {
-                    // Best-effort: if the forwarder has gone, the game just stops receiving keys —
-                    // never a reason to tear the window down.
-                    let _ = self.input_tx.send(wire.to_value());
-                }
+                self.route_input(&event);
             }
-            // A key or button let go while another window had focus never gets a release.
-            WindowEvent::Focused(false) => {
-                for wire in self.keys.release_held() {
-                    let _ = self.input_tx.send(wire.to_value());
-                }
-                for value in self.mouse_buttons.release_held() {
-                    let _ = self.input_tx.send(value);
-                }
-            }
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::CursorMoved { .. } => {
                 if let Some(cursor) = &mut self.cursor
                     && let Some(visible) = cursor.on_motion(Instant::now())
                     && let Some(window) = &self.window
                 {
                     window.set_cursor_visible(visible);
                 }
-                if let Some(pos) = self.map_cursor(position.x as f32, position.y as f32) {
-                    let _ = self.input_tx.send(mouse::mouse_move_event(pos));
-                }
+                self.route_input(&event);
             }
-            WindowEvent::MouseInput { state, button, .. } => {
-                if let Some(value) = self.mouse_buttons.map(button, state) {
-                    let _ = self.input_tx.send(value);
-                }
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let _ = self.input_tx.send(mouse::mouse_wheel_event(delta));
-            }
-            _ => {}
+            event => self.route_input(&event),
         }
     }
 }

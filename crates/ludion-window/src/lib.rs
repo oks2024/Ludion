@@ -46,10 +46,11 @@
 //! lost connection (the reconnect budget exhausted, or a fatal schema mismatch) ends it too, with the
 //! diagnostic. Every thread is then joined with bounded waits before [`run`] returns.
 //!
-//! The `keymap`, `mouse`, and `gamepad` modules and [`spawn_gamepad_thread`] are public because the
-//! `ludion` facade's in-process present host reuses these device-event → `input.inject`-event
-//! builders directly, without going through a `Client` — so a session captured through either window
-//! records the same `input.inject` events regardless of which host produced them. The transport
+//! The [`host_input`] router is public because the `ludion` facade's in-process present host calls
+//! the same device-event → `input.inject`-event path directly, without going through a `Client` — so
+//! a session captured through either window records the same `input.inject` events regardless of
+//! which host produced them. The `keymap`, `mouse` and `gamepad` modules and
+//! [`spawn_gamepad_thread`] stay public as its building blocks. The transport
 //! (this crate's stream/input threads over [`ludion_client`]) stays private: it is this crate's own
 //! peer-client concern, not something a different host would want.
 //!
@@ -74,6 +75,7 @@ pub mod chrome;
 mod frame;
 pub mod gamepad;
 mod gpu;
+pub mod host_input;
 pub mod keymap;
 pub mod mouse;
 mod reconnect;
@@ -94,15 +96,13 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 pub use crate::frame::DecodedFrame;
 pub use crate::reconnect::{StreamSink, run_frame_stream};
 
 use crate::gpu::{Presenter, RenderError};
-use crate::keymap::KeyMapper;
-use crate::mouse::MouseButtons;
+use crate::host_input::HostInput;
 
 /// How the streamed frames are decoded to RGBA and handed between threads: a latest-wins slot that
 /// the stream thread replaces and the main thread reads. `Arc` so a redraw clones only a pointer,
@@ -182,8 +182,7 @@ pub fn run(options: WindowOptions, stop: Receiver<()>) -> Result<(), Diagnostic>
         options,
         slot,
         input_tx,
-        keys: KeyMapper::default(),
-        mouse: MouseButtons::default(),
+        input: HostInput::default(),
         presenter: None,
         window: None,
         fatal: None,
@@ -233,10 +232,8 @@ struct App {
     options: WindowOptions,
     slot: FrameSlot,
     input_tx: Sender<serde_json::Value>,
-    /// Folds left/right modifiers into one engine key and remembers every key forwarded as down.
-    keys: KeyMapper,
-    /// Remembers every mouse button forwarded as down.
-    mouse: MouseButtons,
+    /// Maps keyboard, mouse and focus events to `input.inject` events.
+    input: HostInput,
     presenter: Option<Presenter>,
     window: Option<Arc<Window>>,
     /// Set when a fatal error (lost connection, out-of-memory) ends the loop; becomes `run`'s `Err`.
@@ -279,24 +276,23 @@ impl App {
             Err(RenderError::Fatal(diagnostic)) => self.fail(event_loop, diagnostic),
         }
     }
+}
 
-    /// Maps a cursor position in window-surface physical pixels to render-target pixels, against the
-    /// presenter's current surface size and the latest decoded frame's size — the same two
-    /// dimensions [`redraw`](App::redraw) letterboxes against. `None` before a window/presenter exists
-    /// or before any frame has been decoded yet.
-    fn map_cursor(&self, x: f32, y: f32) -> Option<[f32; 2]> {
-        let presenter = self.presenter.as_ref()?;
-        let (surface_w, surface_h) = presenter.size();
-        let frame = self.slot.lock().expect("frame slot poisoned").clone()?;
-        mouse::map_cursor_to_frame(
-            (x, y),
-            frame.width,
-            frame.height,
-            surface_w,
-            surface_h,
-            None,
-        )
-    }
+/// Maps a cursor position in window-surface physical pixels to render-target pixels, against the
+/// presenter's current surface size and the latest decoded frame's size — the same two dimensions
+/// [`App::redraw`] letterboxes against. `None` before a window/presenter exists or before any frame
+/// has been decoded yet.
+fn map_cursor(presenter: Option<&Presenter>, slot: &FrameSlot, x: f32, y: f32) -> Option<[f32; 2]> {
+    let (surface_w, surface_h) = presenter?.size();
+    let frame = slot.lock().expect("frame slot poisoned").clone()?;
+    mouse::map_cursor_to_frame(
+        (x, y),
+        frame.width,
+        frame.height,
+        surface_w,
+        surface_h,
+        None,
+    )
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -366,42 +362,15 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
-            WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } => {
-                if let PhysicalKey::Code(key_code) = event.physical_key
-                    && let Some(wire) = self.keys.map(key_code, event.state, event.repeat)
-                {
-                    // Best-effort: if the input thread has gone, the game just stops receiving
-                    // keys — never a reason to tear the window down.
-                    let _ = self.input_tx.send(wire.to_value());
-                }
-            }
-            // A key or button let go while another window had focus never gets a release.
-            WindowEvent::Focused(false) => {
-                for wire in self.keys.release_held() {
-                    let _ = self.input_tx.send(wire.to_value());
-                }
-                for value in self.mouse.release_held() {
+            event => self.input.route(
+                &event,
+                |x, y| map_cursor(self.presenter.as_ref(), &self.slot, x, y),
+                // Best-effort: if the input thread has gone, the game just stops receiving
+                // input — never a reason to tear the window down.
+                |value| {
                     let _ = self.input_tx.send(value);
-                }
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                if let Some(pos) = self.map_cursor(position.x as f32, position.y as f32) {
-                    let _ = self.input_tx.send(mouse::mouse_move_event(pos));
-                }
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                if let Some(value) = self.mouse.map(button, state) {
-                    let _ = self.input_tx.send(value);
-                }
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let _ = self.input_tx.send(mouse::mouse_wheel_event(delta));
-            }
-            _ => {}
+                },
+            ),
         }
     }
 }
@@ -456,8 +425,8 @@ impl StreamSink for WindowStreamSink {
 
 /// The input thread: forward every mapped device event (keyboard, mouse, gamepad — all pre-built
 /// `input.inject` event `Value`s from the one channel) as `input.inject` commands, until the channel
-/// closes. Generalized in Phase 13 Wave 4 from a keyboard-only `WireKey` channel: this thread no
-/// longer knows or cares which device an event came from, it only wraps the already-built `Value`.
+/// closes. This thread does not know which device an event came from; it only wraps the
+/// already-built `Value`.
 ///
 /// It survives a lost connection: a dropped socket just clears the client, and each subsequent event
 /// lazily reconnects (a still-down server or a schema mismatch simply drops that event — the stream

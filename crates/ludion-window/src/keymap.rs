@@ -27,9 +27,7 @@ pub struct WireKey {
 }
 
 impl WireKey {
-    /// The `input.inject` event `Value` for this edge — the point where the input thread's channel
-    /// (generalized in Phase 13 Wave 4 to carry any device's pre-built event `Value`) stops caring
-    /// that this edge came from a keyboard at all.
+    /// The `input.inject` event `Value` for this edge.
     pub fn to_value(self) -> serde_json::Value {
         serde_json::json!({ "kind": self.kind, "key": self.key })
     }
