@@ -25,7 +25,7 @@ so two runs of one frame agree exactly: which local lights the shadow budget gra
 (`ludion docs local-shadows`) and the sun's fitted cascades with their casters (`ludion docs sun-cascades`).
 
 **The `load` section.** A report may also carry `LoadProfile`: wall ms for the scene's load, split into
-`scene`, `mesh`, `texture` and `other` phases, the render phases `voxelize`, `renderer_init`,
+`scene`, `docs`, `mesh`, `texture` and `other` phases, the render phases `voxelize`, `renderer_init`,
 `gpu_upload`, `gi_bake` and `first_frame`, plus a `total`, and per asset kind a decoded / reused /
 bytes-read counter row (all eight kinds, fixed order). Offline only, like `cluster`: the offline driver
 attaches a `LoadObserver` before the scene loads and closes the measurement with one rendered first

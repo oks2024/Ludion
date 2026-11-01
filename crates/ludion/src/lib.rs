@@ -1438,6 +1438,7 @@ fn render_scene_out(
 fn load_summary(load: &ludion_protocol::perf::LoadProfile) -> String {
     let phases = [
         ("scene", Some(load.scene_ms)),
+        ("docs", Some(load.docs_ms)),
         ("mesh", Some(load.mesh_ms)),
         ("texture", Some(load.texture_ms)),
         ("other", Some(load.other_ms)),
@@ -2969,7 +2970,8 @@ entities:
             bytes_read: 0,
         };
         let mut load = LoadProfile {
-            scene_ms: 410.4,
+            scene_ms: 290.4,
+            docs_ms: 120.0,
             mesh_ms: 830.0,
             texture_ms: 1050.0,
             other_ms: 12.0,
@@ -2988,7 +2990,7 @@ entities:
         };
         assert_eq!(
             load_summary(&load),
-            "load 5712 ms: scene 410, mesh 830, texture 1050, other 12, voxelize 300, \
+            "load 5712 ms: scene 290, docs 120, mesh 830, texture 1050, other 12, voxelize 300, \
              renderer init 250, gpu upload 1800, gi bake 600, first frame 400, \
              unattributed 60 (1%); decoded 235 texture, 79 mesh"
         );
@@ -3007,7 +3009,7 @@ entities:
         load.assets.clear();
         assert_eq!(
             load_summary(&load),
-            "load 5712 ms: scene 410, mesh 830, texture 1050, other 12, voxelize 300, \
+            "load 5712 ms: scene 290, docs 120, mesh 830, texture 1050, other 12, voxelize 300, \
              first frame 400, unattributed 2710 (47%)"
         );
     }

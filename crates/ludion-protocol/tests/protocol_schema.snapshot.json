@@ -3993,6 +3993,11 @@
             },
             "type": "array"
           },
+          "docs_ms": {
+            "description": "Time spent walking the content root for data-docs and validating them, on the measured scene load.",
+            "format": "double",
+            "type": "number"
+          },
           "first_frame_ms": {
             "description": "Time to the first rendered frame; absent until the renderer reports it.",
             "format": "double",
@@ -4044,7 +4049,7 @@
             ]
           },
           "scene_ms": {
-            "description": "Time spent instantiating the scene document into a world, outside any asset decode.",
+            "description": "Time spent instantiating the scene document into a world, outside the data-doc walk\nand any asset decode.",
             "format": "double",
             "type": "number"
           },
@@ -4069,6 +4074,7 @@
         },
         "required": [
           "scene_ms",
+          "docs_ms",
           "mesh_ms",
           "texture_ms",
           "other_ms",
@@ -6309,6 +6315,11 @@
             },
             "type": "array"
           },
+          "docs_ms": {
+            "description": "Time spent walking the content root for data-docs and validating them, on the measured scene load.",
+            "format": "double",
+            "type": "number"
+          },
           "first_frame_ms": {
             "description": "Time to the first rendered frame; absent until the renderer reports it.",
             "format": "double",
@@ -6360,7 +6371,7 @@
             ]
           },
           "scene_ms": {
-            "description": "Time spent instantiating the scene document into a world, outside any asset decode.",
+            "description": "Time spent instantiating the scene document into a world, outside the data-doc walk\nand any asset decode.",
             "format": "double",
             "type": "number"
           },
@@ -6385,6 +6396,7 @@
         },
         "required": [
           "scene_ms",
+          "docs_ms",
           "mesh_ms",
           "texture_ms",
           "other_ms",

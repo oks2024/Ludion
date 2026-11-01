@@ -1004,6 +1004,12 @@ impl Engine {
             .set_observer(Some(Box::new(crate::profile::LoadClock::default())));
     }
 
+    /// Attaches `observer` as the load observer.
+    #[cfg(test)]
+    pub(crate) fn set_load_observer(&mut self, observer: Box<dyn LoadObserver>) {
+        self.asset_cache.set_observer(Some(observer));
+    }
+
     /// Whether a load observer is attached.
     pub(crate) fn load_observed(&self) -> bool {
         self.asset_cache.observed()
@@ -3434,7 +3440,10 @@ impl Engine {
         // The data-doc stores are engine configuration derived from committed content, not world
         // state, so they survive the reset. A malformed doc fails the load exactly as a bad scene
         // does — before anything on the engine has changed.
-        let docs = self.prepare_docs_for(&mut world, &[])?;
+        self.load_begin(LoadPhase::Docs);
+        let docs = self.prepare_docs_for(&mut world, &[]);
+        self.load_end(LoadPhase::Docs);
+        let docs = docs?;
         let seed = scene.seed.unwrap_or(0);
         let count = world.entity_count() as u32;
         // Loading a scene resets the world, but the systems must survive it (they are engine

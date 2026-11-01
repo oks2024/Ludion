@@ -16,6 +16,8 @@ use ludion_renderer::{FrameObserver, FramePhase};
 pub(crate) enum LoadPhase {
     /// Instantiating the scene document into a world.
     Scene,
+    /// Walking the content root for data-docs and validating them.
+    Docs,
     /// Decoding a mesh document.
     Mesh,
     /// Decoding a texture file.

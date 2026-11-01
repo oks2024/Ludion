@@ -3058,6 +3058,10 @@ export interface LoadProfile {
    */
   assets: AssetLoadCounters[];
   /**
+   * Time spent walking the content root for data-docs and validating them, on the measured scene load.
+   */
+  docs_ms: number;
+  /**
    * Time to the first rendered frame; absent until the renderer reports it.
    */
   first_frame_ms?: number | null;
@@ -3088,7 +3092,8 @@ export interface LoadProfile {
    */
   renderer_init_ms?: number | null;
   /**
-   * Time spent instantiating the scene document into a world, outside any asset decode.
+   * Time spent instantiating the scene document into a world, outside the data-doc walk
+   * and any asset decode.
    */
   scene_ms: number;
   /**

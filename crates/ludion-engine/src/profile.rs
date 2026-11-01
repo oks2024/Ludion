@@ -242,6 +242,7 @@ pub(crate) struct LoadClock {
     stack: Vec<(LoadPhase, Instant, Duration)>,
     last_end: Option<Instant>,
     scene: Duration,
+    docs: Duration,
     mesh: Duration,
     texture: Duration,
     other: Duration,
@@ -277,7 +278,11 @@ impl LoadClock {
             LoadPhase::GpuUpload => Some(&mut self.gpu_upload),
             LoadPhase::GiBake => Some(&mut self.gi_bake),
             LoadPhase::ProbeBake => Some(&mut self.probe_bake),
-            LoadPhase::Scene | LoadPhase::Mesh | LoadPhase::Texture | LoadPhase::Other => None,
+            LoadPhase::Scene
+            | LoadPhase::Docs
+            | LoadPhase::Mesh
+            | LoadPhase::Texture
+            | LoadPhase::Other => None,
         }
     }
 
@@ -285,6 +290,7 @@ impl LoadClock {
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         LoadProfile {
             scene_ms: ms(self.scene),
+            docs_ms: ms(self.docs),
             mesh_ms: ms(self.mesh),
             texture_ms: ms(self.texture),
             other_ms: ms(self.other),
@@ -364,6 +370,7 @@ impl LoadObserver for LoadClock {
         let exclusive = elapsed.saturating_sub(child);
         match phase {
             LoadPhase::Scene => self.scene += exclusive,
+            LoadPhase::Docs => self.docs += exclusive,
             LoadPhase::Mesh => self.mesh += exclusive,
             LoadPhase::Texture => self.texture += exclusive,
             LoadPhase::Other => self.other += exclusive,
@@ -1710,6 +1717,7 @@ mod tests {
         observed.load_inline_scene(SCENE).unwrap();
         let load = finish_load(&mut observed).expect("an observed load reports");
         assert!(load.scene_ms.is_finite() && load.scene_ms >= 0.0);
+        assert!(load.docs_ms.is_finite() && load.docs_ms >= 0.0);
         let mut observer = TimingObserver::default();
         for _ in 0..50 {
             observer.frame.clear();
@@ -2185,6 +2193,7 @@ entities:
         };
         assert!(first_frame >= 0.0 && init >= 0.0 && upload >= 0.0);
         let phases = load.scene_ms
+            + load.docs_ms
             + load.mesh_ms
             + load.texture_ms
             + load.other_ms
@@ -2932,6 +2941,7 @@ entities:
         ProfileReport {
             load: Some(LoadProfile {
                 scene_ms: 0.0,
+                docs_ms: 0.0,
                 mesh_ms: 0.0,
                 texture_ms: 0.0,
                 other_ms: 0.0,
@@ -3753,6 +3763,72 @@ entities:
         let errors = profile_engine(&mut engine, "inline".into(), 0, 1)
             .expect_err("a zero-frame profile has no column to reduce");
         assert_eq!(errors[0].code, code::REPLAY_FRAME_WINDOW);
+    }
+
+    /// Logs each load span's begin (`true`) and end (`false`).
+    struct SpanLog(std::sync::Arc<std::sync::Mutex<Vec<(bool, LoadPhase)>>>);
+
+    impl LoadObserver for SpanLog {
+        fn begin(&mut self, phase: LoadPhase) {
+            self.0.lock().unwrap().push((true, phase));
+        }
+        fn end(&mut self, phase: LoadPhase) {
+            self.0.lock().unwrap().push((false, phase));
+        }
+        fn decoded(&mut self, _: LoadKind, _: &str, _: u64) {}
+        fn reused(&mut self, _: LoadKind, _: &str) {}
+        fn cooked(&mut self, _: LoadKind, _: &str, _: u64) {}
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
+    struct Gadget {
+        power: f32,
+    }
+
+    #[test]
+    fn an_observed_scene_load_brackets_the_doc_walk_inside_the_scene_phase() {
+        let dir = scratch("docs-span");
+        let doc = dir.join("gadget.yaml");
+        std::fs::write(&doc, "format: 1\nkind: gadget\npower: 1.0\n").unwrap();
+        let mut engine = Engine::builder()
+            .doc_kind::<Gadget>("gadget")
+            .project_root(&dir)
+            .build()
+            .unwrap();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        engine.set_load_observer(Box::new(SpanLog(log.clone())));
+
+        engine
+            .load_inline_scene("format: 1\nentities: []\n")
+            .unwrap();
+        let spans = log.lock().unwrap().clone();
+        assert_eq!(
+            spans[..3],
+            [
+                (true, LoadPhase::Scene),
+                (true, LoadPhase::Docs),
+                (false, LoadPhase::Docs)
+            ]
+        );
+        assert_eq!(spans.last(), Some(&(false, LoadPhase::Scene)));
+
+        // A doc broken after boot fails the walk; the Docs span still closes inside Scene.
+        std::fs::write(&doc, "format: 1\nkind: gadget\npower: not-a-number\n").unwrap();
+        log.lock().unwrap().clear();
+        engine
+            .load_inline_scene("format: 1\nentities: []\n")
+            .expect_err("the walk rejects the malformed doc");
+        let spans = log.lock().unwrap().clone();
+        let end_docs = spans
+            .iter()
+            .position(|s| *s == (false, LoadPhase::Docs))
+            .expect("Docs is closed on the error path");
+        let end_scene = spans
+            .iter()
+            .position(|s| *s == (false, LoadPhase::Scene))
+            .expect("Scene is closed on the error path");
+        assert!(end_docs < end_scene, "{spans:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A scratch directory holding the scenes a recording loads.

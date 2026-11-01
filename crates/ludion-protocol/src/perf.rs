@@ -371,8 +371,11 @@ pub struct SunCascadeSliceProfile {
 /// change in them is a change in what gets decoded rather than noise.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LoadProfile {
-    /// Time spent instantiating the scene document into a world, outside any asset decode.
+    /// Time spent instantiating the scene document into a world, outside the data-doc walk
+    /// and any asset decode.
     pub scene_ms: f64,
+    /// Time spent walking the content root for data-docs and validating them, on the measured scene load.
+    pub docs_ms: f64,
     /// Time spent decoding mesh documents (their maps count in `texture_ms`).
     pub mesh_ms: f64,
     /// Time spent decoding textures: loose sprite textures and mesh maps alike.
@@ -687,6 +690,7 @@ mod tests {
         let mut report = window().into_report("scene".to_string(), false);
         report.load = Some(LoadProfile {
             scene_ms: 1.0,
+            docs_ms: 0.25,
             mesh_ms: 2.0,
             texture_ms: 3.0,
             other_ms: 0.5,
@@ -706,6 +710,7 @@ mod tests {
             }],
         });
         let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["load"]["docs_ms"], 0.25);
         assert!(json["load"]["gpu_upload_ms"].is_null());
         assert!(json["load"].get("probe_bake_ms").is_none());
         assert_eq!(
