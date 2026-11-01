@@ -266,27 +266,55 @@ pub(crate) fn peek_kind_checked(source: &str) -> Result<Option<String>, Diagnost
         }))
 }
 
-/// A textual pre-check for [`peek_kind_checked`]: `false` only when no line of `source` could be a
-/// top-level `kind` key, so the full parse can be skipped. Never `false` for a document whose
-/// `peek_kind_checked` is `Ok(Some(_))`; `true` for anything it cannot rule out.
+/// What a textual scan says about a document's top-level `kind` — see [`sniff_kind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindSniff<'a> {
+    /// No line could be a top-level `kind` key: the full peek would answer `Ok(None)` or `Err`.
+    Absent,
+    /// The one top-level `kind` key, decoded: the full peek answers `Ok(Some(k))` or `Err`.
+    Kind(&'a str),
+    /// The scan cannot decide: full-parse.
+    Undecided,
+}
+
+/// A textual pre-check for [`peek_kind_checked`]: decides a document's top-level `kind` without the
+/// strict-YAML parse whenever the text is plain enough to read, and says [`KindSniff::Undecided`]
+/// otherwise. See the public wrapper for the contract.
 ///
 /// The root block mapping's keys all sit at the indentation of the first content line (blank,
 /// comment, `%` directive and bare `---`/`...` marker lines are not content), so only lines at that
-/// indentation or less are candidates. A candidate is `true` when it spells the key as plain
-/// `kind`, `"kind"` or `'kind'` followed by optional spaces/tabs and `:`, or when it starts in a
-/// way this scan does not decode: `?` (an explicit key), `&`/`!`/`*` (node properties, an alias), a
-/// double-quoted key with a `\` escape or no closing quote, or a `---`/`...` marker with content
-/// after it. `\n`, `\r\n` and bare `\r` all break lines; a leading BOM is ignored; a tab never
-/// counts as indentation. A `kind:` inside a comment or nested under another key is `false`.
-pub(crate) fn may_declare_kind(source: &str) -> bool {
+/// indentation or less are candidates. `\n`, `\r\n` and bare `\r` all break lines; a leading BOM is
+/// ignored; a tab never counts as indentation. A key this scan does not decode (`?`, `&`/`!`/`*`, an
+/// escaped or unclosed quoted key, a marker with content) is `Undecided`. Otherwise a file with no
+/// `kind` key is `Absent`; once one is found, the scan runs to the end and a second `kind` key, a
+/// tab-led line or a quoted value that does not close on its line (a multi-line scalar could hide a
+/// `kind:`-shaped line) makes it `Undecided`. A `kind:` inside
+/// a comment or nested under another key is not a candidate.
+pub(crate) fn sniff_kind(source: &str) -> KindSniff<'_> {
     let mut root_indent = None;
+    let mut found = None;
+    let mut awaiting_continuation_check = false;
+    // Only a found `kind` makes these matter: a kind-less file is `Absent` however odd its lines.
+    let (mut saw_tab_line, mut saw_open_quote) = (false, false);
     for line in source.split(['\n', '\r']) {
         let line = line.trim_start_matches('\u{feff}');
         let indent = line.len() - line.trim_start_matches(' ').len();
         let rest = line[indent..].trim_start_matches([' ', '\t']);
-        if rest.is_empty() || rest.starts_with('#') {
+        if rest.is_empty() {
             continue;
         }
+        if awaiting_continuation_check {
+            // A scalar folds its continuation lines: the kind value is the whole scalar only when
+            // the next line cannot continue it.
+            if indent > root_indent.unwrap_or(0) || line[indent..].starts_with('\t') {
+                return KindSniff::Undecided;
+            }
+            awaiting_continuation_check = false;
+        }
+        if rest.starts_with('#') {
+            continue;
+        }
+        saw_tab_line |= line[indent..].starts_with('\t');
         if indent == 0 {
             if rest.starts_with('%') {
                 continue;
@@ -300,40 +328,178 @@ pub(crate) fn may_declare_kind(source: &str) -> bool {
                 if after.is_empty() || after.starts_with('#') {
                     continue;
                 }
-                return true;
+                return KindSniff::Undecided;
             }
         }
         if indent > *root_indent.get_or_insert(indent) {
             continue;
         }
-        if candidate_key_may_be_kind(rest) {
-            return true;
+        match classify_root_line(rest) {
+            RootLine::NotKind => {}
+            RootLine::OpenQuote => saw_open_quote = true,
+            RootLine::Undecided => return KindSniff::Undecided,
+            RootLine::Kind(value) => {
+                if found.is_some() {
+                    return KindSniff::Undecided;
+                }
+                let Some(kind) = decode_kind_value(value) else {
+                    return KindSniff::Undecided;
+                };
+                found = Some(kind);
+                awaiting_continuation_check = true;
+            }
         }
     }
-    false
+    match found {
+        None => KindSniff::Absent,
+        Some(_) if saw_tab_line || saw_open_quote => KindSniff::Undecided,
+        Some(kind) => KindSniff::Kind(kind),
+    }
 }
 
-/// Whether a candidate line (indentation stripped) could open a `kind` key — see
-/// [`may_declare_kind`].
-fn candidate_key_may_be_kind(rest: &str) -> bool {
-    let colon_follows = |after: &str| after.trim_start_matches([' ', '\t']).starts_with(':');
+/// What one root-level line (indentation stripped) is, as far as [`sniff_kind`] can tell.
+enum RootLine<'a> {
+    /// A key other than `kind`, or no key at all.
+    NotKind,
+    /// A `kind` key; the text after its `:`.
+    Kind(&'a str),
+    /// Starts in a way this scan does not decode.
+    Undecided,
+    /// A value whose quote does not close on the line: it may fold onto the following lines.
+    OpenQuote,
+}
+
+fn classify_root_line(rest: &str) -> RootLine<'_> {
     if rest.starts_with(['?', '&', '!', '*']) {
-        return true;
+        return RootLine::Undecided;
     }
-    if let Some(body) = rest.strip_prefix('"') {
-        return match body.find(['"', '\\']) {
-            Some(end) if body[end..].starts_with('"') => {
-                &body[..end] == "kind" && colon_follows(&body[end + 1..])
-            }
-            _ => true,
+    let (key, after_key) = if let Some(body) = rest.strip_prefix('"') {
+        match body.find(['"', '\\']) {
+            Some(end) if body[end..].starts_with('"') => (&body[..end], &body[end + 1..]),
+            _ => return RootLine::Undecided,
+        }
+    } else if let Some(body) = rest.strip_prefix('\'') {
+        let Some(end) = single_quote_end(body) else {
+            return RootLine::Undecided;
         };
+        (&body[..end], &body[end + 1..])
+    } else {
+        return classify_plain_key(rest);
+    };
+    match after_key.trim_start_matches([' ', '\t']).strip_prefix(':') {
+        Some(value) if key == "kind" => RootLine::Kind(value),
+        Some(value) => value_guard(value),
+        None => RootLine::NotKind,
     }
-    if let Some(body) = rest.strip_prefix('\'') {
-        return body
-            .strip_prefix("kind'")
-            .is_some_and(|after| !after.starts_with('\'') && colon_follows(after));
+}
+
+fn classify_plain_key(rest: &str) -> RootLine<'_> {
+    if let Some(after) = rest.strip_prefix("kind")
+        && let Some(value) = after.trim_start_matches([' ', '\t']).strip_prefix(':')
+    {
+        return RootLine::Kind(value);
     }
-    rest.strip_prefix("kind").is_some_and(colon_follows)
+    match value_colon(rest) {
+        Some(colon) => value_guard(&rest[colon + 1..]),
+        None => RootLine::NotKind,
+    }
+}
+
+/// Byte offset of the `'` that closes a single-quoted body (`''` is an escape), if it does.
+fn single_quote_end(body: &str) -> Option<usize> {
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' {
+            if bytes.get(i + 1) == Some(&b'\'') {
+                i += 2;
+                continue;
+            }
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Byte offset of a plain key's `:` — one followed by a space, a tab or the end of the line.
+fn value_colon(rest: &str) -> Option<usize> {
+    rest.match_indices(':')
+        .map(|(i, _)| i)
+        .find(|&i| matches!(rest.as_bytes().get(i + 1), None | Some(b' ' | b'\t')))
+}
+
+/// A non-`kind` key's value: a quote that does not close on the line may fold onto the next lines.
+fn value_guard(value: &str) -> RootLine<'_> {
+    let value = value.trim_start_matches([' ', '\t']);
+    let closes = if let Some(body) = value.strip_prefix('"') {
+        let mut chars = body.chars();
+        loop {
+            match chars.next() {
+                Some('\\') => {
+                    chars.next();
+                }
+                Some('"') => break true,
+                Some(_) => {}
+                None => break false,
+            }
+        }
+    } else if let Some(body) = value.strip_prefix('\'') {
+        single_quote_end(body).is_some()
+    } else {
+        true
+    };
+    if closes {
+        RootLine::NotKind
+    } else {
+        RootLine::OpenQuote
+    }
+}
+
+/// The `kind` scalar's string value when it is a one-line quoted scalar or a plain scalar that
+/// resolves to a string; `None` for anything this scan will not decode.
+fn decode_kind_value(value: &str) -> Option<&str> {
+    if !(value.is_empty() || value.starts_with([' ', '\t'])) {
+        return None; // `kind:mesh` is not a key
+    }
+    let value = value.trim_matches([' ', '\t']);
+    let only_comment_after = |after: &str| {
+        after.is_empty()
+            || (after.starts_with([' ', '\t'])
+                && after.trim_start_matches([' ', '\t']).starts_with('#'))
+    };
+    if let Some(body) = value.strip_prefix('"') {
+        let end = body.find('"')?;
+        return (!body[..end].contains('\\') && only_comment_after(&body[end + 1..]))
+            .then_some(&body[..end]);
+    }
+    if let Some(body) = value.strip_prefix('\'') {
+        let end = body.find('\'')?;
+        return (!body[end + 1..].starts_with('\'') && only_comment_after(&body[end + 1..]))
+            .then_some(&body[..end]);
+    }
+    if value.is_empty()
+        || value.starts_with([
+            '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '%', '@', '`',
+        ])
+    {
+        return None;
+    }
+    let comment = value
+        .match_indices('#')
+        .map(|(i, _)| i)
+        .find(|&i| value[..i].ends_with([' ', '\t']));
+    let text = comment
+        .map_or(value, |i| &value[..i])
+        .trim_end_matches([' ', '\t']);
+    if text.contains(": ") || text.contains(":\t") || text.ends_with(':') {
+        return None;
+    }
+    matches!(
+        crate::scalar::resolve_plain(text),
+        crate::scalar::Resolved::Str
+    )
+    .then_some(text)
 }
 
 /// Thin wrapper over [`peek_kind_checked`] for callers that only ever fell through to a scene
@@ -392,57 +558,112 @@ indices:
             .expect_err("a non-empty flow mapping is outside the strict subset");
     }
 
-    /// Asserts the pre-check's answer and, whenever the full reader finds a `kind`, that the
-    /// pre-check said `true` — the no-false-negative contract, checked on every case.
-    fn check_may_declare(source: &str, expected: bool) {
-        assert_eq!(may_declare_kind(source), expected, "{source:?}");
-        if peek_kind_checked(source).ok().flatten().is_some() {
-            assert!(may_declare_kind(source), "false negative on {source:?}");
+    /// Asserts the sniff's answer and its agreement contract with the full reader on every case:
+    /// `Absent` ⇒ no `Ok(Some(_))`; `Kind(k)` ⇒ `Ok(Some(k))` or `Err`.
+    fn check_sniff(source: &str, expected: KindSniff<'_>) {
+        assert_eq!(sniff_kind(source), expected, "{source:?}");
+        let full = peek_kind_checked(source);
+        match expected {
+            KindSniff::Absent => {
+                assert!(!matches!(full, Ok(Some(_))), "false Absent on {source:?}")
+            }
+            KindSniff::Kind(kind) => assert!(
+                full.as_ref().map_or(true, |k| k.as_deref() == Some(kind)),
+                "the full peek disagrees with Kind({kind:?}) on {source:?}: {full:?}"
+            ),
+            KindSniff::Undecided => {}
         }
     }
 
     #[test]
-    fn may_declare_kind_accepts_every_top_level_spelling() {
-        check_may_declare("format: 1\nkind: mesh\n", true);
-        check_may_declare("kind: mesh\n", true);
-        check_may_declare("kind : mesh\n", true);
-        check_may_declare("kind\t: mesh\n", true);
-        check_may_declare("kind:\n", true);
-        check_may_declare("\"kind\": mesh\n", true);
-        check_may_declare("\"kind\" : mesh\n", true);
-        check_may_declare("'kind': mesh\n", true);
-        check_may_declare("\u{feff}kind: mesh\n", true);
-        check_may_declare("format: 1\r\nkind: mesh\r\n", true);
-        check_may_declare("format: 1\rkind: mesh\r", true);
-        check_may_declare("---\nkind: mesh\n", true);
-        check_may_declare("%YAML 1.2\n---\nkind: mesh\n...\n", true);
-        check_may_declare("# header\n\n  format: 1\n  kind: mesh\n", true);
-        check_may_declare(CUBE_TRI, true);
+    fn sniff_kind_decodes_every_top_level_spelling() {
+        let mesh = KindSniff::Kind("mesh");
+        for source in [
+            "format: 1\nkind: mesh\n",
+            "kind: mesh\n",
+            "kind : mesh\n",
+            "kind\t: mesh\n",
+            "\"kind\": mesh\n",
+            "\"kind\" : mesh\n",
+            "'kind': mesh\n",
+            "\u{feff}kind: mesh\n",
+            "format: 1\r\nkind: mesh\r\n",
+            "format: 1\rkind: mesh\r",
+            "---\nkind: mesh\n",
+            "%YAML 1.2\n---\nkind: mesh\n...\n",
+            "# header\n\n  format: 1\n  kind: mesh\n",
+            "kind: mesh # c\n",
+            "kind: \"mesh\"\n",
+            "kind: 'mesh'\n",
+            "kind: \"mesh\" # c\n",
+            "  format: 1\n  kind: mesh\n",
+            "kind: mesh\n\n# note\nformat: 1\n",
+            CUBE_TRI,
+        ] {
+            check_sniff(source, mesh);
+        }
+        check_sniff("\"kind\": 'prefab'\n", KindSniff::Kind("prefab"));
+        let big = format!(
+            "kind: mesh\nformat: 1\npositions:\n{}",
+            "  - 0.5\n".repeat(1000)
+        );
+        check_sniff(&big, mesh);
     }
 
     #[test]
-    fn may_declare_kind_is_conservative_where_it_does_not_decode() {
-        check_may_declare("\"k\\u0069nd\": mesh\n", true);
-        check_may_declare("? kind\n: mesh\n", true);
-        check_may_declare("?\n  kind\n: mesh\n", true);
-        check_may_declare("&a kind: mesh\n", true);
-        check_may_declare("--- kind: mesh\n", true);
-        check_may_declare("\"unclosed\n", true);
+    fn sniff_kind_is_undecided_where_it_does_not_decode() {
+        for source in [
+            "kind:\n",
+            "kind:mesh\n",
+            "kind: \"me\\u0073h\"\n",
+            "kind: 'it''s'\n",
+            "kind: me\n  sh\n",
+            "kind: \"me\n  sh\"\n",
+            "kind: 1\n",
+            "kind: true\n",
+            "kind: ~\n",
+            "kind: &a mesh\n",
+            "kind: !t mesh\n",
+            "kind: [mesh]\n",
+            "kind: mesh: x\n",
+            "kind: mesh\nkind: prefab\n",
+            "kind: mesh\n\tmore\n",
+            "kind: \"mesh\"x\n",
+            "a: \"x\nkind: mesh\"\n",
+            "a: 'x\nkind: mesh'\n",
+            "? kind\n: mesh\n",
+            "?\n  kind\n: mesh\n",
+            "&a kind: mesh\n",
+            "\"k\\u0069nd\": mesh\n",
+            "--- kind: mesh\n",
+            "\"unclosed\n",
+            "a: 1\n\tkind: mesh\n",
+        ] {
+            check_sniff(source, KindSniff::Undecided);
+        }
     }
 
     #[test]
-    fn may_declare_kind_rejects_what_cannot_be_a_top_level_kind() {
-        check_may_declare("", false);
-        check_may_declare("\n\n# only comments\n", false);
-        check_may_declare("format: 1\nentities: []\n", false);
-        check_may_declare("format: 1\nlight:\n  kind: point\n", false);
-        check_may_declare("# kind: mesh\nformat: 1\n", false);
-        check_may_declare("format: 1 # kind: mesh\n", false);
-        check_may_declare("note: |\n  kind: mesh\n", false);
-        check_may_declare("kinds: 2\nkind_of: 3\n\"kinds\": 4\n'kind''': 5\n", false);
-        check_may_declare("kind of: mesh\n", false);
-        check_may_declare("- kind: mesh\n", false);
-        check_may_declare("---\n...\n", false);
+    fn sniff_kind_rules_out_what_cannot_be_a_top_level_kind() {
+        for source in [
+            "",
+            "\n\n# only comments\n",
+            "format: 1\nentities: []\n",
+            "format: 1\nlight:\n  kind: point\n",
+            "# kind: mesh\nformat: 1\n",
+            "format: 1 # kind: mesh\n",
+            "note: |\n  kind: mesh\n",
+            "format: 1\n\tnote: x\n",
+            "a: \"x\n  y\"\n",
+            "a: 'x\n  y'\n",
+            "- a: \"x\n",
+            "kinds: 2\nkind_of: 3\n\"kinds\": 4\n'kind''': 5\n",
+            "kind of: mesh\n",
+            "- kind: mesh\n",
+            "---\n...\n",
+        ] {
+            check_sniff(source, KindSniff::Absent);
+        }
     }
 
     /// Every kind a `ludion-scene` parser declares through `envelope::check_kind(entry, CODE,
@@ -533,7 +754,7 @@ indices:
         let (mut checked, mut failures) = (0, Vec::new());
         for path in files {
             let source = std::fs::read_to_string(&path).expect("yaml file is readable");
-            if !may_declare_kind(&source) {
+            if sniff_kind(&source) == KindSniff::Absent {
                 continue;
             }
             let Some(kind) = peek_kind(&source) else {

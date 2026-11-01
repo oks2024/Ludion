@@ -171,7 +171,7 @@ pub use generation::{
 };
 pub use instance::{InstanceEntry, InstanceTransform, normalize_prefab_path};
 pub use instantiate::{InstanceHooks, InstantiateOptions};
-pub use kinds::{KINDS, KindCheck, KindEntry, kind_entry};
+pub use kinds::{KINDS, KindCheck, KindEntry, KindSniff, kind_entry};
 pub use map::{
     ColliderSpec, KitPrimitive, MAP_FORMAT_VERSION, MapDoc, MapGrid, MapKit, MapMarker, MapProbe,
     MarkerCell, MeshSpec, generate, generate_traced, parse_map, parse_map_kit,
@@ -661,23 +661,26 @@ pub fn peek_kind_checked(source: &str) -> Result<Option<String>, Diagnostic> {
     kinds::peek_kind_checked(source)
 }
 
-/// A cheap textual pre-check for [`peek_kind_checked`]: `false` only when no line of `source` could
-/// be a top-level `kind` key, so a content-root walk can treat the file as a scene without parsing
-/// it. It never answers `false` for a document `peek_kind_checked` finds a `kind` in; lines it
-/// cannot rule out (an explicit `?` key, node properties, an escaped quoted key) answer `true`.
+/// A cheap textual read of a document's top-level `kind`, so a content-root walk can route a file
+/// without the strict-YAML parse. Never changes an answer, only skips work: [`KindSniff::Absent`]
+/// when no line could be a top-level `kind` key (`peek_kind_checked` is `Ok(None)` or `Err`),
+/// [`KindSniff::Kind`] when exactly one is plainly decodable (`Ok(Some(k))` or `Err`), and
+/// [`KindSniff::Undecided`] for anything else (an explicit `?` key, node properties, escapes,
+/// multi-line or non-string values, a second `kind`): the caller full-parses.
 ///
-/// A `false` also skips the strict-YAML check, so a kind-less file the reader would reject is not
-/// reported by such a walk — the scene loader reports it when that scene loads.
+/// A file a walk skips on `Absent` or an engine `Kind` is not strict-YAML-checked by it — the scene
+/// loader, or the kind's own loader, reports it when it loads.
 ///
 /// # Example
 /// ```
-/// assert!(ludion_scene::may_declare_kind("format: 1\nkind: mesh\n"));
-/// assert!(ludion_scene::may_declare_kind("'kind': mesh\n"));
-/// assert!(!ludion_scene::may_declare_kind("format: 1\nentities: []\n"));
-/// assert!(!ludion_scene::may_declare_kind("light:\n  kind: point\n")); // nested, not top-level
+/// use ludion_scene::{KindSniff, sniff_kind};
+/// assert_eq!(sniff_kind("format: 1\nkind: mesh\n"), KindSniff::Kind("mesh"));
+/// assert_eq!(sniff_kind("format: 1\nentities: []\n"), KindSniff::Absent);
+/// assert_eq!(sniff_kind("light:\n  kind: point\n"), KindSniff::Absent); // nested, not top-level
+/// assert_eq!(sniff_kind("kind: [mesh]\n"), KindSniff::Undecided);
 /// ```
-pub fn may_declare_kind(source: &str) -> bool {
-    kinds::may_declare_kind(source)
+pub fn sniff_kind(source: &str) -> KindSniff<'_> {
+    kinds::sniff_kind(source)
 }
 
 /// Parses strict-subset YAML into a [`MeshDocument`], checking structure/shape only.

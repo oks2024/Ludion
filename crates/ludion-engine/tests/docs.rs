@@ -597,6 +597,37 @@ fn a_kind_less_unparseable_file_is_left_to_the_scene_loader() {
     );
 }
 
+/// Engine-kind files are routed by the textual sniff, never parsed: twenty `kind: mesh` files whose
+/// bodies end in a flow map the strict reader rejects (L1005) must not fail the boot. A parse of any
+/// of them would surface that error, so a green boot proves `parse_document` never ran on them —
+/// no counter or public seam needed. The same broken body under the registered `kind: weapon`
+/// still full-parses and refuses the boot.
+#[test]
+fn engine_kind_files_are_routed_without_a_parse() {
+    let dir = fresh_dir("engine-kind-routed");
+    let body = format!(
+        "format: 1\nkind: mesh\npositions:\n{}bad: {{ a: 1 }}\n",
+        "  - 0.5\n".repeat(20_000)
+    );
+    for i in 0..20 {
+        write(&dir, &format!("art/m{i}.mesh.yaml"), &body);
+    }
+    write(&dir, "weapons/crossbow.yaml", CROSSBOW);
+
+    let engine = weapon_game(&dir)
+        .build()
+        .expect("an engine-kind file is a loader's asset, never parsed by the doc walk");
+    assert_eq!(weapons(&engine).len(), 1, "only the crossbow is a doc");
+
+    write(
+        &dir,
+        "weapons/broken.yaml",
+        "format: 1\nkind: weapon\ndamage: 1.0\ncooldown: 1.0\nbad: { a: 1 }\n",
+    );
+    let err = build_err(weapon_game(&dir));
+    assert!(err.code.as_str().starts_with("L100"), "{}", err.code);
+}
+
 #[test]
 fn zero_registered_kinds_does_not_walk() {
     let dir = fresh_dir("zero-kinds");

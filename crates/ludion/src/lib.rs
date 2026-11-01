@@ -1810,7 +1810,12 @@ fn count_data_docs(root: &Path) -> BTreeMap<String, usize> {
         let Ok(source) = std::fs::read_to_string(&path) else {
             continue;
         };
-        if ludion_scene::may_declare_kind(&source)
+        let skipped = match ludion_scene::sniff_kind(&source) {
+            ludion_scene::KindSniff::Absent => true,
+            ludion_scene::KindSniff::Kind(kind) => ludion_engine::is_engine_kind(kind),
+            ludion_scene::KindSniff::Undecided => false,
+        };
+        if !skipped
             && let Some(kind) = ludion_scene::peek_kind(&source)
             && !ludion_engine::is_engine_kind(&kind)
         {

@@ -598,8 +598,9 @@ fn doc_key(root: &Path, abs: &Path) -> Option<String> {
 ///
 /// **When no kinds are registered this does nothing — no walk, no IO** — so a game that registers no
 /// doc kinds boots byte-identically to before this facility existed. Otherwise every `*.yaml` under
-/// `root` is read; a file with no line that could be a top-level `kind` key
-/// (`ludion_scene::may_declare_kind`) is a scene and skipped unparsed. Every other file is peeked
+/// `root` is read and sniffed textually (`ludion_scene::sniff_kind`): a file with no line that could be a
+/// top-level `kind` key is a scene, and one whose plainly decoded `kind` is an engine kind is a
+/// loader's asset; both are skipped unparsed. Every other file is peeked
 /// (via `ludion_scene::peek_kind_checked`) for its top-level `kind:` and routed: no `kind` (a scene)
 /// or an engine kind ([`is_engine_kind`]) is skipped; a registered kind is validated with
 /// `ludion_scene::check_doc` against the captured schema and collected into that kind's store; an
@@ -655,10 +656,12 @@ pub(crate) fn load_doc_stores(
                 continue;
             }
         };
-        // Full-parsing every scene only to find no `kind` dominated boot time; a kind-less file the
-        // reader would reject goes unreported here and is reported when its scene loads.
-        if !ludion_scene::may_declare_kind(&source) {
-            continue;
+        // Full-parsing every scene and engine asset only to route it dominated boot time; a file
+        // skipped here that the reader would reject is reported by its own loader, not this walk.
+        match ludion_scene::sniff_kind(&source) {
+            ludion_scene::KindSniff::Absent => continue,
+            ludion_scene::KindSniff::Kind(kind) if is_engine_kind(kind) => continue,
+            _ => {}
         }
         match ludion_scene::peek_kind_checked(&source) {
             // No `kind` key is a scene; the scene loader owns those.

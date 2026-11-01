@@ -46,9 +46,10 @@ switch leaves behind is `ludion devdocs engine-residue`; the recorded-vs-regener
 ## Dataflow
 
 **Game data-docs** (`docs.rs`) are the typed side of `ludion-scene`'s generic `check_doc`/`emit_doc`.
-`load_doc_stores` walks `project_root`, peeks each `*.yaml`'s `kind:`, skips scenes (no `kind`) and
-engine kinds — a file `ludion_scene::may_declare_kind` rules out is skipped unparsed, so a kind-less
-file the reader would reject is reported only when its scene loads, not at boot — validates a registered kind, and inserts each kind's `DocStore<T>` resource — empty if
+`load_doc_stores` walks `project_root`, routes each `*.yaml` by its `kind:`, skips scenes (no `kind`) and
+engine kinds — `ludion_scene::sniff_kind` reads the key textually and those files are never parsed, so a
+malformed engine-kind or kind-less file is reported by its loader / `check-scene` (or when its scene
+loads), not by the boot walk; anything the sniff cannot decode is full-parsed as before — validates a registered kind, and inserts each kind's `DocStore<T>` resource — empty if
 it matched nothing. An unregistered `kind:` is an `L1119` with a nearest match when a game registered any kind of its own; on an engine carrying only engine-owned kinds (`patterns()` — the built-in engine behind `serve`/`sim-hash`) the file is skipped with an `L1155` warning, read back from `Engine::doc_skip_warnings()` (one per file) or `Engine::doc_skip_summary()` (one for the walk, naming the kinds and their counts). A host prints the summary: a game's scene directory holds tens of its own docs, and a block per file buries whatever the host says next. The store is keyed by
 slash-normalized content-root-relative path in `BTreeMap` order, with a `generation` counter a system
 compares to react to reloads. Every registered kind's captured `schema_for!(T)` is published on

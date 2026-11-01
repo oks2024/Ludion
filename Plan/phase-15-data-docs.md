@@ -411,6 +411,10 @@ landable, one commit, ending in `node scripts/check.mjs` green.
 
 ## Explicitly out of scope (triggers recorded)
 
+- **Per-process routing cache** (Clockout 0029 point 2: `(path, len, mtime)` → routing decision, game
+  docs always re-read) — deferred; trigger: the walk's own time (`docs_ms`) still a measurable share of
+  boot after the textual sniff on a content root of Clockout's size. Measured on vigil, `--check-docs`
+  wall time median of 3: 1183 ms before the sniff, 418 ms after.
 - **Doc cross-references / ID resolution** (a doc naming another doc by id) — games resolve names
   themselves; trigger: content volume that makes hand-resolution hurt (the brief's non-goal).
 - **Doc inheritance / templating** (a base weapon others extend) — trigger: the same content-volume
@@ -449,7 +453,8 @@ landable, one commit, ending in `node scripts/check.mjs` green.
   two independently-broken docs.
 - **Content-root walk cost / misfire.** Peeking `kind:` on every `*.yaml` at boot must skip scenes
   (no `kind`) and engine kinds (`mesh`/`voxel`) cleanly and stay boot-time-only. Contained by the
-  peek-then-route rule (decision 4) and the Wave 2 discovery test over a mixed content root.
+  peek-then-route rule (decision 4) and the Wave 2 discovery test over a mixed content root. Engine kinds
+  are sniffed textually, never parsed (Clockout 0029).
 - **Sequencing vs open gates.** E4 adds no wire method, no component, and no golden; it shares only
   the guide/docs files and one additive LRP1 record with the open Phase 8/9/M0/M1 human gates, so it
   is safe to run with those queued. Per roadmap rule 2, E4 is the engine wave in flight during M3
