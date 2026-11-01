@@ -35,6 +35,11 @@ entities:
 - **A record is migrated, not trusted.** A snapshot carries residue, so a bag can outlive the shape of
   its components (`ludion dev`'s restart, a replay seek); one this build cannot read is dropped whole
   and reported (`L3030`), so a component change never makes a district unreachable.
+- **A reference follows its target's identity.** An entity reference in a record (`Parent` and every
+  marked field) follows another residue record to its respawned entity, or an entity with a `name:`
+  to the first entity of that name in the scene. Any other reference arrives empty, or its component
+  is left behind when the field is required (`L3053`) — an anonymous entity that is not itself
+  residue, a carried one and a despawned one have no identity to find again.
 - **State must stay alive to be remembered.** Capture reads the departing world as it is, so an entity
   despawned before the switch leaves nothing behind and the scene's authored version comes back. A
   thing used up keeps its entity and flips a component to say so, rather than being deleted.

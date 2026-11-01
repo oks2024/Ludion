@@ -38,7 +38,7 @@ use ludion_core::collections::{StableMap, StableSet};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::rng::{DeterministicRng, WorldSeed};
-use ludion_core::time::{FrameIndex, GameClock};
+use ludion_core::time::{FrameIndex, GameClock, TickRate};
 use ludion_ecs::{
     ComponentInfo, Phase, QueryElemShape, QueryObservations, Registry, Schedule, World,
 };
@@ -548,10 +548,11 @@ struct SessionState {
     /// The `Name`s the scene document the live world was instantiated from authors — the provenance a
     /// residue capture stamps onto each record, so a return can tell a renamed authored entity (drop
     /// the record) from one a system spawned (respawn it). Rebuilt at every world build from a
-    /// document (`scene.load`, a switch) and **empty** after a `restore`, whose world came from a
-    /// snapshot and has no document behind it: an empty set reads every record as code-spawned, which
-    /// respawns — the answer that never loses state.
-    authored_names: StableSet<String>,
+    /// document (`scene.load`, a switch) and `None` after a `restore`: the restored world still
+    /// carries its inline scene text, so [`Engine::authored_names`] derives the set from it on demand
+    /// (an empty set when the text is not inline or does not parse — every record then reads as
+    /// code-spawned, which respawns, the answer that never loses state).
+    authored_names: Option<StableSet<String>>,
 }
 
 impl SessionState {
@@ -576,7 +577,7 @@ impl SessionState {
         self.doc_reloads.clear();
         self.residue.clear();
         // The caller re-stamps this from the scene it just instantiated.
-        self.authored_names.clear();
+        self.authored_names = Some(StableSet::new());
     }
 
     /// Continue the session unchanged — every log, the doc-reload set and the scene residue survive.
@@ -608,11 +609,9 @@ impl SessionState {
         self.reset_logs();
         self.doc_reloads = reloads;
         self.residue = residue;
-        // A restored world was rebuilt from a snapshot, not from a scene document, so nothing here can
-        // claim to be authored. Records captured after a restore respawn on return — the pre-existing
-        // behaviour, and the reading that never drops state (the restored records carry their own
-        // provenance, so only *new* captures are affected).
-        self.authored_names.clear();
+        // The restored world keeps its inline scene text, so the authored set is derived from it when
+        // a capture asks (see `Engine::authored_names`) — a restore stays lazy.
+        self.authored_names = None;
     }
 }
 
@@ -1403,6 +1402,11 @@ impl Engine {
     /// The current wall-clock pacing factor (live-mode only; never affects a tick).
     pub fn speed(&self) -> Speed {
         self.driver.speed()
+    }
+
+    /// The simulation tick rate the live driver runs at.
+    pub(crate) fn tick_rate(&self) -> TickRate {
+        self.driver.tick_rate()
     }
 
     /// The seed the current world was instantiated with (from the scene, default 0).
@@ -3612,9 +3616,17 @@ impl Engine {
     }
 
     /// The `Name`s the live world's scene document authors — what a residue capture stamps each record
-    /// with (see [`SessionState::authored_names`]). Empty for a world with no document behind it.
-    pub(crate) fn authored_names(&self) -> &StableSet<String> {
-        &self.session.authored_names
+    /// with (see [`SessionState::authored_names`]). Derived from the inline scene text after a
+    /// restore; empty for a world with no parsable inline document behind it.
+    pub(crate) fn authored_names(&self) -> std::borrow::Cow<'_, StableSet<String>> {
+        match &self.session.authored_names {
+            Some(names) => std::borrow::Cow::Borrowed(names),
+            None => std::borrow::Cow::Owned(
+                self.authored_scene()
+                    .map(authored_names)
+                    .unwrap_or_default(),
+            ),
+        }
     }
 
     /// The injected events not yet applied (for snapshots).
@@ -5392,12 +5404,11 @@ impl Engine {
         // clears the logs. A load starts a clean stream a replay regenerates from frame 0; a restore
         // adopts the snapshot's reload log and residue so a later switch or replay-seek reproduces
         // the reloaded docs; a switch is mid-session and carries all of it. A restored world has no
-        // document behind it, so its authored set is empty — every record respawns on return, the
-        // reading that never loses state.
+        // document of its own, so its authored set is derived from the restored inline text on demand.
         match &mut kind {
             Rebuild::Load { authored, .. } => {
                 self.session.reset();
-                self.session.authored_names = std::mem::take(authored);
+                self.session.authored_names = Some(std::mem::take(authored));
             }
             Rebuild::Restore {
                 doc_reloads,
@@ -5408,7 +5419,7 @@ impl Engine {
                 .adopt(std::mem::take(doc_reloads), std::mem::take(residue)),
             Rebuild::Switch { authored, .. } => {
                 self.session.carry();
-                self.session.authored_names = std::mem::take(authored);
+                self.session.authored_names = Some(std::mem::take(authored));
             }
         }
         // After the session settles: the mirror copies its residue. On a switch `perform` has already

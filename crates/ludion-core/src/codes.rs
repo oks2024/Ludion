@@ -1973,6 +1973,13 @@ pub mod code {
     /// Raised by `ludion-protocol`.
     pub const REPLAY_TORN_TAIL: DiagnosticCode = DiagnosticCode::new("L3052");
 
+    /// `L3053` — a scene's residue could not follow an entity reference across a visit: its target
+    /// is neither another residue record nor a uniquely identifiable named entity, so an optional
+    /// reference arrived empty and a component whose required reference is unresolved was left
+    /// behind. The switch still happened. A warning. Raised by `ludion-engine`'s residue capture
+    /// and application.
+    pub const RESIDUE_REF_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L3053");
+
     // --- L4xxx: sim (raised by `ludion-sim`) ---
 
     /// `L4001` — a simulation speed factor was not a finite number in `[1/64, 64]`. Raised by
@@ -8851,6 +8858,25 @@ Fix: if the full session matters, re-record it. Otherwise nothing: the replay is
 it goes.",
     },
     CodeEntry {
+        code: code::RESIDUE_REF_UNRESOLVED,
+        severity: Severity::Warning,
+        title: "a residue record's entity reference could not be followed",
+        explanation: "\
+A `Residue`-marked entity holds an entity reference (`Parent`, or any field the registry marks as
+one) to something the scene's residue cannot identify again, so the reference was cleared or its
+component left behind. The switch itself happened.
+
+Residue records an entity reference by identity, not by id: a reference to another residue record
+follows that record to its respawned entity, and a reference to an entity with a `Name` follows the
+first entity of that name in the scene it returns to. Anything else cannot be found again — an
+anonymous entity that is not itself residue, an entity that was carried out of the scene, or one that
+was already despawned. An optional reference arrives empty; a component whose required reference is
+unresolved is left behind, the way a carried component's is (L3043).
+
+Fix: mark the referenced entity `Residue` too, or give it a unique `name:`, so the reference has an
+identity to follow.",
+    },
+    CodeEntry {
         code: code::REPLAY_FRAME_WINDOW,
         severity: Severity::Error,
         title: "replay-to-frames window is out of range",
@@ -10509,6 +10535,7 @@ mod tests {
         code::REPLAY_PANIC_NOT_REPRODUCED,
         code::PROTOCOL_MALFORMED_REPLY,
         code::REPLAY_TORN_TAIL,
+        code::RESIDUE_REF_UNRESOLVED,
         // --- L4xxx: sim ---
         code::INVALID_SIM_SPEED,
         code::INPUT_SCRIPT_IO,
@@ -10686,6 +10713,7 @@ mod tests {
             code::RESTORE_ENGINE_VERSION_DIFFERS,
             code::RESTORE_SNAPSHOT_FIELD_UNKNOWN,
             code::REPLAY_TORN_TAIL,
+            code::RESIDUE_REF_UNRESOLVED,
             code::RESIDUE_DUPLICATE_NAME,
             code::RESIDUE_CARRY_CONFLICT,
             code::RESIDUE_EVICTED,

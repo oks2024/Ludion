@@ -33,12 +33,18 @@ read is dropped whole (`L3030` — residue outlives a component change through a
 in-place branch strips its entity first), and a name two entities of the arriving scene share lands on
 the first and reports both ids (`L3026`). A named record with **no** counterpart splits on
 `ResidueRecord.authored`, stamped at capture from `SessionState.authored_names` (the live document's
-`Name` set — empty after a `restore`, `#[serde(default)]` false in a snapshot): authored means renamed,
+`Name` set — after a `restore` derived lazily from the restored inline scene text, `#[serde(default)]`
+false in a snapshot): authored means renamed,
 so it is dropped and reported (`L3031`); code-spawned means the document never named it, so it respawns
 with its `Name` — vigil's per-sector census depends on that, and the default keeps every older snapshot
 on the respawn side. Step (f) commits the departing capture into the session map only after every
 fallible check has passed, holding both `RESIDUE_MAX_SCENES` (LRU eviction by `last_visit` frame) and
 `RESIDUE_MAX_RECORDS_PER_SCENE` (capture-order truncation), each reported `L3028`.
+
+Entity references inside a bag are recorded by identity (`ResidueRecord.refs`: a record index or a
+`Name`; additive in the snapshot) through the same `remap_refs` walker the carry uses, and the
+components holding them are inserted only after both spawn passes, once every landed id is known. An
+unresolvable one is cleared (optional) or its component dropped (required), reported `L3053`.
 
 ## Rules
 

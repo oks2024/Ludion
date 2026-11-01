@@ -17,7 +17,7 @@
 
 use ludion_core::ids::EntityId;
 use ludion_core::time::FrameIndex;
-use ludion_ecs::{SystemCtx, World};
+use ludion_ecs::{Parent, SystemCtx, World};
 use ludion_engine::{
     Engine, EngineBuilder, Name, RESIDUE_MAX_RECORDS_PER_SCENE, RESIDUE_MAX_SCENES, Residue,
     ResidueStore, SceneSwitch, replay_hashes_with,
@@ -1820,4 +1820,259 @@ fn carried_entities_hold_the_highest_ids_after_a_switch() {
             "{id} was minted after the carried entity — the carry no longer spawns last"
         );
     }
+}
+
+// --- Entity references inside residue --------------------------------------------------------
+
+/// A required entity reference.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+struct Holds {
+    #[schemars(with = "ludion_ecs::EntityRefSchema")]
+    target: EntityId,
+}
+
+/// An optional entity reference.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+struct Eyes {
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    target: Option<EntityId>,
+}
+
+/// A marker the tests find an anonymous entity by.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+struct Tag {
+    id: u32,
+}
+
+/// The base game plus the reference components.
+fn ref_game(root: &Path) -> EngineBuilder {
+    base_game(root).components(|reg| {
+        reg.register::<Holds>("Holds")?;
+        reg.register::<Eyes>("Eyes")?;
+        reg.register::<Tag>("Tag")?;
+        Ok(())
+    })
+}
+
+/// The anonymous entity carrying `Tag { id }`.
+fn tagged(world: &World, id: u32) -> EntityId {
+    let ids: Vec<EntityId> = world.entities().collect();
+    ids.into_iter()
+        .find(|&e| matches!(world.get::<Tag>(e), Ok(Some(tag)) if tag.id == id))
+        .unwrap_or_else(|| panic!("an entity tagged {id} is present"))
+}
+
+/// Spawns an anonymous marked entity tagged `id`.
+fn spawn_marked(world: &mut World, id: u32) -> EntityId {
+    let entity = world.spawn();
+    world.insert(entity, Tag { id }).unwrap();
+    world.insert(entity, Residue {}).unwrap();
+    entity
+}
+
+/// On frame 1: an anonymous unmarked spawn (so ids shift on return), a marked crate, and a marked
+/// pickup that is parented to the crate and holds it.
+fn stack_crate(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() != 1 {
+        return;
+    }
+    let junk = world.spawn();
+    world.insert(junk, Echo { amount: 99 }).unwrap();
+    let crate_id = spawn_marked(world, 1);
+    let pickup = spawn_marked(world, 2);
+    world.insert(pickup, Parent(crate_id)).unwrap();
+    world.insert(pickup, Holds { target: crate_id }).unwrap();
+}
+
+/// On frame 1: one watcher that looks at the authored `lamp`, and one that looks at the player.
+fn watchers(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() != 1 {
+        return;
+    }
+    let lamp = named_entity(world, "lamp").unwrap();
+    let player = player_id(world).unwrap();
+    let a = spawn_marked(world, 1);
+    world.insert(a, Eyes { target: Some(lamp) }).unwrap();
+    let b = spawn_marked(world, 2);
+    world
+        .insert(
+            b,
+            Eyes {
+                target: Some(player),
+            },
+        )
+        .unwrap();
+}
+
+/// On frame 1: a marked entity that requires an anonymous, unmarked one.
+fn holds_anonymous(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() != 1 {
+        return;
+    }
+    let junk = world.spawn();
+    world.insert(junk, Echo { amount: 5 }).unwrap();
+    let holder = spawn_marked(world, 1);
+    world.insert(holder, Holds { target: junk }).unwrap();
+}
+
+#[test]
+fn a_reference_between_residue_records_follows_the_respawned_target() {
+    let dir = fresh_dir("ref-records", DISTRICT_A);
+    let mut engine = ref_game(&dir)
+        .system("stack_crate", stack_crate)
+        .system("travel", travel)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(DISTRICT_A).unwrap();
+    round_trip(&mut engine);
+
+    assert!(
+        engine.last_transition_error().is_none(),
+        "every reference resolved: {:?}",
+        engine.last_transition_error()
+    );
+    let world = engine.world();
+    let crate_id = tagged(world, 1);
+    let pickup = tagged(world, 2);
+    assert_eq!(
+        world.get::<Parent>(pickup).unwrap(),
+        Some(&Parent(crate_id)),
+        "the Parent link names the respawned crate"
+    );
+    assert_eq!(
+        world.get::<Holds>(pickup).unwrap(),
+        Some(&Holds { target: crate_id }),
+        "so does the required reference"
+    );
+    assert_ne!(Some(crate_id), player_id(world));
+}
+
+#[test]
+fn a_reference_by_name_follows_the_named_entity_and_a_carried_target_arrives_empty() {
+    let dir = fresh_dir("ref-names", DISTRICT_A);
+    let mut engine = ref_game(&dir)
+        .system("watchers", watchers)
+        .system("travel", travel)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(DISTRICT_A).unwrap();
+    // The capture reports on the outbound leg; the clean return then replaces the report.
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    let (code, message) = transition_report(&engine);
+    assert_eq!(code, "L3053", "{message}");
+    assert!(
+        message.contains("Eyes"),
+        "the report names the component: {message}"
+    );
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+
+    let world = engine.world();
+    let lamp = named_entity(world, "lamp").unwrap();
+    assert_eq!(
+        world.get::<Eyes>(tagged(world, 1)).unwrap(),
+        Some(&Eyes { target: Some(lamp) }),
+        "a reference to an authored named entity follows it"
+    );
+    assert_eq!(
+        world.get::<Eyes>(tagged(world, 2)).unwrap(),
+        Some(&Eyes { target: None }),
+        "a reference to the carried player cannot be found again"
+    );
+}
+
+#[test]
+fn a_required_reference_to_an_anonymous_entity_drops_its_component() {
+    let dir = fresh_dir("ref-required", DISTRICT_A);
+    let mut engine = ref_game(&dir)
+        .system("holds_anonymous", holds_anonymous)
+        .system("travel", travel)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(DISTRICT_A).unwrap();
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    let (code, message) = transition_report(&engine);
+    assert_eq!(code, "L3053", "{message}");
+    assert!(message.contains("Holds"), "{message}");
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+
+    let world = engine.world();
+    let holder = tagged(world, 1);
+    assert!(
+        world.get::<Holds>(holder).unwrap().is_none(),
+        "the component whose required reference cannot be found again is left behind"
+    );
+}
+
+#[test]
+fn residue_refs_survive_a_snapshot_and_a_ref_free_record_has_none() {
+    let dir = fresh_dir("ref-snapshot", DISTRICT_A);
+    let game = |dir: &Path| {
+        ref_game(dir)
+            .system("stack_crate", stack_crate)
+            .system("travel", travel)
+    };
+    let mut original = game(&dir).build().expect("boots");
+    original.load_inline_scene(DISTRICT_A).unwrap();
+    for _ in 0..3 {
+        original.advance_live();
+    }
+    let snapshot = snapshot_of(&mut original);
+    let records = snapshot_records(&snapshot, "district-a").expect("district A kept records");
+    assert!(
+        records[0].get("refs").is_none() && records[1].get("refs").is_none(),
+        "the door and the crate hold no reference, so their records have no `refs` key"
+    );
+    let refs = records[2]["refs"]
+        .as_array()
+        .expect("the pickup records its references");
+    assert!(
+        refs.iter().any(|r| r["component"] == "Parent"
+            && r["suffix"] == ""
+            && r["target"] == serde_json::json!({ "record": 1 })),
+        "Parent is recorded against the crate's record: {refs:?}"
+    );
+
+    let mut restarted = game(&dir).build().expect("boots");
+    restore(&mut restarted, snapshot);
+    for _ in 0..5 {
+        restarted.advance_live();
+    }
+    let world = restarted.world();
+    let crate_id = tagged(world, 1);
+    assert_eq!(
+        world.get::<Parent>(tagged(world, 2)).unwrap(),
+        Some(&Parent(crate_id)),
+        "the restored record resolves against the respawned crate"
+    );
+}
+
+#[test]
+fn a_restored_session_stamps_new_captures_from_its_inline_scene() {
+    let dir = fresh_dir("restored-provenance", DISTRICT_A);
+    let mut engine = base_game(&dir)
+        .system("travel", travel)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(DISTRICT_A).unwrap();
+    let snapshot = snapshot_of(&mut engine);
+    restore(&mut engine, snapshot);
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    let snapshot = snapshot_of(&mut engine);
+    let records = snapshot_records(&snapshot, "district-a").expect("district A kept the door");
+    assert_eq!(records[0]["name"], "door");
+    assert_eq!(
+        records[0]["authored"],
+        Value::Bool(true),
+        "the restored session still knows the scene authored `door`"
+    );
 }

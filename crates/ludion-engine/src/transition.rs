@@ -42,6 +42,11 @@
 //! - **A record is migrated, not trusted.** A snapshot carries residue across a rebuild, so a bag can
 //!   outlive the shape of its components; one that no longer reads is dropped whole and reported
 //!   (`L3030`), the way a snapshot's world entity is (`L3015`/`L3016`).
+//! - **A reference follows its target's identity.** An entity reference in a bag (`Parent` and every
+//!   marked field) is recorded at capture as the residue record it names or the `Name` of the entity
+//!   it names, and resolved again once the visit's records are respawned. Any other reference — to an
+//!   anonymous entity that is not itself residue, a carried or a dead one — arrives empty, or its
+//!   component is left behind when the field is required (`L3053`).
 //! - **Upsert only.** Capture reads the world that exists, so an entity despawned before the switch
 //!   leaves nothing behind and the target scene's authored version returns. State that must survive a
 //!   visit keeps its entity alive and says "spent" in a component.
@@ -61,10 +66,11 @@ use ludion_core::codes::code;
 use ludion_core::collections::{StableMap, StableSet};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
-use ludion_core::time::{FrameIndex, TickRate};
+use ludion_core::time::FrameIndex;
 use ludion_ecs::{ChildMap, Parent, Registry, is_presentation};
 use ludion_protocol::replay::SceneRef;
 use ludion_sim::{DriverRestore, SimDriver};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::components::{Name, Residue, Transform};
@@ -141,11 +147,36 @@ pub(crate) struct ResidueRecord {
     /// `Name` — the one thing that says what a record with no counterpart on return *means*. An
     /// authored record whose counterpart vanished was renamed (drop it, `L3031`); a code-spawned one
     /// never had a counterpart and must respawn, which is how a game keeps state it created itself.
-    /// Always `false` for an anonymous record, and for anything captured out of a world with no
-    /// document behind it (a restored snapshot), where respawning is the safe reading.
+    /// Always `false` for an anonymous record, and for anything captured out of a world whose scene
+    /// text is not an inline, parsable document, where respawning is the safe reading.
     pub(crate) authored: bool,
     /// The captured components as `(registered name, value)`, in registration order, minus `Name`.
     pub(crate) bag: Vec<(String, Value)>,
+    /// The entity references in `bag` that name something identifiable, in registration then field
+    /// order. The bag keeps the stale id until application writes the resolved one over it; a
+    /// reference absent here was cleared (optional) or its component dropped (required) at capture.
+    pub(crate) refs: Vec<ResidueRef>,
+}
+
+/// One entity reference of a [`ResidueRecord`]'s bag, recorded by its target's identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ResidueRef {
+    /// The registered name of the component holding the reference.
+    pub(crate) component: String,
+    /// The JSON Pointer suffix of the field inside that component (`""` is the whole value).
+    pub(crate) suffix: String,
+    /// What the reference names.
+    pub(crate) target: ResidueTarget,
+}
+
+/// The identity a captured entity reference is resolved by on return.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ResidueTarget {
+    /// The record at this index of the scene's records.
+    Record(usize),
+    /// The first entity of this `Name` in the returning scene.
+    Name(String),
 }
 
 /// Everything one scene kept behind: the records captured the last time the run left it.
@@ -250,6 +281,7 @@ pub(crate) fn perform(
     let frame = engine.frame();
     let run_state = engine.run_state();
     let speed = engine.speed();
+    let tick_rate = engine.tick_rate();
     let profile_text = engine.emit_profile_text();
 
     // (b) Capture each carried entity's component bag from the live world, in registration order (the
@@ -289,9 +321,13 @@ pub(crate) fn perform(
                 continue;
             }
             if let Some(mut value) = info.serialize(engine.world(), id)? {
-                let Some(pending) =
-                    remap_carried(info, &mut value, id, &expanded, &mut left_behind)
-                else {
+                let Some(pending) = remap_refs(
+                    info,
+                    &mut value,
+                    id,
+                    |target| expanded.iter().position(|e| *e == target),
+                    &mut left_behind,
+                ) else {
                     continue;
                 };
                 if pending.is_empty() {
@@ -348,8 +384,12 @@ pub(crate) fn perform(
     let departing_key = engine.scene_name().map(str::to_string);
     let mut departing_residue = None;
     if let Some(key) = departing_key {
-        let (records, residue_warnings) =
-            capture_residue(engine.world(), registry, &expanded, engine.authored_names())?;
+        let (records, residue_warnings) = capture_residue(
+            engine.world(),
+            registry,
+            &expanded,
+            &engine.authored_names(),
+        )?;
         warnings.extend(residue_warnings);
         departing_residue = Some((key, records));
     }
@@ -521,7 +561,7 @@ pub(crate) fn perform(
             frame,
             run_state,
             speed,
-            tick_rate: TickRate::DEFAULT,
+            tick_rate,
         },
     );
 
@@ -585,8 +625,12 @@ fn least_recently_visited(residue: &StableMap<String, SceneResidue>, keep: &str)
 ///
 /// `authored` is the set of `Name`s the departing world's scene document names; it decides each
 /// record's [`authored`](ResidueRecord::authored) flag, and so what a missing counterpart means on
-/// return. An empty set (a world rebuilt from a snapshot rather than a document) marks every record
-/// code-spawned, which respawns — the reading that never loses state.
+/// return. An empty set (a scene with no inline, parsable document) marks every record code-spawned,
+/// which respawns — the reading that never loses state.
+///
+/// Each entity reference in a bag is recorded by identity (see [`ResidueRef`]): a record of this
+/// capture, else a live `Name`d entity that is not carried. Any other target cannot be found again,
+/// so its reference is cleared or its component dropped (`L3053`).
 ///
 /// # Errors
 /// `L0007` if a marked entity's component fails to serialize.
@@ -596,7 +640,8 @@ fn capture_residue(
     carry: &[EntityId],
     authored: &StableSet<String>,
 ) -> Result<(Vec<ResidueRecord>, Vec<Diagnostic>), Diagnostic> {
-    let mut records = Vec::new();
+    let mut captured: Vec<EntityId> = Vec::new();
+    let mut names: Vec<Option<String>> = Vec::new();
     let mut named = StableSet::new();
     let mut duplicates: Vec<String> = Vec::new();
     let mut conflicts: Vec<EntityId> = Vec::new();
@@ -619,20 +664,54 @@ fn capture_residue(
             duplicates.push(name.clone());
             continue;
         }
+        captured.push(id);
+        names.push(name);
+    }
+    let mut records = Vec::with_capacity(captured.len());
+    let mut unresolved: Vec<String> = Vec::new();
+    for (&id, name) in captured.iter().zip(names) {
         let mut bag = Vec::new();
+        let mut refs = Vec::new();
         for info in registry.iter() {
             if info.type_id() == TypeId::of::<Name>() {
                 continue;
             }
-            if let Some(value) = info.serialize(world, id)? {
-                bag.push((info.name().to_string(), value));
+            let Some(mut value) = info.serialize(world, id)? else {
+                continue;
+            };
+            if !info.entity_refs().is_empty() {
+                let Some(pending) = remap_refs(
+                    info,
+                    &mut value,
+                    id,
+                    |target| {
+                        if let Some(index) = captured.iter().position(|e| *e == target) {
+                            return Some(ResidueTarget::Record(index));
+                        }
+                        if carry.contains(&target) || !world.is_alive(target) {
+                            return None;
+                        }
+                        let name = world.get::<Name>(target).ok().flatten()?;
+                        Some(ResidueTarget::Name(name.0.clone()))
+                    },
+                    &mut unresolved,
+                ) else {
+                    continue;
+                };
+                refs.extend(pending.into_iter().map(|(suffix, target)| ResidueRef {
+                    component: info.name().to_string(),
+                    suffix,
+                    target,
+                }));
             }
+            bag.push((info.name().to_string(), value));
         }
         let authored = name.as_ref().is_some_and(|name| authored.contains(name));
         records.push(ResidueRecord {
             name,
             authored,
             bag,
+            refs,
         });
     }
     let mut warnings = Vec::new();
@@ -641,6 +720,9 @@ fn capture_residue(
     }
     if !duplicates.is_empty() {
         warnings.push(residue_duplicate_name(&duplicates));
+    }
+    if !unresolved.is_empty() {
+        warnings.push(residue_ref_unresolved(&unresolved));
     }
     Ok((records, warnings))
 }
@@ -665,7 +747,10 @@ fn capture_residue(
 /// record lands on the first in entity order, as it always did, and both ids are named).
 ///
 /// Both spawning passes run before the anchor lookup and the carried respawn, which is what keeps the
-/// carried entities on the highest ids.
+/// carried entities on the highest ids. A component holding an entity reference
+/// ([`ResidueRecord::refs`]) is inserted only after both passes, once every landed record's id is
+/// known: a reference to a record follows it, one to a `Name` follows the first entity of that name,
+/// and one that no longer resolves is cleared or its component dropped (`L3053`).
 ///
 /// # Errors
 /// `L0002`/`L0006` if a captured value no longer deserializes into its component — unreachable, since
@@ -676,15 +761,20 @@ fn apply_residue(
     records: &[ResidueRecord],
 ) -> Result<Vec<Diagnostic>, Diagnostic> {
     let mut warnings = Vec::new();
+    // The entity each record landed on, by record index; a record dropped above stays `None`.
+    let mut landed: Vec<Option<EntityId>> = vec![None; records.len()];
+    // The components held back for the reference pass: (record index, entity, components).
+    let mut deferred: Vec<HeldBag> = Vec::new();
     // One throwaway world for the migration probe: a bag is deserialized into it to learn whether it
     // still reads, so nothing half-applied ever reaches the world being built.
     let mut probe = ludion_ecs::World::new();
-    let mut named: Vec<&ResidueRecord> = records
+    let mut named: Vec<(usize, &ResidueRecord)> = records
         .iter()
-        .filter(|record| record.name.is_some())
+        .enumerate()
+        .filter(|(_, record)| record.name.is_some())
         .collect();
-    named.sort_by(|a, b| a.name.cmp(&b.name));
-    for record in named {
+    named.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
+    for (index, record) in named {
         let name = record.name.as_deref().expect("named records carry a name");
         if !record_reads(registry, &mut probe, record, &mut warnings) {
             continue;
@@ -701,7 +791,9 @@ fn apply_residue(
                 world
                     .insert(id, Name(name.to_string()))
                     .expect("the entity was just spawned and is alive");
-                insert_bag(world, registry, id, record)?;
+                landed[index] = Some(id);
+                let held = insert_bag(world, registry, id, record)?;
+                deferred.push((index, id, held));
             }
             continue;
         };
@@ -716,14 +808,68 @@ fn apply_residue(
                 info.remove(world, id)?;
             }
         }
-        insert_bag(world, registry, id, record)?;
+        landed[index] = Some(id);
+        let held = insert_bag(world, registry, id, record)?;
+        deferred.push((index, id, held));
     }
-    for record in records.iter().filter(|record| record.name.is_none()) {
+    for (index, record) in records
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| record.name.is_none())
+    {
         if !record_reads(registry, &mut probe, record, &mut warnings) {
             continue;
         }
         let id = world.spawn();
-        insert_bag(world, registry, id, record)?;
+        landed[index] = Some(id);
+        let held = insert_bag(world, registry, id, record)?;
+        deferred.push((index, id, held));
+    }
+    let mut unresolved: Vec<String> = Vec::new();
+    for (index, id, held) in deferred {
+        let record = &records[index];
+        let label = record.name.as_ref().map_or_else(
+            || "an anonymous record".to_string(),
+            |name| format!("`{name}`"),
+        );
+        for (component, mut value) in held {
+            let mut dropped = false;
+            for reference in record.refs.iter().filter(|r| r.component == component) {
+                let resolved = match &reference.target {
+                    ResidueTarget::Record(target) => landed.get(*target).copied().flatten(),
+                    ResidueTarget::Name(name) => entities_named(world, name).first().copied(),
+                };
+                let written = match resolved {
+                    Some(target) => serde_json::to_value(target).map_err(|e| {
+                        Diagnostic::new(code::COMPONENT_SERIALIZE_FAILED, e.to_string())
+                    })?,
+                    None => {
+                        unresolved.push(format!("{label} `{component}`{}", reference.suffix));
+                        let optional = registry.get(&component).is_some_and(|info| {
+                            info.entity_refs()
+                                .iter()
+                                .any(|f| f.suffix == reference.suffix && f.optional)
+                        });
+                        if !optional {
+                            dropped = true;
+                            break;
+                        }
+                        Value::Null
+                    }
+                };
+                if reference.suffix.is_empty() {
+                    value = written;
+                } else if let Some(slot) = value.pointer_mut(&reference.suffix) {
+                    *slot = written;
+                }
+            }
+            if !dropped {
+                registry.deserialize_insert(&component, &value, world, id)?;
+            }
+        }
+    }
+    if !unresolved.is_empty() {
+        warnings.push(residue_ref_unresolved(&unresolved));
     }
     Ok(warnings)
 }
@@ -758,17 +904,27 @@ fn record_reads(
     false
 }
 
-/// Inserts every component of `record`'s bag onto `entity`, in capture (registration) order.
+/// A landed record's held-back components: (record index, entity, `(name, value)` pairs).
+type HeldBag = (usize, EntityId, Vec<(String, Value)>);
+
+/// Inserts every component of `record`'s bag onto `entity`, in capture (registration) order, except
+/// those holding a recorded reference: they come back as `(name, value)` for the caller to insert
+/// once the reference can be resolved.
 fn insert_bag(
     world: &mut ludion_ecs::World,
     registry: &Registry,
     entity: EntityId,
     record: &ResidueRecord,
-) -> Result<(), Diagnostic> {
+) -> Result<Vec<(String, Value)>, Diagnostic> {
+    let mut held = Vec::new();
     for (name, value) in &record.bag {
-        registry.deserialize_insert(name, value, world, entity)?;
+        if record.refs.iter().any(|r| &r.component == name) {
+            held.push((name.clone(), value.clone()));
+        } else {
+            registry.deserialize_insert(name, value, world, entity)?;
+        }
     }
-    Ok(())
+    Ok(held)
 }
 
 /// Every entity in `world` carrying `Name(name)`, in entity order. More than one is an authoring
@@ -881,31 +1037,32 @@ struct DeferredComponent {
     pending: Vec<(String, usize)>,
 }
 
-/// Rewrites the entity references in `value`, `owner`'s serialized `info` component, for the carry.
-/// A reference to a carried entity is returned as `(suffix, index in expanded)` to be written once the
-/// respawned ids exist. One to an entity that stayed behind is cleared when its field is optional
-/// (noted in `left_behind`); when it is required the whole component is dropped (noted too) and `None`
-/// is returned.
-fn remap_carried(
+/// Rewrites the entity references in `value`, `owner`'s serialized `info` component, against a
+/// `resolve` that maps a referenced entity to a `T` (an index into the carry list, a residue
+/// identity). A reference `resolve` answers is returned as `(suffix, T)` to be written once the
+/// final ids exist. One it cannot answer is cleared when its field is optional (noted in
+/// `unresolved`); when it is required the whole component is dropped (noted too) and `None` is
+/// returned.
+fn remap_refs<T>(
     info: &ludion_ecs::ComponentInfo,
     value: &mut Value,
     owner: EntityId,
-    expanded: &[EntityId],
-    left_behind: &mut Vec<String>,
-) -> Option<Vec<(String, usize)>> {
+    mut resolve: impl FnMut(EntityId) -> Option<T>,
+    unresolved: &mut Vec<String>,
+) -> Option<Vec<(String, T)>> {
     let mut pending = Vec::new();
     let mut cleared = Vec::new();
     for field in info.entity_refs() {
         let Some(target) = crate::engine::ref_target(value, field) else {
             continue;
         };
-        if let Some(index) = expanded.iter().position(|e| *e == target) {
-            pending.push((field.suffix.clone(), index));
+        if let Some(resolved) = resolve(target) {
+            pending.push((field.suffix.clone(), resolved));
             continue;
         }
         let item = format!("{owner} `{}`{} → {target}", info.name(), field.suffix);
         if !field.optional {
-            left_behind.push(item);
+            unresolved.push(item);
             return None;
         }
         cleared.push((field.suffix.as_str(), item));
@@ -916,7 +1073,7 @@ fn remap_carried(
         } else if let Some(slot) = value.pointer_mut(suffix) {
             *slot = Value::Null;
         }
-        left_behind.push(item);
+        unresolved.push(item);
     }
     Some(pending)
 }
@@ -936,6 +1093,24 @@ fn carry_left_behind(items: &[String]) -> Diagnostic {
     .with_help(
         "carry the referenced entity too; an optional reference arrived empty, a component whose \
          required reference stayed behind was left behind",
+    )
+}
+
+/// Builds the `L3053` warning for residue entity references that could not follow their target across
+/// a visit: an optional one was cleared, a component whose required one was unresolved was dropped.
+fn residue_ref_unresolved(items: &[String]) -> Diagnostic {
+    Diagnostic::new(
+        code::RESIDUE_REF_UNRESOLVED,
+        format!(
+            "the scene's residue could not follow {} entity reference: {}",
+            items.len(),
+            items.join(", ")
+        ),
+    )
+    .with_help(
+        "mark the referenced entity `Residue` too, or give it a unique `name:`, so the reference has \
+         an identity to follow; an optional reference arrived empty, a component whose required \
+         reference could not be resolved was left behind",
     )
 }
 

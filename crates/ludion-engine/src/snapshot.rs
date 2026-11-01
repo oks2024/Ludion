@@ -370,6 +370,11 @@ struct ResidueRecordDoc {
     #[serde(default, skip_serializing_if = "is_false")]
     authored: bool,
     bag: Vec<(String, Value)>,
+    /// The entity references in `bag`, by the identity each is resolved by on return. Optional and
+    /// additive (the `authored` precedent), absent when empty: a snapshot written before the field
+    /// restores with no refs, so its bags apply verbatim as they did before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    refs: Vec<crate::transition::ResidueRef>,
 }
 
 /// `skip_serializing_if` for [`ResidueRecordDoc::authored`]: `false` is what `#[serde(default)]` reads
@@ -459,6 +464,7 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
                         name: record.name.clone(),
                         authored: record.authored,
                         bag: record.bag.clone(),
+                        refs: record.refs.clone(),
                     })
                     .collect(),
             })
@@ -835,6 +841,7 @@ pub(crate) fn restore_into(
                             name: record.name,
                             authored: record.authored,
                             bag: record.bag,
+                            refs: record.refs,
                         })
                         .collect(),
                     last_visit: ludion_core::time::FrameIndex::new(scene.last_visit),
