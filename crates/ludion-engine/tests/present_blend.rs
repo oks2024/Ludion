@@ -8,8 +8,8 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::{SimTime, TickRate};
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
-    Engine, Mesh, Name, NoInterpolate, QualityParams, Transform, advance_volleys, extract_at,
-    play_patterns, teleport_character,
+    Engine, Mesh, Name, NoInterpolate, QualityParams, Transform, Visibility, advance_volleys,
+    extract_at, play_patterns, teleport_character,
 };
 use ludion_protocol::{Command, ResponseBody};
 use ludion_renderer::{BlendData, RenderScene, blend};
@@ -212,6 +212,45 @@ fn an_entity_spawned_this_tick_takes_its_new_pose() {
     assert!(
         mesh_xs(&mid).contains(&10.0),
         "no previous pose: the spawn is not dragged from the origin"
+    );
+}
+
+/// Moves the box +1 m every tick; hides it on frame 0 and shows it again on frame 1.
+fn hide_then_show(world: &mut World, ctx: &SystemCtx) {
+    nudge(world, "box", 1.0);
+    let id = named(world, "box");
+    match ctx.frame.as_u64() {
+        0 => {
+            let hidden = Visibility {
+                visible: false,
+                ..Visibility::default()
+            };
+            world.insert(id, hidden).unwrap();
+        }
+        1 => {
+            world.insert(id, Visibility::default()).unwrap();
+        }
+        _ => {}
+    }
+}
+
+/// A hidden-to-shown entity has no key in the previous tick, so it snaps to its new pose instead of
+/// blending from where it was last drawn.
+#[test]
+fn an_entity_shown_this_tick_takes_its_new_pose() {
+    let mut engine = engine_with(&[("toggle", hide_then_show)]);
+    let id = named(engine.world(), "box");
+    let (prev_scene, prev) = tick(&mut engine);
+    assert!(
+        !prev.meshes.contains(&Some(id)),
+        "the hidden box is not in the previous tick"
+    );
+    let (next, next_data) = tick(&mut engine);
+    let mid = blend(&prev_scene, &prev, &next, &next_data, 0.5);
+    assert_eq!(
+        box_x(&mid, &next_data, id),
+        box_x(&next, &next_data, id),
+        "no previous pose: the box takes its new pose, with no midpoint"
     );
 }
 

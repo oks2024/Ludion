@@ -14,7 +14,8 @@ use ludion_engine::components::{Anchor, UiList, UiListItem, UiRect, UiText};
 use ludion_engine::{
     Camera, Decal, DecalMap, DecalReceiverSet, DropShadow, Environment, Fade, GiDynamic,
     GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshSource, ParticleEmitter, PointLight,
-    PostProcess, QualityParams, Sprite, TileAppearance, Tilemap, Transform, extract, extract_at,
+    PostProcess, QualityParams, SpotLight, Sprite, Text, TileAppearance, Tilemap, Transform,
+    Visibility, extract, extract_at,
 };
 use ludion_renderer::{
     DecalReceivers, GROUND_MARKER_LIFT, GroundMarkerShape as RendererMarkerShape, MapImage,
@@ -1610,6 +1611,151 @@ fn a_child_mesh_inherits_its_nearest_ancestors_fade() {
             (0.5, 2.0),
             (1.0, -f32::MAX)
         ]
+    );
+}
+
+/// A camera, a hidden-able root, and one child of every kind `Visibility` removes. `root` is the
+/// `Visibility` the root carries (`None`: the component is absent).
+fn visibility_world(root: Option<Visibility>) -> World {
+    let mut world = World::new();
+    let camera = world.spawn();
+    world.insert(camera, Transform::default()).unwrap();
+    world.insert(camera, Camera::default()).unwrap();
+    let root_id = world.spawn();
+    world.insert(root_id, Transform::default()).unwrap();
+    if let Some(visibility) = root {
+        world.insert(root_id, visibility).unwrap();
+    }
+    let child = |world: &mut World| {
+        let id = world.spawn();
+        world.insert(id, Transform::default()).unwrap();
+        world.insert(id, ludion_ecs::Parent(root_id)).unwrap();
+        id
+    };
+    let id = child(&mut world);
+    world.insert(id, Mesh::default()).unwrap();
+    let id = child(&mut world);
+    world.insert(id, PointLight::default()).unwrap();
+    let id = child(&mut world);
+    world.insert(id, SpotLight::default()).unwrap();
+    let id = child(&mut world);
+    world.insert(id, Sprite::default()).unwrap();
+    let id = child(&mut world);
+    world.insert(id, Text::default()).unwrap();
+    let id = child(&mut world);
+    world.insert(id, GroundMarker::default()).unwrap();
+    let id = child(&mut world);
+    world.insert(id, DropShadow::default()).unwrap();
+    let id = child(&mut world);
+    world.insert(id, Decal::default()).unwrap();
+    let id = child(&mut world);
+    world.insert(id, ParticleEmitter::default()).unwrap();
+    world
+}
+
+fn hidden() -> Visibility {
+    Visibility {
+        visible: false,
+        ..Visibility::default()
+    }
+}
+
+/// A hidden root removes every kind under it, a part's own `visible: true` notwithstanding, and
+/// showing the root again extracts exactly what a world with no `Visibility` extracts.
+#[test]
+fn a_hidden_root_extracts_none_of_its_tree() {
+    let mut world = visibility_world(Some(hidden()));
+    let part = world.entities().last().unwrap();
+    world.insert(part, Visibility::default()).unwrap();
+    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    assert!(scene.meshes.is_empty());
+    assert!(scene.lights.is_empty());
+    assert!(scene.spot_lights.is_empty());
+    assert!(scene.sprites.is_empty(), "sprite and text quads");
+    assert!(scene.ground_markers.is_empty());
+    assert!(scene.drop_shadows.is_empty());
+    assert!(scene.decals.is_empty());
+    assert!(scene.particles.is_empty());
+
+    let root = world.entities().nth(1).unwrap();
+    world.insert(root, Visibility::default()).unwrap();
+    let shown = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let plain = extract(&visibility_world(None), (320, 180), Path::new(".")).unwrap();
+    assert_eq!(shown, plain, "an all-default Visibility changes nothing");
+    assert!(!shown.meshes.is_empty() && !shown.lights.is_empty());
+}
+
+/// A world with no `Visibility` extracts identically twice (the gate path), and a shadowless root
+/// alone removes nothing from the scene.
+#[test]
+fn a_visibility_free_world_extracts_unchanged() {
+    let world = visibility_world(None);
+    let a = extract(&world, (320, 180), Path::new(".")).unwrap();
+    let b = extract(&world, (320, 180), Path::new(".")).unwrap();
+    assert_eq!(a, b);
+    let shadowless = visibility_world(Some(Visibility {
+        cast_shadows: false,
+        ..Visibility::default()
+    }));
+    let c = extract(&shadowless, (320, 180), Path::new(".")).unwrap();
+    assert_eq!(a, c, "cast_shadows alone does not hide anything");
+}
+
+/// A hidden `GiDynamic` light is absent from the scene's lights.
+#[test]
+fn a_hidden_gi_dynamic_light_is_not_extracted() {
+    let mut world = World::new();
+    let light = world.spawn();
+    world.insert(light, Transform::default()).unwrap();
+    world.insert(light, PointLight::default()).unwrap();
+    world.insert(light, GiDynamic::default()).unwrap();
+    let shown = extract(&world, (320, 180), Path::new(".")).unwrap();
+    assert_eq!(shown.lights.len(), 1);
+    world.insert(light, hidden()).unwrap();
+    let scene = extract(&world, (320, 180), Path::new(".")).unwrap();
+    assert!(scene.lights.is_empty());
+}
+
+fn sim_hash(world: &World) -> ludion_sim::WorldHash {
+    ludion_sim::WorldHash::compute(world, &ludion_engine::builtin_registry()).unwrap()
+}
+
+/// Presentation entities are never hashed, so toggling `Visibility` on one moves nothing; on a sim
+/// entity it does, and an all-default `Visibility` hashes the same as `Visibility: {}`.
+#[test]
+fn visibility_hashes_on_sim_entities_only() {
+    let mut world = World::new();
+    let sim = world.spawn();
+    world.insert(sim, Transform::default()).unwrap();
+    let fx = world.spawn_presentation();
+    world.insert(fx, Transform::default()).unwrap();
+    let before = sim_hash(&world);
+
+    world.insert(fx, hidden()).unwrap();
+    assert_eq!(sim_hash(&world), before, "a presentation toggle is free");
+
+    world.insert(sim, Visibility::default()).unwrap();
+    let defaulted = sim_hash(&world);
+    let empty: Visibility = serde_json::from_value(serde_json::json!({})).unwrap();
+    world.insert(sim, empty).unwrap();
+    assert_eq!(sim_hash(&world), defaulted, "`{{}}` is the default");
+
+    world.insert(sim, hidden()).unwrap();
+    assert_ne!(sim_hash(&world), defaulted, "a sim toggle moves the hash");
+}
+
+/// `{}` deserializes to the default and a default serializes to `{}`.
+#[test]
+fn visibility_round_trips_through_empty_json() {
+    let empty: Visibility = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(empty, Visibility::default());
+    assert_eq!(
+        serde_json::to_value(Visibility::default()).unwrap(),
+        serde_json::json!({})
+    );
+    assert_eq!(
+        serde_json::to_value(hidden()).unwrap(),
+        serde_json::json!({ "visible": false })
     );
 }
 

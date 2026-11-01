@@ -22,7 +22,7 @@ use ludion_ecs::{ChildMap, PRESENTATION_BASE, Parent, World, is_presentation};
 use ludion_renderer::DebugSegment;
 use ludion_spatial::{Body, Collider};
 
-use crate::components::{Fade, Transform};
+use crate::components::{Fade, Transform, Visibility};
 
 /// The most ancestors a chain may have before the entity is treated as a root.
 pub const MAX_HIERARCHY_DEPTH: usize = 64;
@@ -107,6 +107,51 @@ pub(crate) fn inherited_fade(world: &World, entity: EntityId) -> Fade {
         .skip(1)
         .find_map(|&ancestor| own(ancestor))
         .unwrap_or_default()
+}
+
+/// `entity`'s effective [`Visibility`]: the AND of its own and every `Parent` ancestor's (a hidden
+/// ancestor hides the whole tree; a part's own `visible: true` never shows it). A world with no
+/// `Visibility` anywhere answers the default after one O(1) count and never walks a chain.
+pub(crate) fn inherited_visibility(world: &World, entity: EntityId) -> Visibility {
+    if world.component_count::<Visibility>() == 0 {
+        return Visibility::default();
+    }
+    let own = |id: EntityId| world.get::<Visibility>(id).ok().flatten().copied();
+    let ids = if world.has::<Parent>(entity) {
+        chain(world, entity).0
+    } else {
+        vec![entity]
+    };
+    ids.into_iter()
+        .filter_map(own)
+        .fold(Visibility::default(), |acc, v| Visibility {
+            visible: acc.visible && v.visible,
+            cast_shadows: acc.cast_shadows && v.cast_shadows,
+        })
+}
+
+/// The entities hidden by [`Visibility`] this frame, computed once so each extract pass asks a set
+/// instead of walking `Parent` chains. Empty, with no walk, when the world has no `Visibility`.
+pub(crate) struct FrameVisibility {
+    hidden: BTreeSet<EntityId>,
+}
+
+impl FrameVisibility {
+    pub(crate) fn of(world: &World, ids: &[EntityId]) -> Self {
+        let mut hidden = BTreeSet::new();
+        if world.component_count::<Visibility>() != 0 {
+            for &id in ids {
+                if !inherited_visibility(world, id).visible {
+                    hidden.insert(id);
+                }
+            }
+        }
+        Self { hidden }
+    }
+
+    pub(crate) fn hidden(&self, id: EntityId) -> bool {
+        self.hidden.contains(&id)
+    }
 }
 
 pub(crate) fn level_trs(transform: &Transform) -> Trs {
@@ -813,6 +858,68 @@ mod tests {
             [2.0, 0.0, 0.0]
         );
         assert!(world_transform(&world, a).is_none());
+    }
+
+    fn hide(world: &mut World, id: EntityId, visible: bool, cast_shadows: bool) {
+        world
+            .insert(
+                id,
+                Visibility {
+                    visible,
+                    cast_shadows,
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn visibility_ands_down_a_three_level_chain() {
+        let mut world = World::new();
+        let a = spawn(&mut world, at(0.0), None);
+        let b = spawn(&mut world, at(0.0), Some(a));
+        let c = spawn(&mut world, at(0.0), Some(b));
+        hide(&mut world, b, true, false);
+        let seen = inherited_visibility(&world, c);
+        assert!(seen.visible && !seen.cast_shadows);
+        hide(&mut world, a, false, true);
+        let seen = inherited_visibility(&world, c);
+        assert!(!seen.visible && !seen.cast_shadows);
+        let frame = FrameVisibility::of(&world, &[a, b, c]);
+        assert!(frame.hidden(a) && frame.hidden(b) && frame.hidden(c));
+    }
+
+    #[test]
+    fn a_visible_part_stays_hidden_under_a_hidden_root() {
+        let mut world = World::new();
+        let root = spawn(&mut world, at(0.0), None);
+        let part = spawn(&mut world, at(0.0), Some(root));
+        hide(&mut world, root, false, true);
+        hide(&mut world, part, true, true);
+        assert!(!inherited_visibility(&world, part).visible);
+        assert!(FrameVisibility::of(&world, &[root, part]).hidden(part));
+    }
+
+    #[test]
+    fn visibility_on_a_parent_cycle_degrades_without_hanging() {
+        let mut world = World::new();
+        let a = spawn(&mut world, at(0.0), None);
+        let b = spawn(&mut world, at(0.0), Some(a));
+        world.insert(a, Parent(b)).unwrap();
+        hide(&mut world, b, false, true);
+        assert!(
+            inherited_visibility(&world, a).visible,
+            "a cycle makes a a root"
+        );
+        assert!(!inherited_visibility(&world, b).visible);
+    }
+
+    #[test]
+    fn visibility_without_the_component_is_the_default_and_hides_nothing() {
+        let mut world = World::new();
+        let a = spawn(&mut world, at(0.0), None);
+        let b = spawn(&mut world, at(0.0), Some(a));
+        assert_eq!(inherited_visibility(&world, b), Visibility::default());
+        assert!(!FrameVisibility::of(&world, &[a, b]).hidden(b));
     }
 
     #[test]

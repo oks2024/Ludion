@@ -1349,6 +1349,59 @@ impl Default for Fade {
     }
 }
 
+/// Hides an entity, or only its shadow, from the extracted scene.
+///
+/// `visible: false` removes the entity from every render pass: its mesh, sprite, tilemap cell, text,
+/// ground marker, drop shadow, decal, particles, volley bullets, point light and spot light are not
+/// extracted, so it appears in no prepass, shadow pass or probe capture, and a hidden light lights
+/// nothing. `cast_shadows: false` keeps the entity on screen but out of the sun map, the cascades,
+/// the local shadow atlas and drop-shadow occlusion. `visible: false` always wins over
+/// `cast_shadows`.
+///
+/// Effective visibility is an AND down the [`Parent`](ludion_ecs::Parent) chain: an entity is hidden
+/// when it or **any** ancestor has `visible: false`, and a part's own `visible: true` never shows it
+/// under a hidden root. `cast_shadows` folds the same way, so a shadowless root makes its whole tree
+/// shadowless. A `ParentJoint` child always has a `Parent`, so it follows its parent. (This differs
+/// from [`Fade`], where the nearest own component wins. Use `Fade` to dither a mesh that occludes the
+/// player; use `Visibility` to hide it outright.)
+///
+/// Both fields are omitted from text and from the hash at their defaults, and `Visibility: {}` is the
+/// default. A world without the component extracts byte-identically and pays one O(1) check.
+///
+/// Particles and volley bullets are closed forms of time: hiding skips them and touches no state, so
+/// on unhide they show what their time function gives. A hidden mesh is still placed (never
+/// resolved, skinned or drawn), and the static GI bake ignores the flag, so a toggle never moves the
+/// bake signature. `render.bounds` still reports hidden entities. The component is hashed on sim
+/// entities only, because presentation entities are never hashed.
+///
+/// Not affected: cameras, `DirectionalLight`, `Environment`, `PostProcess`, `GiVolume`,
+/// `ReflectionProbe`, audio, physics colliders (a hidden entity still collides) and the UI
+/// components, which keep their own `visible`.
+///
+/// ```yaml
+/// components:
+///   Visibility:
+///     visible: false
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct Visibility {
+    /// Whether the entity, and every `Parent` descendant, is extracted (default `true`).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    /// Whether the entity, and every `Parent` descendant, casts shadows (default `true`).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub cast_shadows: bool,
+}
+
+impl Default for Visibility {
+    fn default() -> Self {
+        Visibility {
+            visible: true,
+            cast_shadows: true,
+        }
+    }
+}
+
 /// Which tonemap operator maps the composited HDR image onto the 8-bit output.
 ///
 /// **Every variant carries a doc comment**, which is what makes schemars emit the `oneOf`-of-`const`
@@ -4908,6 +4961,9 @@ fn exposure_default() -> f32 {
 fn yes() -> bool {
     true
 }
+fn is_true(value: &bool) -> bool {
+    *value
+}
 fn fog_color_default() -> [f32; 3] {
     [0.5, 0.5, 0.5]
 }
@@ -5220,6 +5276,10 @@ pub fn builtin_registry() -> Registry {
     // `check-scene`. Registered last, per the append-only order above.
     registry
         .register::<ParentJoint>("ParentJoint")
+        .expect("unique");
+    // `Visibility` needs no semantic validator: two bools have no invalid value.
+    registry
+        .register::<Visibility>("Visibility")
         .expect("unique");
     registry
 }
@@ -5783,12 +5843,13 @@ mod tests {
                 "DropShadow",
                 "Decal",
                 "ParentJoint",
+                "Visibility",
             ]
         );
         assert_eq!(
             registry.len(),
-            43,
-            "appending ParentJoint grows the registry by exactly one"
+            44,
+            "appending Visibility grows the registry by exactly one"
         );
     }
 

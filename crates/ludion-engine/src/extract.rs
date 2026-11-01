@@ -50,7 +50,7 @@ use crate::components::{
 };
 use crate::docs::DocStore;
 use crate::fonts::FontLibrary;
-use crate::hierarchy::{WorldAffines, level_trs};
+use crate::hierarchy::{FrameVisibility, WorldAffines, level_trs};
 use crate::load_observer::LoadPhase;
 use crate::particles::{self, CameraBasis};
 use crate::patterns::{self, BulletKind, PatternDoc, Volley};
@@ -700,6 +700,17 @@ fn extract_inner(
         now,
     );
     drop_non_finite(&mut placed, degraded);
+    // Hidden entities leave every list that feeds the scene, early, so the blend keys and the pixel
+    // snap stay consistent. Meshes stay: the GI voxelizer reads them and ignores `Visibility`.
+    let visibility = FrameVisibility::of(world, &ids);
+    placed
+        .sprites
+        .retain(|sprite| !visibility.hidden(sprite.id));
+    placed.texts.retain(|text| !visibility.hidden(text.0));
+    placed.lights.retain(|light| !visibility.hidden(light.0));
+    placed
+        .spot_lights
+        .retain(|light| !visibility.hidden(light.0));
 
     // Resolve sprite textures in first-encounter (entity) order, collecting every load error before
     // giving up. Geometry is already fixed above — only the path→index mapping and its IO live here.
@@ -804,6 +815,7 @@ fn extract_inner(
     extract_volleys(
         world,
         &ids,
+        &visibility,
         project_root,
         assets,
         &mut atlases,
@@ -1050,6 +1062,11 @@ fn extract_inner(
     let mut palette_scratch: Vec<Mat4> = Vec::new();
     let mut last_fade = None;
     for mesh in &placed.meshes {
+        // Hidden meshes stay in `placed` for the voxelizer (the static GI bake ignores `Visibility`)
+        // but are never resolved, skinned or drawn.
+        if visibility.hidden(mesh.id) {
+            continue;
+        }
         // Per-instance fade rides the entity's optional `Fade` component; absent ⇒ the
         // render-identical default `(1.0, -f32::MAX)`, which `mesh.wgsl`'s screen-door discard can
         // never reject. A mesh with no `Fade` of its own takes its nearest ancestor's, so a faded
@@ -1229,6 +1246,7 @@ fn extract_inner(
     let (decals, decal_ids) = extract_decals(
         world,
         &ids,
+        &visibility,
         &mut poses,
         &meshes,
         &mesh_owners,
@@ -1284,9 +1302,10 @@ fn extract_inner(
         }
     };
 
-    let (ground_markers, ground_marker_ids) = extract_ground_markers(world, &ids, &mut poses);
+    let (ground_markers, ground_marker_ids) =
+        extract_ground_markers(world, &ids, &visibility, &mut poses);
     let (drop_shadows, drop_shadow_ids) =
-        extract_drop_shadows(world, &ids, &mut poses, &mesh_owners);
+        extract_drop_shadows(world, &ids, &visibility, &mut poses, &mesh_owners);
     let (light_ids, spot_light_ids): (Vec<EntityId>, Vec<EntityId>) = if collect {
         (
             placed.lights.iter().map(|(id, _)| *id).collect(),
@@ -1312,6 +1331,7 @@ fn extract_inner(
         particles: extract_particles(
             world,
             &ids,
+            &visibility,
             &mut poses,
             now,
             particle_density,
@@ -1679,9 +1699,11 @@ fn extract_spot_lights(lights: Vec<(EntityId, SpotLightData)>) -> Vec<SpotLightD
 fn extract_ground_markers(
     world: &World,
     ids: &[EntityId],
+    visibility: &FrameVisibility,
     poses: &mut WorldAffines,
 ) -> (Vec<GroundMarkerInstance>, Vec<EntityId>) {
     ids.iter()
+        .filter(|&&id| !visibility.hidden(id))
         .filter_map(|&id| {
             let marker = get::<GroundMarker>(world, id)?;
             let pose = render_pose(world, poses, id);
@@ -1731,11 +1753,13 @@ fn scaled_shape(shape: GroundMarkerShape, scale: f32) -> ludion_renderer::Ground
 fn extract_drop_shadows(
     world: &World,
     ids: &[EntityId],
+    visibility: &FrameVisibility,
     poses: &mut WorldAffines,
     mesh_owners: &[EntityId],
 ) -> (Vec<DropShadowInstance>, Vec<EntityId>) {
     let mut children = None;
     ids.iter()
+        .filter(|&&id| !visibility.hidden(id))
         .filter_map(|&id| {
             let shadow = get::<DropShadow>(world, id)?;
             let pose = render_pose(world, poses, id);
@@ -1785,6 +1809,7 @@ fn extract_drop_shadows(
 fn extract_decals(
     world: &World,
     ids: &[EntityId],
+    visibility: &FrameVisibility,
     poses: &mut WorldAffines,
     meshes: &[MeshInstance],
     mesh_owners: &[EntityId],
@@ -1797,6 +1822,9 @@ fn extract_decals(
     let mut children = None;
     let mut decals: Vec<(i16, EntityId, DecalInstance)> = Vec::new();
     for (index, &id) in ids.iter().enumerate() {
+        if visibility.hidden(id) {
+            continue;
+        }
         let Some(decal) = get::<Decal>(world, id) else {
             continue;
         };
@@ -1946,9 +1974,11 @@ fn decal_map(
 ///
 /// Like ground markers, emitters do not travel through [`place`]: `render.bounds` reports the
 /// scene's *content*, and a plume is dressing over it.
+#[allow(clippy::too_many_arguments)]
 fn extract_particles(
     world: &World,
     ids: &[EntityId],
+    visibility: &FrameVisibility,
     poses: &mut WorldAffines,
     now: SimTime,
     particle_density: f32,
@@ -1958,6 +1988,9 @@ fn extract_particles(
     let mut emitters = Vec::new();
     let mut live = 0;
     for &id in ids {
+        if visibility.hidden(id) {
+            continue;
+        }
         let Some(emitter) = get::<ParticleEmitter>(world, id) else {
             continue;
         };
@@ -2042,6 +2075,7 @@ const PARTICLE_PAR_MIN_LIVE: usize = 4096;
 fn extract_volleys(
     world: &World,
     ids: &[EntityId],
+    visibility: &FrameVisibility,
     project_root: &Path,
     assets: &mut dyn SceneAssets,
     atlases: &mut AtlasCache,
@@ -2074,6 +2108,9 @@ fn extract_volleys(
             continue;
         };
         let id = ids[index];
+        if visibility.hidden(id) {
+            continue;
+        }
         let Some(volley) = get::<Volley>(world, id) else {
             continue;
         };
@@ -7082,6 +7119,50 @@ mod tests {
             assert_eq!(
                 here.hash, moved.hash,
                 "the grid the marked motion cannot touch is bit-identical"
+            );
+        }
+
+        /// Hiding a static mesh leaves the voxelization alone: the static GI bake ignores
+        /// `Visibility`, so a toggle is a signature hit with a bit-identical grid, while the scene
+        /// itself drops the mesh.
+        #[test]
+        fn hiding_a_static_mesh_does_not_invalidate_the_signature() {
+            let mut cache = AssetCache::new();
+            let before = rasterization_count();
+            let mut world = world_with_a_cube(0.0, 0.5);
+            let shown = voxelize_through(&world, &mut cache);
+
+            let cube = world.entities().next().expect("the cube");
+            world
+                .insert(
+                    cube,
+                    crate::components::Visibility {
+                        visible: false,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let hidden = extract_through(
+                &world,
+                (320, 180),
+                Path::new("."),
+                &mut cache,
+                tick_zero(),
+                QualityParams::FULL.particle_density,
+                None,
+                &mut Vec::new(),
+            )
+            .expect("the fixture world extracts");
+            assert!(hidden.meshes.is_empty(), "the hidden cube is not drawn");
+            assert_eq!(
+                rasterization_count() - before,
+                1,
+                "a visibility toggle must be a cache hit, not a rebuild"
+            );
+            assert_eq!(
+                shown.hash,
+                hidden.voxel.expect("the grid survives").hash,
+                "the static bake ignores Visibility"
             );
         }
 

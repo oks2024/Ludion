@@ -332,6 +332,34 @@ fn a_parent_joint_child_composes_the_joint_rest() {
     }
 }
 
+/// A `ParentJoint` child follows its skin's `Visibility`: hidden under a hidden skin, drawn once the
+/// skin is shown again (the `Parent` walk covers it with no joint-specific code).
+#[test]
+fn a_parent_joint_child_is_hidden_with_its_skin() {
+    let (mut engine, dir) = engine_with_rig("visibility");
+    let skin = format!("{SKIN_MESH}{SKIN_TRANSFORM}      Visibility:\n        visible: false\n");
+    let child = format!(
+        "{PARENT_OF_SKIN}{}      Mesh: {{}}\n",
+        parent_joint("child")
+    );
+    engine
+        .load_inline_scene(&scene(&skin, &child))
+        .expect("the scene loads");
+    let drawn = |engine: &Engine| {
+        ludion_engine::extract(engine.world(), (320, 180), &dir)
+            .expect("the scene extracts")
+            .meshes
+            .len()
+    };
+    assert_eq!(drawn(&engine), 0, "the child hides with its hidden skin");
+
+    let skin = format!("{SKIN_MESH}{SKIN_TRANSFORM}");
+    engine
+        .load_inline_scene(&scene(&skin, &child))
+        .expect("the scene loads");
+    assert_eq!(drawn(&engine), 2, "the skin and its child are drawn");
+}
+
 /// A presentation `ParentJoint` child is never hashed: the scene with and without it hashes equal.
 #[test]
 fn a_presentation_parent_joint_child_does_not_move_the_hash() {
