@@ -1,6 +1,7 @@
 //! [`PhysicsWorld`]: the solver state as one world resource, and the mapping from the authored
 //! [`Collider`]/[`Velocity`] surface onto it.
 
+use bincode::Options;
 use core::fmt;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -317,7 +318,8 @@ struct SnapshotRef<'a> {
     last_write_held: Option<u64>,
 }
 
-/// The snapshot as read — the same fields in the same order, so the two encode identically.
+/// The snapshot as read — the same fields in the same order, so the two encode identically. The
+/// encoding is positional: any field change is a blob-format event.
 #[derive(Deserialize)]
 struct SnapshotOwned {
     rapier: RapierWorld,
@@ -335,7 +337,6 @@ struct SnapshotOwned {
     sensor_events: Vec<SensorEvent>,
     despawned: Vec<EntityId>,
     last_write_frame: Option<u64>,
-    #[serde(default)]
     last_write_held: Option<u64>,
 }
 
@@ -1238,8 +1239,12 @@ impl PhysicsWorld {
     /// walking the restored table in its own order, never by walking a solver set. The timestep is
     /// taken from `tick_rate`, not from the bytes, so a session restores at the rate it runs at.
     pub fn from_bytes(bytes: &[u8], tick_rate: TickRate) -> Result<Self, PhysicsError> {
-        let snapshot: SnapshotOwned =
-            bincode::deserialize(bytes).map_err(|why| PhysicsError::Decode(why.to_string()))?;
+        // `bincode::deserialize` is this chain plus `allow_trailing_bytes`; a blob with a tail is corrupt.
+        let snapshot: SnapshotOwned = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .reject_trailing_bytes()
+            .deserialize(bytes)
+            .map_err(|why| PhysicsError::Decode(why.to_string()))?;
         let mut world = PhysicsWorld {
             rapier: snapshot.rapier,
             table: snapshot.table,
@@ -2801,6 +2806,17 @@ mod tests {
 
     use super::*;
     use crate::systems::{DEFAULT_SOLVER_ITERATIONS, DEFAULT_STABILIZATION_ITERATIONS};
+
+    #[test]
+    fn a_blob_with_trailing_bytes_is_refused() {
+        let mut bytes = PhysicsWorld::new(TickRate::DEFAULT).to_bytes().unwrap();
+        assert!(PhysicsWorld::from_bytes(&bytes, TickRate::DEFAULT).is_ok());
+        bytes.push(0);
+        assert!(matches!(
+            PhysicsWorld::from_bytes(&bytes, TickRate::DEFAULT),
+            Err(PhysicsError::Decode(_))
+        ));
+    }
 
     #[test]
     fn the_iteration_defaults_equal_the_pinned_rapier_defaults() {

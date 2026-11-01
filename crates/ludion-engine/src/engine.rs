@@ -1667,7 +1667,10 @@ impl Engine {
         };
         recorder.pending_ticks += 1;
         match self.free_run_keyframe(&mut recorder) {
-            Ok(()) => self.recorder = Some(recorder),
+            Ok(skipped) => {
+                self.recorder = Some(recorder);
+                self.report_keyframe_skip(skipped);
+            }
             // recorder dropped (not restored) — recording ends here.
             Err(diagnostic) => self.stop_recording_on_failure(&diagnostic),
         }
@@ -1675,16 +1678,49 @@ impl Engine {
 
     /// Writes a keyframe (preceded by a `SimStep` flush of the batched free-run ticks) when the
     /// current frame has crossed the [`KEYFRAME_INTERVAL`] boundary — the free-run analogue of the
-    /// keyframe half of [`write_record`](Engine::write_record). A no-op between boundaries.
-    fn free_run_keyframe(&self, recorder: &mut Recorder) -> Result<(), Diagnostic> {
+    /// keyframe half of [`write_record`](Engine::write_record). A no-op between boundaries. Returns the
+    /// skip diagnostic when the keyframe was skipped (see [`keyframe_or_skip`](Engine::keyframe_or_skip)).
+    fn free_run_keyframe(&self, recorder: &mut Recorder) -> Result<Option<Diagnostic>, Diagnostic> {
         let current = self.frame();
         if current.as_u64() >= recorder.last_keyframe.as_u64() + recorder.keyframe_interval {
             crate::recording::flush_pending_ticks(recorder, current).map_err(io_to_diagnostic)?;
-            let snapshot = crate::snapshot::capture(self)?;
-            crate::recording::write_keyframe(recorder, current, &snapshot)
-                .map_err(io_to_diagnostic)?;
+            return self.keyframe_or_skip(recorder, current);
         }
-        Ok(())
+        Ok(None)
+    }
+
+    /// Captures the world and writes it as a keyframe at `frame`. A world whose capture fails
+    /// with `L0007` (a non-finite float, or another component serialize failure) skips the keyframe instead of ending the
+    /// recording: nothing is written, `last_keyframe` moves to `frame` so the next attempt comes one
+    /// interval later, and the diagnostic is returned for the `&mut self` caller to report. The
+    /// delta and input records continue, and a replay seeks from the nearest earlier keyframe. Any
+    /// other capture failure is returned as an error.
+    fn keyframe_or_skip(
+        &self,
+        recorder: &mut Recorder,
+        frame: FrameIndex,
+    ) -> Result<Option<Diagnostic>, Diagnostic> {
+        match crate::snapshot::capture(self) {
+            Ok(snapshot) => {
+                crate::recording::write_keyframe(recorder, frame, &snapshot)
+                    .map_err(io_to_diagnostic)?;
+                Ok(None)
+            }
+            Err(diagnostic) if diagnostic.code == code::COMPONENT_SERIALIZE_FAILED => {
+                recorder.last_keyframe = frame;
+                Ok(Some(diagnostic))
+            }
+            Err(diagnostic) => Err(diagnostic),
+        }
+    }
+
+    /// Reports a keyframe skipped by [`keyframe_or_skip`](Engine::keyframe_or_skip) into `Diagnostics`,
+    /// latched by its message so one report per entity, component and count.
+    fn report_keyframe_skip(&mut self, skipped: Option<Diagnostic>) {
+        if let Some(diagnostic) = skipped {
+            let key = diagnostic.message.clone();
+            crate::diagnostics::report_full(self.driver.world_mut(), key, diagnostic);
+        }
     }
 
     /// Advances one tick with a [`ScheduleObserver`] attached, draining audio exactly as
@@ -3184,13 +3220,15 @@ impl Engine {
     ///
     /// The stashed doc reload and partial application are dropped because [`execute`](Engine::execute)
     /// never reached its `take`, and they would otherwise be recorded against the *next* command. The
-    /// driver is paused because the handler may have half-applied its edit and nothing should tick on
-    /// that world; the world itself is left as the panic left it, as evidence.
+    /// handler may have half-applied its edit, which no record can describe, so an active recording
+    /// stops here (`L3042`): the free-run ticks before the command are flushed first, and no keyframe is
+    /// written because the world is the panic's wreckage. The driver is paused because nothing should
+    /// tick on that world; the world itself is left as the panic left it, as evidence.
     pub(crate) fn command_panicked(&mut self, method: &str, message: &str) -> Diagnostic {
         self.pending_doc_reload = None;
         self.applied_before_error = None;
         self.driver.pause();
-        Diagnostic::new(
+        let diagnostic = Diagnostic::new(
             code::COMMAND_PANICKED,
             format!(
                 "the command `{method}` panicked on frame {}: {message}",
@@ -3198,10 +3236,17 @@ impl Engine {
             ),
         )
         .with_help(
-            "the sim is paused, the world is as the panic left it, and the command was not recorded; \
+            "the sim is paused, the world is as the panic left it, and the recording stops here; \
              the panic's location is on the host's stderr; `engine.restore` or `scene.load` \
              gets back to a known world (`ludion explain L4016`)",
-        )
+        );
+        if let Some(mut recorder) = self.recorder.take() {
+            // The flush is best effort: the recording is stopping anyway.
+            let _ = crate::recording::flush_pending_ticks(&mut recorder, self.frame());
+            self.recorder = Some(recorder);
+            self.stop_recording_on_failure(&diagnostic);
+        }
+        diagnostic
     }
 
     // --- Shutdown ------------------------------------------------------------------------------
@@ -4489,7 +4534,8 @@ impl Engine {
     }
 
     /// Stops recording, flushing the sink. Idempotent. Writes a closing keyframe unless nothing was
-    /// recorded since the last keyframe or the session ended on a system panic.
+    /// recorded since the last keyframe, the session ended on a system panic, or the capture fails
+    /// with `L0007` (that keyframe is skipped and the failure reported).
     ///
     /// # Errors
     /// `L3042` if the recording died early (the failure is returned once); a replay-format
@@ -4506,9 +4552,8 @@ impl Engine {
             crate::recording::flush_pending_ticks(&mut recorder, self.frame())
                 .map_err(io_to_diagnostic)?;
             if recorder.writer.records_written() != recorder.records_at_mark {
-                let snapshot = crate::snapshot::capture(self)?;
-                crate::recording::write_keyframe(&mut recorder, self.frame(), &snapshot)
-                    .map_err(io_to_diagnostic)?;
+                let skipped = self.keyframe_or_skip(&mut recorder, self.frame())?;
+                self.report_keyframe_skip(skipped);
             }
             recorder.writer.into_inner().map_err(io_to_diagnostic)?;
         }
@@ -4561,7 +4606,10 @@ impl Engine {
             applied_doc.as_ref(),
             panicked_at,
         ) {
-            Ok(()) => self.recorder = Some(recorder),
+            Ok(skipped) => {
+                self.recorder = Some(recorder);
+                self.report_keyframe_skip(skipped);
+            }
             Err(diagnostic) => self.stop_recording_on_failure(&diagnostic),
         }
     }
@@ -4596,7 +4644,8 @@ impl Engine {
         self.recording_failure = Some(stopped);
     }
 
-    /// Writes one delta record and, if due, one keyframe. Split from [`record`](Engine::record) so
+    /// Writes one delta record and, if due, one keyframe (`Some` carries the diagnostic of a keyframe
+    /// skipped for an `L0007` capture failure). Split from [`record`](Engine::record) so
     /// `recorder` is a local (disjoint from the `&self` reads it needs).
     fn write_record(
         &self,
@@ -4605,7 +4654,7 @@ impl Engine {
         drain_frame: FrameIndex,
         applied_doc: Option<&AppliedDocReload>,
         panicked_at: Option<FrameIndex>,
-    ) -> Result<(), Diagnostic> {
+    ) -> Result<Option<Diagnostic>, Diagnostic> {
         let scene_text = match &self.scene {
             Some(SceneRef::Inline { document }) => Some(document.as_str()),
             _ => None,
@@ -4615,16 +4664,14 @@ impl Engine {
         if let Some(frame) = panicked_at {
             crate::recording::write_system_panic(recorder, frame).map_err(io_to_diagnostic)?;
             // A panicked tick's half-written world is never keyframed.
-            return Ok(());
+            return Ok(None);
         }
 
         let current = self.frame();
         if current.as_u64() >= recorder.last_keyframe.as_u64() + recorder.keyframe_interval {
-            let snapshot = crate::snapshot::capture(self)?;
-            crate::recording::write_keyframe(recorder, current, &snapshot)
-                .map_err(io_to_diagnostic)?;
+            return self.keyframe_or_skip(recorder, current);
         }
-        Ok(())
+        Ok(None)
     }
 }
 

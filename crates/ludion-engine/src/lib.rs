@@ -251,3 +251,6 @@ pub use ludion_renderer::{
     AntiAliasing, DebugView, FrameSize, GpuUploads, PresentSize, Quality, QualityParams,
     RenderScale, dump_frame_graph_json,
 };
+
+#[cfg(test)]
+mod snapshot_integrity_tests;

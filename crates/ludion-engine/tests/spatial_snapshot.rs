@@ -181,25 +181,18 @@ fn poisoned_engine() -> Engine {
 }
 
 #[test]
-fn a_non_finite_collider_pose_does_not_break_the_restore() {
+fn a_non_finite_collider_pose_refuses_the_snapshot() {
     let mut first = poisoned_engine();
     first.advance_live();
-    let snapshot = match first.execute(Command::EngineSnapshot).unwrap().body {
-        ResponseBody::Snapshot { snapshot } => snapshot,
-        other => panic!("expected a snapshot, got {other:?}"),
-    };
-    let filed = snapshot["spatial_index"].as_array().expect("an index");
-    assert_eq!(
-        filed.len(),
-        1,
-        "only the finite entry is carried: {filed:?}"
+    let refusal = first
+        .execute(Command::EngineSnapshot)
+        .expect_err("a NaN pose cannot be stored");
+    assert_eq!(refusal.code.as_str(), "L0007");
+    assert!(
+        refusal.message.contains("`Transform`") && refusal.message.contains("non-finite"),
+        "names the component: {}",
+        refusal.message
     );
-    assert_eq!(filed[0]["center"][0], 2.0);
-
-    let mut resumed = poisoned_engine();
-    resumed
-        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
-        .expect("the restore succeeds");
 }
 
 #[test]

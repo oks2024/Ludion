@@ -26,7 +26,9 @@
 //! from the clock, for a clip already running when first seen (a load, a switch, a restore from an
 //! older snapshot). So a clip a later-registered system starts (the react-on-`end` pattern) fires
 //! its `t = 0` event one tick late, with its first tick of clip time, and an earlier-registered one
-//! on the start tick; never lost, never twice. The record rides a snapshot.
+//! on the start tick; never lost, never twice. The record rides a snapshot. The one exception: a
+//! snapshot with no record (older or hand-built) taken on an earlier-registered starter's start tick
+//! restores as "already running", so that clip's `t = 0` event fires again after the restore.
 //!
 //! **Crossfade.** Only the incoming `clip` emits. The outgoing `from` side never does, its `end`
 //! included: [`crossfade`](crate::crossfade) has already handed the choice to the new clip, so a

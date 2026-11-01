@@ -77,7 +77,7 @@ pub mod input;
 pub mod run_state;
 
 pub use driver::{DriverRestore, PastFrameInject, SimConfig, SimDriver};
-pub use hash::{HashReport, NonFinite, WorldHash};
+pub use hash::{HashReport, NonFinite, WorldHash, non_finite_count};
 pub use input::{
     Action, GamepadAxis, GamepadButton, GamepadState, InputEvent, InputScript, InputState, Key,
     MouseButton, MouseState, STICK_DEADZONE, ScriptedInput, TRIGGER_THRESHOLD,

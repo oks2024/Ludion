@@ -483,7 +483,8 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
 /// The per-entity component documents of `ids`, in the order given.
 ///
 /// # Errors
-/// Propagates a component serialization failure (`L0007`).
+/// Propagates a component serialization failure (`L0007`), including a component holding a NaN or
+/// infinite float: JSON writes it as `null`, which restore would drop along with the whole component.
 fn entity_docs(
     engine: &Engine,
     ids: impl Iterator<Item = EntityId>,
@@ -492,6 +493,24 @@ fn entity_docs(
     for id in ids {
         let mut components = Map::new();
         for info in engine.registry().iter() {
+            let Some(erased) = info.serialize_erased(engine.world(), id)? else {
+                continue;
+            };
+            let non_finite = ludion_sim::non_finite_count(erased)
+                .map_err(|error| info.serialize_failed(id, &error))?;
+            if non_finite > 0 {
+                return Err(Diagnostic::new(
+                    code::COMPONENT_SERIALIZE_FAILED,
+                    format!(
+                        "component `{}` on entity {id} holds {non_finite} non-finite float(s) \
+                         (NaN or ±inf), which a snapshot cannot store",
+                        info.name()
+                    ),
+                )
+                .with_help(
+                    "find the system that wrote the NaN or infinity and fix it (`ludion explain L4024`)",
+                ));
+            }
             if let Some(value) = info.serialize(engine.world(), id)? {
                 components.insert(info.name().to_string(), value);
             }
@@ -605,6 +624,10 @@ fn check_live_set(
     )))
 }
 
+/// The highest frame a restore accepts: headroom for the `+ 1` of every tick and for
+/// `last_keyframe + keyframe_interval`, which a frame near `u64::MAX` would overflow.
+const MAX_RESTORE_FRAME: u64 = u64::MAX / 2;
+
 /// Rebuilds the engine's sim state from a snapshot document, installing it into `engine`, and returns
 /// a [`RestoreReport`] of every component-schema drift the migration had to work around.
 ///
@@ -619,14 +642,18 @@ fn check_live_set(
 ///   `L3016`, carrying the serde error);
 /// - added fields fill from serde defaults inside deserialization; the filled/removed *field paths*
 ///   (dotted for nested fields) are computed by re-serializing the inserted value and diffing keys
-///   against the snapshot's stored value, and reported as an informational entry.
+///   against the snapshot's stored value, and reported as an informational entry;
+/// - a value that deserializes but fails the component's schema (`L1014`) or semantic validator is
+///   **kept**, exactly as captured — Rust code may legitimately hold a value outside its authored
+///   range, and a restore must reproduce the live world — and each failure is reported into
+///   `Diagnostics` with a path under `/entities/<i>/components/<Name>` (or `/presentation/<i>/…`).
 ///
 /// An empty report means a clean, lossless restore.
 ///
 /// # Errors
 /// `L3008` for a genuinely malformed snapshot document — a wrong envelope shape, an unparseable
-/// body, an unsupported `format`, an invalid speed, or a `pending_input` event addressed to a frame
-/// before the snapshot's; `L0025` for an entity allocator state that
+/// body, an unsupported `format`, an invalid speed, a `frame` past `MAX_RESTORE_FRAME`, or a
+/// `pending_input` event addressed to a frame before the snapshot's; `L0025` for an entity allocator state that
 /// is inconsistent; `L3041` when the `allocator` field's live slots differ from the `entities`
 /// list. All are raised before the engine is touched. Per-component drift never errors; it lands in
 /// the returned report.
@@ -658,6 +685,18 @@ pub(crate) fn restore_into(
             format!("snapshot speed {} is not a valid pacing factor", doc.speed),
         )
     })?;
+
+    if doc.frame > MAX_RESTORE_FRAME {
+        return Err(Diagnostic::new(
+            code::PROTOCOL_SNAPSHOT_INVALID,
+            format!(
+                "snapshot frame {} is past the highest restorable frame {MAX_RESTORE_FRAME}",
+                doc.frame
+            ),
+        )
+        .with_path("/frame")
+        .with_help("a run never reaches this frame; re-take the snapshot from a real session"));
+    }
 
     if let Some((i, event)) = doc
         .pending_input
@@ -771,10 +810,31 @@ pub(crate) fn restore_into(
             field: field.clone(),
         });
     }
-    for entity in doc.entities.iter().chain(&doc.presentation) {
+    let mut invalid: Vec<Diagnostic> = Vec::new();
+    let listed = doc
+        .entities
+        .iter()
+        .enumerate()
+        .map(|(i, entity)| (entity, format!("/entities/{i}")))
+        .chain(
+            doc.presentation
+                .iter()
+                .enumerate()
+                .map(|(i, entity)| (entity, format!("/presentation/{i}"))),
+        );
+    for (entity, doc_path) in listed {
         let id = EntityId::new(entity.index, entity.generation);
         for (name, snapshot_value) in &entity.components {
-            migrate_component(registry, &mut world, id, name, snapshot_value, &mut entries);
+            migrate_component(
+                registry,
+                &mut world,
+                id,
+                name,
+                snapshot_value,
+                &doc_path,
+                &mut entries,
+                &mut invalid,
+            );
         }
     }
 
@@ -867,6 +927,15 @@ pub(crate) fn restore_into(
         })
         .map_err(crate::commands::collapse)?;
 
+    for diagnostic in invalid {
+        let key = format!(
+            "restore@{frame} {} {}",
+            diagnostic.path.as_deref().unwrap_or_default(),
+            diagnostic.code.as_str()
+        );
+        crate::diagnostics::report_full(engine.world_mut(), key, diagnostic);
+    }
+
     if missing_settings {
         crate::diagnostics::report(
             engine.world_mut(),
@@ -885,14 +954,18 @@ pub(crate) fn restore_into(
 ///
 /// The three outcomes (drop-unregistered / drop-undeserializable / kept-with-field-diff) are exactly
 /// the migration policy documented on [`restore_into`]. A component that restores byte-identically
-/// pushes nothing.
+/// pushes nothing. A kept component whose value fails its schema or semantic check also lands in
+/// `invalid`, each diagnostic's path prefixed with `doc_path/components/<name>`.
+#[allow(clippy::too_many_arguments)]
 fn migrate_component(
     registry: &ludion_ecs::Registry,
     world: &mut ludion_ecs::World,
     entity: EntityId,
     name: &str,
     snapshot_value: &Value,
+    doc_path: &str,
     entries: &mut Vec<RestoreEntry>,
+    invalid: &mut Vec<Diagnostic>,
 ) {
     // 1. A component this build no longer registers is dropped (L3015).
     if registry.get(name).is_none() {
@@ -901,6 +974,15 @@ fn migrate_component(
             component: name.to_string(),
         });
         return;
+    }
+
+    // 1b. The value is checked as a scene or wire value would be, but only reported: it is kept either
+    //     way (see the policy on `restore_into`).
+    let mut failures = ludion_scene::check_component(name, snapshot_value, registry);
+    if failures.is_empty()
+        && let Some(info) = registry.get(name)
+    {
+        failures = info.validate_semantics(snapshot_value);
     }
 
     // 2. A value that no longer deserializes is dropped, carrying the serde error (L3016). Added
@@ -913,6 +995,15 @@ fn migrate_component(
             error: diagnostic.message,
         });
         return;
+    }
+
+    // Reported only now: a value that was dropped above is not "kept", and says so already.
+    for mut diagnostic in failures {
+        diagnostic.path = Some(format!(
+            "{doc_path}/components/{name}{}",
+            diagnostic.path.as_deref().unwrap_or_default()
+        ));
+        invalid.push(diagnostic);
     }
 
     // 3. Kept — but compute the honest field diff by re-serializing the inserted value and comparing

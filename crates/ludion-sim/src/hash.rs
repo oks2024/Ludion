@@ -86,6 +86,26 @@ pub struct HashReport {
     pub non_finite: Option<NonFinite>,
 }
 
+/// How many NaN or infinite floats `component` holds, counted by the same canonical encoder the
+/// world hash uses — so a component the hash reports as non-finite is one this counts.
+///
+/// # Errors
+/// Whatever the component's own `Serialize` reports, plus the two shapes JSON cannot hold (a
+/// 128-bit integer outside `u64`/`i64`, a map key that is not string-like).
+///
+/// # Example
+/// ```
+/// use ludion_sim::non_finite_count;
+///
+/// assert_eq!(non_finite_count(&[1.0_f32, 2.0]).unwrap(), 0);
+/// assert_eq!(non_finite_count(&[f32::NAN, f32::INFINITY]).unwrap(), 2);
+/// ```
+pub fn non_finite_count(component: &dyn erased_serde::Serialize) -> Result<u64, serde_json::Error> {
+    let mut encoder = Canonical::default();
+    encoder.encode(component)?;
+    Ok(encoder.non_finite())
+}
+
 /// A stable 64-bit digest of the world's entities and component data.
 ///
 /// Displayed — and serialized — as exactly 16 lowercase hex digits, so hashes compare as strings

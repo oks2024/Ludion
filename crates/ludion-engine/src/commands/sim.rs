@@ -30,6 +30,7 @@ pub(crate) fn resume(engine: &mut Engine) -> Result<ResponseBody, Diagnostic> {
 /// that `L4007` rather than an Ack that would claim the requested ticks all ran (the sim's own
 /// `run_state` and the `log` channel report the same pause to anyone not holding this reply). The
 /// step did advance the world, so the record holds the ticks that ran, the panicking tick included.
+/// A hash that cannot be computed after the ticks ran is recorded the same way.
 pub(crate) fn step(engine: &mut Engine, params: SimStepParams) -> Result<ResponseBody, Diagnostic> {
     let ran = engine.step_ticks(params.ticks);
     if let Some(panic) = engine.take_system_panic() {
@@ -40,7 +41,16 @@ pub(crate) fn step(engine: &mut Engine, params: SimStepParams) -> Result<Respons
         return Err(panic);
     }
     let hash = if params.hash {
-        Some(WireHash::from_u64(engine.world_hash()?.as_u64()))
+        match engine.world_hash() {
+            Ok(hash) => Some(WireHash::from_u64(hash.as_u64())),
+            Err(error) => {
+                engine.note_applied_before_error(Command::SimStep(SimStepParams {
+                    ticks: ran,
+                    hash: params.hash,
+                }));
+                return Err(error);
+            }
+        }
     } else {
         None
     };

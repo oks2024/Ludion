@@ -17,7 +17,7 @@ use ludion_core::time::FrameIndex;
 use ludion_ecs::Registry;
 use ludion_engine::Engine;
 use ludion_import::ExternalFiles;
-use ludion_protocol::command::EngineRestoreParams;
+use ludion_protocol::command::{EngineRestoreParams, SimStepParams};
 use ludion_protocol::frame::FrameHeader;
 use ludion_protocol::replay::ReplayReader;
 use ludion_protocol::{Command, Request};
@@ -358,6 +358,11 @@ pub fn restore_snapshot(data: &[u8]) {
         .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
         .is_ok()
     {
+        // One tick on the restored frame, so a frame the restore accepted must also survive a step.
+        let _ = engine.execute(Command::SimStep(SimStepParams {
+            ticks: 1,
+            hash: true,
+        }));
         let _ = engine.execute(Command::EngineSnapshot);
     }
 }
