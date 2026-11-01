@@ -204,7 +204,8 @@ pub use sculpt::{
 pub use sprite::{
     GradientBlend, GradientDirection, OutlineSide, SPRITE_EMPTY_GLYPH, SPRITE_FORMAT_VERSION,
     SPRITE_GLYPH_BUDGET, SPRITE_MAX_SIZE, SpriteDocument, SpriteEffect, SpriteEffectOp,
-    SpriteFrame, SpritePaletteEntry, SpritePaletteInclude,
+    SpriteFrame, SpriteFrameGrid, SpriteMirror, SpritePaletteEntry, SpritePaletteInclude,
+    SpritePatch,
 };
 pub use validate::HierarchyCycle;
 pub use voxel::{

@@ -10,8 +10,8 @@
 
 use ludion_scene::{
     GradientBlend, GradientDirection, OutlineSide, SpriteDocument, SpriteEffect, SpriteEffectOp,
-    SpriteFrame, SpritePaletteEntry, SpritePaletteInclude, check_sprite, emit_sprite, parse_sprite,
-    validate_sprite,
+    SpriteFrame, SpriteFrameGrid, SpriteMirror, SpritePaletteEntry, SpritePaletteInclude,
+    SpritePatch, check_sprite, emit_sprite, parse_sprite, validate_sprite,
 };
 use proptest::prelude::*;
 #[path = "support/deterministic.rs"]
@@ -283,6 +283,8 @@ fn sprite_doc() -> impl Strategy<Value = SpriteDocument> {
                 .collect();
             let mut choices = glyphs.clone();
             choices.push('.');
+            let mut patch_choices = choices.clone();
+            patch_choices.push(' ');
             let colors = proptest::collection::vec(
                 (color(), proptest::option::of(0.0f64..8.0)),
                 glyphs.len(),
@@ -295,6 +297,21 @@ fn sprite_doc() -> impl Strategy<Value = SpriteDocument> {
                 proptest::option::of((0.0f64..=f64::from(sx), 0.0f64..=f64::from(sy))),
                 frame_count,
             );
+            // Per frame: a mirror (0 none, 1 x, 2 y, 3 xy), whether it is a patch of `frame-0`, and
+            // the patch's size and cells.
+            let shapes = proptest::collection::vec(
+                (
+                    0u8..4,
+                    any::<bool>(),
+                    1usize..=2,
+                    1usize..=sx as usize,
+                    proptest::collection::vec(
+                        proptest::sample::select(patch_choices.clone()),
+                        2 * sx as usize,
+                    ),
+                ),
+                frame_count,
+            );
             (
                 Just(glyphs),
                 Just([sx, sy]),
@@ -305,10 +322,11 @@ fn sprite_doc() -> impl Strategy<Value = SpriteDocument> {
                 colors,
                 cells,
                 pivots,
+                shapes,
             )
         })
         .prop_map(
-            |(glyphs, size, name, seed, frame_count, ops, colors, cells, pivots)| {
+            |(glyphs, size, name, seed, frame_count, ops, colors, cells, pivots, shapes)| {
                 let palette = glyphs
                     .iter()
                     .zip(colors)
@@ -321,16 +339,63 @@ fn sprite_doc() -> impl Strategy<Value = SpriteDocument> {
                 let [sx, sy] = size;
                 let mut cells = cells.into_iter();
                 let frames = (0..frame_count)
-                    .map(|index| SpriteFrame {
-                        name: format!("frame-{index}"),
-                        pivot: pivots[index].map(|(px, py)| [px, py]),
-                        rows: (0..sy)
-                            .map(|_| {
-                                (0..sx)
-                                    .map(|_| cells.next().expect("one cell per texel"))
-                                    .collect()
-                            })
-                            .collect(),
+                    .map(|index| {
+                        let (mirror, patched, patch_h, patch_w, patch_cells) = &shapes[index];
+                        let grid = if *patched && index > 0 {
+                            let patch_h = (*patch_h).min(sy as usize);
+                            let mut patch_cells = patch_cells.iter().copied();
+                            SpriteFrameGrid::Patched {
+                                base: "frame-0".to_string(),
+                                patches: vec![SpritePatch {
+                                    at: [0, 0],
+                                    rows: (0..patch_h)
+                                        .map(|_| {
+                                            (0..*patch_w)
+                                                .map(|_| patch_cells.next().expect("patch cell"))
+                                                .collect()
+                                        })
+                                        .collect(),
+                                }],
+                            }
+                        } else {
+                            let mirror = match mirror {
+                                1 => Some(SpriteMirror::X),
+                                2 => Some(SpriteMirror::Y),
+                                3 => Some(SpriteMirror::Xy),
+                                _ => None,
+                            };
+                            let (rows, width) = (
+                                if mirror.is_some_and(|m| {
+                                    matches!(m, SpriteMirror::Y | SpriteMirror::Xy)
+                                }) {
+                                    sy.div_ceil(2)
+                                } else {
+                                    sy
+                                },
+                                if mirror.is_some_and(|m| {
+                                    matches!(m, SpriteMirror::X | SpriteMirror::Xy)
+                                }) {
+                                    sx.div_ceil(2)
+                                } else {
+                                    sx
+                                },
+                            );
+                            SpriteFrameGrid::Rows {
+                                rows: (0..rows)
+                                    .map(|_| {
+                                        (0..width)
+                                            .map(|_| cells.next().expect("one cell per texel"))
+                                            .collect()
+                                    })
+                                    .collect(),
+                                mirror,
+                            }
+                        };
+                        SpriteFrame {
+                            name: format!("frame-{index}"),
+                            pivot: pivots[index].map(|(px, py)| [px, py]),
+                            grid,
+                        }
                     })
                     .collect();
                 let effects = ops

@@ -1,0 +1,25 @@
+format: 1
+kind: sprite
+name: gem
+size:
+  - 5
+  - 2
+palette:
+  "#":
+    color: "#ccccee"
+  o:
+    color: "#ff8019"
+frames:
+  idle:
+    mirror: x
+    rows:
+      - "#o."
+      - ".#o"
+  spark:
+    base: idle
+    patches:
+      - at:
+          - 1
+          - 0
+        rows:
+          - "# #"

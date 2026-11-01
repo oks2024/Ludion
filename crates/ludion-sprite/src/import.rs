@@ -12,7 +12,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_scene::{
     SPRITE_EMPTY_GLYPH, SPRITE_GLYPH_BUDGET, SPRITE_MAX_SIZE, SpriteDocument, SpriteFrame,
-    SpritePaletteEntry,
+    SpriteFrameGrid, SpritePaletteEntry,
 };
 
 use crate::structure_error;
@@ -118,7 +118,7 @@ pub fn import_png(
             frames: vec![SpriteFrame {
                 name: IMPORT_FRAME.to_string(),
                 pivot: None,
-                rows,
+                grid: SpriteFrameGrid::Rows { rows, mirror: None },
             }],
             effects: Vec::new(),
         },

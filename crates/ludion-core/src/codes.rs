@@ -807,9 +807,11 @@ pub mod code {
 
     /// `L1153` — a `kind: sprite`, `kind: atlas-source` or `kind: atlas` document is malformed:
     /// an unknown or wrong-typed key, rows that do not match `size`, a glyph naming no palette
-    /// entry, a duplicate frame or region name, a region rect or pivot outside its image, a missing
-    /// input file, or `generate-atlas --check` drift. Raised by `ludion-scene` for the text-level
-    /// defects and by the bake for the ones only it can see.
+    /// entry, a mirrored frame's rows not matching its kept half, a patch outside its frame, a
+    /// `base` naming no `rows:` frame, `mirror` on a patched frame, a duplicate frame or region
+    /// name, a region rect or pivot outside its image, a missing input file, or `generate-atlas
+    /// --check` drift. Raised by `ludion-scene` for the text-level defects and by the bake for the
+    /// ones only it can see.
     pub const SPRITE_DOCUMENT_STRUCTURE: DiagnosticCode = DiagnosticCode::new("L1153");
 
     /// `L1250` — a `kind: font` document is malformed: an unknown or wrong-typed key, glyphs out
@@ -4561,9 +4563,11 @@ generated output).
 The three share one code because they share one shape and one failure mode — a text document whose
 keys, types, or cross-references do not agree with each other. It covers both passes: *structure*
 (a missing or wrong-typed key, an unrecognized key with a nearest-match suggestion, a malformed
-list, a colour that is not `\"#rrggbb\"`/`\"#rrggbbaa\"`) and *semantics* (a frame's `rows` not matching `size` exactly, a glyph naming no palette
-entry, a duplicate frame or region name, a pivot outside its frame, a region rect outside the packed
-image, an input path that names no file, a `hold` list a different length from its flipbook's
+list, a colour that is not `\"#rrggbb\"`/`\"#rrggbbaa\"`) and *semantics* (a frame's `rows` not
+matching `size` exactly, a glyph naming no palette entry, a duplicate frame or region name, a pivot
+outside its frame, a region rect outside the packed image, a mirrored frame's rows not matching its
+kept half, a patch outside its frame, a `base` naming no `rows:` frame, `mirror` on a patched frame,
+an input path that names no file, a `hold` list a different length from its flipbook's
 `frames`). `generate-atlas --check` drift — a committed atlas that no longer matches what its source
 regenerates — reports under this code too, since the defect is the same one: a document that does
 not agree with itself.

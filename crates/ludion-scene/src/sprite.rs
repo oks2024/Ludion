@@ -62,7 +62,8 @@ const PALETTE_ENTRY_KEYS: [&str; 2] = ["color", "emissive"];
 const PALETTE_INCLUDE_KEYS: [&str; 2] = ["from", "overrides"];
 
 /// The frame keys this format recognizes, in the order suggestions should prefer.
-const FRAME_KEYS: [&str; 2] = ["pivot", "rows"];
+const FRAME_KEYS: [&str; 5] = ["base", "mirror", "patches", "pivot", "rows"];
+const PATCH_KEYS: [&str; 2] = ["at", "rows"];
 
 /// Every effect `op` name, in the order the format documents them.
 const EFFECT_OPS: [&str; 8] = [
@@ -152,9 +153,124 @@ pub struct SpriteFrame {
     /// frame's center, [`SpriteDocument::default_pivot`] — never written by `emit` when absent, so
     /// "centered" stays one spelling.
     pub pivot: Option<[f64; 2]>,
-    /// One string per texel row, top-down: exactly `size[1]` rows of exactly `size[0]` characters,
-    /// each character [`SPRITE_EMPTY_GLYPH`] or a palette glyph.
+    /// How the frame's grid is authored; [`SpriteDocument::frame_rows`] resolves it to the full grid.
+    pub grid: SpriteFrameGrid,
+}
+
+/// How a frame authors its glyph grid.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SpriteFrameGrid {
+    /// Authored rows. Without `mirror`: exactly `size[1]` rows of exactly `size[0]` characters, each
+    /// [`SPRITE_EMPTY_GLYPH`] or a palette glyph.
+    Rows {
+        /// One string per texel row, top-down. With `mirror`, only the kept half: the top rows
+        /// and/or the left columns, the centre line included when the extent is odd.
+        rows: Vec<String>,
+        /// The axes the authored half is reflected across to make the full grid.
+        mirror: Option<SpriteMirror>,
+    },
+    /// A grid made by writing patches over another frame's resolved grid.
+    Patched {
+        /// The name of a [`SpriteFrameGrid::Rows`] frame; patches never chain.
+        base: String,
+        /// The patches, applied in order over the base's full (expanded) grid.
+        patches: Vec<SpritePatch>,
+    },
+}
+
+/// The axes a `mirror:` frame reflects its authored half across.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpriteMirror {
+    /// Left-right: each row is the left half, `ceil(width / 2)` characters.
+    X,
+    /// Top-bottom: the rows are the top half, `ceil(height / 2)` rows.
+    Y,
+    /// Both axes: the top-left quarter.
+    Xy,
+}
+
+impl SpriteMirror {
+    /// The keyword the document spells this axis set as.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::X => "x",
+            Self::Y => "y",
+            Self::Xy => "xy",
+        }
+    }
+
+    fn flips_x(self) -> bool {
+        matches!(self, Self::X | Self::Xy)
+    }
+
+    fn flips_y(self) -> bool {
+        matches!(self, Self::Y | Self::Xy)
+    }
+}
+
+/// One rectangle of glyphs written over a base frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpritePatch {
+    /// The patch's top-left texel in the base's full coordinates, `[x, y]`.
+    pub at: [u32; 2],
+    /// The patch rows: a space keeps the base texel, `.` writes transparent, any other glyph writes
+    /// that glyph.
     pub rows: Vec<String>,
+}
+
+/// `half ++ reverse(half[..len - odd])`: the reflection that shares the centre line when the full
+/// extent is odd. Keyed on the document's size parity, so a 1-wide `x` mirror is the identity.
+fn reflect<T: Clone>(half: &[T], odd: bool) -> Vec<T> {
+    let keep = half.len().saturating_sub(usize::from(odd));
+    let mut out = half.to_vec();
+    out.extend(half[..keep].iter().rev().cloned());
+    out
+}
+
+fn expand_mirror(rows: &[String], mirror: SpriteMirror, size: [u32; 2]) -> Vec<String> {
+    let mut rows: Vec<String> = rows.to_vec();
+    if mirror.flips_x() {
+        let odd = size[0] % 2 == 1;
+        rows = rows
+            .iter()
+            .map(|row| {
+                reflect(&row.chars().collect::<Vec<_>>(), odd)
+                    .into_iter()
+                    .collect()
+            })
+            .collect();
+    }
+    if mirror.flips_y() {
+        rows = reflect(&rows, size[1] % 2 == 1);
+    }
+    rows
+}
+
+/// Writes each patch over `rows` by character index; a space keeps the texel, and anything that
+/// would land outside `size` is skipped.
+fn apply_patches(rows: Vec<String>, patches: &[SpritePatch], size: [u32; 2]) -> Vec<String> {
+    let mut grid: Vec<Vec<char>> = rows.iter().map(|row| row.chars().collect()).collect();
+    for patch in patches {
+        for (j, patch_row) in patch.rows.iter().enumerate() {
+            let y = patch.at[1] as usize + j;
+            if y >= size[1] as usize {
+                break;
+            }
+            let Some(row) = grid.get_mut(y) else { continue };
+            for (i, ch) in patch_row.chars().enumerate() {
+                let x = patch.at[0] as usize + i;
+                if x >= size[0] as usize {
+                    break;
+                }
+                if ch != ' ' && x < row.len() {
+                    row[x] = ch;
+                }
+            }
+        }
+    }
+    grid.into_iter()
+        .map(|row| row.into_iter().collect())
+        .collect()
 }
 
 /// Which way a `gradient` op ramps across a frame.
@@ -306,14 +422,16 @@ impl SpriteDocument {
     ///               \x20     - 1.0\n      - 1.0\n      - 1.0\n      - 1.0\nframes:\n  idle:\n    \
     ///               rows:\n      - \"A.\"\n";
     /// let sprite = ludion_scene::check_sprite(source).expect("the sprite is valid");
-    /// assert_eq!(sprite.frame("idle").map(|f| f.rows.as_slice()), Some(&["A.".to_string()][..]));
+    /// assert!(sprite.frame("idle").is_some());
     /// assert!(sprite.frame("walk").is_none());
     /// ```
     pub fn frame(&self, name: &str) -> Option<&SpriteFrame> {
         self.frames.iter().find(|frame| frame.name == name)
     }
 
-    /// The frame's glyph grid as the bake reads it, one string per texel row, top-down.
+    /// The frame's resolved glyph grid as the bake reads it, one string per texel row, top-down:
+    /// a `mirror` is expanded and `patches` are applied over their base. Total — a patched frame
+    /// whose base is missing or itself patched resolves to no rows (validation reports it).
     ///
     /// # Example
     /// ```
@@ -324,8 +442,34 @@ impl SpriteDocument {
     /// let frame = sprite.frame("idle").expect("the frame exists");
     /// assert_eq!(sprite.frame_rows(frame).as_ref(), &["A.".to_string()][..]);
     /// ```
+    ///
+    /// A mirrored frame authors the kept half:
+    /// ```
+    /// let source = "format: 1\nkind: sprite\nsize:\n  - 3\n  - 1\npalette:\n  A:\n    color:\n\
+    ///               \x20     - 1.0\n      - 1.0\n      - 1.0\n      - 1.0\nframes:\n  idle:\n    \
+    ///               mirror: x\n    rows:\n      - \"A.\"\n";
+    /// let sprite = ludion_scene::check_sprite(source).expect("the sprite is valid");
+    /// let frame = sprite.frame("idle").expect("the frame exists");
+    /// assert_eq!(sprite.frame_rows(frame).as_ref(), &["A.A".to_string()][..]);
+    /// ```
     pub fn frame_rows<'a>(&'a self, frame: &'a SpriteFrame) -> std::borrow::Cow<'a, [String]> {
-        std::borrow::Cow::Borrowed(&frame.rows)
+        match &frame.grid {
+            SpriteFrameGrid::Rows { rows, mirror: None } => std::borrow::Cow::Borrowed(rows),
+            SpriteFrameGrid::Rows {
+                rows,
+                mirror: Some(mirror),
+            } => std::borrow::Cow::Owned(expand_mirror(rows, *mirror, self.size)),
+            SpriteFrameGrid::Patched { base, patches } => {
+                let base_rows = match self.frame(base).map(|frame| &frame.grid) {
+                    Some(SpriteFrameGrid::Rows { rows, mirror }) => match mirror {
+                        Some(mirror) => expand_mirror(rows, *mirror, self.size),
+                        None => rows.clone(),
+                    },
+                    _ => return std::borrow::Cow::Owned(Vec::new()),
+                };
+                std::borrow::Cow::Owned(apply_patches(base_rows, patches, self.size))
+            }
+        }
     }
 
     /// The frame's grid with a column ruler above (hundreds and tens lines only when the width
@@ -844,7 +988,8 @@ fn parse_frames(entry: &MapEntry, diagnostics: &mut Vec<Diagnostic>) -> Vec<Spri
     out
 }
 
-/// Parses one frame: a mapping with a required `rows` and an optional `pivot`.
+/// Parses one frame: a mapping with `rows` (and an optional `mirror`) or `base` + `patches`, and an
+/// optional `pivot`.
 fn parse_frame(
     node: &Node,
     pointer: &str,
@@ -868,6 +1013,9 @@ fn parse_frame(
     };
     let mut pivot = None;
     let mut rows = None;
+    let mut mirror = None;
+    let mut base = None;
+    let mut patches = None;
     for sub in entries {
         match sub.key.as_str() {
             "pivot" => {
@@ -887,6 +1035,43 @@ fn parse_frame(
                     diagnostics,
                 ));
             }
+            "mirror" => {
+                mirror = parse_choice(
+                    &sub.node,
+                    &format!("{pointer}/mirror"),
+                    "mirror",
+                    &["x", "y", "xy"],
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    diagnostics,
+                )
+                .map(|text| match text {
+                    "x" => SpriteMirror::X,
+                    "y" => SpriteMirror::Y,
+                    _ => SpriteMirror::Xy,
+                });
+            }
+            "base" => match &sub.node.value {
+                NodeValue::Scalar(Value::String(text)) => base = Some(text.clone()),
+                other => diagnostics.push(
+                    Diagnostic::new(
+                        code::SPRITE_DOCUMENT_STRUCTURE,
+                        format!(
+                            "`base` must be a frame name, found {} (line {})",
+                            other.type_phrase(),
+                            sub.node.line
+                        ),
+                    )
+                    .with_path(format!("{pointer}/base"))
+                    .with_help("name the `rows:` frame the patches apply to"),
+                ),
+            },
+            "patches" => {
+                patches = Some(parse_patches(
+                    &sub.node,
+                    &format!("{pointer}/patches"),
+                    diagnostics,
+                ));
+            }
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
                 sub,
@@ -897,25 +1082,222 @@ fn parse_frame(
             )),
         }
     }
-    let Some(rows) = rows else {
-        diagnostics.push(
-            Diagnostic::new(
-                code::SPRITE_DOCUMENT_STRUCTURE,
-                "a frame is missing its required `rows`",
-            )
+    let structural = |message: &str, help: &str| {
+        Diagnostic::new(code::SPRITE_DOCUMENT_STRUCTURE, message.to_string())
             .with_path(pointer.to_string())
-            .with_help(
+            .with_help(help.to_string())
+    };
+    let grid = match (rows, base, patches) {
+        (Some(_), Some(_), _) => {
+            diagnostics.push(structural(
+                "a frame authors either `rows` or `base` with `patches`, not both",
+                "keep `rows` for a frame drawn by hand, or `base` + `patches` for a variant of \
+                 another frame",
+            ));
+            return None;
+        }
+        (None, Some(_), _) if mirror.is_some() => {
+            diagnostics.push(structural(
+                "a patched frame never authors `mirror`",
+                "mirror its base; the patch applies to the expanded base",
+            ));
+            return None;
+        }
+        (Some(rows), None, None) => SpriteFrameGrid::Rows { rows, mirror },
+        (Some(_), None, Some(_)) => {
+            diagnostics.push(structural(
+                "`patches` needs a `base` frame to patch, not `rows`",
+                "replace `rows` with `base: <frame>`, or drop `patches`",
+            ));
+            return None;
+        }
+        (None, Some(base), Some(patches)) => SpriteFrameGrid::Patched { base, patches },
+        (None, Some(_), None) => {
+            diagnostics.push(structural(
+                "a frame with a `base` is missing its `patches`",
+                "add `patches`, a list of patches:\n  patches:\n    - at:\n        - <x>\n        - <y>\n      rows:\n        - \"...\"",
+            ));
+            return None;
+        }
+        (None, None, Some(_)) => {
+            diagnostics.push(structural(
+                "`patches` needs a `base` frame to patch",
+                "add `base: <frame>` naming a frame that authors `rows:`",
+            ));
+            return None;
+        }
+        (None, None, None) => {
+            diagnostics.push(structural(
+                "a frame is missing its required `rows`",
                 "add `rows`: one quoted string per texel row, top-down, `.` for a transparent \
-                 texel",
-            ),
-        );
-        return None;
+                 texel; or `base:` + `patches:` to vary another frame",
+            ));
+            return None;
+        }
     };
     Some(SpriteFrame {
         name: name.to_string(),
         pivot,
-        rows,
+        grid,
     })
+}
+
+/// Parses a frame's `patches`: a sequence of `{at, rows}` mappings.
+fn parse_patches(
+    node: &Node,
+    pointer: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<SpritePatch> {
+    let NodeValue::Sequence(items) = &node.value else {
+        diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!(
+                    "`patches` must be a sequence of patches, found {} (line {})",
+                    node.value.type_phrase(),
+                    node.line
+                ),
+            )
+            .with_path(pointer.to_string())
+            .with_help(
+                "write each patch as:\n  - at:\n      - <x>\n      - <y>\n    rows:\n      - \"...\"",
+            ),
+        );
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let item_pointer = format!("{pointer}/{index}");
+        let NodeValue::Mapping(entries) = &item.value else {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    format!(
+                        "patch {index} must be a mapping with `at` and `rows`, found {} (line {})",
+                        item.value.type_phrase(),
+                        item.line
+                    ),
+                )
+                .with_path(item_pointer)
+                .with_help(
+                    "write each patch as:\n  - at:\n      - <x>\n      - <y>\n    rows:\n      - \"...\"",
+                ),
+            );
+            continue;
+        };
+        let mut at = None;
+        let mut rows = None;
+        for sub in entries {
+            match sub.key.as_str() {
+                "at" => at = parse_at(&sub.node, &format!("{item_pointer}/at"), diagnostics),
+                "rows" => {
+                    rows = Some(parse_rows(
+                        &sub.node,
+                        &format!("{item_pointer}/rows"),
+                        diagnostics,
+                    ));
+                }
+                unknown => diagnostics.push(envelope::unknown_key(
+                    unknown,
+                    sub,
+                    &item_pointer,
+                    "a patch",
+                    PATCH_KEYS,
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                )),
+            }
+        }
+        match (at, rows) {
+            (Some(at), Some(rows)) => out.push(SpritePatch { at, rows }),
+            (at, rows) => {
+                if at.is_none() && !entries.iter().any(|sub| sub.key == "at") {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            code::SPRITE_DOCUMENT_STRUCTURE,
+                            format!("patch {index} is missing its required `at`"),
+                        )
+                        .with_path(item_pointer.clone())
+                        .with_help(
+                            "add the patch's top-left texel:\n  at:\n    - <x>\n    - <y>",
+                        ),
+                    );
+                }
+                if rows.is_none() {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            code::SPRITE_DOCUMENT_STRUCTURE,
+                            format!("patch {index} is missing its required `rows`"),
+                        )
+                        .with_path(item_pointer)
+                        .with_help("add `rows`: one quoted string per patch row"),
+                    );
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Parses a patch's `at`: two non-negative whole numbers.
+fn parse_at(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -> Option<[u32; 2]> {
+    let help = "write `at` as two non-negative integers, the patch's top-left texel:\n  at:\n    - <x>\n    - <y>";
+    let NodeValue::Sequence(items) = &node.value else {
+        diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!(
+                    "`at` must be a sequence of two whole numbers, found {} (line {})",
+                    node.value.type_phrase(),
+                    node.line
+                ),
+            )
+            .with_path(pointer.to_string())
+            .with_help(help),
+        );
+        return None;
+    };
+    if items.len() != 2 {
+        diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!(
+                    "`at` must have exactly 2 entries (x, y), found {}",
+                    items.len()
+                ),
+            )
+            .with_path(pointer.to_string())
+            .with_help(help),
+        );
+        return None;
+    }
+    let mut out = [0u32; 2];
+    let mut ok = true;
+    for (index, item) in items.iter().enumerate() {
+        let value = match &item.value {
+            NodeValue::Scalar(Value::Number(n)) => n.as_u64().and_then(|v| u32::try_from(v).ok()),
+            _ => None,
+        };
+        match value {
+            Some(v) => out[index] = v,
+            None => {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::SPRITE_DOCUMENT_STRUCTURE,
+                        format!(
+                            "`at[{index}]` must be a non-negative whole number of texels, found \
+                             {} (line {})",
+                            item.value.type_phrase(),
+                            item.line
+                        ),
+                    )
+                    .with_path(format!("{pointer}/{index}"))
+                    .with_help(help),
+                );
+                ok = false;
+            }
+        }
+    }
+    ok.then_some(out)
 }
 
 /// Parses a frame's `rows`: a sequence of strings.
@@ -1239,12 +1621,13 @@ fn parse_choice(
     pointer: &str,
     what: &str,
     valid: &[&'static str],
+    code: ludion_core::diagnostics::DiagnosticCode,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<&'static str> {
     let NodeValue::Scalar(Value::String(text)) = &node.value else {
         diagnostics.push(
             Diagnostic::new(
-                code::SPRITE_EFFECT_INVALID,
+                code,
                 format!(
                     "`{what}` must be a string, found {} (line {})",
                     node.value.type_phrase(),
@@ -1260,7 +1643,7 @@ fn parse_choice(
         return Some(found);
     }
     let mut diagnostic = Diagnostic::new(
-        code::SPRITE_EFFECT_INVALID,
+        code,
         format!("`{text}` is not a valid `{what}` (line {})", node.line),
     )
     .with_path(pointer.to_string());
@@ -1364,6 +1747,7 @@ fn parse_effect(
         &format!("{pointer}/op"),
         "op",
         &EFFECT_OPS,
+        code::SPRITE_EFFECT_INVALID,
         diagnostics,
     )?;
 
@@ -1567,6 +1951,7 @@ fn parse_effect_fields(
                     &field_pointer,
                     "direction",
                     &["vertical", "horizontal", "radial"],
+                    code::SPRITE_EFFECT_INVALID,
                     diagnostics,
                 )
                 .map(|text| match text {
@@ -1581,6 +1966,7 @@ fn parse_effect_fields(
                     &field_pointer,
                     "blend",
                     &["replace", "multiply"],
+                    code::SPRITE_EFFECT_INVALID,
                     diagnostics,
                 )
                 .map(|text| match text {
@@ -1594,6 +1980,7 @@ fn parse_effect_fields(
                     &field_pointer,
                     "side",
                     &["outside", "inside"],
+                    code::SPRITE_EFFECT_INVALID,
                     diagnostics,
                 )
                 .map(|text| match text {
@@ -1886,6 +2273,245 @@ pub(crate) fn validate_palette_entries(
     known
 }
 
+/// Checks an authored `rows:` grid against the extents its `mirror` (if any) leaves it: the full
+/// size, or the kept half.
+fn validate_rows(
+    frame: &SpriteFrame,
+    rows: &[String],
+    mirror: Option<SpriteMirror>,
+    [width, height]: [u32; 2],
+    known: Option<&[char]>,
+    pointer: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let half_rows = mirror.is_some_and(SpriteMirror::flips_y);
+    let half_width = mirror.is_some_and(SpriteMirror::flips_x);
+    let want_rows = if half_rows {
+        height.div_ceil(2)
+    } else {
+        height
+    };
+    let want_width = if half_width { width.div_ceil(2) } else { width };
+    if rows.len() as u64 != u64::from(want_rows) {
+        let message = if half_rows {
+            format!(
+                "frame `{}` has {} rows but `mirror: {}` keeps the top half: expected {want_rows} \
+                 (ceil({height}/2), the centre row included)",
+                frame.name,
+                rows.len(),
+                mirror.map_or("", SpriteMirror::as_str)
+            )
+        } else {
+            format!(
+                "frame `{}` has {} rows but `size` declares height {height}",
+                frame.name,
+                rows.len()
+            )
+        };
+        diagnostics.push(
+            Diagnostic::new(code::SPRITE_DOCUMENT_STRUCTURE, message)
+                .with_path(format!("{pointer}/rows"))
+                .with_help(
+                    "every frame in a document is the same size; a differently sized pose is a \
+                     different sprite document",
+                ),
+        );
+    }
+    for (index, row) in rows.iter().enumerate() {
+        let row_pointer = format!("{pointer}/rows/{index}");
+        let row_width = row.chars().count();
+        if row_width as u64 != u64::from(want_width) {
+            let message = if half_width {
+                format!(
+                    "row {index} of frame `{}` is {row_width} characters wide but `mirror: {}` \
+                     keeps the left half: expected {want_width} (ceil({width}/2), the centre \
+                     column included)",
+                    frame.name,
+                    mirror.map_or("", SpriteMirror::as_str)
+                )
+            } else {
+                format!(
+                    "row {index} of frame `{}` is {row_width} characters wide but `size` \
+                     declares width {width}",
+                    frame.name
+                )
+            };
+            diagnostics.push(
+                Diagnostic::new(code::SPRITE_DOCUMENT_STRUCTURE, message)
+                    .with_path(row_pointer.clone())
+                    .with_help(if half_width {
+                        "author only the kept half of each row; the rest is the reflection"
+                    } else {
+                        "pad transparent texels with `.` so every row is exactly `size[0]`"
+                    }),
+            );
+        }
+        // Glyph membership is only checkable with a resolved palette; an unresolved include skips
+        // it here and faces it again once resolved (see [`validate`]).
+        if let Some(known) = known {
+            report_unknown_glyphs(
+                row,
+                known,
+                &[],
+                &format!("row {index} of frame `{}`", frame.name),
+                &row_pointer,
+                diagnostics,
+            );
+        }
+    }
+}
+
+/// Reports each palette-less glyph of `row` once; `allowed` are extra accepted characters.
+fn report_unknown_glyphs(
+    row: &str,
+    known: &[char],
+    allowed: &[char],
+    place: &str,
+    pointer: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut reported: Vec<char> = Vec::new();
+    for ch in row.chars() {
+        if ch != SPRITE_EMPTY_GLYPH
+            && !allowed.contains(&ch)
+            && !known.contains(&ch)
+            && !reported.contains(&ch)
+        {
+            reported.push(ch);
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    format!("the glyph `{ch}` in {place} names no palette entry"),
+                )
+                .with_path(pointer.to_string())
+                .with_help(format!(
+                    "add `{ch}` to the palette, or use `.` for a transparent texel"
+                )),
+            );
+        }
+    }
+}
+
+/// Checks a `base` + `patches` frame: the base, then each patch's origin, extent and glyphs.
+fn validate_patched(
+    doc: &SpriteDocument,
+    frame: &SpriteFrame,
+    base: &str,
+    patches: &[SpritePatch],
+    known: Option<&[char]>,
+    pointer: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let [width, height] = doc.size;
+    match doc.frame(base).map(|found| &found.grid) {
+        None => {
+            let mut diagnostic = Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!(
+                    "frame `{}` has a `base` of `{base}`, which names no frame",
+                    frame.name
+                ),
+            )
+            .with_path(format!("{pointer}/base"));
+            let names = doc.frames.iter().map(|other| other.name.as_str());
+            diagnostic = match suggest::nearest(base, names) {
+                Some(candidate) => diagnostic.with_help(format!("nearest match is `{candidate}`")),
+                None => diagnostic.with_help("name a frame of this document that authors `rows:`"),
+            };
+            diagnostics.push(diagnostic);
+        }
+        Some(SpriteFrameGrid::Patched { .. }) => diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!(
+                    "frame `{}` has a `base` of `{base}`, which is itself a patched frame",
+                    frame.name
+                ),
+            )
+            .with_path(format!("{pointer}/base"))
+            .with_help(
+                "a base must author `rows:`; patch that frame's own base instead — patches do \
+                 not chain",
+            ),
+        ),
+        Some(SpriteFrameGrid::Rows { .. }) => {}
+    }
+    if patches.is_empty() {
+        diagnostics.push(
+            Diagnostic::new(
+                code::SPRITE_DOCUMENT_STRUCTURE,
+                format!(
+                    "frame `{}` has no patches; a patched frame must write something",
+                    frame.name
+                ),
+            )
+            .with_path(format!("{pointer}/patches"))
+            .with_help("add a patch, or author the frame with `rows:` instead"),
+        );
+    }
+    for (k, patch) in patches.iter().enumerate() {
+        let patch_pointer = format!("{pointer}/patches/{k}");
+        let [x, y] = patch.at;
+        if x >= width || y >= height {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    format!(
+                        "patch {k} of frame `{}` starts at [{x}, {y}], outside the {width}x{height} \
+                         frame",
+                        frame.name
+                    ),
+                )
+                .with_path(format!("{patch_pointer}/at"))
+                .with_help("`at` is the patch's top-left texel in the base's full coordinates"),
+            );
+        }
+        if patch.rows.is_empty() {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    format!(
+                        "patch {k} of frame `{}` is a patch with nothing to write",
+                        frame.name
+                    ),
+                )
+                .with_path(format!("{patch_pointer}/rows"))
+                .with_help("add one string per patch row, or remove the patch"),
+            );
+        }
+        for (j, row) in patch.rows.iter().enumerate() {
+            let row_pointer = format!("{patch_pointer}/rows/{j}");
+            let chars = row.chars().count() as u64;
+            if u64::from(x) + chars > u64::from(width)
+                || u64::from(y) + j as u64 >= u64::from(height)
+            {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::SPRITE_DOCUMENT_STRUCTURE,
+                        format!(
+                            "row {j} of patch {k} in frame `{}` extends past the {width}x{height} \
+                             frame from [{x}, {y}]",
+                            frame.name
+                        ),
+                    )
+                    .with_path(row_pointer.clone())
+                    .with_help("shorten the row or move `at` so the whole patch fits the frame"),
+                );
+            }
+            if let Some(known) = known {
+                report_unknown_glyphs(
+                    row,
+                    known,
+                    &[' '],
+                    &format!("row {j} of patch {k} in frame `{}`", frame.name),
+                    &row_pointer,
+                    diagnostics,
+                );
+            }
+        }
+    }
+}
+
 fn validate_frames(
     doc: &SpriteDocument,
     known: Option<&[char]>,
@@ -1939,63 +2565,12 @@ fn validate_frames(
             seen.push(&frame.name);
         }
 
-        if frame.rows.len() as u64 != u64::from(height) {
-            diagnostics.push(
-                Diagnostic::new(
-                    code::SPRITE_DOCUMENT_STRUCTURE,
-                    format!(
-                        "frame `{}` has {} rows but `size` declares height {height}",
-                        frame.name,
-                        frame.rows.len()
-                    ),
-                )
-                .with_path(format!("{pointer}/rows"))
-                .with_help(
-                    "every frame in a document is the same size; a differently sized pose is a \
-                     different sprite document",
-                ),
-            );
-        }
-        for (index, row) in frame.rows.iter().enumerate() {
-            let row_pointer = format!("{pointer}/rows/{index}");
-            let row_width = row.chars().count();
-            if row_width as u64 != u64::from(width) {
-                diagnostics.push(
-                    Diagnostic::new(
-                        code::SPRITE_DOCUMENT_STRUCTURE,
-                        format!(
-                            "row {index} of frame `{}` is {row_width} characters wide but `size` \
-                             declares width {width}",
-                            frame.name
-                        ),
-                    )
-                    .with_path(row_pointer.clone())
-                    .with_help("pad transparent texels with `.` so every row is exactly `size[0]`"),
-                );
+        match &frame.grid {
+            SpriteFrameGrid::Rows { rows, mirror } => {
+                validate_rows(frame, rows, *mirror, doc.size, known, &pointer, diagnostics);
             }
-            // Glyph membership is only checkable with a resolved palette; an unresolved include skips
-            // it here and faces it again once resolved (see [`validate`]).
-            if let Some(known) = known {
-                let mut reported: Vec<char> = Vec::new();
-                for ch in row.chars() {
-                    if ch != SPRITE_EMPTY_GLYPH && !known.contains(&ch) && !reported.contains(&ch) {
-                        reported.push(ch);
-                        diagnostics.push(
-                            Diagnostic::new(
-                                code::SPRITE_DOCUMENT_STRUCTURE,
-                                format!(
-                                    "the glyph `{ch}` in row {index} of frame `{}` names no palette \
-                                     entry",
-                                    frame.name
-                                ),
-                            )
-                            .with_path(row_pointer.clone())
-                            .with_help(format!(
-                                "add `{ch}` to the palette, or use `.` for a transparent texel"
-                            )),
-                        );
-                    }
-                }
+            SpriteFrameGrid::Patched { base, patches } => {
+                validate_patched(doc, frame, base, patches, known, &pointer, diagnostics);
             }
         }
 
@@ -2346,15 +2921,45 @@ fn emit_frames(out: &mut String, frames: &[SpriteFrame]) {
                 out.push('\n');
             }
         }
-        if frame.rows.is_empty() {
-            out.push_str("    rows: []\n");
-        } else {
-            out.push_str("    rows:\n");
-            for row in &frame.rows {
-                out.push_str("      - ");
-                out.push_str(&scalar_string(row));
-                out.push('\n');
+        match &frame.grid {
+            SpriteFrameGrid::Rows { rows, mirror } => {
+                if let Some(mirror) = mirror {
+                    out.push_str("    mirror: ");
+                    out.push_str(mirror.as_str());
+                    out.push('\n');
+                }
+                emit_rows(out, "    ", rows);
             }
+            SpriteFrameGrid::Patched { base, patches } => {
+                out.push_str("    base: ");
+                out.push_str(&scalar_string(base));
+                out.push('\n');
+                if patches.is_empty() {
+                    out.push_str("    patches: []\n");
+                } else {
+                    out.push_str("    patches:\n");
+                    for patch in patches {
+                        out.push_str("      - at:\n");
+                        for component in patch.at {
+                            out.push_str(&format!("          - {component}\n"));
+                        }
+                        emit_rows(out, "        ", &patch.rows);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn emit_rows(out: &mut String, indent: &str, rows: &[String]) {
+    if rows.is_empty() {
+        out.push_str(&format!("{indent}rows: []\n"));
+    } else {
+        out.push_str(&format!("{indent}rows:\n"));
+        for row in rows {
+            out.push_str(&format!("{indent}  - "));
+            out.push_str(&scalar_string(row));
+            out.push('\n');
         }
     }
 }

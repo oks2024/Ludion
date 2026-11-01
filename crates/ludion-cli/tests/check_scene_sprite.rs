@@ -94,6 +94,22 @@ fn rows_prints_every_frame_grid_before_the_ok_line() {
     assert!(idle < spent && spent < ok, "stdout was: {stdout}");
 }
 
+/// `--rows` prints the resolved grid of a mirrored frame and of a patched one, not the authored half.
+#[test]
+fn rows_prints_the_resolved_grid_of_mirror_and_patch_frames() {
+    let output = check_rows("mirror.sprite.yaml", &[]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        stdout.contains("-- idle --\n   01234\n0  #o.o#\n1  .#o#.\n"),
+        "stdout was: {stdout}"
+    );
+    assert!(
+        stdout.contains("-- spark --\n   01234\n0  ##.##\n1  .#o#.\n"),
+        "stdout was: {stdout}"
+    );
+}
+
 /// `--rows` on a non-sprite document is a usage error naming the kind.
 #[test]
 fn rows_on_a_palette_is_a_usage_error() {

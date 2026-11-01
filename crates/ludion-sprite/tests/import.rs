@@ -36,7 +36,12 @@ fn a_lossless_import_bakes_back_to_the_source_pixels() {
     assert_eq!(imported.doc.frames.len(), 1);
     assert_eq!(imported.doc.frames[0].name, "main");
     assert_eq!(imported.doc.palette.len(), 4);
-    assert_eq!(imported.doc.frames[0].rows[0].chars().nth(2), Some('.'));
+    assert_eq!(
+        imported.doc.frame_rows(&imported.doc.frames[0])[0]
+            .chars()
+            .nth(2),
+        Some('.')
+    );
 
     // The document survives a trip through the canonical text form...
     let text = emit_sprite(&imported.doc);

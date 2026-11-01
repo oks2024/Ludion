@@ -180,7 +180,10 @@ fn the_emitted_text_is_lf_only() {
 #[test]
 fn accessors_answer_from_the_parsed_document() {
     let doc = check(GOOD).expect("the sprite is valid");
-    assert_eq!(doc.frame("bank-left").map(|f| f.rows.len()), Some(3));
+    assert_eq!(
+        doc.frame("bank-left").map(|f| doc.frame_rows(f).len()),
+        Some(3)
+    );
     assert!(doc.frame("fly").is_none());
     assert_eq!(doc.palette_entry('o').and_then(|e| e.emissive), Some(2.0));
     assert!(doc.palette_entry(SPRITE_EMPTY_GLYPH).is_none());
@@ -324,7 +327,10 @@ fn a_duplicate_glyph_is_rejected() {
         frames: vec![SpriteFrame {
             name: "idle".to_string(),
             pivot: None,
-            rows: vec!["A".to_string()],
+            grid: SpriteFrameGrid::Rows {
+                rows: vec!["A".to_string()],
+                mirror: None,
+            },
         }],
         ..SpriteDocument::default()
     };
@@ -341,7 +347,10 @@ fn an_empty_palette_is_rejected() {
         frames: vec![SpriteFrame {
             name: "idle".to_string(),
             pivot: None,
-            rows: vec![".".to_string()],
+            grid: SpriteFrameGrid::Rows {
+                rows: vec![".".to_string()],
+                mirror: None,
+            },
         }],
         ..SpriteDocument::default()
     };
@@ -576,7 +585,10 @@ fn blank(width: usize, height: usize) -> SpriteDocument {
 fn frame_rows_equals_the_authored_rows() {
     let sprite = check_sprite(GOOD).expect("GOOD is valid");
     let frame = sprite.frame("idle").expect("idle exists");
-    assert_eq!(sprite.frame_rows(frame).as_ref(), frame.rows.as_slice());
+    let SpriteFrameGrid::Rows { rows, mirror: None } = &frame.grid else {
+        panic!("idle authors plain rows");
+    };
+    assert_eq!(sprite.frame_rows(frame).as_ref(), rows.as_slice());
 }
 
 #[test]
@@ -741,4 +753,213 @@ fn an_exact_legacy_colour_re_emits_as_hex() {
 #[test]
 fn the_writer_quotes_a_hex_colour() {
     assert_eq!(crate::scalar::scalar_string("#ff0000"), "\"#ff0000\"");
+}
+
+// --- Mirror and patches --------------------------------------------------------------------------
+
+/// A sprite of the given size with glyphs `A` and `B` and the frames text spliced in verbatim.
+fn mirror_doc(width: u32, height: u32, frames: &str) -> String {
+    format!(
+        "format: 1\nkind: sprite\nsize:\n  - {width}\n  - {height}\npalette:\n  A:\n    color: \
+         \"#ff0000\"\n  B:\n    color: \"#00ff00\"\nframes:\n{frames}"
+    )
+}
+
+fn resolved(source: &str, frame: &str) -> Vec<String> {
+    let doc = check(source).expect("the sprite is valid");
+    let frame = doc.frame(frame).expect("the frame exists");
+    doc.frame_rows(frame).into_owned()
+}
+
+#[test]
+fn mirror_x_expands_an_even_and_an_odd_width() {
+    let even = mirror_doc(4, 1, "  f:\n    mirror: x\n    rows:\n      - \"AB\"\n");
+    assert_eq!(resolved(&even, "f"), ["ABBA"]);
+    let odd = mirror_doc(5, 1, "  f:\n    mirror: x\n    rows:\n      - \"A.B\"\n");
+    assert_eq!(resolved(&odd, "f"), ["A.B.A"]);
+}
+
+#[test]
+fn mirror_y_shares_the_centre_row_of_an_odd_height() {
+    let source = mirror_doc(
+        2,
+        3,
+        "  f:\n    mirror: y\n    rows:\n      - \"AB\"\n      - \"B.\"\n",
+    );
+    assert_eq!(resolved(&source, "f"), ["AB", "B.", "AB"]);
+}
+
+#[test]
+fn mirror_xy_reflects_both_axes() {
+    let source = mirror_doc(
+        4,
+        3,
+        "  f:\n    mirror: xy\n    rows:\n      - \"AB\"\n      - \".B\"\n",
+    );
+    assert_eq!(resolved(&source, "f"), ["ABBA", ".BB.", "ABBA"]);
+}
+
+#[test]
+fn a_one_wide_x_mirror_is_the_identity() {
+    let source = mirror_doc(
+        1,
+        2,
+        "  f:\n    mirror: x\n    rows:\n      - \"A\"\n      - \"B\"\n",
+    );
+    assert_eq!(resolved(&source, "f"), ["A", "B"]);
+}
+
+#[test]
+fn patches_keep_on_space_clear_on_dot_and_write_a_glyph() {
+    let source = mirror_doc(
+        4,
+        2,
+        "  base:\n    mirror: x\n    rows:\n      - \"AB\"\n      - \"BA\"\n  hit:\n    base: base\n    \
+         patches:\n      - at:\n          - 1\n          - 0\n        rows:\n          - \" .B\"\n",
+    );
+    // Column 1 is kept (space), column 2 is cleared (`.`), column 3 gets `B`.
+    assert_eq!(resolved(&source, "hit"), ["AB.B", "BAAB"]);
+}
+
+#[test]
+fn a_patch_can_break_the_symmetry_of_a_mirrored_base() {
+    let source = mirror_doc(
+        4,
+        1,
+        "  base:\n    mirror: x\n    rows:\n      - \"AB\"\n  odd:\n    base: base\n    patches:\n      - at:\n          - 0\n          - 0\n        rows:\n          - \"B\"\n",
+    );
+    assert_eq!(resolved(&source, "base"), ["ABBA"]);
+    assert_eq!(resolved(&source, "odd"), ["BBBA"]);
+}
+
+fn diagnostic_at<'a>(diagnostics: &'a [Diagnostic], path: &str) -> &'a Diagnostic {
+    let found = find(diagnostics, path);
+    assert_eq!(found.code.as_str(), "L1153", "{found:?}");
+    found
+}
+
+#[test]
+fn a_half_width_mismatch_names_the_expected_width() {
+    let source = mirror_doc(7, 1, "  f:\n    mirror: x\n    rows:\n      - \"AAAAA\"\n");
+    let diagnostics = errors(&source);
+    let found = diagnostic_at(&diagnostics, "/frames/f/rows/0");
+    assert!(
+        found.message.contains("5 characters wide"),
+        "{}",
+        found.message
+    );
+    assert!(found.message.contains("expected 4"), "{}", found.message);
+    assert!(found.message.contains("centre"), "{}", found.message);
+}
+
+#[test]
+fn a_half_height_mismatch_names_the_expected_rows() {
+    let source = mirror_doc(
+        1,
+        5,
+        "  f:\n    mirror: y\n    rows:\n      - \"A\"\n      - \"A\"\n",
+    );
+    let diagnostics = errors(&source);
+    let found = diagnostic_at(&diagnostics, "/frames/f/rows");
+    assert!(found.message.contains("expected 3"), "{}", found.message);
+}
+
+#[test]
+fn a_glyph_in_a_mirrored_half_still_needs_a_palette_entry() {
+    let source = mirror_doc(2, 1, "  f:\n    mirror: x\n    rows:\n      - \"Z\"\n");
+    let diagnostics = errors(&source);
+    diagnostic_at(&diagnostics, "/frames/f/rows/0");
+}
+
+const PATCH_BASE: &str = "  a:\n    rows:\n      - \"AB\"\n      - \"BA\"\n";
+
+#[test]
+fn a_base_naming_no_frame_suggests_the_nearest() {
+    let frames = format!(
+        "{PATCH_BASE}  b:\n    base: aa\n    patches:\n      - at:\n          - 0\n          - 0\n        rows:\n          - \"B\"\n"
+    );
+    let diagnostics = errors(&mirror_doc(2, 2, &frames));
+    let found = diagnostic_at(&diagnostics, "/frames/b/base");
+    assert!(
+        found.help.as_deref().is_some_and(|h| h.contains("`a`")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_base_that_is_patched_is_refused_including_itself() {
+    let frames = format!(
+        "{PATCH_BASE}  b:\n    base: a\n    patches:\n      - at:\n          - 0\n          - 0\n        rows:\n          - \"B\"\n  c:\n    base: b\n    patches:\n      - at:\n          - 0\n          - 0\n        rows:\n          - \"B\"\n  d:\n    base: d\n    patches:\n      - at:\n          - 0\n          - 0\n        rows:\n          - \"B\"\n"
+    );
+    let diagnostics = errors(&mirror_doc(2, 2, &frames));
+    let chained = diagnostic_at(&diagnostics, "/frames/c/base");
+    assert!(
+        chained
+            .help
+            .as_deref()
+            .is_some_and(|h| h.contains("do not chain")),
+        "{chained:?}"
+    );
+    diagnostic_at(&diagnostics, "/frames/d/base");
+}
+
+#[test]
+fn a_patch_outside_its_frame_is_refused() {
+    let frames = format!(
+        "{PATCH_BASE}  b:\n    base: a\n    patches:\n      - at:\n          - 2\n          - 0\n        rows:\n          - \"B\"\n      - at:\n          - 1\n          - 0\n        rows:\n          - \"BB\"\n      - at:\n          - 0\n          - 1\n        rows:\n          - \"B\"\n          - \"B\"\n      - at:\n          - 0\n          - 0\n        rows:\n          - \"Z\"\n"
+    );
+    let diagnostics = errors(&mirror_doc(2, 2, &frames));
+    diagnostic_at(&diagnostics, "/frames/b/patches/0/at");
+    diagnostic_at(&diagnostics, "/frames/b/patches/1/rows/0");
+    diagnostic_at(&diagnostics, "/frames/b/patches/2/rows/1");
+    diagnostic_at(&diagnostics, "/frames/b/patches/3/rows/0");
+}
+
+#[test]
+fn an_empty_patch_list_and_an_empty_patch_are_refused() {
+    let frames = format!(
+        "{PATCH_BASE}  b:\n    base: a\n    patches: []\n  c:\n    base: a\n    patches:\n      - at:\n          - 0\n          - 0\n        rows: []\n"
+    );
+    let diagnostics = errors(&mirror_doc(2, 2, &frames));
+    diagnostic_at(&diagnostics, "/frames/b/patches");
+    diagnostic_at(&diagnostics, "/frames/c/patches/0/rows");
+}
+
+#[test]
+fn structural_frame_mistakes_are_l1153_at_the_frame() {
+    let patch =
+        "patches:\n      - at:\n          - 0\n          - 0\n        rows:\n          - \"B\"\n";
+    let cases = [
+        format!("  f:\n    rows:\n      - \"AB\"\n      - \"BA\"\n    base: f\n    {patch}"),
+        format!("{PATCH_BASE}  f:\n    base: a\n    mirror: x\n    {patch}"),
+        format!("{PATCH_BASE}  f:\n    rows:\n      - \"AB\"\n      - \"BA\"\n    {patch}"),
+        format!("{PATCH_BASE}  f:\n    base: a\n"),
+        "  f:\n    pivot:\n      - 0.0\n      - 0.0\n".to_string(),
+    ];
+    for frames in cases {
+        let Err(diagnostics) = parse(&mirror_doc(2, 2, &frames)) else {
+            panic!("expected a parse failure for:\n{frames}");
+        };
+        let found = diagnostic_at(&diagnostics, "/frames/f");
+        assert!(!found.message.is_empty());
+    }
+}
+
+#[test]
+fn an_unknown_mirror_keyword_is_l1153_with_a_suggestion() {
+    let source = mirror_doc(2, 1, "  f:\n    mirror: xx\n    rows:\n      - \"A\"\n");
+    let Err(diagnostics) = parse(&source) else {
+        panic!("expected a parse failure");
+    };
+    diagnostic_at(&diagnostics, "/frames/f/mirror");
+}
+
+#[test]
+fn mirror_and_patches_round_trip_through_the_writer() {
+    let frames = "  base:\n    mirror: xy\n    rows:\n      - AB\n      - B.\n  hit:\n    base: base\n    patches:\n      - at:\n          - 1\n          - 0\n        rows:\n          - \" B\"\n          - \"  \"\n          - \"   \"\n";
+    let source = mirror_doc(4, 4, frames);
+    let doc = check(&source).expect("the sprite is valid");
+    let emitted = emit(&doc);
+    assert_eq!(emitted, source, "{emitted}");
+    assert_eq!(parse(&emitted).expect("re-parses"), doc);
 }
