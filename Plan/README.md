@@ -31,6 +31,7 @@ The reference game that drove many engine arcs is private; its design and plans 
 - [Scene load speed](scene-load-speed.md) — planned (load-phase profiling, parallel asset prefetch, cache retained across loads); not started.
 - [Sector state persistence](sector-state-persistence.md) — W3–W4 complete (scene residue across sector transitions); W4 human gate owed.
 - [Skeletal animation](skeletal-animation.md) — W1–W3 mechanized (glTF skins, joint tree, GPU bone palette); W4 not started.
+- [Sprite authoring tools](sprite-authoring-tools.md) — design settled (hex colours, mirror, frame patches, variants, palette ramps, baked self-light, `sprite-craft`); not started.
 - [Sprite engine](sprite-engine.md) — W1–W4 mechanized (sprite/atlas kinds, bake, `generate-atlas`); close rides the external consumer and human verdicts.
 - [Telegraphs and VFX](telegraphs-and-vfx.md) — wave 1 complete (`GroundMarker` end to end); later waves not started.
 - [Textured PBR](textured-pbr.md) — W1–W4 mechanized (glTF texture-map import fidelity); exit gate's human look owed.
