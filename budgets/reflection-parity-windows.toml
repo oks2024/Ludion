@@ -10,7 +10,7 @@
 # difference relative to the sky fill): measured and recorded here, never checked.
 #
 # Recalibrate (after a deliberate renderer change, with the reason in the commit):
-#   LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity
+#   LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it -E 'test(/^reflection_parity::/)'
 # Floors are the measured value minus the margin, written by LUDION_BLESS=1; the commit records the machine.
 
 margin = 0.02

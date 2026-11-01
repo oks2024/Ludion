@@ -143,10 +143,10 @@ replay verifies every district's systems.
 ## Verify
 
 ```
-cargo test -p ludion-engine --test docs             # boot load, survive-reset, determinism
-cargo test -p ludion-engine --test docs_reload      # hot-reload determinism + record→replay off-disk
-cargo test -p ludion-engine --test transition       # carry, continuity, failure paths
-cargo test -p ludion-engine --test transition_replay --test transition_snapshot
+cargo nextest run -p ludion-engine --test it -E 'test(/^docs::/)'             # boot load, survive-reset, determinism
+cargo nextest run -p ludion-engine --test it -E 'test(/^docs_reload::/)'      # hot-reload determinism + record→replay off-disk
+cargo nextest run -p ludion-engine --test it -E 'test(/^transition::/)'       # carry, continuity, failure paths
+cargo nextest run -p ludion-engine --test it -E 'test(/^(transition_replay|transition_snapshot)::/)'
 cargo run -p ludion --example data_docs
 cargo run -p ludion --example player_profile
 ```

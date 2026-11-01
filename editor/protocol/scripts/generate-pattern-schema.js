@@ -5,7 +5,7 @@
 // snapshot (`crates/ludion-engine/tests/snapshots/pattern_schema.json`).
 //
 // Same two layers as protocol.d.ts: a Rust test asserts the snapshot matches `PatternDoc`
-// (`cargo test -p ludion-engine --test pattern_schema_snapshot`); `ci/scripts/schema-drift.mjs`
+// (`cargo nextest run -p ludion-engine --test it -E 'test(/^pattern_schema_snapshot::/)'`); `ci/scripts/schema-drift.mjs`
 // re-runs this script with `--out <tmp>` and byte-compares. The snapshot text is embedded verbatim
 // (no parse/stringify round-trip, which could reorder integer-like keys). No npm dependency.
 

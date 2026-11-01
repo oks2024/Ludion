@@ -8,7 +8,7 @@ use ludion_protocol::command::AssetReloadParams;
 use ludion_protocol::{Command, ResponseBody};
 
 fn root(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ludion-font-draw-{tag}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("ludion-font-reload-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("fonts")).unwrap();
     let gallery = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/fonts");

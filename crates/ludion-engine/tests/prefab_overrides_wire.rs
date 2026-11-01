@@ -611,7 +611,7 @@ fn the_read_is_unhashed_and_unrecorded() {
 
 /// `prefab.overrides` on a vigil-sized scene (50 instances beside 3000 plain entities), the OK case and
 /// the refused one, where the read collapses once more per instance. Run with
-/// `cargo test --release -p ludion-engine --test prefab_overrides_wire -- --ignored --nocapture`.
+/// `cargo nextest run --release -p ludion-engine --test it -E 'test(/^prefab_overrides_wire::/)' --run-ignored ignored-only --no-capture`.
 #[test]
 #[ignore = "timing probe"]
 #[allow(clippy::disallowed_methods)] // wall clock: a host-side timing probe, not sim

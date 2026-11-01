@@ -105,8 +105,8 @@ and takes **one** `extract_at` — so `n` phases come out of one evaluator run a
 
 ```
 cargo test -p ludion-scene                          # assembly/part/animation round-trips + emit idempotence
-cargo test -p ludion-engine --test assembly_animation   # the visual-only proof
-cargo test -p ludion-engine --test extract --test model_sheet
+cargo nextest run -p ludion-engine --test it -E 'test(/^assembly_animation::/)'   # the visual-only proof
+cargo nextest run -p ludion-engine --test it -E 'test(/^(extract|model_sheet)::/)'
 cargo test -p ludion-cli --test check_scene_voxel_animation --test render_model
 cargo run -p ludion-engine --example assembly_clip   # prints posed vs rest part origins
 ```

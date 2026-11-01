@@ -4,7 +4,7 @@
 //! change that is not re-blessed fails here instead of drifting silently. To re-bless:
 //!
 //! ```text
-//! BLESS_SCHEMA=1 cargo test -p ludion-engine --test pattern_schema_snapshot
+//! BLESS_SCHEMA=1 cargo nextest run -p ludion-engine --test it -E 'test(/^pattern_schema_snapshot::/)'
 //! ```
 //!
 //! then `npm run generate` in `editor/protocol` and commit both files.

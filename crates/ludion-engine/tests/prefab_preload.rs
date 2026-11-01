@@ -328,7 +328,7 @@ fn a_preloading_scene_replays_from_a_deleted_prefab_file() {
 }
 
 /// First and second `spawn_prefab` of a heavy skinned prefab, with and without `preload:`. Run with
-/// `cargo test --release -p ludion-engine --test prefab_preload -- --ignored --nocapture`.
+/// `cargo nextest run --release -p ludion-engine --test it -E 'test(/^prefab_preload::/)' --run-ignored ignored-only --no-capture`.
 #[test]
 #[ignore = "timing probe"]
 #[allow(clippy::disallowed_methods)] // wall clock: a host-side timing probe, not sim

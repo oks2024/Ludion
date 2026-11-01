@@ -16,7 +16,7 @@
 //!
 //! Every image is reproducible with `ludion render --scene <fixture> --set …`; the fixtures' headers
 //! say how. Recalibrate the floors with
-//! `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity`.
+//! `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it -E 'test(/^reflection_parity::/)'`.
 //!
 //! Needs a real GPU adapter and skips gracefully (printing why) when there is none.
 
@@ -387,7 +387,7 @@ fn floors_text(os: &str, rows: &[(f32, f64, f64, f64)]) -> String {
          # difference relative to the sky fill): measured and recorded here, never checked.\n\
          #\n\
          # Recalibrate (after a deliberate renderer change, with the reason in the commit):\n\
-         #   LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity\n\
+         #   LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it -E 'test(/^reflection_parity::/)'\n\
          # Floors are the measured value minus the margin, written by LUDION_BLESS=1; the commit records the machine.\n\n\
          margin = {MARGIN}\n"
     );
@@ -432,8 +432,8 @@ fn needs_gpu_ssr_and_probes_agree_in_a_fitted_box_room() {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|_| {
         panic!(
             "no reflection parity floors at {} — this calibration is owed (`Plan/owed.md`, \"Reflections \
-             parity floors\"). Calibrate with `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test \
-             reflection_parity`",
+             parity floors\"). Calibrate with `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it \
+             -E 'test(/^reflection_parity::/)'`",
             path.display()
         )
     });

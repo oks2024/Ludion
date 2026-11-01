@@ -98,7 +98,7 @@ fn the_ragdoll_skinned_scene_matches_the_committed_cross_arch_trace() {
         let header = "\
 # Per-tick WorldHash of examples/gallery/ragdoll-skinned.yaml, stepped under a bare engine (its own\n\
 # physics: space: free block is the only opt-in) (crates/ludion-engine/tests/ragdoll_skinned_scene.rs).\n\
-# Recorded with: LUDION_BLESS=1 cargo test -p ludion-engine --test ragdoll_skinned_scene\n\
+# Recorded with: LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it -E 'test(/^ragdoll_skinned_scene::/)'\n\
 # The M4 must reproduce this file byte-identically (Plan/skeletal-animation.md gate, cross-arch) -\n\
 # never fabricated by copying the Windows trace.\n";
         std::fs::write(&path, format!("{header}{}\n", trace.join("\n")))
@@ -311,8 +311,8 @@ fn the_committed_ragdoll_skinned_replay_reproduces_the_committed_trace() {
     assert_eq!(
         committed_replayed_hashes, committed_hashes,
         "the committed ragdoll-skinned.lrp no longer replays to the committed trace — after an \
-         intentional change, re-record it with `LUDION_BLESS=1 cargo test -p ludion-engine --test \
-         ragdoll_skinned_scene the_committed_ragdoll_skinned_replay_reproduces_the_committed_trace` \
+         intentional change, re-record it with `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it \
+         -E 'test(=ragdoll_skinned_scene::the_committed_ragdoll_skinned_replay_reproduces_the_committed_trace)'` \
          and commit it"
     );
 }

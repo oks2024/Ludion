@@ -10,7 +10,8 @@
 //      re-audit the clippy determinism denylist against the new registry source.
 //   2. the resolved-feature gate: `node scripts/physics-features.mjs`. A failure stops the run.
 //   3-4. the physics gates under nextest, all CPU: every ludion-physics test binary, the
-//      ludion-engine physics_* and ragdoll* binaries, the ludion-cli `physics` binary, then the
+//      ludion-engine physics_* and ragdoll* test modules (of its merged `it` binary), the
+//      ludion-cli `physics` binary, then the
 //      #[ignore]d thread_identity scenes. Steps 3 (cross-arch traces) and 4 (in-process
 //      determinism) are the same runs: on ONE machine only the in-process tests carry meaning,
 //      because the committed traces and replays were recorded by the previous pin.
@@ -92,7 +93,7 @@ const BLESS_TRACE_TESTS = [
 const STALE_REPLAYS = ['examples/gallery/physics-stress.lrp', 'examples/gallery/ragdoll.lrp'];
 
 const GATE_FILTER =
-  'package(ludion-physics) | (package(ludion-engine) & (binary(/^physics_/) | binary(/^ragdoll/))) | (package(ludion-cli) & binary(physics))';
+  'package(ludion-physics) | (binary_id(=ludion-engine::it) & test(/^(physics_|ragdoll)/)) | (package(ludion-cli) & binary(physics))';
 const THREAD_FILTER = 'package(ludion-engine) & binary(thread_identity)';
 
 function usage(msg) {
@@ -320,7 +321,8 @@ if (values['bless-traces']) {
     started = performance.now();
     const filter = BLESS_TRACE_TESTS.map((t) => {
       const [bin, test] = t.split('::');
-      return `(binary(=${bin}) & test(=${test}))`;
+      // Matches whether the file is still its own binary or a module of a merged `it` binary.
+      return `((binary(=${bin}) & test(=${test})) | (binary(=it) & test(=${t})))`;
     }).join(' | ');
     const res = nextest(filter, 'physics-pin-ritual-bless.log', { env: { LUDION_BLESS: '1' } });
     const blessVerdict = res.status === 0 ? 'PASS' : 'FAIL';

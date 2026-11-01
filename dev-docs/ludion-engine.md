@@ -53,7 +53,7 @@ hash, the `frame` LFR1 format) is `ludion devdocs ludion-protocol`; the WS host 
 - `crates/ludion-engine/src/assembly_mesh.rs`, `crates/ludion-engine/src/asset_cache.rs` (the `dependents` map of source-file edges), and `extract.rs`'s `part_placements` — `ludion devdocs assembly-animation`.
 - `crates/ludion-engine/src/cooked_maps.rs` — `TextureSource` and the cooked-map lookup behind `Engine::set_textures` (`source` decodes PNGs, `cooked` reads the `ludion sync` store of the first GPU-supported target that has one, and falls back per map with `L1271`); a host switch like quality, never hashed. Hosts: `ludion docs quality`.
 - `crates/ludion-engine/src/extract.rs`, `crates/ludion-engine/src/render.rs`, `crates/ludion-engine/src/ui.rs`, `crates/ludion-engine/src/model_sheet.rs`, `crates/ludion-engine/src/sweep.rs` — `ludion devdocs engine-image-paths`.
-- `crates/ludion-engine/tests/` — `dispatch.rs` (per-family happy + diagnostic paths, no GPU), `gpu_dispatch.rs`/`gpu_render.rs` (graceful-skip on `L2003`), `extract.rs`, `dump_graph_snapshot.rs` + `snapshots/`, `docs.rs`, `docs_reload.rs`, `presentation.rs` (presentation entities through snapshot, replay, extract), `transition*.rs`.
+- `crates/ludion-engine/tests/` — `dispatch.rs` (per-family happy + diagnostic paths, no GPU), `gpu_dispatch.rs`/`gpu_render.rs` (graceful-skip on `L2003`), `extract.rs`, `dump_graph_snapshot.rs` + `snapshots/`, `docs.rs`, `docs_reload.rs`, `presentation.rs` (presentation entities through snapshot, replay, extract), `transition*.rs`; all compiled as modules of `tests/it.rs` except `thread_identity.rs`.
 
 ## Rules
 

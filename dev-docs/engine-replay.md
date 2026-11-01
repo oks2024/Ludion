@@ -159,7 +159,7 @@ comparison that faked a divergence, arming order, and what a restore does not ca
 ```
 cargo run -p ludion-cli -- sim-hash --scene examples/gallery/meshes.yaml --frames 60 --record target/session.lrp
 cargo run -p ludion-cli -- replay target/session.lrp --hashes
-cargo test -p ludion-engine --test dispatch        # snapshot/restore determinism, replay round-trip; no GPU
+cargo nextest run -p ludion-engine --test it -E 'test(/^dispatch::/)'        # snapshot/restore determinism, replay round-trip; no GPU
 cargo run -p breakout -- --replay-verify games/breakout/run.lrp
 ```
 

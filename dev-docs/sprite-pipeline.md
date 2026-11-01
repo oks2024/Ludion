@@ -145,7 +145,7 @@ The texel is premultiplied, so the tint's alpha scales colour as well as coverag
 ```
 cargo test -p ludion-sprite
 cargo test -p ludion-scene --test sprite_roundtrip --test atlas_roundtrip
-cargo test -p ludion-engine --test sprite_atlas --test sprite_flipbook --test sprite_sheet --test tilemap
+cargo nextest run -p ludion-engine --test it -E 'test(/^(sprite_atlas|sprite_flipbook|sprite_sheet|tilemap)::/)'
 cargo test -p ludion-cli --test generate_atlas --test render_sprite --test import_sprite --test check_scene_sprite
 node scripts/atlas-drift.mjs
 cargo run -p ludion-cli -- render --scene examples/gallery/sprite-atlas.yaml --out target/sprite-atlas.png

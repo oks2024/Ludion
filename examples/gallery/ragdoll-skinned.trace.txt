@@ -1,6 +1,6 @@
 # Per-tick WorldHash of examples/gallery/ragdoll-skinned.yaml, stepped under a bare engine (its own
 # physics: space: free block is the only opt-in) (crates/ludion-engine/tests/ragdoll_skinned_scene.rs).
-# Recorded with: LUDION_BLESS=1 cargo test -p ludion-engine --test ragdoll_skinned_scene
+# Recorded with: LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it -E 'test(/^ragdoll_skinned_scene::/)'
 # The M4 must reproduce this file byte-identically (Plan/skeletal-animation.md gate, cross-arch) -
 # never fabricated by copying the Windows trace.
 0000 9701d0bb38f42379

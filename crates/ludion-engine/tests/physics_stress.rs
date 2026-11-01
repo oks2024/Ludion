@@ -111,7 +111,7 @@ fn the_stress_pile_matches_the_committed_cross_arch_trace() {
         let header = "\
 # Per-tick WorldHash of examples/gallery/physics-stress.yaml, stepped under a bare engine (its own\n\
 # physics: space: free block is the only opt-in) (crates/ludion-engine/tests/physics_stress.rs).\n\
-# Recorded with: LUDION_BLESS=1 cargo test -p ludion-engine --test physics_stress\n\
+# Recorded with: LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it -E 'test(/^physics_stress::/)'\n\
 # Free space: free ignores the engine's default Plane, so the pile falls on y rather than hanging\n\
 # frozen under the plane's locks. The M4 must reproduce this file byte-identically\n\
 # (Plan/physics.md gate 1, cross-arch) - never fabricated by copying the Windows trace.\n";
@@ -361,7 +361,7 @@ fn the_committed_stress_replay_reproduces_the_committed_trace() {
     assert_eq!(
         committed_replayed_hashes, committed_hashes,
         "the committed physics-stress.lrp no longer replays to the committed trace — after an \
-         intentional change, re-record it with `LUDION_BLESS=1 cargo test -p ludion-engine --test \
-         physics_stress the_committed_stress_replay_reproduces_the_committed_trace` and commit it"
+         intentional change, re-record it with `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it \
+         -E 'test(=physics_stress::the_committed_stress_replay_reproduces_the_committed_trace)'` and commit it"
     );
 }

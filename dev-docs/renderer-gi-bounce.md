@@ -141,7 +141,7 @@ gi_bake.wgsl `bake`, per ray, after trace_hit:
 
 ```
 cargo test -p ludion-renderer                   # includes gi_bake's bounce unit tests (below)
-cargo test -p ludion-engine --test gi_bounce    # physics fixtures: torch lights room, albedo tint,
+cargo nextest run -p ludion-engine --test it -E 'test(/^gi_bounce::/)'    # physics fixtures: torch lights room, albedo tint,
                                                  # distance falloff, sun occlusion, no leak through a wall
 ```
 

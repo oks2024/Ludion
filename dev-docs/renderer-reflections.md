@@ -41,6 +41,6 @@ cargo test -p ludion-renderer needs_gpu_a_sky_filled_source
 cargo test -p ludion-renderer needs_gpu_reflections
 cargo test -p ludion-renderer needs_gpu_metal_reflects
 cargo test -p ludion-renderer needs_gpu_a_reflection_over_a_bright
-cargo nextest run -p ludion-engine --test reflection_parity
+cargo nextest run -p ludion-engine --test it -E 'test(/^reflection_parity::/)'
 cargo run -p ludion-cli -- dump-graph --scene examples/gallery/night-sky.yaml   # scene → reflections → transparents
 ```

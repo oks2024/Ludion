@@ -403,8 +403,8 @@ fn the_committed_ragdoll_scene_matches_a_fresh_generation() {
     assert_eq!(
         committed, generated,
         "examples/gallery/ragdoll.yaml has drifted from a fresh switch_to_ragdoll generation; \
-         re-bless with `LUDION_BLESS=1 cargo test -p ludion-engine --test ragdoll_scene \
-         the_committed_ragdoll_scene_matches_a_fresh_generation`"
+         re-bless with `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it \
+         -E 'test(=ragdoll_scene::the_committed_ragdoll_scene_matches_a_fresh_generation)'`"
     );
 }
 
@@ -456,7 +456,7 @@ fn the_ragdoll_scene_matches_the_committed_cross_arch_trace() {
         let header = "\
 # Per-tick WorldHash of examples/gallery/ragdoll.yaml, stepped under a bare engine (its own\n\
 # physics: space: free block is the only opt-in) (crates/ludion-engine/tests/ragdoll_scene.rs).\n\
-# Recorded with: LUDION_BLESS=1 cargo test -p ludion-engine --test ragdoll_scene\n\
+# Recorded with: LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it -E 'test(/^ragdoll_scene::/)'\n\
 # The M4 must reproduce this file byte-identically (Plan/physics.md gate 1, cross-arch) - never\n\
 # fabricated by copying the Windows trace.\n";
         std::fs::write(&path, format!("{header}{}\n", trace.join("\n")))
@@ -671,7 +671,7 @@ fn the_committed_ragdoll_replay_reproduces_the_committed_trace() {
     assert_eq!(
         committed_replayed_hashes, committed_hashes,
         "the committed ragdoll.lrp no longer replays to the committed trace — after an intentional \
-         change, re-record it with `LUDION_BLESS=1 cargo test -p ludion-engine --test ragdoll_scene \
-         the_committed_ragdoll_replay_reproduces_the_committed_trace` and commit it"
+         change, re-record it with `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it \
+         -E 'test(=ragdoll_scene::the_committed_ragdoll_replay_reproduces_the_committed_trace)'` and commit it"
     );
 }

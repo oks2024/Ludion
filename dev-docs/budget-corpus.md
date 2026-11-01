@@ -73,7 +73,7 @@ description: Catalogue of budgets/ files: calibration scene, gated keys and meas
   fully confident. The rule is `image-stats`' (the value is a pure function of one machine's render, so
   each floor sits a flat `margin` = 0.02 below the measurement); per-OS because GPU float differs.
   The sky-to-probe seam is recorded beside the bands, never checked. Re-calibrate with
-  `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test reflection_parity`; Windows was calibrated
+  `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it -E 'test(/^reflection_parity::/)'`; Windows was calibrated
   on the RTX 3090 (2026-10-27), macOS on an unpinned M5 (the M4 re-calibration is owed), and a pinned
   OS with no file fails the test until it is calibrated.
 - `games/vigil/budgets/pinned-rtx3090.toml` / `pinned-apple-m4.toml` — vigil's own E6 gate (vigil is the private reference game: its files exist only in the Lore tree, absent from a public clone) over

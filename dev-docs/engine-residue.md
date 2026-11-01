@@ -63,7 +63,7 @@ unresolvable one is cleared (optional) or its component dropped (required), repo
 ## Verify
 
 ```
-cargo test -p ludion-engine --test transition_residue  # capture/apply, bounds, ResidueStore mirror
-cargo test -p ludion-engine --test transition_snapshot
+cargo nextest run -p ludion-engine --test it -E 'test(/^transition_residue::/)'  # capture/apply, bounds, ResidueStore mirror
+cargo nextest run -p ludion-engine --test it -E 'test(/^transition_snapshot::/)'
 cargo run -p ludion --example scene_residue
 ```

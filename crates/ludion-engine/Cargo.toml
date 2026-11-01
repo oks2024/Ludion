@@ -8,6 +8,8 @@ rust-version.workspace = true
 description = "The Ludion engine core: the Engine, its exhaustive command dispatch (the protocol parity gate), and session recording/replay."
 keywords = ["ludion", "game-engine", "replay", "ecs"]
 categories = ["game-engines", "simulation"]
+# One test crate (`tests/it.rs`) compiles the shared generics once; `thread_identity` is selected by binary name.
+autotests = false
 
 [features]
 # Measurement only: enables `PhysicsWorld::step_breakdown`'s rapier stage timers; they never feed the sim.
@@ -53,3 +55,11 @@ ludion-cook = { path = "../ludion-cook", version = "0.1.0" }
 ludion-testkit = { path = "../ludion-testkit" }
 png.workspace = true
 proptest.workspace = true
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+[[test]]
+name = "thread_identity"
+path = "tests/thread_identity.rs"

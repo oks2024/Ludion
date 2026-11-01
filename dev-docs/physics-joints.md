@@ -111,5 +111,5 @@ motors or multibody joints.
 ```
 cargo clippy -p ludion-physics --all-targets --all-features -- -D warnings
 cargo nextest run -p ludion-physics --test joints --test joint_motor
-cargo nextest run -p ludion-engine --test physics_joints --test joint_motor
+cargo nextest run -p ludion-engine --test it -E 'test(/^(physics_joints|joint_motor)::/)'
 ```

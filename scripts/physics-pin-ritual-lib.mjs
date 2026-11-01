@@ -9,12 +9,13 @@ import path from 'node:path';
 const FAIL_LINE =
   /^\s*(?:FAIL|SIGSEGV|SIGABRT|SIGBUS|SIGILL|SIGFPE|SIGKILL|SIGTERM|TIMEOUT|LEAK-FAIL|EXEC-FAIL|ABORT)\s+\[[^\]]*\]\s+(?:\(\s*\d+\/\d+\)\s+)?(\S+)\s+(\S+)\s*$/gm;
 
-// The failing tests in a nextest log as sorted `binary::test` keys.
+// The failing tests in a nextest log as sorted `binary::test` keys (`stem::test` for a merged `it` binary).
 export function parseFailedTests(out) {
   const failed = new Set();
   for (const m of out.matchAll(FAIL_LINE)) {
     const bin = m[1].split('::').pop();
-    failed.add(`${bin}::${m[2]}`);
+    // A merged binary (`it`) already names the file in the test: `stem::test`.
+    failed.add(bin === 'it' ? m[2] : `${bin}::${m[2]}`);
   }
   return [...failed].sort();
 }

@@ -126,9 +126,9 @@ tuning loop therefore costs zero replay churn.
 ## Verify
 
 ```
-cargo test -p ludion-engine --test extract
-cargo test -p ludion-engine --test sprite_sheet   # CPU-only: no adapter, exact-pixel probes
+cargo nextest run -p ludion-engine --test it -E 'test(/^extract::/)'
+cargo nextest run -p ludion-engine --test it -E 'test(/^sprite_sheet::/)'   # CPU-only: no adapter, exact-pixel probes
 cargo run -p ludion-cli -- render --scene examples/gallery/lights.yaml --out target/lights.png
 cargo run -p ludion-cli -- render --model examples/gallery/voxels/lantern.voxel.yaml --out target/lantern.sheet.png
-cargo test -p ludion-engine --test gpu_render     # graceful-skips without an adapter (L2003)
+cargo nextest run -p ludion-engine --test it -E 'test(/^gpu_render::/)'     # graceful-skips without an adapter (L2003)
 ```

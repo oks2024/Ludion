@@ -93,5 +93,5 @@ dominated by rebuilding rapier and everything above it.
 ```
 node scripts/physics-features.mjs
 node scripts/physics-pin-ritual.mjs
-cargo nextest run -p ludion-engine -E 'binary(physics_stress)'
+cargo nextest run -p ludion-engine --test it -E 'test(/^physics_stress::/)'
 ```

@@ -56,6 +56,12 @@ machine), and a `cargo-build` group (tests that spawn
 Without nextest on PATH the lane falls back to plain `cargo test --workspace` — serial and slower,
 but gating exactly the same set.
 
+ludion-engine's integration tests are one `it` binary (`autotests = false`; `tests/it.rs` declares each
+file as a module), so the shared generics compile once. Test names are `stem::test`; filter one file
+with `cargo nextest run -p ludion-engine --test it -E 'test(/^stem::/)'`. `thread_identity` stays its
+own binary because the thread-identity step selects it by binary name. `lists-in-step` fails on a
+`tests/*.rs` that `it.rs` does not declare.
+
 `--scope` with a `docs/` (or `embedded-docs/`) path builds ludion-cli (the mirror check) and runs only the
 `DOCS_TESTS` binaries in `scripts/check-scope.mjs`. The classifier test greps integration tests for docs
 readers; a src unit test or a vigil test that reads `docs/` is caught only by the default suite.

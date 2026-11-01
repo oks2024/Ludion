@@ -107,4 +107,4 @@ refused with `L1255` while a recording is armed; a re-bake changes the PNG too, 
 asset cache.
 
 ## Verify
-`cargo test -p ludion-font`, `cargo test -p ludion-renderer --lib atlas`, `cargo test -p ludion-engine --test font_layout_parity`, `cargo test -p ludion-scene --lib font`, `cargo test -p ludion-engine --lib fonts`, `cargo test -p ludion-cli --test check_scene_fonts`, `cargo test -p ludion-font --features bake`, `cargo test -p ludion-cli --test generate_atlas_font`.
+`cargo test -p ludion-font`, `cargo test -p ludion-renderer --lib atlas`, `cargo nextest run -p ludion-engine --test it -E 'test(/^font_layout_parity::/)'`, `cargo test -p ludion-scene --lib font`, `cargo test -p ludion-engine --lib fonts`, `cargo test -p ludion-cli --test check_scene_fonts`, `cargo test -p ludion-font --features bake`, `cargo test -p ludion-cli --test generate_atlas_font`.

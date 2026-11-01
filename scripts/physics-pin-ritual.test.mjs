@@ -18,6 +18,11 @@ test('a FAIL line without a counter parses', () => {
   assert.deepEqual(parseFailedTests(out), ['physics_stress::a_thing']);
 });
 
+test('a FAIL line from the merged engine binary parses to stem::test', () => {
+  const out = '        FAIL [   0.053s] (  2/12) ludion-engine::it physics_stress::a_thing\n';
+  assert.deepEqual(parseFailedTests(out), ['physics_stress::a_thing']);
+});
+
 test('a counter of several digits parses', () => {
   const out = '        FAIL [   1.500s] (123/456) ludion-engine::ragdoll_scene some_test\n';
   assert.deepEqual(parseFailedTests(out), ['ragdoll_scene::some_test']);

@@ -7,8 +7,8 @@
 //      must match what the protocol code generates right now.
 //   2. regenerate each TS file from its committed snapshot into a scratch directory.
 //   3. byte-compare every regenerated file against the committed one.
-// The pattern schema snapshot's Rust half (`cargo test -p ludion-engine --test
-// pattern_schema_snapshot`) runs in the workspace test lane, not here: this job never builds the engine.
+// The pattern schema snapshot's Rust half (`cargo nextest run -p ludion-engine --test it
+// -E 'test(/^pattern_schema_snapshot::/)'`) runs in the workspace test lane, not here: this job never builds the engine.
 //
 // `--fast` skips layers 1 and `npm ci`: check.mjs's test lane already runs the snapshot test and its
 // npm-deps verdict covers the install.

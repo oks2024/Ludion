@@ -30,6 +30,9 @@
 //   crate-allow  no strict or sim crate carries a crate-level `#![allow(..)]` / `#![expect(..)]` of
 //             `clippy::disallowed_methods` / `disallowed_types`, which would switch the denylist off for
 //             the whole crate; an item-level allow with a why-comment stays legal (audit 2026-10-03 Q5).
+//   orphan    in a package with `autotests = false` (ludion-engine's merged `it` binary), every top-level
+//             `tests/*.rs` is a `[[test]]` path or a `mod <stem>;` of one of the package's test roots, else
+//             it never compiles or runs. Binary ids come from the manifest's `[[test]]` tables there.
 //   proptest  every `proptest!` block opens with a `proptest_config` that is `deterministic_config()` or a
 //             `RngSeed::Fixed` seed with `failure_persistence: None`, so a red run reproduces anywhere and
 //             no `.proptest-regressions` file is written (audit 2026-10-31 section 34).
@@ -73,6 +76,7 @@ const subdirs = (dir) => (existsSync(dir) ? readdirSync(dir).filter((n) => statS
 function scanWorkspace() {
   const packages = new Set();
   const binaries = new Map(); // binary id -> source path
+  const orphans = [];
   for (const group of ['crates', 'games']) {
     for (const dirName of subdirs(path.join(REPO_ROOT, group))) {
       const dir = path.join(REPO_ROOT, group, dirName);
@@ -81,8 +85,29 @@ function scanWorkspace() {
       const name = /^\[package\][\s\S]*?^name\s*=\s*"([^"]+)"/m.exec(read(manifest))?.[1];
       if (!name) continue;
       packages.add(name);
+      const manifestText = read(manifest);
+      const declared = tomlBlocks(manifestText).filter((b) => b.header === '[[test]]').map((b) => ({
+        name: /^name\s*=\s*"([^"]+)"/m.exec(b.body)?.[1],
+        path: /^path\s*=\s*"([^"]+)"/m.exec(b.body)?.[1],
+      }));
+      for (const t of declared) {
+        if (t.name) binaries.set(`${name}::${t.name}`, path.join(dir, t.path ?? `tests/${t.name}.rs`));
+      }
       const tests = path.join(dir, 'tests');
       if (!existsSync(tests)) continue;
+      if (/^autotests\s*=\s*false/m.test(manifestText.split(/^\[(?!package\])/m)[0])) {
+        // A file nothing declares never compiles: it must be a `[[test]]` path or a `mod` of a declared root.
+        const roots = declared.map((t) => path.join(dir, t.path ?? `tests/${t.name}.rs`));
+        const rootText = roots.filter((r) => existsSync(r)).map(read).join('\n');
+        for (const entry of readdirSync(tests)) {
+          if (!entry.endsWith('.rs') || statSync(path.join(tests, entry)).isDirectory()) continue;
+          const stem = entry.slice(0, -3);
+          const full = path.join(tests, entry);
+          if (roots.includes(full) || new RegExp(`^\\s*(pub\\s+)?mod\\s+${stem}\\s*;`, 'm').test(rootText)) continue;
+          orphans.push(`orphan: ${rel(full)} is neither a [[test]] path in ${rel(manifest)} nor a \`mod ${stem};\` in one of its test roots, so it never compiles, declare it`);
+        }
+        continue;
+      }
       for (const entry of readdirSync(tests)) {
         const full = path.join(tests, entry);
         if (statSync(full).isDirectory()) {
@@ -93,7 +118,7 @@ function scanWorkspace() {
       }
     }
   }
-  return { packages, binaries };
+  return { packages, binaries, orphans };
 }
 
 // ── nextest ──────────────────────────────────────────────────────────────────
@@ -541,7 +566,7 @@ const requireGpu = checkRequireGpu();
 const bless = checkBless();
 const crateAllow = checkCrateAllows();
 const proptest = checkProptest();
-const errors = [...nextest.errors, ...requireGpu.errors, ...bless.errors, ...crateAllow.errors, ...proptest.errors, ...header.errors, ...clippy.errors];
+const errors = [...workspace.orphans, ...nextest.errors, ...requireGpu.errors, ...bless.errors, ...crateAllow.errors, ...proptest.errors, ...header.errors, ...clippy.errors];
 
 if (errors.length === 0) {
   console.log(`lists-in-step: OK (nextest ${nextest.count} tests scanned, c-header ${header.count} items, clippy ${clippy.count} files, require-gpu ${requireGpu.count} files, bless ${bless.count} files, crate-allow ${crateAllow.count} files, proptest ${proptest.count} blocks)`);
