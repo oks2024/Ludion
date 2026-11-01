@@ -56,6 +56,11 @@ machine), and a `cargo-build` group (tests that spawn
 Without nextest on PATH the lane falls back to plain `cargo test --workspace` — serial and slower,
 but gating exactly the same set.
 
+`--scope` with a `docs/` (or `embedded-docs/`) path builds ludion-cli (the mirror check) and runs only the
+`DOCS_TESTS` binaries in `scripts/check-scope.mjs`. The classifier test greps integration tests for docs
+readers; a src unit test or a vigil test that reads `docs/` is caught only by the default suite.
+`--fail-fast` (scope only, opt-in) stops the cargo chain and nextest at the first red.
+
 ### Wall time
 
 The default `check.mjs` run is about 756 s on the reference 32-core box (it was 914 s before the sync

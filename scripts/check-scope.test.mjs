@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classify } from './check-scope.mjs';
+import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DOCS_TESTS, classify, testSelection } from './check-scope.mjs';
+
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const WS = {
   members: [
     { name: 'ludion-core', dir: 'crates/ludion-core', lib: true, deps: [] },
     { name: 'ludion-protocol', dir: 'crates/ludion-protocol', lib: true, deps: ['ludion-core'] },
     { name: 'ludion', dir: 'crates/ludion', lib: true, deps: ['ludion-core', 'ludion-protocol'] },
+    { name: 'ludion-scene', dir: 'crates/ludion-scene', lib: true, deps: ['ludion-core'] },
     { name: 'ludion-cli', dir: 'crates/ludion-cli', lib: false, deps: ['ludion'] },
     { name: 'breakout', dir: 'games/breakout', lib: false, deps: ['ludion'] },
   ],
@@ -41,12 +48,64 @@ test('prose needs only the cheap gates', () => {
   assert.equal(s.drift || s.scripts || s.frontend || s.vigil, false);
 });
 
-test('docs/ is ludion-cli (the embedded mirror), game assets the drift gates', () => {
-  assert.deepEqual(classify(['docs/scenes.md'], WS).packages, ['ludion-cli']);
+test('game assets select the drift gates', () => {
   const game = classify(['games/breakout/scenes/level.yaml'], WS);
   assert.deepEqual(game.packages, ['breakout']);
   assert.equal(game.drift, true);
   assert.equal(classify(['games/breakout/src/main.rs'], WS).drift, false);
+});
+
+const DOCS_FILTER = 'binary_id(=ludion-cli::docs) | binary_id(=ludion-cli::explain) | binary_id(=ludion-cli::new) | binary_id(=ludion-scene::kind_precheck)';
+
+test('docs/ and its embedded mirror build ludion-cli and run only the docs-reading tests', () => {
+  for (const p of ['docs/scenes.md', 'crates/ludion-cli/embedded-docs/x.md']) {
+    const s = classify([p], WS);
+    assert.deepEqual(s.packages, [], p);
+    assert.equal(s.docs, true, p);
+    assert.deepEqual(testSelection(s), { clippy: ['ludion-cli'], test: ['ludion-cli', 'ludion-scene'], filter: DOCS_FILTER }, p);
+  }
+});
+
+test('a whole package keeps its tests in the docs filter; both whole packages need none', () => {
+  const cli = testSelection(classify(['docs/scenes.md', 'crates/ludion-cli/src/main.rs'], WS));
+  assert.equal(cli.filter, 'package(=ludion-cli) | binary_id(=ludion-scene::kind_precheck)');
+  const both = testSelection(classify(['docs/scenes.md', 'crates/ludion-cli/src/main.rs', 'crates/ludion-scene/src/lib.rs'], WS));
+  assert.equal(both.filter, null);
+  assert.deepEqual(both.test, ['ludion-cli', 'ludion-scene']);
+});
+
+test('without a docs path the selection is the packages and no filter', () => {
+  const s = classify(['crates/ludion-core/src/lib.rs'], WS);
+  assert.deepEqual(testSelection(s), { clippy: ['ludion-core'], test: ['ludion-core'], filter: null });
+});
+
+// Every integration test file that reads docs/ must be in DOCS_TESTS, and no entry may be stale.
+test('DOCS_TESTS lists exactly the integration tests that read docs/', () => {
+  const rs = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? rs(path.join(dir, e.name)) : e.name.endsWith('.rs') ? [path.join(dir, e.name)] : []));
+  const pkgName = (dir) => /^name\s*=\s*"([^"]+)"/m.exec(readFileSync(path.join(dir, 'Cargo.toml'), 'utf8'))[1];
+  const hits = new Set();
+  for (const group of ['crates', 'games', 'examples']) {
+    for (const e of readdirSync(path.join(ROOT, group), { withFileTypes: true })) {
+      const dir = path.join(ROOT, group, e.name);
+      if (!e.isDirectory() || (group === 'games' && e.name === 'vigil') || !existsSync(path.join(dir, 'tests'))) continue;
+      for (const file of rs(path.join(dir, 'tests'))) {
+        const reads = readFileSync(file, 'utf8').split('\n').some((l) => !l.trim().startsWith('//') && /"docs[/"]|embedded-docs/.test(l));
+        if (!reads) continue;
+        const rel = path.relative(path.join(dir, 'tests'), file).split(path.sep);
+        assert.equal(rel.length, 1, `${file} reads docs/ from a nested test file: map it by hand in DOCS_TESTS in scripts/check-scope.mjs`);
+        hits.add(`${pkgName(dir)}::${rel[0].replace(/\.rs$/, '')}`);
+      }
+    }
+  }
+  const listed = new Set(DOCS_TESTS.map(([p, b]) => `${p}::${b}`));
+  for (const h of hits) assert.ok(listed.has(h), `${h} reads docs/: add it to DOCS_TESTS in scripts/check-scope.mjs`);
+  for (const l of listed) assert.ok(hits.has(l), `${l} is in DOCS_TESTS but no longer reads docs/: remove it from scripts/check-scope.mjs`);
+});
+
+test('--fail-fast without --scope is refused', () => {
+  const r = spawnSync('node', ['scripts/check.mjs', '--fail-fast'], { cwd: ROOT, encoding: 'utf8' });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--fail-fast.*--scope/);
 });
 
 test('the detached workspaces and the frontend each select their own lane', () => {

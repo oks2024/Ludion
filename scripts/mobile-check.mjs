@@ -9,8 +9,9 @@
 //
 //   1. clippy `-D warnings` on the facade and `ludion-assets` with every feature off — the shipped
 //      shape: no listener, no viewer, no watcher (`ludion-assets`' opt-in `watch` feature stays off
-//      because nothing in that tree enables it). `--no-deps` lints those two crates only; the rest
-//      of the tree is compiled, not linted, so this costs one check-build, not a second clippy run.
+//      because nothing in that tree enables it). The tree's workspace crates are linted in each
+//      shape too (stricter); dropping `--no-deps` keeps clippy's argument fingerprint stable, so a
+//      repeat run is warm.
 //   2. the same on the facade with `wire` alone — the debug-build shape: a listener the agent
 //      attaches to, still no viewer.
 //   3. the same on the facade with `window` alone — the desktop player shape: `launch` opens the
@@ -53,15 +54,15 @@ const DESKTOP_ONLY = ['winit', 'gilrs', 'notify', 'tokio', 'ludion-window', 'lud
 const LINT_STEPS = [
   {
     what: 'shipped shape (no wire, no window, no watch)',
-    args: ['clippy', '-p', 'ludion', '-p', 'ludion-assets', '--no-default-features', '--no-deps', '--', '-D', 'warnings'],
+    args: ['clippy', '-p', 'ludion', '-p', 'ludion-assets', '--no-default-features', '--', '-D', 'warnings'],
   },
   {
     what: 'debug shape (wire, no window)',
-    args: ['clippy', '-p', 'ludion', '--no-default-features', '--features', 'wire', '--no-deps', '--', '-D', 'warnings'],
+    args: ['clippy', '-p', 'ludion', '--no-default-features', '--features', 'wire', '--', '-D', 'warnings'],
   },
   {
     what: 'desktop player shape (window, no wire)',
-    args: ['clippy', '-p', 'ludion', '--no-default-features', '--features', 'window', '--no-deps', '--', '-D', 'warnings'],
+    args: ['clippy', '-p', 'ludion', '--no-default-features', '--features', 'window', '--', '-D', 'warnings'],
   },
   {
     what: "vigil's lib in the shipped shape (no wire, no window)",

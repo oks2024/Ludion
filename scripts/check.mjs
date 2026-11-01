@@ -12,7 +12,7 @@
 // mirror it here.
 //
 // Usage:  node scripts/check.mjs [--rust-only|--frontend-only] [--no-gpu] [--full] [--soak] [--fix] [--history]
-//         node scripts/check.mjs --scope [--deps] [--no-gpu] [--fix] <paths...>
+//         node scripts/check.mjs --scope [--deps] [--fail-fast] [--no-gpu] [--fix] <paths...>
 //
 //   (no flag)        every gate: the cheap node gates, the Rust gates (fmt, clippy, nextest +
 //                    doctests, the derived-import sync, the drift gates, the check-docs smoke, mobile,
@@ -48,11 +48,13 @@
 //                    crates (`-p`); vigil, the editor host, fuzz, the frontend, schema-drift, the
 //                    drift gates and the script tests only when a path falls under them. `--deps`
 //                    adds every crate that depends on a named one (vigil, through the facade). Never
-//                    a commit gate: the default suite runs before the commit lands. Logs and scratch
-//                    are per run (target/check-scope/<pid>/), so scoped runs overlap each other; one
-//                    refuses while a default run holds the lock. A workspace-wide path (a manifest,
-//                    the lockfile, toolchain or nextest config, vendor/) is refused: run the default
-//                    suite
+//                    a commit gate: the default suite runs before the commit lands. A `docs/` path
+//                    builds ludion-cli (the mirror check) and runs only the tests that read `docs/`.
+//                    `--fail-fast` stops the cargo chain and nextest at the first red. Logs and
+//                    scratch are per run (target/check-scope/<pid>/), so scoped runs overlap each
+//                    other; one refuses while a default run holds the lock. A workspace-wide path (a
+//                    manifest, the lockfile, toolchain or nextest config, vendor/) is refused: run
+//                    the default suite
 //
 // games/vigil is a Lore-only game and its own Cargo workspace: its steps run with cwd games/vigil, and
 // report as skipped when the directory is absent (a public clone).
@@ -81,7 +83,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { acquireLock, pruneScopeTemps } from './check-lock.mjs';
-import { classify, loadWorkspace } from './check-scope.mjs';
+import { classify, loadWorkspace, testSelection } from './check-scope.mjs';
 import { writeFileAtomic } from './atomic-write.mjs';
 import { killTree, spawnTool } from './kill-tree.mjs';
 
@@ -136,6 +138,7 @@ try {
       history: { type: 'boolean', default: false },
       scope: { type: 'boolean', default: false },
       deps: { type: 'boolean', default: false },
+      'fail-fast': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   }));
@@ -191,6 +194,10 @@ if (positionals.length && !values.scope) {
   console.error(`check: unexpected argument ${positionals[0]} (paths are taken only with --scope)`);
   process.exit(2);
 }
+if (values['fail-fast'] && !values.scope) {
+  console.error('check: --fail-fast stops a --scope run at its first red; it needs --scope');
+  process.exit(2);
+}
 if (values.deps && !values.scope) {
   console.error('check: --deps widens a --scope run; it needs --scope');
   process.exit(2);
@@ -220,16 +227,27 @@ const SCOPE_GATES = scope && {
   fmt: scope.packages.length > 0, 'physics-features': scope.packages.length > 0,
   'vigil-fmt': scope.vigil, 'vigil-node': scope.vigilNode, 'vigil-lab': scope.vigilNode,
   'voxel-kit': scope.scripts, 'commit-wrapper': scope.scripts, 'gate-scripts': scope.scripts, 'pin-ritual': scope.scripts,
-  heavy: scope.packages.length > 0 || scope.vigil || scope.drift,
+  heavy: scope.packages.length > 0 || scope.docs || scope.vigil || scope.drift,
   bins: scope.vigil || scope.drift || scope.packages.includes('ludion'),
   drift: scope.drift, 'check-docs': scope.drift || scope.packages.includes('ludion'),
-  clippy: scope.packages.length > 0, doctest: scope.libs.length > 0, vigil: scope.vigil, mobile: scope.mobile,
+  clippy: scope.packages.length > 0 || scope.docs, doctest: scope.libs.length > 0, vigil: scope.vigil, mobile: scope.mobile,
   tauri: scope.tauri, fuzz: scope.fuzz,
 };
 const inScope = (gate) => !SCOPE_GATES || SCOPE_GATES[gate];
 const outOfScope = (name) => skipped(name, 'out of scope');
 // The root workspace's selection for clippy, nextest and the doctests.
-const SELECT = scope ? scope.packages.flatMap((p) => ['-p', p]) : ['--workspace'];
+const SEL = scope && testSelection(scope);
+const CLIPPY_SELECT = scope ? SEL.clippy.flatMap((p) => ['-p', p]) : ['--workspace'];
+const TEST_SELECT = scope ? SEL.test.flatMap((p) => ['-p', p]) : ['--workspace'];
+const FAIL_FAST = Boolean(values['fail-fast']);
+const FAIL_FLAG = FAIL_FAST ? '--fail-fast' : '--no-fail-fast';
+// nextest ORs repeated `-E` flags, so the docs filter and the fps exclusion are one expression.
+const nextestFilter = (fpsExpr) => {
+  const docs = SEL?.filter;
+  const fps = fpsExpr ? `not (${fpsExpr})` : null;
+  if (docs && fps) return ['-E', `(${docs}) & ${fps}`];
+  return docs || fps ? ['-E', docs || fps] : [];
+};
 const DOC_SELECT = scope ? scope.libs.flatMap((p) => ['-p', p]) : ['--workspace'];
 // A scoped package may have no test of its own (or none left once the fps gates are filtered out).
 const NO_TESTS = scope ? ['--no-tests=pass'] : [];
@@ -386,7 +404,7 @@ const publicTreeStep = { name: 'public-tree', cmd: 'node', args: ['scripts/publi
 // The physics pin ritual's parser and leftover scan (scripts/physics-pin-ritual-lib.mjs). Mirrors
 // ci.yml's `physics pin ritual tests`.
 const pinRitualStep = { name: 'pin-ritual', cmd: 'node', args: ['--test', 'scripts/physics-pin-ritual.test.mjs'], log: 'pin-ritual.log' };
-const clippyStep = { name: 'clippy', cmd: 'cargo', args: ['clippy', ...SELECT, '--all-targets', '--all-features', '--', '-D', 'warnings'], log: 'clippy.log' };
+const clippyStep = { name: 'clippy', cmd: 'cargo', args: ['clippy', ...CLIPPY_SELECT, '--all-targets', '--all-features', '--', '-D', 'warnings'], log: 'clippy.log' };
 // vigil's own workspace: the same commands as the root's, run from games/vigil/ so its
 // `.cargo/config.toml` (the shared `target/`) and `.config/nextest.toml` apply.
 const vigilFmtStep = { name: 'vigil-fmt', cmd: 'cargo', args: ['fmt', '--all', '--', '--check'], cwd: VIGIL, log: 'vigil-fmt.log' };
@@ -412,7 +430,7 @@ const vigilClippyStep = { name: 'vigil-clippy', cmd: 'cargo', args: ['clippy', '
 // Both shapes leave out the exclusive tests (`fpsGateFilter`): the fps gates measure wall-clock fps, which
 // the parallel lanes saturate, so the `fps-gate` step runs them after every lane has finished.
 // The hosted lane's test step: the `no-gpu` profile with the GPU forbidden (`.github/workflows/ci.yml`).
-const noGpuStep = { name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...SELECT, ...NO_TESTS, '--profile', 'no-gpu', '--no-fail-fast'], log: 'test.log', env: { LUDION_FORBID_GPU: '1' } };
+const noGpuStep = { name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...TEST_SELECT, ...NO_TESTS, '--profile', 'no-gpu', FAIL_FLAG, ...nextestFilter(null)], log: 'test.log', env: { LUDION_FORBID_GPU: '1' } };
 const referenceGpuEnv = () => {
   const [cmd, args, name] = IS_WINDOWS
     ? ['nvidia-smi', ['--query-gpu=name', '--format=csv,noheader'], 'RTX 3090']
@@ -422,7 +440,7 @@ const referenceGpuEnv = () => {
       ? { LUDION_REQUIRE_REFERENCE_ADAPTER: '1' } : {};
   } catch { return {}; }
 };
-const nextestStep = (fps) => ({ name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...SELECT, ...NO_TESTS, '--no-fail-fast', ...(fps.expr ? ['-E', `not (${fps.expr})`] : [])], log: 'test.log', env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } });
+const nextestStep = (fps) => ({ name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...TEST_SELECT, ...NO_TESTS, FAIL_FLAG, ...nextestFilter(fps.expr)], log: 'test.log', env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } });
 // vigil's test lane takes the root lane's shape (the nextest `no-gpu` profile, nextest, or plain `cargo test`) and env.
 const vigilTestStep = (shape) => ({
   name: 'vigil-test', cwd: VIGIL, log: 'vigil-test.log',
@@ -431,8 +449,9 @@ const vigilTestStep = (shape) => ({
     : { cmd: 'cargo', args: ['test', '--workspace', '--no-fail-fast'], env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } }),
 });
 const vigilDoctestStep = { name: 'vigil-doctest', cmd: 'cargo', args: ['test', '--workspace', '--doc', '--no-fail-fast'], cwd: VIGIL, log: 'vigil-doctest.log' };
-const doctestStep = { name: 'doctest', cmd: 'cargo', args: ['test', ...DOC_SELECT, '--doc', '--no-fail-fast'], log: 'doctest.log' };
-const cargoTestStep = (fps) => ({ name: 'test', cmd: 'cargo', args: ['test', ...SELECT, '--no-fail-fast', ...(fps.prefix ? ['--', '--skip', fps.prefix] : [])], log: 'test.log', env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } });
+const doctestStep = { name: 'doctest', cmd: 'cargo', args: ['test', ...DOC_SELECT, '--doc', FAIL_FLAG], log: 'doctest.log' };
+// Without nextest a docs scope runs its whole packages: wider than the nextest filter, never narrower.
+const cargoTestStep = (fps) => ({ name: 'test', cmd: 'cargo', args: ['test', ...TEST_SELECT, ...(FAIL_FAST ? [] : ['--no-fail-fast']), ...(fps.prefix ? ['--', '--skip', fps.prefix] : [])], log: 'test.log', env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } });
 
 // The fps gates' filter, read from the exclusive override in `.config/nextest.toml` — the one place it
 // is written (`scripts/lists-in-step.mjs` checks the block and its callers). The expression keeps its
@@ -676,6 +695,7 @@ async function binLane(copied, syncDone) {
 // A compile failure in clippy makes the test build a redundant recompile-failure; a test failure
 // leaves doctest and mobile independent, so they still run.
 const VIGIL_CARGO_STEPS = ['vigil-clippy', 'vigil-test', 'vigil-doctest'];
+const failFastSkips = (red, names) => names.map((n) => (hasVigil || !VIGIL_CARGO_STEPS.includes(n) ? skipped(n, `${red} failed (--fail-fast)`) : vigilAbsent(n)));
 async function cargoChain(syncDone) {
   const root = inScope('clippy');
   const clippy = root ? await runStep(clippyStep) : outOfScope('clippy');
@@ -688,12 +708,18 @@ async function cargoChain(syncDone) {
   }
   const out = [clippy, synced];
   if (root) {
-    out.push(await runStep(noGpu ? noGpuStep : useNextest ? nextestStep(fpsGate) : cargoTestStep(fpsGate)));
+    const test = await runStep(noGpu ? noGpuStep : useNextest ? nextestStep(fpsGate) : cargoTestStep(fpsGate));
+    out.push(test);
+    if (FAIL_FAST && !test.ok) return [...out, ...failFastSkips('test', ['doctest', ...VIGIL_CARGO_STEPS, 'mobile'])];
     out.push(!useNextest ? skipped('doctest', 'ran inside cargo test (no cargo-nextest)') : inScope('doctest') ? await runStep(doctestStep) : skipped('doctest', 'no library in scope'));
+    if (FAIL_FAST && !out.at(-1).ok) return [...out, ...failFastSkips('doctest', [...VIGIL_CARGO_STEPS, 'mobile'])];
   } else {
     out.push(outOfScope('test'), outOfScope('doctest'));
   }
-  out.push(...(inScope('vigil') ? await vigilChain(useNextest) : VIGIL_CARGO_STEPS.map(outOfScope)));
+  const vigil = inScope('vigil') ? await vigilChain(useNextest) : VIGIL_CARGO_STEPS.map(outOfScope);
+  out.push(...vigil);
+  const vigilRed = vigil.find((r) => !r.ok);
+  if (FAIL_FAST && vigilRed) return [...out, ...failFastSkips(vigilRed.name, ['mobile'])];
   out.push(inScope('mobile') ? await runStep(mobileStep()) : outOfScope('mobile'));
   return out;
 }
@@ -963,7 +989,7 @@ async function main() {
 
   console.log(`Ludion check ${DIM}— ${mode} — logs in ${path.relative(REPO_ROOT, LOG_DIR)}/${RST}`);
   if (scope) {
-    console.log(`${DIM}scope: ${scope.paths.join(' ')}${values.deps ? ' (with dependents)' : ''}${scope.packages.length ? ` → ${scope.packages.join(', ')}` : ''}${RST}`);
+    console.log(`${DIM}scope: ${scope.paths.join(' ')}${values.deps ? ' (with dependents)' : ''}${scope.packages.length ? ` → ${scope.packages.join(', ')}` : ''}${scope.docs ? ' + docs tests' : ''}${RST}`);
     console.log(`${YELLOW}check: a scoped run is the inner loop, not a commit gate — the default suite still runs before the commit lands.${RST}`);
   }
   if (runRust) warnIfDepsBloated();
@@ -998,6 +1024,8 @@ async function main() {
       results.push(skipped('fps-gate', '--no-gpu'));
     } else if (scope && !fpsGate.error && !scope.packages.includes(fpsGate.crate)) {
       results.push(outOfScope('fps-gate'));
+    } else if (FAIL_FAST && results.some((r) => !r.ok)) {
+      results.push(skipped('fps-gate', 'a step failed (--fail-fast)'));
     } else if (test?.skipped) {
       results.push(skipped('fps-gate', test.reason));
     } else if (fpsGate.error) {

@@ -1,7 +1,8 @@
 // `check.mjs --scope <paths...>`: which gates a change to the named paths needs. A scoped run is the
 // coder's inner loop, never a substitute for the default suite before a commit lands — it gives up
 // everything a path cannot name: the dependents of a changed crate (unless `--deps`), generated
-// files whose generator lives in an engine crate, and the timing baselines of a full run.
+// files whose generator lives in an engine crate, and the timing baselines of a full run. A `docs/`
+// path builds ludion-cli (the embedded-mirror check) and runs only the `DOCS_TESTS` binaries.
 //
 // Paths are named explicitly, like `commit.mjs`'s: a shared checkout's dirty set mixes several
 // instances' work, so `git status` cannot say whose change this run is for.
@@ -13,6 +14,15 @@ import path from 'node:path';
 // Paths no gate reads beyond the cheap node gates that run in every mode.
 const PROSE_ROOTS = ['Plan/', 'Plan-Private/', 'dev-docs/', 'licenses/', 'infra/', 'ci/teamcity/', '.exarch/', '.claude/'];
 const PROSE_FILE = /^[^/]+\.md$|^LICENSE-/;
+
+// [package, test binary] pairs that read `docs/` (or the binary's embedded copy); the guard in
+// check-scope.test.mjs derives the set by grep.
+export const DOCS_TESTS = [
+  ['ludion-cli', 'docs'],
+  ['ludion-cli', 'explain'],
+  ['ludion-cli', 'new'],
+  ['ludion-scene', 'kind_precheck'],
+];
 
 // The root workspace's members, read from `cargo metadata` (no build, no build lock), and the root
 // crates the detached fuzz workspace depends on by path.
@@ -35,7 +45,7 @@ export function loadWorkspace(repoRoot) {
 export function classify(paths, { members, fuzzDeps }, { deps = false } = {}) {
   const s = {
     packages: new Set(), vigil: false, vigilNode: false, tauri: false, fuzz: false,
-    frontend: false, schema: false, scripts: false, drift: false,
+    frontend: false, schema: false, scripts: false, drift: false, docs: false,
   };
   const byDepth = [...members].sort((a, b) => b.dir.length - a.dir.length);
   for (const raw of paths) {
@@ -58,7 +68,7 @@ export function classify(paths, { members, fuzzDeps }, { deps = false } = {}) {
       if (/drift|import-sync|ludion-bin/.test(p)) s.drift = true;
       continue;
     }
-    if (under('docs')) { s.packages.add('ludion-cli'); continue; }
+    if (under('docs') || under('crates/ludion-cli/embedded-docs')) { s.docs = true; continue; }
     if (under('examples')) { s.drift = true; continue; }
     const member = byDepth.find((m) => under(m.dir));
     if (member) {
@@ -87,4 +97,21 @@ export function classify(paths, { members, fuzzDeps }, { deps = false } = {}) {
     libs: libs.sort(),
     mobile: s.packages.has('ludion') || s.packages.has('ludion-assets'),
   };
+}
+
+// The cargo packages to lint and test for a classified scope, and the nextest filter (or null) that
+// narrows the docs-only packages to their `DOCS_TESTS` binaries.
+export function testSelection(scope) {
+  const uniq = (a) => [...new Set(a)].sort();
+  const whole = new Set(scope.packages);
+  const docsPkgs = scope.docs ? DOCS_TESTS.map(([p]) => p) : [];
+  const clippy = uniq([...scope.packages, ...(scope.docs ? ['ludion-cli'] : [])]);
+  const test = uniq([...scope.packages, ...docsPkgs]);
+  const partial = DOCS_TESTS.filter(([p]) => scope.docs && !whole.has(p));
+  if (partial.length === 0) return { clippy, test, filter: null };
+  const terms = [
+    ...[...whole].sort().map((p) => `package(=${p})`),
+    ...uniq(partial.map(([p, b]) => `binary_id(=${p}::${b})`)),
+  ];
+  return { clippy, test, filter: terms.join(' | ') };
 }
