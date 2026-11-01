@@ -25,7 +25,7 @@ against each row below.
 
 - `ludion docs components` — declaring/registering your own components, and the core scene/render set.
 - `ludion docs components-ui` — the screen-space UI components and world `Text`.
-- `ludion docs sprites` — the sprite layer's hub: document kinds, verbs, components, six spokes.
+- `ludion docs sprites` — the sprite layer's hub: document kinds, verbs, components, eight spokes.
 - `ludion docs particles` — `ParticleEmitter`: the analytic effect, its fields, and firing a burst.
 - `ludion docs character-animation` — skinned characters: `crossfade`, `AnimationEvents`, the cycle example.
 - `ludion docs patterns` — `Volley`/`PatternPlayer`: bullet patterns as text.

@@ -8,7 +8,7 @@ document to one image per frame, effects applied), `pack()` (frames plus loose P
 and the derived `kind: atlas` document), and `import_png()` (a decoded PNG back to an editable
 document). The *text* halves of all three families live in `ludion-scene`
 (`ludion devdocs scene-kind-documents`); the pipeline end to end, from text to the renderer, is
-`ludion devdocs sprite-pipeline`. The formats are `ludion docs sprite-authoring` and
+`ludion devdocs sprite-pipeline`. The formats are `ludion docs sprite-format` and
 `ludion docs sprite-sheets`.
 
 ## Layout

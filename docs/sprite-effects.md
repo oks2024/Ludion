@@ -7,8 +7,8 @@ description: The eight baked sprite effect ops, their parameters, the glyphs/fra
 **Scope:** the ordered `effects:` list a `kind: sprite` document bakes on top of its glyph grid — the
 closed op set, each op's parameters and ranges, the two filters that scope them, and the traps each
 has sprung. The document those effects sit in (its grid, palette, frames, pivots) and the contact
-sheet you judge a bake by are `ludion docs sprite-authoring`; the hub over both is
-`ludion docs sprites`.
+sheet you judge a bake by are `ludion docs sprite-format` and `ludion docs sprite-authoring`; the hub
+over both is `ludion docs sprites`.
 
 ## The op set
 
@@ -19,18 +19,18 @@ silently skipped entry. Every op is CPU-baked and deterministic, and every chann
 
 | `op` | Parameters (default) | What it does |
 |---|---|---|
-| `gradient` | `from`, `to` (required RGBA), `direction: vertical\|horizontal\|radial` (`vertical`), `blend: replace\|multiply` (`replace`) | Ramps between two colours across the **target set's own bounding box**, so a ramp over one glyph fills that glyph's extent; radial runs from the box centre to half its diagonal. `replace` takes the ramp's RGB and scales the texel's alpha by it, `multiply` scales all four |
-| `outline` | `color` (required RGBA), `side: outside\|inside` (`outside`) | A one-texel border on the silhouette. `outside` paints transparent texels with a 4-neighbour in the set — the frame edge clips it, so leave a margin; `inside` paints the set's own edge texels |
+| `gradient` | `from`, `to` (required hex), `direction: vertical\|horizontal\|radial` (`vertical`), `blend: replace\|multiply` (`replace`) | Ramps between two colours across the **target set's own bounding box**, so a ramp over one glyph fills that glyph's extent; radial runs from the box centre to half its diagonal. `replace` takes the ramp's RGB and scales the texel's alpha by it, `multiply` scales all four |
+| `outline` | `color` (required hex), `side: outside\|inside` (`outside`) | A one-texel border on the silhouette. `outside` paints transparent texels with a 4-neighbour in the set — the frame edge clips it, so leave a margin; `inside` paints the set's own edge texels |
 | `shade` | `light` (`[-1, -1]`, never both zero), `strength` (`0.25`, in `0..=1`) | A one-texel bevel: the edge facing the light moves toward white by `strength`, the edge away scales by `1 - strength`, the interior is untouched. Texel space, `+x` right and **`+y` down** |
-| `shadow` | `offset` (`[1, 1]`, never `[0, 0]`), `color` (`[0, 0, 0, 0.5]`) | An offset copy of the silhouette landing **only on transparent texels**, so it never overwrites the sprite it belongs to |
+| `shadow` | `offset` (`[1, 1]`, never `[0, 0]`), `color` (black at half alpha, `"#00000080"`) | An offset copy of the silhouette landing **only on transparent texels**, so it never overwrites the sprite it belongs to |
 | `dither` | `glyphs` **required, exactly two**; `density` (`0.5`, in `0..=1`) | An ordered 4×4 Bayer checker: a texel authored as the first glyph takes the second's colour where the threshold falls under `density`. Ordered, not random, so the pattern survives an edit that does not move the texel |
 | `noise` | `amount` (required, `0..=1`) | Per-texel RGB jitter in `[-amount, amount]`, a pure function of `(seed, frame index, x, y, channel)`. Alpha is never jittered — a noisy silhouette is a different sprite |
 | `blur` | `radius` (required, `1..=8` texels) | A box blur — the glow primitive. A wider glow is a second sprite, not a bigger radius |
-| `glow` | `radius_px` (required, `0 < radius_px <= 32`, **fractional**), `strength` (required, `>= 0`), `color` (optional RGBA) | A soft halo grown **outside** the silhouette, leaving the opaque core crisp. Every transparent texel within `radius_px` of an opaque source texel gains alpha from a parabolic `1 - d²/r²` falloff; the halo's colour is `color` when given, else the contribution-weighted average of the sources' own colours (a red bolt glows red). `strength` scales the accumulated alpha, then it clamps to `0..=1`. Unlike `blur`, `radius_px` is fractional, so a bright 4–8 px core keeps its shape with a soft ring instead of dissolving |
+| `glow` | `radius_px` (required, `0 < radius_px <= 32`, **fractional**), `strength` (required, `>= 0`), `color` (optional hex) | A soft halo grown **outside** the silhouette, leaving the opaque core crisp. Every transparent texel within `radius_px` of an opaque source texel gains alpha from a parabolic `1 - d²/r²` falloff; the halo's colour is `color` when given, else the contribution-weighted average of the sources' own colours (a red bolt glows red). `strength` scales the accumulated alpha, then it clamps to `0..=1`. Unlike `blur`, `radius_px` is fractional, so a bright 4–8 px core keeps its shape with a soft ring instead of dissolving |
 
-`light`, `offset`, `from`, `to` and `color` are block sequences like every other collection in the
-strict-YAML subset — a flow sequence anywhere in a document is `L1005`
-(`ludion docs sprite-authoring --section "Format"`).
+`light` and `offset` are block sequences like every other collection in the strict-YAML subset — a
+flow sequence anywhere in a document is `L1005` (`ludion docs sprite-format --section "Format"`).
+Colours are quoted hex strings, `"#rrggbb"` or `"#rrggbbaa"` (`ludion docs sprite-format --section "Hex colours"`).
 
 ## The two filters
 
@@ -50,16 +50,8 @@ effects:
   - op: gradient
     glyphs:
       - "#"
-    from:
-      - 1.0
-      - 1.0
-      - 1.0
-      - 1.0
-    to:
-      - 0.45
-      - 0.48
-      - 0.58
-      - 1.0
+    from: "#ffffff"
+    to: "#b3b8c8"
     direction: vertical
     blend: multiply
   - op: shade
@@ -68,11 +60,7 @@ effects:
       - -1.0
     strength: 0.35
   - op: outline
-    color:
-      - 0.03
-      - 0.03
-      - 0.06
-      - 1.0
+    color: "#303045"
     side: outside
 ```
 
@@ -81,12 +69,12 @@ effects:
 - **`L1154`** — one `effects:` entry is invalid: an unknown `op` or key (with a nearest match), a
   missing required parameter, a value out of range, or a `glyphs:`/`frames:` name this document does
   not define. The JSON Pointer names the entry and the field (`/effects/2/glyphs/0`,
-  `/effects/0/from/3`). `ludion explain L1154` prints the full rule.
+  `/effects/0/from`). `ludion explain L1154` prints the full rule.
 - **An effect that has no op is a gap to record, not something to paint into the grid.** A gradient,
   glow, shadow or shading drawn as glyphs cannot be swept by `--set` and does not follow a palette
-  change (`ludion docs sprite-authoring --section "Gotchas"`).
+  change (`ludion docs sprite-format --section "Gotchas"`).
 - **Tuning an op's parameters never edits the file** — `--set`/`--sweep` address
-  `/effects/<i>/<param>` and `/effects/<i>/<param>/<j>` in memory; anything outside that domain is
+  `/effects/<i>/<param>` (and `/effects/<i>/<param>/<j>` for a `light` or `offset` component) in memory; anything outside that domain is
   `L4008`. `ludion docs sprite-authoring` owns the whole pointer domain.
 
 ## Gotchas
@@ -113,7 +101,8 @@ effects:
 
 ## Next
 
-- `ludion docs sprite-authoring` — the document these ops bake onto, and the contact sheet.
+- `ludion docs sprite-format` — the document these ops bake onto.
+- `ludion docs sprite-authoring` — the contact sheet, `--steps`, and tuning.
 - `ludion docs sprite-craft` — what makes a sprite read: marks with a cause, few shades, ops over paint.
 - `ludion docs sprites` — the sprite layer end to end: documents, verbs, components.
 - `ludion docs sprite-sheets` — packing baked frames into a committed `kind: atlas`.

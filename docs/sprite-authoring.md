@@ -1,17 +1,15 @@
 ---
-description: Authoring a kind: sprite document — the glyph grid, its palette, named frames, and the contact sheet
+description: The sprite loop: check-scene, the contact sheet, --steps, --set/--sweep tuning, importing a PNG
 ---
 
 # Sprite authoring
 
-**Scope:** writing a `kind: sprite` document — its glyph grid, palette, named frames and pivots — and
-the CPU contact sheet you judge it by. It is the 2D sibling of a voxel model
-(`ludion docs voxel-format`): single-character glyphs indexing a palette, `.` reserved for a
-transparent texel, one `size` every frame shares, and a differently sized pose is a different
-document. The ordered `effects:` list baked on top is `ludion docs sprite-effects`; packing the
-frames is `ludion docs sprite-sheets`; the grid component that spends the same atlas per cell is
-`ludion docs tilemaps`. The hub over all of them is `ludion docs sprites`. What makes a sprite *read* at game scale is
-`ludion docs sprite-craft`.
+**Scope:** the loop around a `kind: sprite` document — check it alone, read its resolved grid, bake
+the contact sheet, see each effect's step, tune a value without editing the file, import a PNG. The
+document itself (keys, hex colours, `mirror`, patches, palette includes) is `ludion docs sprite-format`;
+the ordered `effects:` list is `ludion docs sprite-effects`; packing the frames is
+`ludion docs sprite-sheets`; the grid component that spends the atlas per cell is `ludion docs tilemaps`.
+What makes a sprite *read* at game scale is `ludion docs sprite-craft`. The hub is `ludion docs sprites`.
 
 ## The loop
 
@@ -22,11 +20,13 @@ frames is `ludion docs sprite-sheets`; the grid component that spends the same a
    ```
    prints `OK (ship, 16x12, 4 palette glyphs, 3 frames, 3 effects)` and one `idle: pivot (8, 6)`
    line per frame — the *resolved* pivot, so a defaulted one reads without arithmetic.
-   `--rows` adds every frame's glyph grid, with a column ruler and row numbers, before the `OK` line:
+   `--rows` adds every frame's glyph grid, with a column ruler and row numbers, before the `OK` line.
+   It prints the **resolved** grid — `mirror` and `patches` already applied:
    ```
    ludion check-scene examples/gallery/sprites/ship.sprite.yaml --rows
    ```
-   It is cheaper than an image for an exact texel fix, and it is the grid the bake reads.
+   It is cheaper than an image for an exact texel fix, and it is the grid the bake reads. The
+   document's keys: `ludion docs sprite-format`.
 3. **Bake it and look:**
    ```
    ludion render --sprite examples/gallery/sprites/ship.sprite.yaml --scale 4 --out target/ship.sheet.png
@@ -40,113 +40,15 @@ frames is `ludion docs sprite-sheets`; the grid component that spends the same a
    **footer echoing the effect list that was applied**, in order. The same echo goes to stdout, so a
    session that never opens the image still reads what produced it:
    ```
-   wrote target/ship.sheet.png (2038x553)
-     effect 0. gradient  glyphs: #  frames: all  from=[1, 1, 1, 1] to=[0.45, 0.48, 0.58, 1] direction=vertical blend=multiply
+   wrote target/ship.sheet.png (1696x553)
+     effect 0. gradient  glyphs: #  frames: all  from=#ffffff to=#b3b8c8 direction=vertical blend=multiply
      effect 1. shade  glyphs: all  frames: all  light=[-1, -1] strength=0.35
+     effect 2. outline  glyphs: all  frames: all  color=#303045 side=outside
    ```
    `--out` defaults to `<stem>.sheet.png` in the current directory; `--scale` is a whole number in
    `1..=16` (default `1`) — a fraction of a texel is not a pixel anyone can judge, so it is refused.
 4. **Tune without touching the file** — `--set` and `--sweep`, below.
 5. **Pack it** into an atlas and reference it: `ludion docs sprite-sheets`.
-
-## Format
-
-```yaml
-format: 1
-kind: sprite
-name: ship
-size:
-  - 16
-  - 12
-seed: 4211
-palette:
-  "#":
-    color:
-      - 0.35
-      - 0.40
-      - 0.50
-      - 1.0
-  o:
-    color:
-      - 0.30
-      - 0.85
-      - 1.0
-      - 1.0
-    emissive: 2.5
-frames:
-  idle:
-    pivot:
-      - 8.0
-      - 9.0
-    rows:                       # twelve of these, each exactly sixteen characters
-      - "......##........"
-      - ".....####......."
-effects:
-  - op: shade
-    light:
-      - -1.0
-      - -1.0
-    strength: 0.35
-```
-
-**Block style is the parser rule, not a house preference.** The strict-YAML subset rejects every
-non-empty flow collection — `size: [16, 12]`, `- { op: shade, … }` — as `L1005`, pointing at the
-offending node (`--> /size/0`) and telling you to write one element per line; only an empty `[]` or
-`{}` may stay in flow. `examples/gallery/sprites/` holds four worked documents in the accepted shape.
-
-| Key | Rule |
-|---|---|
-| `format`/`kind` | `1` and `sprite`, both required |
-| `name` | optional — the region prefix an atlas mints (`<name>/<frame>`), else the file stem |
-| `size` | required `[width, height]`, each `1..=1024` texels — past that it is a texture, not an atlas region |
-| `seed` | optional non-negative integer, `0` when absent — an unseeded document still bakes to one fixed image |
-| `palette` | required, non-empty: an inline glyph map, or a `{ from, overrides }` include (below). Key = **exactly one** printable-ASCII character (`!` to `~`), never the reserved `.` |
-| `palette/<glyph>/color` | required linear RGBA, each component in `0..=1` |
-| `palette/<glyph>/emissive` | optional, finite, `>= 0` |
-| `frames` | required, non-empty, **authored order** — the order an atlas mints region names in. A name is unique, non-empty and free of `/` (a region is `<doc>/<frame>`, so a `/` would make it ambiguous) |
-| `frames/<name>/pivot` | optional `[px, py]` in texels from the frame's top-left, each inside `0..=size`; absent is the frame's centre |
-| `frames/<name>/rows` | required: exactly `size[1]` quoted strings of exactly `size[0]` characters, top-down; `.` transparent |
-| `effects` | optional; ops in application order |
-
-**Emissive is palette data, not colour-map data.** The bake paints from `color` alone and an atlas
-carries one `color` entry under `maps:`; `emissive` records the intensity a glyph is authored at, so it travels
-with the document owning it.
-
-## One palette, many sprites
-
-Thirty documents repeating the same sixteen colours drift on the first typo. Put the palette in its
-own `kind: palette` document — `format`, `kind`, an optional `name`, and the identical glyph map —
-and have each sprite reference it in place of its own:
-
-```yaml
-palette:
-  from: palettes/orrery.palette.yaml
-  overrides:
-    o:
-      color:
-        - 0.3
-        - 0.85
-        - 1.0
-        - 1.0
-```
-
-- `from` resolves **relative to the sprite document's own directory**; `overrides` is an ordinary
-  palette map, optional — a glyph the shared palette defines is replaced, one it does not is added.
-- The include resolves **at bake time**, so `check-scene`, `generate-atlas` and `render --sprite` all
-  work against the merged palette: `--set`/`--sweep` address `/palette/<glyph>/…` whether the glyph is
-  inherited or overridden (the shared file is never written), and a sprite that includes a palette
-  bakes byte-identically to the same sprite with that palette inlined.
-- `ludion check-scene palettes/orrery.palette.yaml` checks a palette alone. A malformed palette
-  document — or a `from` naming no readable `kind: palette` document — is `L1147`, reported at
-  `/palette/from` with the palette's own path and pointer in the message; a glyph a frame uses that
-  the merged palette still lacks stays the ordinary `L1153`.
-- `examples/gallery/sprites/emblem.*` is the worked pair: palette, sprite, and the committed atlas.
-
-## The effect ops
-
-`effects:` applies ops from a closed set of eight — `gradient`, `outline`, `shade`, `shadow`,
-`dither`, `noise`, `blur`, `glow` — in list order, each scoped by an optional `glyphs:`/`frames:`
-filter. Parameters, ranges and traps: `ludion docs sprite-effects`.
 
 ## Seeing what each effect did: `--steps`
 
@@ -161,7 +63,7 @@ A, no ruler or pivot. `--out` defaults to `<stem>.steps.png` (`<stem>-<frame>.st
 `--frame`); stdout adds one `steps` line per row, listing the effect indices that produced its cells:
 
 ```
-  steps idle: paint, 0, 1
+  steps idle: paint, 0, 1, 2
 ```
 
 `--set` applies; `--sweep` is refused by clap. At most 16 cells in all: past that `L4008` names
@@ -222,35 +124,21 @@ Then read the document and fix the palette where the merge shows.
 
 ## Rules
 
-- **`L1153`** — the document does not hold together: a missing, wrong-typed or unknown key (with a
-  nearest match), a `rows` grid that does not match `size`, a glyph naming no palette entry, a
-  duplicate frame name, a pivot outside its frame. A JSON Pointer names the position
-  (`/frames/idle/rows/3`, `/palette/~1`).
-- **`L1154`** — one `effects:` entry is invalid; the op set and every range it enforces are
-  `ludion docs sprite-effects`.
-- **`L1005`** — a non-empty flow collection anywhere in the document.
-- **`L4008`** — a `--set`/`--sweep` pointer outside that domain.
+- **`L4008`** — a `--set`/`--sweep` pointer outside that domain, or `--frame` without `--steps`.
 - **`L4014`**/**`L4015`** — the PNG import's refusal and its quantization warning.
-
-`ludion explain L1153` prints the full rule.
+- **`L1153`**/**`L1154`**/**`L1147`**/**`L1005`** — the document, an effect entry, a palette include,
+  a flow collection: `ludion docs sprite-format`.
 
 ## Gotchas
 
-- **A gradient, a glow, a shadow or shading painted into the glyphs is a defect.** Author the
-  silhouette and its flat colour regions in the grid, everything on top of them in `effects:` — that
-  is what keeps the grid diffable and the shading re-tunable by one `--set`. A missing op is a note
-  for the notebook, not a licence to hand-paint the result: a painted highlight cannot be swept and
-  does not follow a palette change.
-- **The bake refuses to run on an invalid document**: an out-of-range colour has no defined image,
-  and a guess would end up in a committed PNG.
-- **Every op has a trap worth reading before you reach for it** — `blur` and `glow` need a
-  transparent margin, `shade` seams a full-bleed tile, `noise` speckles dark glyphs:
-  `ludion docs sprite-effects --section "Gotchas"`.
+- **The bake refuses to run on an invalid document**, so every loop step above stops at the first
+  error: fix the document first (`ludion docs sprite-format`).
 - **The sheet's burned-in labels are uppercase** (the 8×8 font has no lowercase), so the glyph `o`
   is drawn as `O` while the stdout echo keeps the authored spelling.
 
 ## Next
 
+- `ludion docs sprite-format` — the document: keys, hex colours, `mirror`, patches, palette includes.
 - `ludion docs sprites` — the hub: the sprite layer's documents, verbs and components at a glance.
 - `ludion docs sprite-craft` — what makes a sprite read at game scale: silhouette, marks, shades, glyphs.
 - `ludion docs sprite-effects` — the eight ops, their parameters, and their gotchas.

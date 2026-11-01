@@ -1,5 +1,5 @@
 ---
-description: Index of the sprite layer: its document kinds, CLI verbs, components, and seven spokes
+description: Index of the sprite layer: its document kinds, CLI verbs, components, and eight spokes
 ---
 
 # Sprites
@@ -22,7 +22,7 @@ to change.
 ## The verbs
 
 - `ludion check-scene <doc>` — checks a sprite, palette or atlas document alone, no GPU; `--rows` on a
-  sprite prints every frame's glyph grid with a ruler.
+  sprite prints every frame's resolved glyph grid with a ruler.
 - `ludion render --sprite <doc> --scale 8` — the contact sheet: every frame, ruled and pivot-marked.
 - `ludion render --atlas <doc>` — the packing overview; `--clip <flipbook>` with `--time`/`--strip
   N`/`--onion` draws the animation instead (add `--scale 8`, or 16 px frames are unreadable).
@@ -43,6 +43,7 @@ Full field table and defaults: `ludion docs components`.
   is not finite (a NaN or infinite `Transform`, or one up its `Parent` chain) is skipped and
   reported once as `L2109`.
 - **`Animation`** — `clip` names one of the atlas's `flipbooks:` instead of the authored `frame`.
+- **`Sprite` `uv_repeat`/`uv_scroll`** — tile and scroll a band (`ludion docs sprite-animation`).
 - **`Tilemap`** — one `layer` for the whole grid; each legend entry takes `Sprite`'s own
   `texture`/`atlas` + `frame`/`color`/`lit`/`flip_x`/`flip_y` shapes.
 - **`UiRect`** — the same `atlas` + `frame` pair, in screen space.
@@ -50,29 +51,10 @@ Full field table and defaults: `ludion docs components`.
   texel-to-pixel scale and each sprite centre to the texel grid, so crisp art stops
   shimmering under motion. Extract-only: the world hash never moves.
 
-## Scrolling and tiling
-
-`uv_repeat` repeats the frame across the quad; `uv_scroll` slides it, in frame widths per second. An
-endless parallax band is then one entity — no wrap point, no second copy. Either field off its
-default wraps the quad's region instead of clamping it, and the offset is derived from sim time at
-extract, so nothing enters the world hash. A linear filter blends the column where a tile restarts
-toward the atlas neighbour: pad the frame, or pack it alone.
-
-```yaml
-Sprite:
-  atlas: sprites/sky.atlas.yaml
-  frame: band/zodiac
-  uv_repeat:
-    - 8.0
-    - 1.0
-  uv_scroll:
-    - 0.05
-    - 0.0
-```
-
 ## The spokes
 
-- `ludion docs sprite-authoring` — the `kind: sprite` grid, palette includes, pivots, the contact sheet.
+- `ludion docs sprite-format` — the `kind: sprite`/`palette` documents: hex colours, `mirror`, patches, includes.
+- `ludion docs sprite-authoring` — the loop: `check-scene`, the contact sheet, `--steps`, tuning, `import`.
 - `ludion docs sprite-craft` — what makes a sprite read at game scale, as checkable rules.
 - `ludion docs sprite-effects` — the eight baked ops, their parameters, and their traps.
 - `ludion docs sprite-sheets` — `generate-atlas`, the committed pair, the drift gate, drawing a region.

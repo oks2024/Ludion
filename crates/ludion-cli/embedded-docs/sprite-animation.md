@@ -1,13 +1,13 @@
 ---
-description: Driving a Sprite's frame over time with an atlas flipbook and the Animation component
+description: Driving a Sprite's frame with an atlas flipbook and Animation, and scrolling or tiling a band
 ---
 
 # Sprite animation
 
 **Scope:** playing one of an atlas's `flipbooks:` on a `Sprite` — the same `Animation` component that
 poses a voxel assembly's clips (`ludion docs voxel-animation`), read against a `Sprite` instead of a
-`Mesh`. Declaring the flipbook itself is `ludion docs sprite-sheets`; authoring the frames it cycles
-is `ludion docs sprite-authoring`; the component's full field table is `ludion docs components`;
+`Mesh`. Separately, the `Sprite` fields `uv_repeat`/`uv_scroll` tile and scroll a band. Declaring the flipbook itself is `ludion docs sprite-sheets`; authoring the frames it cycles
+is `ludion docs sprite-format`; the component's full field table is `ludion docs components`;
 the hub over the sprite layer is `ludion docs sprites`.
 
 ## The loop
@@ -70,6 +70,26 @@ Worked example: `fps: 10.0`, three `frames` `a`/`b`/`c`, `hold` `1`/`3`/`1`. Tot
 clip frames `1`–`3` (`t` in `[0.1, 0.4)`), `c` for clip frame `4` (`t` in `[0.4, 0.5)`); past `0.5` s a
 one-shot holds `c`, a loop wraps back to `a`.
 
+## Scrolling and tiling
+
+`uv_repeat` repeats the frame across the quad; `uv_scroll` slides it, in frame widths per second. An
+endless parallax band is then one entity — no wrap point, no second copy. Either field off its
+default wraps the quad's region instead of clamping it, and the offset is derived from sim time at
+extract, so nothing enters the world hash. A linear filter blends the column where a tile restarts
+toward the atlas neighbour: pad the frame, or pack it alone.
+
+```yaml
+Sprite:
+  atlas: sprites/sky.atlas.yaml
+  frame: band/zodiac
+  uv_repeat:
+    - 8.0
+    - 1.0
+  uv_scroll:
+    - 0.05
+    - 0.0
+```
+
 ## Rules
 
 - **`Animation.clip` resolves against whatever the entity renders.** On a `Mesh` whose `shape` is an
@@ -113,7 +133,7 @@ one-shot holds `c`, a loop wraps back to `a`.
 
 - `ludion docs sprites` — the hub: the sprite layer's documents, verbs and components at a glance.
 - `ludion docs sprite-sheets` — declaring `flipbooks:` on an atlas source, and the `atlas-drift` gate.
-- `ludion docs sprite-authoring` — the `kind: sprite` frames a flipbook cycles through.
+- `ludion docs sprite-format` — the `kind: sprite` frames a flipbook cycles through.
 - `ludion docs voxel-animation` — the same `Animation` component over a voxel assembly's clips.
 - `ludion docs components` — `Sprite` and `Animation`'s full field tables.
 - `ludion docs verify-loop` — ticking before extracting, and the golden manifest's overrides.

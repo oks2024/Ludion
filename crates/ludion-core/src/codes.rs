@@ -4762,7 +4762,7 @@ to see what is actually answering.",
 One entry of a sprite document's `effects:` list is not a valid effect.
 
 `effects:` is a fixed, enumerated op set — `gradient`, `outline`, `shade`, `shadow`, `dither`,
-`noise`, `blur` — applied in list order at bake time. It is deliberately not an expression language
+`noise`, `blur`, `glow` — applied in list order at bake time. It is deliberately not an expression language
 and not a node graph (`engine-pillars.md`: Rust is the only Turing-complete layer), so every op has
 a closed parameter set that is checked exactly, and an op the set does not name is an error with a
 nearest-match suggestion rather than a silently ignored entry.
@@ -4778,7 +4778,7 @@ The JSON Pointer names the entry and the field: `/effects/2/glyphs/0`, `/effects
 
 Fix: correct the named field. If the effect you want has no op, that is a gap in the op set to
 record, not something to paint into the glyph grid by hand — a gradient, glow, shadow or shading
-drawn as glyphs is a defect the sprite-authoring docs call out, because it cannot be retuned.",
+drawn as glyphs is a defect `ludion docs sprite-format` calls out, because it cannot be retuned.",
     },
     CodeEntry {
         code: code::COLLIDER_NON_POSITIVE_EXTENT,

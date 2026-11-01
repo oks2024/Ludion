@@ -6,7 +6,7 @@ description: Packing sprite frames into a committed kind: atlas, and drawing one
 
 **Scope:** turning sprite documents and loose PNGs into one packed, **committed** atlas, and spending
 its regions from a `Sprite` or a `Tilemap` legend. Authoring the frames is
-`ludion docs sprite-authoring`; the grid component's own conventions are `ludion docs tilemaps`;
+`ludion docs sprite-format`; the grid component's own conventions are `ludion docs tilemaps`;
 the hub over the whole sprite layer is `ludion docs sprites`.
 
 Three documents, two of them yours: you write a `kind: atlas-source` listing what goes in;
@@ -185,22 +185,13 @@ never beside `texture` — any other combination is `L1151`:
   divided by the atlas's `pixels_per_unit`. A 16×12-texel region at 16 px/unit is `1.0 × 0.75` world
   units. An explicit `size:` *overrides* that — for untextured quads and deliberate stretches — and
   `Transform.scale` x/y multiplies whichever you get.
-- **`lit: false` (the default) is texel × tint with no light lookup**, which is what a bullet swarm
-  needs; `lit: true` takes clustered-forward shading: ambient, every point light, and the
-  sun's light unshadowed (no shadow map, no IBL), all two-sided.
-- **`color`** tints, multiplying the sampled texel; **`flash`** (`0`–`1`) lerps the result toward
-  **`flash_color`** (HDR-capable, default white) for a hit flash the game times itself.
-  `flash: 0.0` is render-identical by construction.
-- **`layer` (`i16`, default `0`) is the primary sort key**: sprites draw in
-  `(layer, view depth back-to-front, scene order)`, higher in front. A pure ordering, never a Z
-  displacement — nothing leaks into picking, shadows or debug draws.
-- **`blend: alpha` (default) or `additive`.** Both run through the one premultiplied
-  `One, OneMinusSrcAlpha` blend, so the mode is a per-instance flag that never splits a batch.
-- **`flip_x`/`flip_y` mirror the sampled art** left↔right and top↔bottom, through the UV rect at
-  extract — no second copy of the region, no shader branch.
+- `lit`, `color`/`flash`, `layer`, `blend` and `flip_x`/`flip_y` behave as on any `Sprite` —
+  `ludion docs sprites` lists them, `ludion docs components` has the field table. `flash: 0.0` is
+  render-identical by construction, and both blends run through the one premultiplied
+  `One, OneMinusSrcAlpha` blend, so `blend` never splits a batch.
 - **A region's `pivot` is the point the entity sits at and turns about** — the quad centre is offset
   by the pivot's fraction of the region's extent, so a `Transform.rotation` swings the art around the
-  authored pivot, not the quad's middle. An untextured quad has no region, so no pivot.
+  authored pivot. An untextured quad has no region, so no pivot.
 - Every quad naming one atlas resolves to **one** texture entry: a thousand tiles batch into one
   instanced draw.
 - **Crisp art shimmers under motion** until an orthographic `Camera` sets `pixel_snap: true`
@@ -246,7 +237,7 @@ so HUD icons live in the committed atlas instead of loose PNGs — `ludion docs 
 ## Next
 
 - `ludion docs sprites` — the hub: the sprite layer's documents, verbs and components at a glance.
-- `ludion docs sprite-authoring` — writing the `kind: sprite` documents an atlas packs.
+- `ludion docs sprite-format` — writing the `kind: sprite` documents an atlas packs.
 - `ludion docs sprite-animation` — playing a `flipbooks:` entry with `Animation`.
 - `ludion docs tilemaps` — the legend, the placement convention, reading the grid from a system.
 - `ludion docs components` — `Sprite` and `TileAppearance` fields and defaults.

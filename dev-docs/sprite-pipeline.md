@@ -34,7 +34,7 @@ re-validates and paints. Nothing in `ludion-scene` bakes, and nothing in `ludion
 file, so the two halves are independently testable and the CLI is the only stage that touches disk.
 
 **The shared-palette include.** A sprite may carry `palette: { from, overrides }` instead of an inline
-map (`kind: palette`, `ludion docs sprite-authoring`). `ludion_scene::resolve_sprite_include` merges
+map (`kind: palette`, `ludion docs sprite-format`). `ludion_scene::resolve_sprite_include` merges
 the two documents and reads nothing; the single IO half is
 `ludion_engine::resolve_sprite_palette(sprite_path, doc)` in `sprite_sheet.rs`, which reads `from`
 relative to the sprite's own directory and re-points the palette's own defects at `/palette/from`

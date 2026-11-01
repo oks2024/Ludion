@@ -22,8 +22,9 @@ components you place and the systems that drive them are `ludion docs components
 - `ludion docs drop-shadow` — the `DropShadow` projected contact shadow under a character.
 - `ludion docs debug-draw` — world-space debug lines a system draws, and `--debug-draw` on the offline renders.
 - `ludion docs particles` — `ParticleEmitter`: the analytic particle effect, and firing a burst.
-- `ludion docs sprites` — the sprite layer's hub: document kinds, CLI verbs, components, six spokes.
-- `ludion docs sprite-authoring` — the `kind: sprite` glyph grid, palettes, frames, and the contact sheet.
+- `ludion docs sprites` — the sprite layer's hub: document kinds, CLI verbs, components, eight spokes.
+- `ludion docs sprite-format` — the `kind: sprite`/`palette` documents: grid, hex colours, mirror, patches.
+- `ludion docs sprite-authoring` — the sprite loop: check, contact sheet, `--steps`, tuning, PNG import.
 - `ludion docs sprite-effects` — the eight baked effect ops, their parameters, and their traps.
 - `ludion docs sprite-sheets` — packing frames into a committed `kind: atlas`, and drawing one region.
 - `ludion docs sprite-animation` — playing an atlas flipbook on a `Sprite` with `Animation`.

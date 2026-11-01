@@ -5,7 +5,7 @@ description: What makes a sprite read at game scale: silhouette, marks, few shad
 # Sprite craft
 
 **Scope:** the art direction a valid sprite still needs, stated as checkable rules. The document
-format and the commands each rule names are `ludion docs sprite-authoring`, the ops are
+format is `ludion docs sprite-format`, the commands each rule names are `ludion docs sprite-authoring`, the ops are
 `ludion docs sprite-effects`, and the layer end to end is `ludion docs sprites`.
 
 A sprite that passes `check-scene` is *valid*, not *good*. These rules are what separates a sprite
@@ -46,12 +46,18 @@ uppercase the dark shade of one hue (`r`/`R` for red). `.` is reserved for the t
 
 Outlines, shading, glow and shadow live in `effects:`, not in the grid. A painted highlight cannot be
 swept and does not follow a palette change. The rule and its reason are in
-`ludion docs sprite-authoring --section "Gotchas"`.
+`ludion docs sprite-format --section "Gotchas"`.
 
 ## Repetition
 
-A recolour of an existing sprite is a palette include with `overrides`, not a copied document:
-`ludion docs sprite-authoring --section "One palette, many sprites"`.
+Do not copy a document to vary it:
+
+- A symmetric shape authors half with `mirror` — `ludion docs sprite-format --section "Mirror"`.
+- A frame that differs by a few texels is `base` + `patches` — `ludion docs sprite-format --section "Patches"`.
+- A recolour is an atlas-source variant (*Recolour variants* in `ludion docs sprite-sheets`) or, for a
+  standalone document, a palette include's `overrides` — `ludion docs sprite-format --section "One palette, many sprites"`.
+
+`ludion check-scene <doc> --rows` prints the resolved grid, so each is checked before it is baked.
 
 ## The verify loop
 
@@ -62,6 +68,7 @@ A recolour of an existing sprite is a palette include with `overrides`, not a co
 
 ## Next
 
-- `ludion docs sprite-authoring` — the document, palette includes, and the contact sheet.
+- `ludion docs sprite-format` — the document, mirror, patches, palette includes.
+- `ludion docs sprite-authoring` — the loop: check, contact sheet, tuning.
 - `ludion docs sprite-effects` — the eight ops, their parameters, and their gotchas.
 - `ludion docs sprites` — the hub: documents, verbs and components at a glance.
