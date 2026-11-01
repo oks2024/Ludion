@@ -36,7 +36,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use crate::components::{Anchor, UiList, UiListItem, UiText};
+use crate::components::{Anchor, UiList, UiListItem, UiRect, UiText};
 pub use ludion_font::FontFace;
 use ludion_font::{GlyphQuad, TextLayout, YAxis, fold_line_breaks, layout};
 use ludion_sim::{GamepadButton, InputState, Key};
@@ -120,6 +120,27 @@ pub fn resolve_ui_rect(
         size[0] * scale,
         size[1] * scale,
     ]
+}
+
+/// Resolves a [`UiRect`] to its pixel-space rect `[x, y, w, h]`: the whole render target
+/// (`[0, 0, width, height]`) when `fill` is set, ignoring `anchor`, `offset` and `size`; otherwise
+/// [`resolve_ui_rect`]. The one resolve every reader of a rect's bounds uses — the overlay pass and a
+/// game's mouse hit test see the same rect.
+///
+/// # Example
+///
+/// ```
+/// use ludion_engine::components::UiRect;
+/// use ludion_engine::ui::resolve_ui_rect_of;
+///
+/// let backdrop = UiRect { fill: true, ..UiRect::default() };
+/// assert_eq!(resolve_ui_rect_of(&backdrop, (2560, 1080)), [0.0, 0.0, 2560.0, 1080.0]);
+/// ```
+pub fn resolve_ui_rect_of(rect: &UiRect, viewport: (u32, u32)) -> [f32; 4] {
+    if rect.fill {
+        return [0.0, 0.0, viewport.0 as f32, viewport.1 as f32];
+    }
+    resolve_ui_rect(rect.anchor, rect.offset, rect.size, viewport)
 }
 
 /// Measures a [`UiText`] block's extent in **canvas units** from the
@@ -680,6 +701,42 @@ fn step_cursor(items: &[UiListItem], from: usize, forward: bool) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A filled rect is the whole target at 4:3, 16:9, 21:9 and a resized 2560x1080, whatever its
+    /// anchor, offset and size say; without `fill` the anchored arithmetic is unchanged.
+    #[test]
+    fn a_filled_rect_covers_the_viewport_at_every_extent() {
+        let filled = UiRect {
+            anchor: Anchor::BottomRight,
+            offset: [30.0, -12.0],
+            size: [7.0, 9.0],
+            fill: true,
+            ..UiRect::default()
+        };
+        for viewport in [
+            (1440, 1080),
+            (1920, 1080),
+            (2520, 1080),
+            (2560, 1080),
+            (1, 1),
+        ] {
+            let expected = [0.0, 0.0, viewport.0 as f32, viewport.1 as f32];
+            assert_eq!(resolve_ui_rect_of(&filled, viewport), expected);
+        }
+        let anchored = UiRect {
+            fill: false,
+            ..filled
+        };
+        assert_eq!(
+            resolve_ui_rect_of(&anchored, (1920, 1080)),
+            resolve_ui_rect(
+                anchored.anchor,
+                anchored.offset,
+                anchored.size,
+                (1920, 1080)
+            )
+        );
+    }
 
     // --- resolve_ui_rect: all nine anchors, at two resolutions (uniform 2x scaling) ---
 

@@ -1535,6 +1535,11 @@ pub mod code {
     /// run; pointer `<kind>`.
     pub const DOC_SINGLETON_COUNT: DiagnosticCode = DiagnosticCode::new("L1315");
 
+    /// `L1316` — a `UiRect` with `fill: true` also authors a non-default `offset` or `size`; a fill
+    /// rect covers the whole render target, so both are ignored. Warning, raised by `UiRect`'s
+    /// semantic validator; the JSON Pointer names the ignored field (`/offset`, `/size`).
+    pub const UI_RECT_FILL_IGNORES_PLACEMENT: DiagnosticCode = DiagnosticCode::new("L1316");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7641,6 +7646,19 @@ refused and the store keeps its contents and generation).
 Fix: delete or rename the stray copy, or add the missing doc under the content root. If a set (or no
 doc) is legitimate, register the kind with `doc_kind` instead.",
     },
+    CodeEntry {
+        code: code::UI_RECT_FILL_IGNORES_PLACEMENT,
+        severity: Severity::Warning,
+        title: "a filled UiRect ignores its offset or size",
+        explanation: "A `UiRect` with `fill: true` covers the whole render target (`[0, 0, width, height]` pixels at any
+extent or aspect), so its `anchor`, `offset` and `size` play no part in placing it. The rect also
+authors a non-default `offset` or `size` (pointer `/offset` or `/size`), which does nothing.
+
+The scene loads and the rect fills the screen; the warning flags a value that looks like it should
+matter. Fix: delete the `offset` or `size` from the filled rect, or drop `fill: true` to place the
+rect by its anchor again. (`anchor` is not checked: the default is indistinguishable from an
+authored `top_left`.)",
+    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -10448,6 +10466,7 @@ mod tests {
         code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
         code::PREFAB_CLIP_TARGET,
         code::DOC_SINGLETON_COUNT,
+        code::UI_RECT_FILL_IGNORES_PLACEMENT,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -10706,6 +10725,7 @@ mod tests {
             code::LANE_PATH_VERTICAL,
             code::CAMERA_RIG_TARGET_MISSING,
             code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
+            code::UI_RECT_FILL_IGNORES_PLACEMENT,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

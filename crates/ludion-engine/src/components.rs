@@ -3681,6 +3681,9 @@ pub enum Anchor {
 /// canvas units. With `texture: None` the element is a flat-colored quad — the [`Sprite::texture`]
 /// convention, not a separate rect/sprite pair.
 ///
+/// `fill: true` is the exception to "UI anchors, never stretches": the rect covers the whole canvas
+/// at any extent or aspect and `anchor`, `offset` and `size` are ignored.
+///
 /// An entity may carry a [`Transform`] alongside `UiRect`; it is simply ignored by the UI path —
 /// screen space has no world placement.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
@@ -3722,6 +3725,12 @@ pub struct UiRect {
     /// rather than the alpha-zero or zero-size conventions.
     #[serde(default = "yes")]
     pub visible: bool,
+    /// Cover the whole render target (default `false`): the rect resolves to `[0, 0, width, height]`
+    /// pixels at any extent or aspect, and `anchor`, `offset` and `size` are ignored (`L1119` warns
+    /// when `offset` or `size` is authored non-default). A texture or atlas frame stretches over it
+    /// like over a sized rect. The one exception to "UI anchors, never stretches".
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fill: bool,
 }
 
 impl Default for UiRect {
@@ -3736,6 +3745,7 @@ impl Default for UiRect {
             color: [1.0; 4],
             order: 0,
             visible: true,
+            fill: false,
         }
     }
 }
@@ -3760,9 +3770,45 @@ impl SemanticValidate for UiRect {
                 |field| object.get(field).is_some_and(|v| !v.is_null()),
                 "",
             ));
+            if object.get("fill").and_then(Value::as_bool) == Some(true) {
+                out.extend(ui_rect_fill_ignored(object));
+            }
         }
         out
     }
+}
+
+/// `L1316` — a filled `UiRect` authors an `offset` or `size` that differs from the default.
+fn ui_rect_fill_ignored(object: &serde_json::Map<String, Value>) -> Vec<Diagnostic> {
+    let default = UiRect::default();
+    let differs = |field: &str, default: [f32; 2]| {
+        object
+            .get(field)
+            .and_then(Value::as_array)
+            .is_some_and(|pair| {
+                pair.iter()
+                    .zip(default)
+                    .any(|(v, d)| as_stored_f32(v).is_some_and(|x| x != f64::from(d)))
+            })
+    };
+    [("offset", default.offset), ("size", default.size)]
+        .into_iter()
+        .filter(|&(field, value)| differs(field, value))
+        .map(|(field, _)| {
+            Diagnostic::new(
+                code::UI_RECT_FILL_IGNORES_PLACEMENT,
+                format!("this `UiRect` has `fill: true`, so its `{field}` is ignored"),
+            )
+            .with_path(format!("/{field}"))
+            .with_help(format!(
+                "remove `{field}`, or drop `fill: true` to place the rect by its anchor"
+            ))
+        })
+        .collect()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// A run of screen-space text (the embedded 8×8 face, or a baked face named by `font`), anchored to
@@ -6927,6 +6973,7 @@ mod tests {
             color: [1.0, 0.2, 0.2, 1.0],
             order: 5,
             visible: false,
+            fill: true,
         };
         let json = serde_json::to_value(&rect).unwrap();
         assert_eq!(json["anchor"], serde_json::json!("bottom_right"));
@@ -6947,6 +6994,7 @@ mod tests {
             color: [1.0; 4],
             order: 2,
             visible: true,
+            fill: false,
         };
         let json = serde_json::to_value(&rect).unwrap();
         assert_eq!(json["atlas"], serde_json::json!("sprites/hud.atlas.yaml"));
@@ -6970,6 +7018,42 @@ mod tests {
         assert_eq!(rect.color, [1.0; 4]);
         assert_eq!(rect.order, 0);
         assert!(rect.visible);
+        assert!(!rect.fill);
+    }
+
+    /// `fill: false` is never written, so a non-fill rect serializes exactly as before the field
+    /// existed; `fill: true` round-trips.
+    #[test]
+    fn ui_rect_fill_is_omitted_when_false_and_round_trips_when_true() {
+        let json = serde_json::to_value(UiRect::default()).unwrap();
+        assert!(json.get("fill").is_none());
+        let filled = UiRect {
+            fill: true,
+            ..UiRect::default()
+        };
+        let json = serde_json::to_value(&filled).unwrap();
+        assert_eq!(json["fill"], serde_json::json!(true));
+        assert_eq!(serde_json::from_value::<UiRect>(json).unwrap(), filled);
+    }
+
+    /// A filled rect that authors a non-default `offset` or `size` warns `L1316`, one per field
+    /// with its pointer; defaults, and non-filled rects, do not.
+    #[test]
+    fn filled_ui_rect_warns_about_ignored_offset_and_size() {
+        let warn = |value: serde_json::Value| UiRect::validate_semantics(&value);
+        let both = warn(serde_json::json!({"fill": true, "offset": [4, 0], "size": [10, 10]}));
+        let pointers: Vec<_> = both.iter().map(|d| d.path.clone().unwrap()).collect();
+        assert_eq!(pointers, ["/offset", "/size"]);
+        assert!(
+            both.iter()
+                .all(|d| d.code == code::UI_RECT_FILL_IGNORES_PLACEMENT)
+        );
+        assert!(warn(serde_json::json!({"fill": true})).is_empty());
+        assert!(
+            warn(serde_json::json!({"fill": true, "offset": [0, 0], "size": [100, 100]}))
+                .is_empty()
+        );
+        assert!(warn(serde_json::json!({"offset": [4, 0], "size": [10, 10]})).is_empty());
     }
 
     /// `UiText` round-trips through serde with non-default fields.

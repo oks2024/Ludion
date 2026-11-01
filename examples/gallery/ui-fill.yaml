@@ -1,0 +1,96 @@
+# Feature: `UiRect.fill` — a rect that covers the whole render target whatever its anchor, offset and
+# size say. The wide translucent blue wash (`order: 0`) must reach all four edges of the frame; the
+# small anchored panel (`order: 1`, bottom-left) proves a sized rect still composes over it.
+format: 1
+name: "ui-fill - a translucent UiRect with fill: true tints the whole frame; a sized rect sits above it"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.2
+          - 6.5
+        rotation:
+          - -10.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.28
+          - 0.3
+          - 0.34
+          - 1.0
+        roughness: 0.85
+  - name: beacon
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.9
+          - -0.4
+        scale:
+          - 0.6
+          - 0.6
+          - 0.6
+      Mesh:
+        shape: sphere
+        color:
+          - 1.0
+          - 0.7
+          - 0.3
+          - 1.0
+        roughness: 0.2
+        emissive: 4.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 4.5
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 5.0
+        range: 20.0
+  - name: wash
+    components:
+      UiRect:
+        fill: true
+        color:
+          - 0.1
+          - 0.25
+          - 0.7
+          - 0.45
+        order: 0
+  - name: panel
+    components:
+      UiRect:
+        anchor: bottom_left
+        offset:
+          - 32.0
+          - -32.0
+        size:
+          - 240.0
+          - 72.0
+        color:
+          - 0.95
+          - 0.85
+          - 0.3
+          - 1.0
+        order: 1

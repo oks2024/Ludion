@@ -44,7 +44,7 @@
 //!   from world-space `Text`. A game drives the cursor itself: build a [`UiNav`] (usually
 //!   `UiNav::from_input`) and call `UiList::navigate`, which returns the activated index — exactly
 //!   one list per frame, whichever one the game's phase state says is up. See
-//!   [`math::resolve_ui_rect`] for the matching mouse-hit-test helper (or [`math::list_hit`] for a
+//!   [`math::resolve_ui_rect_of`] for the matching mouse-hit-test helper (or [`math::list_hit`] for a
 //!   `UiList`), and the engine guide's
 //!   "Screen-space UI" chapter (`ludion docs screen-ui`) and its `UiList` spoke (`ludion docs ui-list`).
 //! - **ECS surface** — [`World`] (and its `query`/`get`/`spawn` methods), [`Registry`], [`Schedule`],

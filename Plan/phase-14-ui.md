@@ -3,6 +3,8 @@
 > Status: **landed 2026-07-16 — all 5 waves, one commit each (Lore revs 169–173); E3 READY.**
 > Windows `ui-hud` goldens blessed and reviewed at both resolutions; the `goldens/macos/` twins are
 > queued for the next mac session. No amendments beyond the per-OS-goldens fact update (rev 168).
+> Amendment 2026-11-01 (Clockout 0024): `UiRect.fill` covers the whole canvas (decision 2's exception); `L1316`
+> warns on an ignored `offset`/`size`; gallery `ui-fill` golden blessed on Windows, macOS twin owed.
 >
 > Originally: authored 2026-07-16, ready to start. This is the wave-level plan for wave **E3** of the
 > first-game arc; its brief is `Plan/engine-first-game.md` §"E3 — Screen-space UI primitives" plus the
@@ -161,7 +163,8 @@
    canvas point and the element's own pivot.** The virtual canvas is always 1080 units tall and
    `1080 × aspect` wide; `scale = target_height / 1080` maps canvas → pixels uniformly, so one
    authored HUD fits every resolution (the brief's rule) and width differences are absorbed by
-   anchoring, not stretching. One regular pivot rule: the element's *own* anchor-named point sits at
+   anchoring, not stretching. **Exception:** a `UiRect` with `fill: true` covers the whole canvas;
+   every other element still anchors, never stretches. One regular pivot rule: the element's *own* anchor-named point sits at
    the canvas anchor point + offset — `BottomRight` pins the rect's bottom-right corner to the
    canvas's bottom-right corner (the corner-HUD case needs no size arithmetic); `Center` centers a
    pause-menu panel with zero offset. `UiText` measures its block (8×8 glyph cells: width =

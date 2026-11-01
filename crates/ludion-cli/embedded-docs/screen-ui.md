@@ -24,7 +24,10 @@ the canvas point an element pins to *and* the element's own pivot: `BottomRight`
 pins the element's own bottom-right corner exactly on the canvas's bottom-right corner (a corner HUD
 needs no size arithmetic to hug it), `Center` centers the element on the canvas center. `offset`
 moves the element from that shared point, in canvas units, `+Y down`. There is no separate `pivot`
-field — one anchor names both ends.
+field — one anchor names both ends. To cover the whole screen, set `fill: true` on a `UiRect`: it
+resolves to the full render target at any extent or aspect (`anchor`, `offset` and `size` are ignored;
+a non-default `offset` or `size` beside it is warning `L1316`). A texture or atlas frame stretches
+over it; `UiText` and `UiList` have no `fill`.
 
 **Authoring.** A bottom-left HP bar — a darker frame `UiRect` with a brighter fill `UiRect` on top of
 it (`order` is what keeps the fill drawn over the frame, not the other way around) — plus a
@@ -161,7 +164,8 @@ The complete, runnable version — a full drain-and-drive HUD with a "GAME OVER"
 
 **Mouse hit-testing.** There is no input routing to UI — no click-on-button dispatch — so a game
 hit-tests by hand with the same anchor math the renderer draws with, re-exported as
-`math::resolve_ui_rect`:
+`math::resolve_ui_rect` (or `math::resolve_ui_rect_of(&rect, viewport)`, which takes the `UiRect`
+itself and honours `fill`):
 
 ```rust,ignore
 let cursor = world.resource::<InputState>().unwrap().mouse().position(); // render-target pixels

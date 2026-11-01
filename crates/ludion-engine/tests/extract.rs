@@ -1202,6 +1202,7 @@ fn ui_rect_resolves_through_extract_exactly_like_the_pure_function() {
         color: [1.0, 0.2, 0.2, 1.0],
         order: 3,
         visible: true,
+        fill: false,
     };
     world.insert(e, rect.clone()).unwrap();
 
@@ -1227,6 +1228,37 @@ fn ui_rect_resolves_through_extract_exactly_like_the_pure_function() {
             );
         }
         other => panic!("expected Rect, got {other:?}"),
+    }
+}
+
+/// A `fill: true` rect extracts as the whole render target at every extent, so it follows a resized
+/// window; its anchor, offset and size play no part, and a texture-less fill keeps the full UV.
+#[test]
+fn a_filled_ui_rect_extracts_as_the_whole_viewport() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world
+        .insert(
+            e,
+            UiRect {
+                anchor: Anchor::Center,
+                offset: [40.0, 40.0],
+                size: [10.0, 10.0],
+                color: [0.0, 0.0, 0.0, 0.5],
+                fill: true,
+                ..UiRect::default()
+            },
+        )
+        .unwrap();
+    for viewport in [(1440, 1080), (1920, 1080), (2520, 1080), (2560, 1080)] {
+        let scene = extract(&world, viewport, Path::new(".")).unwrap();
+        match &scene.ui[..] {
+            [UiInstance::Rect { rect_px, uv, .. }] => {
+                assert_eq!(*rect_px, [0.0, 0.0, viewport.0 as f32, viewport.1 as f32]);
+                assert_eq!(*uv, [0.0, 0.0, 1.0, 1.0]);
+            }
+            other => panic!("expected one Rect, got {other:?}"),
+        }
     }
 }
 

@@ -813,7 +813,7 @@ fn extract_inner(
         if let Some(rect) = get::<UiRect>(world, id)
             && rect.visible
         {
-            let rect_px = ui::resolve_ui_rect(rect.anchor, rect.offset, rect.size, viewport);
+            let rect_px = ui::resolve_ui_rect_of(rect, viewport);
             // The UV sub-rect the rect samples. A loose `texture:` or an untextured fill samples the
             // whole image (byte-identical to the pre-atlas path); an `atlas` + `frame` reference
             // narrows it to that region, resolved through the same `resolve_atlas_frame` and the
