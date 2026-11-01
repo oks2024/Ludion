@@ -194,6 +194,10 @@ pub mod code {
     /// Raised by `ludion-cli`.
     pub const NEW_NAME_INVALID: DiagnosticCode = DiagnosticCode::new("L0035");
 
+    /// `L0036` — a project's `LUDION-GUIDE.md` differs from the CLI's engine guide. Raised by
+    /// `ludion-cli`.
+    pub const GUIDE_STALE: DiagnosticCode = DiagnosticCode::new("L0036");
+
     // --- L1xxx: scene / assets (raised by `ludion-scene`, `ludion-assets`) ---
 
     /// `L1001` — a scene file is not well-formed YAML at all (unbalanced structure, bad
@@ -2770,6 +2774,19 @@ character an ASCII letter; and not a name that is reserved — a Rust keyword on
 Fix: use the suggested name from the help, or any name matching the rule.",
     },
     CodeEntry {
+        code: code::GUIDE_STALE,
+        severity: Severity::Warning,
+        title: "project's `LUDION-GUIDE.md` is not this CLI's engine guide",
+        explanation: "\
+`LUDION-GUIDE.md` in a project is a copy of the engine guide, written when `ludion new` scaffolded
+the project. `ludion docs` compares it with the guide baked into the CLI that is running, and warns
+when they differ: the engine has moved on since the copy was made, or the copy was edited. Nothing
+else reads the file. `CLAUDE.md` is the game's own and is never compared.
+
+Fix: run `ludion new --refresh-guide` from the project (it rewrites only `LUDION-GUIDE.md`), or read
+the current guide with `ludion docs engine-guide`.",
+    },
+    CodeEntry {
         code: code::PRESENTATION_BOUNDARY,
         severity: Severity::Error,
         title: "presentation boundary crossed",
@@ -2999,7 +3016,10 @@ instantiated, or inspected. This usually means a typo in the component name (the
 suggests the nearest registered name), or a scene written for a game/engine build that registers
 components this one does not.
 
-Fix: correct the spelling, or run the check against the build that defines the component.",
+Fix: correct the spelling, or run the check against the build that defines the component.
+`ludion check-scene` and `ludion render` link no game code, so they know only the engine's
+components; for a game's own, run `cargo run -- --scene <path> --check-scene` from the game's
+project.",
     },
     CodeEntry {
         code: code::SCENE_COMPONENT_MISMATCH,
@@ -10107,6 +10127,7 @@ mod tests {
         code::DEV_DEGRADED,
         code::EXPORT_FAILED,
         code::NEW_NAME_INVALID,
+        code::GUIDE_STALE,
         // --- L1xxx: scene / assets ---
         code::SCENE_YAML_SYNTAX,
         code::SCENE_YAML_ANCHOR,
@@ -10563,6 +10584,7 @@ mod tests {
         const LINTS: &[DiagnosticCode] = &[
             code::COMPONENT_NOT_REGISTERED,
             code::DEV_DEGRADED,
+            code::GUIDE_STALE,
             code::MAP_GATE_SEALED,
             code::MAP_MARKER_BLOCKED,
             code::MAP_GATES_DISCONNECTED,

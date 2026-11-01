@@ -1,12 +1,13 @@
 # {{name}}
 
-A Ludion game. **Read `LUDION-GUIDE.md` before writing code** — it is the complete guide to building
-a game with this engine (components, systems, scenes, and the verification loop you work through).
+A Ludion game. **Read `LUDION-GUIDE.md` before writing code** — it is the index of the engine guide
+(a copy of `ludion docs engine-guide`; `ludion new --refresh-guide` updates it).
 
-The guide names deeper **topics** in passing — run `ludion docs` to list the ones available here, and
-`ludion docs <topic>` to fetch one (e.g. `ludion docs scene-format`). Pull a topic only when you're
-working in that area. A name the listing doesn't show is engine-internals documentation that ships
-with the engine's own source rather than with this project — `L0009` says so.
+The guide names deeper **topics** in passing — run `ludion docs` (`node scripts/ludion.mjs docs` when
+`ludion` is not on your PATH) to list the ones available here, and `ludion docs <topic>` to fetch one
+(e.g. `ludion docs scene-format`). Pull a topic only when you're working in that area. A name the
+listing doesn't show is engine-internals documentation that ships with the engine's own source rather
+than with this project — `L0009` says so.
 
 ## Project layout
 

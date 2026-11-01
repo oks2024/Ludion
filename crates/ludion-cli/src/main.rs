@@ -885,12 +885,18 @@ enum Command {
         no_cook: bool,
     },
     /// Scaffold a new, standalone Ludion game project at `./<name>`: a starter component, system,
-    /// scene, the determinism clippy denylist, tests that pass out of the box, and the engine guide.
+    /// scene, the determinism clippy denylist, tests that pass out of the box, the engine guide, and (in
+    /// an engine checkout) a Node wrapper, `scripts/ludion.mjs`, that builds and runs this engine's CLI.
     New {
         /// The project name (e.g. `breakout`): ASCII letters, digits, `-` and `_`, starting with a
         /// letter, and not a reserved word (a Rust keyword, `test`, a Windows device name). The
         /// project is created at `./<name>`; a refusal (`L0035`) suggests a valid name.
-        name: String,
+        #[arg(required_unless_present = "refresh_guide")]
+        name: Option<String>,
+        /// Rewrite the current project's `LUDION-GUIDE.md` with this CLI's engine guide, touching
+        /// nothing else; `ludion docs` warns `L0036` when they differ.
+        #[arg(long, conflicts_with = "name")]
+        refresh_guide: bool,
     },
     /// Export the game as an Xcode project folder for iOS: the embedded host template, the game built
     /// as a static library, and the default scene's directory plus every `[[import]]` tree (synced
@@ -1910,7 +1916,16 @@ fn knob_free(cli: &Cli) -> Option<std::process::ExitCode> {
             json,
             check,
         } => image_stats::run(images, *json, check.as_deref()),
-        Command::New { name } => new::run(name),
+        Command::New {
+            refresh_guide: true,
+            ..
+        } => new::refresh_guide(),
+        Command::New {
+            name: Some(name), ..
+        } => new::run(name),
+        Command::New { name: None, .. } => {
+            unreachable!("clap requires a name without --refresh-guide")
+        }
         _ => return None,
     })
 }

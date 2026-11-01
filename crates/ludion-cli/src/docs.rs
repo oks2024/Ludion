@@ -53,6 +53,11 @@ const DEV_DOCS: DocSet = DocSet {
 
 /// Runs `ludion docs [topic] [--path] [--section]`. See [`run_set`] for the shared behavior.
 pub fn run(topic: Option<&str>, path: bool, section: Option<&str>) -> ExitCode {
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(warning) = crate::new::stale_guide_warning(&cwd)
+    {
+        eprintln!("{warning}");
+    }
     run_set(&USER_DOCS, topic, path, section)
 }
 

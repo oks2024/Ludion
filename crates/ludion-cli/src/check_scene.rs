@@ -299,7 +299,10 @@ fn run_scene(
     let registry = builtin_registry();
     let scene = match ludion_scene::check(source, &registry) {
         Ok(scene) => scene,
-        Err(diagnostics) => return reporter.fail(diagnostics),
+        Err(mut diagnostics) => {
+            add_project_component_help(path, &mut diagnostics);
+            return reporter.fail(diagnostics);
+        }
     };
     // Prefab instances expand first, so the engine's passes see what loads; each diagnostic is
     // mapped back to the document. The passes read other files, so they are rooted at the scene's
@@ -430,6 +433,41 @@ fn layers_json(scene: &Scene) -> serde_json::Value {
 /// exactly as `EngineBuilder::load_scene_file` roots a hosted game.
 fn scene_root(path: &Path) -> &Path {
     path.parent().unwrap_or_else(|| Path::new("."))
+}
+
+/// Points the first `L1013` (top level, then its `related`) at the game's own `--check-scene` when
+/// `scene_path` sits in a project: this CLI links no game code, so it cannot know the game's
+/// components. Appends to the help the registry already wrote; later `L1013`s stay as they are.
+pub(crate) fn add_project_component_help(scene_path: &Path, diagnostics: &mut [Diagnostic]) {
+    let absolute = std::path::absolute(scene_path).unwrap_or_else(|_| scene_path.to_path_buf());
+    let Some(root) = ludion_engine::manifest::find(scene_root(&absolute)) else {
+        return;
+    };
+    let relative = absolute
+        .strip_prefix(&root)
+        .unwrap_or(scene_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let sentence = format!(
+        "this CLI knows only engine components; for your game's own, run `cargo run -- --scene {relative} --check-scene` from the project"
+    );
+    for diagnostic in diagnostics.iter_mut() {
+        if append_to_first_unknown_component(diagnostic, &sentence) {
+            return;
+        }
+    }
+}
+
+/// Appends `sentence` to the first `L1013` in `diagnostic` or its `related`; whether one was found.
+fn append_to_first_unknown_component(diagnostic: &mut Diagnostic, sentence: &str) -> bool {
+    if diagnostic.code == code::SCENE_UNKNOWN_COMPONENT {
+        *diagnostic = diagnostic.clone().append_help(sentence);
+        return true;
+    }
+    diagnostic
+        .related
+        .iter_mut()
+        .any(|related| append_to_first_unknown_component(related, sentence))
 }
 
 /// Validates a mesh asset document. `L1112` (the vertex-count style budget) is registered as a
@@ -1923,7 +1961,8 @@ pub(crate) fn load_engine(scene_path: &Path) -> Result<Engine, ExitCode> {
     let engine = Engine::builder()
         .patterns()
         .load_scene_file(scene_path)
-        .map_err(|diagnostic| {
+        .map_err(|mut diagnostic| {
+            add_project_component_help(scene_path, std::slice::from_mut(&mut diagnostic));
             eprintln!("{diagnostic}");
             ExitCode::FAILURE
         })?;
@@ -1960,4 +1999,48 @@ pub(crate) fn arm_recording(engine: &mut Engine, record_path: &Path) -> Result<(
         eprintln!("{diagnostic}");
         ExitCode::FAILURE
     })
+}
+
+#[cfg(test)]
+mod project_help_tests {
+    use super::add_project_component_help;
+    use ludion_core::codes::code;
+    use ludion_core::diagnostics::Diagnostic;
+    use std::path::Path;
+
+    fn unknown(message: &str) -> Diagnostic {
+        Diagnostic::new(code::SCENE_UNKNOWN_COMPONENT, message).with_help("registered are: A")
+    }
+
+    fn diagnostics() -> Vec<Diagnostic> {
+        vec![
+            unknown("first"),
+            Diagnostic::new(code::SCENE_IO, "other"),
+            unknown("second"),
+        ]
+    }
+
+    #[test]
+    fn only_the_first_unknown_component_gains_the_sentence_inside_a_project() {
+        let scene =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../games/breakout/scenes/x.yaml");
+        let mut found = diagnostics();
+        add_project_component_help(&scene, &mut found);
+        let help = found[0].help.as_deref().expect("help");
+        assert!(help.starts_with("registered are: A; "), "{help}");
+        assert!(
+            help.contains("--scene scenes/x.yaml --check-scene"),
+            "{help}"
+        );
+        assert_eq!(found[1].help, None);
+        assert_eq!(found[2].help.as_deref(), Some("registered are: A"));
+    }
+
+    #[test]
+    fn a_scene_outside_a_project_is_unchanged() {
+        let scene = std::env::temp_dir().join("ludion-no-project-here/x.yaml");
+        let mut found = diagnostics();
+        add_project_component_help(&scene, &mut found);
+        assert_eq!(found, diagnostics());
+    }
 }

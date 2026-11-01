@@ -4,7 +4,7 @@ description: What ludion new scaffolds: each file's job, the content root, and w
 
 # Project anatomy
 
-**Scope:** The files `ludion new` writes and what each is for, the content root every asset path resolves against, and how `src/` grows as a game gets bigger. The scene file syntax is scene-format; the two things a game brings are components and systems.
+**Scope:** The files `ludion new` writes and what each is for, how to get a `ludion` CLI that matches the engine, the content root every asset path resolves against, and how `src/` grows as a game gets bigger. The scene file syntax is scene-format; the two things a game brings are components and systems.
 
 `ludion new <name>` generated this project. The files, and what each is for:
 
@@ -16,12 +16,23 @@ description: What ludion new scaffolds: each file's job, the content root, and w
 | `src/main.rs` | The binary — three lines: `ludion::run(<game>::game())`. A packaged host with no argv calls `ludion::launch(<game>::game(), LaunchRoots { content, save })` instead, where `content` is the directory the `default_scene` path resolves against. |
 | `scenes/main.yaml` | The scene (strict-subset YAML): built-in visuals + your components. |
 | `scenes/model-stage.yaml`, `scenes/model-stage-night.yaml`, `scenes/effects-stage.yaml` | The Ludion editor's stage scenes (its Voxel Artist / Models and Effects views) — display surfaces a second `ludion serve` hosts, never your own scene. Built-in components only; the `subject`/`adventurer`/`target` entity names are load-bearing. Safe to delete if you don't use the editor — it re-adds them with **Add stage scenes**. |
+| `CLAUDE.md` | Yours to edit; the engine never compares or rewrites it. |
+| `LUDION-GUIDE.md` | A copy of `ludion docs engine-guide` made at scaffold time. `ludion docs` warns `L0036` when it differs from the CLI's; `ludion new --refresh-guide` rewrites it. |
+| `scripts/ludion.mjs` | A Node wrapper that builds and runs this engine's CLI (written when the engine is a checkout; see below). |
 | `tests/gameplay.rs` | Headless sim assertions + a WorldHash-determinism test (no GPU). |
 | `tests/golden.rs` | A golden-image test (bless-or-skip until you commit `goldens/<os>/main.png`). |
 | `tests/drift.rs` | Asserts every component in the registry survives snapshot migration (`ludion docs components`). |
 | `clippy.toml` | The sim-side determinism denylist your game code inherits. |
 | `ludion.toml` | The project manifest: `name`, `default_scene`, the optional `[audio]` voice caps, and the `[ios] bundle_id` `ludion export` reads (`ludion docs export`). |
 | `Cargo.toml` | A **standalone** crate (empty `[workspace]`); `ludion` is a path dep on the engine. The `wire` (the listener) and `window` (the `--window` in-process window) features are declared here and default on — the dev shape; `ludion export` builds with `--no-default-features` and starts through the lib's `ludion_game_start`. |
+
+## Getting the ludion CLI
+
+`node scripts/ludion.mjs <verb>` (for example `node scripts/ludion.mjs docs`) builds the CLI of the engine this project's path dependency names, into the project's own `target/ludion-cli` so it never shares or links against the engine checkout's `target/`. It always matches the engine the game builds against.
+
+Or install one: `cargo install --path <engine>/crates/ludion-cli`, and reinstall whenever the engine moves — the `L0036` warning from `ludion docs` is the tell.
+
+`ludion check-scene` and `ludion render` link no game code, so they know only the engine's components. A scene that uses your own needs the game's binary: `cargo run -- --scene <path> --check-scene`.
 
 Asset files (textures, `meshes/*.mesh.yaml`, `voxels/*.voxel.yaml`) are not scaffolded; when you add
 them, they resolve relative to the **content root** — the scene's directory, so `scenes/assets/…`,

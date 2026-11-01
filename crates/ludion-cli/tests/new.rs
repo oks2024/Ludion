@@ -1,8 +1,10 @@
 //! Integration tests for `ludion new`, driving the real built binary (`env!("CARGO_BIN_EXE_ludion")`).
 //!
-//! Three tests: (1) the scaffold produces the expected file set + key content; (2) `new` refuses to
-//! scaffold inside the engine workspace's member globs (`L0011`); (3) the generated project's own
-//! `cargo test` passes out of the box — the real exit criterion.
+//! The scaffold produces the expected file set + key content (and the Node wrapper only in checkout
+//! flow); `new` refuses to scaffold inside the engine workspace's member globs (`L0011`); the
+//! generated project's own `cargo test` passes out of the box — the real exit criterion. In a
+//! project, a stale `LUDION-GUIDE.md` warns `L0036` until `new --refresh-guide`, and `check-scene`
+//! names the game's own `--check-scene` for an unknown component.
 
 mod common;
 
@@ -177,6 +179,7 @@ fn new_scaffolds_the_expected_files() {
         "tests/gameplay.rs",
         "tests/golden.rs",
         "tests/drift.rs",
+        "scripts/ludion.mjs",
     ] {
         assert!(proj.join(rel).is_file(), "missing generated file: {rel}");
     }
@@ -200,6 +203,25 @@ fn new_scaffolds_the_expected_files() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+
+    // The wrapper builds this checkout's CLI into the project's own target dir.
+    let wrapper = read("scripts/ludion.mjs");
+    let manifest_path = format!(
+        "{}/Cargo.toml",
+        engine_root().to_string_lossy().replace('\\', "/")
+    );
+    assert!(
+        wrapper.contains(&manifest_path),
+        "wrapper lacks the engine manifest:\n{wrapper}"
+    );
+    assert!(
+        wrapper.contains("ludion-cli"),
+        "wrapper lacks the ludion-cli target dir"
+    );
+    assert!(
+        !wrapper.contains("{{"),
+        "wrapper has an unsubstituted placeholder"
+    );
 
     // Cargo.toml: standalone workspace, engine path deps, name substituted.
     let cargo = read("Cargo.toml");
@@ -286,6 +308,10 @@ fn new_installed_mode_emits_version_deps_without_absolute_paths() {
     );
 
     let cargo = fs::read_to_string(base.join("installed-check").join("Cargo.toml")).unwrap();
+    assert!(
+        !base.join("installed-check/scripts/ludion.mjs").exists(),
+        "an installed CLI is on the PATH; no wrapper is scaffolded"
+    );
 
     // Every engine dependency is a version dep at this binary's own workspace version.
     let version = env!("CARGO_PKG_VERSION");
@@ -311,6 +337,100 @@ fn new_installed_mode_emits_version_deps_without_absolute_paths() {
         !cargo.contains(&engine_root().to_string_lossy().replace('\\', "/")),
         "installed-mode Cargo.toml leaked the build machine's engine root:\n{cargo}"
     );
+}
+
+/// Runs `ludion <args>` in `dir`.
+fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(ludion())
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("run ludion")
+}
+
+/// `ludion docs` warns `L0036` on stderr (stdout and exit code unchanged) when the project's guide
+/// differs, until `ludion new --refresh-guide` rewrites only that file.
+#[test]
+fn a_stale_guide_warns_until_refreshed() {
+    let (base, _lock) = common::stable_scratch("stale_guide");
+    let made = run_in(&base, &["new", "guide-check"]);
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let proj = base.join("guide-check");
+    let fresh = fs::read_to_string(proj.join("LUDION-GUIDE.md")).unwrap();
+
+    let quiet = run_in(&proj, &["docs"]);
+    assert!(quiet.status.success());
+    assert!(!String::from_utf8_lossy(&quiet.stderr).contains("L0036"));
+
+    let claude = proj.join("CLAUDE.md");
+    fs::write(&claude, "my own notes\n").unwrap();
+    fs::write(proj.join("LUDION-GUIDE.md"), format!("{fresh}\nan edit\n")).unwrap();
+    let heading = fresh
+        .lines()
+        .next()
+        .unwrap()
+        .trim_start_matches('#')
+        .trim()
+        .to_owned();
+    for args in [
+        vec!["docs"],
+        vec!["docs", "engine-guide", "--section", heading.as_str()],
+    ] {
+        let output = run_in(&proj, &args);
+        assert!(output.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("warning[L0036]"), "{args:?}: {stderr}");
+        assert!(stderr.contains("--refresh-guide"), "{args:?}: {stderr}");
+    }
+
+    let refreshed = run_in(&proj.join("scenes"), &["new", "--refresh-guide"]);
+    assert!(
+        refreshed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&refreshed.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(proj.join("LUDION-GUIDE.md")).unwrap(),
+        fresh
+    );
+    assert_eq!(fs::read_to_string(&claude).unwrap(), "my own notes\n");
+    assert!(!String::from_utf8_lossy(&run_in(&proj, &["docs"]).stderr).contains("L0036"));
+
+    let outside = run_in(&base, &["new", "--refresh-guide"]);
+    assert!(!outside.status.success());
+    assert!(String::from_utf8_lossy(&outside.stderr).contains("error[L0023]"));
+}
+
+/// An unknown component in a project's scene names the game's own `--check-scene`, once.
+#[test]
+fn check_scene_in_a_project_names_the_game_check() {
+    let (base, _lock) = common::stable_scratch("check_scene_project");
+    let made = run_in(&base, &["new", "check-game"]);
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let proj = base.join("check-game");
+    let line = "cargo run -- --scene scenes/main.yaml --check-scene";
+
+    let inside = run_in(&proj, &["check-scene", "scenes/main.yaml"]);
+    assert!(!inside.status.success());
+    let stderr = String::from_utf8_lossy(&inside.stderr);
+    assert!(stderr.contains("L1013"), "{stderr}");
+    assert_eq!(stderr.matches(line).count(), 1, "{stderr}");
+
+    let loose = base.join("loose");
+    fs::create_dir_all(&loose).unwrap();
+    fs::copy(proj.join("scenes/main.yaml"), loose.join("main.yaml")).unwrap();
+    let outside = run_in(&loose, &["check-scene", "main.yaml"]);
+    let stderr = String::from_utf8_lossy(&outside.stderr);
+    assert!(stderr.contains("L1013"), "{stderr}");
+    assert!(!stderr.contains("--check-scene"), "{stderr}");
 }
 
 #[test]

@@ -375,7 +375,10 @@ fn run_scene(
             );
             ExitCode::SUCCESS
         }
-        Err(diagnostics) => report(scene, &diagnostics),
+        Err(mut diagnostics) => {
+            crate::check_scene::add_project_component_help(scene, &mut diagnostics);
+            report(scene, &diagnostics)
+        }
     }
 }
 

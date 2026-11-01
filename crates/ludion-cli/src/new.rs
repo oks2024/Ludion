@@ -5,6 +5,9 @@
 //! sim-assertion / WorldHash-determinism / golden / drift-safety tests that pass out of the box, the
 //! project manifest, a short `CLAUDE.md`, and `LUDION-GUIDE.md` (the shipped engine guide).
 //!
+//! `ludion new --refresh-guide`, run inside a project, rewrites only its `LUDION-GUIDE.md` with the
+//! running CLI's guide; `ludion docs` warns (`L0036`) when the two differ.
+//!
 //! Templates are embedded from `crates/ludion-cli/templates/` via `include_str!`, with a dumb
 //! `{{name}}` / `{{name_ident}}` / `{{…_dep}}` substitution (no template engine). The guide has a
 //! **single source of truth** — `docs/engine-guide.md` — embedded directly here (frontmatter
@@ -105,6 +108,12 @@ const TEMPLATES: &[TemplateFile] = &[
     },
 ];
 
+/// The Node wrapper that builds and runs this engine's CLI; written in checkout flow only.
+const WRAPPER: TemplateFile = TemplateFile {
+    rel_path: "scripts/ludion.mjs",
+    body: include_str!("../templates/scripts/ludion.mjs"),
+};
+
 /// The canonical engine guide — the same doc `ludion docs engine-guide` resolves — embedded so every
 /// generated project carries an identical `LUDION-GUIDE.md`. Its docs frontmatter is stripped on
 /// write. Included from the vendored copy — committed, mirrored from `docs/engine-guide.md` by
@@ -185,6 +194,7 @@ pub fn run(name: &str) -> ExitCode {
             .replace("{{ludion_testkit_dep}}", &deps.ludion_testkit)
             .replace("{{ludion_engine_dep}}", &deps.ludion_engine)
             .replace("{{ludion_core_dep}}", &deps.ludion_core)
+            .replace("{{engine_root}}", &forward_slash_root(&engine_root))
             .replace("{{name}}", name)
     };
 
@@ -206,17 +216,22 @@ pub fn run(name: &str) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    if let Err(err) = write_file(
-        &project_dir,
-        "LUDION-GUIDE.md",
-        &strip_frontmatter(ENGINE_GUIDE),
-    ) {
+    if let Err(err) = write_file(&project_dir, "LUDION-GUIDE.md", &guide_body()) {
         eprintln!("{}", output_failed(err));
         return ExitCode::FAILURE;
     }
     written.push("LUDION-GUIDE.md");
+    // An installed CLI is already on the PATH; only a checkout needs a way to build one.
+    let wrapper = !installed_mode(&engine_root);
+    if wrapper {
+        if let Err(err) = write_file(&project_dir, WRAPPER.rel_path, &substitute(WRAPPER.body)) {
+            eprintln!("{}", output_failed(err));
+            return ExitCode::FAILURE;
+        }
+        written.push(WRAPPER.rel_path);
+    }
 
-    print_summary(name, &project_dir, &written);
+    print_summary(name, &project_dir, &written, wrapper);
     ExitCode::SUCCESS
 }
 
@@ -374,7 +389,7 @@ fn engine_dependencies(engine_root: &Path) -> EngineDeps {
         if installed_mode(engine_root) {
             format!("{{ version = \"{}\"{tail} }}", env!("CARGO_PKG_VERSION"))
         } else {
-            let root = engine_root.to_string_lossy().replace('\\', "/");
+            let root = forward_slash_root(engine_root);
             format!("{{ path = \"{root}/crates/{crate_name}\"{tail} }}")
         }
     };
@@ -384,6 +399,11 @@ fn engine_dependencies(engine_root: &Path) -> EngineDeps {
         ludion_engine: crate_spec("ludion-engine", ""),
         ludion_core: crate_spec("ludion-core", ""),
     }
+}
+
+/// `root` with forward slashes, the form generated manifests and scripts embed.
+fn forward_slash_root(root: &Path) -> String {
+    root.to_string_lossy().replace('\\', "/")
 }
 
 /// Whether to scaffold in installed flow (version deps). True when forced by `LUDION_NEW_INSTALLED`,
@@ -406,6 +426,89 @@ fn write_file(project_dir: &Path, rel_path: &str, body: &str) -> Result<(), Stri
     let path = project_dir.join(rel_path);
     ludion_core::atomic::write_atomic(&path, body)
         .map_err(|e| format!("could not write `{}`: {e}", path.display()))
+}
+
+/// The text `ludion new` writes as `LUDION-GUIDE.md`: the embedded guide without its frontmatter.
+fn guide_body() -> String {
+    strip_frontmatter(ENGINE_GUIDE)
+}
+
+/// The nearest project above `cwd` and its `LUDION-GUIDE.md` path.
+fn guide_path(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
+    let start = std::path::absolute(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let root = ludion_engine::manifest::find(&start)?;
+    let guide = root.join("LUDION-GUIDE.md");
+    Some((root, guide))
+}
+
+/// The `L0036` warning when the project holding `cwd` has a `LUDION-GUIDE.md` that is not this
+/// CLI's engine guide. `None` outside a project, in a project without a guide, or when it matches
+/// (line endings aside).
+pub(crate) fn stale_guide_warning(cwd: &Path) -> Option<Diagnostic> {
+    let (_, guide) = guide_path(cwd)?;
+    let text = std::fs::read_to_string(&guide).ok()?;
+    if text.replace("\r\n", "\n") == guide_body() {
+        return None;
+    }
+    Some(
+        Diagnostic::new(
+            code::GUIDE_STALE,
+            format!(
+                "`{}` differs from this CLI's engine guide (`ludion docs engine-guide`)",
+                guide.display()
+            ),
+        )
+        .with_help(
+            "run `ludion new --refresh-guide` from the project to rewrite it; `CLAUDE.md` is never \
+             touched",
+        ),
+    )
+}
+
+/// Runs `ludion new --refresh-guide`: rewrites the current project's `LUDION-GUIDE.md` with this
+/// CLI's engine guide and touches nothing else.
+pub fn refresh_guide() -> ExitCode {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            eprintln!(
+                "{}",
+                Diagnostic::new(
+                    code::SCENE_IO,
+                    format!("could not read the current directory: {err}")
+                )
+                .with_help("run `ludion new` from a directory that still exists and is readable")
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some((root, guide)) = guide_path(&cwd) else {
+        eprintln!(
+            "{}",
+            Diagnostic::new(
+                code::MANIFEST_INVALID,
+                format!(
+                    "no `ludion.toml` in `{}` or any parent — `--refresh-guide` rewrites a \
+                     project's `LUDION-GUIDE.md`",
+                    cwd.display()
+                ),
+            )
+            .with_help("run it from inside a project `ludion new` scaffolded")
+        );
+        return ExitCode::FAILURE;
+    };
+    let body = guide_body();
+    let current = std::fs::read_to_string(&guide).ok();
+    if current.is_some_and(|text| text.replace("\r\n", "\n") == body) {
+        println!("`{}` is already this CLI's engine guide", guide.display());
+        return ExitCode::SUCCESS;
+    }
+    if let Err(err) = write_file(&root, "LUDION-GUIDE.md", &body) {
+        eprintln!("{}", output_failed(err));
+        return ExitCode::FAILURE;
+    }
+    println!("refreshed `{}`", guide.display());
+    ExitCode::SUCCESS
 }
 
 /// Strips the three-line docs frontmatter (`---` / `description: …` / `---`) from the guide, leaving
@@ -432,7 +535,7 @@ fn strip_frontmatter(md: &str) -> String {
 }
 
 /// Prints the created file tree and next steps.
-fn print_summary(name: &str, project_dir: &Path, written: &[&str]) {
+fn print_summary(name: &str, project_dir: &Path, written: &[&str], wrapper: bool) {
     println!("created `{}` — a Ludion game", project_dir.display());
     println!();
     println!("{name}/");
@@ -451,6 +554,11 @@ fn print_summary(name: &str, project_dir: &Path, written: &[&str]) {
     println!(
         "  cargo run -- --scene scenes/main.yaml   # host it live (prints `listening on ws://…`)"
     );
+    if wrapper {
+        println!(
+            "  node scripts/ludion.mjs docs            # this engine's CLI, built into target/ludion-cli"
+        );
+    }
     println!();
     println!("read LUDION-GUIDE.md before writing code.");
 }
