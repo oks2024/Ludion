@@ -114,6 +114,16 @@ use tokio::sync::watch;
 /// forcing them, so teardown can never hang a test.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
+/// The longest [`Server::shutdown`] can take: the connection drain and runtime wind-down share one
+/// [`SHUTDOWN_GRACE`] deadline, the runtime keeps a 100 ms floor past it, and the sim join waits at
+/// most [`SIM_STOP_GRACE`]. A host that stops a listener-bearing core waits at least this long.
+pub const TEARDOWN_BOUND: Duration = Duration::from_millis(
+    (SHUTDOWN_GRACE.as_millis() + RUNTIME_FLOOR.as_millis() + SIM_STOP_GRACE.as_millis()) as u64,
+);
+
+/// The least the runtime wind-down is given once the drain has used the whole grace.
+const RUNTIME_FLOOR: Duration = Duration::from_millis(100);
+
 /// A running WebSocket host for one [`Engine`].
 ///
 /// Construct with [`Server::bind`]; it owns the sim thread and the tokio runtime for its whole life.
@@ -165,6 +175,22 @@ impl Server {
             .next()
             .ok_or_else(|| startup_error("the bind address resolved to no socket addresses"))?;
 
+        // Everything that can fail on a bad address or a busy port happens before the sim thread
+        // spawns, so those errors return with the engine still on this thread, never run.
+        // The tokio runtime: two workers, confined to this crate (architecture §3).
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| startup_error(format!("could not build the tokio runtime: {e}")))?;
+        // Bind synchronously so the caller gets the concrete port before `bind` returns.
+        let listener = runtime
+            .block_on(TcpListener::bind(addr))
+            .map_err(|e| startup_error(format!("could not bind {addr}: {e}")))?;
+        let local_addr = listener
+            .local_addr()
+            .map_err(|e| startup_error(format!("could not read the bound address: {e}")))?;
+
         // The intake queue (many producers → one sim-thread consumer) and the two shutdown seams.
         let (intake_tx, intake_rx) = crossbeam_channel::unbounded::<StampedCommand>();
         let (sim_shutdown, sim_shutdown_rx) = shutdown_channel();
@@ -201,13 +227,6 @@ impl Server {
             })
             .map_err(|e| startup_error(format!("could not spawn the sim thread: {e}")))?;
 
-        // The tokio runtime: two workers, confined to this crate (architecture §3).
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .map_err(|e| startup_error(format!("could not build the tokio runtime: {e}")))?;
-
         // Bridge the two crossbeam egress lanes into tokio: a std pump thread drains both eagerly —
         // events into an unbounded mpsc (ordered, never coalesced), frames into a single watch slot
         // (latest-wins: a frame the router hasn't picked up is superseded, never queued). The pump does
@@ -220,7 +239,16 @@ impl Server {
             .spawn(move || {
                 delivery::run_egress_pump(frame_egress_rx, event_egress_rx, event_tx, frame_tx)
             })
-            .map_err(|e| startup_error(format!("could not spawn the egress pump: {e}")))?;
+            .map_err(|e| startup_error(format!("could not spawn the egress pump: {e}")));
+        let egress_pump = match egress_pump {
+            Ok(pump) => pump,
+            Err(error) => {
+                // The sim thread is live and owns the engine: stop and join it rather than detach it.
+                sim_shutdown.signal();
+                let _ = join_sim(sim_thread, SIM_STOP_GRACE, &sim_shutdown);
+                return Err(error);
+            }
+        };
 
         // The shared subscription registry (sub id → per-subscriber delivery state), read by the
         // routers and written by each connection as its subscribe/unsubscribe replies pass through.
@@ -241,14 +269,6 @@ impl Server {
             registry.clone(),
             hub.clone(),
         ));
-
-        // Bind synchronously so the caller gets the concrete port before `bind` returns.
-        let listener = runtime
-            .block_on(TcpListener::bind(addr))
-            .map_err(|e| startup_error(format!("could not bind {addr}: {e}")))?;
-        let local_addr = listener
-            .local_addr()
-            .map_err(|e| startup_error(format!("could not read the bound address: {e}")))?;
 
         let hello = ServerHello {
             engine_version: ENGINE_VERSION.to_string(),
@@ -302,17 +322,18 @@ impl Server {
     /// as an ordinary `asset.reload` command — so a texture edited on disk reloads live, even while the
     /// engine is paused. The engine ignores a forwarded path it does not cache, so the watch can be
     /// broad; the reply is discarded (the reload's effect is the fired `asset.reloaded` event and the
-    /// re-rendered frame). Returns the [`WatchHandle`] whose drop stops the watch **and** its
-    /// forwarding thread; keep it alive for as long as the watch should run.
+    /// re-rendered frame). Returns the [`AssetWatch`] whose drop stops the watch **and** joins its
+    /// forwarding thread; keep it alive for as long as the watch should run, and drop it before
+    /// [`shutdown`](Server::shutdown).
     ///
     /// # Errors
     /// `L1103` if the OS watcher cannot start (or the forwarder thread cannot be spawned) — a host
     /// degrades from this by logging it and serving on with explicit `asset.reload` only, never a dead
     /// host.
-    pub fn watch_assets(&self, root: &Path, debounce: Duration) -> Result<WatchHandle, Diagnostic> {
+    pub fn watch_assets(&self, root: &Path, debounce: Duration) -> Result<AssetWatch, Diagnostic> {
         let (changes, handle) = ludion_assets::watch(root, debounce)?;
         let sink = self.command_sink();
-        std::thread::Builder::new()
+        let forwarder = std::thread::Builder::new()
             .name("ludion-asset-forward".into())
             .spawn(move || {
                 // Ends when the watcher's handle is dropped: `changes` disconnects and the loop stops.
@@ -328,7 +349,10 @@ impl Server {
                     format!("could not spawn the asset-watch forwarder thread: {e}"),
                 )
             })?;
-        Ok(handle)
+        Ok(AssetWatch {
+            watch: Some(handle),
+            forwarder: Some(forwarder),
+        })
     }
 
     /// A receiver that fires once a wire `engine.shutdown` command has been dispatched, so a host can
@@ -388,7 +412,7 @@ impl Server {
         if let Some(runtime) = self.runtime.take() {
             let remaining = drain_deadline
                 .saturating_duration_since(Instant::now())
-                .max(Duration::from_millis(100));
+                .max(RUNTIME_FLOOR);
             runtime.shutdown_timeout(remaining);
         }
         // 5. Join the sim thread (it has already observed the shutdown signal or the now-disconnected
@@ -419,6 +443,25 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.teardown();
+    }
+}
+
+/// A running asset watch (see [`Server::watch_assets`]). Dropping it stops the watcher, then joins
+/// the forwarding thread, so nothing is submitted into the intake after the drop. Drop it before
+/// [`Server::shutdown`], so no change is submitted into a stopping queue.
+pub struct AssetWatch {
+    watch: Option<WatchHandle>,
+    forwarder: Option<JoinHandle<()>>,
+}
+
+impl Drop for AssetWatch {
+    fn drop(&mut self) {
+        // The watcher's drop joins its debounce thread, which disconnects `changes` and ends the
+        // forwarder; the join is bounded because `CommandSink::submit` never blocks.
+        drop(self.watch.take());
+        if let Some(forwarder) = self.forwarder.take() {
+            let _ = forwarder.join();
+        }
     }
 }
 
@@ -460,6 +503,30 @@ mod tests {
     use super::*;
     use ludion_engine::live::Activity;
     use ludion_protocol::command::SimStepParams;
+
+    #[test]
+    fn a_busy_port_fails_the_bind_before_the_sim_ever_runs() {
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        let mut engine = Engine::builder()
+            .system("mark_ran", move |_, _| flag.store(true, Ordering::Release))
+            .build()
+            .unwrap();
+        engine
+            .load_inline_scene("format: 1\nentities: []\n")
+            .unwrap();
+
+        let error = Server::bind(engine, occupied.local_addr().unwrap())
+            .err()
+            .expect("the port is taken");
+        assert_eq!(error.code, code::PROTOCOL_ENGINE_UNAVAILABLE);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !ran.load(Ordering::Acquire),
+            "the sim thread must not spawn for a bind that fails"
+        );
+    }
 
     #[test]
     fn a_wedged_sim_step_does_not_hang_teardown() {

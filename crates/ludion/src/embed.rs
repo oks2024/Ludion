@@ -270,6 +270,10 @@ struct TouchHost {
     awaiting_resume: bool,
 }
 
+/// How long [`Embedded::suspend`] and [`Embedded::resume`] wait for the sim thread. Above a
+/// backgrounded `nextDrawable` timeout (~1 s), well under iOS's ~5 s background budget.
+const SUSPEND_GRACE: Duration = Duration::from_secs(2);
+
 /// A running embedded engine. Dropping it without [`stop`](Self::stop) still ends the host — the
 /// intake closes — but does not wait for it or report how it ended.
 pub struct Embedded {
@@ -586,7 +590,9 @@ impl Embedded {
     /// at once: the intake is ordered, so the engine comes up paused.
     ///
     /// # Errors
-    /// `L3009` if the host has ended (or failed to boot) instead of answering.
+    /// `L3009` if the host has ended (or failed to boot) instead of answering. `L3023` if the sim
+    /// thread did not confirm within 2 s; the pause stays queued and applies at the sim's next pass
+    /// boundary.
     pub fn suspend(&self) -> Result<(), Diagnostic> {
         // Held controls return to rest first, so a finger down at suspension leaves nothing stuck.
         {
@@ -605,7 +611,8 @@ impl Embedded {
     /// loading, queueing the resume and returning at once, as [`suspend`](Self::suspend) does.
     ///
     /// # Errors
-    /// `L3009` if the host has ended.
+    /// `L3009` if the host has ended. `L3023` if the sim thread did not confirm within 2 s; the
+    /// resume stays queued.
     pub fn resume(&self) -> Result<(), Diagnostic> {
         self.touch_host().awaiting_resume = false;
         self.request_settled(Command::SimResume)
@@ -732,18 +739,48 @@ impl Embedded {
         }
     }
 
-    /// [`request`](Self::request) once the boot serves its intake; before that, queues the command
-    /// and returns without waiting, so a UI thread never parks behind a scene load. A boot that has
-    /// already ended still fails.
+    /// [`request_within`](Self::request_within) once the boot serves its intake; before that, queues
+    /// the command and returns without waiting, so a UI thread never parks behind a scene load. A boot
+    /// that has already ended still fails.
     fn request_settled(&self, command: Command) -> Result<(), Diagnostic> {
         if self.running.load(Ordering::Acquire) {
-            return self.request(command).map(drop);
+            return self.request_within(command, SUSPEND_GRACE).map(drop);
         }
         let (stamped, _reply) = StampedCommand::new(command);
         self.intake.send(stamped).map_err(|_| host_gone())
     }
 
-    /// Runs one command through the sim thread and returns its answer.
+    /// Runs one command through the sim thread, giving up after `grace` with `L3023`. The command stays
+    /// queued and applies when the sim next reaches a pass boundary.
+    fn request_within(
+        &self,
+        command: Command,
+        grace: Duration,
+    ) -> Result<ResponseBody, Diagnostic> {
+        let method = command.method();
+        let (stamped, reply) = StampedCommand::new(command);
+        self.intake.send(stamped).map_err(|_| host_gone())?;
+        match reply.recv_timeout(grace) {
+            Ok(result) => result.map(|dispatched| dispatched.body),
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => Err(host_gone()),
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => Err(Diagnostic::new(
+                code::PROTOCOL_SIM_STALLED,
+                format!(
+                    "the sim thread did not confirm `{method}` within {} s",
+                    grace.as_secs()
+                ),
+            )
+            .with_help(
+                "the transition stays queued and applies at the sim's next pass boundary; a sim \
+                 that never answers is wedged (see L3023)",
+            )),
+        }
+    }
+
+    /// Runs one command through the sim thread and returns its answer, waiting without bound: a
+    /// test's long `sim.step` is the reason. Production waits go through
+    /// [`request_within`](Self::request_within).
+    #[cfg(test)]
     pub(crate) fn request(&self, command: Command) -> Result<ResponseBody, Diagnostic> {
         let (stamped, reply) = StampedCommand::new(command);
         self.intake.send(stamped).map_err(|_| host_gone())?;
@@ -973,7 +1010,7 @@ fn host_listener(
         Ok(server) => server,
         Err(diagnostic) => return fail(diagnostic),
     };
-    let _asset_watch = host::watch_project(&server, project_root);
+    let asset_watch = host::watch_project(&server, project_root);
     host::announce(&server, &opts);
 
     let sink = server.command_sink();
@@ -988,6 +1025,7 @@ fn host_listener(
             recv(wire_shutdown) -> _ => break,
         }
     }
+    drop(asset_watch);
     match server.shutdown() {
         Some(diagnostic) => fail(diagnostic),
         None => true,
@@ -1331,6 +1369,49 @@ mod tests {
             "the engine woke paused: only the stepped tick ran"
         );
         assert_eq!(reference.stop(), ExitCode::SUCCESS);
+    }
+
+    /// A sim that never returns to its command loop cannot hang a suspend: it reports `L3023` after
+    /// the grace, and the host still stops cleanly once the sim is released.
+    #[test]
+    fn suspend_against_a_held_sim_reports_l3023() {
+        use std::sync::atomic::AtomicBool;
+
+        let content = content_root("held-sim");
+        let hold = Arc::new(AtomicBool::new(true));
+        let entered = Arc::new(AtomicBool::new(false));
+        let held = builder().system("hold", {
+            let (hold, entered) = (hold.clone(), entered.clone());
+            move |_, _| {
+                entered.store(true, Ordering::Release);
+                while hold.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        });
+        let embedded = Embedded::start(held, roots(&content), None, StartOptions::default())
+            .unwrap_or_else(|d| panic!("{d}"));
+        // The sim is inside a tick, so it cannot reach the command loop to confirm a pause.
+        for _ in 0..6000 {
+            if entered.load(Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(entered.load(Ordering::Acquire), "the sim never ticked");
+
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _ = done_tx.send(embedded.suspend());
+            });
+            let outcome = done_rx.recv_timeout(Duration::from_secs(10));
+            hold.store(false, Ordering::Release);
+            let outcome = outcome.expect("suspend returned instead of hanging");
+            let diagnostic = outcome.expect_err("a held sim cannot confirm");
+            assert_eq!(diagnostic.code, code::PROTOCOL_SIM_STALLED);
+        });
+        assert_eq!(embedded.stop(), ExitCode::SUCCESS);
     }
 
     /// Input queued before the boot finishes is held in order and reaches the sim: the hash moves

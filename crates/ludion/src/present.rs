@@ -72,11 +72,22 @@ use crate::host;
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 720;
 
-/// How long a requested stop may take before the window gives up on the boot thread. Longer than the
-/// server's own bounded teardown ([`SIM_STOP_GRACE`]), so with a listener the server reports `L4022`
-/// with the real activity and [`HostEvent::Ended`] wins; this is the backstop for the no-listener
-/// shape, where the boot thread is the sim loop itself and a wedged sim never ends it.
-const WINDOW_STOP_GRACE: Duration = Duration::from_secs(SIM_STOP_GRACE.as_secs() + 2);
+/// Slack past the host's own bounded teardown, so its `L4022` report (with the real activity) wins
+/// over the window's backstop.
+const STOP_MARGIN: Duration = Duration::from_secs(2);
+
+/// How long a requested stop may take before the window gives up on the boot thread. With a listener
+/// it outlasts [`ludion_server::TEARDOWN_BOUND`], the longest the server's shutdown can run, so the
+/// server reports `L4022` and [`HostEvent::Ended`] wins; without one the boot thread is the sim loop
+/// itself, so this is the backstop for a wedged sim, past [`SIM_STOP_GRACE`].
+fn window_stop_grace(listening: bool) -> Duration {
+    #[cfg(feature = "wire")]
+    if listening {
+        return ludion_server::TEARDOWN_BOUND + STOP_MARGIN;
+    }
+    let _ = listening;
+    SIM_STOP_GRACE + STOP_MARGIN
+}
 
 /// When a requested stop runs out of time. The first request arms it and a second close or Ctrl-C
 /// never extends it. Pure, so the deadline rule is testable without a window.
@@ -84,9 +95,10 @@ const WINDOW_STOP_GRACE: Duration = Duration::from_secs(SIM_STOP_GRACE.as_secs()
 struct StopTimer(Option<Instant>);
 
 impl StopTimer {
-    /// Arms the timer at `now` unless it is already armed; returns the deadline either way.
-    fn arm(&mut self, now: Instant) -> Instant {
-        *self.0.get_or_insert(now + WINDOW_STOP_GRACE)
+    /// Arms the timer at `now` for `grace` unless it is already armed; returns the deadline either
+    /// way.
+    fn arm(&mut self, now: Instant, grace: Duration) -> Instant {
+        *self.0.get_or_insert(now + grace)
     }
 
     fn expired(&self, now: Instant) -> bool {
@@ -142,6 +154,11 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
             }
         };
     let proxy = event_loop.create_proxy();
+    #[cfg(feature = "wire")]
+    let listening = options.listen.is_some();
+    #[cfg(not(feature = "wire"))]
+    let listening = false;
+    let stop_grace = window_stop_grace(listening);
 
     let running = Arc::new(AtomicBool::new(true));
     let (input_tx, input_rx) = crossbeam_channel::unbounded::<serde_json::Value>();
@@ -167,6 +184,7 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
         waiter: None,
         fatal: None,
         stop_timer: StopTimer::default(),
+        stop_grace,
         stuck: false,
         role,
         title_hint,
@@ -194,11 +212,11 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
     }
 
     // The loop ends once the boot thread has, so `stop` joins at once and flushes an armed recording
-    // before the outcome is reported. If instead a stop outlived `WINDOW_STOP_GRACE`, the boot is
+    // before the outcome is reported. If instead a stop outlived `stop_grace`, the boot is
     // abandoned, not joined again: its thread stays detached (`Embedded` has no `Drop`), and its audio
     // sink with it, so nothing on this thread needs forgetting.
     let stopped = match embedded {
-        Some(embedded) if stuck => embedded.abandon(WINDOW_STOP_GRACE),
+        Some(embedded) if stuck => embedded.abandon(stop_grace),
         Some(embedded) => embedded.stop(),
         None => ExitCode::SUCCESS,
     };
@@ -270,8 +288,9 @@ struct App {
     waiter: Option<JoinHandle<()>>,
     /// Set when a fatal error ends the loop; printed by [`host_windowed`].
     fatal: Option<Diagnostic>,
-    /// Armed by the first stop request; see [`WINDOW_STOP_GRACE`].
+    /// Armed by the first stop request, for `stop_grace`.
     stop_timer: StopTimer,
+    stop_grace: Duration,
     /// Set when the loop exited because the stop timer ran out, not because the boot ended.
     stuck: bool,
     role: WindowRole,
@@ -389,7 +408,7 @@ impl App {
     fn request_stop(&mut self) {
         if let Some(embedded) = &self.embedded {
             embedded.request_stop();
-            self.stop_timer.arm(Instant::now());
+            self.stop_timer.arm(Instant::now(), self.stop_grace);
         }
     }
 
@@ -648,16 +667,30 @@ mod tests {
             "unarmed never expires"
         );
 
-        let deadline = timer.arm(t0);
-        assert_eq!(deadline, t0 + WINDOW_STOP_GRACE);
+        let grace = window_stop_grace(false);
+        let deadline = timer.arm(t0, grace);
+        assert_eq!(deadline, t0 + grace);
         assert!(!timer.expired(deadline - Duration::from_millis(1)));
         assert!(timer.expired(deadline));
 
         assert_eq!(
-            timer.arm(t0 + Duration::from_secs(1)),
+            timer.arm(t0 + Duration::from_secs(1), grace),
             deadline,
             "a second request never extends it"
         );
         assert_eq!(timer.deadline(), Some(deadline));
+    }
+
+    #[test]
+    fn the_stop_grace_outlasts_the_hosts_own_teardown() {
+        assert_eq!(window_stop_grace(false), SIM_STOP_GRACE + STOP_MARGIN);
+        #[cfg(feature = "wire")]
+        {
+            assert_eq!(
+                window_stop_grace(true),
+                ludion_server::TEARDOWN_BOUND + STOP_MARGIN
+            );
+            assert!(window_stop_grace(true) > window_stop_grace(false));
+        }
     }
 }

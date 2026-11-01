@@ -223,12 +223,12 @@ pub(crate) fn announce(server: &Server, opts: &HostOptions<'_>) {
 /// `asset.reload` — so a texture edited on disk reloads live, even while the engine is paused.
 ///
 /// A watcher that fails to start degrades to explicit `asset.reload` commands with a warning, never
-/// a dead host. The returned handle must stay in scope for as long as the server: its drop stops the
-/// watch.
+/// a dead host. The returned guard must stay in scope for as long as the server, and be dropped before
+/// its shutdown: its drop stops the watch and joins the forwarder.
 #[cfg(feature = "wire")]
-pub(crate) fn watch_project(server: &Server, root: &Path) -> Option<ludion_assets::WatchHandle> {
+pub(crate) fn watch_project(server: &Server, root: &Path) -> Option<ludion_server::AssetWatch> {
     match server.watch_assets(root, ASSET_WATCH_DEBOUNCE) {
-        Ok(handle) => Some(handle),
+        Ok(watch) => Some(watch),
         Err(diagnostic) => {
             eprintln!(
                 "{}",

@@ -44,7 +44,8 @@
 //!   event loop to exit — this is how a host wires Ctrl-C.
 //!
 //! Closing the window or firing `stop` ends the loop cleanly (no `process::exit`); a lost connection
-//! does not end it, but a fatal schema mismatch does, with the diagnostic. Every thread is then joined with bounded waits before [`run`] returns.
+//! does not end it, but a fatal schema mismatch does, with the diagnostic. Every thread is then
+//! joined with bounded waits before [`run`] returns.
 //!
 //! The [`host_input`] router is public because the `ludion` facade's in-process present host calls
 //! the same device-event → `input.inject`-event path directly, without going through a `Client` — so
@@ -456,14 +457,18 @@ impl StreamSink for WindowStreamSink {
 /// lazily reconnects (a still-down server or a schema mismatch simply drops that event — the stream
 /// thread owns the fatal path and the title flag, so input is always best-effort and never ends the
 /// loop). Injections that arrive during the blink are dropped, which is correct: the sim is down.
+///
+/// Each call is bounded by [`INPUT_CALL_TIMEOUT`]: a sim that stops answering surfaces `L3009`, which
+/// drops the client like a lost socket, so this thread never parks behind a wedged sim and can be
+/// joined.
 fn spawn_input_thread(url: String, input_rx: Receiver<serde_json::Value>) -> JoinHandle<()> {
     std::thread::spawn(move || {
         // Best-effort initial connect; if it fails, the first events drop until a later one reconnects.
-        let mut client = Client::connect(&url).ok();
+        let mut client = connect_input(&url);
         // Ends when every `input_tx` is dropped (the event loop torn down).
         while let Ok(event) = input_rx.recv() {
             if client.is_none() {
-                client = Client::connect(&url).ok();
+                client = connect_input(&url);
             }
             let Some(active) = client.as_mut() else {
                 continue; // still down: drop this event
@@ -477,6 +482,16 @@ fn spawn_input_thread(url: String, input_rx: Receiver<serde_json::Value>) -> Joi
             }
         }
     })
+}
+
+/// How long one `input.inject` call may wait for its reply: one sim pass many times over, and far
+/// under the server's 120 s.
+const INPUT_CALL_TIMEOUT: Duration = Duration::from_secs(1);
+
+fn connect_input(url: &str) -> Option<Client> {
+    Client::connect(url)
+        .map(|client| client.with_call_timeout(INPUT_CALL_TIMEOUT))
+        .ok()
 }
 
 /// The gamepad thread: poll `gilrs` for the first connected pad's events and push mapped

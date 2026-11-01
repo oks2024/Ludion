@@ -409,7 +409,8 @@ pub unsafe extern "C" fn ludion_resize(
     }
 }
 
-/// Pauses the sim and returns once it has; `false` for a null handle or an ended host.
+/// Pauses the sim and returns once it has; `false` for a null handle or an ended host. A sim slow to
+/// confirm is reported and still `true`: the pause is queued.
 ///
 /// # Safety
 /// `handle` must be null or a live handle from [`start`] that [`ludion_stop`] has not consumed.
@@ -418,10 +419,11 @@ pub unsafe extern "C" fn ludion_suspend(handle: *mut LudionEmbed) -> bool {
     let Some(engine) = (unsafe { embedded(handle) }) else {
         return false;
     };
-    engine.suspend().is_ok()
+    transition_queued(engine.suspend())
 }
 
-/// Resumes the sim and returns once it has; `false` for a null handle or an ended host.
+/// Resumes the sim and returns once it has; `false` for a null handle or an ended host. A sim slow
+/// to confirm is reported and still `true`: the resume is queued.
 ///
 /// # Safety
 /// `handle` must be null or a live handle from [`start`] that [`ludion_stop`] has not consumed.
@@ -430,7 +432,20 @@ pub unsafe extern "C" fn ludion_resume(handle: *mut LudionEmbed) -> bool {
     let Some(engine) = (unsafe { embedded(handle) }) else {
         return false;
     };
-    engine.resume().is_ok()
+    transition_queued(engine.resume())
+}
+
+/// Whether a suspend/resume took hold: a confirmation timeout (`L3023`) is printed and still counts,
+/// because the transition stays queued.
+fn transition_queued(result: Result<(), Diagnostic>) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(diag) if diag.code == code::PROTOCOL_SIM_STALLED => {
+            eprintln!("{diag}");
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Whether the engine has ended on its own — an argv mode finished, a wire `engine.shutdown`, a

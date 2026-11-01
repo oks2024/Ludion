@@ -46,8 +46,9 @@ layout, construction and disk seams are `ludion devdocs ludion`; the window crat
   the safe rect's height; a stick emits the clamped deflection (+Y up, the game owns its deadzone),
   optionally the side's trigger past `deadzone` and a one-tap D-pad flick — never a held D-pad, which
   would outrank the stick. A finger that slides off a button releases it for good. `suspend` rests
-  every control; the next `Began` resumes the core and is swallowed (`TouchOutcome::Resumed`, even
-  with no layout). The host draws at `touch_controls()` rects (`ludion_touch_control`) and never
+  every control (suspend/resume wait at most 2 s, then report `L3023` with the transition still
+  queued); the next `Began` resumes the core and is swallowed (`TouchOutcome::Resumed`, even with no
+  layout). The host draws at `touch_controls()` rects (`ludion_touch_control`) and never
   hit-tests. Touch adds no `InputEvent`, so no wire or replay moves.
 - **The iOS staticlib is built by the command, never by the manifest** (`ludion export` runs it). Run from `games/vigil/` (the private, Lore-only reference game): `cargo rustc -p vigil --lib
   --crate-type staticlib --target aarch64-apple-ios[-sim] --release --no-default-features [--features

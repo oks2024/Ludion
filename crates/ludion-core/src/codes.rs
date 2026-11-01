@@ -1838,7 +1838,8 @@ pub mod code {
 
     /// `L3023` — a request reached the sim thread but no reply came back within the server's wait
     /// bound: the sim thread is running and is not returning to its command loop. Raised by
-    /// `ludion-server` in place of the reply.
+    /// `ludion-server` in place of the reply, and by the embedded host's `suspend`/`resume` when the
+    /// sim thread does not confirm within their 2 s grace.
     pub const PROTOCOL_SIM_STALLED: DiagnosticCode = DiagnosticCode::new("L3023");
 
     /// `L3024` — a replay re-driven with the current build no longer reproduces a keyframe the
@@ -9021,7 +9022,9 @@ and the reply simply never arrived: a game system looping without terminating, a
 something that never completes, or a `sim.step` whose `ticks` cannot finish inside the bound. The
 bound sits far above any command this engine performs in one go, so it never fires on work that is
 merely slow. The server answers this rather than waiting forever, so the connection keeps serving and
-the host can still be shut down; the diagnostic names the method that stalled.
+the host can still be shut down; the diagnostic names the method that stalled. The embedded host's
+`suspend` and `resume` raise it too, after a 2 s wait; the transition stays queued and applies when
+the sim next reaches a pass boundary.
 
 Fix: the stalled method names the code to look at. For a game system, attach a debugger to the
 `ludion-sim` thread and find the loop that is not terminating — an unbounded `while` on a condition
