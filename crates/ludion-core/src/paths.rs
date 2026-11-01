@@ -96,6 +96,31 @@ pub fn content_refusal(text: &str) -> Option<PathRefusal> {
     relative_refusal(&normalize(text))
 }
 
+/// [`content_refusal`] with a budget of `climb` leading `..` segments once the path folds: the
+/// rule for a base that sits `climb` levels below the directory the path must stay inside.
+/// `usize::MAX` checks the spelling only, for a check that cannot see the root; the read that
+/// can bounds the climb.
+///
+/// ```
+/// use ludion_core::paths::{climbing_refusal, PathRefusal};
+///
+/// assert_eq!(climbing_refusal("../assets/a.png", 1), None);
+/// assert_eq!(climbing_refusal("../../a.png", 1), Some(PathRefusal::ParentDir));
+/// assert_eq!(climbing_refusal("../../a.png", usize::MAX), None);
+/// assert_eq!(climbing_refusal("/a.png", usize::MAX), Some(PathRefusal::Absolute));
+/// ```
+pub fn climbing_refusal(text: &str, climb: usize) -> Option<PathRefusal> {
+    let folded = normalize(text);
+    let mut rest = folded.as_str();
+    for _ in 0..climb {
+        match rest.strip_prefix("../") {
+            Some(below) => rest = below,
+            None => break,
+        }
+    }
+    relative_refusal(rest)
+}
+
 /// Whether one path segment names a Windows device (`con`, `NUL .png`, `com1.tar.gz`, `Aux.`),
 /// which Win32 resolves to the device whatever the extension.
 pub fn is_reserved_device(segment: &str) -> bool {

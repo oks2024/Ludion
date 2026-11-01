@@ -320,10 +320,11 @@ pub(crate) fn write_delta(
     }
 }
 
-/// Refuses a path a replay could not carry between machines: absolute, drive-prefixed or escaping.
-/// Upstream validation already refuses these; this is the backstop that keeps one out of a `.lrp`.
+/// Refuses a path a replay could not carry between machines: absolute, drive-prefixed or reserved.
+/// A relative climb is portable; the read bounds it at the project root. Upstream validation
+/// already refuses these; this is the backstop that keeps one out of a `.lrp`.
 fn portable(path: &str) -> io::Result<()> {
-    match ludion_core::paths::content_refusal(path) {
+    match ludion_core::paths::climbing_refusal(path, usize::MAX) {
         Some(refusal) => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(

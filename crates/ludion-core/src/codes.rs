@@ -1563,7 +1563,8 @@ pub mod code {
     pub const PRESENTATION_INSTANCE_SIM_COMPONENT: DiagnosticCode = DiagnosticCode::new("L1320");
 
     /// `L1321` — the general rule for a content or payload path leaving the content root: absolute,
-    /// prefixed, reserved, or climbing above the root once its `..` segments fold. Raised by
+    /// prefixed, reserved, or climbing above the project root (the nearest directory holding
+    /// `ludion.toml`, else the content root) once its `..` segments fold. Raised by
     /// `ludion_assets::resolve`, so every asset read shares it; the per-kind path codes stay.
     pub const CONTENT_PATH_OUTSIDE_ROOT: DiagnosticCode = DiagnosticCode::new("L1321");
 
@@ -7773,8 +7774,11 @@ The general rule for any path that came from content or a payload and is joined 
 root: a component asset field, a path nested in a document, or a recorded prefab source. After its
 `..` segments are folded, the path must be a plain relative path below the root. An absolute path
 (`/dev/zero`, `//host/share`), a drive, scheme or stream prefix (`C:x`), a reserved device name
-(`nul.png`), or a `..` that climbs above the root is refused before any file is opened. A `..` that
-only cancels a segment (`meshes/../t.png`) is fine. The per-kind codes (the fonts table, a prefab
+(`nul.png`), or a `..` that climbs above the project root is refused before any file is opened.
+The project root is the nearest directory above the content root holding `ludion.toml` (the content
+root itself when none does), so a scene in `scenes/` may name `../assets/town/...`, an `[[import]]`
+tree beside it; a check with no root at hand (scene validation, the wire) refuses only the spellings
+and leaves the climb to the read. A `..` that only cancels a segment (`meshes/../t.png`) is fine. The per-kind codes (the fonts table, a prefab
 asset path, a wire outer parameter) stay for the places that check earlier.
 
 Fix: name the file relative to the content root (the directory of the scene the engine was started

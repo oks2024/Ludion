@@ -31,7 +31,9 @@
 //! # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
 //! ```
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -227,7 +229,9 @@ pub const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 /// The directory an asset path is joined to, and whether the join is confined to it.
 ///
 /// [`content`](AssetRoot::content) is the engine's content root: every path that came from content
-/// or a payload must stay below it. [`local_document_unconfined`](AssetRoot::local_document_unconfined)
+/// or a payload must stay inside its project — the nearest ancestor holding `ludion.toml`, else the
+/// root itself — so a scene directory reaches the `[[import]]` trees beside it with `..`.
+/// [`local_document_unconfined`](AssetRoot::local_document_unconfined)
 /// is for a file the local author named, whose document-relative paths may climb above its own
 /// directory. Both refuse an absolute or prefixed path and keep the bounded read.
 #[derive(Clone, Copy, Debug)]
@@ -237,7 +241,7 @@ pub struct AssetRoot<'a> {
 }
 
 impl<'a> AssetRoot<'a> {
-    /// The engine's content root: a path that climbs out of `dir` is refused.
+    /// The engine's content root: a path that climbs out of `dir`'s project is refused.
     pub fn content(dir: &'a Path) -> Self {
         AssetRoot {
             dir,
@@ -261,8 +265,9 @@ impl<'a> AssetRoot<'a> {
 }
 
 /// Resolves `relative` against `root`, refusing a path that is not a plain relative path once its
-/// `..` segments are folded ([`ludion_core::paths::content_refusal`]); an unconfined root lets a
-/// climbing `..` through and refuses everything else.
+/// `..` segments are folded ([`ludion_core::paths::content_refusal`]), except that a confined root
+/// may climb as far as its project root ([`project_climb`]); an unconfined root lets any climbing
+/// `..` through and refuses everything else.
 ///
 /// # Errors
 /// `L1321` for an absolute, prefixed, reserved-name or (confined) escaping path.
@@ -279,7 +284,12 @@ impl<'a> AssetRoot<'a> {
 /// ```
 pub fn resolve(root: AssetRoot<'_>, relative: &str) -> Result<PathBuf, Diagnostic> {
     let refusal = if root.confined {
-        ludion_core::paths::content_refusal(relative)
+        match ludion_core::paths::content_refusal(relative) {
+            Some(ludion_core::paths::PathRefusal::ParentDir) => {
+                ludion_core::paths::climbing_refusal(relative, project_climb(root.dir))
+            }
+            other => other,
+        }
     } else {
         ludion_core::paths::sibling_refusal(relative)
     };
@@ -291,10 +301,30 @@ pub fn resolve(root: AssetRoot<'_>, relative: &str) -> Result<PathBuf, Diagnosti
         )
         .with_help(
             "name the file relative to the content root (the directory of the scene the engine \
-             was started with); a document's own paths may climb with `..` only while they stay \
-             inside it",
+             was started with); a path may climb with `..` only as far as the project root, the \
+             nearest directory above it holding `ludion.toml`",
         )),
     }
+}
+
+/// How many levels `dir` sits below its project root, the nearest ancestor holding `ludion.toml`
+/// (0 when none does): how far a content path may climb, so a scene directory reaches the project's
+/// `[[import]]` trees beside it. Looked up once per directory, so a resolve does no file IO after.
+pub fn project_climb(dir: &Path) -> usize {
+    static CLIMBS: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
+    let lock = || CLIMBS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(&climb) = lock().get(dir) {
+        return climb;
+    }
+    let climb = std::path::absolute(dir)
+        .ok()
+        .and_then(|dir| {
+            dir.ancestors()
+                .position(|a| a.join("ludion.toml").is_file())
+        })
+        .unwrap_or(0);
+    lock().insert(dir.to_path_buf(), climb);
+    climb
 }
 
 /// Reads `reader` to its end, or `Ok(None)` when it holds more than `cap` bytes. The read is cut at
@@ -318,7 +348,14 @@ fn read_bounded(path: &Path, label: &str) -> Result<AssetBytes, Diagnostic> {
         )
         .with_help("check the path is correct and names a file that exists relative to the project")
     };
-    let file = std::fs::File::open(path).map_err(|error| io_error(error.to_string()))?;
+    // Windows refuses to open a directory ("access denied") before the regular-file check can say so.
+    let file = std::fs::File::open(path).map_err(|error| {
+        io_error(if path.is_dir() {
+            "not a regular file".to_string()
+        } else {
+            error.to_string()
+        })
+    })?;
     let metadata = file
         .metadata()
         .map_err(|error| io_error(error.to_string()))?;
@@ -854,6 +891,30 @@ mod tests {
                 .code,
             code::CONTENT_PATH_OUTSIDE_ROOT
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_content_root_climbs_to_its_project_root_and_no_further() {
+        let dir = std::env::temp_dir().join(format!("ludion-assets-proj-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("project/scenes")).unwrap();
+        std::fs::create_dir_all(dir.join("project/assets")).unwrap();
+        std::fs::write(
+            dir.join("project/ludion.toml"),
+            "name = \"p\"
+",
+        )
+        .unwrap();
+        std::fs::write(dir.join("project/assets/x.bin"), b"abc").unwrap();
+        std::fs::write(dir.join("y.bin"), b"no").unwrap();
+        let scenes = dir.join("project/scenes");
+        let root = AssetRoot::content(&scenes);
+        assert_eq!(project_climb(&scenes), 1);
+        assert_eq!(load_bytes(root, "../assets/x.bin").unwrap().bytes, b"abc");
+        for path in ["../../y.bin", "../assets/../../y.bin", "/dev/zero"] {
+            let error = load_bytes(root, path).unwrap_err();
+            assert_eq!(error.code, code::CONTENT_PATH_OUTSIDE_ROOT, "{path}");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

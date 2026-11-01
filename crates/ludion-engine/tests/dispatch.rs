@@ -466,10 +466,10 @@ fn spawn_with_name_and_name_component_is_l3014() {
 }
 
 #[test]
-fn an_escaping_asset_path_is_refused_on_spawn_and_component_set() {
+fn a_non_relative_asset_path_is_refused_on_spawn_and_component_set() {
     let mut engine = engine();
     let mut components = BTreeMap::new();
-    components.insert("Sprite".to_string(), json!({ "texture": "../outside.png" }));
+    components.insert("Sprite".to_string(), json!({ "texture": "C:outside.png" }));
     assert_eq!(
         err_code(
             &mut engine,

@@ -158,7 +158,8 @@ fn check_asset_paths(
         if path.is_empty() {
             return;
         }
-        if let Some(refusal) = ludion_core::paths::content_refusal(path) {
+        // No root here, so only the spelling is checked; the read bounds a climb at the project.
+        if let Some(refusal) = ludion_core::paths::climbing_refusal(path, usize::MAX) {
             out.push(
                 Diagnostic::new(
                     code::CONTENT_PATH_OUTSIDE_ROOT,
@@ -166,7 +167,7 @@ fn check_asset_paths(
                 )
                 .with_path(format!("{pointer}{field}"))
                 .with_help(
-                    "an asset path is relative to the content root (the scene's own directory) and must stay inside it",
+                    "an asset path is relative to the content root (the scene's own directory); it may climb with `..` only as far as the project root, the nearest directory above it holding `ludion.toml`",
                 ),
             );
         }
@@ -1296,10 +1297,10 @@ mod tests {
     }
 
     #[test]
-    fn an_asset_path_leaving_the_content_root_is_refused_at_its_field() {
+    fn a_non_relative_asset_path_is_refused_at_its_field() {
         let mut registry = Registry::new();
         registry.register::<TestSkin>("Skin").unwrap();
-        for path in ["../x.png", "/etc/x.png", "C:x.png"] {
+        for path in ["/etc/x.png", "C:x.png", "../con.png"] {
             let diagnostics = check_scene_asset_paths(&skin_scene(path), &registry);
             assert_eq!(diagnostics.len(), 1, "{path}: {diagnostics:?}");
             assert_eq!(diagnostics[0].code, code::CONTENT_PATH_OUTSIDE_ROOT);
@@ -1311,6 +1312,12 @@ mod tests {
             assert_eq!(wire.len(), 1, "{path}: {wire:?}");
             assert_eq!(wire[0].path.as_deref(), Some("/texture"));
         }
-        assert!(check_scene_asset_paths(&skin_scene("a/../b.png"), &registry).is_empty());
+        // A climb is a spelling the read bounds at the project root, not this rootless check.
+        for path in ["a/../b.png", "../assets/b.png"] {
+            assert!(
+                check_scene_asset_paths(&skin_scene(path), &registry).is_empty(),
+                "{path}"
+            );
+        }
     }
 }
