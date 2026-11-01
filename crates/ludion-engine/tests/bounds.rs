@@ -138,6 +138,7 @@ fn mixed_scene_has_exact_bounds_and_excludes_lights() {
                 h: 64.0,
             }),
             on_screen: true,
+            hidden: false,
         }
     );
 
@@ -157,6 +158,7 @@ fn mixed_scene_has_exact_bounds_and_excludes_lights() {
                 h: 64.0,
             }),
             on_screen: true,
+            hidden: false,
         }
     );
 
@@ -176,8 +178,45 @@ fn mixed_scene_has_exact_bounds_and_excludes_lights() {
                 h: 64.0,
             }),
             on_screen: true,
+            hidden: false,
         }
     );
+}
+
+/// A hidden entity (or one under a hidden ancestor) is still reported, marked `hidden: true`; a visible
+/// one serializes with no `hidden` key.
+#[test]
+fn a_hidden_entity_is_reported_with_hidden_true() {
+    let mut engine = engine();
+    let world = engine.world_mut();
+    add_camera(world);
+    let root = world.spawn();
+    world.insert(root, Transform::default()).unwrap();
+    world
+        .insert(
+            root,
+            ludion_engine::Visibility {
+                visible: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let child = world.spawn();
+    world.insert(child, Transform::default()).unwrap();
+    world.insert(child, ludion_ecs::Parent(root)).unwrap();
+    world.insert(child, Mesh::default()).unwrap();
+    let shown = world.spawn();
+    world.insert(shown, Transform::default()).unwrap();
+    world.insert(shown, Mesh::default()).unwrap();
+
+    let (_, entities) = bounds(&mut engine);
+    assert_eq!(entities.len(), 2);
+    assert_eq!((entities[0].entity, entities[0].hidden), (child, true));
+    assert_eq!((entities[1].entity, entities[1].hidden), (shown, false));
+    let json = serde_json::to_value(&entities[1]).unwrap();
+    assert!(json.get("hidden").is_none(), "omitted when false: {json}");
+    let json = serde_json::to_value(&entities[0]).unwrap();
+    assert_eq!(json["hidden"], true);
 }
 
 /// A fresh per-process scratch project root holding `files` (rel path → text).

@@ -42,6 +42,7 @@ use crate::asset_cache::AssetCache;
 use crate::extract::{
     PlacedMesh, PlacedMeshSource, PlacedSprite, build_camera, place_uncached, single_camera,
 };
+use crate::hierarchy::FrameVisibility;
 use crate::voxel_mesh::grid_box;
 
 /// A clipped point whose homogeneous `w` is at or below this threshold is dropped from the screen
@@ -103,6 +104,7 @@ pub(crate) fn compute(
         vertex_boxes: StableMap::new(),
     };
 
+    let visibility = FrameVisibility::of(world, &ids);
     let mut entities = Vec::new();
     for &id in &ids {
         // Union the world AABB of every renderable this entity carries (usually exactly one).
@@ -127,6 +129,7 @@ pub(crate) fn compute(
             },
             screen_rect,
             on_screen,
+            hidden: visibility.hidden(id),
         });
     }
 

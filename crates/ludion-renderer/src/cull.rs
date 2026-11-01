@@ -167,10 +167,52 @@ pub(crate) fn visible_ranges(sources: &[u32], visible: &[bool]) -> Vec<Range<u32
     ranges
 }
 
+/// `ranges` (instance positions of a draw whose `sources` are ascending `scene.meshes` indices) with
+/// every position whose source does not cast (`casts[source]` false) removed, survivors re-coalesced.
+pub(crate) fn casting_ranges(
+    ranges: Vec<Range<u32>>,
+    sources: &[u32],
+    casts: &[bool],
+) -> Vec<Range<u32>> {
+    let mut kept: Vec<Range<u32>> = Vec::new();
+    for position in ranges.into_iter().flatten() {
+        if !casts[sources[position as usize] as usize] {
+            continue;
+        }
+        match kept.last_mut() {
+            Some(last) if last.end == position => last.end += 1,
+            _ => kept.push(position..position + 1),
+        }
+    }
+    kept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ludion_core::math::glam::{Mat3, Quat};
+
+    #[test]
+    fn casting_ranges_split_drop_and_recoalesce() {
+        let sources = [0, 1, 2, 3, 4, 5];
+        let all: Vec<Range<u32>> = std::iter::once(0..6).collect();
+        assert_eq!(
+            casting_ranges(all.clone(), &sources, &[true; 6]),
+            vec![0..6]
+        );
+        assert!(casting_ranges(all.clone(), &sources, &[false; 6]).is_empty());
+        let alternating = [true, false, true, false, true, false];
+        assert_eq!(
+            casting_ranges(all, &sources, &alternating),
+            vec![0..1, 2..3, 4..5]
+        );
+        // Multi-range input: a gap between ranges stays a gap, a dropped middle splits a range.
+        let casts = [true, true, false, true, true, true];
+        assert_eq!(
+            casting_ranges(vec![0..3, 4..6], &sources, &casts),
+            vec![0..2, 4..6]
+        );
+    }
 
     #[test]
     fn visible_ranges_coalesce_runs_and_skip_gaps() {
@@ -194,6 +236,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         }
     }
 

@@ -448,6 +448,7 @@ pub struct EntityMatch {
 ///     world_aabb: WorldAabb { min: [3.0, 1.5, 0.0], max: [7.0, 3.5, 0.0] },
 ///     screen_rect: Some(ScreenRect { x: 130.0, y: 15.0, w: 40.0, h: 20.0 }),
 ///     on_screen: true,
+///     hidden: false,
 /// };
 /// assert_eq!(b.world_aabb.max, [7.0, 3.5, 0.0]);
 /// ```
@@ -463,6 +464,10 @@ pub struct EntityBounds {
     pub screen_rect: Option<ScreenRect>,
     /// Whether `screen_rect` is present and intersects the `[0, render_size]` viewport.
     pub on_screen: bool,
+    /// The entity, or an ancestor, has `Visibility { visible: false }`: it is not drawn; picking still
+    /// finds it. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 /// A world-space axis-aligned bounding box: componentwise `min` ≤ `max`.

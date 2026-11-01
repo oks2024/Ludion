@@ -132,25 +132,36 @@ pub(crate) fn inherited_visibility(world: &World, entity: EntityId) -> Visibilit
 
 /// The entities hidden by [`Visibility`] this frame, computed once so each extract pass asks a set
 /// instead of walking `Parent` chains. Empty, with no walk, when the world has no `Visibility`.
+/// `shadowless` holds the visible entities that cast no shadow; a hidden entity is in `hidden` only.
 pub(crate) struct FrameVisibility {
     hidden: BTreeSet<EntityId>,
+    shadowless: BTreeSet<EntityId>,
 }
 
 impl FrameVisibility {
     pub(crate) fn of(world: &World, ids: &[EntityId]) -> Self {
         let mut hidden = BTreeSet::new();
+        let mut shadowless = BTreeSet::new();
         if world.component_count::<Visibility>() != 0 {
             for &id in ids {
-                if !inherited_visibility(world, id).visible {
+                let seen = inherited_visibility(world, id);
+                if !seen.visible {
                     hidden.insert(id);
+                } else if !seen.cast_shadows {
+                    shadowless.insert(id);
                 }
             }
         }
-        Self { hidden }
+        Self { hidden, shadowless }
     }
 
     pub(crate) fn hidden(&self, id: EntityId) -> bool {
         self.hidden.contains(&id)
+    }
+
+    /// Whether `id` writes shadow maps: false when it, or an ancestor, sets `cast_shadows: false`.
+    pub(crate) fn casts(&self, id: EntityId) -> bool {
+        !self.shadowless.contains(&id)
     }
 }
 
@@ -886,6 +897,22 @@ mod tests {
         assert!(!seen.visible && !seen.cast_shadows);
         let frame = FrameVisibility::of(&world, &[a, b, c]);
         assert!(frame.hidden(a) && frame.hidden(b) && frame.hidden(c));
+    }
+
+    #[test]
+    fn a_shadowless_root_makes_its_child_shadowless_and_hidden_wins() {
+        let mut world = World::new();
+        let root = spawn(&mut world, at(0.0), None);
+        let child = spawn(&mut world, at(0.0), Some(root));
+        let other = spawn(&mut world, at(0.0), None);
+        hide(&mut world, root, true, false);
+        let frame = FrameVisibility::of(&world, &[root, child, other]);
+        assert!(!frame.casts(root) && !frame.casts(child) && frame.casts(other));
+        assert!(!frame.hidden(child));
+        hide(&mut world, root, false, false);
+        let frame = FrameVisibility::of(&world, &[root, child]);
+        assert!(frame.hidden(child), "hidden wins");
+        assert!(frame.casts(child), "a hidden entity is not in `shadowless`");
     }
 
     #[test]

@@ -537,6 +537,7 @@ fn floor_instance() -> MeshInstance {
         flash: 0.0,
         flash_color: [1.0; 3],
         bone_offset: 0,
+        cast_shadows: true,
     }
 }
 

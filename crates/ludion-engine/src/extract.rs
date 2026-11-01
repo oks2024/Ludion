@@ -1080,6 +1080,7 @@ fn extract_inner(
                 fade
             }
         };
+        let cast_shadows = visibility.casts(mesh.id);
         let mut character: Option<Arc<CharacterData>> = None;
         let shape = match mesh.source {
             PlacedMeshSource::Primitive(shape) => Some(shape),
@@ -1183,6 +1184,7 @@ fn extract_inner(
                         flash: mesh.flash,
                         flash_color: mesh.flash_color,
                         bone_offset: 0,
+                        cast_shadows,
                     });
                 }
                 continue;
@@ -1239,6 +1241,7 @@ fn extract_inner(
                 flash: mesh.flash,
                 flash_color: mesh.flash_color,
                 bone_offset,
+                cast_shadows,
             });
         }
     }

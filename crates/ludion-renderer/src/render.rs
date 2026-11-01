@@ -1758,6 +1758,11 @@ impl Renderer {
         } else {
             Vec::new()
         };
+        let casts: Vec<bool> = if scene.meshes.iter().all(|m| m.cast_shadows) {
+            Vec::new()
+        } else {
+            scene.meshes.iter().map(|m| m.cast_shadows).collect()
+        };
         let sun_cascade_casters: Vec<Vec<u32>> =
             sun_cascades.as_ref().map_or_else(Vec::new, |fit| {
                 crate::sun_cascade::sun_cascade_casters(fit, &caster_bounds)
@@ -1831,6 +1836,7 @@ impl Renderer {
             sun_cascade_casters,
             sun_tile: chain.shadow_map.unwrap_or_default(),
             caster_bounds,
+            casts,
             ground_marker_draw,
             debug_line_draw,
             sprite_draws,
@@ -3313,6 +3319,8 @@ struct FrameRecorder<'a> {
     /// The sun atlas's tile edge, the chain's `shadow_map`.
     sun_tile: u32,
     caster_bounds: Vec<Option<Aabb>>,
+    /// Per scene mesh, whether it writes shadow maps; empty when every instance does.
+    casts: Vec<bool>,
     /// The scene's ground markers, or `None` when it authors none — in which case the scene pass
     /// binds no marker pipeline and issues no marker draw.
     ground_marker_draw: Option<GroundMarkerDraw>,
@@ -4150,6 +4158,21 @@ impl FrameRecorder<'_> {
         )
     }
 
+    /// `ranges` for a draw's `sources`, minus the instances that cast no shadow. `casts` is empty
+    /// when every instance casts, so the common path is `ranges` untouched.
+    fn casting(
+        &self,
+        sources: &[u32],
+        ranges: &impl Fn(&[u32]) -> Vec<std::ops::Range<u32>>,
+    ) -> Vec<std::ops::Range<u32>> {
+        let kept = ranges(sources);
+        if self.casts.is_empty() {
+            kept
+        } else {
+            crate::cull::casting_ranges(kept, sources, &self.casts)
+        }
+    }
+
     /// The one caster loop behind all four shadow passes. `ranges` maps a draw's `sources` to the
     /// instance ranges to draw; `bound` tracks which caster pipeline is bound across calls. Primitives
     /// first, then assets; a mask asset binds its own material before each draw.
@@ -4160,7 +4183,7 @@ impl FrameRecorder<'_> {
         bound: &mut CasterPipeline,
     ) {
         for draw in &self.mesh_draws {
-            let kept = ranges(&draw.sources);
+            let kept = self.casting(&draw.sources, &ranges);
             if kept.is_empty() {
                 continue;
             }
@@ -4176,7 +4199,7 @@ impl FrameRecorder<'_> {
             }
         }
         for draw in &self.mesh_asset_draws {
-            let kept = ranges(&draw.sources);
+            let kept = self.casting(&draw.sources, &ranges);
             if kept.is_empty() {
                 continue;
             }
@@ -9149,6 +9172,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         };
         let mut scene = RenderScene::empty((64, 64));
         scene.meshes = vec![
@@ -9225,6 +9249,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         };
         assert_eq!(instance_material(&base), [0.3, 0.7, 2.0, 0.0]);
         assert_eq!(
@@ -9585,6 +9610,7 @@ mod tests {
                 flash: 0.0,
                 flash_color: [1.0; 3],
                 bone_offset: 0,
+                cast_shadows: true,
             });
         }
 
@@ -9707,6 +9733,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         };
         let empty = MeshData {
             positions: vec![],
@@ -9802,6 +9829,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         }
     }
 
@@ -9819,6 +9847,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         }
     }
 
@@ -10104,6 +10133,7 @@ mod tests {
                 flash: 0.0,
                 flash_color: [1.0; 3],
                 bone_offset: 0,
+                cast_shadows: true,
             },
         ];
 
@@ -10142,6 +10172,7 @@ mod tests {
             flash,
             flash_color: [0.2, 0.3, 0.4],
             bone_offset: 0,
+            cast_shadows: true,
         }
     }
 
@@ -10461,6 +10492,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         };
 
         let mut scene = RenderScene::empty((w, h));
@@ -10567,6 +10599,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset,
+            cast_shadows: true,
         }
     }
 
@@ -10831,6 +10864,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         }];
         scene
     }
@@ -11088,6 +11122,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         }];
         scene
     }
@@ -11876,6 +11911,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         }
     }
 
@@ -12481,6 +12517,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         });
         scene
     }
@@ -15929,6 +15966,189 @@ mod tests {
         );
     }
 
+    /// Asserts the `cast_shadows` contract on `scene_with(occluder)`, where the occluder is a mesh
+    /// outside the camera frustum that shadows the visible floor at `probe`: with `cast_shadows` false
+    /// the frame is byte-identical to the frame without it, and with `true` the probe darkens.
+    fn assert_shadowless_occluder_is_absent(
+        renderer: &Renderer,
+        size: FrameSize,
+        probe: (u32, u32),
+        scene_with: impl Fn(Option<bool>) -> RenderScene,
+    ) {
+        let absent = renderer.render(&scene_with(None), size).expect("absent");
+        let silent = renderer
+            .render(&scene_with(Some(false)), size)
+            .expect("shadowless occluder");
+        let casting = renderer
+            .render(&scene_with(Some(true)), size)
+            .expect("casting occluder");
+        assert_eq!(
+            silent.rgba, absent.rgba,
+            "a shadowless occluder must leave the frame byte-identical to no occluder"
+        );
+        let (lit, dark) = (
+            luma(&absent, probe.0, probe.1),
+            luma(&casting, probe.0, probe.1),
+        );
+        assert!(
+            dark * 10 < lit * 8,
+            "sanity: the same occluder casting must darken the probe: {lit} -> {dark}"
+        );
+    }
+
+    /// A floor seen from (0, 3, 11) and, when `slab` is set, a slab behind and above that camera (out
+    /// of frame) whose shadow a sun travelling toward -Z throws onto the visible floor at z = 6.5.
+    /// The flag is the slab's `cast_shadows`.
+    fn shadow_camera_scene(w: u32, h: u32, slab: Option<bool>) -> RenderScene {
+        let mut scene = RenderScene::empty((w, h));
+        scene.ambient = [0.05, 0.05, 0.05];
+        let eye = Vec3::new(0.0, 3.0, 11.0);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::perspective_rh(
+                60.0_f32.to_radians(),
+                w as f32 / h as f32,
+                0.1,
+                100.0,
+            ),
+            position: eye,
+        };
+        scene.meshes = vec![ground(20.0)];
+        if let Some(cast) = slab {
+            let mut slab = cube(
+                Vec3::new(0.0, 8.0, 16.0),
+                Vec3::new(40.0, 0.4, 6.0),
+                [0.4, 0.4, 0.4, 1.0],
+            );
+            slab.cast_shadows = cast;
+            scene.meshes.push(slab);
+        }
+        scene
+    }
+
+    /// **`cast_shadows: false` keeps an instance out of the anchored sun map.**
+    #[test]
+    fn needs_gpu_a_shadowless_instance_writes_no_anchored_sun_shadow() {
+        let Some(renderer) = skip_or_renderer("a_shadowless_instance_anchored_sun") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let build = |slab| {
+            let mut scene = shadow_camera_scene(w, h, slab);
+            scene.sun = Some(test_sun(
+                Vec3::new(0.0, -1.0, -1.0),
+                Vec3::splat(3.0),
+                0.002,
+            ));
+            scene
+        };
+        let probe = pixel_of(&build(None), Vec3::new(0.0, 0.0, 6.5), w, h);
+        assert_shadowless_occluder_is_absent(&renderer, FrameSize::native(w, h), probe, build);
+    }
+
+    /// **`cast_shadows: false` keeps an instance out of every sun cascade.**
+    #[test]
+    fn needs_gpu_a_shadowless_instance_writes_no_cascade_shadow() {
+        let Some(renderer) = sun_renderer("a_shadowless_instance_cascades", 512, 3) else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let build = |slab| {
+            let mut scene = shadow_camera_scene(w, h, slab);
+            let mut sun = test_sun(Vec3::new(0.0, -1.0, -1.0), Vec3::splat(3.0), 0.002);
+            sun.cascades = Some(crate::scene::SunCascadeConfig {
+                count: 3,
+                shadow_distance: 20.0,
+                splits: None,
+                shadow_near: -100.0,
+                shadow_far: 100.0,
+            });
+            scene.sun = Some(sun);
+            scene
+        };
+        let probe = pixel_of(&build(None), Vec3::new(0.0, 0.0, 6.5), w, h);
+        assert_shadowless_occluder_is_absent(&renderer, FrameSize::native(w, h), probe, build);
+    }
+
+    /// A top-down floor lit by a shadow-granted local light 40 m up, with a slab between the light and
+    /// the floor but above the camera (so it is behind the near plane). `point` picks a point light
+    /// over a spot.
+    fn local_shadow_scene(w: u32, h: u32, slab: Option<bool>, point: bool) -> RenderScene {
+        let mut scene = local_receive_scene(w, h);
+        let at = Vec3::new(0.0, 40.0, 0.0);
+        let shadow = Some(crate::scene::LocalShadowData {
+            bias: 0.02,
+            near: 0.1,
+        });
+        if point {
+            let mut light = point_light(at, 150.0, 60.0);
+            light.shadow = shadow;
+            scene.lights = vec![light];
+        } else {
+            let mut spot = casting_spot(at, 60.0, true);
+            spot.intensity = 150.0;
+            spot.shadow = shadow;
+            scene.spot_lights = vec![spot];
+        }
+        if let Some(cast) = slab {
+            let mut slab = cube(
+                Vec3::new(0.0, 35.0, 0.0),
+                Vec3::new(8.0, 0.4, 8.0),
+                [0.4, 0.4, 0.4, 1.0],
+            );
+            slab.cast_shadows = cast;
+            scene.meshes.push(slab);
+        }
+        scene
+    }
+
+    /// **`cast_shadows: false` keeps an instance out of the local shadow atlas**, for a spot and a
+    /// point light alike.
+    #[test]
+    fn needs_gpu_a_shadowless_instance_writes_no_local_shadow() {
+        let Some(renderer) = skip_or_renderer("a_shadowless_instance_local_shadow") else {
+            return;
+        };
+        let (w, h) = (96u32, 96u32);
+        for point in [false, true] {
+            let probe = pixel_of(&local_shadow_scene(w, h, None, point), Vec3::ZERO, w, h);
+            assert_shadowless_occluder_is_absent(
+                &renderer,
+                FrameSize::native(w, h),
+                probe,
+                |slab| local_shadow_scene(w, h, slab, point),
+            );
+        }
+    }
+
+    /// **`cast_shadows: false` keeps an instance out of drop-shadow occlusion.** The plate no longer
+    /// shields the floor beneath it, exactly as if it were listed in `exclude`.
+    #[test]
+    fn needs_gpu_a_shadowless_plate_does_not_shield_a_drop_shadow() {
+        let Some(renderer) = skip_or_renderer("a_shadowless_plate_drop_shadow") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let size = FrameSize::native(w, h);
+        let render_floor = |cast: bool| {
+            let mut bare = drop_shadow_fixture(w, h, true);
+            bare.meshes[1].cast_shadows = cast;
+            let mut shadowed = bare.clone();
+            shadowed.drop_shadows.push(fixture_drop_shadow(Vec::new()));
+            let lit = renderer.render(&bare, size).expect("a bare render");
+            let dark = renderer.render(&shadowed, size).expect("a shadowed render");
+            let (fx, fy) = pixel_of(&bare, Vec3::new(0.8, 0.0, 0.5), w, h);
+            (luma(&lit, fx, fy), luma(&dark, fx, fy))
+        };
+        let (lit, dark) = render_floor(true);
+        assert_eq!(dark, lit, "sanity: a casting plate shields the floor");
+        let (lit, dark) = render_floor(false);
+        assert!(
+            dark * 10 < lit * 6,
+            "a shadowless plate lets the shadow reach the floor: {lit} -> {dark}"
+        );
+    }
+
     /// Renders the plate fixture bare and with a drop shadow excluding `exclude`, and returns the
     /// luma of the floor under the plate and of the plate's top in each.
     fn plate_lumas(renderer: &Renderer, exclude: Vec<u32>) -> ((u32, u32), (u32, u32)) {
@@ -17415,6 +17635,7 @@ mod tests {
             flash: 0.0,
             flash_color: [1.0; 3],
             bone_offset: 0,
+            cast_shadows: true,
         }
     }
 

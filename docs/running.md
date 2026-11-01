@@ -101,7 +101,8 @@ sticks in `[-1, 1]` and triggers in `[0, 1]`, or the inject is refused (`L3005`)
 **Verify what you drew — without a screenshot.** `render.bounds` (MCP tool `render_bounds`) is the
 text-legible answer to "did my sprite land where I meant". It returns, for every renderable entity
 under the current camera, its world-space AABB and its `screen_rect` in pixels (`{x, y, w, h}` at the
-render size), plus `on_screen` — and a `null` rect when the thing is behind the camera. Pure CPU, so
+render size), plus `on_screen` — and a `null` rect when the thing is behind the camera. An entity hidden by
+`Visibility` is still reported, with `hidden: true` (the key is absent otherwise). Pure CPU, so
 it answers even with no GPU. A voxel model or assembly is boxed by its grid, a mesh, sculpt or
 character by its vertex extent at rest (not a posed or animated one); a document that does not load
 gets a unit box instead, so the query still answers for a broken scene. A first-render geometry mistake becomes a diff you can read:

@@ -93,6 +93,10 @@ pub struct MeshInstance {
     /// `1`. Rides the vertex shader as `fade.z`; an unskinned instance's shader branch never reads the
     /// palette, so `0` is render-identical to today's unskinned draw.
     pub bone_offset: u32,
+    /// Whether this instance writes the sun map, cascades, local shadow atlas and drop-shadow
+    /// occlusion; `true` for every instance a Visibility-free scene extracts. CPU-only: it never
+    /// reaches the GPU instance data.
+    pub cast_shadows: bool,
 }
 
 /// A single sprite/billboard: a textured, tinted quad in world space.

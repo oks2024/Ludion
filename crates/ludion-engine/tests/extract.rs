@@ -1685,20 +1685,83 @@ fn a_hidden_root_extracts_none_of_its_tree() {
     assert!(!shown.meshes.is_empty() && !shown.lights.is_empty());
 }
 
-/// A world with no `Visibility` extracts identically twice (the gate path), and a shadowless root
-/// alone removes nothing from the scene.
+fn shadowless() -> Visibility {
+    Visibility {
+        cast_shadows: false,
+        ..Visibility::default()
+    }
+}
+
+/// A world with no `Visibility` extracts identically twice (the gate path) with every mesh casting,
+/// and a shadowless root alone removes nothing from the scene: it only clears `cast_shadows` on the
+/// meshes under it.
 #[test]
 fn a_visibility_free_world_extracts_unchanged() {
     let world = visibility_world(None);
     let a = extract(&world, (320, 180), Path::new(".")).unwrap();
     let b = extract(&world, (320, 180), Path::new(".")).unwrap();
     assert_eq!(a, b);
-    let shadowless = visibility_world(Some(Visibility {
-        cast_shadows: false,
-        ..Visibility::default()
-    }));
-    let c = extract(&shadowless, (320, 180), Path::new(".")).unwrap();
-    assert_eq!(a, c, "cast_shadows alone does not hide anything");
+    assert!(a.meshes.iter().all(|m| m.cast_shadows));
+    let c = extract(
+        &visibility_world(Some(shadowless())),
+        (320, 180),
+        Path::new("."),
+    )
+    .unwrap();
+    assert_eq!(a.meshes.len(), c.meshes.len());
+    assert!(c.meshes.iter().all(|m| !m.cast_shadows));
+    let mut recast = c.clone();
+    for mesh in &mut recast.meshes {
+        mesh.cast_shadows = true;
+    }
+    assert_eq!(a, recast, "cast_shadows alone does not hide anything");
+}
+
+/// `cast_shadows: false` on a root reaches its child's instance and every part of an assembly under
+/// it; a hidden ancestor still removes the mesh entirely.
+#[test]
+fn cast_shadows_inherits_to_children_and_assembly_parts() {
+    let dir = assembly_dir("cast-shadows");
+    let mut world = World::new();
+    let root = world.spawn();
+    world.insert(root, Transform::default()).unwrap();
+    world.insert(root, shadowless()).unwrap();
+    let child = world.spawn();
+    world.insert(child, Transform::default()).unwrap();
+    world.insert(child, ludion_ecs::Parent(root)).unwrap();
+    world
+        .insert(
+            child,
+            Mesh {
+                shape: MeshSource::Assembly("models/fixture.assembly.yaml".to_string()),
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+    let plain = world.spawn();
+    world.insert(plain, Transform::default()).unwrap();
+    world.insert(plain, Mesh::default()).unwrap();
+    let scene = extract(&world, (320, 180), &dir).unwrap();
+    assert_eq!(
+        scene.meshes.len(),
+        3,
+        "two assembly parts and the plain cube"
+    );
+    assert!(!scene.meshes[0].cast_shadows && !scene.meshes[1].cast_shadows);
+    assert!(scene.meshes[2].cast_shadows);
+
+    world
+        .insert(
+            root,
+            Visibility {
+                visible: false,
+                cast_shadows: false,
+            },
+        )
+        .unwrap();
+    let scene = extract(&world, (320, 180), &dir).unwrap();
+    assert_eq!(scene.meshes.len(), 1, "hidden wins over the shadow flag");
+    assert!(scene.meshes[0].cast_shadows);
 }
 
 /// A hidden `GiDynamic` light is absent from the scene's lights.
