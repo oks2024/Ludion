@@ -2,8 +2,8 @@
 //!
 //! These drive a real [`Server`](ludion_server::Server) with a real [`Client`], because the whole
 //! point of the wave is that the profiler is a *wire* capability, not an in-process one. The engine
-//! they serve registers one named system so the per-system section has something to report — the
-//! built-in registry has no systems, which is exactly the gap a live capture exists to close.
+//! they serve registers one named system so the per-system section has a game system to report beside
+//! the engine's always-installed built-ins.
 //!
 //! Timing discipline: the sim is paced to a high speed so a 60-frame window closes in well under a
 //! second, and every wait is a generous deadline rather than a sleep — flaky tests are P0. The two
@@ -24,6 +24,10 @@ const SCENE: &str = "format: 1\nseed: 7\nentities: []\n";
 
 /// The name the served engine's one system is registered under.
 const SYSTEM: &str = "profiled_noop";
+
+/// The served schedule, in run order: the game's system between the engine's two always-installed
+/// built-ins.
+const SCHEDULE: [&str; 3] = ["path_follow", SYSTEM, "camera_rig"];
 
 /// How long a window may take to arrive before the test calls it a failure. Far above the ~0.2 s a
 /// 60-frame window takes at the speed these tests set — it bounds a stall, it is never the metric.
@@ -117,7 +121,7 @@ fn needs_gpu_subscribing_streams_gapless_windows_with_medians_and_samples() {
                 .iter()
                 .map(|s| s.name.as_str())
                 .collect::<Vec<_>>(),
-            [SYSTEM],
+            SCHEDULE,
         );
         // The live tick's two sequential spans, in their fixed order.
         assert_eq!(
@@ -133,7 +137,7 @@ fn needs_gpu_subscribing_streams_gapless_windows_with_medians_and_samples() {
         let samples = &window.samples;
         assert_eq!(samples.frames.len() as u64, window.frames);
         assert_eq!(samples.frame_total_ms.len() as u64, window.frames);
-        assert_eq!(samples.system_names, [SYSTEM]);
+        assert_eq!(samples.system_names, SCHEDULE);
         assert_eq!(samples.system_ms[0].len() as u64, window.frames);
         assert_eq!(samples.frames[0], window.first_frame);
         // No `frames` subscription, so no frame was ever encoded or sent: the server's transport
@@ -185,7 +189,7 @@ fn needs_gpu_a_capture_answers_with_a_report_while_windows_keep_streaming() {
             .iter()
             .map(|s| s.name.as_str())
             .collect::<Vec<_>>(),
-        [SYSTEM],
+        SCHEDULE,
         "a capture reports the running game's own systems — the gap the offline driver cannot close"
     );
     let samples = report.samples.expect("include_samples was set");
