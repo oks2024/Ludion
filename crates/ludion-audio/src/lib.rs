@@ -117,7 +117,7 @@ fn voice_limits(caps: VoiceCaps) -> VoiceLimits {
 
 /// A running audio sink. Its session runs on a pooled playback thread and ends on its own when the
 /// engine's [`AudioMessage`] sender is dropped (the channel disconnects). Dropping the sink detaches
-/// it and never waits ([`wait`](Self::wait) is the blocking end), so a host's teardown does not stand
+/// it and never waits ([`wait_timeout`](Self::wait_timeout) is the blocking end), so a host's teardown does not stand
 /// on the audio device opening and closing.
 ///
 /// **Playback threads never exit.** cpal's WASAPI backend caches its device enumerator process-wide,

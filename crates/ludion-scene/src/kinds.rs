@@ -266,7 +266,7 @@ pub(crate) fn peek_kind_checked(source: &str) -> Result<Option<String>, Diagnost
         }))
 }
 
-/// What a textual scan says about a document's top-level `kind` — see [`sniff_kind`].
+/// What a textual scan says about a document's top-level `kind` — see `sniff_kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KindSniff<'a> {
     /// No line could be a top-level `kind` key: the full peek would answer `Ok(None)` or `Err`.
