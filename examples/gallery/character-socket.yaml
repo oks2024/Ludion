@@ -1,0 +1,193 @@
+# Feature: a prop rides a joint of a skinned character. Three mannequins play the same `run` cycle
+# at staggered `started` frames (0, 13, 27 of a 40-tick loop), each with a cube parented to its
+# `lower_arm_l` joint through `ParentJoint`. Rendered at tick 60 the row shows three phases of the cycle,
+# and the prop follows the left hand in each (`ludion docs character-animation`, Sockets).
+format: 1
+name: character-socket - a prop held in the mannequin left hand across three run phases
+seed: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.8
+          - 5.0
+        rotation:
+          - -4.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 3.0
+          - 3.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 4.0
+        range: 20.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 8.0
+          - 1.0
+          - 4.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.57
+          - 0.6
+          - 1.0
+  - name: mannequin-0
+    components:
+      Transform:
+        translation:
+          - -1.2
+          - 0.0
+          - 0.0
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+        color:
+          - 0.6
+          - 0.45
+          - 0.35
+          - 1.0
+        roughness: 0.8
+      Animation:
+        clip: run
+        started: 0
+  - name: prop-0
+    components:
+      Parent:
+        index: 3
+        generation: 0
+      ParentJoint:
+        joint: lower_arm_l
+      Transform:
+        translation:
+          - 0.0
+          - 0.2
+          - 0.0
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.08
+          - 0.25
+          - 0.08
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.15
+          - 0.55
+          - 1.0
+  - name: mannequin-1
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+        color:
+          - 0.6
+          - 0.45
+          - 0.35
+          - 1.0
+        roughness: 0.8
+      Animation:
+        clip: run
+        started: 13
+  - name: prop-1
+    components:
+      Parent:
+        index: 5
+        generation: 0
+      ParentJoint:
+        joint: lower_arm_l
+      Transform:
+        translation:
+          - 0.0
+          - 0.2
+          - 0.0
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.08
+          - 0.25
+          - 0.08
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.15
+          - 0.55
+          - 1.0
+  - name: mannequin-2
+    components:
+      Transform:
+        translation:
+          - 1.2
+          - 0.0
+          - 0.0
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+        color:
+          - 0.6
+          - 0.45
+          - 0.35
+          - 1.0
+        roughness: 0.8
+      Animation:
+        clip: run
+        started: 27
+  - name: prop-2
+    components:
+      Parent:
+        index: 7
+        generation: 0
+      ParentJoint:
+        joint: lower_arm_l
+      Transform:
+        translation:
+          - 0.0
+          - 0.2
+          - 0.0
+        rotation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.08
+          - 0.25
+          - 0.08
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.15
+          - 0.55
+          - 1.0

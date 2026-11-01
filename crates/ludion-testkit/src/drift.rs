@@ -34,6 +34,8 @@
 //! required (there is no honest default drive), `max_force` and anything added later must default.
 //! `SkinBone` needs the same treatment: its `skin`/`bone` name a specific joint with no honest
 //! default, so it is seeded rather than exempted, and anything added later must default.
+//! `ParentJoint` is seeded for the same reason: its `joint` names a specific joint, and an empty
+//! default name would load without error.
 //! `PrefabInstance` is seeded the same way: its `source`, `part` and `root` are provenance
 //! `spawn_prefab` always writes, with no honest default.
 
@@ -58,6 +60,7 @@ fn probe_seed(name: &str) -> Value {
         }),
         "JointMotor" => json!({ "target": [0.0], "stiffness": 0.0, "damping": 0.0 }),
         "SkinBone" => json!({ "skin": { "index": 0, "generation": 0 }, "bone": "b" }),
+        "ParentJoint" => json!({ "joint": "j" }),
         "PrefabInstance" => json!({
             "source": "p.prefab.yaml",
             "part": "a",

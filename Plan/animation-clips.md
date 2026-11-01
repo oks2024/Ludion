@@ -306,7 +306,7 @@ clip file layout are settled in W1 and W2 and recorded in Status.
   sitting rejects.
 - Proportion retargeting.
 - Morph targets (they stay `L1202`).
-- A sim-side bone query. **Trigger:** gameplay that must read a bone.
+- A sim-side bone query. **Trigger:** gameplay that must read a bone. `posed_joint_world` (Clockout 0028) is a presentation read, refused from sim with `L0028`, so it does not fire this trigger.
 - Switching a skin between clips and `SkinBone` at runtime (a death ragdoll).
 - Quaternion storage (decision 8's trigger) and a compact keyframe spelling (decision 9's trigger).
 

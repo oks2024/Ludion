@@ -53,13 +53,14 @@ The runnable version — a turret yawing on a moving platform, a prop grabbed by
 | a chain deeper than 64 | The entity reads as a root — `L1220` |
 | `reparent` that closes a loop | Refused, nothing changes — `L1224` |
 | `reparent` past depth 64 | Refused, nothing changes — `L1260` |
+| `ParentJoint` under a skinned `Parent` | `Transform` is local to the joint: sim reads compose its rest pose, the draw its posed pose (`ludion docs character-animation`); a non-skin parent `L1318`, an unknown joint `L1319` |
 | a scene whose links form a loop | `L1035` at load and `check-scene`; `scene.save` refuses to write one — `L1018` |
 
 `L1221` and `L1222` are reported by `check-scene` as well as at runtime, so a bad scene fails before it runs.
 
 ## Gotchas
 
-- **A held object goes kinematic first.** `reparent` refuses a `rigid` body under a parent (`L1221`), so a grab is `collider.body = Body::Kinematic` then `reparent(world, prop, Some(hand), Keep::World)`; a throw is `reparent(world, prop, None, Keep::World)`, the body back to `Body::Rigid(..)`, then a `Velocity` write. The example does exactly this.
+- **A held object goes kinematic first.** `reparent` refuses a `rigid` body under a parent (`L1221`), so a grab is `collider.body = Body::new_kinematic()` then `reparent(world, prop, Some(hand), Keep::World)`; a throw is `reparent(world, prop, None, Keep::World)`, the body back to `Body::Rigid(..)`, then a `Velocity` write. The example does exactly this.
 - **`Keep::World` keeps the world position exactly; only a shear is lossy.** A rotated child under a non-uniform accumulated scale has a world transform no `Transform` can hold (`WorldPose::sheared`), so its rotation and scale come out as the closest rigid pose (`Keep::World` and the physics pose both use it). Author uniform scales on a parent that rotates its children.
 - **Raw `Parent` writes teleport.** Only `reparent` keeps the world pose; setting `Parent` by `component.set` moves the entity to wherever its old local `Transform` lands under the new parent.
 - **`move_and_slide` answers in world coordinates.** For a mover under a `Parent`, convert the returned delta into the parent's frame before adding it to the local `Transform`, or keep movers as roots (`ludion docs collision`).
@@ -73,3 +74,4 @@ The runnable version — a turret yawing on a moving platform, a prop grabbed by
 - `ludion docs scene-transitions` — carrying a subtree across a switch.
 - `ludion docs debug-draw` — the `hierarchy` category.
 - `ludion docs wire-protocol` — `entity.reparent`, `query.entities` `world`, `entity.destroy` `descendants`.
+- `ludion docs character-animation` — sockets: `ParentJoint` on a skinned `Parent`.

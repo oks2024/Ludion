@@ -41,6 +41,17 @@
 > override) through the bare path — mid-tumble, physics-driven, not the authored A-pose. Decision
 > 8 records automatic anchor derivation as not built. No wire, golden (other than the one new one), or
 > schema-hash change.
+>
+> **Sockets (Clockout 0028, 2026-11-01):** `ParentJoint { joint }` attaches an entity to a joint of its
+> skinned parent. Sim reads compose the joint's rest pose (no hash depends on clip data); `extract` draws
+> the posed joint, and `posed_joint_world` returns it to presentation code (`L0028` from sim). The
+> `character-socket` gallery golden proves three run phases. Deferred, each with its trigger: a `Mat4`
+> variant of `posed_joint_world` for sheared poses (a sheared socket); a `SkinBone` part memoized before
+> the socket pre-pass keeps the rest level (content nesting one); `posed_joint_world` on a skin that is an
+> animated prefab part composes the part's sim transform, not its clip-animated local, while the draw does
+> follow it (a consumer); `reparent(Keep::World)` on a `ParentJoint` child keeps the rest world, not the
+> drawn pose (a detach that must keep the drawn pose; the idiom is `posed_joint_world` plus a fresh
+> presentation spawn).
 > Every claim of current-code fact below was read from the tree on 2026-09-26; file:line pointers are
 > of that date, so re-grep before editing.
 

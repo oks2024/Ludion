@@ -41,7 +41,7 @@ clips:
   leaves out keeps its bind value. Rotation interpolates as a quaternion slerp (no gimbal flips), so
   a segment turning 180° or more on an axis, or whose axes combine past half a circle, is
   `L1142`: split it. `scale` composes down the joint chain, and the binding's `speed` multiplies
-  `Animation.speed`. An empty or unbound clip name draws the rest pose. The pose is render-side only — never hashed or recorded. A skin with `SkinBone`
+  `Animation.speed`. An empty or unbound clip name draws the rest pose. The pose is never hashed or recorded, and sim code cannot read it; presentation code reads it through `posed_joint_world` (§Sockets). A skin with `SkinBone`
   followers is posed by them instead. Lighting follows the pose: a joint with a non-uniform scale
   bends the skin's normals the way it bends the surface.
 - Editing the character, its mesh or any clip re-reads it (the pose; `AnimationEvents` picks up retimed events at the next load, restore or scene switch). `ludion check-scene <file>` loads and
@@ -107,6 +107,36 @@ clips:
 - Write `Animation` only when the choice changes, and stamp with `ctx.game_frame`, never `ctx.frame`
   (a held gameplay clock would restart the clip late).
 
+## Sockets
+
+`ParentJoint` makes a prop follow a joint of a skinned mesh. The parent is the skin
+(`shape: character`, or `asset` with `joints:`); the child's `Transform` is local to the joint's model transform.
+
+```yaml
+- name: baton
+  components:
+    Parent: { index: 3, generation: 0 }   # the mannequin entity
+    ParentJoint: { joint: lower_arm_l }
+    Transform: { translation: [0.0, 0.2, 0.0] }   # along the bone, to the hand
+    Mesh: { shape: cube, color: [1.0, 0.15, 0.55, 1.0] }
+```
+
+- **Rest vs drawn.** Sim reads (`world_transform`, `world_affine`, physics, `reparent`) compose the joint's
+  **rest** pose, so no `WorldHash` depends on clip data. The draw composes the **posed** joint — the clip,
+  the crossfade, the held tick of `hold` and any `SkinBone` followers — and the child's descendants ride on it.
+- Under present interpolation the socket child and its subtree take the skin's blend key, so the prop
+  never swims against the body.
+- `posed_joint_world(world, skin, joint, now) -> Result<Option<WorldPose>, Diagnostic>` is presentation
+  and host only; a sim system gets `L0028`. `Ok(None)` means a dead skin, no `Transform`, not a skin, or an
+  unknown joint; a skin without `Animation` returns the rest pose. Idiom: on the hit tick a presentation
+  system spawns the thrown prop at that pose with `spawn_presentation`.
+- `L1318` (no `Parent`, or the parent is not a skinned mesh) and `L1319` (unknown joint; the help names the
+  nearest) fire at load, `check-scene` and prefab spawn. A runtime miss composes as a plain `Parent`, silently.
+- Author a uniform skin scale: `WorldPose` is TRS, so a sheared pose is lossy. `reparent(.., Keep::World)`
+  on a socket child keeps the rest-pose world, not the drawn one.
+- Example: `examples/gallery/character-socket.yaml` — three phases of `run`, a prop on each `lower_arm_l`;
+  `ludion render --scene examples/gallery/character-socket.yaml --frames 60 --out socket.png`.
+
 ## Strips
 
 `ludion render --model <x>.character.yaml --clip <name>` (or `--crossfade`) renders a strip without
@@ -130,6 +160,7 @@ cargo run -p ludion-testkit --example character_cycle -- --replay-verify example
 
 ## Next
 
+- `ludion docs hierarchy` — `Parent` and `ParentJoint` rules.
 - `ludion docs voxel-animation` — the clip strips (`--clip`, `--crossfade`) and rigid assemblies.
 - `ludion docs components` — the `Animation` component's fields and defaults.
 - `ludion docs sprite-animation` — the same component over a `Sprite`'s flipbook.
