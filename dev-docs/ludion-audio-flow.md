@@ -52,8 +52,8 @@ their envelope and bus master, the music, `soft_limit`, clamp, convert. Voice id
 `Arc` pointer; `Router::superseded` keeps evicted buffers off the callback's drop. `advance_into` moves the one cursor: a one-shot past its end drops; a loop wraps.
 
 When the engine's sender is dropped, `serve` returns and `run` drops the stream. The thread returns to
-the idle pool and drops the session's `done` sender; `AudioSink::drop` waits on that, so tearing down
-blocks until playback has stopped.
+the idle pool and drops the session's `done` sender. Dropping the `AudioSink` only detaches, so a host's
+teardown never waits on the device; `AudioSink::wait` is the blocking end that waits on `done`.
 
 The **silent path** (`drain_silently`) drains every event to disconnect without touching a device;
 its `SilentCheck` runs `check_message` once per file version and prints the device path's warning.

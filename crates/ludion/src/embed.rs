@@ -890,16 +890,12 @@ fn run_boot(boot: Boot) -> bool {
         _instance = Some(instance);
     }
 
-    // `_audio_sink` stays in scope for the whole host (dropping it waits for its session to end), and
-    // the engine is re-bound after it so it drops *first*: the session ends only once the engine's
-    // audio sender is gone, so an early return with the engine alive would hang the wait.
     let project_root = engine.project_root().to_path_buf();
     let caps = match host::voice_caps(&project_root) {
         Ok(caps) => caps,
         Err(diagnostic) => return fail(diagnostic),
     };
-    let _audio_sink = host::wire_audio(&mut engine, project_root.clone(), caps);
-    let engine = engine;
+    host::wire_audio(&mut engine, project_root.clone(), caps);
 
     // From here the boot only serves its intake: transitions are answered, not queued.
     running.store(true, Ordering::Release);
@@ -912,7 +908,7 @@ fn run_boot(boot: Boot) -> bool {
                 .listen
                 .as_deref()
                 .expect("a listener host names its address");
-            let (ok, sim_stuck) = host_listener(
+            return host_listener(
                 engine,
                 addr,
                 host::HostOptions {
@@ -927,12 +923,6 @@ fn run_boot(boot: Boot) -> bool {
                 &stop,
                 &project_root,
             );
-            if sim_stuck {
-                // The wedged sim thread, detached, still owns the engine and so the audio sender
-                // the sink's drop waits on: dropping the sink here would hang this return.
-                std::mem::forget(_audio_sink);
-            }
-            return ok;
         }
         StopWait::Sim(shutdown) => shutdown,
     };
@@ -969,7 +959,7 @@ fn parse_run_argv(argv: &[String]) -> Option<crate::RunArgs> {
 
 /// Binds the wire listener and forwards the core's intake into it until stop, `engine.shutdown`, or
 /// the core's intake closes; then shuts the server down cleanly, flushing any armed recording.
-/// Returns whether it ended well, and whether the sim thread was left detached and stuck (`L4022`).
+/// Returns whether it ended well.
 #[cfg(feature = "wire")]
 fn host_listener(
     engine: Engine,
@@ -978,10 +968,10 @@ fn host_listener(
     intake: &Receiver<StampedCommand>,
     stop: &Receiver<()>,
     project_root: &Path,
-) -> (bool, bool) {
+) -> bool {
     let server = match ludion_server::Server::bind(engine, addr) {
         Ok(server) => server,
-        Err(diagnostic) => return (fail(diagnostic), false),
+        Err(diagnostic) => return fail(diagnostic),
     };
     let _asset_watch = host::watch_project(&server, project_root);
     host::announce(&server, &opts);
@@ -999,11 +989,8 @@ fn host_listener(
         }
     }
     match server.shutdown() {
-        Some(diagnostic) => {
-            let stuck = diagnostic.code == code::SIM_THREAD_STUCK;
-            (fail(diagnostic), stuck)
-        }
-        None => (true, false),
+        Some(diagnostic) => fail(diagnostic),
+        None => true,
     }
 }
 

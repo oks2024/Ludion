@@ -95,14 +95,14 @@ const HISTORY = path.join(REPO_ROOT, 'target', 'check-history.jsonl');
 const LOCK = path.join(REPO_ROOT, 'target', 'check.lock');
 // Cargo never prunes stale artifacts, and macOS's default unpacked split-debuginfo leaves a loose `.o`
 // per codegen unit in `target/debug/deps`. Past ~100k entries CoreAudio's per-boot directory scan
-// makes the embed/ffi boot tests fail with L4022 (dev-docs/test-box-failures.md). A warning only.
+// slows every audio boot (dev-docs/test-box-failures.md). A warning only.
 const DEPS_WARN_FILES = Number(process.env.LUDION_DEPS_WARN_FILES ?? 60000);
 function warnIfDepsBloated() {
   const deps = path.join(REPO_ROOT, 'target', 'debug', 'deps');
   if (!existsSync(deps)) return;
   const count = readdirSync(deps).length;
   if (count > DEPS_WARN_FILES) {
-    console.log(`${YELLOW}check: target/debug/deps holds ${count} files (warn past ${DEPS_WARN_FILES}) — macOS boot tests may fail with L4022. Run \`cargo sweep --time 7\` or \`cargo clean\`.${RST}`);
+    console.log(`${YELLOW}check: target/debug/deps holds ${count} files (warn past ${DEPS_WARN_FILES}) — macOS audio boots slow down. Run \`cargo sweep --time 7\` or \`cargo clean\`.${RST}`);
   }
 }
 
@@ -114,7 +114,7 @@ function warnIfDepsBloated() {
 // `path_flag_outside_repo_is_l0008` and `devdocs_outside_a_checkout_is_l0008_for_every_form`) need
 // scratch outside any checkout. Only these steps: build tools keep the real temp dir.
 const TEST_TEMP = path.join(os.tmpdir(), `ludion-check-${createHash('sha256').update(REPO_ROOT).digest('hex').slice(0, 8)}${SCOPED ? `-scope-${process.pid}` : ''}`);
-const TEST_TEMP_STEPS = new Set(['test', 'doctest', 'vigil-test', 'vigil-doctest', 'fps-gate', 'tauri-test', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak', 'mobile', 'mobile-exclusive']);
+const TEST_TEMP_STEPS = new Set(['test', 'doctest', 'vigil-test', 'vigil-doctest', 'fps-gate', 'tauri-test', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak', 'mobile']);
 const IS_WINDOWS = process.platform === 'win32';
 const EXE = IS_WINDOWS ? '.exe' : '';
 const VIGIL = 'games/vigil';
@@ -409,9 +409,8 @@ const vigilClippyStep = { name: 'vigil-clippy', cmd: 'cargo', args: ['clippy', '
 // On a box carrying the reference GPU they also set `LUDION_REQUIRE_REFERENCE_ADAPTER=1`, so wgpu
 // picking another adapter fails the byte-exact goldens instead of skipping them (`referenceGpuEnv`).
 //
-// Both shapes leave out the exclusive tests (`fpsGateFilter`): the fps gates measure wall-clock fps and the
-// facade's embed/ffi tests wait a wall-clock stop grace (L4022), both of which the parallel lanes saturate,
-// so the `fps-gate` step runs them after every lane has finished.
+// Both shapes leave out the exclusive tests (`fpsGateFilter`): the fps gates measure wall-clock fps, which
+// the parallel lanes saturate, so the `fps-gate` step runs them after every lane has finished.
 // The hosted lane's test step: the `no-gpu` profile with the GPU forbidden (`.github/workflows/ci.yml`).
 const noGpuStep = { name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...SELECT, ...NO_TESTS, '--profile', 'no-gpu', '--no-fail-fast'], log: 'test.log', env: { LUDION_FORBID_GPU: '1' } };
 const referenceGpuEnv = () => {
@@ -423,7 +422,7 @@ const referenceGpuEnv = () => {
       ? { LUDION_REQUIRE_REFERENCE_ADAPTER: '1' } : {};
   } catch { return {}; }
 };
-const nextestStep = (fps) => ({ name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...SELECT, ...NO_TESTS, '--no-fail-fast', ...(fps.expr ? ['-E', `not (${fps.held})`] : [])], log: 'test.log', env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } });
+const nextestStep = (fps) => ({ name: 'test', cmd: 'cargo', args: ['nextest', 'run', ...SELECT, ...NO_TESTS, '--no-fail-fast', ...(fps.expr ? ['-E', `not (${fps.expr})`] : [])], log: 'test.log', env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } });
 // vigil's test lane takes the root lane's shape (the nextest `no-gpu` profile, nextest, or plain `cargo test`) and env.
 const vigilTestStep = (shape) => ({
   name: 'vigil-test', cwd: VIGIL, log: 'vigil-test.log',
@@ -447,12 +446,7 @@ function fpsGateFilter() {
   const prefix = expr.match(/test\(\/\^(\w+)\/\)/)?.[1];
   if (!bin || !prefix) return { error: `filter \`${expr}\` has no binary_id(=crate::binary) / test(/^prefix/) parts` };
   if (expr.includes('"')) return { error: `filter \`${expr}\` contains a double quote, which the Windows spawn cannot pass` };
-  // Every later exclusive override (the facade's embed/ffi tests) is held out of `test` and run in the
-  // same quiet tail: `@global` isolates only inside one nextest process, not from the parallel lanes.
-  const extra = toml.split('[[profile.default.overrides]]').filter((b) => b !== block && /^threads-required\s*=\s*"num-test-threads"/m.test(b))
-    .map((b) => ({ expr: b.match(/^filter\s*=\s*'([^'\n]+)'/m)?.[1], crate: b.match(/binary_id\(=([\w-]+)/)?.[1] }));
-  if (extra.some((e) => !e.expr || !e.crate || e.expr.includes('"'))) return { error: 'an exclusive `num-test-threads` override after the fps one needs a single-quoted, double-quote-free filter naming binary_id(=crate…)' };
-  return { expr, crate: bin[1], binary: bin[2], prefix, extra, held: [expr, ...extra.map((e) => e.expr)].join(' | ') };
+  return { expr, crate: bin[1], binary: bin[2], prefix };
 }
 let fpsGate = {};
 // The mobile feature set (Plan/ios-target.md): the facade with its default `wire` + `window`
@@ -461,13 +455,7 @@ let fpsGate = {};
 // aarch64-apple-ios where that target and the iPhoneOS SDK are installed; the facade's lib tests run in
 // the shipped and debug shapes too. Cargo-lock bound, so it rides
 // the cargo chain. Mirrors the `mobile feature set` step in .github/workflows/ci.yml.
-// Its facade lib tests hold out the exclusive embed/ffi ones (L4022 under load); `mobile-exclusive`
-// runs them in the quiet tail, from the same nextest override prefixes.
-const mobilePrefixes = () => fpsGate.extra.filter((e) => e.crate === 'ludion').flatMap((e) => [...e.expr.matchAll(/test\(\/\^([\w:]+)\/\)/g)].map((m) => m[1]));
-const mobileStep = () => {
-  const held = fpsGate.error ? [] : mobilePrefixes();
-  return { name: 'mobile', cmd: 'node', args: ['scripts/mobile-check.mjs', ...(held.length ? [`--hold=${held.join(',')}`] : [])], log: 'mobile.log' };
-};
+const mobileStep = () => ({ name: 'mobile', cmd: 'node', args: ['scripts/mobile-check.mjs'], log: 'mobile.log' });
 
 // The binaries the drift gates and the check-docs smoke run. Built once, then copied out of
 // `target/` so the gates can run beside clippy and the test build: nothing they run holds cargo's
@@ -848,7 +836,7 @@ function printHistory() {
 }
 
 // ── reporting ───────────────────────────────────────────────────────────────
-const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'mobile-exclusive', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
+const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
 const YELLOW = '\x1b[33m'; const GREEN = '\x1b[32m'; const RED = '\x1b[31m'; const DIM = '\x1b[2m'; const BOLD = '\x1b[1m'; const RST = '\x1b[0m';
 
 function line(r) {
@@ -1008,7 +996,7 @@ async function main() {
     const test = results.find((r) => r.name === 'test');
     if (noGpu) {
       results.push(skipped('fps-gate', '--no-gpu'));
-    } else if (scope && !fpsGate.error && ![fpsGate, ...fpsGate.extra].some((g) => scope.packages.includes(g.crate))) {
+    } else if (scope && !fpsGate.error && !scope.packages.includes(fpsGate.crate)) {
       results.push(outOfScope('fps-gate'));
     } else if (test?.skipped) {
       results.push(skipped('fps-gate', test.reason));
@@ -1016,18 +1004,9 @@ async function main() {
       results.push(verdict('fps-gate', 'fps-gate.log', false, `fps-gate: cannot read the filter from .config/nextest.toml: ${fpsGate.error}\nthe exclusive override must stay as scripts/lists-in-step.mjs expects`));
     } else {
       const args = (await hasNextest())
-        ? ['nextest', 'run', ...(scope ? [...new Set([fpsGate, ...fpsGate.extra].map((g) => g.crate).filter((c) => scope.packages.includes(c)))].flatMap((c) => ['-p', c]) : ['--workspace']), '--no-fail-fast', '-E', fpsGate.held]
+        ? ['nextest', 'run', ...(scope ? ['-p', fpsGate.crate] : ['--workspace']), '--no-fail-fast', '-E', fpsGate.expr]
         : ['test', ...(scope ? ['-p', fpsGate.crate] : ['--workspace']), '--test', fpsGate.binary, '--', fpsGate.prefix, '--test-threads=1'];
       results.push(await runStep({ name: 'fps-gate', cmd: 'cargo', args, log: 'fps-gate.log', env: { LUDION_REQUIRE_GPU: '1' } }));
-    }
-
-    // The mobile build's share of the held tests, in the same quiet tail; it still runs after a failed `mobile`.
-    const mobile = results.find((r) => r.name === 'mobile');
-    const held = fpsGate.error ? [] : mobilePrefixes();
-    if (!mobile || mobile.skipped || held.length === 0) {
-      results.push(skipped('mobile-exclusive', mobile?.skipped ? mobile.reason : 'nothing held'));
-    } else {
-      results.push(await runStep({ name: 'mobile-exclusive', cmd: 'node', args: ['scripts/mobile-check.mjs', `--only=${held.join(',')}`], log: 'mobile-exclusive.log' }));
     }
   }
 

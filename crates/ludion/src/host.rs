@@ -289,9 +289,8 @@ fn second_press(pressed: &AtomicBool) -> bool {
     pressed.swap(true, Ordering::Relaxed)
 }
 
-/// Wires `engine`'s audio-event sender to a playback sink rooted at `project_root` and returns the
-/// sink, which the caller keeps in scope for the whole host (dropping it waits for its session to
-/// end) and declares *before* the engine, so the engine's sender is gone by the time that wait runs.
+/// Wires `engine`'s audio-event sender to a playback sink rooted at `project_root`. The sink is
+/// detached: its session ends by itself once the engine's sender is gone.
 ///
 /// The engine emits `AudioEvent`s on the channel's sending half; the sink resolves and plays them
 /// under the content root, mixed down through the game's authored bus balance
@@ -305,17 +304,17 @@ pub(crate) fn wire_audio(
     engine: &mut Engine,
     project_root: PathBuf,
     caps: ludion_audio::VoiceCaps,
-) -> ludion_audio::AudioSink {
+) {
     let gains = engine.category_gains();
     let (audio_tx, audio_rx) = crossbeam_channel::unbounded();
     engine.set_audio_sender(audio_tx);
-    ludion_audio::AudioSink::spawn(
+    drop(ludion_audio::AudioSink::spawn(
         audio_rx,
         project_root,
         gains,
         caps,
         engine.seconds_per_tick(),
-    )
+    ));
 }
 
 /// The voice caps a game at `scene_dir` plays under: the `[audio]` table of the nearest `ludion.toml`

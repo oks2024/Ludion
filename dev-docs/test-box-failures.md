@@ -34,14 +34,15 @@ be performed on a file with a user-mapped section open"* when another process ho
   end when those steps all passed, kept for diagnosis otherwise. It is outside `target/` on purpose:
   ludion-cli's `docs.rs` tests need scratch outside any checkout. A targeted `cargo test` still
   writes `ludion-*` dirs to the real temp dir; delete them when no test runs.
-- **macOS embed/ffi boot tests fail with `L4022` under load when `target/debug/deps` holds a huge file
-  count (~190k):** CoreAudio's `AudioUnitInitialize` → `CSCheckFix` scans the executable's directory on
-  every audio boot, and nextest's parallel processes multiply the scan. Sweep or clean the target tree
-  (`cargo sweep --time 7`, or `cargo clean` on a tree already past ~100k files); never raise the
-  timeout. Cargo never prunes stale objects, and macOS's default `split-debuginfo = "unpacked"` leaves
-  a loose `.o` per codegen unit there. `split-debuginfo = "packed"` would stop that but triples the
-  incremental rebuild (dsymutil), so it is not set; `check.mjs` warns instead when the directory
-  passes `LUDION_DEPS_WARN_FILES` (default 60000).
+- **macOS audio boot is slow when `target/debug/deps` holds a huge file count (~190k):** CoreAudio's
+  `AudioUnitInitialize` → `CSCheckFix` scans the executable's directory on every audio boot, and
+  nextest's parallel processes multiply the scan. It slows the host's first sound and the device open,
+  but does not gate `Embedded::stop` (the sink's drop detaches). Sweep or clean the target tree
+  (`cargo sweep --time 7`, or `cargo clean` on a tree already past ~100k files). Cargo never prunes
+  stale objects, and macOS's default `split-debuginfo = "unpacked"` leaves a loose `.o` per codegen
+  unit there. `split-debuginfo = "packed"` would stop that but triples the incremental rebuild
+  (dsymutil), so it is not set; `check.mjs` warns instead when the directory passes
+  `LUDION_DEPS_WARN_FILES` (default 60000).
 - **A GPU test that ABORTs with `0xc0000409` (os error 1282) and prints nothing** is usually the NVIDIA
   driver killing the process after a TDR, not a Rust panic. Confirm in the Application event log:
   `Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddHours(-1)} | ? { $_.Message -match 'TDR has been detected' }`

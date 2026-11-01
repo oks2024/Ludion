@@ -41,7 +41,7 @@
 //! let seconds_per_tick = 1.0 / 60.0; // `engine.seconds_per_tick()`: times the music fades
 //! let caps = VoiceCaps::default(); // 4 per sound, 64 in all; a game overrides it in `ludion.toml`
 //! let _sink = AudioSink::spawn(rx, PathBuf::from("games/hello-paddle/scenes"), gains, caps, seconds_per_tick);
-//! // `_sink` drops (waiting for its session to end) once the engine's sender is gone.
+//! // Dropping `_sink` detaches it: the session ends by itself once the engine's sender is gone.
 //! ```
 
 mod music;
@@ -116,8 +116,9 @@ fn voice_limits(caps: VoiceCaps) -> VoiceLimits {
 }
 
 /// A running audio sink. Its session runs on a pooled playback thread and ends on its own when the
-/// engine's [`AudioMessage`] sender is dropped (the channel disconnects); dropping the sink waits for
-/// that end.
+/// engine's [`AudioMessage`] sender is dropped (the channel disconnects). Dropping the sink detaches
+/// it and never waits ([`wait`](Self::wait) is the blocking end), so a host's teardown does not stand
+/// on the audio device opening and closing.
 ///
 /// **Playback threads never exit.** cpal's WASAPI backend caches its device enumerator process-wide,
 /// inside the COM apartment of the first thread that asked for a device; a thread exit uninitializes
@@ -134,7 +135,7 @@ struct Session {
     gains: CategoryGains,
     caps: VoiceCaps,
     seconds_per_tick: f64,
-    /// Dropped when the session ends, which is what [`AudioSink`]'s drop waits on.
+    /// Dropped when the session ends, which is what [`AudioSink::wait`] waits on.
     done: Sender<()>,
 }
 
@@ -184,10 +185,10 @@ impl AudioSink {
         }
         AudioSink { done }
     }
-}
 
-impl Drop for AudioSink {
-    fn drop(&mut self) {
+    /// Blocks until the session has ended and its thread is idle again. A host never needs it:
+    /// dropping the sink detaches, and the session ends by itself once the engine's sender is gone.
+    pub fn wait(self) {
         // Disconnects once the session's `done` sender drops; no message is ever sent.
         let _ = self.done.recv();
     }
@@ -207,7 +208,8 @@ fn spawn_playback_thread(first: Session) {
                     session.caps,
                     session.seconds_per_tick,
                 );
-                // Idle before the sink hears the end, so a host restarted at once reuses this thread.
+                // Idle before the sink hears the end, so a restart after `wait` reuses this thread (one started
+                // before the old session ends takes a new pooled thread).
                 idle_threads().push(sessions_tx.clone());
                 drop(session.done);
             }
@@ -3359,7 +3361,28 @@ mod tests {
             1.0 / 60.0,
         );
         drop(tx); // disconnect; the thread must notice and exit
-        drop(sink); // waits for the session's end — completes rather than hanging
+        sink.wait(); // completes rather than hanging
+    }
+
+    #[test]
+    fn dropping_a_sink_never_waits_for_its_session() {
+        let _pool = POOL.lock().unwrap_or_else(PoisonError::into_inner);
+        let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
+        let sink = AudioSink::spawn(
+            rx,
+            std::env::temp_dir(),
+            CategoryGains::default(),
+            VoiceCaps::default(),
+            1.0 / 60.0,
+        );
+        let (dropped_tx, dropped) = crossbeam_channel::bounded::<()>(1);
+        // `tx` stays alive, so the session cannot end: a waiting drop would hang here.
+        std::thread::spawn(move || {
+            drop(sink);
+            let _ = dropped_tx.send(());
+        });
+        assert!(dropped.recv_timeout(Duration::from_secs(10)).is_ok());
+        drop(tx);
     }
 
     #[test]
@@ -3375,7 +3398,7 @@ mod tests {
                 1.0 / 60.0,
             );
             drop(tx);
-            drop(sink);
+            sink.wait();
             assert!(
                 !idle_threads().is_empty(),
                 "the thread that opened the device outlives its session"

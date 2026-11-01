@@ -28,8 +28,6 @@
 //      bindgen against the SDK, so the target alone is not enough); elsewhere it is skipped with a
 //      printed reason (Plan/ios-target.md, decision 11).
 //
-// `--hold=<prefixes>` / `--only=<prefixes>` split the lib tests (6) for check.mjs; see below.
-//
 // Run standalone (`node scripts/mobile-check.mjs`) or via the `mobile` step in scripts/check.mjs;
 // mirrored as the `mobile feature set` step in .github/workflows/ci.yml and the `mobile` step in
 // ci/teamcity/provision.mjs — keep the three in step.
@@ -117,17 +115,9 @@ MOBILE FEATURE SET: the ${what} tests fail (see above).`);
   }
 }
 
-// The facade's embed/ffi tests wait a wall-clock stop grace (L4022) and run exclusive in the main suite.
-// check.mjs passes their prefixes: `--hold=a,b` leaves them out of this parallel-phase run, and
-// `--only=a,b` (its quiet tail) runs just them, one at a time as the nextest exclusive group does
-// (libtest's default parallelism would stack them and trip the grace). Neither flag runs everything.
-const flag = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3).split(',').filter(Boolean) ?? [];
-const hold = flag('hold');
-const only = flag('only');
-const libTests = [...only, ...(only.length > 0 ? ['--test-threads=1'] : []), '--skip', 'needs_gpu_', ...hold.flatMap((p) => ['--skip', p])];
+const libTests = ['--skip', 'needs_gpu_'];
 test("facade lib in the shipped shape", ['test', '-p', 'ludion', '--no-default-features', '--lib', '--', ...libTests]);
 test("facade lib in the debug shape", ['test', '-p', 'ludion', '--no-default-features', '--features', 'wire', '--lib', '--', ...libTests]);
-if (only.length > 0) process.exit(0);
 
 const iosSkip = hasVigil ? iosTargetReady() : 'games/vigil absent';
 if (iosSkip === null) {
