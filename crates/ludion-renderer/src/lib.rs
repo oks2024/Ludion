@@ -56,6 +56,7 @@ mod lobe;
 mod local_shadow;
 mod mesh;
 mod mipgen;
+mod presenter;
 mod probe;
 mod probe_capture;
 mod probe_relight;
@@ -86,6 +87,10 @@ pub use local_shadow::{
     LocalShadowStats, is_valid_atlas_edge, local_shadow_marks, local_shadow_stats,
 };
 pub use ludion_font::GlyphQuad;
+pub use presenter::{
+    PresentBackend, PresentPacket, PresentSettings, Presenter, PresenterNote, TickStamp,
+    WindowBackend,
+};
 pub use probe::{MAX_PROBES, ProbeData, ProbeVolume, probe_rank};
 pub use probe_capture::{
     AxisIrradiance, ProbeIrradiance, ProbeReadback, ProbeResolve, ResolvedProbe,

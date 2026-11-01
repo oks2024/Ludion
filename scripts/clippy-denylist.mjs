@@ -9,7 +9,9 @@
 //   sim         types + clock + threads + math + glam: crates and games whose code runs inside a tick.
 //   strict      types + clock + math + glam: crates on the deterministic path that own a thread seam
 //               (`dev-docs/determinism.md`), so `std::thread` stays allowed.
-//   permissive  no lists: host-side crates (renderer, server, audio, ...). Never written here.
+//   render      clock only: the renderer, which keeps glam trig and std maps but owns one wall-clock
+//               site (the presenter thread).
+//   permissive  no lists: host-side crates (render-graph, server, audio, ...). Never written here.
 //
 // `sqrt` is not banned: IEEE sqrt is correctly rounded on every platform. `mul_add`, `abs`, `floor`,
 // `to_radians` are exact and stay allowed too. The `glam` group bans the `Quat`/`Vec4` methods whose
@@ -95,6 +97,7 @@ const GROUPS = {
 const TIERS = {
   sim: ['types', 'clock', 'threads', 'math', 'glam'],
   strict: ['types', 'clock', 'math', 'glam'],
+  render: ['clock'],
   permissive: [],
 };
 
@@ -119,7 +122,7 @@ export const CRATES = {
   'crates/ludion-physics': 'sim',
   'crates/ludion-protocol': 'strict',
   'crates/ludion-render-graph': 'permissive',
-  'crates/ludion-renderer': 'permissive',
+  'crates/ludion-renderer': 'render',
   'crates/ludion-scene': 'sim',
   'crates/ludion-sculpt': 'sim',
   'crates/ludion-server': 'permissive',

@@ -264,6 +264,30 @@ impl Gpu {
             lock_faults(&sink).lost = Some(format!("{reason:?}: {message}"));
         });
 
+        Ok(Gpu::assemble(
+            device,
+            queue,
+            adapter,
+            info.name,
+            format!("{:?}", info.backend),
+            timestamps_supported,
+            compression,
+            faults,
+        ))
+    }
+
+    /// Builds the graph's own pipelines and sampler on `device` and wraps everything into a [`Gpu`].
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter: wgpu::Adapter,
+        adapter_name: String,
+        adapter_backend: String,
+        timestamps_supported: bool,
+        compression: wgpu::Features,
+        faults: Arc<Mutex<GpuFaults>>,
+    ) -> Gpu {
         let (gradient_pipeline, vignette_pipeline, vignette_bind_group_layout) =
             build_pipelines(&device);
 
@@ -278,7 +302,7 @@ impl Gpu {
             ..Default::default()
         });
 
-        Ok(Gpu {
+        Gpu {
             device,
             queue,
             adapter,
@@ -286,12 +310,32 @@ impl Gpu {
             vignette_pipeline,
             vignette_bind_group_layout,
             sampler,
-            adapter_name: info.name,
-            adapter_backend: format!("{:?}", info.backend),
+            adapter_name,
+            adapter_backend,
             timestamps_supported,
             compression,
             faults,
-        })
+        }
+    }
+
+    /// A second context over the same adapter, device and queue — for a thread that renders beside
+    /// the first (the presenter). The fault sink is shared, not re-installed: wgpu keeps one
+    /// uncaptured-error handler and one device-lost callback per device, so a fault on either
+    /// context reaches [`Gpu::take_fault`] on both.
+    ///
+    /// # Errors
+    /// Reserved for a future backend that can refuse; today it always succeeds.
+    pub fn share(&self) -> Result<Gpu, Diagnostic> {
+        Ok(Gpu::assemble(
+            self.device.clone(),
+            self.queue.clone(),
+            self.adapter.clone(),
+            self.adapter_name.clone(),
+            self.adapter_backend.clone(),
+            self.timestamps_supported,
+            self.compression,
+            Arc::clone(&self.faults),
+        ))
     }
 
     /// Takes the fault the device has reported, if any: a lost device (`L2011`, sticky — every later
@@ -1166,6 +1210,28 @@ fn build_pipelines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shared context reads the original's fault sink: one handler per device, two views of it.
+    #[test]
+    fn needs_gpu_share_sees_the_original_gpus_faults() {
+        let gpu = match Gpu::request() {
+            Ok(gpu) => gpu,
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+                eprintln!("SKIPPED share: no GPU adapter");
+                return;
+            }
+            Err(d) => panic!("gpu request failed: {d:?}"),
+        };
+        let shared = gpu.share().expect("share");
+        assert!(Arc::ptr_eq(&gpu.faults, &shared.faults));
+        lock_faults(&gpu.faults).validation.push("boom".to_owned());
+        let fault = shared.take_fault().expect("the shared gpu sees the fault");
+        assert!(fault.message.contains("boom"));
+        assert!(
+            gpu.take_fault().is_none(),
+            "the sink is drained once for both"
+        );
+    }
 
     /// Two cleared 16² outputs land in layers 2 and 1 of a 3-layer texture, with no readback of the graph.
     #[test]

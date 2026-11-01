@@ -8,9 +8,9 @@
 //! without one; a present target of `None` submits exactly the commands it always did.
 //!
 //! Threading: a surface must be created on the process's main thread on some platforms, so the host
-//! builds the target there and moves it (it is `Send`) to the render thread, which owns it from then
-//! on. The window thread keeps only a [`PresentSize`] handle and writes the surface's physical size
-//! into it on every resize; the render thread reads that handle before each present, reconfigures
+//! builds the target there and moves it (it is `Send`) to the presenter thread, which owns it from
+//! then on. The window thread keeps only a [`PresentSize`] handle and writes the surface's physical size
+//! into it on every resize; the presenter thread reads that handle before each present, reconfigures
 //! when it has moved, and writes back the presented frame's own size for the window thread's cursor
 //! mapping. Those two atomics are the whole cross-thread contract — no lock, and a resize can never
 //! tear a frame.
@@ -156,9 +156,9 @@ impl PresentTarget {
         height: u32,
     ) -> Result<PresentTarget, Diagnostic> {
         let setup = SurfaceSetup::for_surface(gpu, &surface)?;
-        // The presenter runs on the sim thread. Vsync here would pace the fixed-step simulation to
-        // the display's refresh, so the swapchain must never block on it.
-        let config = setup.config(width, height, wgpu::PresentMode::AutoNoVsync);
+        // Fifo is the one mode every backend guarantees, never tears, and blocks in acquire — the
+        // presenter thread is off the sim thread, so that block is the display clock pacing it.
+        let config = setup.config(width, height, wgpu::PresentMode::Fifo);
 
         let mut target = PresentTarget {
             surface,
@@ -177,6 +177,11 @@ impl PresentTarget {
     /// A handle the window thread keeps to report resizes. See [`PresentSize`].
     pub fn size_handle(&self) -> PresentSize {
         self.requested.clone()
+    }
+
+    /// The surface size the window thread last requested; `(0, 0)` while minimized.
+    pub fn requested_size(&self) -> (u32, u32) {
+        self.requested.get()
     }
 
     /// Configures the swapchain for `width` × `height` physical pixels, capped by
@@ -200,7 +205,7 @@ impl PresentTarget {
     /// `L2007` if acquiring the swapchain image fails validation. That is a permanent condition, not
     /// a transient one: it must end the host rather than paint black forever. The live loop reports
     /// it through `Engine::arm_render_fault_notify`.
-    pub(crate) fn present(&mut self, gpu: &Gpu, source: &wgpu::Texture) -> Result<(), Diagnostic> {
+    pub fn present(&mut self, gpu: &Gpu, source: &wgpu::Texture) -> Result<(), Diagnostic> {
         let (width, height) = self.requested.get();
         if width == 0 || height == 0 {
             return Ok(());

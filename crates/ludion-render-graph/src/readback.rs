@@ -373,6 +373,9 @@ pub struct StreamReadback<S> {
     /// per-session GPU-resource holder — it already outlives a frame and is already rebuilt when the
     /// render size moves — so the cache rides it rather than becoming a second thing to keep in step.
     physicals: Option<PhysicalCache>,
+    /// The output texture of the last frame rendered through this ring (a cheap handle clone), so a
+    /// presenter can blit it again without rendering.
+    last_output: Option<wgpu::Texture>,
 }
 
 struct Pending<S> {
@@ -485,7 +488,14 @@ impl<S> StreamReadback<S> {
             // segment and reads no clock (the `TickTrace` discipline).
             trace: SubmitTrace::from_env(),
             physicals: None,
+            last_output: None,
         }
+    }
+
+    /// The output texture of the most recent frame rendered through this ring; `None` before the
+    /// first.
+    pub fn last_output(&self) -> Option<&wgpu::Texture> {
+        self.last_output.as_ref()
     }
 
     /// Whether the per-segment trace is armed — the one test a disarmed run pays.
@@ -785,6 +795,7 @@ impl Gpu {
             _ => Some(stamp.clone()),
         };
         let output_texture = &frame_resources[schedule.aliasing.assignment[output.index()]].texture;
+        ring.last_output = Some(output_texture.clone());
         if sinks.readback {
             self.stream_track(ring, slot, output_texture, encoder, stamp);
         } else {

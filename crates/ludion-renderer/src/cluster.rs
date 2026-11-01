@@ -1217,6 +1217,8 @@ mod tests {
     /// under 0.3 ms for the CPU build to keep its ground.
     #[test]
     #[ignore = "a timing measurement, not a gate — run with --release --ignored --nocapture"]
+    // A measurement, not sim code: it times itself on the wall clock.
+    #[allow(clippy::disallowed_methods)]
     fn cluster_build_cost_at_the_stress_population() {
         let camera = camera_at(Vec3::new(0.0, 18.0, 40.0), Vec3::ZERO);
         let mut rng = DeterministicRng::new(0x5735_5000);
