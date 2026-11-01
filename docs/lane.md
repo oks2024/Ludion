@@ -41,7 +41,7 @@ Past the end of an open path, `ends: extend` continues the lane straight along t
 
 - A lane that was fully off acquires `s` by the nearest point over the **whole** path when it engages, then pulls in capped and eased. A big offset is not a snap. Engaging from `blend` 0 always runs this global acquire; a game that knows better writes `s` once `blend > 0` (a written `s` at `blend` 0 is replaced).
 - Changing the path at runtime must also null `s`: `LaneConstraint::set_path(path)` does both. A write to `path` alone leaves the old `s` in place.
-- After `teleport_character` (or any `Transform` write that moves the feet far), set `s` to `None` so the lane finds the global nearest again.
+- `teleport_character` re-acquires the lane (nulls `s`, keeps `blend`); a raw `Transform` write that moves the feet far still needs `s: None`.
 - `move_character_with` (an explicit `MoveConstraint`) **bypasses the lane**: one constraint per call.
 
 ## Frame and stick

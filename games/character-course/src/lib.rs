@@ -321,10 +321,6 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
     let feet = state.checkpoint.unwrap_or(runner.spawn);
     if (respawn || below) && teleport_character(world, hero, feet, 0.0).is_ok() {
         state.velocity_y = 0.0;
-        // A lane re-acquires its place over the whole path.
-        if let Ok(Some(lane)) = world.get_mut::<LaneConstraint>(hero) {
-            lane.s = None;
-        }
         state.crouching = world
             .get::<CharacterMotorState>(hero)
             .ok()

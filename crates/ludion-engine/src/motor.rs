@@ -119,6 +119,8 @@ pub fn fits_character(world: &World, entity: EntityId, height: f32) -> Result<bo
 }
 
 /// Places the feet and yaw without driving the capsule; see [`ludion_physics::teleport_character`].
+/// A `LaneConstraint` on the entity re-acquires its place over the whole path (`s` is nulled,
+/// `blend` and the rest are kept).
 ///
 /// ```no_run
 /// # use ludion_core::ids::EntityId;
@@ -134,7 +136,11 @@ pub fn teleport_character(
     feet: [f32; 3],
     yaw: f32,
 ) -> Result<(), MotorError> {
-    ludion_physics::teleport_character::<Transform>(world, entity, feet, yaw)
+    ludion_physics::teleport_character::<Transform>(world, entity, feet, yaw)?;
+    if let Ok(Some(lane)) = world.get_mut::<crate::lane::LaneConstraint>(entity) {
+        lane.s = None;
+    }
+    Ok(())
 }
 
 /// Draws one call's `motor` primitives. `was_grounded` is the state before the call: the probe's

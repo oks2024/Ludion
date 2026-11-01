@@ -233,7 +233,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
     - It lives in `ludion-engine`: `ludion-physics` stays free of `ludion-scene`, so the engine's
       `move_character` resolves the path and hands the motor a `MoveConstraint`.
     - One constraint per call: `move_character_with` bypasses the lane. A path change needs `s: null`
-      (`set_path` does both), so no unhashed state hides.
+      (`set_path` does both), so no unhashed state hides. `teleport_character` nulls `s` (the lane
+      re-acquires globally) and keeps `blend`, as `set_path` does.
     - **Why:** the lateral removal must live inside collide-and-slide, which only the motor owns, and
       2.5D, rails and lane runners all share it.
 

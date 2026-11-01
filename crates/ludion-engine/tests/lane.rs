@@ -614,8 +614,12 @@ fn a_platform_along_the_lane_carries_the_rider_and_one_across_it_does_not() {
 
 fn teleport_at_sixty(world: &mut World, tick: u64, hero: EntityId) -> [f32; 3] {
     if tick == 60 {
+        let before = world.get::<LaneConstraint>(hero).unwrap().unwrap().blend;
         teleport_character(world, hero, [12.0, 0.0, 1.0], 0.0).unwrap();
-        set_lane(world, hero, |lane| lane.s = None);
+        let lane = world.get::<LaneConstraint>(hero).unwrap().unwrap();
+        assert!(lane.s.is_none(), "teleport_character nulls s");
+        assert_eq!(lane.blend, before, "and keeps blend");
+        assert!(before > 0.99, "the lane was fully engaged");
     }
     [STEP, -0.1, 0.0]
 }
