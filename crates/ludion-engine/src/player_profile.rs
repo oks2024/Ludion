@@ -215,6 +215,12 @@ impl ProfileKind {
         (self.install)(world, path, source, backup)
     }
 
+    /// Installs the clean first-boot default at `path`, never reading disk: what a replay gets when
+    /// its recording carries no profile text.
+    pub(crate) fn load_default(&self, path: &Path, world: &mut World) -> ProfileMigration {
+        (self.install)(world, path, ProfileSource::Default, false)
+    }
+
     /// Installs the profile directly from engine-emitted canonical `text` (a replay header's or a
     /// snapshot keyframe's embedded profile-at-start), never reading disk. The text normally
     /// round-trips exactly, so the report is usually clean; a build whose `P` drifted from the embedded

@@ -734,6 +734,17 @@ impl<'a> ReplayReader<'a> {
             .collect()
     }
 
+    /// Decodes every record except keyframes, in stream order, never decompressing a keyframe
+    /// body. What a plain replay drives; [`records`](Self::records) when keyframes matter.
+    pub fn deltas(&self) -> Result<Vec<ReplayRecord>, Diagnostic> {
+        let mut budget = DecodeBudget::new(self.bytes.len());
+        self.scan()
+            .iter()
+            .filter(|raw| raw.kind != KIND_KEYFRAME)
+            .map(|raw| decode_record(raw, &mut budget))
+            .collect()
+    }
+
     /// Finds the latest keyframe at or before `target` and the deltas that reach `target` from it.
     ///
     /// The deltas are the command/input records written after the chosen keyframe in the stream
@@ -1585,6 +1596,35 @@ mod tests {
         let reader = ReplayReader::new(&sink.bytes).unwrap();
         assert_eq!(reader.records().unwrap(), full[..full.len() - 1]);
         assert_eq!(reader.torn_tail().unwrap().code, code::REPLAY_TORN_TAIL);
+    }
+
+    #[test]
+    fn deltas_are_records_minus_keyframes() {
+        let mut buffer = Vec::new();
+        let mut writer = ReplayWriter::new(&mut buffer, &header()).unwrap();
+        writer
+            .write_keyframe(FrameIndex::new(0), &serde_json::json!({ "k": 0 }))
+            .unwrap();
+        writer
+            .write_command(FrameIndex::new(1), &Command::SimResume)
+            .unwrap();
+        writer
+            .write_keyframe(FrameIndex::new(2), &serde_json::json!({ "k": 2 }))
+            .unwrap();
+        writer
+            .write_command(FrameIndex::new(3), &Command::SimPause)
+            .unwrap();
+        writer.into_inner().unwrap();
+
+        let reader = ReplayReader::new(&buffer).unwrap();
+        let expected: Vec<_> = reader
+            .records()
+            .unwrap()
+            .into_iter()
+            .filter(|r| !matches!(r, ReplayRecord::Keyframe { .. }))
+            .collect();
+        assert_eq!(expected.len(), 2);
+        assert_eq!(reader.deltas().unwrap(), expected);
     }
 
     #[test]

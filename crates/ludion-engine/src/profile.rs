@@ -38,7 +38,7 @@ use serde::Deserialize;
 use crate::commands::collapse;
 use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
 use crate::replay::{
-    DriveHook, PlainDrive, drive_actions_with, prepare_replay, require_monotonic_frames,
+    DriveHook, Keyframes, PlainDrive, drive_actions_with, prepare_replay, require_monotonic_frames,
     resolve_window, total_frames,
 };
 use crate::{Engine, EngineBuilder};
@@ -711,7 +711,7 @@ pub(crate) fn profile_replay_engine(
     to: Option<u64>,
     label: String,
 ) -> Result<(ProfileReport, Engine), Diagnostic> {
-    let (mut engine, actions) = prepare_replay(builder, bytes, project_root)?;
+    let (mut engine, actions) = prepare_replay(builder, bytes, project_root, Keyframes::Skip)?;
     require_monotonic_frames("profile-replay", &actions)?;
     let to = resolve_window("profile-replay", from, to, total_frames(&actions)?)?;
     let mut hook = ReplayProfile {

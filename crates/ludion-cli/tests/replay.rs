@@ -225,3 +225,31 @@ impl Drop for DirCleanup {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// `--record` stages the session in `<FILE>.recording` and renames it on success: an existing
+/// target is replaced by a readable session, and no staging sibling is left behind.
+#[test]
+fn record_replaces_the_target_and_leaves_no_staging_file() {
+    let session = session_path("staged");
+    let staged = PathBuf::from(format!("{}.recording", session.display()));
+    let _cleanup = Cleanup(session.clone());
+    let _cleanup_staged = Cleanup(staged.clone());
+    std::fs::write(&session, b"sentinel").unwrap();
+
+    hash_of(&[
+        "--scene",
+        fixture("good.yaml").to_str().unwrap(),
+        "--frames",
+        "3",
+        "--record",
+        session.to_str().unwrap(),
+    ]);
+
+    assert!(!staged.exists(), "the staging file is renamed away");
+    let replay = run_ludion(&["replay", session.to_str().unwrap()]);
+    assert!(
+        replay.status.success(),
+        "the replaced target is a readable session: {}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+}

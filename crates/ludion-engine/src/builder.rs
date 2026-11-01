@@ -90,6 +90,7 @@ pub struct EngineBuilder {
     project_root: PathBuf,
     save_root: Option<PathBuf>,
     profile_persistence: bool,
+    profile_off_disk: bool,
     observe_load: bool,
     category_gains: CategoryGains,
     plane: Plane,
@@ -104,7 +105,6 @@ pub struct EngineBuilder {
     /// engine skip a foreign `kind:` instead of refusing the boot.
     game_doc_kinds: bool,
     doc_validators: Vec<DocValidator>,
-    doc_texts: std::collections::BTreeMap<String, String>,
     resource_carriers: Vec<ResourceCarrier>,
     profile_kind: Option<ProfileKind>,
     profile_path: Option<PathBuf>,
@@ -119,6 +119,7 @@ impl EngineBuilder {
             project_root: PathBuf::from("."),
             save_root: None,
             profile_persistence: false,
+            profile_off_disk: false,
             observe_load: false,
             category_gains: CategoryGains::default(),
             plane: Plane::default(),
@@ -129,7 +130,6 @@ impl EngineBuilder {
             doc_kinds: Vec::new(),
             game_doc_kinds: false,
             doc_validators: Vec::new(),
-            doc_texts: std::collections::BTreeMap::new(),
             resource_carriers: Vec::new(),
             profile_kind: None,
             profile_path: None,
@@ -165,6 +165,14 @@ impl EngineBuilder {
     #[must_use]
     pub fn persist_profile(mut self) -> Self {
         self.profile_persistence = true;
+        self
+    }
+
+    /// Makes every profile install read the recording or the default, never `save/profile.yaml`.
+    /// Replay-only (`prepare_replay`), so a replay never depends on the developer's save.
+    #[must_use]
+    pub(crate) fn replay_profile(mut self) -> Self {
+        self.profile_off_disk = true;
         self
     }
 
@@ -377,8 +385,7 @@ impl EngineBuilder {
     /// world-hash surface: the store is a resource a game's systems read (`world.resource::<DocStore<T>>()`),
     /// and its numbers reach the hash only through the components those systems derive from it.
     ///
-    /// Register several kinds with repeated calls (use [`doc_singleton`](EngineBuilder::doc_singleton)
-    /// for a kind that must hold exactly one doc); a malformed doc fails the build (or `scene.load`)
+    /// Register several kinds with repeated calls; a malformed doc fails the build (or `scene.load`)
     /// with an `L1119`/`L1120` diagnostic, exactly as a bad scene does.
     ///
     /// # Example
@@ -404,78 +411,6 @@ impl EngineBuilder {
         self.doc_kind_engine_owned::<T>(kind)
     }
 
-    /// Registers a game data-doc kind that must hold **exactly one** doc — a `rules` or `tuning`
-    /// file, not a set.
-    ///
-    /// Everything else is [`doc_kind`](EngineBuilder::doc_kind): the same [`DocStore`](crate::DocStore),
-    /// schema check, live reload and recording. In addition the engine counts the kind's docs at
-    /// every point the validators run (build, `scene.load`/`restore`/district switch, `--check-docs`,
-    /// live `asset.reload`): zero or two-or-more is an `L1315` error. A reload that would add a second
-    /// doc is refused and the store keeps its contents and generation. Read the doc with
-    /// [`DocStore::single`](crate::DocStore::single).
-    ///
-    /// # Example
-    /// ```
-    /// use ludion_engine::Engine;
-    /// use schemars::JsonSchema;
-    /// use serde::{Deserialize, Serialize};
-    ///
-    /// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
-    /// struct Rules {
-    ///     lives: u32,
-    /// }
-    ///
-    /// let builder = Engine::builder().doc_singleton::<Rules>("rules");
-    /// # let _ = builder;
-    /// ```
-    #[must_use]
-    pub fn doc_singleton<T>(mut self, kind: &str) -> Self
-    where
-        T: Serialize + DeserializeOwned + JsonSchema + 'static + Send + Sync,
-    {
-        self.game_doc_kinds = true;
-        self.doc_kinds.push(DocKind::new::<T>(kind, true));
-        self
-    }
-
-    /// Supplies a data-doc as text, replacing the file doc at `key` or adding one — a test's variant
-    /// of a content file without writing it to disk.
-    ///
-    /// `key` is content-root-relative, like the walk's (`weather/rain.yaml`; `\` is read as `/`); a
-    /// key that is absolute, has a `..` segment or does not end in `.yaml` is an `L1119`. The text goes
-    /// through the same kind dispatch, schema check and [`validate_docs`](EngineBuilder::validate_docs)
-    /// passes as a file doc (`L1119`/`L1120`, and `L1315` for a [`doc_singleton`](EngineBuilder::doc_singleton)
-    /// kind), and fails [`build`](EngineBuilder::build) the same way. A shadowed file is not read, so
-    /// the text also wins over a malformed file. A second call with the same key replaces the first.
-    ///
-    /// The doc lives as long as the engine: it is reinstalled on every `scene.load`, restore and
-    /// district rebuild, and a live `asset.reload` of its key is ignored. Replacing a singleton's file
-    /// keeps its count at one; a new key makes two (`L1315`). A recording armed on the engine carries
-    /// it ahead of the first keyframe, so a replay reproduces it. Builder-only: there is no live
-    /// setter, and the content root is still walked (use an empty scratch root to keep it unread).
-    ///
-    /// # Example
-    /// ```
-    /// use ludion_engine::Engine;
-    /// use schemars::JsonSchema;
-    /// use serde::{Deserialize, Serialize};
-    ///
-    /// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
-    /// struct Weapon {
-    ///     damage: f32,
-    /// }
-    ///
-    /// let builder = Engine::builder()
-    ///     .doc_kind::<Weapon>("weapon")
-    ///     .doc_text("weapons/crossbow.yaml", "format: 1\nkind: weapon\ndamage: 99\n");
-    /// # let _ = builder;
-    /// ```
-    #[must_use]
-    pub fn doc_text(mut self, key: &str, text: &str) -> Self {
-        self.doc_texts.insert(key.to_owned(), text.to_owned());
-        self
-    }
-
     /// Registers a kind the *engine* owns, without claiming the content root the way
     /// [`doc_kind`](EngineBuilder::doc_kind) does.
     ///
@@ -488,7 +423,7 @@ impl EngineBuilder {
     where
         T: Serialize + DeserializeOwned + JsonSchema + 'static + Send + Sync,
     {
-        self.doc_kinds.push(DocKind::new::<T>(kind, false));
+        self.doc_kinds.push(DocKind::new::<T>(kind));
         self
     }
 
@@ -500,9 +435,6 @@ impl EngineBuilder {
     /// [`DocStore`](crate::DocStore) is installed, so a rule may read across kinds, and returns one
     /// [`Diagnostic`] per broken reference. Register it more than once to split the rules by kind:
     /// the passes run in registration order and their results concatenate into one report.
-    ///
-    /// The engine's own [`doc_singleton`](EngineBuilder::doc_singleton) count runs first, at the same
-    /// moments, and a game with only singleton kinds needs no validator for it.
     ///
     /// The engine runs the passes at three moments: at build and at every `scene.load`/`restore`/
     /// district switch (an `Error` refuses the load exactly as a malformed doc's `L1119` does; a
@@ -715,7 +647,6 @@ impl EngineBuilder {
         let profile_rel_path = self
             .profile_path
             .unwrap_or_else(crate::player_profile::default_profile_rel_path);
-        let doc_texts = crate::docs::resolve_doc_texts(&self.doc_kinds, self.doc_texts)?;
         let mut engine = Engine::from_parts(
             registry,
             self.systems,
@@ -728,6 +659,7 @@ impl EngineBuilder {
         engine.save_root = self.save_root;
         // Before `install_profile`: the boot load decides on it whether an unloadable save is renamed.
         engine.profile_persistence = self.profile_persistence;
+        engine.profile_off_disk = self.profile_off_disk;
         engine.category_gains = self.category_gains;
         // Set before the mirror: `install_plane` copies the field onto the world, and every later
         // world (re)build re-runs it.
@@ -740,8 +672,6 @@ impl EngineBuilder {
         // Set before `install_docs` too: it decides whether a foreign `kind:` in the content root
         // refuses the boot or is skipped with a warning.
         engine.game_doc_kinds = self.game_doc_kinds;
-        // Set before `install_docs`, which merges them over the content-root walk.
-        engine.doc_texts = doc_texts;
         engine.resource_carriers = self.resource_carriers;
         // Populate the data-doc stores into the initial (pre-scene-load) world so a game driven
         // before any `scene.load` still sees its docs; a malformed doc — or a broken cross-reference
@@ -1220,74 +1150,6 @@ damage: 60.0
         assert!(
             logs[0].message.contains("help: lower the damage"),
             "{logs:?}"
-        );
-    }
-
-    /// A live reload that would leave a `doc_singleton` kind with two docs is refused by the engine's
-    /// count alone (no `validate_docs`), with the store and generation untouched and nothing logged.
-    #[test]
-    fn a_reload_that_adds_a_second_singleton_doc_is_refused() {
-        use serde::Deserialize;
-
-        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
-        struct Weapon {
-            damage: f32,
-        }
-
-        let root = fresh_dir("singleton-reload");
-        std::fs::create_dir_all(root.join("weapons")).unwrap();
-        let a = root.join("weapons/a.yaml");
-        std::fs::write(&a, "format: 1\nkind: weapon\ndamage: 12.0\n").unwrap();
-
-        let mut engine = Engine::builder()
-            .project_root(&root)
-            .doc_singleton::<Weapon>("weapon")
-            .build()
-            .unwrap();
-        let stored = |engine: &Engine| {
-            let store = engine
-                .world()
-                .resource::<crate::DocStore<Weapon>>()
-                .unwrap();
-            (
-                store
-                    .iter()
-                    .map(|(k, w)| (k.clone(), w.damage))
-                    .collect::<Vec<_>>(),
-                store.generation(),
-            )
-        };
-        let (_, generation) = stored(&engine);
-
-        std::fs::write(
-            root.join("weapons/b.yaml"),
-            "format: 1\nkind: weapon\ndamage: 5.0\n",
-        )
-        .unwrap();
-        let refused = engine
-            .reload_doc_from_disk("weapons/b.yaml")
-            .expect_err("a second singleton doc is refused");
-        let rendered = refused.to_string();
-        assert!(rendered.contains("L1315"), "{rendered}");
-        assert_eq!(
-            stored(&engine),
-            (vec![("weapons/a.yaml".to_string(), 12.0)], generation),
-            "the store moved"
-        );
-        engine.advance_live();
-        let logged = engine
-            .take_events()
-            .into_iter()
-            .any(|event| matches!(event, ludion_protocol::event::Event::Log(_)));
-        assert!(!logged, "a refused reload logged");
-
-        std::fs::write(&a, "format: 1\nkind: weapon\ndamage: 60.0\n").unwrap();
-        engine
-            .reload_doc_from_disk("weapons/a.yaml")
-            .expect("editing the one doc applies");
-        assert_eq!(
-            stored(&engine),
-            (vec![("weapons/a.yaml".to_string(), 60.0)], generation + 1)
         );
     }
 

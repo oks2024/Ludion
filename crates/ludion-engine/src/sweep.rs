@@ -301,7 +301,8 @@ pub fn render_frame_strip(
             Diagnostic::new(
                 code::SCENE_OVERRIDE_INVALID,
                 format!(
-                    "a strip of {} frames does not fit a contact sheet; at most {MAX_SWEEP_CELLS}                      cells stay large enough to judge",
+                    "a strip of {} frames does not fit a contact sheet; at most {MAX_SWEEP_CELLS} \
+                     cells stay large enough to judge",
                     frames.len()
                 ),
             )

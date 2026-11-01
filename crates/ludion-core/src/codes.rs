@@ -1527,11 +1527,6 @@ pub mod code {
     /// `check-scene <prefab>`; pointer `/clips/<name>`.
     pub const PREFAB_CLIP_TARGET: DiagnosticCode = DiagnosticCode::new("L1314");
 
-    /// `L1315` — a kind registered with `EngineBuilder::doc_singleton` has zero, or two or more,
-    /// docs; the kind must hold exactly one. Raised by `ludion-engine` wherever the doc validators
-    /// run; pointer `<kind>`.
-    pub const DOC_SINGLETON_COUNT: DiagnosticCode = DiagnosticCode::new("L1315");
-
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7596,25 +7591,6 @@ composed path (`turret/barrel`).
 
 Fix: rename the track's `target` to a part name (`entities[].name`); the message names the nearest one.",
     },
-    CodeEntry {
-        code: code::DOC_SINGLETON_COUNT,
-        severity: Severity::Error,
-        title: "a single-doc kind does not hold exactly one doc",
-        explanation: "A game registered a kind with `EngineBuilder::doc_singleton`, which promises the content
-root holds exactly one `kind:` doc of it, and the count is not one (pointer `<kind>`).
-
-With two or more, every read of the store would answer with a stray copy or an arbitrary one, so the
-edit the author meant to apply may silently lose to a forgotten file; the message names every
-declaring file. With none, the game would boot into nothing: the rules, tuning or clock it expects are
-absent and no system could say so.
-
-The engine counts at every point the doc validators run: at build, at `scene.load`/`restore`/district
-switch, under `--check-docs`, and after a live `asset.reload` (a reload that would add a second doc is
-refused and the store keeps its contents and generation).
-
-Fix: delete or rename the stray copy, or add the missing doc under the content root. If a set (or no
-doc) is legitimate, register the kind with `doc_kind` instead.",
-    },
     // --- L2xxx: render ---
     CodeEntry {
         code: code::RENDER_GRAPH_CYCLE,
@@ -9311,8 +9287,8 @@ A write to the replay sink failed mid-session — the sink itself failed (L3010)
 its replay ceiling (L3017) — so the engine stopped recording. The command that triggered the write
 still applied; only the recording ended.
 
-The `.lrp` is valid up to the last successful write: everything before the last keyframe written
-before the failure replays. `Engine::stop_recording` returns this diagnostic once; a second call is
+The `.lrp` is valid up to the last whole record: everything written before the failure replays,
+and a torn final record is dropped with L3052. `Engine::stop_recording` returns this diagnostic once; a second call is
 `Ok`. The message names the frame the recording died at and the underlying cause.
 
 Fix: remove the cause (free disk space, record a smaller scene) and re-record.",
@@ -10401,7 +10377,6 @@ mod tests {
         code::LOCAL_LIGHT_INVALID_SHADOW,
         code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
         code::PREFAB_CLIP_TARGET,
-        code::DOC_SINGLETON_COUNT,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

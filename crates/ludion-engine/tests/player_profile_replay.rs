@@ -266,3 +266,51 @@ fn a_profile_free_snapshot_has_no_profile_key() {
         .body;
     assert!(matches!(restored, ResponseBody::Restored { report } if report.is_clean()));
 }
+
+/// Projects the profile without the mid-run bump, so a profile-free recording and a profile-bearing
+/// replay of it trace identically exactly when the replay installs the default profile.
+fn project_only(world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {
+    let (runs, unlocked) = world
+        .resource::<Profile<Save>>()
+        .map(|p| (p.get().runs, p.get().unlocked as u32))
+        .unwrap_or((0, 0));
+    for (progress,) in world.query::<(&mut Progress,)>() {
+        progress.runs = runs;
+        progress.unlocked = unlocked;
+    }
+}
+
+#[test]
+fn a_replay_without_a_header_profile_installs_the_default_never_the_disk_save() {
+    let dir = fresh_dir("no-header-profile");
+    let sink = SharedSink::default();
+    // A profile-free recorder: its header carries no profile text.
+    let mut recorder = Engine::builder()
+        .components(|reg| reg.register::<Progress>("Progress"))
+        .system("project_only", project_only)
+        .project_root(&dir)
+        .build()
+        .unwrap();
+    recorder.load_inline_scene(SCENE).unwrap();
+    recorder.set_recording(sink.clone()).unwrap();
+    let live = ludion_engine::drive_hashes(&mut recorder, session()).unwrap();
+    recorder.stop_recording().unwrap();
+
+    // The replaying build registers the profile and the developer's save holds non-default values.
+    write(&dir, "save/profile.yaml", OTHER);
+    let replaying = Engine::builder()
+        .components(|reg| reg.register::<Progress>("Progress"))
+        .system("project_only", project_only)
+        .profile::<Save>()
+        .project_root(&dir);
+    let replayed = replay_hashes_with(replaying, &sink.bytes(), &dir).unwrap();
+    assert_eq!(
+        live, replayed,
+        "the replay booted on the default, not runs=99"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("save/profile.yaml")).unwrap(),
+        OTHER,
+        "the save file is untouched"
+    );
+}

@@ -147,7 +147,12 @@ pub fn check_query_drift_replay(
     bytes: &[u8],
     project_root: impl AsRef<Path>,
 ) -> Result<QueryDriftReport, Diagnostic> {
-    let (mut engine, actions) = crate::replay::prepare_replay(builder, bytes, project_root)?;
+    let (mut engine, actions) = crate::replay::prepare_replay(
+        builder,
+        bytes,
+        project_root,
+        crate::replay::Keyframes::Skip,
+    )?;
     engine.begin_query_recording();
     crate::replay::drive_actions_with(&mut engine, actions, &mut crate::replay::PlainDrive)?;
     let observed = engine.take_query_observations();

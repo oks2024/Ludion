@@ -13,7 +13,9 @@
 //! to [`ludion_sim::SimDriver`] directly, as earlier phases did) is what makes `--record <FILE>` a
 //! one-line addition: `check_scene::arm_recording` arms recording right after the scene loads, and
 //! every subsequent command — each injected input, then the `sim.step` — is written to the session
-//! file exactly as a live/protocol run would record it. `ludion replay` re-drives that file through
+//! file exactly as a live/protocol run would record it. The run writes `<FILE>.recording` and renames
+//! it onto `<FILE>` only after the run succeeds, so a failed run leaves an existing `<FILE>`
+//! untouched and no sibling behind. `ludion replay` re-drives that file through
 //! the same dispatch path and must reproduce the identical `WorldHash` sequence. `ludion serve
 //! --record` arms recording the same way, through the same `check_scene::load_engine` /
 //! `check_scene::arm_recording` helpers this module uses.
@@ -24,12 +26,15 @@
 //! canonical hash are all deterministic across processes. The same pipeline, not a demo stand-in,
 //! gains systems when the engine arrives.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
+use ludion_engine::Engine;
 use ludion_protocol::Command;
 use ludion_protocol::command::{InputInjectParams, SimStepParams};
-use ludion_sim::InputScript;
+use ludion_sim::{InputScript, WorldHash};
 
 use crate::check_scene;
 
@@ -61,12 +66,58 @@ pub fn run(
         Err(exit) => return exit,
     };
 
-    if let Some(record_path) = record_path
-        && let Err(exit) = check_scene::arm_recording(&mut engine, record_path)
+    // A recording goes to a sibling and replaces the target only once the run succeeded, so a
+    // failed run never truncates an existing session file.
+    let staged = record_path.map(staged_path);
+    if let Some(staged) = &staged
+        && let Err(exit) = check_scene::arm_recording(&mut engine, staged)
     {
         return exit;
     }
 
+    let result = drive(&mut engine, &input, frames);
+    if let (Some(staged), Some(target)) = (&staged, record_path) {
+        let committed = match &result {
+            Ok(_) => std::fs::rename(staged, target).map_err(|error| {
+                let diagnostic = Diagnostic::new(
+                    code::OUTPUT_IO,
+                    format!(
+                        "could not move replay session `{}` to `{}`: {error}",
+                        staged.display(),
+                        target.display()
+                    ),
+                )
+                .with_help("check that the destination is writable and not held open");
+                eprintln!("{diagnostic}");
+                let _ = std::fs::remove_file(staged);
+            }),
+            Err(_) => {
+                let _ = std::fs::remove_file(staged);
+                Ok(())
+            }
+        };
+        if committed.is_err() {
+            return ExitCode::FAILURE;
+        }
+    }
+    match result {
+        Ok(hash) => {
+            println!("{hash}");
+            ExitCode::SUCCESS
+        }
+        Err(exit) => exit,
+    }
+}
+
+/// `<target>.recording`: where a `--record` run writes until it succeeds.
+fn staged_path(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_owned();
+    name.push(".recording");
+    PathBuf::from(name)
+}
+
+/// Injects the script, steps, stops recording and hashes. Prints diagnostics itself.
+fn drive(engine: &mut Engine, input: &InputScript, frames: u64) -> Result<WorldHash, ExitCode> {
     for scripted in input.events() {
         let event = serde_json::to_value(scripted.event).expect("InputEvent always serializes");
         let injected = engine.execute(Command::InputInject(InputInjectParams {
@@ -75,7 +126,7 @@ pub fn run(
         }));
         if let Err(diagnostic) = injected {
             eprintln!("{diagnostic}");
-            return ExitCode::FAILURE;
+            return Err(ExitCode::FAILURE);
         }
     }
 
@@ -85,23 +136,17 @@ pub fn run(
     }));
     if let Err(diagnostic) = stepped {
         eprintln!("{diagnostic}");
-        return ExitCode::FAILURE;
+        return Err(ExitCode::FAILURE);
     }
 
     // Idempotent no-op when `--record` was not given.
     if let Err(diagnostic) = engine.stop_recording() {
         eprintln!("{diagnostic}");
-        return ExitCode::FAILURE;
+        return Err(ExitCode::FAILURE);
     }
 
-    match engine.world_hash() {
-        Ok(hash) => {
-            println!("{hash}");
-            ExitCode::SUCCESS
-        }
-        Err(diagnostic) => {
-            eprintln!("{diagnostic}");
-            ExitCode::FAILURE
-        }
-    }
+    engine.world_hash().map_err(|diagnostic| {
+        eprintln!("{diagnostic}");
+        ExitCode::FAILURE
+    })
 }

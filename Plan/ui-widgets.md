@@ -55,8 +55,8 @@
 > `committed_replays_stay_under_the_measured_maximum` was already red at HEAD (the committed keyframe
 > 229,043 B against `LARGEST_COMMITTED_RECORD` 200 KiB — the reference game's scenes grew past the
 > clustered-forward measurement and the laptop never ran that crate); this wave's record is 229,296 B,
-> the constant is 240 KiB with its doc comment re-measured, and the reader's ceiling (7.5 MiB) still
-> refuses the 8 MiB fuzz reproducer.
+> the constant is 240 KiB with its doc comment re-measured; the reader's ceiling is now 256x the
+> compressed size, within 1 MiB..256 MiB per frame, with a whole-file cap.
 >
 > Wave 1 log: `UiList`/`UiListItem` registered **21st** (decision 7's "after `GiDynamic`" was stale
 > by landing time — `GroundMarker` had taken the 20th slot; append-last honoured, both tripwires

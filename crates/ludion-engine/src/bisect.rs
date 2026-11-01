@@ -54,7 +54,7 @@ use serde_json::Value;
 use crate::builder::EngineBuilder;
 use crate::engine::Engine;
 use crate::replay::{
-    DriveHook, PlainDrive, ReplayAction, drive_actions_with, prepare_replay,
+    DriveHook, Keyframes, PlainDrive, ReplayAction, drive_actions_with, prepare_replay,
     require_monotonic_frames, total_frames,
 };
 
@@ -536,7 +536,7 @@ pub fn verify_replay_keyframes(
     bytes: &[u8],
     project_root: impl AsRef<Path>,
 ) -> Result<KeyframeDriftReport, Diagnostic> {
-    let (mut engine, actions) = prepare_replay(builder, bytes, project_root)?;
+    let (mut engine, actions) = prepare_replay(builder, bytes, project_root, Keyframes::Keep)?;
     let keyframes = actions
         .iter()
         .filter(|action| matches!(action, ReplayAction::Keyframe { .. }))
@@ -844,7 +844,7 @@ fn prepare_bisect(
     bytes: &[u8],
     project_root: &Path,
 ) -> Result<(Engine, Vec<ReplayAction>), Diagnostic> {
-    let (engine, actions) = prepare_replay(builder, bytes, project_root)?;
+    let (engine, actions) = prepare_replay(builder, bytes, project_root, Keyframes::Keep)?;
     require_monotonic_frames("bisect", &actions)?;
     Ok((engine, actions))
 }

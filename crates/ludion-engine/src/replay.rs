@@ -9,8 +9,8 @@
 //! stepping logic. The loop calls a hook at every *settled* frame (all actions at it applied);
 //! [`replay_with`], the hash trace and the frame renderer are all hooks on it.
 //!
-//! Keyframe records stay in the action list: inert for a plain drive, and the alignment points a
-//! keyframe verifier compares at. Seeks use `ludion-protocol`'s [`ReplayReader::seek`].
+//! A plain drive never decodes keyframe records; the bisect paths keep them in the action list as
+//! the alignment points a keyframe verifier compares at. Seeks use `ludion-protocol`'s [`ReplayReader::seek`].
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
@@ -110,7 +110,8 @@ pub(crate) enum ReplayAction {
     /// A recorded keyframe, kept **in record order** so a verifier knows exactly when the live state
     /// is supposed to equal it: the keyframe was captured right after the preceding delta record was
     /// written, so applying the actions up to here reproduces the snapshotted state. Inert for a
-    /// plain drive (a linear replay reconstructs from the deltas, never from a keyframe).
+    /// plain drive (a linear replay reconstructs from the deltas, never from a keyframe). Present
+    /// only when the caller kept keyframes.
     Keyframe { frame: FrameIndex, snapshot: Value },
 }
 
@@ -325,7 +326,7 @@ pub fn replay_hashes_with(
     bytes: &[u8],
     project_root: impl AsRef<Path>,
 ) -> Result<Vec<(FrameIndex, WorldHash)>, Diagnostic> {
-    let (mut engine, actions) = prepare_replay(builder, bytes, project_root)?;
+    let (mut engine, actions) = prepare_replay(builder, bytes, project_root, Keyframes::Skip)?;
     drive_actions(&mut engine, actions)
 }
 
@@ -385,7 +386,7 @@ pub fn replay_with<F>(
 where
     F: FnMut(&mut Engine, FrameIndex) -> Result<ControlFlow<()>, Diagnostic>,
 {
-    let (mut engine, actions) = prepare_replay(builder, bytes, project_root)?;
+    let (mut engine, actions) = prepare_replay(builder, bytes, project_root, Keyframes::Skip)?;
     drive_actions_with(&mut engine, actions, &mut Observer(on_frame))?;
     Ok(engine)
 }
@@ -502,7 +503,7 @@ pub fn replay_render_frames<F>(
 where
     F: FnMut(u64, &[u8]) -> Result<(), Diagnostic>,
 {
-    let (mut engine, actions) = prepare_replay(builder, bytes, project_root)?;
+    let (mut engine, actions) = prepare_replay(builder, bytes, project_root, Keyframes::Skip)?;
     engine.set_debug_draw(request.debug.clone());
 
     require_monotonic_frames("replay-to-frames", &actions)?;
@@ -719,6 +720,14 @@ impl DriveHook for RenderHook<'_, '_> {
     }
 }
 
+/// Whether [`prepare_replay`] decodes the replay's keyframes into [`ReplayAction::Keyframe`]s. Only
+/// the bisect paths consume them; a plain drive never decompresses a keyframe body.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Keyframes {
+    Keep,
+    Skip,
+}
+
 /// Builds the game engine from `builder`, loads the replay's scene/seed/profile, and reconstructs the
 /// drive actions from its records — everything [`replay_hashes_with`] does *up to* driving. Split out
 /// so a caller that needs to instrument the drive (the query-drift verifier arms recording between
@@ -727,14 +736,35 @@ impl DriveHook for RenderHook<'_, '_> {
 /// # Errors
 /// Every error [`replay_hashes_with`] can raise.
 pub(crate) fn prepare_replay(
-    mut builder: EngineBuilder,
+    builder: EngineBuilder,
     bytes: &[u8],
     project_root: impl AsRef<Path>,
+    keyframes: Keyframes,
 ) -> Result<(Engine, Vec<ReplayAction>), Diagnostic> {
     let reader = ReplayReader::new(bytes)?;
     check_compatible(reader.header())?;
 
-    // Reconstruct the action list from the delta records; keyframes are kept as inert actions, the
+    let mut engine = builder
+        .replay_profile()
+        .build_at(project_root.as_ref().to_path_buf())?;
+    // The extent is sim input (a game unprojects the cursor through it), so it is installed before the
+    // scene loads — with `render.size`'s validity check, which refuses a hostile header value, but not
+    // the host's render-scale check. A header without one is a pre-field `.lrp`, recorded at the
+    // default extent.
+    if let Some(extent) = &reader.header().render_extent {
+        let params = RenderSizeParams {
+            width: Some(extent.width),
+            height: Some(extent.height),
+        };
+        render::apply_recorded(&mut engine, &params).map_err(|mut diagnostic| {
+            diagnostic.message = format!("replay header render_extent: {}", diagnostic.message);
+            if let Some(path) = &diagnostic.path {
+                diagnostic.path = Some(path.replace("/params/", "/render_extent/"));
+            }
+            diagnostic
+        })?;
+    }
+    // Reconstruct the action list from the delta records; `Keep` also yields keyframe actions, the
     // verifier's alignment marker.
     // A `SceneLoad` record replays from its inline text, never its path. `SceneSwitch` records are
     // not drive actions — the switch *regenerates* from the sim's re-set request under replay (same
@@ -747,11 +777,11 @@ pub(crate) fn prepare_replay(
     let mut prefabs = PrefabScan::default();
     // The last tick of the `sim.step` record just before this one — what a `SystemPanic` must name.
     let mut step_end: Option<FrameIndex> = None;
-    // A `DocReload` ahead of the first keyframe is a builder `doc_text` doc the recorder wrote at
-    // arm time, not a live reload: it rebuilds into the builder so the engine holds it from frame 0.
-    let mut seen_keyframe = false;
-    let mut inline_docs: Vec<(String, String)> = Vec::new();
-    for record in reader.records()? {
+    let records = match keyframes {
+        Keyframes::Keep => reader.records()?,
+        Keyframes::Skip => reader.deltas()?,
+    };
+    for record in records {
         actions.extend(prefabs.observe(&record));
         let prior_step_end = step_end.take();
         match record {
@@ -786,17 +816,11 @@ pub(crate) fn prepare_replay(
                 path,
                 document,
                 ..
-            } => {
-                if seen_keyframe {
-                    actions.push(ReplayAction::DocReload {
-                        kind: doc_kind,
-                        path,
-                        document,
-                    });
-                } else {
-                    inline_docs.push((path, document));
-                }
-            }
+            } => actions.push(ReplayAction::DocReload {
+                kind: doc_kind,
+                path,
+                document,
+            }),
             ReplayRecord::SceneLoad {
                 frame,
                 path,
@@ -833,10 +857,9 @@ pub(crate) fn prepare_replay(
                 actions.pop();
                 actions.push(ReplayAction::PanickedStep { frame, params });
             }
-            // Kept in record order — inert for a plain drive, and the alignment marker a keyframe
-            // verifier needs (`crate::bisect`): the state right here is what the keyframe captured.
+            // Present only under `Keyframes::Keep`, in record order: the alignment marker a keyframe
+            // verifier needs (`crate::bisect`) — the state right here is what the keyframe captured.
             ReplayRecord::Keyframe { frame, snapshot } => {
-                seen_keyframe = true;
                 actions.push(ReplayAction::Keyframe { frame, snapshot });
             }
             // Pre-scan the target text (last write wins if a district is visited more than once); the
@@ -851,27 +874,6 @@ pub(crate) fn prepare_replay(
             // Filed or driven by `PrefabScan` above.
             ReplayRecord::PrefabText { .. } => {}
         }
-    }
-    for (path, document) in inline_docs {
-        builder = builder.doc_text(&path, &document);
-    }
-    let mut engine = builder.build_at(project_root.as_ref().to_path_buf())?;
-    // The extent is sim input (a game unprojects the cursor through it), so it is installed before the
-    // scene loads — with `render.size`'s validity check, which refuses a hostile header value, but not
-    // the host's render-scale check. A header without one is a pre-field `.lrp`, recorded at the
-    // default extent.
-    if let Some(extent) = &reader.header().render_extent {
-        let params = RenderSizeParams {
-            width: Some(extent.width),
-            height: Some(extent.height),
-        };
-        render::apply_recorded(&mut engine, &params).map_err(|mut diagnostic| {
-            diagnostic.message = format!("replay header render_extent: {}", diagnostic.message);
-            if let Some(path) = &diagnostic.path {
-                diagnostic.path = Some(path.replace("/params/", "/render_extent/"));
-            }
-            diagnostic
-        })?;
     }
     engine.install_replay_scene_text(scene_text);
     // Always installed, even empty: a replay never reads a prefab off disk — the header scene's own
@@ -1287,6 +1289,23 @@ entities:
             linear[..seek_trace.len()],
             "a seek reconstruction whose deltas cross the switch reproduces the linear trace off-disk \
              — the pre-scanned scene-text map wins over the reverted district file"
+        );
+    }
+
+    #[test]
+    fn a_zero_tick_replay_yields_the_frame_zero_hash() {
+        let dir = fresh_dir("zero-tick");
+        let sink = SharedSink::default();
+        let mut engine = game(&dir).build().unwrap();
+        engine.load_inline_scene(START).unwrap();
+        engine.set_recording(sink.clone()).unwrap();
+        engine.stop_recording().unwrap();
+        let bytes = sink.0.lock().unwrap().clone();
+
+        let trace = replay_hashes_with(game(&dir), &bytes, &dir).unwrap();
+        assert_eq!(
+            trace,
+            vec![(FrameIndex::ZERO, engine.world_hash().unwrap())]
         );
     }
 }
