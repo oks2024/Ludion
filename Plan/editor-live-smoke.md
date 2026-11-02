@@ -233,3 +233,8 @@ With vigil (in the repo) and a project outside the repo, no view shows an "outsi
 
 ## Inspector u64 round trip (audit 2026-10-31 16/M1)
 With vigil playing a random-shape volley, select the live `Volley` in the inspector (edit mode) and nudge `angle_deg`: in-flight bullets keep their angles and speeds, no killed bullet reappears, and the `seed` field shows the same digits before and after.
+
+## Refused scene load (Clockout 0033)
+With a project whose collider mesh file is renamed:
+- Boot it from the game stage: the failure card reads "The game failed to start" with `L1212` and its `L1101` in the detail, not a blank stage.
+- In a live session, pick that scene in the scene picker: the `DiagnosticBanner` shows the `L1212` with an expandable related `L1101`, and the prior scene stays loaded and running.

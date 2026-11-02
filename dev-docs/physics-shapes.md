@@ -41,7 +41,7 @@ memoized loads, never hashed or snapshotted; the engine installs it at every loa
 switch, `asset.reload` never touches it). `BodyEntry.mesh_hash` records the document hash a body was
 built from and rides the snapshot; `is_stale` compares it with the library's current one, so an
 edited document rebuilds the body on the next tick and an unchanged one does not. The `rejected` map
-keys on the hash too. A `mesh` or `heightfield` on `rigid` is `L1211` at `create`; everything else unbuildable is `L1212`, the loader's own `Diagnostic` riding in `ShapeRejection.related`.
+keys on the hash too. A `mesh` or `heightfield` on `rigid` is `L1211` at `create`; everything else unbuildable is `L1212`, the loader's own `Diagnostic` riding in `ShapeRejection.related`. A file that cannot be opened never gets that far at a load or switch: `mesh_check::missing_collider_meshes` refuses it in `instantiate_named_world` (a restore or runtime spawn stays on this path).
 ### Collision layers
 
 `CollisionLayers` (`systems.rs`) resolves the scene's table: layer `i` is bit `i` (`default` = 0), a

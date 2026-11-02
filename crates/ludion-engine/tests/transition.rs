@@ -600,6 +600,69 @@ fn a_missing_target_file_rejects_the_switch_with_l3018() {
     );
 }
 
+const NO_MESH_DISTRICT: &str = "\
+format: 1
+physics:
+  space: free
+entities:
+  - name: gate-from-start
+    components:
+      Transform: {}
+  - name: floor
+    components:
+      Transform: {}
+      Collider:
+        shape:
+          mesh:
+            path: gone.mesh.yaml
+        body: static
+";
+
+fn switch_to_missing_collider_mesh(world: &mut World, ctx: &SystemCtx) {
+    request_switch(world, ctx, "no-mesh.yaml", "gate-from-start");
+}
+
+/// The control's twin of [`switch_to_missing_collider_mesh`]: same system name and slot, no request.
+fn never_switch(_world: &mut World, _ctx: &SystemCtx) {}
+
+fn run_with_switch_system(name: &str, system: fn(&mut World, &SystemCtx)) -> (Engine, u64) {
+    let dir = fresh_dir(name);
+    std::fs::write(dir.join("no-mesh.yaml"), NO_MESH_DISTRICT).unwrap();
+    let mut engine = base_game(&dir)
+        .system("switch_request", system)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(START).unwrap();
+    for _ in 0..8 {
+        engine.advance_live();
+    }
+    let hash = engine.world_hash().expect("the world hashes").as_u64();
+    (engine, hash)
+}
+
+#[test]
+fn a_switch_to_a_missing_collider_mesh_is_rejected_and_moves_no_hash() {
+    let (refused, refused_hash) =
+        run_with_switch_system("collider-mesh-refused", switch_to_missing_collider_mesh);
+    let (_control, control_hash) = run_with_switch_system("collider-mesh-control", never_switch);
+
+    let error = refused
+        .last_transition_error()
+        .expect("the refused district is reported");
+    assert_eq!(error.code.as_str(), "L3018");
+    assert!(
+        error.related.iter().any(|d| d.code.as_str() == "L1212"),
+        "the L1212 rides along: {error:?}"
+    );
+    assert_eq!(
+        refused.frame().as_u64(),
+        8,
+        "the sim stayed in its district"
+    );
+    assert_eq!(refused.world().entity_count(), 1);
+    assert_eq!(refused_hash, control_hash, "a refused switch moves no hash");
+}
+
 #[test]
 fn a_malformed_target_file_rejects_the_switch_with_l3018() {
     let dir = fresh_dir("malformed-target");

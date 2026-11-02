@@ -223,8 +223,63 @@ fn l1212_records(name: &str, text: Option<&str>) -> Vec<LogEvent> {
 }
 
 #[test]
-fn a_missing_mesh_document_is_one_l1212_with_the_read_failure_as_related() {
-    let records = l1212_records("missing-doc", None);
+fn a_missing_mesh_document_refuses_the_load_and_keeps_the_prior_world() {
+    let dir = fresh_dir("refused");
+    let mut engine = Engine::builder()
+        .project_root(dir.clone())
+        .build()
+        .expect("boots");
+    engine
+        .load_inline_scene("format: 1\nseed: 1\nentities:\n  - name: before\n")
+        .unwrap();
+    let before = engine.world().entity_count();
+    let errors = engine
+        .load_inline_scene(&scene())
+        .expect_err("the collider mesh is missing");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].code.as_str(), "L1212");
+    assert_eq!(
+        errors[0].path.as_deref(),
+        Some("/entities/0/components/Collider/shape/mesh/path")
+    );
+    let related: Vec<&str> = errors[0].related.iter().map(|d| d.code.as_str()).collect();
+    assert_eq!(related, ["L1101"], "{errors:?}");
+    assert_eq!(engine.world().entity_count(), before);
+    engine.advance_live();
+}
+
+#[test]
+fn a_scene_without_a_physics_block_loads_with_a_missing_collider_mesh() {
+    let dir = fresh_dir("no-physics");
+    let mut engine = Engine::builder().project_root(dir).build().expect("boots");
+    let text = scene().replace("physics:\n  space: free\n", "");
+    engine.load_inline_scene(&text).expect("loads as before");
+}
+
+#[test]
+fn a_mesh_deleted_before_a_restore_is_one_l1212_with_the_read_failure_as_related() {
+    let (mut engine, dir) = booted("missing-doc", 0.0);
+    let snapshot: Value = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    std::fs::remove_file(dir.join(MESH)).unwrap();
+    match engine
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    let records: Vec<LogEvent> = log_lines(engine, 5)
+        .into_iter()
+        .filter(|line| {
+            line.diagnostic
+                .as_ref()
+                .is_some_and(|d| d.code.as_str() == "L1212")
+        })
+        .collect();
     assert_eq!(records.len(), 1, "{records:?}");
     let diagnostic = records[0].diagnostic.as_ref().unwrap();
     assert!(

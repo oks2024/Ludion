@@ -5801,7 +5801,9 @@ impl Engine {
 /// Diagnostics of the post-expansion passes are located back into the document.
 ///
 /// # Errors
-/// Every parse/validation/expansion/instantiation/`SkinBone` diagnostic the scene produced.
+/// Every parse/validation/expansion/instantiation/`SkinBone` diagnostic the scene produced, and an
+/// `L1212` (with the `L1101` as related) for each physics-claimed `Collider` mesh file that cannot
+/// be opened when the scene has a `physics:` block.
 ///
 /// `placements` is each top-level instance's root with the `transform` its entry places it at;
 /// `source` is the checked document before expansion.
@@ -5813,6 +5815,10 @@ pub(crate) fn instantiate_named_world(
 ) -> Result<Instantiated, Vec<Diagnostic>> {
     let scene = ludion_scene::check(document, registry)?;
     let expanded = crate::scene_check::expand_scene_with(registry, &scene, resolve)?;
+    let unreadable = crate::mesh_check::missing_collider_meshes(project_root, &expanded.scene);
+    if !unreadable.is_empty() {
+        return Err(unreadable.into_iter().map(|d| expanded.locate(d)).collect());
+    }
     let (world, ids) = instantiate_expanded_world(&expanded, registry, project_root)?;
     let placements = expanded
         .instances

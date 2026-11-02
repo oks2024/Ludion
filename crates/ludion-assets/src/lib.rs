@@ -475,6 +475,32 @@ pub fn check_png_header(root: AssetRoot<'_>, relative: &str) -> Result<(), Diagn
     check_png_side(reader.info(), relative)
 }
 
+/// Checks that `root`/`relative` opens as a regular file, without reading it. The loader's refusal
+/// for a missing, unopenable or directory path, at the cost of an open and a metadata call; size and
+/// content are the reader's to judge.
+///
+/// # Errors
+/// - `L1321` if `relative` is absolute, prefixed or (on a confined root) climbs out of it.
+/// - `L1101` if the file cannot be opened or is not a regular file.
+///
+/// # Example
+/// ```
+/// use ludion_assets::{check_readable, AssetRoot};
+///
+/// let root = std::env::temp_dir().join(format!("ludion-readable-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&root).unwrap();
+/// std::fs::write(root.join("a.txt"), b"x").unwrap();
+/// assert!(check_readable(AssetRoot::content(&root), "a.txt").is_ok());
+/// assert_eq!(
+///     check_readable(AssetRoot::content(&root), "b.txt").unwrap_err().code.as_str(),
+///     "L1101"
+/// );
+/// # std::fs::remove_dir_all(&root).ok();
+/// ```
+pub fn check_readable(root: AssetRoot<'_>, relative: &str) -> Result<(), Diagnostic> {
+    open_regular(&resolve(root, relative)?, relative).map(drop)
+}
+
 /// Decodes PNG `bytes` (named `label` for diagnostics) into `(width, height, rgba8)`.
 ///
 /// Split out from [`load_png`] so it can be unit-tested on in-memory bytes without touching disk.
@@ -1005,6 +1031,27 @@ mod tests {
                 .code
                 .as_str(),
             "L1102"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn readable_check_opens_files_and_refuses_the_rest() {
+        let dir = std::env::temp_dir().join(format!("ludion-readable-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.bin"), b"x").unwrap();
+        let root = AssetRoot::content(&dir);
+        assert!(check_readable(root, "a.bin").is_ok());
+        for missing in ["gone.bin", "sub"] {
+            assert_eq!(
+                check_readable(root, missing).unwrap_err().code,
+                code::ASSET_FILE_IO,
+                "{missing}"
+            );
+        }
+        assert_eq!(
+            check_readable(root, "/abs.bin").unwrap_err().code,
+            code::CONTENT_PATH_OUTSIDE_ROOT
         );
         std::fs::remove_dir_all(&dir).ok();
     }

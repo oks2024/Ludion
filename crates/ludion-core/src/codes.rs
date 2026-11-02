@@ -6658,6 +6658,10 @@ The cause is one of: a blank `path`; the `kind: mesh` document is missing, unrea
 the physics engine refuses the triangles (degenerate or non-finite geometry); or no collider-mesh
 library is installed on the world. The body is not created; the diagnostic carries the reason.
 
+A scene with a `physics:` block whose mesh file cannot be opened is refused when it loads or
+switches, with the `L1101` as related; `ludion sim-hash` exits 1 with no hash. A restore, a runtime
+spawn or a `component.set` gets no body instead.
+
 The mesh is read when a scene loads, a snapshot restores or the scene switches, not by
 `asset.reload`. A body whose mesh failed is retried once the document's content changes, at the
 next such point.

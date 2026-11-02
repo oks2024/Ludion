@@ -190,7 +190,8 @@ edge always hits; a slanted ray lying exactly in a grid plane can miss at a shar
 collider size or a rigid body's `mass` is not strictly positive and finite; `L1181` — a `convex`
 hull's points are coincident, collinear or coplanar; `L1182` — a `heightfield` grid is ragged or
 smaller than 2×2; `L1211` — a `mesh` or `heightfield` collider on a `rigid` body; `L1212` — a `mesh` collider's
-document cannot be built. A shape the solver still rejects gets no body and is retried only once
+document cannot be built (a missing file refuses the scene load or switch; a restore or runtime
+spawn gets no body). A shape the solver still rejects gets no body and is retried only once
 its `Collider` changes, reported once per entity. Rapier mapping: `ludion devdocs ludion-physics`.
 
 ## Next

@@ -106,7 +106,7 @@ export function gameCard(input: {
       return {
         slot: {
           tone: 'error',
-          title: 'The game failed to build',
+          title: 'The game failed to start',
           detail: status.message ?? 'The game exited before it announced a url, and printed nothing to explain it.',
           canRestart: false,
           canAddScenes: false,

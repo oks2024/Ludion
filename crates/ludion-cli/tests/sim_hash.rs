@@ -102,6 +102,30 @@ fn broken_scene_fails_with_diagnostics() {
     assert!(stderr.contains("error[L1014]"), "stderr was: {stderr}");
 }
 
+/// A physics-claimed collider naming a mesh file that is not there refuses the load: exit 1, no
+/// hash, the `L1212` and its `L1101` on stderr — also with no frames to run.
+#[test]
+fn a_missing_collider_mesh_fails_with_no_hash() {
+    let dir = std::env::temp_dir().join(format!("ludion-sim-hash-collider-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("scene.yaml");
+    std::fs::write(
+        &scene,
+        "format: 1\nseed: 1\nphysics:\n  space: free\nentities:\n  - name: floor\n    components:\n      Transform: {}\n      Collider:\n        shape:\n          mesh:\n            path: gone.mesh.yaml\n        body: static\n",
+    )
+    .unwrap();
+    for frames in ["0", "5"] {
+        let output = run_sim_hash(&["--scene", scene.to_str().unwrap(), "--frames", frames]);
+        assert_eq!(output.status.code(), Some(1), "frames {frames}");
+        assert!(output.stdout.is_empty(), "no hash may be printed");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("L1212"), "stderr was: {stderr}");
+        assert!(stderr.contains("L1101"), "stderr was: {stderr}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A missing script file is an L4002 diagnostic; a malformed one is an L4003 with the record
 /// shape in the help. Both exit non-zero without printing a hash.
 #[test]

@@ -136,6 +136,67 @@ pub fn scene_mesh_asset_diagnostics(project_root: &Path, scene: &Scene) -> Vec<D
     found
 }
 
+/// The `L1212` a scene's physics-claimed `Collider` mesh files earn when they cannot be opened,
+/// each with the `L1101` as `related`: the faults that refuse a load, since the world would
+/// otherwise run with no body for them. A scene with no `physics:` block never raises these, and a
+/// document that opens but is malformed stays the runtime's `L1212`.
+pub(crate) fn missing_collider_meshes(project_root: &Path, scene: &Scene) -> Vec<Diagnostic> {
+    if scene.physics.is_none() {
+        return Vec::new();
+    }
+    let mut sites = Vec::new();
+    for (index, entity) in scene.entities.iter().enumerate() {
+        let Some((_, value)) = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "Collider")
+        else {
+            continue;
+        };
+        if let Ok(collider) = serde_json::from_value::<Collider>(value.clone())
+            && collider.is_solver_owned()
+            && let Shape::Mesh { path } = collider.shape
+            && !path.is_empty()
+        {
+            sites.push((index, path));
+        }
+    }
+    let root = AssetRoot::content(project_root);
+    let mut faults: BTreeMap<&str, Diagnostic> = BTreeMap::new();
+    for (_, rel) in &sites {
+        if !faults.contains_key(rel.as_str())
+            && let Err(fault) = ludion_assets::check_readable(root, rel)
+            && fault.code == code::ASSET_FILE_IO
+        {
+            faults.insert(rel, fault);
+        }
+    }
+    let mut manifest = None;
+    let faults: BTreeMap<&str, Diagnostic> = faults
+        .into_iter()
+        .map(|(rel, fault)| (rel, helped(project_root, fault, &mut manifest)))
+        .collect();
+    sites
+        .iter()
+        .filter_map(|(index, rel)| {
+            let fault = faults.get(rel.as_str())?;
+            let named = crate::skin_bone::named(&scene.entities[*index], *index);
+            Some(
+                Diagnostic::new(
+                    code::COLLIDER_MESH_UNAVAILABLE,
+                    format!(
+                        "{named}: the mesh `{rel}` cannot be read, so this scene would load with no body for it"
+                    ),
+                )
+                .with_related(fault.clone())
+                .with_path(format!(
+                    "/entities/{index}/components/Collider/shape/mesh/path"
+                )),
+            )
+        })
+        .collect()
+}
+
 /// The faults a site reports, each with the label and document path it is reported under (a
 /// character's mesh fault names the mesh, not the character).
 fn site_faults<'a>(
