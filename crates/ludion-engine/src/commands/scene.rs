@@ -96,6 +96,7 @@ pub(crate) fn save(
              engine was started with) and is writable",
         )
     })?;
+    engine.asset_cache_prune_requested();
     // The scene on disk changed — notify `scene.changed` subscribers (dropped if none are open).
     engine.push_event(Event::SceneChanged(SceneChangedData {
         path: Some(params.path.clone()),

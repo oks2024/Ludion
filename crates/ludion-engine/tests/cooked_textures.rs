@@ -10,7 +10,8 @@ use ludion_assets::cooked::{ColorSpace, CookSettings, CookTarget, cook_key, cook
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{Egress, EgressChannels, Engine, TextureSource};
 use ludion_protocol::command::{
-    RenderScreenshotParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
+    AssetReloadParams, RenderScreenshotParams, SceneLoadParams, SimStepParams,
+    StreamSubscribeParams, SubscribeMode,
 };
 use ludion_protocol::event::{Event, LogEvent};
 use ludion_protocol::frame::FrameFormat;
@@ -168,6 +169,16 @@ fn l1271(lines: &[LogEvent]) -> Vec<&LogEvent> {
 /// Renders `rounds` screenshots on a live sim thread, stepping once after each, and returns the log
 /// lines seen after every round.
 fn live_logs(engine: Engine, rounds: usize) -> Vec<Vec<LogEvent>> {
+    live_logs_with(engine, rounds, |_, _| {})
+}
+
+/// [`live_logs`], calling `between(round, send)` before each round's screenshot, with `send` running
+/// a command on the sim thread.
+fn live_logs_with(
+    engine: Engine,
+    rounds: usize,
+    mut between: impl FnMut(usize, &dyn Fn(Command)),
+) -> Vec<Vec<LogEvent>> {
     let mut engine = engine;
     engine.execute(Command::SimPause).expect("pauses");
     let (intake, intake_rx) = unbounded();
@@ -196,7 +207,8 @@ fn live_logs(engine: Engine, rounds: usize) -> Vec<Vec<LogEvent>> {
         format: FrameFormat::Qoi,
     }));
     let mut seen = Vec::new();
-    for _ in 0..rounds {
+    for round in 0..rounds {
+        between(round, &send);
         send(Command::RenderScreenshot(RenderScreenshotParams {
             width: Some(64),
             height: Some(64),
@@ -318,5 +330,70 @@ alpha_cutoff: 0.5
     cook_map(&dir, NORMAL, target, ColorSpace::Linear, None);
     let rounds = live_logs(engine(&dir, TextureSource::Cooked), 1);
     assert_eq!(l1271(&rounds[0]).len(), 1, "{:?}", rounds[0]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A map cooked after the first render is picked up by an `asset.reload` of a store file, with no
+/// restart: the second `L1271` lists only the map still uncooked.
+#[test]
+fn needs_gpu_a_sync_mid_session_takes_effect() {
+    let Some(target) = target_or_skip("a_sync_mid_session_takes_effect") else {
+        return;
+    };
+    let dir = project("sync-mid");
+    let root = dir.clone();
+    let rounds = live_logs_with(engine(&dir, TextureSource::Cooked), 2, |round, send| {
+        if round == 1 {
+            cook_map(&root, BASE, target, ColorSpace::Srgb, None);
+            send(Command::AssetReload(AssetReloadParams {
+                path: Some(".ludion/cooked/store-file.ktx2".to_string()),
+            }));
+        }
+    });
+    assert_eq!(
+        l1271(&rounds[0])[0]
+            .diagnostic
+            .as_ref()
+            .unwrap()
+            .related
+            .len(),
+        2
+    );
+    let second = l1271(&rounds[1]);
+    assert_eq!(second.len(), 1, "{:?}", rounds[1]);
+    assert_eq!(second[0].diagnostic.as_ref().unwrap().related.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A scene load re-tests the cook fallbacks, so a store filled since the last load is read.
+#[test]
+fn needs_gpu_a_scene_load_retries_a_cook_fallback() {
+    let Some(target) = target_or_skip("a_scene_load_retries_a_cook_fallback") else {
+        return;
+    };
+    let dir = project("load-retry");
+    std::fs::create_dir_all(dir.join("scenes")).unwrap();
+    std::fs::write(dir.join("scenes/main.yaml"), SCENE).unwrap();
+    let root = dir.clone();
+    let rounds = live_logs_with(engine(&dir, TextureSource::Cooked), 2, |round, send| {
+        if round == 1 {
+            cook_map(&root, BASE, target, ColorSpace::Srgb, None);
+            send(Command::SceneLoad(SceneLoadParams {
+                path: "scenes/main.yaml".to_string(),
+            }));
+        }
+    });
+    assert_eq!(
+        l1271(&rounds[0])[0]
+            .diagnostic
+            .as_ref()
+            .unwrap()
+            .related
+            .len(),
+        2
+    );
+    let second = l1271(&rounds[1]);
+    assert_eq!(second.len(), 1, "{:?}", rounds[1]);
+    assert_eq!(second[0].diagnostic.as_ref().unwrap().related.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }

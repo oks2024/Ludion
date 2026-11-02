@@ -321,10 +321,14 @@ pub struct Engine {
     /// [`TextureSource::Source`]. A client setting exactly as [`quality`](Engine::quality) is: not
     /// hashed, not snapshotted, not recorded and invisible to the simulation.
     textures: TextureSource,
-    /// Whether the asset cache has been pointed at the cooked store (or away from it) for the
-    /// current [`textures`](Engine::textures) value. Cleared by `set_textures`, set by the first
-    /// extract after, which needs the renderer's cook target to resolve it.
+    /// Whether the asset cache is pointed at the cooked store (or away from it) for the current
+    /// [`textures`](Engine::textures) value and its held cook fallbacks have been re-tested against
+    /// the store. Cleared by `set_textures`, a world rebuild and an `asset.reload` of a store file;
+    /// the first extract after re-resolves the lookup (which needs the renderer's cook target) and
+    /// retests the fallbacks.
     cook_resolved: bool,
+    /// Whether a scene save asked the next cache reader to evict what the world no longer names.
+    prune_pending: bool,
     /// Where reflection-probe cubes come from ([`set_probes`](Engine::set_probes)). Default
     /// [`ProbeSource::Fresh`]. A client setting exactly as [`textures`](Engine::textures) is: not
     /// hashed, not snapshotted, not recorded and invisible to the simulation.
@@ -755,6 +759,7 @@ impl Engine {
             quality: QualitySetting::default(),
             textures: TextureSource::default(),
             cook_resolved: false,
+            prune_pending: false,
             probes: ProbeSource::default(),
             probe_store: None,
             probe_world: None,
@@ -1348,8 +1353,22 @@ impl Engine {
                 crate::cooked_maps::lookup_for(&self.project_root, &supported).map(Arc::new)
             }
         };
-        self.asset_cache.set_cook(lookup);
+        let changed = self.asset_cache.set_cook(lookup);
+        let retried = self.asset_cache.retry_cook_misses();
+        if changed || retried {
+            self.prefetch_pending = true;
+        }
         self.cook_resolved = true;
+    }
+
+    /// A file in the cooked store moved: the next extract re-tests the held cook fallbacks.
+    pub(crate) fn cook_store_moved(&mut self) {
+        self.cook_resolved = false;
+    }
+
+    /// A scene save asks the next cache reader to evict what the world no longer names.
+    pub(crate) fn asset_cache_prune_requested(&mut self) {
+        self.prune_pending = true;
     }
 
     /// Sets whether the GI caches follow the world ([`GiRebakeMode::Auto`], the default) or hold the
@@ -4251,7 +4270,8 @@ impl Engine {
     fn refresh_asset_cache(&mut self, prefetch: bool) -> bool {
         let revalidate = std::mem::take(&mut self.revalidate_pending);
         let prefetch = prefetch && std::mem::take(&mut self.prefetch_pending);
-        if !revalidate && !prefetch {
+        let prune = std::mem::take(&mut self.prune_pending);
+        if !revalidate && !prefetch && !prune {
             return false;
         }
         let refs =
@@ -4259,6 +4279,8 @@ impl Engine {
         if revalidate {
             self.asset_cache
                 .retain_referenced(AssetRoot::content(&self.project_root), &refs);
+        } else if prune {
+            self.asset_cache.evict_unreferenced(&refs);
         }
         if prefetch {
             self.asset_cache
@@ -4306,6 +4328,7 @@ impl Engine {
         height: u32,
         use_view: bool,
     ) -> Result<RenderScene, Vec<Diagnostic>> {
+        self.asset_cache.forget_failures();
         self.extract_render_scene_blend(width, height, use_view, None)
     }
 
@@ -4367,8 +4390,9 @@ impl Engine {
                 let target = cache
                     .cook()
                     .and_then(crate::cooked_maps::CookLookup::target);
+                // Keyed by the count so a retry that leaves fewer fallbacks reports again.
                 degraded.push((
-                    "textures: cooked".to_string(),
+                    format!("textures: cooked ({} uncooked)", misses.len()),
                     crate::cooked_maps::not_cooked_warning(target, &misses),
                 ));
             }
@@ -4413,6 +4437,7 @@ impl Engine {
         &mut self,
         use_view: bool,
     ) -> Result<([u32; 2], Vec<EntityBounds>), Diagnostic> {
+        self.asset_cache.forget_failures();
         self.refresh_asset_cache(false);
         let size = self.render_size();
         let view = use_view.then_some(self.view_override.as_ref()).flatten();
@@ -5906,6 +5931,7 @@ impl Engine {
         // Prefetched at the first extract, not here: headless rebuilds (replay verification, sim
         // hashing) never draw, and must not pay the decode bill.
         self.prefetch_pending = true;
+        self.cook_resolved = false;
         self.revalidate_pending = true;
         self.arm_query_recording();
     }
@@ -7027,5 +7053,125 @@ entities:
             (with.position, with.right, with.up),
             (rig.position, rig.right, rig.up)
         );
+    }
+
+    fn memo_root(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ludion-memo-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sprite_png() -> Vec<u8> {
+        ludion_assets::encode_png(2, 2, &[255; 16]).unwrap()
+    }
+
+    const MEMO_SPRITE_SCENE: &str =
+        "format: 1\nentities:\n  - components:\n      Sprite:\n        texture: a.png\n";
+
+    fn memo_engine(dir: &Path, scene: &str) -> Engine {
+        let mut engine = Engine::builder().project_root(dir).build().unwrap();
+        engine.load_inline_scene(scene).unwrap();
+        engine
+    }
+
+    fn live_blend(engine: &mut Engine) -> Result<RenderScene, Vec<Diagnostic>> {
+        engine.extract_render_scene_blend(64, 64, false, None)
+    }
+
+    fn reload(engine: &mut Engine, path: &str) {
+        engine
+            .execute(ludion_protocol::Command::AssetReload(
+                ludion_protocol::command::AssetReloadParams {
+                    path: Some(path.to_string()),
+                },
+            ))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_live_frame_remembers_a_failure_until_an_asset_reload() {
+        let dir = memo_root("live");
+        let mut engine = memo_engine(&dir, MEMO_SPRITE_SCENE);
+        assert!(live_blend(&mut engine).is_err());
+        std::fs::write(dir.join("a.png"), sprite_png()).unwrap();
+        assert!(
+            live_blend(&mut engine).is_err(),
+            "the failure is remembered"
+        );
+        reload(&mut engine, "elsewhere/unrelated.png");
+        assert!(live_blend(&mut engine).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_one_shot_extract_always_retries_a_failure() {
+        let dir = memo_root("one-shot");
+        let mut engine = memo_engine(&dir, MEMO_SPRITE_SCENE);
+        assert!(live_blend(&mut engine).is_err());
+        std::fs::write(dir.join("a.png"), sprite_png()).unwrap();
+        assert!(engine.extract_render_scene(64, 64).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_asset_reload_of_any_path_retries_a_failed_assembly() {
+        let dir = memo_root("assembly");
+        let scene = "format: 1\nentities:\n  - components:\n      Mesh:\n        shape:\n          assembly: models/m.assembly.yaml\n";
+        std::fs::create_dir_all(dir.join("models/parts")).unwrap();
+        std::fs::write(
+            dir.join("models/m.assembly.yaml"),
+            "format: 1\nkind: assembly\nname: m\nsize:\n  - 2\n  - 1\n  - 1\npalette:\n  A:\n    color:\n      - 1.0\n      - 0.0\n      - 0.0\n      - 1.0\nparts:\n  - name: body\n    file: parts/m.part.yaml\n    place:\n      - 0\n      - 0\n      - 0\n",
+        )
+        .unwrap();
+        let mut engine = memo_engine(&dir, scene);
+        assert!(live_blend(&mut engine).is_err());
+        std::fs::write(
+            dir.join("models/parts/m.part.yaml"),
+            "format: 1\nkind: part\nsize:\n  - 2\n  - 1\n  - 1\nslices:\n  -\n    - \"AA\"\n",
+        )
+        .unwrap();
+        assert!(live_blend(&mut engine).is_err(), "no edge names the part");
+        reload(&mut engine, "models/parts/m.part.yaml");
+        assert!(live_blend(&mut engine).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scene_save_evicts_what_the_world_no_longer_names() {
+        let dir = memo_root("save");
+        std::fs::write(dir.join("a.png"), sprite_png()).unwrap();
+        std::fs::write(
+            dir.join("b.png"),
+            ludion_assets::encode_png(2, 2, &[7; 16]).unwrap(),
+        )
+        .unwrap();
+        let mut engine = memo_engine(&dir, MEMO_SPRITE_SCENE);
+        engine.extract_render_scene(64, 64).unwrap();
+        let sprite = engine.world().entities().next().unwrap();
+        engine
+            .world_mut()
+            .insert(
+                sprite,
+                crate::components::Sprite {
+                    texture: Some("b.png".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        engine.extract_render_scene(64, 64).unwrap();
+        assert!(engine.asset_cache().contains("a.png"), "kept until a save");
+
+        engine
+            .execute(ludion_protocol::Command::SceneSave(
+                ludion_protocol::command::SceneSaveParams {
+                    path: "saved.yaml".to_string(),
+                },
+            ))
+            .unwrap();
+        engine.extract_render_scene(64, 64).unwrap();
+        assert!(!engine.asset_cache().contains("a.png"));
+        assert!(engine.asset_cache().contains("b.png"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

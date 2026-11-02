@@ -10,6 +10,10 @@
 //! `AssetsReloaded` reply. So a host can forward *everything* under the asset root and the engine
 //! ignores what it does not hold; there is no cross-thread sharing of cache membership.
 //!
+//! **Every reload retries remembered load failures** (`AssetCache::forget_failures`), whatever the
+//! path: a failed load cannot name every file it would have read. A path under `.ludion/cooked/`
+//! does only that and re-tests the held cook fallbacks at the next extract.
+//!
 //! **The paused re-render needs no special wiring.** `asset.reload` is an ordinary drained command, so
 //! `run_live`'s drain loop trips `frame_dirty` for it exactly as it does for a `component.set` — the
 //! next egress pass re-renders even while paused, and because the reload already replaced the cache
@@ -34,6 +38,15 @@ pub(crate) fn reload(
         // No path given: nothing to reload (kept for wire compatibility with the empty-reply shape).
         return Ok(ResponseBody::AssetsReloaded { paths: Vec::new() });
     };
+
+    // Any reload retries remembered load failures, whatever the path and whether or not it is cached.
+    engine.asset_cache_mut().forget_failures();
+    // A cooked-store file is never a cache key or a document: the next extract re-tests the held
+    // cook fallbacks, so a whole sync's batch collapses into one retry.
+    if crate::cooked_maps::is_store_path(&path) {
+        engine.cook_store_moved();
+        return Ok(ResponseBody::AssetsReloaded { paths: Vec::new() });
+    }
 
     // A renderer shader (`.wgsl`) is a dev-only reloadable asset (Plan/shader-bindgen.md decisions
     // 10–11). Under the dev flag the renderer recreates the module + dependent pipeline (keeping the

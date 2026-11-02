@@ -852,7 +852,7 @@ fn discard_undeliverable_events(engine: &mut Engine, has_transport: bool) {
 /// rendered text is held in [`last_render_error`](EgressState::last_render_error)), and a render
 /// success — or a *different* failure — resets that latch so the next distinct problem, or a
 /// recurrence after recovery, logs again. An ordinary failure leaves the frame dirty for the next
-/// pass, so a transient one self-heals.
+/// pass; the disk retry is bounded by the cache's failure memo (see the `asset_cache` module docs).
 fn emit_egress(
     engine: &mut Engine,
     channels: Option<&EgressChannels>,
@@ -988,8 +988,8 @@ fn absorb_render_failure(engine: &mut Engine, state: &mut EgressState, diag: Dia
     // Any failure but a missing adapter (a missing texture `L1101`, a bad extract, a readback error
     // `L2005`, and the fatal faults above): surface it loudly on the `log` channel rather than
     // skipping in silence, but only once per distinct diagnostic — the same failure recurs every
-    // pass, and a frozen stream should not become a flood of log spam. The frame stays dirty, so
-    // the next pass retries a transient failure and a recovery self-heals.
+    // pass, and a frozen stream should not become a flood of log spam. The frame stays dirty, and
+    // the disk retry is bounded by the cache's failure memo (see the `asset_cache` module docs).
     let rendered = diag.to_string();
     if state.last_render_error.as_deref() != Some(rendered.as_str()) {
         engine.push_event(Event::Log(LogEvent::from_diagnostic(diag)));

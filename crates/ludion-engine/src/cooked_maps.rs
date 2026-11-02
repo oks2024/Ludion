@@ -14,7 +14,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ludion_assets::AssetBytes;
 use ludion_assets::cooked::{
     ColorSpace, CookSettings, CookTarget, Ktx2Error, cook_key, cooked_file_name, read_ktx2,
 };
@@ -227,17 +226,17 @@ impl CookLookup {
         })
     }
 
-    /// Reads the cooked copy of the map whose PNG bytes are `png`, in `role` under the table cap
-    /// `cap`.
+    /// Reads the cooked copy of the map whose PNG content hash is `png_hash`, in `role` under the
+    /// table cap `cap`.
     pub(crate) fn read(
         &self,
-        png: &AssetBytes,
+        png_hash: u64,
         role: CookRole,
         cap: Option<u32>,
     ) -> Result<Arc<CookedMap>, CookMiss> {
         let target = self.target.ok_or(CookMiss::Unsupported)?;
         let key = cook_key(
-            png.hash,
+            png_hash,
             &CookSettings {
                 target,
                 color_space: role.space,
@@ -255,6 +254,12 @@ impl CookLookup {
         check_compressed(&image, role.space == ColorSpace::Srgb).map_err(CookMiss::Invalid)?;
         Ok(Arc::new(CookedMap { key, image }))
     }
+}
+
+/// Whether `path` (relative or absolute, either separator) lies in a cooked store, a file that is
+/// never a cache key or a document.
+pub(crate) fn is_store_path(path: &str) -> bool {
+    ludion_core::paths::normalize(path).contains(".ludion/cooked/")
 }
 
 /// How many maps one `L1271` lists in full.
@@ -314,6 +319,15 @@ mod tests {
             roots: roots.iter().map(ToString::to_string).collect(),
             ..lookup(0, &[])
         }
+    }
+
+    #[test]
+    fn a_store_path_is_recognised_in_every_spelling() {
+        assert!(is_store_path("/p/.ludion/cooked/desktop/ab.ktx2"));
+        assert!(is_store_path(".ludion/cooked/desktop/ab.ktx2"));
+        assert!(is_store_path("C:\\p\\.ludion\\cooked\\desktop\\ab.ktx2"));
+        assert!(!is_store_path("assets/ludion/cooked.png"));
+        assert!(!is_store_path("assets/a.png"));
     }
 
     #[test]

@@ -155,7 +155,8 @@ ssao_samples = 4
 
 `--textures <source|cooked>` picks where imported mesh maps come from: `source` decodes the PNGs,
 `cooked` reads the BC7/ASTC copies `ludion sync` wrote under `.ludion/cooked/`. A map with no cooked
-copy loads from its PNG, with one `L1271` warning per load. Pixels only — never the sim or its hash.
+copy loads from its PNG, with one `L1271` warning per load. A `ludion sync` during a session takes
+effect with no restart. Pixels only — never the sim or its hash.
 
 | Host | Textures |
 |---|---|

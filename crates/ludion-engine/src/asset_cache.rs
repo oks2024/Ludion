@@ -43,7 +43,19 @@
 //! drops what changed; the extract then calls [`AssetCache::prefetch`], which decodes the misses on
 //! the worker pool and inserts the results serially in sorted key order, so the cache is the same at
 //! any thread count and the extract that follows only hits. A scene load therefore never clears the
-//! cache: what two worlds share is decoded once. A failed decode is left for that extract to report.
+//! cache: what two worlds share is decoded once. A successful `scene.save` evicts what the world no
+//! longer names ([`AssetCache::evict_unreferenced`]), without the re-hash.
+//!
+//! # Remembered failures
+//!
+//! A remembered failure is a short-lived memo for the live frame stream, never a verdict. A failed
+//! load cannot name every file it would have read (a missing part of an assembly leaves no
+//! dependency edge), so the memo is never matched to a changed file; the whole memo clears on:
+//! any `asset.reload`, whatever the path; a world rebuild or eviction; a real cook setting change;
+//! any one-shot extract (screenshot, profile, dump); and every `FAILURE_RETRY_PASSES` extract
+//! passes, so a host with no watcher still heals. A cook fallback is not a failure: it decoded, is
+//! held as an entry with its reason in `cook_misses`, and is re-tested by
+//! [`AssetCache::retry_cook_misses`].
 //!
 //! Asset bytes live here and nowhere in the world, so a reload is invisible to the `WorldHash` and a
 //! recorded session — sim-invisible and replay-safe.
@@ -65,6 +77,15 @@ use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
 use crate::prefab_clips::{PartRests, PrefabClipData};
 use crate::voxel_mesh::VoxelStaticGrid;
 
+/// How many extract passes a remembered load failure survives with no other clearer, so a host with
+/// no file watcher still retries within about a second at 60 fps.
+const FAILURE_RETRY_PASSES: u32 = 60;
+
+/// The most distinct prefab texts whose parsed rests are held. The one map bounded by time (keyed by
+/// text version) rather than by project size; a parse is cheap, so clearing when full costs only a
+/// world with more live prefab texts than this.
+const PREFAB_RESTS_CAP: usize = 256;
+
 /// Which pixels a mesh map's cache entry holds: the PNG's decode, or — under `textures: cooked`, for
 /// a map an `[[import]]` table produced or a `[cook] roots` directory holds — the cooked file read
 /// for one colour role (a cooked map's bytes differ by role, so one path can hold two entries).
@@ -76,7 +97,7 @@ enum MapRole {
 
 /// Which of the cache's maps an entry lives in — the tag a dependency edge carries so a reload
 /// re-runs the right loader.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum AssetKind {
     Texture,
     /// A texture map a mesh document binds: held once however many meshes name it (per role under
@@ -177,7 +198,7 @@ fn decode(
             let cooked = match (role, cook) {
                 (MapRole::Cooked(role), Some(cook)) => {
                     let cap = cook.cap_for(key).unwrap_or(None);
-                    Some(cook.read(&bytes, role, cap))
+                    Some(cook.read(bytes.hash, role, cap))
                 }
                 (MapRole::Cooked(_), None) => Some(Err(CookMiss::Unsupported)),
                 (MapRole::Source, _) => None,
@@ -271,6 +292,12 @@ pub(crate) struct AssetCache {
     /// Part rests parsed from a prefab's held text, by the text's content hash: an instance poses
     /// against the text it was expanded from, which may differ from the file.
     prefab_rests: BTreeMap<u64, Arc<PartRests>>,
+    /// Loads that failed, by kind and the raw `rel` they were asked for, so the live frame stream does
+    /// not re-read the disk every frame. A short-lived memo, never a verdict: see the module docs for
+    /// what clears it.
+    failures: BTreeMap<(AssetKind, String), Vec<Diagnostic>>,
+    /// Extract passes since the memo was last cleared.
+    failure_passes: u32,
     atlases: BTreeMap<String, Arc<AtlasAsset>>,
     /// Which cached entries each **source file** feeds, as `(kind, entry key)`: an entry's own
     /// document key maps to itself, and every other file it read (an assembly's part or clip, a
@@ -318,6 +345,8 @@ impl AssetCache {
             characters: BTreeMap::new(),
             prefab_clips: BTreeMap::new(),
             prefab_rests: BTreeMap::new(),
+            failures: BTreeMap::new(),
+            failure_passes: 0,
             atlases: BTreeMap::new(),
             dependents: BTreeMap::new(),
             source_hashes: BTreeMap::new(),
@@ -341,10 +370,12 @@ impl AssetCache {
     /// Points mesh-map loading at a cooked store (`Some`) or back at the PNGs (`None`). A change
     /// drops every mesh map through its dependents, which drops the meshes built from them, so the
     /// next prefetch or extract rebuilds them under the new setting; an equal setting is a no-op.
-    pub(crate) fn set_cook(&mut self, cook: Option<Arc<CookLookup>>) {
+    /// Returns whether it changed anything.
+    pub(crate) fn set_cook(&mut self, cook: Option<Arc<CookLookup>>) -> bool {
         if self.cook == cook {
-            return;
+            return false;
         }
+        self.forget_failures();
         self.cook = cook;
         let files: BTreeSet<String> = self
             .mesh_maps
@@ -355,6 +386,53 @@ impl AssetCache {
             self.drop_dependents(&file);
         }
         self.prune_source_hashes();
+        true
+    }
+
+    /// Re-tests every held cook fallback against the store: a map whose cooked file now reads, or
+    /// fails for a different reason, is dropped with the meshes built from it, so the next prefetch
+    /// or extract rebuilds it. A map still missing for the same reason keeps its held PNG with no
+    /// re-decode. Returns whether anything was dropped.
+    pub(crate) fn retry_cook_misses(&mut self) -> bool {
+        let Some(cook) = self.cook.clone() else {
+            return false;
+        };
+        let mut moved: BTreeSet<String> = BTreeSet::new();
+        for ((key, role), held) in &self.cook_misses {
+            let Some(hash) = self.source_hashes.get(key) else {
+                continue;
+            };
+            let cap = cook.cap_for(key).unwrap_or(None);
+            match cook.read(*hash, *role, cap) {
+                Err(miss) if miss == *held => {}
+                _ => {
+                    moved.insert(key.clone());
+                }
+            }
+        }
+        let any = !moved.is_empty();
+        for key in moved {
+            self.drop_dependents(&key);
+        }
+        any
+    }
+
+    /// Forgets every remembered load failure.
+    pub(crate) fn forget_failures(&mut self) {
+        self.failures.clear();
+        self.failure_passes = 0;
+    }
+
+    /// Counts one extract pass against the remembered failures and forgets them all once
+    /// [`FAILURE_RETRY_PASSES`] have gone by.
+    pub(crate) fn age_failures(&mut self) {
+        if self.failures.is_empty() {
+            return;
+        }
+        self.failure_passes += 1;
+        if self.failure_passes >= FAILURE_RETRY_PASSES {
+            self.forget_failures();
+        }
     }
 
     /// The maps that loaded from their PNG although cooking was asked for, with why, in path order.
@@ -614,6 +692,9 @@ impl AssetCache {
             return Some(Arc::clone(rests));
         }
         let rests = Arc::new(crate::prefab_clips::rests_of_text(text)?);
+        if self.prefab_rests.len() >= PREFAB_RESTS_CAP {
+            self.prefab_rests.clear();
+        }
         self.prefab_rests.insert(hash, Arc::clone(&rests));
         Some(rests)
     }
@@ -675,6 +756,10 @@ impl AssetCache {
         kind: AssetKind,
         rel: &str,
     ) -> Result<(), Vec<Diagnostic>> {
+        let memo = (kind, rel.to_string());
+        if let Some(failure) = self.failures.get(&memo) {
+            return Err(failure.clone());
+        }
         let key = normalize_key(rel);
         let phase = kind.load_phase();
         if let Some(observer) = self.observer.as_deref_mut() {
@@ -684,7 +769,13 @@ impl AssetCache {
         if let Some(observer) = self.observer.as_deref_mut() {
             observer.end(phase);
         }
-        let sources = decoded?;
+        let sources = match decoded {
+            Ok(sources) => sources,
+            Err(failure) => {
+                self.failures.insert(memo, failure.clone());
+                return Err(failure);
+            }
+        };
         self.report_decoded(project_root, kind, &key, &sources);
         self.record_sources(kind, &key, &sources);
         Ok(())
@@ -912,14 +1003,11 @@ impl AssetCache {
         self.prune_source_hashes();
     }
 
-    /// Makes the cache the working set of the world `refs` describes: evicts every entry the world
-    /// does not name (so a chain of scene switches never accumulates), then re-hashes the files the
-    /// survivors were built from and drops every entry built from one that changed or vanished — the
-    /// drop half of [`reload`](AssetCache::reload). The next [`prefetch`](AssetCache::prefetch) then
-    /// decodes only what is missing, so a scene that shares assets with the last one pays for none of
-    /// them. Nothing is re-read here: a dropped entry is decoded again by the prefetch or the extract
-    /// that follows.
-    pub(crate) fn retain_referenced(&mut self, project_root: AssetRoot<'_>, refs: &AssetRefs) {
+    /// Evicts every entry the world `refs` describes no longer names, with the dependency edges,
+    /// hashes and cook fallbacks that went with them, and forgets the remembered failures. Nothing is
+    /// re-read or re-hashed: a cold authoring moment (a rebuild, a scene save) is the only caller.
+    pub(crate) fn evict_unreferenced(&mut self, refs: &AssetRefs) {
+        self.forget_failures();
         let mut meshes = refs.meshes.clone();
         for key in &refs.characters {
             if let Some(character) = self.characters.get(key) {
@@ -954,6 +1042,17 @@ impl AssetCache {
         self.cook_misses
             .retain(|(key, role), _| maps.contains_key(&(key.clone(), MapRole::Cooked(*role))));
         self.retain_edges();
+    }
+
+    /// Makes the cache the working set of the world `refs` describes: evicts every entry the world
+    /// does not name (so a chain of scene switches never accumulates), then re-hashes the files the
+    /// survivors were built from and drops every entry built from one that changed or vanished — the
+    /// drop half of [`reload`](AssetCache::reload). The next [`prefetch`](AssetCache::prefetch) then
+    /// decodes only what is missing, so a scene that shares assets with the last one pays for none of
+    /// them. Nothing is re-read here: a dropped entry is decoded again by the prefetch or the extract
+    /// that follows.
+    pub(crate) fn retain_referenced(&mut self, project_root: AssetRoot<'_>, refs: &AssetRefs) {
+        self.evict_unreferenced(refs);
 
         self.begin(LoadPhase::Other);
         let changed: Vec<String> = {
@@ -1214,8 +1313,8 @@ impl AssetCache {
     /// `L1101`/`L1113`/`L1114` (voxel, or a sculpt's voxel part), `L1101`/`L1156`/`L1157`/`L1160`
     /// (sculpt), `L1101`/`L1137`–`L1142` (assembly), or `L1101`/`L1102`/`L1153` (atlas) if a dependent
     /// entry can no longer be read, decoded, or validated. Every dependent is re-read; the first
-    /// failure is returned and each failed entry is left dropped, so a later successful reload (or
-    /// the next `extract`) reinstates it.
+    /// failure is returned and each failed entry is left dropped, so a later reload, a one-shot
+    /// extract, or a live pass once the failure is forgotten reinstates it.
     pub(crate) fn reload(
         &mut self,
         project_root: AssetRoot<'_>,
@@ -1223,6 +1322,7 @@ impl AssetCache {
     ) -> Result<u64, Diagnostic> {
         // Drop every entry before any re-read: one failing early must not leave a later dependent
         // (a character built on a mesh that just changed) holding the stale copy.
+        self.forget_failures();
         let dependents = self.drop_dependents(key);
         let mut first_error = None;
         for (kind, entry) in &dependents {
@@ -1238,6 +1338,12 @@ impl AssetCache {
             return Err(error);
         }
         Ok(ludion_assets::load_bytes(project_root, key)?.hash)
+    }
+
+    /// How many parsed prefab rests are held. Test-only.
+    #[cfg(test)]
+    pub(crate) fn prefab_rests_len(&self) -> usize {
+        self.prefab_rests.len()
     }
 
     /// Whether the cache holds a texture at `key` (in its normalized form). Test-only.
@@ -3810,5 +3916,136 @@ parts:
         let hashes: Vec<_> = cache.source_hashes.keys().collect();
         assert_eq!(edges, hashes);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn texture_err(cache: &mut AssetCache, dir: &Path) -> String {
+        let error = cache
+            .load(ludion_assets::AssetRoot::content(dir), "t.png")
+            .map(|_| ())
+            .unwrap_err();
+        format!("{error:?}")
+    }
+
+    #[test]
+    fn a_cook_fallback_retries_once_the_store_file_appears() {
+        let dir = cook_project("retry-appears", None);
+        let mut cache = AssetCache::new();
+        cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        let root = ludion_assets::AssetRoot::content(&dir);
+        cache.load_mesh(root, KIT_MESH).unwrap();
+        assert_eq!(cache.cook_misses().len(), 2);
+        assert!(!cache.retry_cook_misses(), "no new file, no move");
+
+        store_both(&dir, None);
+        assert!(cache.retry_cook_misses());
+        assert!(!cache.contains_mesh_map(KIT_BASE));
+        assert!(!cache.contains_mesh(KIT_MESH));
+        cache.load_mesh(root, KIT_MESH).unwrap();
+        cooked_image(&cache, KIT_BASE, ColorSpace::Srgb);
+        assert!(cache.cook_misses().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cook_fallback_with_no_new_file_keeps_its_entry() {
+        let dir = cook_project("retry-none", None);
+        let mut cache = AssetCache::new();
+        cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        cache
+            .load_mesh(ludion_assets::AssetRoot::content(&dir), KIT_MESH)
+            .unwrap();
+        assert!(!cache.retry_cook_misses());
+        assert!(cache.contains_mesh(KIT_MESH));
+        assert_eq!(cache.cook_misses().len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_load_is_remembered_until_forgotten() {
+        let dir = revalidation_dir("memo-forget");
+        let mut cache = AssetCache::new();
+        let first = texture_err(&mut cache, &dir);
+        write_png(&dir.join("t.png"), [1, 2, 3, 255]);
+        assert_eq!(texture_err(&mut cache, &dir), first);
+        cache.forget_failures();
+        assert!(
+            cache
+                .load(ludion_assets::AssetRoot::content(&dir), "t.png")
+                .is_ok()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_remembered_failure_expires_after_its_passes() {
+        let dir = revalidation_dir("memo-expire");
+        let mut cache = AssetCache::new();
+        texture_err(&mut cache, &dir);
+        write_png(&dir.join("t.png"), [1, 2, 3, 255]);
+        for _ in 0..FAILURE_RETRY_PASSES - 1 {
+            cache.age_failures();
+        }
+        cache
+            .load(ludion_assets::AssetRoot::content(&dir), "t.png")
+            .unwrap_err();
+        cache.age_failures();
+        assert!(
+            cache
+                .load(ludion_assets::AssetRoot::content(&dir), "t.png")
+                .is_ok()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rebuild_a_reload_and_a_cook_change_each_clear_remembered_failures() {
+        let dir = revalidation_dir("memo-clearers");
+        let root = ludion_assets::AssetRoot::content(&dir);
+        let remembered = |cache: &mut AssetCache| {
+            texture_err(cache, &dir);
+            assert!(!cache.failures.is_empty());
+        };
+
+        let mut cache = AssetCache::new();
+        remembered(&mut cache);
+        cache.retain_referenced(root, &AssetRefs::default());
+        assert!(cache.failures.is_empty(), "a rebuild");
+
+        remembered(&mut cache);
+        write_png(&dir.join("other.png"), [1, 2, 3, 255]);
+        cache.load(root, "other.png").unwrap();
+        cache.reload(root, "other.png").unwrap();
+        assert!(cache.failures.is_empty(), "a reload");
+
+        remembered(&mut cache);
+        assert!(!cache.set_cook(None), "an equal setting changes nothing");
+        assert!(!cache.failures.is_empty());
+        let cook_dir = cook_project("memo-clearers-cook", None);
+        assert!(cache.set_cook(lookup(&cook_dir, Some(CookTarget::Desktop))));
+        assert!(cache.failures.is_empty(), "a cook change");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cook_dir);
+    }
+
+    #[test]
+    fn a_failure_keeps_its_diagnostic() {
+        let dir = revalidation_dir("memo-diagnostic");
+        let mut cache = AssetCache::new();
+        let cold = texture_err(&mut cache, &dir);
+        assert_eq!(texture_err(&mut cache, &dir), cold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefab_rests_never_exceed_their_cap() {
+        let text = include_str!("../../../examples/import-node-clips/expected/model.prefab.yaml");
+        let mut cache = AssetCache::new();
+        for n in 0..PREFAB_RESTS_CAP + 8 {
+            let named = text.replacen("name: hinge", &format!("name: hinge{n}"), 1);
+            assert!(cache.prefab_rests(&named).is_some(), "text {n} parses");
+            assert!(cache.prefab_rests_len() <= PREFAB_RESTS_CAP);
+        }
+        let later = text.replacen("name: hinge", "name: later", 1);
+        assert!(cache.prefab_rests(&later).is_some());
     }
 }

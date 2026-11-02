@@ -649,6 +649,7 @@ pub(crate) fn extract_through_blend(
     // authors a `GiVolume` never consults the voxelization cache and must not inherit the last
     // answer.
     cache.clear_gi_stale();
+    cache.age_failures();
     let mut assets = CachedAssets {
         root: project_root,
         cache,
