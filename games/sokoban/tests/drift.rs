@@ -13,8 +13,8 @@ fn registry_is_drift_safe() {
 #[test]
 fn committed_scenes_respell_nothing_on_save() {
     ludion_testkit::assert_saves_respell_nothing(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
-        &["scenes"],
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes"),
+        &["."],
         sokoban::game(),
     );
 }

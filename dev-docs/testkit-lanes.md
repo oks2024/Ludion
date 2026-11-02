@@ -26,7 +26,8 @@ description: Testkit lanes: GPU-less skips, needs_gpu_* naming, spelling gate, n
 
 ### The spelling gate
 
-`assert_saves_respell_nothing(project, roots, builder)` (`spelling.rs`) proves a committed
+`assert_saves_respell_nothing(project, roots, builder)` (`spelling.rs`; `project` is the scenes'
+content root, a game's `scenes/` with `&["."]`, as a boot roots them) proves a committed
 hand-authored scene or prefab already carries the spelling the writer would give it (audit
 scene-text S1): a hand edit saved by `scene.save` must not drag float or quoting churn with it. It
 loads each scene through `scene.load` and `Engine::scene_text`, re-emits each prefab through

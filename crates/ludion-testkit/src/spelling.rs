@@ -348,9 +348,13 @@ fn is_generated(text: &str) -> bool {
 /// has its own gate. With `LUDION_BLESS=1`, same-value respellings are rewritten in place (only
 /// the scalar's characters change); a changed or dropped value is never blessed.
 ///
+/// `project` must be the scenes' content root: what a boot roots a scene at, its parent directory.
+/// Pass a game's `scenes` directory with `&["."]`, so relative mesh and prefab paths resolve as at
+/// runtime.
+///
 /// ```no_run
-/// let project = std::path::Path::new("games/breakout");
-/// ludion_testkit::assert_saves_respell_nothing(project, &["scenes"], ludion::prelude::Engine::builder());
+/// let project = std::path::Path::new("games/breakout/scenes");
+/// ludion_testkit::assert_saves_respell_nothing(project, &["."], ludion::prelude::Engine::builder());
 /// ```
 ///
 /// # Panics
