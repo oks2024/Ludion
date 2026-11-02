@@ -4135,6 +4135,14 @@ entities:
 
     /// Requests a switch to `next.yaml` on frame 2, carrying the `player` entity.
     fn switch_on_frame_two(world: &mut World, ctx: &ludion_ecs::SystemCtx) {
+        // Fixed work: an early-return system is shorter than a clock tick and would time as zero.
+        let mut x = std::hint::black_box(0x9E37_79B9_7F4A_7C15u64);
+        for _ in 0..8000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+        }
+        std::hint::black_box(x);
         if ctx.frame.as_u64() != 2 {
             return;
         }
@@ -4204,7 +4212,10 @@ entities:
             .iter()
             .position(|n| n == "switch_on_frame_two")
             .unwrap();
-        assert!(samples.system_ms[at][0] > 0.0);
+        assert!(
+            samples.system_ms[at].iter().all(|&ms| ms > 0.0),
+            "the column stays filled across the rebuild"
+        );
     }
 
     #[test]
