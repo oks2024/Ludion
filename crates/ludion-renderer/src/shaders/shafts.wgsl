@@ -60,6 +60,13 @@
 // there is no reach field: the reach of an exponential medium is a function of its extinction, so a
 // range knob would be a second spelling of `fog_density`.
 //
+// A transparent ends the ray in proportion to its coverage: a texel the layer covers fully stops the
+// march at the layer's mean distance, and past that distance a sample counts only for the share the
+// layer leaves uncovered, so a sprite takes the beams of the air in front of it and not of the air
+// behind. Under an orthographic camera the ray runs along the view from the pixel's own origin on
+// the camera plane, the measure the layer's distance and the composite's fog use. A pixel the layer
+// does not reach marches exactly as it does without a layer.
+//
 // Under sun cascades the air past the last cascade is lit; the fit reaches the last cascade out to
 // this extinction cutoff when the frame runs shafts.
 //
@@ -115,10 +122,11 @@ struct Shafts {
     // stop showing steps on a hard beam edge; a machine that cannot afford that marches coarser
     // rather than losing the beams.
     steps: u32,
+    // Nonzero when `shafts_layer` is real: it mirrors the graph's own gate, as the composite's flag does.
+    transparent_depth: u32,
     // The matrices give this struct 16-byte alignment, so its size rounds up to a multiple of 16 and
-    // the two lanes past `steps` are part of the layout. They are spelled because `shader_gen`'s
+    // the lane past `transparent_depth` is part of the layout. It is spelled because `shader_gen`'s
     // generated POD carries no implicit padding — a hole has to have a name.
-    pad0: f32,
     pad1: f32,
     // The sun's fitted cascades, as the mesh pass's `Sun` carries them; lanes `cascade_count..` are
     // zero and a count of 0 keeps the anchored `light_space` above.
@@ -133,6 +141,9 @@ struct Shafts {
     cascade_pad0: u32,
     cascade_pad1: u32,
     cascade_pad2: u32,
+    // `.xyz` is the unit view direction and `.w` is 1 under an orthographic camera (0 otherwise), where
+    // every eye ray runs along the view and starts on the camera plane.
+    view_forward: vec4<f32>,
 };
 
 // The scene pass's depth, at the render extent. `Depth32Float` is unfilterable and this pass binds
@@ -142,8 +153,14 @@ struct Shafts {
 // The sun shadow map, loaded rather than comparison-sampled: a marched point is in free space, not on
 // a surface, so there is no acne to fight and nothing to filter — one exact texel is the answer.
 @group(0) @binding(1) var shafts_shadow: texture_depth_2d;
-@group(0) @binding(2) var shafts_samp: sampler;
-@group(0) @binding(3) var<uniform> shafts: Shafts;
+// The transparent layer: weighted view distance in R, coverage in G, at the render extent — the
+// **optional** input, behind the required reads. It exists when the scene draws a sprite, particle or
+// world text under fog; otherwise the recorder binds a 1x1 stand-in and
+// `shafts.transparent_depth` is zero, so the fetch below never reads it. Fetched by `textureLoad`
+// at the texel the march snaps to, like the depth.
+@group(0) @binding(2) var shafts_layer: texture_2d<f32>;
+@group(0) @binding(3) var shafts_samp: sampler;
+@group(0) @binding(4) var<uniform> shafts: Shafts;
 
 // How many e-foldings of the medium's extinction are worth marching. Past `3/σ_t` the transmittance
 // is under 5% and the remaining integral cannot reach a display step.
@@ -238,6 +255,68 @@ fn henyey_greenstein(cos_theta: f32) -> f32 {
     return (1.0 - g2) / (FOUR_PI * pow(max(denom, 1e-4), 1.5));
 }
 
+// A coverage at or above this stops the march outright: an opaque stack blended in half-float may land
+// just under 1.
+const SHAFT_FULL_COVERAGE: f32 = 0.999;
+
+// The march for a pixel a transparent covers, or any pixel under an orthographic camera. `fs_main`
+// keeps the plain loop verbatim for every other pixel, so a frame without a transparent stays
+// byte-identical.
+fn layered_march(source_uv: vec2<f32>, depth: f32, coverage: f32, layer_t: f32, pos: vec2<f32>) -> f32 {
+    let far = world_from_depth(source_uv, 1.0);
+    let to_far = far - shafts.cam_pos;
+    let ortho = shafts.view_forward.w > 0.5;
+    var origin = shafts.cam_pos;
+    var ray = normalize(to_far);
+    if (ortho) {
+        ray = shafts.view_forward.xyz;
+        origin = far - ray * dot(to_far, ray);
+    }
+    var end = SHAFT_OPTICAL_CUTOFF / max(shafts.density, SHAFT_MIN_DENSITY);
+    if (depth < 1.0) {
+        let to_surface = world_from_depth(source_uv, depth) - origin;
+        var surface = length(to_surface);
+        if (ortho) {
+            surface = dot(to_surface, ray);
+        }
+        end = min(end, surface);
+    }
+    if (coverage >= SHAFT_FULL_COVERAGE) {
+        end = min(end, layer_t);
+    }
+    let past = 1.0 - coverage;
+    let jitter = BAYER4[(u32(pos.y) % 4u) * 4u + (u32(pos.x) % 4u)];
+    let dt = end / f32(shafts.steps);
+    var visible = 0.0;
+    for (var i: u32 = 0u; i < shafts.steps; i = i + 1u) {
+        let t = (f32(i) + jitter) * dt;
+        let transmittance = exp(-medium_optical_depth(
+            shafts.density,
+            shafts.fog_start,
+            shafts.fog_height,
+            shafts.fog_height_falloff,
+            origin.y,
+            ray.y,
+            t,
+        ));
+        let local = medium_density_ratio(
+            shafts.fog_start,
+            shafts.fog_height,
+            shafts.fog_height_falloff,
+            origin.y,
+            ray.y,
+            t,
+        );
+        var sample = sun_visibility(origin + ray * t) * transmittance * local;
+        if (coverage > 0.0 && t > layer_t) {
+            sample = sample * past;
+        }
+        visible = visible + sample;
+    }
+    let phase = henyey_greenstein(dot(ray, -shafts.sun_dir));
+    return visible * dt * shafts.albedo * shafts.density * phase * shafts.intensity;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // This pass runs at a fraction of the *output* extent while the scene pass ran at the *render*
@@ -253,6 +332,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (depth < 1.0) {
         // A surface was drawn here: the medium in front of it is all there is to march.
         end = min(end, length(world_from_depth(source_uv, depth) - shafts.cam_pos));
+    }
+
+    // The layer is read only after the plain march's own setup: a read hoisted above the ray moves
+    // the compiled arithmetic of a frame with no transparent by one step on Metal.
+    var coverage = 0.0;
+    var layer_t = 0.0;
+    if (shafts.transparent_depth != 0u) {
+        let layer = textureLoad(shafts_layer, vec2<i32>(texel), 0);
+        coverage = layer.g;
+        layer_t = layer.r / max(layer.g, 1e-4);
+    }
+    if (coverage > 0.0 || shafts.view_forward.w > 0.5) {
+        return vec4<f32>(layered_march(source_uv, depth, coverage, layer_t, in.pos.xy));
     }
 
     // The step offset, one full `BAYER4` period across every 4×4 block of this target — which is

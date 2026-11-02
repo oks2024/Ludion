@@ -486,11 +486,13 @@ mod tests {
                 "ssao.samples",
                 3,
             ),
+            // Four: the plain march and the layered march each read the count as the loop bound and
+            // as the step's divisor.
             (
                 "shafts.wgsl",
                 include_str!("shaders/shafts.wgsl"),
                 "shafts.steps",
-                2,
+                4,
             ),
             (
                 "dof.wgsl",

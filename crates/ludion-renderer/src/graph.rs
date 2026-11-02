@@ -1484,7 +1484,11 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         graph.add_external_pass(
             pass::SHAFTS,
             pass::SHAFTS,
-            vec![scene_depth, shadow_map],
+            // The transparent layer is the optional slot, declared last.
+            [scene_depth, shadow_map]
+                .into_iter()
+                .chain(transparent_layer)
+                .collect(),
             vec![shafts.raw],
         );
         graph.add_external_pass(
@@ -4988,6 +4992,47 @@ mod tests {
         let at = |n: &str| order.iter().position(|&p| p == n).unwrap();
         assert!(at(pass::TRANSPARENTS) < at(pass::TRANSPARENT_DEPTH));
         assert!(at(pass::TRANSPARENT_DEPTH) < at(pass::DOF_COC));
+    }
+
+    /// With shafts the march reads the layer last, behind the scene depth and the shadow map, and
+    /// the layer's pass runs before it. Without a transparent the reads are the two they always were.
+    #[test]
+    fn the_shaft_march_reads_the_layer_last() {
+        let shafts_chain = |cover| PostChain {
+            shadow_map: Some(2048),
+            shafts: true,
+            fog: true,
+            transparent_cover: cover,
+            ..PostChain::default()
+        };
+        let reads = |graph: &RenderGraph| {
+            graph
+                .passes()
+                .iter()
+                .find(|p| p.name == pass::SHAFTS)
+                .expect("shafts")
+                .reads
+                .len()
+        };
+
+        let (with, _) = build_frame_graph(FrameSize::native(64, 64), shafts_chain(true));
+        assert!(pass_names(&with).contains(&pass::TRANSPARENT_DEPTH));
+        assert_eq!(reads(&with), 3, "scene_depth, shadow_map, then the layer");
+        let shafts = with
+            .passes()
+            .iter()
+            .find(|p| p.name == pass::SHAFTS)
+            .expect("shafts");
+        let last = shafts.reads.last().expect("reads");
+        assert_eq!(with.resources()[last.index()].name, pass::TRANSPARENT_DEPTH);
+        let scheduled = schedule(&with).expect("schedules");
+        let order = scheduled.order_names();
+        let at = |n: &str| order.iter().position(|&p| p == n).unwrap();
+        assert!(at(pass::TRANSPARENT_DEPTH) < at(pass::SHAFTS));
+
+        let (without, _) = build_frame_graph(FrameSize::native(64, 64), shafts_chain(false));
+        assert!(!pass_names(&without).contains(&pass::TRANSPARENT_DEPTH));
+        assert_eq!(reads(&without), 2, "scene_depth and shadow_map only");
     }
 
     /// A machine's mask never removes content: both flags survive `masked`.

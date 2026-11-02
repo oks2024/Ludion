@@ -1,0 +1,334 @@
+# Feature: light shafts stop at a transparent's own distance. A sprite, a particle and a world Text
+# carry no depth of their own, so the march that integrates the sun's beams along each eye ray stops
+# at the transparent, not at the wall or the sky behind it. What to read in the image: the near sprite stands in front of a beam
+# and takes only the air in front of it, so it is not lit by the shaft behind it; the far sprite sits
+# behind the colonnade and takes the beams of the air up to itself; the sprite against the sky takes
+# the same beams as one over a wall; the sprite across the wall's top edge shows no seam in its beam
+# term; the half-transparent sprite takes a share between the two; and the smoke and the label stop
+# the beams at their own distance. The shaft term is added in the composite and is not fogged
+# again, so a covered pixel carries the beams of its own march only.
+format: 1
+name: shafts-sprites - light shafts stopped at each transparent distance
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.02
+          - 0.04
+          - 0.12
+        sky_horizon:
+          - 0.12
+          - 0.16
+          - 0.28
+        sky_ground:
+          - 0.01
+          - 0.012
+          - 0.02
+        ibl_intensity: 0.8
+  - name: post
+    components:
+      PostProcess:
+        bloom_threshold: 1.0
+        bloom_strength: 0.06
+        exposure: 0.9
+        tonemap: aces
+        fog_density: 0.03
+        fog_color:
+          - 0.03
+          - 0.045
+          - 0.09
+        fog_start: 0.0
+        fog_height: 0.0
+        fog_height_falloff: 0.0
+        fog_sky: 0.3
+        fog_anisotropy: 0.55
+        shafts: 1.5
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 5.0
+          - 22.0
+        rotation:
+          - -20.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 64.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - -10.0
+      DirectionalLight:
+        direction:
+          - 0.15
+          - -0.35
+          - 0.92
+        color:
+          - 0.8
+          - 0.85
+          - 1.0
+        intensity: 1.6
+        shadow_extent: 40.0
+        shadow_near: 1.0
+        shadow_far: 120.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 160.0
+          - 1.0
+          - 160.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.12
+          - 0.14
+          - 0.12
+          - 1.0
+  - name: far-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - -30.0
+        scale:
+          - 90.0
+          - 5.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.38
+          - 0.34
+          - 0.3
+          - 1.0
+  - name: column-1
+    components:
+      Transform:
+        translation:
+          - -12.0
+          - 5.0
+          - -8.0
+        scale:
+          - 2.0
+          - 10.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.2
+          - 0.24
+          - 1.0
+  - name: column-2
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 5.0
+          - -8.0
+        scale:
+          - 2.0
+          - 10.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.2
+          - 0.24
+          - 1.0
+  - name: column-3
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 5.0
+          - -8.0
+        scale:
+          - 2.0
+          - 10.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.2
+          - 0.24
+          - 1.0
+  - name: column-4
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 5.0
+          - -8.0
+        scale:
+          - 2.0
+          - 10.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.2
+          - 0.24
+          - 1.0
+  - name: column-5
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 5.0
+          - -8.0
+        scale:
+          - 2.0
+          - 10.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.2
+          - 0.24
+          - 1.0
+  - name: near-sprite
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 2.2
+          - 11.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 2.6
+          - 2.6
+        billboard: true
+  - name: far-sprite
+    components:
+      Transform:
+        translation:
+          - 9.0
+          - 3.4
+          - -16.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 4.0
+          - 4.0
+        billboard: true
+  - name: sky-sprite
+    components:
+      Transform:
+        translation:
+          - 10.0
+          - 9.0
+          - -50.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 8.0
+          - 8.0
+        billboard: true
+  - name: horizon-sprite
+    components:
+      Transform:
+        translation:
+          - -30.0
+          - 5.0
+          - -25.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 6.0
+          - 6.0
+        billboard: true
+  - name: soft-sprite
+    components:
+      Transform:
+        translation:
+          - 6.5
+          - 2.4
+          - 6.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 2.6
+          - 2.6
+        billboard: true
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.5
+  - name: smoke-column
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 0.2
+          - 0.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.35
+          - 0.35
+          - 0.35
+        rate: 18.0
+        life:
+          - 2.0
+          - 2.8
+        speed:
+          - 0.5
+          - 1.0
+        spread_deg: 14.0
+        gravity: -0.9
+        drag: 0.35
+        start_size: 0.9
+        end_size: 3.0
+        start_color:
+          - 0.7
+          - 0.7
+          - 0.72
+          - 0.5
+        end_color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 0.0
+        softness: 0.85
+        seed: 11
+  - name: label
+    components:
+      Transform:
+        translation:
+          - -9.0
+          - 4.0
+          - 4.0
+      Text:
+        text: SHAFT
+        size: 1.6
+        color:
+          - 1.0
+          - 0.9
+          - 0.5
+          - 1.0

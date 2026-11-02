@@ -3703,7 +3703,7 @@ impl FrameRecorder<'_> {
             fog_height: self.post.fog_height,
             fog_height_falloff: self.post.fog_height_falloff,
             steps: self.r.quality_params.shaft_steps,
-            pad0: 0.0,
+            transparent_depth: u32::from(self.has_transparent_depth),
             pad1: 0.0,
             cascade_space: lanes.space,
             cascade_rect: lanes.rect,
@@ -3713,8 +3713,19 @@ impl FrameRecorder<'_> {
             cascade_pad0: 0,
             cascade_pad1: 0,
             cascade_pad2: 0,
+            view_forward: self.view_forward,
         };
-        self.fullscreen_effect(pass, ShaderId::Shafts, &[], bytemuck::bytes_of(&shafts));
+        let optional = [OptionalInput {
+            binding: shader_gen::SHAFTS_LAYER_BINDING,
+            present: self.has_transparent_depth,
+            fallback: &self.r.fallback_hdr.view,
+        }];
+        self.fullscreen_effect(
+            pass,
+            ShaderId::Shafts,
+            &optional,
+            bytemuck::bytes_of(&shafts),
+        );
     }
 
     /// The depth-of-field prefilter, at a fraction of the output extent, from the scene pass's
@@ -7323,7 +7334,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Shafts,
-        create: shader_gen::create_shafts_depth_shafts_shadow_shafts_samp_shafts_bgl,
+        create: shader_gen::create_shafts_depth_shafts_shadow_shafts_layer_shafts_samp_shafts_bgl,
     },
     LayoutDesc {
         id: LayoutId::DofCoc,
@@ -8976,6 +8987,8 @@ mod tests {
     use super::*;
     use crate::scene::{MeshInstance, RenderScene};
 
+    mod shaft_layer;
+
     /// The decision-16 mapping-drift guard: the string this crate composes and compiles for every
     /// shader (its snippets + body, from `include_str!`) must be byte-identical to what the bindgen
     /// registry (`ludion_shader_bindgen::COMPOSITIONS`) composes by reading the same files from disk.
@@ -9119,16 +9132,18 @@ mod tests {
             ],
             [0, 1, 2],
         );
-        // Two input textures: the shaft march loads the scene depth and the sun's shadow map, in the
-        // graph pass's declared read order, and declares a sampler it never calls (like `resolve`).
+        // Three input textures: the shaft march loads the scene depth and the sun's shadow map, in the
+        // graph pass's declared read order, and the transparent layer in the *optional* slot behind
+        // them, and declares a sampler it never calls (like `resolve`).
         assert_eq!(
             [
                 shader_gen::SHAFTS_DEPTH_BINDING,
                 shader_gen::SHAFTS_SHADOW_BINDING,
+                shader_gen::SHAFTS_LAYER_BINDING,
                 shader_gen::SHAFTS_SAMP_BINDING,
                 shader_gen::SHAFTS_BINDING,
             ],
-            [0, 1, 2, 3],
+            [0, 1, 2, 3, 4],
         );
         // One input texture: the shared 4×4 box blur, whichever pass names it.
         assert_eq!(
