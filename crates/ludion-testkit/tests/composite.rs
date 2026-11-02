@@ -120,6 +120,47 @@ fn needs_gpu_dither_lowers_banding_on_the_night_sky() {
     );
 }
 
+/// **The dither survives a resample.** A scaled frame is dithered where it is written — the last
+/// output pass owns the dither — so a gradient rendered at 2x or 0.5x still gets the break-up the
+/// band-free look needs. Each scale compares dithered against `dither=false` at that scale, and the
+/// scaled dithered score has to stay near the native dithered one.
+#[test]
+fn needs_gpu_dither_survives_a_resample_on_the_night_sky() {
+    let test = "banding_resample";
+    let (w, h) = (480, 270);
+    let off = &["/entities/0/components/PostProcess/dither=false"];
+    let Some(native) = render_or_skip(test, "night-sky.yaml", w, h, 1.0, &[]) else {
+        return;
+    };
+    let native_score = image_stats(&native).banding_score;
+    for factor in [2.0, 0.5] {
+        let plain =
+            render_or_skip(test, "night-sky.yaml", w, h, factor, off).expect("adapter still there");
+        let dithered =
+            render_or_skip(test, "night-sky.yaml", w, h, factor, &[]).expect("adapter still there");
+        let (before, after) = (
+            image_stats(&plain).banding_score,
+            image_stats(&dithered).banding_score,
+        );
+        eprintln!(
+            "[{test}] {factor}x banding_score {before:.4} -> {after:.4} (native dithered \
+             {native_score:.4})",
+        );
+        assert!(
+            after < before - 0.10,
+            "dither must survive the resample at {factor}x: {before:.4} -> {after:.4}",
+        );
+        assert!(
+            (after - native_score).abs() < RESAMPLE_BANDING_MARGIN,
+            "the resampled dithered frame must band like the native one: {after:.4} at {factor}x \
+             vs {native_score:.4}",
+        );
+    }
+}
+
+/// How far the scaled dithered `banding_score` may sit from the native one.
+const RESAMPLE_BANDING_MARGIN: f64 = 0.05;
+
 /// What every `banding_score` gate on `post-full.yaml` has to switch off.
 ///
 /// The scene authors `grain`, and grain removes banding by construction — it is a per-pixel offset
@@ -331,79 +372,83 @@ fn needs_gpu_grain_lowers_banding_on_the_night_sky() {
 /// instruments give — `banding_score` saturates at the cell sizes this test needs, and `ssim`
 /// measures agreement rather than spread.
 ///
-/// Measured on the pinned RTX 3090, output 480x270, `grain: 0.02`, `grain_size: 0.02`:
+/// Measured on the M4 (patch luma sigma), output 480x270, `grain: 0.02`:
 ///
-/// | scale | patch sigma, grain off | patch sigma, grain on | ratio  |
-/// |-------|------------------------|-----------------------|--------|
-/// | 1x    | 2.0108                 | 3.4814                | 1.7313 |
-/// | 2x    | 2.0203                 | 3.4320                | 1.6988 |
+/// | `grain_size`    | scale | sigma, grain off | sigma, grain on | ratio  |
+/// |-----------------|-------|------------------|-----------------|--------|
+/// | 0.02            | 1x    | 1.8256           | 3.3674          | 1.8445 |
+/// | 0.02            | 2x    | 1.8246           | 3.3673          | 1.8455 |
+/// | 0.002 (shipped) | 1x    | 1.8256           | 3.4603          | 1.8954 |
+/// | 0.002 (shipped) | 2x    | 1.8246           | 3.4549          | 1.8934 |
 ///
-/// — 1.9% apart, against the 10% `GRAIN_SCALE_TOLERANCE` allows for the M4's own arithmetic.
-///
-/// **The gate can fail, and the failing configuration is one override away.** `grain_size` is set
-/// well above its default here precisely so the cell clears `MIN_GRAIN_CELL` at *both* scales: at
-/// the shipped 0.002, a 270-line frame floors the cell to one render pixel, which *is*
-/// per-render-pixel grain, and the same measurement then reads 1.7744 at 1x against 1.2790 at 2x —
-/// 28% apart, which this tolerance rejects. That gap is the resolve averaging the grain away, and it
-/// is exactly what the fraction-of-height rule prevents at the resolutions a frame ships at.
+/// The grain is applied after the resample, at the output extent, so the cell is the same fraction of
+/// the frame at every scale — including the shipped `grain_size`, whose cell floors to one *output*
+/// pixel at this height.
 #[test]
 fn needs_gpu_grain_is_render_scale_invariant() {
     let test = "grain_scale";
     let (w, h) = (480, 270);
-    let grain = [
+    let coarse = [
         "/entities/0/components/PostProcess/grain=0.02",
         "/entities/0/components/PostProcess/grain_size=0.02",
     ];
+    // The shipped `grain_size`: the finest grain there is at this height.
+    let finest = ["/entities/0/components/PostProcess/grain=0.02"];
     let Some(native_off) = render_or_skip(test, "night-sky.yaml", w, h, 1.0, &[]) else {
         return;
     };
-    let native_on =
-        render_or_skip(test, "night-sky.yaml", w, h, 1.0, &grain).expect("adapter still there");
     let ssaa_off =
         render_or_skip(test, "night-sky.yaml", w, h, 2.0, &[]).expect("adapter still there");
-    let ssaa_on =
-        render_or_skip(test, "night-sky.yaml", w, h, 2.0, &grain).expect("adapter still there");
+    let spread = |image: &DecodedImage| patch_std(image, GRAIN_PATCH);
 
-    let spread = |image| patch_std(image, GRAIN_PATCH);
-    let (native_ratio, ssaa_ratio) = (
-        spread(&native_on) / spread(&native_off),
-        spread(&ssaa_on) / spread(&ssaa_off),
-    );
-    eprintln!(
-        "[{test}] patch sigma 1x {:.4} -> {:.4} (ratio {native_ratio:.4}), 2x {:.4} -> {:.4} \
-         (ratio {ssaa_ratio:.4})",
-        spread(&native_off),
-        spread(&native_on),
-        spread(&ssaa_off),
-        spread(&ssaa_on),
-    );
+    for (label, grain) in [
+        ("grain_size 0.02", &coarse[..]),
+        ("shipped grain_size", &finest[..]),
+    ] {
+        let native_on =
+            render_or_skip(test, "night-sky.yaml", w, h, 1.0, grain).expect("adapter still there");
+        let ssaa_on =
+            render_or_skip(test, "night-sky.yaml", w, h, 2.0, grain).expect("adapter still there");
+        let (native_ratio, ssaa_ratio) = (
+            spread(&native_on) / spread(&native_off),
+            spread(&ssaa_on) / spread(&ssaa_off),
+        );
+        eprintln!(
+            "[{test}] {label}: patch sigma 1x {:.4} -> {:.4} (ratio {native_ratio:.4}), 2x {:.4} \
+             -> {:.4} (ratio {ssaa_ratio:.4})",
+            spread(&native_off),
+            spread(&native_on),
+            spread(&ssaa_off),
+            spread(&ssaa_on),
+        );
 
-    // Non-vacuity, both halves. The grain has to have reached the patch at all — two ratios of 1.0
-    // would agree perfectly and prove nothing — and the two grain-free frames have to agree about
-    // what the patch *is*, or the ratios would be normalised by two different denominators.
-    assert!(
-        native_ratio > 1.3,
-        "grain must visibly spread the patch before its scale invariance means anything: \
-         {native_ratio:.4}",
-    );
-    assert!(
-        (spread(&native_off) - spread(&ssaa_off)).abs() < 0.05 * spread(&native_off),
-        "the two grain-free frames must agree about the patch: {:.4} at 1x vs {:.4} at 2x",
-        spread(&native_off),
-        spread(&ssaa_off),
-    );
+        // Non-vacuity, both halves. The grain has to have reached the patch at all — two ratios of
+        // 1.0 would agree perfectly and prove nothing — and the two grain-free frames have to agree
+        // about what the patch *is*, or the ratios would be normalised by two different denominators.
+        assert!(
+            native_ratio > 1.3,
+            "{label}: grain must visibly spread the patch before its scale invariance means \
+             anything: {native_ratio:.4}",
+        );
+        assert!(
+            (spread(&native_off) - spread(&ssaa_off)).abs() < 0.05 * spread(&native_off),
+            "{label}: the two grain-free frames must agree about the patch: {:.4} at 1x vs {:.4} \
+             at 2x",
+            spread(&native_off),
+            spread(&ssaa_off),
+        );
 
-    assert!(
-        (native_ratio - ssaa_ratio).abs() < GRAIN_SCALE_TOLERANCE * native_ratio,
-        "the resolve must not average the grain away: ratio {native_ratio:.4} at 1x vs \
-         {ssaa_ratio:.4} at 2x, beyond {GRAIN_SCALE_TOLERANCE}",
-    );
+        assert!(
+            (native_ratio - ssaa_ratio).abs() < GRAIN_SCALE_TOLERANCE * native_ratio,
+            "{label}: the resample must not average the grain away: ratio {native_ratio:.4} at 1x \
+             vs {ssaa_ratio:.4} at 2x, beyond {GRAIN_SCALE_TOLERANCE}",
+        );
+    }
 }
 
-/// How far apart the 1x and 2x grain-to-no-grain ratios may sit. Wide against the measured 1.9% —
-/// for the M4's own arithmetic and for the cell boundaries a 2x resolve genuinely does soften — and
-/// far under the 28% that per-render-pixel grain produces, so it can only be met by grain the
-/// resolve left alone.
+/// How far apart the 1x and 2x grain-to-no-grain ratios may sit. The measured gap is under 0.2%
+/// (table above); the margin is for another machine's arithmetic, and it stays far under the gap
+/// grain averaged away by a resample would open.
 const GRAIN_SCALE_TOLERANCE: f64 = 0.10;
 
 /// The sky patch `grain_is_render_scale_invariant` measures, as `(x, y, width, height)` in a 480x270

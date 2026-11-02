@@ -39,7 +39,8 @@ chromatic aberration → depth of field → + bloom + halation → the medium (h
 ```
 
 With SMAA on, the tail is `… vignette → SMAA → grain → dither`: grain and dither move into the AA's
-last pass. See `ludion docs anti-aliasing`.
+last pass. At a render scale other than 1 they run after the resample, at the output size, so a scaled
+frame keeps the dither a smooth gradient needs. See `ludion docs anti-aliasing`.
 
 The split worth knowing is scene-referred against display-referred. Everything through the medium
 happens to the *light*, in linear HDR, before any camera transform — a camera photographs fogged
@@ -144,8 +145,9 @@ anisotropy.
   The colour is not authorable: halation's hue is a property of the film stock.
 - **`grain`** / **`grain_size`** — monochrome additive grain in the **sRGB-encoded** domain, `[0, 1]`
   (default `0.0` — off, and the gate), with a cell side as a fraction of the frame's height `[0, 1]`
-  (default `0.002`, about two pixels at 1080p). The pattern is a deterministic integer hash and
-  static — it carries no frame index, so a moving camera moves through a fixed field.
+  (default `0.002`, about two output pixels at 1080p; the cell is the same fraction of the frame at
+  any render scale). The pattern is a deterministic integer hash and static — it carries no frame
+  index, so a moving camera moves through a fixed field.
 - **`ssr`** — screen-space reflections, `[0, 1]` (default `0.0` — off, and the gate): the strength
   that scales the trace's confidence, so `0.0` is exactly the sky reflection. It is opt-in per
   scene. **`ssr_fade`** is the roughness band `[start, end]` (default `[0.45, 0.65]`) over which the

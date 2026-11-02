@@ -34,9 +34,9 @@
 //
 // # The kernel, and why every fetch is a `textureLoad`
 //
-// A Vogel (golden-angle) spiral: `r = sqrt((i + 0.5)/N)`, `theta = i * GOLDEN_ANGLE`. `sqrt` makes the
-// samples uniform in **area** rather than in radius, so the disc is evenly covered, and the golden
-// angle is the disc analogue of the argument for Roberts' R2 over Hammersley — it is well
+// A Vogel (golden-angle) spiral: `r = sqrt((i + 0.5)/N)`, `theta = i * g` (see `DOF_SPIRAL`).
+// `sqrt` makes the samples uniform in **area** rather than in radius, so the disc is evenly covered,
+// and the golden angle is the disc analogue of the argument for Roberts' R2 over Hammersley — it is well
 // distributed at *any* prefix length, so lowering `dof_params.taps` cannot quietly leave a lobe
 // unsampled.
 // The radius is `PostProcess.dof` in fractions of the frame's **height**, converted to this target's
@@ -89,9 +89,46 @@ struct Dof {
 @group(0) @binding(1) var dof_samp: sampler;
 @group(0) @binding(2) var<uniform> dof_params: Dof;
 
-// The golden angle, `pi * (3 - sqrt(5))` — the rotation between successive spiral samples that leaves
-// no direction preferred at any sample count.
-const DOF_GOLDEN_ANGLE: f32 = 2.39996322972865332;
+// The spiral's unit directions, `(cos(i * g), sin(i * g))` for the golden angle
+// `g = pi * (3 - sqrt(5)) = 2.39996322972865332` — the rotation between successive samples that leaves
+// no direction preferred at any sample count. A table rather than `cos`/`sin` per tap: the angle
+// depends on no runtime input, and a transcendental's last bits are not guaranteed across backends.
+// Computed in `f32` and printed at 9 significant digits; `QualityParams::FULL.dof_taps` (32) is the
+// most taps a pass runs, and a `render.rs` test pins the table against `cos`/`sin`.
+const DOF_SPIRAL: array<vec2<f32>, 32> = array<vec2<f32>, 32>(
+    vec2<f32>(1, 0),
+    vec2<f32>(-0.737368822, 0.675490379),
+    vec2<f32>(0.0874255449, -0.996171057),
+    vec2<f32>(0.608439267, 0.79360044),
+    vec2<f32>(-0.984713554, -0.174181595),
+    vec2<f32>(0.843755186, -0.536728203),
+    vec2<f32>(-0.259603322, 0.965715349),
+    vec2<f32>(-0.460907787, -0.887448013),
+    vec2<f32>(0.939321518, 0.343037963),
+    vec2<f32>(-0.924345315, 0.381556928),
+    vec2<f32>(0.423845619, -0.90573442),
+    vec2<f32>(0.29928413, 0.954164028),
+    vec2<f32>(-0.865212202, -0.501405835),
+    vec2<f32>(0.976675391, -0.214721262),
+    vec2<f32>(-0.575128019, 0.818063438),
+    vec2<f32>(-0.128512248, -0.991707921),
+    vec2<f32>(0.764649928, 0.644445896),
+    vec2<f32>(-0.999145985, 0.041319102),
+    vec2<f32>(0.708828628, -0.705380738),
+    vec2<f32>(-0.0461904667, 0.99893266),
+    vec2<f32>(-0.640709758, -0.767783165),
+    vec2<f32>(0.991069496, 0.133346319),
+    vec2<f32>(-0.820858061, 0.571132302),
+    vec2<f32>(0.219480991, -0.975616753),
+    vec2<f32>(0.497184396, 0.867644906),
+    vec2<f32>(-0.952693939, -0.303931266),
+    vec2<f32>(0.907789588, -0.419425935),
+    vec2<f32>(-0.386057764, 0.922474623),
+    vec2<f32>(-0.338455528, -0.940982401),
+    vec2<f32>(0.885190964, 0.465227842),
+    vec2<f32>(-0.966969192, 0.254893243),
+    vec2<f32>(0.540835202, -0.841128588),
+);
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
@@ -112,8 +149,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     for (var i = 0u; i < dof_params.taps; i = i + 1u) {
         let radius = sqrt((f32(i) + 0.5) / f32(dof_params.taps)) * dof_params.max_coc;
-        let angle = f32(i) * DOF_GOLDEN_ANGLE;
-        let step = vec2<f32>(cos(angle), sin(angle)) * (radius / softness);
+        let step = DOF_SPIRAL[i] * (radius / softness);
         let tap = textureLoad(
             dof_src,
             clamp(here + vec2<i32>(round(step)), vec2<i32>(0), last),

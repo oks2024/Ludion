@@ -19,7 +19,7 @@ scene (HDR, full res) ─► bloom_threshold ─► bloom_down_1 ─► … ─�
    │                            │
    └────────────────────────────┴─────────────────────────────────► composite ─► final (Rgba8UnormSrgb)   [ui == false]
                                                                           ▼
-                                                                         ldr (Rgba8UnormSrgb) ─► overlay ─► final    [ui == true]
+                                                                         ldr (Rgba8UnormSrgb; Rgba16Float under a resample) ─► overlay ─► final    [ui == true]
 ```
 
 The three content-conditional chains hang off that spine, each one ordered purely by the read its consumer declares:
@@ -43,6 +43,6 @@ composite ─► ldr ─► resample ─► ldr_resolved ─► overlay ─► f
 
 `resample` above is one pass, either `resolve` (an area-weighted box down, above native) or `upscale` (bilinear up, below it). The box filter degenerates to nearest-neighbour under magnification, which is why the second direction needs its own shader rather than a wider ratio through the first.
 
-Each pass writes a distinct virtual resource — ping-ponging into a read resource would be a graph cycle. `final` excludes `TextureBinding` usage, so `overlay` cannot read it; the `ldr` transient is the seam that lets `overlay` read what `composite` wrote.
+Each pass writes a distinct virtual resource — ping-ponging into a read resource would be a graph cycle. `final` excludes `TextureBinding` usage, so `overlay` cannot read it; the `ldr` transient is the seam that lets `overlay` read what `composite` wrote. Under a resample `ldr` is half-float (`PostChain::resample_owns_output`), because `resolve`/`upscale` then own the grain and dither and their sub-LSB offsets need bits below 8; a debug view keeps it 8-bit.
 
 What each pass then does per frame, and the composite imaging chain: `ludion devdocs renderer-passes`.

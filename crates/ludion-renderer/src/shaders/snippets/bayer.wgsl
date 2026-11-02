@@ -2,9 +2,9 @@
 // entry is 15/16 = 0.9375. A 4×4 tile is chosen over 8×8: 16 gradation levels are ample for both of
 // its consumers, and the compact tile reads as fine stipple rather than a large visible grid.
 //
-// Shared by the mesh pass's screen-door occlusion fade (a per-fragment discard), the composite pass's
-// output dither (a sub-LSB offset in the encoded domain), the SSAO estimator's hemisphere rotation and
-// the light-shaft march's step offset. Those are different mechanisms over the same tile, and the
+// Shared by the mesh pass's screen-door occlusion fade (a per-fragment discard), the output dither
+// (`output_encode.wgsl`, a sub-LSB offset in the encoded domain, applied by the last output pass), the
+// SSAO estimator's hemisphere rotation and the light-shaft march's step offset. Those are different mechanisms over the same tile, and the
 // engine has exactly one ordered pattern rather than one per consumer — a second table would drift and
 // would read as two different stipples on the same frame.
 //

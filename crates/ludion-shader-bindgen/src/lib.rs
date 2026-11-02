@@ -184,6 +184,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "sky_gradient.wgsl",
             "hdr.wgsl",
             "srgb.wgsl",
+            "output_encode.wgsl",
         ],
     ),
     ("debug_line.wgsl", &["camera.wgsl"]),
@@ -261,7 +262,15 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ),
     ("probe_face.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("projector.wgsl", &["rounded_box.wgsl", "decal.wgsl"]),
-    ("resolve.wgsl", &["fullscreen_vs.wgsl"]),
+    (
+        "resolve.wgsl",
+        &[
+            "fullscreen_vs.wgsl",
+            "bayer.wgsl",
+            "srgb.wgsl",
+            "output_encode.wgsl",
+        ],
+    ),
     (
         "shafts.wgsl",
         &["fullscreen_vs.wgsl", "bayer.wgsl", "medium.wgsl"],
@@ -271,7 +280,12 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("sky.wgsl", &["sky_gradient.wgsl"]),
     (
         "smaa_blend.wgsl",
-        &["fullscreen_vs.wgsl", "bayer.wgsl", "srgb.wgsl"],
+        &[
+            "fullscreen_vs.wgsl",
+            "bayer.wgsl",
+            "srgb.wgsl",
+            "output_encode.wgsl",
+        ],
     ),
     ("smaa_edges.wgsl", &["fullscreen_vs.wgsl", "srgb.wgsl"]),
     ("smaa_weights.wgsl", &["fullscreen_vs.wgsl"]),
@@ -290,7 +304,15 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         &["fullscreen_vs.wgsl", "hdr.wgsl", "lobe.wgsl", "ssr.wgsl"],
     ),
     ("threshold.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
-    ("upscale.wgsl", &["fullscreen_vs.wgsl"]),
+    (
+        "upscale.wgsl",
+        &[
+            "fullscreen_vs.wgsl",
+            "bayer.wgsl",
+            "srgb.wgsl",
+            "output_encode.wgsl",
+        ],
+    ),
 ];
 
 /// The ordered snippet file names composed ahead of shader `file_name`, or an empty slice if it

@@ -27,7 +27,7 @@ consts, `create_*_bgl` functions, `*_VS_MAIN_INPUTS` — are **generated**, not 
   bindgen reflection, and the hot-reload rebuild all see. A shader body must **not** redeclare
   anything its snippets provide. `camera.wgsl` and `lights.wgsl` exist so the `Camera`/`Light`/
   `Lights` declarations come from one place; `bayer.wgsl` is one `BAYER4` tile for the whole engine
-  rather than one per consumer; `hdr.wgsl` holds `HDR_CEILING` (60 000, under half-float's 65 504)
+  rather than one per consumer; `output_encode.wgsl` holds the grain and the output dither (`encoded_output`) for every pass that can be the last output one: `composite`, `smaa_blend`, `resolve`, `upscale`; `hdr.wgsl` holds `HDR_CEILING` (60 000, under half-float's 65 504)
   and `hdr_safe` — the mesh output and the bloom threshold, downsample and upsample clamp through it,
   and it reads NaN as 0 by a bit test (WGSL has no `isnan`); `medium.wgsl` and `sky_gradient.wgsl` are shared *because* two
   shaders each must not disagree about the medium's shape or the sky's colour

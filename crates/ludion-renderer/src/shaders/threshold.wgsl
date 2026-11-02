@@ -1,4 +1,4 @@
-// Bloom bright-pass: keep only the HDR energy above 1.0, into the half-res bloom target.
+// Bloom bright-pass: keep only the HDR energy above `bloom.level`, into the half-res bloom target.
 //
 // `VsOut` + `vs_main` come from the shared `shaders/snippets/fullscreen_vs.wgsl`, composed ahead of
 // this body (Plan/shader-bindgen.md decision 16).

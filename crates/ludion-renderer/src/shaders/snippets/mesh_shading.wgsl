@@ -554,7 +554,8 @@ fn shade(
         let dist = length(to_light);
         let range = max(light.position.w, 1e-3);
         let atten = clamp(1.0 - dist / range, 0.0, 1.0);
-        let l = to_light / max(dist, 1e-6);
+        // `normalize` keeps the blessed bytes; the select guards a light exactly at the point.
+        let l = select(vec3<f32>(0.0), normalize(to_light), dist > 0.0);
         let h = normalize(l + v);
         let ndl = max(dot(n, l), 0.0);
         let ndh = max(dot(n, h), 0.0);

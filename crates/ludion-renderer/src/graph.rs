@@ -131,7 +131,8 @@
 //! draws the rest into `scene` against `scene_depth`.
 //!
 //! When the scene carries screen-space UI ([`PostChain::ui`], `Plan/phase-14-ui.md` decision 5), the
-//! **composite** pass instead writes an LDR transient (`ldr`, `Rgba8UnormSrgb`) and a trailing
+//! **composite** pass instead writes an LDR transient (`ldr`, `Rgba8UnormSrgb`, or `Rgba16Float` when the
+//! resample owns the output dither: [`PostChain::resample_owns_output`]) and a trailing
 //! **overlay** pass reads it, blits it to the output, and draws the sorted UI rects/text on top.
 //!
 //! A render extent that differs from the output extent inserts one resampling pass between the two —
@@ -301,7 +302,8 @@ pub mod pass {
     /// The depth-of-field gather: one disc of taps over [`DOF_COC`]'s colour+CoC target, writing the
     /// defocused image and the weight `composite` blends it in with. [`PostChain::dof`](super::PostChain::dof) only.
     pub const DOF: &str = "dof";
-    /// Scene + bloom composited, then exposure, the tonemap operator and the output dither, HDR→sRGB
+    /// Scene + bloom composited, then exposure, the tonemap operator, grain and the output dither (the
+    /// last output pass owns the two: not here under SMAA or a resample), HDR→sRGB
     /// into the output (or into the `ldr` transient when UI is present or the frame is
     /// supersampled), or into `aa_input` when SMAA runs. Everything that is a pure per-pixel
     /// function of already-sampled colour folds into this one pass rather than costing a
@@ -312,8 +314,8 @@ pub mod pass {
     pub const SMAA_EDGES: &str = "smaa_edges";
     /// SMAA blending weights from `smaa_edges`, looked up in the AreaTex and SearchTex tables.
     pub const SMAA_WEIGHTS: &str = "smaa_weights";
-    /// SMAA neighbourhood blend of `aa_input` by `smaa_weights`, then grain and dither, into the
-    /// target `composite` would have written.
+    /// SMAA neighbourhood blend of `aa_input` by `smaa_weights`, then grain and dither unless a
+    /// resample follows, into the target `composite` would have written.
     pub const SMAA_BLEND: &str = "smaa_blend";
     /// The supersampling downsample: an area-weighted box filter from the render extent to the
     /// output extent. Present only when
@@ -829,6 +831,13 @@ impl PostChain {
             && !self.sun_cascade_view
     }
 
+    /// Whether the resample is the last output pass: the frame is resampled and no debug view stands in
+    /// for the finished picture, so `resolve`/`upscale` apply the grain and dither at the output extent
+    /// and `composite` hands them a half-float `ldr`. The one predicate the graph and the recorder share.
+    pub fn resample_owns_output(self, size: FrameSize) -> bool {
+        size.resample().is_some() && self.view().is_none()
+    }
+
     /// The debug view this chain draws in place of the finished picture, if any.
     pub fn view(&self) -> Option<crate::DebugView> {
         self.ssr_view
@@ -1204,10 +1213,16 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // `ldr` is what `composite` writes whenever a pass still has to run after it — the overlay's
     // seam (the present target excludes `TextureBinding`, so `overlay` cannot read it directly) and
     // the resampling pass's source. It is at the *render* extent: the resampling pass is what brings
-    // the frame to the output extent.
+    // the frame to the output extent. When the resample owns the output dither it is half-float, so the
+    // sub-LSB offsets have something finer than 8 bits to land on; under a debug view it stays 8-bit,
+    // because those passes have no half-float twin.
     let overlay = chain.ui || chain.debug_lines;
-    let ldr = (overlay || resample.is_some())
-        .then(|| graph.transient("ldr", TextureDesc::color(render_w, render_h)));
+    let ldr_desc = if chain.resample_owns_output(size) {
+        TextureDesc::hdr_color(render_w, render_h)
+    } else {
+        TextureDesc::color(render_w, render_h)
+    };
+    let ldr = (overlay || resample.is_some()).then(|| graph.transient("ldr", ldr_desc));
     // Only a resampled frame that also draws UI needs a second LDR seam: the resampling pass must
     // land somewhere the overlay can sample, and that is not the present target. It holds the frame
     // at the output extent whichever pass wrote it.
@@ -1215,7 +1230,8 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         .then(|| graph.transient("ldr_resolved", TextureDesc::color(width, height)));
     // The SMAA transients, declared last so every AA-off resource list is unchanged. All three are
     // linear `Rgba16Float` at the render extent: the input must keep more than 8 bits (grain and
-    // dither move into the blend) and the edge and weight values must not go through an sRGB target.
+    // dither move into the last output pass, the blend or the resample) and the edge and weight
+    // values must not go through an sRGB target.
     let smaa = chain.smaa_scheduled().then(|| SmaaTargets {
         input: graph.transient("aa_input", TextureDesc::hdr_color(render_w, render_h)),
         edges: graph.transient("smaa_edges", TextureDesc::hdr_color(render_w, render_h)),
@@ -3902,6 +3918,73 @@ mod tests {
             assert_eq!(r.desc.format, TextureDesc::hdr_color(1, 1).format, "{name}");
         }
         on
+    }
+
+    fn format_of(graph: &RenderGraph, name: &str) -> String {
+        let r = graph.resources().iter().find(|r| r.name == name).unwrap();
+        r.desc.format.as_str().to_owned()
+    }
+
+    /// Under a resample the `ldr` seam is half-float, so the output dither the resample applies has
+    /// bits below 8 to land on; at native it stays 8-bit, and `ldr_resolved` always does.
+    #[test]
+    fn ldr_is_half_float_exactly_when_the_resample_owns_the_output() {
+        let with_ui = |aa| PostChain {
+            ui: true,
+            aa,
+            ..PostChain::default()
+        };
+        for aa in [AntiAliasing::Off, AntiAliasing::Smaa] {
+            let native = FrameSize::native(960, 540);
+            let (graph, _) = build_frame_graph(native, with_ui(aa));
+            assert_eq!(format_of(&graph, "ldr"), "rgba8unorm_srgb", "native {aa:?}");
+            for size in [ssaa(960, 540), sub_native(960, 540)] {
+                for chain in [
+                    with_ui(aa),
+                    PostChain {
+                        ui: false,
+                        ..with_ui(aa)
+                    },
+                ] {
+                    assert!(chain.resample_owns_output(size));
+                    let (graph, _) = build_frame_graph(size, chain);
+                    assert_eq!(format_of(&graph, "ldr"), "rgba16float", "{size:?} {aa:?}");
+                    if chain.ui {
+                        assert_eq!(format_of(&graph, "ldr_resolved"), "rgba8unorm_srgb");
+                    }
+                }
+            }
+            assert!(!with_ui(aa).resample_owns_output(native));
+        }
+        assert!(!PostChain::default().resample_owns_output(FrameSize::native(960, 540)));
+    }
+
+    /// A debug view has no half-float twin for its pass, so under a view the seam stays 8-bit and the
+    /// resample adds nothing.
+    #[test]
+    fn ldr_stays_8_bit_under_a_debug_view() {
+        let views = [
+            PostChain {
+                probe_view: true,
+                ..PostChain::default()
+            },
+            PostChain {
+                local_shadow_view: true,
+                local_shadow_atlas: Some(256),
+                ..PostChain::default()
+            },
+            PostChain {
+                sun_cascade_view: true,
+                ..PostChain::default()
+            },
+            ssr_view_chain(),
+        ];
+        for chain in views {
+            assert!(chain.view().is_some());
+            assert!(!chain.resample_owns_output(ssaa(960, 540)));
+            let (graph, _) = build_frame_graph(ssaa(960, 540), chain);
+            assert_eq!(format_of(&graph, "ldr"), "rgba8unorm_srgb");
+        }
     }
 
     #[test]

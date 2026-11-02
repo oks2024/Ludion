@@ -1821,6 +1821,7 @@ impl Renderer {
             has_shafts: chain.shafts,
             has_dof: chain.dof,
             has_smaa: chain.smaa_scheduled(),
+            resample_owns_output: chain.resample_owns_output(size),
             ssr_view: chain.ssr.zip(chain.ssr_view).map(|(scale, view)| {
                 let levels =
                     crate::ssr_pyramid::levels(crate::ssr_pyramid::trace_extent(size, scale));
@@ -3265,8 +3266,12 @@ struct FrameRecorder<'a> {
     /// passes' presence.
     has_dof: bool,
     /// Whether this frame runs the SMAA passes. The composite then runs with its grain and dither
-    /// zeroed, because `smaa_blend` applies them after the blend.
+    /// zeroed, because `smaa_blend` applies them after the blend (unless a resample follows).
     has_smaa: bool,
+    /// Whether the resample is the last output pass ([`PostChain::resample_owns_output`]). `composite`
+    /// and `smaa_blend` then run with grain and dither zeroed, and `resolve`/`upscale` apply them at
+    /// the output extent.
+    resample_owns_output: bool,
     /// The full-screen SSR debug view this frame draws in place of `composite`, with the colour
     /// pyramid's level count (the footprint view's scale). The trace also reads it to switch to
     /// footprint output.
@@ -3401,9 +3406,11 @@ impl PassRecorder for FrameRecorder<'_> {
                     strength: self.post.bloom_strength,
                     exposure: self.post.exposure,
                     tonemap: tonemap_selector(self.post.tonemap),
-                    // Under SMAA the blend pass applies the grain and the dither (it is the last stage
-                    // of the chain); with SMAA off these are exactly the post settings.
-                    dither: u32::from(self.post.dither && !self.has_smaa),
+                    // The last output pass applies the grain and the dither: the blend under SMAA, the
+                    // resample under a scale; otherwise these are exactly the post settings.
+                    dither: u32::from(
+                        self.post.dither && !self.has_smaa && !self.resample_owns_output,
+                    ),
                     lift: self.post.lift,
                     contrast: self.post.contrast,
                     gamma: self.post.gamma,
@@ -3428,7 +3435,11 @@ impl PassRecorder for FrameRecorder<'_> {
                     // exactly, so it is on only when both passes ran and `shafts_tex` is real.
                     shafts_color: self.sun.map_or([0.0; 3], |sun| sun.color.to_array()),
                     shafts: u32::from(self.has_shafts),
-                    grain: if self.has_smaa { 0.0 } else { self.post.grain },
+                    grain: if self.has_smaa || self.resample_owns_output {
+                        0.0
+                    } else {
+                        self.post.grain
+                    },
                     grain_size: self.post.grain_size,
                     fog_albedo: self.post.fog_albedo,
                     // No `Environment` is no sky term, expressed by zeroing the *blend* rather than by
@@ -5263,7 +5274,8 @@ impl FrameRecorder<'_> {
         );
     }
 
-    /// The SMAA blend, which also applies the grain and dither the composite skipped.
+    /// The SMAA blend, which also applies the grain and dither the composite skipped, unless the
+    /// resample after it owns them.
     fn record_smaa_blend(&self, pass: &mut RecordedPass<'_>) {
         let (width, height) = self.size.render;
         let params = shader_gen::SmaaBlendParams {
@@ -5273,9 +5285,13 @@ impl FrameRecorder<'_> {
                 width as f32,
                 height as f32,
             ],
-            grain: self.post.grain,
+            grain: if self.resample_owns_output {
+                0.0
+            } else {
+                self.post.grain
+            },
             grain_size: self.post.grain_size,
-            dither: u32::from(self.post.dither),
+            dither: u32::from(self.post.dither && !self.resample_owns_output),
             pad: 0,
         };
         self.fullscreen_effect(pass, ShaderId::SmaaBlend, &[], bytemuck::bytes_of(&params));
@@ -5284,12 +5300,17 @@ impl FrameRecorder<'_> {
     fn record_resolve(&self, pass: &mut RecordedPass<'_>) {
         let (source_w, source_h) = self.size.render;
         let target = pass.colors()[0].extent;
+        let owns = self.resample_owns_output;
         let params = ResolveParams {
             source_extent: [source_w as f32, source_h as f32],
             ratio: [
                 source_w as f32 / target.width.max(1) as f32,
                 source_h as f32 / target.height.max(1) as f32,
             ],
+            grain: if owns { self.post.grain } else { 0.0 },
+            grain_size: self.post.grain_size,
+            dither: u32::from(owns && self.post.dither),
+            output_height: target.height as f32,
         };
         self.fullscreen_effect(pass, ShaderId::Resolve, &[], bytemuck::bytes_of(&params));
     }
@@ -5301,12 +5322,17 @@ impl FrameRecorder<'_> {
     fn record_upscale(&self, pass: &mut RecordedPass<'_>) {
         let (source_w, source_h) = self.size.render;
         let target = pass.colors()[0].extent;
+        let owns = self.resample_owns_output;
         let params = UpscaleParams {
             source_extent: [source_w as f32, source_h as f32],
             ratio: [
                 source_w as f32 / target.width.max(1) as f32,
                 source_h as f32 / target.height.max(1) as f32,
             ],
+            grain: if owns { self.post.grain } else { 0.0 },
+            grain_size: self.post.grain_size,
+            dither: u32::from(owns && self.post.dither),
+            output_height: target.height as f32,
         };
         self.fullscreen_effect(pass, ShaderId::Upscale, &[], bytemuck::bytes_of(&params));
     }
@@ -6522,6 +6548,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::SkyGradient,
             Snippet::Hdr,
             Snippet::Srgb,
+            Snippet::OutputEncode,
         ],
         layouts: &[Some(LayoutId::Composite)],
     },
@@ -6529,14 +6556,24 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::Resolve,
         file_name: "resolve.wgsl",
         body: include_str!("shaders/resolve.wgsl"),
-        snippets: &[Snippet::FullscreenVs],
+        snippets: &[
+            Snippet::FullscreenVs,
+            Snippet::Bayer,
+            Snippet::Srgb,
+            Snippet::OutputEncode,
+        ],
         layouts: &[Some(LayoutId::Resolve)],
     },
     ShaderDesc {
         id: ShaderId::Upscale,
         file_name: "upscale.wgsl",
         body: include_str!("shaders/upscale.wgsl"),
-        snippets: &[Snippet::FullscreenVs],
+        snippets: &[
+            Snippet::FullscreenVs,
+            Snippet::Bayer,
+            Snippet::Srgb,
+            Snippet::OutputEncode,
+        ],
         layouts: &[Some(LayoutId::Upscale)],
     },
     ShaderDesc {
@@ -6734,7 +6771,12 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::SmaaBlend,
         file_name: "smaa_blend.wgsl",
         body: include_str!("shaders/smaa_blend.wgsl"),
-        snippets: &[Snippet::FullscreenVs, Snippet::Bayer, Snippet::Srgb],
+        snippets: &[
+            Snippet::FullscreenVs,
+            Snippet::Bayer,
+            Snippet::Srgb,
+            Snippet::OutputEncode,
+        ],
         layouts: &[Some(LayoutId::SmaaBlend)],
     },
 ];
@@ -6800,7 +6842,7 @@ enum Snippet {
     Lights,
     /// The fullscreen-triangle `VsOut` + `vs_main` (blit, blur, threshold, composite).
     FullscreenVs,
-    /// The `BAYER4` ordered dither tile (mesh's screen-door fade, composite's output dither, the SSAO
+    /// The `BAYER4` ordered dither tile (mesh's screen-door fade, the output dither, the SSAO
     /// rotation, the light-shaft march's step offset).
     Bayer,
     /// The participating medium's geometry — its optical depth and local density as functions of
@@ -6841,6 +6883,9 @@ enum Snippet {
     /// `linear_to_srgb` / `srgb_to_linear`, the transfer pair, binding-free (composite,
     /// ssr_debug, probe_debug).
     Srgb,
+    /// `grain_offset` and `encoded_output`, the grain and ordered output dither applied in the encoded
+    /// domain, binding-free (composite, smaa_blend, resolve, upscale).
+    OutputEncode,
     /// The glyph-atlas `@group(1)` bindings, the shared `VsOut` and the coverage `fs_main` (text,
     /// ui_text).
     Glyph,
@@ -6879,6 +6924,7 @@ impl Snippet {
             Snippet::Footprint => "footprint.wgsl",
             Snippet::Ssr => "ssr.wgsl",
             Snippet::Srgb => "srgb.wgsl",
+            Snippet::OutputEncode => "output_encode.wgsl",
             Snippet::Glyph => "glyph.wgsl",
             Snippet::RoundedBox => "rounded_box.wgsl",
             Snippet::Decal => "decal.wgsl",
@@ -6908,6 +6954,7 @@ impl Snippet {
             Snippet::Footprint => include_str!("shaders/snippets/footprint.wgsl"),
             Snippet::Ssr => include_str!("shaders/snippets/ssr.wgsl"),
             Snippet::Srgb => include_str!("shaders/snippets/srgb.wgsl"),
+            Snippet::OutputEncode => include_str!("shaders/snippets/output_encode.wgsl"),
             Snippet::Glyph => include_str!("shaders/snippets/glyph.wgsl"),
             Snippet::RoundedBox => include_str!("shaders/snippets/rounded_box.wgsl"),
             Snippet::Decal => include_str!("shaders/snippets/decal.wgsl"),
@@ -6938,6 +6985,7 @@ impl Snippet {
             Snippet::Footprint,
             Snippet::Ssr,
             Snippet::Srgb,
+            Snippet::OutputEncode,
             Snippet::Glyph,
             Snippet::RoundedBox,
             Snippet::Decal,
@@ -7358,6 +7406,8 @@ fn build_pipeline(
         // `blit` is the overlay pass's passthrough copy of the composited LDR image, and `resolve`
         // and `upscale` are the two directions of the render scale's resampling; all four write the
         // LDR sRGB output.
+        // `Composite` and `SmaaBlend` also carry the half-float twin built below, for the `ldr` seam
+        // under a resample.
         ShaderId::Composite
         | ShaderId::Resolve
         | ShaderId::Upscale
@@ -7427,8 +7477,9 @@ fn build_pipeline(
         }
     };
     // With SMAA on, the composite writes the half-float input the three SMAA passes read instead of
-    // the LDR output, so it carries a pipeline for each.
-    let hdr = (id == ShaderId::Composite)
+    // the LDR output, and under a resample the composite and the blend write a half-float `ldr`, so
+    // both carry a pipeline for each.
+    let hdr = matches!(id, ShaderId::Composite | ShaderId::SmaaBlend)
         .then(|| build_fullscreen_pipeline(device, label, src, &layout, HDR_FORMAT, None));
     ShaderPipelines {
         main,
@@ -10922,10 +10973,9 @@ mod tests {
         };
         let (w, h) = (128u32, 128u32);
         let mut scene = flat_diamond_scene(w, h);
-        // The output dither ships on, and at scale 2 it is applied at the *render* extent and then
-        // averaged by the very filter under test - so a flat area would resolve to within one step
-        // of itself rather than to itself. That is the dither working, not the box filter failing,
-        // and it would make the equalities below read as noise. Off for this fixture only.
+        // The output dither ships on and the resolve applies it at the output extent, so a flat area
+        // would carry the tile rather than its own value, and the equalities below would read as
+        // noise. Off for this fixture only.
         scene.post = Some(crate::scene::PostData {
             dither: false,
             ..crate::scene::PostData::default()
@@ -10952,10 +11002,18 @@ mod tests {
              object={silhouette}",
         );
         assert_eq!(background, luma(&resolved, 0, 0), "flat background unmoved");
-        assert_eq!(
-            silhouette,
-            luma(&resolved, w / 2, h / 2),
-            "flat interior unmoved",
+        // One step per channel, not exact: the half-float seam can land on the other side of an
+        // 8-bit rounding boundary. Flat stays flat: every interior pixel equals the centre.
+        assert!(
+            pixel_drift(&resolved, &native, w / 2, h / 2) <= 1,
+            "flat interior moved by more than a rounding step",
+        );
+        let centre = region(&resolved, w / 2..w / 2 + 1, h / 2..h / 2 + 1)[0];
+        assert!(
+            region(&resolved, w / 2 - 8..w / 2 + 8, h / 2 - 8..h / 2 + 8)
+                .iter()
+                .all(|px| *px == centre),
+            "flat interior must stay flat",
         );
 
         // Count pixels strictly between the two flat values, with a couple of LSBs of slack so the
@@ -11005,9 +11063,8 @@ mod tests {
         };
         let (w, h) = (128u32, 128u32);
         let mut scene = flat_diamond_scene(w, h);
-        // Off for the same reason the resolve's twin switches it off: the dither is applied at the
-        // render extent and would then be magnified, so a flat area would arrive carrying the
-        // pattern rather than its own value.
+        // Off for the same reason the resolve's twin switches it off: the upscale applies the dither,
+        // so a flat area would carry the pattern rather than its own value.
         scene.post = Some(crate::scene::PostData {
             dither: false,
             ..crate::scene::PostData::default()
@@ -11036,10 +11093,18 @@ mod tests {
             luma(&magnified, 0, 0),
             "flat background unmoved",
         );
-        assert_eq!(
-            silhouette,
-            luma(&magnified, w / 2, h / 2),
-            "flat interior unmoved",
+        // One step per channel, not exact: the half-float seam can land on the other side of an
+        // 8-bit rounding boundary. Flat stays flat: every interior pixel equals the centre.
+        assert!(
+            pixel_drift(&magnified, &native, w / 2, h / 2) <= 1,
+            "flat interior moved by more than a rounding step",
+        );
+        let centre = region(&magnified, w / 2..w / 2 + 1, h / 2..h / 2 + 1)[0];
+        assert!(
+            region(&magnified, w / 2 - 8..w / 2 + 8, h / 2 - 8..h / 2 + 8)
+                .iter()
+                .all(|px| *px == centre),
+            "flat interior must stay flat",
         );
 
         let intermediates = |img: &RenderedImage| {
@@ -11076,8 +11141,8 @@ mod tests {
     /// background half of the equality proves nothing about the filter — the interpolation is
     /// `magnifying_a_hard_edge_produces_intermediate_pixels`'s claim, and this test is about the
     /// overlay and nothing else. The output dither is the one shipped default that would break the
-    /// flatness (applied at the render extent, then magnified, it would arrive at twice its period)
-    /// and is off for this fixture only.
+    /// flatness (the upscale applies it to the frame the overlay then draws on) and is off for this
+    /// fixture only.
     ///
     /// The rect and the glyphs are deliberately odd-sized and odd-placed, so none of their edges
     /// lands on a source texel: UI rasterized ahead of the magnification could not reproduce these
@@ -11287,6 +11352,199 @@ mod tests {
             }
         }
         assert!(grained_apart > 0, "the grain must reach the SMAA frame");
+    }
+
+    /// The DoF shader's spiral table covers every tap a quality can ask for, and each entry is the
+    /// unit direction of its golden-angle step.
+    #[test]
+    fn dof_spiral_table_matches_the_golden_angle() {
+        let body = ShaderId::Dof.body_source();
+        let start = body.find("const DOF_SPIRAL").expect("the table");
+        let table = &body[start..];
+        let table = &table[..table.find(");").expect("the table's end")];
+        let numbers: Vec<f32> = table
+            .split("vec2<f32>(")
+            .skip(1)
+            .flat_map(|entry| {
+                entry
+                    .split(')')
+                    .next()
+                    .unwrap()
+                    .split(',')
+                    .map(|n| n.trim().parse::<f32>().expect("a float literal"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(numbers.len() % 2, 0);
+        let entries: Vec<[f32; 2]> = numbers.chunks(2).map(|c| [c[0], c[1]]).collect();
+        assert!(entries.len() >= QualityParams::FULL.dof_taps as usize);
+        let golden = 2.399_963_2_f32;
+        for (i, [c, s]) in entries.iter().enumerate() {
+            let angle = (i as f32 * golden) as f64;
+            assert!((f64::from(*c) - angle.cos()).abs() < 1e-6, "cos at {i}");
+            assert!((f64::from(*s) - angle.sin()).abs() < 1e-6, "sin at {i}");
+        }
+    }
+
+    /// The pixels of `img` over `xs` x `ys`, as `[r, g, b]` triples in row-major order.
+    fn region(
+        img: &RenderedImage,
+        xs: std::ops::Range<u32>,
+        ys: std::ops::Range<u32>,
+    ) -> Vec<[u8; 3]> {
+        ys.flat_map(|y| xs.clone().map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let i = ((y * img.width + x) * 4) as usize;
+                [img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]]
+            })
+            .collect()
+    }
+
+    /// **The dither is applied after the resample, so it survives it.** At scale 2 and 0.5 a flat
+    /// patch carries the Bayer tile at the output extent: within one step of the native dithered
+    /// frame, repeating with period 4 exactly in x and y, and not constant.
+    #[test]
+    fn needs_gpu_a_resampled_flat_patch_keeps_the_dither_tile() {
+        let Some(renderer) = skip_or_renderer("a_resampled_flat_patch_keeps_the_dither_tile")
+        else {
+            return;
+        };
+        let (w, h) = (128u32, 128u32);
+        let scene = flat_diamond_scene(w, h);
+        let native = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("native render");
+        // The background corner and the diamond's interior: flat, far from every edge.
+        let flat = [(4..28u32, 4..28u32), (56..72, 56..72)];
+        for factor in [2.0, 0.5] {
+            let scaled = renderer
+                .render(
+                    &scene,
+                    FrameSize::scaled(w, h, crate::RenderScale::new(factor).unwrap()),
+                )
+                .expect("scaled render");
+            for (xs, ys) in flat.clone() {
+                for y in ys.clone() {
+                    for x in xs.clone() {
+                        let drift = pixel_drift(&scaled, &native, x, y);
+                        assert!(
+                            drift <= 1,
+                            "{factor}x ({x}, {y}) is {drift} steps off native"
+                        );
+                    }
+                }
+                let tile = region(&scaled, xs.clone(), ys.clone());
+                let side = xs.len();
+                let at = |x: usize, y: usize| tile[y * side + x];
+                for y in 0..side {
+                    for x in 0..side - 4 {
+                        assert_eq!(
+                            at(x, y),
+                            at(x + 4, y),
+                            "{factor}x period 4 in x at ({x}, {y})"
+                        );
+                    }
+                }
+                for y in 0..side - 4 {
+                    for x in 0..side {
+                        assert_eq!(
+                            at(x, y),
+                            at(x, y + 4),
+                            "{factor}x period 4 in y at ({x}, {y})"
+                        );
+                    }
+                }
+                let distinct: std::collections::BTreeSet<_> = tile.iter().collect();
+                assert!(
+                    distinct.len() >= 2,
+                    "{factor}x: a flat patch with no dither proves nothing",
+                );
+            }
+        }
+    }
+
+    /// **SMAA under a resample still carries the grain and the dither** — now applied by the resample
+    /// after the blend. Within one step of the `Off` frame at the same scale on flat areas, and apart
+    /// from a grain-off frame. This also proves the half-float `smaa_blend` pipeline validates.
+    #[test]
+    fn needs_gpu_smaa_keeps_grain_and_dither_under_a_resample() {
+        let Some(mut renderer) = skip_or_renderer("smaa_keeps_grain_and_dither_under_a_resample")
+        else {
+            return;
+        };
+        let (w, h) = (96u32, 96u32);
+        let mut scene = flat_diamond_scene(w, h);
+        scene.post = Some(crate::scene::PostData {
+            grain: 0.03,
+            dither: true,
+            ..crate::scene::PostData::default()
+        });
+        let flat = [(4..28u32, 4..28u32), (44..52, 44..52)];
+        for factor in [2.0, 0.5] {
+            let size = FrameSize::scaled(w, h, crate::RenderScale::new(factor).unwrap());
+            scene.post = Some(crate::scene::PostData {
+                grain: 0.03,
+                dither: true,
+                ..crate::scene::PostData::default()
+            });
+            renderer.set_anti_aliasing(AntiAliasing::Off);
+            let off = renderer.render(&scene, size).expect("off render");
+            renderer.set_anti_aliasing(AntiAliasing::Smaa);
+            let smaa = renderer.render(&scene, size).expect("smaa render");
+            scene.post = Some(crate::scene::PostData {
+                grain: 0.0,
+                dither: true,
+                ..crate::scene::PostData::default()
+            });
+            let ungrained = renderer.render(&scene, size).expect("smaa without grain");
+
+            let mut grained_apart = 0;
+            for (xs, ys) in flat.clone() {
+                for y in ys {
+                    for x in xs.clone() {
+                        let drift = pixel_drift(&smaa, &off, x, y);
+                        assert!(drift <= 1, "{factor}x ({x}, {y}) is {drift} steps from Off");
+                        if pixel_drift(&smaa, &ungrained, x, y) > 1 {
+                            grained_apart += 1;
+                        }
+                    }
+                }
+            }
+            assert!(
+                grained_apart > 0,
+                "{factor}x: the grain must reach the frame"
+            );
+        }
+    }
+
+    /// A debug view has no half-float twin, so under a resample it keeps the 8-bit seam: the frame
+    /// renders at scale 2 without a wgpu fault.
+    #[test]
+    fn needs_gpu_debug_views_render_under_a_resample() {
+        let Some(mut renderer) = skip_or_renderer("debug_views_render_under_a_resample") else {
+            return;
+        };
+        renderer.set_quality(
+            Quality::FULL,
+            QualityParams {
+                local_shadow_atlas_size: 256,
+                ..QualityParams::FULL
+            },
+        );
+        let (w, h) = (160u32, 120u32);
+        let size = FrameSize::scaled(w, h, crate::RenderScale::new(2.0).unwrap());
+        let mut scene = local_shadow_fixture(w, h, true);
+        scene.debug_view = Some(crate::DebugView::LocalShadowAtlas);
+        let image = renderer.render(&scene, size).expect("view render");
+        assert_eq!((image.width, image.height), (w, h));
+        assert!(renderer.gpu.take_fault().is_none());
+
+        // The SSR trace view: a real full-screen pass with no twin, behind the SSR fixture.
+        let size = FrameSize::scaled(96, 64, crate::RenderScale::new(2.0).unwrap());
+        let (image, _) =
+            ssr_view_frame_at(&renderer, size, 1.0, Some(crate::DebugView::SsrConfidence));
+        assert_eq!((image.width, image.height), (96, 64));
+        assert!(renderer.gpu.take_fault().is_none());
     }
 
     /// **SMAA blends what the `Off` path would have stored.** A shallow-sloped square at 6.0 against a
@@ -19032,7 +19290,15 @@ mod tests {
         ssr: f32,
         view: Option<crate::DebugView>,
     ) -> (RenderedImage, RenderScene) {
-        let size = FrameSize::native(96, 64);
+        ssr_view_frame_at(renderer, FrameSize::native(96, 64), ssr, view)
+    }
+
+    fn ssr_view_frame_at(
+        renderer: &Renderer,
+        size: FrameSize,
+        ssr: f32,
+        view: Option<crate::DebugView>,
+    ) -> (RenderedImage, RenderScene) {
         let mut scene = RenderScene::empty(size.render);
         scene.post = Some(PostData {
             ssr,

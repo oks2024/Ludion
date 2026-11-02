@@ -757,10 +757,18 @@ const _: () = assert!(core::mem::offset_of!(RelightParams, ambient) == 576);
 pub struct ResolveParams {
     pub source_extent: [f32; 2],
     pub ratio: [f32; 2],
+    pub grain: f32,
+    pub grain_size: f32,
+    pub dither: u32,
+    pub output_height: f32,
 }
-const _: () = assert!(core::mem::size_of::<ResolveParams>() == 16);
+const _: () = assert!(core::mem::size_of::<ResolveParams>() == 32);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, source_extent) == 0);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, ratio) == 8);
+const _: () = assert!(core::mem::offset_of!(ResolveParams, grain) == 16);
+const _: () = assert!(core::mem::offset_of!(ResolveParams, grain_size) == 20);
+const _: () = assert!(core::mem::offset_of!(ResolveParams, dither) == 24);
+const _: () = assert!(core::mem::offset_of!(ResolveParams, output_height) == 28);
 
 /// WGSL `struct ShadeProbe`.
 ///
@@ -1084,10 +1092,18 @@ const _: () = assert!(core::mem::offset_of!(UpsampleParams, texel) == 0);
 pub struct UpscaleParams {
     pub source_extent: [f32; 2],
     pub ratio: [f32; 2],
+    pub grain: f32,
+    pub grain_size: f32,
+    pub dither: u32,
+    pub output_height: f32,
 }
-const _: () = assert!(core::mem::size_of::<UpscaleParams>() == 16);
+const _: () = assert!(core::mem::size_of::<UpscaleParams>() == 32);
 const _: () = assert!(core::mem::offset_of!(UpscaleParams, source_extent) == 0);
 const _: () = assert!(core::mem::offset_of!(UpscaleParams, ratio) == 8);
+const _: () = assert!(core::mem::offset_of!(UpscaleParams, grain) == 16);
+const _: () = assert!(core::mem::offset_of!(UpscaleParams, grain_size) == 20);
+const _: () = assert!(core::mem::offset_of!(UpscaleParams, dither) == 24);
+const _: () = assert!(core::mem::offset_of!(UpscaleParams, output_height) == 28);
 
 // --- Binding indices (@group / @binding per WGSL resource) ---------------------------------------
 
@@ -3182,7 +3198,7 @@ pub fn create_resolve_src_resolve_samp_resolve_params_bgl(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(16),
+                    min_binding_size: wgpu::BufferSize::new(32),
                 },
                 count: None,
             },
@@ -3897,7 +3913,7 @@ pub fn create_upscale_src_upscale_samp_upscale_params_bgl(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(16),
+                    min_binding_size: wgpu::BufferSize::new(32),
                 },
                 count: None,
             },
