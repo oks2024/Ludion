@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 
 use ludion_core::diagnostics::Diagnostic;
+use ludion_core::paths::sibling;
 use ludion_texgen::Image;
-use ludion_texgen::resolve::normalize;
 use ludion_texgen::{Resolver, Source};
 
 /// Documents and image files by normalized id.
@@ -35,7 +35,7 @@ impl MemResolver {
 
 impl Resolver for MemResolver {
     fn read(&self, reference: &str, from: Option<&str>) -> Result<Source, String> {
-        let id = normalize(reference, from);
+        let id = sibling(from.unwrap_or(""), reference);
         self.documents
             .get(&id)
             .map(|text| Source {
@@ -46,7 +46,7 @@ impl Resolver for MemResolver {
     }
 
     fn read_bytes(&self, reference: &str, from: Option<&str>) -> Result<(String, Vec<u8>), String> {
-        let id = normalize(reference, from);
+        let id = sibling(from.unwrap_or(""), reference);
         self.images
             .get(&id)
             .map(|bytes| (id.clone(), bytes.clone()))

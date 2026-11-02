@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{MemResolver, first_error, recipe};
+use common::{MemResolver, first_error, pattern_png, recipe};
 
 const OUT: &str = "  base_color: n\n  roughness: n\n  height: n\n";
 
@@ -386,6 +386,49 @@ fn image_files_report_missing_and_undecodable() {
         (d.code.as_str(), d.path.as_deref()),
         ("L1284", Some("/steps/n/path"))
     );
+}
+
+#[test]
+fn references_that_leave_the_recipe_directory_are_refused() {
+    let resolver = MemResolver::default()
+        .with_image("../../../elsewhere/x.png", pattern_png(8))
+        .with_image("C:/x.png", pattern_png(8))
+        .with_image("/x.png", pattern_png(8))
+        .with_image("sub/ok.png", pattern_png(8));
+    for (path, why) in [
+        ("../../../elsewhere/x.png", "climbs out"),
+        ("C:/x.png", "prefix"),
+        ("/x.png", "absolute"),
+    ] {
+        let step = format!("  n:\n    op: image\n    path: \"{path}\"\n");
+        let d = first_error(&recipe(&step, OUT), &resolver);
+        assert_eq!(
+            (d.code.as_str(), d.path.as_deref()),
+            ("L1285", Some("/steps/n/path")),
+            "{path}"
+        );
+        assert!(d.message.contains(why), "{path}: {}", d.message);
+    }
+    let step = "  n:\n    op: image\n    path: sub/../sub/ok.png\n";
+    let rest = ludion_texgen::load(&recipe(step, OUT), &resolver).err();
+    assert!(
+        rest.iter()
+            .flatten()
+            .all(|d| d.path.as_deref() != Some("/steps/n/path")),
+        "{rest:?}"
+    );
+}
+
+#[test]
+fn recipe_references_that_leave_the_recipe_directory_are_refused() {
+    let resolver = MemResolver::with(&[("../x.texture.yaml", CHILD)]);
+    let step = "  n:\n    op: recipe\n    path: ../x.texture.yaml\n    output: out\n";
+    let d = first_error(&recipe(step, OUT), &resolver);
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1285", Some("/steps/n/path"))
+    );
+    assert!(d.message.contains("climbs out"), "{}", d.message);
 }
 
 #[test]

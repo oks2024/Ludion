@@ -105,7 +105,7 @@ fn run_png(input: &Path, out: &Path, quantize: Option<usize>, name: Option<Strin
     };
     let text = ludion_scene::emit_sprite(&imported.doc);
     if let Err(error) = create_new_atomic(&out_path, &text) {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
+        if error.kind() == std::io::ErrorKind::AlreadyExists && out_path.exists() {
             diagnostic::print(
                 &Diagnostic::new(
                     code::CREATE_TARGET_EXISTS,

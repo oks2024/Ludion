@@ -231,6 +231,25 @@ fn a_second_import_never_overwrites_the_document() {
 /// Both import codes are answerable, and `ludion explain` states which one stops a build: the
 /// refusal is an error, the reported merge only a warning.
 #[test]
+fn a_file_where_a_parent_folder_belongs_is_not_reported_as_the_document_existing() {
+    let dir = scratch("import_png_file_parent");
+    let png = dir.join("a.png");
+    write_png(&png, 4, 2, three_color_texels());
+    let blocker = dir.join("blocker");
+    std::fs::write(&blocker, "a file").unwrap();
+    let out = blocker.join("a.sprite.yaml");
+    let result = run_ludion(&[
+        "import",
+        png.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(!result.status.success());
+    let err = stderr(&result);
+    assert!(!err.contains("already exists"), "{err}");
+}
+
+#[test]
 fn the_import_codes_explain_with_their_severities() {
     for (code, severity) in [("L4014", "error"), ("L4015", "warning")] {
         let output = run_ludion(&["explain", code]);

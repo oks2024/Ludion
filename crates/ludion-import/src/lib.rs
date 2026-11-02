@@ -351,6 +351,16 @@ pub fn import(
     let document = gltf::Document::from_json(document.into_json())
         .map_err(|error| vec![invalid_gltf(format!("invalid glTF: {error}"))])?;
     let document = &document;
+    if document.nodes().len() == 0 {
+        return Err(vec![
+            invalid_gltf("the glTF has no nodes, so there is nothing to import")
+                .with_path("/nodes")
+                .with_help(
+                    "export the model with at least one node (an object in the scene) from the \
+                     authoring tool; a file holding only meshes or materials has nothing to place",
+                ),
+        ]);
+    }
     let buffers = Buffers::resolve(document, external, blob.as_deref()).map_err(|d| vec![d])?;
 
     let mut state = State::default();

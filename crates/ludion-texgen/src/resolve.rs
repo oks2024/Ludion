@@ -51,26 +51,22 @@ impl FsResolver {
     }
 }
 
-/// Joins `reference` onto the directory of `from` and folds `.` and `..` lexically.
-pub fn normalize(reference: &str, from: Option<&str>) -> String {
-    let reference = reference.replace('\\', "/");
-    let dir = from.and_then(|f| f.rsplit_once('/')).map_or("", |(d, _)| d);
-    let mut parts: Vec<&str> = Vec::new();
-    for part in dir.split('/').chain(reference.split('/')) {
-        match part {
-            "" | "." => {}
-            ".." if parts.last().is_some_and(|p| *p != "..") => {
-                parts.pop();
-            }
-            other => parts.push(other),
-        }
+/// The id of `reference` relative to the document `from`, refused when it leaves the root
+/// document's directory (`..` past it, a drive or scheme prefix, an absolute path).
+///
+/// # Errors
+/// The refusal as a phrase finishing "the path …".
+pub fn confined_id(reference: &str, from: Option<&str>) -> Result<String, String> {
+    let id = ludion_core::paths::sibling(from.unwrap_or(""), reference);
+    match ludion_core::paths::content_refusal(&id) {
+        None => Ok(id),
+        Some(refusal) => Err(format!("the path {}", refusal.describe())),
     }
-    parts.join("/")
 }
 
 impl Resolver for FsResolver {
     fn read(&self, reference: &str, from: Option<&str>) -> Result<Source, String> {
-        let id = normalize(reference, from);
+        let id = confined_id(reference, from)?;
         let text = std::fs::read_to_string(self.base.join(&id))
             .map_err(|e| format!("cannot read recipe `{id}`: {e}"))?;
         Ok(Source { id, text })
@@ -80,7 +76,7 @@ impl Resolver for FsResolver {
         if reference.starts_with("std:") {
             return Err("an image cannot come from std:".into());
         }
-        let id = normalize(reference, from);
+        let id = confined_id(reference, from)?;
         let bytes = std::fs::read(self.base.join(&id))
             .map_err(|e| format!("cannot read image `{id}`: {e}"))?;
         Ok((id, bytes))
@@ -184,7 +180,7 @@ fn node(
             let read = if id.is_some_and(stdlib::is_std) {
                 Err("a stdlib recipe cannot load an image".to_string())
             } else {
-                resolver.read_bytes(path, id)
+                confined_id(path, id).and_then(|_| resolver.read_bytes(path, id))
             };
             match read {
                 Err(reason) => diags.push(tag(
@@ -401,6 +397,7 @@ fn node(
 fn source(resolver: &dyn Resolver, from: Option<&str>, path: &str) -> Result<Source, String> {
     stdlib::std_policy(from, path)?;
     let Some(name) = path.strip_prefix("std:") else {
+        confined_id(path, from)?;
         return resolver.read(path, from);
     };
     match stdlib::get(name) {

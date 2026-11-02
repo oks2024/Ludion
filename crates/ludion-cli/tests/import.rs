@@ -164,6 +164,31 @@ fn textured_import_reproduces_committed_tree_in_default_mode() {
 /// A re-import over a tree holding a file the new import would not write is `L0030` naming it and
 /// leaves the tree untouched; an identical re-import over its own output still succeeds.
 #[test]
+fn a_gltf_with_no_nodes_is_refused_as_a_gltf_and_writes_nothing() {
+    let dir = scratch("import_no_nodes");
+    let input = dir.join("empty.gltf");
+    std::fs::write(
+        &input,
+        r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[]}],"scene":0,"nodes":[]}"#,
+    )
+    .unwrap();
+    let out = dir.join("out");
+    let result = run_ludion(&[
+        "import",
+        input.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success());
+    assert!(stderr.contains("L1201"), "{stderr}");
+    assert!(!stderr.contains("L1390"), "{stderr}");
+    assert!(stderr.contains("no nodes"), "{stderr}");
+    assert!(stderr.contains("/nodes"), "{stderr}");
+    assert!(!out.exists(), "the refusal wrote nothing");
+}
+
+#[test]
 fn a_reimport_over_stale_outputs_is_refused_and_an_identical_one_succeeds() {
     let (out, first) = import_beside_copy(
         "import_stale_outputs",
