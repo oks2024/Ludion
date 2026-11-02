@@ -39,8 +39,9 @@ The prefab gains an optional `clips:` map, short name to clip file, resolved aga
 
 - **The pose is relative to the part's authored rest.** The playback transform is stored local × rest⁻¹ × sampled, so the placement baked into the root part and any `transform`/override ride on top; an unplaced part takes the sample exactly. Exact for uniform scale.
 - **`Animation` goes on the root part** (`PrefabInstance.root` equals the entity). Put it in an `overrides:` entry, or write it after `spawn_prefab`. The `clip` name resolves through the instanced prefab's `clips:` map.
+- **A root whose `Mesh` is an assembly or a character plays that model's clips**, not the prefab's: the prefab's parts stay at rest (the rule `animation_events` follows).
 - **Two instances animate independently**, each with its own `Animation`.
-- **A track must name a part: `L1314`** from `check-scene` (`the clip snap animates lidd, which is not a part of this prefab`), with the nearest part name as the fix. Playback draws an unmatched track's part at rest, silently, so run the check.
+- **A track must name a part: `L1314`** from `check-scene` of the prefab or of any scene placing it, and from wire `scene.check` (`the clip snap animates lidd, which is not a part of this prefab`), with the nearest part name as the fix. Playback draws an unmatched track's part at rest, silently, so run the check.
 - **Visual only.** Posing happens at extract; the sim `Transform`, the `WorldHash` and recordings are unchanged. Children of a posed part follow, and so do point and spot lights (in position — a spot's aim is its world-space `direction`, not the part's rotation), rendered reflection probes, decals, particles and drop shadows under it; **colliders, cameras and the sun do not**, and the `probes` debug lines stay at the stored pose — move an analytic collider from game code.
 - **`animation_events` needs one more query.** A game registering that system declares `.query::<(&Animation, &PrefabInstance)>()` or the query-drift gate reports `L1126`.
 - **Profiling:** the load report gains a `prefab_clips` row (`ludion docs profiling`).

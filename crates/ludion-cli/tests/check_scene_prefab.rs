@@ -237,6 +237,34 @@ fn a_clip_track_naming_no_part_is_l1314_with_the_nearest_part() {
 }
 
 #[test]
+fn a_scene_placing_a_prefab_with_a_bad_clip_track_is_l1314() {
+    let dir = hinge_copy("scene-bad-target");
+    let clip = dir.join("clips/snap.anim.yaml");
+    let text = std::fs::read_to_string(&clip).unwrap();
+    std::fs::write(&clip, text.replace("\n  latch:\n", "\n  latchh:\n")).unwrap();
+    let scene = dir.join("scene.yaml");
+    std::fs::write(
+        &scene,
+        "format: 1\nname: s\nentities:\n  - name: hinge-1\n    prefab: model.prefab.yaml\n",
+    )
+    .unwrap();
+    let output = run_check_scene(&scene);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1314"), "{stderr}");
+    assert!(stderr.contains("in `model.prefab.yaml`"), "{stderr}");
+    assert!(stderr.contains("nearest part is `latch`"), "{stderr}");
+
+    std::fs::write(&clip, text).unwrap();
+    let output = run_check_scene(&scene);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn an_unclipped_prefab_is_unchanged_and_json_lists_no_clips() {
     let path = scratch(
         "plain.prefab.yaml",

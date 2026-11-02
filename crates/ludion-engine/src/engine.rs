@@ -3057,15 +3057,18 @@ impl Engine {
     /// Writes the live `entities` as a new `kind: prefab` at `path` under the content root and
     /// returns the normalized key. The first entity is the prefab's root, and the parts follow in the
     /// order given; each needs a unique `Name` without `/`, and a reference between them must stay
-    /// inside the set. An existing file is overwritten, like `scene.save`. The world is unchanged
-    /// and the session's prefab library is not touched: a prefab it already holds picks up the new
-    /// text at the next `asset.reload`.
+    /// inside the set. An existing file is overwritten, like `scene.save`. The world's entities are
+    /// unchanged. When the session's prefab library already holds the prefab it takes the new text as
+    /// a recorded reload, so later spawns use it and a replay agrees; live instances are not
+    /// re-expanded. The file is written after the library accepted the text, and the library is
+    /// restored if the write fails.
     ///
     /// # Errors
     /// `L1236` for an empty or duplicate set, a dead entity, a missing, duplicate or `/`-bearing
     /// name, a reference out of the set, a path that is not a `.prefab.yaml` or a failed write;
     /// `L1230` for an absolute path or a world with no prefab library; the prefab's own diagnostics
-    /// (`L1229` for a `Camera` part) when the result would not validate. Nothing is written on error.
+    /// (`L1229` for a `Camera` part) when the result would not validate, including a dependent
+    /// prefab the new text breaks. Nothing is written on error.
     ///
     /// # Example
     /// ```
@@ -3083,11 +3086,31 @@ impl Engine {
     /// # std::fs::remove_dir_all(&root).ok();
     /// ```
     pub fn create_prefab(
-        &self,
+        &mut self,
         entities: &[EntityId],
         path: &str,
     ) -> Result<String, Vec<Diagnostic>> {
-        crate::prefab_ops::create(self.world(), self.registry(), entities, path)
+        let result = crate::prefab_ops::create(self.driver.world_mut(), entities, path);
+        self.drain_prefab_texts();
+        if let Ok(key) = &result {
+            self.refresh_prefab_clip_cache(key);
+        }
+        result
+    }
+
+    /// Re-reads the cached clip rests of the prefab `path` after its file was rewritten: the file is
+    /// a source of that cache entry, so a part would otherwise pose against the old rest. A failed
+    /// re-read leaves the entry dropped for the next extract to report.
+    fn refresh_prefab_clip_cache(&mut self, path: &str) {
+        let root = self.project_root().to_path_buf();
+        if let Some(key) = self
+            .asset_cache()
+            .resolve_key(AssetRoot::content(&root), path)
+        {
+            let _ = self
+                .asset_cache_mut()
+                .reload(AssetRoot::content(&root), &key);
+        }
     }
 
     /// Writes the edits of the prefab instance `instance` is part of back into its prefab file: each
@@ -3138,18 +3161,7 @@ impl Engine {
         let result = crate::prefab_ops::apply(self.driver.world_mut(), instance, parts);
         self.drain_prefab_texts();
         if let Ok(applied) = &result {
-            // The rewritten prefab is a source of its cached clip rests: re-read them now, or a
-            // part would pose against the old rest. A failed re-read leaves the entry dropped for
-            // the next extract to report.
-            let root = self.project_root().to_path_buf();
-            if let Some(key) = self
-                .asset_cache()
-                .resolve_key(AssetRoot::content(&root), &applied.path)
-            {
-                let _ = self
-                    .asset_cache_mut()
-                    .reload(AssetRoot::content(&root), &key);
-            }
+            self.refresh_prefab_clip_cache(&applied.path);
         }
         result
     }
@@ -6596,21 +6608,10 @@ entities:
         let failure = engine.stop_recording().expect_err("the death is returned");
         assert_eq!(failure.code.as_str(), "L3042");
     }
-    ///  on a hand-authored prefab re-reads the clip rests the engine's cache holds:
-    /// the lid then poses exactly as in a fresh extract over the rewritten file.
-    #[test]
-    fn apply_prefab_refreshes_the_cached_clip_rests() {
-        let scene = "format: 1
-seed: 1
-entities:
-  - name: opening
-    prefab: hinge/model.prefab.yaml
-    overrides:
-      base:
-        Animation:
-          clip: open
-";
-        let root = std::env::temp_dir().join(format!("ludion-apply-rests-{}", std::process::id()));
+    /// A project root holding a hand-authored copy of the hinge prefab (clips and meshes beside it) at
+    /// `hinge/model.prefab.yaml`: the imported `generated_from` line is dropped so the file is editable.
+    fn hinge_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("ludion-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let source =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-node-clips/expected");
@@ -6631,15 +6632,27 @@ entities:
             .unwrap()
             .lines()
             .filter(|line| !line.starts_with("generated_from"))
-            .map(|line| {
-                format!(
-                    "{line}
-"
-                )
-            })
+            .map(|line| format!("{line}\n"))
             .collect();
         std::fs::write(&file, hand_authored).unwrap();
+        root
+    }
 
+    /// `apply_prefab` on a hand-authored prefab re-reads the clip rests the engine's cache holds:
+    /// the lid then poses exactly as in a fresh extract over the rewritten file.
+    #[test]
+    fn apply_prefab_refreshes_the_cached_clip_rests() {
+        let scene = "format: 1
+seed: 1
+entities:
+  - name: opening
+    prefab: hinge/model.prefab.yaml
+    overrides:
+      base:
+        Animation:
+          clip: open
+";
+        let root = hinge_root("apply-rests");
         let mut engine = Engine::with_project_root(&root);
         engine.load_inline_scene(scene).expect("the scene loads");
         engine.extract_render_scene(320, 180).expect("extracts");
@@ -6661,6 +6674,321 @@ entities:
             .meshes;
         assert_eq!(after[1].model, fresh[1].model);
         assert_eq!(after[2].model, fresh[2].model);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    const HINGE_SCENE: &str = "format: 1
+seed: 1
+entities:
+  - name: opening
+    prefab: hinge/model.prefab.yaml
+    overrides:
+      base:
+        Animation:
+          clip: open
+";
+
+    const EXTRA_PART: &str = "  - name: extra
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      Transform: {}
+";
+
+    fn spawn_hinge(engine: &mut Engine, name: &str) -> Vec<EntityId> {
+        crate::prefab::spawn_prefab(
+            engine.world_mut(),
+            "hinge/model.prefab.yaml",
+            None,
+            Some(name),
+            false,
+        )
+        .expect("the hinge spawns")
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn reload_hinge(engine: &mut Engine) -> Result<(), Diagnostic> {
+        engine
+            .execute(Command::AssetReload(
+                ludion_protocol::command::AssetReloadParams {
+                    path: Some("hinge/model.prefab.yaml".into()),
+                },
+            ))
+            .map(|_| ())
+    }
+
+    /// An animated instance puts its prefab in the clip-rest cache, and `asset.reload` of the file
+    /// must still reach the library: a later spawn takes the new text, a bad edit leaves the old one,
+    /// and a recording carries the reload.
+    #[test]
+    fn asset_reload_of_an_animated_prefab_reaches_the_library() {
+        let root = hinge_root("reload-animated");
+        let file = root.join("hinge/model.prefab.yaml");
+        let original = std::fs::read_to_string(&file).unwrap();
+        let mut engine = Engine::with_project_root(&root);
+        engine
+            .load_inline_scene(HINGE_SCENE)
+            .expect("the scene loads");
+        let buffer = SharedBuf::default();
+        engine.set_recording(buffer.clone()).expect("arms");
+        engine.extract_render_scene(320, 180).expect("extracts");
+        let before = spawn_hinge(&mut engine, "first").len();
+
+        std::fs::write(&file, format!("{original}{EXTRA_PART}")).unwrap();
+        reload_hinge(&mut engine).expect("the edit reloads");
+        assert_eq!(spawn_hinge(&mut engine, "second").len(), before + 1);
+
+        std::fs::write(&file, format!("{original}  - name: extra\n    bogus: 1\n")).unwrap();
+        reload_hinge(&mut engine).expect_err("a bad edit is refused");
+        assert_eq!(spawn_hinge(&mut engine, "third").len(), before + 1);
+
+        engine.stop_recording().unwrap();
+        let bytes = buffer.0.lock().unwrap().clone();
+        let reloads = ludion_protocol::replay::ReplayReader::new(bytes.as_slice())
+            .unwrap()
+            .records()
+            .unwrap()
+            .into_iter()
+            .filter(|record| {
+                matches!(
+                    record,
+                    ludion_protocol::replay::ReplayRecord::PrefabText { reload: true, .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            reloads, 1,
+            "the applied reload is recorded, the refused one is not"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    const TWO_HINGES: &str = "format: 1
+seed: 1
+entities:
+  - name: a
+    prefab: hinge/model.prefab.yaml
+    overrides:
+      base:
+        Animation:
+          clip: open
+  - name: b
+    prefab: hinge/model.prefab.yaml
+    overrides:
+      base:
+        Animation:
+          clip: open
+";
+
+    fn models(engine: &mut Engine) -> Vec<ludion_core::math::glam::Mat4> {
+        engine
+            .extract_render_scene(320, 180)
+            .expect("extracts")
+            .meshes
+            .iter()
+            .map(|mesh| mesh.model)
+            .collect()
+    }
+
+    /// An instance poses against the text it was expanded from: applying another instance's edit
+    /// (which rewrites the file) leaves it where it was.
+    #[test]
+    fn an_applied_edit_leaves_another_live_instance_posed_as_before() {
+        let root = hinge_root("rests-bound");
+        let mut engine = Engine::with_project_root(&root);
+        engine
+            .load_inline_scene(TWO_HINGES)
+            .expect("the scene loads");
+        let before = models(&mut engine);
+        let ids: Vec<_> = engine.world().entities().collect();
+        // The latch's translation is a channel `open` animates, so its rest matters to the pose.
+        let mut moved = *engine.world().get::<Transform>(ids[2]).unwrap().unwrap();
+        moved.translation[2] += 0.25;
+        engine.world_mut().insert(ids[2], moved).unwrap();
+        engine.apply_prefab(ids[0], None).expect("applies");
+
+        let after = models(&mut engine);
+        assert_eq!(&after[3..], &before[3..], "instance b did not move");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A hand-edit of a part's rest reloaded through `asset.reload` reaches new spawns only; the
+    /// instances already live keep the rest of their text.
+    #[test]
+    fn a_reloaded_rest_reaches_new_instances_and_not_live_ones() {
+        let root = hinge_root("rests-reload");
+        let file = root.join("hinge/model.prefab.yaml");
+        let mut engine = Engine::with_project_root(&root);
+        engine
+            .load_inline_scene(TWO_HINGES)
+            .expect("the scene loads");
+        let before = models(&mut engine);
+
+        let text = std::fs::read_to_string(&file).unwrap();
+        // The latch's translation is a channel `open` animates, so its rest matters to an instance
+        // whose stored pose differs from it; the lid's translation is a channel `open` leaves to
+        // the rest, so a new instance draws it from there.
+        let edited = text
+            .replacen(
+                "          - 0.05\n          - 0.8\n",
+                "          - 0.05\n          - 0.9\n",
+                1,
+            )
+            .replacen("          - 0.1\n", "          - 0.3\n", 1);
+        assert_ne!(edited, text, "the rests moved");
+        std::fs::write(&file, &edited).unwrap();
+        reload_hinge(&mut engine).expect("reloads");
+        assert_eq!(
+            models(&mut engine),
+            before,
+            "live instances keep their rest"
+        );
+
+        let spawned = spawn_hinge(&mut engine, "c");
+        let animation: crate::components::Animation =
+            serde_json::from_value(serde_json::json!({"clip": "open"})).unwrap();
+        engine.world_mut().insert(spawned[0], animation).unwrap();
+        let all = models(&mut engine);
+        let mut fresh = Engine::with_project_root(&root);
+        fresh
+            .load_inline_scene(HINGE_SCENE)
+            .expect("the scene loads");
+        let fresh = models(&mut fresh);
+        assert_eq!(&all[6..], &fresh[..], "a new spawn poses from the new rest");
+        assert_ne!(all[7], before[1], "the new rest moved the lid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A prefab root whose `Mesh` is an assembly plays the assembly's clips: the prefab's same-named
+    /// clip does not also pose the other parts.
+    #[test]
+    fn a_root_drawing_an_assembly_does_not_play_the_prefab_clip() {
+        let root = hinge_root("model-root");
+        let voxels = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/voxels");
+        for entry in walk(&voxels) {
+            let to = root
+                .join("voxels")
+                .join(entry.strip_prefix(&voxels).unwrap());
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(&entry, to).unwrap();
+        }
+        let file = root.join("hinge/model.prefab.yaml");
+        let text = std::fs::read_to_string(&file).unwrap();
+        let edited = text.replace(
+            "asset: meshes/base.mesh.yaml",
+            "assembly: ../voxels/figure.assembly.yaml",
+        );
+        assert_ne!(edited, text);
+        std::fs::write(&file, edited).unwrap();
+        fn walk(dir: &Path) -> Vec<PathBuf> {
+            let mut files = Vec::new();
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    files.extend(walk(&path));
+                } else {
+                    files.push(path);
+                }
+            }
+            files
+        }
+        let scene = |animation: &str| {
+            format!(
+                "format: 1
+seed: 1
+entities:
+  - name: opening
+    prefab: hinge/model.prefab.yaml
+{animation}"
+            )
+        };
+        let draw = |scene: String| {
+            let mut engine = Engine::with_project_root(&root);
+            engine.load_inline_scene(&scene).expect("the scene loads");
+            // Half a second in, the `open` clip has moved the lid well off its rest.
+            engine
+                .execute(Command::SimStep(ludion_protocol::command::SimStepParams {
+                    ticks: 30,
+                    hash: false,
+                }))
+                .unwrap();
+            models(&mut engine)
+        };
+        let still = draw(scene(""));
+        let playing = draw(scene(
+            "    overrides:\n      base:\n        Animation:\n          clip: open\n",
+        ));
+        assert_eq!(still.len(), playing.len());
+        let parts = still.len() - 2;
+        assert_eq!(
+            &playing[parts..],
+            &still[parts..],
+            "the lid and latch stay at rest"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Runs the wire `scene.check` over `scene.yaml` in `root`, returning `(valid, diagnostics)`.
+    fn wire_check(root: &Path) -> (bool, Vec<Diagnostic>) {
+        std::fs::write(
+            root.join("scene.yaml"),
+            "format: 1\nname: s\nentities:\n  - name: plain\n  - name: hinge-1\n    prefab: hinge/model.prefab.yaml\n",
+        )
+        .unwrap();
+        let mut engine = Engine::with_project_root(root);
+        let ResponseBody::SceneChecked { valid, diagnostics } = engine
+            .execute(Command::SceneCheck(
+                ludion_protocol::command::SceneCheckParams {
+                    path: "scene.yaml".into(),
+                },
+            ))
+            .expect("checks")
+            .body
+        else {
+            panic!("scene.check answers SceneChecked");
+        };
+        (valid, diagnostics)
+    }
+
+    /// A clip track naming no part of a placed prefab is `L1314` at the placing entry, once per
+    /// prefab; the unbroken hinge draws none.
+    #[test]
+    fn scene_check_reports_a_clip_track_naming_no_part_of_a_placed_prefab() {
+        let root = hinge_root("scene-check-clips");
+        let (valid, diagnostics) = wire_check(&root);
+        assert!(valid, "{diagnostics:?}");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let clip = root.join("hinge/clips/snap.anim.yaml");
+        let text = std::fs::read_to_string(&clip).unwrap();
+        assert!(text.contains("\n  latch:\n"));
+        std::fs::write(&clip, text.replace("\n  latch:\n", "\n  latchh:\n")).unwrap();
+        let (valid, diagnostics) = wire_check(&root);
+        assert!(!valid);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let found = &diagnostics[0];
+        assert_eq!(found.code.as_str(), "L1314");
+        assert_eq!(found.path.as_deref(), Some("/entities/1"));
+        assert!(
+            found.message.starts_with("in `hinge/model.prefab.yaml`: "),
+            "{}",
+            found.message
+        );
+        assert_eq!(found.help.as_deref(), Some("nearest part is `latch`"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

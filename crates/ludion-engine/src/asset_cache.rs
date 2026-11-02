@@ -62,7 +62,7 @@ use crate::character::CharacterData;
 use crate::cooked_maps::{CookLookup, CookMiss, CookRole};
 use crate::extract::{AtlasAsset, load_texture};
 use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
-use crate::prefab_clips::PrefabClipData;
+use crate::prefab_clips::{PartRests, PrefabClipData};
 use crate::voxel_mesh::VoxelStaticGrid;
 
 /// Which pixels a mesh map's cache entry holds: the PNG's decode, or — under `textures: cooked`, for
@@ -268,6 +268,9 @@ pub(crate) struct AssetCache {
     assemblies: BTreeMap<String, Arc<AssemblyData>>,
     characters: BTreeMap<String, Arc<CharacterData>>,
     prefab_clips: BTreeMap<String, Arc<PrefabClipData>>,
+    /// Part rests parsed from a prefab's held text, by the text's content hash: an instance poses
+    /// against the text it was expanded from, which may differ from the file.
+    prefab_rests: BTreeMap<u64, Arc<PartRests>>,
     atlases: BTreeMap<String, Arc<AtlasAsset>>,
     /// Which cached entries each **source file** feeds, as `(kind, entry key)`: an entry's own
     /// document key maps to itself, and every other file it read (an assembly's part or clip, a
@@ -314,6 +317,7 @@ impl AssetCache {
             assemblies: BTreeMap::new(),
             characters: BTreeMap::new(),
             prefab_clips: BTreeMap::new(),
+            prefab_rests: BTreeMap::new(),
             atlases: BTreeMap::new(),
             dependents: BTreeMap::new(),
             source_hashes: BTreeMap::new(),
@@ -600,6 +604,18 @@ impl AssetCache {
             observer.reused(AssetKind::Character.load_kind(), &key);
         }
         Ok(self.characters.get(&key).expect("just inserted on a miss"))
+    }
+
+    /// The part rests of prefab source `text`, parsed once per distinct text; `None` when it does
+    /// not parse.
+    pub(crate) fn prefab_rests(&mut self, text: &str) -> Option<Arc<PartRests>> {
+        let hash = ludion_assets::content_hash(text.as_bytes());
+        if let Some(rests) = self.prefab_rests.get(&hash) {
+            return Some(Arc::clone(rests));
+        }
+        let rests = Arc::new(crate::prefab_clips::rests_of_text(text)?);
+        self.prefab_rests.insert(hash, Arc::clone(&rests));
+        Some(rests)
     }
 
     /// Reads the prefab at `rel` **through** the cache for the clips it binds: a miss reads the
@@ -921,6 +937,7 @@ impl AssetCache {
             .retain(|key, _| refs.characters.contains(key));
         self.prefab_clips
             .retain(|key, _| refs.prefab_clips.contains(key));
+        self.prefab_rests.clear();
         self.meshes.retain(|key, _| meshes.contains(key));
         self.retain_edges();
 

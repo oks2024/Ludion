@@ -195,7 +195,9 @@ pub use perf_live::{
 };
 pub use player_profile::{Profile, ProfileSaveEntry};
 pub use prefab::{PrefabInstance, spawn_prefab};
-pub use prefab_clips::{PrefabClipData, load as load_prefab_clips};
+pub use prefab_clips::{
+    PrefabClipData, load as load_prefab_clips, prefab_clip_target_diagnostics, prefab_part_names,
+};
 pub use prefab_ops::{PrefabApplied, PrefabReverted, revert_prefab, unpack_prefab};
 pub use probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 pub use probe_check::scene_probe_diagnostics;
@@ -228,7 +230,8 @@ pub use scene_check::{
     scene_audio_diagnostics, scene_camera_offset_diagnostics, scene_camera_rig_diagnostics,
     scene_engine_diagnostics, scene_font_diagnostics, scene_hierarchy_body_diagnostics,
     scene_layer_diagnostics, scene_local_light_diagnostics, scene_motor_diagnostics,
-    scene_physics_diagnostics, scene_sensor_diagnostics, scene_sun_diagnostics,
+    scene_physics_diagnostics, scene_prefab_clip_diagnostics, scene_sensor_diagnostics,
+    scene_sun_diagnostics,
 };
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use shutdown::Shutdown;

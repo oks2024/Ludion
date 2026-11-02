@@ -262,31 +262,31 @@ fn create_refuses_what_a_prefab_cannot_hold_with_l1236() {
     let (post, arm, weld) = (ids["post"], ids["arm"], ids["weld"]);
     let before = engine.scene_text().unwrap();
 
-    let refused = |engine: &Engine, set: &[EntityId], path: &str| {
+    let refused = |engine: &mut Engine, set: &[EntityId], path: &str| {
         let found = engine.create_prefab(set, path).unwrap_err();
         assert_eq!(found[0].code, code::PREFAB_CREATE, "{}", found[0].message);
         found[0].message.clone()
     };
     // `arm` is parented to `post`, which is not in the set.
-    let message = refused(&engine, &[arm], "x.prefab.yaml");
+    let message = refused(&mut engine, &[arm], "x.prefab.yaml");
     assert!(message.contains("not in `entities`"), "{message}");
     assert!(message.contains("`arm`"), "{message}");
-    assert!(refused(&engine, &[], "x.prefab.yaml").contains("no entities"));
-    assert!(refused(&engine, &[post, post], "x.prefab.yaml").contains("twice"));
-    assert!(refused(&engine, &[post], "x.yaml").contains(".prefab.yaml"));
+    assert!(refused(&mut engine, &[], "x.prefab.yaml").contains("no entities"));
+    assert!(refused(&mut engine, &[post, post], "x.prefab.yaml").contains("twice"));
+    assert!(refused(&mut engine, &[post], "x.yaml").contains(".prefab.yaml"));
 
     let anonymous = engine.world_mut().spawn();
-    assert!(refused(&engine, &[anonymous], "x.prefab.yaml").contains("no `Name`"));
+    assert!(refused(&mut engine, &[anonymous], "x.prefab.yaml").contains("no `Name`"));
     engine
         .world_mut()
         .insert(anonymous, Name("post".into()))
         .unwrap();
-    assert!(refused(&engine, &[post, anonymous], "x.prefab.yaml").contains("two entities"));
+    assert!(refused(&mut engine, &[post, anonymous], "x.prefab.yaml").contains("two entities"));
     engine
         .world_mut()
         .insert(anonymous, Name("a/b".into()))
         .unwrap();
-    assert!(refused(&engine, &[anonymous], "x.prefab.yaml").contains("`/`"));
+    assert!(refused(&mut engine, &[anonymous], "x.prefab.yaml").contains("`/`"));
     let _ = weld;
 
     assert!(!root.join("x.prefab.yaml").exists());
@@ -450,6 +450,62 @@ fn revert_resolves_a_pointer_into_a_nested_instance() {
     let reverted = revert_prefab(world, tube, Some("/barrel/tube")).unwrap();
     assert_eq!(reverted.entities, vec![tube]);
     assert_eq!(light(world, tube), None);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A root part's `Transform` and `Parent` are the instance's placement: a pointer naming them is
+/// refused rather than silently doing nothing, while the part's other components still revert.
+#[test]
+fn a_pointer_at_a_roots_placement_is_l1238_and_changes_nothing() {
+    let root = root("revert-placement");
+    let source =
+        "format: 1\nname: s\nentities:\n  - name: turret-1\n    prefab: turret.prefab.yaml\n";
+    let mut engine = loaded(&root, source);
+    let world = engine.world_mut();
+    let ids = index(world);
+    let (base, tube) = (ids["turret-1/base"], ids["turret-1/barrel/tube"]);
+    let moved = Transform {
+        translation: [9.0, 9.0, 9.0],
+        rotation: [0.0; 3],
+        scale: [1.0; 3],
+    };
+    world.insert(base, moved).unwrap();
+    world.insert(tube, moved).unwrap();
+    world.insert(tube, bright(7.0)).unwrap();
+
+    for pointer in [
+        "/base/Transform",
+        "/barrel/tube/Transform",
+        "/barrel/tube/Transform/translation",
+        "/barrel/tube/Parent",
+    ] {
+        let found = revert_prefab(world, tube, Some(pointer)).unwrap_err();
+        assert_eq!(
+            found[0].code,
+            code::PREFAB_REVERT,
+            "{pointer}: {}",
+            found[0].message
+        );
+        assert!(
+            found[0].message.contains("placement"),
+            "{}",
+            found[0].message
+        );
+    }
+    assert_eq!(translation(world, base), [9.0, 9.0, 9.0]);
+    assert_eq!(translation(world, tube), [9.0, 9.0, 9.0]);
+
+    let reverted = revert_prefab(world, tube, Some("/barrel/tube")).unwrap();
+    assert_eq!(reverted.entities, vec![tube]);
+    assert_eq!(light(world, tube), None);
+    assert_eq!(
+        translation(world, tube),
+        [9.0, 9.0, 9.0],
+        "the placement stays"
+    );
+    revert_prefab(world, tube, None).unwrap();
+    assert_eq!(translation(world, tube), [9.0, 9.0, 9.0]);
+    assert_eq!(translation(world, base), [9.0, 9.0, 9.0]);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -1289,6 +1345,127 @@ entities: []
         assert_eq!(replay(&root), live, "the original file restored");
         std::fs::remove_file(root.join(PAIR_FILE)).unwrap();
         assert_eq!(replay(&root), live, "a deleted file");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `pair` is held by the instance; `solo` is a plain entity a create can turn into a one-part
+    /// prefab over the same file.
+    const HELD: &str = "format: 1\nname: s\nentities:\n  - name: pair-1\n    prefab: pair.prefab.yaml\n  - name: solo\n    components:\n      Transform: {}\n";
+
+    fn spawn_count(engine: &mut Engine, name: &str) -> usize {
+        spawn_prefab(engine.world_mut(), PAIR_FILE, None, Some(name), false)
+            .expect("spawns")
+            .len()
+    }
+
+    #[test]
+    fn create_over_a_held_prefab_reaches_later_spawns() {
+        let root = root("create-held");
+        let mut engine = loaded(&root, HELD);
+        let solo = index(engine.world_mut())["solo"];
+        assert_eq!(spawn_count(&mut engine, "before"), 3);
+
+        engine.create_prefab(&[solo], PAIR_FILE).expect("creates");
+        assert_eq!(spawn_count(&mut engine, "after"), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_create_over_a_held_prefab_is_recorded_and_replays() {
+        let root = root("create-replay");
+        let sink = SharedSink::default();
+        let mut engine = loaded(&root, HELD);
+        let solo = index(engine.world_mut())["solo"];
+        let mut trace = vec![(engine.frame(), engine.world_hash().unwrap())];
+        engine.set_recording(sink.clone()).unwrap();
+        step(&mut engine, &mut trace);
+        engine.create_prefab(&[solo], PAIR_FILE).expect("creates");
+        step(&mut engine, &mut trace);
+        let spawned = engine
+            .execute(Command::PrefabSpawn(PrefabSpawnParams {
+                path: PAIR_FILE.to_owned(),
+                transform: None,
+                name: Some("c".to_owned()),
+                presentation: false,
+            }))
+            .unwrap()
+            .body;
+        assert!(
+            matches!(spawned, ResponseBody::PrefabSpawned { ref entities } if entities.len() == 1)
+        );
+        restamp(&mut engine, &mut trace);
+        step(&mut engine, &mut trace);
+        engine.stop_recording().unwrap();
+        let bytes = sink.0.lock().unwrap().clone();
+
+        let reloads = ReplayReader::new(&bytes[..])
+            .unwrap()
+            .records()
+            .unwrap()
+            .into_iter()
+            .filter(|record| matches!(record, ReplayRecord::PrefabText { reload: true, .. }))
+            .count();
+        assert_eq!(reloads, 1);
+        let replay = |root: &Path| {
+            replay_hashes_with(Engine::builder().project_root(root), &bytes, root).unwrap()
+        };
+        assert_eq!(replay(&root), trace, "the created file on disk");
+        std::fs::write(root.join(PAIR_FILE), PAIR).unwrap();
+        assert_eq!(replay(&root), trace, "the original file restored");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_create_write_leaves_later_spawns_on_the_old_text() {
+        let root = root("create-rollback");
+        let mut engine = loaded(&root, HELD);
+        let solo = index(engine.world_mut())["solo"];
+        let path = root.join(PAIR_FILE);
+        set_readonly(&path, true);
+        set_readonly(&root, true);
+        if ludion_core::atomic::write_atomic(&path, PAIR).is_ok() {
+            set_readonly(&root, false);
+            set_readonly(&path, false);
+            eprintln!("SKIPPED: the read-only bit does not block writes for this user");
+            return;
+        }
+        let found = engine.create_prefab(&[solo], PAIR_FILE);
+        set_readonly(&root, false);
+        set_readonly(&path, false);
+        let found = found.unwrap_err();
+        assert_eq!(found[0].code, code::PREFAB_CREATE, "{}", found[0].message);
+        assert_eq!(file(&root, PAIR_FILE), PAIR);
+        assert_eq!(spawn_count(&mut engine, "after"), 3);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_create_the_dependents_cannot_take_is_refused_with_nothing_written() {
+        let root = root("create-dependent");
+        let turret = TURRET.replace(
+            "    transform:\n",
+            "    overrides:\n      muzzle:\n        PointLight:\n          intensity: 3.0\n    transform:\n",
+        );
+        std::fs::write(root.join("turret.prefab.yaml"), &turret).unwrap();
+        let mut engine = loaded(
+            &root,
+            "format: 1\nname: s\nentities:\n  - name: t\n    prefab: turret.prefab.yaml\n  - name: solo\n    components:\n      Transform: {}\n",
+        );
+        let solo = index(engine.world_mut())["solo"];
+        // A spawn loads the turret into the library, which makes it a dependent of the barrel.
+        spawn_prefab(
+            engine.world_mut(),
+            "turret.prefab.yaml",
+            None,
+            Some("t2"),
+            false,
+        )
+        .expect("spawns");
+        let found = engine
+            .create_prefab(&[solo], "barrel.prefab.yaml")
+            .unwrap_err();
+        assert!(!found.is_empty());
+        assert_eq!(file(&root, "barrel.prefab.yaml"), BARREL);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -129,8 +129,7 @@ fn create_refusal(message: impl Into<String>, help: impl Into<String>) -> Vec<Di
 /// Writes `entities` as a new `kind: prefab` at `path` under the world's content root and returns
 /// the normalized key. See [`Engine::create_prefab`](crate::Engine::create_prefab).
 pub(crate) fn create(
-    world: &World,
-    registry: &Registry,
+    world: &mut World,
     entities: &[EntityId],
     path: &str,
 ) -> Result<String, Vec<Diagnostic>> {
@@ -147,6 +146,7 @@ pub(crate) fn create(
     let Some(library) = world.resource::<PrefabLibrary>() else {
         return Err(one(no_library("create the prefab")));
     };
+    let (root, registry) = (library.root().to_path_buf(), Arc::clone(library.registry()));
     if entities.is_empty() {
         return Err(create_refusal(
             "cannot create a prefab from no entities",
@@ -246,10 +246,10 @@ pub(crate) fn create(
             clips: Vec::new(),
             entities: parts,
         },
-        registry,
+        &registry,
     );
     library.validate(&key, &text)?;
-    if let Ok(held) = std::fs::read_to_string(library.root().join(&key))
+    if let Ok(held) = std::fs::read_to_string(root.join(&key))
         && let Ok(PrefabDocument {
             generated_from: Some(source),
             ..
@@ -260,12 +260,24 @@ pub(crate) fn create(
             "a generated prefab is write-only: the next import would overwrite the new one",
         ));
     }
-    ludion_core::atomic::write_atomic(&library.root().join(&key), text).map_err(|error| {
-        create_refusal(
+    // A prefab the library holds takes the new text first, as `apply` does, so a later spawn agrees
+    // with the file; a failed write puts the library back.
+    let library = world
+        .resource_mut::<PrefabLibrary>()
+        .expect("checked above");
+    let saved = library.holds(&key).then(|| library.clone());
+    if saved.is_some() {
+        library.replace(&key, &text)?;
+    }
+    if let Err(error) = ludion_core::atomic::write_atomic(&root.join(&key), text) {
+        if let Some(saved) = saved {
+            *library = saved;
+        }
+        return Err(create_refusal(
             format!("cannot create prefab `{key}`: {error}"),
             "check the content root is writable",
-        )
-    })?;
+        ));
+    }
     Ok(key)
 }
 
@@ -453,8 +465,8 @@ enum Write {
 /// longer has — removed parts are not re-spawned.
 ///
 /// A prefab root (a part with no `Parent`) keeps its `Transform` and `Parent`: they are the
-/// instance's placement, not the prefab's values. A component whose prefab value refers to a part
-/// the instance no longer has is left as it is.
+/// instance's placement, not the prefab's values, so a pointer naming either is refused (`L1238`).
+/// A component whose prefab value refers to a part the instance no longer has is left as it is.
 ///
 /// `pointer` narrows the revert to `/<part path>`, `/<part path>/<Component>` or
 /// `/<part path>/<Component>/<field>...` (a JSON pointer inside the component); part paths of
@@ -462,8 +474,9 @@ enum Write {
 ///
 /// # Errors
 /// `L1235` when `instance` is not part of a prefab instance; `L1238` for a malformed pointer or
-/// one naming no part, component or field, or a part the instance lost; the prefab's own
-/// diagnostics when it cannot be read or fails validation. Nothing changes on error.
+/// one naming no part, component or field, a part the instance lost, or a root part's `Transform`
+/// or `Parent`; the prefab's own diagnostics when it cannot be read or fails validation. Nothing
+/// changes on error.
 ///
 /// # Example
 /// ```
@@ -521,6 +534,20 @@ pub fn revert_prefab(
         return Err(revert_refusal(
             format!("`{component}` is not a registered component"),
             POINTER_HELP,
+        ));
+    }
+
+    if let (Some(part), Some(component)) = (&scope.part, &scope.component)
+        && expected.roots.contains(part)
+        && (component == TRANSFORM || component == PARENT)
+    {
+        return Err(revert_refusal(
+            format!(
+                "`{component}` of the root part `{part}` is the instance's placement, which a revert never touches"
+            ),
+            format!(
+                "move the instance to change its placement, or revert the other components of `/{part}`"
+            ),
         ));
     }
 

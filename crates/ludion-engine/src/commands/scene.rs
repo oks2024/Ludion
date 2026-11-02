@@ -154,6 +154,11 @@ pub(crate) fn check(
                     .into_iter()
                     .map(|d| expanded.locate(d)),
             );
+            diagnostics.extend(crate::scene_check::scene_prefab_clip_diagnostics(
+                root,
+                engine.registry(),
+                &expanded,
+            ));
             (
                 !diagnostics.iter().any(|d| d.severity.is_error()),
                 diagnostics,

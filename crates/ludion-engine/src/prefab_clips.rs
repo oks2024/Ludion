@@ -8,14 +8,19 @@
 //! relative to (`crate::extract`'s `prefab_part_poses`). Nothing here samples or poses anything.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::paths::sibling;
+use ludion_ecs::Registry;
 
 use crate::assembly_mesh::{AssemblyClipData, read_clip};
 use crate::asset_cache::SourceFiles;
 use crate::components::Transform;
+
+/// Each top-level part's authored `Transform` by part name.
+pub(crate) type PartRests = BTreeMap<String, Transform>;
 
 /// A prefab's resolved clips and its parts' authored rest transforms.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,7 +29,7 @@ pub struct PrefabClipData {
     pub clips: Vec<AssemblyClipData>,
     /// Each top-level part's authored `Transform` by part name. A part with no `Transform`, and an
     /// instance entry (a nested prefab, whose parts have path names), has none.
-    pub rests: BTreeMap<String, Transform>,
+    pub rests: PartRests,
 }
 
 /// Reads the prefab at `root`/`rel` and every clip file it names, for `check-scene`.
@@ -93,8 +98,117 @@ pub(crate) fn load_with_sources(
         return Err(diagnostics);
     }
 
-    let rests = doc
-        .entities
+    let rests = rests_of(&doc);
+    Ok((PrefabClipData { clips, rests }, sources))
+}
+
+/// The part names an instance of the prefab at `root`/`rel` spawns (`entities[].name`, a nested
+/// instance's parts by their composed path) — what playback binds a clip's tracks against.
+///
+/// # Errors
+/// The diagnostics of an unreadable or invalid prefab.
+///
+/// # Example
+/// ```
+/// let root = std::env::temp_dir().join(format!("ludion-part-names-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&root).unwrap();
+/// std::fs::write(
+///     root.join("crate.prefab.yaml"),
+///     "format: 1\nkind: prefab\nname: crate\nentities:\n  - name: lid\n    components: {}\n",
+/// )
+/// .unwrap();
+/// let registry = ludion_engine::builtin_registry();
+/// let names = ludion_engine::prefab_part_names(&root, &registry, "crate.prefab.yaml").unwrap();
+/// assert_eq!(names, ["lid"]);
+/// # std::fs::remove_dir_all(&root).ok();
+/// ```
+pub fn prefab_part_names(
+    root: &Path,
+    registry: &Registry,
+    rel: &str,
+) -> Result<Vec<String>, Vec<Diagnostic>> {
+    let probe = format!(
+        "format: 1
+entities:
+  - name: subject
+    prefab: {}
+",
+        serde_json::Value::from(rel)
+    );
+    let scene = ludion_scene::check(&probe, registry)?;
+    let expanded = crate::scene_check::expand_scene(root, registry, &scene)?;
+    Ok(expanded
+        .instances
+        .into_iter()
+        .find(|instance| instance.depth == 0)
+        .map(|instance| instance.paths)
+        .unwrap_or_default())
+}
+
+/// One `L1314` per clip track of `data` whose `target` is not one of the prefab's `parts`, at
+/// `/clips/{name}` of the prefab document.
+///
+/// # Example
+/// ```
+/// let root = std::env::temp_dir().join(format!("ludion-clip-target-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(root.join("clips")).unwrap();
+/// std::fs::write(
+///     root.join("clips/swing.anim.yaml"),
+///     "format: 1\nkind: animation\nname: swing\nduration: 1.0\nloop: false\ntracks:\n  lidd:\n    rotation:\n      - t: 0.0\n        v:\n          - 0.0\n          - 0.0\n          - 0.0\n      - t: 1.0\n        v:\n          - 0.0\n          - 0.0\n          - 10.0\n",
+/// )
+/// .unwrap();
+/// std::fs::write(
+///     root.join("crate.prefab.yaml"),
+///     "format: 1\nkind: prefab\nname: crate\nclips:\n  swing: clips/swing.anim.yaml\nentities:\n  - name: lid\n    components: {}\n",
+/// )
+/// .unwrap();
+/// let data = ludion_engine::load_prefab_clips(
+///     ludion_assets::AssetRoot::content(&root),
+///     "crate.prefab.yaml",
+/// )
+/// .unwrap();
+/// let found = ludion_engine::prefab_clip_target_diagnostics(&data, &["lid".to_string()]);
+/// assert_eq!(found.len(), 1);
+/// assert_eq!(found[0].path.as_deref(), Some("/clips/swing"));
+/// # std::fs::remove_dir_all(&root).ok();
+/// ```
+pub fn prefab_clip_target_diagnostics(data: &PrefabClipData, parts: &[String]) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for binding in &data.clips {
+        for track in &binding.clip.tracks {
+            if parts.contains(&track.target) {
+                continue;
+            }
+            let help = match ludion_core::suggest::nearest(
+                &track.target,
+                parts.iter().map(String::as_str),
+            ) {
+                Some(candidate) => format!("nearest part is `{candidate}`"),
+                None => "a track's target must be a part name (`entities[].name`)".to_string(),
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::PREFAB_CLIP_TARGET,
+                    format!(
+                        "the clip `{}` (`{}`) animates `{}`, which is not a part of this prefab",
+                        binding.name, binding.file, track.target
+                    ),
+                )
+                .with_path(format!(
+                    "/clips/{}",
+                    ludion_core::diagnostics::pointer_token(&binding.name)
+                ))
+                .with_help(help),
+            );
+        }
+    }
+    diagnostics
+}
+
+/// The authored `Transform` of each top-level part of `doc` that has one and is not an instance
+/// entry.
+pub(crate) fn rests_of(doc: &ludion_scene::PrefabDocument) -> PartRests {
+    doc.entities
         .iter()
         .filter(|entity| entity.instance.is_none())
         .filter_map(|entity| {
@@ -103,8 +217,14 @@ pub(crate) fn load_with_sources(
             let transform = serde_json::from_value::<Transform>(value.clone()).ok()?;
             Some((name.clone(), transform))
         })
-        .collect();
-    Ok((PrefabClipData { clips, rests }, sources))
+        .collect()
+}
+
+/// [`rests_of`] for prefab source `text`; `None` when it does not parse.
+pub(crate) fn rests_of_text(text: &str) -> Option<PartRests> {
+    ludion_scene::parse_prefab(text)
+        .ok()
+        .map(|doc| rests_of(&doc))
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@
 //! `run_live`'s drain loop trips `frame_dirty` for it exactly as it does for a `component.set` — the
 //! next egress pass re-renders even while paused, and because the reload already replaced the cache
 //! entry, that render reads the *new* bytes. Asset bytes never enter the `WorldHash`, so a reload is
-//! sim-invisible and replay-safe.
+//! sim-invisible and replay-safe; a prefab's text reaches later spawns through a recorded reload.
 
 use ludion_assets::AssetRoot;
 use ludion_core::codes::code;
@@ -67,9 +67,12 @@ pub(crate) fn reload(
         .asset_cache()
         .resolve_key(AssetRoot::content(&root), &path)
     {
-        // A cached CPU asset (texture/mesh/voxel): drop the stale entry and re-read from disk. An
-        // `L1101`/`L1102` here (the file went missing or is now unreadable) is reported honestly, not
-        // faked as a success. This path is render-only and never recorded.
+        // A cached CPU asset: drop the stale entry and re-read from disk. An `L1101`/`L1102` here (the
+        // file went missing or is now unreadable) is reported honestly, not faked as a success. A
+        // texture/mesh/voxel reload is render-only and never recorded; a prefab is held by both the
+        // cache (its clip rests) and the library, so the library goes first: a refused edit returns
+        // with both as they were, and an applied one is recorded as a `prefab_text` reload.
+        engine.reload_prefab(&path)?;
         let hash = engine
             .asset_cache_mut()
             .reload(AssetRoot::content(&root), &key)?;

@@ -59,7 +59,8 @@ pub(crate) fn spawn(
     Ok(ResponseBody::PrefabSpawned { entities })
 }
 
-/// `prefab.create` — write the live `entities` out as a new prefab at `path`; the world is untouched.
+/// `prefab.create` — write the live `entities` out as a new prefab at `path`; the world's entities are
+/// untouched, and the library takes the new text of a prefab it already holds.
 pub(crate) fn create(
     engine: &mut Engine,
     params: PrefabCreateParams,

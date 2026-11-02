@@ -471,7 +471,13 @@ fn a_root_transform_override_is_listed_and_revert_leaves_it() {
     let first = read(&mut engine, None).unwrap().remove(0);
     assert_eq!(first.overrides["base"], ["/Transform/translation"]);
 
-    revert(&mut engine, ids["pair-1/base"], "/base/Transform");
+    let refusal = engine
+        .execute(Command::PrefabRevert(PrefabRevertParams {
+            instance: ids["pair-1/base"],
+            pointer: Some("/base/Transform".to_owned()),
+        }))
+        .expect_err("a root's placement is not revertable by pointer");
+    assert_eq!(refusal.code.as_str(), "L1238", "{}", refusal.message);
     let first = read(&mut engine, None).unwrap().remove(0);
     assert_eq!(first.overrides["base"], ["/Transform/translation"]);
     let _ = std::fs::remove_dir_all(&root);

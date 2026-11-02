@@ -1319,7 +1319,13 @@ fn run_check_scene(builder: EngineBuilder, scene: &Path) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let found = ludion_engine::scene_engine_diagnostics(engine.project_root(), document);
-    if let Some(exit) = fail_on_errors(scene, &located(found)) {
+    let mut found = located(found);
+    found.extend(ludion_engine::scene_prefab_clip_diagnostics(
+        engine.project_root(),
+        engine.registry(),
+        &expanded,
+    ));
+    if let Some(exit) = fail_on_errors(scene, &found) {
         return exit;
     }
     let entities = document.entities.len();

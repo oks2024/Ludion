@@ -566,8 +566,8 @@ impl PrefabLibrary {
 }
 
 /// The part paths whose `Transform` and `Parent` are the instance's placement: the named parts of
-/// the flattened prefab with no `Parent` component. `prefab.revert` leaves them alone, and
-/// `prefab.overrides` reports them, so both read the rule here.
+/// the flattened prefab with no `Parent` component. A whole `prefab.revert` leaves them alone and a
+/// pointer naming them is `L1238`; `prefab.overrides` reports them, so both read the rule here.
 pub(crate) fn root_parts(expanded: &ExpandedScene) -> Vec<String> {
     expanded
         .scene

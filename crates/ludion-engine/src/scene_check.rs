@@ -22,6 +22,77 @@ pub use ludion_components::validators::{
 };
 use ludion_core::diagnostics::pointer_token;
 
+/// `L1314` for every clip track, in a prefab a scene places, that names no part of that prefab.
+///
+/// A clip is chosen at runtime and playback tolerates a miss, so this runs at the check surfaces
+/// only, not at scene load. Each prefab is checked once, at the first outermost entry placing it:
+/// the diagnostic reads ``in `{source}`: …`` and points at that entry, `/entities/{entry}` of the
+/// scene document — already document-level, so it must not go through [`ExpandedScene::locate`].
+/// A prefab that does not load, or binds no clips, is skipped here: its own check reports it.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{expand_scene, scene_prefab_clip_diagnostics};
+///
+/// let root = std::env::temp_dir().join(format!("ludion-prefab-clip-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(root.join("clips")).unwrap();
+/// std::fs::write(
+///     root.join("clips/swing.anim.yaml"),
+///     "format: 1\nkind: animation\nname: swing\nduration: 1.0\nloop: false\ntracks:\n  lidd:\n    rotation:\n      - t: 0.0\n        v:\n          - 0.0\n          - 0.0\n          - 0.0\n      - t: 1.0\n        v:\n          - 0.0\n          - 0.0\n          - 10.0\n",
+/// )
+/// .unwrap();
+/// std::fs::write(
+///     root.join("crate.prefab.yaml"),
+///     "format: 1\nkind: prefab\nname: crate\nclips:\n  swing: clips/swing.anim.yaml\nentities:\n  - name: lid\n    components: {}\n",
+/// )
+/// .unwrap();
+/// let registry = ludion_engine::builtin_registry();
+/// let scene = ludion_scene::check(
+///     "format: 1\nname: doc\nentities:\n  - name: crate-1\n    prefab: crate.prefab.yaml\n",
+///     &registry,
+/// )
+/// .unwrap();
+/// let expanded = expand_scene(&root, &registry, &scene).unwrap();
+/// let found = scene_prefab_clip_diagnostics(&root, &registry, &expanded);
+/// assert_eq!(found.len(), 1);
+/// assert_eq!(found[0].path.as_deref(), Some("/entities/0"));
+/// assert_eq!(found[0].help.as_deref(), Some("nearest part is `lid`"));
+/// # std::fs::remove_dir_all(&root).ok();
+/// ```
+pub fn scene_prefab_clip_diagnostics(
+    project_root: &Path,
+    registry: &Registry,
+    expanded: &ExpandedScene,
+) -> Vec<Diagnostic> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut found = Vec::new();
+    for instance in expanded.instances.iter().filter(|i| i.depth == 0) {
+        if !seen.insert(instance.source.as_str()) {
+            continue;
+        }
+        let Ok(data) = crate::prefab_clips::load(
+            ludion_assets::AssetRoot::content(project_root),
+            &instance.source,
+        ) else {
+            continue;
+        };
+        if data.clips.is_empty() {
+            continue;
+        }
+        let Ok(parts) =
+            crate::prefab_clips::prefab_part_names(project_root, registry, &instance.source)
+        else {
+            continue;
+        };
+        for mut diagnostic in crate::prefab_clips::prefab_clip_target_diagnostics(&data, &parts) {
+            diagnostic.message = format!("in `{}`: {}", instance.source, diagnostic.message);
+            diagnostic.path = Some(format!("/entities/{}", instance.entry));
+            found.push(diagnostic);
+        }
+    }
+    found
+}
+
 /// Expands the prefab instances of a checked `scene`, reading each prefab file from `project_root`.
 ///
 /// The flat [`ExpandedScene::scene`] is what loads: run the engine's other passes over it and map

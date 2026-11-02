@@ -58,7 +58,7 @@ use crate::load_observer::LoadPhase;
 use crate::particles::{self, CameraBasis};
 use crate::patterns::{self, BulletKind, PatternDoc, Volley};
 use crate::prefab::PrefabInstance;
-use crate::prefab_clips::PrefabClipData;
+use crate::prefab_clips::{PartRests, PrefabClipData};
 use crate::ui;
 use crate::voxel_mesh::VoxelStaticGrid;
 
@@ -105,6 +105,9 @@ pub(crate) trait SceneAssets {
     /// Resolves a prefab's content-root path to the clips it binds and its parts' authored rests,
     /// for an animated instance root.
     fn prefab_clips(&mut self, rel: &str) -> Result<Arc<PrefabClipData>, Vec<Diagnostic>>;
+    /// The part rests of prefab source `text` (the text an instance was expanded from), memoised by
+    /// content; `None` when it does not parse or this loader holds no cache.
+    fn prefab_rests(&mut self, text: &str) -> Option<Arc<PartRests>>;
     /// The world voxelization already built for the instance set `signature` stands for, or `None`
     /// when this loader holds none. The inner `Option` is the voxelizer's own answer (a scene with
     /// nothing rasterizable has no grid).
@@ -173,6 +176,9 @@ impl SceneAssets for CachedAssets<'_> {
     }
     fn prefab_clips(&mut self, rel: &str) -> Result<Arc<PrefabClipData>, Vec<Diagnostic>> {
         self.cache.load_prefab_clips(self.root, rel).cloned()
+    }
+    fn prefab_rests(&mut self, text: &str) -> Option<Arc<PartRests>> {
+        self.cache.prefab_rests(text)
     }
     fn voxelization(&self, signature: u64) -> Option<Option<Arc<WorldVoxelGrid>>> {
         self.cache.voxelization(signature)
@@ -3009,6 +3015,9 @@ impl SceneAssets for RefLoader {
     fn prefab_clips(&mut self, _: &str) -> Result<Arc<PrefabClipData>, Vec<Diagnostic>> {
         Err(Self::unresolved())
     }
+    fn prefab_rests(&mut self, _: &str) -> Option<Arc<PartRests>> {
+        None
+    }
     fn voxelization(&self, _: u64) -> Option<Option<Arc<WorldVoxelGrid>>> {
         None
     }
@@ -3073,6 +3082,7 @@ pub(crate) fn asset_refs(world: &World, project_root: AssetRoot<'_>) -> AssetRef
         if get::<Animation>(world, id).is_some()
             && let Some(instance) = get::<PrefabInstance>(world, id)
             && instance.root == id
+            && !drives_a_model_mesh(world, id)
         {
             refs.prefab_clips
                 .insert(ludion_core::paths::normalize(&instance.source));
@@ -4424,10 +4434,23 @@ pub(crate) fn character_pose<'a>(
     (pose, fade)
 }
 
+/// Whether `id`'s `Mesh` is an assembly or a character: its `Animation` then plays that model's
+/// clips, and a prefab root carrying one does not also play the prefab's (as `animation_events`).
+fn drives_a_model_mesh(world: &World, id: EntityId) -> bool {
+    get::<Mesh>(world, id).is_some_and(|mesh| {
+        matches!(
+            mesh.shape,
+            MeshSource::Assembly(_) | MeshSource::Character(_)
+        )
+    })
+}
+
 /// One playing prefab instance: its loaded clips and the sides of its `Animation`, as indices into
 /// `data.clips` with the clip time to sample each at.
 struct PrefabPlay {
     data: Arc<PrefabClipData>,
+    /// The rests of the text the instance was expanded from, when the library still holds it.
+    rests: Option<Arc<PartRests>>,
     pose: Option<(usize, f64)>,
     fade: Option<(Option<(usize, f64)>, f64)>,
 }
@@ -4441,9 +4464,12 @@ struct PrefabPlay {
 /// [`animation_pose`].
 ///
 /// Track values are the part's absolute local TRS, a channel the track lacks reading the part's
-/// authored rest. The sample is applied **relative to that rest**: a part whose stored `Transform`
-/// is the authored one takes the sample as is, and one the instance placed or overrode takes
-/// `stored * rest^-1 * sample`, so the placement rides on top (exact for uniform scale).
+/// authored rest. The rest is read from the text the instance was expanded from, so editing the
+/// prefab file does not shift an instance already live; an instance with no held text (after a
+/// restore) reads the file's rest. The sample is applied **relative to that rest**: a part whose
+/// stored `Transform` is the authored one takes the sample as is, and one the instance placed or
+/// overrode takes `stored * rest^-1 * sample`, so the placement rides on top (exact for uniform
+/// scale).
 fn prefab_part_poses(
     world: &World,
     ids: &[EntityId],
@@ -4452,6 +4478,8 @@ fn prefab_part_poses(
     poses: &mut WorldAffines,
 ) {
     let mut plays: BTreeMap<EntityId, PrefabPlay> = BTreeMap::new();
+    // The rests of each distinct (snapshot, prefab) text, so N instances cost one hash per frame.
+    let mut bound_rests: BTreeMap<(usize, String), Option<Arc<PartRests>>> = BTreeMap::new();
     for &id in ids {
         let Some(animation) = get::<Animation>(world, id) else {
             continue;
@@ -4460,9 +4488,24 @@ fn prefab_part_poses(
         let Some(instance) = get::<PrefabInstance>(world, id).filter(|i| i.root == id) else {
             continue;
         };
+        if drives_a_model_mesh(world, id) {
+            continue;
+        }
         let Ok(data) = assets.prefab_clips(&instance.source) else {
             continue;
         };
+        let library = world.resource::<crate::prefab::PrefabLibrary>();
+        let rests = library
+            .and_then(|library| library.expanded_from(id, &instance.source))
+            .and_then(|snapshot| {
+                bound_rests
+                    .entry((snapshot, instance.source.clone()))
+                    .or_insert_with(|| {
+                        let text = library?.snapshot(snapshot).get(&instance.source)?;
+                        assets.prefab_rests(text)
+                    })
+                    .clone()
+            });
         let side = |name: &str, elapsed: f64| {
             let index = data.clips.iter().position(|binding| binding.name == name)?;
             Some((
@@ -4482,6 +4525,7 @@ fn prefab_part_poses(
                 id,
                 PrefabPlay {
                     data: data.clone(),
+                    rests,
                     pose,
                     fade,
                 },
@@ -4503,8 +4547,9 @@ fn prefab_part_poses(
         }
         let stored = transform_of(world, id);
         let rest = play
-            .data
             .rests
+            .as_deref()
+            .unwrap_or(&play.data.rests)
             .get(&instance.part)
             .copied()
             .unwrap_or(stored);
