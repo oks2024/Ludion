@@ -123,7 +123,8 @@ impl<T> DocStore<T> {
     }
 
     /// The "something changed" signal a system compares against a cached value: 0 at every fresh
-    /// boot (`scene.load`/`restore` rebuild the store at 0), incremented by a live reload.
+    /// boot, incremented by a live reload. A restore or a scene switch re-applies the session's
+    /// reload log with each document's reload count, so it reproduces the live count exactly.
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -215,6 +216,68 @@ fn singleton_counts(doc_kinds: &[DocKind], world: &World) -> Vec<Diagnostic> {
     out
 }
 
+/// One document of the session's reload log: its latest canonical text and how many times it was
+/// reloaded. A reload replaces the text in place, so the log holds one entry per `(kind, key)`;
+/// `applied` carries the count a re-apply must restore to the store's generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DocReload {
+    pub(crate) kind: String,
+    pub(crate) key: String,
+    pub(crate) document: String,
+    pub(crate) applied: u64,
+}
+
+/// The session's data-doc reload log: one [`DocReload`] per `(kind, key)`, in first-appearance order.
+/// Document state commutes across reloads (a reapply is per document and schema-only), so the order
+/// only has to be deterministic; the counts are what keep [`DocStore::generation`] exact.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DocReloadLog(Vec<DocReload>);
+
+impl DocReloadLog {
+    /// Records one reload: replaces the text of an existing entry and counts it, or appends a new one.
+    pub(crate) fn record(&mut self, kind: &str, key: &str, document: &str) {
+        match self.0.iter_mut().find(|r| r.kind == kind && r.key == key) {
+            Some(entry) => {
+                entry.document = document.to_string();
+                entry.applied += 1;
+            }
+            None => self.0.push(DocReload {
+                kind: kind.to_string(),
+                key: key.to_string(),
+                document: document.to_string(),
+                applied: 1,
+            }),
+        }
+    }
+
+    /// Builds a log from stored entries, folding duplicates: the last text wins and counts add up.
+    pub(crate) fn from_entries(entries: impl IntoIterator<Item = DocReload>) -> Self {
+        let mut log = DocReloadLog::default();
+        for entry in entries {
+            match log
+                .0
+                .iter_mut()
+                .find(|r| r.kind == entry.kind && r.key == entry.key)
+            {
+                Some(existing) => {
+                    existing.document = entry.document;
+                    existing.applied += entry.applied;
+                }
+                None => log.0.push(entry),
+            }
+        }
+        log
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &DocReload> {
+        self.0.iter()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 /// What [`prepare_docs`] hands the engine's commit: the walk's skips and the validators' warnings,
 /// held back from every engine field until the rebuild they belong to lands.
 pub(crate) struct PreparedDocs {
@@ -223,7 +286,8 @@ pub(crate) struct PreparedDocs {
 }
 
 /// Installs every doc kind's store into `world`, runs the validators over it, then re-applies each
-/// entry of `reloads` (`(kind, key, canonical text)`, application order) off-disk on top — the whole
+/// entry of `reloads` (one per `(kind, key)`, latest canonical text) off-disk on top, restoring each
+/// store's generation by the entry's reload count — the whole
 /// fallible half of a world rebuild, run against a world not yet swapped in. Touches no engine state
 /// and reports nothing: the warnings ride back in [`PreparedDocs`].
 ///
@@ -243,7 +307,7 @@ pub(crate) fn prepare_docs(
     game_kinds: bool,
     validators: &[DocValidator],
     inline: &BTreeMap<String, InlineDoc>,
-    reloads: &[(String, String, String)],
+    reloads: &DocReloadLog,
     world: &mut World,
 ) -> Result<PreparedDocs, Vec<Diagnostic>> {
     let skips = load_doc_stores(root, doc_kinds, game_kinds, inline, world)?;
@@ -258,10 +322,13 @@ pub(crate) fn prepare_docs(
         }
         warnings = reported;
     }
-    for (kind, key, document) in reloads {
-        reload_doc(doc_kinds, world, kind, key, document)
+    for entry in reloads.iter() {
+        reload_doc(doc_kinds, world, &entry.kind, &entry.key, &entry.document)
             .map_err(crate::commands::collapse)
             .map_err(|d| vec![d])?;
+        if let Some(dk) = doc_kinds.iter().find(|dk| dk.kind == entry.kind) {
+            (dk.advance_generation)(world, entry.applied.saturating_sub(1));
+        }
     }
     Ok(PreparedDocs { skips, warnings })
 }
@@ -369,6 +436,8 @@ pub(crate) struct DocKind {
     pub(crate) singleton: bool,
     install: DocInstaller,
     reload: DocReloader,
+    /// Adds to the kind's store generation; a no-op when the store is absent.
+    advance_generation: fn(&mut World, u64),
     keys: fn(&World) -> Vec<String>,
 }
 
@@ -387,8 +456,20 @@ impl DocKind {
             singleton,
             install: install_doc_store::<T>,
             reload: reload_doc_store::<T>,
+            advance_generation: advance_doc_generation::<T>,
             keys: doc_store_keys::<T>,
         }
+    }
+}
+
+/// Adds `by` to the generation of `DocStore<T>`; nothing when the store is absent. The monomorphized
+/// body of every [`DocKind::advance_generation`].
+fn advance_doc_generation<T>(world: &mut World, by: u64)
+where
+    T: Send + Sync + 'static,
+{
+    if let Some(store) = world.resource_mut::<DocStore<T>>() {
+        store.generation += by;
     }
 }
 

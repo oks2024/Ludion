@@ -791,3 +791,173 @@ fn an_old_snapshot_without_doc_reloads_falls_back_to_the_disk_rebuild() {
         "an old snapshot (no `doc_reloads`) rebuilds the store from disk — the pre-fix fallback"
     );
 }
+
+// --- The reload log keeps one entry per document and still reproduces the store generation ------
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+struct GenerationReadout {
+    value: f32,
+}
+
+const BOW_KEY: &str = "weapons/bow.yaml";
+
+const DOC_GENERATION: &str = "\
+format: 1
+seed: 1
+entities:
+  - name: player
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      GenerationReadout:
+        value: 0.0
+";
+
+/// Caches the weapon store's generation in a hashed component, the way the docs teach.
+fn cache_generation(world: &mut World, _ctx: &SystemCtx) {
+    let generation = world
+        .resource::<DocStore<Weapon>>()
+        .map(|store| store.generation());
+    if let Some(generation) = generation {
+        for (readout,) in world.query::<(&mut GenerationReadout,)>() {
+            readout.value = generation as f32;
+        }
+    }
+}
+
+fn generation_game(root: &Path) -> EngineBuilder {
+    doc_game(root)
+        .components(|reg| reg.register::<GenerationReadout>("GenerationReadout"))
+        .system("cache_generation", cache_generation)
+}
+
+fn weapon_text(damage: u32) -> String {
+    format!("format: 1\nkind: weapon\ndamage: {damage}.0\n")
+}
+
+fn reload_path(engine: &mut Engine, dir: &Path, key: &str, damage: u32) {
+    let path = dir.join(key);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, weapon_text(damage)).unwrap();
+    engine
+        .execute(Command::AssetReload(AssetReloadParams {
+            path: Some(key.to_string()),
+        }))
+        .unwrap();
+}
+
+fn weapon_generation(engine: &Engine) -> u64 {
+    engine
+        .world()
+        .resource::<DocStore<Weapon>>()
+        .unwrap()
+        .generation()
+}
+
+fn damage_at(engine: &Engine, key: &str) -> f32 {
+    engine
+        .world()
+        .resource::<DocStore<Weapon>>()
+        .unwrap()
+        .get(key)
+        .unwrap()
+        .damage
+}
+
+/// Reloads A, B, A on a fresh engine (A = the crossbow, B = the bow).
+fn reloaded_a_b_a(dir: &Path) -> Engine {
+    write_weapon(dir, WEAPON_V1);
+    let mut engine = generation_game(dir).build().expect("boots");
+    engine.load_inline_scene(DOC_GENERATION).unwrap();
+    engine.advance_live();
+    reload_path(&mut engine, dir, WEAPON_KEY, 20);
+    reload_path(&mut engine, dir, BOW_KEY, 5);
+    reload_path(&mut engine, dir, WEAPON_KEY, 30);
+    engine
+}
+
+#[test]
+fn a_repeated_reload_is_one_snapshot_entry_and_the_restore_reproduces_the_generation() {
+    let dir = fresh_dir("reload-aba");
+    let mut engine = reloaded_a_b_a(&dir);
+    assert_eq!(weapon_generation(&engine), 3);
+
+    let snapshot = snapshot_of(&mut engine);
+    let reloads = snapshot["doc_reloads"].as_array().unwrap();
+    assert_eq!(reloads.len(), 2, "one entry per document");
+    assert_eq!(reloads[0]["key"].as_str(), Some(WEAPON_KEY));
+    assert!(reloads[0]["document"].as_str().unwrap().contains("30"));
+    assert_eq!(reloads[0]["applied"].as_u64(), Some(2));
+    assert_eq!(reloads[1]["key"].as_str(), Some(BOW_KEY));
+    assert!(
+        reloads[1].get("applied").is_none(),
+        "a single reload omits `applied`"
+    );
+
+    let mut restored = generation_game(&dir).build().expect("boots");
+    restore(&mut restored, snapshot);
+    assert_eq!(damage_at(&restored, WEAPON_KEY), 30.0);
+    assert_eq!(weapon_generation(&restored), weapon_generation(&engine));
+}
+
+#[test]
+fn a_seek_through_repeated_reloads_matches_the_straight_run_hash() {
+    let dir = fresh_dir("reload-aba-hash");
+    let mut straight = reloaded_a_b_a(&dir);
+    let snapshot = snapshot_of(&mut straight);
+    straight.advance_live();
+    let expected = straight.world_hash().unwrap().as_u64();
+
+    let mut restored = generation_game(&dir).build().expect("boots");
+    restore(&mut restored, snapshot);
+    restored.advance_live();
+    assert_eq!(
+        restored.world_hash().unwrap().as_u64(),
+        expected,
+        "a component caching the generation hashes the same after a keyframe restore"
+    );
+}
+
+#[test]
+fn an_old_snapshot_repeating_a_document_folds_to_the_last_text_and_the_summed_count() {
+    let dir = fresh_dir("reload-old-dup");
+    let mut engine = reloaded_a_b_a(&dir);
+    let mut snapshot = snapshot_of(&mut engine);
+    let entry = |damage: u32| {
+        serde_json::json!({
+            "kind": "weapon",
+            "key": WEAPON_KEY,
+            "document": weapon_text(damage),
+        })
+    };
+    snapshot["doc_reloads"] = serde_json::json!([entry(20), entry(30)]);
+
+    let mut restored = generation_game(&dir).build().expect("boots");
+    restore(&mut restored, snapshot);
+    assert_eq!(damage_at(&restored, WEAPON_KEY), 30.0);
+    assert_eq!(weapon_generation(&restored), 2);
+}
+
+#[test]
+fn a_switch_after_repeated_reloads_keeps_the_generation() {
+    let dir = fresh_dir("reload-switch");
+    std::fs::write(dir.join("next.yaml"), DOC_NEXT).unwrap();
+    write_weapon(&dir, WEAPON_V1);
+    let mut engine = generation_game(&dir).build().expect("boots");
+    engine.load_inline_scene(DOC_START).unwrap();
+    engine.advance_live();
+    reload_path(&mut engine, &dir, WEAPON_KEY, 20);
+    reload_path(&mut engine, &dir, WEAPON_KEY, 30);
+    assert_eq!(weapon_generation(&engine), 2);
+
+    for _ in 0..6 {
+        engine.advance_live(); // the switch fires on frame 5
+    }
+    assert!(engine.last_transition_error().is_none());
+    assert!(names_of(&engine).contains(&"gate-from-start".to_string()));
+    assert_eq!(damage_at(&engine, WEAPON_KEY), 30.0);
+    assert_eq!(weapon_generation(&engine), 2);
+}

@@ -741,3 +741,32 @@ fn a_profile_type_with_a_top_level_format_field_is_refused_at_build() {
         diagnostic.message
     );
 }
+
+/// Saves on every frame, so the log gains an entry per tick.
+fn save_every_frame(world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {
+    if let Some(profile) = world.resource_mut::<Profile<SaveV1>>() {
+        profile.save();
+    }
+}
+
+#[test]
+fn the_profile_save_log_drops_the_oldest_entries_beyond_its_capacity() {
+    let mut engine = Engine::builder()
+        .profile::<SaveV1>()
+        .system("save_every_frame", save_every_frame)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+    let ticks = 4096 + 5;
+    for _ in 0..ticks {
+        engine.advance_live();
+    }
+    let log = engine.profile_save_log();
+    assert_eq!(log.len(), 4096, "bounded, oldest dropped first");
+    assert_eq!(
+        log.front().unwrap().frame.as_u64(),
+        (ticks - 4096) as u64,
+        "the earliest surviving entry is the (extra+1)-th request"
+    );
+    assert_eq!(log.back().unwrap().frame.as_u64(), (ticks - 1) as u64);
+}

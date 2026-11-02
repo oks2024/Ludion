@@ -404,6 +404,7 @@ fn live_loop(
         if egress.is_some() || engine.present_attached() {
             emit_egress(engine, egress.as_ref(), &mut egress_state, latest_tick);
         }
+        discard_undeliverable_events(engine, egress.is_some());
         shutdown.1.store(ACTIVITY_IDLE, Ordering::Relaxed);
 
         // 5. Answer a `profile.capture` whose window has now closed (see `PendingCapture`).
@@ -801,6 +802,15 @@ fn plan_egress(input: EgressInput) -> EgressPlan {
     plan
 }
 
+/// Empties the event outbox when the loop has no transport: nothing can deliver an event, and no
+/// buffering for future subscribers exists (architecture §6), so keeping them would grow without
+/// bound. Runs after [`emit_egress`] so a log that emit pushed is dropped too.
+fn discard_undeliverable_events(engine: &mut Engine, has_transport: bool) {
+    if !has_transport {
+        engine.take_events();
+    }
+}
+
 /// Emits one pass worth of egress: every queued event, then at most one rendered frame.
 ///
 /// **Events** — the engine's event outbox is drained and each event addressed to every open
@@ -852,7 +862,8 @@ fn emit_egress(
     // 1. Events: drain the outbox and fan each out to its channel's subscribers on the ordered,
     //    unbounded event lane — never the latest-wins frame slot, so a pending frame can no longer
     //    displace an event (audit finding 1.3). `send` on an unbounded channel never blocks; it fails
-    //    only if the receiver is gone (teardown). With no transport the outbox is left untouched.
+    //    only if the receiver is gone (teardown). With no transport nothing is sent here;
+    //    `discard_undeliverable_events` empties the outbox after this call.
     if let Some(channels) = channels {
         let events = engine.take_events();
         if !events.is_empty() {
@@ -1614,6 +1625,21 @@ mod tests {
         observe_frames_epoch(&mut state, next);
         absorb_render_failure(&mut engine, &mut state, fault(code::RENDER_DEVICE_LOST));
         assert_eq!(logs(&mut engine), 1);
+    }
+
+    #[test]
+    fn events_are_discarded_without_a_transport_and_kept_with_one() {
+        let (_state, _rx, mut engine) = absorbed(fault(code::RENDER_DEVICE_LOST));
+        discard_undeliverable_events(&mut engine, true);
+        assert_eq!(
+            engine.take_events().len(),
+            1,
+            "a transport keeps the outbox"
+        );
+
+        let (_state, _rx, mut engine) = absorbed(fault(code::RENDER_DEVICE_LOST));
+        discard_undeliverable_events(&mut engine, false);
+        assert!(engine.take_events().is_empty(), "no transport empties it");
     }
 
     #[test]

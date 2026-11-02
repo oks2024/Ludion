@@ -493,6 +493,10 @@ pub struct Engine {
 /// has actually run this long loses its earliest entries.
 const AUDIO_LOG_CAPACITY: usize = 4096;
 
+/// The most [`ProfileSaveEntry`]s the profile-save log keeps, the oldest dropped first — the
+/// [`AUDIO_LOG_CAPACITY`] bound, for the same reason: a long session must not grow it without limit.
+const PROFILE_SAVE_LOG_CAPACITY: usize = 4096;
+
 /// Per-session engine state that is **not** world content and is **not** captured verbatim in a
 /// snapshot: the frame-stamped verification logs (audio, profile-save — a replay regenerates them),
 /// the last non-fatal diagnostics (profile-save `L1122`, transition `L3018`–`L3020`, a caught system
@@ -515,7 +519,8 @@ struct SessionState {
     /// The frame-stamped profile-save requests drained so far this session, in request order — the
     /// text-first verification surface for saves (the [`audio_log`](SessionState::audio_log) mold). A
     /// pure function of the sim (a replay regenerates it), never in the `WorldHash` or a snapshot.
-    profile_save_log: Vec<ProfileSaveEntry>,
+    /// Bounded to [`PROFILE_SAVE_LOG_CAPACITY`] entries, oldest dropped first.
+    profile_save_log: VecDeque<ProfileSaveEntry>,
     /// The most recent frame-boundary profile-save failure (`L1122`), or `None` if the last save
     /// succeeded or none was attempted. A save write is atomic and non-fatal; this is how a host prints
     /// the warning and a test asserts it. Cleared on a successful write.
@@ -539,8 +544,8 @@ struct SessionState {
     /// event pushed alongside it; this field is what gives the request that *caused* the tick a real
     /// answer instead of an Ack.
     last_system_panic: Option<Diagnostic>,
-    /// The game data-doc reloads applied this session, in application order (`(kind, key, document)` —
-    /// canonical text). Appended by both the live `asset.reload` doc branch
+    /// The game data-doc reloads applied this session: one entry per `(kind, key)` holding its latest
+    /// canonical text and its reload count, in first-appearance order. Recorded by both the live `asset.reload` doc branch
     /// ([`reload_doc_from_disk`](Engine::reload_doc_from_disk)) and the replay reapply
     /// ([`apply_doc_reload_inline`](Engine::apply_doc_reload_inline)), so it is identical live and under
     /// replay. A scene switch **and a restore** re-apply these off-disk after
@@ -549,7 +554,7 @@ struct SessionState {
     /// since reverted (Phase 17 / E7 item 4; audit finding 2.1). Snapshotted additively so a restore
     /// adopts the snapshot's log rather than rebuilding from disk. Never hashed — the `DocStore` it
     /// feeds is a resource.
-    doc_reloads: Vec<(String, String, String)>,
+    doc_reloads: crate::docs::DocReloadLog,
     /// What each scene visited this session kept behind, keyed by the scene's `name:` — the state a
     /// switch captured off its `Residue`-marked entities on the way out and re-applies on the way back
     /// in (see [`crate::transition`]). Engine state, not world content: never hashed, and a game reads
@@ -616,7 +621,7 @@ impl SessionState {
     /// marks nothing, or an older snapshot predating the field — adopts nothing.
     fn adopt(
         &mut self,
-        reloads: Vec<(String, String, String)>,
+        reloads: crate::docs::DocReloadLog,
         residue: StableMap<String, crate::transition::SceneResidue>,
     ) {
         self.reset_logs();
@@ -2018,9 +2023,12 @@ impl Engine {
         if !kind.take_dirty(self.driver.world_mut()) {
             return;
         }
+        if self.session.profile_save_log.len() >= PROFILE_SAVE_LOG_CAPACITY {
+            self.session.profile_save_log.pop_front();
+        }
         self.session
             .profile_save_log
-            .push(ProfileSaveEntry { frame });
+            .push_back(ProfileSaveEntry { frame });
         if !self.profile_persistence {
             return;
         }
@@ -2642,7 +2650,7 @@ impl Engine {
             self.game_doc_kinds,
             &self.doc_validators,
             &self.doc_texts,
-            &[],
+            &crate::docs::DocReloadLog::default(),
             self.driver.world_mut(),
         )?;
         self.commit_docs(prepared);
@@ -2658,7 +2666,7 @@ impl Engine {
     pub(crate) fn prepare_docs_for(
         &self,
         world: &mut World,
-        reloads: &[(String, String, String)],
+        reloads: &crate::docs::DocReloadLog,
     ) -> Result<PreparedDocs, Vec<Diagnostic>> {
         crate::docs::prepare_docs(
             &self.project_root,
@@ -2891,9 +2899,7 @@ impl Engine {
         // Log the reload so a later scene switch or a snapshot restore re-applies it off-disk on the
         // rebuilt district (see `SessionState::doc_reloads`) — the same canonical text a replay's
         // `DocReload` record and a snapshot's `doc_reloads` field carry.
-        self.session
-            .doc_reloads
-            .push((kind.clone(), key.clone(), document.clone()));
+        self.session.doc_reloads.record(&kind, &key, &document);
         self.pending_doc_reload = Some(AppliedDocReload {
             kind,
             key,
@@ -3112,9 +3118,7 @@ impl Engine {
             .map_err(crate::commands::collapse)?;
         // Log the reload identically to the live path, so a switch under replay re-applies the same
         // reloads on the rebuilt district that the live run did (Phase 17 / E7, item 4).
-        self.session
-            .doc_reloads
-            .push((kind.to_string(), key.to_string(), document.to_string()));
+        self.session.doc_reloads.record(kind, key, document);
         Ok(())
     }
 
@@ -3143,7 +3147,8 @@ impl Engine {
     /// A system's [`Profile::save`](crate::Profile::save) at frame N appears here as one entry stamped
     /// N (several saves within one frame collapse into one). Like the audio log it is a pure function
     /// of the sim, so a replay regenerates the identical stream, and it is reset at every world reset.
-    pub fn profile_save_log(&self) -> &[ProfileSaveEntry] {
+    /// Bounded to the most recent `PROFILE_SAVE_LOG_CAPACITY` entries.
+    pub fn profile_save_log(&self) -> &VecDeque<ProfileSaveEntry> {
         &self.session.profile_save_log
     }
 
@@ -3183,10 +3188,10 @@ impl Engine {
         self.session.last_system_panic.take()
     }
 
-    /// This session's data-doc reload log (`(kind, key, canonical text)`, application order) — read by
+    /// This session's data-doc reload log (one entry per `(kind, key)`: latest canonical text and reload count) — read by
     /// [`crate::snapshot::capture`] so a snapshot carries the reloads and a restore re-applies them
     /// off-disk instead of rebuilding the `DocStore`s from possibly-changed disk (audit finding 2.1).
-    pub(crate) fn session_doc_reloads(&self) -> &[(String, String, String)] {
+    pub(crate) fn session_doc_reloads(&self) -> &crate::docs::DocReloadLog {
         &self.session.doc_reloads
     }
 
@@ -3484,7 +3489,7 @@ impl Engine {
         // state, so they survive the reset. A malformed doc fails the load exactly as a bad scene
         // does — before anything on the engine has changed.
         self.load_begin(LoadPhase::Docs);
-        let docs = self.prepare_docs_for(&mut world, &[]);
+        let docs = self.prepare_docs_for(&mut world, &crate::docs::DocReloadLog::default());
         self.load_end(LoadPhase::Docs);
         let docs = docs?;
         let seed = scene.seed.unwrap_or(0);
@@ -3561,9 +3566,9 @@ impl Engine {
     /// Producers (`scene.load`, the asset-reload commands) push here;
     /// [`run_live`](crate::live::run_live) drains the outbox once per pass, addresses each event to
     /// every open subscriber on its channel, and drops any event with no subscriber (there is no
-    /// buffering for future subscribers, per architecture §6). Outside the live loop the outbox
-    /// simply holds the last few events until the next `load` replaces the world — nothing drains
-    /// it, and nothing needs to.
+    /// buffering for future subscribers, per architecture §6). With no transport the loop discards
+    /// every event each pass (stderr already printed any diagnostic). Outside the live loop nothing
+    /// drains the outbox, so it lives as long as that finite drive.
     pub(crate) fn push_event(&mut self, event: Event) {
         self.event_outbox.push(event);
     }
@@ -5477,11 +5482,11 @@ pub(crate) struct RestoredWorld {
     /// The snapshot's `scene_physics` field, decoded — `None` for a bare engine, a scene that never
     /// declared a `physics:` block, or a snapshot taken before this field existed.
     pub scene_physics: Option<ScenePhysics>,
-    /// The snapshot's data-doc reload log (`(kind, key, canonical text)`, application order), empty for
+    /// The snapshot's data-doc reload log (one entry per `(kind, key)`: latest canonical text and reload count), empty for
     /// a snapshot with no live reloads or one predating the field. Adopted into the session and
     /// re-applied off-disk on restore, so a post-restore switch or a replay-seek reproduces the reloaded
     /// docs instead of rebuilding from possibly-changed disk (audit finding 2.1).
-    pub doc_reloads: Vec<(String, String, String)>,
+    pub doc_reloads: crate::docs::DocReloadLog,
     /// The snapshot's scene residue (what each visited scene kept behind, keyed by scene `name:`),
     /// empty for a game that marks nothing or a snapshot predating the field. Adopted into the session
     /// on restore, so a return performed after the restore — or a replay-seek keyframe landing after
@@ -5545,7 +5550,7 @@ pub(crate) enum Rebuild {
     },
     /// `engine.restore`: an exact continuation of a snapshotted session.
     Restore {
-        doc_reloads: Vec<(String, String, String)>,
+        doc_reloads: crate::docs::DocReloadLog,
         residue: StableMap<String, crate::transition::SceneResidue>,
         game_clock: GameClock,
         input: Box<InputState>,

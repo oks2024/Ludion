@@ -140,8 +140,7 @@ Those numbers are the tuning rule below for 1 kg at 0.5 m, 2 Hz.
 - `L1188` rejects the component alone at load or `component.set`: a `target` arity other than 1 or
   3, a non-finite value, a negative value. `L3037` reports at runtime, against the carrier's
   `Joint`, a `fixed` joint, an arity that does not match the kind, or a bad value that bypassed
-  `L1188`; the joint stays passive until the `JointMotor` or `Joint` changes, reported once per
-  carrier. A passive motor (stiffness and damping both 0) is not checked, so a mismatch reports
+  `L1188`; the joint stays passive until the `JointMotor` or `Joint` changes, reported once per offender (a prefab part, a named entity, or an unnamed entity's slot). A passive motor (stiffness and damping both 0) is not checked, so a mismatch reports
   when a system first makes it active. A `JointMotor` with no `Joint` (after a break, say) is silently inert.
 
 ## Rules
@@ -165,7 +164,7 @@ Those numbers are the tuning rule below for 1 kg at 0.5 m, 2 Hz.
   impulse counts toward the break the same as a hinge's or fixed joint's locked axes; a hinge's or
   ball's *angular* limits never do — a break is a linear-impulse quantity.
 - If `a` or `b` is dead or has no body, the joint sits inert — never deleted — and `L3035` reports it
-  once per carrier for the session. It re-forms once both bodies exist (an unclaimed `Collider` coming good, a delayed spawn) — never
+  once per offender for the session. It re-forms once both bodies exist (an unclaimed `Collider` coming good, a delayed spawn) — never
   for a dead `a`/`b`: that carrier stays inert until its `Joint` names a live body.
 
 ## Skinned ragdolls

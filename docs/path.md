@@ -125,8 +125,8 @@ writing the pose.
 - `path_follow` is installed on every schedule (scene load, restore, district switch) and lists first
   in `engine.describe`, at `order: 0`; in a world without a follower it costs one empty query. A
   follower spawned at runtime moves like an authored one.
-- A path that cannot be read or fails validation raises `L1215` once per entity; the entity stays put.
-- A `speed` or `phase` that is not a finite `f32` (NaN, infinite, or past `f32` range) is `L1269` at `/speed` or `/phase`; built in Rust, the follower is held where it is and `L1269` is raised once per entity.
+- A path that cannot be read or fails validation raises `L1215` once per offender (a prefab part, a named entity, or an unnamed entity's slot); the entity stays put.
+- A `speed` or `phase` that is not a finite `f32` (NaN, infinite, or past `f32` range) is `L1269` at `/speed` or `/phase`; built in Rust, the follower is held where it is and `L1269` is raised once per offender.
 - The path library is read at load, restore and district switch and never hashed or snapshotted.
 
 ## Gotchas

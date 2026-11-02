@@ -91,7 +91,7 @@ on the `PhysicsWorld` resource — no `Velocity` component needed, and the body'
 A queued call takes effect on the tick it was queued in: the write system applies the queue just before
 the step, in call order, so queue from a system that runs before it (under a `physics:` block every game
 system does). It wakes a sleeper and moves `rigid` bodies only — `static` and `kinematic` bodies are
-skipped, and an entity with no body, or one of those, is a dropped call reported once per entity as
+skipped, and an entity with no body, or one of those, is a dropped call reported once per offender (a prefab part, a named entity, or an unnamed entity's slot) as
 `L3038`. A non-finite input, a `radius` or `min_distance` that is not above zero, or an ignored layer the
 scene does not declare is `Err(PhysicsError::QueryInput)` and nothing is queued.
 
@@ -192,7 +192,7 @@ hull's points are coincident, collinear or coplanar; `L1182` — a `heightfield`
 smaller than 2×2; `L1211` — a `mesh` or `heightfield` collider on a `rigid` body; `L1212` — a `mesh` collider's
 document cannot be built (a missing file refuses the scene load or switch; a restore or runtime
 spawn gets no body). A shape the solver still rejects gets no body and is retried only once
-its `Collider` changes, reported once per entity. Rapier mapping: `ludion devdocs ludion-physics`.
+its `Collider` changes, reported once per offender. Rapier mapping: `ludion devdocs ludion-physics`.
 
 ## Next
 

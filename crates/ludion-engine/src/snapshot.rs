@@ -24,7 +24,8 @@
 //! field): a restore adopts it and re-applies each reload off-disk over the freshly-walked stores (the
 //! way a scene switch does), so a replay-seek keyframe landing after a live reload — or a scene switch
 //! performed after a restore — reproduces the reloaded docs instead of rebuilding from possibly-changed
-//! disk (audit finding 2.1). A reload-free session omits the field and is byte-identical to before;
+//! disk (audit finding 2.1). The log holds one entry per document (latest text, reload count) and the
+//! restore reproduces each store's `generation()`. A reload-free session omits the field and is byte-identical to before;
 //! an older snapshot without it restores with the pre-fix clean-disk rebuild. Invisible to the world
 //! hash (the `DocStore` it feeds is a resource).
 //!
@@ -220,7 +221,8 @@ struct SnapshotDoc {
     /// it (the `allocator` precedent), in indices relative to the presentation range.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     presentation_allocator: Option<ludion_ecs::AllocatorState>,
-    /// This session's game data-doc reloads applied before the snapshot, in application order. Carried
+    /// This session's game data-doc reloads applied before the snapshot, one entry per document in
+    /// first-appearance order with its latest text and reload count. Carried
     /// so a restore re-applies them off-disk (the way a scene switch does) rather than rebuilding the
     /// `DocStore`s from possibly-changed disk: a replay-seek keyframe landing after a live reload, or a
     /// scene switch after a restore, then reproduces the reloaded docs cross-machine (audit finding
@@ -323,14 +325,26 @@ impl TryFrom<ScenePhysicsDoc> for ScenePhysics {
     }
 }
 
-/// One recorded data-doc reload carried in a snapshot: the registered `kind`, the store `key`
-/// (slash-normalized content-root-relative path), and the canonical document text — the same triple
-/// the session's reload log and a replay's `DocReload` record hold.
+/// One data-doc of the reload log carried in a snapshot: the registered `kind`, the store `key`
+/// (slash-normalized content-root-relative path), the latest canonical document text, and how many
+/// times it was reloaded. `applied` is omitted when 1, so a session with no repeated reload
+/// serializes as it always did; an older snapshot may repeat a document, which the read folds
+/// (summed counts, last text).
 #[derive(Serialize, Deserialize)]
 struct DocReloadDoc {
     kind: String,
     key: String,
     document: String,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    applied: u64,
+}
+
+fn one() -> u64 {
+    1
+}
+
+fn is_one(n: &u64) -> bool {
+    *n == 1
 }
 
 /// One scene's residue carried in a snapshot: the scene's `name:` key and the records captured the
@@ -444,10 +458,11 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
         doc_reloads: engine
             .session_doc_reloads()
             .iter()
-            .map(|(kind, key, document)| DocReloadDoc {
-                kind: kind.clone(),
-                key: key.clone(),
-                document: document.clone(),
+            .map(|reload| DocReloadDoc {
+                kind: reload.kind.clone(),
+                key: reload.key.clone(),
+                document: reload.document.clone(),
+                applied: reload.applied,
             })
             .collect(),
         // The session map is sorted by scene key, so the emitted order is deterministic for free.
@@ -878,11 +893,15 @@ pub(crate) fn restore_into(
     // Adopt the snapshot's reload log so the restore re-applies each reloaded doc off-disk (audit
     // finding 2.1); an empty log — including an older snapshot that predates the field — restores the
     // pre-fix clean-disk rebuild.
-    let doc_reloads = doc
-        .doc_reloads
-        .into_iter()
-        .map(|reload| (reload.kind, reload.key, reload.document))
-        .collect();
+    let doc_reloads =
+        crate::docs::DocReloadLog::from_entries(doc.doc_reloads.into_iter().map(|reload| {
+            crate::docs::DocReload {
+                kind: reload.kind,
+                key: reload.key,
+                document: reload.document,
+                applied: reload.applied,
+            }
+        }));
 
     // Adopt the snapshot's scene residue for the same reason: a return performed after this restore
     // must re-apply what the snapshotted session kept, not arrive at a scene with no memory. An empty

@@ -121,7 +121,7 @@ impl<P> Profile<P> {
 /// One drained profile-save request, stamped with the frame during which a game system called
 /// [`Profile::save`].
 ///
-/// The engine's [profile save log](crate::Engine::profile_save_log) is a `Vec` of these, in request
+/// The engine's [profile save log](crate::Engine::profile_save_log) is a bounded `VecDeque` of these, in request
 /// order — the [`AudioLogEntry`](crate::AudioLogEntry) mold. Like audio, a save request is a pure
 /// function of the sim, so a replay regenerates the identical stream and it is never recorded; several
 /// `save()` calls within one frame collapse into a single entry (one drain per frame boundary).
