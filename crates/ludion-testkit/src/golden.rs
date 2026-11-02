@@ -767,7 +767,7 @@ pub const MACOS_REFERENCE_ADAPTER: &str = "Apple M4";
 
 /// The pinned reference-adapter substring for `platform` (`"windows"`/`"macos"`), or `None` for a
 /// platform with no pinned tier.
-fn reference_adapter(platform: &str) -> Option<&'static str> {
+pub fn reference_adapter(platform: &str) -> Option<&'static str> {
     match platform {
         "windows" => Some(WINDOWS_REFERENCE_ADAPTER),
         "macos" => Some(MACOS_REFERENCE_ADAPTER),

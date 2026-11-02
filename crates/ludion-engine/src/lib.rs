@@ -267,4 +267,6 @@ pub use ludion_renderer::{
 #[cfg(test)]
 mod animation_clock_tests;
 #[cfg(test)]
+mod probe_bake_pin_tests;
+#[cfg(test)]
 mod snapshot_integrity_tests;

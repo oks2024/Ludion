@@ -27,10 +27,12 @@ use crate::quality::{Quality, QualityParams};
 use crate::scene::{MeshTexture, RenderScene};
 
 /// Bump whenever the capture or the prefilter produces different bytes for the same input; every
-/// stored entry is then orphaned. 4: the capture holds geometry only (sky rgb 0) and the entry
-/// carries the baked irradiance the live relight divides by. 5: an emissive layer the relight leaves
-/// unscaled. 6: the baked irradiance is per axis.
-pub(crate) const PROBE_BAKE_VERSION: u32 = 6;
+/// stored entry is then orphaned. `ludion-engine`'s `probe_bake_pin` test fails when the capture
+/// moves without this changing: bump it when that pin moves, then re-bless the pin. 4: the capture
+/// holds geometry only (sky rgb 0) and the entry carries the baked irradiance the live relight
+/// divides by. 5: an emissive layer the relight leaves unscaled. 6: the baked irradiance is per
+/// axis.
+pub const PROBE_BAKE_VERSION: u32 = 6;
 
 const TEXEL_BYTES: u32 = 8;
 

@@ -98,7 +98,7 @@ pub use probe::{MAX_PROBES, ProbeData, ProbeVolume, probe_rank};
 pub use probe_capture::{
     AxisIrradiance, ProbeIrradiance, ProbeReadback, ProbeResolve, ResolvedProbe,
 };
-pub use probe_store::{ProbePrune, prune_store};
+pub use probe_store::{PROBE_BAKE_VERSION, ProbePrune, prune_store};
 pub use projector::{
     DecalStats, OCCLUSION_ATLAS_MAX, OCCLUSION_TILE, OcclusionAtlas, ProjectorBlend, ProjectorKind,
     decal_stats, footprint_bound, occlusion_atlas, occlusion_bias, occlusion_view,

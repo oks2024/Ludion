@@ -87,7 +87,7 @@ pub use driver::{GameplayDriver, inject, loaded_engine, step};
 pub use golden::{
     GoldenOutcome, GoldenTest, MACOS_REFERENCE_ADAPTER, WINDOWS_REFERENCE_ADAPTER, bless_requested,
     check_engine_golden, compare_png_bytes, missing_golden, platform_dir, provenance_label,
-    unverifiable,
+    reference_adapter, unverifiable,
 };
 pub use image::DecodedImage;
 pub use imports::{missing_derived_imports, require_derived_imports};

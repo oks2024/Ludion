@@ -1,0 +1,120 @@
+# Fixture: the scene `src/probe_bake_pin_tests.rs` captures one probe of. Every capture input a
+# Rust-side change could move is present: sky, a sun, a point and a spot light, a GI volume, an
+# emissive surface and a diffuse one. It has no skinned or voxel-only geometry and no textured map.
+format: 1
+name: "probe-bake-pin - one probe in a lit room"
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.1
+          - 0.2
+          - 0.5
+        sky_horizon:
+          - 0.5
+          - 0.6
+          - 0.7
+        sky_ground:
+          - 0.1
+          - 0.1
+          - 0.1
+        ibl_intensity: 1.0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0
+          - 3
+          - 8
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0
+          - 10
+          - 0
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.8
+          - -0.5
+        intensity: 1.0
+  - name: point
+    components:
+      Transform:
+        translation:
+          - 3
+          - 2
+          - 1
+      PointLight:
+        intensity: 6.0
+        range: 10.0
+  - name: spot
+    components:
+      Transform:
+        translation:
+          - -3
+          - 5
+          - 0
+      SpotLight:
+        intensity: 8.0
+        range: 10.0
+        direction:
+          - 0
+          - -1
+          - 0
+        inner_angle: 20.0
+        outer_angle: 35.0
+  - name: gi
+    components:
+      GiVolume:
+        cell_size: 0.5
+        probe_spacing: 1.0
+        sky_visibility: 0.8
+        bounce: 0.6
+  - name: floor
+    components:
+      Transform:
+        scale:
+          - 10
+          - 1
+          - 10
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.7
+          - 0.7
+          - 1.0
+  - name: wall
+    components:
+      Transform:
+        translation:
+          - 0
+          - 2
+          - -4
+        scale:
+          - 8
+          - 4
+          - 1
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.4
+          - 0.2
+          - 1.0
+        emissive: 0.5
+  - name: probe
+    components:
+      Transform:
+        translation:
+          - 0
+          - 2
+          - 0
+      ReflectionProbe: {}
