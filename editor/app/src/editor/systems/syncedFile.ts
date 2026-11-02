@@ -19,6 +19,9 @@
 //   4. A CONFLICT HOLDS THE WRITE, and a dispose under a conflict writes nothing. Auto-writing through
 //      the banner would silently drop one side's edit, the one outcome the reducer exists to prevent;
 //      `keepMine` (adopt the incoming mtime, keep the local text) then writes, `reload` discards.
+//      So does a disk text that fails to parse (`loadError`). Accepted edge: a conflict first
+//      detected by the dispose flush is dropped silently, as the session is already disposed and
+//      has no one to notify.
 //
 // Writes are serialised: a flush waits for the one in flight, then re-checks the phase. An edit that
 // lands while a write is in flight keeps the document dirty once the write's `save` is applied.
@@ -51,6 +54,8 @@ export interface Timers {
 }
 
 export interface SyncedFileOptions<D> {
+  /** May throw: a throw means the text is not adoptable. The session then keeps its document and
+   *  baseline, sets `loadError`, and refuses writes until a parsable disk state is adopted. */
   parse(text: string): D;
   /** The document as the file text. */
   source(doc: D): string;
@@ -194,8 +199,9 @@ export class SyncedFileSession<D> {
       if (!this.pollable()) {
         return;
       }
-      this.apply({ type: 'externalChange', mtime: stat.mtimeMs, content });
-      this.notify();
+      if (this.apply({ type: 'externalChange', mtime: stat.mtimeMs, content })) {
+        this.notify();
+      }
     } catch {
       // A file that vanished mid-edit is the readout's story to tell, not the poll's.
     }
@@ -207,8 +213,10 @@ export class SyncedFileSession<D> {
     this.notify();
   }
 
-  /** Banner "Keep mine": keep local edits and write them (last-writer-wins, the settled policy). */
+  /** Banner "Keep mine": keep local edits and write them (last-writer-wins, the settled policy). The
+   *  explicit overwrite also clears a parse failure of the disk text it replaces. */
   keepMine(): void {
+    this.loadError = null;
     this.apply({ type: 'keepMine' });
     this.schedule('commit');
     this.notify();
@@ -225,14 +233,30 @@ export class SyncedFileSession<D> {
     return !this.disposed && this.doc !== null && this.writing === 0 && this.trailing === null;
   }
 
-  private apply(event: SyncEvent): void {
+  /** Feeds the reducer. A disk text that does not parse is not adopted: the baseline, phase and
+   *  document stay as they were and `loadError` is set. Returns whether anything observable changed
+   *  (a repeat of the same parse failure is not a change). */
+  private apply(event: SyncEvent): boolean {
     const { state, effect } = reduce(this.sync, event);
-    this.sync = state;
     if (effect.type === 'setContent') {
-      this.doc = this.options.parse(effect.content);
+      let parsed: D;
+      try {
+        parsed = this.options.parse(effect.content);
+      } catch (err) {
+        const message = `could not parse ${this.path}: ${String(err)}`;
+        const changed = this.loadError !== message;
+        this.loadError = message;
+        return changed;
+      }
+      this.sync = state;
+      this.doc = parsed;
+      this.loadError = null;
       this.savedRevision += 1;
       this.options.onReplaced?.();
+      return true;
     }
+    this.sync = state;
+    return true;
   }
 
   private cancelTrailing(): void {
@@ -266,7 +290,7 @@ export class SyncedFileSession<D> {
   }
 
   private async writeOnce(): Promise<void> {
-    if (this.doc === null || this.sync.phase !== 'dirty') {
+    if (this.doc === null || this.sync.phase !== 'dirty' || this.loadError !== null) {
       return;
     }
     const path = this.path;

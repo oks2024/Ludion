@@ -266,4 +266,60 @@ describe('SyncedFileSession', () => {
     await s.poll();
     expect(replaced).toBe(1);
   });
+
+  describe('a disk text that does not parse', () => {
+    const strict = { parse: (text: string) => { if (text.startsWith('!')) throw new Error('bad yaml'); return text; } };
+
+    it('poll keeps the old doc, sets loadError once, refuses writes, then adopts a fixed file', async () => {
+      const { disk, session: s, changes } = rig('a.yaml', 'a: 1', strict);
+      await s.load();
+      disk.put('a.yaml', '!broken');
+      await s.poll();
+      expect(s.current()).toBe('a: 1');
+      expect(s.snapshot().loadError).toContain('bad yaml');
+      const notified = changes.length;
+      await s.poll(); // persistently broken: retried, no new notification
+      expect(changes.length).toBe(notified);
+
+      s.edit('a: 9', 'commit');
+      await settle();
+      expect(disk.writes).toEqual([]);
+      expect(disk.text('a.yaml')).toBe('!broken');
+
+      // The refused edit left the doc dirty, so the fixed file raises the banner; reload adopts it.
+      disk.put('a.yaml', 'a: 2');
+      await s.poll();
+      expect(s.snapshot().phase).toBe('conflict');
+      s.reload();
+      expect(s.snapshot().loadError).toBeNull();
+      expect(s.current()).toBe('a: 2');
+      expect(disk.writes).toEqual([]);
+    });
+
+    it('a clean doc adopts the fixed file on the next poll and clears loadError', async () => {
+      const { disk, session: s } = rig('a.yaml', 'a: 1', strict);
+      await s.load();
+      disk.put('a.yaml', '!broken');
+      await s.poll();
+      disk.put('a.yaml', 'a: 2');
+      await s.poll();
+      expect(s.snapshot().loadError).toBeNull();
+      expect(s.current()).toBe('a: 2');
+    });
+
+    it('reload does not throw, keeps the conflict and the doc, and sets loadError', async () => {
+      const { disk, session: s } = rig('a.yaml', 'a: 1', strict);
+      await s.load();
+      s.edit('a: 9', 'defer');
+      disk.put('a.yaml', '!broken');
+      await s.poll();
+      expect(s.snapshot().phase).toBe('conflict');
+      expect(() => s.reload()).not.toThrow();
+      expect(s.current()).toBe('a: 9');
+      expect(s.snapshot().phase).toBe('conflict');
+      expect(s.snapshot().loadError).toContain('bad yaml');
+      await s.dispose();
+      expect(disk.writes).toEqual([]);
+    });
+  });
 });
