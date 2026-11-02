@@ -535,6 +535,20 @@ fn minimal_mesh_omits_optional_fields() {
     );
 }
 
+/// A position past the f32 range reads as infinite, so validation refuses it with `L1111` at its
+/// own pointer rather than letting it narrow to `inf` later.
+#[test]
+fn a_position_past_the_f32_range_is_l1111() {
+    let source = "format: 1\nkind: mesh\npositions:\n  - 1e39\n  - 0.0\n  - 0.0\nindices: []\n";
+    let diagnostics = check_mesh(source).expect_err("1e39 does not fit a 32-bit float");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code.as_str() == "L1111" && d.path.as_deref() == Some("/positions/0")),
+        "{diagnostics:?}"
+    );
+}
+
 /// `L1111` on inconsistent data: a truncated `uvs` list and an out-of-range index, both reported
 /// in one pass with JSON Pointers to the exact offending list.
 #[test]

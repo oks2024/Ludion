@@ -103,6 +103,80 @@ fn out_of_range_value_is_data() {
     );
 }
 
+fn levels(extra: &str) -> String {
+    format!("  l:\n    op: levels\n    input: n\n{extra}")
+}
+
+fn level_err(extra: &str) -> (String, Option<String>) {
+    let steps = format!("{}{}", noise(""), levels(extra));
+    let d = err(&steps, &OUT.replace(": n", ": l"));
+    (d.code.as_str().to_string(), d.path)
+}
+
+#[test]
+fn noise_gain_is_bounded_to_the_unit_interval() {
+    for gain in ["-1", "1e30", "1.5"] {
+        let d = err(&noise(&format!("    gain: {gain}\n")), OUT);
+        assert_eq!(
+            (d.code.as_str(), d.path.as_deref()),
+            ("L1284", Some("/steps/n/gain")),
+            "gain {gain}"
+        );
+    }
+    for gain in ["0", "1"] {
+        let recipe = recipe(&noise(&format!("    gain: {gain}\n")), OUT);
+        ludion_texgen::load(&recipe, &MemResolver::default())
+            .unwrap_or_else(|d| panic!("gain {gain}: {d:?}"));
+    }
+}
+
+#[test]
+fn numbers_past_the_f32_range_are_refused_at_the_read() {
+    assert_eq!(
+        level_err("    in_low: -1e39\n"),
+        ("L1284".into(), Some("/steps/l/in_low".into()))
+    );
+    let steps = format!("{}{}", noise(""), levels("    in_low: $big\n"));
+    let text = recipe(&steps, &OUT.replace(": n", ": l"))
+        .replace("steps:", "params:\n  big: 1e39\nsteps:");
+    let d = first_error(&text, &MemResolver::default());
+    assert_eq!(
+        (d.code.as_str(), d.path.as_deref()),
+        ("L1284", Some("/steps/l/in_low"))
+    );
+}
+
+#[test]
+fn a_gamma_that_narrows_to_zero_or_subnormal_is_refused() {
+    for gamma in ["1e-50", "1e-45"] {
+        assert_eq!(
+            level_err(&format!("    gamma: {gamma}\n")),
+            ("L1284".into(), Some("/steps/l/gamma".into())),
+            "gamma {gamma}"
+        );
+    }
+}
+
+#[test]
+fn arithmetic_overflow_in_a_map_is_refused_before_encoding() {
+    let steps = format!(
+        "{}{}",
+        noise(""),
+        levels("    out_low: -3e38\n    out_high: 3e38\n")
+    );
+    let text = recipe(&steps, &OUT.replace(": n", ": l"));
+    let diagnostics = ludion_texgen::build(&text, &MemResolver::default(), 16)
+        .expect_err("the overflowed map is refused");
+    let d = &diagnostics[0];
+    assert_eq!(d.code.as_str(), "L1284", "{d:?}");
+    assert!(
+        d.path
+            .as_deref()
+            .is_some_and(|p| p.starts_with("/outputs/")),
+        "{d:?}"
+    );
+}
+
 #[test]
 fn bad_hex_and_unsorted_stops_are_data() {
     let steps = format!(

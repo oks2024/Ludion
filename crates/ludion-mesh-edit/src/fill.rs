@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, VecDeque};
 use ludion_core::math::f64::sqrt;
 
 use crate::paint::{MapSampler, colour_weight};
-use crate::raster::Coverage;
+use crate::raster::{Coverage, MAX_RASTER_WORK};
 
 /// How far, in texels, a seam bridge looks on each side for a texel of the island it is bridging.
 pub const BRIDGE_REACH: i64 = 2;
@@ -258,6 +258,11 @@ pub enum FillRefusal {
     },
     /// The coverage has no covered texel at all, so there is nothing to walk.
     NoTexels,
+    /// The seams' bridges would visit more texels than [`MAX_RASTER_WORK`] allows.
+    TooManySeamCuts {
+        /// The texels the bridges would visit.
+        work: u64,
+    },
 }
 
 /// A fill's parameters, as its region document spells them.
@@ -355,6 +360,10 @@ pub fn flood(
         (matched > 0.0).then(|| weight(distance) * matched)
     };
 
+    let work = bridge_work(&surface.seams, width, height);
+    if work > MAX_RASTER_WORK {
+        return Err(FillRefusal::TooManySeamCuts { work });
+    }
     let bridges = bridges(coverage, surface);
     let island_of = |index: usize| coverage.at(index).map(|(t, _)| surface.island[t as usize]);
     let mut weights = vec![0.0; coverage.len()];
@@ -403,17 +412,31 @@ pub fn flood(
     Ok(FillWeights { weights, seed })
 }
 
+/// The segments a seam is cut into: one per texel of its longer UV side.
+fn seam_segments(seam: &Seam, width: f64, height: f64) -> u32 {
+    let length = |side: usize| {
+        let [low, high] = seam.uv[side];
+        let (du, dv) = ((high[0] - low[0]) * width, (high[1] - low[1]) * height);
+        sqrt(du * du + dv * dv)
+    };
+    length(0).max(length(1)).ceil().max(1.0) as u32
+}
+
+/// The texels the seam bridges visit in total: per cut, two searches of the reach window.
+fn bridge_work(seams: &[Seam], width: u32, height: u32) -> u64 {
+    let window = (2 * BRIDGE_REACH + 1) as u64;
+    seams.iter().fold(0_u64, |work, seam| {
+        let cuts = u64::from(seam_segments(seam, f64::from(width), f64::from(height))) + 1;
+        work.saturating_add(cuts * 2 * window * window)
+    })
+}
+
 /// The texel pairs every seam connects, sorted and deduplicated, both directions.
 fn bridges(coverage: &Coverage, surface: &Surface) -> Vec<(u32, u32)> {
     let (width, height) = (f64::from(coverage.width()), f64::from(coverage.height()));
     let mut pairs = Vec::new();
     for seam in &surface.seams {
-        let length = |side: usize| {
-            let [low, high] = seam.uv[side];
-            let (du, dv) = ((high[0] - low[0]) * width, (high[1] - low[1]) * height);
-            sqrt(du * du + dv * dv)
-        };
-        let segments = length(0).max(length(1)).ceil().max(1.0) as u32;
+        let segments = seam_segments(seam, width, height);
         for step in 0..=segments {
             let s = f64::from(step) / f64::from(segments);
             let point = |side: usize| {
@@ -829,6 +852,21 @@ mod tests {
         let filled =
             flooded(&mesh, 8, [0.125, 0.0, 0.0625], 0.1, 1.0, None, &grey(8, 8)).expect("seeds");
         assert_eq!(filled.seed, 0);
+    }
+
+    /// One seam across the UV diagonal of a 4096² map is cheap; enough of them cross the limit.
+    #[test]
+    fn seam_bridge_work_crosses_the_limit_at_the_expected_count() {
+        let seam = Seam {
+            triangles: [0, 1],
+            uv: [[[0.0, 0.0], [1.0, 1.0]], [[0.0, 0.0], [1.0, 1.0]]],
+        };
+        let one = bridge_work(std::slice::from_ref(&seam), 4096, 4096);
+        assert!(one > 0 && one < MAX_RASTER_WORK / 1000, "{one}");
+        let crossing = MAX_RASTER_WORK / one + 1;
+        let seams = vec![seam; crossing as usize];
+        assert!(bridge_work(&seams, 4096, 4096) > MAX_RASTER_WORK);
+        assert!(bridge_work(&seams[..seams.len() - 1], 4096, 4096) <= MAX_RASTER_WORK);
     }
 
     /// A mesh nothing of which the UVs cover has no texel to start from.

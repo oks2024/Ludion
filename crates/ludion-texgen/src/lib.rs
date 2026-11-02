@@ -96,6 +96,29 @@ pub fn check_size(size: u32) -> Result<(), Vec<Diagnostic>> {
     ])
 }
 
+/// Checks that every sample of every evaluated map is finite.
+///
+/// Bounded inputs can still overflow in a step's arithmetic; the PNG encoder would write the
+/// result as a black or saturated map.
+///
+/// # Errors
+/// One `L1284` at `/outputs/<key>` naming the first non-finite sample.
+pub fn check_finite(maps: &Maps) -> Result<(), Vec<Diagnostic>> {
+    let Some((key, at)) = maps.first_non_finite() else {
+        return Ok(());
+    };
+    Err(vec![
+        Diagnostic::new(
+            code::TEXTURE_DATA,
+            format!(
+                "the `{key}` map holds a non-finite value at sample {at}: a step's arithmetic overflowed"
+            ),
+        )
+        .with_path(format!("/outputs/{key}"))
+        .with_help("bring the extreme values of the steps feeding it into a smaller range"),
+    ])
+}
+
 /// Loads `root`, evaluates it at `size`×`size` and encodes the maps.
 ///
 /// # Errors
@@ -105,6 +128,7 @@ pub fn build(root: &str, resolver: &dyn Resolver, size: u32) -> Result<MapSet, V
     check_size(size)?;
     let loaded = load(root, resolver)?;
     let maps = evaluate(&loaded, size, &mut |_, _| {});
+    check_finite(&maps)?;
     encode(&maps)
         .map_err(|reason| vec![Diagnostic::new(code::TEXTURE_DATA, reason).with_path("/size")])
 }

@@ -11,7 +11,8 @@ The recipe format, outputs, the `std:` macros and the CLI are `ludion docs textu
 
 Pick the op, write the step, run `ludion texture build <file> --size 64` and read the diagnostics: an
 out-of-range field is `L1284` with a JSON Pointer to it, an unknown op or field gets a
-"did you mean" (`L1283`). A field marked *req* has no default.
+"did you mean" (`L1283`). A field marked *req* has no default. Numbers must fit a 32-bit float, and
+a map that comes out non-finite is refused (`L1284`).
 
 ## Format
 
@@ -37,7 +38,7 @@ units (the tile is 0..1 on both axes) and wraps. **Gray** = one channel, **color
 | `noise.scale` | int | req | 1..65536 lattice cells per tile |
 | `noise.octaves` | int | 1 | 1..12 |
 | `noise.lacunarity` | int | 2 | 2..65536 lattice multiplier per octave |
-| `noise.gain` | number | 0.5 | amplitude multiplier per octave |
+| `noise.gain` | number | 0.5 | 0..=1 amplitude multiplier per octave |
 | `noise.seed` | int | 0 | 0..4294967295, mixed into the recipe seed |
 | `noise.return` | `f1` \| `f2` \| `f2_minus_f1` | `f1` | cellular only; `f2_minus_f1` is bright on cell borders |
 | `noise.jitter` | number | 1.0 | 0..1, cellular only: feature-point wander |

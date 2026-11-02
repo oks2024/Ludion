@@ -639,6 +639,18 @@ fn flood_region(
             .with_path(pointer)
             .with_help("a `fill` walks texels the mesh's UV set covers; check the mesh's `uvs`"),
         ]),
+        Err(FillRefusal::TooManySeamCuts { work }) => Err(vec![
+            Diagnostic::new(
+                code::MESH_EDIT_INAPPLICABLE,
+                format!(
+                    "op {index}'s `fill` would bridge the mesh's UV seams over {work} texel \
+                     visits, past the limit of {}",
+                    raster::MAX_RASTER_WORK
+                ),
+            )
+            .with_path(format!("{pointer}/region/fill"))
+            .with_help("re-unwrap the mesh with fewer or shorter seams, or lower the map `size`"),
+        ]),
     }
 }
 

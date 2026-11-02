@@ -347,6 +347,7 @@ fn evaluate_recipe(
         }
         last = start.elapsed();
     });
+    ludion_texgen::check_finite(&maps)?;
     let set = ludion_texgen::encode(&maps)
         .map_err(|reason| vec![Diagnostic::new(code::TEXTURE_DATA, reason).with_path("/size")])?;
     Ok(Built {

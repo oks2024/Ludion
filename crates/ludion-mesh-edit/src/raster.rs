@@ -19,6 +19,11 @@ use ludion_core::diagnostics::Diagnostic;
 /// times the largest map any generator in this engine writes.
 pub const MAX_EXTENT: u32 = 4096;
 
+/// The most texels a rasterisation or the fill's seam bridges may visit in total: 256 full
+/// overdraws of a [`MAX_EXTENT`] map, a limit no non-overlapping unwrap approaches, since a tiny
+/// triangle's scan is about 25 texels.
+pub const MAX_RASTER_WORK: u64 = 1 << 32;
+
 /// Marks a texel no triangle covers.
 const UNCOVERED: u32 = u32::MAX;
 
@@ -81,7 +86,8 @@ impl Coverage {
 ///
 /// # Errors
 /// `L1176` when the lists do not agree, when an index is out of range, when `width`/`height` are
-/// `0` or above [`MAX_EXTENT`], or when a UV lies outside `[0, 1]`.
+/// `0` or above [`MAX_EXTENT`], when a UV lies outside `[0, 1]`, or when the triangles' scans
+/// total more than [`MAX_RASTER_WORK`] texels.
 ///
 /// # Example
 /// ```
@@ -133,6 +139,33 @@ pub fn rasterize(
         ));
     }
 
+    let mut work = 0_u64;
+    for (triangle, corners) in indices.chunks_exact(3).enumerate() {
+        let mut uv = [[0.0; 2]; 3];
+        for (corner, index) in corners.iter().enumerate() {
+            let vertex = *index as usize;
+            if vertex >= vertices {
+                return Err(inapplicable(format!(
+                    "triangle {triangle} names vertex {vertex}, past the mesh's {vertices} vertices"
+                )));
+            }
+            uv[corner] = [uvs[vertex * 2], uvs[vertex * 2 + 1]];
+        }
+        if let Some((x0, x1, y0, y1)) = triangle_span(&uv, width, height) {
+            work = work.saturating_add(u64::from(x1 - x0) * u64::from(y1 - y0));
+        }
+    }
+    if work > MAX_RASTER_WORK {
+        return Err(inapplicable(format!(
+            "rasterising this mesh's UV triangles would scan {work} texels, past the limit of \
+             {MAX_RASTER_WORK}, on a {width}x{height} map"
+        ))
+        .with_help(
+            "this source's triangles overlap heavily in UV space, or the map is far larger than \
+             the mesh needs; re-unwrap it without overlaps or lower the map `size`",
+        ));
+    }
+
     let texels = (width as usize) * (height as usize);
     let mut coverage = Coverage {
         width,
@@ -147,11 +180,6 @@ pub fn rasterize(
         let mut position = [[0.0; 3]; 3];
         for (corner, index) in corners.iter().enumerate() {
             let vertex = *index as usize;
-            if vertex >= vertices {
-                return Err(inapplicable(format!(
-                    "triangle {triangle} names vertex {vertex}, past the mesh's {vertices} vertices"
-                )));
-            }
             uv[corner] = [uvs[vertex * 2], uvs[vertex * 2 + 1]];
             position[corner] = [
                 positions[vertex * 3],
@@ -172,22 +200,11 @@ fn rasterize_triangle(
     uv: &[[f64; 2]; 3],
     position: &[[f64; 3]; 3],
 ) {
-    let area = cross(uv[0], uv[1], uv[2]);
-    if area == 0.0 {
-        // A triangle with no UV area covers no texel centre; it is a seam, not a surface.
+    let Some((x0, x1, y0, y1)) = triangle_span(uv, coverage.width, coverage.height) else {
         return;
-    }
+    };
+    let area = cross(uv[0], uv[1], uv[2]);
     let (width, height) = (coverage.width as f64, coverage.height as f64);
-    let min_u = uv[0][0].min(uv[1][0]).min(uv[2][0]);
-    let max_u = uv[0][0].max(uv[1][0]).max(uv[2][0]);
-    let min_v = uv[0][1].min(uv[1][1]).min(uv[2][1]);
-    let max_v = uv[0][1].max(uv[1][1]).max(uv[2][1]);
-    // The texel whose centre is at `u` sits at `u * width - 0.5`; widen by one either way so a
-    // centre exactly on the bound is never skipped by the floor.
-    let x0 = span_start(min_u * width);
-    let x1 = span_end(max_u * width, coverage.width);
-    let y0 = span_start(min_v * height);
-    let y1 = span_end(max_v * height, coverage.height);
 
     for y in y0..y1 {
         let v = (f64::from(y) + 0.5) / height;
@@ -214,6 +231,27 @@ fn rasterize_triangle(
             });
         }
     }
+}
+
+/// The texel box `x0..x1` × `y0..y1` a triangle's scan visits, or `None` for a triangle with no
+/// UV area, which covers no texel centre: a seam, not a surface.
+fn triangle_span(uv: &[[f64; 2]; 3], width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
+    if cross(uv[0], uv[1], uv[2]) == 0.0 {
+        return None;
+    }
+    let (w, h) = (f64::from(width), f64::from(height));
+    let min_u = uv[0][0].min(uv[1][0]).min(uv[2][0]);
+    let max_u = uv[0][0].max(uv[1][0]).max(uv[2][0]);
+    let min_v = uv[0][1].min(uv[1][1]).min(uv[2][1]);
+    let max_v = uv[0][1].max(uv[1][1]).max(uv[2][1]);
+    // The texel whose centre is at `u` sits at `u * width - 0.5`; widen by one either way so a
+    // centre exactly on the bound is never skipped by the floor.
+    Some((
+        span_start(min_u * w),
+        span_end(max_u * w, width),
+        span_start(min_v * h),
+        span_end(max_v * h, height),
+    ))
 }
 
 fn span_start(edge: f64) -> u32 {
@@ -338,6 +376,17 @@ mod tests {
         let error = rasterize(&positions, &uvs, &[0, 1, 9], 2, 2).expect_err("refused");
         assert_eq!(error.code, code::MESH_EDIT_INAPPLICABLE);
         assert!(error.message.contains("vertex 9"), "{}", error.message);
+    }
+
+    #[test]
+    fn heavily_overlapping_triangles_are_refused_before_any_allocation() {
+        let positions = [0.0; 9];
+        let uvs = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let indices: Vec<u32> = [0, 1, 2].repeat(257);
+        let error = rasterize(&positions, &uvs, &indices, MAX_EXTENT, MAX_EXTENT)
+            .expect_err("257 overdraws exceed the work limit");
+        assert_eq!(error.code, code::MESH_EDIT_INAPPLICABLE);
+        assert!(error.message.contains("would scan"), "{}", error.message);
     }
 
     #[test]

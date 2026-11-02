@@ -165,7 +165,7 @@ channel are the preview.
 | `L1173` | Mesh-edit document structure — missing/wrong-typed key, unknown key with its nearest match, unrecognized `op`/region shape, a capsule's retired `from`/`to`, or a `map` this engine does not paint. Also carries the drift report. |
 | `L1174` | Mesh-edit document data — non-finite number, non-positive radius/`max_radius`/extent, a capsule with fewer than two `points`, colour or strength outside `[0, 1]`, negative `feather`, `tolerance` or `color_feather`, an `out` that escapes the document, a `source` that is absolute, a `source` inside the edit's own `out`, `size` on a map that already exists. |
 | `L1175` | `pick` resolved to no surface — no triangle under the pixel, an unknown view, or a pixel outside the assumed extent. |
-| `L1176` | The edit cannot apply to its source — no `uvs`, a target map with no `size` to create it, a `key`/`fill` reading a map nothing provides, or `out` holding files the derive did not write or a tree another edit owns. |
+| `L1176` | The edit cannot apply to its source — no `uvs`, a target map with no `size` to create it, a `key`/`fill` reading a map nothing provides, or `out` holding files the derive did not write or a tree another edit owns, or a source whose triangles overlap so heavily in UV space that rasterising or bridging them would exceed the work limit. |
 | `L1177` | An op painted nothing — its region covers no texel of the surface (names the op index and the region's box against the mesh's own bounds), or reaches texels at zero weight (a `strength` of 0). |
 | `L1178` | A colour match failed — a `key` rejected every texel its region reaches (names the nearest distance and that texel's colour), or a `fill`'s seed is off the surface or outside `max_radius`. |
 

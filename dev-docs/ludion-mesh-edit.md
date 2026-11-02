@@ -17,7 +17,8 @@ and the blind-editing loop are `ludion docs mesh-editing`.
   reports against the mesh's own bounds.
 - `crates/ludion-mesh-edit/src/raster.rs` — `rasterize`: which UV triangle (if any) reaches each
   texel centre of a `width × height` grid, and the surface point there. `MAX_EXTENT` (4096) is the
-  derived-map ceiling.
+  derived-map ceiling. `MAX_RASTER_WORK` (2^32 texel visits) bounds the scan of all triangles, and
+  the fill's seam bridges share it (`FillRefusal::TooManySeamCuts`); both refuse as `L1176`.
 - `crates/ludion-mesh-edit/src/paint.rs` — `WorkingMap` (`f64`, straight-alpha, linear RGB), `paint`
   (blend one op into a map through a region's weight), `dilate` (bleed past a UV island's border).
 - `crates/ludion-mesh-edit/src/fill.rs` — the seeded flood fill: `surface` builds the welded adjacency

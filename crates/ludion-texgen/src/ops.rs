@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use ludion_core::codes::code;
 use ludion_core::color;
 use ludion_core::diagnostics::{Diagnostic, pointer_token, value_phrase};
+use ludion_core::number::engine_number;
 use ludion_core::suggest::nearest;
 use serde_json::{Map, Value};
 
@@ -644,9 +645,11 @@ impl<'a> Reader<'a> {
             return Ok(None);
         };
         match value {
-            Value::Number(n) => Ok(Some(Scalar::Number(n.as_f64().unwrap_or(f64::NAN)))),
+            Value::Number(n) => Ok(Some(Scalar::Number(engine_number(
+                n.as_f64().unwrap_or(f64::NAN),
+            )))),
             Value::String(s) if s.starts_with('$') => match self.scope.get(&s[1..]) {
-                Some(ParamValue::Number(x)) => Ok(Some(Scalar::Number(*x))),
+                Some(ParamValue::Number(x)) => Ok(Some(Scalar::Number(engine_number(*x)))),
                 Some(ParamValue::Color(c)) => Ok(Some(Scalar::Color(*c))),
                 None => {
                     let known: Vec<&str> = self.scope.keys().map(String::as_str).collect();
@@ -684,8 +687,8 @@ impl<'a> Reader<'a> {
             Some(Scalar::Number(x)) if x.is_finite() => Ok(x),
             Some(Scalar::Number(_)) => Err(self.data(
                 field,
-                format!("`{field}` must be finite"),
-                "use a finite number".into(),
+                format!("`{field}` must be finite and fit a 32-bit float"),
+                "use a number between -3.4e38 and 3.4e38".into(),
             )),
             Some(Scalar::Color(_)) => Err(self.data(
                 field,
@@ -718,10 +721,13 @@ impl<'a> Reader<'a> {
     /// A number above zero.
     pub(crate) fn positive(&mut self, field: &'static str, default: Option<f64>) -> Read<f32> {
         let x = self.number(field, default)?;
-        if x <= 0.0 {
+        if (x as f32) < f32::MIN_POSITIVE {
             return Err(self.data(
                 field,
-                format!("`{field}` must be above 0, found {x}"),
+                format!(
+                    "`{field}` must be above 0 (at least {}), found {x}",
+                    f32::MIN_POSITIVE
+                ),
                 "use a positive value".into(),
             ));
         }
@@ -861,8 +867,8 @@ impl<'a> Reader<'a> {
             Some(Scalar::Number(x)) if x.is_finite() => Ok(Const::Gray(x as f32)),
             Some(Scalar::Number(_)) => Err(self.data(
                 field,
-                format!("`{field}` must be finite"),
-                "use a finite number".into(),
+                format!("`{field}` must be finite and fit a 32-bit float"),
+                "use a number between -3.4e38 and 3.4e38".into(),
             )),
             Some(Scalar::Color(c)) => Ok(Const::Color(c)),
             None => Err(self.missing(field, "<number or \"#rrggbb\">")),
@@ -1561,7 +1567,7 @@ fn noise(r: &mut Reader<'_>) -> Read<Op> {
     let scale = r.int("scale", None, 1, 65536);
     let octaves = r.int("octaves", Some(1), 1, 12);
     let lacunarity = r.int("lacunarity", Some(2), 2, 65536);
-    let gain = r.float("gain", Some(0.5));
+    let gain = r.ranged("gain", Some(0.5), 0.0, 1.0);
     let seed = r.int("seed", Some(0), 0, STEP_SEED_MAX);
     let stretch = r.int("stretch", Some(1), 1, 256);
     let stretch_axis = r.word("stretch_axis", Some("u"), &["u", "v"]);
@@ -1605,7 +1611,7 @@ fn noise(r: &mut Reader<'_>) -> Read<Op> {
 
 /// `x` in `(0, hi]`, as `f32`.
 fn open_below(r: &mut Reader<'_>, field: &str, x: f64, hi: f64) -> Read<f32> {
-    if x > 0.0 && x <= hi {
+    if (x as f32) >= f32::MIN_POSITIVE && x <= hi {
         return Ok(x as f32);
     }
     Err(r.data(

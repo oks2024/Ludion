@@ -34,6 +34,26 @@ pub struct Maps {
     pub height: Image,
 }
 
+impl Maps {
+    /// The first map, in output order, holding a NaN or infinite sample: its output key and the
+    /// index into its sample data.
+    pub fn first_non_finite(&self) -> Option<(&'static str, usize)> {
+        let maps = [
+            ("base_color", Some(&self.base_color)),
+            ("roughness", Some(&self.roughness)),
+            ("metallic", Some(&self.metallic)),
+            ("normal", Some(&self.normal)),
+            ("occlusion", Some(&self.occlusion)),
+            ("emissive", self.emissive.as_ref()),
+            ("height", Some(&self.height)),
+        ];
+        maps.into_iter().find_map(|(key, image)| {
+            let at = image?.data.iter().position(|v| !v.is_finite())?;
+            Some((key, at))
+        })
+    }
+}
+
 /// Evaluates `recipe` at `size`×`size` texels.
 ///
 /// Only steps the outputs reach are evaluated, and an image is dropped after its last consumer.
