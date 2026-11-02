@@ -60,21 +60,24 @@ pub fn letterbox(frame_w: u32, frame_h: u32, surface_w: u32, surface_h: u32) -> 
         // Surface is proportionally wider than the frame → bound by height; bars left/right.
         let height = surface_h;
         let width = surface_h * frame_w / frame_h;
+        let x = ((surface_w - width) / 2.0) as f32;
         Viewport {
-            x: ((surface_w - width) / 2.0) as f32,
+            x,
             y: 0.0,
-            width: width as f32,
+            // Derived from x, so x + width cannot round past the surface.
+            width: (surface_w as f32 - 2.0 * x).max(0.0),
             height: height as f32,
         }
     } else {
         // Surface is proportionally taller (or equal) → bound by width; bars top/bottom.
         let width = surface_w;
         let height = surface_w * frame_h / frame_w;
+        let y = ((surface_h - height) / 2.0) as f32;
         Viewport {
             x: 0.0,
-            y: ((surface_h - height) / 2.0) as f32,
+            y,
             width: width as f32,
-            height: height as f32,
+            height: (surface_h as f32 - 2.0 * y).max(0.0),
         }
     }
 }
@@ -122,10 +125,12 @@ pub fn letterbox_in(
     if inner == Viewport::ZERO {
         return inner;
     }
+    let (x, y) = (inner.x + r.x as f32, inner.y + r.y as f32);
     Viewport {
-        x: inner.x + r.x as f32,
-        y: inner.y + r.y as f32,
-        ..inner
+        x,
+        y,
+        width: inner.width.min((r.x + r.width) as f32 - x),
+        height: inner.height.min((r.y + r.height) as f32 - y),
     }
 }
 
@@ -285,6 +290,26 @@ mod tests {
         assert_eq!(v.width, 1000.0);
         assert!((v.height - 562.5).abs() < 1e-3);
         assert!((v.y - 218.75).abs() < 1e-3);
+    }
+
+    #[test]
+    fn viewport_never_leaves_the_attachment_after_f32_rounding() {
+        for surface_w in [1u32, 3, 7, 999, 1921, 4097, 8191, 8192] {
+            for surface_h in [1u32, 5, 719, 1080, 2161, 8192] {
+                for (fw, fh) in [(1u32, 1u32), (3, 7), (1385, 720), (1920, 1080), (8192, 1)] {
+                    let v = letterbox(fw, fh, surface_w, surface_h);
+                    assert!(v.x >= 0.0 && v.y >= 0.0);
+                    assert!(
+                        v.x + v.width <= surface_w as f32,
+                        "{fw}x{fh} in {surface_w}x{surface_h}"
+                    );
+                    assert!(
+                        v.y + v.height <= surface_h as f32,
+                        "{fw}x{fh} in {surface_w}x{surface_h}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

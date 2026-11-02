@@ -146,6 +146,45 @@ fn contested_writers(passes: &[PassDecl], read: crate::resource::ResourceId) -> 
     contested.then(|| writers.into_iter().map(|(index, _)| index).collect())
 }
 
+/// The passes writing what `read` reads, split into one group per mip the read overlaps (one group
+/// when the read and every write are unmipped). A whole-resource write belongs to every group.
+fn writer_groups(passes: &[PassDecl], read: crate::resource::ResourceId) -> Vec<Vec<usize>> {
+    let hits: Vec<(usize, crate::resource::ResourceId)> = passes
+        .iter()
+        .enumerate()
+        .flat_map(|(index, pass)| {
+            pass.writes()
+                .into_iter()
+                .filter(|w| w.overlaps(read))
+                .map(move |w| (index, w))
+        })
+        .collect();
+    let mut mips: Vec<Option<u32>> = hits
+        .iter()
+        .filter_map(|(_, w)| w.mip_level().map(Some))
+        .collect();
+    mips.sort_unstable();
+    mips.dedup();
+    if mips.is_empty() {
+        mips.push(None);
+    }
+    mips.into_iter()
+        .map(|mip| {
+            let probe = crate::resource::ResourceId {
+                index: read.index(),
+                mip,
+            };
+            let mut group: Vec<usize> = hits
+                .iter()
+                .filter(|(_, w)| w.overlaps(probe))
+                .map(|(index, _)| *index)
+                .collect();
+            group.dedup();
+            group
+        })
+        .collect()
+}
+
 /// Rejects any pass that reads a resource no pass ever writes (`L2002`). A mip read needs a write
 /// overlapping that mip; a whole read of a mipped resource needs every mip covered. A contested
 /// read (several passes write what it reads) also needs a writer declared before the reader, since
@@ -237,25 +276,24 @@ fn topo_order(passes: &[PassDecl]) -> Result<Vec<usize>, Diagnostic> {
     }
     for (consumer, pass) in passes.iter().enumerate() {
         for read in pass.reads() {
-            match contested_writers(passes, read) {
-                None => {
-                    for (producer, other) in passes.iter().enumerate() {
-                        if other.writes().iter().any(|w| w.overlaps(read)) {
-                            add(&mut deps, consumer, producer);
-                        }
+            // Contention is judged per overlapping mip: writers of different mips never order each
+            // other, so a read of a pyramid orders against the latest earlier writer of each mip.
+            for group in writer_groups(passes, read) {
+                if group.len() < 2 {
+                    for &producer in &group {
+                        add(&mut deps, consumer, producer);
                     }
+                    continue;
                 }
-                Some(writers) => {
-                    // A pass reading what it writes stays a self-dependency (`L2001`).
-                    if writers.contains(&consumer) {
-                        add(&mut deps, consumer, consumer);
-                    }
-                    if let Some(&before) = writers.iter().filter(|&&w| w < consumer).max() {
-                        add(&mut deps, consumer, before);
-                    }
-                    if let Some(&after) = writers.iter().filter(|&&w| w > consumer).min() {
-                        add(&mut deps, after, consumer);
-                    }
+                // A pass reading what it writes stays a self-dependency (`L2001`).
+                if group.contains(&consumer) {
+                    add(&mut deps, consumer, consumer);
+                }
+                if let Some(&before) = group.iter().filter(|&&w| w < consumer).max() {
+                    add(&mut deps, consumer, before);
+                }
+                if let Some(&after) = group.iter().filter(|&&w| w > consumer).min() {
+                    add(&mut deps, after, consumer);
                 }
             }
         }
@@ -897,6 +935,30 @@ mod tests {
         let order = split.order_names();
         let at = |n: &str| order.iter().position(|&o| o == n).unwrap();
         assert!(at("mid") < at("late"), "{order:?}");
+    }
+
+    /// Mip0 is contested (a, b); mip1 has one writer `c`, which waits on `w`, declared after the
+    /// reader. The reader must still wait for the latest earlier mip0 writer *and* for `c`.
+    #[test]
+    fn a_contested_read_orders_against_the_latest_writer_per_mip() {
+        let mut graph = RenderGraph::new();
+        let mut desc = TextureDesc::color(8, 8);
+        desc.mip_levels = 2;
+        let pyr = graph.transient("pyr", desc);
+        let g = graph.transient("g", TextureDesc::color(8, 8));
+        let out = graph.output("final", TextureDesc::present_target(8, 8));
+        graph.add_external_pass("a", "a", vec![], vec![pyr.mip(0)]);
+        graph.add_external_pass("b", "b", vec![], vec![pyr.mip(0)]);
+        graph.add_external_pass("c", "c", vec![g], vec![pyr.mip(1)]);
+        graph.add_external_pass("reader", "reader", vec![pyr], vec![out]);
+        graph.add_external_pass("w", "w", vec![], vec![g]);
+        let order = super::schedule(&graph).unwrap();
+        let order = order.order_names();
+        let at = |n: &str| order.iter().position(|&o| o == n).unwrap();
+        assert!(at("b") < at("reader"), "{order:?}");
+        assert!(at("c") < at("reader"), "{order:?}");
+        assert!(at("w") < at("c"), "{order:?}");
+        assert!(at("a") < at("b"), "{order:?}");
     }
 
     #[test]

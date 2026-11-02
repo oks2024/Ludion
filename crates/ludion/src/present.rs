@@ -454,14 +454,17 @@ fn map_cursor(
 ) -> Option<[f32; 2]> {
     let present_size = embedded?.present_size()?;
     let (frame_width, frame_height) = present_size.frame_size()?;
-    let (surface_width, surface_height) = surface_size;
+    // The swapchain is the window capped at the texture limit: the blit fits against that, so the
+    // cursor and the host rect are scaled into it first.
+    let capped = ludion_render_graph::blit::surface_extent(surface_size.0, surface_size.1);
+    let cursor = mouse::window_to_surface((x, y), surface_size, capped);
     mouse::map_cursor_to_frame(
-        (x, y),
+        cursor,
         frame_width,
         frame_height,
-        surface_width,
-        surface_height,
-        present_size.rect(),
+        capped.0,
+        capped.1,
+        ludion_render_graph::present::scale_host_rect(present_size.rect(), surface_size, capped),
     )
 }
 

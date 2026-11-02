@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ludion_core::diagnostics::Diagnostic;
-use ludion_core::letterbox::{HostRect, letterbox_in};
+use ludion_core::letterbox::{HostRect, Viewport, letterbox_in};
 
 use crate::blit::{self, Blit, SurfaceSetup};
 use crate::execute::Gpu;
@@ -94,6 +94,55 @@ impl PresentSize {
     }
 }
 
+/// Scales a host rect from window pixels into the swapchain's pixel space, which is the window
+/// capped at the texture limit; equal sizes return the rect unchanged. Each edge is scaled and
+/// rounded, so the scaled rect never grows past the surface.
+pub fn scale_host_rect(
+    rect: Option<HostRect>,
+    window: (u32, u32),
+    surface: (u32, u32),
+) -> Option<HostRect> {
+    let rect = rect?;
+    if window == surface || window.0 == 0 || window.1 == 0 {
+        return Some(rect);
+    }
+    let scale = |value: u32, window: u32, surface: u32| {
+        ((u64::from(value) * u64::from(surface) + u64::from(window) / 2) / u64::from(window)) as u32
+    };
+    let edge = |start: u32, len: u32, window: u32, surface: u32| {
+        let a = scale(start, window, surface);
+        let b = scale(start.saturating_add(len), window, surface).min(surface);
+        (a, b.saturating_sub(a))
+    };
+    let (x, width) = edge(rect.x, rect.width, window.0, surface.0);
+    let (y, height) = edge(rect.y, rect.height, window.1, surface.1);
+    Some(HostRect {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+/// The blit viewport for a `frame_w` × `frame_h` source in a window of `window` physical pixels:
+/// fitted against the swapchain's capped extent (the attachment the viewport must lie inside), with
+/// the host rect scaled by the same cap factor.
+pub fn present_viewport(
+    frame_w: u32,
+    frame_h: u32,
+    window: (u32, u32),
+    rect: Option<HostRect>,
+) -> Viewport {
+    let surface = blit::surface_extent(window.0, window.1);
+    letterbox_in(
+        frame_w,
+        frame_h,
+        surface.0,
+        surface.1,
+        scale_host_rect(rect, window, surface),
+    )
+}
+
 fn pack(width: u32, height: u32) -> u64 {
     (u64::from(width) << 32) | u64::from(height)
 }
@@ -143,6 +192,9 @@ pub struct PresentTarget {
     /// window was created minimized).
     configured: (u32, u32),
     requested: PresentSize,
+    /// Set when the last acquire was `Suboptimal`: the frame is presented, then the swapchain is
+    /// reconfigured before the next acquire.
+    stale: bool,
 }
 
 impl PresentTarget {
@@ -177,6 +229,7 @@ impl PresentTarget {
             view_format: setup.view_format,
             configured: (0, 0),
             requested: PresentSize::new(width, height),
+            stale: false,
         };
         if width != 0 && height != 0 {
             target.configure(gpu, width, height);
@@ -224,13 +277,17 @@ impl PresentTarget {
         if width == 0 || height == 0 {
             return Ok(PresentOutcome::Skipped);
         }
-        if (width, height) != self.configured {
+        if (width, height) != self.configured || self.stale {
             self.configure(gpu, width, height);
+            self.stale = false;
         }
 
         let surface_texture = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Success(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                self.stale = true;
+                texture
+            }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 return Ok(PresentOutcome::Skipped);
             }
@@ -265,11 +322,10 @@ impl PresentTarget {
         // Published before the draw, so a host reading it maps against the geometry this very blit
         // uses.
         self.requested.set_frame(source.width(), source.height());
-        let rect = letterbox_in(
+        let rect = present_viewport(
             source.width(),
             source.height(),
-            width,
-            height,
+            (width, height),
             self.requested.rect(),
         );
         self.blit
@@ -333,6 +389,75 @@ mod tests {
         );
         size.set_rect(None);
         assert_eq!(size.rect(), None);
+    }
+
+    #[test]
+    fn oversized_window_viewport_stays_inside_the_attachment() {
+        let surface = blit::surface_extent(10240, 2160);
+        assert_eq!(surface, (8192, 1728));
+        let v = present_viewport(1920, 1080, (10240, 2160), None);
+        assert!(v.x >= 0.0 && v.y >= 0.0);
+        assert!(v.x + v.width <= surface.0 as f32);
+        assert!(v.y + v.height <= surface.1 as f32);
+        let rect = HostRect {
+            x: 5000,
+            y: 0,
+            width: 5240,
+            height: 2160,
+        };
+        let v = present_viewport(1920, 1080, (10240, 2160), Some(rect));
+        assert!(v.x + v.width <= surface.0 as f32);
+        assert!(v.y + v.height <= surface.1 as f32);
+    }
+
+    #[test]
+    fn scale_host_rect_is_identity_at_equal_sizes_and_scales_above_the_cap() {
+        let rect = Some(HostRect {
+            x: 10,
+            y: 20,
+            width: 30,
+            height: 40,
+        });
+        assert_eq!(scale_host_rect(rect, (100, 100), (100, 100)), rect);
+        assert_eq!(scale_host_rect(None, (200, 100), (100, 50)), None);
+        let half = scale_host_rect(rect, (200, 200), (100, 100)).unwrap();
+        assert_eq!(
+            half,
+            HostRect {
+                x: 5,
+                y: 10,
+                width: 15,
+                height: 20
+            }
+        );
+    }
+
+    #[test]
+    fn cursor_at_the_image_centre_maps_to_the_source_centre_over_the_cap() {
+        let window = (10240u32, 2160u32);
+        let surface = blit::surface_extent(window.0, window.1);
+        let v = present_viewport(1920, 1080, window, None);
+        // The image centre in window pixels is the viewport centre scaled back up.
+        let centre = (
+            (v.x + v.width / 2.0) * window.0 as f32 / surface.0 as f32,
+            (v.y + v.height / 2.0) * window.1 as f32 / surface.1 as f32,
+        );
+        let cursor = ludion_window_free_scale(centre, window, surface);
+        let placed = present_viewport(1920, 1080, window, None);
+        let u = (cursor.0 - placed.x) / placed.width * 1920.0;
+        let w = (cursor.1 - placed.y) / placed.height * 1080.0;
+        assert!((u - 960.0).abs() < 0.01 && (w - 540.0).abs() < 0.01);
+    }
+
+    fn ludion_window_free_scale(
+        c: (f32, f32),
+        window: (u32, u32),
+        surface: (u32, u32),
+    ) -> (f32, f32) {
+        (
+            c.0 * surface.0 as f32 / window.0 as f32,
+            c.1 * surface.1 as f32 / window.1 as f32,
+        )
     }
 
     #[test]

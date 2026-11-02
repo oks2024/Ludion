@@ -21,7 +21,7 @@ use ludion_assets::cooked::{CompressedFormat, CookTarget};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 
-use crate::graph::PassKind;
+use crate::graph::{PassKind, ResourceKind};
 use crate::readback;
 use crate::resource::{ResourceId, TextureDesc, TextureFormat};
 use crate::schedule::{Aliasing, Schedule};
@@ -160,6 +160,29 @@ fn headless_tiers(pinned: Option<wgpu::Backends>) -> Vec<(wgpu::Backends, bool)>
             (wgpu::Backends::all(), true),
         ],
     }
+}
+
+/// Refuses a copy source that is not an output-kind resource: only outputs are exempt from
+/// transient aliasing, so any other resource's texture may hold another resource's pixels by the
+/// time the copy runs.
+fn check_copy_sources(
+    schedule: &Schedule,
+    sources: impl IntoIterator<Item = ResourceId>,
+) -> Result<(), Diagnostic> {
+    for id in sources {
+        let decl = schedule.resource(id);
+        if decl.kind != ResourceKind::Output {
+            return Err(Diagnostic::new(
+                code::RENDER_GPU_ERROR,
+                format!(
+                    "`{}` is a copy source but is not an output resource",
+                    decl.name
+                ),
+            )
+            .with_help("declare the resource with `RenderGraph::output` so it is never aliased"));
+        }
+    }
+    Ok(())
 }
 
 impl Gpu {
@@ -759,7 +782,8 @@ impl Gpu {
     /// `dest.origin`.
     ///
     /// # Errors
-    /// `L2010` / `L2011` if the GPU rejected the work or the device was lost (see
+    /// `L2010` if a copy source is not an output-kind resource (a transient may be aliased away
+    /// before the copy), or if the GPU rejected the work; `L2011` if the device was lost (see
     /// [`Gpu::take_fault`]).
     ///
     /// # Example (requires a GPU adapter)
@@ -802,6 +826,7 @@ impl Gpu {
         recorder: &dyn PassRecorder,
         copies: &[(ResourceId, wgpu::TexelCopyTextureInfo<'_>)],
     ) -> Result<(), Diagnostic> {
+        check_copy_sources(schedule, copies.iter().map(|(output, _)| *output))?;
         self.guarded(|| {
             let frame = self.allocate_physicals(schedule);
             let mut encoder = self
@@ -1260,6 +1285,20 @@ fn build_pipelines(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_copy_source_must_be_an_output_resource() {
+        let mut graph = crate::RenderGraph::new();
+        let mid = graph.transient("mid", crate::TextureDesc::color(8, 8));
+        let out = graph.output("final", crate::TextureDesc::present_target(8, 8));
+        graph.add_external_pass("a", "a", vec![], vec![mid]);
+        graph.add_external_pass("b", "b", vec![mid], vec![out]);
+        let schedule = crate::schedule(&graph).unwrap();
+        assert!(check_copy_sources(&schedule, [out]).is_ok());
+        let err = check_copy_sources(&schedule, [out, mid]).unwrap_err();
+        assert_eq!(err.code.as_str(), "L2010");
+        assert!(err.message.contains("`mid`"), "{}", err.message);
+    }
+
     use super::*;
 
     #[test]
