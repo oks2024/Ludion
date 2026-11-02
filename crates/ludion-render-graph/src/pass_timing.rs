@@ -21,12 +21,15 @@
 //! On an adapter without `TIMESTAMP_QUERY` the ring allocates no query sets at all and reports the
 //! same degradation `dump_timings_json` does: every pass present by name with `gpu_time_ms: None`.
 //! Timing never returns an error — losing a sample must never cost a frame.
+//!
+//! Each collected sample also carries the frame span ([`FrameTiming`]), under the proofs in
+//! [`timings`](crate::timings).
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use crate::execute::Gpu;
-use crate::timings::PassTiming;
+use crate::timings::{FrameTiming, PassTiming, frame_span_ms};
 
 /// Bytes one resolved timestamp query occupies.
 const QUERY_BYTES: u64 = 8;
@@ -51,6 +54,8 @@ pub struct PassTimingRing<S> {
     next_slot: usize,
     /// The queue's timestamp period, captured once at construction; `None` in degraded mode.
     period_ns: Option<f32>,
+    /// Whether this backend proves one queue timeline, so a sample may carry a frame span.
+    span_proved: bool,
 }
 
 /// One frame's GPU-side timing storage: the query set the passes write, the buffer the queries
@@ -100,7 +105,7 @@ impl<S> PassTimingRing<S> {
     /// Queries one slot's set holds.
     const QUERY_COUNT: u32 = (Self::MAX_PASSES * 2) as u32;
 
-    fn new(device: &wgpu::Device, period_ns: f32) -> PassTimingRing<S> {
+    fn new(device: &wgpu::Device, period_ns: f32, span_proved: bool) -> PassTimingRing<S> {
         let size = u64::from(Self::QUERY_COUNT) * QUERY_BYTES;
         let slots = (0..Self::DEPTH)
             .map(|_| Slot {
@@ -128,6 +133,7 @@ impl<S> PassTimingRing<S> {
             pending: VecDeque::new(),
             next_slot: 0,
             period_ns: Some(period_ns),
+            span_proved,
         }
     }
 
@@ -139,6 +145,7 @@ impl<S> PassTimingRing<S> {
             pending: VecDeque::new(),
             next_slot: 0,
             period_ns: None,
+            span_proved: false,
         }
     }
 
@@ -160,7 +167,7 @@ impl<S> PassTimingRing<S> {
     ///
     /// Never fails: a poll or map error costs that one sample (it is dropped, its slot freed) and
     /// leaves the render loop untouched.
-    pub fn try_collect_timings(&mut self, gpu: &Gpu) -> Option<(S, Vec<PassTiming>)> {
+    pub fn try_collect_timings(&mut self, gpu: &Gpu) -> Option<(S, FrameTiming)> {
         if self.pending.front()?.mapped.is_some() && gpu.device.poll(wgpu::PollType::Poll).is_err()
         {
             return None;
@@ -231,7 +238,7 @@ impl<S> PassTimingRing<S> {
     }
 
     /// Pops the oldest sample if it has completed, converting raw query deltas to milliseconds.
-    fn take_ready(&mut self) -> Option<(S, Vec<PassTiming>)> {
+    fn take_ready(&mut self) -> Option<(S, FrameTiming)> {
         match &self.pending.front()?.mapped {
             None => {}
             Some(mapped) => match mapped.rx.try_recv() {
@@ -249,7 +256,11 @@ impl<S> PassTimingRing<S> {
             names,
             mapped,
         } = self.pending.pop_front().expect("front was just inspected");
-        let millis = mapped.and_then(|m| self.read_slot(m.slot, names.len()));
+        let (millis, frame_gpu_time_ms) =
+            match mapped.and_then(|m| self.read_slot(m.slot, names.len())) {
+                Some((millis, span)) => (Some(millis), span),
+                None => (None, None),
+            };
         let passes = names
             .into_iter()
             .enumerate()
@@ -258,11 +269,18 @@ impl<S> PassTimingRing<S> {
                 gpu_time_ms: millis.as_ref().map(|m| m[i]),
             })
             .collect();
-        Some((stamp, passes))
+        Some((
+            stamp,
+            FrameTiming {
+                passes,
+                frame_gpu_time_ms,
+            },
+        ))
     }
 
-    /// Reads `pass_count` begin/end query pairs out of a mapped slot and unmaps it.
-    fn read_slot(&self, slot: usize, pass_count: usize) -> Option<Vec<f64>> {
+    /// Reads `pass_count` begin/end query pairs out of a mapped slot and unmaps it, returning the
+    /// per-pass milliseconds and the frame span.
+    fn read_slot(&self, slot: usize, pass_count: usize) -> Option<(Vec<f64>, Option<f64>)> {
         let period_ns = f64::from(self.period_ns?);
         let buffer = &self.slots[slot].map;
         let millis = buffer.slice(..).get_mapped_range().ok().map(|mapped| {
@@ -271,13 +289,19 @@ impl<S> PassTimingRing<S> {
                 .take(pass_count * 2)
                 .map(|c| u64::from_le_bytes(c.try_into().expect("chunks_exact(8) yields 8 bytes")))
                 .collect();
-            (0..pass_count)
+            let millis: Vec<f64> = (0..pass_count)
                 .map(|i| {
                     // Saturating: some backends report equal or slightly out-of-order stamps.
                     let delta = stamps[i * 2 + 1].saturating_sub(stamps[i * 2]);
                     (delta as f64) * period_ns / 1.0e6
                 })
-                .collect()
+                .collect();
+            let span = if self.span_proved {
+                frame_span_ms(&stamps, period_ns)
+            } else {
+                None
+            };
+            (millis, span)
         });
         buffer.unmap();
         millis
@@ -291,7 +315,11 @@ impl Gpu {
     /// degraded mode (see the module docs).
     pub fn new_pass_timing_ring<S>(&self) -> PassTimingRing<S> {
         if self.timestamps_supported {
-            PassTimingRing::new(&self.device, self.queue.get_timestamp_period())
+            PassTimingRing::new(
+                &self.device,
+                self.queue.get_timestamp_period(),
+                self.frame_span_proved(),
+            )
         } else {
             PassTimingRing::degraded()
         }
@@ -318,9 +346,11 @@ mod tests {
         assert!(matches!(plan, FramePlan::Degraded));
         ring.file(plan, names(4), 7);
 
-        let (stamp, passes) = ring
+        let (stamp, timing) = ring
             .take_ready()
             .expect("a degraded sample is ready at once");
+        let passes = timing.passes;
+        assert!(timing.frame_gpu_time_ms.is_none());
         assert_eq!(stamp, 7);
         assert_eq!(passes.len(), 4);
         assert!(passes.iter().all(|p| p.gpu_time_ms.is_none()));

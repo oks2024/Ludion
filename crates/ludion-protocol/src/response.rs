@@ -610,6 +610,8 @@ mod tests {
                 gpu: crate::perf::GpuProfile {
                     available: false,
                     timestamps_supported: false,
+                    frame_median_ms: None,
+                    frame_tail: None,
                     passes: Vec::new(),
                 },
                 transport: None,

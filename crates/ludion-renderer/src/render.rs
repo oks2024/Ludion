@@ -18,7 +18,7 @@ use ludion_core::math::glam::{Mat3, Mat4, Vec3};
 use ludion_core::time::FrameIndex;
 use ludion_font::GlyphQuad;
 use ludion_render_graph::{
-    FrameSinks, Gpu, PassRecorder, PassTiming, PassTimingRing, RecordedPass, RenderedImage,
+    FrameSinks, FrameTiming, Gpu, PassRecorder, PassTimingRing, RecordedPass, RenderedImage,
     StreamReadback, schedule,
 };
 
@@ -1150,7 +1150,7 @@ impl Renderer {
     pub fn collect_pass_timings(
         &self,
         ring: &mut PassTimingRing<FrameIndex>,
-    ) -> Option<(FrameIndex, Vec<PassTiming>)> {
+    ) -> Option<(FrameIndex, FrameTiming)> {
         ring.try_collect_timings(&self.gpu)
     }
 

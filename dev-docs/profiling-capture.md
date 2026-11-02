@@ -47,14 +47,17 @@ supersample (a different measurement, not a noisier one), `--json` to write the 
 **Tails and the replay variant.** Every offline `SystemTiming` (systems, sequential costs) and
 `SimProfile::frame_total_tail` carries a `TimingTail` — `max_ms`, `max_frame` (the produced-frame
 index, `engine.frame()` after the tick) and nearest-rank `p99_ms` (`ceil(0.99·n)`-th smallest) — beside
-the median; a live capture leaves them `None`. A game's `--profile-replay <FILE> [--from N] [--to M]`
+the median; a live capture leaves the sim ones `None`. `gpu.frame_tail` is the exception: the live
+GPU column exists at window close, so a live window fills it (`max_frame` is the produced-frame index),
+and `gpu_frame_max_ms` works on `--attach`. A game's `--profile-replay <FILE> [--from N] [--to M]`
 (`ludion_engine::profile_replay`) drives a committed `.lrp` through the shared replay loop with a
 `DriveHook` that overrides `tick`: ticks before `from` run plain (`warmup_frames`), ticks in the window
 run through `Engine::step_ticks_observed` with the timing observer — hash-neutral, asserted by
 `replay_profile_is_hash_neutral` — and the first tick past `to` ends the drive. Sim only (`gpu`
 unavailable, no `cluster`); the per-frame series is the report's `samples`. Budgets gate the tails with
 `frame_total_max_ms` and `[systems_max]` (`L4005`, statistic `max`, frame named), skipped when the
-report has no tail. `load_total_ms` gates the one-sample `load.total_ms`, which only a fresh offline or
+report has no tail. `gpu_frame_ms` / `gpu_frame_max_ms` gate `gpu.frame_median_ms` / `frame_tail`; a
+report with no span is `L4019`, not a skip. `load_total_ms` gates the one-sample `load.total_ms`, which only a fresh offline or
 game `--profile` run carries; a report without it is `L4025`, not a skip.
 
 **Live: the `profile` channel and `profile.capture`.** Subscribing to `Channel::Profile` arms the
@@ -89,7 +92,9 @@ build a Chrome trace-event JSON from a report's samples, by one shared timeline 
 origin is the cumulative sum of earlier frames' `frame_total + extract + submit`; sim spans
 butt-join within their frame (the schedule is strictly sequential); GPU and transport lanes are
 monotonic, so a lane that cannot keep up reads as a queue instead of as overlapping spans. It is a
-picture of the *work*, not of the wall clock — inter-frame sleep is not represented.
+picture of the *work*, not of the wall clock — inter-frame sleep is not represented. The GPU lane is
+schematic: it butt-joins per-pass durations, never stamps, so it shows no overlap or gaps; the frame
+cost is `gpu.frame_median_ms`.
 
 ## Gotchas
 

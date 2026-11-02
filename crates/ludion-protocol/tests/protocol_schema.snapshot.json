@@ -1501,6 +1501,26 @@
       "LiveGpuProfile": {
         "description": "The GPU half of a [`ProfileWindowData`].",
         "properties": {
+          "frame_median_ms": {
+            "default": null,
+            "description": "Median over the sampled frames of the frame-spanning GPU time: the span from the earliest\nto the latest pass stamp of one frame, first timed pass start to last timed pass end. This is\nthe number to read for frame cost; per-pass medians may overlap and must not be summed.\nUploads before the graph and present after it are outside the span, and on a serial GPU it\ncan exceed the pass sum (inter-pass gaps). `null` without timestamps or where one queue\ntimeline cannot be proved; a frame whose stamps fail the per-frame guard (counter reset,\nunwritten end) is left out of the median.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "frame_tail": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TimingTail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The worst frame and 99th percentile of the frame-spanning GPU time.\n`max_frame` is the produced-frame index of the worst frame. Omitted when `frame_median_ms`\nis `null`."
+          },
           "passes": {
             "description": "Per-pass median GPU time over the sampled frames, in scheduled order.",
             "items": {
@@ -3976,6 +3996,26 @@
             "description": "Whether a GPU adapter was available at all. `false` (with empty `passes`) on a headless host\nwith no adapter — the sim section is still fully measured. Also `false` for a replay\nprofile, which measures the sim only.",
             "type": "boolean"
           },
+          "frame_median_ms": {
+            "default": null,
+            "description": "Median over the measured frames of the frame-spanning GPU time: the span from the earliest\nto the latest pass stamp of one frame, first timed pass start to last timed pass end. This is\nthe number to read for frame cost; per-pass medians may overlap and must not be summed.\nUploads before the graph and present after it are outside the span, and on a serial GPU it\ncan exceed the pass sum (inter-pass gaps). `null` without timestamps or where one queue\ntimeline cannot be proved; a frame whose stamps fail the per-frame guard (counter reset,\nunwritten end) is left out of the median.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "frame_tail": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TimingTail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The worst frame and 99th percentile of the frame-spanning GPU time.\nOffline, `max_frame` is the worst render's position among the measured renders, because the\ndriver re-renders one extracted frame repeatedly; in a live capture's report it is the\nproduced-frame index. Omitted when `frame_median_ms` is `null`."
+          },
           "passes": {
             "description": "Per-pass median GPU time, in scheduled order.",
             "items": {
@@ -4111,7 +4151,7 @@
             "type": "integer"
           },
           "requested": {
-            "description": "Casting lights whose footprint touches the camera frustum.",
+            "description": "Casting lights inside their `shadow_distance` whose footprint touches the camera frustum; a\nlight past it is not requested.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -6307,6 +6347,26 @@
             "description": "Whether a GPU adapter was available at all. `false` (with empty `passes`) on a headless host\nwith no adapter — the sim section is still fully measured. Also `false` for a replay\nprofile, which measures the sim only.",
             "type": "boolean"
           },
+          "frame_median_ms": {
+            "default": null,
+            "description": "Median over the measured frames of the frame-spanning GPU time: the span from the earliest\nto the latest pass stamp of one frame, first timed pass start to last timed pass end. This is\nthe number to read for frame cost; per-pass medians may overlap and must not be summed.\nUploads before the graph and present after it are outside the span, and on a serial GPU it\ncan exceed the pass sum (inter-pass gaps). `null` without timestamps or where one queue\ntimeline cannot be proved; a frame whose stamps fail the per-frame guard (counter reset,\nunwritten end) is left out of the median.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "frame_tail": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TimingTail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The worst frame and 99th percentile of the frame-spanning GPU time.\nOffline, `max_frame` is the worst render's position among the measured renders, because the\ndriver re-renders one extracted frame repeatedly; in a live capture's report it is the\nproduced-frame index. Omitted when `frame_median_ms` is `null`."
+          },
           "passes": {
             "description": "Per-pass median GPU time, in scheduled order.",
             "items": {
@@ -6442,7 +6502,7 @@
             "type": "integer"
           },
           "requested": {
-            "description": "Casting lights whose footprint touches the camera frustum.",
+            "description": "Casting lights inside their `shadow_distance` whose footprint touches the camera frustum; a\nlight past it is not requested.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"

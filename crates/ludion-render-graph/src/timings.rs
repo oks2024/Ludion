@@ -11,6 +11,24 @@
 //! This is the **one** timings machinery for both kinds of graph: built-in pass kinds record through
 //! the proving executor, externally-recorded graphs (the render pipeline) through their
 //! [`PassRecorder`] — the query set, resolve, readback, and scaling are identical.
+//!
+//! # The frame span
+//!
+//! Besides per-pass deltas, a timed frame reports one frame-spanning GPU time: the hull of every
+//! written stamp, first pass start to last pass end (`frame_span_ms`). It is reported only where
+//! one queue timeline is proved, so the stamps are comparable across passes:
+//!
+//! 1. *Structural.* Both timed paths ([`Gpu::dump_timings_json`] and the render pipeline's frame
+//!    loop) record every pass into one encoder and one submit; recorders get no queue and never
+//!    submit, and wgpu exposes one queue per device.
+//! 2. *Backend allowlist.* Vulkan, Dx12 and Metal report a span; GL and browser WebGPU (quantized
+//!    stamps, unpinned) stay `None`.
+//! 3. *Per frame, on the data.* A counter reset or wrap (last stamp not after the first) or a failed
+//!    sample (`0` or all-ones at either end) yields `None` for that frame.
+//!
+//! The hull, not last end minus first begin, because on a tile-based GPU an independent pass may
+//! start before the first or end after the last; an unwritten interior stamp is ignored.
+//! Per-pass deltas may overlap and must not be summed to get frame cost; the span is that number.
 
 use serde::Serialize;
 
@@ -27,6 +45,42 @@ struct TimingsDump {
     #[serde(skip_serializing_if = "Option::is_none")]
     timestamp_period_ns: Option<f32>,
     passes: Vec<PassTiming>,
+    /// First pass start to last pass end, where one queue timeline is proved and the stamps are sound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame_gpu_time_ms: Option<f64>,
+}
+
+/// One timed frame: its per-pass times and, where provable, the frame-spanning GPU time.
+#[derive(Clone, Debug)]
+pub struct FrameTiming {
+    /// Per-pass times in scheduled order.
+    pub passes: Vec<PassTiming>,
+    /// Earliest pass start to latest pass end in milliseconds, or `None` without timestamps, on a
+    /// backend that cannot prove one queue timeline, or when this frame's stamps are unsound.
+    pub frame_gpu_time_ms: Option<f64>,
+}
+
+/// Whether `backend` is one where the timestamps of a single submission share one timeline.
+pub(crate) fn backend_proves_one_timeline(backend: wgpu::Backend) -> bool {
+    matches!(
+        backend,
+        wgpu::Backend::Vulkan | wgpu::Backend::Dx12 | wgpu::Backend::Metal
+    )
+}
+
+/// The frame span in milliseconds from resolved `stamps` (begin0, end0, begin1, end1, … in
+/// scheduled order), or `None` when they cannot be trusted: fewer than two, an unwritten (`0` or
+/// all-ones) first or last stamp, or a last stamp not after the first (counter reset or wrap).
+/// Otherwise the hull of the written stamps; an unwritten interior stamp is ignored.
+pub(crate) fn frame_span_ms(stamps: &[u64], period_ns: f64) -> Option<f64> {
+    let written = |s: u64| s != 0 && s != u64::MAX;
+    let (&first, &last) = (stamps.first()?, stamps.last()?);
+    if stamps.len() < 2 || !written(first) || !written(last) || last <= first {
+        return None;
+    }
+    let min = stamps.iter().copied().filter(|&s| written(s)).min()?;
+    let max = stamps.iter().copied().filter(|&s| written(s)).max()?;
+    Some((max - min) as f64 * period_ns / 1.0e6)
 }
 
 /// One pass's GPU time. `gpu_time_ms` is `None` when the adapter cannot time passes at all —
@@ -79,7 +133,8 @@ impl Gpu {
             .collect();
 
         let dump = if self.timestamps_supported {
-            let millis = self.collect_pass_timings(schedule, output, recorder)?;
+            let (millis, frame_gpu_time_ms) =
+                self.collect_pass_timings(schedule, output, recorder)?;
             TimingsDump {
                 timestamps_supported: true,
                 timestamp_period_ns: Some(self.queue.get_timestamp_period()),
@@ -91,6 +146,7 @@ impl Gpu {
                         gpu_time_ms: Some(ms),
                     })
                     .collect(),
+                frame_gpu_time_ms,
             }
         } else {
             TimingsDump {
@@ -103,6 +159,7 @@ impl Gpu {
                         gpu_time_ms: None,
                     })
                     .collect(),
+                frame_gpu_time_ms: None,
             }
         };
 
@@ -113,13 +170,14 @@ impl Gpu {
     }
 
     /// Runs the graph with per-pass timestamp writes and returns each pass's GPU time in
-    /// milliseconds, in scheduled order. Only called when timestamps are supported.
+    /// milliseconds, in scheduled order, with the frame span. Only called when timestamps are
+    /// supported.
     fn collect_pass_timings(
         &self,
         schedule: &Schedule,
         output: ResourceId,
         recorder: Option<&dyn PassRecorder>,
-    ) -> Result<Vec<f64>, Diagnostic> {
+    ) -> Result<(Vec<f64>, Option<f64>), Diagnostic> {
         let pass_count = schedule.order_names().len();
         let query_count = (pass_count * 2) as u32;
 
@@ -192,7 +250,7 @@ impl Gpu {
         }
 
         let period_ns = f64::from(self.queue.get_timestamp_period());
-        let millis = {
+        let (millis, span) = {
             let mapped = map_buffer.slice(..).get_mapped_range().map_err(|error| {
                 timing_failure(format!("could not access mapped bytes: {error}"))
             })?;
@@ -200,17 +258,28 @@ impl Gpu {
                 .chunks_exact(8)
                 .map(|c| u64::from_le_bytes(c.try_into().expect("chunks_exact(8) yields 8 bytes")))
                 .collect();
-            (0..pass_count)
+            let millis: Vec<f64> = (0..pass_count)
                 .map(|i| {
                     // Saturating: some backends report equal or slightly out-of-order stamps.
                     let delta = stamps[i * 2 + 1].saturating_sub(stamps[i * 2]);
                     (delta as f64) * period_ns / 1.0e6
                 })
-                .collect()
+                .collect();
+            let span = if self.frame_span_proved() {
+                frame_span_ms(&stamps, period_ns)
+            } else {
+                None
+            };
+            (millis, span)
         };
         map_buffer.unmap();
 
-        Ok(millis)
+        Ok((millis, span))
+    }
+
+    /// Whether this adapter's backend proves one queue timeline, so a frame span may be reported.
+    pub(crate) fn frame_span_proved(&self) -> bool {
+        backend_proves_one_timeline(self.adapter.get_info().backend)
     }
 }
 
@@ -220,4 +289,88 @@ fn timing_failure(detail: String) -> Diagnostic {
         format!("could not read GPU timings back: {detail}"),
     )
     .with_help("timestamp readback failed; retry, and check GPU driver stability")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MS: f64 = 1.0e6;
+
+    #[test]
+    fn overlapping_passes_span_less_than_their_sum() {
+        let stamps = [100, 200, 150, 250, 200, 300];
+        assert_eq!(frame_span_ms(&stamps, 1.0), Some(200.0 / MS));
+        let sum: u64 = stamps.chunks(2).map(|p| p[1] - p[0]).sum();
+        assert_eq!(sum, 300);
+    }
+
+    #[test]
+    fn no_stamps_and_one_pass() {
+        assert_eq!(frame_span_ms(&[], 1.0), None);
+        assert_eq!(frame_span_ms(&[5], 1.0), None);
+        assert_eq!(frame_span_ms(&[100, 300], 1.0), Some(200.0 / MS));
+    }
+
+    #[test]
+    fn period_scales_the_span() {
+        assert_eq!(frame_span_ms(&[100, 300], 2.5), Some(500.0 / MS));
+    }
+
+    #[test]
+    fn a_counter_reset_is_refused() {
+        assert_eq!(frame_span_ms(&[300, 400, 100, 200], 1.0), None);
+        assert_eq!(frame_span_ms(&[300, 300], 1.0), None);
+    }
+
+    #[test]
+    fn sentinel_ends_are_refused() {
+        assert_eq!(frame_span_ms(&[0, 100, 200, 300], 1.0), None);
+        assert_eq!(frame_span_ms(&[100, 200, 300, 0], 1.0), None);
+        assert_eq!(frame_span_ms(&[u64::MAX, 200, 300, 400], 1.0), None);
+        assert_eq!(frame_span_ms(&[100, 200, 300, u64::MAX], 1.0), None);
+    }
+
+    #[test]
+    fn an_unwritten_interior_stamp_is_ignored() {
+        assert_eq!(frame_span_ms(&[100, 0, 200, 300], 1.0), Some(200.0 / MS));
+        assert_eq!(
+            frame_span_ms(&[100, u64::MAX, 200, 300], 1.0),
+            Some(200.0 / MS)
+        );
+    }
+
+    #[test]
+    fn an_interior_excursion_widens_the_span() {
+        assert_eq!(
+            frame_span_ms(&[100, 200, 150, 500, 250, 300], 1.0),
+            Some(400.0 / MS)
+        );
+        assert_eq!(
+            frame_span_ms(&[100, 200, 50, 250, 250, 300], 1.0),
+            Some(250.0 / MS)
+        );
+    }
+
+    #[test]
+    fn a_reversed_interior_pair_still_gives_the_span() {
+        assert_eq!(
+            frame_span_ms(&[100, 200, 260, 220, 250, 300], 1.0),
+            Some(200.0 / MS)
+        );
+    }
+
+    #[test]
+    fn only_vulkan_dx12_and_metal_prove_one_timeline() {
+        for backend in [
+            wgpu::Backend::Vulkan,
+            wgpu::Backend::Dx12,
+            wgpu::Backend::Metal,
+        ] {
+            assert!(backend_proves_one_timeline(backend));
+        }
+        for backend in [wgpu::Backend::Gl, wgpu::Backend::BrowserWebGpu] {
+            assert!(!backend_proves_one_timeline(backend));
+        }
+    }
 }

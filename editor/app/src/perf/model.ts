@@ -52,6 +52,8 @@ export interface GpuSection {
   readonly passes: readonly PassMedian[];
   readonly sampled_frames: number;
   readonly timestamps_supported: boolean;
+  /** Median frame-spanning GPU time; `null` where no span could be proved. Absent in older payloads. */
+  readonly frame_median_ms?: number | null;
 }
 
 /** The server-filled delivery section (`TransportProfile`), absent until a frame reaches a subscriber. */
@@ -602,7 +604,8 @@ export function latestBreakdown(ring: WindowRing, limit: number): Breakdown | nu
         'GPU passes',
         window.gpu.passes.map((p) => ({ key: seriesKey('pass', p.name), name: p.name, ms: p.median_ms ?? 0 })),
         limit,
-        `${window.gpu.sampled_frames} of ${window.frames} frames sampled`,
+        `${window.gpu.sampled_frames} of ${window.frames} frames sampled` +
+          (window.gpu.frame_median_ms == null ? '' : ` · GPU frame ${formatMs(window.gpu.frame_median_ms)} ms`),
       ),
     );
   }

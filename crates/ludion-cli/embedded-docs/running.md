@@ -41,8 +41,16 @@ within 5 s is reported as `L4022` and the host exits non-zero. Peers attach to t
   name. Add **`--profile-check <BUDGET.toml>`** to gate on a budget (an optional `frame_total_ms`, a
   `[systems]` table, and a `[passes]` table of millisecond ceilings, plus `load_total_ms` for the
   scene-load wall time; `frame_total_max_ms` and a `[systems_max]` table gate the worst frame
-  instead of the median): any over-budget line is an `L4005` and the process exits non-zero. Measure in `--release`; a debug build's numbers are not
+  instead of the median; `gpu_frame_ms` and `gpu_frame_max_ms` gate the GPU frame the same way): any
+  over-budget line is an `L4005` and the process exits non-zero. Measure in `--release`; a debug build's numbers are not
   comparable to a release-calibrated budget.
+  **Read the GPU frame from `gpu.frame_median_ms` (with `gpu.frame_tail`), never from the pass sum.**
+  Per-pass medians are a regression instrument and may overlap, on Metal overcounting by up to ~3x on
+  a post-heavy chain, so do not add them up. The frame time is `null` without timestamps or on a
+  backend that cannot prove one queue timeline. It spans
+  first timed pass start to last timed pass end, so uploads before the graph and present after it are
+  outside it, it can exceed the pass sum on a serial GPU, and frames failing the per-frame guard are
+  left out of the median. `sim.frame_total_median_ms` is the sim side only and excludes the GPU.
 - **`--replay-frames <FILE>`** does not host either: it drives a committed `.lrp` frame-by-frame
   through *your* engine builder and renders each stepped sim frame to a zero-padded PNG
   (`frame-00000.png`, …) under **`--frames-out <DIR>`**, so `ffmpeg` can assemble a gameplay clip

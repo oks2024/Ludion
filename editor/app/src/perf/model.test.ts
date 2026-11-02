@@ -365,6 +365,15 @@ describe('latestBreakdown', () => {
     expect(breakdown?.groups.map((g) => g.id)).toEqual(['systems', 'sequential']);
   });
 
+  it('names the GPU frame in the passes note when a span was measured', () => {
+    const gpu = { passes: [{ name: 'scene', median_ms: 1 }], sampled_frames: 2, timestamps_supported: true };
+    const withSpan = pushWindow(emptyRing(), makeWindow({ first_frame: 0, gpu: { ...gpu, frame_median_ms: 4.9 } }));
+    const passes = latestBreakdown(withSpan, 8)?.groups.find((g) => g.id === 'passes');
+    expect(passes?.note).toContain('GPU frame 4.90 ms');
+    const without = pushWindow(emptyRing(), makeWindow({ first_frame: 0, gpu: { ...gpu, frame_median_ms: null } }));
+    expect(latestBreakdown(without, 8)?.groups.find((g) => g.id === 'passes')?.note).not.toContain('GPU frame');
+  });
+
   it('adds the transport group only once the server has filled it', () => {
     const ring = pushWindow(
       emptyRing(),

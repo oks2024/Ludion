@@ -122,6 +122,6 @@ pub use sun_cascade::{
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`
 // directly.
 pub use ludion_render_graph::{
-    FrameSinks, Gpu, PassTiming, PassTimingRing, PresentSize, PresentTarget, RenderedImage,
-    StreamReadback,
+    FrameSinks, FrameTiming, Gpu, PassTiming, PassTimingRing, PresentSize, PresentTarget,
+    RenderedImage, StreamReadback,
 };

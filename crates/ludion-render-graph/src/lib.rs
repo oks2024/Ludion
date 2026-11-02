@@ -78,7 +78,7 @@ pub use present::{PresentOutcome, PresentSize, PresentTarget};
 pub use readback::{FrameSinks, StreamReadback};
 pub use resource::{Extent2d, ResourceId, TextureDesc, TextureFormat, TextureUsage};
 pub use schedule::{Aliasing, PhysicalTexture, Schedule, schedule};
-pub use timings::PassTiming;
+pub use timings::{FrameTiming, PassTiming};
 
 /// Builds the fixed proving graph at `width` × `height` and returns it with the handle of its final
 /// output target.

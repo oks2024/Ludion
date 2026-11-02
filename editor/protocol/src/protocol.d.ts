@@ -2331,6 +2331,22 @@ export interface ProfileWindowData {
  */
 export interface LiveGpuProfile {
   /**
+   * Median over the sampled frames of the frame-spanning GPU time: the span from the earliest
+   * to the latest pass stamp of one frame, first timed pass start to last timed pass end. This is
+   * the number to read for frame cost; per-pass medians may overlap and must not be summed.
+   * Uploads before the graph and present after it are outside the span, and on a serial GPU it
+   * can exceed the pass sum (inter-pass gaps). `null` without timestamps or where one queue
+   * timeline cannot be proved; a frame whose stamps fail the per-frame guard (counter reset,
+   * unwritten end) is left out of the median.
+   */
+  frame_median_ms?: number | null;
+  /**
+   * The worst frame and 99th percentile of the frame-spanning GPU time.
+   * `max_frame` is the produced-frame index of the worst frame. Omitted when `frame_median_ms`
+   * is `null`.
+   */
+  frame_tail?: TimingTail | null;
+  /**
    * Per-pass median GPU time over the sampled frames, in scheduled order.
    */
   passes: PassTiming[];
@@ -2345,6 +2361,25 @@ export interface LiveGpuProfile {
    * render, when no timing ring exists yet to ask.
    */
   timestamps_supported: boolean;
+  [k: string]: unknown;
+}
+/**
+ * The tail of one timing's per-frame distribution: the worst frame and the 99th percentile.
+ */
+export interface TimingTail {
+  /**
+   * The produced-frame index (`engine.frame()` after the tick) the maximum occurred at; the
+   * first one if several tie.
+   */
+  max_frame: number;
+  /**
+   * The largest single-frame wall time, in milliseconds.
+   */
+  max_ms: number;
+  /**
+   * The nearest-rank 99th percentile, in milliseconds: the `ceil(0.99·n)`-th smallest sample.
+   */
+  p99_ms: number;
   [k: string]: unknown;
 }
 /**
@@ -2417,25 +2452,6 @@ export interface SystemTiming {
    * capture and for a report predating the field.
    */
   tail?: TimingTail | null;
-  [k: string]: unknown;
-}
-/**
- * The tail of one timing's per-frame distribution: the worst frame and the 99th percentile.
- */
-export interface TimingTail {
-  /**
-   * The produced-frame index (`engine.frame()` after the tick) the maximum occurred at; the
-   * first one if several tie.
-   */
-  max_frame: number;
-  /**
-   * The largest single-frame wall time, in milliseconds.
-   */
-  max_ms: number;
-  /**
-   * The nearest-rank 99th percentile, in milliseconds: the `ceil(0.99·n)`-th smallest sample.
-   */
-  p99_ms: number;
   [k: string]: unknown;
 }
 /**
@@ -3050,6 +3066,23 @@ export interface GpuProfile {
    */
   available: boolean;
   /**
+   * Median over the measured frames of the frame-spanning GPU time: the span from the earliest
+   * to the latest pass stamp of one frame, first timed pass start to last timed pass end. This is
+   * the number to read for frame cost; per-pass medians may overlap and must not be summed.
+   * Uploads before the graph and present after it are outside the span, and on a serial GPU it
+   * can exceed the pass sum (inter-pass gaps). `null` without timestamps or where one queue
+   * timeline cannot be proved; a frame whose stamps fail the per-frame guard (counter reset,
+   * unwritten end) is left out of the median.
+   */
+  frame_median_ms?: number | null;
+  /**
+   * The worst frame and 99th percentile of the frame-spanning GPU time.
+   * Offline, `max_frame` is the worst render's position among the measured renders, because the
+   * driver re-renders one extracted frame repeatedly; in a live capture's report it is the
+   * produced-frame index. Omitted when `frame_median_ms` is `null`.
+   */
+  frame_tail?: TimingTail | null;
+  /**
    * Per-pass median GPU time, in scheduled order.
    */
   passes: PassTiming[];
@@ -3173,7 +3206,8 @@ export interface LocalShadowProfile {
    */
   granted: number;
   /**
-   * Casting lights whose footprint touches the camera frustum.
+   * Casting lights inside their `shadow_distance` whose footprint touches the camera frustum; a
+   * light past it is not requested.
    */
   requested: number;
   /**

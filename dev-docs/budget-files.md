@@ -93,11 +93,16 @@ The per-file catalogue (one entry per calibration scene and per-OS twin, with me
 - **SSR cost is the `ssr` post group** (the Hi-Z and colour pyramids plus the trace; `reflections` runs
   every frame for the sky, so it is its own `[passes]` line). A pyramid pass is one per level, named
   `hiz_reduce_<k>` / `ssr_color_reduce_<k>`: a `[passes]` key may name any level, and the group sums them all.
-- **A budget with GPU lines needs a GPU measurement.** `[passes]`, `[post_groups]` and
-  `post_total_ms` against a run with no adapter, or no timestamp queries, is `L4019` (exit non-zero),
+- **A budget with GPU lines needs a GPU measurement.** `[passes]`, `[post_groups]`,
+  `post_total_ms`, `gpu_frame_ms` and `gpu_frame_max_ms` against a run with no adapter, or no timestamp queries, is `L4019` (exit non-zero),
   not a quiet pass; a pass merely absent from a run that did measure stays quiet. A CPU-only budget
   carries none of those lines. `committed_budget_files_parse_and_name_producible_keys` loads every
   committed budget CPU-only, so a renamed pass fails per push.
+- **GPU frame keys: `gpu_frame_ms` and `gpu_frame_max_ms`.** They gate `gpu.frame_median_ms` and
+  `gpu.frame_tail.max_ms`, the frame-spanning GPU time, which per-pass lines cannot (passes overlap and
+  do not sum). Calibrate at about 2x a release median per pinned box; a fixed-deadline ceiling (the
+  frame budget of the target refresh) is also legitimate. A run whose backend proves no span (or
+  has no timestamps) is `L4019`.
 - **Load ceiling: `load_total_ms`.** It gates `ProfileReport.load.total_ms`, **one sample, not a
   median**: calibrate from the median of three warm runs (cold run discarded) and set about 2x. The
   total includes renderer creation (about 0.85 s on the RTX 3090 box, a fixed floor) and runs on a warm

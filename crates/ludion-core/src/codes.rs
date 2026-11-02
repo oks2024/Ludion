@@ -2130,8 +2130,9 @@ pub mod code {
     /// `ludion-ecs`'s `Schedule` when a duplicate is added directly.
     pub const SYSTEM_NAME_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L4018");
 
-    /// `L4019` — a budget file gates GPU timings (`[passes]`, `[post_groups]`, `post_total_ms`) but
-    /// the profile run measured none: no adapter, or one without timestamp queries. Raised by
+    /// `L4019` — a budget file gates GPU timings (`[passes]`, `[post_groups]`, `post_total_ms`,
+    /// `gpu_frame_ms`, `gpu_frame_max_ms`) but the profile run measured none: no adapter, one
+    /// without timestamp queries, or (for the frame keys) a backend that cannot prove one queue timeline. Raised by
     /// `ludion-engine`'s budget check — a gate that measured nothing must not read as a pass.
     pub const BUDGET_GPU_UNMEASURED: DiagnosticCode = DiagnosticCode::new("L4019");
 
@@ -10130,8 +10131,10 @@ Fix: give every system a distinct name (the function's own name is the conventio
         severity: Severity::Error,
         title: "profile budget gates GPU timings but none were measured",
         explanation: "\
-A budget file names GPU lines (`[passes]`, `[post_groups]` or `post_total_ms`), but the profile run
-measured no GPU pass: the host had no GPU adapter, or the adapter has no timestamp queries. Nothing
+A budget file names GPU lines (`[passes]`, `[post_groups]`, `post_total_ms`, `gpu_frame_ms` or
+`gpu_frame_max_ms`), but the profile run measured none of them: the host had no GPU adapter, the
+adapter has no timestamp queries, or — for the two frame keys — the backend cannot prove one queue
+timeline for a frame, so the report carries no `gpu.frame_median_ms`. Nothing
 measured cannot be over budget, so without this error the check would exit 0 with every GPU line
 silently unchecked — a green gate that gated nothing.
 

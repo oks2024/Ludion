@@ -199,6 +199,8 @@ mod tests {
                 timestamps_supported: false,
                 sampled_frames: 0,
                 passes: Vec::new(),
+                frame_median_ms: None,
+                frame_tail: None,
             },
             transport: None,
             samples: crate::perf::ProfileSamples {

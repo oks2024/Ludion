@@ -43,7 +43,7 @@ use ludion_core::time::FrameIndex;
 use ludion_ecs::ScheduleObserver;
 use ludion_renderer::{PassTimingRing, Renderer};
 
-use crate::profile::{PassTiming, SystemTiming, TimingObserver, median_f64};
+use crate::profile::{PassTiming, SystemTiming, TimingObserver, median_f64, tail};
 
 /// Frames in one rolling [`ProfileWindowData`] — 60, so a window is one second of medians at the default
 /// 60 Hz tick rate and a stream of them reads as ~1 Hz.
@@ -127,6 +127,9 @@ pub struct FrameSample {
     /// Per-pass GPU times in scheduled order (`None` per pass on an adapter without
     /// `TIMESTAMP_QUERY`), or `None` for a frame whose sample never arrived.
     pub(crate) passes: Option<Vec<(String, Option<f64>)>>,
+    /// The frame-spanning GPU time in milliseconds, or `None` where the sample carried no provable
+    /// span (or never arrived).
+    pub(crate) gpu_frame_ms: Option<f64>,
 }
 
 // The window shapes are wire types: a closed window goes out verbatim as a `profile` subscription
@@ -259,6 +262,7 @@ impl LivePerf {
             submit_ms: None,
             render_stamp: None,
             passes: None,
+            gpu_frame_ms: None,
         });
     }
 
@@ -299,13 +303,15 @@ impl LivePerf {
                 collected.push(sample);
             }
         }
-        for (stamp, passes) in collected {
+        for (stamp, timing) in collected {
             self.file_gpu(
                 stamp,
-                passes
+                timing
+                    .passes
                     .into_iter()
                     .map(|pass| (pass.name, pass.gpu_time_ms))
                     .collect(),
+                timing.frame_gpu_time_ms,
             );
         }
     }
@@ -332,7 +338,12 @@ impl LivePerf {
 
     /// Files one late GPU sample against the frame whose render carried `stamp`. A stamp matching no
     /// open window (its window already closed, or the render was never sampled) is dropped.
-    fn file_gpu(&mut self, stamp: FrameIndex, passes: Vec<(String, Option<f64>)>) {
+    fn file_gpu(
+        &mut self,
+        stamp: FrameIndex,
+        passes: Vec<(String, Option<f64>)>,
+        gpu_frame_ms: Option<f64>,
+    ) {
         for builder in &mut self.builders {
             if let Some(sample) = builder
                 .samples
@@ -341,6 +352,7 @@ impl LivePerf {
                 .find(|sample| sample.render_stamp == Some(stamp))
             {
                 sample.passes = Some(passes.clone());
+                sample.gpu_frame_ms = gpu_frame_ms;
             }
         }
         self.harvest();
@@ -425,6 +437,9 @@ impl WindowBuilder {
         let mut extract_ms = Vec::with_capacity(frames);
         let mut submit_ms = Vec::with_capacity(frames);
         let mut sampled_frames = 0u64;
+        // The frame span of each sampled frame that carried one, with the frame it belongs to.
+        let mut frame_spans: Vec<f64> = Vec::new();
+        let mut frame_span_frames: Vec<u64> = Vec::new();
 
         for sample in &self.samples {
             frame_indices.push(sample.frame.as_u64());
@@ -447,6 +462,10 @@ impl WindowBuilder {
             }
             if sample.passes.is_some() {
                 sampled_frames += 1;
+            }
+            if let Some(span) = sample.gpu_frame_ms {
+                frame_spans.push(span);
+                frame_span_frames.push(sample.frame.as_u64());
             }
         }
 
@@ -492,6 +511,9 @@ impl WindowBuilder {
                 timestamps_supported,
                 sampled_frames,
                 passes,
+                frame_median_ms: (!frame_spans.is_empty())
+                    .then(|| median_f64(&mut frame_spans.clone())),
+                frame_tail: tail(&frame_spans, &frame_span_frames),
             },
             samples: ProfileSamples {
                 frames: frame_indices,
@@ -570,6 +592,7 @@ mod tests {
             submit_ms: None,
             render_stamp: None,
             passes: None,
+            gpu_frame_ms: None,
         }
     }
 
@@ -716,8 +739,16 @@ mod tests {
         // Three frames ticked and rendered, then their timings arrive out of the frames that
         // collected them — frame 0's render carried stamp 1, and so on.
         drive(&mut perf, 0, 3);
-        perf.file_gpu(FrameIndex::new(2), vec![("scene".to_string(), Some(4.0))]);
-        perf.file_gpu(FrameIndex::new(1), vec![("scene".to_string(), Some(2.0))]);
+        perf.file_gpu(
+            FrameIndex::new(2),
+            vec![("scene".to_string(), Some(4.0))],
+            None,
+        );
+        perf.file_gpu(
+            FrameIndex::new(1),
+            vec![("scene".to_string(), Some(2.0))],
+            None,
+        );
 
         let builder = &perf.builders[0];
         assert_eq!(builder.samples[0].frame.as_u64(), 0);
@@ -733,7 +764,11 @@ mod tests {
         assert!(builder.samples[2].passes.is_none());
 
         // A stamp no open sample claims is dropped rather than mis-filed.
-        perf.file_gpu(FrameIndex::new(900), vec![("scene".to_string(), Some(9.0))]);
+        perf.file_gpu(
+            FrameIndex::new(900),
+            vec![("scene".to_string(), Some(9.0))],
+            None,
+        );
         assert!(
             perf.builders[0]
                 .samples
@@ -749,7 +784,11 @@ mod tests {
         let mut next_frame = drive(&mut perf, 0, PROFILE_WINDOW_FRAMES as u64);
         // Every frame was rendered but only one timing sample ever comes back — the ring skipped
         // the rest. The window must age out and close anyway.
-        perf.file_gpu(FrameIndex::new(1), vec![("scene".to_string(), Some(3.0))]);
+        perf.file_gpu(
+            FrameIndex::new(1),
+            vec![("scene".to_string(), Some(3.0))],
+            None,
+        );
         for _ in 0..GPU_GRACE_FRAMES {
             assert!(perf.take_windows().is_empty());
             next_frame = drive(&mut perf, next_frame, 1);
@@ -775,12 +814,61 @@ mod tests {
             perf.file_gpu(
                 FrameIndex::new(frame + 1),
                 vec![("scene".to_string(), Some(1.0))],
+                None,
             );
         }
         drive(&mut perf, next_frame, 1);
         let windows = perf.take_windows();
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].gpu.sampled_frames, PROFILE_WINDOW_FRAMES as u64);
+    }
+
+    #[test]
+    fn the_frame_span_is_a_median_and_tail_over_the_frames_that_had_one() {
+        let mut perf = LivePerf::new();
+        perf.system_names = vec!["bump".to_string()];
+        let next_frame = drive(&mut perf, 0, PROFILE_WINDOW_FRAMES as u64);
+        let pass = || vec![("scene".to_string(), Some(1.0))];
+        // Frames 0, 1 and 2 carry spans; frame 3 is sampled with no provable span and adds nothing.
+        perf.file_gpu(FrameIndex::new(1), pass(), Some(2.0));
+        perf.file_gpu(FrameIndex::new(2), pass(), Some(9.0));
+        perf.file_gpu(FrameIndex::new(3), pass(), Some(4.0));
+        perf.file_gpu(FrameIndex::new(4), pass(), None);
+        for _ in 0..GPU_GRACE_FRAMES {
+            drive(&mut perf, next_frame, 1);
+        }
+        let windows = perf.take_windows();
+        let gpu = &windows[0].gpu;
+        assert_eq!(gpu.sampled_frames, 4);
+        assert_eq!(gpu.frame_median_ms, Some(4.0));
+        let tail = gpu.frame_tail.as_ref().expect("spans were sampled");
+        assert_eq!((tail.max_ms, tail.max_frame), (9.0, 1));
+        assert_eq!(tail.p99_ms, 9.0);
+
+        let report = windows[0].clone().into_report("live".to_string(), false);
+        assert_eq!(report.gpu.frame_median_ms, Some(4.0));
+        assert_eq!(report.gpu.frame_tail.as_ref().map(|t| t.max_frame), Some(1));
+    }
+
+    #[test]
+    fn a_window_without_spans_has_no_frame_time() {
+        let mut perf = LivePerf::new();
+        perf.system_names = vec!["bump".to_string()];
+        let next_frame = drive(&mut perf, 0, PROFILE_WINDOW_FRAMES as u64);
+        perf.file_gpu(
+            FrameIndex::new(1),
+            vec![("scene".to_string(), Some(1.0))],
+            None,
+        );
+        for _ in 0..GPU_GRACE_FRAMES {
+            drive(&mut perf, next_frame, 1);
+        }
+        let windows = perf.take_windows();
+        assert_eq!(windows[0].gpu.frame_median_ms, None);
+        assert!(windows[0].gpu.frame_tail.is_none());
+        let report = windows[0].clone().into_report("live".to_string(), false);
+        assert_eq!(report.gpu.frame_median_ms, None);
+        assert!(report.gpu.frame_tail.is_none());
     }
 
     #[test]
@@ -832,7 +920,11 @@ mod tests {
         let mut perf = LivePerf::new();
         perf.system_names = vec!["bump".to_string()];
         drive(&mut perf, 0, 4);
-        perf.file_gpu(FrameIndex::new(1), vec![("scene".to_string(), Some(3.0))]);
+        perf.file_gpu(
+            FrameIndex::new(1),
+            vec![("scene".to_string(), Some(3.0))],
+            None,
+        );
         let mut builder = perf.builders.remove(0);
         builder.target = 4;
         let window = builder.close(&perf.system_names, true);

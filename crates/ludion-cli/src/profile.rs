@@ -18,7 +18,8 @@
 //! reduced-quality measurement against a budget calibrated on the full one.
 //!
 //! With `--check`, the report is compared against a TOML budget file: optional `frame_total_ms`,
-//! `post_total_ms`, `cluster_build_ms`, `extract_ms` and `load_total_ms` scalars, and `[systems]`,
+//! `post_total_ms`, `cluster_build_ms`, `extract_ms`, `load_total_ms`, `gpu_frame_ms` and
+//! `gpu_frame_max_ms` scalars, and `[systems]`,
 //! `[passes]` and `[post_groups]` tables of millisecond ceilings. `load_total_ms` gates the report's
 //! single-run load total and is `L4025` on a report with no load section (an `--attach` capture).
 //! Only the offline path measures the cluster build, so a `cluster_build_ms` line is skipped rather

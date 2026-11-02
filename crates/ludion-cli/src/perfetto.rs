@@ -42,7 +42,9 @@
 //! 2. **host** (`tid` 2) — `frame_total`, then `extract`, then `submit` (the latter two present iff
 //!    that frame sampled them), per frame. Always present when there is at least one frame.
 //! 3. **GPU passes** (`tid` 3) — per-pass spans, butt-joined within each frame. Absent when no frame
-//!    carried a GPU sample (no adapter, or timestamps unsupported) — never an error.
+//!    carried a GPU sample (no adapter, or timestamps unsupported) — never an error. The lane is
+//!    schematic: it joins per-pass durations, not stamps, so it shows no overlap and no gaps; frame
+//!    cost is `gpu.frame_median_ms`.
 //! 4. **transport** (`tid` 4) — `encode` then `send`, per frame. Absent when the report carries no
 //!    transport columns (every offline report, or a live report no frame was ever delivered from).
 //!
@@ -265,6 +267,8 @@ mod tests {
                     name: "scene".to_string(),
                     median_ms: Some(2.0),
                 }],
+                frame_median_ms: None,
+                frame_tail: None,
             },
             transport: Some(TransportProfile {
                 encode_median_ms: 1.5,

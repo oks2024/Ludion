@@ -68,6 +68,7 @@ fn needs_gpu_dump_timings_json_has_one_entry_per_pass() {
     let Some(outcome) = render_or_skip_timed("timings", "lights.yaml", 160, 90, true) else {
         return;
     };
+    let adapter = outcome.adapter.clone();
     let json = outcome.timings_json.expect("timings were requested");
     let value: serde_json::Value = serde_json::from_str(&json).expect("timings output is JSON");
 
@@ -117,6 +118,19 @@ fn needs_gpu_dump_timings_json_has_one_entry_per_pass() {
                 ms.is_finite() && ms >= 0.0,
                 "gpu_time_ms must be finite and non-negative, got {ms}",
             );
+        }
+        // The frame span is reported on exactly the backends that prove one queue timeline.
+        let proved = ["(Vulkan)", "(Dx12)", "(Metal)"]
+            .iter()
+            .any(|backend| adapter.ends_with(backend));
+        if proved {
+            let span = value
+                .get("frame_gpu_time_ms")
+                .and_then(|v| v.as_f64())
+                .expect("a proving backend reports the frame span");
+            assert!(span > 0.0, "the frame span must be positive, got {span}");
+        } else {
+            assert!(value.get("frame_gpu_time_ms").is_none());
         }
     }
 }

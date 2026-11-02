@@ -107,6 +107,18 @@ bracket, and what submission costs shows up in the engine-side `submit` span. Th
 Performance view can subscribe to `frames` (its own preview) to populate this section; the
 encode/send it measures is that viewer's own delivery cost, not one the game pays when unwatched.
 
+**The GPU frame span.** `gpu.frame_median_ms` / `frame_tail` come from stamps the per-pass timing already
+resolves, no new query: the hull (max − min of written stamps) of one frame's begin/end stamps
+(`frame_span_ms`, `ludion-render-graph/src/timings.rs`). It is reported only where one queue timeline is
+proved: (1) structurally, both timed paths (`collect_pass_timings`, `render_frame_unguarded`) record every
+pass into one encoder and one submit and recorders get no queue; (2) by backend, Vulkan, Dx12 and Metal
+report it and GL and browser WebGPU stay `null` (unpinned, quantized stamps); (3) per frame, on the data: a
+last stamp not after the first (counter reset) or an unwritten (`0` / all-ones) first or last stamp drops
+that frame. The hull rather than last end minus first begin because a tile-based GPU may start an
+independent pass before the first or end it after the last; an unwritten interior stamp is ignored.
+Per-pass medians are not additive (Metal overcounts), so the span is the frame cost. Offline, the
+tail's `max_frame` is the position among the repeated renders of one extracted frame.
+
 **The `load` section** is offline only: `Engine::observe_load` (or `EngineBuilder::observe_load`) arms
 a `LoadClock` before the scene load, and a disarmed host reads no clock for loading. Its phases are
 exclusive self-times, and its decoded/cooked/reused/bytes counters are deterministic. `cooked` counts

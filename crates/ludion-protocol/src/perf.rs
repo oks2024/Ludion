@@ -298,7 +298,8 @@ pub struct ClusterProfile {
 /// which is honest for a frame that drew no local shadow — the report's `quality.shadows` names why.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LocalShadowProfile {
-    /// Casting lights whose footprint touches the camera frustum.
+    /// Casting lights inside their `shadow_distance` whose footprint touches the camera frustum; a
+    /// light past it is not requested.
     pub requested: u64,
     /// Lights granted a set of atlas tiles.
     pub granted: u64,
@@ -498,6 +499,21 @@ pub struct GpuProfile {
     pub timestamps_supported: bool,
     /// Per-pass median GPU time, in scheduled order.
     pub passes: Vec<PassTiming>,
+    /// Median over the measured frames of the frame-spanning GPU time: the span from the earliest
+    /// to the latest pass stamp of one frame, first timed pass start to last timed pass end. This is
+    /// the number to read for frame cost; per-pass medians may overlap and must not be summed.
+    /// Uploads before the graph and present after it are outside the span, and on a serial GPU it
+    /// can exceed the pass sum (inter-pass gaps). `null` without timestamps or where one queue
+    /// timeline cannot be proved; a frame whose stamps fail the per-frame guard (counter reset,
+    /// unwritten end) is left out of the median.
+    #[serde(default)]
+    pub frame_median_ms: Option<f64>,
+    /// The worst frame and 99th percentile of the frame-spanning GPU time.
+    /// Offline, `max_frame` is the worst render's position among the measured renders, because the
+    /// driver re-renders one extracted frame repeatedly; in a live capture's report it is the
+    /// produced-frame index. Omitted when `frame_median_ms` is `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_tail: Option<TimingTail>,
 }
 
 /// One frame-graph pass's median GPU time across the measured frames.
@@ -586,6 +602,20 @@ pub struct LiveGpuProfile {
     pub sampled_frames: u64,
     /// Per-pass median GPU time over the sampled frames, in scheduled order.
     pub passes: Vec<PassTiming>,
+    /// Median over the sampled frames of the frame-spanning GPU time: the span from the earliest
+    /// to the latest pass stamp of one frame, first timed pass start to last timed pass end. This is
+    /// the number to read for frame cost; per-pass medians may overlap and must not be summed.
+    /// Uploads before the graph and present after it are outside the span, and on a serial GPU it
+    /// can exceed the pass sum (inter-pass gaps). `null` without timestamps or where one queue
+    /// timeline cannot be proved; a frame whose stamps fail the per-frame guard (counter reset,
+    /// unwritten end) is left out of the median.
+    #[serde(default)]
+    pub frame_median_ms: Option<f64>,
+    /// The worst frame and 99th percentile of the frame-spanning GPU time.
+    /// `max_frame` is the produced-frame index of the worst frame. Omitted when `frame_median_ms`
+    /// is `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_tail: Option<TimingTail>,
 }
 
 /// A window's raw per-frame samples, stored columnar: every name appears once and each measurement
@@ -639,7 +669,7 @@ impl ProfileWindowData {
     /// # let window = ProfileWindowData {
     /// #     first_frame: 0, last_frame: 59, frames: 60, capture: true,
     /// #     systems: vec![], sequential: vec![], frame_total_median_ms: 1.0, threads: 8,
-    /// #     gpu: LiveGpuProfile { timestamps_supported: false, sampled_frames: 0, passes: vec![] },
+    /// #     gpu: LiveGpuProfile { timestamps_supported: false, sampled_frames: 0, passes: vec![], frame_median_ms: None, frame_tail: None },
     /// #     transport: None,
     /// #     samples: ProfileSamples {
     /// #         frames: vec![], system_names: vec![], system_ms: vec![], frame_total_ms: vec![],
@@ -668,6 +698,8 @@ impl ProfileWindowData {
                 available: self.gpu.sampled_frames > 0,
                 timestamps_supported: self.gpu.timestamps_supported,
                 passes: self.gpu.passes,
+                frame_median_ms: self.gpu.frame_median_ms,
+                frame_tail: self.gpu.frame_tail,
             },
             transport: self.transport,
             cluster: None,
@@ -775,6 +807,8 @@ mod tests {
                     name: "scene".into(),
                     median_ms: Some(1.5),
                 }],
+                frame_median_ms: Some(1.6),
+                frame_tail: None,
             },
             transport: None,
             samples: ProfileSamples {
@@ -808,6 +842,43 @@ mod tests {
         assert_eq!(
             ProfileCaptureParams::default(),
             serde_json::from_str("{}").unwrap()
+        );
+    }
+
+    #[test]
+    fn an_unknown_frame_time_is_an_explicit_null_and_an_old_body_still_parses() {
+        let mut report = window().into_report("scene".to_string(), false);
+        report.gpu.frame_median_ms = None;
+        report.gpu.frame_tail = None;
+        let mut json = serde_json::to_value(&report).unwrap();
+        assert!(json["gpu"]["frame_median_ms"].is_null());
+        assert!(json["gpu"].get("frame_tail").is_none());
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json.clone()).unwrap(),
+            report
+        );
+
+        // A body written before the fields existed (the frozen stress reports) parses as unknown.
+        json["gpu"]
+            .as_object_mut()
+            .unwrap()
+            .remove("frame_median_ms");
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json).unwrap(),
+            report
+        );
+
+        report.gpu.frame_median_ms = Some(4.5);
+        report.gpu.frame_tail = Some(TimingTail {
+            max_ms: 6.0,
+            max_frame: 3,
+            p99_ms: 6.0,
+        });
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["gpu"]["frame_tail"]["max_frame"], 3);
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json).unwrap(),
+            report
         );
     }
 
@@ -949,7 +1020,10 @@ mod tests {
         let report: ProfileReport = serde_json::from_value(old.clone()).unwrap();
         assert!(report.transport.is_none());
         assert!(report.samples.is_none());
-        // And it serializes back to exactly the old bytes — the new fields add no keys when absent.
-        assert_eq!(serde_json::to_value(&report).unwrap(), old);
+        // And it serializes back to the old shape — the optional sections add no keys when absent; the
+        // unknown GPU frame time is the one explicit `null`.
+        let mut expected = old;
+        expected["gpu"]["frame_median_ms"] = serde_json::Value::Null;
+        assert_eq!(serde_json::to_value(&report).unwrap(), expected);
     }
 }

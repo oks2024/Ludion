@@ -763,6 +763,8 @@ pub(crate) fn profile_replay_engine(
             available: false,
             timestamps_supported: false,
             passes: Vec::new(),
+            frame_median_ms: None,
+            frame_tail: None,
         },
         transport: None,
         cluster: None,
@@ -839,7 +841,7 @@ fn duration_ms(duration: Duration) -> f64 {
 /// The worst frame and nearest-rank 99th percentile of a per-frame column in frame order, `frames`
 /// naming the frame each entry was measured at. `None` for an empty column. The maximum is the
 /// first one when several tie.
-fn tail(column_ms: &[f64], frames: &[u64]) -> Option<TimingTail> {
+pub(crate) fn tail(column_ms: &[f64], frames: &[u64]) -> Option<TimingTail> {
     let mut max_index = 0;
     for (i, ms) in column_ms.iter().enumerate() {
         if *ms > column_ms[max_index] {
@@ -1001,6 +1003,8 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
                 available: false,
                 timestamps_supported: false,
                 passes: Vec::new(),
+                frame_median_ms: None,
+                frame_tail: None,
             });
         }
         Err(diag) => return Err(diag),
@@ -1013,8 +1017,11 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
     let mut timestamps_supported = true;
     let mut names: Vec<String> = Vec::new();
     let mut per_pass: Vec<Vec<f64>> = Vec::new();
+    // The frame span of each measured render that had one, with its position among the renders.
+    let mut spans: Vec<f64> = Vec::new();
+    let mut span_positions: Vec<u64> = Vec::new();
 
-    for _ in 0..frames {
+    for position in 0..frames {
         let raw: RawTimings = serde_json::from_str(&renderer.dump_timings_json(&scene, size)?)
             .map_err(|error| {
                 Diagnostic::new(
@@ -1026,6 +1033,10 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
                 )
             })?;
         timestamps_supported = raw.timestamps_supported;
+        if let Some(span) = raw.frame_gpu_time_ms {
+            spans.push(span);
+            span_positions.push(position);
+        }
         if names.is_empty() {
             names = raw.passes.iter().map(|p| p.name.clone()).collect();
             per_pass = vec![Vec::new(); names.len()];
@@ -1050,10 +1061,14 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
         })
         .collect();
 
+    let frame_tail = tail(&spans, &span_positions);
+    let frame_median_ms = (!spans.is_empty()).then(|| median_f64(&mut spans));
     Ok(GpuProfile {
         available: true,
         timestamps_supported,
         passes,
+        frame_median_ms,
+        frame_tail,
     })
 }
 
@@ -1063,6 +1078,8 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
 struct RawTimings {
     timestamps_supported: bool,
     passes: Vec<RawPass>,
+    #[serde(default)]
+    frame_gpu_time_ms: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1142,6 +1159,16 @@ pub struct Budget {
     /// carries no tail, which is every live capture.
     #[serde(default)]
     pub frame_total_max_ms: Option<f64>,
+    /// Ceiling on the median frame-spanning GPU time, in milliseconds — first timed pass start to
+    /// last timed pass end, the number to read for frame cost (see `GpuProfile::frame_median_ms`).
+    /// A report that measured no span (no adapter, no timestamps, or a backend that cannot prove one
+    /// queue timeline) is `L4019`, never a pass.
+    #[serde(default)]
+    pub gpu_frame_ms: Option<f64>,
+    /// Ceiling on the worst frame-spanning GPU time, in milliseconds. Checked against the span's
+    /// `GpuProfile::frame_tail`, which a live capture carries too; a report without one is `L4019`.
+    #[serde(default)]
+    pub gpu_frame_max_ms: Option<f64>,
     /// Per-system median ceilings, keyed by system name.
     #[serde(default)]
     pub systems: BTreeMap<String, f64>,
@@ -1385,6 +1412,8 @@ fn measured_sum(report: &ProfileReport, members: &[&str]) -> Option<(f64, usize)
 ///
 /// A budget that names any of those GPU lines against a report with no GPU measurement (no adapter,
 /// or no timestamp queries) is `L4019` — the skips above are per-scene, never per-machine.
+/// `gpu_frame_ms` and `gpu_frame_max_ms` check the frame-spanning GPU time and its tail; a report
+/// without a span (also a backend that cannot prove one queue timeline) is `L4019` too.
 ///
 /// `post_total_ms` is the same sum across every group's members, under the same skip rule; it is a
 /// ceiling on the whole post chain, so it needs no producible-set check of its own.
@@ -1493,8 +1522,26 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
     let gates_gpu = !budget.passes.is_empty()
         || !budget.post_groups.is_empty()
         || budget.post_total_ms.is_some();
-    if gates_gpu && !(report.gpu.available && report.gpu.timestamps_supported) {
+    let gates_frame = budget.gpu_frame_ms.is_some() || budget.gpu_frame_max_ms.is_some();
+    let no_gpu = !(report.gpu.available && report.gpu.timestamps_supported);
+    if (gates_gpu && no_gpu) || (gates_frame && report.gpu.frame_median_ms.is_none()) {
         over.push(gpu_unmeasured(report));
+    }
+
+    if let (Some(limit), Some(measured)) = (budget.gpu_frame_ms, report.gpu.frame_median_ms)
+        && measured > limit
+    {
+        over.push(exceeded("GPU frame", "median", measured, limit));
+    }
+    if let (Some(limit), Some(tail)) = (budget.gpu_frame_max_ms, &report.gpu.frame_tail)
+        && tail.max_ms > limit
+    {
+        over.push(exceeded(
+            &format!("GPU frame (worst at frame {})", tail.max_frame),
+            "max",
+            tail.max_ms,
+            limit,
+        ));
     }
 
     for (name, &limit) in &budget.passes {
@@ -1569,16 +1616,18 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
 
 /// Builds the `L4019` for a budget that gates GPU timings against a run that measured none.
 fn gpu_unmeasured(report: &ProfileReport) -> Diagnostic {
-    let why = if report.gpu.available {
+    let why = if !report.gpu.available {
+        "no GPU adapter was available"
+    } else if !report.gpu.timestamps_supported {
         "the GPU adapter has no timestamp queries"
     } else {
-        "no GPU adapter was available"
+        "this backend cannot prove one queue timeline for a frame"
     };
     Diagnostic::new(
         code::BUDGET_GPU_UNMEASURED,
         format!(
-            "budget gates GPU timings (`[passes]`, `[post_groups]` or `post_total_ms`) but none were \
-             measured: {why}"
+            "budget gates GPU timings (`[passes]`, `[post_groups]`, `post_total_ms`, `gpu_frame_ms` \
+             or `gpu_frame_max_ms`) but none were measured: {why}"
         ),
     )
     .with_help(
@@ -1645,7 +1694,7 @@ fn budget_invalid(path: &Path, detail: String) -> Diagnostic {
     )
     .with_help(
         "a budget is TOML: optional `frame_total_ms`, `frame_total_max_ms`, `post_total_ms`, \
-         `cluster_build_ms`, `extract_ms` and `load_total_ms` scalars, and `[systems]`, \
+         `cluster_build_ms`, `extract_ms`, `load_total_ms`, `gpu_frame_ms` and `gpu_frame_max_ms` scalars, and `[systems]`, \
          `[systems_max]`, `[passes]` and `[post_groups]` tables of millisecond ceilings — see \
          `ludion explain L4004`",
     )
@@ -2312,6 +2361,8 @@ entities:
                     name: "scene".to_string(),
                     median_ms: Some(1.5),
                 }],
+                frame_median_ms: None,
+                frame_tail: None,
             },
             transport: None,
             cluster: None,
@@ -2511,6 +2562,14 @@ entities:
         // The offline GPU path never carries a per-frame breakdown, adapter or not.
         assert!(samples.pass_names.is_empty());
         assert!(samples.pass_ms.is_empty());
+        // The frame span rides on the same condition the GPU test asserts: timestamps on a backend
+        // that proves one queue timeline.
+        if report.gpu.timestamps_supported {
+            let proved =
+                ["Vulkan", "Dx12", "Metal"].contains(&engine.renderer().unwrap().adapter_backend());
+            assert_eq!(report.gpu.frame_median_ms.is_some(), proved);
+            assert_eq!(report.gpu.frame_tail.is_some(), proved);
+        }
         // Still absent: the offline driver delivers no frames, so it never measures transport.
         assert!(report.transport.is_none());
     }
@@ -2905,6 +2964,8 @@ entities:
                     name: "scene".to_string(),
                     median_ms: Some(3.0),
                 }],
+                frame_median_ms: None,
+                frame_tail: None,
             },
             transport: None,
             cluster: None,
@@ -3024,6 +3085,8 @@ entities:
                 available: false,
                 timestamps_supported: false,
                 passes: Vec::new(),
+                frame_median_ms: None,
+                frame_tail: None,
             };
             report
         };
@@ -3357,6 +3420,81 @@ entities:
         let diagnostic = load_budget(&path).unwrap_err();
         assert_eq!(diagnostic.code, code::BUDGET_FILE_INVALID);
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn framed_report(median_ms: Option<f64>, max_ms: f64) -> ProfileReport {
+        let mut report = sample_report();
+        report.gpu.available = true;
+        report.gpu.timestamps_supported = true;
+        report.gpu.frame_median_ms = median_ms;
+        report.gpu.frame_tail = median_ms.map(|_| TimingTail {
+            max_ms,
+            max_frame: 17,
+            p99_ms: max_ms,
+        });
+        report
+    }
+
+    #[test]
+    fn gpu_frame_keys_breach_with_l4005_and_pass_under_the_limit() {
+        let report = framed_report(Some(4.0), 9.0);
+        let over = check_budget(
+            &report,
+            &Budget {
+                gpu_frame_ms: Some(3.0),
+                gpu_frame_max_ms: Some(8.0),
+                ..Budget::default()
+            },
+        );
+        assert_eq!(over.len(), 2, "{over:?}");
+        assert!(over.iter().all(|d| d.code == code::BUDGET_EXCEEDED));
+        assert!(over.iter().any(|d| d.message.contains("GPU frame: median")));
+        assert!(over.iter().any(|d| d.message.contains("worst at frame 17")));
+
+        let roomy = Budget {
+            gpu_frame_ms: Some(5.0),
+            gpu_frame_max_ms: Some(10.0),
+            ..Budget::default()
+        };
+        assert!(check_budget(&report, &roomy).is_empty());
+    }
+
+    #[test]
+    fn a_gated_gpu_frame_key_with_no_span_is_l4019_once() {
+        let budget = Budget {
+            gpu_frame_ms: Some(100.0),
+            gpu_frame_max_ms: Some(100.0),
+            ..Budget::default()
+        };
+        // Timestamps work but this backend proved no timeline: the third reason.
+        let over = check_budget(&framed_report(None, 0.0), &budget);
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert_eq!(over[0].code, code::BUDGET_GPU_UNMEASURED);
+        assert!(over[0].message.contains("one queue timeline"), "{over:?}");
+        assert!(over[0].message.contains("gpu_frame_ms"), "{over:?}");
+
+        // No timestamps at all, with a pass line also gated: still one diagnostic.
+        let mut report = framed_report(None, 0.0);
+        report.gpu.timestamps_supported = false;
+        let both = Budget {
+            passes: BTreeMap::from([("scene".to_string(), 100.0)]),
+            ..budget
+        };
+        let over = check_budget(&report, &both);
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert!(over[0].message.contains("no timestamp queries"), "{over:?}");
+    }
+
+    #[test]
+    fn valid_budget_parses_the_gpu_frame_keys() {
+        let budget: Budget = toml::from_str(
+            "gpu_frame_ms = 5.0
+gpu_frame_max_ms = 9.5
+",
+        )
+        .unwrap();
+        assert_eq!(budget.gpu_frame_ms, Some(5.0));
+        assert_eq!(budget.gpu_frame_max_ms, Some(9.5));
     }
 
     #[test]

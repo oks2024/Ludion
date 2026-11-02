@@ -2526,6 +2526,8 @@ mod budget_quality_tests {
                 available: false,
                 timestamps_supported: false,
                 passes: Vec::new(),
+                frame_median_ms: None,
+                frame_tail: None,
             },
             transport: None,
             cluster: None,

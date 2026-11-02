@@ -60,7 +60,7 @@ fn drain_timings(
         .poll(wgpu::PollType::wait_indefinitely())
         .unwrap();
     while let Some(sample) = timing.try_collect_timings(gpu) {
-        into.push(sample);
+        into.push((sample.0, sample.1.passes));
     }
 }
 
