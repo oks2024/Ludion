@@ -5,7 +5,9 @@ stating. Everything else is byte-identical to the crates.io release; the license
 
 **Changed:** `src/query/ray/ray_heightfield.rs`, the dim3 `RayCast for HeightField`'s
 `cast_local_ray_and_get_normal`: the start cell is re-seated right after `cell_at_point`. The exact
-change is `LUDION-PATCH.diff`.
+change is `LUDION-PATCH.diff`. `Cargo.toml` also gains an empty `[workspace]` table: the crate is its
+own workspace root, so `cargo metadata --no-deps` on it (the importer fingerprint's build script) works
+offline even inside a nested checkout. Cargo ignores it when built as a dependency.
 
 It reaches every build through rapier3d's path dependency on it (`vendor/rapier3d/Cargo.toml`), not a
 root `[patch]`.

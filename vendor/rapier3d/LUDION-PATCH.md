@@ -10,6 +10,9 @@ stating. Everything else is byte-identical to the crates.io release; the license
   `src/geometry/collider_components.rs` (`ColliderChanges::MATERIAL`).
 - `Cargo.toml`, the `parry3d` dependency gains `path = "../parry3d"`: a consumer never sees a root
   `[patch]`, so this is how the parry3d patch reaches it (and keeps one parry3d in the build).
+- `Cargo.toml`, an empty `[workspace]` table: the crate is its own workspace root, so `cargo metadata
+  --no-deps` on it (the importer fingerprint's build script) works offline even when the checkout nests
+  inside another workspace. Cargo ignores it when the crate is built as a dependency.
 
 The exact change is `LUDION-PATCH.diff`.
 

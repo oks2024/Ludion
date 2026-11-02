@@ -1,10 +1,12 @@
 //! The importer fingerprint: a hash of every source the importer's output can depend on.
 //!
-//! The closure is derived, never listed: one `cargo metadata --offline` call is walked from
+//! The closure is derived, never listed: `cargo metadata --no-deps --offline` is walked from
 //! `ludion-import` over its non-dev path dependencies, so a new dependency joins the fingerprint
-//! with no edit here. The call lists every package, so a path crate outside the workspace (an
-//! `exclude`d vendored one) is found without opening its own manifest as a root, which cargo
-//! refuses when the checkout nests inside another workspace.
+//! with no edit here. `--no-deps` never resolves the graph, so it touches no registry and cannot
+//! rewrite `Cargo.lock`; it lists only the members of the manifest's own workspace, so a path crate
+//! outside it (the vendored ones) is reached by a further call on its own manifest. Such a crate
+//! must declare its own empty `[workspace]`, or cargo walks up and refuses when the checkout nests
+//! inside another workspace.
 //! The `build.rs` reruns on mtime (`rerun-if-changed`) but the hash is of content, so a touch
 //! reruns it and yields the same constant; the one miss is an edit whose file and directory mtimes
 //! all predate the last build-script run. A packaged crate (`Cargo.toml.orig` beside the manifest)
@@ -44,6 +46,7 @@ fn metadata(cargo: &Path, manifest: &Path) -> Result<(PathBuf, Vec<Package>), St
     let output = Command::new(cargo)
         .args([
             "metadata",
+            "--no-deps",
             "--offline",
             "--format-version",
             "1",
@@ -114,6 +117,11 @@ pub fn closure(cargo: &Path, manifest: &Path, root_pkg: &str) -> Result<Closure,
     while let Some(dir) = queue.pop_front() {
         if seen.contains_key(&dir) {
             continue;
+        }
+        if !known.contains_key(&dir) {
+            for package in metadata(cargo, &dir.join("Cargo.toml"))?.1 {
+                known.insert(package.dir.clone(), package);
+            }
         }
         let package = known
             .get(&dir)

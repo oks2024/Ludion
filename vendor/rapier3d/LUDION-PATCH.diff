@@ -88,3 +88,9 @@
  features = ["required-features"]
  default-features = false
  
+@@ -482,3 +483,5 @@
+     'cfg(feature, values("dim2", "f64", "std", "alloc", "bytemuck"))',
+     'cfg(target_arch, values("spirv"))',
+ ]
++
++[workspace]

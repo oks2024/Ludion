@@ -100,6 +100,50 @@ fn the_fingerprint_moves_with_the_closure_and_only_with_it() {
 }
 
 #[test]
+fn a_checkout_nested_in_another_workspace_still_walks() {
+    let outer =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fp-nest-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&outer);
+    write(
+        &outer,
+        "Cargo.toml",
+        "[workspace]
+resolver = \"2\"
+members = []
+",
+    );
+    let root = outer.join("tree");
+    write(
+        &root,
+        "Cargo.toml",
+        "[workspace]
+resolver = \"2\"
+members = [\"a\"]
+exclude = [\"vendor/d\"]
+",
+    );
+    krate(
+        &root,
+        "a",
+        "a",
+        "[dependencies]
+d = { path = \"../vendor/d\" }
+",
+    );
+    krate(
+        &root,
+        "vendor/d",
+        "d",
+        "[workspace]
+",
+    );
+    let closure = fingerprint::closure(&cargo(), &root.join("a/Cargo.toml"), "a").unwrap();
+    let names: Vec<&str> = closure.crates.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["a", "d"]);
+    fs::remove_dir_all(&outer).unwrap();
+}
+
+#[test]
 fn the_real_closure_excludes_the_engine_and_renderer() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let closure = fingerprint::closure(&cargo(), &manifest, "ludion-import").unwrap();

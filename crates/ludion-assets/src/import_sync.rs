@@ -19,7 +19,7 @@ pub const LOCK_FILE: &str = ".ludion-sync.lock";
 /// The sync record: the importer that wrote the tree and one entry per source stem.
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncRecord {
-    /// The importer fingerprint: xxh3 of the `ludion` binary that wrote the tree, 16 hex digits.
+    /// The importer fingerprint: `ludion_import::IMPORTER_FINGERPRINT`, a hash of the importer's source closure, 16 hex digits.
     pub importer: String,
     /// The recorded sources, by stem.
     pub entries: BTreeMap<String, SyncRecordEntry>,

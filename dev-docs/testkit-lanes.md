@@ -77,8 +77,8 @@ readers; a src unit test or a vigil test that reads `docs/` is caught only by th
 The default `check.mjs` run is about 756 s on the reference 32-core box (it was 914 s before the sync
 fingerprint, 2026-11-01). The critical path is roughly the total: import-sync → test → doctest →
 vigil-clippy → vigil-test → mobile → fps-gate. The root test step (~390 s) is the largest.
-`importer_fingerprint` hashes the ludion binary, so every ludion-cli rebuild re-imports all vigil kits
-(~60 s of import-sync); the source-derived fix is owed (`Plan/owed.md`, Engineering debt). Time a run
+The importer fingerprint is source-derived (`crates/ludion-import/build/fingerprint.rs`), so a
+ludion-cli-only rebuild no longer re-imports vigil's kits; an edit inside the importer's closure does. Time a run
 only on a tree with no foreign dirty crates: the `ludion-cli` `dev` and `new` tests build a scratch
 game against the live workspace, and another instance's uncommitted engine edits make them recompile
 or time out (root test then reads 500–550 s). `node scripts/check.mjs --history` holds the per-step

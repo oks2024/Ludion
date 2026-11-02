@@ -531,3 +531,5 @@ check-cfg = [
     'cfg(feature, values("encase"))',
     'cfg(target_arch, values("spirv"))',
 ]
+
+[workspace]
