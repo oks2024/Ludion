@@ -234,6 +234,9 @@ fn run_one(map_path: &Path, options: &Options<'_>) -> ExitCode {
     let (speed, speed_source) = resolve(options.speed, loaded.kit.probe.speed, DEFAULT_SPEED);
 
     let grid = MapGrid::new(&loaded.doc);
+    if let Err(diagnostic) = check_lattice_budget(&grid, radius) {
+        return diagnostic::report(map_path, &[diagnostic]);
+    }
     let root = map_path.parent().unwrap_or_else(|| Path::new("."));
     let probe = match Probe::build(root, &scene, &grid, radius as f32) {
         Ok(probe) => probe,
@@ -321,6 +324,50 @@ const LATTICE_STEPS_PER_RADIUS: f64 = 2.0;
 /// The most samples per cell axis, bounding the lattice for a tiny `--radius`.
 const LATTICE_MAX_PER_AXIS: usize = 33;
 
+/// The most samples either lattice may hold (2^25): the reachability BFS spends about ten bytes a
+/// sample and the seal flood five, so this keeps a run near a third of a gigabyte, and every sample
+/// index stays far below the seal flood's `u32::MAX` "unseen" sentinel.
+const MAX_LATTICE_SAMPLES: u64 = 1 << 25;
+
+/// Samples per cell axis on the reachability lattice (odd, so a cell's centre is a sample).
+fn lattice_axis(grid: &MapGrid, radius: f64) -> usize {
+    let wanted = (grid.cell_size() * LATTICE_STEPS_PER_RADIUS / radius).ceil();
+    (wanted.min(LATTICE_MAX_PER_AXIS as f64) as usize).max(1) | 1
+}
+
+/// Samples per cell axis on the seal lattice.
+fn seal_axis(grid: &MapGrid, radius: f64) -> usize {
+    let wanted = (grid.cell_size() * SEAL_STEPS_PER_RADIUS / radius).ceil();
+    (wanted.min(SEAL_MAX_PER_AXIS as f64) as usize).max(1)
+}
+
+/// Refuses a map whose lattices would exceed [`MAX_LATTICE_SAMPLES`], before anything is allocated.
+fn check_lattice_budget(grid: &MapGrid, radius: f64) -> Result<(), Diagnostic> {
+    let cells = (grid.width() as u64).saturating_mul(grid.height() as u64);
+    let (reach, seal) = (lattice_axis(grid, radius), seal_axis(grid, radius));
+    let worst = [reach, seal]
+        .into_iter()
+        .map(|n| cells.saturating_mul((n as u64).saturating_mul(n as u64)))
+        .max()
+        .unwrap_or(0);
+    if worst <= MAX_LATTICE_SAMPLES {
+        return Ok(());
+    }
+    Err(Diagnostic::new(
+        code::MAP_DOCUMENT_STRUCTURE,
+        format!(
+            "the {}x{} grid at --radius {radius} needs {worst} lattice samples, above the \
+             {MAX_LATTICE_SAMPLES} map-check allows",
+            grid.width(),
+            grid.height()
+        ),
+    )
+    .with_help(
+        "pass a larger --radius (the lattice is finer the smaller the radius), or split the \
+         district into smaller maps",
+    ))
+}
+
 /// The walker's sub-cell sampling lattice: every cell is `n × n` samples, `step = cell_size / n`
 /// apart, each at the centre of its `step` square. `n` is odd, so a cell's centre is itself a sample.
 struct Lattice {
@@ -335,8 +382,7 @@ struct Lattice {
 impl Lattice {
     /// An all-free lattice over `grid` fine enough for a walker of `radius`.
     fn new(grid: &MapGrid, radius: f64) -> Self {
-        let wanted = (grid.cell_size() * LATTICE_STEPS_PER_RADIUS / radius).ceil();
-        let n = (wanted.min(LATTICE_MAX_PER_AXIS as f64) as usize).max(1) | 1;
+        let n = lattice_axis(grid, radius);
         Lattice {
             n,
             step: grid.cell_size() / n as f64,
@@ -559,12 +605,13 @@ fn outside_cells(
     blocked: &[bool],
     reached: &[bool],
 ) -> Vec<bool> {
+    let rows = glyph_rows(doc);
     let candidate = |row: usize, col: usize| {
         let i = idx(grid, row, col);
-        let glyph = doc
-            .rows
+        let glyph = rows
             .get(row)
-            .and_then(|r| r.chars().nth(col))
+            .and_then(|r| r.get(col))
+            .copied()
             .unwrap_or(' ');
         glyph == ' ' && !blocked[i] && !reached[i]
     };
@@ -624,6 +671,11 @@ fn walk_distances(lattice: &Lattice, start: Option<usize>) -> Vec<Option<u32>> {
     distance
 }
 
+/// The map's rows as glyph vectors, so a per-cell lookup is an index, not a scan of the row.
+fn glyph_rows(doc: &ludion_scene::MapDoc) -> Vec<Vec<char>> {
+    doc.rows.iter().map(|r| r.chars().collect()).collect()
+}
+
 fn neighbors(grid: &MapGrid, row: usize, col: usize) -> Vec<(usize, usize)> {
     let mut out = Vec::with_capacity(4);
     if row > 0 {
@@ -663,8 +715,7 @@ struct SealLattice {
 
 impl SealLattice {
     fn new(grid: &MapGrid, radius: f64) -> Self {
-        let wanted = (grid.cell_size() * SEAL_STEPS_PER_RADIUS / radius).ceil();
-        let n = (wanted.min(SEAL_MAX_PER_AXIS as f64) as usize).max(1);
+        let n = seal_axis(grid, radius);
         SealLattice {
             n,
             step: grid.cell_size() / n as f64,
@@ -1207,6 +1258,7 @@ fn walkability_delta_count(
         .map(|g| glyph_has_collider(kit, g))
         .unwrap_or(false);
 
+    let rows = glyph_rows(doc);
     let mut count = 0;
     for row in 0..grid.height() {
         for col in 0..grid.width() {
@@ -1215,10 +1267,10 @@ fn walkability_delta_count(
             }
             // Only an authored, non-void glyph declares a walkable cell; a `bounds:` map's cells and
             // void cells declare nothing.
-            let Some(glyph) = doc
-                .rows
+            let Some(glyph) = rows
                 .get(row)
-                .and_then(|r| r.chars().nth(col))
+                .and_then(|r| r.get(col))
+                .copied()
                 .filter(|&g| g != ' ')
             else {
                 continue;

@@ -3509,8 +3509,8 @@ impl Default for TileAppearance {
 ///
 /// # Placement convention (unambiguous — game logic depends on it)
 ///
-/// The grid is **axis-aligned in the world XY plane**. Only the entity's `Transform.translation` is
-/// used, as the **grid origin — the center of cell `(col 0, row 0)`**, the first glyph of the first
+/// The grid is **axis-aligned in the world XY plane**. Only the entity's world translation (its
+/// `Transform.translation` when unparented) is used, as the **grid origin — the center of cell `(col 0, row 0)`**, the first glyph of the first
 /// row. `Transform.rotation` and `Transform.scale` are **ignored**: a tilemap is a grid of cells,
 /// not a transformable sprite (this is what makes the coordinate helpers exact and unambiguous).
 ///
@@ -3531,7 +3531,7 @@ impl Default for TileAppearance {
 /// Use [`glyph_at`](Tilemap::glyph_at) to read a cell's glyph, and
 /// [`cell_to_world`](Tilemap::cell_to_world) / [`world_to_cell`](Tilemap::world_to_cell) to map
 /// between cell coordinates and world space (both take the grid origin — the tilemap entity's
-/// `Transform.translation`).
+/// world translation, its `Transform.translation` when unparented).
 ///
 /// ```
 /// use ludion_components::{TileAppearance, Tilemap};
@@ -3609,7 +3609,7 @@ impl Tilemap {
     }
 
     /// The world-space center of cell `(col, row)`, given the grid `origin` (the tilemap entity's
-    /// `Transform.translation` — the center of cell `(0, 0)`). +X is column, −Y is row (see the
+    /// world translation, its `Transform.translation` when unparented — the center of cell `(0, 0)`). +X is column, −Y is row (see the
     /// [placement convention](Tilemap#placement-convention-unambiguous--game-logic-depends-on-it)).
     pub fn cell_to_world(&self, origin: [f32; 3], col: i32, row: i32) -> [f32; 3] {
         [

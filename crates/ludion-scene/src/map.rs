@@ -50,8 +50,8 @@ pub const MAP_FORMAT_VERSION: u64 = 1;
 /// The reserved grid glyph meaning "empty cell": it emits nothing and is exempt from the kit-glyph
 /// check (a visual hole in the grid — a gate gap, the space outside a building footprint).
 const VOID_GLYPH: char = ' ';
-/// Per-axis cap on a declared `bounds` extent; `map-check` allocates a fine lattice per cell, so
-/// the cap bounds memory.
+/// Per-axis cap on a declared `bounds` extent (a `rows:` map is bounded by its text). It bounds the
+/// grid only; `map-check` caps its own sampling lattice separately, by sample count.
 const MAX_MAP_EXTENT: u32 = 1024;
 
 const MAP_KEYS: [&str; 9] = [
@@ -1274,6 +1274,7 @@ pub fn generate_traced(
                              another entity of the same fragment",
                         ),
                     );
+                    continue;
                 }
                 crate::expand::remap_positions(registry, component, value, &|p| Some(p + offset));
             }
@@ -1346,15 +1347,16 @@ pub fn generate_traced(
 
 /// The grid geometry shared by the grid and marker passes: the pure [`MapGrid`] coordinate math plus
 /// the row glyphs and base underlay the generator reads.
-struct Grid<'a> {
+struct Grid {
     geom: MapGrid,
-    rows: &'a [String],
+    /// The rows as glyph vectors: a per-cell lookup is an index, not a scan of the row.
+    rows: Vec<Vec<char>>,
     /// The `base:` underlay glyph, if set and a single character.
     base: Option<char>,
 }
 
-impl<'a> Grid<'a> {
-    fn new(map: &'a MapDoc, width: usize, height: usize) -> Self {
+impl Grid {
+    fn new(map: &MapDoc, width: usize, height: usize) -> Self {
         Grid {
             geom: MapGrid {
                 origin: map.origin,
@@ -1362,7 +1364,7 @@ impl<'a> Grid<'a> {
                 width,
                 height,
             },
-            rows: &map.rows,
+            rows: map.rows.iter().map(|r| r.chars().collect()).collect(),
             base: map.base.as_deref().and_then(single_char),
         }
     }
@@ -1380,7 +1382,7 @@ impl<'a> Grid<'a> {
     }
 
     fn glyph_at(&self, row: usize, col: usize) -> Option<char> {
-        self.rows.get(row)?.chars().nth(col)
+        self.rows.get(row)?.get(col).copied()
     }
 
     /// The world XZ center of the cell rectangle `cols [c0, c1]` × `rows [r0, r1]` (inclusive).
@@ -1431,7 +1433,7 @@ impl Source<'_> {
 /// non-base glyph's primitive stack, per each primitive's mode. Every emitted item is tagged with
 /// its anchor cell for the row-major sort in [`generate`].
 fn emit_grid(
-    grid: &Grid<'_>,
+    grid: &Grid,
     kit: &MapKit,
     seed: u64,
     items: &mut Vec<GridItem>,
@@ -1502,7 +1504,7 @@ fn prim_prefix(prim: &KitPrimitive, default: &str, prim_index: usize) -> String 
 
 /// Greedy row-major maximal-rectangle merge over the `mask` cells; one scaled entity per rect.
 fn emit_merged(
-    grid: &Grid<'_>,
+    grid: &Grid,
     prim: &KitPrimitive,
     prefix: &str,
     seed: u64,
@@ -1576,7 +1578,7 @@ fn emit_merged(
 /// A cell that cannot be covered by a whole block is `L1026`.
 #[allow(clippy::too_many_arguments)]
 fn emit_footprint(
-    grid: &Grid<'_>,
+    grid: &Grid,
     prim: &KitPrimitive,
     prefix: &str,
     seed: u64,
@@ -1653,7 +1655,7 @@ fn emit_footprint(
 
 /// One unscaled entity per `mask` cell.
 fn emit_per_cell(
-    grid: &Grid<'_>,
+    grid: &Grid,
     prim: &KitPrimitive,
     prefix: &str,
     seed: u64,
@@ -1694,7 +1696,7 @@ fn emit_per_cell(
 /// Emits a marker's entities: one per kit primitive when a `kind` is set (the verbatim `components`
 /// merged onto the first), else a single entity carrying just the `Transform` and `components`.
 fn emit_marker(
-    grid: &Grid<'_>,
+    grid: &Grid,
     kit: &MapKit,
     seed: u64,
     marker: &MapMarker,

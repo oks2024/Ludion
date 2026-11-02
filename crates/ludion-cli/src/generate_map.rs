@@ -115,14 +115,28 @@ pub fn run(maps: &[PathBuf], out: Option<&Path>, check: bool) -> ExitCode {
 
 /// Generates one map and writes its canonical scene.
 fn generate_one(map_path: &Path, out: Option<&Path>) -> ExitCode {
-    let (scene, yaml) = match generate_yaml(map_path) {
-        Ok(pair) => pair,
-        Err(code) => return code,
-    };
-
     let out_path = out
         .map(PathBuf::from)
         .unwrap_or_else(|| default_out(map_path));
+    if same_path(map_path, &out_path) {
+        eprintln!(
+            "{}",
+            Diagnostic::new(
+                code::OUTPUT_IO,
+                format!(
+                    "--out `{}` is the map source itself; writing there would replace the map \
+                     with its generated scene",
+                    out_path.display()
+                ),
+            )
+            .with_help("name a different --out, or drop --out to write beside the map")
+        );
+        return ExitCode::FAILURE;
+    }
+    let (scene, yaml) = match generate_yaml(map_path, &out_path) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
     if let Err(error) = write_atomic(&out_path, &yaml) {
         eprintln!(
             "{}",
@@ -149,13 +163,13 @@ fn generate_one(map_path: &Path, out: Option<&Path>) -> ExitCode {
 /// output path — the mid-loop form of the CI drift gate. Writes nothing; exits non-zero on drift or
 /// if the target scene is missing/unreadable.
 fn check_one(map_path: &Path, out: Option<&Path>) -> ExitCode {
-    let (_scene, yaml) = match generate_yaml(map_path) {
-        Ok(pair) => pair,
-        Err(code) => return code,
-    };
     let out_path = out
         .map(PathBuf::from)
         .unwrap_or_else(|| default_out(map_path));
+    let (_scene, yaml) = match generate_yaml(map_path, &out_path) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
 
     match std::fs::read(&out_path) {
         Ok(existing) if existing == yaml.as_bytes() => {
@@ -281,11 +295,18 @@ pub(crate) fn report_faults(
 
 /// Loads, generates, and canonically emits a map, running the parse→emit idempotence self-check.
 /// Shared by `generate_one` (which writes the YAML) and `check_one` (which compares it).
-fn generate_yaml(map_path: &Path) -> Result<(Scene, String), ExitCode> {
-    let loaded = match load(map_path) {
+fn generate_yaml(map_path: &Path, out_path: &Path) -> Result<(Scene, String), ExitCode> {
+    let mut loaded = match load(map_path) {
         Ok(loaded) => loaded,
         Err(diagnostics) => return Err(report(map_path, &diagnostics)),
     };
+    // `generated_from` is read from the scene's own directory: beside the map it is the bare file
+    // name, an `--out` elsewhere names the map relative to it.
+    let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
+    match ludion_import::relative_to(out_dir, map_path, code::OUTPUT_IO) {
+        Ok(source) => loaded.doc.source = Some(source),
+        Err(diagnostic) => return Err(report(map_path, &[diagnostic])),
+    }
     let registry = ludion_engine::builtin_registry();
     let scene = match generate_checked(&loaded, &registry) {
         Ok(scene) => scene,
@@ -316,6 +337,31 @@ fn self_check_idempotent(yaml: &str, registry: &Registry) -> Result<(), Vec<Diag
         ]);
     }
     Ok(())
+}
+
+/// Whether two paths name the same file: by identity when both exist, else by lexical spelling.
+fn same_path(a: &Path, b: &Path) -> bool {
+    if let (Ok(a), Ok(b)) = (a.canonicalize(), b.canonicalize()) {
+        return a == b;
+    }
+    lexical(a) == lexical(b)
+}
+
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in std::path::absolute(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .components()
+    {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// The default output path: the map file with the `.map` component of its `.map.yaml` extension

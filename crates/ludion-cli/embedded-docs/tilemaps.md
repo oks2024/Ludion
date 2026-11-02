@@ -58,7 +58,7 @@ color; there is no implicit blank glyph.
 
 The grid is **axis-aligned in the world XY plane** — not the (x, z) plane colliders live on;
 `ludion docs visuals --section "Which plane is 2D?"` states both once. Only the entity's
-`Transform.translation` is used — as the **grid origin, the center of cell `(col 0, row 0)`** (the
+world translation (its `Transform.translation` when unparented) is used — as the **grid origin, the center of cell `(col 0, row 0)`** (the
 first glyph of the first row).
 `Transform.rotation` and `scale` are ignored: a tilemap is a grid, not a transformable sprite. From
 the origin:
@@ -87,7 +87,7 @@ problem:
 Game logic reads the same component the renderer draws — that is how walls, floors, and targets are
 one source of truth. `Tilemap` (and `TileAppearance`) are in `ludion::prelude`. Read cells with
 `glyph_at(col, row)`, and map between cell coordinates and world space with `cell_to_world` /
-`world_to_cell` (both take the grid origin — the tilemap entity's `Transform.translation`), so you
+`world_to_cell` (both take the grid origin — the tilemap entity's world translation, its `Transform.translation` when unparented), so you
 never re-derive the coordinate math:
 
 ```rust

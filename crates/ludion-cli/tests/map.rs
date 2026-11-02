@@ -71,9 +71,15 @@ fn generate_map_is_byte_deterministic() {
     assert_eq!(first, second, "two runs must produce byte-identical scenes");
 
     let text = String::from_utf8(first).unwrap();
+    // `--out` elsewhere: `generated_from` is relative to the scene and resolves to the map.
+    let from = text
+        .lines()
+        .find_map(|l| l.strip_prefix("generated_from:"))
+        .map(|v| v.trim().trim_matches('"'))
+        .expect("the generated scene must carry its provenance");
     assert!(
-        text.contains("generated_from: district.map.yaml\n"),
-        "the generated scene must carry its provenance: {text}"
+        a.parent().unwrap().join(from).exists(),
+        "{from} must resolve to the map"
     );
     // The fragment (singletons.yaml) is merged verbatim first: its camera precedes any grid entity.
     let camera = text.find("name: camera").expect("fragment camera present");
@@ -1088,4 +1094,87 @@ fn map_check_traverse_times_inert_gates_and_labels_them() {
             "the inert gate must be timed and labelled, got: {line}"
         );
     }
+}
+
+// --- generate-map --out edges / map-check lattice ceiling --------------------------------------
+
+/// `--out` naming the map itself is refused before anything is written: the source stays intact.
+#[test]
+fn generate_map_out_onto_the_source_is_refused() {
+    let dir = scratch("generate_out_onto_source");
+    let maps = stage_maps(&dir, &["plaza"]);
+    let before = std::fs::read(&maps[0]).unwrap();
+    // A spelling that only normalizes to the map path.
+    let spelled = dir.join("sub/../plaza.map.yaml");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let output = run_ludion(&[
+        "generate-map",
+        maps[0].to_str().unwrap(),
+        "--out",
+        spelled.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--out"));
+    assert_eq!(std::fs::read(&maps[0]).unwrap(), before);
+}
+
+/// `generated_from` is relative to the scene's own directory: bare beside the map, a path elsewhere.
+#[test]
+fn generate_map_generated_from_resolves_from_the_scene() {
+    let dir = scratch("generate_from_out");
+    let maps = stage_maps(&dir, &["plaza"]);
+    std::fs::create_dir_all(dir.join("scenes")).unwrap();
+    let elsewhere = dir.join("scenes/plaza.yaml");
+    let output = run_ludion(&[
+        "generate-map",
+        maps[0].to_str().unwrap(),
+        "--out",
+        elsewhere.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = std::fs::read_to_string(&elsewhere).unwrap();
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("generated_from:"))
+        .unwrap();
+    let value = line
+        .trim_start_matches("generated_from:")
+        .trim()
+        .trim_matches('"');
+    assert_eq!(value, "../plaza.map.yaml");
+    assert!(elsewhere.parent().unwrap().join(value).exists());
+
+    let default = run_ludion(&["generate-map", maps[0].to_str().unwrap()]);
+    assert!(default.status.success());
+    let text = std::fs::read_to_string(dir.join("plaza.yaml")).unwrap();
+    assert!(
+        text.lines()
+            .any(|l| l.trim_end() == "generated_from: plaza.map.yaml"),
+        "{text}"
+    );
+}
+
+/// A `bounds:` map whose lattice would hold billions of samples is refused promptly, before it
+/// allocates, with a pointer at `--radius`.
+#[test]
+fn map_check_refuses_a_lattice_past_the_ceiling() {
+    let dir = scratch("map_check_ceiling");
+    std::fs::copy(fixtures().join("kit.yaml"), dir.join("kit.yaml")).unwrap();
+    let map = dir.join("huge.map.yaml");
+    std::fs::write(
+        &map,
+        "format: 1\nkind: map\nname: huge\nkit: kit.yaml\ncell_size: 1.0\norigin:\n  - 0.0\n  - 0.0\nbounds:\n  - 1024\n  - 1024\n",
+    )
+    .unwrap();
+    let output = run_ludion(&["map-check", map.to_str().unwrap(), "--radius", "0.05"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--radius") && stderr.contains("lattice samples"),
+        "{stderr}"
+    );
 }
