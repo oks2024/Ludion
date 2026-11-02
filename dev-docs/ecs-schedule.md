@@ -63,7 +63,7 @@ reports `L1218`–`L1220` once.
 `spawn_presentation` takes ids from a second `EntityAllocator` offset by `PRESENTATION_BASE` (2^24), so sim ids never move and every column's presentation rows form one contiguous tail (keys ascend). Every system runs in a `Phase` (`Sim` for `add_system`, `Presentation` for `add_presentation_system`; `Host` outside systems, unrestricted). The guard, in prose:
 
 - **Sim:** presentation ids are invisible — `has` false, `presentation_entities()` empty, queries and `entity_indices_with` stop before the base; `get`/`get_mut`/`insert`/`remove`/`despawn` return `L0028`; `spawn_presentation` panics with it.
-- **Presentation:** sim entities are read-only — their writes return `L0028`, `spawn` panics; resource writes panic unless the type is in `allow_presentation_writes::<T>()` (outbox resources only).
+- **Presentation:** sim entities are read-only — their writes return `L0028` (also queued and reported once, `World::take_boundary_crossings`), `spawn` panics; resource writes panic unless the type is in `allow_presentation_writes::<T>()` (outbox resources only).
 - **Windowing:** each query builds one key window from the phase (`World::query_window`) and clamps every column with one `partition_point` in `window_slices`, before the join and the `par_for_each` chunking. A presentation query naming any `&mut` joins presentation rows only.
 
 The why is in `Plan/presentation-state.md`.
