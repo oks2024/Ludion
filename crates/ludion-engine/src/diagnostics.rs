@@ -13,8 +13,9 @@
 //!
 //! - **Once per `(code, key)` per session.** The resource latches every pair it has already
 //!   reported, so a system reporting the same fault sixty times a second prints one line. `key` is
-//!   the offender's identity — a doc name, a scene name, an entity's name and id — so the same code
-//!   still prints once for each distinct offender.
+//!   the offender's identity — a doc name, a scene name, or for an entity [`offender_key`], never
+//!   the id with its generation (a respawn takes a new generation) — so the same code still prints
+//!   once for each distinct offender.
 //! - **Never hashed, never serialized.** The resource is engine-owned world state like
 //!   [`AudioQueue`](crate::AudioQueue): outside the component registry, so it reaches neither
 //!   `WorldHash` nor a snapshot, and reporting cannot move a replay.
@@ -26,7 +27,11 @@
 use ludion_core::codes::code;
 use ludion_core::collections::{StableMap, StableSet};
 use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
-use ludion_ecs::{Registry, World};
+use ludion_core::ids::EntityId;
+use ludion_ecs::{Registry, World, is_presentation};
+
+use crate::components::Name;
+use crate::prefab::PrefabInstance;
 
 /// The engine-owned queue a game system reports diagnostics into, drained at the frame boundary.
 ///
@@ -57,6 +62,9 @@ pub struct Diagnostics {
     /// Every `(code, key)` already reported this session — the once-per-offender latch.
     /// Keyed by code so a probe by `&str` allocates nothing.
     latched: StableMap<DiagnosticCode, StableSet<String>>,
+    /// The current scene's identity, prefixed onto an entity key so an offender in a new scene
+    /// (whose ids restart at `e0v0`) cannot match an old scene's key.
+    scope: String,
 }
 
 impl Diagnostics {
@@ -125,8 +133,38 @@ impl Diagnostics {
         Diagnostics {
             pending: Vec::new(),
             latched: std::mem::take(&mut self.latched),
+            scope: String::new(),
         }
     }
+
+    /// Sets the scene identity [`offender_key`] prefixes onto entity keys.
+    pub(crate) fn set_scope(&mut self, scope: String) {
+        self.scope = scope;
+    }
+}
+
+/// The latch key for a report about `id`, stable across respawns. First match wins:
+///
+/// - a [`PrefabInstance`] part: `prefab:{source}#{part}`, not scene-scoped — the fault belongs to
+///   the prefab, so it reports once per `(code, source, part)` per session;
+/// - a [`Name`]d entity: `{scope}/{name}`, so same-named entities of one scene share a line;
+/// - anonymous: `{scope}#e{index}`, the slot index without its generation, so serial respawn in one
+///   slot is one key while two live anonymous offenders stay distinct.
+///
+/// A presentation entity is not read (a sim-phase read of it is refused) and keys as anonymous.
+pub(crate) fn offender_key(world: &World, id: EntityId) -> String {
+    let scope = world
+        .resource::<Diagnostics>()
+        .map_or("", |diagnostics| diagnostics.scope.as_str());
+    if !is_presentation(id) {
+        if let Ok(Some(instance)) = world.get::<PrefabInstance>(id) {
+            return format!("prefab:{}#{}", instance.source, instance.part);
+        }
+        if let Ok(Some(name)) = world.get::<Name>(id) {
+            return format!("{scope}/{}", name.0);
+        }
+    }
+    format!("{scope}#e{}", id.index())
 }
 
 /// Reports one diagnostic from a system that holds only `&mut World` — the one-line form of
@@ -220,7 +258,7 @@ pub(crate) fn report_unregistered(world: &mut World, registry: &Registry) {
 #[cfg(test)]
 mod tests {
     use super::{Diagnostics, report, report_full};
-    use crate::{Engine, SceneSwitch};
+    use crate::{Engine, SceneSwitch, spawn_prefab};
     use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
     use ludion_core::ids::EntityId;
     use ludion_ecs::{SystemCtx, World};
@@ -500,6 +538,182 @@ entities:
             .collect();
         assert_eq!(changed.len(), 1, "one switch, one event: {changed:?}");
         assert_eq!(changed[0].path, None);
+    }
+
+    const FAULTY_PREFAB: &str = "\
+format: 1
+kind: prefab
+name: rail
+entities:
+  - name: runner
+    components:
+      PathFollower:
+        path: missing.path.yaml
+";
+
+    /// Logs of `code` drained since the last call.
+    fn logged_code(engine: &mut Engine, code: &str) -> usize {
+        logged(engine)
+            .iter()
+            .filter(|log| code_of(log) == Some(code))
+            .count()
+    }
+
+    fn engine_with_prefab(name: &str) -> (ScratchDir, Engine) {
+        let dir = fresh_dir(name);
+        std::fs::write(dir.join("rail.prefab.yaml"), FAULTY_PREFAB).unwrap();
+        let mut engine = Engine::builder()
+            .project_root(&*dir)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        engine.take_events();
+        (dir, engine)
+    }
+
+    #[test]
+    fn a_faulty_prefab_respawned_many_times_logs_one_line() {
+        let (_dir, mut engine) = engine_with_prefab("prefab-respawn");
+        for round in 0..25 {
+            let ids = spawn_prefab(
+                engine.world_mut(),
+                "rail.prefab.yaml",
+                None,
+                Some(&format!("rail-{round}")),
+                false,
+            )
+            .expect("the prefab spawns");
+            engine.advance_live();
+            for id in ids {
+                engine.world_mut().despawn(id).unwrap();
+            }
+        }
+        let count = logged_code(&mut engine, "L1215");
+        let latched = engine
+            .world()
+            .resource::<Diagnostics>()
+            .unwrap()
+            .reported(DiagnosticCode::new("L1215"))
+            .count();
+        assert_eq!(count, 1, "25 respawns of one faulty part log one line");
+        assert_eq!(latched, 1, "and the latch holds one key, not 25");
+    }
+
+    #[test]
+    fn many_live_instances_of_a_faulty_prefab_log_one_line() {
+        let (_dir, mut engine) = engine_with_prefab("prefab-live");
+        for round in 0..10 {
+            spawn_prefab(
+                engine.world_mut(),
+                "rail.prefab.yaml",
+                None,
+                Some(&format!("rail-{round}")),
+                false,
+            )
+            .expect("the prefab spawns");
+        }
+        engine.advance_live();
+        engine.advance_live();
+        assert_eq!(logged_code(&mut engine, "L1215"), 1);
+    }
+
+    /// An anonymous `PathFollower` naming a missing path.
+    fn spawn_faulty_anonymous(engine: &mut Engine) -> EntityId {
+        let world = engine.world_mut();
+        let id = world.spawn();
+        world
+            .insert(
+                id,
+                crate::PathFollower {
+                    path: "missing.path.yaml".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn two_live_anonymous_offenders_log_two_lines_and_respawning_adds_none() {
+        let dir = fresh_dir("anonymous");
+        let mut engine = engine_with(|_, _| {}, &dir);
+        let first = spawn_faulty_anonymous(&mut engine);
+        let second = spawn_faulty_anonymous(&mut engine);
+        engine.advance_live();
+        assert_eq!(logged_code(&mut engine, "L1215"), 2);
+
+        for victim in [first, second] {
+            engine.world_mut().despawn(victim).unwrap();
+            spawn_faulty_anonymous(&mut engine);
+            engine.advance_live();
+        }
+        assert_eq!(
+            logged_code(&mut engine, "L1215"),
+            0,
+            "a respawn in a reported slot is the same offender"
+        );
+    }
+
+    /// Switches to `next.yaml` on frame 2 and back to `first.yaml` on frame 5.
+    fn switch_there_and_back(world: &mut World, ctx: &SystemCtx) {
+        let target = match ctx.frame.as_u64() {
+            2 => "next.yaml",
+            5 => "first.yaml",
+            _ => return,
+        };
+        if let Some(switch) = world.resource_mut::<SceneSwitch>() {
+            switch.request(
+                target.to_string(),
+                "gate".to_string(),
+                Vec::<EntityId>::new(),
+            );
+        }
+    }
+
+    #[test]
+    fn an_anonymous_offender_in_a_second_scene_reports_and_returning_adds_none() {
+        let dir = fresh_dir("scoped");
+        let named = |name: &str| {
+            format!(
+                "format: 1\nname: {name}\nentities:\n  - name: gate\n    components:\n      Transform: {{}}\n"
+            )
+        };
+        std::fs::write(dir.join("first.yaml"), named("first")).unwrap();
+        std::fs::write(dir.join("next.yaml"), named("second")).unwrap();
+        let mut engine = Engine::builder()
+            .system("switch_there_and_back", switch_there_and_back)
+            .project_root(&*dir)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(&named("first")).expect("loads");
+        engine.take_events();
+
+        spawn_faulty_anonymous(&mut engine);
+        engine.advance_live(); // frame 0
+        engine.advance_live(); // frame 1
+        assert_eq!(logged_code(&mut engine, "L1215"), 1, "first scene");
+
+        engine.advance_live(); // frame 2: the switch to `second`
+        engine.advance_live(); // frame 3
+        assert!(engine.last_transition_error().is_none());
+        spawn_faulty_anonymous(&mut engine);
+        engine.advance_live(); // frame 4
+        assert_eq!(
+            logged_code(&mut engine, "L1215"),
+            1,
+            "the same slot in a new scene is a new offender"
+        );
+
+        engine.advance_live(); // frame 5: the switch back to `first`
+        engine.advance_live(); // frame 6
+        assert!(engine.last_transition_error().is_none());
+        spawn_faulty_anonymous(&mut engine);
+        engine.advance_live();
+        assert_eq!(
+            logged_code(&mut engine, "L1215"),
+            0,
+            "returning to a visited scene stays quiet"
+        );
     }
 
     #[test]

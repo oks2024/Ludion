@@ -688,7 +688,7 @@ pub(crate) fn report_hierarchy_faults(world: &mut World) {
         // The latch is probed before the message is formatted: a fault persists every tick.
         match fault {
             HierarchyFault::InvalidParent(parent) => {
-                let key = format!("{id}/Parent");
+                let key = format!("{}/Parent", crate::diagnostics::offender_key(world, id));
                 if !crate::diagnostics::is_latched(world, code::HIERARCHY_PARENT_INVALID, &key) {
                     crate::diagnostics::report(
                         world,
@@ -702,7 +702,7 @@ pub(crate) fn report_hierarchy_faults(world: &mut World) {
                 }
             }
             HierarchyFault::TooDeep => {
-                let key = format!("{id}/Parent");
+                let key = format!("{}/Parent", crate::diagnostics::offender_key(world, id));
                 if !crate::diagnostics::is_latched(world, code::HIERARCHY_TOO_DEEP, &key) {
                     crate::diagnostics::report(
                         world,
@@ -718,7 +718,7 @@ pub(crate) fn report_hierarchy_faults(world: &mut World) {
             HierarchyFault::Cycle => {
                 let members = cycle_members(world, id);
                 let key = members.iter().min().copied().unwrap_or(id);
-                let key = format!("{key}/Parent");
+                let key = format!("{}/Parent", crate::diagnostics::offender_key(world, key));
                 if !crate::diagnostics::is_latched(world, code::HIERARCHY_CYCLE, &key) {
                     crate::diagnostics::report(
                         world,

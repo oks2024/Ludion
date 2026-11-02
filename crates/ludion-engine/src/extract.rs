@@ -703,7 +703,7 @@ fn extract_inner(
         &mut poses,
         now,
     );
-    drop_non_finite(&mut placed, degraded);
+    drop_non_finite(world, &mut placed, degraded);
     // Hidden entities leave every list that feeds the scene, early, so the blend keys and the pixel
     // snap stay consistent. Meshes stay: the GI voxelizer reads them and ignores `Visibility`.
     let visibility = FrameVisibility::of(world, &ids);
@@ -2700,16 +2700,20 @@ pub fn mesh_grid_cell(grid: &MeshGrid, col: usize, row: usize) -> (Mat4, Mat3) {
 /// Skips every sprite and mesh whose placement is not finite, reporting each as `L2109`. NaN
 /// geometry draws nothing and says nothing; dropping it here keeps the sort and the GI voxelizer
 /// downstream NaN-free. A tilemap or mesh grid reports once per entity, not per cell, and the latch
-/// key names the entity (`{id}/sprite`, `{id}/mesh`), not its walk position: an entity id is stable
-/// across despawns, a walk index is reused.
-fn drop_non_finite(placed: &mut Placed<'_>, degraded: &mut Vec<(String, Diagnostic)>) {
+/// key names the entity (`{offender}/sprite`, `{offender}/mesh`, see
+/// [`offender_key`](crate::diagnostics::offender_key)), not its walk position: a walk index is reused.
+fn drop_non_finite(
+    world: &World,
+    placed: &mut Placed<'_>,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) {
     let mut last_sprite = None;
     placed.sprites.retain(|s| {
         let finite = s.center.is_finite() && s.right.is_finite() && s.up.is_finite();
         if !finite && last_sprite != Some(s.id) {
             last_sprite = Some(s.id);
             degraded.push((
-                format!("{}/sprite", s.id),
+                format!("{}/sprite", crate::diagnostics::offender_key(world, s.id)),
                 Diagnostic::new(
                     code::RENDER_PLACEMENT_NON_FINITE,
                     format!(
@@ -2732,7 +2736,7 @@ fn drop_non_finite(placed: &mut Placed<'_>, degraded: &mut Vec<(String, Diagnost
         if !finite && last_reported != Some(m.id) {
             last_reported = Some(m.id);
             degraded.push((
-                format!("{}/mesh", m.id),
+                format!("{}/mesh", crate::diagnostics::offender_key(world, m.id)),
                 Diagnostic::new(
                     code::RENDER_PLACEMENT_NON_FINITE,
                     format!(
@@ -5053,8 +5057,14 @@ mod tests {
             .inspect(|(_, d)| assert_eq!(d.code, code::RENDER_PLACEMENT_NON_FINITE))
             .map(|(key, d)| (key.as_str(), d.path.as_deref()))
             .collect();
-        let sprite_key = format!("{nan_sprite}/sprite");
-        let mesh_key = format!("{inf_mesh}/mesh");
+        let sprite_key = format!(
+            "{}/sprite",
+            crate::diagnostics::offender_key(&world, nan_sprite)
+        );
+        let mesh_key = format!(
+            "{}/mesh",
+            crate::diagnostics::offender_key(&world, inf_mesh)
+        );
         assert_eq!(
             reported,
             [
@@ -5065,7 +5075,8 @@ mod tests {
     }
 
     /// `L2109` latches per entity, not per scene-walk position: once A is reported, B going
-    /// non-finite at the walk index A vacated is a new offender, and A is not reported twice.
+    /// non-finite at the walk index A vacated (A and a spare are despawned in LIFO order, so B takes
+    /// the spare's slot) is a new offender, and A is not reported twice.
     #[test]
     fn l2109_is_latched_per_entity_not_per_walk_index() {
         use crate::Engine;
@@ -5121,14 +5132,16 @@ mod tests {
         };
 
         let a = spawn_nan_sprite(&mut engine);
+        let spare = engine.world_mut().spawn();
         let logged = reported_after_extract(&mut engine);
         assert_eq!(logged.len(), 1, "{logged:?}");
         assert!(logged[0].contains(&a.to_string()), "{logged:?}");
         assert!(!logged[0].contains("  "), "{logged:?}");
 
         engine.world_mut().despawn(a).unwrap();
+        engine.world_mut().despawn(spare).unwrap();
         let b = spawn_nan_sprite(&mut engine);
-        assert_ne!(a, b);
+        assert_ne!(a.index(), b.index());
         let logged = reported_after_extract(&mut engine);
         assert_eq!(logged.len(), 1, "B reuses A's walk index: {logged:?}");
         assert!(logged[0].contains(&b.to_string()), "{logged:?}");

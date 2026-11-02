@@ -2360,8 +2360,24 @@ impl Engine {
     /// The latch travels because "once per session" is a property of the session, not of a world: a
     /// run that walks back and forth through a gate would otherwise re-print the same fault at every
     /// crossing.
-    fn install_diagnostics(&mut self, carried: crate::Diagnostics) {
+    fn install_diagnostics(&mut self, mut carried: crate::Diagnostics) {
+        carried.set_scope(self.scene_scope());
         self.driver.world_mut().insert_resource(carried);
+    }
+
+    /// The loaded scene's identity for [`offender_key`](crate::diagnostics::offender_key): its
+    /// `name:`, else its path, else the content hash of its inline text, else `""` at boot.
+    fn scene_scope(&self) -> String {
+        if let Some(name) = &self.scene_name {
+            return name.clone();
+        }
+        match &self.scene {
+            Some(SceneRef::Path { path }) => path.clone(),
+            Some(SceneRef::Inline { document }) => {
+                format!("{:016x}", ludion_assets::content_hash(document.as_bytes()))
+            }
+            None => String::new(),
+        }
     }
 
     /// Mirrors this session's [`render_size`](Engine::render_size) onto the current world as the

@@ -97,10 +97,11 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         );
     }
     if !world.has::<Camera>(entity) {
+        let key = crate::diagnostics::offender_key(world, entity);
         crate::diagnostics::report(
             world,
             code::CAMERA_RIG_WITHOUT_CAMERA,
-            entity.to_string(),
+            key,
             format!(
                 "{entity} has a `CameraRig` but no `Camera`, so there is nothing to pose: put the \
                  rig on the camera entity"
@@ -109,10 +110,11 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         return;
     }
     if world.has::<Parent>(entity) {
+        let key = crate::diagnostics::offender_key(world, entity);
         crate::diagnostics::report(
             world,
             code::CAMERA_RIG_PARENTED,
-            entity.to_string(),
+            key,
             format!(
                 "{entity} has a `CameraRig` and a `Parent`; the rig writes a world-space pose: \
                  make the camera a root entity"
@@ -127,9 +129,10 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         return;
     };
     if let Some((pointer, rule)) = invalid_field(&rig) {
+        let key = crate::diagnostics::offender_key(world, entity);
         crate::diagnostics::report_full(
             world,
-            entity.to_string(),
+            key,
             Diagnostic::new(
                 code::CAMERA_RIG_INVALID,
                 format!("{entity} `CameraRig` `{pointer}` {rule}; the camera holds its pose"),
@@ -146,10 +149,11 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
     let Some(target_position) =
         crate::hierarchy::world_transform(world, target).map(|pose| pose.trs.translation)
     else {
+        let key = crate::diagnostics::offender_key(world, entity);
         crate::diagnostics::report(
             world,
             code::CAMERA_RIG_TARGET_MISSING,
-            entity.to_string(),
+            key,
             format!(
                 "the `CameraRig` on {entity} follows {target}, which does not exist; the camera \
                  holds its pose until `target` names a live entity"
@@ -182,7 +186,8 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
                 ),
                 Diagnostic::with_related,
             );
-            crate::diagnostics::report_full(world, entity.to_string(), diagnostic);
+            let key = crate::diagnostics::offender_key(world, entity);
+            crate::diagnostics::report_full(world, key, diagnostic);
             return;
         }
     };

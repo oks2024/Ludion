@@ -286,10 +286,14 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
         .map(|(id, _)| id)
         .collect();
     for id in sprite_fades {
+        let key = format!(
+            "{}/Animation/fade",
+            crate::diagnostics::offender_key(world, id)
+        );
         crate::diagnostics::report(
             world,
             code::ANIMATION_SPRITE_CROSSFADE,
-            format!("{id}/Animation/fade"),
+            key,
             format!(
                 "a sprite flipbook cannot crossfade: `Animation.fade` on {id} is ignored and the \
                  sprite hard-cuts to its `clip`"
@@ -401,7 +405,11 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
         let diagnostic = causes
             .into_iter()
             .fold(diagnostic, Diagnostic::with_related);
-        crate::diagnostics::report_full(world, format!("{id}/Animation/clip"), diagnostic);
+        let key = format!(
+            "{}/Animation/clip",
+            crate::diagnostics::offender_key(world, id)
+        );
+        crate::diagnostics::report_full(world, key, diagnostic);
     }
 }
 

@@ -481,7 +481,11 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         )
         .with_path(format!("/{field}"))
         .with_help(format!("give `{field}` a finite number"));
-        crate::diagnostics::report_full(world, format!("{id}/PathFollower/{field}"), diagnostic);
+        let key = format!(
+            "{}/PathFollower/{field}",
+            crate::diagnostics::offender_key(world, id)
+        );
+        crate::diagnostics::report_full(world, key, diagnostic);
     }
     for (id, path, causes) in failures {
         let diagnostic = Diagnostic::new(
@@ -491,7 +495,11 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         let diagnostic = causes
             .into_iter()
             .fold(diagnostic, Diagnostic::with_related);
-        crate::diagnostics::report_full(world, format!("{id}/PathFollower/path"), diagnostic);
+        let key = format!(
+            "{}/PathFollower/path",
+            crate::diagnostics::offender_key(world, id)
+        );
+        crate::diagnostics::report_full(world, key, diagnostic);
     }
 }
 

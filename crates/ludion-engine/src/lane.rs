@@ -364,11 +364,11 @@ fn resolve(world: &mut World, entity: EntityId) -> Option<Resolved> {
         )
         .with_path(format!("/{field}"))
         .with_help(format!("give `{field}` a value in its range"));
-        crate::diagnostics::report_full(
-            world,
-            format!("{entity}/LaneConstraint/{field}"),
-            diagnostic,
+        let key = format!(
+            "{}/LaneConstraint/{field}",
+            crate::diagnostics::offender_key(world, entity)
         );
+        crate::diagnostics::report_full(world, key, diagnostic);
         return None;
     }
     let loaded = world.resource_mut::<PathLibrary>().map(|library| {
@@ -382,11 +382,11 @@ fn resolve(world: &mut World, entity: EntityId) -> Option<Resolved> {
         Ok((sampler, spans, centre)) => {
             if !spans.is_empty() {
                 let diagnostic = path_vertical(&lane.path, &spans);
-                crate::diagnostics::report_full(
-                    world,
-                    format!("{entity}/LaneConstraint/vertical"),
-                    diagnostic,
+                let key = format!(
+                    "{}/LaneConstraint/vertical",
+                    crate::diagnostics::offender_key(world, entity)
                 );
+                crate::diagnostics::report_full(world, key, diagnostic);
             }
             Some(Resolved {
                 lane,
@@ -399,11 +399,11 @@ fn resolve(world: &mut World, entity: EntityId) -> Option<Resolved> {
                 .iter()
                 .cloned()
                 .fold(path_unloaded(&lane.path, &causes), Diagnostic::with_related);
-            crate::diagnostics::report_full(
-                world,
-                format!("{entity}/LaneConstraint/path"),
-                diagnostic,
+            let key = format!(
+                "{}/LaneConstraint/path",
+                crate::diagnostics::offender_key(world, entity)
             );
+            crate::diagnostics::report_full(world, key, diagnostic);
             None
         }
     }
@@ -600,10 +600,11 @@ pub(crate) fn report_without_motor(world: &mut World) {
         if world.has::<CharacterMotor>(id) {
             continue;
         }
+        let key = crate::diagnostics::offender_key(world, id);
         crate::diagnostics::report(
             world,
             code::LANE_WITHOUT_MOTOR,
-            id.to_string(),
+            key,
             format!(
                 "{id} has a `LaneConstraint` but no `CharacterMotor`, so nothing reads the lane: \
                  add a `CharacterMotor` to the entity"

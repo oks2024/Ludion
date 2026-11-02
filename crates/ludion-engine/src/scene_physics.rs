@@ -179,26 +179,14 @@ pub(crate) fn describe_entries() -> [Value; 3] {
     ]
 }
 
-/// The diagnostics latch key for a report about `entity`: `"{name}@{id}"` when it has a [`Name`],
-/// else its id. The id alone keeps two entities of one world apart (the generation makes it unique),
-/// but a district switch carries the latch onto a fresh world that reuses ids from `e0v0` — the name
-/// ties a report to the authored entity across that boundary, and keeps two same-named entities
-/// distinct.
-fn latch_key(world: &World, entity: EntityId) -> String {
-    match world.get::<Name>(entity) {
-        Ok(Some(name)) => format!("{}@{entity}", name.0),
-        _ => entity.to_string(),
-    }
-}
-
 /// Drains `ludion-physics`'s queued shape rejections and reports each once through
 /// [`crate::diagnostics::report`] — the seam this module exists for, since `ludion-physics` cannot
 /// see the engine's `Diagnostics` resource (it does not depend on the engine). A no-op on a world
 /// with no [`PhysicsWorld`] resource, which is every world until a collider is first claimed.
 ///
-/// The latch key is the entity's [`Name`] plus its id ([`latch_key`]), so two entities sharing a
-/// name (or having none) latch independently; the message names the entity by its [`Name`] when it
-/// has one, else by that id, so it reads the way a level designer would recognize the offender.
+/// The latch key is the entity's [`offender_key`](crate::diagnostics::offender_key), stable across
+/// respawns; the message names the entity by its [`Name`] when it has one, else by its id, so it
+/// reads the way a level designer would recognize the offender.
 pub(crate) fn report_rejections(world: &mut World) {
     let Some(physics) = world.resource_mut::<PhysicsWorld>() else {
         return;
@@ -234,7 +222,7 @@ pub(crate) fn report_rejections(world: &mut World) {
             Diagnostic::new(rejection.code, message),
             Diagnostic::with_related,
         );
-        let key = latch_key(world, rejection.entity);
+        let key = crate::diagnostics::offender_key(world, rejection.entity);
         crate::diagnostics::report_full(world, key, diagnostic);
     }
 }
@@ -254,7 +242,7 @@ pub(crate) fn report_parented_bodies(world: &mut World) {
         .map(|(id, _)| id)
         .collect();
     for id in motors {
-        let key = latch_key(world, id);
+        let key = crate::diagnostics::offender_key(world, id);
         if crate::diagnostics::is_latched(world, code::CHARACTER_MOTOR_PARENTED, &key) {
             continue;
         }
@@ -278,7 +266,7 @@ pub(crate) fn report_parented_bodies(world: &mut World) {
             Body::Static(_) => code::HIERARCHY_STATIC_COLLIDER,
             Body::Kinematic(_) => code::HIERARCHY_KINEMATIC_SHEAR,
         };
-        let key = latch_key(world, id);
+        let key = crate::diagnostics::offender_key(world, id);
         if crate::diagnostics::is_latched(world, diagnostic, &key) {
             continue;
         }
@@ -316,7 +304,7 @@ pub(crate) fn report_scaled_colliders(world: &mut World) {
         .map(|(id, (_, transform))| (id, transform.scale))
         .collect();
     for (id, own) in ids {
-        let key = latch_key(world, id);
+        let key = crate::diagnostics::offender_key(world, id);
         if crate::diagnostics::is_latched(world, code::COLLIDER_SCALE_IGNORED, &key) {
             continue;
         }
@@ -450,7 +438,7 @@ pub(crate) fn entity_label(world: &World, id: EntityId) -> String {
 /// [`report_rejections`] seam, for a joint whose `a` or `b` is dead or has no body instead of a
 /// rejected shape. A no-op on a world with no [`PhysicsWorld`] resource.
 ///
-/// The latch key is the carrier's [`latch_key`], the [`report_rejections`] precedent.
+/// The latch key is the carrier's [`offender_key`](crate::diagnostics::offender_key), the [`report_rejections`] precedent.
 pub(crate) fn report_missing_joints(world: &mut World) {
     let Some(physics) = world.resource_mut::<PhysicsWorld>() else {
         return;
@@ -483,7 +471,7 @@ pub(crate) fn report_missing_joints(world: &mut World) {
                  bodies exist"
             ),
         };
-        let key = latch_key(world, carrier);
+        let key = crate::diagnostics::offender_key(world, carrier);
         crate::diagnostics::report(world, code::JOINT_BODY_MISSING, key, message);
     }
 }
@@ -492,7 +480,7 @@ pub(crate) fn report_missing_joints(world: &mut World) {
 /// [`report_missing_joints`] seam, for a `JointMotor` that cannot drive its carrier's `Joint`. A
 /// no-op on a world with no [`PhysicsWorld`] resource.
 ///
-/// The latch key is the carrier's [`latch_key`], the [`report_rejections`] precedent.
+/// The latch key is the carrier's [`offender_key`](crate::diagnostics::offender_key), the [`report_rejections`] precedent.
 pub(crate) fn report_motor_mismatches(world: &mut World) {
     let Some(physics) = world.resource_mut::<PhysicsWorld>() else {
         return;
@@ -504,7 +492,7 @@ pub(crate) fn report_motor_mismatches(world: &mut World) {
             "{named}: {}; the joint stays passive until its JointMotor or Joint changes",
             mismatch.reason
         );
-        let key = latch_key(world, mismatch.carrier);
+        let key = crate::diagnostics::offender_key(world, mismatch.carrier);
         crate::diagnostics::report(world, code::JOINT_MOTOR_MISMATCH, key, message);
     }
 }
@@ -513,7 +501,7 @@ pub(crate) fn report_motor_mismatches(world: &mut World) {
 /// as `L3038` — the [`report_motor_mismatches`] seam, for an impulse whose target has no rigid
 /// body. A no-op on a world with no [`PhysicsWorld`] resource.
 ///
-/// The latch key is the target entity's [`latch_key`], the [`report_rejections`] precedent.
+/// The latch key is the target entity's [`offender_key`](crate::diagnostics::offender_key), the [`report_rejections`] precedent.
 pub(crate) fn report_impulse_misses(world: &mut World) {
     let Some(physics) = world.resource_mut::<PhysicsWorld>() else {
         return;
@@ -522,7 +510,7 @@ pub(crate) fn report_impulse_misses(world: &mut World) {
     for miss in misses {
         let named = entity_label(world, miss.entity);
         let message = format!("{named}: {}; the impulse was dropped", miss.reason);
-        let key = latch_key(world, miss.entity);
+        let key = crate::diagnostics::offender_key(world, miss.entity);
         crate::diagnostics::report(world, code::IMPULSE_TARGET_INVALID, key, message);
     }
 }
@@ -555,24 +543,50 @@ mod tests {
     use ludion_spatial::{Body, Collider, JointKind, RigidBody, Shape};
 
     #[test]
-    fn the_latch_key_pairs_a_name_with_the_id() {
+    fn the_offender_key_has_three_forms_and_is_scoped() {
+        use crate::diagnostics::offender_key;
+        use crate::prefab::PrefabInstance;
+
         let mut world = World::new();
+        world.insert_resource(Diagnostics::default());
+        world
+            .resource_mut::<Diagnostics>()
+            .unwrap()
+            .set_scope("town".to_string());
         let named = world.spawn();
         world
             .insert(named, Name("crate".to_string()))
             .expect("a fresh entity accepts a name");
         let anonymous = world.spawn();
-
-        assert_eq!(latch_key(&world, named), format!("crate@{named}"));
-        assert_eq!(latch_key(&world, anonymous), anonymous.to_string());
-
-        // A fresh world reuses the first id: only the name tells the two authored entities apart.
-        let mut other = World::new();
-        let first = other.spawn();
-        other
-            .insert(first, Name("door".to_string()))
+        let part = world.spawn();
+        world
+            .insert(part, Name("ignored".to_string()))
             .expect("a fresh entity accepts a name");
-        assert_ne!(latch_key(&world, named), latch_key(&other, first));
+        world
+            .insert(
+                part,
+                PrefabInstance {
+                    source: "prefabs/door.yaml".to_string(),
+                    part: "leaf".to_string(),
+                    root: part,
+                },
+            )
+            .expect("a fresh entity accepts an instance");
+
+        assert_eq!(offender_key(&world, named), "town/crate");
+        assert_eq!(
+            offender_key(&world, anonymous),
+            format!("town#e{}", anonymous.index())
+        );
+        assert_eq!(offender_key(&world, part), "prefab:prefabs/door.yaml#leaf");
+
+        // One name under two scopes is two offenders.
+        world
+            .resource_mut::<Diagnostics>()
+            .unwrap()
+            .set_scope("cellar".to_string());
+        assert_eq!(offender_key(&world, named), "cellar/crate");
+        assert_eq!(offender_key(&world, part), "prefab:prefabs/door.yaml#leaf");
     }
 
     #[test]
@@ -905,10 +919,10 @@ mod tests {
         );
     }
 
-    /// The rejection latch is keyed by entity id, not by [`Name`], so two entities sharing a name
-    /// each report once instead of one shadowing the other.
+    /// The rejection latch is keyed by [`Name`] within a scene, so two entities sharing a name
+    /// report one line between them; fixing one surfaces the other on the next run.
     #[test]
-    fn two_entities_sharing_a_name_each_report_their_own_rejection() {
+    fn two_entities_sharing_a_name_report_one_rejection() {
         let mut world = World::new();
         world.insert_resource(Diagnostics::default());
         let degenerate = || Collider {
@@ -919,7 +933,6 @@ mod tests {
             layer: None,
             sensor: false,
         };
-        let mut entities = Vec::new();
         for _ in 0..2 {
             let entity = world.spawn();
             world
@@ -931,7 +944,6 @@ mod tests {
             world
                 .insert(entity, degenerate())
                 .expect("a fresh entity accepts a collider");
-            entities.push(entity);
         }
 
         let mut schedule = Schedule::new();
@@ -948,18 +960,10 @@ mod tests {
             .take();
         assert_eq!(
             reported.len(),
-            2,
-            "two distinct entities named `twin` must each latch independently: {reported:?}"
+            1,
+            "two entities named `twin` share one line: {reported:?}"
         );
-        for entity in entities {
-            let id = entity.to_string();
-            assert!(
-                reported
-                    .iter()
-                    .any(|d| d.message.contains("twin") && d.message.contains(&id)),
-                "expected a message naming `twin` and {id}: {reported:?}"
-            );
-        }
+        assert!(reported[0].message.contains("twin"), "{reported:?}");
     }
 
     /// `L3035`'s message names which of `a`/`b` went missing, its id, and whether it is dead: a

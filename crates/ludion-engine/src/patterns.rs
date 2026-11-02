@@ -637,7 +637,8 @@ pub fn play_patterns(world: &mut World, ctx: &SystemCtx) {
         return;
     }
     let mut spawns: Vec<(Transform, Volley)> = Vec::new();
-    let mut warnings: Vec<(String, String)> = Vec::new();
+    // `(offender, key suffix, message)`: the key is built from the offender at the report loop.
+    let mut warnings: Vec<(EntityId, String, String)> = Vec::new();
 
     // The players come out of the world before the [`DocStore`] does: the store is a shared borrow
     // held across the whole walk, and a typed query needs `&mut World`. A player's record is one
@@ -667,7 +668,8 @@ pub fn play_patterns(world: &mut World, ctx: &SystemCtx) {
             let id = *id;
             let Some(doc) = store.and_then(|store| store.get(&player.pattern)) else {
                 warnings.push((
-                    format!("{id}/pattern"),
+                    id,
+                    "pattern".to_string(),
                     format!(
                         "PatternPlayer on {id} names pattern `{}`, which is not a loaded \
                          `kind: pattern` document; the player fires nothing",
@@ -706,7 +708,8 @@ pub fn play_patterns(world: &mut World, ctx: &SystemCtx) {
                     Some(play) => {
                         let Some(played) = store.and_then(|store| store.get(play)) else {
                             walk.warnings.push((
-                                format!("{id}/play:{play}"),
+                                id,
+                                format!("play:{play}"),
                                 format!(
                                     "pattern `{}` plays `{play}`, which is not a loaded \
                                      `kind: pattern` document; the entry fires nothing",
@@ -731,7 +734,11 @@ pub fn play_patterns(world: &mut World, ctx: &SystemCtx) {
         let _ = world.insert(entity, transform);
         let _ = world.insert(entity, volley);
     }
-    for (key, message) in warnings {
+    for (offender, suffix, message) in warnings {
+        let key = format!(
+            "{}/{suffix}",
+            crate::diagnostics::offender_key(world, offender)
+        );
         report(world, code::VOLLEY_INVALID, key, message);
     }
 }
@@ -764,7 +771,7 @@ struct Walk<'a> {
     /// The captured aim angle in degrees, or `None` when the player has no live target.
     aim_deg: Option<f32>,
     spawns: &'a mut Vec<(Transform, Volley)>,
-    warnings: &'a mut Vec<(String, String)>,
+    warnings: &'a mut Vec<(EntityId, String, String)>,
     /// Counts every candidate volley the walk passes — fired or not, an entry's `repeat` candidates
     /// in order — so a volley's seed does not depend on which of its siblings happened to be due
     /// this frame.
@@ -815,7 +822,8 @@ impl Walk<'_> {
         };
         if !doc.bullets.contains_key(name) {
             self.warnings.push((
-                format!("{}/bullet:{name}", self.player),
+                self.player,
+                format!("bullet:{name}"),
                 format!(
                     "pattern `{pattern}` fires bullet kind `{name}`, which its own `bullets:` \
                      map does not define; the volley is skipped"
@@ -830,7 +838,8 @@ impl Walk<'_> {
                 Some(aim) => aim,
                 None => {
                     self.warnings.push((
-                        format!("{}/target", self.player),
+                        self.player,
+                        "target".to_string(),
                         format!(
                             "pattern `{pattern}` aims a volley at the player's `target`, which \
                              is missing or dead; it fires at its authored absolute angle instead"
@@ -893,7 +902,7 @@ pub fn advance_volleys(world: &mut World, ctx: &SystemCtx) {
             };
             if let Some(field) = volley_non_finite_field(volley) {
                 warnings.push((
-                    format!("{id}/{field}"),
+                    format!("volley:{}/{}/{field}", volley.pattern, volley.bullet),
                     format!(
                         "volley {id} has a non-finite `{field}`, so every bullet position would \
                          be NaN; it is reaped"
@@ -907,7 +916,7 @@ pub fn advance_volleys(world: &mut World, ctx: &SystemCtx) {
                 .and_then(|doc| doc.bullets.get(&volley.bullet));
             let Some(kind) = kind else {
                 warnings.push((
-                    format!("{id}/kind"),
+                    format!("volley:{}/{}/kind", volley.pattern, volley.bullet),
                     format!(
                         "volley {id} names bullet kind `{}` of pattern `{}`, which is not loaded; \
                          it cannot be drawn or hit-tested and is reaped",
@@ -2442,7 +2451,7 @@ timeline:
         assert!(crate::diagnostics::is_latched(
             engine.world(),
             code::VOLLEY_INVALID,
-            &format!("{id}/angle_deg")
+            "volley:patterns/probe.yaml/needle/angle_deg"
         ));
         let _ = std::fs::remove_dir_all(&dir);
     }

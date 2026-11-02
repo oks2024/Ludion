@@ -84,8 +84,8 @@ server). The two lanes' capacities and what happens to a message next are
   intake of `StampedCommand`s and a capacity-1 one-shot reply per command. That is the entire surface
   `ludion-server` needs.
 - **A diagnostic's latch is `(code, key)`, once per session**, so a check running every tick prints
-  one line while one code still prints once per offender (`key` = a doc name, a scene name, a slot
-  index).
+  one line while one code still prints once per offender (`key` = a doc name, a scene name, or an
+  entity's `offender_key`).
 - **Diagnostics are drained in `drain_frame_boundary`**, after the system-panic drain and before
   `drain_scene_switch`: each report becomes one `Event::Log` built by `LogEvent::from_diagnostic` (the
   severity's level, `message` the `Display` rendering, the whole diagnostic in `LogEvent.diagnostic`)
