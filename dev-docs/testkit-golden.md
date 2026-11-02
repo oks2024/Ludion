@@ -108,6 +108,7 @@ render — no GPU included — must be a hard failure, never a skip. `bless()` a
 a golden whose parent dir is the host's `goldens/<os>/` when the adapter does not contain the
 platform's reference constant (`RTX 3090` / `Apple M4`); a scratch golden outside an OS dir is never
 refused, and `LUDION_BLESS_ANY_ADAPTER=1` opts out (a game project whose pinned GPU is its own).
+`LUDION_GOLDEN_ACTUALS=<dir>` makes the compare path also write every rendered image, pass or fail, to `<dir>/<stem>.png` — a byte comparison of two builds without a bless; it never touches a golden.
 
 **Wire-side comparison.** `compare_png_bytes(golden_png, actual_png, threshold)` runs the
 identical decode + comparison on two in-memory PNGs — the entry point for a `render.screenshot`

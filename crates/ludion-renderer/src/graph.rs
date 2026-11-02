@@ -1520,15 +1520,16 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // sunless frame's zeroed uniform plus 1×1 fallback depth already refuses to do. The cost is that
     // the depth buffer now lives to the end of the frame instead of dying at the scene pass.
     //
-    // The shaft term and the depth-of-field gather are the two inputs that genuinely cannot be
-    // unconditional — neither producer exists on most frames — so both are declared **last**, after
-    // every required read and in their binding order. That ordering is the graph half of the
+    // The shaft term, the depth-of-field gather and the transparent layer are the inputs that
+    // genuinely cannot be unconditional — none of their producers exists on most frames — so all are
+    // declared **last**, after every required read and in their binding order. That ordering is the graph half of the
     // optional-slot rule `fullscreen_effect` states: the recorder walks the optional slots in their
     // fixed binding order and consumes a real input for each present one, so the graph must declare
     // the present ones in that same order, behind the required reads.
     let mut composite_reads = vec![scene, bloom, scene_depth];
     composite_reads.extend(shafts_term);
     composite_reads.extend(dof_term);
+    composite_reads.extend(transparent_layer);
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
@@ -4955,7 +4956,7 @@ mod tests {
 
     /// With both halves the pass and the `Rg16Float` target exist at the render extent, the pass
     /// draws after `transparents` over the opaque depth and before `composite`, and `composite`
-    /// reads exactly what it did without the layer.
+    /// reads exactly what it did without the layer, plus the layer last.
     #[test]
     fn the_transparent_layer_pass_follows_the_transparents() {
         let size = FrameSize::scaled(64, 64, crate::RenderScale::new(2.0).unwrap());
@@ -4998,7 +4999,12 @@ mod tests {
                 .map(|r| graph.resources()[r.index()].name.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(composite_reads(&graph), composite_reads(&without));
+        let mut expected = composite_reads(&without);
+        expected.push(pass::TRANSPARENT_DEPTH.to_string());
+        assert_eq!(composite_reads(&graph), expected);
+        let (plain, _) = build_frame_graph(size, PostChain::default());
+        assert_eq!(composite_reads(&plain), composite_reads(&without));
+        assert!(!composite_reads(&plain).contains(&pass::TRANSPARENT_DEPTH.to_string()));
     }
 
     /// The dump names the pass and its format, which is how an agent sees the layer is scheduled.

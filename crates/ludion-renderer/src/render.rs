@@ -1833,6 +1833,7 @@ impl Renderer {
             has_ao: chain.ssao,
             has_shafts: chain.shafts,
             has_dof: chain.dof,
+            has_transparent_depth: chain.transparent_depth_scheduled(),
             has_smaa: chain.smaa_scheduled(),
             resample_owns_output: chain.resample_owns_output(size),
             ssr_view: chain.ssr.zip(chain.ssr_view).map(|(scale, view)| {
@@ -3282,6 +3283,10 @@ struct FrameRecorder<'a> {
     /// graph's `dof` target against the 1×1 fallback), sets its uniform flag, and mirrors the two
     /// passes' presence.
     has_dof: bool,
+    /// Whether this frame draws the transparent layer ([`PostChain::transparent_depth_scheduled`]).
+    /// Picks the composite's optional `transparent_depth_tex` (the layer target against the 1×1
+    /// fallback), sets its uniform flag, and mirrors the pass's presence.
+    has_transparent_depth: bool,
     /// Whether this frame runs the SMAA passes. The composite then runs with its grain and dither
     /// zeroed, because `smaa_blend` applies them after the blend (unless a resample follows).
     has_smaa: bool,
@@ -3473,12 +3478,13 @@ impl PassRecorder for FrameRecorder<'_> {
                     sky_zenith: self.environment.map_or([0.0; 3], |env| env.sky_zenith),
                     sky_horizon: self.environment.map_or([0.0; 3], |env| env.sky_horizon),
                     sky_ground: self.environment.map_or([0.0; 3], |env| env.sky_ground),
-                    pad0: 0.0,
+                    transparent_depth: u32::from(self.has_transparent_depth),
                     pad1: 0.0,
                     pad2: 0.0,
                     inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
+                    view_forward: self.view_forward,
                 };
-                // The composite's two optional inputs, each at the binding the WGSL itself declares,
+                // The composite's three optional inputs, each at the binding the WGSL itself declares,
                 // so neither can move the other and turning one off cannot shift the one behind it.
                 let optional = [
                     OptionalInput {
@@ -3489,6 +3495,11 @@ impl PassRecorder for FrameRecorder<'_> {
                     OptionalInput {
                         binding: shader_gen::DOF_TEX_BINDING,
                         present: self.has_dof,
+                        fallback: &self.r.fallback_hdr.view,
+                    },
+                    OptionalInput {
+                        binding: shader_gen::TRANSPARENT_DEPTH_TEX_BINDING,
+                        present: self.has_transparent_depth,
                         fallback: &self.r.fallback_hdr.view,
                     },
                 ];
@@ -6660,6 +6671,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Bayer,
             Snippet::Medium,
             Snippet::SkyGradient,
+            Snippet::ViewRay,
             Snippet::Hdr,
             Snippet::Srgb,
             Snippet::OutputEncode,
@@ -7284,7 +7296,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::Composite,
         create:
-            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_samp_composite_bgl,
+            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_samp_composite_bgl,
     },
     LayoutDesc {
         id: LayoutId::Resolve,
@@ -9057,10 +9069,11 @@ mod tests {
             ],
             [0, 1, 2],
         );
-        // Five input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
-        // the blurred shaft term and blends the depth-of-field gather — the first three in the graph
-        // pass's declared read order, and the last two the arc's *optional* slots, whose bindings are
-        // fixed whether or not the scene enables them (see `optional_inputs_hold_their_binding`).
+        // Six input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
+        // the blurred shaft term, blends the depth-of-field gather and loads the transparent layer —
+        // the first three in the graph pass's declared read order, and the last three the arc's
+        // *optional* slots, whose bindings are fixed whether or not the scene enables them (see
+        // `optional_inputs_hold_their_binding`).
         assert_eq!(
             [
                 shader_gen::SCENE_TEX_BINDING,
@@ -9068,10 +9081,11 @@ mod tests {
                 shader_gen::SCENE_DEPTH_TEX_BINDING,
                 shader_gen::SHAFTS_TEX_BINDING,
                 shader_gen::DOF_TEX_BINDING,
+                shader_gen::TRANSPARENT_DEPTH_TEX_BINDING,
                 shader_gen::SAMP_BINDING,
                 shader_gen::COMPOSITE_BINDING,
             ],
-            [0, 1, 2, 3, 4, 5, 6],
+            [0, 1, 2, 3, 4, 5, 6, 7],
         );
         // Two input textures: the depth-of-field prefilter samples the scene and loads its depth, in
         // the graph pass's declared read order. One input: the gather, over that one target.
@@ -9277,6 +9291,31 @@ mod tests {
             binding_plan(3, &[shafts, dof]),
             [Some(0), Some(1), Some(2), None, None],
             "both absent leaves the required inputs exactly where they were",
+        );
+
+        // The transparent layer sits behind both, adjacent to the gather, and cannot shift either
+        // of them or be shifted by them.
+        let layer = shader_gen::TRANSPARENT_DEPTH_TEX_BINDING;
+        assert_eq!(layer, dof + 1, "the optional slots are adjacent");
+        assert_eq!(
+            binding_plan(6, &[]),
+            [Some(0), Some(1), Some(2), Some(3), Some(4), Some(5)],
+            "all three optional inputs present",
+        );
+        assert_eq!(
+            binding_plan(5, &[layer]),
+            [Some(0), Some(1), Some(2), Some(3), Some(4), None],
+            "the layer absent must not move the other two",
+        );
+        assert_eq!(
+            binding_plan(5, &[dof]),
+            [Some(0), Some(1), Some(2), Some(3), None, Some(4)],
+            "the gather absent must not move the layer's declared position past the shafts",
+        );
+        assert_eq!(
+            binding_plan(3, &[shafts, dof, layer]),
+            [Some(0), Some(1), Some(2), None, None, None],
+            "all absent leaves the required inputs exactly where they were",
         );
     }
 
@@ -20583,6 +20622,573 @@ mod tests {
             third.rgba, never.rgba,
             "the third frame matches a fresh renderer's"
         );
+    }
+
+    // --- Fog at each transparent's own distance ----------------------------------------------
+
+    /// The exact-output post with fog on: an output byte is the sRGB encoding of the linear value
+    /// the composite produced, and `dither: false` keeps two different pixels comparable.
+    fn own_fog_post(density: f32, color: [f32; 3]) -> PostData {
+        PostData {
+            fog_density: density,
+            fog_color: color,
+            ..exact_post()
+        }
+    }
+
+    /// The fog fixture's sky and `FOG_COLOR`, with no slabs: a camera at the origin looking down −Z.
+    fn own_fog_scene(w: u32, h: u32, density: f32) -> RenderScene {
+        let mut scene = fog_scene(w, h);
+        scene.meshes.clear();
+        scene.post = Some(own_fog_post(density, FOG_COLOR));
+        scene
+    }
+
+    /// A square sprite of side `size`.
+    fn sized_sprite(
+        center: Vec3,
+        size: f32,
+        color: [f32; 4],
+        additive: bool,
+    ) -> crate::scene::SpriteInstance {
+        let mut sprite = layer_sprite(center, color, additive);
+        sprite.right = Vec3::new(size, 0.0, 0.0);
+        sprite.up = Vec3::new(0.0, size, 0.0);
+        sprite
+    }
+
+    const OPAQUE_SLAB: [f32; 4] = [SLAB_COLOR[0], SLAB_COLOR[1], SLAB_COLOR[2], 1.0];
+
+    fn channel_gap(a: [u8; 3], b: [u8; 3]) -> u8 {
+        (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap()
+    }
+
+    /// The linear value `surface` becomes at `distance` in a fog of `density` toward `fog`.
+    fn fogged(surface: [f32; 3], fog: [f32; 3], density: f32, distance: f32) -> [f32; 3] {
+        let transmitted = (-density * distance).exp();
+        std::array::from_fn(|c| surface[c] * transmitted + fog[c] * (1.0 - transmitted))
+    }
+
+    /// Every pixel of `texels` that the layer covers fully, as `(x, y)`.
+    fn covered_pixels(texels: &[[f32; 2]], width: u32) -> Vec<(u32, u32)> {
+        texels
+            .iter()
+            .enumerate()
+            .filter(|(_, texel)| texel[1] > 0.999)
+            .map(|(i, _)| (i as u32 % width, i as u32 / width))
+            .collect()
+    }
+
+    /// An opaque sprite is fogged at its own distance, so the same sprite reads the same over a wall
+    /// 40 units behind it and over the open sky. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_sprite_is_fogged_the_same_over_a_wall_and_over_the_sky() {
+        let Some(renderer) =
+            skip_or_renderer("a_sprite_is_fogged_the_same_over_a_wall_and_over_the_sky")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut sky = own_fog_scene(w, h, 0.03);
+        sky.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -5.0),
+            3.0,
+            OPAQUE_SLAB,
+            false,
+        )];
+        let mut wall = sky.clone();
+        wall.meshes = vec![slab(
+            Vec3::new(0.0, 0.0, -60.0),
+            40.0,
+            [0.0625, 0.5, 0.0625],
+        )];
+        let over_sky = renderer.render(&sky, size).expect("sky frame");
+        let over_wall = renderer.render(&wall, size).expect("wall frame");
+        let mut worst = 0;
+        for (x, y) in [(28, 28), (36, 28), (28, 36), (36, 36), (32, 32)] {
+            worst = worst.max(channel_gap(
+                rgb_at(&over_sky, x, y),
+                rgb_at(&over_wall, x, y),
+            ));
+        }
+        assert!(
+            worst <= 1,
+            "the sprite must not take its fog from what is behind it: worst gap {worst} LSB, \
+             sky {:?} wall {:?}",
+            rgb_at(&over_sky, 32, 32),
+            rgb_at(&over_wall, 32, 32),
+        );
+    }
+
+    /// A sprite across the top edge of a wall has no step where the wall ends: both sides are fogged
+    /// at the sprite's distance. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_sprite_straddling_the_horizon_has_no_fog_seam() {
+        let Some(renderer) = skip_or_renderer("a_sprite_straddling_the_horizon_has_no_fog_seam")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let mut scene = own_fog_scene(w, h, 0.03);
+        scene.meshes = vec![slab(Vec3::new(0.0, -30.0, -60.0), 60.0, SLAB_COLOR)];
+        scene.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -5.0),
+            3.0,
+            OPAQUE_SLAB,
+            false,
+        )];
+        let image = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("seam frame");
+        let above = rgb_at(&image, 32, 28);
+        let below = rgb_at(&image, 32, 36);
+        assert!(
+            channel_gap(above, below) <= 1,
+            "a step across the wall's top edge: above {above:?} below {below:?}",
+        );
+    }
+
+    /// A far sprite against the sky moves toward the fog colour by the analytic extinction.
+    /// Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_far_sprite_against_the_sky_is_fogged() {
+        let Some(renderer) = skip_or_renderer("a_far_sprite_against_the_sky_is_fogged") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let (density, distance) = (0.03_f32, 50.0_f32);
+        let mut scene = own_fog_scene(w, h, density);
+        scene.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -distance),
+            20.0,
+            OPAQUE_SLAB,
+            false,
+        )];
+        let image = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("far sprite frame");
+        let want = fogged(SLAB_COLOR, FOG_COLOR, density, distance);
+        let got = rgb_at(&image, 32, 32);
+        for c in 0..3 {
+            let expected = srgb8_from_linear(want[c]);
+            assert!(
+                (f32::from(got[c]) - expected).abs() <= 2.0,
+                "channel {c}: got {got:?}, want {expected} (linear {want:?})",
+            );
+        }
+    }
+
+    /// A half-transparent sprite across a wall's top edge stays continuous. With layer colour `S`
+    /// and weight `a` over a background `B`, composite fogs the image once, so the transmitted
+    /// colour is off the ideal `a(S·T_s + L·F_s) + (1-a)(B·T_b + L·F_b)` by exactly
+    /// `a(1-a)(S-B)(F_s-F_b)`. Each side must sit within that error of the ideal, plus a decode
+    /// tolerance, and the jump across the edge within the ideal jump plus both errors. Skips with no
+    /// GPU.
+    #[test]
+    fn needs_gpu_a_soft_sprite_is_continuous_over_a_fog_edge() {
+        let Some(renderer) = skip_or_renderer("a_soft_sprite_is_continuous_over_a_fog_edge") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let (density, alpha) = (0.03_f32, 0.5_f32);
+        let mut bare = own_fog_scene(w, h, density);
+        bare.meshes = vec![slab(Vec3::new(0.0, -30.0, -60.0), 60.0, SLAB_COLOR)];
+        let mut soft = bare.clone();
+        soft.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -5.0),
+            3.0,
+            [0.0625, 0.5, 0.0625, alpha],
+            false,
+        )];
+        let background = renderer.render(&bare, size).expect("background frame");
+        let image = renderer.render(&soft, size).expect("soft frame");
+        let sprite = [0.0625_f32, 0.5, 0.0625];
+        let f_sprite = 1.0 - (-density * 5.0).exp();
+        let read = |img: &RenderedImage, y: u32| -> [f64; 3] {
+            let p = rgb_at(img, 32, y);
+            std::array::from_fn(|c| linear_from_srgb8(p[c]))
+        };
+        let mut worst_jump = 0.0_f64;
+        let mut worst_gap = 0.0_f64;
+        let mut ideal = [[0.0_f64; 3]; 2];
+        let mut bound = [[0.0_f64; 3]; 2];
+        for (side, y) in [28u32, 36].into_iter().enumerate() {
+            let bg = read(&background, y);
+            let got = read(&image, y);
+            // The unfogged background is the sky above the edge and the slab below it.
+            let (unfogged, f_bg): ([f64; 3], f64) = if side == 0 {
+                (std::array::from_fn(|c| bg[c]), 0.0)
+            } else {
+                let tangent = (f32::from(36u8) + 0.5 - 32.0) / 32.0 * 30.0_f32.to_radians().tan();
+                let distance = 30.0 * (1.0 + tangent * tangent).sqrt();
+                (
+                    std::array::from_fn(|c| f64::from(SLAB_COLOR[c])),
+                    f64::from(1.0 - (-density * distance).exp()),
+                )
+            };
+            for c in 0..3 {
+                let fog_light = f64::from(FOG_COLOR[c]);
+                let s = f64::from(sprite[c]);
+                let a = f64::from(alpha);
+                ideal[side][c] = a
+                    * (s * (1.0 - f64::from(f_sprite)) + fog_light * f64::from(f_sprite))
+                    + (1.0 - a) * bg[c];
+                bound[side][c] =
+                    a * (1.0 - a) * (s - unfogged[c]).abs() * (f64::from(f_sprite) - f_bg).abs();
+                worst_gap = worst_gap.max((got[c] - ideal[side][c]).abs() - bound[side][c]);
+            }
+            let jump = std::array::from_fn::<f64, 3, _>(|c| got[c]);
+            if side == 1 {
+                let above = read(&image, 28);
+                for c in 0..3 {
+                    let ideal_jump = (ideal[1][c] - ideal[0][c]).abs();
+                    worst_jump = worst_jump
+                        .max((jump[c] - above[c]).abs() - ideal_jump - bound[0][c] - bound[1][c]);
+                }
+            }
+        }
+        eprintln!(
+            "soft sprite: worst excess over the error bound {worst_gap:.5}, jump excess {worst_jump:.5}"
+        );
+        assert!(
+            worst_gap <= 0.01,
+            "a side is off the ideal by more than a(1-a)|S-B||F_s-F_b|: excess {worst_gap}",
+        );
+        assert!(
+            worst_jump <= 0.01,
+            "the jump across the fog edge exceeds the ideal jump plus both errors: {worst_jump}",
+        );
+    }
+
+    /// A particle and a text run are each fogged at their own distance: the same pixels over a wall
+    /// and over the sky read the same. Skips with no GPU.
+    #[test]
+    fn needs_gpu_particles_and_world_text_are_fogged_at_their_own_distance() {
+        let Some(renderer) =
+            skip_or_renderer("particles_and_world_text_are_fogged_at_their_own_distance")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut sky = own_fog_scene(w, h, 0.03);
+        sky.particles = vec![particle(Vec3::new(0.0, 0.0, -5.0), 3.0, OPAQUE_SLAB, 0.0)];
+        let mut sky_text = own_fog_scene(w, h, 0.03);
+        sky_text.texts = vec![layer_text(-5.0)];
+        for (what, scene) in [("particle", sky), ("text", sky_text)] {
+            let mut wall = scene.clone();
+            wall.meshes = vec![slab(
+                Vec3::new(0.0, 0.0, -60.0),
+                40.0,
+                [0.0625, 0.5, 0.0625],
+            )];
+            let interior = covered_pixels(&layer_texels(&renderer, &scene, size), w);
+            assert!(!interior.is_empty(), "{what} covers some pixels outright");
+            let over_sky = renderer.render(&scene, size).expect("sky frame");
+            let over_wall = renderer.render(&wall, size).expect("wall frame");
+            let worst = interior
+                .iter()
+                .map(|&(x, y)| channel_gap(rgb_at(&over_sky, x, y), rgb_at(&over_wall, x, y)))
+                .max()
+                .unwrap();
+            assert!(
+                worst <= 1,
+                "{what}: fogged by what is behind it, worst gap {worst} LSB over {} pixels",
+                interior.len(),
+            );
+        }
+    }
+
+    /// A black additive texel adds nothing and claims no fog: the frame equals the one without the
+    /// sprite, byte for byte. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_black_additive_texel_claims_no_fog() {
+        let Some(renderer) = skip_or_renderer("a_black_additive_texel_claims_no_fog") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut bare = own_fog_scene(w, h, 0.03);
+        bare.meshes = vec![slab(Vec3::new(0.0, 0.0, -60.0), 40.0, SLAB_COLOR)];
+        let mut black = bare.clone();
+        black.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -5.0),
+            3.0,
+            [0.0, 0.0, 0.0, 1.0],
+            true,
+        )];
+        assert_eq!(
+            renderer.render(&bare, size).expect("bare").rgba,
+            renderer.render(&black, size).expect("black").rgba,
+            "a black additive quad must leave the wall's fog alone",
+        );
+    }
+
+    /// A bright additive texel over black is dimmed by the fog at its own distance: a black sky
+    /// and a zero fog colour leave extinction as the only term. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_bright_additive_texel_is_dimmed_at_its_own_distance() {
+        let Some(renderer) =
+            skip_or_renderer("a_bright_additive_texel_is_dimmed_at_its_own_distance")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let (density, distance) = (0.03_f32, 5.0_f32);
+        let mut scene = RenderScene::empty((w, h));
+        scene.camera = origin_camera(w, h);
+        scene.post = Some(own_fog_post(density, [0.0; 3]));
+        // An all-black sky: without an `Environment` the clear is the engine's historical colour.
+        scene.environment = Some(crate::scene::EnvironmentData {
+            sky_zenith: [0.0; 3],
+            sky_horizon: [0.0; 3],
+            sky_ground: [0.0; 3],
+            sun_disc_size: 0.0,
+            sun_disc_intensity: 0.0,
+            ambient: [0.0; 3],
+            ibl_intensity: 0.0,
+        });
+        let emitted = [1.0_f32, 0.5, 0.25];
+        scene.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -distance),
+            3.0,
+            [emitted[0], emitted[1], emitted[2], 1.0],
+            true,
+        )];
+        let image = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("additive frame");
+        assert_eq!(rgb_at(&image, 2, 2), [0, 0, 0], "the background is black");
+        let transmitted = (-density * distance).exp();
+        let got = rgb_at(&image, 32, 32);
+        for c in 0..3 {
+            let expected = srgb8_from_linear(emitted[c] * transmitted);
+            assert!(
+                (f32::from(got[c]) - expected).abs() <= 2.0,
+                "channel {c}: got {got:?}, want {expected}",
+            );
+        }
+    }
+
+    /// Pixels no transparent touches are exactly what the frame without it renders. Skips with no
+    /// GPU.
+    #[test]
+    fn needs_gpu_pixels_a_transparent_misses_are_untouched() {
+        let Some(renderer) = skip_or_renderer("pixels_a_transparent_misses_are_untouched") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut bare = own_fog_scene(w, h, 0.03);
+        bare.meshes = vec![slab(Vec3::new(0.0, 0.0, -60.0), 40.0, SLAB_COLOR)];
+        let mut with = bare.clone();
+        with.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -5.0),
+            3.0,
+            OPAQUE_SLAB,
+            false,
+        )];
+        let a = renderer.render(&bare, size).expect("bare");
+        let b = renderer.render(&with, size).expect("sprite");
+        let mut checked = 0;
+        for y in 0..h {
+            for x in 0..w {
+                if (12..52).contains(&x) && (12..52).contains(&y) {
+                    continue;
+                }
+                checked += 1;
+                assert_eq!(
+                    pixel(&a, x, y),
+                    pixel(&b, x, y),
+                    "pixel ({x}, {y}) outside the quad"
+                );
+            }
+        }
+        assert!(checked > 1000);
+        assert_ne!(a.rgba, b.rgba, "the sprite is visible");
+    }
+
+    /// The live path: a ring-read stream of frames that toggles the layer pass leaves every bare
+    /// frame equal to a fresh renderer's, and every sprite frame equal to another. Skips with no
+    /// GPU.
+    #[test]
+    fn needs_gpu_a_streamed_flip_leaves_the_image_untouched() {
+        let Some(renderer) = skip_or_renderer("a_streamed_flip_leaves_the_image_untouched") else {
+            return;
+        };
+        let Some(fresh) = skip_or_renderer("a_streamed_flip_leaves_the_image_untouched") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut bare = own_fog_scene(w, h, 0.03);
+        bare.meshes = vec![slab(Vec3::new(0.0, 0.0, -60.0), 40.0, SLAB_COLOR)];
+        let mut with = bare.clone();
+        with.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -5.0),
+            3.0,
+            OPAQUE_SLAB,
+            false,
+        )];
+
+        let mut ring = renderer.new_stream_readback(size).expect("ring");
+        // (frame was a sprite frame, image), in return order.
+        let mut returned: Vec<(bool, RenderedImage)> = Vec::new();
+        let counts = |returned: &[(bool, RenderedImage)]| {
+            let sprites = returned.iter().filter(|(sprite, _)| *sprite).count();
+            (returned.len() - sprites, sprites)
+        };
+        // Frames alternate bare, sprite, bare, ...; the ring may drop a frame in flight, so keep
+        // submitting until enough of each kind has come back.
+        for i in 0..60u64 {
+            let scene = if i % 2 == 0 { &bare } else { &with };
+            if let Some((stamp, image)) = renderer
+                .render_streamed(scene, size, &mut ring, FrameIndex(i), None)
+                .expect("streamed frame")
+            {
+                returned.push((stamp.0 % 2 == 1, image));
+            }
+            while let Some((stamp, image)) = renderer.collect_streamed(&mut ring).expect("collect")
+            {
+                returned.push((stamp.0 % 2 == 1, image));
+            }
+            let (bares, sprites) = counts(&returned);
+            if bares >= 3 && sprites >= 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let (bares, sprites) = counts(&returned);
+        assert!(
+            bares >= 3 && sprites >= 2,
+            "the stream returned {bares} bare and {sprites} sprite frames"
+        );
+        let never = fresh.render(&bare, size).expect("fresh frame");
+        let first_sprite = &returned.iter().find(|(sprite, _)| *sprite).unwrap().1;
+        for (sprite, frame) in &returned {
+            if *sprite {
+                assert_eq!(
+                    frame.rgba, first_sprite.rgba,
+                    "sprite frames differ from each other"
+                );
+            } else {
+                assert_eq!(
+                    frame.rgba, never.rgba,
+                    "a bare streamed frame differs from a fresh render"
+                );
+            }
+        }
+        assert_ne!(
+            first_sprite.rgba, never.rgba,
+            "the sprite must show, or the test proves nothing"
+        );
+    }
+
+    fn ortho_fog_camera() -> crate::scene::RenderCamera {
+        crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0), Vec3::Y),
+            projection: Mat4::orthographic_rh(-20.0, 20.0, -20.0, 20.0, 0.1, 1000.0),
+            position: Vec3::ZERO,
+        }
+    }
+
+    /// Under an orthographic camera a plane facing it is fogged by view depth alone: every pixel
+    /// matches, for the plain medium, for a sky-tinted medium, and (along a row) for a height
+    /// falloff. Skips with no GPU.
+    #[test]
+    fn needs_gpu_ortho_fog_does_not_fan() {
+        let Some(renderer) = skip_or_renderer("ortho_fog_does_not_fan") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = own_fog_scene(w, h, 0.03);
+        scene.camera = ortho_fog_camera();
+        scene.meshes = vec![slab(Vec3::new(0.0, 0.0, -60.0), 100.0, SLAB_COLOR)];
+        let spread = |image: &RenderedImage, pixels: &[(u32, u32)]| {
+            let first = rgb_at(image, pixels[0].0, pixels[0].1);
+            pixels
+                .iter()
+                .map(|&(x, y)| channel_gap(first, rgb_at(image, x, y)))
+                .max()
+                .unwrap()
+        };
+        let everywhere = [
+            (0, 0),
+            (63, 0),
+            (0, 63),
+            (63, 63),
+            (32, 32),
+            (8, 40),
+            (55, 12),
+        ];
+        let one_row = [(0, 32), (10, 32), (32, 32), (50, 32), (63, 32)];
+
+        let plain = renderer.render(&scene, size).expect("plain");
+        assert!(spread(&plain, &everywhere) <= 1, "plain fog fans");
+
+        let mut sky = scene.clone();
+        if let Some(post) = sky.post.as_mut() {
+            post.fog_sky = 1.0;
+        }
+        let sky_image = renderer.render(&sky, size).expect("sky fog");
+        assert!(spread(&sky_image, &everywhere) <= 1, "sky-tinted fog fans");
+
+        let mut height = scene.clone();
+        if let Some(post) = height.post.as_mut() {
+            post.fog_height_falloff = 0.05;
+        }
+        let height_image = renderer.render(&height, size).expect("height fog");
+        assert!(
+            spread(&height_image, &one_row) <= 1,
+            "height fog fans along a row"
+        );
+    }
+
+    /// Under an orthographic camera a sprite and a wall at one view depth fog alike, though they
+    /// sit far apart in the frame. Skips with no GPU.
+    #[test]
+    fn needs_gpu_an_ortho_sprite_and_a_wall_at_one_distance_fog_alike() {
+        let Some(renderer) =
+            skip_or_renderer("an_ortho_sprite_and_a_wall_at_one_distance_fog_alike")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let mut scene = own_fog_scene(w, h, 0.03);
+        scene.camera = ortho_fog_camera();
+        scene.meshes = vec![slab(Vec3::new(-17.5, 0.0, -32.5), 25.0, SLAB_COLOR)];
+        scene.sprites = vec![sized_sprite(
+            Vec3::new(10.0, 0.0, -20.0),
+            8.0,
+            OPAQUE_SLAB,
+            false,
+        )];
+        let image = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("ortho frame");
+        // The slab's shading is not exactly its emissive colour, so each surface is held to its own
+        // unfogged value run through the analytic extinction at the one shared depth.
+        let mut clear = scene.clone();
+        clear.post = Some(own_fog_post(0.0, FOG_COLOR));
+        let unfogged = renderer
+            .render(&clear, FrameSize::native(w, h))
+            .expect("unfogged frame");
+        for (what, x) in [("wall", 12), ("sprite", 48)] {
+            let base = rgb_at(&unfogged, x, 32);
+            let surface = std::array::from_fn(|c| linear_from_srgb8(base[c]) as f32);
+            let want = fogged(surface, FOG_COLOR, 0.03, 20.0);
+            let got = rgb_at(&image, x, 32);
+            for c in 0..3 {
+                let expected = srgb8_from_linear(want[c]);
+                assert!(
+                    (f32::from(got[c]) - expected).abs() <= 2.0,
+                    "{what} channel {c}: got {got:?}, want {expected} from base {base:?}",
+                );
+            }
+        }
     }
 
     /// The gallery's mirror floor at 1080p: a back wall, a sphere and a cube, all rough so their own

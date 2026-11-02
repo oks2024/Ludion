@@ -128,7 +128,12 @@
 // graph declares neither the passes nor the target, the recorder binds the same 1x1 stand-in here,
 // and `composite.dof` is zero so the branch below never reads it.
 @group(0) @binding(4) var dof_tex: texture_2d<f32>;
-@group(0) @binding(5) var samp: sampler;
+// The transparent layer: weighted view distance in R, coverage in G, at the render extent — the third
+// **optional** input, behind `dof_tex`. It exists when the scene draws a sprite, particle or world
+// text under fog; otherwise the recorder binds the same 1x1 stand-in and `composite.transparent_depth`
+// is zero, so the fog block below never reads it.
+@group(0) @binding(5) var transparent_depth_tex: texture_2d<f32>;
+@group(0) @binding(6) var samp: sampler;
 
 // The selector values `Composite.tonemap` carries, one per `PostProcess.tonemap` variant. The
 // shader-bindgen hoists integer consts into `shader_gen`, so the recorder maps its `TonemapOperator`
@@ -141,16 +146,17 @@ const TONEMAP_NONE: u32 = 3u;
 // The composite's per-frame knobs, from the scene's `PostProcess` (or the renderer's shipped defaults
 // when it declares none).
 //
-// 272 bytes. A `vec3<f32>` starts on a 16-byte boundary and leaves the fourth lane of its block free,
+// 288 bytes. A `vec3<f32>` starts on a 16-byte boundary and leaves the fourth lane of its block free,
 // so each triple carries one loose scalar in that lane rather than a hole, and `tint`'s own block
 // carries the three fog/vignette scalars that would otherwise need one. The two aberration/halation
 // scalars took the block `dof` sits in, which had two free lanes; the grain pair opens a block whose
 // remaining two lanes are `fog_albedo` and `fog_sky`. The three sky colours are the one place the rule
 // cannot be kept — they are three triples and there is no fourth scalar left to ride with them, so
-// their spare lanes are spelled pads. 272 is the minimum the layout admits: 260 bytes of payload with
-// a 64-byte matrix at the end forces the prefix up to 208. `inv_view_proj` is last because a
-// `mat4x4<f32>` must start on a 16-byte boundary; the tail scalars ahead of it are what buys that
-// alignment (`shader_gen`'s generated POD has no implicit padding, so a hole must be spelled).
+// their spare lanes are spelled pads, except the zenith's, which carries `transparent_depth`. The
+// prefix is 208 bytes, the matrix 64 and the `view_forward` lane 16. `inv_view_proj` precedes the
+// lane because a `mat4x4<f32>` must start on a 16-byte boundary; the tail scalars ahead of it are
+// what buys that alignment (`shader_gen`'s generated POD has no implicit padding, so a hole must be
+// spelled).
 struct Composite {
     // How strongly the blurred bloom is mixed back in (`bloom_strength`, default 0.1 — small
     // because the pyramid composites the sum of all six of its levels).
@@ -235,7 +241,9 @@ struct Composite {
     // The `Environment`'s authored sky gradient, linear HDR — zenith, horizon, ground. Zeroed when the
     // scene carries no `Environment`.
     sky_zenith: vec3<f32>,
-    pad0: f32,
+    // Nonzero when `transparent_depth_tex` is real. It mirrors the graph's own gate exactly, as `dof`
+    // does for `dof_tex`.
+    transparent_depth: u32,
     sky_horizon: vec3<f32>,
     pad1: f32,
     sky_ground: vec3<f32>,
@@ -243,8 +251,11 @@ struct Composite {
     // Inverse view-projection, for reconstructing a fragment's world position from its depth.
     // Inverted on the CPU, where the matrix already lives and the cost is once per frame.
     inv_view_proj: mat4x4<f32>,
+    // The `view_ray.wgsl` lane: the camera's one view direction, with `w` set for an orthographic
+    // camera. Fog measures distance along it there rather than along the per-pixel ray.
+    view_forward: vec4<f32>,
 };
-@group(0) @binding(6) var<uniform> composite: Composite;
+@group(0) @binding(7) var<uniform> composite: Composite;
 
 // Rec.709 luma weights: the grey axis the white balance normalizes against and the saturation mix
 // collapses toward. One definition, so "luminance-preserving" means the same thing in both steps.
@@ -279,8 +290,27 @@ fn world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
 // height model and the `fog_start` offset are written down — the march in `shafts.wgsl` integrates
 // the *same* function, so the two terms cannot disagree about where the medium is or how thick it is
 // at a given height.
+//
+// An orthographic camera has no eye the rays fan out from: every ray runs along the one view
+// direction, so the distance is the depth along it and the ray's height is the surface's own less
+// the climb along that direction. A perspective camera falls through to the expressions it always
+// had, untouched by the branch above them.
 fn fog_factor(world: vec3<f32>) -> f32 {
     let to_surface = world - composite.cam_pos;
+    if (composite.view_forward.w > 0.5) {
+        let forward = composite.view_forward.xyz;
+        let depth_along = dot(to_surface, forward);
+        let optical_depth = medium_optical_depth(
+            composite.fog_density,
+            composite.fog_start,
+            composite.fog_height,
+            composite.fog_height_falloff,
+            world.y - forward.y * depth_along,
+            forward.y,
+            depth_along,
+        );
+        return 1.0 - exp(-optical_depth);
+    }
     let distance = length(to_surface);
     let optical_depth = medium_optical_depth(
         composite.fog_density,
@@ -292,6 +322,19 @@ fn fog_factor(world: vec3<f32>) -> f32 {
         distance,
     );
     return 1.0 - exp(-optical_depth);
+}
+
+// The point at distance `t` along this pixel's view ray: the transparent layer's mean distance,
+// turned back into a position `fog_factor` can measure. Under an orthographic camera `t` is a depth
+// along the view direction, so the point is the far-plane point slid back along it.
+fn layer_world(uv: vec2<f32>, t: f32) -> vec3<f32> {
+    let far = world_from_depth(uv, 1.0);
+    let to_far = far - composite.cam_pos;
+    if (composite.view_forward.w > 0.5) {
+        let forward = composite.view_forward.xyz;
+        return far - forward * (dot(to_far, forward) - t);
+    }
+    return composite.cam_pos + normalize(to_far) * t;
 }
 
 // Narkowicz's ACES filmic curve fit — the engine's shipped operator, kept verbatim so `aces` is the
@@ -647,6 +690,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         hdr = hdr + bloom * halation_gain() * composite.halation;
     }
     if (composite.fog_density > 0.0) {
+        // The transparent layer: sprites, particles and world text, which write no depth, hold their
+        // own mean distance and coverage here. Under one the pixel is fogged at that distance, not at
+        // whatever the opaque pass left behind it.
+        var coverage = 0.0;
+        var layer_t = 0.0;
+        if (composite.transparent_depth != 0u) {
+            let layer = textureLoad(transparent_depth_tex, vec2<i32>(in.pos.xy), 0);
+            coverage = layer.g;
+            layer_t = layer.r / max(layer.g, 1e-4);
+        }
         // The medium's ambient radiance: the authored slab, the sky along this pixel's view ray, or a
         // blend. The ray is reconstructed at the **far plane** because a ray's direction does not
         // depend on how far along it a surface sits — `shafts.wgsl` reconstructs its own the same way.
@@ -656,10 +709,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // the branch — between the depth load and the blend that consumes it — perturbs how the
         // backend schedules the rest of the fragment enough to move a pixel of `post-full` by one
         // output step, with the branch never even taken. Out here the neutral frame's arithmetic is
-        // untouched and the byte-identity claim holds.
+        // untouched and the byte-identity claim holds. The layer load above sits ahead of it for the same
+        // measured reason.
         var ambient = composite.fog_color;
         if (composite.fog_sky > 0.0) {
-            let view_dir = normalize(world_from_depth(in.uv, 1.0) - composite.cam_pos);
+            let view_dir = normalize(view_from_eye(
+                world_from_depth(in.uv, 1.0) - composite.cam_pos,
+                composite.view_forward,
+            ));
             ambient = mix(
                 ambient,
                 sky_gradient(
@@ -679,7 +736,24 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // colour. The corollary for an author is what `fog_sky` answers: at 0 the haze is one slab and
         // the horizon reads continuous only if `fog_color` is picked near `Environment.sky_horizon`,
         // while at 1 the haze *is* the sky along that ray and the two meet by construction.
-        if (depth < 1.0) {
+        if (coverage > 0.0) {
+            // One fog is applied to the already blended image, so a layer of weight `a` over a
+            // background takes the mixed extinction `mix(F_background, F_layer, a)`. The in-scatter
+            // term is exact; the transmitted colour is off by `a(1-a)(S-B)(F_s-F_b)`, zero for an
+            // opaque or absent layer and at most a quarter of `|S-B||F_s-F_b|` on a half-covered
+            // texel. The background's own share is zero over the sky, which the medium never touches.
+            var back = 0.0;
+            if (depth < 1.0) {
+                back = fog_factor(world_from_depth(in.uv, depth));
+            }
+            let extinguished = mix(back, fog_factor(layer_world(in.uv, layer_t)), coverage);
+            if (composite.fog_albedo == 1.0) {
+                hdr = mix(hdr, ambient, extinguished);
+            } else {
+                hdr = hdr * (1.0 - extinguished)
+                    + ambient * (composite.fog_albedo * extinguished);
+            }
+        } else if (depth < 1.0) {
             // The ambient in-scatter, in its closed form: `T·surface + α·(1 - T)·L_ambient`, with
             // `1 - T` the extinguished fraction `fog_factor` returns. The extinction is σ_t's alone —
             // a surface behind an absorbing medium is buried whether or not that medium glows — and

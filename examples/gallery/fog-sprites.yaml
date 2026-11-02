@@ -1,0 +1,253 @@
+# Feature: fog at a transparent's own distance. A sprite, a particle and a world Text carry no depth,
+# so the composite fogs each pixel they cover at the distance of the transparent itself, not of the
+# wall or the sky behind it. What to read in the image: the near sprite stays clear and the far one
+# sits in haze (against the sky it is fogged too, though the sky never is); the sprite across the
+# wall's top edge takes one fog on both sides, with no seam; the half-transparent sprite keeps its
+# colour over both the ground and the wall; the smoke is hazed with the distance it is at; and the
+# additive embers over the fogged wall are dimmed by their own distance. Their fog is the known
+# approximation: the wall under a bright ember takes the ember's fog as well, so a bright ember can read as
+# a small fog hole with a tint shifted toward the unfogged wall.
+format: 1
+name: fog-sprites - transparents fogged at their own distance
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.05
+          - 0.09
+          - 0.2
+        sky_horizon:
+          - 0.32
+          - 0.38
+          - 0.5
+        sky_ground:
+          - 0.05
+          - 0.06
+          - 0.08
+        ibl_intensity: 1.0
+  - name: post
+    components:
+      PostProcess:
+        bloom_threshold: 1.0
+        bloom_strength: 0.08
+        exposure: 1.0
+        tonemap: aces
+        fog_density: 0.022
+        fog_color:
+          - 0.3
+          - 0.36
+          - 0.48
+        fog_start: 9.0
+        fog_height: 0.0
+        fog_height_falloff: 0.115
+        fog_sky: 1.0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - 20.0
+        rotation:
+          - -15.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.8
+          - -0.5
+        intensity: 2.4
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 160.0
+          - 1.0
+          - 160.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.22
+          - 0.26
+          - 0.2
+          - 1.0
+  - name: far-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - -30.0
+        scale:
+          - 90.0
+          - 5.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.42
+          - 0.36
+          - 1.0
+  - name: near-sprite
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 1.4
+          - 11.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 2.8
+          - 2.8
+        billboard: true
+  - name: far-sprite-sky
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 8.3
+          - -50.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 7.0
+          - 7.0
+        billboard: true
+  - name: horizon-sprite
+    components:
+      Transform:
+        translation:
+          - -9.0
+          - 4.4
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 3.0
+          - 3.0
+        billboard: true
+  - name: soft-sprite
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 4.4
+          - 0.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 3.0
+          - 3.0
+        billboard: true
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.5
+  - name: smoke-column
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 0.2
+          - -4.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.35
+          - 0.35
+          - 0.35
+        rate: 18.0
+        life:
+          - 2.0
+          - 2.8
+        speed:
+          - 0.5
+          - 1.0
+        spread_deg: 14.0
+        gravity: -0.9
+        drag: 0.35
+        start_size: 0.9
+        end_size: 3.0
+        start_color:
+          - 0.7
+          - 0.7
+          - 0.72
+          - 0.5
+        end_color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 0.0
+        softness: 0.85
+        seed: 11
+  - name: ember-fountain
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 0.2
+          - -6.0
+      ParticleEmitter:
+        rate: 58.0
+        life:
+          - 1.1
+          - 1.9
+        speed:
+          - 3.6
+          - 5.6
+        spread_deg: 26.0
+        gravity: 5.0
+        start_size: 0.4
+        end_size: 0.1
+        start_color:
+          - 2.0
+          - 0.7
+          - 0.15
+          - 1.0
+        end_color:
+          - 1.2
+          - 0.18
+          - 0.03
+          - 0.0
+        blend: additive
+        softness: 0.3
+        seed: 23
+  - name: label
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 4.2
+          - -8.0
+      Text:
+        text: FOG
+        size: 2.0
+        color:
+          - 1.0
+          - 0.9
+          - 0.5
+          - 1.0

@@ -167,6 +167,8 @@ struct Env {
     bless: bool,
     any_adapter: bool,
     require_reference: bool,
+    /// `LUDION_GOLDEN_ACTUALS`: a directory that receives every rendered image, pass or fail.
+    actuals: Option<PathBuf>,
 }
 
 impl Env {
@@ -176,6 +178,9 @@ impl Env {
             bless: bless_requested(),
             any_adapter: any_adapter_bless(),
             require_reference: reference_adapter_required(),
+            actuals: std::env::var_os("LUDION_GOLDEN_ACTUALS")
+                .filter(|dir| !dir.is_empty())
+                .map(PathBuf::from),
         }
     }
 }
@@ -318,7 +323,9 @@ impl GoldenTest {
 
     /// Renders the scene and compares it against the committed golden, writing diagnostic
     /// artifacts (`<stem>.actual.png`, `<stem>.diff.json`) into `out_dir` **on failure only** — a
-    /// passing test leaves no trace beyond its return value. `out_dir` must not be the goldens
+    /// passing test leaves no trace beyond its return value, unless `LUDION_GOLDEN_ACTUALS=<dir>`
+    /// is set: then every rendered image is also written to `<dir>/<stem>.png`, pass or fail, for
+    /// a byte comparison across builds (it never touches a golden). `out_dir` must not be the goldens
     /// directory itself (callers pick a scratch/build directory; see `ludion-cli`'s `test` command
     /// for the convention it uses).
     ///
@@ -630,6 +637,10 @@ fn run_with(
         return Err(vec![diag]);
     }
     let (actual, adapter) = render()?;
+    if let Some(dir) = &env.actuals {
+        std::fs::create_dir_all(dir).map_err(|error| vec![io_diagnostic(dir, error)])?;
+        write_png(&dir.join(format!("{}.png", test_stem(golden))), &actual)?;
+    }
     if let Some(diag) = skip(Some(&adapter)) {
         return Err(vec![refuse_adapter_skip(diag, env.require_reference)]);
     }
@@ -1410,6 +1421,7 @@ mod tests {
             bless,
             any_adapter,
             require_reference: false,
+            actuals: None,
         }
     }
 
@@ -1534,6 +1546,34 @@ mod tests {
         let text = panic.expect("a red render against a blue golden must fail");
         assert!(text.contains("provenance:"), "{text}");
         assert!(out.join("a.actual.png").exists());
+    }
+
+    #[test]
+    fn the_actuals_directory_receives_a_passing_render_and_leaves_the_golden_alone() {
+        let root = scratch_set("actuals");
+        let golden = root.join("windows").join("a.png");
+        write_png(&golden, &solid([255, 0, 0, 255])).unwrap();
+        let before = std::fs::read(&golden).unwrap();
+        let actuals = root.join("actuals");
+        let red = solid([255, 0, 0, 255]);
+
+        let (_, panic) = check(
+            &golden,
+            &root.join("out"),
+            &env(false, false),
+            &red,
+            REFERENCE,
+        );
+        assert_eq!(panic, None);
+        assert!(!actuals.exists(), "unset must write nothing");
+
+        let mut set = env(false, false);
+        set.actuals = Some(actuals.clone());
+        let (_, panic) = check(&golden, &root.join("out"), &set, &red, REFERENCE);
+        assert_eq!(panic, None);
+        assert!(actuals.join("a.png").exists());
+        assert_eq!(std::fs::read(&golden).unwrap(), before);
+        assert!(!root.join("out").exists());
     }
 
     #[test]

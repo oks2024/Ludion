@@ -294,14 +294,15 @@ pub struct Composite {
     pub fog_albedo: f32,
     pub fog_sky: f32,
     pub sky_zenith: [f32; 3],
-    pub pad0: f32,
+    pub transparent_depth: u32,
     pub sky_horizon: [f32; 3],
     pub pad1: f32,
     pub sky_ground: [f32; 3],
     pub pad2: f32,
     pub inv_view_proj: [[f32; 4]; 4],
+    pub view_forward: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<Composite>() == 272);
+const _: () = assert!(core::mem::size_of::<Composite>() == 288);
 const _: () = assert!(core::mem::offset_of!(Composite, strength) == 0);
 const _: () = assert!(core::mem::offset_of!(Composite, exposure) == 4);
 const _: () = assert!(core::mem::offset_of!(Composite, tonemap) == 8);
@@ -331,12 +332,13 @@ const _: () = assert!(core::mem::offset_of!(Composite, grain_size) == 148);
 const _: () = assert!(core::mem::offset_of!(Composite, fog_albedo) == 152);
 const _: () = assert!(core::mem::offset_of!(Composite, fog_sky) == 156);
 const _: () = assert!(core::mem::offset_of!(Composite, sky_zenith) == 160);
-const _: () = assert!(core::mem::offset_of!(Composite, pad0) == 172);
+const _: () = assert!(core::mem::offset_of!(Composite, transparent_depth) == 172);
 const _: () = assert!(core::mem::offset_of!(Composite, sky_horizon) == 176);
 const _: () = assert!(core::mem::offset_of!(Composite, pad1) == 188);
 const _: () = assert!(core::mem::offset_of!(Composite, sky_ground) == 192);
 const _: () = assert!(core::mem::offset_of!(Composite, pad2) == 204);
 const _: () = assert!(core::mem::offset_of!(Composite, inv_view_proj) == 208);
+const _: () = assert!(core::mem::offset_of!(Composite, view_forward) == 272);
 
 /// WGSL `struct DebugView`.
 ///
@@ -1605,10 +1607,6 @@ pub const REFL_GI_BINDING: u32 = 5;
 pub const RELIGHT_BOUNCE_G_GROUP: u32 = 0;
 pub const RELIGHT_BOUNCE_G_BINDING: u32 = 5;
 
-/// `samp` — `@group(0) @binding(5)`, in `composite.wgsl`.
-pub const SAMP_GROUP: u32 = 0;
-pub const SAMP_BINDING: u32 = 5;
-
 /// `source_cube` — `@group(0) @binding(5)`, in `ibl.wgsl`.
 pub const SOURCE_CUBE_GROUP: u32 = 0;
 pub const SOURCE_CUBE_BINDING: u32 = 5;
@@ -1617,6 +1615,10 @@ pub const SOURCE_CUBE_BINDING: u32 = 5;
 pub const TRACE_PARAMS_GROUP: u32 = 0;
 pub const TRACE_PARAMS_BINDING: u32 = 5;
 
+/// `transparent_depth_tex` — `@group(0) @binding(5)`, in `composite.wgsl`.
+pub const TRANSPARENT_DEPTH_TEX_GROUP: u32 = 0;
+pub const TRANSPARENT_DEPTH_TEX_BINDING: u32 = 5;
+
 /// `blend_samp` — `@group(0) @binding(6)`, in `ssr_blend.wgsl`.
 pub const BLEND_SAMP_GROUP: u32 = 0;
 pub const BLEND_SAMP_BINDING: u32 = 6;
@@ -1624,10 +1626,6 @@ pub const BLEND_SAMP_BINDING: u32 = 6;
 /// `bounce_g_out` — `@group(0) @binding(6)`, in `gi_bake.wgsl`.
 pub const BOUNCE_G_OUT_GROUP: u32 = 0;
 pub const BOUNCE_G_OUT_BINDING: u32 = 6;
-
-/// `composite` — `@group(0) @binding(6)`, in `composite.wgsl`.
-pub const COMPOSITE_GROUP: u32 = 0;
-pub const COMPOSITE_BINDING: u32 = 6;
 
 /// `dyn_out` — `@group(0) @binding(6)`, in `gi_inject.wgsl`.
 pub const DYN_OUT_GROUP: u32 = 0;
@@ -1645,6 +1643,10 @@ pub const REFL_SAMP_BINDING: u32 = 6;
 pub const RELIGHT_BOUNCE_B_GROUP: u32 = 0;
 pub const RELIGHT_BOUNCE_B_BINDING: u32 = 6;
 
+/// `samp` — `@group(0) @binding(6)`, in `composite.wgsl`.
+pub const SAMP_GROUP: u32 = 0;
+pub const SAMP_BINDING: u32 = 6;
+
 /// `source_sampler` — `@group(0) @binding(6)`, in `ibl.wgsl`.
 pub const SOURCE_SAMPLER_GROUP: u32 = 0;
 pub const SOURCE_SAMPLER_BINDING: u32 = 6;
@@ -1656,6 +1658,10 @@ pub const BLEND_PARAMS_BINDING: u32 = 7;
 /// `bounce_b_out` — `@group(0) @binding(7)`, in `gi_bake.wgsl`.
 pub const BOUNCE_B_OUT_GROUP: u32 = 0;
 pub const BOUNCE_B_OUT_BINDING: u32 = 7;
+
+/// `composite` — `@group(0) @binding(7)`, in `composite.wgsl`.
+pub const COMPOSITE_GROUP: u32 = 0;
+pub const COMPOSITE_BINDING: u32 = 7;
 
 /// `downsample_src` — `@group(0) @binding(7)`, in `ibl.wgsl`.
 pub const DOWNSAMPLE_SRC_GROUP: u32 = 0;
@@ -3216,12 +3222,12 @@ pub fn create_resolve_src_resolve_samp_resolve_params_bgl(
     })
 }
 
-/// Bind group layout `scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_samp_composite` (@group 0), from `composite.wgsl`.
-pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_samp_composite_bgl(
+/// Bind group layout `scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_samp_composite` (@group 0), from `composite.wgsl`.
+pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_samp_composite_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_samp_composite"),
+        label: Some("scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_samp_composite"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: SCENE_TEX_BINDING,
@@ -3274,6 +3280,16 @@ pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_samp_compos
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
+                binding: TRANSPARENT_DEPTH_TEX_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
                 binding: SAMP_BINDING,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
@@ -3285,7 +3301,7 @@ pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_samp_compos
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(272),
+                    min_binding_size: wgpu::BufferSize::new(288),
                 },
                 count: None,
             },

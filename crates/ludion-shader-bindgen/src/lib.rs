@@ -187,6 +187,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "bayer.wgsl",
             "medium.wgsl",
             "sky_gradient.wgsl",
+            "view_ray.wgsl",
             "hdr.wgsl",
             "srgb.wgsl",
             "output_encode.wgsl",
