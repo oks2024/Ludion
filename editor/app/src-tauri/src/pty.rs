@@ -570,9 +570,12 @@ pub fn write_editor_context(cwd: String, json: String) -> Result<(), String> {
     let dir = Path::new(&cwd).join(".ludion");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let target = dir.join("editor-context.json");
-    let tmp = dir.join("editor-context.json.tmp");
+    let tmp = crate::project::temp_sibling(&target);
     std::fs::write(&tmp, json.as_bytes()).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
     Ok(())
 }
 
@@ -617,21 +620,36 @@ pub fn stat_editor_file(path: String) -> Result<FileStat, String> {
 /// Atomically write a text file (temp sibling + rename, so a reader never sees a half-written
 /// file — the same posture as `write_editor_context`) and return the new mtime, which the
 /// frontend adopts as its own baseline so its own write doesn't read back as an external change.
-/// Missing parent directories are created first.
+/// Missing parent directories are created first. With `create_new`, an existing file is never
+/// replaced: the write is refused instead.
 #[tauri::command]
-pub fn write_editor_file(path: String, text: String) -> Result<FileStat, String> {
+pub fn write_editor_file(
+    path: String,
+    text: String,
+    create_new: Option<bool>,
+) -> Result<FileStat, String> {
     crate::confine::check(&path)?;
     let target = Path::new(&path);
     if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("could not create `{}`: {e}", parent.display()))?;
     }
-    let name = target
-        .file_name()
-        .ok_or_else(|| format!("not a file path: {path}"))?;
-    let mut tmp_name = name.to_os_string();
-    tmp_name.push(".tmp");
-    let tmp = target.with_file_name(tmp_name);
+    if target.file_name().is_none() {
+        return Err(format!("not a file path: {path}"));
+    }
+    if create_new == Some(true) {
+        crate::project::create_new_atomic(target, text.as_bytes()).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                format!(
+                    "`{path}` already exists — open it instead of creating it; nothing was written."
+                )
+            } else {
+                e.to_string()
+            }
+        })?;
+        return file_mtime_ms(target).map(|mtime_ms| FileStat { mtime_ms });
+    }
+    let tmp = crate::project::temp_sibling(target);
     std::fs::write(&tmp, text.as_bytes()).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, target).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
@@ -989,21 +1007,42 @@ mod tests {
         assert!(stat_editor_file(path_s.clone()).is_err());
 
         // Write returns a plausible mtime and lands the exact bytes; the temp sibling is gone.
-        let first = write_editor_file(path_s.clone(), "fn a() {}\n".to_string()).unwrap();
+        let first = write_editor_file(path_s.clone(), "fn a() {}\n".to_string(), None).unwrap();
         assert!(first.mtime_ms > 0.0);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn a() {}\n");
-        assert!(
-            !dir.join("movement.rs.tmp").exists(),
-            "temp file was left behind"
-        );
+        assert!(no_tmp_left(&dir), "temp file was left behind");
 
         // Stat matches the write's reported mtime (same underlying file), and a second write
         // replaces the content in place.
         let statted = stat_editor_file(path_s.clone()).unwrap();
         assert_eq!(statted.mtime_ms, first.mtime_ms);
-        write_editor_file(path_s.clone(), "fn b() {}\n".to_string()).unwrap();
+        write_editor_file(path_s.clone(), "fn b() {}\n".to_string(), None).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn b() {}\n");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn no_tmp_left(dir: &Path) -> bool {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp"))
+    }
+
+    #[test]
+    fn create_new_writes_a_fresh_path_and_never_replaces_an_existing_file() {
+        let dir = std::env::temp_dir().join(format!("ludion-file-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ludion.toml"), TEST_MANIFEST).unwrap();
+        let path = dir.join("p.yaml");
+        let path_s = path.to_string_lossy().into_owned();
+        write_editor_file(path_s.clone(), "one\n".into(), Some(true)).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\n");
+        assert!(no_tmp_left(&dir));
+        let err = write_editor_file(path_s, "two\n".into(), Some(true)).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\n");
+        assert!(no_tmp_left(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1014,7 +1053,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("ludion.toml"), TEST_MANIFEST).unwrap();
         let path = dir.join("a").join("b").join("file.txt");
-        write_editor_file(path.to_string_lossy().into_owned(), "hi\n".to_string()).unwrap();
+        write_editor_file(
+            path.to_string_lossy().into_owned(),
+            "hi\n".to_string(),
+            None,
+        )
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hi\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1025,8 +1069,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a").join("file.txt");
-        let err =
-            write_editor_file(path.to_string_lossy().into_owned(), "x".to_string()).unwrap_err();
+        let err = write_editor_file(path.to_string_lossy().into_owned(), "x".to_string(), None)
+            .unwrap_err();
         assert!(err.contains("outside the engine checkout"), "{err}");
         assert!(!dir.join("a").exists());
         let _ = std::fs::remove_dir_all(&dir);

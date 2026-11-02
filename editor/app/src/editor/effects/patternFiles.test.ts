@@ -3,6 +3,7 @@ import {
   docKey,
   docLabel,
   docPath,
+  existingPatternKey,
   isPatternDoc,
   newPatternKey,
   newPatternText,
@@ -85,5 +86,16 @@ describe('newPatternText', () => {
     expect(text).toContain('    bullet: needle');
     expect(text).not.toContain('[');
     expect(text).not.toContain('{');
+  });
+});
+
+describe('existingPatternKey', () => {
+  const keys = ['patterns/boss.yaml', 'patterns/ring.yaml'];
+  it('finds a listed key, ignoring case', () => {
+    expect(existingPatternKey(keys, 'patterns/boss.yaml')).toBe('patterns/boss.yaml');
+    expect(existingPatternKey(keys, 'patterns/BOSS.yaml')).toBe('patterns/boss.yaml');
+  });
+  it('is null for an unlisted key', () => {
+    expect(existingPatternKey(keys, 'patterns/new.yaml')).toBeNull();
   });
 });

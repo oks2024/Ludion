@@ -94,18 +94,14 @@ export function statEditorFile(path: string): Promise<FileStat> {
   return invoke('stat_editor_file', { path });
 }
 
-/** Whether a path exists on the host — a directory included (`stat_editor_file` is a plain metadata
- *  read). Never rejects: missing and unreadable both read as `false`. */
-export function editorPathExists(path: string): Promise<boolean> {
-  return statEditorFile(path).then(
-    () => true,
-    () => false,
-  );
-}
-
-/** Atomically write a text file and return its new mtime (the caller adopts it as its baseline). */
-export function writeEditorFile(path: string, text: string): Promise<FileStat> {
-  return invoke('write_editor_file', { path, text });
+/** Atomically write a text file and return its new mtime (the caller adopts it as its baseline).
+ *  With `createNew` the host refuses to replace an existing file. */
+export function writeEditorFile(
+  path: string,
+  text: string,
+  opts?: { createNew?: boolean },
+): Promise<FileStat> {
+  return invoke('write_editor_file', { path, text, createNew: opts?.createNew ?? false });
 }
 
 export function editorPaths(): Promise<EditorPaths> {

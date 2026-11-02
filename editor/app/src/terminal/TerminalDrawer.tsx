@@ -26,6 +26,7 @@ import {
   type LlamaCppSettings,
 } from './opencode';
 import { modelKind, modelLabel, resolveModelId, TERMINAL_MODELS } from './models';
+import { isConfinementRefusal } from '../shell/hostRefusal';
 import { statusSinkPath } from './context';
 import { parseStatusText } from './cache';
 import { terminalStatus } from './status';
@@ -176,8 +177,13 @@ function TauriDrawer({ url, viewId, scenePath, projectDir, projectName, onOpenPr
             session.status = payload;
             session.cache = updateCacheState(session.cache, payload, Date.now());
           }
-        } catch {
-          // No sink yet (before the first assistant message) — leave the "—" readouts.
+        } catch (err) {
+          // No sink yet (before the first assistant message) — leave the "—" readouts. A
+          // confinement refusal is not "no sink yet": show it.
+          if (isConfinementRefusal(err)) {
+            const message = String(err);
+            setError((current) => (current === message ? current : message));
+          }
         }
       }
       tick();

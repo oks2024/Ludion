@@ -10,6 +10,7 @@
 // the bytes changed, so a memo keyed on `text` does not rebuild on a poll that found nothing.
 
 import { useEffect, useState } from 'react';
+import { isConfinementRefusal } from '../../shell/hostRefusal';
 import { isTauri } from '../../shell/tauri';
 import { readEditorFile, statEditorFile } from '../../terminal/pty';
 import { MODEL_POLL_MS } from './stage';
@@ -62,9 +63,13 @@ export function useWatchedFile(path: string | null): WatchedFile {
             return;
           }
           adopt(await readEditorFile(path), stat.mtimeMs);
-        } catch {
+        } catch (err) {
           // A file that vanished under a half-typed reference is the readout's story to tell, not
-          // the poll's — and the next good save resolves it without a click.
+          // the poll's — and the next good save resolves it without a click. A confinement
+          // refusal is different: nothing will ever resolve it, so say so.
+          if (isConfinementRefusal(err)) {
+            setState((current) => ({ ...current, error: String(err) }));
+          }
         }
       })();
     }, MODEL_POLL_MS);

@@ -17,10 +17,11 @@ pub struct ProjectInfo {
     default_scene: String,
 }
 
-/// The subset of `ludion.toml` this reader needs. Unlike the engine's `ludion-cli` manifest
-/// reader (`crates/ludion-cli/src/manifest.rs`, `deny_unknown_fields`), this one is lenient: an
-/// `[ios]` table or any future key must pass, since the editor only ever displays `name` and
-/// `default_scene`.
+/// The subset of `ludion.toml` this reader needs. The canonical, strict reader is
+/// `crates/ludion-engine/src/manifest.rs` (`deny_unknown_fields`). This one stays lenient about
+/// unknown keys (`[ios]`, `[[import]]`, `[audio]`, any future key) because the host links no engine
+/// crate and only displays `name` and `default_scene`; it mirrors just the engine's `default_scene`
+/// rule, so the editor refuses what the engine refuses.
 #[derive(Debug, Deserialize)]
 struct Manifest {
     name: String,
@@ -45,11 +46,38 @@ pub fn read_project(dir: &Path) -> Result<ProjectInfo, String> {
             manifest_path.display()
         )
     })?;
+    if let Some(reason) = default_scene_refusal(&manifest.default_scene) {
+        return Err(format!(
+            "`{}`: `default_scene` = `{}` {reason} — write it as `scenes/main.yaml`.",
+            manifest_path.display(),
+            manifest.default_scene
+        ));
+    }
     Ok(ProjectInfo {
         dir: dir.display().to_string(),
         name: manifest.name,
         default_scene: manifest.default_scene,
     })
+}
+
+/// Why the engine would refuse this `default_scene` spelling, or `None` when it is fine.
+fn default_scene_refusal(scene: &str) -> Option<&'static str> {
+    let bytes = scene.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if scene.starts_with(['/', '\\']) || drive {
+        return Some("is absolute");
+    }
+    let mut segments = scene.split('/');
+    if segments.clone().any(|s| s == "..") {
+        return Some("climbs with `..`");
+    }
+    if scene.is_empty() || scene.contains('\\') || segments.any(|s| s.is_empty() || s == ".") {
+        return Some("is not in its one spelling");
+    }
+    if !scene.contains('/') {
+        return Some("has no directory");
+    }
+    None
 }
 
 /// The `--project <dir>` / `--project=<dir>` value in `args`, or `None` when the flag is absent or
@@ -116,7 +144,7 @@ pub fn add_stage_scenes_from(templates: &Path, project: &Path) -> Result<Vec<Str
 
 /// The temp file a write to `dest` lands on first: `.{name}.{pid}.{n}.tmp` beside it, so two
 /// concurrent writers never share (or delete) each other's temp.
-fn temp_sibling(dest: &Path) -> std::path::PathBuf {
+pub(crate) fn temp_sibling(dest: &Path) -> std::path::PathBuf {
     static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let name = dest.file_name().unwrap_or_default().to_string_lossy();
     let n = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -125,7 +153,7 @@ fn temp_sibling(dest: &Path) -> std::path::PathBuf {
 
 /// Publishes `body` at `dest` only if `dest` is absent: a unique temp sibling is written whole, then
 /// hard-linked into place — atomic and no-clobber, so `dest` never exists half-written.
-fn create_new_atomic(dest: &Path, body: &[u8]) -> std::io::Result<()> {
+pub(crate) fn create_new_atomic(dest: &Path, body: &[u8]) -> std::io::Result<()> {
     let tmp = temp_sibling(dest);
     if let Err(e) = std::fs::write(&tmp, body) {
         let _ = std::fs::remove_file(&tmp);
@@ -201,6 +229,34 @@ mod tests {
         let err = read_project(&dir).unwrap_err();
         assert!(err.contains("is not a valid manifest"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn read_with_scene(scene: &str, extra: &str) -> Result<ProjectInfo, String> {
+        let dir = temp_project_dir();
+        let body = format!("name = \"x\"\ndefault_scene = '{scene}'\n{extra}");
+        std::fs::write(dir.join("ludion.toml"), body).unwrap();
+        let out = read_project(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        out
+    }
+
+    #[test]
+    fn bad_default_scene_spellings_are_refused() {
+        for (scene, reason) in [
+            ("../x/y.yaml", "climbs with `..`"),
+            ("/abs/main.yaml", "is absolute"),
+            ("main.yaml", "has no directory"),
+            ("scenes\\main.yaml", "is not in its one spelling"),
+        ] {
+            let err = read_with_scene(scene, "").unwrap_err();
+            assert!(err.contains(reason), "{scene}: {err}");
+        }
+    }
+
+    #[test]
+    fn unknown_tables_still_pass_with_a_good_default_scene() {
+        let extra = "[audio]\nvolume = 1\n\n[[import]]\nsrc = \"a\"\n";
+        assert!(read_with_scene("scenes/main.yaml", extra).is_ok());
     }
 
     #[test]

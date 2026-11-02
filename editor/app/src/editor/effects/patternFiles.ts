@@ -120,3 +120,10 @@ timeline:
 loop: 120
 `;
 }
+
+/** The listed key equal to `key` ignoring ASCII case (macOS and Windows fold case on disk), or
+ *  `null` when none is. */
+export function existingPatternKey(keys: readonly string[], key: string): string | null {
+  const folded = key.toLowerCase();
+  return keys.find((listed) => listed.toLowerCase() === folded) ?? null;
+}

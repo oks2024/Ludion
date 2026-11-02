@@ -16,6 +16,7 @@ pub fn check(path: &str) -> Result<(), String> {
     check_under(path, &crate::pty::repo_root()?)
 }
 
+// The frontend's `shell/hostRefusal.ts` matches these messages; keep the fragments in step.
 fn check_under(path: &str, repo_root: &Path) -> Result<(), String> {
     if path.is_empty() || path.contains('\0') || !Path::new(path).is_absolute() {
         return Err(format!(
@@ -142,6 +143,17 @@ mod tests {
         let err = f.check(&f.outside.join("x.txt")).unwrap_err();
         assert!(err.contains("outside the engine checkout"), "{err}");
         assert!(err.contains("x.txt"), "{err}");
+    }
+
+    #[test]
+    fn a_manifest_with_a_bad_default_scene_does_not_make_a_root() {
+        let f = Fixture::new("badscene");
+        fs::write(
+            f.outside.join("ludion.toml"),
+            "name = \"t\"\ndefault_scene = \"main.yaml\"\n",
+        )
+        .unwrap();
+        assert!(f.check(&f.outside.join("x.txt")).is_err());
     }
 
     #[test]

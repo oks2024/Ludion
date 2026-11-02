@@ -46,6 +46,7 @@ import { deriveDocForm, markFloats, subschemaAt, type DocEdit } from './docField
 import {
   docKey,
   docLabel,
+  existingPatternKey,
   docPath,
   isPatternDoc,
   newPatternKey,
@@ -329,17 +330,21 @@ export function PatternEditor(props: PatternEditorProps) {
     if (key === null) {
       return;
     }
+    if (existingPatternKey(keys, key) !== null) {
+      setNote(`\`${docLabel(key)}\` already exists — pick it from the list to open it.`);
+      return;
+    }
     setFresh('');
     void (async () => {
       try {
-        await writeEditorFile(docPath(root, key), newPatternText(fresh));
+        await writeEditorFile(docPath(root, key), newPatternText(fresh), { createNew: true });
         await relist();
         open(key);
       } catch (err) {
         onError(toDiagnostic(err));
       }
     })();
-  }, [fresh, root, relist, open, onError]);
+  }, [fresh, keys, root, relist, open, onError]);
 
   return (
     <div className="fx-pattern">

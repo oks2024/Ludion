@@ -17,6 +17,7 @@ import { toDiagnostic, type DiagnosticView } from '../viewer/diagnostic';
 import { listEditorDir, type DirEntry } from './host';
 import { readEditorFile } from '../terminal/pty';
 import { docParts } from './docpath';
+import { isConfinementRefusal } from './hostRefusal';
 import { isTauri } from './tauri';
 import { listScenes, pickScene, sameScenePath, type SceneEntry } from './sceneList';
 
@@ -53,9 +54,9 @@ export function ScenePicker({ client, sceneRoot, dirty, savePath, onError }: Sce
           setScenes(result);
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (!cancelled) {
-          setListError('No scenes folder in this project');
+          setListError(isConfinementRefusal(err) ? String(err) : 'No scenes folder in this project');
         }
       });
     return () => {

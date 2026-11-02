@@ -228,3 +228,5 @@ With vigil (in the repo) and a project outside the repo, no view shows an "outsi
 - Generation: the candidates grid shows thumbnails.
 - Terminal drawer: the status line still updates.
 - Performance: save.
+
+**Pattern tab, New pattern with an existing name (code audit H-02):** type a name whose slug is already listed (try a different case too) and press New: the note reads "already exists — pick it from the list to open it", the file's bytes are unchanged, and nothing is rewritten. A non-pattern `.yaml` at that path reads the host's "already exists" error instead.
