@@ -106,7 +106,7 @@ pub struct AcceptedMeshDocument {
 /// finalized, an index outside the run, a missing candidate file, a destination that already
 /// exists, or a run predating the prompt snapshot whose recipe no longer resolves or whose recipe or
 /// workflow hash has changed since. `L1102` for a candidate that is not a decodable
-/// PNG, and the importer's own `L1201`/`L1202`/`L1203` for a `.glb` it will not read.
+/// PNG, and the importer's own `L1201`/`L1202`/`L1203`/`L1111` for a `.glb` it will not read.
 pub fn accept(
     run_dir: &Path,
     index: u32,

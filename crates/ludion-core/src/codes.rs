@@ -453,7 +453,8 @@ pub mod code {
     /// `L1111` — a mesh asset document parsed cleanly but its vertex/index data does not hang
     /// together: a flat list's length is not the required multiple, two lists that must describe
     /// the same vertices disagree on the count, an index names a vertex that does not exist, or a
-    /// float is not finite. Raised by `ludion-scene`.
+    /// float is not finite. Raised by `ludion-scene`; `ludion import` raises it too for a mesh it
+    /// compiled, to be fixed in the source and re-exported.
     pub const MESH_DATA_CONSISTENCY: DiagnosticCode = DiagnosticCode::new("L1111");
 
     /// `L1112` — a mesh asset document has more vertices than the HD-2D style budget expects. A
@@ -1136,8 +1137,8 @@ pub mod code {
     /// `L1201` — a glTF input could not be read or parsed: the file is unreadable, or its bytes are
     /// not a valid `.gltf`/`.glb` document (bad JSON, a failed structural validation, or a buffer/
     /// image source that could not be resolved), or its data is malformed (a non-finite number, an
-    /// accessor that does not fit its buffer view, an index past the vertex count). Raised by
-    /// `ludion-import` (`ludion import`).
+    /// accessor that does not fit its buffer view), or its node graph is not a forest (a node listed
+    /// as a child twice, or its own ancestor). Raised by `ludion-import` (`ludion import`).
     pub const IMPORT_INVALID_GLTF: DiagnosticCode = DiagnosticCode::new("L1201");
 
     /// `L1202` — a glTF document uses a feature the importer does not map onto a Ludion component
@@ -1148,8 +1149,9 @@ pub mod code {
     pub const IMPORT_UNSUPPORTED_FEATURE: DiagnosticCode = DiagnosticCode::new("L1202");
 
     /// `L1203` — the imported output tree could not be written: a directory could not be created or
-    /// a file (`model.prefab.yaml`, a mesh doc, a texture) could not be written to disk. Raised by
-    /// `ludion-import` (`ludion import`).
+    /// a file (`model.prefab.yaml`, a mesh doc, a texture) could not be written to disk; or the
+    /// importer's own PNG re-encode failed in memory (an importer bug). Raised by `ludion-import`
+    /// (`ludion import`).
     pub const IMPORT_OUTPUT_IO: DiagnosticCode = DiagnosticCode::new("L1203");
 
     /// `L1204` — a glTF external buffer or image URI is not readable from where the import allows:
@@ -3789,6 +3791,9 @@ Specifically, one of:
 
 The JSON Pointer names the offending list or element.
 
+`ludion import` raises this code too, for a mesh it compiled from a glTF primitive; the message is
+prefixed with the primitive, and the fix is in the authoring tool, then re-export.
+
 Fix: correct the counts so every list describes the same vertices, fix the out-of-range index, or
 replace the non-finite value with a real number. Shape/type problems (a missing key, a wrong-typed
 value, a bad `kind`) are the separate `L1110`.",
@@ -6304,8 +6309,10 @@ reading the input — the file could not be opened, its bytes are not a well-for
 could not be resolved (a missing external `.bin`/image file in the `.gltf`'s directory or below it, or
 a `data:` URI whose base64 payload is corrupt). It is also raised when the document parses but its
 data is malformed: a non-finite number, a zero rotation quaternion, an accessor that overruns its
-buffer view or has a stride shorter than one element, attributes of different lengths, or an index
-past the vertex count. The message includes the underlying reason and names the element.
+buffer view or has a stride shorter than one element, or attributes of different lengths. A node
+graph that is not a forest is refused the same way (a node listed as a child twice, or its own
+ancestor); the JSON Pointer names the listing to remove. The message includes the underlying reason
+and names the element.
 
 Fix: check the path and that the file is a valid glTF export. If the `.gltf` references external
 files (its buffers or images use relative URIs), make sure those files sit in its directory or below
@@ -6383,6 +6390,9 @@ subdirectories) could not be created, or one of the files (`model.prefab.yaml`, 
 typically a missing parent directory, a permission denial, or a full disk. An `--out` on a
 different drive from the glTF is refused here too, before any write: the prefab and clips record
 the source as a relative `generated_from`, which has no form across drives.
+
+The same code covers an in-memory failure to re-encode a PNG the importer had just decoded or baked.
+That is not a path or disk problem but an importer bug: report it with the input file.
 
 Fix: check that the `--out` directory's parent exists and is writable and that there is free disk
 space, then re-run. The import is a pure function of its input, so re-running after fixing the

@@ -119,9 +119,10 @@ use convert::{
     spot_light_value, transform_value,
 };
 use diagnostics::{
-    blend_unsupported, camera_unsupported, emissive_without_uvs, emissive_zero_base_channel,
-    extension_ignored, invalid_gltf, malformed, node_inside_joint_chain, node_matrix_shears,
-    node_under_joint, output_io, unsupported, unweighted_vertices,
+    blend_unsupported, camera_unsupported, compiled_mesh_problem, emissive_without_uvs,
+    emissive_zero_base_channel, extension_ignored, invalid_gltf, malformed,
+    node_inside_joint_chain, node_matrix_shears, node_under_joint, output_io, png_encode_failed,
+    unsupported, unweighted_vertices,
 };
 use document::check_structure;
 pub use provenance::relative_to;
@@ -318,7 +319,9 @@ pub enum ExternalFiles<'a> {
 ///
 /// # Errors
 /// - `L1201` if the bytes are not a readable, valid glTF, or a buffer/image source cannot be
-///   resolved.
+///   resolved, or the node graph is not a forest (a node listed as a child twice, or its own
+///   ancestor).
+/// - `L1111` for a compiled mesh whose data is inconsistent.
 /// - `L1204` if an external URI leaves the allowed directory (absolute, prefixed, `..`), names a
 ///   non-regular or oversized file, or `external` is [`ExternalFiles::Refused`].
 /// - `L1202`(s) if the document uses unsupported features **and** `allow_lossy` is false — the
@@ -490,7 +493,7 @@ fn build_entities(
 ) -> Result<Built, Vec<Diagnostic>> {
     let nodes: Vec<gltf::Node> = document.nodes().collect();
 
-    // A node's parent is whichever node lists it as a child (a node has at most one parent).
+    // A node's parent is the node that lists it as a child; check_structure refused any node with two.
     let mut parent_of: Vec<Option<usize>> = vec![None; nodes.len()];
     for node in &nodes {
         for child in node.children() {
@@ -699,7 +702,6 @@ fn emitted_nodes(
             continue;
         }
         let mut current = index;
-        let mut steps = 0;
         while let Some(parent) = parent_of[current] {
             if folded[parent] {
                 emitted[index] = false;
@@ -713,10 +715,6 @@ fn emitted_nodes(
                 break;
             }
             current = parent;
-            steps += 1;
-            if steps > nodes.len() {
-                break;
-            }
         }
     }
     emitted
@@ -1177,9 +1175,8 @@ fn emit_tinted_texture(
         }
     };
     let (width, height, rgba) = baked;
-    let png = ludion_assets::encode_png(width, height, &rgba).map_err(|detail| {
-        invalid_gltf(format!("re-encoding a baked emissive map failed: {detail}"))
-    })?;
+    let png = ludion_assets::encode_png(width, height, &rgba)
+        .map_err(|detail| png_encode_failed("a baked emissive map", &detail))?;
     let rel_path = register_png(png, state);
     state.tinted_paths.insert(key, Some(rel_path.clone()));
     Ok(Some(rel_path))
@@ -1234,7 +1231,7 @@ fn emit_texture(
     let label = format!("image {}", image.index());
     let (width, height, rgba) = ludion_assets::decode_png(&resolved.bytes, &label)?;
     let png = ludion_assets::encode_png(width, height, &rgba)
-        .map_err(|detail| invalid_gltf(format!("re-encoding {label} failed: {detail}")))?;
+        .map_err(|detail| png_encode_failed(&label, &detail))?;
     let rel_path = register_png(png, state);
     state
         .image_paths
@@ -1395,7 +1392,7 @@ fn build_mesh_document(
     if !problems.is_empty() {
         return Err(problems
             .into_iter()
-            .map(|d| malformed(format!("{label}: {}", d.message)))
+            .map(|d| compiled_mesh_problem(d, &label))
             .collect());
     }
 
@@ -1418,7 +1415,10 @@ fn build_mesh_document(
     // The importer builds this; if it is somehow inconsistent that is a hard bug, not a lossy drop.
     let problems = ludion_scene::validate_mesh(&doc);
     if !problems.is_empty() {
-        return Err(problems);
+        return Err(problems
+            .into_iter()
+            .map(|d| compiled_mesh_problem(d, &label))
+            .collect());
     }
     Ok(Some(doc))
 }

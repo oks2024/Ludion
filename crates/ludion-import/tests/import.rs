@@ -1324,6 +1324,24 @@ fn malformed_message(json: &str) -> String {
     errors[0].message.clone()
 }
 
+/// Imports `json` in default mode, expecting a compiled mesh to fail `validate_mesh` (`L1111`)
+/// with its pointer, the original help and the re-export context, and returns its message.
+fn mesh_problem_message(json: &str) -> String {
+    let errors = import(
+        json.as_bytes(),
+        ExternalFiles::Beside(Path::new(".")),
+        false,
+    )
+    .expect_err("an inconsistent mesh must be refused");
+    let first = &errors[0];
+    assert_eq!(first.code.as_str(), "L1111", "{errors:?}");
+    assert!(first.path.is_some(), "{first:?}");
+    let help = first.help.as_deref().unwrap_or_default();
+    assert!(help.contains("re-export"), "{help}");
+    assert!(help.contains("; this mesh document"), "{help}");
+    first.message.clone()
+}
+
 /// A normal-map material on texture 0, and the texture block it needs.
 fn normal_map_extra() -> String {
     format!(
@@ -1396,7 +1414,7 @@ fn a_view_past_the_end_of_its_buffer_is_l1201() {
 }
 
 #[test]
-fn a_nan_position_is_l1201() {
+fn a_nan_position_is_l1111() {
     let mut positions = vec![0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     positions[4] = f32::NAN;
     let json = raw_gltf(
@@ -1406,11 +1424,11 @@ fn a_nan_position_is_l1201() {
         r#"{"attributes":{"POSITION":0}}"#,
         "",
     );
-    assert!(malformed_message(&json).contains("tri-mesh"));
+    assert!(mesh_problem_message(&json).contains("tri-mesh"));
 }
 
 #[test]
-fn an_index_past_the_vertex_count_is_l1201_before_the_tangent_pass() {
+fn an_index_past_the_vertex_count_is_l1111_before_the_tangent_pass() {
     // Positions, UVs, then three u16 indices `[0, 1, 7]` (padded to a 4-byte multiple).
     let mut bytes = triangle_bytes();
     bytes.extend(f32_bytes(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
@@ -1424,11 +1442,11 @@ fn an_index_past_the_vertex_count_is_l1201_before_the_tangent_pass() {
         r#"{"attributes":{"POSITION":0,"TEXCOORD_0":1},"indices":2,"material":0}"#,
         &normal_map_extra(),
     );
-    assert!(malformed_message(&json).contains("tri-mesh"));
+    assert!(mesh_problem_message(&json).contains("tri-mesh"));
 }
 
 #[test]
-fn uvs_shorter_than_the_positions_are_l1201_before_the_tangent_pass() {
+fn uvs_shorter_than_the_positions_are_l1111_before_the_tangent_pass() {
     let mut bytes = triangle_bytes();
     bytes.extend(f32_bytes(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
     let json = triangle_gltf(
@@ -1438,7 +1456,7 @@ fn uvs_shorter_than_the_positions_are_l1201_before_the_tangent_pass() {
         r#"{"attributes":{"POSITION":0,"TEXCOORD_0":1},"material":0}"#,
         &normal_map_extra(),
     );
-    assert!(malformed_message(&json).contains("tri-mesh"));
+    assert!(mesh_problem_message(&json).contains("tri-mesh"));
 }
 
 #[test]
@@ -1555,4 +1573,122 @@ fn an_out_of_range_index_is_l1201() {
     let json = r#"{"asset":{"version":"2.0"},"nodes":[{"mesh":7}]}"#;
     let message = l1201_message(json.as_bytes());
     assert!(message.contains("invalid glTF"), "{message}");
+}
+
+// --- The node graph is a forest: L1201 with a pointer, never a hang --------------------------------
+
+/// Imports `bytes`, asserts the first diagnostic is an `L1201` at `pointer` whose help names the
+/// forest rule, and returns its message.
+fn forest_refusal(bytes: &[u8], pointer: &str) -> String {
+    let diagnostics = import(bytes, ExternalFiles::Beside(Path::new(".")), false)
+        .expect_err("a node graph that is not a forest must be refused");
+    let first = diagnostics.into_iter().next().expect("one diagnostic");
+    assert_eq!(first.code.as_str(), "L1201", "{}", first.message);
+    assert_eq!(first.path.as_deref(), Some(pointer), "{}", first.message);
+    assert!(first.help.as_deref().unwrap_or_default().contains("forest"));
+    first.message
+}
+
+fn forest_seed(name: &str) -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/corpus/gltf_import")
+            .join(name),
+    )
+    .expect("fuzz seed")
+}
+
+fn nodes_gltf(nodes: &str) -> String {
+    format!(r#"{{"asset":{{"version":"2.0"}},"nodes":[{nodes}]}}"#)
+}
+
+#[test]
+fn a_node_that_lists_itself_is_refused() {
+    let message = forest_refusal(&forest_seed("node-self-loop.gltf"), "/nodes/0/children/0");
+    assert!(message.contains("lists itself"), "{message}");
+}
+
+#[test]
+fn a_two_node_cycle_is_refused() {
+    let message = forest_refusal(&forest_seed("node-two-cycle.gltf"), "/nodes/1/children/0");
+    assert!(message.contains("form a cycle"), "{message}");
+}
+
+#[test]
+fn a_node_listed_by_two_parents_is_refused_at_the_second_listing() {
+    let message = forest_refusal(&forest_seed("node-diamond.gltf"), "/nodes/2/children/0");
+    assert!(
+        message.contains("node 3") && message.contains("node 1") && message.contains("node 2"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_node_listed_twice_by_one_parent_is_refused() {
+    let json = nodes_gltf(r#"{"children":[1,1]},{}"#);
+    let message = forest_refusal(json.as_bytes(), "/nodes/0/children/1");
+    assert!(message.contains("twice"), "{message}");
+}
+
+#[test]
+fn a_node_listing_itself_under_another_parent_is_refused() {
+    let json = nodes_gltf(r#"{"children":[1]},{"children":[1]}"#);
+    forest_refusal(json.as_bytes(), "/nodes/1/children/0");
+}
+
+#[test]
+fn a_rootless_three_cycle_is_refused() {
+    let json = nodes_gltf(r#"{"children":[1]},{"children":[2]},{"children":[0]}"#);
+    forest_refusal(json.as_bytes(), "/nodes/2/children/0");
+}
+
+#[test]
+fn a_cycle_below_a_root_is_a_node_listed_twice() {
+    let json = nodes_gltf(r#"{"children":[1]},{"children":[2]},{"children":[1]}"#);
+    let message = forest_refusal(json.as_bytes(), "/nodes/2/children/0");
+    assert!(message.contains("at most one parent"), "{message}");
+}
+
+#[test]
+fn a_spot_light_on_a_self_listing_node_is_refused_not_hung() {
+    let json = spot_gltf("{}", None, None)
+        .replace(r#"{"name":"lamp""#, r#"{"name":"lamp","children":[0]"#);
+    assert_ne!(json, spot_gltf("{}", None, None));
+    forest_refusal(json.as_bytes(), "/nodes/0/children/0");
+}
+
+#[test]
+fn a_named_node_appears_by_name_in_the_refusal() {
+    let json = nodes_gltf(r#"{"name":"hand","children":[0]}"#);
+    let message = forest_refusal(json.as_bytes(), "/nodes/0/children/0");
+    assert!(message.contains(r#"node 0 ("hand")"#), "{message}");
+}
+
+#[test]
+fn a_fibonacci_diamond_chain_is_refused_promptly() {
+    let nodes: Vec<String> = (0..64)
+        .map(|i| match i {
+            62 => r#"{"children":[63]}"#.to_owned(),
+            63 => "{}".to_owned(),
+            i => format!(r#"{{"children":[{},{}]}}"#, i + 1, i + 2),
+        })
+        .collect();
+    let json = nodes_gltf(&nodes.join(","));
+    forest_refusal(json.as_bytes(), "/nodes/1/children/0");
+}
+
+#[test]
+fn an_out_of_range_child_stays_an_invalid_gltf_refusal() {
+    let json = nodes_gltf(r#"{"children":[9]}"#);
+    let message = l1201_message(json.as_bytes());
+    assert!(message.contains("invalid glTF"), "{message}");
+}
+
+#[test]
+fn a_three_level_tree_imports_with_its_parent_chain() {
+    let json = nodes_gltf(r#"{"children":[1]},{"children":[2]},{}"#);
+    let plan = import_clean(&json);
+    assert!(component(&plan, 0, "Parent").is_none());
+    assert!(component(&plan, 1, "Parent").is_some());
+    assert!(component(&plan, 2, "Parent").is_some());
 }

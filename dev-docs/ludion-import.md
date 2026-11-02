@@ -21,7 +21,7 @@ before touching the glTF→component mapping, the `L1202` unsupported-feature su
   conversion routed through `ludion_core::math` for cross-platform bit-exactness.
 - `crates/ludion-import/src/diagnostics.rs` — the codes: `L1201` (unreadable/invalid glTF),
   `L1202` (a feature with no Ludion mapping, always naming the offender), `L1203` (output write
-  failure), `L1204` (an external source refused), `L1205` (a warning: a skinned vertex with no
+  failure, or the importer's own PNG re-encode failing), `L1204` (an external source refused), `L1205` (a warning: a skinned vertex with no
   weight, bound to the root joint), `L1206` (a clip over its error bound),
   `L1207` (invalid animation `extras`).
 - `crates/ludion-import/src/skin.rs` — the skin mapping: `bind_skin` (joints, parent-first order,
@@ -69,6 +69,7 @@ before touching the glTF→component mapping, the `L1202` unsupported-feature su
   The writer prints an `f32`-schema field as its shortest f32 decimal, so a component float in an
   import is short *and* a `scene.load` → `scene.save` fixed point. Mesh and clip documents are
   `f64`-typed and keep the widened digits.
+- **The node graph is a forest, checked once.** `check_structure` refuses a node listed twice or its own ancestor (`L1201`, with a pointer), so every walk up `parent_of` may assume it terminates and carries no step guard.
 - **Quaternion→Euler conversion is `ludion_core::math`'s** (f32 for node transforms, `math::f64` for clips), never glam's `to_euler`/`normalize` — glam's backends round the last bit differently per platform.
 - **`origin:` is never written here.** `MeshDocument.origin` stays `None` through this crate;
   `ludion-gen`'s `accept` step is the sole writer, splicing `Origin` into the plan before
@@ -92,7 +93,7 @@ as written and percent-decoded, then name a regular file of at most 512 MiB; els
 that merely fails stays `L1201`.
 
 Accessors and mesh data are checked before any reader (`accessors.rs`, `ludion_scene::validate_mesh`)
-and every float handed to a component builder is checked finite; malformed data is `L1201` naming the element.
+and every float handed to a component builder is checked finite; an accessor or float failure is `L1201` naming the element, and a compiled mesh's failure keeps `validate_mesh`'s own code (`L1111`).
 
 Material, texture and geometry mapping (`mesh_reference`, the emissive mapping and tint bake, content-hashed textures, tangents): `ludion devdocs import-materials`.
 

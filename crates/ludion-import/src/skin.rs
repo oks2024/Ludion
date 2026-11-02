@@ -45,7 +45,7 @@ pub(crate) struct SkinBinding {
 ///
 /// # Errors
 /// `L1201` for a non-finite joint transform or inverse bind matrix, an inverse bind accessor that
-/// does not fit its buffer, a duplicate joint or a joint cycle.
+/// does not fit its buffer, or a duplicate joint.
 pub(crate) fn bind_skin(
     skin: &gltf::Skin,
     mesh_node: &gltf::Node,
@@ -92,9 +92,6 @@ pub(crate) fn bind_skin(
                     return Some(parent);
                 }
                 passed.push(ancestor);
-                if passed.len() > nodes.len() {
-                    return None;
-                }
                 current = parent_of[ancestor];
             }
             None
@@ -106,10 +103,8 @@ pub(crate) fn bind_skin(
     let mut placed = vec![false; count];
     while order.len() < count {
         let next = (0..count)
-            .find(|&slot| !placed[slot] && parent_slot[slot].is_none_or(|parent| placed[parent]));
-        let Some(next) = next else {
-            return Err(vec![malformed(format!("{label}'s joints form a cycle"))]);
-        };
+            .find(|&slot| !placed[slot] && parent_slot[slot].is_none_or(|parent| placed[parent]))
+            .expect("check_structure refused a node cycle, and joints are distinct");
         placed[next] = true;
         order.push(next);
     }
@@ -332,9 +327,6 @@ fn world(index: usize, nodes: &[gltf::Node], parent_of: &[Option<usize>]) -> DMa
     let mut chain = vec![index];
     while let Some(parent) = parent_of[*chain.last().expect("the chain starts non-empty")] {
         chain.push(parent);
-        if chain.len() > nodes.len() {
-            break;
-        }
     }
     chain
         .iter()

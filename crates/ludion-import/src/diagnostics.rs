@@ -17,14 +17,50 @@ pub(crate) fn invalid_gltf(detail: impl Into<String>) -> Diagnostic {
 }
 
 /// `L1201` — the file parsed but its data is inconsistent (a non-finite number, an accessor that
-/// does not fit its buffer view, attributes of different lengths, an index past the vertex count).
-/// `detail` names the element.
+/// does not fit its buffer view, attributes of different lengths). `detail` names the element.
 pub(crate) fn malformed(detail: impl Into<String>) -> Diagnostic {
     Diagnostic::new(code::IMPORT_INVALID_GLTF, detail.into()).with_help(
         "the file parsed but its data is inconsistent — re-export it from the authoring tool (glTF \
          requires finite numbers, unit rotation quaternions, accessors that fit their buffer views \
-         with a stride at least one element wide, attributes of one length, and indices below the \
-         vertex count)",
+         with a stride at least one element wide, and attributes of one length)",
+    )
+}
+
+/// `L1201` — the node graph is not a forest. `detail` names the nodes; `pointer` is the child
+/// listing to remove.
+pub(crate) fn node_graph_not_forest(detail: String, pointer: String) -> Diagnostic {
+    Diagnostic::new(code::IMPORT_INVALID_GLTF, detail)
+        .with_path(pointer)
+        .with_help(
+            "a glTF node graph must be a forest: each node has at most one parent, is listed once, \
+             and is never its own ancestor. Re-export from the authoring tool; for a generated or \
+             hand-edited file, remove the listing at this path",
+        )
+}
+
+/// A mesh document the importer compiled failed `validate_mesh`: keeps the problem's code, severity,
+/// path and related, prefixes its message with `label` and adds where the path points.
+pub(crate) fn compiled_mesh_problem(mut problem: Diagnostic, label: &str) -> Diagnostic {
+    const CONTEXT: &str = "this mesh document is compiled from the glTF primitive, and the path \
+                           points into it: fix the data in the authoring tool and re-export";
+    problem.message = format!("{label}: {}", problem.message);
+    problem.help = Some(match problem.help.take() {
+        Some(help) => format!("{help}; {CONTEXT}"),
+        None => CONTEXT.to_owned(),
+    });
+    problem
+}
+
+/// `L1203` — re-encoding a PNG the importer decoded or baked failed in memory. Not a disk problem:
+/// the input decoded, so this is the importer's own output.
+pub(crate) fn png_encode_failed(what: &str, detail: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::IMPORT_OUTPUT_IO,
+        format!("re-encoding {what} failed: {detail}"),
+    )
+    .with_help(
+        "the input image decoded, and this is the importer's own re-encode of it, so this is an \
+         importer bug: report it with the input file",
     )
 }
 
@@ -313,10 +349,23 @@ mod tests {
             node_inside_joint_chain("node 2"),
             channel_on_reframed_joint("a channel", "node 3"),
             node_under_joint("node 4"),
+            node_graph_not_forest("node 1 lists itself as a child".into(), "/nodes/1".into()),
+            png_encode_failed("image 0", "boom"),
         ] {
             let help = found.help.as_deref().unwrap_or_default();
             assert!(!found.message.contains("  "), "{}", found.message);
             assert!(!help.contains("  "), "{help}");
         }
+    }
+
+    #[test]
+    fn a_failed_png_encode_is_l1203_and_not_a_path_problem() {
+        let found = png_encode_failed("image 0", "boom");
+        assert_eq!(found.code, code::IMPORT_OUTPUT_IO);
+        let help = found.help.as_deref().unwrap_or_default();
+        assert!(
+            !help.contains("valid glTF export") && !help.contains("--out"),
+            "{help}"
+        );
     }
 }
