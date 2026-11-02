@@ -94,8 +94,8 @@ else median-cuts to the clamped target and reports the loss.
   gutter policy and width rule stay per crate because each moves committed bytes.
 - **IO-free by design.** The crate reads no file and writes none: the caller resolves paths, loads
   inputs and writes results, so every function is a pure function of its arguments and unit-testable
-  without a temp directory. `output_stem` honours the CLI's "derive from the file name" fallback
-  without doing IO, because `generated_from` *is* that path.
+  without a temp directory. The CLI derives the output stem once and passes it to `pack`, which
+  only names the `color_map` from it.
 - **`emissive` is not colour-map input.** `palette_lookup` reads `color` alone; the emissive value
   rides the document for a map that bakes from the same source.
 

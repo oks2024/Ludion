@@ -493,3 +493,104 @@ fn a_variant_dropping_emissive_on_purpose_leaves_the_light_sourceless() {
     let text = stderr(&output);
     assert!(text.contains("L1154"), "stderr was: {text}");
 }
+
+/// A dotted, unnamed source keeps its whole stem: `ship-v1.2.atlas-source.yaml` bakes
+/// `ship-v1.2.png` + `ship-v1.2.atlas.yaml`, and the document names that PNG.
+#[test]
+fn a_dotted_unnamed_source_keeps_its_whole_stem() {
+    let staged = staged("atlas_dotted_stem");
+    let dir = staged.parent().unwrap();
+    let source = dir.join("ship-v1.2.atlas-source.yaml");
+    std::fs::rename(&staged, &source).unwrap();
+    let text = std::fs::read_to_string(&source).unwrap();
+    let head = text.split("inputs:").next().unwrap();
+    let head: String = head
+        .lines()
+        .filter(|l| !l.starts_with("name:"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(
+        &source,
+        format!("{head}inputs:\n  - ship.sprite.yaml\n  - spark.png\n"),
+    )
+    .unwrap();
+    let output = generate(&source);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(dir.join("ship-v1.2.png").exists());
+    let yaml = std::fs::read_to_string(dir.join("ship-v1.2.atlas.yaml")).unwrap();
+    assert_eq!(
+        ludion_scene::check_atlas(&yaml).unwrap().color_map,
+        "ship-v1.2.png"
+    );
+}
+
+/// An atlas whose output PNG is one of its own inputs is refused, by `generate` and `--check`
+/// alike, and the input is left byte-identical.
+#[test]
+fn an_output_that_is_an_input_is_refused() {
+    let source = staged("atlas_self_overwrite");
+    let dir = source.parent().unwrap();
+    std::fs::copy(dir.join("spark.png"), dir.join("ship.png")).unwrap();
+    let before = std::fs::read(dir.join("ship.png")).unwrap();
+    with_inputs(&source, "  - ship.sprite.yaml\n  - ./ship.png\n", "");
+    for output in [generate(&source), check(&source)] {
+        assert!(!output.status.success());
+        let text = stderr(&output);
+        assert!(text.contains("L1153"), "stderr was: {text}");
+        assert!(text.contains("/inputs/1"), "stderr was: {text}");
+    }
+    assert_eq!(std::fs::read(dir.join("ship.png")).unwrap(), before);
+    assert!(!dir.join("ship.atlas.yaml").exists());
+}
+
+/// Two sources that would write the same pair are refused up front and nothing is written.
+#[test]
+fn two_sources_sharing_an_output_write_nothing() {
+    let first = staged("atlas_shared_output");
+    let dir = first.parent().unwrap();
+    let second = dir.join("other.atlas-source.yaml");
+    std::fs::copy(&first, &second).unwrap();
+    let text = std::fs::read_to_string(&second).unwrap();
+    let text = if text.contains("name:") {
+        text
+    } else {
+        text.replacen(
+            "kind: atlas-source\n",
+            "kind: atlas-source\nname: ship\n",
+            1,
+        )
+    };
+    std::fs::write(&second, text).unwrap();
+    let output = run_ludion(&[
+        "generate-atlas",
+        first.to_str().unwrap(),
+        second.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let text = stderr(&output);
+    assert!(
+        text.contains("L1153") && text.contains("/name"),
+        "stderr was: {text}"
+    );
+    assert!(
+        text.contains("ship.atlas-source.yaml") && text.contains("other.atlas-source.yaml"),
+        "stderr was: {text}"
+    );
+    assert!(!dir.join("ship.png").exists());
+    assert!(!dir.join("ship.atlas.yaml").exists());
+}
+
+/// An empty `name:` is refused at `/name`, not derived into a `.png`.
+#[test]
+fn an_empty_name_is_refused() {
+    let source = staged("atlas_empty_name");
+    let text = std::fs::read_to_string(&source).unwrap();
+    std::fs::write(&source, text.replacen("name: ship\n", "name: \"\"\n", 1)).unwrap();
+    let output = generate(&source);
+    assert!(!output.status.success());
+    let text = stderr(&output);
+    assert!(
+        text.contains("L1153") && text.contains("/name"),
+        "stderr was: {text}"
+    );
+}

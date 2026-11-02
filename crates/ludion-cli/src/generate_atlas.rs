@@ -47,6 +47,9 @@ struct Baked {
 /// aggregating the exit code (non-zero if any input fails). Unlike `generate-map`'s `--out`, the
 /// destination is a *directory*, so it stays meaningful with several inputs.
 pub fn run(sources: &[PathBuf], out_dir: Option<&Path>, check: bool) -> ExitCode {
+    if let Some(code) = refuse_shared_outputs(sources, out_dir) {
+        return code;
+    }
     let mut failed = false;
     for source in sources {
         let code = if check {
@@ -62,6 +65,97 @@ pub fn run(sources: &[PathBuf], out_dir: Option<&Path>, check: bool) -> ExitCode
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+/// Refuses a run in which two sources would write the same file (a shared `name:`, or a
+/// `foo.font-source.yaml` beside a `foo.atlas-source.yaml`), before anything is written or compared.
+/// A source that cannot be read or validated is left to its own bake to report.
+fn refuse_shared_outputs(sources: &[PathBuf], out_dir: Option<&Path>) -> Option<ExitCode> {
+    let mut claimed: Vec<(PathBuf, &Path)> = Vec::new();
+    let mut refusals = Vec::new();
+    for source in sources {
+        for output in planned_outputs(source, out_dir) {
+            let output = normalize(&output);
+            if let Some((_, first)) = claimed.iter().find(|(path, _)| *path == output) {
+                refusals.push((
+                    source.as_path(),
+                    Diagnostic::new(
+                        code::SPRITE_DOCUMENT_STRUCTURE,
+                        format!(
+                            "`{}` and `{}` would both write `{}`; neither source was baked",
+                            first.display(),
+                            source.display(),
+                            output.display()
+                        ),
+                    )
+                    .with_path("/name")
+                    .with_help("give one source a distinct `name:`, or bake them separately"),
+                ));
+                continue;
+            }
+            claimed.push((output, source.as_path()));
+        }
+    }
+    let mut code = None;
+    for (source, diagnostic) in refusals {
+        code = Some(diagnostic::report(source, &[diagnostic]));
+    }
+    code
+}
+
+/// The files `source` would write, or none when it cannot be read or does not validate.
+fn planned_outputs(source_path: &Path, out_dir: Option<&Path>) -> Vec<PathBuf> {
+    let Ok(text) = std::fs::read_to_string(source_path) else {
+        return Vec::new();
+    };
+    let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
+    let dir = out_dir.map_or_else(|| source_dir.to_path_buf(), Path::to_path_buf);
+    match ludion_scene::peek_kind(&text).as_deref() {
+        Some("atlas-source") => match ludion_scene::check_atlas_source(&text) {
+            Ok(doc) => match atlas_stem(&doc, source_path) {
+                Ok(stem) => vec![
+                    dir.join(format!("{stem}.png")),
+                    dir.join(format!("{stem}.atlas.yaml")),
+                ],
+                Err(_) => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        },
+        Some("font-source") => match ludion_scene::check_font_source(&text) {
+            Ok(doc) => {
+                let stem = font_stem(&doc, source_path);
+                vec![
+                    dir.join(format!("{stem}.png")),
+                    dir.join(format!("{stem}.font.yaml")),
+                ]
+            }
+            Err(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// A path made absolute with `.`/`..` folded away and its directory resolved through symlinks, so
+/// two spellings of one file compare equal even when the file does not exist yet.
+fn normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut folded = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                folded.pop();
+            }
+            other => folded.push(other),
+        }
+    }
+    match (folded.parent(), folded.file_name()) {
+        (Some(parent), Some(name)) => parent
+            .canonicalize()
+            .map_or_else(|_| folded.clone(), |parent| parent.join(name)),
+        _ => folded,
     }
 }
 
@@ -201,13 +295,18 @@ fn bake_atlas_source(
 
     let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
     let dir = out_dir.map_or_else(|| source_dir.to_path_buf(), Path::to_path_buf);
-    let stem = output_stem(&doc, source_path);
+    let stem = atlas_stem(&doc, source_path)
+        .map_err(|diagnostic| diagnostic::report(source_path, &[diagnostic]))?;
+    let png_path = dir.join(format!("{stem}.png"));
+    let yaml_path = dir.join(format!("{stem}.atlas.yaml"));
+    refuse_input_overwrite(&doc, source_dir, &[&png_path, &yaml_path])
+        .map_err(|diagnostics| diagnostic::report(source_path, &diagnostics))?;
     let generated_from = ludion_import::relative_to(&dir, source_path, code::OUTPUT_IO)
         .map_err(|diagnostic| diagnostic::report(source_path, &[diagnostic]))?;
 
     let inputs = load_inputs(&doc, source_dir)
         .map_err(|diagnostics| diagnostic::report(source_path, &diagnostics))?;
-    let bake = ludion_sprite::pack(&doc, &generated_from, &inputs)
+    let bake = ludion_sprite::pack(&doc, &generated_from, &stem, &inputs)
         .map_err(|diagnostics| diagnostic::report(source_path, &diagnostics))?;
 
     let yaml = ludion_scene::emit_atlas(&bake.doc);
@@ -216,10 +315,10 @@ fn bake_atlas_source(
     }
 
     Ok(Baked {
-        yaml_path: dir.join(format!("{stem}.atlas.yaml")),
-        // `pack` derives the colour map's file name from the same stem, so writing the PNG anywhere
+        yaml_path,
+        // `pack` names the colour map `<stem>.png` from this same stem, so writing the PNG anywhere
         // else would commit a document naming a file that is not there.
-        png_path: dir.join(format!("{stem}.png")),
+        png_path,
         summary: format!(
             "{}x{}, {} regions",
             bake.image.width,
@@ -244,10 +343,7 @@ fn bake_font_source(
 
     let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
     let dir = out_dir.map_or_else(|| source_dir.to_path_buf(), Path::to_path_buf);
-    let stem = match doc.name.as_deref() {
-        Some(name) => name.to_string(),
-        None => document_stem(source_path, ".font-source"),
-    };
+    let stem = font_stem(&doc, source_path);
     let generated_from = ludion_import::relative_to(&dir, source_path, code::OUTPUT_IO)
         .map_err(|diagnostic| diagnostic::report(source_path, &[diagnostic]))?;
 
@@ -563,11 +659,62 @@ fn unsupported_input(path: &Path, pointer: &str) -> Diagnostic {
 
 /// The output stem both written files share: the source's `name:`, else its own file name with
 /// `.yaml`/`.yml` and then a trailing `.atlas-source` dropped
-/// (`ship.atlas-source.yaml` → `ship`).
-fn output_stem(doc: &AtlasSourceDocument, source_path: &Path) -> String {
+/// (`ship.atlas-source.yaml` → `ship`). An empty `name:` would write `.png`, so it is refused.
+fn atlas_stem(doc: &AtlasSourceDocument, source_path: &Path) -> Result<String, Diagnostic> {
+    match doc.name.as_deref() {
+        Some("") => Err(Diagnostic::new(
+            code::SPRITE_DOCUMENT_STRUCTURE,
+            "the atlas `name` is empty, so the output files would have no name",
+        )
+        .with_path("/name")
+        .with_help("give `name:` a value, or remove it to use the source file's own stem")),
+        Some(name) => Ok(name.to_string()),
+        None => Ok(document_stem(source_path, ".atlas-source")),
+    }
+}
+
+/// The font bake's output stem: the source's `name:`, else its own file name minus `.font-source`.
+fn font_stem(doc: &ludion_scene::FontSourceDocument, source_path: &Path) -> String {
     match doc.name.as_deref() {
         Some(name) => name.to_string(),
-        None => document_stem(source_path, ".atlas-source"),
+        None => document_stem(source_path, ".font-source"),
+    }
+}
+
+/// Refuses an atlas whose output PNG or document is one of its own `inputs:` — the bake would
+/// overwrite a source image with the packed atlas.
+fn refuse_input_overwrite(
+    doc: &AtlasSourceDocument,
+    source_dir: &Path,
+    outputs: &[&Path],
+) -> Result<(), Vec<Diagnostic>> {
+    let outputs: Vec<PathBuf> = outputs.iter().map(|path| normalize(path)).collect();
+    let diagnostics: Vec<Diagnostic> = doc
+        .inputs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let input = normalize(&source_dir.join(&entry.path));
+            outputs.contains(&input).then(|| {
+                Diagnostic::new(
+                    code::SPRITE_DOCUMENT_STRUCTURE,
+                    format!(
+                        "the atlas input `{}` is a file this bake writes; packing would overwrite it",
+                        entry.path
+                    ),
+                )
+                .with_path(format!("/inputs/{index}"))
+                .with_help(
+                    "set `name:` on the atlas source (or `--out-dir`) so the packed files land \
+                     beside the inputs, not over them",
+                )
+            })
+        })
+        .collect();
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(diagnostics)
     }
 }
 

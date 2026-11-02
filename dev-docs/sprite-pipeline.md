@@ -138,8 +138,10 @@ The texel is premultiplied, so the tint's alpha scales colour as well as coverag
   `flipbooks` is read at extract: `extract.rs::flipbook_frame_name` resolves an entity's `Animation`
   clip against `AtlasDocument::flipbook`, then `ludion_scene::flipbook_frame` picks the showing
   region, replacing the authored `frame` for both `place()`'s derived size and `extract()`'s UV rect.
-- **`--out-dir` moves both files or neither**: `pack` derives the colour map's file name from the
-  same stem, so writing the PNG elsewhere commits a document naming a file that is not there.
+- **Nothing overwrites an input or another source's output**: an output PNG/document equal to an
+  `inputs:` path is `L1153` at `/inputs/<i>`; two sources of one run writing the same file are
+  `L1153` at `/name` before anything is baked; an empty `name:` is `L1153` at `/name`.
+- **`--out-dir` moves both files or neither**: the CLI's one stem names the colour map in `pack` and the PNG on disk, so writing the PNG elsewhere commits a document naming a file that is not there.
 
 ## Verify
 ```

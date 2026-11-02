@@ -6,7 +6,7 @@
 //! diff. A cleverer packer that saved texels but reshuffled on an unrelated edit would re-bake every
 //! committed atlas for nothing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ludion_assets::Image;
 use ludion_core::diagnostics::Diagnostic;
@@ -69,8 +69,8 @@ pub struct AtlasBake {
 /// Packs `inputs` into one atlas, deriving the `kind: atlas` document from `source`.
 ///
 /// `generated_from` is the atlas source's path relative to the written document — the provenance
-/// marker the drift gate finds the pair through — and the packed image's name is derived from
-/// `source.name`, falling back to `generated_from`'s own stem.
+/// marker the drift gate finds the pair through — and `stem` is the output file stem the caller
+/// derived, which names the document's `color_map` (`<stem>.png`).
 ///
 /// Layout is fully determined by the inputs: regions sort by height descending, then width
 /// descending, then name ascending; the width is the smallest multiple of four that holds both the
@@ -86,6 +86,7 @@ pub struct AtlasBake {
 pub fn pack(
     source: &AtlasSourceDocument,
     generated_from: &str,
+    stem: &str,
     inputs: &[AtlasInput],
 ) -> Result<AtlasBake, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
@@ -119,7 +120,6 @@ pub fn pack(
         )]);
     }
     let (image, png) = compose(&layout, &entries)?;
-    let stem = output_stem(source, generated_from);
 
     let regions = layout
         .placements
@@ -179,13 +179,14 @@ struct Layout {
 /// and a frame with no texels.
 fn collect<'a>(inputs: &'a [AtlasInput], diagnostics: &mut Vec<Diagnostic>) -> Vec<Entry<'a>> {
     let mut entries: Vec<Entry<'a>> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for (index, input) in inputs.iter().enumerate() {
         for frame in &input.frames {
             let name = match &frame.name {
                 Some(frame_name) => format!("{}/{}", input.base, frame_name),
                 None => input.base.clone(),
             };
-            if entries.iter().any(|entry| entry.name == name) {
+            if seen.contains(&name) {
                 diagnostics.push(structure_error(
                     format!("two inputs both produce the region `{name}`"),
                     format!("/inputs/{index}"),
@@ -207,6 +208,7 @@ fn collect<'a>(inputs: &'a [AtlasInput], diagnostics: &mut Vec<Diagnostic>) -> V
                 ));
                 continue;
             }
+            seen.insert(name.clone());
             entries.push(Entry { name, frame });
         }
     }
@@ -220,13 +222,13 @@ fn check_flipbooks(
     entries: &[Entry<'_>],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let names: BTreeSet<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
     for (book_index, flipbook) in source.flipbooks.iter().enumerate() {
         for (frame_index, frame) in flipbook.frames.iter().enumerate() {
-            if entries.iter().any(|entry| entry.name == *frame) {
+            if names.contains(frame.as_str()) {
                 continue;
             }
-            let names = entries.iter().map(|entry| entry.name.as_str());
-            let help = match suggest::nearest(frame, names) {
+            let help = match suggest::nearest(frame, names.iter().copied()) {
                 Some(candidate) => format!("nearest region is `{candidate}`"),
                 None => format!(
                     "flipbook `{}` names regions of this atlas; a region is \
@@ -376,26 +378,6 @@ fn compose(layout: &Layout, entries: &[Entry<'_>]) -> Result<(Image, Vec<u8>), V
     Ok((image, png))
 }
 
-/// The output file stem: the source's declared `name`, else `generated_from`'s own stem.
-///
-/// The fallback mirrors what the CLI does for an unnamed source — derive from the file's name —
-/// and `generated_from` *is* that file's path, so this crate can honour the rule without doing IO.
-fn output_stem(source: &AtlasSourceDocument, generated_from: &str) -> String {
-    if let Some(name) = &source.name
-        && !name.is_empty()
-    {
-        return name.clone();
-    }
-    let file = generated_from
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(generated_from);
-    match file.split_once('.') {
-        Some((stem, _)) if !stem.is_empty() => stem.to_string(),
-        _ => file.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,14 +399,5 @@ mod tests {
         assert_eq!(align_up(1), 4);
         assert_eq!(align_up(4), 4);
         assert_eq!(align_up(5), 8);
-    }
-
-    #[test]
-    fn the_output_stem_falls_back_to_the_source_path() {
-        let mut source = AtlasSourceDocument::default();
-        assert_eq!(output_stem(&source, "art/ship.atlas-source.yaml"), "ship");
-        assert_eq!(output_stem(&source, "ship.atlas-source.yaml"), "ship");
-        source.name = Some("fleet".to_string());
-        assert_eq!(output_stem(&source, "art/ship.atlas-source.yaml"), "fleet");
     }
 }

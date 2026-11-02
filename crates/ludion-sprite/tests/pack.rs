@@ -76,7 +76,13 @@ fn inputs() -> Vec<AtlasInput> {
 }
 
 fn packed() -> AtlasBake {
-    pack(&source(Vec::new()), "fixture.atlas-source.yaml", &inputs()).expect("the fixture packs")
+    pack(
+        &source(Vec::new()),
+        "fixture.atlas-source.yaml",
+        "fixture",
+        &inputs(),
+    )
+    .expect("the fixture packs")
 }
 
 #[test]
@@ -189,6 +195,7 @@ fn the_derived_document_round_trips_through_check_atlas() {
     let bake = pack(
         &source(vec![flipbook]),
         "fixture.atlas-source.yaml",
+        "fixture",
         &inputs(),
     )
     .expect("the fixture packs");
@@ -224,8 +231,13 @@ fn packing_the_same_inputs_twice_gives_the_same_png() {
 fn two_inputs_minting_one_region_name_are_refused() {
     let mut inputs = inputs();
     inputs[1].base = "a".to_string();
-    let diagnostics = pack(&source(Vec::new()), "fixture.atlas-source.yaml", &inputs)
-        .expect_err("a duplicate region name is a defect");
+    let diagnostics = pack(
+        &source(Vec::new()),
+        "fixture.atlas-source.yaml",
+        "fixture",
+        &inputs,
+    )
+    .expect_err("a duplicate region name is a defect");
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].code.as_str(), "L1153");
     assert_eq!(diagnostics[0].path.as_deref(), Some("/inputs/1"));
@@ -244,6 +256,7 @@ fn a_flipbook_naming_no_region_is_refused_with_a_suggestion() {
     let diagnostics = pack(
         &source(vec![flipbook]),
         "fixture.atlas-source.yaml",
+        "fixture",
         &inputs(),
     )
     .expect_err("an unresolvable flipbook frame is a defect");
@@ -261,8 +274,13 @@ fn a_flipbook_naming_no_region_is_refused_with_a_suggestion() {
 
 #[test]
 fn an_atlas_with_no_inputs_is_refused() {
-    let diagnostics = pack(&source(Vec::new()), "fixture.atlas-source.yaml", &[])
-        .expect_err("an empty atlas can never be sampled");
+    let diagnostics = pack(
+        &source(Vec::new()),
+        "fixture.atlas-source.yaml",
+        "fixture",
+        &[],
+    )
+    .expect_err("an empty atlas can never be sampled");
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].path.as_deref(), Some("/inputs"));
 }
@@ -283,6 +301,7 @@ fn an_atlas_over_the_png_limit_is_refused_at_inputs() {
     let diagnostics = pack(
         &source(Vec::new()),
         "fixture.atlas-source.yaml",
+        "fixture",
         &one_frame(1, 9000),
     )
     .expect_err("a 9004-texel-tall atlas is not a loadable texture");
@@ -299,9 +318,25 @@ fn an_atlas_exactly_at_the_limit_packs() {
     let bake = pack(
         &source(Vec::new()),
         "fixture.atlas-source.yaml",
+        "fixture",
         &one_frame(1, 8190),
     )
     .expect("an 8192-texel side is the largest the loader takes");
     assert_eq!(bake.image.height, 8192);
     ludion_assets::decode_png(&bake.png, "x").expect("the loader accepts what the packer emits");
+}
+
+#[test]
+fn the_caller_supplied_stem_names_the_colour_map() {
+    let bake = pack(
+        &AtlasSourceDocument {
+            name: None,
+            ..source(Vec::new())
+        },
+        "ship-v1.2.atlas-source.yaml",
+        "ship-v1.2",
+        &inputs(),
+    )
+    .expect("packs");
+    assert_eq!(bake.doc.color_map, "ship-v1.2.png");
 }
