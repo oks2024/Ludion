@@ -53,7 +53,7 @@ fn play_run(world: &mut World, ctx: &SystemCtx) {
         let weapon = if unlocked { "crossbow" } else { "fists" };
         let entities: Vec<EntityId> = world.entities().collect();
         for e in entities {
-            if let Some(fighter) = world.get_mut::<Fighter>(e).unwrap() {
+            if let Some(fighter) = world.component_mut::<Fighter>(e) {
                 fighter.weapon = weapon.to_string();
             }
         }

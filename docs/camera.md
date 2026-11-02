@@ -82,7 +82,7 @@ The target is projected onto the rail (the nearest point within `search_window` 
 - A game switches rigs by copying a `RigConfig` (a zone's, embedded in its own component) into `CameraRig::rig`; `trauma` and `shake` are untouched by the switch. A component embedding one should validate it: `impl SemanticValidate` delegating to `RigConfig::validate_semantics` (pointers relative to the config, `L1304`) and register it with `register_validated`; `ludion_camera::invalid_config` is the same check for Rust-built values.
 
 ```rust
-let rig = world.get_mut::<CameraRig>(camera)?.unwrap();
+let rig = world.component_mut::<CameraRig>(camera).unwrap();
 rig.rig = zone.rig.clone();      // blends over zone.rig.blend_in.seconds
 add_trauma(rig, 0.4);            // clamped to 1; a non-finite amount is ignored
 ```

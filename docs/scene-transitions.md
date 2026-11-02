@@ -39,14 +39,14 @@ struct Gate { to: String, anchor: String }
 /// `Gate` entity, so this never re-fires after the crossing — the switch is naturally one-shot.
 fn cross_gate(world: &mut World, _ctx: &SystemCtx) {
     let Some(player) = world.single::<Player>() else { return };
-    let player_x = world.get::<Transform>(player).unwrap().map_or(0.0, |t| t.translation[0]);
+    let player_x = world.component::<Transform>(player).map_or(0.0, |t| t.translation[0]);
 
     let gates: Vec<EntityId> = world.entities()
-        .filter(|&e| world.get::<Gate>(e).unwrap().is_some()).collect();
+        .filter(|&e| world.component::<Gate>(e).is_some()).collect();
     for gate in gates {
-        let gate_x = world.get::<Transform>(gate).unwrap().map_or(0.0, |t| t.translation[0]);
+        let gate_x = world.component::<Transform>(gate).map_or(0.0, |t| t.translation[0]);
         if player_x >= gate_x {
-            let g = world.get::<Gate>(gate).unwrap().unwrap();
+            let g = world.component::<Gate>(gate).unwrap();
             let (to, anchor) = (g.to.clone(), g.anchor.clone());
             world.resource_mut::<SceneSwitch>().unwrap().request(to, anchor, vec![player]);
             return;

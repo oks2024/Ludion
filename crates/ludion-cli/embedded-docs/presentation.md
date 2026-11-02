@@ -43,12 +43,13 @@ Crossing the boundary is `L0028`, in every direction:
 
 | Who | Does | Result | Fix |
 | --- | --- | --- | --- |
-| sim system | `get`/`get_mut`/`insert`/`remove`/`despawn` on a presentation entity | `L0028` error | keep the data on a sim entity |
+| sim system | `get`/`get_mut`/`insert`/`remove`/`despawn` on a presentation entity | `L0028` error, reported once | keep the data on a sim entity |
 | sim system | `spawn_presentation` | panic `L0028` | spawn from a presentation system |
-| presentation system | `get_mut`/`insert`/`remove`/`despawn` on a sim entity | `L0028` error | read it (`get`, read-only query) and write your own entity |
+| presentation system | `get_mut`/`insert`/`remove`/`despawn` on a sim entity | `L0028` error, reported once | read it (`get`, read-only query) and write your own entity |
 | presentation system | `spawn` | panic `L0028` | `spawn_presentation` |
 | presentation system | `resource_mut`/`insert_resource` on a resource | panic `L0028` | only the outboxes `Diagnostics` and `AudioQueue` (and the prefab library, through `spawn_prefab`) are writable; `DebugDraw` panics |
 
+- Every crossing is logged once per system/op/component even if the `Result` is discarded (`let _ = world.get_mut(..)`); `ludion_testkit::assert_no_boundary_crossings(engine.world())` fails a test on any.
 - Randomness: `DeterministicRng::derived(seed, frame, entity)`, never the master `DeterministicRng`.
 - **Stays sim:** a camera the sim unprojects through (the external game's grab, a twin-stick game's aim; a `CameraRig` camera is sim, `ludion docs camera`) and anything with a `Collider`. Making it presentation turns every sim read of it into `L0028`.
 - A sim entity's entity-reference field (`Parent`, `Joint` ends) may not name a presentation entity: `L1036` in a scene, `L1018` at `scene.save`. A presentation entity may name a sim one (a popup parented to the ball).

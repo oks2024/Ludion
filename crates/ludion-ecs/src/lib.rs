@@ -95,7 +95,7 @@ pub use query::QueryElemShape;
 pub use registry::{ComponentInfo, Registry, SemanticValidate};
 pub use schedule::payload_text as panic_payload_text;
 pub use schedule::{Schedule, ScheduleObserver, SystemCtx, SystemFn, SystemPanic};
-pub use world::{QueryObservations, World};
+pub use world::{BoundaryCrossing, QueryObservations, World};
 
 // The query traits and join iterators are `#[doc(hidden)]` implementation detail, but must be
 // nameable because they appear in `World::query`'s signature and its return type.

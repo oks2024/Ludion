@@ -158,8 +158,8 @@ you take by hand (the file is the pattern's only truth; there is no wire method 
   fn cancel_into_items(world: &mut World, ctx: &SystemCtx, cancelled: &[EntityId]) {
       let plane = Plane::of(world);
       for &id in cancelled {
-          let volley = world.get::<Volley>(id).unwrap().unwrap().clone();
-          let origin = *world.get::<Transform>(id).unwrap().unwrap();
+          let volley = world.component::<Volley>(id).unwrap().clone();
+          let origin = *world.component::<Transform>(id).unwrap();
           let doc = world.resource::<DocStore<PatternDoc>>().unwrap().get(&volley.pattern).unwrap();
           let kind = doc.bullets[&volley.bullet].clone();
           for index in 0..volley.count {

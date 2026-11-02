@@ -99,13 +99,13 @@ fn snap_movers_to_walkable_cells(world: &mut World, _ctx: &SystemCtx) {
     // The tilemap entity: the one that has a `Tilemap`. Read its grid and origin up front.
     let grid = world.single::<Tilemap>();
     let Some(grid) = grid else { return };
-    let map = world.get::<Tilemap>(grid).unwrap().unwrap().clone();
-    let origin = world.get::<Transform>(grid).unwrap().unwrap().translation;
+    let map = world.component::<Tilemap>(grid).unwrap().clone();
+    let origin = world.component::<Transform>(grid).unwrap().translation;
 
     // Collect first (the query borrows the world), then apply.
     let movers: Vec<EntityId> = world.entities().filter(|&e| world.has::<Mover>(e)).collect();
     for mover in movers {
-        let Some(Some(transform)) = world.get::<Transform>(mover).ok() else { continue };
+        let Some(transform) = world.component::<Transform>(mover) else { continue };
         let (col, row) = map.world_to_cell(origin, transform.translation);
         // `world_to_cell` may return a negative or out-of-range cell — neither names a glyph.
         let glyph = usize::try_from(col)
@@ -114,7 +114,7 @@ fn snap_movers_to_walkable_cells(world: &mut World, _ctx: &SystemCtx) {
             .and_then(|(c, r)| map.glyph_at(c, r));
         if glyph == Some('.') {
             let snapped = map.cell_to_world(origin, col, row);
-            world.get_mut::<Transform>(mover).unwrap().unwrap().translation = snapped;
+            world.component_mut::<Transform>(mover).unwrap().translation = snapped;
         }
     }
 }

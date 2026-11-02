@@ -60,6 +60,19 @@ Move a light instead by mutating its entity's `Transform` in the same shape.
 - **A stale `EntityId` is an error, not a silent hit.** After you despawn an entity, drop its handle;
   reusing it is an `L0002` diagnostic (generational handles catch use-after-despawn).
 
+**Read or write one entity's component.** `component`/`component_mut` return an `Option` — `None` when
+the id is dead, the component absent, or the id across the sim/presentation boundary (logged, `L0028`).
+
+```rust
+let hp = world.component::<Health>(enemy).map_or(0, |h| h.0);
+if let Some(health) = world.component_mut::<Health>(enemy) {
+    health.0 -= 1;
+}
+if let Some(run) = world.single_get_mut::<RunState>() {
+    run.score += 10;
+}
+```
+
 ## Next
 
 - `ludion docs systems` — the system contract and the determinism rules.

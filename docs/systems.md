@@ -25,9 +25,13 @@ components, in ascending entity order. Arity 1–4; a single-element query is `(
 trailing comma). A query needs `&mut World` even when read-only, and must not name the same component
 type twice. A query yields component references only — **not** the `EntityId`. When you need ids (to
 despawn, say), use `world.query_ids::<(&A,)>()`, which yields `(EntityId, (&A,))`, or iterate
-`world.entities()` and read with `world.get`/`world.has` — the copyable form is in `ludion docs recipes`.
-A singleton (the only carrier of a component: the run state, the player, the camera) is
-`world.single::<T>()` / `world.single_get::<T>()` — the first carrier in entity order, `None` when absent.
+`world.entities()` and read with `world.component`/`world.has` — the copyable form is in `ludion docs recipes`.
+The everyday single-entity read is `world.component::<T>(e)` / `world.component_mut::<T>(e)`: an `Option`,
+`None` when the id is dead, the component absent, or the id across the sim/presentation boundary (that
+crossing is still logged, `L0028`). Use `get`/`get_mut` only when you must tell a dead id from an absent
+component. A singleton (the only carrier of a component: the run state, the player, the camera) is
+`world.single::<T>()` / `world.single_get::<T>()` / `world.single_get_mut::<T>()` — the first carrier in
+entity order, `None` when absent.
 
 **Time — only through `ctx`.** `ctx.dt: f32` is the fixed timestep (`1/60` s by default and never
 varies); `ctx.frame: FrameIndex` is the tick count; `ctx.time: SimTime` gives exact

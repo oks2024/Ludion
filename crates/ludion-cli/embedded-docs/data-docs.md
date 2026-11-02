@@ -88,8 +88,8 @@ fn equip_weapons(world: &mut World, _ctx: &SystemCtx) {
     let entities: Vec<EntityId> = world.entities().collect();
     let mut updates: Vec<(EntityId, f32, f32)> = Vec::new();
     for e in entities {
-        let Some(loadout) = world.get::<Loadout>(e).unwrap() else { continue };
-        let current = world.get::<WeaponStats>(e).unwrap()
+        let Some(loadout) = world.component::<Loadout>(e) else { continue };
+        let current = world.component::<WeaponStats>(e)
             .is_some_and(|s| s.applied_generation == Some(generation));
         if current { continue; }
         let weapon = loadout.weapon.clone();
@@ -99,7 +99,7 @@ fn equip_weapons(world: &mut World, _ctx: &SystemCtx) {
         }
     }
     for (e, damage, cooldown) in updates {
-        if let Some(s) = world.get_mut::<WeaponStats>(e).unwrap() {
+        if let Some(s) = world.component_mut::<WeaponStats>(e) {
             s.damage = damage; s.cooldown = cooldown; s.applied_generation = Some(generation);
         }
     }

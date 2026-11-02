@@ -100,6 +100,14 @@ impl Diagnostics {
             .is_some_and(|keys| keys.as_inner().contains(key))
     }
 
+    /// The keys already reported this session under `code`, in set order.
+    pub fn reported(&self, code: DiagnosticCode) -> impl Iterator<Item = &str> {
+        self.latched
+            .get(&code)
+            .into_iter()
+            .flat_map(|keys| keys.as_inner().iter().map(String::as_str))
+    }
+
     /// Whether anything is waiting for the next boundary drain.
     pub(crate) fn is_empty(&self) -> bool {
         self.pending.is_empty()
@@ -162,6 +170,17 @@ pub(crate) fn is_latched(world: &World, code: DiagnosticCode, key: &str) -> bool
 pub fn report_full(world: &mut World, key: impl Into<String>, diagnostic: Diagnostic) {
     if let Some(diagnostics) = world.resource_mut::<Diagnostics>() {
         diagnostics.report_full(key, diagnostic);
+    }
+}
+
+/// Reports the `L0028` refusals the world queued since the last drain (see
+/// [`World::take_boundary_crossings`]), once per `"{system}/{op}/{Component}"` key per session.
+/// Sorted by key: refusals from `par_for_each` chunks queue in nondeterministic order.
+pub(crate) fn report_boundary_crossings(world: &mut World) {
+    let mut crossings = world.take_boundary_crossings();
+    crossings.sort_by(|a, b| a.key.cmp(&b.key));
+    for crossing in crossings {
+        report_full(world, crossing.key, crossing.diagnostic);
     }
 }
 
@@ -394,6 +413,33 @@ entities:
             logged(&mut engine).is_empty(),
             "nothing reported means nothing logged and nothing printed"
         );
+    }
+
+    /// Presentation: a discarded write to a sim entity (the `Result` is thrown away).
+    fn trespass(world: &mut World, _ctx: &SystemCtx) {
+        let Some((sim, _)) = world.query_ids::<(&crate::Transform,)>().next() else {
+            return;
+        };
+        let _ = world.get_mut::<crate::Transform>(sim);
+    }
+
+    #[test]
+    fn a_discarded_boundary_crossing_logs_one_l0028() {
+        let dir = fresh_dir("crossing");
+        let mut engine = Engine::builder()
+            .presentation_system("trespass", trespass)
+            .project_root(&*dir)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        engine.take_events();
+        for _ in 0..10 {
+            engine.advance_live();
+        }
+        let logs = logged(&mut engine);
+        assert_eq!(logs.len(), 1, "{logs:?}");
+        assert_eq!(code_of(&logs[0]), Some("L0028"));
+        assert!(logs[0].message.contains("trespass"), "{}", logs[0].message);
     }
 
     #[test]

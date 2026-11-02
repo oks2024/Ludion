@@ -1628,7 +1628,8 @@ impl Engine {
 
     /// Drains what game systems reported into [`Diagnostics`](crate::Diagnostics) this tick — and
     /// what `ludion-physics` queued as shape rejections and missing-joint carriers, drained into
-    /// the same resource first — onto both sinks a reader can have: a `Warn` [`Event::Log`] for any
+    /// the same resource first, and the `L0028` phase-boundary refusals the world queued (whatever its
+    /// callers did with the `Result`) — onto both sinks a reader can have: a `Warn` [`Event::Log`] for any
     /// `log`-channel subscriber, and the host's stderr for a headless or windowed run with no
     /// client attached.
     ///
@@ -1636,6 +1637,7 @@ impl Engine {
     /// arrives here once; the queue is drained before [`drain_scene_switch`](Engine::drain_scene_switch)
     /// so nothing reported in the departing district is lost with it.
     fn drain_diagnostics(&mut self) {
+        crate::diagnostics::report_boundary_crossings(self.driver.world_mut());
         crate::diagnostics::report_unregistered(self.driver.world_mut(), &self.registry);
         crate::hierarchy::report_hierarchy_faults(self.driver.world_mut());
         scene_physics::report_parented_bodies(self.driver.world_mut());

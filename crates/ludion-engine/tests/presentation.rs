@@ -6,11 +6,12 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{PRESENTATION_BASE, World};
 use ludion_engine::{
-    AudioQueue, Engine, EngineBuilder, KEYFRAME_INTERVAL, Name, Sprite, Transform, dispatch,
-    extract, replay_hashes_with, report_diagnostic, verify_replay_keyframes,
+    AudioQueue, Diagnostics, Engine, EngineBuilder, KEYFRAME_INTERVAL, Name, Sprite, Transform,
+    dispatch, extract, replay_hashes_with, report_diagnostic, verify_replay_keyframes,
 };
 use ludion_protocol::command::{EngineRestoreParams, RenderBoundsParams, SimStepParams};
 use ludion_protocol::replay::{ReplayReader, ReplayRecord};
@@ -559,4 +560,73 @@ fn a_presentation_entity_parented_to_a_sim_entity_round_trips() {
     reloaded.load_inline_scene(&text).unwrap();
     assert_eq!(reloaded.scene_text().unwrap(), text);
     assert_eq!(presentation_ids(&reloaded), [popup]);
+}
+
+// --- The boundary outbox through the engine -----------------------------------------------------
+
+/// Presentation: a discarded write to a sim entity — the shape the outbox exists for.
+fn peek(world: &mut World, _ctx: &ludion_ecs::SystemCtx) {
+    let ball = ball(world);
+    let _ = world.get_mut::<Transform>(ball);
+}
+
+/// Sim: a discarded read of the first popup's presentation id. The popup is despawned and its slot
+/// reused within a few ticks, but the sim is refused on the id's range before liveness is looked at,
+/// so the computed id crosses the boundary on every tick without sharing state with `popups`.
+fn pry(world: &mut World, _ctx: &ludion_ecs::SystemCtx) {
+    let popup = EntityId::new(PRESENTATION_BASE, 0);
+    let _ = world.get::<Popup>(popup).ok().flatten();
+}
+
+/// The popups game plus `extra`, in its own scratch dir so tests can run side by side.
+fn popups_game(name: &str, extra: impl FnOnce(EngineBuilder) -> EngineBuilder) -> Engine {
+    let builder = Engine::builder()
+        .project_root(fresh_dir(name))
+        .components(|r| {
+            r.register::<Score>("Score")?;
+            r.register::<Popup>("Popup")
+        })
+        .system("score", score)
+        .presentation_system("popups", popups);
+    let mut engine = extra(builder).build().unwrap();
+    engine.load_inline_scene(SCENE).unwrap();
+    engine.set_render_size(256, 256);
+    engine
+}
+
+/// The `L0028` keys the engine has reported this session. The latch is what prints a line, so one
+/// key is one log line (the event stream itself is private to the crate's unit tests).
+fn boundary_keys(engine: &Engine) -> Vec<String> {
+    engine
+        .world()
+        .resource::<Diagnostics>()
+        .expect("the engine installs Diagnostics")
+        .reported(code::PRESENTATION_BOUNDARY)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A discarded presentation write logs one `L0028` over 30 ticks and moves no hash.
+#[test]
+fn a_discarded_presentation_write_logs_once_and_moves_no_hash() {
+    let mut plain = popups_game("outbox-plain-a", |b| b);
+    let mut peeking = popups_game("outbox-peek", |b| b.presentation_system("peek", peek));
+    assert_eq!(
+        advance_trace(&mut peeking, 30),
+        advance_trace(&mut plain, 30)
+    );
+    assert_eq!(boundary_keys(&peeking), ["peek/get_mut/Transform"]);
+    assert!(boundary_keys(&plain).is_empty());
+}
+
+/// A discarded sim read of a presentation entity logs one `L0028` and moves no hash.
+#[test]
+fn a_discarded_sim_read_of_a_popup_logs_once_and_moves_no_hash() {
+    let mut plain = popups_game("outbox-plain-b", |b| b);
+    let mut prying = popups_game("outbox-pry", |b| b.system("pry", pry));
+    assert_eq!(
+        advance_trace(&mut prying, 30),
+        advance_trace(&mut plain, 30)
+    );
+    assert_eq!(boundary_keys(&prying), ["pry/get/Popup"]);
 }

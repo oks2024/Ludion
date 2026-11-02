@@ -2869,6 +2869,10 @@ anything unhashed:
   `resource_mut`, `insert_resource` and `remove_resource` panic with this text too, unless the type
   is an allowlisted outbox (`World::allow_presentation_writes`).
 
+The engine also logs every refused `get`, `get_mut`, `insert`, `remove` and `despawn` once per
+system, op and component, even when the caller discards the `Result` or reads through
+`World::component`; `ludion_testkit::assert_no_boundary_crossings` fails a test on any.
+
 A `bool`, `Option` or bare `EntityId` cannot carry a diagnostic, so those calls panic; the schedule
 reports the panic as `L4007`, naming the system. Every message names the system, the entity (its id,
 plus its `Name` when it has one), the call and component it went through, and the direction crossed.

@@ -174,7 +174,7 @@ fn move_player(world: &mut World, ctx: &SystemCtx) {
 
     let Some((player, _)) = world.query_ids::<(&Player,)>().next() else { return };
     let resolved = spatial::move_and_slide::<Transform, TransformHierarchy>(world, player, wish);
-    let transform = world.get_mut::<Transform>(player).unwrap().unwrap();
+    let transform = world.component_mut::<Transform>(player).unwrap();
     transform.translation[0] += resolved[0]; // the only hashed write, in YOUR code
     transform.translation[2] += resolved[1];
 }
@@ -186,7 +186,7 @@ fn separate_enemies(world: &mut World, ctx: &SystemCtx) {
     // enemy's move never changes what the next one sees.
     let mut pushes = Vec::new();
     for enemy in enemies {
-        let here = world.get::<Transform>(enemy).unwrap().unwrap().translation;
+        let here = world.component::<Transform>(enemy).unwrap().translation;
         let center = [here[0], here[2]];
         let mut push = [0.0f32, 0.0];
         for entry in spatial::k_nearest_entries(world, center, 4, 1.5, Some(Body::new_kinematic())) {
@@ -197,7 +197,7 @@ fn separate_enemies(world: &mut World, ctx: &SystemCtx) {
         pushes.push((enemy, push));
     }
     for (enemy, push) in pushes {
-        let transform = world.get_mut::<Transform>(enemy).unwrap().unwrap();
+        let transform = world.component_mut::<Transform>(enemy).unwrap();
         transform.translation[0] += push[0] * 2.0 * ctx.dt;
         transform.translation[2] += push[1] * 2.0 * ctx.dt;
     }

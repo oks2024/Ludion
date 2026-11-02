@@ -78,6 +78,7 @@ hash, the `frame` LFR1 format) is `ludion devdocs ludion-protocol`; the WS host 
   the presentation entity range (`Plan/presentation-state.md`). Extract and bounds walk both ranges;
   snapshots carry `presentation`/`presentation_allocator`; a presentation system may write only
   `Diagnostics` and `AudioQueue` (a follow-up widens it on demand), anything else is `L0028`.
+  `Engine::drain_diagnostics` drains the world's queued `L0028` refusals first (`diagnostics::report_boundary_crossings`, sorted by key), so a discarded `Result` still logs once.
 
 ## Dataflow
 

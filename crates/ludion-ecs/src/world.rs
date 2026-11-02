@@ -111,12 +111,14 @@ impl QueryObservations {
 /// its own disjoint slice. The fan-out begins and ends inside a single system call on the owning
 /// thread; no `&World` outlives it.
 ///
-/// The one piece of interior mutability is the opt-in access recorder
-/// ([`begin_query_recording`](World::begin_query_recording)): a `Mutex` around the recording state
-/// alone, so that `&self` accessors like [`get`](World::get) can observe themselves — from a worker
-/// chunk as readily as from the owning thread. It holds no sim state — nothing hashed, snapshotted,
-/// or replayed — so the sim-state contract is unaffected, and the lock is only ever taken while
-/// recording is armed (a single `Option` check otherwise).
+/// Interior mutability is limited to two host-observation cells, each a `Mutex` so that `&self`
+/// accessors like [`get`](World::get) can observe themselves — from a worker chunk as readily as from
+/// the owning thread: the opt-in access recorder
+/// ([`begin_query_recording`](World::begin_query_recording)), locked only while recording is armed
+/// (a single `Option` check otherwise), and the `L0028` outbox
+/// ([`take_boundary_crossings`](World::take_boundary_crossings)), locked only on a refused access.
+/// Neither holds sim state — nothing hashed, snapshotted, or replayed — so the sim-state contract is
+/// unaffected.
 ///
 /// # Example
 ///
@@ -157,8 +159,14 @@ pub struct World {
     /// check per recorded access). Host/test observation only: never hashed, snapshotted, or
     /// replayed, and never branches sim logic. The `Mutex` is what lets the `&self` accessors
     /// ([`get`](World::get)) record — including from a `par_for_each` worker chunk; it is the
-    /// world's only interior mutability and carries no sim state.
+    /// world's only interior mutability besides `crossings`, and carries no sim state.
     recording: Option<Mutex<QueryRecording>>,
+    /// The `L0028` refusals not yet drained by the host (see
+    /// [`take_boundary_crossings`](World::take_boundary_crossings)), one per distinct key. Host
+    /// observation only, like `recording`: never hashed, snapshotted, or replayed, and never
+    /// branches sim logic. A `Mutex` so the `&self` readers can record, including from a
+    /// `par_for_each` chunk; touched only on the cold refusal path.
+    crossings: Mutex<Vec<BoundaryCrossing>>,
     /// The component types a `par_for_each` region currently has lifted out of `storages` — empty
     /// outside a region. Lets the `&self` readers tell "lifted" from "no such component"; the name
     /// is for the `L0026` message. Never hashed or snapshotted.
@@ -240,6 +248,8 @@ impl World {
     /// # Errors
     /// Returns an `L0002` diagnostic if `entity` is not alive (already despawned, never existed, or
     /// a stale handle), and `L0028` if it lies across the phase boundary (see [`Phase`]).
+    /// An `L0028` is also recorded for the engine to report once (see
+    /// [`take_boundary_crossings`](World::take_boundary_crossings)).
     pub fn despawn(&mut self, entity: EntityId) -> Result<(), Diagnostic> {
         self.ensure_access(entity, true, "despawn", no_component)?;
         if !self.doomed_has_children(&[entity]) {
@@ -571,6 +581,8 @@ impl World {
     /// # Errors
     /// Returns an `L0002` diagnostic if `entity` is not alive, and `L0028` across the phase boundary
     /// (see [`Phase`]).
+    /// An `L0028` is also recorded for the engine to report once (see
+    /// [`take_boundary_crossings`](World::take_boundary_crossings)).
     pub fn insert<T: Component>(
         &mut self,
         entity: EntityId,
@@ -589,6 +601,8 @@ impl World {
     /// # Errors
     /// Returns an `L0002` diagnostic if `entity` is not alive, and `L0028` across the phase boundary
     /// (see [`Phase`]).
+    /// An `L0028` is also recorded for the engine to report once (see
+    /// [`take_boundary_crossings`](World::take_boundary_crossings)).
     pub fn remove<T: Component>(&mut self, entity: EntityId) -> Result<Option<T>, Diagnostic> {
         self.record_component_access::<T>(true);
         self.ensure_access(entity, true, "remove", std::any::type_name::<T>)?;
@@ -606,7 +620,8 @@ impl World {
     /// Returns an `L0002` diagnostic if `entity` is not alive, and an `L0026` diagnostic if `T` is
     /// a column the enclosing [`par_for_each`](World::par_for_each) took `&mut` (that column is
     /// lent to the region, so it cannot be read through the world). `L0028` if a sim system names a
-    /// presentation entity (see [`Phase`]).
+    /// presentation entity (see [`Phase`]); that `L0028` is also recorded for the engine to report
+    /// once (see [`take_boundary_crossings`](World::take_boundary_crossings)).
     pub fn get<T: Component>(&self, entity: EntityId) -> Result<Option<&T>, Diagnostic> {
         self.record_component_access::<T>(false);
         self.get_unrecorded(entity)
@@ -657,6 +672,8 @@ impl World {
     /// # Errors
     /// Returns an `L0002` diagnostic if `entity` is not alive, and `L0028` across the phase boundary
     /// (see [`Phase`]).
+    /// An `L0028` is also recorded for the engine to report once (see
+    /// [`take_boundary_crossings`](World::take_boundary_crossings)).
     pub fn get_mut<T: Component>(
         &mut self,
         entity: EntityId,
@@ -666,6 +683,78 @@ impl World {
         Ok(self
             .storage_opt_mut::<T>()
             .and_then(|s| s.get_mut(entity.index)))
+    }
+
+    /// The everyday read: `T` on `entity`, or `None` when the id is dead, `T` is absent, or the id
+    /// lies across the phase boundary. Use [`get`](World::get) only when you must tell a dead id
+    /// from an absent component. A crossing is still recorded (see
+    /// [`take_boundary_crossings`](World::take_boundary_crossings)); a dead id is not.
+    ///
+    /// # Panics
+    /// With the `L0026` text if `T` is a column the enclosing
+    /// [`par_for_each`](World::par_for_each) took `&mut`, like [`has`](World::has): an `Option`
+    /// cannot carry the diagnostic, and answering `None` would be wrong.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_ecs::World;
+    /// use serde::{Deserialize, Serialize};
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Health(u32);
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Armor(u32);
+    ///
+    /// let mut world = World::new();
+    /// let e = world.spawn();
+    /// world.insert(e, Health(3)).unwrap();
+    /// assert_eq!(world.component::<Health>(e).unwrap().0, 3);
+    /// assert!(world.component::<Armor>(e).is_none());
+    ///
+    /// world.despawn(e).unwrap();
+    /// assert!(world.component::<Health>(e).is_none());
+    /// assert!(world.take_boundary_crossings().is_empty());
+    /// ```
+    pub fn component<T: Component>(&self, entity: EntityId) -> Option<&T> {
+        match self.get(entity) {
+            Ok(value) => value,
+            Err(diagnostic) if diagnostic.code == code::LIFTED_COMPONENT_READ => {
+                panic!("{diagnostic}")
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// [`component`](World::component) for writing: `None` when the id is dead, `T` is absent, or
+    /// the id lies across the phase boundary (recorded like [`get_mut`](World::get_mut)).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_ecs::World;
+    /// use serde::{Deserialize, Serialize};
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Health(u32);
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Armor(u32);
+    ///
+    /// let mut world = World::new();
+    /// let e = world.spawn();
+    /// world.insert(e, Health(3)).unwrap();
+    /// if let Some(health) = world.component_mut::<Health>(e) {
+    ///     health.0 += 1;
+    /// }
+    /// assert_eq!(world.component::<Health>(e).unwrap().0, 4);
+    /// assert!(world.component_mut::<Armor>(e).is_none());
+    ///
+    /// world.despawn(e).unwrap();
+    /// assert!(world.component_mut::<Health>(e).is_none());
+    /// assert!(world.take_boundary_crossings().is_empty());
+    /// ```
+    pub fn component_mut<T: Component>(&mut self, entity: EntityId) -> Option<&mut T> {
+        self.get_mut(entity).ok().flatten()
     }
 
     /// How many rows the `T` column holds, presentation rows included; `0` when none was ever
@@ -1107,7 +1196,7 @@ impl World {
     ) -> Result<(), Diagnostic> {
         if self.entities.is_alive(entity) {
             if write && self.phase == Phase::Presentation {
-                return Err(self.entity_crossing(entity, op, component()));
+                return Err(self.refuse(entity, op, component));
             }
             return Ok(());
         }
@@ -1125,9 +1214,56 @@ impl World {
         component: fn() -> &'static str,
     ) -> Result<(), Diagnostic> {
         if is_presentation(entity) && self.phase == Phase::Sim {
-            return Err(self.entity_crossing(entity, op, component()));
+            return Err(self.refuse(entity, op, component));
         }
         self.ensure_alive(entity)
+    }
+
+    /// The `L0028` for a refused accessor, queued for the host unless its key is already queued
+    /// (so a world nobody drains stays bounded by the distinct keys).
+    #[cold]
+    #[inline(never)]
+    fn refuse(
+        &self,
+        entity: EntityId,
+        op: &'static str,
+        component: fn() -> &'static str,
+    ) -> Diagnostic {
+        let name = component();
+        let system = self.current_system.unwrap_or("-");
+        let key = if name.is_empty() {
+            format!("{system}/{op}")
+        } else {
+            format!("{system}/{op}/{}", short_name(name))
+        };
+        let diagnostic = self.entity_crossing(entity, op, name);
+        let mut queued = unpoison(self.crossings.lock());
+        if queued.iter().all(|c| c.key != key) {
+            queued.push(BoundaryCrossing {
+                key,
+                diagnostic: diagnostic.clone(),
+            });
+        }
+        diagnostic
+    }
+
+    /// Drains the queued `L0028` refusals. Every `get`/`get_mut`/`insert`/`remove`/`despawn`/
+    /// `despawn_many` that crossed the phase boundary is recorded here whatever the caller did with
+    /// its `Result`, one entry per distinct `"{system}/{op}/{Component}"` key since the last drain
+    /// (`L0002` is never recorded). The engine drains this at the frame boundary into its
+    /// diagnostics; a bare driver world only grows to the distinct keys. Entries arrive in
+    /// nondeterministic order when a refusal comes from a `par_for_each` chunk — sort by `key`.
+    pub fn take_boundary_crossings(&mut self) -> Vec<BoundaryCrossing> {
+        std::mem::take(unpoison(self.crossings.get_mut()))
+    }
+
+    /// The keys of the refusals [`take_boundary_crossings`](World::take_boundary_crossings) would
+    /// drain, without draining them.
+    pub fn pending_boundary_crossings(&self) -> Vec<String> {
+        unpoison(self.crossings.lock())
+            .iter()
+            .map(|c| c.key.clone())
+            .collect()
     }
 
     /// The running system as `sim system `name``, or just `sim system` outside a named one.
@@ -1395,6 +1531,16 @@ impl World {
     pub(crate) fn id_at(&self, index: u32) -> EntityId {
         resolve_id(&self.entities, &self.presentation, index)
     }
+}
+
+/// One recorded `L0028` refusal: the dedupe `key` (`"{system}/{op}/{Component}"`, or
+/// `"{system}/despawn"`; `system` is `-` outside a named system) and the diagnostic the caller got.
+#[derive(Debug, Clone)]
+pub struct BoundaryCrossing {
+    /// The once-per-session latch key.
+    pub key: String,
+    /// The refusal as the accessor returned it.
+    pub diagnostic: Diagnostic,
 }
 
 /// The component thunk of an accessor that names no component type.

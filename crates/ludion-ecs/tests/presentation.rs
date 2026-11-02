@@ -947,3 +947,107 @@ fn a_dead_sim_id_is_l0002_in_every_phase() {
         assert_eq!(log(&world), expected, "presentation phase: {presentation}");
     }
 }
+
+// --- The boundary outbox ------------------------------------------------------------------------
+
+fn discarded_write(world: &mut World, _: &SystemCtx) {
+    let sim = world.resource::<Targets>().unwrap().sim;
+    let _ = world.get_mut::<Pos>(sim);
+}
+
+fn discarded_read(world: &mut World, _: &SystemCtx) {
+    let pres = world.resource::<Targets>().unwrap().pres;
+    let _ = world.get::<Pos>(pres).ok().flatten();
+}
+
+fn option_reads(world: &mut World, _: &SystemCtx) {
+    let (sim, pres) = {
+        let t = world.resource::<Targets>().unwrap();
+        (t.sim, t.pres)
+    };
+    let rows = [
+        (
+            "component_mut of the sim id",
+            world.component_mut::<Pos>(sim).is_none(),
+        ),
+        (
+            "component of the presentation id",
+            world.component::<Pos>(pres).is_none(),
+        ),
+    ];
+    for (label, none) in rows {
+        Log::note(world, label, none);
+    }
+}
+
+#[test]
+fn a_discarded_crossing_is_recorded_once_until_drained() {
+    let (mut world, _) = world_with_pair();
+    let mut schedule = Schedule::new();
+    schedule.add_presentation_system("peek", discarded_write);
+    for _ in 0..5 {
+        schedule.run(&mut world, &ctx());
+    }
+    let taken = world.take_boundary_crossings();
+    assert_eq!(taken.len(), 1);
+    assert!(
+        taken[0].key.ends_with("peek/get_mut/Pos"),
+        "{}",
+        taken[0].key
+    );
+    assert_eq!(taken[0].diagnostic.code, code::PRESENTATION_BOUNDARY);
+    schedule.run(&mut world, &ctx());
+    assert_eq!(world.take_boundary_crossings().len(), 1);
+}
+
+#[test]
+fn a_sim_read_of_a_presentation_entity_is_recorded() {
+    let (mut world, _) = world_with_pair();
+    let mut schedule = Schedule::new();
+    schedule.add_system("pry", discarded_read);
+    schedule.run(&mut world, &ctx());
+    assert_eq!(world.pending_boundary_crossings(), ["pry/get/Pos"]);
+}
+
+#[test]
+fn a_dead_id_or_a_host_access_records_nothing() {
+    let (mut world, targets) = world_with_pair();
+    let dead = world.spawn();
+    world.despawn(dead).unwrap();
+    world.insert_resource(Dead(dead));
+    let mut schedule = Schedule::new();
+    schedule.add_system("dead_probe", dead_probe);
+    schedule.add_presentation_system("dead_probe_p", dead_probe);
+    schedule.run(&mut world, &ctx());
+    assert!(world.take_boundary_crossings().is_empty());
+    // Host phase: no system, no phase guard.
+    world.get_mut::<Pos>(targets.pres).unwrap();
+    world.get::<Pos>(targets.sim).unwrap();
+    assert!(world.take_boundary_crossings().is_empty());
+}
+
+#[test]
+fn option_reads_across_the_boundary_are_none_and_recorded() {
+    let (mut world, _) = world_with_pair();
+    let mut sim = Schedule::new();
+    sim.add_system("sim_option", option_reads);
+    sim.run(&mut world, &ctx());
+    let mut pres = Schedule::new();
+    pres.add_presentation_system("pres_option", option_reads);
+    pres.run(&mut world, &ctx());
+    // Sim: component_mut on a sim entity is fine, component on a presentation id is refused.
+    // Presentation: component_mut on a sim id is refused, component on a presentation id is fine.
+    assert_eq!(
+        log(&world),
+        [
+            ("component_mut of the sim id", false),
+            ("component of the presentation id", true),
+            ("component_mut of the sim id", true),
+            ("component of the presentation id", false),
+        ]
+        .map(|(l, b)| (l, b.to_string()))
+    );
+    let mut keys = world.pending_boundary_crossings();
+    keys.sort();
+    assert_eq!(keys, ["pres_option/get_mut/Pos", "sim_option/get/Pos"]);
+}
