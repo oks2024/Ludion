@@ -10,6 +10,15 @@
 //! anchor in the new one. The target scene's `seed:` is deliberately **ignored**: the run has one
 //! uninterrupted seeded RNG stream (the determinism pillar), so reseeding mid-run would fork it.
 //!
+//! # Restarting the current scene
+//!
+//! [`SceneSwitch::restart`] is the same rebuild pointed at the scene the session already runs: no
+//! target path, no anchor (a carried entity keeps its pose), and the text is the one the session
+//! *holds* — the engine's inline scene document and the prefab texts its library holds, never disk.
+//! A restart writes no record: replay holds the same text, and the rebuild stays in its prefab
+//! epoch, so a recording does not grow per restart. [`SceneSwitch::arrived_by_restart`] is true for
+//! the one tick after it lands.
+//!
 //! The switch is requested through a resource (the [`AudioQueue`](crate::AudioQueue) mold) and
 //! performed by the host at the frame boundary in [`drain_scene_switch`](crate::Engine) — no wire
 //! method, no new component. It is **transactional**: the target district instantiates into a local
@@ -86,7 +95,15 @@ use crate::engine::{Engine, Instantiated, PreparedWorld, Rebuild, instantiate_na
 /// trips no drift gate.
 #[derive(Default, Debug)]
 pub struct SceneSwitch {
-    pending: Option<SwitchTo>,
+    pending: Option<PendingTransition>,
+    arrived_by_restart: bool,
+}
+
+/// What a tick asked for: a district change, or a rebuild of the current scene.
+#[derive(Clone, Debug)]
+pub(crate) enum PendingTransition {
+    Switch(SwitchTo),
+    Restart { carry: Vec<EntityId> },
 }
 
 /// The target of a requested district change: the scene to load, the anchor to drop the carried
@@ -115,11 +132,47 @@ impl SceneSwitch {
         spawn_anchor: impl Into<String>,
         carry: Vec<EntityId>,
     ) {
-        self.pending = Some(SwitchTo {
+        self.pending = Some(PendingTransition::Switch(SwitchTo {
             scene_path: scene_path.into(),
             spawn_anchor: spawn_anchor.into(),
             carry,
-        });
+        }));
+    }
+
+    /// Requests a rebuild of the current scene from the text the session holds, to be performed at
+    /// the next frame boundary: authored entities come back as authored, the frame counter and RNG
+    /// continue, and the `carry` entities travel with their poses (there is no anchor).
+    ///
+    /// Last request wins, whether the other one is a `restart` or a [`request`](Self::request).
+    ///
+    /// # Examples
+    /// ```
+    /// use ludion_engine::SceneSwitch;
+    ///
+    /// let mut switch = SceneSwitch::default();
+    /// switch.restart(Vec::new());
+    /// assert!(switch.is_pending());
+    /// ```
+    pub fn restart(&mut self, carry: Vec<EntityId>) {
+        self.pending = Some(PendingTransition::Restart { carry });
+    }
+
+    /// Whether the world was just rebuilt by a [`restart`](Self::restart): true for the one tick
+    /// after it landed, false after a [`request`](Self::request) arrival or a rejected restart.
+    ///
+    /// # Examples
+    /// ```
+    /// use ludion_engine::SceneSwitch;
+    ///
+    /// assert!(!SceneSwitch::default().arrived_by_restart());
+    /// ```
+    pub fn arrived_by_restart(&self) -> bool {
+        self.arrived_by_restart
+    }
+
+    /// Marks the resource of a world a restart just built.
+    pub(crate) fn mark_arrived_by_restart(&mut self) {
+        self.arrived_by_restart = true;
     }
 
     /// Whether a switch is currently pending.
@@ -127,8 +180,10 @@ impl SceneSwitch {
         self.pending.is_some()
     }
 
-    /// Removes and returns the pending switch, leaving none (the engine's drain path).
-    pub(crate) fn take(&mut self) -> Option<SwitchTo> {
+    /// Removes and returns the pending transition, leaving none, and clears the arrival fact: the
+    /// drain runs at every boundary, so it lasts exactly one tick (the engine's drain path).
+    pub(crate) fn take(&mut self) -> Option<PendingTransition> {
+        self.arrived_by_restart = false;
         self.pending.take()
     }
 }
@@ -274,6 +329,71 @@ pub(crate) fn perform(
     switch: SwitchTo,
     target_text: &str,
 ) -> Result<Option<Diagnostic>, Diagnostic> {
+    let reads = engine.load_reads();
+    rebuild(
+        engine,
+        Arrival {
+            carry: switch.carry,
+            anchor: Some(switch.spawn_anchor),
+            scene_path: Some(switch.scene_path),
+        },
+        target_text,
+        reads,
+    )
+}
+
+/// Performs a requested restart: [`perform`] pointed at the session's own scene, whose held
+/// `scene_text` the drain supplies. The anchor steps (6, `L3019`, `L3029`) do not apply: carried
+/// entities keep their translation. The prefab outcomes the library holds are inherited, not re-read.
+///
+/// # Errors
+/// `L3018` if the held scene or a prefab it names can no longer be built; the data-doc walk's
+/// diagnostics (`L1101`, `L1119`/`L1120`) if the docs no longer load. The live world is untouched.
+pub(crate) fn perform_restart(
+    engine: &mut Engine,
+    carry: Vec<EntityId>,
+    scene_text: &str,
+) -> Result<Option<Diagnostic>, Diagnostic> {
+    let reads = engine.restart_reads();
+    rebuild(
+        engine,
+        Arrival {
+            carry,
+            anchor: None,
+            scene_path: None,
+        },
+        scene_text,
+        reads,
+    )
+}
+
+/// Where a rebuild lands: a switch names a path and an anchor, a restart neither.
+struct Arrival {
+    carry: Vec<EntityId>,
+    anchor: Option<String>,
+    scene_path: Option<String>,
+}
+
+/// The body of [`perform`] and [`perform_restart`]; the numbered steps are on [`perform`].
+fn rebuild(
+    engine: &mut Engine,
+    arrival: Arrival,
+    target_text: &str,
+    mut reads: crate::prefab::LoadReads,
+) -> Result<Option<Diagnostic>, Diagnostic> {
+    let restart = arrival.anchor.is_none();
+    let label = arrival
+        .scene_path
+        .clone()
+        .or_else(|| engine.scene_name().map(str::to_string))
+        .unwrap_or_else(|| "(unnamed)".to_string());
+    let unresolved = |diagnostics: Vec<Diagnostic>| {
+        if restart {
+            restart_unresolved(&label, diagnostics)
+        } else {
+            target_unresolved(&label, diagnostics)
+        }
+    };
     // (a) Snapshot the run's continuity out of the live world before anything changes: the RNG is
     //     carried verbatim (never reseeded), the frame keeps counting, and the profile is carried
     //     in-memory (the target scene's `seed:` is ignored — one run, one uninterrupted RNG stream).
@@ -294,7 +414,7 @@ pub(crate) fn perform(
     let child_map = ChildMap::build(engine.world());
     let mut expanded: Vec<EntityId> = Vec::new();
     let mut skipped: Vec<EntityId> = Vec::new();
-    for &id in &switch.carry {
+    for &id in &arrival.carry {
         if !engine.world().is_alive(id) {
             skipped.push(id);
             continue;
@@ -397,7 +517,6 @@ pub(crate) fn perform(
     // (c) Instantiate the target district into a LOCAL world (the `scene.load` front half, shared via
     //     `instantiate_named_world`). A load/validation failure discards this local value — the live
     //     driver is never touched — so the sim runs on in the current district.
-    let mut reads = engine.load_reads();
     let Instantiated {
         source,
         scene,
@@ -409,13 +528,13 @@ pub(crate) fn perform(
         engine.project_root(),
         &mut |path| reads.resolve(path),
     )
-    .map_err(|diagnostics| target_unresolved(&switch.scene_path, diagnostics))?;
+    .map_err(&unresolved)?;
 
     // (c′′) Ready the target's `preload:` prefabs into its library, still before anything on
     //      the session changes: a bad entry fails the switch like a bad scene.
     let prefab_library = engine
         .prepare_prefab_library(&source, scene.physics.clone(), frame, reads)
-        .map_err(|diagnostics| target_unresolved(&switch.scene_path, diagnostics))?;
+        .map_err(&unresolved)?;
 
     // (c′) Re-apply what the target scene kept from an earlier visit, over the freshly authored world.
     //      Switching into the scene you are leaving is the one case the session map cannot answer —
@@ -441,17 +560,14 @@ pub(crate) fn perform(
     // (d) Locate the anchor by `Name` in the fresh world; its translation is the drop point. An
     //     anchor that carries no `Transform` names no drop point, so it is refused like a missing one
     //     rather than dropping the run at the world origin.
-    let anchor_translation = match anchor_translation(&world, &switch.spawn_anchor) {
-        Anchor::At(translation) => translation,
-        Anchor::NoTransform => {
-            return Err(anchor_without_transform(
-                &switch.scene_path,
-                &switch.spawn_anchor,
-            ));
-        }
-        Anchor::Missing => {
-            return Err(anchor_missing(&switch.scene_path, &switch.spawn_anchor));
-        }
+    //     A restart has no anchor: the carried entities keep the pose they had.
+    let anchor_translation = match &arrival.anchor {
+        None => None,
+        Some(anchor) => match anchor_translation(&world, anchor) {
+            Anchor::At(translation) => Some(translation),
+            Anchor::NoTransform => return Err(anchor_without_transform(&label, anchor)),
+            Anchor::Missing => return Err(anchor_missing(&label, anchor)),
+        },
     };
 
     // (e) Respawn each carried bag into the local world, overriding only `Transform.translation` to
@@ -468,6 +584,7 @@ pub(crate) fn perform(
                 .deserialize_insert(name, value, &mut world, id)?;
         }
         if carried_parent.is_none()
+            && let Some(anchor_translation) = anchor_translation
             && let Ok(Some(transform)) = world.get::<Transform>(id)
         {
             let mut transform = *transform;
@@ -585,6 +702,7 @@ pub(crate) fn perform(
         kind: Rebuild::Switch {
             authored: crate::engine::authored_names(&scene),
             profile_text,
+            restart,
         },
     });
 
@@ -984,6 +1102,32 @@ fn target_unresolved(scene_path: &str, diagnostics: Vec<Diagnostic>) -> Diagnost
          the switch was rejected and the sim continues in the current district",
     )
     .with_related(crate::commands::collapse(diagnostics))
+}
+
+/// Builds the `L3018` rejection for a restart whose held scene could not be rebuilt.
+fn restart_unresolved(scene_name: &str, diagnostics: Vec<Diagnostic>) -> Diagnostic {
+    Diagnostic::new(
+        code::TRANSITION_TARGET_UNRESOLVED,
+        format!("the current scene `{scene_name}` could not be rebuilt for a restart"),
+    )
+    .with_help(
+        "a restart rebuilds the scene text the session holds, so the cause is a prefab the \
+         scene names that no longer builds; the restart was rejected and the sim continues in \
+         the current world",
+    )
+    .with_related(crate::commands::collapse(diagnostics))
+}
+
+/// Builds the `L3018` rejection for a restart in a session that holds no scene text to rebuild.
+pub(crate) fn restart_no_scene() -> Diagnostic {
+    Diagnostic::new(
+        code::TRANSITION_TARGET_UNRESOLVED,
+        "the session holds no scene text to rebuild for a restart",
+    )
+    .with_help(
+        "a restart rebuilds the scene the session loaded or switched to; load a scene first \
+         (`scene.load`, or boot with one). The restart was rejected and the sim continues",
+    )
 }
 
 /// Builds the `L3020` warning for carry ids that were not alive at the switch frame. The switch still

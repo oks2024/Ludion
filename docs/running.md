@@ -174,4 +174,4 @@ world state it writes no replay record: the recording ends at that frame, and so
 - `ludion docs dev-loop` — the live reload loop.
 - `ludion docs wire-protocol` — the raw JSON protocol.
 - `ludion docs post-processing` — the imaging chain.
-- `ludion docs scene-transitions` — the other request a system leaves for the frame boundary.
+- `ludion docs scene-transitions` — the other request a system leaves for the frame boundary, and restarting the scene.

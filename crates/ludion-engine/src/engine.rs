@@ -453,7 +453,8 @@ pub struct Engine {
     /// off-disk posture), and a map miss takes the identical rejection path a live disk-read failure
     /// takes (decision 4's determinism note: both are the same world no-op, only the unhashed message
     /// differs). `None` (a live engine only) reads disk and,
-    /// when recording, writes the switch as a `SceneSwitch` record. Replay-drive-scoped: set only on a
+    /// when recording, writes the switch as a `SceneSwitch` record. A restart reads neither: its
+    /// text is the held `scene`. Replay-drive-scoped: set only on a
     /// replay engine, never on a live one.
     replay_scene_text: Option<BTreeMap<String, String>>,
     /// The replay's recorded prefab texts, which stand in for the disk under the same posture as
@@ -462,7 +463,7 @@ pub struct Engine {
     replay_prefab_text: Option<Arc<crate::prefab::PrefabTextSource>>,
     /// The rebuild epoch a replay's prefab library resolves its read texts in: each `commit_world`
     /// under replay takes [`replay_prefab_next_epoch`](Engine::replay_prefab_next_epoch), as the live
-    /// library is emptied by each one.
+    /// library is emptied by each one. A restart is the exception: it stays in this epoch.
     replay_prefab_epoch: u32,
     /// The epoch the next world rebuild is in — also the epoch a load resolves its prefab reads in,
     /// before it commits.
@@ -2175,13 +2176,18 @@ impl Engine {
     /// carrying that disk text inline. A *rejected* switch records nothing: under replay the map miss
     /// reproduces the identical rejection.
     fn drain_scene_switch(&mut self, frame: FrameIndex) {
-        let Some(switch) = self
+        let switch = match self
             .driver
             .world_mut()
             .resource_mut::<crate::transition::SceneSwitch>()
             .and_then(crate::transition::SceneSwitch::take)
-        else {
-            return;
+        {
+            None => return,
+            Some(crate::transition::PendingTransition::Restart { carry }) => {
+                self.restart_scene(carry);
+                return;
+            }
+            Some(crate::transition::PendingTransition::Switch(switch)) => switch,
         };
         let target_text = match &self.replay_scene_text {
             // Replay: the target text is the embedded record's, never disk. A miss is the same world
@@ -2225,18 +2231,48 @@ impl Engine {
         } else {
             None
         };
-        // The world was replaced, so `scene.changed` subscribers hear of it. No path: the switch's
-        // path is project-root relative, a `scene.load`'s is content-root relative.
+        self.finish_transition(outcome, record_error);
+    }
+
+    /// Performs a requested restart: rebuilds the current scene from the text the session holds,
+    /// never from disk, and writes no record (a replay holds the same text and the rebuild stays in
+    /// its prefab epoch). A session with no inline scene text rejects it, live and under replay alike.
+    fn restart_scene(&mut self, carry: Vec<EntityId>) {
+        let Some(text) = self.current_scene_text() else {
+            self.report_transition(Some(crate::transition::restart_no_scene()));
+            return;
+        };
+        let outcome = crate::transition::perform_restart(self, carry, &text);
+        self.finish_transition(outcome, None);
+    }
+
+    /// The tail both transitions share: the world was replaced, so `scene.changed` subscribers hear
+    /// of it, then the outcome lands on the error channel. No path on the event: a switch's path is
+    /// project-root relative and a `scene.load`'s content-root relative, and a restart has none.
+    fn finish_transition(
+        &mut self,
+        outcome: Result<Option<Diagnostic>, Diagnostic>,
+        record_error: Option<Diagnostic>,
+    ) {
         if outcome.is_ok() {
             self.push_event(Event::SceneChanged(SceneChangedData { path: None }));
         }
         let outcome = match outcome {
             Err(diagnostic) => Some(diagnostic),
-            // A clean switch surfaces only a recording IO failure (if any); a degraded one keeps its
-            // `L3020` warning (a recording failure on top of it is unlikely and lower-priority).
+            // A clean transition surfaces only a recording IO failure (if any); a degraded one keeps
+            // its `L3020` warning (a recording failure on top of it is unlikely and lower-priority).
             Ok(warning) => warning.or(record_error),
         };
         self.report_transition(outcome);
+    }
+
+    /// The scene text the session holds: the inline document every load, switch and restore leaves in
+    /// `scene`. `None` for a `Path` reference or no scene, which a restart rejects.
+    fn current_scene_text(&self) -> Option<String> {
+        match &self.scene {
+            Some(SceneRef::Inline { document }) => Some(document.clone()),
+            Some(SceneRef::Path { .. }) | None => None,
+        }
     }
 
     /// Stores a transition outcome on [`last_transition_error`](Engine::last_transition_error) and,
@@ -2529,8 +2565,10 @@ impl Engine {
                 }
             }
         }
-        // Under replay the epoch the commit is about to enter is the next one.
-        let mut library = self.new_prefab_library(physics, frame, self.replay_prefab_next_epoch);
+        // Under replay the epoch the commit is about to enter: the next one, or for a restart the
+        // current one.
+        let mut library = self.new_prefab_library(physics, frame, reads.epoch);
+        library.adopt(std::mem::take(&mut reads.held));
         library.seed(reads.reads);
         for key in keys {
             if let Err(found) = library.ready(&key) {
@@ -2571,10 +2609,26 @@ impl Engine {
     /// A resolver for the prefab texts a scene load (or district switch) reads, in the epoch the
     /// rebuilt world will be in.
     pub(crate) fn load_reads(&self) -> crate::prefab::LoadReads {
+        self.reads_in(self.replay_prefab_next_epoch)
+    }
+
+    /// The resolver for a restart: the epoch the world is already in, holding the outcomes the
+    /// current library decided, so the rebuilt world files no new read.
+    pub(crate) fn restart_reads(&self) -> crate::prefab::LoadReads {
+        let held = self
+            .driver
+            .world()
+            .resource::<crate::prefab::PrefabLibrary>()
+            .map(crate::prefab::PrefabLibrary::held_for_restart)
+            .unwrap_or_default();
+        self.reads_in(self.replay_prefab_epoch).with_held(held)
+    }
+
+    fn reads_in(&self, epoch: u32) -> crate::prefab::LoadReads {
         crate::prefab::LoadReads::new(
             self.project_root.clone(),
             self.replay_prefab_text.clone(),
-            self.replay_prefab_next_epoch,
+            epoch,
         )
     }
 
@@ -5542,6 +5596,9 @@ pub(crate) struct RestoredWorld {
     /// predating the field. Installed on the restored driver, so an `input.inject` for a later frame
     /// still fires.
     pub pending_input: ludion_sim::InputScript,
+    /// Whether the snapshot was taken on the boundary a scene restart landed at: installed onto the
+    /// restored `SceneSwitch`, so the next tick sees the same fact the live session did.
+    pub arrived_by_restart: bool,
 }
 
 /// A top-level prefab instance's root and the placement its scene entry gave it.
@@ -5594,11 +5651,14 @@ pub(crate) enum Rebuild {
         input: Box<InputState>,
         pending_input: ludion_sim::InputScript,
         profile: Option<String>,
+        arrived_by_restart: bool,
     },
-    /// A scene switch: the same session, a new district.
+    /// A scene switch: the same session, a new district. A `restart` rebuilds the current scene and
+    /// stays in its prefab epoch.
     Switch {
         authored: StableSet<String>,
         profile_text: Option<String>,
+        restart: bool,
     },
 }
 
@@ -5631,6 +5691,7 @@ impl Engine {
                 input: Box::new(restored.input),
                 pending_input: restored.pending_input,
                 profile: restored.profile,
+                arrived_by_restart: restored.arrived_by_restart,
             },
         });
         Ok(())
@@ -5710,6 +5771,20 @@ impl Engine {
         self.install_audio_queue();
         self.install_presentation_rules();
         self.install_scene_switch();
+        if matches!(
+            kind,
+            Rebuild::Switch { restart: true, .. }
+                | Rebuild::Restore {
+                    arrived_by_restart: true,
+                    ..
+                }
+        ) && let Some(switch) = self
+            .driver
+            .world_mut()
+            .resource_mut::<crate::transition::SceneSwitch>()
+        {
+            switch.mark_arrived_by_restart();
+        }
         self.install_shutdown();
         self.install_render_settings();
         self.install_debug_draw();
@@ -5725,7 +5800,9 @@ impl Engine {
         self.install_skin_rests();
         self.install_path_library();
         self.install_font_library();
-        if self.replay_prefab_text.is_some() {
+        if self.replay_prefab_text.is_some()
+            && !matches!(kind, Rebuild::Switch { restart: true, .. })
+        {
             self.replay_prefab_epoch = self.replay_prefab_next_epoch;
             self.replay_prefab_next_epoch += 1;
         }

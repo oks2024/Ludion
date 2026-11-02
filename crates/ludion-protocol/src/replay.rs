@@ -242,8 +242,9 @@ pub enum ReplayRecord {
     },
     /// A prefab source text carried **inline**. A read record (`reload: false`) is a text source
     /// like [`ReplayRecord::SceneSwitch`], filed per rebuild epoch (a restore, load or switch starts
-    /// the next): the library resolves a path to the text its epoch read instead of reading the
-    /// (possibly changed) file. A reload record (`reload: true`) is an accepted `asset.reload`,
+    /// the next; a scene restart stays in its epoch): the library resolves a path to the text its
+    /// epoch read instead of reading the (possibly changed) file. A reload record (`reload: true`)
+    /// is an accepted `asset.reload`,
     /// applied at its position in the stream.
     PrefabText {
         /// The frame whose tick first sees this text.

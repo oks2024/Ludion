@@ -121,7 +121,8 @@
 //!   described by numbers, evaluated analytically at the render boundary. No system, no pool, and no
 //!   entity per point — a burst is one component write stamping `started` with the current frame.
 //! - **Scene transitions** — [`SceneSwitch`] (the resource a system sets via
-//!   `request(scene_path, spawn_anchor, carry)` to change district mid-run) and its
+//!   `request(scene_path, spawn_anchor, carry)` to change district mid-run, or `restart(carry)` to
+//!   rebuild the current scene from the text it holds) and its
 //!   [`SwitchTo`] payload. The engine performs the switch at the frame boundary, continuing the run.
 //!   [`Residue`] is its mirror image: the field-less marker on an entity whose state must **stay**
 //!   with its scene, captured on the way out and re-applied when the run comes back this session.

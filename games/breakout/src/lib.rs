@@ -72,13 +72,9 @@ pub const BRICK_BURST_FALLBACK_COLOR: [f32; 4] = [1.0, 0.9, 0.7, 1.0];
 
 /// The pause menu's first row: closes the menu and hands play back.
 pub const MENU_RESUME: &str = "RESUME";
-/// The pause menu's second row: re-instantiates the scene from disk, board and ball included.
+/// The pause menu's second row: rebuilds the scene from the text the session holds, board and ball
+/// included.
 pub const MENU_RESTART: &str = "RESTART";
-
-/// The scene [`MENU_RESTART`] loads, relative to the project root (the started scene's directory).
-const RESTART_SCENE: &str = "main.yaml";
-/// The entity in [`RESTART_SCENE`] a restart drops its (empty) carry set at.
-const RESTART_ANCHOR: &str = "paddle";
 
 // --- Components ---------------------------------------------------------------------------------
 
@@ -253,10 +249,10 @@ pub fn menu_input(world: &mut World, _ctx: &SystemCtx) {
     }
 
     if restart {
-        // The engine rebuilds the world from the scene at the frame boundary: fresh board, fresh
-        // ball, fresh menu. Nothing is carried — a restart keeps no state by definition.
+        // The engine rebuilds the world from the held scene at the frame boundary: fresh board,
+        // fresh ball, fresh menu. Nothing is carried — a restart keeps no state by definition.
         if let Some(switch) = world.resource_mut::<SceneSwitch>() {
-            switch.request(RESTART_SCENE, RESTART_ANCHOR, Vec::new());
+            switch.restart(Vec::new());
         }
     }
 }

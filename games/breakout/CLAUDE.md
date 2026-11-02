@@ -18,7 +18,7 @@ generated `LUDION-GUIDE.md` copy is dropped in favor of its source of truth, `do
 - `scenes/main.yaml` — the scene (strict-subset YAML): built-in visuals + this game's components.
 - `tests/gameplay.rs` — headless sim assertions + a WorldHash-determinism test (no GPU needed).
 - `tests/menu.rs` — the pause menu under scripted keyboard, gamepad and mouse input: open/close, the
-  total freeze (visible state *and* a still WorldHash), cursor wrap, and `RESTART`'s scene switch.
+  total freeze (visible state *and* a still WorldHash), cursor wrap, and `RESTART`'s scene restart.
 - `scenes/fonts.yaml`, `scenes/fonts/` — the font table (`body`) and breakout's own copy of Inter
   (TTF, licence, baked atlas) the pause menu draws with; `scenes/` is the runtime content root.
 - `tests/golden.rs` — the golden-image tests against `goldens/<os>/main.png` and `menu.png` (the open

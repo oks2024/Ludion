@@ -8885,7 +8885,12 @@ runs on in the current district; the failure never crashes or stalls the sim.
 
 Fix: check the related diagnostics for the underlying load/validation error, confirm the district's
 scene file exists at the requested path relative to the project root (the directory of the scene the
-engine was started with) and passes `ludion check-scene`, then request the switch again.",
+engine was started with) and passes `ludion check-scene`, then request the switch again.
+
+A `SceneSwitch::restart` raises the same code when the scene text the session holds or a prefab it
+names can no longer be built, or when the session holds no scene text at all (a data doc gone bad
+reports the doc walk's own code). A restart rebuilds held text, never the scene file:
+edit-then-retry means `scene.load`.",
     },
     CodeEntry {
         code: code::TRANSITION_ANCHOR_MISSING,
@@ -8903,7 +8908,8 @@ untouched and the simulation continues in the current district — this never cr
 
 Fix: add an entity to the target district whose `name:` equals the anchor the switch requests (place
 it at the intended entrance), or correct the `spawn_anchor` string in the switch request to match an
-existing name. Anchor names are matched exactly.",
+existing name. Anchor names are matched exactly. A `SceneSwitch::restart` names no anchor and never
+raises this.",
     },
     CodeEntry {
         code: code::TRANSITION_CARRY_DEAD,

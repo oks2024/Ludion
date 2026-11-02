@@ -109,6 +109,7 @@ mod trace;
 mod transition;
 mod transition_replay;
 mod transition_residue;
+mod transition_restart;
 mod transition_snapshot;
 mod trigger_edges;
 mod ui_list_nav;

@@ -1,10 +1,10 @@
 ---
-description: Switching districts mid-run: the SceneSwitch request, anchors, what carries, and failure codes
+description: Switching districts or restarting the scene mid-run: SceneSwitch, anchors, carry, failure codes
 ---
 
 # Scene transitions
 
-**Scope:** Moving the player between scene files inside one run — requesting a switch, what travels with it, and what happens when it fails. Starting a fresh session on a scene is running; the save that outlives a run is player-profiles.
+**Scope:** Moving the player between scene files inside one run, or restarting the current scene without ending it — requesting either, what travels with it, and what happens when it fails. Starting a fresh session (frame 0, reseed) on a scene is running; the save that outlives a run is player-profiles.
 
 A game larger than one screen is many **districts** — separate scene files the player moves between
 mid-run. A scene transition switches the loaded district in place: it rebuilds the world from a target
@@ -66,7 +66,7 @@ version of this pattern — two districts as scene files, the player walking acr
 The anchor is an ordinary `name:`d entity in the target district (invisible or decorative) whose
 `Transform.translation` is the drop point. Each carried entity respawns with its `translation` set to
 the anchor's; **everything else travels verbatim** — rotation, scale, `hp`, `Name`, every component,
-byte-for-byte. (Anchor-driven *facing* — setting rotation from the anchor — is a non-goal.) A
+byte-for-byte. A
 carried entity brings its whole subtree, and the children keep their `Parent` links, remapped to the
 respawned ids. A carried child whose parent stays behind arrives un-parented, keeping its world pose,
 with warning `L3043` (`ludion docs hierarchy`). Every other entity reference a carried entity holds
@@ -93,15 +93,45 @@ component is left behind when the field is required; both warn `L3043`.
   `engine.restore` restores the snapshot's held input. Edges never re-fire (a carried key is not a
   new press), so a game that reads a *held level as intent* — a hold-to-open — should demand a fresh
   press on arrival (a `GateRearm`-style latch).
-- **The run clock is frame arithmetic.** The `FrameIndex` is continuous across a switch (no reset to
-  0), so a run timer is `frame - run_start_frame` — derived, never stored as a carried value.
+- **The run clock is frame arithmetic.** The `FrameIndex` is continuous across a switch, so a run timer
+  is `frame - run_start_frame`, derived.
 - **The RNG stream continues.** The one seeded RNG is carried into the new district uninterrupted; the
   **target scene's `seed:` is ignored** on a switch (honoring it would fork the run's one stream). A
   district's `seed:` matters only when that scene is loaded as a fresh session's start.
-- **The player profile carries in-memory.** An unlock earned this run survives the district change
-  (the switch carries the live `Profile<P>`, never re-reads disk).
+- **The player profile carries in-memory** (the live `Profile<P>`, never re-read from disk).
 - **Residue stays with the district.** An entity marked `Residue: {}` keeps its state for the
   session while the run is elsewhere, the mirror image of carry (`ludion docs scene-residue`).
+
+## Restarting the scene
+
+A game-over or retry rebuilds the scene the run is already in. `restart` is the switch with no target
+and no anchor, at the same frame boundary:
+
+```rust,ignore
+world.resource_mut::<SceneSwitch>().unwrap().restart(vec![player]);
+```
+
+Unlike `request`, it sets no anchor (a carried entity keeps its pose); unlike `scene.load`, it does not
+reset the frame or reseed.
+
+What continues: the frame counter, the RNG stream, the carried entities with every component and their
+pose, `carry_resource` resources, held input, the profile, and `Residue` state, which re-applies to its
+entities. Presentation entities rebuild, so a play-once latch belongs in a `carry_resource` resource.
+The last request in a tick wins, whichever kind it is. `SceneSwitch::arrived_by_restart()` is true for
+the one tick after a restart lands (not after a `request` arrival or a rejection), so a system can skip
+its first-frame work.
+
+A restart rebuilds the text the session **holds**, never disk: the scene as loaded or switched to, and
+the prefab texts read or reloaded so far. A scene or prefab file edited on disk does not reach a
+restart; `scene.load`, a `request` to the scene's own path, or `asset.reload` for a prefab picks the edit
+up. **Data docs are the exception**: they re-walk disk on every rebuild, with this session's reloads
+on top, so a doc gone bad rejects the restart and a doc edited without `asset.reload` is picked up.
+A replay walks its own disk and only `DocReload` records travel in the `.lrp`, so a doc edited between
+recording and replay can make the replay diverge, as across a `request`.
+
+It fails like a switch minus the anchor codes: `L3018` when the held scene or a prefab no longer
+builds, or the session holds no scene text at all; a data doc gone bad reports the doc walk's own code
+(`L1101`, `L1119`/`L1120`). The live world is untouched.
 
 ## When a switch fails
 
@@ -120,9 +150,7 @@ the current district — a bad gate never crashes or half-rebuilds the world:
 Each is a non-fatal warning on `Engine::last_transition_error()` (cleared only by a fully-clean
 switch), never a panic — and each is **printed**: one `log` event plus the same `L####: message` line
 on stderr, so a district that fails to load mid-run says so, exactly as a failed save (`L1122`) does.
-The print is latched on the line, so a gate the player is standing in — re-requesting the same rejected
-switch every frame — reports once. Query the accessor for the diagnostic itself (a test asserts on it;
-`ludion explain L3018`/`L3019`/`L3020`/`L3029`).
+The print is latched on the line, so a rejected switch re-requested every frame reports once. A test asserts on the accessor (`ludion explain L3018`).
 
 ## Reproducibility: the switch regenerates
 
@@ -133,22 +161,17 @@ replay record carrying the **target district's canonical text inline** (the same
 and a `DocReload` use). Under replay the switch resolves its text from those embedded records, never
 disk — so a committed `.lrp` that crosses a gate reproduces its `WorldHash` trace bit-for-bit on
 another machine even if the district file has since changed or is gone. The record is additive: old
-`.lrp` still decode, the wire surface is unmoved. (See the `determinism` topic for the full contract.)
+`.lrp` still decode, the wire surface is unmoved. A restart records nothing: the held text is already in the recording. (See the `determinism` topic for the full contract.)
 
 Snapshots and `ludion dev` cross a switch for free: the switch sets the engine's scene to the target's
 inline text, so a snapshot taken *after* a switch already embeds the switched district, its carried
-player, and the carried profile — `engine.restore`, a keyframe seek, and `dev`'s
-snapshot→restart→restore all reconstruct the post-switch district through the existing restore path,
-with no snapshot-format change.
+player and profile; `engine.restore`, a keyframe seek and `dev`'s restart reconstruct it.
 
 ## Non-goals (and their triggers)
 
-- **No async / streamed / preloaded loading.** A switch is a synchronous frame-boundary rebuild (a
-  district load is milliseconds of instantiation). Trigger: a proven need for seamless streaming (whose
-  entry point is this same carry seam).
-- **No cross-scene queries or references.** One district is loaded at a time — an entity in district A
-  cannot name one in district B. Trigger: seamless streaming.
-- **Carry is translation-only.** No anchor-driven facing. Triggers recorded per feature.
+- **No async / streamed loading, no cross-scene references.** A switch is a synchronous rebuild of one
+  loaded district. Trigger: a proven need for seamless streaming (this same carry seam).
+- **Carry is translation-only.** No anchor-driven facing.
 
 ## Next
 

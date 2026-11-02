@@ -83,9 +83,21 @@ pub(crate) struct PrefabLibrary {
 pub(crate) struct LoadReads {
     root: PathBuf,
     source: Option<Arc<PrefabTextSource>>,
-    epoch: u32,
-    /// Every `(key, text)` resolved so far, in first-read order.
+    pub(crate) epoch: u32,
+    /// Every `(key, text)` read from the disk or the recording so far, in first-read order.
     pub(crate) reads: Vec<(String, String)>,
+    /// The outcomes a restart carries over from the library it replaces: resolved before any read,
+    /// and never part of `reads`, so the rebuilt world files nothing new in its epoch.
+    pub(crate) held: HeldPrefabs,
+}
+
+/// What a library has already decided in its epoch, for a restart to inherit: every held text
+/// (reloads included) and every refusal, with the dependencies of the refused keys.
+#[derive(Default)]
+pub(crate) struct HeldPrefabs {
+    texts: BTreeMap<String, String>,
+    failed: BTreeMap<String, Vec<Diagnostic>>,
+    deps: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl LoadReads {
@@ -96,7 +108,14 @@ impl LoadReads {
             source,
             epoch,
             reads: Vec::new(),
+            held: HeldPrefabs::default(),
         }
+    }
+
+    /// Resolves held outcomes before reading, for a restart.
+    pub(crate) fn with_held(mut self, held: HeldPrefabs) -> Self {
+        self.held = held;
+        self
     }
 
     /// The text of the prefab `path`, as written in the document.
@@ -107,6 +126,12 @@ impl LoadReads {
         let key = prefab_key(path).map_err(|mut found| found.swap_remove(0))?;
         if let Some((_, held)) = self.reads.iter().find(|(read, _)| *read == key) {
             return Ok(held.clone());
+        }
+        if let Some(held) = self.held.texts.get(&key) {
+            return Ok(held.clone());
+        }
+        if let Some(failed) = self.held.failed.get(&key) {
+            return Err(failed[0].clone());
         }
         let text = fetch(&self.root, self.source.as_deref(), self.epoch, &key)?;
         self.reads.push((key, text.clone()));
@@ -227,6 +252,37 @@ impl PrefabLibrary {
     /// The placement of the instance rooted at `root`, `None` when unknown (after a restore).
     pub(crate) fn placement(&self, root: EntityId) -> Option<&InstanceTransform> {
         self.placements.get(&root)
+    }
+
+    /// The outcomes a restart inherits: the held texts, the refusals and the refused keys' dependencies.
+    pub(crate) fn held_for_restart(&self) -> HeldPrefabs {
+        let failed: BTreeMap<_, _> = self
+            .prefabs
+            .iter()
+            .filter_map(|(key, loaded)| Some((key.clone(), loaded.as_ref().err()?.clone())))
+            .collect();
+        let deps = failed
+            .keys()
+            .filter_map(|key| Some((key.clone(), self.deps.get(key)?.clone())))
+            .collect();
+        HeldPrefabs {
+            texts: self.texts.clone(),
+            failed,
+            deps,
+        }
+    }
+
+    /// Takes over a replaced library's outcomes without logging them: the recording already holds
+    /// them in this epoch. The texts go into the current snapshot, so a later instance diffs
+    /// against the text it was expanded from.
+    pub(crate) fn adopt(&mut self, held: HeldPrefabs) {
+        for (key, text) in &held.texts {
+            self.hold(key, text);
+        }
+        for (key, diagnostics) in held.failed {
+            self.prefabs.insert(key, Err(diagnostics));
+        }
+        self.deps.extend(held.deps);
     }
 
     /// Holds the texts a scene load read and logs them at the library's frame, so the recording files

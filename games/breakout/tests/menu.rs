@@ -23,8 +23,8 @@ const AUTHORED_PADDLE_X: f32 = 0.0;
 /// The board's full brick count.
 const BRICKS: usize = 15;
 
-/// A fresh driver rooted at `scenes/`, so `RESTART`'s scene switch resolves `main.yaml` off disk
-/// exactly as the live game does (the project root is the started scene's directory).
+/// A fresh driver rooted at `scenes/`, the project root the live game runs with (the started
+/// scene's directory).
 fn driver() -> GameplayDriver {
     GameplayDriver::new(
         breakout::game().project_root(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scenes")),
@@ -94,21 +94,21 @@ fn play_until_bricks_break(d: &mut GameplayDriver) {
     );
 }
 
-/// Presses `Enter` and steps exactly one tick: the switch is performed at that tick's frame
+/// Presses `Enter` and steps exactly one tick: the restart is performed at that tick's frame
 /// boundary, so the world read afterwards is the freshly instantiated scene with no tick on it.
 fn activate(d: &mut GameplayDriver) {
     d.inject("key_down", "Enter");
     d.step(1);
 }
 
-/// Asserts the world is the scene as authored, and that the switch itself raised nothing.
+/// Asserts the world is the scene as authored, and that the restart itself raised nothing.
 fn assert_restarted(d: &mut GameplayDriver) {
     assert_eq!(
         d.engine()
             .last_transition_error()
             .map(|e| e.code.to_string()),
         None,
-        "the restart switch must be clean"
+        "the restart must be clean"
     );
     assert_eq!(brick_count(d), BRICKS, "a restart rebuilds the whole board");
     assert!(items(d).is_empty(), "the fresh scene's menu is closed");

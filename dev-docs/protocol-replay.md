@@ -53,7 +53,9 @@ kinds beyond the `Command`/`Input`/`Keyframe` base carry *external* text a repla
 consumed as an **off-disk text source**, not as a drive action — `ludion-engine` regenerates the reload
 / switch from the sim and reads the embedded text so the session reproduces cross-machine (see
 `ludion devdocs ludion-engine` and `ludion devdocs determinism`). Neither moves `schema_hash` (`ReplayRecord` is outside the schema
-composition) and neither is a `Command` variant, so the wire surface is unmoved.
+composition) and neither is a `Command` variant, so the wire surface is unmoved. A `SceneSwitch::restart`
+writes no record: it rebuilds the held `Engine.scene` text and the held prefab outcomes and stays in
+its prefab epoch (`starts_epoch` is for real switches only), so a recording does not grow per restart.
 
 ## Gotchas
 

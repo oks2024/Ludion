@@ -1311,6 +1311,87 @@ entities:
         );
     }
 
+    /// Requests a restart on the tick that carries the frame counter to the keyframe boundary.
+    fn restart_into_the_keyframe(world: &mut World, ctx: &SystemCtx) {
+        if ctx.frame.as_u64() == crate::KEYFRAME_INTERVAL - 1
+            && let Some(switch) = world.resource_mut::<SceneSwitch>()
+        {
+            switch.restart(Vec::new());
+        }
+    }
+
+    /// Writes the arrival fact into the hashed world, so a snapshot that lost it would diverge.
+    fn witness_arrival(world: &mut World, _ctx: &SystemCtx) {
+        if world
+            .resource::<SceneSwitch>()
+            .is_some_and(SceneSwitch::arrived_by_restart)
+        {
+            let id = world.spawn();
+            world.insert(id, Name("arrived".to_string())).unwrap();
+        }
+    }
+
+    fn restart_game(dir: &std::path::Path) -> EngineBuilder {
+        Engine::builder()
+            .system("restart_into_the_keyframe", restart_into_the_keyframe)
+            .system("witness_arrival", witness_arrival)
+            .project_root(dir)
+    }
+
+    #[test]
+    fn a_seek_across_a_restart_keyframe_keeps_the_arrival_fact() {
+        let dir = fresh_dir("restart-keyframe");
+        let sink = SharedSink::default();
+        let mut engine = restart_game(&dir).build().unwrap();
+        engine.load_inline_scene(START).unwrap();
+        engine.set_recording(sink.clone()).unwrap();
+        let mut live = vec![(engine.frame(), engine.world_hash().unwrap())];
+        for _ in 0..crate::KEYFRAME_INTERVAL + 6 {
+            engine
+                .execute(Command::SimStep(SimStepParams {
+                    ticks: 1,
+                    hash: false,
+                }))
+                .unwrap();
+            live.push((engine.frame(), engine.world_hash().unwrap()));
+        }
+        engine.stop_recording().unwrap();
+        let bytes = sink.0.lock().unwrap().clone();
+
+        let keyframes: Vec<FrameIndex> = ReplayReader::new(&bytes)
+            .unwrap()
+            .records()
+            .unwrap()
+            .into_iter()
+            .filter_map(|record| match record {
+                ReplayRecord::Keyframe { frame, .. } => Some(frame),
+                _ => None,
+            })
+            .collect();
+        let arrival = FrameIndex::new(crate::KEYFRAME_INTERVAL);
+        assert!(
+            keyframes.contains(&arrival),
+            "the arrival boundary holds a keyframe: {keyframes:?}"
+        );
+
+        let linear = replay_hashes_with(restart_game(&dir), &bytes, &dir).unwrap();
+        assert_eq!(linear, live, "the linear replay reproduces the live trace");
+        // ON the keyframe (the re-driven tick reads the restored fact) and just AFTER it.
+        for target in [arrival, FrameIndex::new(crate::KEYFRAME_INTERVAL + 1)] {
+            let seek = seek_reconstruct(restart_game(&dir), &bytes, target, &dir);
+            assert!(!seek.is_empty());
+            assert!(seek.last().unwrap().0 > target);
+            for (frame, hash) in &seek {
+                let want = live.iter().find(|(f, _)| f == frame).unwrap();
+                assert_eq!(want.1, *hash, "seek to {target:?} diverged at {frame:?}");
+            }
+        }
+        assert!(
+            live.windows(2).any(|pair| pair[0].1 != pair[1].1),
+            "the trace moves"
+        );
+    }
+
     #[test]
     fn a_zero_tick_replay_yields_the_frame_zero_hash() {
         let dir = fresh_dir("zero-tick");

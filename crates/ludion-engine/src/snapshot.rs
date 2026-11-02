@@ -44,6 +44,11 @@
 //! field, and serializes byte-identically to before; an older snapshot without it restores as no
 //! residue. Invisible to the world hash — residue is session state, not world content.
 //!
+//! The `arrived_by_restart` fact of the `SceneSwitch` resource rides along (the field of that name):
+//! a snapshot taken on the boundary a restart landed would otherwise restore it false, and a seek
+//! would then run the next tick differently from the live session. Omitted when false, so existing
+//! snapshots serialize byte-identically.
+//!
 //! The loaded scene's **`physics:` block** rides the same precedent (the `scene_physics` field,
 //! additive and distinct from the solver-bytes `physics` field above): a restore adopts it and
 //! rebuilds the schedule with it, so a `ludion dev` restart into a fresh engine that never loaded
@@ -241,6 +246,10 @@ struct SnapshotDoc {
     /// session state, not world content (the arriving world it rebuilds *is* hashed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     residue: Vec<SceneResidueDoc>,
+    /// Whether the world was rebuilt by a scene restart on the boundary this snapshot was taken at
+    /// (`SceneSwitch::arrived_by_restart`). Additive (the `residue` precedent): omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    arrived_by_restart: bool,
     /// Top-level fields this build does not define, kept only so a restore can report them. Never
     /// written: capture leaves it empty, so the document stays byte-identical.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
@@ -484,6 +493,10 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
                     .collect(),
             })
             .collect(),
+        arrived_by_restart: engine
+            .world()
+            .resource::<crate::SceneSwitch>()
+            .is_some_and(crate::SceneSwitch::arrived_by_restart),
         unknown: BTreeMap::new(),
     };
 
@@ -943,6 +956,7 @@ pub(crate) fn restore_into(
             game_clock: doc.game_clock,
             input: doc.input,
             pending_input: doc.pending_input,
+            arrived_by_restart: doc.arrived_by_restart,
         })
         .map_err(crate::commands::collapse)?;
 

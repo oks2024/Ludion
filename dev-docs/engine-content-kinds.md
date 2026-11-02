@@ -104,7 +104,9 @@ Carried entities respawn at the anchor's `Transform.translation` (translation on
 verbatim); a carry id not alive at the switch frame is skipped and reported (`L3020`) rather than
 aborting. Under recording, `recording::write_scene_switch` stores the district text just read;
 under replay, `install_replay_scene_text` pre-loads a `path→text` map and the regenerated switch
-resolves from it, never disk.
+resolves from it, never disk. A restart (`perform_restart`) reads neither: the text is
+`Engine.scene`, and the prefab library hands its held texts and refusals to the next one
+(`PrefabLibrary::held_for_restart`/`adopt`), so each key has one outcome per epoch.
 
 **Scene residue** (`transition.rs` + `residue_store.rs`) is `SessionState.residue`, captured and
 re-applied inside `perform`'s own step order — `ludion devdocs engine-residue`.
