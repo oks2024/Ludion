@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -107,28 +107,33 @@ pub fn gen_args(verb: &str, args: &[String], url: Option<&str>) -> Result<Vec<St
 /// The one JSON object a `--json` verb printed, or `None`.
 ///
 /// `cargo run -q` keeps its own chatter on stderr, so stdout is normally the object alone — but a
-/// stray line before it must not lose the object, so the scan starts at the first line that opens
-/// one. Deliberately total: a verb that died before printing yields `None`, not an error, because
+/// stray line before it must not lose the object, so after the whole text, each line that opens
+/// with `{` is tried as the start of the object (to the end of the text), first parse wins.
+/// Deliberately total: a verb that died before printing yields `None`, not an error, because
 /// its stderr is the thing worth showing.
 pub fn parse_one_object(stdout: &str) -> Option<Value> {
-    let trimmed = stdout.trim_start();
-    if let Ok(value @ Value::Object(_)) = serde_json::from_str::<Value>(trimmed) {
-        return Some(value);
-    }
-    let start = stdout
-        .char_indices()
-        .find(|(_, c)| *c == '{')
-        .map(|(index, _)| index)?;
-    match serde_json::from_str::<Value>(&stdout[start..]) {
+    let as_object = |text: &str| match serde_json::from_str::<Value>(text) {
         Ok(value @ Value::Object(_)) => Some(value),
         _ => None,
+    };
+    if let Some(value) = as_object(stdout.trim_start()) {
+        return Some(value);
     }
+    let mut offset = 0;
+    for line in stdout.split_inclusive('\n') {
+        if line.trim_start().starts_with('{')
+            && let Some(value) = as_object(&stdout[offset..])
+        {
+            return Some(value);
+        }
+        offset += line.len();
+    }
+    None
 }
 
-/// `cargo run -p ludion-cli` with the editor's standard posture, run **in the game project**.
+/// `cargo run -p ludion-cli`, run **in the game project**.
 ///
-/// Mirrors [`crate::stage`]'s own spawn posture (no inherited stdin, piped output, no flashing
-/// console window on Windows) and stays separate from it for the one thing that differs: a `gen`
+/// It stays separate from [`crate::stage`]'s `cargo` for the one thing that differs: a `gen`
 /// verb resolves its recipe, its run folders and `gen status`'s bare project walk against the
 /// *current directory*, so this runs in `project_dir` while `--manifest-path` keeps the workspace
 /// pinned. The environment is inherited untouched — that is how `LUDION_COMFY_URL` arrives.
@@ -137,16 +142,7 @@ fn gen_command(repo_root: &Path, project_dir: &Path, argv: &[String]) -> Command
     let mut command = Command::new("cargo");
     command
         .args(cli_argv(repo_root, &refs))
-        .current_dir(project_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+        .current_dir(project_dir);
     command
 }
 
@@ -550,6 +546,12 @@ mod tests {
         // A JSON array or scalar is not what a `--json` verb prints, so it is not accepted as one.
         assert_eq!(parse_one_object("[1, 2]"), None);
         assert_eq!(parse_one_object("\"ok\""), None);
+        // A `{` that is not a JSON start must not hide the object after it.
+        assert_eq!(
+            parse_one_object("note: {seed}\n{\"kind\":\"image\"}\n").unwrap()["kind"],
+            "image"
+        );
+        assert_eq!(parse_one_object("{ not json\n{\"a\":1}\n").unwrap()["a"], 1);
         // A truncated object (a killed child) is a parse failure, never a partial reading.
         assert_eq!(parse_one_object("{\"kind\": \"im"), None);
     }

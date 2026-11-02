@@ -7,6 +7,9 @@
 //! killing the wrapper alone neither stops that work nor frees the pipes it holds. Windows does not
 //! kill a child with its parent, hence `taskkill /T`; elsewhere the child leads its own process
 //! group and the group is signalled. Nothing here names gen, cargo or Tauri.
+//!
+//! This module owns every spawn in the host: [`HostChildren::run`] for one-shot children,
+//! [`spawn_tree`] / [`spawn_direct`] for the long-lived ones the stage supervises itself.
 
 use std::collections::HashMap;
 use std::process::{Child, Command, Stdio};
@@ -18,6 +21,9 @@ use std::time::{Duration, Instant};
 
 /// A cold `cargo run` build, allowed on top of whatever the verb itself may take.
 pub const BUILD_ALLOWANCE: Duration = Duration::from_secs(30 * 60);
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const POLL: Duration = Duration::from_millis(50);
 /// How long to wait for a pipe's reader after the child is reaped. After a tree kill every pipe
@@ -71,15 +77,7 @@ impl HostChildren {
         deadline: Duration,
         on_start: impl FnOnce(u64),
     ) -> std::io::Result<RunOutput> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt as _;
-            command.process_group(0);
-        }
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        tree_posture(&mut command);
 
         // Registered before the spawn so a `kill_all` racing it still reaches this child.
         let id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -99,8 +97,13 @@ impl HostChildren {
         let mut killed = false;
         let mut timed_out = false;
         let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {}
+                Err(err) => {
+                    kill_tree(&mut child);
+                    return Err(err);
+                }
             }
             if !killed {
                 let expired = start.elapsed() >= deadline;
@@ -179,12 +182,49 @@ fn drain<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<V
     rx
 }
 
-fn kill_tree(child: &mut Child) {
+/// Stdin null, stdout and stderr piped, and no console window on Windows: how the host runs every
+/// child, so none inherits the host's terminal or flashes a window.
+pub fn spawn_posture(command: &mut Command) {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+/// [`spawn_posture`] plus a process group of its own on unix, so [`kill_tree`] can signal the
+/// whole tree.
+fn tree_posture(command: &mut Command) {
+    spawn_posture(command);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+}
+
+/// Spawn a child that may have descendants (a `cargo` wrapper); end it with [`kill_tree`].
+pub fn spawn_tree(command: &mut Command) -> std::io::Result<Child> {
+    tree_posture(command);
+    command.spawn()
+}
+
+/// Spawn a direct executable with no descendants; `Child::kill` ends it.
+pub fn spawn_direct(command: &mut Command) -> std::io::Result<Child> {
+    spawn_posture(command);
+    command.spawn()
+}
+
+/// End `child` and its whole process tree.
+pub fn kill_tree(child: &mut Child) {
     let pid = child.id().to_string();
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let _ = Command::new("taskkill")
             .args(["/pid", &pid, "/T", "/F"])
             .creation_flags(CREATE_NO_WINDOW)
@@ -208,6 +248,24 @@ fn kill_tree(child: &mut Child) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+    /// Keeps a fork from landing while a test holds a port lock. `flock(2)` belongs to the open
+    /// file *description*, which a `fork()` duplicates, and portable-pty spawns by fork+exec (its
+    /// `pre_exec`), so a pty test forking inside a lock test's hold-then-drop window leaves the
+    /// lock held in the forked child until it execs. Forking tests take the read side, lock tests
+    /// that assert "released" the write side.
+    static FORK_GUARD: RwLock<()> = RwLock::new(());
+
+    /// Held while spawning through a fork+exec path.
+    pub(crate) fn forking() -> RwLockReadGuard<'static, ()> {
+        FORK_GUARD.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Held for the whole body of a test that asserts a port lock is free after its holder dropped.
+    pub(crate) fn no_forks() -> RwLockWriteGuard<'static, ()> {
+        FORK_GUARD.write().unwrap_or_else(PoisonError::into_inner)
+    }
 
     /// A command re-running this test binary on one `#[test]`, gated by `env` so an ordinary test
     /// run of that test is a no-op (the stage tests' `sleeper_child` idiom).
@@ -356,15 +414,15 @@ pub(crate) mod tests {
         assert!(String::from_utf8_lossy(&out.stderr).contains("said-err"));
     }
 
-    /// Class gate: a one-shot child spawned with a bare `.output()` is invisible to app exit and
-    /// has no deadline. Every one goes through [`HostChildren`].
+    /// Class gate: a child spawned with a bare `.output()` / `.spawn()` is invisible to app exit,
+    /// has no deadline or is killed without its tree. Every one goes through this module.
     #[test]
-    fn no_host_source_runs_a_child_with_a_bare_output_call() {
+    fn no_host_source_spawns_a_child_outside_children() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut offenders = Vec::new();
         for entry in std::fs::read_dir(&src).unwrap() {
             let path = entry.unwrap().path();
-            if path.extension().is_none_or(|ext| ext != "rs") {
+            if path.extension().is_none_or(|ext| ext != "rs") || path.ends_with("children.rs") {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
@@ -377,10 +435,14 @@ pub(crate) mod tests {
             .min()
             .unwrap_or(text.len());
             let production = &text[..tests];
-            if production.contains(".output()") {
+            if production.contains(".output()") || production.contains(".spawn()") {
                 offenders.push(path.file_name().unwrap().to_string_lossy().into_owned());
             }
         }
-        assert!(offenders.is_empty(), "bare `.output()` in {offenders:?}");
+        assert!(
+            offenders.is_empty(),
+            "bare `.output()`/`.spawn()` in {offenders:?}: spawn through \
+             `children::{{spawn_tree, spawn_direct}}` or `HostChildren`"
+        );
     }
 }

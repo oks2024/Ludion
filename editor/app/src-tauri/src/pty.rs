@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -179,7 +179,8 @@ pub trait PtyEventSink: Clone + Send + 'static {
 struct ConPty {
     /// Both `Some` until `Drop`, which takes them in a load-bearing order (see below).
     master: Option<Box<dyn MasterPty + Send>>,
-    writer: Option<Box<dyn Write + Send>>,
+    /// Shared so a write can proceed after the registry lock is released; `Drop` empties it.
+    writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     open: Arc<AtomicUsize>,
 }
 
@@ -192,19 +193,13 @@ impl ConPty {
         open.fetch_add(1, Ordering::SeqCst);
         Self {
             master: Some(master),
-            writer: Some(writer),
+            writer: Arc::new(Mutex::new(Some(writer))),
             open,
         }
     }
 
-    fn write(&mut self, data: &str) -> Result<(), PtyError> {
-        match self.writer.as_mut() {
-            Some(writer) => writer
-                .write_all(data.as_bytes())
-                .and_then(|()| writer.flush())
-                .map_err(|e| PtyError::Io(e.to_string())),
-            None => Err(PtyError::Io("pseudoconsole is closing".to_string())),
-        }
+    fn writer(&self) -> Arc<Mutex<Option<Box<dyn Write + Send>>>> {
+        Arc::clone(&self.writer)
     }
 
     fn resize(&self, size: PtySize) -> Result<(), PtyError> {
@@ -234,7 +229,8 @@ impl Drop for ConPty {
         // query closes cleanly, so only the sessions that lived a few milliseconds longer leak.
         // Sending the report unprompted is harmless — the session is over, and a frontend that
         // already answered leaves conhost with nothing waiting on this one.
-        if let Some(writer) = self.writer.as_mut() {
+        let mut writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(writer) = writer.as_mut() {
             let _ = writer.write_all(CURSOR_POSITION_REPORT);
             let _ = writer.flush();
         }
@@ -242,7 +238,9 @@ impl Drop for ConPty {
         // `shutdown` that returned before the OS had released the host process would report a leak
         // as clean. The writer lives in this struct, rather than beside it in `Session`, precisely
         // so both steps are stated here instead of resting on field-declaration order.
-        drop(self.writer.take());
+        // The Option, not field order, keeps this true even if a write still holds an Arc clone.
+        drop(writer.take());
+        drop(writer);
         drop(self.master.take());
         self.open.fetch_sub(1, Ordering::SeqCst);
     }
@@ -311,7 +309,7 @@ impl<S: PtyEventSink> PtyRegistry<S> {
             cmd.env(k, v);
         });
 
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| PtyError::Spawn(e.to_string()))?;
@@ -319,14 +317,19 @@ impl<S: PtyEventSink> PtyRegistry<S> {
         // the child exits, so the reader thread would block forever.
         drop(pair.slave);
 
-        let mut reader = pair
+        let (mut reader, writer) = match pair
             .master
             .try_clone_reader()
-            .map_err(|e| PtyError::Spawn(e.to_string()))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| PtyError::Spawn(e.to_string()))?;
+            .and_then(|reader| pair.master.take_writer().map(|writer| (reader, writer)))
+        {
+            Ok(io) => io,
+            Err(e) => {
+                // The child is already running; without a session nothing else would end it.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(PtyError::Spawn(e.to_string()));
+            }
+        };
 
         // Reader: forward raw bytes until EOF. EOF arrives only once the waiter
         // drops the master (see `Session` note), so this thread outlives the child.
@@ -413,11 +416,23 @@ impl<S: PtyEventSink> PtyRegistry<S> {
     }
 
     pub fn write(&self, id: &str, data: &str) -> Result<(), PtyError> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let session = sessions
-            .get_mut(id)
-            .ok_or_else(|| PtyError::NoSession(id.to_string()))?;
-        session.pty.write(data)
+        // Cloned out so a blocking write never holds the registry lock.
+        let writer = {
+            let sessions = self.sessions.lock().unwrap();
+            sessions
+                .get(id)
+                .ok_or_else(|| PtyError::NoSession(id.to_string()))?
+                .pty
+                .writer()
+        };
+        let mut writer = writer.lock().unwrap_or_else(PoisonError::into_inner);
+        let writer = writer
+            .as_mut()
+            .ok_or_else(|| PtyError::Io("pseudoconsole is closing".to_string()))?;
+        writer
+            .write_all(data.as_bytes())
+            .and_then(|()| writer.flush())
+            .map_err(|e| PtyError::Io(e.to_string()))
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), PtyError> {
@@ -519,7 +534,7 @@ pub fn pty_spawn(state: tauri::State<'_, AppPtyRegistry>, opts: SpawnOpts) -> Re
 }
 
 #[tauri::command]
-pub fn pty_write(
+pub async fn pty_write(
     state: tauri::State<'_, AppPtyRegistry>,
     id: String,
     data: String,
@@ -645,7 +660,8 @@ pub struct EditorPaths {
 /// Resolve the repo root from this crate's compile-time location
 /// (`<repo>/editor/app/src-tauri`). Correct for the dev/local-build editor — the same
 /// posture as the `cargo run -p ludion-mcp` fallback — and the single point to revisit if
-/// the editor is ever shipped as a relocatable bundle.
+/// the editor is ever shipped as a relocatable bundle (bundling is off in `tauri.conf.json` for
+/// this reason).
 pub fn repo_root() -> Result<std::path::PathBuf, String> {
     Path::new(env!("CARGO_MANIFEST_DIR")) // <repo>/editor/app/src-tauri
         .parent() // <repo>/editor/app
@@ -695,6 +711,13 @@ mod tests {
         fn exit(&self, _id: &str, code: Option<i32>) {
             let _ = self.tx.send(Ev::Exit(code));
         }
+    }
+
+    /// Spawn under the fork guard (`children::tests`): portable-pty forks, which would duplicate a
+    /// port lock a stage test is holding.
+    fn spawn_guarded(reg: &PtyRegistry<TestSink>, opts: SpawnOpts) -> Result<(), PtyError> {
+        let _fork = crate::children::tests::forking();
+        reg.spawn(opts)
     }
 
     fn sink() -> (TestSink, Receiver<Ev>) {
@@ -796,7 +819,7 @@ mod tests {
     fn spawn_forwards_output_write_resize_then_kill_exits_and_reaps() {
         let (s, rx) = sink();
         let reg = PtyRegistry::new(s);
-        reg.spawn(long_opts("s1")).unwrap();
+        spawn_guarded(&reg, long_opts("s1")).unwrap();
         assert_eq!(reg.list(), vec!["s1".to_string()]);
 
         // Output plumbing: ConPTY's init handshake reliably reaches the reader/sink.
@@ -838,9 +861,9 @@ mod tests {
     fn duplicate_id_is_rejected() {
         let (s, rx) = sink();
         let reg = PtyRegistry::new(s);
-        reg.spawn(long_opts("dup1")).unwrap();
+        spawn_guarded(&reg, long_opts("dup1")).unwrap();
 
-        match reg.spawn(long_opts("dup1")) {
+        match spawn_guarded(&reg, long_opts("dup1")) {
             Err(PtyError::AlreadyLive(id)) => assert_eq!(id, "dup1"),
             other => panic!("expected AlreadyLive, got {other:?}"),
         }
@@ -875,7 +898,7 @@ mod tests {
     fn shutdown_closes_a_pseudoconsole_that_asked_for_the_cursor() {
         let (s, rx) = sink();
         let reg = PtyRegistry::new(s);
-        reg.spawn(long_opts("live")).unwrap();
+        spawn_guarded(&reg, long_opts("live")).unwrap();
         assert_eq!(reg.open_cons.load(Ordering::SeqCst), 1);
         assert!(
             wait_for(&rx, Duration::from_secs(5), |e| matches!(e, Ev::Output(_))).is_some(),

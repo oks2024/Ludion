@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -42,7 +42,7 @@ use notify::{RecursiveMode, Watcher as _};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::children::{BUILD_ALLOWANCE, HostChildren};
+use crate::children::{self, BUILD_ALLOWANCE, HostChildren};
 use crate::wire;
 
 /// Waiter poll cadence — the same reasoning as `pty`'s: instant to a human, free at idle.
@@ -218,38 +218,20 @@ pub fn cli_argv(repo_root: &Path, args: &[&str]) -> Vec<String> {
     argv
 }
 
-/// The editor's standard child-process posture, shared by `check-scene`, the stages and the game:
-/// no inherited stdin, piped output, and no flashing console window on Windows (the host is a GUI
-/// process).
-fn spawn_posture(command: &mut Command) {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-}
-
-/// `cargo run -p ludion-cli -- <args>`, out of the repo, with [`spawn_posture`].
+/// `cargo run -p ludion-cli -- <args>`, out of the repo.
 fn cargo(repo_root: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("cargo");
     command
         .args(cli_argv(repo_root, args))
         .current_dir(repo_root);
-    spawn_posture(&mut command);
     command
 }
 
-/// `cargo build` for a [`StageCommand`], with [`spawn_posture`] and the command's own cwd.
+/// `cargo build` for a [`StageCommand`], in the command's own cwd.
 fn build_command_for(repo_root: &Path, command: &StageCommand) -> Command {
     let mut c = Command::new("cargo");
     c.args(command.build_argv(repo_root))
         .current_dir(command.cwd(repo_root));
-    spawn_posture(&mut c);
     c
 }
 
@@ -579,7 +561,8 @@ fn artifact_executable(value: &serde_json::Value) -> Option<PathBuf> {
 trait StartSteps {
     fn probe(&self, addr: &str) -> PortProbe;
     fn reclaim(&self, addr: &str) -> Result<(), String>;
-    fn sync(&self, repo_root: &Path, project: &Path) -> Result<(), String>;
+    /// `on_start` gets the in-flight `ludion sync`'s [`HostChildren`] id, for cancelling it.
+    fn sync(&self, repo_root: &Path, project: &Path, on_start: &dyn Fn(u64)) -> Result<(), String>;
     fn spawn(&self, command: &mut Command) -> std::io::Result<Child>;
 }
 
@@ -597,12 +580,12 @@ impl StartSteps for RealSteps<'_> {
         reclaim_port(addr)
     }
 
-    fn sync(&self, repo_root: &Path, project: &Path) -> Result<(), String> {
-        sync_project(self.children, repo_root, project)
+    fn sync(&self, repo_root: &Path, project: &Path, on_start: &dyn Fn(u64)) -> Result<(), String> {
+        sync_project(self.children, repo_root, project, on_start)
     }
 
     fn spawn(&self, command: &mut Command) -> std::io::Result<Child> {
-        command.spawn()
+        children::spawn_tree(command)
     }
 }
 
@@ -629,6 +612,9 @@ struct Inner {
     /// attempt: a start takes it in its pre-steps, a newer start of the same slot takes it over
     /// from a cancelled one, and it is released with [`Stage::release_port_lock`].
     port_lock: Option<(u16, File)>,
+    /// The [`HostChildren`] id of the in-flight pre-start `ludion sync`, so a `stop` that cancels
+    /// the start can end it.
+    sync: Option<u64>,
 }
 
 /// One stage session, the one named by its [`StageSlot`]. Cheap to clone (shared inner + a cloned
@@ -758,10 +744,13 @@ fn spawn_stderr_reader(stderr: std::process::ChildStderr, scan: Arc<Mutex<Stderr
 }
 
 /// Poll `child` to exit, killing it when `kill` is raised. The exit code, if there was one.
-fn reap(child: &mut Child, kill: &AtomicBool) -> Option<i32> {
+/// `end` is called once, when `kill` is first seen raised.
+fn reap(child: &mut Child, kill: &AtomicBool, end: fn(&mut Child)) -> Option<i32> {
+    let mut ended = false;
     loop {
-        if kill.load(Ordering::Relaxed) {
-            let _ = child.kill();
+        if !ended && kill.load(Ordering::Relaxed) {
+            end(child);
+            ended = true;
         }
         match child.try_wait() {
             Ok(Some(status)) => return status.code(),
@@ -787,6 +776,7 @@ impl<S: StageEventSink> Stage<S> {
                 watch: None,
                 serving: None,
                 port_lock: None,
+                sync: None,
             })),
             sink,
             repo_root,
@@ -892,11 +882,17 @@ impl<S: StageEventSink> Stage<S> {
         let Some(generation) = self.reserve(&serving, &opts.scene)? else {
             return Ok(self.status());
         };
-        let prepared = match self.pre_steps(steps, &opts, replace, &addr, game_project) {
+        let prepared = match self.pre_steps(steps, &opts, replace, &addr, game_project, generation)
+        {
             Ok(prepared) => prepared,
             Err(message) => {
                 self.release_port_lock(generation);
+                let cancelled = self.inner.lock().unwrap().generation != generation;
                 self.set_status(generation, StageStatus::stopped(self.slot));
+                if cancelled {
+                    // A stop cancelled this start; that is not an error to surface.
+                    return Ok(self.status());
+                }
                 return Err(message);
             }
         };
@@ -999,6 +995,7 @@ impl<S: StageEventSink> Stage<S> {
         replace: bool,
         addr: &str,
         game_project: Option<String>,
+        generation: u64,
     ) -> Result<Prepared, String> {
         let Some(project) = game_project else {
             return self.stage_pre_steps(steps, opts, addr);
@@ -1024,7 +1021,24 @@ impl<S: StageEventSink> Stage<S> {
                 )));
             }
         }
-        steps.sync(&self.repo_root, Path::new(&project))?;
+        let on_start = |id: u64| {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.generation == generation {
+                inner.sync = Some(id);
+            } else {
+                // A stop raced ahead of the spawn.
+                drop(inner);
+                self.children.kill(id);
+            }
+        };
+        let synced = steps.sync(&self.repo_root, Path::new(&project), &on_start);
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.generation == generation {
+                inner.sync = None;
+            }
+        }
+        synced?;
         Ok(Prepared::Spawn {
             command: StageCommand::Game {
                 project: PathBuf::from(project),
@@ -1198,7 +1212,7 @@ impl<S: StageEventSink> Stage<S> {
         let stage = self.clone();
         let scene_path = scene;
         thread::spawn(move || {
-            let mut code = reap(&mut build, &kill);
+            let mut code = reap(&mut build, &kill, children::kill_tree);
             // Why the session ended, when the stderr scan cannot say.
             let mut failure: Option<String> = None;
             let mut engine: Option<Child> = None;
@@ -1218,8 +1232,7 @@ impl<S: StageEventSink> Stage<S> {
                             engine_command
                                 .args(command.engine_args())
                                 .current_dir(command.cwd(&stage.repo_root));
-                            spawn_posture(&mut engine_command);
-                            match engine_command.spawn() {
+                            match children::spawn_direct(&mut engine_command) {
                                 Ok(child) => {
                                     if let Some(port) = port {
                                         let record = Record {
@@ -1248,7 +1261,9 @@ impl<S: StageEventSink> Stage<S> {
                 if let Some(stdout) = engine.stdout.take() {
                     stage.spawn_listening_reader(stdout, generation, &scene_path, &content_root);
                 }
-                code = reap(&mut engine, &kill);
+                code = reap(&mut engine, &kill, |c| {
+                    let _ = c.kill();
+                });
                 if let Some(port) = port {
                     take_record(&stage.state_dir, port);
                 }
@@ -1263,7 +1278,8 @@ impl<S: StageEventSink> Stage<S> {
             // The stderr tail explains both terminal shapes worth explaining: a start that never
             // listened, and a session that died with a non-zero code (a crash, or a kill that beat
             // the graceful shutdown). A clean exit says nothing, because there is nothing to say.
-            let message = if listened && code == Some(0) {
+            let user_stopped = kill.load(Ordering::Relaxed) && !listened;
+            let message = if user_stopped || (listened && code == Some(0)) {
                 None
             } else {
                 Some(
@@ -1281,7 +1297,9 @@ impl<S: StageEventSink> Stage<S> {
                 generation,
                 StageStatus {
                     slot: stage.slot,
-                    phase: if listened {
+                    phase: if user_stopped {
+                        StagePhase::Stopped
+                    } else if listened {
                         StagePhase::Exited
                     } else {
                         StagePhase::Failed
@@ -1368,7 +1386,11 @@ impl<S: StageEventSink> Stage<S> {
                 inner.generation += 1;
                 inner.status = StageStatus::stopped(self.slot);
                 let status = inner.status.clone();
+                let sync = inner.sync.take();
                 drop(inner);
+                if let Some(id) = sync {
+                    self.children.kill(id);
+                }
                 self.sink.status(&status);
                 return;
             };
@@ -1606,16 +1628,22 @@ pub fn check_scene(
 /// Brings the project's derived `[[import]]` trees fresh (`ludion sync`, a pipeline verb run as a
 /// host subprocess) so the game starts against them. A project with no `ludion.toml` has none and
 /// spawns nothing. A cold miss is silent for ~10 s: the stage shows no "syncing" status.
-fn sync_project(children: &HostChildren, repo_root: &Path, project: &Path) -> Result<(), String> {
+fn sync_project(
+    children: &HostChildren,
+    repo_root: &Path,
+    project: &Path,
+    on_start: &dyn Fn(u64),
+) -> Result<(), String> {
     if !project.join("ludion.toml").is_file() {
         return Ok(());
     }
     let project = project.to_string_lossy();
     let deadline = BUILD_ALLOWANCE + Duration::from_secs(10 * 60);
     let output = children
-        .run(
+        .run_with(
             cargo(repo_root, &["sync", "--project", &project, "--json"]),
             deadline,
+            on_start,
         )
         .map_err(|e| {
             format!(
@@ -1632,7 +1660,10 @@ fn sync_project(children: &HostChildren, repo_root: &Path, project: &Path) -> Re
         ));
     }
     if output.cancelled {
-        return Err("the editor stopped `ludion sync` (it is exiting)".to_string());
+        return Err(
+            "the editor stopped `ludion sync` (the start was cancelled or the editor is exiting)"
+                .to_string(),
+        );
     }
     if output.code == Some(0) {
         return Ok(());
@@ -1768,6 +1799,7 @@ pub fn run_check_scene(
 mod tests {
     use super::*;
     use std::net::TcpListener;
+    use std::process::Stdio;
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -1797,6 +1829,8 @@ mod tests {
         reclaim_error: Option<String>,
         /// Spawn the test binary as a long-lived child instead of failing the spawn.
         sleeper: bool,
+        /// Run the sync as a real child through this registry, so a cancel can kill it.
+        sync_runner: Option<Arc<HostChildren>>,
         /// Spawn a fake build: after `delay` it prints one cargo `compiler-artifact` line naming
         /// `executable`, then exits 0, so the real waiter goes on to spawn that executable.
         artifact: Option<(PathBuf, Duration)>,
@@ -1814,6 +1848,7 @@ mod tests {
                 reclaim_gate: Mutex::new(None),
                 reclaim_error: None,
                 sleeper: false,
+                sync_runner: None,
                 artifact: None,
                 probes: AtomicUsize::new(0),
                 reclaims: AtomicUsize::new(0),
@@ -1888,8 +1923,28 @@ mod tests {
             }
         }
 
-        fn sync(&self, _repo_root: &Path, _project: &Path) -> Result<(), String> {
+        fn sync(
+            &self,
+            _repo_root: &Path,
+            _project: &Path,
+            on_start: &dyn Fn(u64),
+        ) -> Result<(), String> {
             Self::pass(&self.sync_gate);
+            if let Some(children) = &self.sync_runner {
+                let out = children
+                    .run_with(
+                        children::tests::child_of(
+                            "children::tests::sleeper_child",
+                            "LUDION_CHILDREN_SLEEPER",
+                        ),
+                        Duration::from_secs(60),
+                        on_start,
+                    )
+                    .map_err(|e| e.to_string())?;
+                if out.cancelled {
+                    return Err("the editor stopped `ludion sync`".to_string());
+                }
+            }
             Ok(())
         }
 
@@ -2134,7 +2189,7 @@ mod tests {
         new_cmd
             .args(cli_argv(&repo_root, &["new", "live-game"]))
             .current_dir(&scratch);
-        spawn_posture(&mut new_cmd);
+        children::spawn_posture(&mut new_cmd);
         let output = new_cmd.output().expect("run `ludion new`");
         assert!(
             output.status.success(),
@@ -2383,7 +2438,7 @@ mod tests {
         let repo = Path::new("/ludion-no-such-repo");
         let project = std::env::temp_dir().join("ludion-stage-no-manifest");
         assert_eq!(
-            sync_project(&HostChildren::default(), repo, &project),
+            sync_project(&HostChildren::default(), repo, &project, &|_| {}),
             Ok(())
         );
     }
@@ -2852,6 +2907,7 @@ mod tests {
 
     #[test]
     fn a_held_port_lock_is_refused_until_the_holder_drops_it() {
+        let _fork = children::tests::no_forks();
         let dir = state_dir("lock-helper");
         let held = try_port_lock(&dir, 40101).unwrap().expect("a free lock");
         assert!(try_port_lock(&dir, 40101).unwrap().is_none(), "held");
@@ -2901,6 +2957,7 @@ mod tests {
     /// Another live editor holds the port's lock: this one asks nothing of the port at all.
     #[test]
     fn a_second_editor_gets_busy_while_the_first_holds_the_port() {
+        let _fork = children::tests::no_forks();
         let (s, _rx) = sink();
         let dir = state_dir("second-editor");
         let first_editor = try_port_lock(&dir, 40112)
@@ -2949,6 +3006,7 @@ mod tests {
     /// The lock marks a live session: held while it runs, gone once `stop()` returns.
     #[test]
     fn the_port_lock_is_released_when_the_session_ends() {
+        let _fork = children::tests::no_forks();
         let (s, _rx) = sink();
         let dir = state_dir("lock-lifetime");
         let stage = Stage::new(StageSlot::Model, s, PathBuf::from("/repo"), Arc::default())
@@ -3050,6 +3108,7 @@ mod tests {
     /// process already holds is refused) and report another editor's session.
     #[test]
     fn a_cancelled_start_does_not_block_the_next_start() {
+        let _fork = children::tests::no_forks();
         let (s, _rx) = sink();
         let dir = state_dir("cancelled-start");
         write_record(
@@ -3096,6 +3155,7 @@ mod tests {
     /// slow step returns.
     #[test]
     fn a_cancelled_start_releases_the_port_lock_when_nothing_follows() {
+        let _fork = children::tests::no_forks();
         let (s, _rx) = sink();
         let dir = state_dir("cancelled-alone");
         write_record(
@@ -3222,6 +3282,7 @@ mod tests {
     /// consumed and its port lock is free. The old `cargo run` wrapper design left it alive.
     #[test]
     fn stop_ends_the_engine_the_build_produced() {
+        let _fork = children::tests::no_forks();
         let (s, _rx) = sink();
         let dir = state_dir("built-engine");
         let executable = fake_engine(&dir);
@@ -3280,10 +3341,62 @@ mod tests {
         thread::sleep(Duration::from_millis(2500));
         assert!(!dir.join("started").exists(), "an engine was spawned");
         assert_eq!(read_record(&dir, 40122), None);
-        assert!(!matches!(
-            stage.status().phase,
-            StagePhase::Starting | StagePhase::Listening
-        ));
+        let status = stage.status();
+        assert_eq!(status.phase, StagePhase::Stopped);
+        assert_eq!(status.message, None);
+    }
+
+    /// A stop during a game start's `ludion sync` ends that sync and the start returns `Ok`.
+    #[test]
+    fn a_stop_cancels_the_sync_child_of_a_game_start() {
+        let (s, _rx) = sink();
+        let children = Arc::new(HostChildren::default());
+        let stage = Stage::new(
+            StageSlot::Game,
+            s,
+            PathBuf::from("/repo"),
+            Arc::clone(&children),
+        );
+        let scene = scene_file("ludion-stage-cancel-sync.yaml");
+        let steps = FakeSteps {
+            sync_runner: Some(Arc::clone(&children)),
+            ..FakeSteps::new()
+        };
+        thread::scope(|scope| {
+            let start =
+                scope.spawn(|| stage.start_with(opts_for(&scene, Some("/p/game")), false, &steps));
+            wait_until("the sync child", || children.live() == 1);
+            stage.stop();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !start.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+            assert!(start.is_finished(), "the start stayed blocked in sync");
+            assert!(start.join().unwrap().is_ok());
+        });
+        assert_eq!(children.live(), 0);
+        assert_eq!(steps.spawned(), 0);
+    }
+
+    /// The stage build is ended with its whole tree, not just the wrapper.
+    #[test]
+    fn reaping_a_build_with_kill_tree_takes_the_grandchild() {
+        let marker =
+            std::env::temp_dir().join(format!("ludion-stage-marker-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let mut command = children::tests::child_of(
+            "children::tests::grandparent_child",
+            "LUDION_CHILDREN_GRANDPARENT",
+        );
+        command.env("LUDION_CHILDREN_MARKER", &marker);
+        let mut child = children::spawn_tree(&mut command).unwrap();
+        thread::sleep(Duration::from_millis(500));
+        let kill = AtomicBool::new(true);
+        reap(&mut child, &kill, children::kill_tree);
+        thread::sleep(Duration::from_secs(5));
+        let survived = marker.exists();
+        let _ = std::fs::remove_file(&marker);
+        assert!(!survived, "the grandchild outlived the build's kill");
     }
 
     #[test]
