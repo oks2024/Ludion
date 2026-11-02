@@ -127,8 +127,9 @@ struct Outcome {
     no_tables: bool,
 }
 
-/// Syncs every table. `Err` covers what aborts before any write: the manifest, a refused table, an
-/// unreadable binary. A per-entry import failure stays in `Outcome::failed`.
+/// Syncs every table. `Err` covers what aborts before any import: the manifest, a refused table or
+/// cook root, a held lock, a table that cannot be claimed or a source that cannot be hashed. A
+/// per-entry import failure stays in `Outcome::failed`.
 fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagnostic>> {
     let manifest = manifest::load(project).map_err(|diagnostic| vec![diagnostic])?;
     if manifest.imports.is_empty() && manifest.cook_roots().is_empty() {

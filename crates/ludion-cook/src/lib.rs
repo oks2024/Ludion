@@ -49,7 +49,7 @@ pub const ASTC_PRESET: &str = "medium";
 pub const ENCODER_VERSIONS: [(&str, &str); 2] =
     [("intel_tex_2", "0.5.0"), ("ctt-astcenc", "0.6.0")];
 /// The `COOKER_VERSION` [`ENCODER_VERSIONS`] were pinned at.
-pub const ENCODER_VERSIONS_FOR: u32 = 2;
+pub const ENCODER_VERSIONS_FOR: u32 = 3;
 
 /// Why a map could not be cooked.
 #[derive(Clone, PartialEq, Eq, Debug)]

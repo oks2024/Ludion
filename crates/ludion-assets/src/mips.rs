@@ -1,4 +1,4 @@
-//! The CPU mip chain: the 2×2 box filter `ludion-cook` bakes with and the renderer's coverage-
+//! The CPU mip chain: the box filter `ludion-cook` bakes with and the renderer's coverage-
 //! preserving chain for alpha-mask maps. All f32 arithmetic is basic IEEE operations plus the
 //! libm-safe sRGB helpers of this crate, so the output is identical on every platform.
 
@@ -57,8 +57,26 @@ impl Mixer {
     }
 }
 
-/// The next mip: a 2×2 box with edge-clamped taps for odd sizes. Colour is averaged in linear
-/// light when `srgb`; alpha and every linear-map channel as `(a + b + c + d + 2) / 4` in bytes.
+/// An output texel's source taps on one axis, as (index, weight), and the weights' sum.
+fn axis_taps(side: usize, out: usize) -> (Vec<(usize, u32)>, u32) {
+    if side == 1 {
+        return (vec![(0, 1), (0, 1)], 2);
+    }
+    if side.is_multiple_of(2) {
+        return (vec![(2 * out, 1), (2 * out + 1, 1)], 2);
+    }
+    // side = 2m + 1: the three taps overlap their neighbours so every source texel totals m.
+    let m = (side / 2) as u32;
+    let x = out as u32;
+    (
+        vec![(2 * out, m - x), (2 * out + 1, m), (2 * out + 2, x + 1)],
+        2 * m + 1,
+    )
+}
+
+/// The next mip: a 2×2 box on even sides, an area-weighted 3-tap on odd sides (so every source
+/// texel counts and the mean holds). Colour is averaged in linear light when `srgb`; alpha and
+/// every linear-map channel in bytes, rounded half up.
 ///
 /// # Example
 /// ```
@@ -71,34 +89,34 @@ impl Mixer {
 pub fn next_mip(source: &Level, srgb: bool) -> Level {
     let (width, height) = ((source.width / 2).max(1), (source.height / 2).max(1));
     let mixer = Mixer::new(srgb);
+    let columns: Vec<_> = (0..width).map(|x| axis_taps(source.width, x)).collect();
     let mut rgba = vec![0u8; width * height * 4];
     for y in 0..height {
-        let rows = [
-            (y * 2).min(source.height - 1),
-            (y * 2 + 1).min(source.height - 1),
-        ];
-        for x in 0..width {
-            let columns = [
-                (x * 2).min(source.width - 1),
-                (x * 2 + 1).min(source.width - 1),
-            ];
+        let (row_taps, dy) = axis_taps(source.height, y);
+        for (x, (column_taps, dx)) in columns.iter().enumerate() {
+            let divisor = dy * dx;
             for channel in 0..4 {
+                let out = &mut rgba[(y * width + x) * 4 + channel];
                 let tap = |row: usize, column: usize| {
                     source.rgba[(row * source.width + column) * 4 + channel]
                 };
-                let out = &mut rgba[(y * width + x) * 4 + channel];
                 if mixer.is_linear_light(channel) {
-                    let sum = mixer.load(tap(rows[0], columns[0]), channel)
-                        + mixer.load(tap(rows[0], columns[1]), channel)
-                        + mixer.load(tap(rows[1], columns[0]), channel)
-                        + mixer.load(tap(rows[1], columns[1]), channel);
-                    *out = mixer.store(sum / 4.0, channel);
+                    let mut sum = 0.0f32;
+                    for &(row, wy) in &row_taps {
+                        for &(column, wx) in column_taps {
+                            sum += (wy * wx) as f32 * mixer.load(tap(row, column), channel);
+                        }
+                    }
+                    *out = mixer.store(sum / divisor as f32, channel);
                 } else {
-                    let sum = u32::from(tap(rows[0], columns[0]))
-                        + u32::from(tap(rows[0], columns[1]))
-                        + u32::from(tap(rows[1], columns[0]))
-                        + u32::from(tap(rows[1], columns[1]));
-                    *out = ((sum + 2) / 4) as u8;
+                    let mut sum = 0u64;
+                    for &(row, wy) in &row_taps {
+                        for &(column, wx) in column_taps {
+                            sum += u64::from(wy * wx) * u64::from(tap(row, column));
+                        }
+                    }
+                    let d = u64::from(divisor);
+                    *out = ((sum + d / 2) / d) as u8;
                 }
             }
         }
@@ -224,15 +242,148 @@ mod tests {
     }
 
     #[test]
-    fn odd_sizes_clamp_their_taps() {
-        let level = Level {
+    fn odd_sizes_weight_every_texel() {
+        let level = |values: [u8; 3]| Level {
             width: 3,
             height: 1,
-            rgba: vec![0, 0, 0, 255, 100, 100, 100, 255, 200, 200, 200, 255],
+            rgba: values.iter().flat_map(|v| [*v, *v, *v, 255]).collect(),
         };
-        let next = next_mip(&level, false);
+        let next = next_mip(&level([0, 100, 200]), false);
         assert_eq!((next.width, next.height), (1, 1));
-        assert_eq!(next.rgba, [50, 50, 50, 255]);
+        assert_eq!(next.rgba, [100, 100, 100, 255]);
+        assert_eq!(next_mip(&level([0, 0, 200]), false).rgba[0], 67);
+    }
+
+    /// A deterministic noisy map (xorshift) of the given extent.
+    fn noisy(width: usize, height: usize) -> Level {
+        let mut state = 0x9E37_79B9u32;
+        let rgba = (0..width * height * 4)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                (state >> 8) as u8
+            })
+            .collect();
+        Level {
+            width,
+            height,
+            rgba,
+        }
+    }
+
+    #[test]
+    fn odd_levels_keep_the_mean() {
+        let level = noisy(5, 7);
+        let next = next_mip(&level, false);
+        assert_eq!((next.width, next.height), (2, 3));
+        for channel in 0..4 {
+            let mean = |l: &Level| {
+                let n = l.width * l.height;
+                (0..n)
+                    .map(|i| f64::from(l.rgba[i * 4 + channel]))
+                    .sum::<f64>()
+                    / n as f64
+            };
+            let moved = (mean(&level) - mean(&next)).abs();
+            assert!(moved <= 1.0, "channel {channel} mean moved {moved}");
+        }
+    }
+
+    #[test]
+    fn odd_levels_read_every_texel() {
+        let base = noisy(5, 5);
+        let reference = next_mip(&base, false);
+        for texel in 0..5 {
+            for (x, y) in [(4, texel), (texel, 4)] {
+                let mut changed = base.clone();
+                let byte = &mut changed.rgba[(y * 5 + x) * 4];
+                *byte = if *byte < 128 { 255 } else { 0 };
+                assert_ne!(
+                    next_mip(&changed, false),
+                    reference,
+                    "texel ({x}, {y}) was never read"
+                );
+            }
+        }
+    }
+
+    /// The pre-weighted 2×2 formula, kept as a reference for even sides.
+    fn old_next_mip(source: &Level, srgb: bool) -> Level {
+        let (width, height) = ((source.width / 2).max(1), (source.height / 2).max(1));
+        let mixer = Mixer::new(srgb);
+        let mut rgba = vec![0u8; width * height * 4];
+        for y in 0..height {
+            let rows = [
+                (y * 2).min(source.height - 1),
+                (y * 2 + 1).min(source.height - 1),
+            ];
+            for x in 0..width {
+                let columns = [
+                    (x * 2).min(source.width - 1),
+                    (x * 2 + 1).min(source.width - 1),
+                ];
+                for channel in 0..4 {
+                    let tap = |row: usize, column: usize| {
+                        source.rgba[(row * source.width + column) * 4 + channel]
+                    };
+                    let out = &mut rgba[(y * width + x) * 4 + channel];
+                    if mixer.is_linear_light(channel) {
+                        let sum = mixer.load(tap(rows[0], columns[0]), channel)
+                            + mixer.load(tap(rows[0], columns[1]), channel)
+                            + mixer.load(tap(rows[1], columns[0]), channel)
+                            + mixer.load(tap(rows[1], columns[1]), channel);
+                        *out = mixer.store(sum / 4.0, channel);
+                    } else {
+                        let sum = u32::from(tap(rows[0], columns[0]))
+                            + u32::from(tap(rows[0], columns[1]))
+                            + u32::from(tap(rows[1], columns[0]))
+                            + u32::from(tap(rows[1], columns[1]));
+                        *out = ((sum + 2) / 4) as u8;
+                    }
+                }
+            }
+        }
+        Level {
+            width,
+            height,
+            rgba,
+        }
+    }
+
+    #[test]
+    fn even_levels_match_the_two_by_two_formula() {
+        for (w, h) in [(8, 6), (2, 1), (1, 2)] {
+            for srgb in [false, true] {
+                let level = noisy(w, h);
+                assert_eq!(
+                    next_mip(&level, srgb),
+                    old_next_mip(&level, srgb),
+                    "{w}x{h} srgb={srgb}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mask_chain_on_odd_levels_keeps_coverage() {
+        let mut level = noisy(12, 12);
+        for texel in level.rgba.chunks_exact_mut(4) {
+            texel[3] = if texel[3] < 64 { 255 } else { 0 };
+        }
+        let c = cutoff_byte(0.5);
+        let chain = mask_mip_chain(level, false, 0.5);
+        let target = covered(&chain[0], c) as f64 / 144.0;
+        for l in &chain {
+            let n = (l.width * l.height) as f64;
+            let fraction = covered(l, c) as f64 / n;
+            assert!(
+                (fraction - target).abs() <= (4.0 / n).max(0.02),
+                "{}x{}: {fraction} vs {target}",
+                l.width,
+                l.height
+            );
+        }
     }
 
     fn plain_chain(level0: Level, srgb: bool) -> Vec<Level> {

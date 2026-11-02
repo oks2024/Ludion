@@ -22,7 +22,7 @@ use xxhash_rust::xxh3::xxh3_64;
 /// The cook format's version. Part of every [`cook_key`], so bumping it invalidates every cooked
 /// map. Bump it whenever an encoder, its preset, the mip filter or the file layout changes the
 /// output bytes (`ludion-cook`'s pin test enforces the encoder half).
-pub const COOKER_VERSION: u32 = 2;
+pub const COOKER_VERSION: u32 = 3;
 
 /// Which GPU family a map is cooked for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -297,12 +297,9 @@ pub fn dfd_region(format: CompressedFormat, srgb: bool) -> Vec<u8> {
 }
 
 fn dfd_region_of(vk: Format) -> Vec<u8> {
-    let block = match dfd::Basic::from_format(vk) {
-        Ok((basic, _)) => dfd::Block::Basic(basic).to_vec(),
-        // Every format used here is in ktx2's DFD table; an empty block still yields a well-formed
-        // prefix, and writer and reader agree by construction.
-        Err(_) => Vec::new(),
-    };
+    let (basic, _) = dfd::Basic::from_format(vk)
+        .expect("every format the cook and the probe store name is in ktx2's DFD table");
+    let block = dfd::Block::Basic(basic).to_vec();
     let mut region = ((block.len() + 4) as u32).to_le_bytes().to_vec();
     region.extend_from_slice(&block);
     region
@@ -701,6 +698,29 @@ mod tests {
         assert_eq!(srgb_mean_entry(&mean_block(white)), Some(white));
     }
 
+    #[test]
+    fn every_format_has_a_basic_block() {
+        let formats = [CompressedFormat::Bc7, CompressedFormat::Astc4x4];
+        for format in formats {
+            // A new variant fails to compile here until it joins the list above.
+            let model = match format {
+                CompressedFormat::Bc7 => 134u8,
+                CompressedFormat::Astc4x4 => 162,
+            };
+            for (srgb, transfer) in [(true, 2u8), (false, 1)] {
+                let region = dfd_region(format, srgb);
+                assert!(region.len() > 4, "{format:?} srgb={srgb}");
+                let length = u32::from_le_bytes(region[..4].try_into().unwrap());
+                assert_eq!(length as usize, region.len());
+                assert_eq!(region[12], model, "{format:?} colour model");
+                assert_eq!(region[14], transfer, "{format:?} srgb={srgb} transfer");
+                assert_eq!(region[16..20], [3, 3, 0, 0], "{format:?} texel block");
+                assert_eq!(region[20], 16, "{format:?} bytes per plane");
+            }
+        }
+        assert!(dfd_region_of(Format::R16G16B16A16_SFLOAT).len() > 4);
+    }
+
     const BASE: CookSettings = CookSettings {
         target: CookTarget::Desktop,
         color_space: ColorSpace::Srgb,
@@ -713,7 +733,7 @@ mod tests {
         // Moving this value means the key record changed: every cooked store is orphaned.
         assert_eq!(
             cook_key(0x0123_4567_89ab_cdef, &BASE),
-            0x01ce_6a01_0eac_3d42
+            0x9fe1_77bb_cbcb_af6a
         );
     }
 

@@ -6,7 +6,8 @@
 //! its PNG. The key folds in the PNG's content hash, the map's colour role, the target and the
 //! table's `max_texture_size`, so the lookup reads the PNG's bytes (to hash them), never decodes
 //! them, and finds the file with no index. A map that is missing, corrupt or unusable on this GPU
-//! loads from its PNG, and the load reports the fallbacks as one `L1271`.
+//! loads from its PNG, and the load reports the fallbacks as one `L1271`. A decal's maps always read
+//! their PNG, because sync cooks only the maps mesh documents name.
 //!
 //! The axis is render-only: nothing here reaches the world, so `WorldHash`, replays and snapshots do
 //! not see it.

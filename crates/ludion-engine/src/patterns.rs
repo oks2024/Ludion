@@ -50,6 +50,7 @@ pub use ludion_components::patterns::{PatternPlayer, VOLLEY_MAX_BULLETS, Volley,
 use crate::components::{SpriteBlend, Transform};
 use crate::diagnostics::report;
 use crate::docs::DocStore;
+use crate::extract::AtlasAsset;
 use crate::particles::{MOTION_MAX_SEGMENTS, Motion, Segment};
 
 /// The most motion segments a bullet kind may author (`L1149`); one [`Motion`] slot is the tail.
@@ -1012,29 +1013,38 @@ pub(crate) fn validate_bullet_atlases(project_root: &Path, world: &World) -> Vec
     let Some(store) = world.resource::<DocStore<PatternDoc>>() else {
         return Vec::new();
     };
+    // One decode per atlas for the whole pass, however many kinds name it.
+    let mut loaded = BTreeMap::new();
     store
         .iter()
-        .flat_map(|(key, doc)| bullet_atlas_diagnostics(project_root, key, doc))
+        .flat_map(|(key, doc)| bullet_atlas_diagnostics(project_root, key, doc, &mut loaded))
         .collect()
 }
 
+type LoadedAtlases = BTreeMap<String, Result<AtlasAsset, Vec<Diagnostic>>>;
+
 /// The `L1151`/`L1152` set of one pattern document's bullet kinds, at
-/// `pattern/<key>/bullets/<name>/…`.
-pub(crate) fn bullet_atlas_diagnostics(
+/// `pattern/<key>/bullets/<name>/…`; `loaded` memoises each atlas's load across documents.
+fn bullet_atlas_diagnostics(
     project_root: &Path,
     key: &str,
     doc: &PatternDoc,
+    loaded: &mut LoadedAtlases,
 ) -> Vec<Diagnostic> {
+    let root = ludion_assets::AssetRoot::content(project_root);
     let mut out = Vec::new();
     for (name, kind) in &doc.bullets {
         let base = format!("pattern/{key}/bullets/{name}");
         match (&kind.atlas, &kind.frame) {
-            (Some(atlas), frame) => out.extend(crate::check_atlas_reference(
-                ludion_assets::AssetRoot::content(project_root),
-                &base,
-                atlas,
-                frame.as_deref(),
-            )),
+            (Some(_), None) => out.push(crate::extract::atlas_without_frame(&base)),
+            (Some(atlas), Some(frame)) => {
+                let result = loaded
+                    .entry(atlas.clone())
+                    .or_insert_with(|| crate::extract::load_atlas(root, atlas));
+                out.extend(crate::extract::check_loaded_atlas(
+                    root, &base, atlas, frame, result,
+                ));
+            }
             (None, Some(_)) => out.push(crate::extract::frame_without_atlas(&base)),
             (None, None) => {}
         }
@@ -2996,6 +3006,93 @@ timeline:
             if frame == 4 {
                 assert_eq!(on(&engine, 4, "blink"), 0, "life 0 is reaped as it fires");
             }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A pattern document of bullet kinds `(name, atlas, frame)`.
+    fn doc_of_kinds(kinds: &[(&str, &str, &str)]) -> PatternDoc {
+        let bullets: serde_json::Map<String, serde_json::Value> = kinds
+            .iter()
+            .map(|(name, atlas, frame)| {
+                let kind = serde_json::json!({ "atlas": atlas, "frame": frame, "life": 60 });
+                (name.to_string(), kind)
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({ "bullets": bullets })).unwrap()
+    }
+
+    fn atlas_root(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ludion-bullet-atlas-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("art")).unwrap();
+        let png = ludion_assets::encode_png(2, 2, &[255u8; 16]).unwrap();
+        std::fs::write(dir.join("art/ship.png"), png).unwrap();
+        let mut regions = BTreeMap::new();
+        regions.insert(
+            "ship/idle".to_string(),
+            ludion_scene::AtlasRegion {
+                rect: [0, 0, 2, 2],
+                pivot: [1.0, 1.0],
+            },
+        );
+        let atlas = ludion_scene::AtlasDocument {
+            generated_from: "ship.atlas-source.yaml".to_string(),
+            pixels_per_unit: 16.0,
+            color_map: "ship.png".to_string(),
+            filter: ludion_scene::AtlasFilter::Nearest,
+            regions,
+            flipbooks: Vec::new(),
+        };
+        std::fs::write(
+            dir.join("art/ship.atlas.yaml"),
+            ludion_scene::emit_atlas(&atlas),
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn kinds_sharing_an_atlas_decode_it_once_and_report_at_their_own_pointers() {
+        let dir = atlas_root("shared");
+        let doc = doc_of_kinds(&[
+            ("a", "art/ship.atlas.yaml", "ship/nope"),
+            ("b", "art/ship.atlas.yaml", "ship/also-nope"),
+        ]);
+        let mut loaded = LoadedAtlases::new();
+        let out = bullet_atlas_diagnostics(&dir, "p.yaml", &doc, &mut loaded);
+        assert_eq!(loaded.len(), 1);
+        for name in ["a", "b"] {
+            let path = format!("pattern/p.yaml/bullets/{name}/frame");
+            assert!(
+                out.iter()
+                    .any(|d| d.code.as_str() == "L1152" && d.path.as_deref() == Some(path.as_str())),
+                "{out:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kinds_sharing_a_missing_atlas_each_report_l1151() {
+        let dir = atlas_root("missing");
+        let doc = doc_of_kinds(&[
+            ("a", "art/gone.atlas.yaml", "x"),
+            ("b", "art/gone.atlas.yaml", "x"),
+        ]);
+        let mut loaded = LoadedAtlases::new();
+        let out = bullet_atlas_diagnostics(&dir, "p.yaml", &doc, &mut loaded);
+        assert_eq!(loaded.len(), 1);
+        for name in ["a", "b"] {
+            let path = format!("pattern/p.yaml/bullets/{name}/atlas");
+            assert!(
+                out.iter()
+                    .any(|d| d.code.as_str() == "L1151" && d.path.as_deref() == Some(path.as_str())),
+                "{out:?}"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

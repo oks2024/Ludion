@@ -36,7 +36,8 @@
 //! produced or a `[cook] roots` directory holds is held per colour role instead (`MapRole`): its
 //! cooked file's bytes differ between sRGB and linear, so one path can hold two entries, each
 //! either the cooked image or — with its reason recorded for the load's one `L1271` — the PNG's
-//! decode. Switching the setting drops every map and the meshes built from them.
+//! decode. Switching the setting drops every map and the meshes built from them. A decal's maps
+//! always read their PNG: sync cooks only what mesh documents name.
 //!
 //! After a world rebuild the first cached extract (or `render.bounds`) keeps only what the new world
 //! names ([`AssetCache::retain_referenced`]), re-hashes the files the kept entries were built from and
@@ -151,8 +152,8 @@ pub(crate) struct AssetRefs {
     pub(crate) characters: BTreeSet<String>,
     /// The prefabs whose clips an animated instance root plays.
     pub(crate) prefab_clips: BTreeSet<String>,
-    /// Maps a decal names, with the colour role each is read in; a mesh's maps come from its document.
-    pub(crate) maps: BTreeSet<(String, ColorSpace)>,
+    /// Maps a decal names, always read as PNG; a mesh's maps come from its document.
+    pub(crate) maps: BTreeSet<String>,
 }
 
 /// One decoded entry, ready to insert: what a worker thread hands back to the cache's owner. Every
@@ -843,10 +844,10 @@ impl AssetCache {
         ))
     }
 
-    /// Reads a mesh's or a decal's map at the resolved path `resolved` in the colour role `space`
-    /// **through** the cache: a hit is reported as reused, a miss decodes it once as an entry of its
-    /// own. Every mesh or decal naming one file shares the `Arc`, so the decode counter is unique
-    /// files, not references.
+    /// Reads a mesh's map at the resolved path `resolved` in the colour role `space` **through**
+    /// the cache: a hit is reported as reused, a miss decodes it once as an entry of its own. Every
+    /// mesh naming one file shares the `Arc`, so the decode counter is unique files, not references.
+    /// A decal's maps never come here: they read their PNG ([`load_source_map`](Self::load_source_map)).
     pub(crate) fn load_map(
         &mut self,
         project_root: AssetRoot<'_>,
@@ -854,8 +855,27 @@ impl AssetCache {
         space: ColorSpace,
         alpha_cutoff: Option<f32>,
     ) -> Result<(MapImage, u64), Diagnostic> {
+        let role = self.role(&normalize_key(resolved), space, alpha_cutoff);
+        self.load_map_as(project_root, resolved, role)
+    }
+
+    /// Reads a decal's map: always the PNG, because sync cooks only the maps mesh documents name,
+    /// so a cook lookup covering the path would be a miss nothing can fill.
+    pub(crate) fn load_source_map(
+        &mut self,
+        project_root: AssetRoot<'_>,
+        resolved: &str,
+    ) -> Result<(MapImage, u64), Diagnostic> {
+        self.load_map_as(project_root, resolved, MapRole::Source)
+    }
+
+    fn load_map_as(
+        &mut self,
+        project_root: AssetRoot<'_>,
+        resolved: &str,
+        role: MapRole,
+    ) -> Result<(MapImage, u64), Diagnostic> {
         let key = normalize_key(resolved);
-        let role = self.role(&key, space, alpha_cutoff);
         if !self.mesh_maps.contains_key(&(key.clone(), role)) {
             self.load_entry(project_root, AssetKind::MeshMap(role), resolved)
                 .map_err(first_diagnostic)?;
@@ -1031,7 +1051,7 @@ impl AssetCache {
 
         // A map no kept mesh binds and no decal names is an orphan.
         let dependents = &self.dependents;
-        let decal_maps: BTreeSet<&str> = refs.maps.iter().map(|(key, _)| key.as_str()).collect();
+        let decal_maps: BTreeSet<&str> = refs.maps.iter().map(String::as_str).collect();
         self.mesh_maps.retain(|(key, _), _| {
             decal_maps.contains(key.as_str())
                 || dependents
@@ -1183,8 +1203,8 @@ impl AssetCache {
                 }
             }
         }
-        for (path, space) in &refs.maps {
-            let role = self.role(path, *space, None);
+        for path in &refs.maps {
+            let role = MapRole::Source;
             if self.mesh_maps.contains_key(&(path.clone(), role)) {
                 self.report_reused(AssetKind::MeshMap(role), path);
             } else {
@@ -3189,6 +3209,35 @@ parts:
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A decal's map always reads its PNG: a covering cook lookup and a filled store change
+    /// nothing for it, while a mesh naming the same file still gets the cooked image.
+    #[test]
+    fn a_decal_map_reads_its_png_whatever_the_cook_holds() {
+        let dir = cook_project("decal-source", None);
+        store_both(&dir, None);
+        let root = ludion_assets::AssetRoot::content(&dir);
+        let mut cache = AssetCache::new();
+        cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
+        let (image, _) = cache.load_source_map(root, KIT_BASE).unwrap();
+        assert!(matches!(image, MapImage::Source(_)));
+        assert!(cache.cook_misses().is_empty());
+        cache.load_mesh(root, KIT_MESH).unwrap();
+        cooked_image(&cache, KIT_BASE, ColorSpace::Srgb);
+
+        let empty = cook_project("decal-prefetch", None);
+        let mut fresh = AssetCache::new();
+        fresh.set_cook(lookup(&empty, Some(CookTarget::Desktop)));
+        let refs = AssetRefs {
+            maps: [KIT_BASE.to_string()].into(),
+            ..AssetRefs::default()
+        };
+        fresh.prefetch(ludion_assets::AssetRoot::content(&empty), &refs);
+        assert!(fresh.contains_mesh_map(KIT_BASE));
+        assert!(fresh.cook_misses().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&empty);
+    }
+
     /// A cooked prefetch fills the same cache at any thread count, hits and misses alike.
     #[test]
     fn a_cooked_prefetch_is_thread_count_invariant() {
@@ -3480,9 +3529,7 @@ parts:
         let png_rel = "decals/d.png";
         std::fs::write(dir.join(png_rel), png_bytes(10)).unwrap();
         let named = AssetRefs {
-            maps: [(png_rel.to_string(), ColorSpace::Srgb)]
-                .into_iter()
-                .collect(),
+            maps: [png_rel.to_string()].into_iter().collect(),
             ..AssetRefs::default()
         };
 
@@ -3932,7 +3979,7 @@ parts:
         let mut cache = AssetCache::new();
         cache.set_cook(lookup(&dir, Some(CookTarget::Desktop)));
         let root = ludion_assets::AssetRoot::content(&dir);
-        cache.load_mesh(root, KIT_MESH).unwrap();
+        let fallback_hash = cache.load_mesh(root, KIT_MESH).unwrap().hash;
         assert_eq!(cache.cook_misses().len(), 2);
         assert!(!cache.retry_cook_misses(), "no new file, no move");
 
@@ -3940,7 +3987,11 @@ parts:
         assert!(cache.retry_cook_misses());
         assert!(!cache.contains_mesh_map(KIT_BASE));
         assert!(!cache.contains_mesh(KIT_MESH));
-        cache.load_mesh(root, KIT_MESH).unwrap();
+        let cooked_hash = cache.load_mesh(root, KIT_MESH).unwrap().hash;
+        assert_ne!(
+            cooked_hash, fallback_hash,
+            "a mid-session cook re-keys the mesh"
+        );
         cooked_image(&cache, KIT_BASE, ColorSpace::Srgb);
         assert!(cache.cook_misses().is_empty());
         let _ = std::fs::remove_dir_all(&dir);

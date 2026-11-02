@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use ludion_assets::AssetRoot;
 use ludion_assets::Image;
-use ludion_assets::cooked::ColorSpace;
 use ludion_core::codes::code;
 use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::{Diagnostic, pointer_token};
@@ -75,9 +74,9 @@ pub(crate) trait SceneAssets {
     /// Resolves a sprite/tilemap texture path to a decoded, premultiplied [`TextureImage`],
     /// `Arc`-shared so a cached hit is a refcount bump, not a byte copy.
     fn texture(&mut self, rel: &str) -> Result<Arc<TextureImage>, Diagnostic>;
-    /// Resolves a decal's map at the content-root path `rel` in the colour role `space`, through the
-    /// same cache entry (and cooked role) a mesh document's map of that file would use.
-    fn map(&mut self, rel: &str, space: ColorSpace) -> Result<MapImage, Diagnostic>;
+    /// Resolves a decal's map at the content-root path `rel`. Always the PNG, never a cooked twin:
+    /// sync cooks only the maps mesh documents name.
+    fn map(&mut self, rel: &str) -> Result<MapImage, Diagnostic>;
     /// Resolves a `Sprite.atlas` / `Tilemap` legend `atlas` path to its parsed `kind: atlas`
     /// document and packed colour image. `Arc`-shared like a mesh: a stage is one atlas, so every
     /// quad on screen resolves the same entry.
@@ -148,9 +147,9 @@ impl SceneAssets for CachedAssets<'_> {
     fn texture(&mut self, rel: &str) -> Result<Arc<TextureImage>, Diagnostic> {
         self.cache.load(self.root, rel).cloned()
     }
-    fn map(&mut self, rel: &str, space: ColorSpace) -> Result<MapImage, Diagnostic> {
+    fn map(&mut self, rel: &str) -> Result<MapImage, Diagnostic> {
         self.cache
-            .load_map(self.root, rel, space, None)
+            .load_source_map(self.root, rel)
             .map(|(image, _)| image)
     }
     fn atlas(&mut self, rel: &str) -> Result<Arc<AtlasAsset>, Vec<Diagnostic>> {
@@ -416,8 +415,31 @@ pub fn check_atlas_reference(
     let Some(frame) = frame else {
         return vec![atlas_without_frame(pointer)];
     };
-    match load_atlas(project_root, atlas_rel) {
-        Err(causes) => vec![atlas_unresolved(project_root, atlas_rel, pointer, causes)],
+    check_loaded_atlas(
+        project_root,
+        pointer,
+        atlas_rel,
+        frame,
+        &load_atlas(project_root, atlas_rel),
+    )
+}
+
+/// [`check_atlas_reference`] past the load: the `L1151`/`L1152` set for `frame` against an atlas
+/// already loaded (or already failed), so a caller checking many references decodes each atlas once.
+pub(crate) fn check_loaded_atlas(
+    project_root: AssetRoot<'_>,
+    pointer: &str,
+    atlas_rel: &str,
+    frame: &str,
+    loaded: &Result<AtlasAsset, Vec<Diagnostic>>,
+) -> Vec<Diagnostic> {
+    match loaded {
+        Err(causes) => vec![atlas_unresolved(
+            project_root,
+            atlas_rel,
+            pointer,
+            causes.clone(),
+        )],
         Ok(asset) => match asset.frame(atlas_rel, frame, pointer) {
             Ok(_) => Vec::new(),
             Err(diagnostic) => vec![diagnostic],
@@ -452,7 +474,7 @@ fn atlas_unresolved(
 /// The `L1151` an atlas reference with no `frame` reports. Schema validation rejects the same shape
 /// before a scene ever instantiates ([`Sprite`]'s `validate_semantics`); this is the defensive twin
 /// for a world assembled in code, which reports rather than panics.
-fn atlas_without_frame(pointer: &str) -> Diagnostic {
+pub(crate) fn atlas_without_frame(pointer: &str) -> Diagnostic {
     Diagnostic::new(
         code::SPRITE_ATLAS_UNRESOLVED,
         "`atlas` is set, but no `frame` names the region to draw".to_string(),
@@ -1923,7 +1945,6 @@ fn extract_decals(
                     index,
                     "base_color_texture",
                     decal.base_color_texture.as_ref(),
-                    ColorSpace::Srgb,
                 ),
                 normal: decal_map(
                     project_root,
@@ -1932,7 +1953,6 @@ fn extract_decals(
                     index,
                     "normal_texture",
                     decal.normal_texture.as_ref(),
-                    ColorSpace::Linear,
                 ),
                 metallic_roughness: decal_map(
                     project_root,
@@ -1941,7 +1961,6 @@ fn extract_decals(
                     index,
                     "metallic_roughness_texture",
                     decal.metallic_roughness_texture.as_ref(),
-                    ColorSpace::Linear,
                 ),
                 normal_scale: decal.normal_texture.as_ref().map_or(1.0, |map| map.scale),
             },
@@ -1965,11 +1984,10 @@ fn decal_map(
     index: usize,
     field: &str,
     map: Option<&DecalMap>,
-    space: ColorSpace,
 ) -> Option<MeshTexture> {
     let map = map?;
     let rel = ludion_core::paths::normalize(&map.path);
-    match assets.map(&rel, space) {
+    match assets.map(&rel) {
         Ok(image) => Some(MeshTexture {
             image,
             wrap: match map.wrap {
@@ -2986,7 +3004,7 @@ impl RefLoader {
 }
 
 impl SceneAssets for RefLoader {
-    fn map(&mut self, _: &str, _: ColorSpace) -> Result<MapImage, Diagnostic> {
+    fn map(&mut self, _: &str) -> Result<MapImage, Diagnostic> {
         Err(Self::unresolved().remove(0))
     }
     fn texture(&mut self, _: &str) -> Result<Arc<TextureImage>, Diagnostic> {
@@ -3091,15 +3109,15 @@ pub(crate) fn asset_refs(world: &World, project_root: AssetRoot<'_>) -> AssetRef
         let Some(decal) = get::<Decal>(world, id) else {
             continue;
         };
-        for (map, space) in [
-            (&decal.base_color_texture, ColorSpace::Srgb),
-            (&decal.normal_texture, ColorSpace::Linear),
-            (&decal.metallic_roughness_texture, ColorSpace::Linear),
-        ] {
-            if let Some(map) = map {
-                refs.maps
-                    .insert((ludion_core::paths::normalize(&map.path), space));
-            }
+        for map in [
+            &decal.base_color_texture,
+            &decal.normal_texture,
+            &decal.metallic_roughness_texture,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            refs.maps.insert(ludion_core::paths::normalize(&map.path));
         }
     }
     refs

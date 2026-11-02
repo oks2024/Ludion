@@ -155,7 +155,7 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
             message,
             "`[cook]` is `targets = [\"desktop\", \"ios\"]`, `textures = true` and \
              `roots = [\"scenes/assets\"]` (project-relative, none overlapping an `[[import]] to`); \
-             `[[import]] max_texture_size` is a positive texel count",
+             `[[import]] max_texture_size` is a texel count of at least 4",
         )
     })?;
     manifest.voice_caps()?;
@@ -164,9 +164,9 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
 
 fn validate_cook(manifest: &Manifest) -> Result<(), String> {
     for (index, table) in manifest.imports.iter().enumerate() {
-        if table.max_texture_size == Some(0) {
+        if let Some(cap) = table.max_texture_size.filter(|cap| *cap < 4) {
             return Err(format!(
-                "`[[import]]` #{} `max_texture_size` = 0 would cook empty maps: drop the key to keep the source size",
+                "`[[import]]` #{} `max_texture_size` = {cap} is below one 4×4 block: use 4 or more, or drop the key to keep the source size",
                 index + 1
             ));
         }
@@ -597,6 +597,14 @@ mod tests {
         let err = parse(&table("max_texture_size = 0\n")).unwrap_err();
         assert_eq!(err.code, MANIFEST_INVALID);
         assert!(err.message.contains("max_texture_size"), "{}", err.message);
+        let err = parse(&table("max_texture_size = 3\n")).unwrap_err();
+        assert_eq!(err.code, MANIFEST_INVALID);
+        assert!(
+            err.message.contains("below one 4×4 block"),
+            "{}",
+            err.message
+        );
+        assert!(parse(&table("max_texture_size = 4\n")).is_ok());
         let err = parse(&table("max_size = 4\n")).unwrap_err();
         assert_eq!(err.code, MANIFEST_INVALID);
     }
