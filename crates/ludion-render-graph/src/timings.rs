@@ -19,15 +19,18 @@
 //! one queue timeline is proved, so the stamps are comparable across passes:
 //!
 //! 1. *Structural.* Both timed paths ([`Gpu::dump_timings_json`] and the render pipeline's frame
-//!    loop) record every pass into one encoder and one submit; recorders get no queue and never
-//!    submit, and wgpu exposes one queue per device.
+//!    loop) record every pass into one encoder and one submit, with the resolve in its own later
+//!    submit after that work completes; recorders get no queue and never submit, and wgpu exposes
+//!    one queue per device.
 //! 2. *Backend allowlist.* Vulkan, Dx12 and Metal report a span; GL and browser WebGPU (quantized
 //!    stamps, unpinned) stay `None`.
 //! 3. *Per frame, on the data.* A counter reset or wrap (last stamp not after the first) or a failed
 //!    sample (`0` or all-ones at either end) yields `None` for that frame.
 //!
 //! The hull, not last end minus first begin, because on a tile-based GPU an independent pass may
-//! start before the first or end after the last; an unwritten interior stamp is ignored.
+//! start before the first or end after the last; an unwritten interior stamp is ignored. A pass
+//! that draws nothing writes no end stamp on Metal, so a graph whose last pass draws nothing
+//! reports no span there.
 //! Per-pass deltas may overlap and must not be summed to get frame cost; the span is that number.
 
 use serde::Serialize;
@@ -221,15 +224,26 @@ impl Gpu {
                 );
             }
         }
-        encoder.resolve_query_set(&query_set, 0..query_count, &resolve_buffer, 0);
-        encoder.copy_buffer_to_buffer(
+        self.queue.submit([encoder.finish()]);
+        // Metal has not written the last pass's end stamp until the frame's command buffer completes.
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| timing_failure(format!("device poll failed: {error}")))?;
+
+        let mut resolve = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ludion-render-graph timing resolve"),
+            });
+        resolve.resolve_query_set(&query_set, 0..query_count, &resolve_buffer, 0);
+        resolve.copy_buffer_to_buffer(
             &resolve_buffer,
             0,
             &map_buffer,
             0,
             u64::from(query_count) * 8,
         );
-        self.queue.submit([encoder.finish()]);
+        self.queue.submit([resolve.finish()]);
 
         let (tx, rx) = std::sync::mpsc::channel();
         map_buffer
@@ -338,6 +352,29 @@ mod tests {
             frame_span_ms(&[100, u64::MAX, 200, 300], 1.0),
             Some(200.0 / MS)
         );
+    }
+
+    #[test]
+    fn a_resolve_before_completion_is_refused() {
+        let stamps = [
+            892_798_226_496_708,
+            892_798_226_514_416,
+            892_798_226_510_541,
+            0,
+        ];
+        assert_eq!(frame_span_ms(&stamps, 1.0), None);
+    }
+
+    #[test]
+    fn a_drawless_interior_pass_keeps_the_span() {
+        let stamps = [
+            892_804_303_481_541,
+            0,
+            892_804_303_500_333,
+            892_804_303_629_208,
+            892_804_303_649_750,
+        ];
+        assert_eq!(frame_span_ms(&stamps, 1.0), Some(168_209.0 / MS));
     }
 
     #[test]

@@ -9,6 +9,11 @@
 //! [`PassTimingRing::DEPTH`] frames' query sets are in flight at once, and
 //! [`try_collect_timings`](PassTimingRing::try_collect_timings) drains whichever is ready.
 //!
+//! A sample is resolved only after its frame's GPU work has finished: Metal has not written the
+//! last pass's end stamp before then. The frame files a completion callback; the next collect that
+//! sees it fire submits the resolve and requests the readback map, so a sample arrives a little
+//! later and nothing ever waits.
+//!
 //! Two deliberate divergences from the image ring:
 //!
 //! - **A full ring skips the frame's timing; it never blocks.** The image ring blocks on its oldest
@@ -78,7 +83,11 @@ struct Pending<S> {
 
 struct MappedSlot {
     slot: usize,
-    rx: Receiver<Result<(), wgpu::BufferAsyncError>>,
+    queries: u32,
+    /// Fires when the frame's GPU work finishes; `None` once the resolve is submitted.
+    done: Option<Receiver<()>>,
+    /// The readback map, requested only after the resolve.
+    rx: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 /// What a frame's timing does, decided before recording begins.
@@ -168,11 +177,54 @@ impl<S> PassTimingRing<S> {
     /// Never fails: a poll or map error costs that one sample (it is dropped, its slot freed) and
     /// leaves the render loop untouched.
     pub fn try_collect_timings(&mut self, gpu: &Gpu) -> Option<(S, FrameTiming)> {
-        if self.pending.front()?.mapped.is_some() && gpu.device.poll(wgpu::PollType::Poll).is_err()
-        {
-            return None;
+        if self.pending.front()?.mapped.is_some() {
+            if gpu.device.poll(wgpu::PollType::Poll).is_err() {
+                return None;
+            }
+            self.advance(gpu);
         }
         self.take_ready()
+    }
+
+    /// Submits the resolve and requests the readback map for every pending frame whose GPU work has
+    /// finished, oldest first, stopping at the first still in flight.
+    fn advance(&mut self, gpu: &Gpu) {
+        for index in 0..self.pending.len() {
+            let Some(mapped) = self.pending[index].mapped.as_mut() else {
+                continue;
+            };
+            let Some(done) = mapped.done.as_ref() else {
+                continue;
+            };
+            match done.try_recv() {
+                Err(TryRecvError::Empty) => return,
+                // The callback was dropped unfired; `take_ready` drops the sample.
+                Err(TryRecvError::Disconnected) => {
+                    mapped.done = None;
+                    continue;
+                }
+                Ok(()) => {}
+            }
+            mapped.done = None;
+            let (slot, queries) = (mapped.slot, mapped.queries);
+            let mut encoder = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("ludion-render-graph pass timing resolve"),
+                });
+            self.record_resolve(&mut encoder, slot, queries);
+            gpu.queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.slots[slot]
+                .map
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = tx.send(result);
+                });
+            if let Some(mapped) = self.pending[index].mapped.as_mut() {
+                mapped.rx = Some(rx);
+            }
+        }
     }
 
     /// Decides how the next frame is timed, given how many passes it schedules.
@@ -194,8 +246,8 @@ impl<S> PassTimingRing<S> {
         &self.slots[slot].queries
     }
 
-    /// Records the resolve + copy for a timed frame. Must be recorded into the same encoder as the
-    /// frame's passes, after them.
+    /// Records the resolve + copy for a timed frame, into an encoder submitted after the frame's
+    /// work has completed.
     pub(crate) fn record_resolve(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -213,21 +265,26 @@ impl<S> PassTimingRing<S> {
         );
     }
 
-    /// Files the frame as pending, mapping its readback. Called **after** the frame is submitted.
-    pub(crate) fn file(&mut self, plan: FramePlan, names: Vec<String>, stamp: S) {
+    /// Files the frame as pending. Called **after** the frame is submitted; `done` fires when its
+    /// GPU work finishes and is `None` only for a degraded sample.
+    pub(crate) fn file(
+        &mut self,
+        plan: FramePlan,
+        names: Vec<String>,
+        stamp: S,
+        done: Option<Receiver<()>>,
+    ) {
         let mapped = match plan {
             FramePlan::Skip => return,
             FramePlan::Degraded => None,
-            FramePlan::Timed { slot, .. } => {
-                let (tx, rx) = std::sync::mpsc::channel();
-                self.slots[slot]
-                    .map
-                    .slice(..)
-                    .map_async(wgpu::MapMode::Read, move |result| {
-                        let _ = tx.send(result);
-                    });
+            FramePlan::Timed { slot, queries } => {
                 self.next_slot = (slot + 1) % Self::DEPTH;
-                Some(MappedSlot { slot, rx })
+                Some(MappedSlot {
+                    slot,
+                    queries,
+                    done,
+                    rx: None,
+                })
             }
         };
         self.pending.push_back(Pending {
@@ -241,11 +298,20 @@ impl<S> PassTimingRing<S> {
     fn take_ready(&mut self) -> Option<(S, FrameTiming)> {
         match &self.pending.front()?.mapped {
             None => {}
-            Some(mapped) => match mapped.rx.try_recv() {
-                Ok(Ok(())) => {}
-                Err(TryRecvError::Empty) => return None,
-                // A failed map costs this sample and frees its slot; the ring keeps running.
-                Ok(Err(_)) | Err(TryRecvError::Disconnected) => {
+            Some(mapped) => match (&mapped.done, &mapped.rx) {
+                // Still in flight, or completed but not yet resolved.
+                (Some(_), _) => return None,
+                (None, Some(rx)) => match rx.try_recv() {
+                    Ok(Ok(())) => {}
+                    Err(TryRecvError::Empty) => return None,
+                    // A failed map costs this sample and frees its slot; the ring keeps running.
+                    Ok(Err(_)) | Err(TryRecvError::Disconnected) => {
+                        self.pending.pop_front();
+                        return None;
+                    }
+                },
+                // Completion never arrived; a failed sample frees its slot like a failed map.
+                (None, None) => {
                     self.pending.pop_front();
                     return None;
                 }
@@ -344,7 +410,7 @@ mod tests {
 
         let plan = ring.plan_frame(4);
         assert!(matches!(plan, FramePlan::Degraded));
-        ring.file(plan, names(4), 7);
+        ring.file(plan, names(4), 7, None);
 
         let (stamp, timing) = ring
             .take_ready()
@@ -365,7 +431,7 @@ mod tests {
         for stamp in 0..PassTimingRing::<u64>::DEPTH as u64 {
             let plan = ring.plan_frame(2);
             assert!(matches!(plan, FramePlan::Degraded));
-            ring.file(plan, names(2), stamp);
+            ring.file(plan, names(2), stamp, None);
         }
         assert!(matches!(ring.plan_frame(2), FramePlan::Skip));
 

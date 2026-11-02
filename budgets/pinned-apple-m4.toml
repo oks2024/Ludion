@@ -35,13 +35,10 @@ frame_total_ms = 0.5
 [passes]
 scene           = 0.85   # 0.418 measured (median of four)
 reflections     = 0.97   # 0.482 measured (median of four)
-# Metal's descriptor-level timestamps report composite as 0.0 ms — an Apple stage-boundary sampling
-# artifact (the final pass's end timestamp coincides with the encoder boundary), not a free pass. A
-# ceiling calibrated off a 0.0 median would be meaningless, so this is a small sane placeholder in the
-# range of the measurable full-screen passes above, comfortably above any plausible real composite cost.
-# Re-confirmed 2026-07-27 after the defaults flip put AgX plus the output dither in this pass: still
-# 0.0000 on all six runs, so the placeholder stands unchanged.
-composite       = 0.5
+# Metal publishes the last pass's end stamp only once the frame's command buffer completes; the
+# timing readback used to resolve before that and read composite as 0.0. It now resolves after
+# completion. Measured 2026-11-02 over three 120-frame release runs: 0.501 / 0.501 / 0.497.
+composite       = 1.0
 
 # The bloom chain as one effect, summing whichever of its eleven passes the run measured — the unit
 # both Windows twins use. Measured 2026-07-27 over six 120-frame release runs at 1920x1080: 1.806 /

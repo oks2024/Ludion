@@ -786,9 +786,6 @@ impl Gpu {
         let watch = Watch::start(traced);
         self.record_external_passes(schedule, frame_resources, &mut encoder, recorder, query_set);
         ring.trace_segment(Segment::Record, watch);
-        if let (Some(timing), FramePlan::Timed { slot, queries }) = (timing.as_deref(), &plan) {
-            timing.record_resolve(&mut encoder, *slot, *queries);
-        }
         // The timed frame's stamp is cloned only when a sample will actually be filed.
         let timed_stamp = match plan {
             FramePlan::Skip => None,
@@ -821,7 +818,14 @@ impl Gpu {
                 .into_iter()
                 .map(str::to_owned)
                 .collect();
-            timing.file(plan, names, timed_stamp);
+            let done = matches!(plan, FramePlan::Timed { .. }).then(|| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.queue.on_submitted_work_done(move || {
+                    let _ = tx.send(());
+                });
+                rx
+            });
+            timing.file(plan, names, timed_stamp, done);
         }
         // Raised only after the frame's own bookkeeping is closed, so a dying surface leaves the
         // ring and the timing ring in the state the frame actually left them in.

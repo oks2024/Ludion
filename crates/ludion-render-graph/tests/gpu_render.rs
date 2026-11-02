@@ -6,8 +6,8 @@
 //! byte-identical pixels.
 
 use ludion_render_graph::{
-    Extent2d, Gpu, PassRecorder, PassTiming, PassTimingRing, RecordedPass, RenderGraph, ResourceId,
-    Schedule, TextureDesc, build_graph, schedule,
+    Extent2d, FrameTiming, Gpu, PassRecorder, PassTiming, PassTimingRing, RecordedPass,
+    RenderGraph, ResourceId, Schedule, TextureDesc, build_graph, schedule,
 };
 
 /// Records every pass of the proving graph as a bare clear of its color target.
@@ -48,19 +48,25 @@ fn timed_frames(
     }
     drain_timings(gpu, timing, &mut collected);
     collected
+        .into_iter()
+        .map(|(stamp, sample)| (stamp, sample.passes))
+        .collect()
 }
 
-/// Waits for every in-flight map, then drains whatever the timing ring has ready.
+/// Drains the timing ring in two rounds of wait-then-collect: a sample needs one completion for
+/// its frame, which releases its resolve, and one for the resolve itself.
 fn drain_timings(
     gpu: &Gpu,
     timing: &mut PassTimingRing<usize>,
-    into: &mut Vec<(usize, Vec<PassTiming>)>,
+    into: &mut Vec<(usize, FrameTiming)>,
 ) {
-    gpu.device()
-        .poll(wgpu::PollType::wait_indefinitely())
-        .unwrap();
-    while let Some(sample) = timing.try_collect_timings(gpu) {
-        into.push((sample.0, sample.1.passes));
+    for _ in 0..2 {
+        gpu.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        while let Some(sample) = timing.try_collect_timings(gpu) {
+            into.push(sample);
+        }
     }
 }
 
@@ -575,15 +581,21 @@ fn needs_gpu_compute_pass_reaches_the_pass_timing_ring() {
     drain_timings(&gpu, &mut timing, &mut collected);
 
     assert_eq!(collected.len(), 2, "one timing set per streamed frame");
-    for (stamp, passes) in &collected {
-        let names: Vec<&str> = passes.iter().map(|p| p.name.as_str()).collect();
+    for (stamp, sample) in &collected {
+        let names: Vec<&str> = sample.passes.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(
             names,
             ["inject", "shade"],
             "frame {stamp} must name the compute pass in scheduled order",
         );
         if timing.timestamps_supported() {
-            assert!(passes.iter().all(|p| p.gpu_time_ms.is_some()));
+            assert!(sample.passes.iter().all(|p| p.gpu_time_ms.is_some()));
+            if ["Vulkan", "Dx12", "Metal"].contains(&gpu.adapter_backend()) {
+                assert!(
+                    sample.frame_gpu_time_ms.is_some_and(|ms| ms > 0.0),
+                    "frame {stamp} must report a frame span",
+                );
+            }
         }
     }
 }

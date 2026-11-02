@@ -34,6 +34,6 @@ ssr = 30.0   # 14.906 measured (median of three)
 scene = 1.35         # 0.671 measured
 reflections = 1.8    # 0.883 measured
 
-# Deliberately absent: `composite` (Metal reads it as 0.0, gated by a placeholder in
-# `budgets/pinned-apple-m4.toml`), `transparents` and the `bloom` group (gated on `lights.yaml` and the
-# stress scenes), `frame_total_ms` (the CLI links no game systems) and `[systems]`.
+# Deliberately absent: `composite` (gated by `budgets/pinned-apple-m4.toml`), `transparents` and the
+# `bloom` group (gated on `lights.yaml` and the stress scenes), `frame_total_ms` (the CLI links no
+# game systems) and `[systems]`.

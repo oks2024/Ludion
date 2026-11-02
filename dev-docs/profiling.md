@@ -111,10 +111,13 @@ encode/send it measures is that viewer's own delivery cost, not one the game pay
 resolves, no new query: the hull (max − min of written stamps) of one frame's begin/end stamps
 (`frame_span_ms`, `ludion-render-graph/src/timings.rs`). It is reported only where one queue timeline is
 proved: (1) structurally, both timed paths (`collect_pass_timings`, `render_frame_unguarded`) record every
-pass into one encoder and one submit and recorders get no queue; (2) by backend, Vulkan, Dx12 and Metal
+pass into one encoder and one submit, with the resolve in its own later submit after that work completes
+(Metal has not written the last end stamp before then; the live ring files a completion callback and
+resolves on a later collect, never waiting), and recorders get no queue; (2) by backend, Vulkan, Dx12 and Metal
 report it and GL and browser WebGPU stay `null` (unpinned, quantized stamps); (3) per frame, on the data: a
 last stamp not after the first (counter reset) or an unwritten (`0` / all-ones) first or last stamp drops
-that frame. The hull rather than last end minus first begin because a tile-based GPU may start an
+that frame; a pass that draws nothing writes no end stamp on Metal, so a graph whose last pass draws
+nothing reports `null` there. The hull rather than last end minus first begin because a tile-based GPU may start an
 independent pass before the first or end it after the last; an unwritten interior stamp is ignored.
 Per-pass medians are not additive (Metal overcounts), so the span is the frame cost. Offline, the
 tail's `max_frame` is the position among the repeated renders of one extracted frame.
