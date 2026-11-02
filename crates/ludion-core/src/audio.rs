@@ -1,8 +1,8 @@
 //! The plain-data audio types shared across the sim→playback boundary.
 //!
-//! An [`AudioEvent`] is a *request to play a sound* — nothing more: a content-root-relative WAV path
-//! and a linear gain. An [`AudioMessage`] is the full vocabulary of that boundary: a one-shot, or the
-//! declarative sync/stop of a [loop](LoopId). Neither carries a wall clock, a device handle, or
+//! An [`AudioEvent`] is a *request to play a sound* — nothing more: a content-root-relative WAV path,
+//! a linear gain and a stereo pan. An [`AudioMessage`] is the full vocabulary of that boundary: a
+//! one-shot, or the declarative sync/stop of a [loop](LoopId). Neither carries a wall clock, a device handle, or
 //! decoded samples, so both are safe to push from a deterministic game system (the engine's
 //! `AudioQueue` resource holds these) and to hand across a channel to the out-of-sim playback sink
 //! (`ludion-audio`), which is the one crate that ever resolves the path and touches an audio device.
@@ -37,17 +37,20 @@ pub struct AudioEvent {
     pub sound: String,
     /// A linear gain multiplier applied to the sound's samples (`1.0` leaves it unchanged).
     pub gain: f32,
+    /// Stereo position: `-1.0` hard left, `0.0` centre, `1.0` hard right.
+    pub pan: f32,
     /// Which mixdown bus the sound belongs to.
     pub category: AudioCategory,
 }
 
 impl AudioEvent {
-    /// A one-shot on the [`Sfx`](AudioCategory::Sfx) bus — what a game sound effect is. An ambient
-    /// one-shot is a struct literal, spelling its category out.
+    /// A centred one-shot on the [`Sfx`](AudioCategory::Sfx) bus — what a game sound effect is. An
+    /// ambient one-shot is a struct literal, spelling its category and pan out.
     pub fn new(sound: impl Into<String>, gain: f32) -> AudioEvent {
         AudioEvent {
             sound: sound.into(),
             gain,
+            pan: 0.0,
             category: AudioCategory::Sfx,
         }
     }
@@ -213,6 +216,7 @@ pub enum LoopId {
 ///     id: LoopId::Sound("sfx/wind.wav".to_string()),
 ///     sound: "sfx/wind.wav".to_string(),
 ///     gain: 0.4,
+///     pan: 0.0,
 ///     category: AudioCategory::Ambient,
 /// };
 /// assert_ne!(message, AudioMessage::StopAllLoops);
@@ -229,6 +233,8 @@ pub enum AudioMessage {
         sound: String,
         /// A linear gain multiplier applied to the loop's samples.
         gain: f32,
+        /// Stereo position: `-1.0` hard left, `0.0` centre, `1.0` hard right.
+        pan: f32,
         /// Which mixdown bus the loop belongs to.
         category: AudioCategory,
     },

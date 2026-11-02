@@ -65,7 +65,8 @@ use serde_json::Value;
 
 use crate::asset_cache::AssetCache;
 use crate::audio::{
-    AudioLogEntry, AudioMessage, AudioQueue, CategoryGains, LoopId, Queued, SentLoop, audible_gain,
+    AudioDistance, AudioListener, AudioLogEntry, AudioMessage, AudioPan, AudioQueue, CategoryGains,
+    LoopId, Queued, SentLoop, audible_voice,
 };
 use crate::builtin_registry;
 use crate::components::{AudioEmitter, Camera, Name, ReflectionProbe, Transform};
@@ -258,6 +259,13 @@ pub struct Engine {
     /// it wires the playback sink up. Never simulation state, so it enters no `WorldHash` and no
     /// snapshot.
     pub(crate) category_gains: CategoryGains,
+    /// How positional sounds measure distance, from
+    /// [`EngineBuilder::audio_distance`](crate::EngineBuilder::audio_distance). Not simulation
+    /// state: it shapes the audio stream only, so it enters no `WorldHash` and no snapshot.
+    pub(crate) audio_distance: AudioDistance,
+    /// Whether positional sounds are panned, from
+    /// [`EngineBuilder::audio_pan`](crate::EngineBuilder::audio_pan). Not simulation state.
+    pub(crate) audio_pan: AudioPan,
     /// The plane this game's 2D queries live in, from [`EngineBuilder::plane`](crate::EngineBuilder::plane).
     /// The engine mirrors it onto every world it builds as the [`Plane`] resource, which is how a
     /// query reads it; the field is the persistent copy that survives a resource wipe.
@@ -730,6 +738,8 @@ impl Engine {
             project_root,
             save_root: None,
             category_gains: CategoryGains::default(),
+            audio_distance: AudioDistance::default(),
+            audio_pan: AudioPan::default(),
             plane: Plane::default(),
             asset_cache: AssetCache::new(),
             render_size,
@@ -1889,12 +1899,20 @@ impl Engine {
                     position,
                     range,
                 } => {
-                    let Some(gain) = listener
-                        .and_then(|listener| audible_gain(event.gain, range, listener, position))
-                    else {
+                    let Some((gain, pan)) = listener.as_ref().and_then(|listener| {
+                        audible_voice(
+                            event.gain,
+                            range,
+                            listener,
+                            position,
+                            self.audio_distance,
+                            self.audio_pan,
+                        )
+                    }) else {
                         continue;
                     };
                     event.gain = gain;
+                    event.pan = pan;
                     self.emit_audio(frame, AudioMessage::OneShot(event));
                 }
             }
@@ -1927,8 +1945,10 @@ impl Engine {
     /// the gains and the message order are a pure function of the world.
     ///
     /// An emitter syncs when it becomes audible, then again only when its gain moves past
-    /// [`RESYNC_GAIN_RATIO`](crate::audio::RESYNC_GAIN_RATIO) of the last gain sent or its sound or bus
-    /// changes; the sink holds the loop in between.
+    /// [`RESYNC_GAIN_RATIO`](crate::audio::RESYNC_GAIN_RATIO) of the last gain sent, its pan moves
+    /// past [`RESYNC_PAN_STEP`](crate::audio::RESYNC_PAN_STEP), or its sound or bus changes; the sink
+    /// holds the loop in between. Under [`AudioPan::Centred`] the pan is always `0.0`, so it never
+    /// triggers a sync.
     ///
     /// The liveness diff is what makes despawning an emitter enough: an id that was audible last tick
     /// and is not now — despawned, muted below the audibility epsilon, moved out of range, or with its
@@ -1956,14 +1976,20 @@ impl Engine {
             let Some(at) = crate::hierarchy::world_transform(world, id) else {
                 continue;
             };
-            let Some(gain) =
-                audible_gain(emitter.gain, emitter.range, listener, at.trs.translation)
-            else {
+            let Some((gain, pan)) = audible_voice(
+                emitter.gain,
+                emitter.range,
+                &listener,
+                at.trs.translation,
+                self.audio_distance,
+                self.audio_pan,
+            ) else {
                 continue;
             };
             audible.insert(id);
             let sent = self.audible_emitters.get(&id);
-            if sent.is_some_and(|sent| sent.is_current(&emitter.sound, gain, emitter.category)) {
+            if sent.is_some_and(|sent| sent.is_current(&emitter.sound, gain, pan, emitter.category))
+            {
                 continue;
             }
             self.audible_emitters.insert(
@@ -1971,6 +1997,7 @@ impl Engine {
                 SentLoop {
                     sound: emitter.sound.clone(),
                     gain,
+                    pan,
                     category: emitter.category,
                 },
             );
@@ -1978,6 +2005,7 @@ impl Engine {
                 id: LoopId::Entity(id),
                 sound: emitter.sound.clone(),
                 gain,
+                pan,
                 category: emitter.category,
             });
         }
@@ -3224,6 +3252,16 @@ impl Engine {
     /// authored it. A host reads it here when it wires the playback sink up.
     pub fn category_gains(&self) -> CategoryGains {
         self.category_gains
+    }
+
+    /// How positional sounds measure distance, as the builder authored it.
+    pub fn audio_distance(&self) -> AudioDistance {
+        self.audio_distance
+    }
+
+    /// Whether positional sounds are panned across the stereo field, as the builder authored it.
+    pub fn audio_pan(&self) -> AudioPan {
+        self.audio_pan
     }
 
     /// The plane this game's 2D queries live in, as the builder authored it.
@@ -5917,16 +5955,24 @@ pub(crate) fn authored_names(scene: &Scene) -> StableSet<String> {
 ///
 /// There is no separate `Listener` component — every scene that renders already says where the
 /// viewpoint is, and a second way to say it would be a second thing to keep in sync. A camera with no
-/// [`Transform`] listens from the origin, exactly as it renders from there.
-fn audio_listener(world: &mut World) -> Option<[f32; 3]> {
+/// [`Transform`] listens from the origin facing the default orientation (`+X` right, `+Y` up), exactly
+/// as it renders from there. The camera's rotation gives the stereo axes.
+fn audio_listener(world: &mut World) -> Option<AudioListener> {
     // A typed join over the `Camera` storage, not a per-entity probe of every live entity — free in
     // a scene with none, and `query_ids` yields ascending `EntityId` so the first row is the lowest.
     let (id, _) = world.query_ids::<(&Camera,)>().next()?;
-    Some(
-        crate::hierarchy::world_transform(world, id)
-            .map(|pose| pose.trs.translation)
-            .unwrap_or_default(),
-    )
+    Some(match crate::hierarchy::world_transform(world, id) {
+        Some(pose) => AudioListener {
+            position: pose.trs.translation,
+            right: ludion_core::math::quat_rotate(pose.trs.rotation, [1.0, 0.0, 0.0]),
+            up: ludion_core::math::quat_rotate(pose.trs.rotation, [0.0, 1.0, 0.0]),
+        },
+        None => AudioListener {
+            position: [0.0; 3],
+            right: [1.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+        },
+    })
 }
 
 #[cfg(test)]

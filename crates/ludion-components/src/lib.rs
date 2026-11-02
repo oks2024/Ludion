@@ -4440,8 +4440,9 @@ pub struct ParentJoint {
 /// falloff is the same `clamp(1 − distance/range, 0, 1)` shape, and a scene may place any number.
 ///
 /// **No system to register.** The engine syncs every emitter at the frame boundary, beside the audio
-/// drain: it measures the ground-plane `(x, z)` distance from the listener (the lowest-`EntityId`
-/// entity carrying a [`Camera`]), and keeps the loop at `gain × falloff` under the emitter's own
+/// drain: it measures the distance from the listener (the lowest-`EntityId` entity carrying a
+/// [`Camera`]; ground plane unless the game sets `audio_distance`), and keeps the loop at
+/// `gain × falloff` under the emitter's own
 /// entity identity. An emitter that goes inaudible — out of range, muted, despawned, or with the
 /// component removed — is stopped on the tick it drops out. A scene with no camera syncs nothing that
 /// tick.
@@ -4463,7 +4464,7 @@ pub struct AudioEmitter {
     #[schemars(range(min = 0.0))]
     #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
     pub gain: f32,
-    /// Ground-plane distance at which the emitter falls silent (default `10.0`). Strictly positive and
+    /// Distance at which the emitter falls silent (default `10.0`). Strictly positive and
     /// finite — zero, negative, or non-finite is `L1136`.
     #[serde(default = "ten")]
     pub range: f32,

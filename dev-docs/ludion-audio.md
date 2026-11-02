@@ -27,13 +27,17 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   "this is the last page"; `is_feeding` includes staged samples so a
   once track's tail drains; `Converter::retarget` rebuilds on a reopened track's changed format.
 - `crates/ludion-core/src/audio.rs` — the shared types this crate receives: `AudioEvent` (sound path
-  + gain + category, `AudioEvent::new` defaulting to `Sfx`), `AudioMessage` (one-shot / loop sync /
+  + gain + pan + category, `AudioEvent::new` defaulting to a centred `Sfx`), `AudioMessage` (one-shot / loop sync /
   loop stop / blanket stop / music play / music stop), `LoopId`, `AudioCategory`, and `CategoryGains` (the mixdown the game
   authors on its builder).
 - `crates/ludion-engine/src/audio.rs` — the sim-side seam: `AudioQueue` (the resource game systems
   push into, with `play`, `play_at`/`push_at` (positional one-shots) and `loop_start`/`loop_set_gain`/`loop_stop`, `music_play`/`music_play_once`/`music_stop`), `AudioLogEntry` (the
   frame-stamped log the engine drains into, independent of whether a sink is attached), and
-  `emitter_gain`/`audible_gain`/`AUDIBILITY_EPSILON`, the falloff and audibility rule the emitters and `play_at` share.
+  `emitter_gain`/`audible_gain`/`audible_voice`/`stereo_pan`/`AUDIBILITY_EPSILON`, the falloff, pan and audibility rule the emitters and `play_at` share, and the
+  `AudioDistance`/`AudioPan` enums the builder authors.
+- `crates/ludion-audio/src/lib.rs` pan: `Voice` carries a `Panner` (envelope plus cached
+  constant-power gains) applied in `advance_into` on two-channel devices only; a pan of exactly `0.0`
+  takes the unpanned path, bit-identical to a voice with no pan.
 - `crates/ludion-components/src/lib.rs` + `engine.rs` — the declarative path: the `AudioEmitter`
   component (`L1136`: `range` must be positive and finite) and `Engine::sync_audio_emitters`, the
   frame-boundary step beside `drain_audio`.

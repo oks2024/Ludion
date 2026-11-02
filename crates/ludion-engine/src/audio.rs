@@ -71,10 +71,12 @@ impl AudioQueue {
 
     /// Queues an [`AudioEvent`] to play once from `position` in the world. At the frame boundary its
     /// gain is resolved against the listener (the camera) with the [`AudioEmitter`](crate::AudioEmitter)
-    /// falloff — ground-plane distance, `range` a hard cutoff. Out of range, below audibility, or with
-    /// no camera, nothing is sent or logged (and it is not retried); otherwise it is an ordinary
-    /// one-shot at the attenuated gain. [`play_at`](Self::play_at) is the `Sfx` convenience; this is
-    /// the way to place an ambient one-shot.
+    /// falloff — distance per the game's [`AudioDistance`], `range` a hard cutoff. Out of range, below
+    /// audibility, or with no camera, nothing is sent or logged (and it is not retried); otherwise it
+    /// is an ordinary one-shot at the attenuated gain, and under [`AudioPan::Stereo`] carries the
+    /// pan of its side of the listener (the event's own `pan` is overwritten).
+    /// [`play_at`](Self::play_at) is the `Sfx` convenience; this is the way to place an ambient
+    /// one-shot.
     pub fn push_at(&mut self, mut event: AudioEvent, position: [f32; 3], range: f32) {
         event.gain = self.finite_gain(&event.sound, event.gain);
         self.pending.push(Queued::At {
@@ -87,9 +89,10 @@ impl AudioQueue {
     /// Convenience: queues a sound by path and gain (`1.0` is unattenuated) to play once from
     /// `position`, on the [`AudioCategory::Sfx`] bus. The gain is resolved at the frame boundary
     /// against the listener (the camera) with the [`AudioEmitter`](crate::AudioEmitter) falloff —
-    /// ground-plane distance, `range` a hard cutoff. Out of range, below audibility, or with no
-    /// camera, nothing is sent or logged; once resolved it is an ordinary one-shot at the attenuated
-    /// gain. An ambient one-shot goes through [`push_at`](Self::push_at).
+    /// distance per the game's [`AudioDistance`], `range` a hard cutoff. Out of range, below
+    /// audibility, or with no camera, nothing is sent or logged; once resolved it is an ordinary
+    /// one-shot at the attenuated gain, panned under [`AudioPan::Stereo`]. An ambient one-shot goes
+    /// through [`push_at`](Self::push_at).
     ///
     /// ```
     /// # use ludion_engine::AudioQueue;
@@ -124,6 +127,7 @@ impl AudioQueue {
             id: LoopId::Sound(sound.clone()),
             sound,
             gain,
+            pan: 0.0,
             category: AudioCategory::Ambient,
         }));
     }
@@ -221,28 +225,69 @@ pub(crate) const AUDIBILITY_EPSILON: f32 = 1e-3;
 /// over a few milliseconds, so the step is smooth.
 pub(crate) const RESYNC_GAIN_RATIO: f32 = 0.01;
 
+/// How far an audible emitter's pan may drift from the last one sent before it is sent again: 1% of
+/// the stereo field, far under what a listener hears; the sink slews it over a few milliseconds.
+pub(crate) const RESYNC_PAN_STEP: f32 = 0.02;
+
+/// Within this distance of the listener a positional sound's pan scales down toward centre, so a
+/// sound passing through the listener never jumps from one side to the other.
+pub(crate) const PAN_INNER_RADIUS: f32 = 0.5;
+
+/// How a positional sound's distance to the listener is measured: the game authors it once on the
+/// builder (`EngineBuilder::audio_distance`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AudioDistance {
+    /// Ground-plane distance (`x`, `z`): height above the listener does not attenuate. The default.
+    #[default]
+    Planar,
+    /// Full three-dimensional distance: a sound overhead is as far as one beside the listener.
+    Spatial,
+}
+
+/// Whether positional sounds are placed across the stereo field: the game authors it once on the
+/// builder (`EngineBuilder::audio_pan`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AudioPan {
+    /// Every positional sound is centred (`pan == 0.0`): the stream of a game that never opts in.
+    /// The default.
+    #[default]
+    Centred,
+    /// A positional sound carries a pan from the listener's right and horizontal plane.
+    Stereo,
+}
+
 /// The last [`AudioMessage::LoopSync`] sent for an emitter in earshot: the filter that keeps a
 /// static emitter from resending itself every tick.
 pub(crate) struct SentLoop {
     pub(crate) sound: String,
     pub(crate) gain: f32,
+    pub(crate) pan: f32,
     pub(crate) category: AudioCategory,
 }
 
 impl SentLoop {
-    /// Whether a sync of `sound` at `gain` on `category` would say nothing new: the same sound and
-    /// bus, and a gain within [`RESYNC_GAIN_RATIO`] of the one sent.
-    pub(crate) fn is_current(&self, sound: &str, gain: f32, category: AudioCategory) -> bool {
+    /// Whether a sync of `sound` at `gain` and `pan` on `category` would say nothing new: the same
+    /// sound and bus, a gain within [`RESYNC_GAIN_RATIO`] and a pan within [`RESYNC_PAN_STEP`] of
+    /// the ones sent.
+    pub(crate) fn is_current(
+        &self,
+        sound: &str,
+        gain: f32,
+        pan: f32,
+        category: AudioCategory,
+    ) -> bool {
         self.sound == sound
             && self.category == category
             && (gain - self.gain).abs() <= self.gain * RESYNC_GAIN_RATIO
+            && (pan - self.pan).abs() <= RESYNC_PAN_STEP
     }
 }
 
 /// The gain an [`AudioEmitter`](crate::AudioEmitter) sounds at from `listener`: its authored `gain`
-/// attenuated by `clamp(1 − distance/range, 0, 1)`, where distance is measured on the ground plane
-/// (`x`, `z`) only — the [`PointLight`](crate::PointLight) falloff, one dimension lighter, because
-/// height above the ground is not something a listener hears.
+/// attenuated by `clamp(1 − distance/range, 0, 1)` — the [`PointLight`](crate::PointLight) falloff.
+/// Under [`AudioDistance::Planar`] (the default) distance is measured on the ground plane (`x`, `z`)
+/// only, so height above the ground does not attenuate; under [`AudioDistance::Spatial`] it is the
+/// full three-dimensional distance.
 ///
 /// `range` is a hard cutoff: an emitter exactly at `range` is exactly `0.0`, and one beyond it stays
 /// `0.0`. A non-positive `range` is rejected at authoring time (`L1136`); should one reach here from
@@ -250,21 +295,95 @@ impl SentLoop {
 /// check — a non-positive or non-finite `range` is silent rather than the falloff formula's `1.0 −
 /// distance/range` saturating to full gain at every distance (a negative `range` makes that quotient
 /// negative, and `clamp` cannot rescue a fraction that never crosses zero).
-pub(crate) fn emitter_gain(gain: f32, range: f32, listener: [f32; 3], emitter: [f32; 3]) -> f32 {
+pub(crate) fn emitter_gain(
+    gain: f32,
+    range: f32,
+    listener: [f32; 3],
+    emitter: [f32; 3],
+    distance: AudioDistance,
+) -> f32 {
     if !range.is_finite() || range <= 0.0 {
         return 0.0;
     }
     let dx = emitter[0] - listener[0];
     let dz = emitter[2] - listener[2];
-    let distance = ludion_core::math::sqrt(dx * dx + dz * dz);
-    gain * (1.0 - distance / range).clamp(0.0, 1.0)
+    let squared = match distance {
+        AudioDistance::Planar => dx * dx + dz * dz,
+        AudioDistance::Spatial => {
+            let dy = emitter[1] - listener[1];
+            dx * dx + dy * dy + dz * dz
+        }
+    };
+    gain * (1.0 - ludion_core::math::sqrt(squared) / range).clamp(0.0, 1.0)
 }
 
 /// The gain a sound placed at `at` reaches `listener` with, or `None` when it is inaudible there —
 /// the one audibility rule the AudioEmitter sync and play_at share.
-pub(crate) fn audible_gain(gain: f32, range: f32, listener: [f32; 3], at: [f32; 3]) -> Option<f32> {
-    let gain = emitter_gain(gain, range, listener, at);
+pub(crate) fn audible_gain(
+    gain: f32,
+    range: f32,
+    listener: [f32; 3],
+    at: [f32; 3],
+    distance: AudioDistance,
+) -> Option<f32> {
+    let gain = emitter_gain(gain, range, listener, at, distance);
     (gain.is_finite() && gain > AUDIBILITY_EPSILON).then_some(gain)
+}
+
+/// The listener's pose for stereo placement: where the ear is, and which way is right and up.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AudioListener {
+    pub(crate) position: [f32; 3],
+    pub(crate) right: [f32; 3],
+    pub(crate) up: [f32; 3],
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// Where a sound at `at` sits across the listener's stereo field, `-1.0` (left) to `1.0` (right).
+///
+/// The offset is projected onto the listener's horizontal plane (perpendicular to `up`), so height
+/// never moves a sound sideways: dead ahead, behind and straight overhead are exactly `0.0`. Inside
+/// [`PAN_INNER_RADIUS`] the side is scaled down linearly by `len / PAN_INNER_RADIUS`, so a sound on
+/// top of the listener is centred and the pan never jumps as it passes through them.
+pub(crate) fn stereo_pan(listener: &AudioListener, at: [f32; 3]) -> f32 {
+    let d = [
+        at[0] - listener.position[0],
+        at[1] - listener.position[1],
+        at[2] - listener.position[2],
+    ];
+    let up = dot(d, listener.up);
+    let p = [
+        d[0] - listener.up[0] * up,
+        d[1] - listener.up[1] * up,
+        d[2] - listener.up[2] * up,
+    ];
+    let len = ludion_core::math::sqrt(dot(p, p));
+    if len == 0.0 {
+        return 0.0;
+    }
+    (dot(p, listener.right) / len * (len / PAN_INNER_RADIUS).min(1.0)).clamp(-1.0, 1.0)
+}
+
+/// The gain and pan a sound placed at `at` reaches `listener` with, or `None` when it is inaudible
+/// there: [`audible_gain`] plus, under [`AudioPan::Stereo`], the [`stereo_pan`]. A
+/// [`Centred`](AudioPan::Centred) game gets a literal `0.0` with no pan computed.
+pub(crate) fn audible_voice(
+    gain: f32,
+    range: f32,
+    listener: &AudioListener,
+    at: [f32; 3],
+    distance: AudioDistance,
+    pan: AudioPan,
+) -> Option<(f32, f32)> {
+    let gain = audible_gain(gain, range, listener.position, at, distance)?;
+    let pan = match pan {
+        AudioPan::Centred => 0.0,
+        AudioPan::Stereo => stereo_pan(listener, at),
+    };
+    Some((gain, pan))
 }
 
 /// One drained [`AudioMessage`], stamped with the frame during which it was emitted.
@@ -367,19 +486,44 @@ mod tests {
         let sent = SentLoop {
             sound: "bell.wav".to_string(),
             gain: 0.6,
+            pan: 0.0,
             category: AudioCategory::Ambient,
         };
-        assert!(sent.is_current("bell.wav", 0.605, AudioCategory::Ambient));
-        assert!(!sent.is_current("bell.wav", 0.61, AudioCategory::Ambient));
-        assert!(!sent.is_current("gong.wav", 0.6, AudioCategory::Ambient));
-        assert!(!sent.is_current("bell.wav", 0.6, AudioCategory::Sfx));
+        assert!(sent.is_current("bell.wav", 0.605, 0.0, AudioCategory::Ambient));
+        assert!(!sent.is_current("bell.wav", 0.61, 0.0, AudioCategory::Ambient));
+        assert!(!sent.is_current("gong.wav", 0.6, 0.0, AudioCategory::Ambient));
+        assert!(!sent.is_current("bell.wav", 0.6, 0.0, AudioCategory::Sfx));
+    }
+
+    #[test]
+    fn a_resync_needs_a_pan_move_past_the_step() {
+        let sent = SentLoop {
+            sound: "bell.wav".to_string(),
+            gain: 0.6,
+            pan: 0.3,
+            category: AudioCategory::Ambient,
+        };
+        assert!(sent.is_current(
+            "bell.wav",
+            0.6,
+            0.3 + RESYNC_PAN_STEP / 2.0,
+            AudioCategory::Ambient
+        ));
+        assert!(sent.is_current(
+            "bell.wav",
+            0.6,
+            0.3 - RESYNC_PAN_STEP / 2.0,
+            AudioCategory::Ambient
+        ));
+        assert!(!sent.is_current("bell.wav", 0.6, 0.33, AudioCategory::Ambient));
+        assert!(!sent.is_current("bell.wav", 0.6, 0.0, AudioCategory::Ambient));
     }
 
     /// The falloff at the four distances that pin its shape: full gain on top of the emitter, half at
     /// half `range`, exactly zero at `range`, and still zero beyond it.
     #[test]
     fn emitter_gain_falls_off_linearly_to_zero_at_range() {
-        let at = |x: f32| emitter_gain(0.8, 10.0, [0.0, 0.0, 0.0], [x, 0.0, 0.0]);
+        let at = |x: f32| emitter_gain(0.8, 10.0, [0.0; 3], [x, 0.0, 0.0], AudioDistance::Planar);
         assert_eq!(at(0.0), 0.8);
         assert_eq!(at(5.0), 0.4);
         assert_eq!(at(10.0), 0.0);
@@ -392,7 +536,8 @@ mod tests {
     /// code-inserted path (`games/vigil` builds every `AudioEmitter` in Rust) reaching the same guard.
     #[test]
     fn emitter_gain_is_silent_for_a_non_positive_or_non_finite_range() {
-        let at_listener = |range: f32| emitter_gain(1.0, range, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+        let at_listener =
+            |range: f32| emitter_gain(1.0, range, [0.0; 3], [0.0; 3], AudioDistance::Planar);
         assert_eq!(at_listener(-1.0), 0.0);
         assert_eq!(at_listener(0.0), 0.0);
         assert_eq!(at_listener(f32::NAN), 0.0);
@@ -403,19 +548,118 @@ mod tests {
     /// The shared rule: audible inside `range`, `None` at `range` and for a non-positive `range`.
     #[test]
     fn audible_gain_is_none_when_inaudible() {
-        let at = |x: f32, range: f32| audible_gain(1.0, range, [0.0, 0.0, 0.0], [x, 0.0, 0.0]);
+        let at = |x: f32, range: f32| {
+            audible_gain(1.0, range, [0.0; 3], [x, 0.0, 0.0], AudioDistance::Planar)
+        };
         assert_eq!(at(4.0, 10.0), Some(0.6));
         assert_eq!(at(10.0, 10.0), None);
         assert_eq!(at(0.0, 0.0), None);
         assert_eq!(at(0.0, -1.0), None);
     }
 
-    /// Distance is measured on the ground plane only: height above the listener does not attenuate.
+    /// Planar distance is measured on the ground plane only: height does not attenuate. Spatial
+    /// distance counts it.
     #[test]
-    fn emitter_gain_ignores_height() {
+    fn planar_distance_ignores_height_and_spatial_counts_it() {
+        let gain = |at: [f32; 3], distance| emitter_gain(1.0, 10.0, [0.0; 3], at, distance);
         assert_eq!(
-            emitter_gain(1.0, 10.0, [0.0, 0.0, 0.0], [0.0, 40.0, 5.0]),
-            emitter_gain(1.0, 10.0, [0.0, 0.0, 0.0], [0.0, 0.0, 5.0]),
+            gain([0.0, 40.0, 5.0], AudioDistance::Planar),
+            gain([0.0, 0.0, 5.0], AudioDistance::Planar),
+        );
+        assert_eq!(gain([0.0, 5.0, 0.0], AudioDistance::Planar), 1.0);
+        assert_eq!(gain([0.0, 5.0, 0.0], AudioDistance::Spatial), 0.5);
+        assert_eq!(gain([0.0, 40.0, 5.0], AudioDistance::Spatial), 0.0);
+    }
+
+    /// A listener at the origin looking down `-Z`: right is `+X`, up is `+Y`.
+    fn facing_north() -> AudioListener {
+        AudioListener {
+            position: [0.0; 3],
+            right: [1.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+        }
+    }
+
+    #[test]
+    fn a_sound_to_the_right_pans_right_and_to_the_left_pans_left() {
+        let listener = facing_north();
+        assert!(stereo_pan(&listener, [4.0, 0.0, -1.0]) > 0.9);
+        assert!(stereo_pan(&listener, [-4.0, 0.0, -1.0]) < -0.9);
+        let turned = AudioListener {
+            right: [-1.0, 0.0, 0.0],
+            ..listener
+        };
+        assert!(
+            stereo_pan(&turned, [4.0, 0.0, -1.0]) < -0.9,
+            "a half turn flips the sign"
+        );
+    }
+
+    #[test]
+    fn dead_ahead_behind_and_overhead_are_exactly_centre() {
+        let listener = facing_north();
+        for at in [
+            [0.0, 0.0, -5.0],
+            [0.0, 0.0, 5.0],
+            [0.0, 7.0, 0.0],
+            [0.0, 7.0, -3.0],
+        ] {
+            assert_eq!(stereo_pan(&listener, at), 0.0, "{at:?}");
+        }
+    }
+
+    #[test]
+    fn the_inner_radius_scales_the_pan_toward_centre() {
+        let listener = facing_north();
+        assert_eq!(stereo_pan(&listener, [0.0; 3]), 0.0);
+        assert_eq!(
+            stereo_pan(&listener, [PAN_INNER_RADIUS * 0.5, 0.0, 0.0]),
+            0.5
+        );
+        assert_eq!(stereo_pan(&listener, [PAN_INNER_RADIUS, 0.0, 0.0]), 1.0);
+        assert_eq!(
+            stereo_pan(&listener, [-PAN_INNER_RADIUS * 3.0, 0.0, 0.0]),
+            -1.0
+        );
+    }
+
+    #[test]
+    fn a_centred_game_resolves_a_literal_zero_pan() {
+        let listener = facing_north();
+        let at = [4.0, 0.0, 0.0];
+        let centred = audible_voice(
+            1.0,
+            10.0,
+            &listener,
+            at,
+            AudioDistance::Planar,
+            AudioPan::Centred,
+        );
+        let stereo = audible_voice(
+            1.0,
+            10.0,
+            &listener,
+            at,
+            AudioDistance::Planar,
+            AudioPan::Stereo,
+        );
+        assert_eq!(
+            centred.map(|(_, pan)| pan.to_bits()),
+            Some(0.0f32.to_bits())
+        );
+        assert_eq!(stereo.map(|(_, pan)| pan), Some(1.0));
+        assert_eq!(centred.map(|(gain, _)| gain), stereo.map(|(gain, _)| gain));
+        let far = [40.0, 0.0, 0.0];
+        assert_eq!(
+            audible_voice(
+                1.0,
+                10.0,
+                &listener,
+                far,
+                AudioDistance::Planar,
+                AudioPan::Stereo
+            ),
+            None
         );
     }
 }

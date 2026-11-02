@@ -95,7 +95,8 @@ settled plan, nothing built; **rejected** — closed by design.
 
 ### Audio
 
-- WAV effects, every source downmixed to mono: no stereo panning. Streamed Ogg music shipped
+- WAV effects: stereo clips stay stereo, and positional sound pans across a stereo device when a
+  game opts in (`AudioPan::Stereo`; `AudioDistance::Spatial` adds height to the falloff). Streamed Ogg music shipped
   2026-10-03, rev 1106 (external shmup request 10); music crossfades, Opus and live music volume stay
   deferred. No runtime volume control, no reverb, occlusion or HRTF (out of scope,
   `Plan/audio-ambience.md`).
@@ -158,8 +159,8 @@ it raise the number of autonomous agent iterations (the North Star)?
    double-sided materials (the Blender pipeline hits these on its first props; the platformer pulled them and they shipped, Clockout 0010), animation blending
    beyond crossfade, CCD if a fast fall tunnels.
 5. **The shippable-game bundle, when a game is declared shipping** (post-M7 grilling): desktop
-   export and packaging, texture compression (before iOS device work), music crossfades, stereo
-   panning with volume buses and a settings surface, input rebinding, localization.
+   export and packaging, texture compression (before iOS device work), music crossfades,
+   volume buses and a settings surface, input rebinding, localization.
 
 Not recommended now: networking, material graphs or a custom-shader surface (a second, weaker API
 surface — Pillar 6), GPU particles, SSR or reflection probes, terrain, vehicles, Android, web,

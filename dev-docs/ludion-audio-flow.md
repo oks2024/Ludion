@@ -22,8 +22,11 @@ at the same frame boundary, straight after the queue drain: it finds the listene
 via `query_ids::<(&Camera,)>()`; none means a no-op tick), joins `AudioEmitter`/`Transform` with
 `query_ids::<(&AudioEmitter, &Transform)>()` in ascending `EntityId` — a typed storage join, not a
 per-entity probe, so zero emitters costs nothing — and sends a `LoopSync` under `LoopId::Entity(id)`
-(when audible, then on a 1% gain move or a new sound or bus) at
-`gain × clamp(1 − ground_plane_distance/range, 0, 1)` (`emitter_gain` returns `0.0` for a
+(when audible, then on a 1% gain move, a pan move past `RESYNC_PAN_STEP`, or a new sound or bus) at
+`gain × clamp(1 − distance/range, 0, 1)`, distance per the builder's `AudioDistance` (planar `x`/`z` by
+default, `Spatial` adds `y`), and a `pan` from `stereo_pan` against the camera's rotated right/up axes
+under `AudioPan::Stereo` (a literal `0.0` otherwise) — `audible_voice` is the one rule `play_at`
+shares (`emitter_gain` returns `0.0` for a
 non-positive or non-finite `range`, rather than the clamp saturating to full gain; `L1136` catches it
 at deserialize time, but every vigil emitter is code-inserted). Anything that fell below
 `AUDIBILITY_EPSILON` since last tick — despawned, muted, out of range, component removed — gets a `LoopStop` first, off the

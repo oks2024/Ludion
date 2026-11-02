@@ -114,7 +114,9 @@
 //!   category's bus is mixed through, authored once on the builder
 //!   ([`EngineBuilder::category_gains`](ludion_engine::EngineBuilder::category_gains)) and read off
 //!   the engine by whichever host runs it. It is mixdown, not world state: no value in it reaches a
-//!   `WorldHash`, a replay or the audio log.
+//!   `WorldHash`, a replay or the audio log. Two more builder knobs shape positional sound:
+//!   [`AudioPan`] (`audio_pan`, default centred) places it across the stereo field, and
+//!   [`AudioDistance`] (`audio_distance`, default planar) lets height attenuate it.
 //! - **Particles** — [`ParticleEmitter`] (with [`EmitShape`] and [`ParticleBlend`]): a visual effect
 //!   described by numbers, evaluated analytically at the render boundary. No system, no pool, and no
 //!   entity per point — a burst is one component write stamping `started` with the current frame.
@@ -150,21 +152,21 @@
 //! `Cargo.toml` — they are the game's dependencies, not something the facade injects.
 
 pub use ludion_engine::{
-    Anchor, Animation, AnimationEvents, AntiAliasing, AssemblyData, AudioCategory, AudioEmitter,
-    AudioEvent, AudioQueue, BlendCurve, BlendIn, BulletKind, Camera, CameraRig, CategoryGains,
-    ClipAnchor, ClipEvent, CursorMode, DebugCategories, DebugPen, Decal, DecalBlend, DecalMap,
-    DecalReceiverSet, Diagnostics, DirectionalLight, DocStore, DropShadow, EmitShape, Engine,
-    EngineBuilder, Environment, Fade, FollowerMotion, FontLibrary, GiDynamic, GroundMarker,
-    GroundMarkerShape, Keep, LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF,
-    LANE_ON, LANE_PATH, LaneConstraint, LaneEnds, LaneInput, LookAhead, MOTOR_AIRBORNE,
-    MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE, MOTOR_STUCK,
-    MOTOR_WALL, MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name, NoInterpolate,
-    PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PathDocument, PathFollower,
-    PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler, PatternDoc,
-    PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance, PrefabReverted,
-    ProbeShape, Profile, Projection, RampSpec, ReflectionProbe, RenderExtent, RenderSettings,
-    Residue, ResidueStore, RigConfig, RigMode, RigState, SceneSwitch, ShakeConfig, Shutdown,
-    SpotLight, Springs, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance, Tilemap,
+    Anchor, Animation, AnimationEvents, AntiAliasing, AssemblyData, AudioCategory, AudioDistance,
+    AudioEmitter, AudioEvent, AudioPan, AudioQueue, BlendCurve, BlendIn, BulletKind, Camera,
+    CameraRig, CategoryGains, ClipAnchor, ClipEvent, CursorMode, DebugCategories, DebugPen, Decal,
+    DecalBlend, DecalMap, DecalReceiverSet, Diagnostics, DirectionalLight, DocStore, DropShadow,
+    EmitShape, Engine, EngineBuilder, Environment, Fade, FollowerMotion, FontLibrary, GiDynamic,
+    GroundMarker, GroundMarkerShape, Keep, LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD,
+    LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH, LaneConstraint, LaneEnds, LaneInput, LookAhead,
+    MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
+    MOTOR_STUCK, MOTOR_WALL, MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name,
+    NoInterpolate, PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PathDocument,
+    PathFollower, PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler,
+    PatternDoc, PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance,
+    PrefabReverted, ProbeShape, Profile, Projection, RampSpec, ReflectionProbe, RenderExtent,
+    RenderSettings, Residue, ResidueStore, RigConfig, RigMode, RigState, SceneSwitch, ShakeConfig,
+    Shutdown, SpotLight, Springs, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance, Tilemap,
     TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect,
     UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Volley, VolleyCenter, VolleyShape,
     WorldPose, add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age,

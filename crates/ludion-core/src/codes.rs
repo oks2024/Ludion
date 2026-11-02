@@ -4859,7 +4859,7 @@ A `cylinder`'s `half_height`/`radius` follow the same rule as a `capsule`'s, and
         explanation: "\
 An `AudioEmitter` component's `range` is not a strictly positive, finite number.
 
-`range` is the ground-plane distance at which the emitter falls silent: the engine syncs the loop at
+`range` is the distance at which the emitter falls silent: the engine syncs the loop at
 `gain × clamp(1 − distance/range, 0, 1)`, so `range` divides the listener distance. Zero, negative,
 or non-finite has no meaningful falloff — the emitter would be inaudible everywhere, or feed a
 NaN/infinity into the gain. JSON Schema's range keyword is inclusive (`minimum: 0` still admits

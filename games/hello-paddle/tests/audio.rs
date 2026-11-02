@@ -258,6 +258,73 @@ fn walking_toward_a_placed_emitter_and_away_again_raises_then_lowers_its_gain() 
     );
 }
 
+/// Walks the camera to each `x` in turn (one tick each) with the bell placed 20 units east, a
+/// positional one-shot played from the bell's spot at every stop, and returns the bell's loop pans
+/// and the one-shot pans.
+fn walk_past_the_bell(builder: EngineBuilder) -> (Vec<f32>, Vec<f32>) {
+    let scene = format!("{SCENE}{}", BELL_ENTITY.replace("<sound>", BOUNCE_SOUND));
+    let mut engine = ludion_testkit::loaded_engine(builder, &scene);
+    let camera = only_entity_with::<Camera>(&mut engine);
+    let bell = only_entity_with::<AudioEmitter>(&mut engine);
+    for x in [0.0, 40.0] {
+        engine
+            .world_mut()
+            .get_mut::<Transform>(camera)
+            .expect("the camera is alive")
+            .expect("the camera has a Transform")
+            .translation[0] = x;
+        engine
+            .world_mut()
+            .resource_mut::<AudioQueue>()
+            .expect("the engine installs AudioQueue")
+            .play_at(BOUNCE_SOUND, 1.0, [20.0, 0.0, 0.0], 40.0);
+        engine
+            .execute(Command::SimStep(command::SimStepParams {
+                ticks: 1,
+                hash: false,
+            }))
+            .expect("sim steps");
+    }
+    let messages = audio_messages(&engine);
+    let loop_pans = messages
+        .iter()
+        .filter_map(|(_, message)| match message {
+            AudioMessage::LoopSync { id, pan, .. } if *id == LoopId::Entity(bell) => Some(*pan),
+            _ => None,
+        })
+        .collect();
+    let shot_pans = messages
+        .iter()
+        .filter_map(|(_, message)| match message {
+            AudioMessage::OneShot(event) => Some(event.pan),
+            _ => None,
+        })
+        .collect();
+    (loop_pans, shot_pans)
+}
+
+/// A game that opts into `AudioPan::Stereo` hears the bell, and a one-shot from its spot, on the
+/// right while the camera is west of it and on the left once the camera has walked past; the plain
+/// game logs only centred pans.
+#[test]
+fn a_stereo_game_pans_across_the_bell_and_a_plain_game_stays_centred() {
+    let (loops, shots) = walk_past_the_bell(hello_paddle::game().audio_pan(AudioPan::Stereo));
+    // The camera sits 6 units off the bell's depth, so the pan is just short of full.
+    for pans in [&loops, &shots] {
+        assert!(
+            pans.len() == 2 && pans[0] > 0.9 && pans[1] < -0.9,
+            "the sound flips sides as the camera passes it: {pans:?}"
+        );
+    }
+
+    let (loops, shots) = walk_past_the_bell(hello_paddle::game());
+    assert!(
+        !loops.is_empty() && loops.iter().all(|&pan| pan == 0.0),
+        "{loops:?}"
+    );
+    assert_eq!(shots, vec![0.0, 0.0]);
+}
+
 /// The committed bounce WAV decodes as 16-bit PCM mono through `ludion_assets::load_wav`.
 #[test]
 fn committed_bounce_wav_decodes() {

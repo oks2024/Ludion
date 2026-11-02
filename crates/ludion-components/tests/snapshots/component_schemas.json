@@ -124,7 +124,9 @@
   "AudioEmitter": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "AudioEmitter",
-    "description": "A looping sound placed in the world: audible within `range` of the listener, louder the nearer it\nis. The sound analog of [`PointLight`] — position comes from the entity's [`Transform`], the\nfalloff is the same `clamp(1 − distance/range, 0, 1)` shape, and a scene may place any number.\n\n**No system to register.** The engine syncs every emitter at the frame boundary, beside the audio\ndrain: it measures the ground-plane `(x, z)` distance from the listener (the lowest-`EntityId`\nentity carrying a [`Camera`]), and keeps the loop at `gain × falloff` under the emitter's own\nentity identity. An emitter that goes inaudible — out of range, muted, despawned, or with the\ncomponent removed — is stopped on the tick it drops out. A scene with no camera syncs nothing that\ntick.\n\nPlayback is out-of-sim, so this component is only ever *read* by the engine: it is ordinary hashed\nsim state a game may write, but what the emitter sounds like never feeds back into a tick, and a\nworld with no `AudioEmitter` produces exactly the audio stream it did before the component existed.",
+    "description": "A looping sound placed in the world: audible within `range` of the listener, louder the nearer it\nis. The sound analog of [`PointLight`] — position comes from the entity's [`Transform`], the\nfalloff is the same `clamp(1 − distance/range, 0, 1)` shape, and a scene may place any number.\n\n**No system to register.** The engine syncs every emitter at the frame boundary, beside the audio\ndrain: it measures the distance from the listener (the lowest-`EntityId` entity carrying a
+[`Camera`]; ground plane unless the game sets `audio_distance`), and keeps the loop at
+`gain × falloff` under the emitter's own\nentity identity. An emitter that goes inaudible — out of range, muted, despawned, or with the\ncomponent removed — is stopped on the tick it drops out. A scene with no camera syncs nothing that\ntick.\n\nPlayback is out-of-sim, so this component is only ever *read* by the engine: it is ordinary hashed\nsim state a game may write, but what the emitter sounds like never feeds back into a tick, and a\nworld with no `AudioEmitter` produces exactly the audio stream it did before the component existed.",
     "type": "object",
     "properties": {
       "sound": {
@@ -145,7 +147,7 @@
         ]
       },
       "range": {
-        "description": "Ground-plane distance at which the emitter falls silent (default `10.0`). Strictly positive and\nfinite — zero, negative, or non-finite is `L1136`.",
+        "description": "Distance at which the emitter falls silent (default `10.0`). Strictly positive and\nfinite — zero, negative, or non-finite is `L1136`.",
         "type": "number",
         "format": "float",
         "default": 10.0

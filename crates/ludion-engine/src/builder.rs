@@ -57,6 +57,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::audio::{AudioDistance, AudioPan};
 use crate::builtin_registry;
 use crate::docs::{DocKind, DocValidator};
 use crate::engine::{DEFAULT_RENDER_SIZE, Engine, SystemSpec};
@@ -101,6 +102,8 @@ pub struct EngineBuilder {
     profile_off_disk: bool,
     observe_load: bool,
     category_gains: CategoryGains,
+    audio_distance: AudioDistance,
+    audio_pan: AudioPan,
     plane: Plane,
     render_size: Option<(u32, u32)>,
     anti_aliasing: AntiAliasing,
@@ -135,6 +138,8 @@ impl EngineBuilder {
             profile_off_disk: false,
             observe_load: false,
             category_gains: CategoryGains::default(),
+            audio_distance: AudioDistance::default(),
+            audio_pan: AudioPan::default(),
             plane: Plane::default(),
             render_size: None,
             anti_aliasing: AntiAliasing::default(),
@@ -226,6 +231,53 @@ impl EngineBuilder {
     #[must_use]
     pub fn category_gains(mut self, gains: CategoryGains) -> Self {
         self.category_gains = gains;
+        self
+    }
+
+    /// Sets whether positional sound is placed across the stereo field. Default
+    /// [`AudioPan::Centred`], which keeps the audio stream of a game that never calls this.
+    ///
+    /// With [`AudioPan::Stereo`] every positional one-shot ([`play_at`](crate::AudioQueue::play_at))
+    /// and [`AudioEmitter`](crate::AudioEmitter) carries a `pan` from `-1.0` (left) to `1.0` (right),
+    /// resolved against the camera: its right vector, on the horizontal plane, so height never pans
+    /// a sound. The sink applies it on a two-channel device only.
+    ///
+    /// Authored once on the game, like [`category_gains`](Self::category_gains): not simulation
+    /// state, so it reaches no `WorldHash` and no replay, which regenerates the stream — the game's
+    /// `game()` sets it.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{AudioPan, Engine};
+    ///
+    /// let engine = Engine::builder().audio_pan(AudioPan::Stereo).build()?;
+    /// assert_eq!(engine.audio_pan(), AudioPan::Stereo);
+    /// # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
+    /// ```
+    #[must_use]
+    pub fn audio_pan(mut self, pan: AudioPan) -> Self {
+        self.audio_pan = pan;
+        self
+    }
+
+    /// Sets how positional sound measures distance to the listener. Default
+    /// [`AudioDistance::Planar`] (ground plane, height ignored), which keeps the audio stream of a
+    /// game that never calls this; [`AudioDistance::Spatial`] counts height, for a 3D game.
+    ///
+    /// Authored once on the game, not simulation state: no `WorldHash`, no replay, and the game's
+    /// `game()` sets it.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{AudioDistance, Engine};
+    ///
+    /// let engine = Engine::builder().audio_distance(AudioDistance::Spatial).build()?;
+    /// assert_eq!(engine.audio_distance(), AudioDistance::Spatial);
+    /// # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
+    /// ```
+    #[must_use]
+    pub fn audio_distance(mut self, distance: AudioDistance) -> Self {
+        self.audio_distance = distance;
         self
     }
 
@@ -850,6 +902,8 @@ impl EngineBuilder {
         engine.profile_persistence = self.profile_persistence;
         engine.profile_off_disk = self.profile_off_disk;
         engine.category_gains = self.category_gains;
+        engine.audio_distance = self.audio_distance;
+        engine.audio_pan = self.audio_pan;
         // Set before the mirror: `install_plane` copies the field onto the world, and every later
         // world (re)build re-runs it.
         engine.plane = self.plane;
@@ -1148,6 +1202,25 @@ mod tests {
             .system("second", noop)
             .build()
             .unwrap();
+    }
+
+    /// The audio placement a game authors reaches the built engine; unauthored, it is the centred,
+    /// planar stream every existing game has.
+    #[test]
+    fn the_authored_audio_placement_rides_the_built_engine() {
+        let root = fresh_dir("placement");
+        let plain = Engine::builder().project_root(&root).build().unwrap();
+        assert_eq!(plain.audio_pan(), AudioPan::Centred);
+        assert_eq!(plain.audio_distance(), AudioDistance::Planar);
+
+        let engine = Engine::builder()
+            .project_root(&root)
+            .audio_pan(AudioPan::Stereo)
+            .audio_distance(AudioDistance::Spatial)
+            .build()
+            .unwrap();
+        assert_eq!(engine.audio_pan(), AudioPan::Stereo);
+        assert_eq!(engine.audio_distance(), AudioDistance::Spatial);
     }
 
     /// The mixdown a game authors reaches the built engine, where every host reads it; unauthored,

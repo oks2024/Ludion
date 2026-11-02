@@ -294,6 +294,50 @@ impl Envelope {
     }
 }
 
+/// `|pan|` at which a stereo clip has fully narrowed to its channel mean.
+const PAN_FULL_MONO: f32 = 0.02;
+
+/// A voice's stereo position: an envelope stepped once per device frame, and the constant-power
+/// channel gains cached for the level they were computed at, so the trig runs only when it moves.
+#[derive(Clone, Copy, Debug)]
+struct Panner {
+    envelope: Envelope,
+    gains: [f32; 2],
+    /// The level `gains` belongs to; NaN until the first computation.
+    gains_level: f32,
+}
+
+impl Panner {
+    /// Settled at `pan` (`-1.0` hard left, `0.0` centre, `1.0` hard right).
+    fn at(pan: f32) -> Panner {
+        Panner {
+            envelope: Envelope::at(pan),
+            gains: [1.0, 1.0],
+            gains_level: f32::NAN,
+        }
+    }
+
+    #[cfg(test)]
+    fn centred() -> Panner {
+        Panner::at(0.0)
+    }
+
+    /// The left and right gains for `level`: a constant-power law scaled to unity at the centre, so
+    /// hard left is `√2` on one channel and silence on the other.
+    fn gains_at(&mut self, level: f32) -> [f32; 2] {
+        if self.gains_level != level {
+            let (sin, cos) =
+                ludion_core::math::sin_cos((level + 1.0) * std::f32::consts::FRAC_PI_4);
+            self.gains = [
+                std::f32::consts::SQRT_2 * cos.max(0.0),
+                std::f32::consts::SQRT_2 * sin,
+            ];
+            self.gains_level = level;
+        }
+        self.gains
+    }
+}
+
 /// One playing sound: a shared, device-format sample buffer, a read cursor, and a gain envelope.
 struct Voice {
     /// Interleaved samples at the device's rate and channel count (gain not yet applied; once
@@ -303,6 +347,8 @@ struct Voice {
     pos: usize,
     /// The voice's gain envelope, stepped once per frame while mixing, before the bus master.
     envelope: Envelope,
+    /// The voice's stereo position, stepped once per frame on a two-channel device only.
+    pan: Panner,
     /// Which mixdown bus supplies the master gain multiplied in while mixing.
     category: AudioCategory,
     /// Whether the cursor wraps at the end of the buffer instead of the voice retiring there.
@@ -323,6 +369,10 @@ impl Voice {
     /// envelope steps once per frame of `channels` samples. A looping voice wraps at the end of its
     /// buffer and plays until a fade-out ends; a one-shot stops at the end and retires. An empty
     /// buffer never plays — the guard that keeps a looping voice from spinning on nothing.
+    ///
+    /// On a two-channel device a frame whose pan level is off centre takes the constant-power
+    /// path; every other frame (centre, mono, more than two channels) adds the sample unpanned, so a
+    /// centred voice is bit-identical to a voice with no pan at all.
     fn advance_into(&mut self, scratch: &mut [f32], channels: usize, master: f32) -> bool {
         if self.samples.is_empty() {
             return false;
@@ -333,18 +383,46 @@ impl Voice {
                 return false;
             }
             let gain = level * master;
+            let pan = if channels == 2 {
+                self.pan.envelope.next()
+            } else {
+                0.0
+            };
+            if pan != 0.0
+                && let [left, right] = frame
+            {
+                let (Some(a), Some(b)) = (self.next_sample(), self.next_sample()) else {
+                    return false;
+                };
+                let gains = self.pan.gains_at(pan);
+                let narrow = (pan.abs() / PAN_FULL_MONO).min(1.0);
+                let mid = (a + b) * 0.5;
+                *left += (a + (mid - a) * narrow) * gain * gains[0];
+                *right += (b + (mid - b) * narrow) * gain * gains[1];
+                continue;
+            }
             for slot in frame {
-                if self.pos >= self.samples.len() {
-                    if !self.looping {
-                        return false;
-                    }
-                    self.pos = 0;
-                }
-                *slot += self.samples[self.pos] * gain;
-                self.pos += 1;
+                let Some(sample) = self.next_sample() else {
+                    return false;
+                };
+                *slot += sample * gain;
             }
         }
         self.looping || self.pos < self.samples.len()
+    }
+
+    /// The next sample, wrapping a looping voice at the end of its buffer; `None` when a one-shot
+    /// has run out.
+    fn next_sample(&mut self) -> Option<f32> {
+        if self.pos >= self.samples.len() {
+            if !self.looping {
+                return None;
+            }
+            self.pos = 0;
+        }
+        let sample = self.samples[self.pos];
+        self.pos += 1;
+        Some(sample)
     }
 }
 
@@ -804,6 +882,7 @@ struct Router {
 struct Declared {
     sound: String,
     gain: f32,
+    pan: f32,
     category: AudioCategory,
     /// The order the loop's key was first declared in, which decides who starts first.
     seq: u64,
@@ -812,10 +891,11 @@ struct Declared {
 }
 
 /// A loop voice on `samples`, ready to play from the top and rising to `gain` over `fade_in`
-/// frames (`0` starts at `gain`).
+/// frames (`0` starts at `gain`), settled at `pan`.
 fn looping_voice(
     samples: Arc<Vec<f32>>,
     gain: f32,
+    pan: f32,
     category: AudioCategory,
     fade_in: usize,
 ) -> Voice {
@@ -823,8 +903,18 @@ fn looping_voice(
         samples,
         pos: 0,
         envelope: Envelope::rising(gain, fade_in),
+        pan: Panner::at(pan),
         category,
         looping: true,
+    }
+}
+
+/// A pan the mixer can use: non-finite is centre, anything else clamps to `[-1, 1]`.
+fn sane_pan(pan: f32) -> f32 {
+    if pan.is_finite() {
+        pan.clamp(-1.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -915,6 +1005,7 @@ impl Router {
         Some(looping_voice(
             samples,
             declared.gain,
+            declared.pan,
             declared.category,
             fade_in,
         ))
@@ -987,6 +1078,7 @@ impl Router {
                     samples,
                     pos: 0,
                     envelope: Envelope::at(event.gain),
+                    pan: Panner::at(sane_pan(event.pan)),
                     category: event.category,
                     looping: false,
                 })
@@ -995,8 +1087,10 @@ impl Router {
                 id,
                 sound,
                 gain,
+                pan,
                 category,
             } => {
+                let pan = sane_pan(pan);
                 let key = self.key(id);
                 let (seq, playing) = match self.declared.get(&key) {
                     Some(declared) => (declared.seq, declared.playing),
@@ -1012,6 +1106,7 @@ impl Router {
                     Declared {
                         sound,
                         gain,
+                        pan,
                         category,
                         seq,
                         playing,
@@ -1381,19 +1476,23 @@ impl Mixer {
             Some(running) if running.sound_id() == voice.sound_id() => {
                 // The target, not the level: a loop the sink restarted is still rising.
                 let target = voice.envelope.target;
+                let pan_target = voice.pan.envelope.target;
                 if running.category == voice.category {
                     running.envelope.slew_to(target, self.ramp_frames);
+                    running.pan.envelope.slew_to(pan_target, self.ramp_frames);
                     return;
                 }
                 let old_bus = Voice {
                     samples: running.samples.clone(),
                     pos: running.pos,
                     envelope: running.envelope,
+                    pan: running.pan,
                     category: running.category,
                     looping: true,
                 };
                 running.category = voice.category;
                 running.envelope = Envelope::rising(target, self.ramp_frames);
+                running.pan.envelope.slew_to(pan_target, self.ramp_frames);
                 self.retire(old_bus);
                 return;
             }
@@ -1591,14 +1690,18 @@ fn device_sample(mixed: f32) -> f32 {
 /// Enforcing it here rather than at each call site is what stops a new sound hook from getting
 /// louder with the crowd, and audio has no golden test to catch it. A copy of a sound already
 /// arriving raises that survivor to the loudest of their gains; the survivor keeps the first
-/// arrival's category, since identity here is the sound, not the bus. A new sound is pushed while
-/// `arriving` holds fewer than `limit` voices (earlier arrivals win ties), so the list never grows.
+/// arrival's category, since identity here is the sound, not the bus. The survivor also takes the
+/// pan of the louder arrival (the first's on a tie), so its pan and gain always come from one copy.
+/// A new sound is pushed while `arriving` holds fewer than `limit` voices (earlier arrivals win ties), so the list never grows.
 ///
 /// Deliberately narrow: it bounds *identical* stacking only, at full fidelity. Distinct sounds still
 /// sum, and gains adding past full scale are [`soft_limit`]'s job, not this one's.
 fn collapse_simultaneous(arriving: &mut Vec<Voice>, voice: Voice, limit: usize) {
     let sound = voice.sound_id();
     if let Some(first) = arriving.iter_mut().find(|v| v.sound_id() == sound) {
+        if voice.envelope.level > first.envelope.level {
+            first.pan = voice.pan;
+        }
         first.envelope = Envelope::at(first.envelope.level.max(voice.envelope.level));
     } else if arriving.len() < limit {
         arriving.push(voice);
@@ -1709,6 +1812,7 @@ mod tests {
             samples: samples.clone(),
             pos: 0,
             envelope: Envelope::at(gain),
+            pan: Panner::centred(),
             category,
             looping: false,
         }
@@ -2105,6 +2209,237 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A looping voice on `samples` at unity gain, settled at `pan`.
+    fn panned(samples: &Arc<Vec<f32>>, pan: f32) -> Voice {
+        Voice {
+            pan: Panner::at(pan),
+            ..looping(samples, 1.0, AudioCategory::Sfx)
+        }
+    }
+
+    /// A loop sync on `bed()` whose voice is panned to `pan`.
+    fn panned_command(samples: &Arc<Vec<f32>>, pan: f32) -> VoiceCommand {
+        VoiceCommand::LoopSync {
+            id: bed(),
+            voice: panned(samples, pan),
+        }
+    }
+
+    #[test]
+    fn a_centred_voice_is_bit_identical_to_an_unpanned_one() {
+        let samples = Arc::new(vec![0.1, 0.7, 0.3, -0.2, 0.9, 0.05, -0.4, 0.6]);
+        let mut voice = panned(&samples, 0.0);
+        let mut out = vec![0.0; 8];
+        assert!(voice.advance_into(&mut out, 2, 1.0));
+        for (got, want) in out.iter().zip(samples.iter()) {
+            assert_eq!(got.to_bits(), (want * 1.0).to_bits());
+        }
+
+        // Out to a pan and back: once the envelope lands on 0.0 the unpanned path returns.
+        let mut voice = panned(&samples, 0.0);
+        voice.pan.envelope.slew_to(0.5, 2);
+        let mut away = vec![0.0; 4];
+        voice.advance_into(&mut away, 2, 1.0);
+        assert_ne!(away[1].to_bits(), samples[1].to_bits());
+        voice.pan.envelope.slew_to(0.0, 2);
+        let mut back = vec![0.0; 4];
+        voice.advance_into(&mut back, 2, 1.0);
+        let mut settled = vec![0.0; 8];
+        voice.advance_into(&mut settled, 2, 1.0);
+        let wanted: Vec<f32> = (0..8).map(|i| samples[(8 + i) % 8]).collect();
+        for (got, want) in settled.iter().zip(&wanted) {
+            assert_eq!(got.to_bits(), want.to_bits());
+        }
+    }
+
+    #[test]
+    fn a_hard_pan_silences_the_far_channel_and_lifts_the_near_one() {
+        let samples = constant(0.25, 16);
+        let root2 = std::f32::consts::SQRT_2;
+        let mut left = vec![0.0; 4];
+        panned(&samples, -1.0).advance_into(&mut left, 2, 1.0);
+        let mut right = vec![0.0; 4];
+        panned(&samples, 1.0).advance_into(&mut right, 2, 1.0);
+        for frame in left.chunks(2) {
+            assert!((frame[0] - 0.25 * root2).abs() < 1e-6, "{frame:?}");
+            assert_eq!(frame[1], 0.0);
+        }
+        for frame in right.chunks(2) {
+            assert_eq!(frame[0], 0.0);
+            assert!((frame[1] - 0.25 * root2).abs() < 1e-6, "{frame:?}");
+        }
+    }
+
+    #[test]
+    fn a_stereo_clip_at_a_hard_pan_plays_its_channel_mean() {
+        let samples = Arc::new(vec![0.1, 0.3, 0.1, 0.3]);
+        let mut out = vec![0.0; 4];
+        panned(&samples, -1.0).advance_into(&mut out, 2, 1.0);
+        assert!((out[0] - 0.2 * std::f32::consts::SQRT_2).abs() < 1e-6);
+        assert_eq!(out[1], 0.0);
+        let mut centre = vec![0.0; 4];
+        panned(&samples, 0.0).advance_into(&mut centre, 2, 1.0);
+        assert_eq!(
+            centre,
+            [0.1, 0.3, 0.1, 0.3],
+            "centred, the clip stays stereo"
+        );
+    }
+
+    #[test]
+    fn a_pan_resync_ramps_without_a_step_or_a_cursor_jump() {
+        let samples = constant(0.25, 64);
+        let mut mixer = test_mixer(2, CategoryGains::default(), default_limits());
+        mixer.apply(panned_command(&samples, 0.0));
+        render(&mut mixer, 4);
+        mixer.apply(panned_command(&samples, 1.0));
+        let out = render(&mut mixer, 16);
+        assert_eq!(
+            mixer.loops[&bed()].pos,
+            20,
+            "the cursor survives the resync"
+        );
+        let mut previous = [0.25f32, 0.25];
+        for frame in out.chunks(2) {
+            for channel in 0..2 {
+                assert!(
+                    (frame[channel] - previous[channel]).abs() < 0.1,
+                    "a step in channel {channel}: {out:?}"
+                );
+                previous[channel] = frame[channel];
+            }
+        }
+        let last = &out[out.len() - 2..];
+        assert_eq!(last[0], 0.0);
+        assert!((last[1] - 0.25 * std::f32::consts::SQRT_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pan_applies_only_on_a_two_channel_device() {
+        let samples = constant(0.25, 24);
+        for channels in [1u16, 3] {
+            let mut mixer = test_mixer(channels, CategoryGains::default(), default_limits());
+            mixer.apply(panned_command(&samples, -1.0));
+            let out = render(&mut mixer, 6);
+            assert!(
+                out.iter().all(|&s| s == 0.25),
+                "{channels} channels: {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn simultaneous_copies_keep_the_pan_of_the_louder_arrival() {
+        let samples = constant(0.5, 8);
+        let arrive = |first: (f32, f32), second: (f32, f32)| {
+            let mut arriving = Vec::new();
+            for (gain, pan) in [first, second] {
+                let voice = Voice {
+                    envelope: Envelope::at(gain),
+                    ..panned(&samples, pan)
+                };
+                collapse_simultaneous(&mut arriving, voice, 8);
+            }
+            assert_eq!(arriving.len(), 1);
+            (arriving[0].envelope.level, arriving[0].pan.envelope.level)
+        };
+        assert_eq!(arrive((0.5, -1.0), (1.0, 1.0)), (1.0, 1.0));
+        assert_eq!(arrive((1.0, 1.0), (0.5, -1.0)), (1.0, 1.0));
+        assert_eq!(
+            arrive((0.75, -0.5), (0.75, 0.5)),
+            (0.75, -0.5),
+            "a tie keeps the first"
+        );
+    }
+
+    #[test]
+    fn a_pan_that_is_not_sane_never_reaches_the_device() {
+        assert_eq!(sane_pan(f32::NAN), 0.0);
+        assert_eq!(sane_pan(f32::INFINITY), 0.0);
+        assert_eq!(sane_pan(f32::NEG_INFINITY), 0.0);
+        assert_eq!(sane_pan(7.0), 1.0);
+        assert_eq!(sane_pan(-7.0), -1.0);
+        assert_eq!(sane_pan(0.25), 0.25);
+
+        let root = scratch_root("sane-pan");
+        std::fs::write(root.join("bed.wav"), wav_bytes(&[8192, 16384])).unwrap();
+        let mut rig = rig(root);
+        for pan in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let one_shot = AudioMessage::OneShot(AudioEvent {
+                pan,
+                ..AudioEvent::new("bed.wav", 1.0)
+            });
+            let Some(VoiceCommand::OneShot(voice)) = rig.router.route(one_shot) else {
+                panic!("a one-shot");
+            };
+            assert_eq!(voice.pan.envelope.target, 0.0);
+            let message = AudioMessage::LoopSync {
+                id: LoopId::Sound("bed.wav".to_string()),
+                sound: "bed.wav".to_string(),
+                gain: 1.0,
+                pan,
+                category: AudioCategory::Ambient,
+            };
+            let Some(VoiceCommand::LoopSync { voice, .. }) = rig.router.route(message) else {
+                panic!("a loop sync");
+            };
+            assert_eq!(voice.pan.envelope.target, 0.0);
+        }
+    }
+
+    #[test]
+    fn a_stereo_clip_is_half_narrowed_at_half_the_narrowing_pan() {
+        let samples = Arc::new(vec![0.1, 0.3, 0.1, 0.3]);
+        let mut voice = panned(&samples, PAN_FULL_MONO / 2.0);
+        let mut out = vec![0.0; 2];
+        voice.advance_into(&mut out, 2, 1.0);
+        let gains = voice.pan.gains_at(PAN_FULL_MONO / 2.0);
+        let (a, b) = (0.1f32, 0.3f32);
+        let mid = (a + b) * 0.5;
+        assert!((out[0] - (a + (mid - a) * 0.5) * gains[0]).abs() < 1e-6);
+        assert!((out[1] - (b + (mid - b) * 0.5) * gains[1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_restarted_loop_keeps_its_declared_pan() {
+        let root = scratch_root("declared-pan");
+        std::fs::write(root.join("bed.wav"), wav_bytes(&[8192, 16384])).unwrap();
+        let mut rig = rig(root);
+        let message = AudioMessage::LoopSync {
+            id: LoopId::Sound("bed.wav".to_string()),
+            sound: "bed.wav".to_string(),
+            gain: 1.0,
+            pan: 0.5,
+            category: AudioCategory::Ambient,
+        };
+        let Some(VoiceCommand::LoopSync { id, .. }) = rig.router.route(message) else {
+            panic!("a loop sync");
+        };
+        let rebuilt = rig.router.declared_voice(id, 0).expect("the sound loads");
+        assert_eq!(rebuilt.pan.envelope.target, 0.5);
+        assert_eq!(rebuilt.pan.envelope.level, 0.5);
+    }
+
+    #[test]
+    fn a_bus_crossfade_keeps_the_pan_target() {
+        let samples = constant(0.25, 64);
+        let mut mixer = test_mixer(2, CategoryGains::default(), default_limits());
+        mixer.apply(VoiceCommand::LoopSync {
+            id: bed(),
+            voice: Voice {
+                category: AudioCategory::Ambient,
+                ..panned(&samples, 0.0)
+            },
+        });
+        render(&mut mixer, 2);
+        mixer.apply(panned_command(&samples, 1.0));
+        assert_eq!(mixer.loops[&bed()].pan.envelope.target, 1.0);
+        render(&mut mixer, 16);
+        let settled = render(&mut mixer, 2);
+        assert_eq!(settled[0], 0.0);
+        assert!((settled[1] - 0.25 * std::f32::consts::SQRT_2).abs() < 1e-6);
     }
 
     #[test]
@@ -2596,6 +2931,7 @@ mod tests {
         AudioMessage::OneShot(AudioEvent {
             sound: sound.to_string(),
             gain,
+            pan: 0.0,
             category,
         })
     }
@@ -2605,6 +2941,7 @@ mod tests {
             id: LoopId::Sound(sound.to_string()),
             sound: sound.to_string(),
             gain,
+            pan: 0.0,
             category: AudioCategory::Ambient,
         }
     }
@@ -3182,6 +3519,7 @@ mod tests {
             id,
             sound: sound.to_string(),
             gain,
+            pan: 0.0,
             category: AudioCategory::Ambient,
         }
     }

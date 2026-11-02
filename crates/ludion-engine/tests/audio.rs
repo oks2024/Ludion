@@ -5,7 +5,8 @@
 
 use ludion_core::ids::EntityId;
 use ludion_engine::{
-    AudioCategory, AudioEvent, AudioLogEntry, AudioMessage, AudioQueue, Engine, LoopId,
+    AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
+    Engine, LoopId,
 };
 
 const SCENE: &str = "format: 1\nentities:\n  - components:\n      Transform:\n        translation:\n          - 1.0\n          - 2.0\n          - 3.0\n";
@@ -117,6 +118,7 @@ fn loop_messages_drain_in_the_order_they_were_queued() {
         id: bed.clone(),
         sound: "bed.wav".to_string(),
         gain,
+        pan: 0.0,
         // A manual loop is an ambient bed by construction.
         category: AudioCategory::Ambient,
     };
@@ -247,6 +249,7 @@ fn bell_sync(gain: f32) -> AudioMessage {
         id: LoopId::Entity(BELL),
         sound: "sounds/bell.wav".to_string(),
         gain,
+        pan: 0.0,
         category: AudioCategory::Ambient,
     }
 }
@@ -372,6 +375,7 @@ fn an_emitter_out_of_range_is_stopped_and_sends_nothing_further() {
                 id: LoopId::Entity(BELL),
                 sound: "sounds/bell.wav".to_string(),
                 gain: 0.6,
+                pan: 0.0,
                 category: AudioCategory::Ambient,
             },
             AudioMessage::LoopStop {
@@ -727,4 +731,141 @@ fn music_never_affects_the_world_hash() {
         hashes
     }
     assert_eq!(run(true), run(false));
+}
+
+// --- Stereo pan and spatial distance ---
+
+/// The bell scene on an engine whose game authored `pan` and `distance`.
+fn placed_engine(pan: AudioPan, distance: AudioDistance) -> Engine {
+    let mut engine = Engine::builder()
+        .audio_pan(pan)
+        .audio_distance(distance)
+        .build()
+        .expect("engine builds");
+    engine.load_inline_scene(BELL_SCENE).expect("scene loads");
+    engine
+}
+
+fn set_camera_yaw(engine: &mut Engine, degrees: f32) {
+    engine
+        .world_mut()
+        .get_mut::<ludion_engine::Transform>(EntityId::new(0, 0))
+        .expect("the camera is alive")
+        .expect("the camera has a Transform")
+        .rotation = [0.0, degrees, 0.0];
+}
+
+/// The pan of every bell sync in the log, in emission order.
+fn bell_pans(engine: &Engine) -> Vec<f32> {
+    loop_messages(engine, BELL)
+        .iter()
+        .filter_map(|message| match message {
+            AudioMessage::LoopSync { pan, .. } => Some(*pan),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The pan of every one-shot in the log, in emission order.
+fn shot_pans(engine: &Engine) -> Vec<f32> {
+    engine
+        .audio_log()
+        .iter()
+        .filter_map(|entry| match &entry.message {
+            AudioMessage::OneShot(event) => Some(event.pan),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Under `Stereo` a bell to the listener's right pans right, one to the left pans left, and a half
+/// turn of the camera flips the sign.
+#[test]
+fn a_stereo_emitter_pans_to_its_side_of_the_camera() {
+    let mut engine = placed_engine(AudioPan::Stereo, AudioDistance::Planar);
+    engine.advance_live();
+    assert_eq!(bell_pans(&engine), vec![1.0]);
+    move_bell_to(&mut engine, -4.0);
+    engine.advance_live();
+    assert_eq!(bell_pans(&engine), vec![1.0, -1.0]);
+
+    let mut turned = placed_engine(AudioPan::Stereo, AudioDistance::Planar);
+    set_camera_yaw(&mut turned, 180.0);
+    turned.advance_live();
+    let pans = bell_pans(&turned);
+    assert!(pans.len() == 1 && (pans[0] + 1.0).abs() < 1e-5, "{pans:?}");
+}
+
+/// Dead ahead, behind and straight overhead are exactly centre, whatever the distance.
+#[test]
+fn ahead_behind_and_overhead_are_exactly_centre() {
+    let mut engine = placed_engine(AudioPan::Stereo, AudioDistance::Planar);
+    for at in [[0.0, 0.0, -5.0], [0.0, 0.0, 5.0], [0.0, 7.0, 0.0]] {
+        queue(&mut engine).play_at("hit.wav", 1.0, at, 100.0);
+    }
+    engine.advance_live();
+    assert_eq!(shot_pans(&engine), vec![0.0; 3]);
+}
+
+/// `Spatial` counts height; `Planar` (the default, kept by `play_at_ignores_height`) does not.
+#[test]
+fn spatial_distance_attenuates_a_sound_overhead() {
+    let gain_overhead = |distance| {
+        let mut engine = placed_engine(AudioPan::Centred, distance);
+        queue(&mut engine).play_at("up.wav", 1.0, [0.0, 7.0, 0.0], 10.0);
+        engine.advance_live();
+        one_shots(&engine)[0].2
+    };
+    assert_eq!(gain_overhead(AudioDistance::Planar), 1.0);
+    assert!((gain_overhead(AudioDistance::Spatial) - 0.3).abs() < 1e-6);
+}
+
+/// A camera yawing every tick under a static bell: `Centred` logs exactly one sync (pan `0.0`, no
+/// pan resync at all), `Stereo` follows the sweep with more.
+#[test]
+fn a_centred_game_never_resyncs_for_pan_and_a_stereo_one_does() {
+    let drive = |pan| {
+        let mut engine = placed_engine(pan, AudioDistance::Planar);
+        for tick in 0..60 {
+            set_camera_yaw(&mut engine, tick as f32 * 5.0);
+            engine.advance_live();
+        }
+        bell_pans(&engine)
+    };
+    assert_eq!(drive(AudioPan::Centred), vec![0.0]);
+    assert!(drive(AudioPan::Stereo).len() > 1);
+}
+
+/// A pan move inside the resync step says nothing new.
+#[test]
+fn a_small_yaw_inside_the_pan_step_sends_no_extra_sync() {
+    let mut engine = placed_engine(AudioPan::Stereo, AudioDistance::Planar);
+    engine.advance_live();
+    set_camera_yaw(&mut engine, 1.0); // pan 1.0 -> cos(1 deg), 1.5e-4 away
+    engine.advance_live();
+    assert_eq!(bell_pans(&engine).len(), 1);
+}
+
+/// `play_at` logs a centred pan by default and its side under `Stereo`.
+#[test]
+fn play_at_carries_the_pan_only_under_stereo() {
+    for (pan, right, left) in [(AudioPan::Centred, 0.0, 0.0), (AudioPan::Stereo, 1.0, -1.0)] {
+        let mut engine = placed_engine(pan, AudioDistance::Planar);
+        queue(&mut engine).play_at("r.wav", 1.0, [4.0, 0.0, 0.0], 10.0);
+        queue(&mut engine).play_at("l.wav", 1.0, [-4.0, 0.0, 0.0], 10.0);
+        engine.advance_live();
+        assert_eq!(shot_pans(&engine), vec![right, left], "{pan:?}");
+    }
+}
+
+/// A world rebuild keeps both authored settings, and the rebuilt emitter pans again.
+#[test]
+fn a_world_rebuild_keeps_the_audio_placement() {
+    let mut engine = placed_engine(AudioPan::Stereo, AudioDistance::Spatial);
+    engine.advance_live();
+    engine.load_inline_scene(BELL_SCENE).expect("scene loads");
+    engine.advance_live();
+    assert_eq!(engine.audio_pan(), AudioPan::Stereo);
+    assert_eq!(engine.audio_distance(), AudioDistance::Spatial);
+    assert_eq!(bell_pans(&engine), vec![1.0]);
 }

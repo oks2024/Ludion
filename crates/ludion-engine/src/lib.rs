@@ -113,7 +113,8 @@ pub use assembly_mesh::{
     load_meshed_documents as load_assembly_meshed_documents, mesh_assembly,
 };
 pub use audio::{
-    AudioCategory, AudioEvent, AudioLogEntry, AudioMessage, AudioQueue, CategoryGains, LoopId,
+    AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
+    CategoryGains, LoopId,
 };
 pub use bisect::{
     BisectReport, ComponentDiff, DriveDone, EntityDiff, KeyframeDivergence, KeyframeDriftReport,

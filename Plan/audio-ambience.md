@@ -1,6 +1,22 @@
 # Plan: Audio Ambience — loops, positional emitters, category gains
 
-> Status: **Wave 3 COMPLETE (2026-09-03) — the plan's mechanized half is CLOSED** — `AudioEvent`
+> Status: **Stereo pan + spatial distance SHIPPED (2026-11-01, Clockout 0035)** — two per-game builder
+> knobs, `EngineBuilder::audio_pan(AudioPan::{Centred, Stereo})` and
+> `audio_distance(AudioDistance::{Planar, Spatial})`, both defaulting to today's behaviour so every
+> existing game's stream is unchanged. Pan is **opt-in** and separate from the distance knob (the
+> request implied always-on; a 2D game and vigil keep a centred stream). `AudioEvent` and
+> `AudioMessage::LoopSync` gained `pan: f32` — a **public API break** for a game writing an
+> `AudioEvent` struct literal (the documented ambient one-shot; `AudioEvent::new` sets `0.0`). The
+> engine resolves it from the camera's rotated right/up axes (`stereo_pan`, horizontal plane only, so
+> ahead/behind/overhead are exactly `0.0`); the sink applies a constant-power law at unity centre
+> (hard pan is +3 dB on the near side) with a 10 ms slew, on two-channel devices only, and a
+> `Centred` voice takes the unpanned path bit-identically. Deviation from the request's literal
+> acceptance: inside `PAN_INNER_RADIUS` (0.5) the pan scales continuously by `len/R` instead of a hard
+> zero, so it never jumps as a sound passes through the listener. Resync step `0.02`; a stereo clip
+> narrows to its channel mean as the pan leaves centre; `collapse_simultaneous` takes the louder
+> copy's pan. No wire, hash or replay movement. By-ear check on a stereo device is owed
+> (`Plan/owed.md`).
+> **Wave 3 COMPLETE (2026-09-03) — the plan's mechanized half is CLOSED** — `AudioEvent`
 > carries `category: AudioCategory` and `AudioEvent::new(sound, gain)` is the `Sfx` default (`play()`
 > goes through it; an ambient one-shot is a literal through `push`; every other literal migrated —
 > compiler-enforced, three found). The sink's `CategoryGains { sfx, ambient }` (`Default` = identity,
@@ -188,7 +204,8 @@ lands, even though §9 doesn't name audio explicitly.
 
 **Wave 2 — `AudioEmitter`: positional discoverability.** New component
 `AudioEmitter { sound: String, gain: f32, range: f32, category: AudioCategory }` (mirrors
-`PointLight`; same falloff shape, ground-plane `(x, z)` distance via `ludion_core::math::sqrt`). No
+`PointLight`; same falloff shape, ground-plane `(x, z)` distance via `ludion_core::math::sqrt` — planar
+stays the default, `AudioDistance::Spatial` a per-game option). No
 game-registered system needed: an internal engine step (alongside `drain_audio` in
 `advance_live_profiled`) queries every `(EntityId, &Transform, &AudioEmitter)`, computes gain, pushes
 `LoopSync{ id: LoopId::Entity(id), .. }` above a small audibility epsilon (inaudible emitters send
@@ -236,8 +253,9 @@ Wave 3 lands.
   landing a settings surface, or a game wanting programmatic ducking badly enough to justify the
   `AudioSink`-side setter early.
 - **Loop fade-out on stop.** Shipped: a 10 ms stop fade and gain slew (audit 2026-10-03 U7).
-- **Reverb, geometry occlusion, HRTF/panning.** Out of scope — §6.1 asks for "audible when near," not
-  "audible from the right direction."
+- **Stereo pan.** In scope since 2026-11-01: a 3D consumer needs "from the right direction" (vigil
+  did not), shipped as the opt-in `AudioPan` (see Status).
+- **Reverb, geometry occlusion, HRTF, Doppler.** Out of scope — §6.1 asks for "audible when near".
 
 ## Risks / open questions
 
