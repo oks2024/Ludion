@@ -58,9 +58,13 @@ struct DofCoc {
     // (`PostProcess.dof`, the effect's gate and strength). Screen-relative, never texels, so the
     // blur covers the same fraction of the image at any resolution and any render scale.
     max_coc: f32,
-    pad0: f32,
+    // Nonzero when `coc_layer` is real: it mirrors the graph's own gate, as the composite's flag does.
+    transparent_depth: u32,
     pad1: f32,
     pad2: f32,
+    // `.xyz` is the unit view direction and `.w` is 1 under an orthographic camera (0 otherwise), where
+    // distance is measured along the view and not out from the eye.
+    view_forward: vec4<f32>,
 };
 
 // The scene pass's HDR colour, at the render extent.
@@ -69,8 +73,14 @@ struct DofCoc {
 // sampler, so every depth fetch is a `textureLoad` — the same pairing the composite's fog, the SSAO
 // estimator and the shaft march all rely on.
 @group(0) @binding(1) var coc_depth: texture_depth_2d;
-@group(0) @binding(2) var coc_samp: sampler;
-@group(0) @binding(3) var<uniform> coc_params: DofCoc;
+// The transparent layer: weighted view distance in R, coverage in G, at the render extent — the
+// **optional** input, behind the required reads. It exists when the scene draws a sprite, particle or
+// world text under depth of field or fog; otherwise the recorder binds a 1x1 stand-in and
+// `coc_params.transparent_depth` is zero, so the block below never reads it. Fetched by `textureLoad`
+// like the depth.
+@group(0) @binding(2) var coc_layer: texture_2d<f32>;
+@group(0) @binding(3) var coc_samp: sampler;
+@group(0) @binding(4) var<uniform> coc_params: DofCoc;
 
 // The distance floor in the reciprocal. A surface exactly at the lens is not a scene an author can
 // build, but a degenerate matrix could reconstruct one, and the division must stay finite.
@@ -84,6 +94,17 @@ fn coc_world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
     let ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
     let world = coc_params.inv_view_proj * vec4<f32>(ndc, 1.0);
     return world.xyz / world.w;
+}
+
+// The distance a world point is from the lens: out from the eye, or along the view under an
+// orthographic camera (the same measure the transparent layer's `t` uses). An early return, not a
+// `select`: the perspective arithmetic must stay the one it always was.
+fn coc_view_distance(world: vec3<f32>) -> f32 {
+    let to_point = world - coc_params.cam_pos;
+    if (coc_params.view_forward.w > 0.5) {
+        return dot(to_point, coc_params.view_forward.xyz);
+    }
+    return length(to_point);
 }
 
 fn dof_circle_of_confusion(distance: f32) -> f32 {
@@ -101,6 +122,45 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // approximation.
     let corner = floor(in.uv * dims - vec2<f32>(0.5));
     let last = dims - vec2<f32>(1.0);
+    if (coc_params.transparent_depth != 0u) {
+        // A block holding a transparent takes its circle of confusion from the transparent's own
+        // distance, picking the nearest texel by *distance* because a layer texel has no device depth.
+        // A block with no coverage falls through to the depth-picked path below: picking by distance
+        // there could choose a different texel off-axis than picking by depth does, and that path is
+        // the frame without a layer, byte for byte.
+        var chosen_distance = 3.0e38;
+        var chosen_coc = 0.0;
+        var covered = false;
+        for (var i = 0u; i < 4u; i = i + 1u) {
+            let texel = clamp(
+                corner + vec2<f32>(f32(i & 1u), f32(i >> 1u)),
+                vec2<f32>(0.0),
+                last,
+            );
+            let layer = textureLoad(coc_layer, vec2<i32>(texel), 0);
+            covered = covered || layer.g > 0.0;
+            let uv = (texel + vec2<f32>(0.5)) / dims;
+            let depth = textureLoad(coc_depth, vec2<i32>(texel), 0);
+            let back = coc_view_distance(coc_world_from_depth(uv, depth));
+            var distance = back;
+            var coc = dof_circle_of_confusion(back);
+            if (layer.g > 0.0) {
+                let t = layer.r / max(layer.g, 1e-4);
+                coc = mix(coc, dof_circle_of_confusion(t), layer.g);
+                if (layer.g >= 0.5) {
+                    distance = t;
+                }
+            }
+            if (distance < chosen_distance) {
+                chosen_distance = distance;
+                chosen_coc = coc;
+            }
+        }
+        if (covered) {
+            let color = hdr_safe(textureSampleLevel(coc_scene, coc_samp, in.uv, 0.0).rgb);
+            return vec4<f32>(color, chosen_coc);
+        }
+    }
     var nearest = 1.0;
     var nearest_uv = in.uv;
     for (var i = 0u; i < 4u; i = i + 1u) {
@@ -123,5 +183,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // *is* their box average — the bright pass's trick, for the same reason.
     let color = hdr_safe(textureSampleLevel(coc_scene, coc_samp, in.uv, 0.0).rgb);
     let world = coc_world_from_depth(nearest_uv, nearest);
-    return vec4<f32>(color, dof_circle_of_confusion(length(world - coc_params.cam_pos)));
+    return vec4<f32>(color, dof_circle_of_confusion(coc_view_distance(world)));
 }

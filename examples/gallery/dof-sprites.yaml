@@ -1,0 +1,242 @@
+# Feature: depth of field at a transparent's own distance. A sprite, a particle and a world Text carry
+# no depth, so the circle of confusion of each pixel they cover is taken from the transparent itself,
+# not from the wall or sky behind it. The camera is focused (focus_distance 11) on the character sprite
+# in the middle. What to read in the image: the focus subject and the label beside it stay sharp over a
+# defocused ground and wall; the far sprite against the sky is blurred by its own distance; the sprite
+# across the wall's top edge is one sharpness above and below it, with no seam; the near sprite is
+# defocused and spreads past its own silhouette over what is behind it; the half-transparent sprite
+# keeps some of its edge; and the smoke is softened by the distance it is at. No fog, so the layer
+# serves depth of field alone.
+format: 1
+name: dof-sprites - transparents blurred at their own distance
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.05
+          - 0.09
+          - 0.2
+        sky_horizon:
+          - 0.32
+          - 0.38
+          - 0.5
+        sky_ground:
+          - 0.05
+          - 0.06
+          - 0.08
+        ibl_intensity: 1.0
+  - name: post
+    components:
+      PostProcess:
+        bloom_threshold: 1.0
+        bloom_strength: 0.08
+        exposure: 1.0
+        tonemap: aces
+        dof: 0.02
+        focus_distance: 11.0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 20.0
+        rotation:
+          - -15.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.8
+          - -0.5
+        intensity: 2.4
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 160.0
+          - 1.0
+          - 160.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.22
+          - 0.26
+          - 0.2
+          - 1.0
+  - name: far-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - -30.0
+        scale:
+          - 90.0
+          - 5.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.42
+          - 0.36
+          - 1.0
+  - name: subject
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.4
+          - 10.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 2.8
+          - 2.8
+        billboard: true
+  - name: near-sprite
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 1.4
+          - 15.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 2.8
+          - 2.8
+        billboard: true
+  - name: far-sprite
+    components:
+      Transform:
+        translation:
+          - 5.0
+          - 1.6
+          - -12.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 3.5
+          - 3.5
+        billboard: true
+  - name: far-sprite-sky
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 9.0
+          - -40.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 7.0
+          - 7.0
+        billboard: true
+  - name: horizon-sprite
+    components:
+      Transform:
+        translation:
+          - -9.0
+          - 5.7
+          - 9.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 3.0
+          - 3.0
+        billboard: true
+  - name: soft-sprite
+    components:
+      Transform:
+        translation:
+          - 7.5
+          - 1.6
+          - 9.0
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 3.0
+          - 3.0
+        billboard: true
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.5
+  - name: smoke-column
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 0.2
+          - -4.0
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.35
+          - 0.35
+          - 0.35
+        rate: 18.0
+        life:
+          - 2.0
+          - 2.8
+        speed:
+          - 0.5
+          - 1.0
+        spread_deg: 14.0
+        gravity: -0.9
+        drag: 0.35
+        start_size: 0.9
+        end_size: 3.0
+        start_color:
+          - 0.7
+          - 0.7
+          - 0.72
+          - 0.5
+        end_color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 0.0
+        softness: 0.85
+        seed: 11
+  - name: label
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 3.4
+          - 10.0
+      Text:
+        text: DOF
+        size: 1.6
+        color:
+          - 1.0
+          - 0.9
+          - 0.5
+          - 1.0

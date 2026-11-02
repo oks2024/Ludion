@@ -3727,11 +3727,22 @@ impl FrameRecorder<'_> {
             cam_pos: self.camera_position.to_array(),
             focus_distance: self.post.focus_distance,
             max_coc: self.post.dof,
-            pad0: 0.0,
+            transparent_depth: u32::from(self.has_transparent_depth),
             pad1: 0.0,
             pad2: 0.0,
+            view_forward: self.view_forward,
         };
-        self.fullscreen_effect(pass, ShaderId::DofCoc, &[], bytemuck::bytes_of(&params));
+        let optional = [OptionalInput {
+            binding: shader_gen::COC_LAYER_BINDING,
+            present: self.has_transparent_depth,
+            fallback: &self.r.fallback_hdr.view,
+        }];
+        self.fullscreen_effect(
+            pass,
+            ShaderId::DofCoc,
+            &optional,
+            bytemuck::bytes_of(&params),
+        );
     }
 
     /// The depth-of-field gather: one disc over the prefilter's target. The target's own texel height
@@ -7316,7 +7327,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::DofCoc,
-        create: shader_gen::create_coc_scene_coc_depth_coc_samp_coc_params_bgl,
+        create: shader_gen::create_coc_scene_coc_depth_coc_layer_coc_samp_coc_params_bgl,
     },
     LayoutDesc {
         id: LayoutId::Dof,
@@ -9087,16 +9098,18 @@ mod tests {
             ],
             [0, 1, 2, 3, 4, 5, 6, 7],
         );
-        // Two input textures: the depth-of-field prefilter samples the scene and loads its depth, in
-        // the graph pass's declared read order. One input: the gather, over that one target.
+        // Three input textures: the depth-of-field prefilter samples the scene, loads its depth, in
+        // the graph pass's declared read order, and loads the transparent layer in the *optional* slot
+        // behind them. One input: the gather, over that one target.
         assert_eq!(
             [
                 shader_gen::COC_SCENE_BINDING,
                 shader_gen::COC_DEPTH_BINDING,
+                shader_gen::COC_LAYER_BINDING,
                 shader_gen::COC_SAMP_BINDING,
                 shader_gen::COC_PARAMS_BINDING,
             ],
-            [0, 1, 2, 3],
+            [0, 1, 2, 3, 4],
         );
         assert_eq!(
             [
@@ -21015,14 +21028,7 @@ mod tests {
     /// GPU.
     #[test]
     fn needs_gpu_a_streamed_flip_leaves_the_image_untouched() {
-        let Some(renderer) = skip_or_renderer("a_streamed_flip_leaves_the_image_untouched") else {
-            return;
-        };
-        let Some(fresh) = skip_or_renderer("a_streamed_flip_leaves_the_image_untouched") else {
-            return;
-        };
         let (w, h) = (64u32, 64u32);
-        let size = FrameSize::native(w, h);
         let mut bare = own_fog_scene(w, h, 0.03);
         bare.meshes = vec![slab(Vec3::new(0.0, 0.0, -60.0), 40.0, SLAB_COLOR)];
         let mut with = bare.clone();
@@ -21032,7 +21038,28 @@ mod tests {
             OPAQUE_SLAB,
             false,
         )];
+        streamed_flip_is_neutral(
+            "a_streamed_flip_leaves_the_image_untouched",
+            FrameSize::native(w, h),
+            &bare,
+            &with,
+        );
+    }
 
+    /// Streams `bare` and `with` alternately through a ring and holds every returned `bare` frame
+    /// to a fresh renderer's render of it and every `with` frame to the first one. Skips with no GPU.
+    fn streamed_flip_is_neutral(
+        name: &str,
+        size: FrameSize,
+        bare: &RenderScene,
+        with: &RenderScene,
+    ) {
+        let Some(renderer) = skip_or_renderer(name) else {
+            return;
+        };
+        let Some(fresh) = skip_or_renderer(name) else {
+            return;
+        };
         let mut ring = renderer.new_stream_readback(size).expect("ring");
         // (frame was a sprite frame, image), in return order.
         let mut returned: Vec<(bool, RenderedImage)> = Vec::new();
@@ -21043,7 +21070,7 @@ mod tests {
         // Frames alternate bare, sprite, bare, ...; the ring may drop a frame in flight, so keep
         // submitting until enough of each kind has come back.
         for i in 0..60u64 {
-            let scene = if i % 2 == 0 { &bare } else { &with };
+            let scene = if i % 2 == 0 { bare } else { with };
             if let Some((stamp, image)) = renderer
                 .render_streamed(scene, size, &mut ring, FrameIndex(i), None)
                 .expect("streamed frame")
@@ -21065,7 +21092,7 @@ mod tests {
             bares >= 3 && sprites >= 2,
             "the stream returned {bares} bare and {sprites} sprite frames"
         );
-        let never = fresh.render(&bare, size).expect("fresh frame");
+        let never = fresh.render(bare, size).expect("fresh frame");
         let first_sprite = &returned.iter().find(|(sprite, _)| *sprite).unwrap().1;
         for (sprite, frame) in &returned {
             if *sprite {
@@ -21189,6 +21216,525 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- Depth of field at each transparent's own distance -----------------------------------
+
+    /// The frame edge of the depth-of-field fixtures: large enough that a sprite spans tens of pixels
+    /// and a checker cell is a few.
+    const COC_PX: u32 = 128;
+    /// The aperture the fixtures use: the far field's disc radius is `COC_DOF · height` pixels.
+    const COC_DOF: f32 = 0.03;
+
+    /// The exact-output post with depth of field on and no fog.
+    fn coc_post(dof: f32, focus: f32) -> PostData {
+        PostData {
+            dof,
+            focus_distance: focus,
+            ..exact_post()
+        }
+    }
+
+    /// The same scene with the aperture closed: every distance in focus, no pass built.
+    fn without_dof(scene: &RenderScene) -> RenderScene {
+        let mut off = scene.clone();
+        if let Some(post) = off.post.as_mut() {
+            post.dof = 0.0;
+        }
+        off
+    }
+
+    /// The pixels a disc of the largest circle of confusion can reach, plus one for rounding.
+    fn disc_px(height: u32) -> u32 {
+        (COC_DOF * height as f32).ceil() as u32 + 1
+    }
+
+    /// A black and white checker, `cell` texels a square, sampled nearest.
+    fn checker_texture(side: u32, cell: u32) -> Arc<TextureImage> {
+        let mut rgba = Vec::new();
+        for y in 0..side {
+            for x in 0..side {
+                let v = if (x / cell + y / cell).is_multiple_of(2) {
+                    255
+                } else {
+                    0
+                };
+                rgba.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        Arc::new(TextureImage {
+            width: side,
+            height: side,
+            rgba,
+            hash: 0xC0C0,
+            filter_linear: false,
+            premultiplied_on_load: true,
+            mean: [1.0; 4],
+        })
+    }
+
+    /// A square sprite wearing `scene.textures[0]`, the checker.
+    fn checker_sprite(center: Vec3, size: f32, alpha: f32) -> crate::scene::SpriteInstance {
+        let mut sprite = sized_sprite(center, size, [1.0, 1.0, 1.0, alpha], false);
+        sprite.texture = Some(0);
+        sprite
+    }
+
+    /// A checker sprite `distance` in front of the camera, 0.35 of that wide (about 39 px), focus at
+    /// `focus`, over a wall whose face is `wall` away when given and over the open sky otherwise.
+    fn checker_scene(distance: f32, focus: f32, wall: Option<f32>, alpha: f32) -> RenderScene {
+        let mut scene = fog_scene(COC_PX, COC_PX);
+        scene.meshes.clear();
+        scene.post = Some(coc_post(COC_DOF, focus));
+        scene.textures = vec![checker_texture(16, 2)];
+        scene.sprites = vec![checker_sprite(
+            Vec3::new(0.0, 0.0, -distance),
+            distance * 0.35,
+            alpha,
+        )];
+        if let Some(wall) = wall {
+            scene.meshes = vec![slab(
+                Vec3::new(0.0, 0.0, -(wall + 30.0)),
+                60.0,
+                [0.25, 0.5, 0.25],
+            )];
+        }
+        scene
+    }
+
+    /// The checker on the focal plane under an orthographic camera, 12 units (about 38 px) wide: a
+    /// plane perpendicular to the view, so its circle of confusion is exactly zero everywhere and a
+    /// byte comparison against the unblurred frame is meaningful. `wall` is the wall's face distance.
+    fn ortho_checker_scene(wall: Option<f32>) -> RenderScene {
+        let mut scene = checker_scene(10.0, 10.0, wall, 1.0);
+        scene.camera = ortho_fog_camera();
+        scene.sprites[0].right = Vec3::new(12.0, 0.0, 0.0);
+        scene.sprites[0].up = Vec3::new(0.0, 12.0, 0.0);
+        scene
+    }
+
+    /// The sprite's footprint in pixels as `(x0, y0, x1, y1)`, shrunk by `inset` on every side.
+    fn sprite_rect(scene: &RenderScene, inset: u32) -> (u32, u32, u32, u32) {
+        let s = &scene.sprites[0];
+        let corners = [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)].map(|(a, b)| {
+            project(
+                &scene.camera,
+                s.center + s.right * a + s.up * b,
+                COC_PX,
+                COC_PX,
+            )
+        });
+        let min = |f: fn(&(u32, u32)) -> u32| corners.iter().map(f).min().unwrap();
+        let max = |f: fn(&(u32, u32)) -> u32| corners.iter().map(f).max().unwrap();
+        (
+            min(|c| c.0) + inset,
+            min(|c| c.1) + inset,
+            max(|c| c.0) - inset,
+            max(|c| c.1) - inset,
+        )
+    }
+
+    /// The mean absolute luma step to the right and downward neighbour over `rect` (end exclusive):
+    /// what a blur removes.
+    fn edge_energy(img: &RenderedImage, rect: (u32, u32, u32, u32)) -> f64 {
+        let (x0, y0, x1, y1) = rect;
+        let mut sum = 0.0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let p = f64::from(luma(img, x, y));
+                sum += (f64::from(luma(img, x + 1, y)) - p).abs()
+                    + (f64::from(luma(img, x, y + 1)) - p).abs();
+            }
+        }
+        sum / f64::from((x1 - x0) * (y1 - y0))
+    }
+
+    /// The largest channel gap between two images over `rect` (end exclusive).
+    fn rect_gap(a: &RenderedImage, b: &RenderedImage, rect: (u32, u32, u32, u32)) -> u8 {
+        let (x0, y0, x1, y1) = rect;
+        (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .map(|(x, y)| channel_gap(rgb_at(a, x, y), rgb_at(b, x, y)))
+            .max()
+            .unwrap()
+    }
+
+    /// **The fog arm's neutrality proof.** An in-focus sprite under an orthographic camera has a
+    /// circle of confusion of exactly zero (its distance, 8, is exact in half precision), so the
+    /// frame that schedules the layer pass with fog off must equal, byte for byte inside the sprite,
+    /// the frame that does not: the composite's fog arm and the blend are unreachable. Skips with
+    /// no GPU.
+    #[test]
+    fn needs_gpu_an_in_focus_sprite_with_fog_off_is_byte_identical_to_dof_off() {
+        let Some(renderer) =
+            skip_or_renderer("an_in_focus_sprite_with_fog_off_is_byte_identical_to_dof_off")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let mut on = fog_scene(w, h);
+        on.camera = ortho_fog_camera();
+        on.meshes = vec![slab(Vec3::new(0.0, 0.0, -60.0), 20.0, SLAB_COLOR)];
+        on.post = Some(coc_post(COC_DOF, 8.0));
+        on.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -8.0),
+            16.0,
+            OPAQUE_SLAB,
+            false,
+        )];
+        let off = without_dof(&on);
+        assert!(
+            PostChain::for_scene(&on).transparent_depth_scheduled(),
+            "depth of field with a sprite must schedule the layer pass"
+        );
+        assert!(!PostChain::for_scene(&off).transparent_depth_scheduled());
+
+        let size = FrameSize::native(w, h);
+        let a = renderer.render(&on, size).expect("dof on");
+        let b = renderer.render(&off, size).expect("dof off");
+        let inset = disc_px(h) + 1;
+        let rect = (
+            32 - 12 + inset,
+            32 - 12 + inset,
+            32 + 12 - inset,
+            32 + 12 - inset,
+        );
+        assert_eq!(rect_gap(&a, &b, rect), 0, "the sprite's interior moved");
+        assert_ne!(
+            a.rgba, b.rgba,
+            "the wall is defocused, or nothing was proved"
+        );
+    }
+
+    /// **Sharpness.** A sprite on the focal plane keeps its 2-texel checker over a defocused wall.
+    /// Skips with no GPU.
+    #[test]
+    fn needs_gpu_an_in_focus_sprite_stays_sharp() {
+        let Some(renderer) = skip_or_renderer("an_in_focus_sprite_stays_sharp") else {
+            return;
+        };
+        let on = checker_scene(10.0, 10.0, Some(60.0), 1.0);
+        let off = without_dof(&on);
+        let size = FrameSize::native(COC_PX, COC_PX);
+        let rect = sprite_rect(&on, disc_px(COC_PX) + 1);
+        let sharp = edge_energy(&renderer.render(&off, size).expect("off"), rect);
+        let kept = edge_energy(&renderer.render(&on, size).expect("on"), rect);
+        eprintln!(
+            "sharpness ratio {:.4} ({kept:.2} / {sharp:.2})",
+            kept / sharp
+        );
+        assert!(
+            kept / sharp >= 0.95,
+            "the in-focus sprite lost its edges: {kept:.2} against {sharp:.2}"
+        );
+    }
+
+    /// A sprite away from focus takes one circle of confusion whatever sits behind it: the
+    /// checker's blur is the same over a wall and over the open sky. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_sprite_takes_the_same_coc_over_a_wall_and_over_the_sky() {
+        let Some(renderer) =
+            skip_or_renderer("a_sprite_takes_the_same_coc_over_a_wall_and_over_the_sky")
+        else {
+            return;
+        };
+        let size = FrameSize::native(COC_PX, COC_PX);
+        let wall = checker_scene(20.0, 10.0, Some(60.0), 1.0);
+        let sky = checker_scene(20.0, 10.0, None, 1.0);
+        let rect = sprite_rect(&wall, disc_px(COC_PX) + 1);
+        let over_wall = renderer.render(&wall, size).expect("wall");
+        let over_sky = renderer.render(&sky, size).expect("sky");
+        let sharp = edge_energy(
+            &renderer.render(&without_dof(&wall), size).expect("off"),
+            rect,
+        );
+        let blurred = edge_energy(&over_wall, rect);
+        let gap = rect_gap(&over_wall, &over_sky, rect);
+        eprintln!("blur kept {:.3}, wall/sky gap {gap}", blurred / sharp);
+        assert!(
+            blurred / sharp < 0.9,
+            "the sprite must be defocused to mean anything"
+        );
+        assert!(
+            gap <= 2,
+            "the sprite's blur follows what is behind it: gap {gap} LSB"
+        );
+    }
+
+    /// An in-focus sprite across a wall's top edge has no step in its blur there: its interior
+    /// equals the unblurred frame on both sides. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_sprite_straddling_the_horizon_has_no_coc_seam() {
+        let Some(renderer) = skip_or_renderer("a_sprite_straddling_the_horizon_has_no_coc_seam")
+        else {
+            return;
+        };
+        let mut on = ortho_checker_scene(None);
+        on.meshes = vec![slab(Vec3::new(0.0, -30.0, -60.0), 60.0, [0.25, 0.5, 0.25])];
+        let size = FrameSize::native(COC_PX, COC_PX);
+        let rect = sprite_rect(&on, disc_px(COC_PX) + 1);
+        let a = renderer.render(&on, size).expect("on");
+        let b = renderer.render(&without_dof(&on), size).expect("off");
+        let mid = (rect.1 + rect.3) / 2;
+        let above = rect_gap(&a, &b, (rect.0, rect.1, rect.2, mid));
+        let below = rect_gap(&a, &b, (rect.0, mid, rect.2, rect.3));
+        eprintln!("seam: above {above} below {below}");
+        assert!(
+            above <= 1 && below <= 1,
+            "a step across the wall's edge: {above} / {below}"
+        );
+    }
+
+    /// A sprite well nearer than focus spreads over the background past its silhouette, though the
+    /// wall behind it is on the focal plane. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_near_sprite_blurs_past_its_silhouette() {
+        let Some(renderer) = skip_or_renderer("a_near_sprite_blurs_past_its_silhouette") else {
+            return;
+        };
+        let mut on = fog_scene(COC_PX, COC_PX);
+        on.meshes = vec![slab(Vec3::new(0.0, 0.0, -40.0), 60.0, [0.0, 0.0, 0.0])];
+        on.post = Some(coc_post(COC_DOF, 10.0));
+        on.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -5.0),
+            1.75,
+            [1.0, 1.0, 1.0, 1.0],
+            false,
+        )];
+        let size = FrameSize::native(COC_PX, COC_PX);
+        let a = renderer.render(&on, size).expect("on");
+        let b = renderer.render(&without_dof(&on), size).expect("off");
+        let row = COC_PX / 2;
+        let edge = (0..COC_PX)
+            .rev()
+            .find(|&x| luma(&b, x, row) > 600)
+            .expect("the sprite");
+        let spread = luma(&a, edge + 1, row).saturating_sub(luma(&b, edge + 1, row));
+        eprintln!("near spread {spread} one pixel past the edge at x={edge}");
+        assert!(spread >= 200, "the near sprite does not spread: {spread}");
+    }
+
+    /// A soft sprite in focus keeps a circle of confusion between its own and the wall's, and its
+    /// interior has no spike. Two bounds: a blur never raises a pixel step above the sharp frame's
+    /// (plus rounding), and the checker keeps over 0.2 of its edge energy, about twice what the
+    /// wall's full blur leaves (0.108 measured with the old code), since the circle of confusion is
+    /// the half-weight mix of the wall's and the sprite's zero.
+    /// Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_soft_in_focus_sprite_is_continuous() {
+        let Some(renderer) = skip_or_renderer("a_soft_in_focus_sprite_is_continuous") else {
+            return;
+        };
+        let on = checker_scene(10.0, 10.0, Some(60.0), 0.5);
+        let size = FrameSize::native(COC_PX, COC_PX);
+        let rect = sprite_rect(&on, disc_px(COC_PX) + 1);
+        let a = renderer.render(&on, size).expect("on");
+        let b = renderer.render(&without_dof(&on), size).expect("off");
+        let max_step = |img: &RenderedImage| {
+            let (x0, y0, x1, y1) = rect;
+            (y0..y1)
+                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                .map(|(x, y)| {
+                    let p = i64::from(luma(img, x, y));
+                    (i64::from(luma(img, x + 1, y)) - p)
+                        .abs()
+                        .max((i64::from(luma(img, x, y + 1)) - p).abs())
+                })
+                .max()
+                .unwrap()
+        };
+        let (on_step, off_step) = (max_step(&a), max_step(&b));
+        let kept = edge_energy(&a, rect) / edge_energy(&b, rect);
+        eprintln!("soft: steps {on_step} / {off_step}, sharpness kept {kept:.3}");
+        assert!(
+            on_step <= off_step + 3,
+            "a spike: {on_step} against {off_step}"
+        );
+        assert!(
+            kept > 0.2,
+            "the soft sprite is blurred like the bare wall: {kept:.3}"
+        );
+    }
+
+    /// In-focus particles and world text stay as sharp as they would with the aperture closed, over a
+    /// far wall: every pixel two texels inside the layer's coverage equals the unblurred frame. Skips with no GPU.
+    #[test]
+    fn needs_gpu_in_focus_particles_and_world_text_stay_clear_of_the_background_blur() {
+        let Some(renderer) =
+            skip_or_renderer("in_focus_particles_and_world_text_stay_clear_of_the_background_blur")
+        else {
+            return;
+        };
+        let size = FrameSize::native(COC_PX, COC_PX);
+        let mut base = fog_scene(COC_PX, COC_PX);
+        base.camera = ortho_fog_camera();
+        base.camera.projection = Mat4::orthographic_rh(-8.0, 8.0, -8.0, 8.0, 0.1, 1000.0);
+        base.meshes = vec![slab(Vec3::new(0.0, 0.0, -90.0), 60.0, [0.25, 0.5, 0.25])];
+        base.post = Some(coc_post(COC_DOF, 10.0));
+        let mut particles = base.clone();
+        particles.particles = vec![particle(
+            Vec3::new(0.0, 0.0, -10.0),
+            5.0,
+            [1.0, 1.0, 1.0, 1.0],
+            0.0,
+        )];
+        let mut text = base.clone();
+        text.texts = vec![layer_text(-10.0)];
+        for (what, scene) in [("particle", particles), ("text", text)] {
+            // A rim pixel shares a half-extent block with partly covered texels, which take a mixed
+            // circle of confusion; the interior is what stays clear.
+            let texels = layer_texels(&renderer, &scene, size);
+            let full = |x: u32, y: u32| texels[(y * COC_PX + x) as usize][1] > 0.999;
+            let covered: Vec<(u32, u32)> = covered_pixels(&texels, COC_PX)
+                .into_iter()
+                .filter(|&(x, y)| {
+                    (x.saturating_sub(2)..=x + 2).all(|nx| {
+                        (y.saturating_sub(2)..=y + 2)
+                            .all(|ny| full(nx.min(COC_PX - 1), ny.min(COC_PX - 1)))
+                    })
+                })
+                .collect();
+            assert!(
+                covered.len() > 30,
+                "{what} covers some pixels outright: {}",
+                covered.len()
+            );
+            let a = renderer.render(&scene, size).expect("on");
+            let b = renderer.render(&without_dof(&scene), size).expect("off");
+            let worst = covered
+                .iter()
+                .map(|&(x, y)| channel_gap(rgb_at(&a, x, y), rgb_at(&b, x, y)))
+                .max()
+                .unwrap();
+            eprintln!("{what}: worst gap {worst} over {} pixels", covered.len());
+            assert!(worst <= 2, "{what} took the background's blur: {worst} LSB");
+        }
+    }
+
+    /// A 2×2 block with no layer coverage runs the unchanged code: a wall with a small sprite in
+    /// front and the same wall without it are byte-identical beyond the disc and two target texels
+    /// from the sprite. Skips with no GPU.
+    #[test]
+    fn needs_gpu_an_uncovered_block_is_byte_identical_with_the_layer_on() {
+        let Some(renderer) =
+            skip_or_renderer("an_uncovered_block_is_byte_identical_with_the_layer_on")
+        else {
+            return;
+        };
+        let mut bare = fog_scene(COC_PX, COC_PX);
+        bare.meshes = vec![
+            slab(Vec3::new(-10.0, 0.0, -45.0), 10.0, SLAB_COLOR),
+            slab(Vec3::new(12.0, 2.0, -45.0), 12.0, [0.25, 0.5, 0.25]),
+        ];
+        bare.post = Some(coc_post(COC_DOF, 10.0));
+        let mut with = bare.clone();
+        with.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -10.0),
+            1.2,
+            OPAQUE_SLAB,
+            false,
+        )];
+        assert!(PostChain::for_scene(&with).transparent_depth_scheduled());
+        let size = FrameSize::native(COC_PX, COC_PX);
+        let a = renderer.render(&bare, size).expect("bare");
+        let b = renderer.render(&with, size).expect("with");
+        let (x0, y0, x1, y1) = sprite_rect(&with, 0);
+        let reach = disc_px(COC_PX) + 4;
+        let mut checked = 0;
+        for y in 0..COC_PX {
+            for x in 0..COC_PX {
+                let far = x + reach < x0 || x > x1 + reach || y + reach < y0 || y > y1 + reach;
+                if far {
+                    checked += 1;
+                    assert_eq!(pixel(&a, x, y), pixel(&b, x, y), "pixel ({x}, {y}) moved");
+                }
+            }
+        }
+        assert!(checked > 8000);
+        assert_ne!(a.rgba, b.rgba, "the sprite is visible");
+    }
+
+    /// The live path: toggling the layer pass for depth of field alone leaves every frame equal to
+    /// its steady twin. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_streamed_dof_flip_leaves_the_image_untouched() {
+        let mut bare = fog_scene(COC_PX, COC_PX);
+        bare.meshes = vec![slab(Vec3::new(0.0, 0.0, -90.0), 60.0, [0.25, 0.5, 0.25])];
+        bare.post = Some(coc_post(COC_DOF, 10.0));
+        let mut with = bare.clone();
+        with.sprites = vec![sized_sprite(
+            Vec3::new(0.0, 0.0, -10.0),
+            3.0,
+            OPAQUE_SLAB,
+            false,
+        )];
+        streamed_flip_is_neutral(
+            "a_streamed_dof_flip_leaves_the_image_untouched",
+            FrameSize::native(COC_PX, COC_PX),
+            &bare,
+            &with,
+        );
+    }
+
+    /// Under an orthographic camera the circle of confusion measures depth along the view: a row of
+    /// slabs on the focal plane, wide in the frame, equals the unblurred frame. The old measure
+    /// fans out from the eye and blurs the sides. Skips with no GPU.
+    #[test]
+    fn needs_gpu_ortho_coc_measures_along_the_view() {
+        let Some(renderer) = skip_or_renderer("ortho_coc_measures_along_the_view") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let mut on = fog_scene(w, h);
+        on.camera = ortho_fog_camera();
+        on.meshes = (0..10)
+            .map(|i| {
+                let mut stripe = slab(
+                    Vec3::new(-18.0 + 4.0 * i as f32, 0.0, -7.0),
+                    1.0,
+                    if i % 2 == 0 {
+                        SLAB_COLOR
+                    } else {
+                        [0.0625, 0.5, 0.0625]
+                    },
+                );
+                stripe.model = Mat4::from_translation(Vec3::new(-18.0 + 4.0 * i as f32, 0.0, -7.0))
+                    * Mat4::from_scale(Vec3::new(4.0, 44.0, 4.0));
+                stripe
+            })
+            .collect();
+        on.post = Some(coc_post(COC_DOF, 5.0));
+        let size = FrameSize::native(w, h);
+        let a = renderer.render(&on, size).expect("on");
+        let b = renderer.render(&without_dof(&on), size).expect("off");
+        let gap = rect_gap(&a, &b, (0, 0, w, h));
+        eprintln!("ortho plane gap {gap}");
+        assert_eq!(a.rgba, b.rgba, "the plane on the focus moved: gap {gap}");
+    }
+
+    /// Fog and depth of field together: a sprite on the focal plane over a far wall equals the
+    /// unblurred frame within one step. Skips with no GPU.
+    #[test]
+    fn needs_gpu_fog_and_dof_agree_on_a_sprite() {
+        let Some(renderer) = skip_or_renderer("fog_and_dof_agree_on_a_sprite") else {
+            return;
+        };
+        let mut on = ortho_checker_scene(Some(60.0));
+        on.post = Some(PostData {
+            dof: COC_DOF,
+            focus_distance: 10.0,
+            ..own_fog_post(0.03, FOG_COLOR)
+        });
+        let size = FrameSize::native(COC_PX, COC_PX);
+        let rect = sprite_rect(&on, disc_px(COC_PX) + 1);
+        let a = renderer.render(&on, size).expect("on");
+        let b = renderer.render(&without_dof(&on), size).expect("off");
+        let gap = rect_gap(&a, &b, rect);
+        eprintln!("fog + dof gap {gap}");
+        assert!(
+            gap <= 1,
+            "fog and depth of field disagree on the sprite: {gap} LSB"
+        );
     }
 
     /// The gallery's mirror floor at 1080p: a back wall, a sphere and a cube, all rough so their own

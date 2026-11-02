@@ -130,8 +130,9 @@
 @group(0) @binding(4) var dof_tex: texture_2d<f32>;
 // The transparent layer: weighted view distance in R, coverage in G, at the render extent — the third
 // **optional** input, behind `dof_tex`. It exists when the scene draws a sprite, particle or world
-// text under fog; otherwise the recorder binds the same 1x1 stand-in and `composite.transparent_depth`
-// is zero, so the fog block below never reads it.
+// text under fog or depth of field; otherwise the recorder binds the same 1x1 stand-in and
+// `composite.transparent_depth` is zero, so the fog block below never reads it. With depth of field
+// alone the layer exists and the flag is one, but the fog block is still unreachable.
 @group(0) @binding(5) var transparent_depth_tex: texture_2d<f32>;
 @group(0) @binding(6) var samp: sampler;
 

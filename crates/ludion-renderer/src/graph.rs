@@ -242,7 +242,7 @@ pub mod pass {
     /// The transparent layer: sprites, particles and world text redrawn right after
     /// [`TRANSPARENTS`] into an `Rg16Float` target holding weighted view distance and coverage,
     /// so a later reader can place a transparent's own distance where `scene_depth` only has the
-    /// opaque one. Present only when the scene has fog and a transparent
+    /// opaque one. Present only when the scene has a transparent and fog or depth of field
     /// ([`PostChain::transparent_depth_scheduled`](super::PostChain::transparent_depth_scheduled)).
     pub const TRANSPARENT_DEPTH: &str = "transparent_depth";
     /// Bright-pass threshold into the half-res bloom chain: it writes the pyramid's level 0.
@@ -741,7 +741,7 @@ pub struct PostChain {
     /// [`lit_decals`](PostChain::lit_decals). Content too, so `masked` keeps it.
     pub decal_receivers: bool,
     /// The scene carries a sprite, a particle or a world text run: content, so `masked` keeps it.
-    /// With [`fog`](PostChain::fog) it schedules [`pass::TRANSPARENT_DEPTH`].
+    /// With [`fog`](PostChain::fog) or [`dof`](PostChain::dof) it schedules [`pass::TRANSPARENT_DEPTH`].
     pub transparent_cover: bool,
     /// The scene's medium has a density (`fog_density > 0`). Content too, so `masked` keeps it.
     pub fog: bool,
@@ -846,11 +846,12 @@ impl PostChain {
             && !self.sun_cascade_view
     }
 
-    /// Whether this frame runs the `transparent_depth` pass: a transparent is drawn, the medium has a
-    /// density, and no debug view stands in for the finished picture. The one predicate the graph and
-    /// the recorder share.
+    /// Whether this frame runs the `transparent_depth` pass: a transparent is drawn, a reader needs
+    /// its distance (the medium has a density, or depth of field is on after the machine's mask),
+    /// and no debug view stands in for the finished picture. The one predicate the graph and the
+    /// recorder share.
     pub fn transparent_depth_scheduled(self) -> bool {
-        self.transparent_cover && self.fog && self.view().is_none()
+        self.transparent_cover && (self.fog || self.dof) && self.view().is_none()
     }
 
     /// Whether the resample is the last output pass: the frame is resampled and no debug view stands in
@@ -1121,7 +1122,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // `Plan/shadow-mapping.md` decision 6). A square sampled depth texture: written depth-only by
     // the `shadow` pass, sampled by the scene pass.
     let shadow_map = shadow_map_desc(&chain).map(|desc| graph.transient("shadow_map", desc));
-    // The transparent layer (only when a transparent is drawn under fog, so every other frame's
+    // The transparent layer (only when a transparent is drawn under fog or depth of field, so every other frame's
     // resource list is exactly the layer-free graph's).
     let transparent_layer = chain.transparent_depth_scheduled().then(|| {
         graph.transient(
@@ -1501,7 +1502,11 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         graph.add_external_pass(
             pass::DOF_COC,
             pass::DOF_COC,
-            vec![scene, scene_depth],
+            // The transparent layer is the optional slot, declared last.
+            [scene, scene_depth]
+                .into_iter()
+                .chain(transparent_layer)
+                .collect(),
             vec![dof.coc],
         );
         graph.add_external_pass(pass::DOF, pass::DOF, vec![dof.coc], vec![dof.gathered]);
@@ -4881,8 +4886,8 @@ mod tests {
         scene
     }
 
-    /// The chain asks for the layer only for fog **and** a transparent of any of the three kinds, and
-    /// a sprite, a particle or a text run alone each count.
+    /// The chain asks for the layer only for a transparent of any of the three kinds **and** a reader
+    /// (fog or depth of field), and a sprite, a particle or a text run alone each count.
     #[test]
     fn for_scene_reads_the_transparent_layer_gate() {
         let bare = foggy_scene();
@@ -4911,6 +4916,78 @@ mod tests {
             !PostChain::for_scene(&dry).fog,
             "a PostProcess with no density is no medium"
         );
+        assert!(!PostChain::for_scene(&dry).transparent_depth_scheduled());
+
+        let mut blurred = RenderScene::empty((64, 64));
+        blurred.sprites = vec![a_sprite()];
+        blurred.post = Some(crate::scene::PostData {
+            dof: 0.02,
+            ..crate::scene::PostData::default()
+        });
+        let chain = PostChain::for_scene(&blurred);
+        assert!(chain.dof && !chain.fog);
+        assert!(
+            chain.transparent_depth_scheduled(),
+            "a transparent under depth of field alone schedules the layer"
+        );
+        blurred.sprites.clear();
+        assert!(!PostChain::for_scene(&blurred).transparent_depth_scheduled());
+    }
+
+    /// A machine masking depth of field drops the layer when nothing else reads it, and keeps it
+    /// when fog does.
+    #[test]
+    fn masking_depth_of_field_drops_the_layer_unless_fog_needs_it() {
+        let no_dof = Quality {
+            dof: false,
+            ..Quality::default()
+        };
+        let blur_only = PostChain {
+            transparent_cover: true,
+            dof: true,
+            ..PostChain::default()
+        };
+        assert!(blur_only.transparent_depth_scheduled());
+        assert!(
+            !blur_only
+                .masked(&no_dof, &QualityParams::FULL)
+                .transparent_depth_scheduled()
+        );
+        let both = PostChain {
+            fog: true,
+            ..blur_only
+        };
+        assert!(
+            both.masked(&no_dof, &QualityParams::FULL)
+                .transparent_depth_scheduled()
+        );
+    }
+
+    /// With depth of field the prefilter reads the layer last, behind the scene and its depth, and
+    /// the pass runs after `transparents` and before `dof_coc`.
+    #[test]
+    fn the_dof_prefilter_reads_the_layer_last() {
+        let chain = PostChain {
+            transparent_cover: true,
+            dof: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(64, 64), chain);
+        let names = pass_names(&graph);
+        assert!(names.contains(&pass::TRANSPARENT_DEPTH));
+        let reads = graph
+            .passes()
+            .iter()
+            .find(|p| p.name == pass::DOF_COC)
+            .expect("dof_coc")
+            .reads
+            .len();
+        assert_eq!(reads, 3, "scene, scene_depth, then the layer");
+        let sched = schedule(&graph).expect("schedules");
+        let order = sched.order_names();
+        let at = |n: &str| order.iter().position(|&p| p == n).unwrap();
+        assert!(at(pass::TRANSPARENTS) < at(pass::TRANSPARENT_DEPTH));
+        assert!(at(pass::TRANSPARENT_DEPTH) < at(pass::DOF_COC));
     }
 
     /// A machine's mask never removes content: both flags survive `masked`.

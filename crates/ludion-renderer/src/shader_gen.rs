@@ -380,18 +380,20 @@ pub struct DofCoc {
     pub cam_pos: [f32; 3],
     pub focus_distance: f32,
     pub max_coc: f32,
-    pub pad0: f32,
+    pub transparent_depth: u32,
     pub pad1: f32,
     pub pad2: f32,
+    pub view_forward: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<DofCoc>() == 96);
+const _: () = assert!(core::mem::size_of::<DofCoc>() == 112);
 const _: () = assert!(core::mem::offset_of!(DofCoc, inv_view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(DofCoc, cam_pos) == 64);
 const _: () = assert!(core::mem::offset_of!(DofCoc, focus_distance) == 76);
 const _: () = assert!(core::mem::offset_of!(DofCoc, max_coc) == 80);
-const _: () = assert!(core::mem::offset_of!(DofCoc, pad0) == 84);
+const _: () = assert!(core::mem::offset_of!(DofCoc, transparent_depth) == 84);
 const _: () = assert!(core::mem::offset_of!(DofCoc, pad1) == 88);
 const _: () = assert!(core::mem::offset_of!(DofCoc, pad2) == 92);
+const _: () = assert!(core::mem::offset_of!(DofCoc, view_forward) == 96);
 
 /// WGSL `struct DownsampleParams`.
 ///
@@ -1379,9 +1381,9 @@ pub const BLOOM_BINDING: u32 = 2;
 pub const BOX_PARAMS_GROUP: u32 = 0;
 pub const BOX_PARAMS_BINDING: u32 = 2;
 
-/// `coc_samp` — `@group(0) @binding(2)`, in `dof_coc.wgsl`.
-pub const COC_SAMP_GROUP: u32 = 0;
-pub const COC_SAMP_BINDING: u32 = 2;
+/// `coc_layer` — `@group(0) @binding(2)`, in `dof_coc.wgsl`.
+pub const COC_LAYER_GROUP: u32 = 0;
+pub const COC_LAYER_BINDING: u32 = 2;
 
 /// `dbg_params` — `@group(0) @binding(2)`, in `ssr_debug.wgsl`.
 pub const DBG_PARAMS_GROUP: u32 = 0;
@@ -1483,9 +1485,9 @@ pub const BAKE_ALBEDO_BINDING: u32 = 3;
 pub const BLEND_DEPTH_GROUP: u32 = 0;
 pub const BLEND_DEPTH_BINDING: u32 = 3;
 
-/// `coc_params` — `@group(0) @binding(3)`, in `dof_coc.wgsl`.
-pub const COC_PARAMS_GROUP: u32 = 0;
-pub const COC_PARAMS_BINDING: u32 = 3;
+/// `coc_samp` — `@group(0) @binding(3)`, in `dof_coc.wgsl`.
+pub const COC_SAMP_GROUP: u32 = 0;
+pub const COC_SAMP_BINDING: u32 = 3;
 
 /// `face_samp` — `@group(0) @binding(3)`, in `probe_face.wgsl`.
 pub const FACE_SAMP_GROUP: u32 = 0;
@@ -1550,6 +1552,10 @@ pub const BLEND_TRACE_BINDING: u32 = 4;
 /// `brdf_out` — `@group(0) @binding(4)`, in `ibl.wgsl`.
 pub const BRDF_OUT_GROUP: u32 = 0;
 pub const BRDF_OUT_BINDING: u32 = 4;
+
+/// `coc_params` — `@group(0) @binding(4)`, in `dof_coc.wgsl`.
+pub const COC_PARAMS_GROUP: u32 = 0;
+pub const COC_PARAMS_BINDING: u32 = 4;
 
 /// `dof_tex` — `@group(0) @binding(4)`, in `composite.wgsl`.
 pub const DOF_TEX_GROUP: u32 = 0;
@@ -2193,12 +2199,12 @@ pub fn create_camera_bone_palette_bgl(device: &wgpu::Device) -> wgpu::BindGroupL
     })
 }
 
-/// Bind group layout `coc_scene_coc_depth_coc_samp_coc_params` (@group 0), from `dof_coc.wgsl`.
-pub fn create_coc_scene_coc_depth_coc_samp_coc_params_bgl(
+/// Bind group layout `coc_scene_coc_depth_coc_layer_coc_samp_coc_params` (@group 0), from `dof_coc.wgsl`.
+pub fn create_coc_scene_coc_depth_coc_layer_coc_samp_coc_params_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("coc_scene_coc_depth_coc_samp_coc_params"),
+        label: Some("coc_scene_coc_depth_coc_layer_coc_samp_coc_params"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: COC_SCENE_BINDING,
@@ -2221,6 +2227,16 @@ pub fn create_coc_scene_coc_depth_coc_samp_coc_params_bgl(
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
+                binding: COC_LAYER_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
                 binding: COC_SAMP_BINDING,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
@@ -2232,7 +2248,7 @@ pub fn create_coc_scene_coc_depth_coc_samp_coc_params_bgl(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(96),
+                    min_binding_size: wgpu::BufferSize::new(112),
                 },
                 count: None,
             },
