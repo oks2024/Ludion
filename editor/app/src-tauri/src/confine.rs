@@ -24,7 +24,10 @@ fn check_under(path: &str, repo_root: &Path) -> Result<(), String> {
         ));
     }
     let p = Path::new(path);
-    if p.components().any(|c| c == Component::ParentDir) {
+    // Split on both separators: after a `\\?\` prefix `/` is not one, so `components()` misses it.
+    if p.components().any(|c| c == Component::ParentDir)
+        || path.split(['/', '\\']).any(|s| s == "..")
+    {
         return Err(format!(
             "`{path}` climbs with `..`; pass the resolved absolute path."
         ));
