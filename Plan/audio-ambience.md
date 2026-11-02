@@ -1,6 +1,6 @@
 # Plan: Audio Ambience — loops, positional emitters, category gains
 
-> Status: **Stereo pan + spatial distance SHIPPED (2026-11-01, Clockout 0035)** — two per-game builder
+> Status: **Stereo pan + spatial distance SHIPPED (2026-11-01, r2013, Clockout 0035)** — two per-game builder
 > knobs, `EngineBuilder::audio_pan(AudioPan::{Centred, Stereo})` and
 > `audio_distance(AudioDistance::{Planar, Spatial})`, both defaulting to today's behaviour so every
 > existing game's stream is unchanged. Pan is **opt-in** and separate from the distance knob (the
