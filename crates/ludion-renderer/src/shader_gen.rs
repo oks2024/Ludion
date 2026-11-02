@@ -252,10 +252,12 @@ const _: () = assert!(core::mem::offset_of!(BoxBlurParams, texel) == 0);
 pub struct Camera {
     pub view_proj: [[f32; 4]; 4],
     pub cam_pos: [f32; 4],
+    pub view_forward: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<Camera>() == 80);
+const _: () = assert!(core::mem::size_of::<Camera>() == 96);
 const _: () = assert!(core::mem::offset_of!(Camera, view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(Camera, cam_pos) == 64);
+const _: () = assert!(core::mem::offset_of!(Camera, view_forward) == 80);
 
 /// WGSL `struct Composite`.
 ///
@@ -720,13 +722,15 @@ pub struct Reflections {
     pub env: [f32; 4],
     pub gi_origin: [f32; 4],
     pub gi_scale: [f32; 4],
+    pub view_forward: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<Reflections>() == 128);
+const _: () = assert!(core::mem::size_of::<Reflections>() == 144);
 const _: () = assert!(core::mem::offset_of!(Reflections, inv_view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(Reflections, cam_pos) == 64);
 const _: () = assert!(core::mem::offset_of!(Reflections, env) == 80);
 const _: () = assert!(core::mem::offset_of!(Reflections, gi_origin) == 96);
 const _: () = assert!(core::mem::offset_of!(Reflections, gi_scale) == 112);
+const _: () = assert!(core::mem::offset_of!(Reflections, view_forward) == 128);
 
 /// WGSL `struct RelightParams`.
 ///
@@ -870,8 +874,9 @@ pub struct Sky {
     pub ground: [f32; 4],
     pub sun_dir: [f32; 4],
     pub disc: [f32; 4],
+    pub view_forward: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<Sky>() == 160);
+const _: () = assert!(core::mem::size_of::<Sky>() == 176);
 const _: () = assert!(core::mem::offset_of!(Sky, inv_view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(Sky, cam_pos) == 64);
 const _: () = assert!(core::mem::offset_of!(Sky, zenith) == 80);
@@ -879,6 +884,7 @@ const _: () = assert!(core::mem::offset_of!(Sky, horizon) == 96);
 const _: () = assert!(core::mem::offset_of!(Sky, ground) == 112);
 const _: () = assert!(core::mem::offset_of!(Sky, sun_dir) == 128);
 const _: () = assert!(core::mem::offset_of!(Sky, disc) == 144);
+const _: () = assert!(core::mem::offset_of!(Sky, view_forward) == 160);
 
 /// WGSL `struct SkyColors`.
 ///
@@ -970,11 +976,13 @@ pub struct SsrBlendParams {
     pub inv_view_proj: [[f32; 4]; 4],
     pub cam_pos: [f32; 4],
     pub look: [f32; 4],
+    pub view_forward: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<SsrBlendParams>() == 96);
+const _: () = assert!(core::mem::size_of::<SsrBlendParams>() == 112);
 const _: () = assert!(core::mem::offset_of!(SsrBlendParams, inv_view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(SsrBlendParams, cam_pos) == 64);
 const _: () = assert!(core::mem::offset_of!(SsrBlendParams, look) == 80);
+const _: () = assert!(core::mem::offset_of!(SsrBlendParams, view_forward) == 96);
 
 /// WGSL `struct SsrColorParams`.
 ///
@@ -1013,13 +1021,15 @@ pub struct SsrTrace {
     pub cam_pos: [f32; 4],
     pub proj_levels: [f32; 4],
     pub look: [f32; 4],
+    pub view_forward: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<SsrTrace>() == 176);
+const _: () = assert!(core::mem::size_of::<SsrTrace>() == 192);
 const _: () = assert!(core::mem::offset_of!(SsrTrace, view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(SsrTrace, inv_view_proj) == 64);
 const _: () = assert!(core::mem::offset_of!(SsrTrace, cam_pos) == 128);
 const _: () = assert!(core::mem::offset_of!(SsrTrace, proj_levels) == 144);
 const _: () = assert!(core::mem::offset_of!(SsrTrace, look) == 160);
+const _: () = assert!(core::mem::offset_of!(SsrTrace, view_forward) == 176);
 
 /// WGSL `struct Sun`.
 ///
@@ -2088,7 +2098,7 @@ pub fn create_blend_fill_blend_normal_blend_specular_blend_depth_blend_trace_ble
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(96),
+                    min_binding_size: wgpu::BufferSize::new(112),
                 },
                 count: None,
             },
@@ -2141,7 +2151,7 @@ pub fn create_camera_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(80),
+                min_binding_size: wgpu::BufferSize::new(96),
             },
             count: None,
         }],
@@ -2159,7 +2169,7 @@ pub fn create_camera_bone_palette_bgl(device: &wgpu::Device) -> wgpu::BindGroupL
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(80),
+                    min_binding_size: wgpu::BufferSize::new(96),
                 },
                 count: None,
             },
@@ -3111,7 +3121,7 @@ pub fn create_refl_normal_refl_specular_refl_depth_refl_sky_cube_refl_brdf_lut_r
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(128),
+                    min_binding_size: wgpu::BufferSize::new(144),
                 },
                 count: None,
             },
@@ -3369,7 +3379,7 @@ pub fn create_sky_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(160),
+                min_binding_size: wgpu::BufferSize::new(176),
             },
             count: None,
         }],
@@ -3812,7 +3822,7 @@ pub fn create_trace_hiz_trace_color_trace_normal_trace_depth_trace_samp_trace_pa
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(176),
+                    min_binding_size: wgpu::BufferSize::new(192),
                 },
                 count: None,
             },

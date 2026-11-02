@@ -72,7 +72,7 @@ fn all_repo_shaders_reflect_and_unify() {
         "Camera must unify to a single struct"
     );
     let camera = reflection.struct_named("Camera").unwrap();
-    assert_eq!(camera.size, 80); // mat4x4 (64) + vec4 (16)
+    assert_eq!(camera.size, 96); // mat4x4 (64) + two vec4 (32)
 
     // The clustered light set is composed into both mesh and sprite; each struct must unify to one
     // entry. `Light` is reachable only through the `light_list` storage array — a runtime-sized
@@ -95,7 +95,7 @@ fn all_repo_shaders_reflect_and_unify() {
         camera_binding.kind,
         BindingKind::Buffer {
             address_space: BufferSpace::Uniform,
-            min_size: 80,
+            min_size: 96,
         }
     ));
     assert_eq!(

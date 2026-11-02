@@ -1,6 +1,6 @@
 // The mesh shading, groups 2–3, shared by every shader that lights a surface like a mesh: the sun and
 // local-light shadows (@group 2), the IBL / AO / GI environment (@group 3), the Cook-Torrance lobes and
-// `shade`. Composed after the camera, lights, dfg and gi_probe snippets.
+// `shade`. Composed after the camera, lights, dfg, gi_probe and view_ray snippets.
 
 // The directional "sun" — a mesh-only @group(2) (Plan/shadow-mapping.md decision 3), so the shared
 // camera/lights layouts and the sprite/text shaders are untouched. `sun.color` is premultiplied and
@@ -446,11 +446,13 @@ fn shade(
 
     let n = normalize(n_in);
     // `to_camera` serves twice: normalized it is the view vector, and its own dot product is the
-    // squared camera distance the cluster shell lookup wants — no square root anywhere. `normalize`
-    // is left as `normalize` rather than a hand-rolled divide, because the two are not guaranteed to
-    // emit the same instruction and `v` feeds every specular lobe in the frame.
+    // squared camera distance the cluster shell lookup wants — no square root anywhere. Distance
+    // always comes from `to_camera`; `v` goes through `view_to_eye`, which swaps in the constant
+    // forward of an orthographic camera. `normalize` is left as `normalize` rather than a hand-rolled
+    // divide, because the two are not guaranteed to emit the same instruction and `v` feeds every
+    // specular lobe in the frame.
     let to_camera = camera.cam_pos.xyz - world_pos;
-    let v = normalize(to_camera);
+    let v = normalize(view_to_eye(to_camera, camera.view_forward));
     let ndv = max(dot(n, v), 1e-4);
     // One fetch, shared by every specular lobe below.
     let dfg = textureSampleLevel(env_brdf_lut, env_samp, vec2<f32>(ndv, roughness), 0.0).rg;

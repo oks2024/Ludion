@@ -46,6 +46,8 @@ struct SsrTrace {
     proj_levels: vec4<f32>,
     // x = max distance, y = thickness, zw = the roughness fade (full below z, zero above w).
     look: vec4<f32>,
+    // xyz = unit world-space camera forward, w = 1 under an orthographic projection (zero otherwise).
+    view_forward: vec4<f32>,
 }
 @group(0) @binding(5) var<uniform> trace_params: SsrTrace;
 
@@ -136,7 +138,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let origin_uv = (vec2<f32>(p) + vec2<f32>(0.5)) / vec2<f32>(render);
     let world = trace_unproject(origin_uv, depth);
     let n = normalize(nr.xyz);
-    let v = normalize(trace_params.cam_pos.xyz - world);
+    let v = normalize(view_to_eye(trace_params.cam_pos.xyz - world, trace_params.view_forward));
     let r = reflect(-v, n);
 
     // The ray's two ends in trace space; the far end is pulled back to the near plane if it crosses it.

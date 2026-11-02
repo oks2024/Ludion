@@ -29,6 +29,8 @@ struct SsrBlendParams {
     cam_pos: vec4<f32>,
     // x = the look's intensity (scales the confidence).
     look: vec4<f32>,
+    // xyz = unit world-space camera forward, w = 1 under an orthographic projection (zero otherwise).
+    view_forward: vec4<f32>,
 }
 @group(0) @binding(7) var<uniform> blend_params: SsrBlendParams;
 
@@ -96,7 +98,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
     let spec = textureLoad(blend_specular, p, 0);
-    let v = normalize(blend_params.cam_pos.xyz - world);
+    let v = normalize(view_to_eye(blend_params.cam_pos.xyz - world, blend_params.view_forward));
     let ndv = max(dot(n, v), 1e-4);
     // The sky's split-sum scale and bias, so the two paths match in BRDF.
     let ab = textureSampleLevel(blend_brdf_lut, blend_samp, vec2<f32>(ndv, nr.w), 0.0).rg;

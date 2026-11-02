@@ -155,6 +155,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "hdr.wgsl",
             "dfg.wgsl",
             "gi_probe.wgsl",
+            "view_ray.wgsl",
             "mesh_shading.wgsl",
             "mesh_material.wgsl",
         ],
@@ -198,6 +199,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "hdr.wgsl",
             "dfg.wgsl",
             "gi_probe.wgsl",
+            "view_ray.wgsl",
             "mesh_shading.wgsl",
             "decal.wgsl",
         ],
@@ -242,6 +244,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         "reflections.wgsl",
         &[
             "fullscreen_vs.wgsl",
+            "view_ray.wgsl",
             "hdr.wgsl",
             "lobe.wgsl",
             "dfg.wgsl",
@@ -277,7 +280,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ),
     ("shadow.wgsl", &["skin.wgsl"]),
     ("shadow_cutout.wgsl", &["skin.wgsl", "mesh_material.wgsl"]),
-    ("sky.wgsl", &["sky_gradient.wgsl"]),
+    ("sky.wgsl", &["view_ray.wgsl", "sky_gradient.wgsl"]),
     (
         "smaa_blend.wgsl",
         &[
@@ -292,7 +295,13 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("ssao.wgsl", &["fullscreen_vs.wgsl", "bayer.wgsl"]),
     (
         "ssr_blend.wgsl",
-        &["fullscreen_vs.wgsl", "hdr.wgsl", "dfg.wgsl", "ssr.wgsl"],
+        &[
+            "fullscreen_vs.wgsl",
+            "view_ray.wgsl",
+            "hdr.wgsl",
+            "dfg.wgsl",
+            "ssr.wgsl",
+        ],
     ),
     (
         "ssr_color.wgsl",
@@ -301,7 +310,13 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("ssr_debug.wgsl", &["fullscreen_vs.wgsl", "srgb.wgsl"]),
     (
         "ssr_trace.wgsl",
-        &["fullscreen_vs.wgsl", "hdr.wgsl", "lobe.wgsl", "ssr.wgsl"],
+        &[
+            "fullscreen_vs.wgsl",
+            "view_ray.wgsl",
+            "hdr.wgsl",
+            "lobe.wgsl",
+            "ssr.wgsl",
+        ],
     ),
     ("threshold.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     (

@@ -32,7 +32,7 @@ consts, `create_*_bgl` functions, `*_VS_MAIN_INPUTS` — are **generated**, not 
   and it reads NaN as 0 by a bit test (WGSL has no `isnan`); `medium.wgsl` and `sky_gradient.wgsl` are shared *because* two
   shaders each must not disagree about the medium's shape or the sky's colour
   (`ludion devdocs renderer-medium`); `glyph.wgsl` holds the atlas bindings and the coverage fragment
-  that the world-space and UI text passes share. Editing a snippet is a real change: regenerate and re-check
+  that the world-space and UI text passes share; `view_ray.wgsl` picks an orthographic camera's single view direction over the per-pixel vector to the eye (mesh, decal_lit, sky, reflections, SSR). Editing a snippet is a real change: regenerate and re-check
   like any WGSL edit, and a snippet edit that alters a layout makes the drift gate fail.
 - **The snippet mapping lives in two mirrored places** — the `SHADERS` registry rows in `render.rs`
   (what the GPU compiles) and `ludion_shader_bindgen::COMPOSITIONS` (what the drift gate reflects).

@@ -1376,6 +1376,21 @@ impl RenderScene {
 }
 
 impl RenderCamera {
+    /// The `view_forward` lane of the camera, sky, reflection and SSR uniforms: `xyz` the unit
+    /// world-space forward and `w` = 1 under an orthographic projection, exactly `[0.0; 4]` under a
+    /// perspective one (whose view vector fans out from the eye). Derived from the matrices at use, so
+    /// it agrees with a pixel-snapped or blended camera.
+    pub fn view_forward_lane(&self) -> [f32; 4] {
+        // `perspective_rh` has -1 at `z_axis.w`, `orthographic_rh` 0.
+        if self.projection.z_axis.w != 0.0 {
+            return [0.0; 4];
+        }
+        let view = &self.view;
+        let forward = -Vec3::new(view.x_axis.z, view.y_axis.z, view.z_axis.z);
+        let f = forward.normalize_or_zero();
+        [f.x, f.y, f.z, 1.0]
+    }
+
     /// The documented default framing for a scene with no camera (see [`RenderScene::empty`]).
     pub fn default_framing(viewport: (u32, u32)) -> RenderCamera {
         let position = Vec3::new(0.0, 2.5, 7.0);
@@ -1399,6 +1414,32 @@ pub fn aspect_ratio(viewport: (u32, u32)) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_forward_lane_is_zero_for_perspective_and_the_forward_for_ortho() {
+        let eye = Vec3::new(1.0, 2.0, 3.0);
+        let view = Mat4::look_at_rh(eye, Vec3::new(1.0, 2.0, -5.0), Vec3::Y);
+        let perspective = RenderCamera {
+            view,
+            projection: Mat4::perspective_rh(1.0, 1.5, 0.1, 100.0),
+            position: eye,
+        };
+        assert!(
+            perspective
+                .view_forward_lane()
+                .iter()
+                .all(|c| c.to_bits() == 0.0_f32.to_bits())
+        );
+        let ortho = RenderCamera {
+            projection: Mat4::orthographic_rh(-4.0, 4.0, -3.0, 3.0, 0.1, 50.0),
+            ..perspective
+        };
+        let lane = ortho.view_forward_lane();
+        assert_eq!(lane[3], 1.0);
+        for (got, want) in lane.iter().zip([0.0, 0.0, -1.0]) {
+            assert!((got - want).abs() < 1e-6, "{lane:?}");
+        }
+    }
 
     #[test]
     fn drop_shadow_fade_is_full_then_ramps_then_gone() {

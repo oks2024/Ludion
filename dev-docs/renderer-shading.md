@@ -30,7 +30,10 @@ re-blesses every mesh-bearing golden:
   (`ludion devdocs renderer-ibl`).
 - **Emissive** — `albedo × emissive` added to the fragment before tonemapping; values above `1.0`
   bloom through the untouched threshold/blur/composite passes, with no new pass or uniform.
-- **View vector** — `normalize(camera.cam_pos.xyz − world_pos)`.
+- **View vector** — `normalize(view_to_eye(camera.cam_pos.xyz − world_pos, camera.view_forward))`: the vector to the eye
+  under a perspective camera, the constant camera forward under an orthographic one (`snippets/view_ray.wgsl`; the
+  same helper serves the sky, reflections and both SSR passes). Distances (the cluster shell, SSAO, DoF) stay radial
+  from the eye; only the view direction changes.
 - **Sun** — a `DirectionalLight`, exposed to `mesh.wgsl` as a mesh-only `@group(2)` (`struct Sun`,
   `shadow_tex: texture_depth_2d`, `shadow_samp: sampler_comparison`) so the shared `@group(1)`
   clustered-light payload — and therefore `sprite.wgsl` and its goldens — stays untouched by

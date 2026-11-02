@@ -1501,6 +1501,7 @@ impl Renderer {
         let camera_raw = Camera {
             view_proj: view_proj.to_cols_array_2d(),
             cam_pos: scene.camera.position.extend(1.0).to_array(),
+            view_forward: scene.camera.view_forward_lane(),
         };
         let camera_buf = init_buffer(
             device,
@@ -1837,6 +1838,7 @@ impl Renderer {
             view_proj,
             inv_view_proj: view_proj.inverse(),
             camera_position: scene.camera.position,
+            view_forward: scene.camera.view_forward_lane(),
             proj_y: scene.camera.projection.y_axis.y,
             mesh_draws,
             mesh_asset_draws,
@@ -2751,6 +2753,7 @@ impl Renderer {
             ground: rgb(env.sky_ground),
             sun_dir: [sun_dir.x, sun_dir.y, sun_dir.z, cos_half],
             disc: [env.sun_disc_intensity, has_disc, 0.0, 0.0],
+            view_forward: scene.camera.view_forward_lane(),
         };
         let sky_buf = init_buffer(
             device,
@@ -3317,6 +3320,8 @@ struct FrameRecorder<'a> {
     inv_view_proj: Mat4,
     /// The camera's world position — the other end of the ray the fog integrates along.
     camera_position: Vec3,
+    /// [`RenderCamera::view_forward_lane`]: the one view direction of an orthographic camera.
+    view_forward: [f32; 4],
     /// The camera projection's `[1][1]` (focal length over half the frame height), which the SSR trace
     /// turns into pixels per world unit at a hit.
     proj_y: f32,
@@ -3961,6 +3966,7 @@ impl FrameRecorder<'_> {
             env,
             gi_origin: self.resolved_gi.origin,
             gi_scale: self.resolved_gi.scale,
+            view_forward: self.view_forward,
         };
         let uniform_buf = init_buffer(
             pass.device,
@@ -4722,6 +4728,7 @@ impl FrameRecorder<'_> {
                 0.0,
                 0.0,
             ],
+            view_forward: self.view_forward,
         };
         let uniform_buf = init_buffer(
             pass.device,
@@ -5111,6 +5118,7 @@ impl FrameRecorder<'_> {
                 look.fade[0],
                 look.fade[1],
             ],
+            view_forward: self.view_forward,
         };
         self.fullscreen_effect(pass, ShaderId::SsrTrace, &[], bytemuck::bytes_of(&params));
     }
@@ -6369,6 +6377,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Hdr,
             Snippet::Dfg,
             Snippet::GiProbe,
+            Snippet::ViewRay,
             Snippet::MeshShading,
             Snippet::MeshMaterial,
         ],
@@ -6427,7 +6436,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::Sky,
         file_name: "sky.wgsl",
         body: include_str!("shaders/sky.wgsl"),
-        snippets: &[Snippet::SkyGradient],
+        snippets: &[Snippet::ViewRay, Snippet::SkyGradient],
         layouts: &[Some(LayoutId::Sky)],
     },
     ShaderDesc {
@@ -6612,6 +6621,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/reflections.wgsl"),
         snippets: &[
             Snippet::FullscreenVs,
+            Snippet::ViewRay,
             Snippet::Hdr,
             Snippet::Lobe,
             Snippet::Dfg,
@@ -6628,6 +6638,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/ssr_blend.wgsl"),
         snippets: &[
             Snippet::FullscreenVs,
+            Snippet::ViewRay,
             Snippet::Hdr,
             Snippet::Dfg,
             Snippet::Ssr,
@@ -6661,6 +6672,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/ssr_trace.wgsl"),
         snippets: &[
             Snippet::FullscreenVs,
+            Snippet::ViewRay,
             Snippet::Hdr,
             Snippet::Lobe,
             Snippet::Ssr,
@@ -6742,6 +6754,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Hdr,
             Snippet::Dfg,
             Snippet::GiProbe,
+            Snippet::ViewRay,
             Snippet::MeshShading,
             Snippet::Decal,
         ],
@@ -6898,6 +6911,10 @@ enum Snippet {
     /// `shade_two_sided`, the light rule of a flat camera-facing billboard (sprite, and a lit
     /// particle's centre); needs the `Camera` and `Lights` snippets ahead of it.
     BillboardLight,
+    /// `view_to_eye` and `view_from_eye`, which pick an orthographic camera's single view direction
+    /// over the per-pixel vector to the eye, binding-free (mesh, decal_lit, sky, reflections,
+    /// ssr_blend, ssr_trace).
+    ViewRay,
 }
 
 impl Snippet {
@@ -6929,6 +6946,7 @@ impl Snippet {
             Snippet::RoundedBox => "rounded_box.wgsl",
             Snippet::Decal => "decal.wgsl",
             Snippet::BillboardLight => "billboard_light.wgsl",
+            Snippet::ViewRay => "view_ray.wgsl",
         }
     }
 
@@ -6959,6 +6977,7 @@ impl Snippet {
             Snippet::RoundedBox => include_str!("shaders/snippets/rounded_box.wgsl"),
             Snippet::Decal => include_str!("shaders/snippets/decal.wgsl"),
             Snippet::BillboardLight => include_str!("shaders/snippets/billboard_light.wgsl"),
+            Snippet::ViewRay => include_str!("shaders/snippets/view_ray.wgsl"),
         }
     }
 
@@ -6990,6 +7009,7 @@ impl Snippet {
             Snippet::RoundedBox,
             Snippet::Decal,
             Snippet::BillboardLight,
+            Snippet::ViewRay,
         ]
         .into_iter()
         .find(|s| s.file_name() == name)
@@ -10383,6 +10403,181 @@ mod tests {
             "the sky must show in the metal: {} vs {}",
             centre(&lit),
             centre(&dark),
+        );
+    }
+
+    /// An orthographic camera at `eye` looking at `target`, `half_h` tall and `aspect` wide.
+    fn ortho_camera(
+        eye: Vec3,
+        target: Vec3,
+        half_h: f32,
+        aspect: f32,
+    ) -> crate::scene::RenderCamera {
+        crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, target, Vec3::Y),
+            projection: Mat4::orthographic_rh(
+                -half_h * aspect,
+                half_h * aspect,
+                -half_h,
+                half_h,
+                0.1,
+                20.0,
+            ),
+            position: eye,
+        }
+    }
+
+    /// The largest per-channel gap between any pixel of `img` (RGB) and its pixel at (`x0`, `y0`).
+    fn max_gap_from(img: &RenderedImage, x0: u32, y0: u32) -> i32 {
+        let reference = pixel(img, x0, y0);
+        let mut worst = 0;
+        for y in 0..img.height {
+            for x in 0..img.width {
+                let p = pixel(img, x, y);
+                for c in 0..3 {
+                    worst = worst.max((i32::from(p[c]) - i32::from(reference[c])).abs());
+                }
+            }
+        }
+        worst
+    }
+
+    fn contrast_env(ibl_intensity: f32) -> crate::scene::EnvironmentData {
+        crate::scene::EnvironmentData {
+            sky_zenith: [0.9, 0.1, 0.1],
+            sky_horizon: [0.1, 0.9, 0.1],
+            sky_ground: [0.1, 0.1, 0.9],
+            sun_disc_size: 0.0,
+            sun_disc_intensity: 0.0,
+            ambient: [0.0; 3],
+            ibl_intensity,
+        }
+    }
+
+    /// Under an orthographic camera every ray is parallel, so a flat plane with a sun mirrored about
+    /// the view direction has one specular value across the whole frame.
+    #[test]
+    fn needs_gpu_ortho_specular_is_uniform_on_a_flat_plane() {
+        let Some(renderer) = skip_or_renderer("ortho_specular_is_uniform_on_a_flat_plane") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.ambient = [0.0; 3];
+        scene.camera = ortho_camera(Vec3::new(0.0, 6.0, 6.0), Vec3::ZERO, 8.0, 1.0);
+        // The light travels the mirror of the view direction about +Y: the half vector is the normal.
+        scene.sun = Some(test_sun(Vec3::new(0.0, -1.0, 1.0), Vec3::splat(1.0), 0.002));
+        let mut plane = ground(50.0);
+        plane.material = [0.15, 0.0, 0.0];
+        plane.color = [0.02, 0.02, 0.02, 1.0];
+        scene.meshes = vec![plane];
+        let image = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("ortho specular render");
+        let gap = max_gap_from(&image, w / 2, h / 2);
+        assert!(
+            gap <= 2,
+            "the specular term must not vary across an orthographic plane: worst gap {gap} LSB"
+        );
+    }
+
+    /// The sky behind an orthographic camera is one colour: its rays do not fan out.
+    #[test]
+    fn needs_gpu_ortho_sky_does_not_bend() {
+        let Some(renderer) = skip_or_renderer("ortho_sky_does_not_bend") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.environment = Some(contrast_env(0.0));
+        scene.camera = ortho_camera(Vec3::new(0.0, 1.0, 8.0), Vec3::new(0.0, 1.0, 0.0), 8.0, 1.0);
+        let image = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("ortho sky render");
+        let gap = max_gap_from(&image, w / 2, 0);
+        assert!(
+            gap <= 1,
+            "an orthographic sky must be one colour: worst gap {gap} LSB"
+        );
+    }
+
+    /// A metal plane under an orthographic camera reflects one sky direction everywhere.
+    #[test]
+    fn needs_gpu_ortho_sky_reflection_is_uniform_on_a_flat_plane() {
+        let Some(renderer) = skip_or_renderer("ortho_sky_reflection_is_uniform_on_a_flat_plane")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.environment = Some(contrast_env(1.0));
+        scene.camera = ortho_camera(Vec3::new(0.0, 6.0, 6.0), Vec3::ZERO, 8.0, 1.0);
+        let mut plane = ground(50.0);
+        plane.material = [0.2, 1.0, 0.0];
+        scene.meshes = vec![plane];
+        let image = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("ortho metal render");
+        let gap = max_gap_from(&image, w / 2, h / 2);
+        assert!(
+            gap <= 2,
+            "the sky reflection must not vary across an orthographic plane: worst gap {gap} LSB"
+        );
+    }
+
+    /// Under an orthographic camera SSR reflects along one direction, so a wall wide along X is
+    /// mirrored with a straight edge: the lowest red row is the same in every column.
+    #[test]
+    fn needs_gpu_ortho_ssr_reflects_along_one_direction() {
+        let Some(renderer) = skip_or_renderer("ortho_ssr_reflects_along_one_direction") else {
+            return;
+        };
+        let size = FrameSize::native(96, 64);
+        let mut scene = RenderScene::empty(size.render);
+        scene.post = Some(PostData {
+            ssr: 1.0,
+            ..exact_post()
+        });
+        scene.environment = Some(test_env());
+        scene.camera = ortho_camera(Vec3::new(0.0, 6.0, 6.0), Vec3::ZERO, 8.0, 1.5);
+        let mut floor = ground(50.0);
+        floor.material = [0.02, 1.0, 0.0];
+        let mut wall = cube(
+            Vec3::new(0.0, 0.75, -1.0),
+            Vec3::new(40.0, 1.5, 0.5),
+            [1.0, 0.0, 0.0, 1.0],
+        );
+        wall.material = [0.5, 0.0, 1.0];
+        scene.meshes = vec![floor, wall];
+        let chain = PostChain {
+            ssr: Some(QualityParams::FULL.ssr_scale),
+            ..PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params)
+        };
+        let (graph, output) = build_frame_graph(size, chain);
+        let scheduled = schedule(&graph).expect("the ssr graph schedules");
+        let recorder = renderer.prepare_frame(&scene, size, None).unwrap();
+        let image = renderer
+            .gpu
+            .execute(&scheduled, output, &recorder)
+            .expect("the ssr frame renders");
+        assert!(renderer.gpu.take_fault().is_none(), "the ssr frame faulted");
+
+        let (w, h) = size.output;
+        let mut lowest = Vec::new();
+        for x in 8..w - 8 {
+            let row = (0..h).rev().find(|&y| {
+                let p = pixel(&image, x, y);
+                i32::from(p[0]) - i32::from(p[2]) > 40
+            });
+            lowest.push(row.expect("the wall or its reflection is red in every column"));
+        }
+        let (lo, hi) = (*lowest.iter().min().unwrap(), *lowest.iter().max().unwrap());
+        assert!(
+            hi - lo <= 1,
+            "the reflected wall's edge must be one row in every column: rows {lo}..{hi}"
         );
     }
 

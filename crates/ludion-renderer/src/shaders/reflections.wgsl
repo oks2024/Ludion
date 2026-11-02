@@ -58,6 +58,8 @@ struct Reflections {
     gi_origin: vec4<f32>,
     // xyz = the reciprocal of the volume's world-space span, w = `normal_bias`.
     gi_scale: vec4<f32>,
+    // xyz = unit world-space camera forward, w = 1 under an orthographic projection (zero otherwise).
+    view_forward: vec4<f32>,
 }
 @group(0) @binding(7) var<uniform> reflections: Reflections;
 
@@ -86,7 +88,7 @@ fn reflection_fill(pos: vec4<f32>) -> vec3<f32> {
     let n = normalize(nr.xyz);
     let roughness = nr.w;
     let spec = textureLoad(refl_specular, p, 0);
-    let v = normalize(reflections.cam_pos.xyz - world);
+    let v = normalize(view_to_eye(reflections.cam_pos.xyz - world, reflections.view_forward));
     let ndv = max(dot(n, v), 1e-4);
     let r = reflect(-v, n);
     // The cube and probe lookups follow the lobe's dominant direction, not the mirror ray.

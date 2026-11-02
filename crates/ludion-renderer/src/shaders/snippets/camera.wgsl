@@ -5,6 +5,9 @@
 struct Camera {
     view_proj: mat4x4<f32>,
     cam_pos: vec4<f32>,
+    // xyz = unit world-space camera forward, w = 1 under an orthographic projection and 0 under a
+    // perspective one (see `view_ray.wgsl`).
+    view_forward: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;

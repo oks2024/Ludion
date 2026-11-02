@@ -23,6 +23,8 @@ struct Sky {
     sun_dir: vec4<f32>,
     // x = disc intensity, y = has-disc flag (1 = draw), zw = pad.
     disc: vec4<f32>,
+    // xyz = unit world-space camera forward, w = 1 under an orthographic projection (zero otherwise).
+    view_forward: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> sky: Sky;
 
@@ -47,7 +49,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Reconstruct the world-space view ray for this pixel from the far-plane NDC point.
     let world_h = sky.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
-    let dir = normalize(world_h.xyz / world_h.w - sky.cam_pos.xyz);
+    let dir = normalize(view_from_eye(world_h.xyz / world_h.w - sky.cam_pos.xyz, sky.view_forward));
 
     var color = sky_gradient(dir, sky.zenith.rgb, sky.horizon.rgb, sky.ground.rgb);
 
