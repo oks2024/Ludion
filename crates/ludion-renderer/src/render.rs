@@ -14585,13 +14585,19 @@ mod tests {
     }
 
     /// Reads a `Depth32Float` target back, unpadding the 256-byte row alignment.
-    fn read_depth32(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<f32> {
+    /// `texture`'s level 0 as tightly packed texels, through a blocking staging copy.
+    fn read_texels(
+        renderer: &Renderer,
+        texture: &wgpu::Texture,
+        bytes_per_texel: u32,
+        aspect: wgpu::TextureAspect,
+    ) -> Vec<u8> {
         let size = texture.size();
         let (w, h) = (size.width, size.height);
-        let row = (w * 4).div_ceil(256) * 256;
+        let row = (w * bytes_per_texel).div_ceil(256) * 256;
         let device = renderer.gpu.device();
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("depth readback"),
+            label: Some("test readback"),
             size: u64::from(row * h),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -14603,7 +14609,7 @@ mod tests {
                 texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::DepthOnly,
+                aspect,
             },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
@@ -14625,14 +14631,50 @@ mod tests {
             .expect("the device polls");
         rx.recv().unwrap().expect("the buffer maps");
         let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
-        let mut out = Vec::new();
-        for y in 0..h {
-            for x in 0..w {
-                let at = (y * row + x * 4) as usize;
-                out.push(f32::from_le_bytes(mapped[at..at + 4].try_into().unwrap()));
-            }
-        }
-        out
+        (0..h as usize)
+            .flat_map(|y| {
+                let start = y * row as usize;
+                mapped[start..start + (w * bytes_per_texel) as usize].to_vec()
+            })
+            .collect()
+    }
+
+    fn f32_texels(bytes: &[u8]) -> Vec<f32> {
+        bytes
+            .chunks_exact(4)
+            .map(|texel| f32::from_le_bytes(texel.try_into().unwrap()))
+            .collect()
+    }
+
+    fn read_depth32(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<f32> {
+        f32_texels(&read_texels(
+            renderer,
+            texture,
+            4,
+            wgpu::TextureAspect::DepthOnly,
+        ))
+    }
+
+    /// A graph of the frame's depth-only `pass` alone, its target declared as an output: only an
+    /// output can be copied out, because a later transient may alias any other resource.
+    fn depth_pass_graph(
+        frame: &ludion_render_graph::RenderGraph,
+        pass: &'static str,
+    ) -> (
+        ludion_render_graph::RenderGraph,
+        ludion_render_graph::ResourceId,
+    ) {
+        let depth = frame
+            .passes()
+            .iter()
+            .find(|declared| declared.name == pass)
+            .and_then(|declared| declared.depth)
+            .expect("the graph schedules the depth pass");
+        let target = &frame.resources()[depth.index()];
+        let mut graph = ludion_render_graph::RenderGraph::new();
+        let atlas = graph.output(target.name.clone(), target.desc.clone());
+        graph.add_external_pass_with_depth(pass, pass, vec![], vec![], atlas);
+        (graph, atlas)
     }
 
     /// **The local-shadow pass writes the granted view's tile and nothing else.** The atlas is read
@@ -14659,13 +14701,8 @@ mod tests {
         let chain =
             PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params);
         assert_eq!(chain.local_shadow_atlas, Some(edge));
-        let (graph, _) = build_frame_graph(size, chain);
-        let atlas = graph
-            .passes()
-            .iter()
-            .find(|declared| declared.name == pass::LOCAL_SHADOW)
-            .and_then(|declared| declared.depth)
-            .expect("the graph schedules the local shadow pass");
+        let (frame, _) = build_frame_graph(size, chain);
+        let (graph, atlas) = depth_pass_graph(&frame, pass::LOCAL_SHADOW);
         let scheduled = schedule(&graph).expect("the graph schedules");
         let recorder = renderer.prepare_frame(&scene, size, None).unwrap();
         let granted: Vec<_> = recorder
@@ -14774,13 +14811,8 @@ mod tests {
         size: FrameSize,
     ) -> (Vec<f32>, (u32, u32), Vec<Vec<u32>>) {
         let chain = PostChain::for_scene(scene).masked(&renderer.quality, &renderer.quality_params);
-        let (graph, _) = build_frame_graph(size, chain);
-        let atlas = graph
-            .passes()
-            .iter()
-            .find(|declared| declared.name == pass::SHADOW)
-            .and_then(|declared| declared.depth)
-            .expect("the graph schedules the shadow pass");
+        let (frame, _) = build_frame_graph(size, chain);
+        let (graph, atlas) = depth_pass_graph(&frame, pass::SHADOW);
         let desc = &graph
             .resources()
             .iter()
@@ -19192,25 +19224,39 @@ mod tests {
     ) -> (u32, u32, Vec<[f32; 4]>) {
         let (graph, trace) = crate::graph::build_ssr_trace_graph(size);
         let recorder = renderer.prepare_frame(scene, size, None).unwrap();
-        let image = renderer
+        let (tw, th) = crate::ssr_pyramid::trace_extent(size, QualityParams::FULL.ssr_scale);
+        let copy = renderer
             .gpu
-            .execute(
+            .device()
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("ssr trace copy"),
+                size: wgpu::Extent3d {
+                    width: tw,
+                    height: th,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+        renderer
+            .gpu
+            .execute_into(
                 &schedule(&graph).expect("the trace graph schedules"),
-                trace,
                 &recorder,
+                &[(trace, copy.as_image_copy())],
             )
             .expect("the trace renders");
+        let bytes = read_texels(renderer, &copy, 8, wgpu::TextureAspect::All);
         assert!(renderer.gpu.take_fault().is_none(), "the trace faulted");
-        let (tw, th) = crate::ssr_pyramid::trace_extent(size, QualityParams::FULL.ssr_scale);
-        assert_eq!((image.width, image.height), (tw, th));
-        let texels = (0..tw * th)
-            .map(|i| {
+        let texels = bytes
+            .chunks_exact(8)
+            .map(|texel| {
                 std::array::from_fn(|c| {
-                    let at = (i * 8) as usize + c * 2;
-                    crate::gi_bake::f16_to_f32(u16::from_le_bytes([
-                        image.rgba[at],
-                        image.rgba[at + 1],
-                    ]))
+                    crate::gi_bake::f16_to_f32(u16::from_le_bytes([texel[c * 2], texel[c * 2 + 1]]))
                 })
             })
             .collect();
@@ -19504,53 +19550,7 @@ mod tests {
 
     /// Reads a one-channel `R32Float` target back, unpadding the 256-byte row alignment.
     fn read_r32(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<f32> {
-        let size = texture.size();
-        let (w, h) = (size.width, size.height);
-        let row = (w * 4).div_ceil(256) * 256;
-        let device = renderer.gpu.device();
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("r32 readback"),
-            size: u64::from(row * h),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row),
-                    rows_per_image: Some(h),
-                },
-            },
-            size,
-        );
-        renderer.gpu.queue().submit(Some(encoder.finish()));
-        let (tx, rx) = std::sync::mpsc::channel();
-        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("the device polls");
-        rx.recv().unwrap().expect("the buffer maps");
-        let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
-        let mut out = Vec::new();
-        for y in 0..h {
-            for x in 0..w {
-                let at = (y * row + x * 4) as usize;
-                out.push(f32::from_le_bytes(mapped[at..at + 4].try_into().unwrap()));
-            }
-        }
-        out
+        f32_texels(&read_texels(renderer, texture, 4, wgpu::TextureAspect::All))
     }
 
     /// The real reduce pipelines, run over a 7×5 source into 3×2 (ratios 7/3 and 5/2, so the
