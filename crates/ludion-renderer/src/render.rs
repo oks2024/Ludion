@@ -23,7 +23,7 @@ use ludion_render_graph::{
 };
 
 use crate::compressed::{self, CompressedUploadError};
-use crate::cull::{Aabb, cull, instance_bounds, visible_ranges};
+use crate::cull::{Aabb, cull, instance_bounds, local_bounds, visible_ranges};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
@@ -101,6 +101,10 @@ struct MeshInstanceRaw {
     /// [`Mat4::from_mat3`] so the shader can apply it with the same `mat4 * vec4(n, 0)` arithmetic
     /// the old upper-3×3 path used — which keeps uniform-scale output bit-identical (the normal
     /// matrix then *is* the model's upper-3×3, and the `w` column is annihilated by the `0`).
+    ///
+    /// The lanes that product never reads are **repurposed** to carry the wrap-diffuse data, so this
+    /// struct needs no extra attribute (see [`instance_normal_lanes`]). The next per-instance value
+    /// gets a real lane of its own, not more packing here.
     normal: [[f32; 4]; 4],
     /// `(fade, height_min, bone_offset, handedness)`. Read at `@location(16)`: the first two lanes by
     /// the mesh shader's Bayer-dither discard (from the entity's `Fade` component, defaults
@@ -2170,7 +2174,7 @@ impl Renderer {
                             model: m.model.to_cols_array_2d(),
                             color: m.color,
                             material: instance_material(m),
-                            normal: Mat4::from_mat3(m.normal_matrix).to_cols_array_2d(),
+                            normal: instance_normal_lanes(m, &[]),
                             fade: instance_fade(m),
                             flash: instance_flash(m),
                         },
@@ -2208,7 +2212,9 @@ impl Renderer {
     ) -> Vec<MeshAssetDraw> {
         let mut draws = Vec::new();
         for mirrored in [false, true] {
-            let (buckets, sources) = bucket_asset_instances(scene, meshes.len(), mirrored);
+            let asset_bounds: Vec<Option<Aabb>> = meshes.iter().map(|asset| asset.bounds).collect();
+            let (buckets, sources) =
+                bucket_asset_instances(scene, meshes.len(), &asset_bounds, mirrored);
             for ((mesh, raws), sources) in meshes.iter().zip(buckets.iter()).zip(sources) {
                 // An empty mesh is valid content (erasing a model's last voxel) with nothing to draw;
                 // its zero-size buffers cannot be sliced, so it never reaches a draw loop.
@@ -5968,6 +5974,33 @@ fn instance_flash(m: &MeshInstance) -> [f32; 4] {
     [r, g, b, m.flash]
 }
 
+/// The instance's normal-matrix lanes, which also carry the wrap-diffuse data. The shader reads the
+/// matrix only as `(normal_mat * vec4(n, 0.0)).xyz`, so the `w` row (`n0.w`, `n1.w`, `n2.w`) and the
+/// column multiplied by `0.0` (`n3`) reach no result. A wrapped instance (`wrap > 0`) stores there:
+/// `n0.w` = wrap, `n3.xyz` = scatter colour, `(n1.w, n2.w, n3.w)` = world half-extents of its bounds
+/// (how far the band's shadow test lifts toward the light; zero when unknown). Wrap off is exactly
+/// `Mat4::from_mat3`'s bytes. Every write goes through here, every read through `wrap_lanes` in
+/// `mesh.wgsl`. Everything written is finite: `n3.xyz` is multiplied by `0.0`, so a NaN there would
+/// poison the normal.
+fn instance_normal_lanes(m: &MeshInstance, asset_bounds: &[Option<Aabb>]) -> [[f32; 4]; 4] {
+    let mut lanes = Mat4::from_mat3(m.normal_matrix).to_cols_array_2d();
+    if m.wrap.is_nan() || m.wrap <= 0.0 {
+        return lanes;
+    }
+    let scatter = m
+        .scatter_color
+        .map(|c| if c.is_finite() { c.max(0.0) } else { 1.0 });
+    let half = local_bounds(m.shape, asset_bounds)
+        .map(|local| local.transformed(&m.model))
+        .filter(Aabb::is_finite)
+        .map_or(Vec3::ZERO, |b| (b.max - b.min) * 0.5);
+    lanes[0][3] = m.wrap.min(1.0);
+    lanes[3] = [scatter[0], scatter[1], scatter[2], half.z];
+    lanes[1][3] = half.x;
+    lanes[2][3] = half.y;
+    lanes
+}
+
 /// Buckets every [`MeshShape::Asset`] instance in `scene` by its asset index, in scene order, into
 /// `asset_count` buckets — one linear pass instead of one filter pass per asset — keeping only the
 /// instances whose [`is_mirrored`] equals `mirrored`.
@@ -5980,6 +6013,7 @@ fn instance_flash(m: &MeshInstance) -> [f32; 4] {
 fn bucket_asset_instances(
     scene: &RenderScene,
     asset_count: usize,
+    asset_bounds: &[Option<Aabb>],
     mirrored: bool,
 ) -> (Vec<Vec<MeshInstanceRaw>>, Vec<Vec<u32>>) {
     let mut buckets: Vec<Vec<MeshInstanceRaw>> = vec![Vec::new(); asset_count];
@@ -5999,7 +6033,7 @@ fn bucket_asset_instances(
             model: m.model.to_cols_array_2d(),
             color: m.color,
             material: instance_material(m),
-            normal: Mat4::from_mat3(m.normal_matrix).to_cols_array_2d(),
+            normal: instance_normal_lanes(m, asset_bounds),
             fade: instance_fade(m),
             flash: instance_flash(m),
         });
@@ -9258,7 +9292,7 @@ mod tests {
                         model: m.model.to_cols_array_2d(),
                         color: m.color,
                         material: instance_material(m),
-                        normal: Mat4::from_mat3(m.normal_matrix).to_cols_array_2d(),
+                        normal: instance_normal_lanes(m, &[]),
                         fade: instance_fade(m),
                         flash: instance_flash(m),
                     })
@@ -9287,6 +9321,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         };
@@ -9303,7 +9339,7 @@ mod tests {
         ];
         let asset_count = 4; // index 3 is registered but unreferenced: an empty bucket
 
-        let bucketed = bucket_asset_instances(&scene, asset_count, false).0;
+        let bucketed = bucket_asset_instances(&scene, asset_count, &[], false).0;
         let refiltered = bucket_asset_instances_by_refiltering(&scene, asset_count);
         assert_eq!(bucketed.len(), refiltered.len());
         for (index, (new, old)) in bucketed.iter().zip(refiltered.iter()).enumerate() {
@@ -9364,6 +9400,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         };
@@ -9394,6 +9432,67 @@ mod tests {
             [1.0, -f32::MAX, 0.0, -1.0],
             "a reflection flips the handedness sign",
         );
+    }
+
+    fn wrap_probe(wrap: f32, scatter: [f32; 3]) -> MeshInstance {
+        MeshInstance {
+            shape: MeshShape::Cube,
+            model: Mat4::from_scale(Vec3::new(2.0, 4.0, 6.0)),
+            normal_matrix: Mat3::from_diagonal(Vec3::new(0.5, 0.25, 1.0 / 6.0)),
+            color: [1.0; 4],
+            material: [0.3, 0.7, 2.0],
+            use_vertex_material: true,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            wrap,
+            scatter_color: scatter,
+            bone_offset: 0,
+            cast_shadows: true,
+        }
+    }
+
+    /// Wrap off uploads `Mat4::from_mat3`'s exact bytes; a wrapped instance packs its data in lanes the
+    /// normal product never reads, so the transformed normal is unchanged; nothing non-finite reaches a lane.
+    #[test]
+    fn normal_lanes_carry_wrap_without_moving_the_normal() {
+        let off = wrap_probe(0.0, [0.2, 0.3, 0.4]);
+        let plain = Mat4::from_mat3(off.normal_matrix).to_cols_array_2d();
+        assert_eq!(instance_normal_lanes(&off, &[]), plain);
+        assert_eq!(
+            instance_normal_lanes(&wrap_probe(f32::NAN, [1.0; 3]), &[]),
+            plain
+        );
+
+        let on = wrap_probe(0.5, [0.2, 0.3, 0.4]);
+        let lanes = instance_normal_lanes(&on, &[]);
+        assert_eq!(lanes[0][3], 0.5);
+        assert_eq!(lanes[3][..3], [0.2, 0.3, 0.4]);
+        assert_eq!([lanes[1][3], lanes[2][3], lanes[3][3]], [1.0, 2.0, 3.0]);
+        let n = ludion_core::math::glam::Vec4::new(0.3, -0.6, 0.7, 0.0);
+        let packed = Mat4::from_cols_array_2d(&lanes) * n;
+        let unpacked = Mat4::from_cols_array_2d(&plain) * n;
+        assert_eq!(packed.truncate(), unpacked.truncate());
+
+        let hostile = instance_normal_lanes(
+            &wrap_probe(f32::INFINITY, [f32::NAN, f32::INFINITY, -1.0]),
+            &[],
+        );
+        assert!(
+            hostile.iter().flatten().all(|v| v.is_finite()),
+            "{hostile:?}"
+        );
+        assert_eq!(hostile[0][3], 1.0);
+        assert_eq!(hostile[3][..3], [1.0, 1.0, 0.0]);
+        let unknown = instance_normal_lanes(
+            &MeshInstance {
+                shape: MeshShape::Asset(9),
+                ..on
+            },
+            &[],
+        );
+        assert_eq!([unknown[1][3], unknown[2][3], unknown[3][3]], [0.0; 3]);
     }
 
     /// Screen-space quads for `text` at `cell` px from the origin, on the embedded face.
@@ -9725,6 +9824,8 @@ mod tests {
                 fade_height_min: -f32::MAX,
                 flash: 0.0,
                 flash_color: [1.0; 3],
+                wrap: 0.0,
+                scatter_color: [1.0; 3],
                 bone_offset: 0,
                 cast_shadows: true,
             });
@@ -9848,6 +9949,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         };
@@ -9944,6 +10047,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         }
@@ -9962,6 +10067,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         }
@@ -10249,6 +10356,8 @@ mod tests {
                 fade_height_min: -f32::MAX,
                 flash: 0.0,
                 flash_color: [1.0; 3],
+                wrap: 0.0,
+                scatter_color: [1.0; 3],
                 bone_offset: 0,
                 cast_shadows: true,
             },
@@ -10288,6 +10397,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash,
             flash_color: [0.2, 0.3, 0.4],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         }
@@ -10383,6 +10494,276 @@ mod tests {
             pixel(&mirror, w / 2, h / 2),
             pixel(&rough, w / 2, h / 2),
             "a fully flashed pixel shows the flash colour alone"
+        );
+    }
+
+    // --- Wrap diffuse (Mesh.wrap) -------------------------------------------------------------
+
+    fn wrap_mesh(
+        shape: MeshShape,
+        model: Mat4,
+        wrap: f32,
+        scatter: [f32; 3],
+        cast: bool,
+    ) -> MeshInstance {
+        MeshInstance {
+            shape,
+            model,
+            normal_matrix: Mat3::from_mat4(model.inverse().transpose()),
+            color: [0.9, 0.9, 0.9, 1.0],
+            material: [1.0, 0.0, 0.0],
+            use_vertex_material: false,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            wrap,
+            scatter_color: scatter,
+            bone_offset: 0,
+            cast_shadows: cast,
+        }
+    }
+
+    fn wrap_sphere(wrap: f32, scatter: [f32; 3], cast: bool) -> MeshInstance {
+        wrap_mesh(
+            MeshShape::Sphere,
+            Mat4::from_scale(Vec3::splat(2.0)),
+            wrap,
+            scatter,
+            cast,
+        )
+    }
+
+    /// A 64×64 frame of one sphere at the origin seen from +z, lit only from +x, so the left half is
+    /// past the terminator and a point's screen column follows its `n.x`.
+    fn wrap_scene(sun: bool) -> RenderScene {
+        let mut scene = RenderScene::empty((64, 64));
+        scene.ambient = [0.0; 3];
+        scene.post = Some(exact_post());
+        let eye = Vec3::new(0.0, 0.0, 6.0);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::perspective_rh(40.0_f32.to_radians(), 1.0, 0.1, 100.0),
+            position: eye,
+        };
+        if sun {
+            scene.sun = Some(test_sun(Vec3::NEG_X, Vec3::ONE, 0.002));
+        }
+        scene
+    }
+
+    /// A dark-side pixel at about n.x = -0.3: inside a wrap-0.5 band, past plain Lambert.
+    const WRAP_BAND_PIXEL: (u32, u32) = (28, 32);
+
+    /// A zero wrap is render-identical whatever the scatter colour: the band is never evaluated.
+    #[test]
+    fn needs_gpu_wrap_zero_ignores_the_scatter_colour() {
+        let Some(renderer) = skip_or_renderer("wrap_zero_ignores_the_scatter_colour") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = wrap_scene(true);
+        scene.meshes = vec![wrap_sphere(0.0, [1.0; 3], true)];
+        let white = renderer.render(&scene, size).expect("white");
+        scene.meshes = vec![wrap_sphere(0.0, [1.0, 0.2, 0.1], true)];
+        let red = renderer.render(&scene, size).expect("red");
+        assert_eq!(white.rgba, red.rgba);
+    }
+
+    /// Wrap lights the dark side past the terminator, more with more wrap; an authored vertex material
+    /// wraps too.
+    #[test]
+    fn needs_gpu_wrap_softens_the_terminator() {
+        let Some(renderer) = skip_or_renderer("wrap_softens_the_terminator") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = wrap_scene(true);
+        let at = |scene: &mut RenderScene, mesh: MeshInstance| {
+            scene.meshes = vec![mesh];
+            let img = renderer.render(scene, size).expect("render");
+            luma(&img, WRAP_BAND_PIXEL.0, WRAP_BAND_PIXEL.1)
+        };
+        let none = at(&mut scene, wrap_sphere(0.0, [1.0; 3], true));
+        let half = at(&mut scene, wrap_sphere(0.5, [1.0; 3], true));
+        let full = at(&mut scene, wrap_sphere(1.0, [1.0; 3], true));
+        assert_eq!(none, 0, "plain Lambert is black past the terminator");
+        assert!(half > 0, "wrap 0.5 lights it: {half}");
+        assert!(full > half, "wrap 1 lights it more: {half} -> {full}");
+        let authored = MeshInstance {
+            use_vertex_material: true,
+            ..wrap_sphere(1.0, [1.0; 3], true)
+        };
+        assert!(at(&mut scene, authored) > 0, "an authored material wraps");
+    }
+
+    /// The scatter colour tints the *total* wrapped diffuse per channel, so a zero channel still gets
+    /// light near the terminator: past it, red scatter gives R > G = B > 0 with G following `x^2`; and the
+    /// near-lit rim, where the wrapped cosine is almost the plain one, barely moves.
+    #[test]
+    fn needs_gpu_wrap_scatter_colour_follows_the_total_diffuse_formula() {
+        let Some(renderer) =
+            skip_or_renderer("wrap_scatter_colour_follows_the_total_diffuse_formula")
+        else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = wrap_scene(true);
+        scene.meshes = vec![wrap_sphere(1.0, [1.0, 0.0, 0.0], true)];
+        let tinted = renderer.render(&scene, size).expect("tinted");
+        scene.meshes = vec![wrap_sphere(0.0, [1.0; 3], true)];
+        let plain = renderer.render(&scene, size).expect("plain");
+        let band = rgb_at(&tinted, WRAP_BAND_PIXEL.0, WRAP_BAND_PIXEL.1);
+        // Past the terminator at wrap 1 the total diffuse per channel is `x * mix(scatter, 1, x)`
+        // with `x` the wrapped cosine: red `x`, green and blue `x^2`. A zero scatter channel keeps
+        // light, so the band is not pure red.
+        let linear = |v: u8| ((f32::from(v) / 255.0 + 0.055) / 1.055).powf(2.4);
+        let albedo = 0.9;
+        assert!(
+            band[0] > band[1] && band[1] == band[2] && band[1] > 0,
+            "{band:?}"
+        );
+        let expected_green = srgb8_from_linear(linear(band[0]).powi(2) / albedo);
+        assert!(
+            (f32::from(band[1]) - expected_green).abs() <= 3.0,
+            "green {} should follow the formula {expected_green}",
+            band[1]
+        );
+        let rim = (45, 32);
+        let (a, b) = (rgb_at(&tinted, rim.0, rim.1), rgb_at(&plain, rim.0, rim.1));
+        for c in 0..3 {
+            assert!(
+                a[c].abs_diff(b[c]) <= 12,
+                "the lit rim barely moves: {a:?} vs {b:?}"
+            );
+        }
+    }
+
+    /// The wrap data rides unread lanes of the instance's normal matrix, so a wrapped mesh must shade
+    /// with the same normals as an unwrapped one under a non-uniform scale (where the normal matrix is
+    /// not the model's). A `wrap` of 1e-30 takes the band path with the lanes packed but adds exactly
+    /// zero light (`(n.l + 1e-30) / (1 + 1e-30)` is `n.l` in f32), so the lit frames must be
+    /// byte-identical to `wrap: 0`. The normal target itself has no debug view; this reads the normal
+    /// through the sun shading of a metallic-free sphere and a rotated box.
+    #[test]
+    fn needs_gpu_wrap_lanes_leave_normals_unchanged_under_non_uniform_scale() {
+        let Some(renderer) = skip_or_renderer("wrap_lanes_leave_normals_unchanged") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let squash = Mat4::from_rotation_y(35.0_f32.to_radians())
+            * Mat4::from_rotation_x(20.0_f32.to_radians())
+            * Mat4::from_scale(Vec3::new(2.4, 0.7, 1.6));
+        for shape in [MeshShape::Sphere, MeshShape::Cube] {
+            let render = |wrap: f32| {
+                let mut scene = wrap_scene(true);
+                scene.ambient = [0.05; 3];
+                scene.meshes = vec![wrap_mesh(shape, squash, wrap, [0.2, 0.5, 1.0], true)];
+                renderer.render(&scene, size).expect("render")
+            };
+            let plain = render(0.0);
+            let packed = render(1e-30);
+            assert!(
+                plain.rgba.iter().any(|&b| b != plain.rgba[0]),
+                "the shape shows"
+            );
+            assert_eq!(
+                plain.rgba, packed.rgba,
+                "{shape:?}: packed lanes moved a pixel"
+            );
+        }
+    }
+
+    /// Lights for the shadowed-receiver tests: 0 the sun, 1 a shadowed spot, 2 a shadowed point light.
+    fn wrap_light_scene(kind: u8) -> RenderScene {
+        let mut scene = wrap_scene(kind == 0);
+        let shadow = Some(crate::scene::LocalShadowData {
+            bias: 0.02,
+            near: 0.1,
+            distance: None,
+            fade: 0.0,
+        });
+        match kind {
+            1 => {
+                let mut spot =
+                    spot_light(Vec3::new(4.0, 0.0, 0.0), Vec3::NEG_X, 6.0, 12.0, 40.0, 60.0);
+                spot.shadow = shadow;
+                scene.spot_lights = vec![spot];
+            }
+            2 => {
+                let mut light = point_light(Vec3::new(4.0, 0.0, 0.0), 6.0, 12.0);
+                light.shadow = shadow;
+                scene.lights = vec![light];
+            }
+            _ => {}
+        }
+        scene
+    }
+
+    /// The band is not eaten by the object's own shadow: a caster and a non-caster render the same
+    /// band to within a few levels, for the sun, a shadowed spot and a shadowed point light, on a
+    /// sphere and a rotated box; and across the sun-lit sphere the luma never notches on the way into
+    /// the dark.
+    #[test]
+    fn needs_gpu_wrap_band_has_no_shadow_acne_or_notch() {
+        let Some(renderer) = skip_or_renderer("wrap_band_has_no_shadow_acne_or_notch") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let box_model =
+            Mat4::from_rotation_y(30.0_f32.to_radians()) * Mat4::from_scale(Vec3::splat(1.6));
+        for kind in 0..3u8 {
+            for boxed in [false, true] {
+                let make = |cast: bool| {
+                    if boxed {
+                        wrap_mesh(MeshShape::Cube, box_model, 1.0, [1.0; 3], cast)
+                    } else {
+                        wrap_sphere(1.0, [1.0; 3], cast)
+                    }
+                };
+                let mut scene = wrap_light_scene(kind);
+                scene.meshes = vec![make(true)];
+                let casting = renderer.render(&scene, size).expect("casting");
+                scene.meshes = vec![make(false)];
+                let free = renderer.render(&scene, size).expect("non-casting");
+                let gap = max_channel_diff(&casting, &free, 8..56, 8..56);
+                assert!(
+                    gap <= 6,
+                    "light {kind} boxed {boxed}: caster differs by {gap}"
+                );
+                if kind == 0 && !boxed {
+                    let row: Vec<u32> = (20..45).map(|x| luma(&casting, x, 32)).collect();
+                    for pair in row.windows(2) {
+                        assert!(
+                            pair[1] + 6 >= pair[0],
+                            "a dark notch in the sun row: {row:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A distant caster between the sun and the sphere shades the band: with the wall up, the band is
+    /// as dark as plain Lambert.
+    #[test]
+    fn needs_gpu_wrap_band_is_shadowed_by_a_distant_caster() {
+        let Some(renderer) = skip_or_renderer("wrap_band_is_shadowed_by_a_distant_caster") else {
+            return;
+        };
+        let size = FrameSize::native(64, 64);
+        let mut scene = wrap_scene(true);
+        let wall = cube(
+            Vec3::new(6.0, 0.0, 0.0),
+            Vec3::new(0.5, 10.0, 10.0),
+            [0.5; 4],
+        );
+        scene.meshes = vec![wrap_sphere(1.0, [1.0; 3], false), wall];
+        let img = renderer.render(&scene, size).expect("render");
+        let l = luma(&img, WRAP_BAND_PIXEL.0, WRAP_BAND_PIXEL.1);
+        assert!(
+            l <= 3,
+            "the band must be shaded behind a distant caster: {l}"
         );
     }
 
@@ -10783,6 +11164,8 @@ mod tests {
             fade_height_min: height_min,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         };
@@ -10890,6 +11273,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset,
             cast_shadows: true,
         }
@@ -11155,6 +11540,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         }];
@@ -11427,6 +11814,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         }];
@@ -12409,6 +12798,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         }
@@ -13015,6 +13406,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         });
@@ -18261,6 +18654,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         }

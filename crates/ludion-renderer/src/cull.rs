@@ -122,22 +122,28 @@ pub(crate) fn instance_bounds(
             if mesh.bone_offset != 0 {
                 return None;
             }
-            let local = match mesh.shape {
-                // Object-space extents of `mesh.rs`'s primitives: cube and sphere span ±0.5, the
-                // plane ±0.5 in XZ at y = 0.
-                MeshShape::Cube | MeshShape::Sphere => Aabb {
-                    min: Vec3::splat(-0.5),
-                    max: Vec3::splat(0.5),
-                },
-                MeshShape::Plane => Aabb {
-                    min: Vec3::new(-0.5, 0.0, -0.5),
-                    max: Vec3::new(0.5, 0.0, 0.5),
-                },
-                MeshShape::Asset(i) => (*asset_bounds.get(i)?)?,
-            };
+            let local = local_bounds(mesh.shape, asset_bounds)?;
             Some(local.transformed(&mesh.model)).filter(Aabb::is_finite)
         })
         .collect()
+}
+
+/// A shape's object-space bounds; `None` for an asset index outside `asset_bounds` or an asset with
+/// unknown bounds.
+pub(crate) fn local_bounds(shape: MeshShape, asset_bounds: &[Option<Aabb>]) -> Option<Aabb> {
+    Some(match shape {
+        // Object-space extents of `mesh.rs`'s primitives: cube and sphere span ±0.5, the
+        // plane ±0.5 in XZ at y = 0.
+        MeshShape::Cube | MeshShape::Sphere => Aabb {
+            min: Vec3::splat(-0.5),
+            max: Vec3::splat(0.5),
+        },
+        MeshShape::Plane => Aabb {
+            min: Vec3::new(-0.5, 0.0, -0.5),
+            max: Vec3::new(0.5, 0.0, 0.5),
+        },
+        MeshShape::Asset(i) => (*asset_bounds.get(i)?)?,
+    })
 }
 
 /// Indices (ascending) of the instances a volume can see: those admitted, plus every `None`.
@@ -235,6 +241,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         }

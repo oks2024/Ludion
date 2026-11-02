@@ -438,6 +438,7 @@ mod tests {
             }),
             ("mesh colour", |f| f.scene.meshes[1].color[0] = 0.5),
             ("mesh material", |f| f.scene.meshes[1].material[0] = 0.9),
+            ("mesh wrap", |f| f.scene.meshes[1].wrap = 0.5),
             ("mesh data hash", |f| {
                 let mut mesh = (*f.scene.mesh_assets[0]).clone();
                 mesh.hash += 1;

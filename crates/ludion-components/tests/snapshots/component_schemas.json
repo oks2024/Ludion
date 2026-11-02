@@ -2782,6 +2782,23 @@
           1.0,
           1.0
         ]
+      },
+      "wrap": {
+        "description": "Wrap diffuse in `[0, 1]` (default `0.0`): direct lights soften across the terminator as\n`x = max((n·l + wrap) / (1 + wrap), 0)`, with [`scatter_color`](Mesh::scatter_color) tinting the\ntotal diffuse `x * mix(scatter, 1, 1 - wrap * (1 - x))` per channel (never below plain Lambert; white\nis plain wrap) — a cheap subsurface look for skin, leaves, wax. Specular, IBL,\nambient and GI are unchanged. Applies on meshes with an authored material, like [`flash`](Mesh::flash).\n`0.0` is render-identical by construction.",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "scatter_color": {
+        "description": "The tint of the wrapped diffuse (default white `[1, 1, 1]`), linear RGB. A channel at `0` still\nreceives some wrapped light near the terminator. Inert while [`wrap`](Mesh::wrap) is `0`.",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
       }
     },
     "$defs": {
@@ -3020,6 +3037,23 @@
               1.0,
               1.0
             ]
+          },
+          "wrap": {
+            "description": "Wrap diffuse in `[0, 1]` (default `0.0`): direct lights soften across the terminator as\n`x = max((n·l + wrap) / (1 + wrap), 0)`, with [`scatter_color`](Mesh::scatter_color) tinting the\ntotal diffuse `x * mix(scatter, 1, 1 - wrap * (1 - x))` per channel (never below plain Lambert; white\nis plain wrap) — a cheap subsurface look for skin, leaves, wax. Specular, IBL,\nambient and GI are unchanged. Applies on meshes with an authored material, like [`flash`](Mesh::flash).\n`0.0` is render-identical by construction.",
+            "type": "number",
+            "format": "float",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "scatter_color": {
+            "description": "The tint of the wrapped diffuse (default white `[1, 1, 1]`), linear RGB. A channel at `0` still\nreceives some wrapped light near the terminator. Inert while [`wrap`](Mesh::wrap) is `0`.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3
           }
         }
       },

@@ -1,0 +1,372 @@
+# Feature: Mesh.wrap and Mesh.scatter_color, a wrap diffuse that softens the terminator for direct lights.
+# One sun from the side (+x, a little toward the camera). Row A: spheres at wrap 0, 0.5, 1 that cast
+# shadows, and a wrap-1 sphere with an orange scatter_color; row B: the same three with cast_shadows
+# off, whose bands must match row A's (the band is not eaten by the sphere's own shadow); row C: a
+# wrap-1 sphere behind a wall, which shades its band, and a wrap-1 sphere with a red scatter_color;
+# row D, apart from the acceptance rows: a wrapped box (hard edges, flat back faces) and a wrapped
+# sphere close beside a tilted low platform, where the documented limit shows: a large or close
+# occluder does not fully shade the band; and a sphere with a slab almost touching it (a hard shadow
+# edge where the band clears the slab). The platform is tilted so its top is not at a grazing angle
+# to the sun, which would show shadow acne unrelated to wrap. Every other field is a default.
+# ludion docs materials.
+format: 1
+name: "wrap-diffuse - Mesh.wrap and scatter_color under a side sun"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 2.75
+          - -5.0
+          - 30.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - -1.0
+          - -0.1
+          - -0.6
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 1.6
+        shadow_extent: 24.0
+        shadow_near: 1.0
+        shadow_far: 80.0
+  - name: a-wrap-0
+    components:
+      Transform:
+        translation:
+          - -5.5
+          - 3.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+  - name: b-wrap-0-no-cast
+    components:
+      Transform:
+        translation:
+          - -5.5
+          - -2.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+      Visibility:
+        cast_shadows: false
+  - name: a-wrap-0.5
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 0.5
+  - name: b-wrap-0.5-no-cast
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -2.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 0.5
+      Visibility:
+        cast_shadows: false
+  - name: a-wrap-1
+    components:
+      Transform:
+        translation:
+          - 5.5
+          - 3.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 1
+  - name: b-wrap-1-no-cast
+    components:
+      Transform:
+        translation:
+          - 5.5
+          - -2.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 1
+      Visibility:
+        cast_shadows: false
+  - name: a-scatter
+    components:
+      Transform:
+        translation:
+          - 11.0
+          - 3.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 1
+        scatter_color:
+          - 1.0
+          - 0.35
+          - 0.1
+  - name: b-scatter-no-cast
+    components:
+      Transform:
+        translation:
+          - 11.0
+          - -2.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 1
+        scatter_color:
+          - 1.0
+          - 0.35
+          - 0.1
+      Visibility:
+        cast_shadows: false
+  - name: c-behind-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -7.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 1
+  - name: c-wall
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - -7.0
+          - 0.0
+        scale:
+          - 0.4
+          - 5.0
+          - 8.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 1.0
+  - name: c-red-scatter
+    components:
+      Transform:
+        translation:
+          - -5.5
+          - -7.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 1
+        scatter_color:
+          - 1.0
+          - 0.1
+          - 0.1
+  - name: d-box
+    components:
+      Transform:
+        translation:
+          - -5.5
+          - -12.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 30.0
+          - 0.0
+        scale:
+          - 2.4
+          - 2.4
+          - 2.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 1
+  - name: d-close-sphere
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - -12.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 1
+  - name: d-platform
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - -11.6
+          - 0.0
+        rotation:
+          - 0.0
+          - 0.0
+          - -20.0
+        scale:
+          - 3.0
+          - 0.3
+          - 4.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 1.0
+  - name: d-near-sphere
+    components:
+      Transform:
+        translation:
+          - 11.0
+          - -12.0
+          - 0.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: sphere
+        color:
+          - 0.85
+          - 0.85
+          - 0.85
+          - 1.0
+        wrap: 1
+  - name: d-near-slab
+    components:
+      Transform:
+        translation:
+          - 12.3
+          - -12.0
+          - 0.0
+        scale:
+          - 0.4
+          - 3.0
+          - 4.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 1.0

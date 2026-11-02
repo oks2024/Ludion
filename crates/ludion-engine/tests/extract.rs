@@ -3702,3 +3702,53 @@ entities:
     assert!(scene.decals[0].maps.base_color.is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `Mesh.wrap` / `scatter_color` reach `MeshInstance` for a plain mesh and for every part of an
+/// assembly; an unwrapped mesh carries the defaults.
+#[test]
+fn wrap_reaches_the_mesh_instance_for_a_mesh_and_assembly_parts() {
+    let dir = assembly_dir("wrap");
+    let mut world = World::new();
+    let plain = world.spawn();
+    world.insert(plain, Transform::default()).unwrap();
+    world.insert(plain, Mesh::default()).unwrap();
+    let wrapped = world.spawn();
+    world.insert(wrapped, Transform::default()).unwrap();
+    world
+        .insert(
+            wrapped,
+            Mesh {
+                wrap: 0.6,
+                scatter_color: [1.0, 0.3, 0.2],
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+    let assembly = world.spawn();
+    world.insert(assembly, Transform::default()).unwrap();
+    world
+        .insert(
+            assembly,
+            Mesh {
+                shape: MeshSource::Assembly("models/fixture.assembly.yaml".to_string()),
+                wrap: 0.4,
+                scatter_color: [0.2, 0.9, 0.2],
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
+    assert_eq!(scene.meshes.len(), 4, "one plain, one wrapped, two parts");
+    assert_eq!(
+        (scene.meshes[0].wrap, scene.meshes[0].scatter_color),
+        (0.0, [1.0; 3])
+    );
+    assert_eq!(
+        (scene.meshes[1].wrap, scene.meshes[1].scatter_color),
+        (0.6, [1.0, 0.3, 0.2])
+    );
+    for part in &scene.meshes[2..] {
+        assert_eq!((part.wrap, part.scatter_color), (0.4, [0.2, 0.9, 0.2]));
+    }
+}

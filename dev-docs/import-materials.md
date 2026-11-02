@@ -19,6 +19,7 @@ one white texel) times `r / max r`, multiplied in linear light (`bake_tinted`), 
 written as an ordinary hash-named texture (the untinted source is not written for it). A channel with
 a zero base and a non-zero factor, or a tint on a primitive without `TEXCOORD_0`, is an `L1202`
 naming the material; the emissive is dropped (not the whole material) under `--allow-lossy`.
+A material's `extras.ludion_wrap` / `extras.ludion_scatter_color` map straight onto `Mesh.wrap` / `Mesh.scatter_color` (`material_wrap`; absent, non-object or other keys leave the defaults, a wrong type or range is malformed, naming the material; written only when non-default).
 `KHR_materials_emissive_strength` multiplies `emissiveFactor` first, so the product is what is
 classified and what lands in `Mesh.emissive`. Its five metallic-roughness maps map through `material_textures`: each referenced
 image re-encodes through `ludion_assets::decode_png`/`encode_png` and is written as

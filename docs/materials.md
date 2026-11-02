@@ -227,6 +227,49 @@ surface's ambient term, so a metal reflects the sky instead of nothing, with no 
 under a procedural night sky — see `ludion docs environment` for the component and
 `ludion devdocs renderer-ibl` for the math.
 
+## Wrap diffuse
+
+`Mesh.wrap` (`0..=1`, default `0`) lets direct light bend past the terminator, a cheap stand-in for
+subsurface on skin, leaves, wax or cloth: the diffuse term becomes `max((n·l + wrap) / (1 + wrap), 0)`
+instead of `max(n·l, 0)` (call it `x`), and `scatter_color` (linear RGB, default white, so
+`[1.0, 0.3, 0.2]` gives a warm red edge) tints the **total** diffuse per channel as
+`x * mix(scatter, 1, 1 - wrap * (1 - x))`, kept above plain Lambert, so the tint has no crease at the
+terminator. This departs from "tint only the excess"; a channel at `0` still gets some light near the
+terminator, so `scatter_color: [0, 0, 0]` is not plain Lambert. Only the sun and point/spot lights
+feed it; specular, image-based light, ambient and GI are unchanged. `wrap: 0` renders the same
+bytes as a scene without the field.
+
+```yaml
+- name: ear
+  components:
+    Transform:
+      translation:
+        - 0.0
+        - 1.0
+        - 0.0
+    Mesh:
+      shape: sphere
+      wrap: 0.6
+      scatter_color:
+        - 1.0
+        - 0.3
+        - 0.2
+```
+
+- **Cost.** A mesh that wraps pays a second pass over its cluster's lights and a second set of shadow
+  lookups per fragment; a mesh without wrap pays one branch. Meshes with large screen coverage and
+  wrap on cost the most.
+- **Shadows.** The band is shadow-tested from a point pushed toward the light by the mesh's own
+  bounding thickness along the light ray, so a rounded part does not shade its own band. The
+  consequence: **wrap is for small, rounded parts.** A large receiver (ground, wall, long plank) or a
+  thing close under an occluder keeps the band inside shadows, because the push clears occluders
+  nearer than the mesh's thickness. A distant occluder still shades it. An occluder within the mesh's thickness along the light leaves the band lit with a hard edge, even a broad, near-touching one (about 110 levels in the gallery's near-slab case); wrap suits parts that are not closely overhung, and a lower `wrap` narrows the band and the edge. The tint is gentle under the smooth formula, and a `scatter_color` above `1` is allowed.
+- **Decals.** A lit decal on a wrapped mesh shades the decal as plain Lambert.
+- **Import.** A glTF material's `extras` keys `ludion_wrap` (`0..=1`) and `ludion_scatter_color`
+  (three numbers `>= 0`) land on the part's `Mesh`; a wrong type or range is an import error
+  naming the material. `examples/gallery/wrap-diffuse.yaml` shows wrap 0 / 0.5 / 1, tints, a
+  shaded band and the shadow limit.
+
 ## Next
 
 - `ludion docs environment` — the sky and image-based lighting.

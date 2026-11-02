@@ -1188,6 +1188,8 @@ fn extract_inner(
                         fade_height_min: fade.height_min,
                         flash: mesh.flash,
                         flash_color: mesh.flash_color,
+                        wrap: mesh.wrap,
+                        scatter_color: mesh.scatter_color,
                         bone_offset: 0,
                         cast_shadows,
                     });
@@ -1245,6 +1247,8 @@ fn extract_inner(
                 fade_height_min: fade.height_min,
                 flash: mesh.flash,
                 flash_color: mesh.flash_color,
+                wrap: mesh.wrap,
+                scatter_color: mesh.scatter_color,
                 bone_offset,
                 cast_shadows,
             });
@@ -2619,6 +2623,9 @@ pub(crate) struct PlacedMesh<'w> {
     pub(crate) flash: f32,
     /// The colour the hit-flash lerps toward.
     pub(crate) flash_color: [f32; 3],
+    /// The `Mesh` component's wrap diffuse amount and scatter tint. `wrap == 0.0` is render-identical.
+    pub(crate) wrap: f32,
+    pub(crate) scatter_color: [f32; 3],
     /// The normal matrix (object→world for normals): the model's upper-3×3 for a uniform scale, its
     /// inverse-transpose otherwise. See [`normal_matrix`].
     pub(crate) normal_matrix: Mat3,
@@ -3134,6 +3141,8 @@ pub(crate) fn place<'w>(
                 material: [mesh.roughness, mesh.metallic, mesh.emissive],
                 flash: mesh.flash,
                 flash_color: mesh.flash_color,
+                wrap: mesh.wrap,
+                scatter_color: mesh.scatter_color,
                 source: placed_source(&mesh.shape),
                 dynamic,
             });
@@ -3165,6 +3174,8 @@ pub(crate) fn place<'w>(
                         material: [mesh.roughness, mesh.metallic, mesh.emissive],
                         flash: mesh.flash,
                         flash_color: mesh.flash_color,
+                        wrap: mesh.wrap,
+                        scatter_color: mesh.scatter_color,
                         source: placed_source(&mesh.shape),
                         dynamic,
                     });

@@ -88,6 +88,12 @@ pub struct MeshInstance {
     pub flash: f32,
     /// The colour a hit-flash lerps toward (linear RGB, HDR-capable; default white).
     pub flash_color: [f32; 3],
+    /// Wrap diffuse amount in `[0, 1]` (default `0.0`): direct lights soften across the terminator and
+    /// the wrapped diffuse is tinted by [`scatter_color`](MeshInstance::scatter_color). Shader-side
+    /// a real branch skips it at `0.0`, so a wrap-free frame is render-identical by construction.
+    pub wrap: f32,
+    /// The tint of the wrapped light (linear RGB; default white).
+    pub scatter_color: [f32; 3],
     /// Index into the renderer's uploaded bone palette (`[identity] ++ `[`RenderScene::bone_palette`]):
     /// `0` selects the identity entry, meaning this instance is unskinned, so scene entries start at
     /// `1`. Rides the vertex shader as `fade.z`; an unskinned instance's shader branch never reads the

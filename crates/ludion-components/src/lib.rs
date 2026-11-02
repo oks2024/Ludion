@@ -422,6 +422,19 @@ pub struct Mesh {
     /// `1` blooms.
     #[serde(default = "white3")]
     pub flash_color: [f32; 3],
+    /// Wrap diffuse in `[0, 1]` (default `0.0`): direct lights soften across the terminator as
+    /// `x = max((n·l + wrap) / (1 + wrap), 0)`, with [`scatter_color`](Mesh::scatter_color) tinting the
+    /// total diffuse `x * mix(scatter, 1, 1 - wrap * (1 - x))` per channel (never below plain Lambert; white
+    /// is plain wrap) — a cheap subsurface look for skin, leaves, wax. Specular, IBL,
+    /// ambient and GI are unchanged. Applies on meshes with an authored material, like [`flash`](Mesh::flash).
+    /// `0.0` is render-identical by construction.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub wrap: f32,
+    /// The tint of the wrapped diffuse (default white `[1, 1, 1]`), linear RGB. A channel at `0` still
+    /// receives some wrapped light near the terminator. Inert while [`wrap`](Mesh::wrap) is `0`.
+    #[serde(default = "white3", skip_serializing_if = "is_white3")]
+    pub scatter_color: [f32; 3],
 }
 
 impl Default for Mesh {
@@ -434,15 +447,18 @@ impl Default for Mesh {
             emissive: 0.0,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
         }
     }
 }
 
 impl SemanticValidate for Mesh {
-    /// `color` and `flash_color` are HDR colours (`L1263`); the scalars ride their schemars bounds.
+    /// `color`, `flash_color` and `scatter_color` are colours (`L1263`); the scalars ride their schemars bounds.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = value_color_diagnostics("Mesh", value, "color");
         out.extend(value_color_diagnostics("Mesh", value, "flash_color"));
+        out.extend(value_color_diagnostics("Mesh", value, "scatter_color"));
         out
     }
 }
@@ -2878,6 +2894,10 @@ fn is_decal_color_default(value: &[f32; 4]) -> bool {
 #[allow(clippy::float_cmp)]
 fn is_decal_angle_fade_default(value: &[f32; 2]) -> bool {
     *value == decal_angle_fade_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_white3(value: &[f32; 3]) -> bool {
+    *value == [1.0; 3]
 }
 #[allow(clippy::float_cmp)]
 fn is_zero_f32(value: &f32) -> bool {
@@ -6865,6 +6885,41 @@ mod tests {
         );
     }
 
+    /// `Mesh.wrap` rides its schema range; a default `Mesh` serializes neither wrap key.
+    #[test]
+    fn mesh_wrap_is_bounded_and_default_is_not_serialized() {
+        refused_with("Mesh", "        wrap: 1.5\n", "L1014", "/wrap");
+        refused_with("Mesh", "        wrap: -0.1\n", "L1014", "/wrap");
+        assert!(refusals("Mesh", "        wrap: 0.5\n").is_empty());
+        let value = serde_json::to_value(Mesh::default()).unwrap();
+        assert!(value.get("wrap").is_none());
+        assert!(value.get("scatter_color").is_none());
+        let wrapped = serde_json::to_value(Mesh {
+            wrap: 0.5,
+            scatter_color: [1.0, 0.2, 0.2],
+            ..Mesh::default()
+        })
+        .unwrap();
+        assert_eq!(wrapped["wrap"], 0.5);
+        assert!(wrapped.get("scatter_color").is_some());
+    }
+
+    /// A non-finite `wrap` (YAML `.nan`, `.inf`, `-.inf`) is refused as `L1009` at the field.
+    #[test]
+    fn mesh_wrap_non_finite_is_l1009() {
+        for text in [".nan", ".inf", "-.inf"] {
+            refused_with(
+                "Mesh",
+                &format!(
+                    "        wrap: {text}
+"
+                ),
+                "L1009",
+                "/wrap",
+            );
+        }
+    }
+
     /// Every HDR colour that reaches the scene target refuses a negative RGB element, at that element.
     #[test]
     fn a_negative_hdr_colour_component_is_l1263() {
@@ -6889,6 +6944,11 @@ mod tests {
                 "Mesh",
                 format!("        flash_color:\n{rgb}"),
                 "/flash_color/1",
+            ),
+            (
+                "Mesh",
+                format!("        scatter_color:\n{rgb}"),
+                "/scatter_color/1",
             ),
             ("Text", format!("        color:\n{rgba}"), "/color/2"),
             (

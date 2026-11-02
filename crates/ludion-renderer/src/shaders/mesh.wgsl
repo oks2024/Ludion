@@ -73,7 +73,22 @@ struct VsOut {
     // The world-space tangent frame: `xyz` the interpolated tangent, `w` the bitangent's handedness
     // (a per-vertex constant sign, carried through untouched). Only the normal map reads it.
     @location(7) tangent: vec4<f32>,
+    // Per-instance wrap diffuse `(scatter.rgb, wrap)` and world half-extents, flat like `flash`.
+    @location(8) @interpolate(flat) wrap: vec4<f32>,
+    @location(9) @interpolate(flat) wrap_extent: vec3<f32>,
 };
+
+struct WrapLanes {
+    wrap: vec4<f32>,
+    extent: vec3<f32>,
+}
+
+// The only reader of the wrap data. The normal matrix is used as `(normal_mat * vec4(n, 0.0)).xyz`, so its
+// `w` row and its last column reach no result; the CPU packs `(scatter.rgb, wrap)` and the half-extents
+// there (`instance_normal_lanes` in render.rs). A wrap of 0 means the instance does not wrap.
+fn wrap_lanes(in: VsIn) -> WrapLanes {
+    return WrapLanes(vec4<f32>(in.n3.xyz, in.n0.w), vec3<f32>(in.n1.w, in.n2.w, in.n3.w));
+}
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
@@ -108,6 +123,9 @@ fn vs_main(in: VsIn) -> VsOut {
     out.fade = in.fade.xy;
     // Carry the hit-flash lane to the fragment stage.
     out.flash = in.flash;
+    let wrap = wrap_lanes(in);
+    out.wrap = wrap.wrap;
+    out.wrap_extent = wrap.extent;
     out.uv = in.uv;
     // The tangent rides the **model** matrix, not the normal matrix: a tangent is a direction *along*
     // the surface, so it transforms like a position difference, where a normal transforms by the
@@ -141,6 +159,75 @@ fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> FsOut {
 @fragment
 fn fs_capture(in: VsOut, @builtin(front_facing) front_facing: bool) -> CaptureOut {
     return shade_fragment(in, front_facing);
+}
+
+// The diffuse a wrapped term adds past plain Lambert, per channel; never negative, zero at n·l = 1.
+// The *total* diffuse `T = x * mix(scatter, 1, g)` is what stays smooth across the terminator
+// (`x` the wrapped cosine, `g = 1 - w * (1 - x)`): tinting only the excess over Lambert would leave
+// Lambert's kink visible under a coloured scatter. White scatter gives `T = x`, plain wrap. For any
+// scatter >= 0, `x * g - nl = w * (x - 1)^2 >= 0`, so `T` never falls below Lambert.
+fn wrap_excess(nl: f32, w: f32, scatter: vec3<f32>) -> vec3<f32> {
+    let x = max((nl + w) / (1.0 + w), 0.0);
+    let g = 1.0 - w * (1.0 - x);
+    let total = x * mix(scatter, vec3<f32>(1.0), g);
+    return max(total - vec3<f32>(max(nl, 0.0)), vec3<f32>(0.0));
+}
+
+// How far toward the light to test this fragment's shadow: casters draw their lit side, so a fragment past
+// the terminator is shadowed by its own object unless the test clears the object's thickness along the ray.
+// Along `l`, the shadow-map column and cube face stay the same.
+fn wrap_lift(nl: f32, l: vec3<f32>, extent: vec3<f32>) -> f32 {
+    return 2.0 * dot(abs(l), extent) * (1.0 - max(nl, 0.0));
+}
+
+// The wrapped diffuse past plain Lambert, direct lights only: the same light loop and sun as `shade`,
+// each term `wrap_excess` (the scatter colour is inside it), shadowed at a point lifted toward the light.
+fn wrap_band(
+    world_pos: vec3<f32>,
+    n: vec3<f32>,
+    diffuse: vec3<f32>,
+    ao: f32,
+    frag_pos: vec2<f32>,
+    wrap: vec4<f32>,
+    extent: vec3<f32>,
+) -> vec3<f32> {
+    var direct_ao = 1.0;
+    if (env.ao.x > 0.5 && env.ao.w > 0.0) {
+        direct_ao = mix(1.0, ao, env.ao.w);
+    }
+    var sum = vec3<f32>(0.0);
+    let to_camera = camera.cam_pos.xyz - world_pos;
+    let slice = cluster_slice(frag_pos, dot(to_camera, to_camera));
+    for (var i: u32 = 0u; i < slice.y; i = i + 1u) {
+        let light_index = cluster_lights[slice.x + i];
+        let light = light_list[light_index];
+        let to_light = light.position.xyz - world_pos;
+        let dist = length(to_light);
+        if (dist <= 0.0) {
+            continue;
+        }
+        let range = max(light.position.w, 1e-3);
+        let atten = clamp(1.0 - dist / range, 0.0, 1.0);
+        let l = normalize(to_light);
+        let nl = dot(n, l);
+        let excess = wrap_excess(nl, wrap.a, wrap.rgb);
+        if (any(excess > vec3<f32>(0.0))) {
+            let lift = min(wrap_lift(nl, l, extent), dist);
+            sum += light.color.rgb * spot_factor(light, l)
+                * local_shadow(light_index, world_pos + l * lift, n, l, dist - lift)
+                * excess * atten * atten;
+        }
+    }
+    // A sunless frame has a zero direction, whose normalize is NaN: test the colour first.
+    if (any(sun.color.rgb != vec3<f32>(0.0))) {
+        let l_sun = normalize(-sun.direction.xyz);
+        let nl = dot(n, l_sun);
+        let excess = wrap_excess(nl, wrap.a, wrap.rgb);
+        if (any(excess > vec3<f32>(0.0))) {
+            sum += sun.color.rgb * sun_shadow(world_pos + l_sun * wrap_lift(nl, l_sun, extent)) * excess;
+        }
+    }
+    return sum * diffuse * direct_ao;
 }
 
 fn shade_fragment(in: VsOut, front_facing: bool) -> CaptureOut {
@@ -214,6 +301,10 @@ fn shade_fragment(in: VsOut, front_facing: bool) -> CaptureOut {
 
     let shaded = shade(in.world_pos, normal, albedo, surface, ao, in.clip.xy, occlusion_map);
     var lit = shaded.lit;
+    if (in.wrap.a > 0.0) {
+        let diffuse = (1.0 - clamp(surface.y, 0.0, 1.0)) * albedo;
+        lit = lit + wrap_band(in.world_pos, shaded.n, diffuse, ao, in.clip.xy, in.wrap, in.wrap_extent);
+    }
     if (sun.cascade_view != 0u && sun.cascade_count > 0u) {
         lit = lit * sun_cascade_tint(in.world_pos);
     }

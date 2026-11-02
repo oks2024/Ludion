@@ -49,15 +49,18 @@ pub(crate) fn transform_value(
 /// flat `color` from the material's base-color factor, and the three material scalars read off the
 /// glTF material (`roughnessFactor`/`metallicFactor`/the proportional-emissive rule — the engine
 /// always serializes them, so the scene round-trips). The mesh shader's Cook-Torrance lobes read
-/// all three.
+/// all three. `wrap` / `scatter_color` come from the material's `extras` and are emitted only when
+/// non-default.
 pub(crate) fn mesh_value(
     asset_path: &str,
     color: [f32; 4],
     roughness: f32,
     metallic: f32,
     emissive: f32,
+    wrap: f32,
+    scatter_color: [f32; 3],
 ) -> Value {
-    json!({
+    let mut value = json!({
         "shape": { "asset": asset_path },
         "color": vec4(color),
         "roughness": f32_num(roughness),
@@ -67,7 +70,17 @@ pub(crate) fn mesh_value(
         // canonical fixed point under `scene.save` (which serializes the full `Mesh`).
         "flash": f32_num(0.0),
         "flash_color": vec3([1.0, 1.0, 1.0]),
-    })
+    });
+    // Written only when authored, as the component skips them at their defaults.
+    if let Value::Object(map) = &mut value {
+        if wrap != 0.0 {
+            map.insert("wrap".into(), f32_num(wrap));
+        }
+        if scatter_color != [1.0; 3] {
+            map.insert("scatter_color".into(), vec3(scatter_color));
+        }
+    }
+    value
 }
 
 /// The `PointLight` component value. Emits `color`, `intensity`, and `range`, the fields glTF

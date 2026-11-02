@@ -61,7 +61,8 @@
 //! absent otherwise.
 //!
 //! A material's `MASK` alpha mode with its `alphaCutoff` (default 0.5), and `doubleSided`, map onto
-//! the mesh document's `alpha_mode: mask` / `alpha_cutoff` and `double_sided: true`.
+//! the mesh document's `alpha_mode: mask` / `alpha_cutoff` and `double_sided: true`. A material's
+//! `extras.ludion_wrap` / `extras.ludion_scatter_color` map onto `Mesh.wrap` / `Mesh.scatter_color`.
 //!
 //! Everything else — a texture on a second UV set or with per-axis wrap modes that disagree (a mesh
 //! document holds one mode for both), a `BLEND` alpha mode (`MASK` is the mapped alternative), a camera (a prefab carries none), a directional light, a morph target, an
@@ -730,6 +731,8 @@ struct MeshRef {
     roughness: f32,
     metallic: f32,
     emissive: f32,
+    wrap: f32,
+    scatter_color: [f32; 3],
 }
 
 impl MeshRef {
@@ -740,6 +743,8 @@ impl MeshRef {
             self.roughness,
             self.metallic,
             self.emissive,
+            self.wrap,
+            self.scatter_color,
         )
     }
 }
@@ -833,6 +838,7 @@ fn resolve_primitive(
     };
     finite(&[roughness], "roughnessFactor")?;
     finite(&[metallic], "metallicFactor")?;
+    let (wrap, scatter_color) = material_wrap(&material, &offender)?;
 
     let Some(doc) = build_mesh_document(mesh, primitive, textures, skin, inputs, state)? else {
         return Ok(None);
@@ -859,7 +865,59 @@ fn resolve_primitive(
         roughness,
         metallic,
         emissive,
+        wrap,
+        scatter_color,
     }))
+}
+
+/// A material's `extras.ludion_wrap` (`[0, 1]`) and `extras.ludion_scatter_color` (three non-negative
+/// numbers), which land on `Mesh.wrap` / `Mesh.scatter_color`. Absent extras, extras that are not an
+/// object, and other keys (Blender writes every custom property) leave the defaults; a present key of
+/// the wrong type or range is refused naming the material.
+fn material_wrap(
+    material: &gltf::Material,
+    offender: &str,
+) -> Result<(f32, [f32; 3]), Vec<Diagnostic>> {
+    let mut wrap = 0.0_f32;
+    let mut scatter = [1.0_f32; 3];
+    let Some(raw) = material.extras() else {
+        return Ok((wrap, scatter));
+    };
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(raw.get()) else {
+        return Ok((wrap, scatter));
+    };
+    if let Some(value) = map.get("ludion_wrap") {
+        let number = value.as_f64().map(|v| v as f32).filter(|v| v.is_finite());
+        match number {
+            Some(v) if (0.0..=1.0).contains(&v) => wrap = v,
+            _ => {
+                return Err(vec![malformed(format!(
+                    "{offender}'s extras ludion_wrap must be a number in [0, 1], found {value}"
+                ))]);
+            }
+        }
+    }
+    if let Some(value) = map.get("ludion_scatter_color") {
+        let parsed: Option<Vec<f32>> = value.as_array().and_then(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    item.as_f64()
+                        .map(|v| v as f32)
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                })
+                .collect()
+        });
+        match parsed.as_deref() {
+            Some(&[r, g, b]) => scatter = [r, g, b],
+            _ => {
+                return Err(vec![malformed(format!(
+                    "{offender}'s extras ludion_scatter_color must be three non-negative numbers, found {value}"
+                ))]);
+            }
+        }
+    }
+    Ok((wrap, scatter))
 }
 
 /// Reduces a glTF `emissiveFactor` to Ludion's scalar `Mesh.emissive`: an HDR intensity multiplier

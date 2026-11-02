@@ -1692,3 +1692,68 @@ fn a_three_level_tree_imports_with_its_parent_chain() {
     assert!(component(&plan, 1, "Parent").is_some());
     assert!(component(&plan, 2, "Parent").is_some());
 }
+
+// --- Wrap diffuse: `extras.ludion_wrap` / `extras.ludion_scatter_color` ------------------------------
+
+#[test]
+fn material_extras_land_on_mesh_wrap_and_scatter_color() {
+    let json = mesh_gltf(
+        r#"{"name":"skin","extras":{"ludion_wrap":0.5,"ludion_scatter_color":[1.0,0.25,0.125],"other":"ignored"}}"#,
+        false,
+    );
+    let import = import_clean(&json);
+    let mesh = component(&import, 0, "Mesh").unwrap();
+    assert_eq!(mesh["wrap"], 0.5);
+    assert_eq!(mesh["scatter_color"], serde_json::json!([1.0, 0.25, 0.125]));
+}
+
+#[test]
+fn wrap_alone_leaves_scatter_color_unemitted() {
+    let json = mesh_gltf(r#"{"name":"leaf","extras":{"ludion_wrap":1.0}}"#, false);
+    let import = import_clean(&json);
+    let mesh = component(&import, 0, "Mesh").unwrap();
+    assert_eq!(mesh["wrap"], 1.0);
+    assert!(mesh.get("scatter_color").is_none());
+}
+
+#[test]
+fn a_material_without_wrap_extras_emits_neither_key() {
+    for material in [
+        r#"{"name":"m"}"#,
+        r#"{"name":"m","extras":{"blender_note":3}}"#,
+        r#"{"name":"m","extras":[1,2]}"#,
+    ] {
+        let import = import_clean(&mesh_gltf(material, false));
+        let mesh = component(&import, 0, "Mesh").unwrap();
+        assert!(mesh.get("wrap").is_none(), "{material}");
+        assert!(mesh.get("scatter_color").is_none(), "{material}");
+    }
+}
+
+#[test]
+fn a_bad_wrap_extra_is_refused_naming_the_material() {
+    for extras in [
+        r#""ludion_wrap":1.5"#,
+        r#""ludion_wrap":-0.1"#,
+        r#""ludion_wrap":"high""#,
+        r#""ludion_scatter_color":[1.0,-0.5,1.0]"#,
+        r#""ludion_scatter_color":[1.0,1.0]"#,
+        r#""ludion_scatter_color":"red""#,
+    ] {
+        let json = mesh_gltf(
+            &format!(r#"{{"name":"skin","extras":{{{extras}}}}}"#),
+            false,
+        );
+        let errors = import(
+            json.as_bytes(),
+            ExternalFiles::Beside(Path::new(".")),
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            errors[0].message.contains("skin") && errors[0].message.contains("ludion_"),
+            "{extras}: {}",
+            errors[0].message
+        );
+    }
+}

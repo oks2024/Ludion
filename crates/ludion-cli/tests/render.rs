@@ -1993,3 +1993,33 @@ fn needs_gpu_dump_probes_on_a_probeless_scene_prints_zero() {
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("0 probes"));
 }
+
+/// A scene whose meshes author `Mesh.wrap` and `scatter_color` has the same render graph as one that
+/// does not: wrap is shader-side only and adds no pass, resource or barrier.
+#[test]
+fn dump_graph_ignores_mesh_wrap() {
+    let scene = |mesh_extra: &str| {
+        format!(
+            "format: 1\nname: wrap-graph\nentities:\n  - name: camera\n    components:\n      Transform:\n        translation:\n          - 0.0\n          - 0.0\n          - 5.0\n      Camera:\n        projection:\n          type: perspective\n          fov_y_deg: 50.0\n  - name: ball\n    components:\n      Transform:\n        translation:\n          - 0.0\n          - 0.0\n          - 0.0\n      Mesh:\n        shape: sphere\n{mesh_extra}"
+        )
+    };
+    let dump = |name: &str, text: String| {
+        let path = out_path(name);
+        std::fs::write(&path, text).unwrap();
+        let out = run_ludion(&["dump-graph", "--scene", path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "dump-graph failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out.stdout
+    };
+    let plain = dump("wrap-graph-plain.yaml", scene(""));
+    let wrapped = dump(
+        "wrap-graph-wrapped.yaml",
+        scene(
+            "        wrap: 0.8\n        scatter_color:\n          - 1.0\n          - 0.3\n          - 0.2\n",
+        ),
+    );
+    assert_eq!(plain, wrapped, "wrap must not change the render graph");
+}

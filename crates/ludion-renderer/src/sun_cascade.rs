@@ -689,6 +689,8 @@ mod tests {
             fade_height_min: -f32::MAX,
             flash: 0.0,
             flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
         }

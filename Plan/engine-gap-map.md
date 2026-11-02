@@ -51,6 +51,7 @@ settled plan, nothing built; **rejected** — closed by design.
   per-frame caster budget (`Plan/shadow-mapping.md`). Area lights absent.
 - **Transparency and material coverage** — no alpha-blended meshes (glTF `BLEND` is L1202); no order-independent transparency; no clearcoat, sheen,
   transmission or subsurface. Foliage, glass, fences and hair cards are out.
+  *Amended 2026-11-02 (Clockout 0040): subsurface is approximated by `Mesh.wrap` / `scatter_color` (direct-light wrap diffuse with a tint, `docs/materials.md`); true subsurface and transmission stay a gap. Trigger: if the game's look test objects to the near-occluder cut, the next step is a whole-object band occlusion sample (object centre plus thickness toward the light, one extra lookup per light); not built.*
   *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): alpha-cutout (`alpha_mode: mask`) and double-sided meshes ship (Clockout 0010). Alpha-blend stays a gap; trigger: the first committed asset that must be seen through (e.g. the Noir skylight glass), a separate request with a sorted `transparents` mesh path.*
 - **Textures** — PNG decoded to RGBA8 only; no BC/ASTC/KTX2 compression. Voxel texturing deferred
   (`Plan/textured-pbr.md`).

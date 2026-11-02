@@ -121,6 +121,9 @@ source as PNG, so the script asserts every `bpy.data.images` entry is PNG before
   False` exports `doubleSided`, which imports as `double_sided: true`); Principled `Metallic` and
   `Roughness` set explicitly, `Alpha` 1.0 unless cutting holes. Do not set `mat.use_nodes` —
   deprecated in 5.x, it only warns.
+- **Wrap diffuse:** add the custom properties `ludion_wrap` (0 to 1) and `ludion_scatter_color` (three
+  floats) to the material and export with `export_extras=True`; they land on `Mesh.wrap` / `scatter_color`
+  (`ludion docs materials`).
 - **Cutout holes:** the image's `Alpha` output feeds the Principled `Alpha` input through a threshold
   (`LESS_THAN` against the cutoff, then `1 −` that), which the exporter reads as glTF `MASK` with that
   `alphaCutoff`; pick a cutoff exact in f32 (`0.25`) so the document writes it unchanged. Plain alpha
