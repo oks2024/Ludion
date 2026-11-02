@@ -32,6 +32,8 @@ PointLight:
   cast_shadows: true     # omitted from the saved file when false
   shadow_bias: 0.02
   shadow_near: 0.05
+  shadow_distance: 40.0  # omitted when unset: no limit
+  shadow_fade: 10.0      # omitted when 0
 ```
 
 | Field | Default | Range | Code |
@@ -39,35 +41,45 @@ PointLight:
 | `cast_shadows` | `false` | — | — |
 | `shadow_bias` | `0.02` | `>= 0`, world units | `L1014` |
 | `shadow_near` | `0.05` | finite, `> 0` and `< range` | `L1312` |
+| `shadow_distance` | none | finite, `> 0` | `L1322` |
+| `shadow_fade` | `0` | finite, `>= 0`, `<= shadow_distance`, needs `shadow_distance` | `L1322` |
 
-Both components carry the same three fields. The view's far plane is `range`. A light that leaves them
+Both components carry the same five fields. The view's far plane is `range`. A light that leaves them
 at their defaults saves and hashes exactly as before.
 
 ## Rules
 
 - **Meshes only.** Meshes cast and receive (a `mask` mesh casts its holes, a double-sided one from both faces); sprites, billboards, text and particles do neither, and
   fog and global illumination are not shadowed.
-- **A fixed budget per frame.** Candidates are the opted-in lights whose cluster footprint touches
-  the camera frustum: the range sphere for a point light, the cone's bounding sphere for a spot. They rank by distance from the camera to the sphere's surface, nearest first, ties
+- **A fixed budget per frame.** Candidates are the opted-in lights inside their `shadow_distance`
+  whose cluster footprint touches the camera frustum: the range sphere for a point light, the cone's bounding sphere for a spot. They rank by distance from the camera to the sphere's surface, nearest first, ties
   going to light-list order (point lights, then spots, each by ascending `EntityId`).
 - **An 8×8-cell atlas, granted whole.** A spot takes a 2×2 block of cells; a point light takes six
   one-cell cube faces, and so does a spot with `outer_angle` over 60°. A light is granted only if all
   its views fit; one that doesn't is skipped and later candidates are still tried. That is 16 spot
   tiles at most, at every quality.
-- **No fade, no hysteresis.** A light that falls out of the budget loses its shadow at once, and a
-  light that enters it gains one at once. Nothing is cached between frames.
+- **An opt-in distance fade, no hysteresis.** With `shadow_distance`, a light at or past it (camera
+  to the footprint surface, the metric the rank uses, never scaled by quality) is not a candidate and
+  takes no atlas cells. In the `shadow_fade` band before it the shadow term scales from full to none by
+  smoothstep while the light still lights fully; no `shadow_fade` is a hard cut. **The budget edge
+  still exists:** a light inside its distance that does not fit is skipped at once and one that fits
+  gains its shadow at once. Nothing is cached between frames.
 - **Quality scales only the atlas edge.** `local_shadow_atlas_size` is 4096 at `full` and `high`,
   2048 at `medium` (`ludion docs quality`). Which lamps cast never depends on the machine. `low` turns
   the sun's and the local shadows off together.
 - **Each granted view draws only what it can see,** culled on the CPU; skinned meshes are always drawn.
   A frame that grants nothing keeps its previous frame graph exactly.
 - **Keeping every framing in budget** is a profile check: a game that wants all its lamps shadowed
-  asserts `local_shadows.skipped == 0` over the camera poses it ships.
+  asserts `local_shadows.skipped == 0` over the camera poses it ships; a `shadow_distance` chosen so
+  far lamps are not candidates is what keeps a many-lamp level in budget (`requested` drops, not
+  `skipped`).
 
 ## Gotchas
 
 - **Acne or peter-panning.** Speckle on a lit surface wants a larger `shadow_bias`; a shadow detached
   from its caster wants a smaller one. The bias is in world units and applied before projection.
+- **`shadow_distance` or `shadow_fade` without `cast_shadows`** does nothing and warns `L1323` in
+  `check-scene`; a light past its distance gets no `local_shadows` debug-draw mark.
 - **`shadow_near` too large clips casters close to the lamp.** Keep it well below the nearest caster.
 - **The granted set follows the camera.** The same scene from two poses can shadow different lights, so
   a golden's casters depend on its pose.

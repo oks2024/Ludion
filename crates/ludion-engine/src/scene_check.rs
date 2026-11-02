@@ -457,6 +457,49 @@ pub fn scene_sun_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// `L1323` (a warning) for each `PointLight`/`SpotLight` that sets `shadow_distance` or a non-zero
+/// `shadow_fade` without `cast_shadows: true`: with no shadow to fade, the field does nothing.
+pub fn scene_local_light_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (index, entity) in scene.entities.iter().enumerate() {
+        for (name, light) in &entity.components {
+            if name != "PointLight" && name != "SpotLight" {
+                continue;
+            }
+            if light.get("cast_shadows").and_then(|v| v.as_bool()) == Some(true) {
+                continue;
+            }
+            let distance = light
+                .get("shadow_distance")
+                .and_then(crate::components::as_stored_f32);
+            let fade = light
+                .get("shadow_fade")
+                .and_then(crate::components::as_stored_f32);
+            let field = if distance.is_some() {
+                "shadow_distance"
+            } else if fade.is_some_and(|f| f != 0.0) {
+                "shadow_fade"
+            } else {
+                continue;
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
+                    format!(
+                        "this `{name}` sets `{field}` without `cast_shadows: true`; it has no \
+                         shadow to fade, so the field does nothing"
+                    ),
+                )
+                .with_path(format!("/entities/{index}/components/{name}/{field}"))
+                .with_help(
+                    "set `cast_shadows: true`, or remove `shadow_distance` and `shadow_fade`",
+                ),
+            );
+        }
+    }
+    diagnostics
+}
+
 /// Every `L1261` a checked scene's solver colliders report when the scene has no `physics:` block:
 /// the solver is never installed, so a 3D shape or a rigid body would silently do nothing. The
 /// claim rule is [`ludion_physics::claims`].
@@ -720,6 +763,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_motor_diagnostics(scene));
     diagnostics.extend(scene_camera_rig_diagnostics(scene));
     diagnostics.extend(scene_sun_diagnostics(scene));
+    diagnostics.extend(scene_local_light_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
     // The mesh-asset pass reports a missing skinned mesh at its entity; the skin-bone and
     // parent-joint passes read the same files and push the reader's bare diagnostic, dropped here.
@@ -1153,6 +1197,42 @@ entities:
             found[0].path.as_deref(),
             Some("/entities/0/components/DirectionalLight/shadow_extent")
         );
+    }
+
+    fn local_scene(component: &str, light: &str) -> Scene {
+        let source = format!("format: 1\nentities:\n  - components:\n      {component}:\n{light}");
+        ludion_scene::check(&source, &crate::builtin_registry())
+            .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"))
+    }
+
+    #[test]
+    fn a_shadow_distance_without_cast_shadows_is_l1323() {
+        for component in ["PointLight", "SpotLight"] {
+            let found = scene_local_light_diagnostics(&local_scene(
+                component,
+                "        shadow_distance: 20.0\n        shadow_fade: 5.0\n",
+            ));
+            assert_eq!(found.len(), 1, "{component}");
+            assert_eq!(found[0].code, code::LOCAL_LIGHT_SHADOW_FADE_UNUSED);
+            assert_eq!(
+                found[0].path.as_deref(),
+                Some(format!("/entities/0/components/{component}/shadow_distance").as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn local_lights_that_cast_or_set_nothing_are_clean() {
+        for light in [
+            "        cast_shadows: true\n        shadow_distance: 20.0\n",
+            "        shadow_fade: 0.0\n",
+            "        range: 5.0\n",
+        ] {
+            assert!(
+                scene_local_light_diagnostics(&local_scene("PointLight", light)).is_empty(),
+                "{light}"
+            );
+        }
     }
 
     #[test]

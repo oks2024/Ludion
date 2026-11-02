@@ -1570,6 +1570,14 @@ pub mod code {
     /// `ludion_assets::resolve`, so every asset read shares it; the per-kind path codes stay.
     pub const CONTENT_PATH_OUTSIDE_ROOT: DiagnosticCode = DiagnosticCode::new("L1321");
 
+    /// `L1322` — a `PointLight`/`SpotLight` `shadow_distance` is non-finite or ≤ 0, or its
+    /// `shadow_fade` is non-finite, negative, set without a distance, or longer than the distance.
+    pub const LOCAL_LIGHT_INVALID_SHADOW_DISTANCE: DiagnosticCode = DiagnosticCode::new("L1322");
+
+    /// `L1323` — a `PointLight`/`SpotLight` sets `shadow_distance` or `shadow_fade` without
+    /// `cast_shadows: true`, so the field does nothing.
+    pub const LOCAL_LIGHT_SHADOW_FADE_UNUSED: DiagnosticCode = DiagnosticCode::new("L1323");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7790,6 +7798,36 @@ the instance sim, or keep the sim part in a separate instance and parent the pre
 through `overrides` (`Parent` on the body's root part).",
     },
     CodeEntry {
+        code: code::LOCAL_LIGHT_INVALID_SHADOW_DISTANCE,
+        severity: Severity::Error,
+        title: "local light shadow distance or fade is invalid",
+        explanation: "\
+A `PointLight` or `SpotLight` has a `shadow_distance` or `shadow_fade` that cannot describe a
+distance fade. The message names which case:
+
+- `shadow_distance` is non-finite or not above 0 (pointer `/shadow_distance`).
+- `shadow_fade` is non-finite or negative (pointer `/shadow_fade`).
+- `shadow_fade` is above 0 with no `shadow_distance`: the fade band sits before the distance, so it
+  needs one (pointer `/shadow_fade`).
+- `shadow_fade` is longer than `shadow_distance`, which would start the band behind the camera
+  (pointer `/shadow_fade`).
+
+Fix: give `shadow_distance` a finite value above 0 (the camera distance, to the light's footprint
+surface, where its shadow ends), and keep `shadow_fade` between 0 and `shadow_distance`; remove
+`shadow_fade` to cut the shadow off hard at the distance.",
+    },
+    CodeEntry {
+        code: code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
+        severity: Severity::Warning,
+        title: "local light shadow distance is unused without cast_shadows",
+        explanation: "\
+A `PointLight` or `SpotLight` sets `shadow_distance` or `shadow_fade` but not `cast_shadows: true`
+(pointer `/entities/{i}/components/{PointLight|SpotLight}/shadow_distance`, or `/shadow_fade` when
+only that is set). The light has no shadow to fade, so the field does nothing.
+
+Fix: set `cast_shadows: true`, or remove `shadow_distance` and `shadow_fade`.",
+    },
+    CodeEntry {
         code: code::CONTENT_PATH_OUTSIDE_ROOT,
         severity: Severity::Error,
         title: "a content or payload path leaves the content root",
@@ -10646,6 +10684,8 @@ mod tests {
         code::PARENT_JOINT_UNKNOWN_JOINT,
         code::PRESENTATION_INSTANCE_SIM_COMPONENT,
         code::CONTENT_PATH_OUTSIDE_ROOT,
+        code::LOCAL_LIGHT_INVALID_SHADOW_DISTANCE,
+        code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -10906,6 +10946,7 @@ mod tests {
             code::CAMERA_RIG_TARGET_MISSING,
             code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
             code::UI_RECT_FILL_IGNORES_PLACEMENT,
+            code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

@@ -3,7 +3,8 @@
 //!
 //! Pure CPU and deterministic. The plan is a function of the scene alone: candidates are the lights
 //! with shadow tunables whose footprint (the cluster binner's own sphere) touches the camera
-//! frustum, ranked nearest-first, then granted greedily into a fixed 8×8-cell atlas grid.
+//! frustum and that are inside their `shadow_distance` (measured to the footprint surface, the rank
+//! key), ranked nearest-first, then granted greedily into a fixed 8×8-cell atlas grid.
 //!
 //! # Ranking and ties
 //!
@@ -76,17 +77,20 @@ pub(crate) struct LocalShadowView {
     /// Near and far planes of the projection, for linearising the depth tile.
     pub(crate) near: f32,
     pub(crate) far: f32,
+    /// Distance-fade strength in `(0, 1]`; the shadow term scales by it. A cube's faces share it.
+    pub(crate) strength: f32,
     pub(crate) cull: CullVolume,
 }
 
 /// What a planning pass decided, for the profile report.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LocalShadowStats {
-    /// Casting lights whose footprint touches the camera frustum.
+    /// Casting lights whose footprint touches the camera frustum and that are inside their
+    /// `shadow_distance`; a light past it is not requested.
     pub requested: u32,
     /// Casting lights granted a set of atlas tiles.
     pub granted: u32,
-    /// `requested − granted`: candidates that did not fit the atlas.
+    /// `requested − granted`: candidates that did not fit the atlas (budget overflow only).
     pub skipped: u32,
     /// Shadow views drawn: a spot takes one, a point light (or a wide spot) six.
     pub views: u32,
@@ -121,6 +125,31 @@ struct Candidate {
     outer: f32,
     shadow: LocalShadowData,
     rank: f32,
+    /// The distance-fade strength in `(0, 1]`.
+    strength: f32,
+}
+
+/// Camera to the footprint's surface: the rank key and the `shadow_distance` metric.
+fn footprint_distance(camera: Vec3, center: Vec3, radius: f32) -> f32 {
+    (camera.distance(center) - radius).max(0.0)
+}
+
+/// The distance-fade strength at footprint distance `d`, in `(0, 1]`; `None` is not a candidate.
+fn distance_strength(shadow: &LocalShadowData, d: f32) -> Option<f32> {
+    let Some(limit) = shadow.distance else {
+        return Some(1.0);
+    };
+    // The negated form also refuses a NaN `d`.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(d < limit) {
+        return None;
+    }
+    if shadow.fade <= 0.0 {
+        return Some(1.0);
+    }
+    let t = ((limit - d) / shadow.fade).clamp(0.0, 1.0);
+    let s = t * t * (3.0 - 2.0 * t);
+    (s > 0.0).then_some(s)
 }
 
 /// The cube-face table: direction and up for faces 0..6.
@@ -224,6 +253,10 @@ pub(crate) fn plan_local_shadows(scene: &RenderScene, atlas_edge: u32) -> LocalS
         if !usable || !frustum.intersects_sphere(center, radius) {
             return;
         }
+        let rank = footprint_distance(camera, center, radius);
+        let Some(strength) = distance_strength(&shadow, rank) else {
+            return;
+        };
         candidates.push(Candidate {
             index: index as u32,
             kind,
@@ -232,7 +265,8 @@ pub(crate) fn plan_local_shadows(scene: &RenderScene, atlas_edge: u32) -> LocalS
             range,
             outer,
             shadow,
-            rank: (camera.distance(center) - radius).max(0.0),
+            rank,
+            strength,
         });
     };
     for (i, l) in scene.lights.iter().enumerate() {
@@ -335,6 +369,7 @@ fn spot_view(c: &Candidate, rect: AtlasRect) -> LocalShadowView {
         bias: c.shadow.bias,
         near: c.shadow.near,
         far: c.range,
+        strength: c.strength,
         cull: CullVolume::Frustum(Frustum::from_view_proj(light_space)),
     }
 }
@@ -352,6 +387,7 @@ fn cube_view(c: &Candidate, face: u8, rect: AtlasRect) -> LocalShadowView {
         bias: c.shadow.bias,
         near: c.shadow.near,
         far: c.range,
+        strength: c.strength,
         cull: CullVolume::Frustum(Frustum::from_view_proj(light_space)),
     }
 }
@@ -454,6 +490,8 @@ mod tests {
         Some(LocalShadowData {
             bias: 0.05,
             near: 0.1,
+            distance: None,
+            fade: 0.0,
         })
     }
 
@@ -690,6 +728,8 @@ mod tests {
         s.shadow = Some(LocalShadowData {
             bias: 0.0,
             near: 0.5,
+            distance: None,
+            fade: 0.0,
         });
         scene.spot_lights = vec![s];
         let plan = plan_local_shadows(&scene, 4096);
@@ -764,5 +804,170 @@ mod tests {
         assert_eq!(plan_local_shadows(&scene, 4096).stats.views, 6);
         scene.spot_lights = vec![spot(Vec3::new(0.0, 0.0, -5.0), 5.0, 59.0)];
         assert_eq!(plan_local_shadows(&scene, 4096).stats.views, 1);
+    }
+
+    fn faded(distance: Option<f32>, fade: f32) -> Option<LocalShadowData> {
+        shadow().map(|s| LocalShadowData {
+            distance,
+            fade,
+            ..s
+        })
+    }
+
+    /// Strength of the only light's views, or `None` when it has none (and then nothing is requested).
+    fn strength_of(scene: &RenderScene) -> Option<f32> {
+        let plan = plan_local_shadows(scene, 4096);
+        match plan.light_first_view[0] {
+            UNSHADOWED => {
+                assert!(plan.views.is_empty());
+                assert_eq!(plan.stats.requested, 0);
+                None
+            }
+            first => {
+                let strength = plan.views[first as usize].strength;
+                assert!(plan.views.iter().all(|v| v.strength == strength));
+                Some(strength)
+            }
+        }
+    }
+
+    #[test]
+    fn strength_falls_through_the_band_for_a_point_and_a_spot() {
+        // Limit 20, fade 10: the band is footprint distance [10, 20).
+        for spot_light in [false, true] {
+            let mut previous = 1.0_f32;
+            let mut inside_band = false;
+            let mut z = 5.0_f32;
+            while z <= 40.0 {
+                let mut scene = scene_at_origin();
+                let position = Vec3::new(0.0, 0.0, -z);
+                let (center, radius) = if spot_light {
+                    let mut s = spot(position, 2.0, 30.0);
+                    s.shadow = faded(Some(20.0), 10.0);
+                    scene.spot_lights = vec![s];
+                    light_sphere(position, -Vec3::Z, 2.0, 30.0_f32.to_radians().cos())
+                } else {
+                    scene.lights = vec![point(position, 2.0, faded(Some(20.0), 10.0))];
+                    (position, 2.0)
+                };
+                let d = footprint_distance(Vec3::ZERO, center, radius);
+                match strength_of(&scene) {
+                    None => assert!(d >= 20.0, "spot {spot_light} z {z} d {d}"),
+                    Some(s) => {
+                        assert!(d < 20.0, "spot {spot_light} z {z} d {d}");
+                        assert!(s > 0.0 && s <= 1.0);
+                        if d <= 10.0 {
+                            assert_eq!(s, 1.0, "z {z}");
+                        } else {
+                            inside_band = true;
+                            assert!(s < 1.0, "z {z}");
+                        }
+                        assert!(s <= previous, "not monotone at z {z}");
+                        assert!(previous - s < 0.35, "step too large at z {z}");
+                        previous = s;
+                    }
+                }
+                z += 0.5;
+            }
+            assert!(inside_band && previous < 0.1, "spot {spot_light}");
+        }
+    }
+
+    #[test]
+    fn the_distance_rule_and_the_rank_use_the_footprint() {
+        // A range-30 light 35 m away has its centre past a 20 m limit but its footprint 5 m away.
+        let mut scene = scene_at_origin();
+        scene.lights = vec![point(
+            Vec3::new(0.0, 0.0, -35.0),
+            30.0,
+            faded(Some(20.0), 5.0),
+        )];
+        assert_eq!(strength_of(&scene), Some(1.0));
+        // The camera inside a light footprint is at footprint distance 0.
+        scene.lights = vec![point(
+            Vec3::new(0.0, 0.0, -1.0),
+            30.0,
+            faded(Some(0.5), 0.5),
+        )];
+        assert_eq!(strength_of(&scene), Some(1.0));
+        assert_eq!(
+            footprint_distance(Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0), 30.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn lights_past_their_distance_cost_no_atlas_cells() {
+        let mut scene = scene_at_origin();
+        // Two nearer lights past their 3 m limit; ten farther ones inside a 100 m limit.
+        let mut lights: Vec<PointLightData> = (0..2)
+            .map(|i| {
+                point(
+                    Vec3::new(0.0, 0.0, -5.0 - i as f32),
+                    1.0,
+                    faded(Some(3.0), 0.0),
+                )
+            })
+            .collect();
+        lights.extend((0..10).map(|i| {
+            point(
+                Vec3::new(0.0, 0.0, -10.0 - i as f32),
+                1.0,
+                faded(Some(100.0), 20.0),
+            )
+        }));
+        scene.lights = lights;
+        let plan = plan_local_shadows(&scene, 4096);
+        assert_eq!(plan.stats.requested, 10);
+        assert_eq!(plan.stats.granted, 10);
+        assert_eq!(plan.stats.skipped, 0);
+        assert_eq!(plan.views.len(), 60);
+        assert_eq!(plan.light_first_view[0], UNSHADOWED);
+        assert_eq!(plan.light_first_view[1], UNSHADOWED);
+    }
+
+    #[test]
+    fn a_zero_fade_is_a_hard_cut_and_a_far_distance_plans_as_before() {
+        let mut scene = scene_at_origin();
+        scene.lights = vec![point(
+            Vec3::new(0.0, 0.0, -10.0),
+            2.0,
+            faded(Some(9.0), 0.0),
+        )];
+        assert_eq!(strength_of(&scene), Some(1.0)); // footprint 8 < 9
+        scene.lights = vec![point(
+            Vec3::new(0.0, 0.0, -11.0),
+            2.0,
+            faded(Some(9.0), 0.0),
+        )];
+        assert_eq!(strength_of(&scene), None); // footprint 9 is at the limit
+
+        let mut open = scene_at_origin();
+        open.lights = point_row(4);
+        open.spot_lights = spot_row(3);
+        let mut limited = open.clone();
+        for l in &mut limited.lights {
+            l.shadow = faded(Some(1.0e6), 0.0);
+        }
+        for l in &mut limited.spot_lights {
+            l.shadow = faded(Some(1.0e6), 0.0);
+        }
+        assert_eq!(
+            plan_local_shadows(&open, 2048),
+            plan_local_shadows(&limited, 2048)
+        );
+    }
+
+    #[test]
+    fn the_same_scene_with_fades_plans_identically() {
+        let mut scene = scene_at_origin();
+        scene.lights = point_row(4);
+        for l in &mut scene.lights {
+            l.shadow = faded(Some(12.0), 6.0);
+        }
+        assert_eq!(
+            plan_local_shadows(&scene, 2048),
+            plan_local_shadows(&scene, 2048)
+        );
     }
 }

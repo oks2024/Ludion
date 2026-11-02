@@ -3222,6 +3222,8 @@ mod tests {
         let casting = Some(LocalShadowData {
             bias: 0.05,
             near: 0.1,
+            distance: None,
+            fade: 0.0,
         });
         let seen = Vec3::new(0.0, 0.0, -5.0);
         let granted = PostChain::for_scene(&scene_with_spot(seen, casting));
@@ -3568,6 +3570,8 @@ mod tests {
             shadow: Some(crate::LocalShadowData {
                 bias: 0.02,
                 near: 0.1,
+                distance: None,
+                fade: 0.0,
             }),
         }];
         scene

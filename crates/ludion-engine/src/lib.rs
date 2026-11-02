@@ -225,8 +225,8 @@ pub use scene_check::{
     expand_scene, font_table_faults, prefab_singleton_diagnostics, scene_atlas_diagnostics,
     scene_audio_diagnostics, scene_camera_rig_diagnostics, scene_engine_diagnostics,
     scene_font_diagnostics, scene_hierarchy_body_diagnostics, scene_layer_diagnostics,
-    scene_motor_diagnostics, scene_physics_diagnostics, scene_sensor_diagnostics,
-    scene_sun_diagnostics,
+    scene_local_light_diagnostics, scene_motor_diagnostics, scene_physics_diagnostics,
+    scene_sensor_diagnostics, scene_sun_diagnostics,
 };
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use shutdown::Shutdown;

@@ -15,6 +15,7 @@
 > extended, 9–11 new; replays re-pinned to the new wire hash at r1788); the macOS golden twin is owed (`Plan/owed.md`), and the darkness look gate is the game's.
 > **Clockout 0011 (sun cascades) mechanized 2026-10-30 at Lore r1792–r1800** (decisions 1, 3, 4, 6 amended; 12–17 new);
 > the replays are re-pinned to the new wire hash at r1798, review fixes at r1800. The macOS twins, the M4 GPU tests and the iOS/Metal build are owed (`Plan/owed.md`).
+> **Clockout 0034 (local-light shadow distance fade) mechanized 2026-11-01:** `shadow_distance`/`shadow_fade` on `PointLight`/`SpotLight`, `L1322`/`L1323`, strength in `LocalView.params.w`; decisions 9, 11 amended; wire hash and goldens unmoved; the M4 run of the GPU sweep test is owed (`Plan/owed.md`).
 
 ## Goal
 
@@ -111,7 +112,7 @@ opt in to camera-fitted cascades (decisions 12–17); the anchored box stays the
    on the machine's quality.
 9. **Local-light shadows are opt-in under a camera-ranked caster budget** (Clockout request 0007).
    `cast_shadows` on `PointLight` and `SpotLight`. Each frame, candidates are the opted-in lights whose
-   cluster footprint touches the camera frustum, ranked by `max(0, |camera − centre| − radius)`, ties
+   cluster footprint touches the camera frustum (a light past its `shadow_distance` is not a candidate), ranked by `max(0, |camera − centre| − radius)`, ties
    to light-list order. They are granted whole sets of tiles from an 8×8-cell atlas: a spot a 2×2
    block, a point light (or a spot over 60°) six one-cell cube faces; a light that does not fit is
    skipped and later candidates are still tried.
@@ -123,7 +124,10 @@ opt in to camera-fitted cascades (decisions 12–17); the anchored box stays the
 
     *Why:* a slower machine never changes which lamps cast.
 11. **The open questions, settled.** Six cube faces in the atlas (paraboloids bend straight edges); a
-    spot wider than 60° takes the omni path (authoring never fails); no fade or hysteresis; no static
+    spot wider than 60° takes the omni path (authoring never fails); no hysteresis, and an opt-in per-light distance
+    fade (Clockout 0034: its level has 365 lamps and casts from 84 to stay in budget; a stateless fade
+    keeps the reason for rejecting hysteresis, no history between frames; per light only, decision 10
+    stands, no quality axis scales the distance); no static
     caching; distance rank; per-view CPU culling in the `cull` module, which Clockout request 0011 reuses.
     Out of scope kept: sprites, fog, GI.
 12. **An opt-in camera fit sits beside the explicit box** (Clockout request 0011, amendment 1). `cascades`,

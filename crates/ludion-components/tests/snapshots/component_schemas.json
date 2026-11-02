@@ -3627,7 +3627,7 @@
         "exclusiveMinimum": 0.0
       },
       "cast_shadows": {
-        "description": "Opts the light into a shadow map (default `false`); lights that don't opt in, or that lose\nthe per-frame caster budget, stay lit and unshadowed.",
+        "description": "Opts the light into a shadow map (default `false`); lights that don't opt in, that lose\nthe per-frame caster budget, or that are past `shadow_distance`, stay lit and unshadowed.",
         "type": "boolean"
       },
       "shadow_bias": {
@@ -3647,6 +3647,23 @@
         "x-ui-range": [
           0.01,
           1.0
+        ]
+      },
+      "shadow_distance": {
+        "description": "Camera distance past which the light casts no shadow (default none: no limit). Measured to\nthe light's footprint surface (the camera's distance to the light, less `range`), the metric\nthe caster budget ranks by. A light at or past it is not a candidate and takes no atlas\ncells; it still lights fully. Finite and above 0 (`L1322`).",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float"
+      },
+      "shadow_fade": {
+        "description": "Length of the band before `shadow_distance` over which the shadow fades from full to none,\nby smoothstep (default `0`: a hard cut). Needs `shadow_distance` and is at most it (`L1322`).",
+        "type": "number",
+        "format": "float",
+        "x-ui-range": [
+          0.0,
+          50.0
         ]
       }
     }
@@ -4350,7 +4367,7 @@
         ]
       },
       "cast_shadows": {
-        "description": "Opts the light into a shadow map (default `false`); lights that don't opt in, or that lose\nthe per-frame caster budget, stay lit and unshadowed.",
+        "description": "Opts the light into a shadow map (default `false`); lights that don't opt in, that lose\nthe per-frame caster budget, or that are past `shadow_distance`, stay lit and unshadowed.",
         "type": "boolean"
       },
       "shadow_bias": {
@@ -4370,6 +4387,23 @@
         "x-ui-range": [
           0.01,
           1.0
+        ]
+      },
+      "shadow_distance": {
+        "description": "Camera distance past which the light casts no shadow (default none: no limit). Measured to\nthe surface of the cone's bounding sphere (the footprint the caster budget ranks by, not the\nfull `range` sphere). A light at or past it is not a candidate and takes no atlas\ncells; it still lights fully. Finite and above 0 (`L1322`).",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float"
+      },
+      "shadow_fade": {
+        "description": "Length of the band before `shadow_distance` over which the shadow fades from full to none,\nby smoothstep (default `0`: a hard cut). Needs `shadow_distance` and is at most it (`L1322`).",
+        "type": "number",
+        "format": "float",
+        "x-ui-range": [
+          0.0,
+          50.0
         ]
       }
     }

@@ -2258,6 +2258,8 @@ fn point_light_data(light: &PointLight, position: Vec3, dynamic: bool) -> Option
             light.shadow_bias,
             light.shadow_near,
             light.range,
+            light.shadow_distance,
+            light.shadow_fade,
         ),
     })
 }
@@ -2265,8 +2267,16 @@ fn point_light_data(light: &PointLight, position: Vec3, dynamic: bool) -> Option
 /// A casting light's [`LocalShadowData`], `None` when it doesn't cast. The bias clamps to
 /// non-negative (`f32::max` drops a NaN) and a near plane that is not finite and in `(0, range)`
 /// falls back to the default capped at half the range, so a Rust-built value that skipped
-/// validation (`L1312`) still gets a usable view.
-fn local_shadow(cast: bool, bias: f32, near: f32, range: f32) -> Option<LocalShadowData> {
+/// validation (`L1312`) still gets a usable view. A `distance` that is not finite and positive
+/// becomes `None`; the fade clamps into `[0, distance]`, and is `0` without a distance (`L1322`).
+fn local_shadow(
+    cast: bool,
+    bias: f32,
+    near: f32,
+    range: f32,
+    distance: Option<f32>,
+    fade: f32,
+) -> Option<LocalShadowData> {
     if !cast {
         return None;
     }
@@ -2275,9 +2285,13 @@ fn local_shadow(cast: bool, bias: f32, near: f32, range: f32) -> Option<LocalSha
     } else {
         0.05_f32.min(range * 0.5)
     };
+    let distance = distance.filter(|d| d.is_finite() && *d > 0.0);
+    let fade = distance.map_or(0.0, |d| fade.max(0.0).min(d));
     Some(LocalShadowData {
         bias: bias.max(0.0),
         near,
+        distance,
+        fade,
     })
 }
 
@@ -2308,6 +2322,8 @@ fn spot_light_data(light: &SpotLight, position: Vec3) -> Option<SpotLightData> {
             light.shadow_bias,
             light.shadow_near,
             light.range,
+            light.shadow_distance,
+            light.shadow_fade,
         ),
     })
 }
@@ -6002,6 +6018,8 @@ mod tests {
         let want = Some(LocalShadowData {
             bias: 0.1,
             near: 0.2,
+            distance: None,
+            fade: 0.0,
         });
         assert_eq!(point_shadow(&casting), want);
         let spot = SpotLight {
@@ -6035,6 +6053,34 @@ mod tests {
             ..PointLight::default()
         };
         assert_eq!(point_shadow(&nan_bias).unwrap().bias, 0.0);
+
+        let faded = |distance: Option<f32>, fade: f32| {
+            point_shadow(&PointLight {
+                cast_shadows: true,
+                shadow_distance: distance,
+                shadow_fade: fade,
+                ..PointLight::default()
+            })
+            .unwrap()
+        };
+        let ok = faded(Some(30.0), 8.0);
+        assert_eq!((ok.distance, ok.fade), (Some(30.0), 8.0));
+        let spot = SpotLight {
+            cast_shadows: true,
+            shadow_distance: Some(30.0),
+            shadow_fade: 8.0,
+            ..SpotLight::default()
+        };
+        let spot = spot_light_data(&spot, Vec3::ZERO).unwrap().shadow.unwrap();
+        assert_eq!((spot.distance, spot.fade), (Some(30.0), 8.0));
+        for bad in [0.0, -2.0, f32::NAN, f32::INFINITY] {
+            let data = faded(Some(bad), 5.0);
+            assert_eq!((data.distance, data.fade), (None, 0.0), "distance {bad}");
+        }
+        assert_eq!(faded(None, 5.0).fade, 0.0);
+        assert_eq!(faded(Some(10.0), 40.0).fade, 10.0);
+        assert_eq!(faded(Some(10.0), -3.0).fade, 0.0);
+        assert_eq!(faded(Some(10.0), f32::NAN).fade, 0.0);
     }
 
     /// With multiple suns, extract takes the lowest live `EntityId` (first in the pinned

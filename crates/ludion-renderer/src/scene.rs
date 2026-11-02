@@ -723,6 +723,13 @@ pub struct LocalShadowData {
     pub bias: f32,
     /// Near plane of the shadow view, in metres from the light.
     pub near: f32,
+    /// Camera distance to the surface of the light's footprint sphere (the range sphere for a point
+    /// light, the cone's bounding sphere for a spot; 0 inside it) at and past which the light is not a
+    /// shadow candidate; `None` is no limit.
+    pub distance: Option<f32>,
+    /// Length of the band before `distance` over which the shadow fades from full to none by
+    /// smoothstep; `0` is a hard cut. Only meaningful with a `distance`.
+    pub fade: f32,
 }
 
 /// A dynamic point light: position, color, intensity, and a hard range cutoff.

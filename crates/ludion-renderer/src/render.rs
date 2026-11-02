@@ -2883,7 +2883,7 @@ fn local_view_gpu(
             view.bias * (QualityParams::FULL.local_shadow_atlas_size as f32 / edge),
             2.0 * tan_half_fov / rect.size as f32,
             views_of_light as f32,
-            0.0,
+            view.strength,
         ],
     }
 }
@@ -14565,6 +14565,8 @@ mod tests {
             shadow: cast_shadows.then_some(crate::scene::LocalShadowData {
                 bias: 0.05,
                 near: 0.1,
+                distance: None,
+                fade: 0.0,
             }),
         });
         scene
@@ -15641,6 +15643,8 @@ mod tests {
             shadow: Some(crate::scene::LocalShadowData {
                 bias: 0.05,
                 near: 0.1,
+                distance: None,
+                fade: 0.0,
             }),
             ..light
         }];
@@ -15657,6 +15661,7 @@ mod tests {
             gpu.params[1]
         );
         assert_eq!(gpu.params[2], 6.0);
+        assert_eq!(gpu.params[3], 1.0);
     }
 
     /// A top-down view of a large floor with no sun, no environment and no ambient, so the local
@@ -15690,6 +15695,8 @@ mod tests {
         spot.shadow = cast.then_some(crate::scene::LocalShadowData {
             bias: 0.02,
             near: 0.1,
+            distance: None,
+            fade: 0.0,
         });
         spot
     }
@@ -15784,6 +15791,8 @@ mod tests {
         light.shadow = Some(crate::scene::LocalShadowData {
             bias: 0.02,
             near: 0.1,
+            distance: None,
+            fade: 0.0,
         });
         scene.lights = vec![light];
         let shadowed = renderer.render(&scene, size).expect("a shadowed render");
@@ -15811,6 +15820,91 @@ mod tests {
             max_channel_diff(&plain, &shadowed, x0..x1, y0..y1) <= 3,
             "the open floor crossing every cube-face boundary must match the unshadowed frame",
         );
+    }
+
+    /// **A point light's shadow fades through its `shadow_distance` band and nothing else moves.** A
+    /// slab shadows the floor at the origin; the camera rises straight above it, so the origin pixel
+    /// stays central and the view vector near-constant while the footprint distance crosses the band.
+    /// Before the band the frame equals the one with no distance; past the limit it equals the one
+    /// with no shadow and the plan has no view; inside, the origin brightens without a jump.
+    #[test]
+    fn needs_gpu_a_local_shadow_fades_through_its_band() {
+        let Some(renderer) = skip_or_renderer("a_local_shadow_fades_through_its_band") else {
+            return;
+        };
+        let (w, h) = (192u32, 108u32);
+        let size = FrameSize::native(w, h);
+        let light_at = Vec3::new(-6.0, 6.0, 0.0);
+        let build = |eye_y: f32, shadow: Option<(Option<f32>, f32)>| {
+            let mut scene = local_receive_scene(w, h);
+            let eye = Vec3::new(0.0, eye_y, 0.01);
+            scene.camera.view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
+            scene.camera.position = eye;
+            scene.meshes.push(cube(
+                Vec3::new(-3.0, 3.0, 0.0),
+                Vec3::new(1.5, 0.4, 1.5),
+                [0.8, 0.8, 0.8, 1.0],
+            ));
+            let mut light = point_light(light_at, 2.0, 16.0);
+            light.shadow = shadow.map(|(distance, fade)| crate::scene::LocalShadowData {
+                bias: 0.02,
+                near: 0.1,
+                distance,
+                fade,
+            });
+            scene.lights = vec![light];
+            scene
+        };
+        let origin = |scene: &RenderScene| pixel_of(scene, Vec3::ZERO, w, h);
+
+        // Footprint distance is |eye - light| - 16: about 3 at y = 24, 12 at y = 33.4.
+        let mut lumas = Vec::new();
+        let mut y = 24.0_f32;
+        while y <= 38.0 {
+            let scene = build(y, Some((Some(12.0), 6.0)));
+            let image = renderer.render(&scene, size).expect("a faded render");
+            let (x, py) = origin(&scene);
+            lumas.push(luma(&image, x, py));
+
+            if y == 24.0 {
+                let twin = build(y, Some((None, 0.0)));
+                let twin = renderer.render(&twin, size).expect("a no-distance twin");
+                assert_eq!(
+                    image.rgba, twin.rgba,
+                    "before the band: equal to no distance"
+                );
+            }
+            y += 0.3;
+        }
+        assert!(lumas.len() >= 16);
+        assert!(
+            lumas.windows(2).all(|p| p[0] <= p[1]),
+            "the origin must brighten monotonically: {lumas:?}"
+        );
+        let span = lumas.last().unwrap() - lumas[0];
+        assert!(
+            span > 50,
+            "shadowed to lit spans more than 50 levels: {lumas:?}"
+        );
+        let worst = lumas.windows(2).map(|p| p[1] - p[0]).max().unwrap();
+        assert!(
+            worst as f32 <= 0.15 * span as f32,
+            "no step above 15% of the span ({worst} of {span}): {lumas:?}"
+        );
+
+        let past = build(38.0, Some((Some(12.0), 6.0)));
+        let unshadowed = build(38.0, None);
+        assert!(
+            crate::local_shadow::plan_local_shadows(&past, 4096)
+                .views
+                .is_empty(),
+            "past the limit the light takes no atlas cell"
+        );
+        let a = renderer.render(&past, size).expect("a past-limit render");
+        let b = renderer
+            .render(&unshadowed, size)
+            .expect("an unshadowed render");
+        assert_eq!(a.rgba, b.rgba, "past the limit: equal to no shadow");
     }
 
     /// **Two granted spots in neighbouring atlas tiles do not read each other.** Each half of the
@@ -16082,6 +16176,8 @@ mod tests {
         let shadow = Some(crate::scene::LocalShadowData {
             bias: 0.02,
             near: 0.1,
+            distance: None,
+            fade: 0.0,
         });
         if point {
             let mut light = point_light(at, 150.0, 60.0);

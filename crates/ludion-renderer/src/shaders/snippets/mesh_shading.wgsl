@@ -61,6 +61,7 @@ struct LocalView {
     rect: vec4<f32>,
     // x = depth bias in world units, already scaled to the atlas size; y = world size of one tile
     // texel per unit of distance from the light; z = how many views this light has (1 or 6).
+    // w = distance-fade strength in (0, 1]: the shadow term scales toward lit as it falls.
     params: vec4<f32>,
 };
 
@@ -316,6 +317,8 @@ fn sun_shadow(world_pos: vec3<f32>) -> f32 {
 // The shadow factor of the light at list index `index` for a fragment, 1.0 = lit. `l` is the unit
 // vector toward the light and `dist` the distance to it. An unshadowed light returns before any
 // other read, so multiplying by the result is bit-preserving for every light that has no view.
+// A view with `params.w` below 1 (a light inside its `shadow_distance` band) blends the PCF result
+// toward lit by that strength; at 1 the result is untouched.
 //
 // The cube face is picked by the major axis of the light-to-fragment vector, ties resolved in the
 // order X, Y, Z — the table in `local_shadow.rs`. The bias is applied in world space BEFORE
@@ -371,7 +374,9 @@ fn local_shadow(index: u32, world_pos: vec3<f32>, n: vec3<f32>, l: vec3<f32>, di
             sum = sum + textureSampleCompareLevel(local_shadow_tex, shadow_samp, tap, ndc.z);
         }
     }
-    return sum / f32(sun.pcf * sun.pcf);
+    let shadow = sum / f32(sun.pcf * sun.pcf);
+    // `select`, not a bare `mix`: strength 1 must return the PCF result bit for bit.
+    return select(mix(1.0, shadow, view.params.w), shadow, view.params.w >= 1.0);
 }
 
 // The sky-visibility read, through the shared probe snippet (`gi_probe.wgsl`): the ONE function that

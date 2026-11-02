@@ -462,8 +462,8 @@ pub struct PointLight {
     #[serde(default = "ten")]
     #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub range: f32,
-    /// Opts the light into a shadow map (default `false`); lights that don't opt in, or that lose
-    /// the per-frame caster budget, stay lit and unshadowed.
+    /// Opts the light into a shadow map (default `false`); lights that don't opt in, that lose
+    /// the per-frame caster budget, or that are past `shadow_distance`, stay lit and unshadowed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cast_shadows: bool,
     /// Depth bias in world units, as on `DirectionalLight`, validated `>= 0` (default `0.02`).
@@ -482,6 +482,17 @@ pub struct PointLight {
     )]
     #[schemars(extend("x-ui-range" = [0.01, 1.0]))]
     pub shadow_near: f32,
+    /// Camera distance past which the light casts no shadow (default none: no limit). Measured to
+    /// the light's footprint surface (the camera's distance to the light, less `range`), the metric
+    /// the caster budget ranks by. A light at or past it is not a candidate and takes no atlas
+    /// cells; it still lights fully. Finite and above 0 (`L1322`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_distance: Option<f32>,
+    /// Length of the band before `shadow_distance` over which the shadow fades from full to none,
+    /// by smoothstep (default `0`: a hard cut). Needs `shadow_distance` and is at most it (`L1322`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    #[schemars(extend("x-ui-range" = [0.0, 50.0]))]
+    pub shadow_fade: f32,
 }
 
 impl Default for PointLight {
@@ -493,6 +504,8 @@ impl Default for PointLight {
             cast_shadows: false,
             shadow_bias: local_shadow_bias_default(),
             shadow_near: local_shadow_near_default(),
+            shadow_distance: None,
+            shadow_fade: 0.0,
         }
     }
 }
@@ -506,6 +519,7 @@ impl SemanticValidate for PointLight {
             value,
             f64::from(PointLight::default().range),
         ));
+        out.extend(local_shadow_distance_diagnostics(value));
         out
     }
 }
@@ -546,8 +560,8 @@ pub struct SpotLight {
     #[serde(default = "spot_outer_angle")]
     #[schemars(extend("x-ui-range" = [0.0, 89.0]))]
     pub outer_angle: f32,
-    /// Opts the light into a shadow map (default `false`); lights that don't opt in, or that lose
-    /// the per-frame caster budget, stay lit and unshadowed.
+    /// Opts the light into a shadow map (default `false`); lights that don't opt in, that lose
+    /// the per-frame caster budget, or that are past `shadow_distance`, stay lit and unshadowed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cast_shadows: bool,
     /// Depth bias in world units, as on `DirectionalLight`, validated `>= 0` (default `0.02`).
@@ -566,6 +580,17 @@ pub struct SpotLight {
     )]
     #[schemars(extend("x-ui-range" = [0.01, 1.0]))]
     pub shadow_near: f32,
+    /// Camera distance past which the light casts no shadow (default none: no limit). Measured to
+    /// the surface of the cone's bounding sphere (the footprint the caster budget ranks by, not the
+    /// full `range` sphere). A light at or past it is not a candidate and takes no atlas
+    /// cells; it still lights fully. Finite and above 0 (`L1322`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_distance: Option<f32>,
+    /// Length of the band before `shadow_distance` over which the shadow fades from full to none,
+    /// by smoothstep (default `0`: a hard cut). Needs `shadow_distance` and is at most it (`L1322`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    #[schemars(extend("x-ui-range" = [0.0, 50.0]))]
+    pub shadow_fade: f32,
 }
 
 impl Default for SpotLight {
@@ -580,6 +605,8 @@ impl Default for SpotLight {
             cast_shadows: false,
             shadow_bias: local_shadow_bias_default(),
             shadow_near: local_shadow_near_default(),
+            shadow_distance: None,
+            shadow_fade: 0.0,
         }
     }
 }
@@ -597,6 +624,7 @@ impl SemanticValidate for SpotLight {
             value,
             f64::from(SpotLight::default().range),
         ));
+        out.extend(local_shadow_distance_diagnostics(value));
         if let Some(direction) = value.get("direction").and_then(Value::as_array) {
             let components: Vec<f64> = direction.iter().filter_map(as_stored_f32).collect();
             if components.len() == 3 {
@@ -706,6 +734,57 @@ fn local_light_invalid_shadow_near(near: f64, range: Option<f64>) -> Diagnostic 
     Diagnostic::new(code::LOCAL_LIGHT_INVALID_SHADOW, message)
         .with_path("/shadow_near")
         .with_help("use a finite `shadow_near` above 0 and below `range` (default 0.05)")
+}
+
+/// `L1322` for a `PointLight`/`SpotLight`: an authored `shadow_distance` that is non-finite or
+/// `<= 0`, or an authored `shadow_fade` that is non-finite, negative, set without a distance, or
+/// longer than it. `shadow_fade: 0` without a distance is the default and accepted.
+fn local_shadow_distance_diagnostics(value: &Value) -> Vec<Diagnostic> {
+    let distance = value.get("shadow_distance").and_then(as_stored_f32);
+    let fade = value.get("shadow_fade").and_then(as_stored_f32);
+    let mut out = Vec::new();
+    if let Some(d) = distance
+        && (!d.is_finite() || d <= 0.0)
+    {
+        out.push(
+            Diagnostic::new(
+                code::LOCAL_LIGHT_INVALID_SHADOW_DISTANCE,
+                format!("the light's shadow_distance {d} is non-finite or not above 0"),
+            )
+            .with_path("/shadow_distance")
+            .with_help("use a finite `shadow_distance` above 0, or remove it for no limit"),
+        );
+    }
+    let distance_ok = distance.filter(|d| d.is_finite() && *d > 0.0);
+    if let Some(f) = fade {
+        let message = if !f.is_finite() || f < 0.0 {
+            Some(format!(
+                "the light's shadow_fade {f} is non-finite or negative"
+            ))
+        } else if f > 0.0 && distance.is_none() {
+            Some(format!(
+                "the light's shadow_fade {f} has no shadow_distance to fade before"
+            ))
+        } else if let Some(d) = distance_ok
+            && f > d
+        {
+            Some(format!(
+                "the light's shadow_fade {f} is longer than its shadow_distance {d}"
+            ))
+        } else {
+            None
+        };
+        if let Some(message) = message {
+            out.push(
+                Diagnostic::new(code::LOCAL_LIGHT_INVALID_SHADOW_DISTANCE, message)
+                    .with_path("/shadow_fade")
+                    .with_help(
+                        "set `shadow_distance` above 0 and keep `shadow_fade` between 0 and it",
+                    ),
+            );
+        }
+    }
+    out
 }
 
 /// A reflection probe: a captured cube of the scene around the entity, projected onto a box or
@@ -6425,6 +6504,8 @@ mod tests {
             cast_shadows: true,
             shadow_bias: 0.1,
             shadow_near: 0.2,
+            shadow_distance: Some(30.0),
+            shadow_fade: 8.0,
         };
         let json = serde_json::to_value(custom).unwrap();
         assert_eq!(serde_json::from_value::<SpotLight>(json).unwrap(), custom);
@@ -6465,6 +6546,8 @@ mod tests {
             cast_shadows: true,
             shadow_bias: 0.1,
             shadow_near: 0.2,
+            shadow_distance: Some(30.0),
+            shadow_fade: 8.0,
         };
         let json = serde_json::to_value(custom).unwrap();
         assert_eq!(serde_json::from_value::<PointLight>(json).unwrap(), custom);
@@ -6486,19 +6569,28 @@ mod tests {
             );
             let scene = ludion_scene::check(&old, &registry).expect("an old-shape light");
             let text = ludion_scene::emit(&scene, &registry);
-            for key in ["cast_shadows", "shadow_bias", "shadow_near"] {
+            for key in [
+                "cast_shadows",
+                "shadow_bias",
+                "shadow_near",
+                "shadow_distance",
+                "shadow_fade",
+            ] {
                 assert!(!text.contains(key), "{component} emitted {key}: {text}");
             }
 
             let authored = format!(
                 "format: 1\nentities:\n  - components:\n      {component}:\n        \
-                 cast_shadows: true\n        shadow_bias: 0.1\n        shadow_near: 0.2\n"
+                 cast_shadows: true\n        shadow_bias: 0.1\n        shadow_near: 0.2\n        \
+                 shadow_distance: 30.0\n        shadow_fade: 8.5\n"
             );
             let scene = ludion_scene::check(&authored, &registry).expect("a casting light");
             let once = ludion_scene::emit(&scene, &registry);
             let reparsed = ludion_scene::check(&once, &registry).expect("emitted scene re-parses");
             assert_eq!(once, ludion_scene::emit(&reparsed, &registry));
             assert!(once.contains("cast_shadows: true"), "{once}");
+            assert!(once.contains("shadow_distance: 30.0"), "{once}");
+            assert!(once.contains("shadow_fade: 8.5"), "{once}");
 
             let info = registry.get(component).unwrap();
             let mut world = World::new();
@@ -6538,6 +6630,37 @@ mod tests {
                 "        cast_shadows: true\n",
                 "        shadow_near: 0.5\n        range: 9.0\n",
                 "        range: 0.04\n",
+            ] {
+                assert!(
+                    refusals(component, clean).is_empty(),
+                    "{component} {clean:?}"
+                );
+            }
+        }
+    }
+
+    /// A bad `shadow_distance` or `shadow_fade` is `L1322` on both local lights; `fade == distance`
+    /// and an authored `shadow_fade: 0` alone are legal.
+    #[test]
+    fn a_bad_local_light_shadow_distance_is_l1322() {
+        for component in ["PointLight", "SpotLight"] {
+            for (fields, pointer) in [
+                ("        shadow_distance: 0.0\n", "/shadow_distance"),
+                ("        shadow_distance: -3.0\n", "/shadow_distance"),
+                ("        shadow_fade: -1.0\n", "/shadow_fade"),
+                ("        shadow_fade: 2.0\n", "/shadow_fade"),
+                (
+                    "        shadow_distance: 10.0\n        shadow_fade: 10.5\n",
+                    "/shadow_fade",
+                ),
+            ] {
+                refused_with(component, fields, "L1322", pointer);
+            }
+            for clean in [
+                "        shadow_distance: 10.0\n        shadow_fade: 10.0\n",
+                "        shadow_distance: 10.0\n",
+                "        shadow_fade: 0.0\n",
+                "        shadow_distance: null\n",
             ] {
                 assert!(
                     refusals(component, clean).is_empty(),

@@ -174,7 +174,7 @@ A `SpotLight` is a point light with an axis: `color`, `intensity`, `range` as a 
 
 `PointLight` and `SpotLight` cast no shadow until `cast_shadows: true` opts them in. A per-frame
 budget grants shadow maps to the camera-nearest opted-in lights, 16 spot tiles at every quality; the
-rest stay lit and unshadowed. Fields, ranking, tuning and the profile check: `ludion docs local-shadows`.
+rest stay lit and unshadowed; `shadow_distance` (with a `shadow_fade` band) drops far lamps from the candidates. Fields, ranking, tuning and the profile check: `ludion docs local-shadows`.
 
 ## Gotchas
 
