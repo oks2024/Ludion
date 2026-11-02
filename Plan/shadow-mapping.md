@@ -15,7 +15,7 @@
 > extended, 9–11 new; replays re-pinned to the new wire hash at r1788); the macOS golden twin is owed (`Plan/owed.md`), and the darkness look gate is the game's.
 > **Clockout 0011 (sun cascades) mechanized 2026-10-30 at Lore r1792–r1800** (decisions 1, 3, 4, 6 amended; 12–17 new);
 > the replays are re-pinned to the new wire hash at r1798, review fixes at r1800. The macOS twins, the M4 GPU tests and the iOS/Metal build are owed (`Plan/owed.md`).
-> **Clockout 0034 (local-light shadow distance fade) mechanized 2026-11-01:** `shadow_distance`/`shadow_fade` on `PointLight`/`SpotLight`, `L1322`/`L1323`, strength in `LocalView.params.w`; decisions 9, 11 amended; wire hash and goldens unmoved; the M4 run of the GPU sweep test is owed (`Plan/owed.md`).
+> **Clockout 0034 (local-light shadow distance fade) mechanized 2026-11-02 at Lore r2009:** `shadow_distance`/`shadow_fade` on `PointLight`/`SpotLight`, `L1322`/`L1323`, strength in `LocalView.params.w`; decisions 9, 11 amended; wire hash and goldens unmoved; the M4 run of the GPU sweep test is owed (`Plan/owed.md`).
 
 ## Goal
 
