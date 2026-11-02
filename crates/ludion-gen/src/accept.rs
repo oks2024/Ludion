@@ -1214,7 +1214,7 @@ inputs:
     fn a_mesh_candidate_with_an_external_source_is_refused_and_writes_nothing() {
         let fixture = fixture("mesh-external", "ok", "mesh", 1);
         let out = fixture.root.join("assets/idol");
-        let json = br#"{"asset":{"version":"2.0"},"buffers":[{"uri":"tri.bin","byteLength":36}]}"#;
+        let json = br#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{}],"buffers":[{"uri":"tri.bin","byteLength":36}]}"#;
         std::fs::write(fixture.run_dir.join("0000.glb"), glb_of(json.to_vec())).expect("the glb");
         std::fs::write(fixture.run_dir.join("tri.bin"), [0u8; 36]).expect("the buffer beside it");
 
