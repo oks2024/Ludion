@@ -33,10 +33,10 @@
 //!
 //! A mesh's texture maps are entries of their own, shared by every mesh that names the file, so one PNG
 //! is one decode however many meshes bind it. Under `textures: cooked` a map an `[[import]]` table
-//! produced is held per colour role instead (`MapRole`): its cooked file's bytes differ between
-//! sRGB and linear, so one path can hold two entries, each either the cooked image or — with its
-//! reason recorded for the load's one `L1271` — the PNG's decode. Switching the setting drops every
-//! map and the meshes built from them.
+//! produced or a `[cook] roots` directory holds is held per colour role instead (`MapRole`): its
+//! cooked file's bytes differ between sRGB and linear, so one path can hold two entries, each
+//! either the cooked image or — with its reason recorded for the load's one `L1271` — the PNG's
+//! decode. Switching the setting drops every map and the meshes built from them.
 //!
 //! After a world rebuild the first cached extract (or `render.bounds`) keeps only what the new world
 //! names ([`AssetCache::retain_referenced`]), re-hashes the files the kept entries were built from and
@@ -66,8 +66,8 @@ use crate::prefab_clips::PrefabClipData;
 use crate::voxel_mesh::VoxelStaticGrid;
 
 /// Which pixels a mesh map's cache entry holds: the PNG's decode, or — under `textures: cooked`, for
-/// a map an `[[import]]` table produced — the cooked file read for one colour role (a cooked map's
-/// bytes differ by role, so one path can hold two entries).
+/// a map an `[[import]]` table produced or a `[cook] roots` directory holds — the cooked file read
+/// for one colour role (a cooked map's bytes differ by role, so one path can hold two entries).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum MapRole {
     Source,

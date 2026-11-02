@@ -707,12 +707,31 @@ fn write_export(
             ));
         }
     }
+    for root in manifest.cook_roots() {
+        if !project.join(root).is_dir() {
+            return Err(export_failed(
+                format!(
+                    "the `[cook] roots` directory `{}` does not exist",
+                    root.display()
+                ),
+                "run the import that writes it, or drop the root from `[cook] roots`",
+            ));
+        }
+    }
     // A sync may be mid-swap on these trees (`ludion dev`, the editor's game slot): wait for it.
-    let locks = crate::sync::lock_imports(project, &manifest.imports)?;
+    let mut locks = crate::sync::lock_imports(project, &manifest.imports)?;
+    locks.extend(crate::sync::lock_cook_store(project, manifest)?);
     for import in &manifest.imports {
         // The sync record (`sync::RECORD_FILE`) is bookkeeping, not content: `copy_tree` skips it
         // with every other dot-file.
         copy_tree(&project.join(&import.to), &content_root.join(&import.to))?;
+    }
+    // The runtime hashes a root's PNGs to find their cooked keys, so the tree ships at its
+    // project-relative path; one inside the scene directory is already there.
+    for root in manifest.cook_roots() {
+        if !is_inside(root, scene_dir) {
+            copy_tree(&project.join(root), &content_root.join(root))?;
+        }
     }
     let shipped = ship_cooked(project, manifest, &content_root)?;
     drop(locks);
@@ -736,6 +755,16 @@ fn write_export(
     Ok(shipped)
 }
 
+/// True when `path` is `dir` or below it, comparing names without case as the content trees' file
+/// systems do.
+fn is_inside(path: &Path, dir: &Path) -> bool {
+    let mut path = path.components();
+    dir.components().all(|part| {
+        path.next()
+            .is_some_and(|other| part.as_os_str().eq_ignore_ascii_case(other.as_os_str()))
+    })
+}
+
 /// What the bundle took from the `ios` cooked store.
 #[derive(Debug, Default)]
 struct Shipped {
@@ -747,9 +776,9 @@ struct Shipped {
     unscanned: usize,
 }
 
-/// Copies the `ios` store entries the import trees reference into the bundle, beside the PNGs
-/// (the app's host finds the store from the bundled manifest). A missing entry is counted, not an
-/// error: that map falls back to its PNG.
+/// Copies the `ios` store entries the import trees and `[cook] roots` reference into the bundle,
+/// beside the PNGs (the app's host finds the store from the bundled manifest). A missing entry is
+/// counted, not an error: that map falls back to its PNG.
 fn ship_cooked(
     project: &Path,
     manifest: &Manifest,
@@ -771,7 +800,12 @@ fn ship_cooked(
             .map_err(|err| output_io(format!("could not read `{}`: {err}", import.to.display())))?;
         trees.push(tree);
     }
-    let referenced = crate::cook::referenced_files(project, &trees, CookTarget::Ios);
+    let roots: Vec<PathBuf> = manifest
+        .cook_roots()
+        .iter()
+        .map(|root| project.join(root))
+        .collect();
+    let referenced = crate::cook::referenced_files(project, &trees, &roots, CookTarget::Ios);
     shipped.unscanned = referenced.failed.len();
     let store = crate::cook::store_dir(project, CookTarget::Ios);
     let dst_dir = content_root
@@ -1252,6 +1286,36 @@ mod tests {
         assert_eq!(
             (shipped.maps, shipped.uncooked, shipped.unscanned),
             (1, 1, 0)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_cook_root_outside_the_scene_directory_ships_its_tree_and_cooked_maps() {
+        let (root, project, [b, n]) = cooked_project("roots", "");
+        std::fs::write(
+            project.join("ludion.toml"),
+            "name = \"probe\"
+default_scene = \"scenes/main.yaml\"
+
+[cook]
+roots = [\"assets/derived\"]
+",
+        )
+        .unwrap();
+        let shipped = export_cooked(&root, &project);
+        let store = root.join("out/content/.ludion/cooked/ios");
+        assert!(store.join(&b).is_file() && store.join(&n).is_file());
+        assert!(!store.join("stale.ktx2").exists());
+        let textures = root.join("out/content/assets/derived/kit/textures");
+        assert!(textures.join("b.png").is_file() && textures.join("n.png").is_file());
+        assert!(
+            root.join("out/content/assets/derived/kit/model.mesh.yaml")
+                .is_file()
+        );
+        assert_eq!(
+            (shipped.maps, shipped.uncooked, shipped.unscanned),
+            (2, 0, 0)
         );
         let _ = std::fs::remove_dir_all(&root);
     }

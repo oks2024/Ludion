@@ -1,5 +1,5 @@
 //! Implementation of `ludion sync [--project <dir>] [--json]` — keeps a project's derived import
-//! trees fresh.
+//! trees fresh and their texture maps, and those of any `[cook] roots` directory, cooked.
 //!
 //! Each `[[import]]` table in `ludion.toml` names glTF sources (`from`, a glob) and a derived root
 //! (`to`); a match `<dir>/<stem>.gltf` compiles into `<to>/<stem>/` exactly as `ludion import` would.
@@ -16,8 +16,10 @@
 //! record and re-decides ownership under the lock. Each table writes an intent record (every stem it
 //! is about to import, with no outputs) before its first swap, so a sync killed midway leaves stems
 //! the next run owns and re-imports. After the import stage, still under the locks, the cook stage
-//! (`cook.rs`) compresses the imported meshes' maps into `.ludion/cooked/`; a cook failure never
-//! undoes an import.
+//! (`cook.rs`) compresses the imported meshes' maps, and the maps of every `*.mesh.yaml` under a
+//! `[cook] roots` directory, into `.ludion/cooked/`; a cook failure never undoes an import. A project
+//! with roots also holds `.ludion/.ludion-sync.lock` for the stage, since a roots-only project has no
+//! table lock.
 
 use std::collections::BTreeMap;
 use std::fs::{File, TryLockError};
@@ -33,7 +35,7 @@ use ludion_core::atomic::write_atomic;
 use ludion_core::codes::code::{IMPORT_OUTPUT_IO, IMPORT_SYNC_REFUSED};
 use ludion_core::diagnostics::Diagnostic;
 
-use crate::cook::{CookOutcome, CookRequest, CookTree, cook_project};
+use crate::cook::{CookOutcome, CookRequest, CookTree, check_roots, cook_project};
 use crate::diagnostic;
 use ludion_assets::cooked::CookTarget;
 use ludion_engine::manifest::{self, ImportSection};
@@ -120,7 +122,7 @@ struct Outcome {
     failed: Vec<(String, Vec<Diagnostic>)>,
     /// What the successful imports warned about, in print order.
     warnings: Vec<Diagnostic>,
-    /// The manifest has no `[[import]]` table: nothing was looked at.
+    /// The manifest has no `[[import]]` table and no `[cook]` root: nothing was looked at.
     no_tables: bool,
 }
 
@@ -128,7 +130,7 @@ struct Outcome {
 /// unreadable binary. A per-entry import failure stays in `Outcome::failed`.
 fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagnostic>> {
     let manifest = manifest::load(project).map_err(|diagnostic| vec![diagnostic])?;
-    if manifest.imports.is_empty() {
+    if manifest.imports.is_empty() && manifest.cook_roots().is_empty() {
         return Ok(Outcome {
             no_tables: true,
             ..Outcome::default()
@@ -141,6 +143,16 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
         )]
     })?;
     let importer = ludion_import::IMPORTER_FINGERPRINT;
+    let cook_textures = manifest
+        .cook
+        .as_ref()
+        .is_none_or(|section| section.textures);
+    let cook_runs = cook.enabled && cook_textures;
+    let cook_roots: Vec<PathBuf> = manifest
+        .cook_roots()
+        .iter()
+        .map(|dir| root.join(dir))
+        .collect();
 
     let mut tables = Vec::new();
     let mut refusals = Vec::new();
@@ -149,6 +161,9 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
             Ok(table) => tables.push(table),
             Err(diagnostic) => refusals.push(diagnostic),
         }
+    }
+    if cook_runs {
+        refusals.extend(check_roots(&root, &cook_roots));
     }
     if !refusals.is_empty() {
         return Err(refusals);
@@ -161,6 +176,9 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
     let mut locks = Vec::new();
     for table in &tables {
         locks.push(lock_root(&table.to).map_err(|failure| vec![failure])?);
+    }
+    if cook_runs {
+        locks.extend(lock_cook_store(&root, &manifest).map_err(|failure| vec![failure])?);
     }
     let mut refusals = Vec::new();
     for table in &mut tables {
@@ -181,11 +199,7 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
     for table in &tables {
         sync_table(&root, table, importer, &mut outcome);
     }
-    let cook_textures = manifest
-        .cook
-        .as_ref()
-        .is_none_or(|section| section.textures);
-    if cook.enabled && cook_textures {
+    if cook_runs {
         let mut targets = manifest.cook_targets();
         for extra in &cook.extra_targets {
             if !targets.contains(extra) {
@@ -202,7 +216,7 @@ fn sync_project(project: &Path, cook: &CookRequest) -> Result<Outcome, Vec<Diagn
                 max_texture_size: section.max_texture_size,
             })
             .collect();
-        outcome.cook = Some(cook_project(&root, &trees, &targets));
+        outcome.cook = Some(cook_project(&root, &trees, &cook_roots, &targets));
     }
     drop(locks);
     Ok(outcome)
@@ -245,6 +259,19 @@ pub(crate) fn lock_imports(
         .iter()
         .map(|import| lock_root(&project.join(&import.to)))
         .collect()
+}
+
+/// The lock on the cooked store, `<project>/.ludion/.ludion-sync.lock` (outside the swept target
+/// directories), taken after the table locks. `None` without `[cook] roots`: an import-only project
+/// is guarded by its table locks and never creates it.
+pub(crate) fn lock_cook_store(
+    project: &Path,
+    manifest: &manifest::Manifest,
+) -> Result<Option<File>, Diagnostic> {
+    if manifest.cook_roots().is_empty() {
+        return Ok(None);
+    }
+    lock_root(&project.join(".ludion")).map(Some)
 }
 
 /// True when `to` holds nothing but the sync's own lock and debris.
@@ -318,7 +345,8 @@ pub(crate) struct Summary {
 }
 
 /// The in-process entry `dev` and `export` call: brings the project's derived imports and their
-/// cooked maps up to date. A project with no `ludion.toml` or no `[[import]]` table is a no-op.
+/// cooked maps up to date. A project with no `ludion.toml`, or neither an `[[import]]` table nor a
+/// `[cook]` root, is a no-op.
 /// Prints each entry's import warnings; a failed entry is an `Err` carrying all its diagnostics. A
 /// map that fails to cook is printed and never an `Err`: it still loads from its source PNG.
 pub(crate) fn ensure_fresh(project: &Path, cook: &CookRequest) -> Result<Summary, Vec<Diagnostic>> {
@@ -331,6 +359,9 @@ pub(crate) fn ensure_fresh(project: &Path, cook: &CookRequest) -> Result<Summary
         for diagnostic in &failed.diagnostics {
             diagnostic::print(diagnostic);
         }
+    }
+    for warning in outcome.cook.iter().flat_map(|cook| &cook.warnings) {
+        diagnostic::print(warning);
     }
     if outcome.failed.is_empty() {
         return Ok(Summary {
@@ -364,7 +395,7 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
     if outcome.no_tables {
         if !json {
             println!(
-                "sync: no [[import]] tables in {}",
+                "sync: no [[import]] tables or [cook] roots in {}",
                 project.join("ludion.toml").display()
             );
         }
@@ -387,6 +418,9 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
             diagnostic::print(diagnostic);
         }
     }
+    for warning in outcome.cook.iter().flat_map(|cook| &cook.warnings) {
+        diagnostic::print(warning);
+    }
     let ok = outcome.failed.is_empty() && cook_failed.clone().next().is_none();
     let warmed = warm_probes(project, json);
     if json {
@@ -395,6 +429,7 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
             .iter()
             .chain(outcome.failed.iter().flat_map(|(_, d)| d))
             .chain(cook_failed.flat_map(|failed| &failed.diagnostics))
+            .chain(outcome.cook.iter().flat_map(|cook| &cook.warnings))
             .cloned()
             .collect();
         print_json(ok, &outcome, &warmed, &rendered);

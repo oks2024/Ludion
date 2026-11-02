@@ -1,11 +1,12 @@
 //! Cooked mesh maps: the engine half of `ludion sync`'s cook stage.
 //!
-//! Under [`TextureSource::Cooked`] a mesh map that an `[[import]]` table produced is read from the
-//! content-addressed store `<project>/.ludion/cooked/<target>/<cook key>.ktx2` as BC7 or ASTC instead
-//! of being decoded from its PNG. The key folds in the PNG's content hash, the map's colour role, the
-//! target and the table's `max_texture_size`, so the lookup reads the PNG's bytes (to hash them),
-//! never decodes them, and finds the file with no index. A map that is missing, corrupt or unusable
-//! on this GPU loads from its PNG, and the load reports the fallbacks as one `L1271`.
+//! Under [`TextureSource::Cooked`] a mesh map that an `[[import]]` table produced, or that lies under
+//! a `[cook] roots` directory, is read from the content-addressed store
+//! `<project>/.ludion/cooked/<target>/<cook key>.ktx2` as BC7 or ASTC instead of being decoded from
+//! its PNG. The key folds in the PNG's content hash, the map's colour role, the target and the
+//! table's `max_texture_size`, so the lookup reads the PNG's bytes (to hash them), never decodes
+//! them, and finds the file with no index. A map that is missing, corrupt or unusable on this GPU
+//! loads from its PNG, and the load reports the fallbacks as one `L1271`.
 //!
 //! The axis is render-only: nothing here reaches the world, so `WorldHash`, replays and snapshots do
 //! not see it.
@@ -112,11 +113,15 @@ pub(crate) struct CookLookup {
     store: PathBuf,
     /// Each `[[import]]` table's `to`, as a prefix of a content-root-relative map path, with its cap.
     tables: Vec<(String, Option<u32>)>,
+    /// The content root relative to the manifest, `/`-separated; empty when they are the same.
+    content_dir: String,
+    /// Each `[cook] roots` entry, project-relative with `/` separators. Their maps are uncapped.
+    roots: Vec<String>,
 }
 
 /// The lookup for the project whose content root is `project_root`, or `None` when no manifest
-/// governs it, the manifest does not load or it has no `[[import]]`: every map then uses its PNG
-/// silently, because sync cooks nothing for it.
+/// governs it, the manifest does not load or it has neither `[[import]]` tables nor `[cook] roots`:
+/// every map then uses its PNG silently, because sync cooks nothing for it.
 ///
 /// `supported` is the device's targets in preference order. The pick is the first whose store
 /// directory exists, else the first supported: a bundle ships one target, and an Apple-silicon GPU
@@ -124,14 +129,21 @@ pub(crate) struct CookLookup {
 pub(crate) fn lookup_for(project_root: &Path, supported: &[CookTarget]) -> Option<CookLookup> {
     let project = crate::manifest::find(project_root)?;
     let manifest = crate::manifest::load(&project).ok()?;
-    if manifest.imports.is_empty() {
+    if manifest.imports.is_empty() && manifest.cook_roots().is_empty() {
         return None;
     }
-    let depth = project_root
-        .strip_prefix(&project)
-        .ok()?
+    let below = project_root.strip_prefix(&project).ok()?;
+    let depth = below.components().count();
+    let content_dir = below
         .components()
-        .count();
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    let roots = manifest
+        .cook_roots()
+        .iter()
+        .map(|root| root.to_string_lossy().replace('\\', "/"))
+        .collect();
     let tables = manifest
         .imports
         .iter()
@@ -148,6 +160,8 @@ pub(crate) fn lookup_for(project_root: &Path, supported: &[CookTarget]) -> Optio
         target,
         store,
         tables,
+        content_dir,
+        roots,
     })
 }
 
@@ -174,9 +188,10 @@ impl CookLookup {
         self.target
     }
 
-    /// The cap of the table that owns the map at the normalized `rel`; `None` when no table does,
-    /// which is a map sync never cooks. Sync cooks only `<to>/<stem>/…` (a non-dot stem directory
-    /// holding the map), so a file directly under `<to>/` is not covered.
+    /// The cap of the table or `[cook]` root that owns the map at the normalized `rel` (a root's
+    /// maps are uncapped, `Some(None)`); `None` when none does, which is a map sync never cooks.
+    /// A table is cooked only at `<to>/<stem>/…` (a non-dot stem directory holding the map), so a
+    /// file directly under `<to>/` is not covered; a root covers every depth below it.
     pub(crate) fn cap_for(&self, rel: &str) -> Option<Option<u32>> {
         self.tables
             .iter()
@@ -189,6 +204,27 @@ impl CookLookup {
                     })
             })
             .map(|(_, cap)| *cap)
+            .or_else(|| self.under_root(rel).then_some(None))
+    }
+
+    /// `rel` folded against the content root gives the project-relative path, so this holds at any
+    /// content-root depth and for a content root below or above the root. No segment below the
+    /// root may start with `.`, as the sync's walk skips those.
+    fn under_root(&self, rel: &str) -> bool {
+        let path = if self.content_dir.is_empty() {
+            ludion_core::paths::normalize(rel)
+        } else {
+            ludion_core::paths::normalize(&format!("{}/{rel}", self.content_dir))
+        };
+        self.roots.iter().any(|root| {
+            path.get(..root.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(root))
+                && path[root.len()..].strip_prefix('/').is_some_and(|below| {
+                    below
+                        .split('/')
+                        .all(|part| !part.is_empty() && !part.starts_with('.'))
+                })
+        })
     }
 
     /// Reads the cooked copy of the map whose PNG bytes are `png`, in `role` under the table cap
@@ -267,7 +303,57 @@ mod tests {
                 .iter()
                 .map(|(to, cap)| (table_prefix(depth, to), *cap))
                 .collect(),
+            content_dir: String::new(),
+            roots: Vec::new(),
         }
+    }
+
+    fn with_roots(content_dir: &str, roots: &[&str]) -> CookLookup {
+        CookLookup {
+            content_dir: content_dir.to_string(),
+            roots: roots.iter().map(ToString::to_string).collect(),
+            ..lookup(0, &[])
+        }
+    }
+
+    #[test]
+    fn a_root_covers_every_map_below_it_at_any_content_depth() {
+        let at_manifest = with_roots("", &["assets"]);
+        assert_eq!(at_manifest.cap_for("assets/x/t/a.png"), Some(None));
+        assert_eq!(at_manifest.cap_for("assets/a.png"), Some(None));
+
+        let scenes = with_roots("scenes", &["scenes/assets"]);
+        assert_eq!(scenes.cap_for("assets/g/p/textures/a.png"), Some(None));
+
+        let level = with_roots("scenes/level", &["scenes/assets"]);
+        assert_eq!(level.cap_for("../assets/g/a.png"), Some(None));
+
+        let inner = with_roots("scenes/assets/g", &["scenes/assets"]);
+        assert_eq!(inner.cap_for("p/a.png"), Some(None));
+    }
+
+    #[test]
+    fn a_root_does_not_cover_dot_directories_siblings_or_escapes() {
+        let scenes = with_roots("scenes", &["scenes/assets"]);
+        assert_eq!(scenes.cap_for("assets/.hidden/a.png"), None);
+        assert_eq!(scenes.cap_for("assets-old/a.png"), None);
+        assert_eq!(scenes.cap_for("assets"), None);
+        assert_eq!(scenes.cap_for("../../../x/a.png"), None);
+    }
+
+    #[test]
+    fn lookup_for_accepts_a_roots_only_manifest() {
+        let dir = std::env::temp_dir().join(format!("ludion-cook-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("scenes")).unwrap();
+        std::fs::write(
+            dir.join("ludion.toml"),
+            "name = \"r\"\ndefault_scene = \"scenes/main.yaml\"\n\n[cook]\nroots = [\"scenes/assets\"]\n",
+        )
+        .unwrap();
+        let found = lookup_for(&dir.join("scenes"), &[CookTarget::Desktop]).unwrap();
+        assert_eq!(found.cap_for("assets/g/a.png"), Some(None));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

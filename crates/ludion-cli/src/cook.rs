@@ -1,13 +1,17 @@
-//! The cook stage of `ludion sync`: compresses every PNG map an imported `*.mesh.yaml` references
-//! into a KTX2 file of `<project>/.ludion/cooked/<target>/<key>.ktx2`, `<key>` being
+//! The cook stage of `ludion sync`: compresses every PNG map a `*.mesh.yaml` references into a KTX2
+//! file of `<project>/.ludion/cooked/<target>/<key>.ktx2`, `<key>` being
 //! [`ludion_assets::cooked::cook_key`] over the source file's hash and the cook settings.
 //!
 //! The stage is incremental by key (a file already in the store is reused, so a changed source, cap
 //! or cooker is a new key and a new file) and parallel through `ludion_core::par` (the store is
 //! byte-identical at any thread count). Afterwards every store entry no live mesh references is
 //! deleted: the store is the sync's alone, and `write_atomic` temp debris from a killed run goes
-//! with it. Only the import trees' own maps are cooked; a map that leaves its `<to>/<stem>/`
-//! directory is skipped.
+//! with it.
+//!
+//! Two inputs feed the stage. An `[[import]]` tree's meshes (`<to>/<stem>/`) cook under the table's
+//! `max_texture_size`; a `[cook] roots` directory is walked for every `*.mesh.yaml` below it (dot
+//! entries skipped) and cooks uncapped. A map that leaves its directory is skipped: quietly for a
+//! tree, with one `L1325` warning for a root.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -16,7 +20,9 @@ use ludion_assets::cooked::{ColorSpace, CookSettings, CookTarget, cook_key, cook
 use ludion_assets::import_sync::collect_files;
 use ludion_assets::{Image, content_hash, decode_png};
 use ludion_core::atomic::write_atomic;
-use ludion_core::codes::code::{COOK_ENCODE_FAILED, IMPORT_OUTPUT_IO};
+use ludion_core::codes::code::{
+    COOK_ENCODE_FAILED, COOK_MAP_LEAVES_ROOT, COOK_ROOT_INVALID, IMPORT_OUTPUT_IO,
+};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_scene::{AlphaMode, MeshTextures, parse_mesh};
 
@@ -60,6 +66,8 @@ pub(crate) struct CookOutcome {
     pub failed: Vec<CookFailure>,
     /// The bytes left in the cooked target directories.
     pub store_bytes: u64,
+    /// Findings that do not fail the run: the one `L1325` when a root's mesh names a map outside it.
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// One `[[import]]` table's derived tree.
@@ -99,6 +107,8 @@ struct MeshFile {
     /// The stem directory the mesh and its maps must stay inside.
     stem_dir: PathBuf,
     max_texture_size: Option<u32>,
+    /// A `[cook] roots` mesh: a map it names outside the root is reported, not skipped quietly.
+    reports_leaving: bool,
 }
 
 /// One map in one colour role, before the target is chosen.
@@ -175,17 +185,103 @@ fn failure(map: String, target: &'static str, diagnostic: Diagnostic) -> CookFai
     }
 }
 
-/// What the trees' meshes reference, hashed.
+/// A root mesh and a map reference of it that the cook leaves out, project-relative.
+type Left = (String, String);
+
+/// What the trees' and roots' meshes reference, hashed.
 struct Scan {
     uses: BTreeSet<MapUse>,
     hashes: BTreeMap<PathBuf, u64>,
     /// `false` when a mesh or PNG could not be read, so the referenced set is not the whole truth.
     complete: bool,
     failed: Vec<CookFailure>,
+    /// The references of root meshes that leave their root, sorted.
+    left: Vec<Left>,
 }
 
-/// Walks the trees' meshes and hashes every map they reference.
-fn scan(root: &Path, trees: &[CookTree]) -> Scan {
+/// Every `*.mesh.yaml` under `dir`, recursively. Entries whose name starts with `.` are skipped and
+/// other files ignored; a symbolic link or junction is `InvalidInput`, as in `collect_files`.
+fn collect_meshes(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in dir.read_dir()? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "`{}` is a symbolic link or junction",
+                    entry.path().display()
+                ),
+            ));
+        }
+        if kind.is_dir() {
+            collect_meshes(&entry.path(), out)?;
+        } else if kind.is_file() && name.ends_with(".mesh.yaml") {
+            out.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
+/// Refuses `[cook] roots` the walk cannot trust: absent, not a directory, or behind a symbolic link
+/// or junction. `roots` are absolute and below `root`; each component below `root` is checked
+/// without following links. An absent root is never read as an empty one, which would sweep its
+/// maps.
+pub(crate) fn check_roots(root: &Path, roots: &[PathBuf]) -> Vec<Diagnostic> {
+    let invalid = |root_path: &Path, why: &str, help: &str| {
+        Diagnostic::new(
+            COOK_ROOT_INVALID,
+            format!("`[cook] roots` entry `{}` {why}", display(root, root_path)),
+        )
+        .with_help(help.to_string())
+    };
+    let mut found = Vec::new();
+    for path in roots {
+        let below = path.strip_prefix(root).unwrap_or(path);
+        let mut walked = root.to_path_buf();
+        let mut problem = None;
+        for part in below.components() {
+            walked.push(part);
+            match std::fs::symlink_metadata(&walked) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    problem = Some(invalid(
+                        path,
+                        &format!("passes through the link `{}`", display(root, &walked)),
+                        "replace the link with the real directory",
+                    ));
+                }
+                Ok(meta) if walked == *path && !meta.is_dir() => {
+                    problem = Some(invalid(
+                        path,
+                        "is not a directory",
+                        "point the root at a directory, or drop it from `[cook] roots`",
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    problem = Some(invalid(
+                        path,
+                        "does not exist",
+                        "run the import that writes it, or drop the root from `[cook] roots`",
+                    ));
+                }
+                Err(error) => problem = Some(io_failure("read", &walked, &error)),
+            }
+            if problem.is_some() {
+                break;
+            }
+        }
+        found.extend(problem);
+    }
+    found
+}
+
+/// Walks the trees' and roots' meshes and hashes every map they reference.
+fn scan(root: &Path, trees: &[CookTree], roots: &[PathBuf]) -> Scan {
     let mut complete = true;
     let mut failed: Vec<CookFailure> = Vec::new();
 
@@ -214,16 +310,45 @@ fn scan(root: &Path, trees: &[CookTree]) -> Scan {
                         path: stem_dir.join(file),
                         stem_dir: stem_dir.clone(),
                         max_texture_size: tree.max_texture_size,
+                        reports_leaving: false,
                     }),
             );
         }
     }
+    for dir in roots {
+        let mut files = Vec::new();
+        if let Err(error) = collect_meshes(dir, &mut files) {
+            complete = false;
+            let diagnostic = if error.kind() == std::io::ErrorKind::InvalidInput {
+                Diagnostic::new(COOK_ROOT_INVALID, error.to_string())
+                    .with_help("replace the link with the real files, or drop the root")
+            } else {
+                io_failure("read", dir, &error)
+            };
+            failed.push(failure(display(root, dir), "all", diagnostic));
+            continue;
+        }
+        files.sort();
+        meshes.extend(files.into_iter().map(|path| MeshFile {
+            path,
+            stem_dir: dir.clone(),
+            max_texture_size: None,
+            reports_leaving: true,
+        }));
+    }
 
     let parsed = ludion_core::par::par_map_chunks(&meshes, 1, |_, chunk| read_mesh(&chunk[0]));
     let mut uses: BTreeSet<MapUse> = BTreeSet::new();
+    let mut left: Vec<Left> = Vec::new();
     for result in parsed {
         match result {
-            Ok(found) => uses.extend(found),
+            Ok((found, out)) => {
+                uses.extend(found);
+                left.extend(
+                    out.into_iter()
+                        .map(|(mesh, reference)| (display(root, &mesh), reference)),
+                );
+            }
             Err((path, diagnostics)) => {
                 complete = false;
                 failed.push(CookFailure {
@@ -260,11 +385,14 @@ fn scan(root: &Path, trees: &[CookTree]) -> Scan {
             }
         }
     }
+    left.sort();
+    left.dedup();
     Scan {
         uses,
         hashes,
         complete,
         failed,
+        left,
     }
 }
 
@@ -292,9 +420,14 @@ pub(crate) struct Referenced {
     pub failed: Vec<CookFailure>,
 }
 
-/// The file names `target`'s store holds for the trees' meshes.
-pub(crate) fn referenced_files(root: &Path, trees: &[CookTree], target: CookTarget) -> Referenced {
-    let scan = scan(root, trees);
+/// The file names `target`'s store holds for the trees' and roots' meshes.
+pub(crate) fn referenced_files(
+    root: &Path,
+    trees: &[CookTree],
+    roots: &[PathBuf],
+    target: CookTarget,
+) -> Referenced {
+    let scan = scan(root, trees, roots);
     let files = units(&scan, target)
         .keys()
         .map(|&key| cooked_file_name(key))
@@ -310,12 +443,19 @@ pub(crate) fn store_dir(root: &Path, target: CookTarget) -> PathBuf {
     root.join(STORE).join(target.name())
 }
 
-/// Cooks every map the trees' meshes reference for each target, then sweeps the store. `trees`
-/// and `targets` are in manifest order; the result does not depend on the thread count.
-pub(crate) fn cook_project(root: &Path, trees: &[CookTree], targets: &[CookTarget]) -> CookOutcome {
-    let mut scan = scan(root, trees);
+/// Cooks every map the trees' and roots' meshes reference for each target, then sweeps the store.
+/// `trees`, `roots` (absolute) and `targets` are in manifest order; the result does not depend on
+/// the thread count.
+pub(crate) fn cook_project(
+    root: &Path,
+    trees: &[CookTree],
+    roots: &[PathBuf],
+    targets: &[CookTarget],
+) -> CookOutcome {
+    let mut scan = scan(root, trees, roots);
     let mut outcome = CookOutcome {
         failed: std::mem::take(&mut scan.failed),
+        warnings: leaves_root_warning(&scan.left).into_iter().collect(),
         ..CookOutcome::default()
     };
     // A run that could not read every mesh or PNG does not know what the store should hold.
@@ -376,8 +516,47 @@ fn settings(target: CookTarget, map: &MapUse) -> CookSettings {
     }
 }
 
-/// Reads one mesh document and lists its in-tree maps; the error is the mesh and why.
-fn read_mesh(mesh: &MeshFile) -> Result<Vec<MapUse>, (PathBuf, Vec<Diagnostic>)> {
+/// How many references one `L1325` lists in full.
+const LISTED: usize = 8;
+
+/// The one warning for root meshes whose maps are not cooked because they leave the root.
+fn leaves_root_warning(left: &[Left]) -> Option<Diagnostic> {
+    if left.is_empty() {
+        return None;
+    }
+    let more = left.len().saturating_sub(LISTED);
+    let tail = if more > 0 {
+        format!(" (and {more} more)")
+    } else {
+        String::new()
+    };
+    let mut diagnostic = Diagnostic::new(
+        COOK_MAP_LEAVES_ROOT,
+        format!(
+            "{} mesh map references leave their `[cook] roots` directory and are not cooked{tail}",
+            left.len()
+        ),
+    )
+    .with_help("move the map inside the root, or add its directory to `[cook] roots`");
+    for (mesh, reference) in left.iter().take(LISTED) {
+        diagnostic = diagnostic.with_related(
+            Diagnostic::new(
+                COOK_MAP_LEAVES_ROOT,
+                format!("references `{reference}`, outside its root"),
+            )
+            .with_path(mesh.clone()),
+        );
+    }
+    Some(diagnostic)
+}
+
+/// A mesh's cookable maps and, for a root mesh, the `(mesh, reference)` pairs that leave the root.
+type MeshMaps = (Vec<MapUse>, Vec<(PathBuf, String)>);
+
+/// Reads one mesh document and lists its in-tree maps; the error is the mesh and why. A reference
+/// that resolves outside `stem_dir`, or through a dot segment below it, is left out, and listed
+/// when the mesh `reports_leaving`.
+fn read_mesh(mesh: &MeshFile) -> Result<MeshMaps, (PathBuf, Vec<Diagnostic>)> {
     let text = std::fs::read_to_string(&mesh.path).map_err(|error| {
         (
             mesh.path.clone(),
@@ -385,17 +564,29 @@ fn read_mesh(mesh: &MeshFile) -> Result<Vec<MapUse>, (PathBuf, Vec<Diagnostic>)>
         )
     })?;
     let document = parse_mesh(&text).map_err(|diagnostics| (mesh.path.clone(), diagnostics))?;
-    Ok(roles(&document.textures, document.alpha_mode)
-        .into_iter()
-        .filter_map(|(space, reference, alpha_cutoff)| {
-            Some(MapUse {
-                png: resolve_map(&mesh.stem_dir, &mesh.path, reference)?,
+    let mut uses = Vec::new();
+    let mut left = Vec::new();
+    for (space, reference, alpha_cutoff) in roles(&document.textures, document.alpha_mode) {
+        let png = resolve_map(&mesh.stem_dir, &mesh.path, reference).filter(|png| {
+            !mesh.reports_leaving
+                || png.strip_prefix(&mesh.stem_dir).is_ok_and(|below| {
+                    below
+                        .components()
+                        .all(|part| !part.as_os_str().to_string_lossy().starts_with('.'))
+                })
+        });
+        match png {
+            Some(png) => uses.push(MapUse {
+                png,
                 srgb: space == ColorSpace::Srgb,
                 max_texture_size: mesh.max_texture_size,
                 alpha_cutoff,
-            })
-        })
-        .collect())
+            }),
+            None if mesh.reports_leaving => left.push((mesh.path.clone(), reference.to_string())),
+            None => {}
+        }
+    }
+    Ok((uses, left))
 }
 
 /// Decodes, cooks and stores one map, so a worker holds one map at a time.
@@ -496,6 +687,46 @@ mod tests {
         assert_eq!(resolved("../../x.png"), None);
         assert_eq!(resolved("../../../outside.png"), None);
         assert_eq!(resolved("/abs/x.png"), None);
+    }
+
+    #[test]
+    fn collect_meshes_recurses_and_skips_dot_entries_and_other_files() {
+        let dir = std::env::temp_dir().join(format!("ludion-cook-collect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for sub in ["a/b", ".hidden", "c"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        for file in [
+            "top.mesh.yaml",
+            "a/b/deep.mesh.yaml",
+            "a/review.yaml",
+            "a/tex.png",
+            ".hidden/skip.mesh.yaml",
+            ".dot.mesh.yaml",
+        ] {
+            std::fs::write(dir.join(file), b"x").unwrap();
+        }
+        let mut found = Vec::new();
+        collect_meshes(&dir, &mut found).unwrap();
+        let mut names: Vec<String> = found.iter().map(|path| display(&dir, path)).collect();
+        names.sort();
+        assert_eq!(names, ["a/b/deep.mesh.yaml", "top.mesh.yaml"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_absent_or_non_directory_root_is_l1324() {
+        let dir = std::env::temp_dir().join(format!("ludion-cook-absent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("here")).unwrap();
+        std::fs::write(dir.join("file"), b"x").unwrap();
+        let found = check_roots(
+            &dir,
+            &[dir.join("here"), dir.join("gone/deeper"), dir.join("file")],
+        );
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|d| d.code == COOK_ROOT_INVALID));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -6,7 +6,10 @@
 //! the ASTC store; `max_texture_size` caps level 0 and moves the key; a bad `[cook]` key is refused
 //! as `L0023`; planted debris is swept; a sync killed mid-cook leaves only whole files and the next
 //! sync completes the store; and a map that cannot be cooked fails the run without undoing the
-//! import.
+//! import. A `[cook] roots` project (no `[[import]]` table) cooks every map the root's meshes
+//! reference, reuses them, sweeps what no mesh references, refuses an absent root or a link under it
+//! (`L1324`) without sweeping, and warns once (`L1325`) about a map that leaves its root; an
+//! import-only project keeps its keys, store and record.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -134,6 +137,61 @@ fn unique_maps_project(name: &str, kits: &[&str], size: u32) -> Scratch {
     dir
 }
 
+/// A project whose manifest has `[cook] roots = ["scenes/assets"]` and no `[[import]]` table, with
+/// each part imported by `ludion import` into `scenes/assets/group/<part>` and a stray YAML beside.
+fn roots_project(name: &str, parts: &[&str]) -> Scratch {
+    let dir = scratch(name);
+    std::fs::write(
+        dir.join("ludion.toml"),
+        format!("{MANIFEST}\n[cook]\nroots = [\"scenes/assets\"]\n"),
+    )
+    .unwrap();
+    for part in parts {
+        write_kit(&dir, part, 64);
+        let gltf = dir.join(format!("kits/{part}/export/{part}.gltf"));
+        let out = dir.join(format!("scenes/assets/group/{part}"));
+        let imported = run_ludion(&[
+            "import",
+            gltf.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ]);
+        assert!(
+            imported.status.success(),
+            "{}",
+            String::from_utf8_lossy(&imported.stderr)
+        );
+    }
+    std::fs::write(dir.join("scenes/assets/group/review.yaml"), "format: 1\n").unwrap();
+    dir
+}
+
+/// A directory link `link` -> `target`; a junction on Windows, which needs no privilege.
+fn link_dir(link: &Path, target: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    if std::os::windows::fs::symlink_dir(target, link).is_err() {
+        let status = ProcCommand::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success(), "could not create a junction");
+    }
+}
+
+fn diagnostic_codes(json: &serde_json::Value) -> Vec<String> {
+    json["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["code"].as_str().unwrap().to_string())
+        .collect()
+}
+
 type Run = (bool, serde_json::Value, String);
 
 fn sync_with(project: &Path, extra: &[&str]) -> Run {
@@ -206,8 +264,13 @@ type Unit = (PathBuf, bool, Option<u32>);
 /// sRGB, the rest linear; only a mask mesh's base colour carries its cutoff), independently of the
 /// cook stage.
 fn expected_units(project: &Path) -> BTreeSet<Unit> {
+    expected_units_under(project, "assets/derived")
+}
+
+/// [`expected_units`] over the meshes below the project-relative directory `tree`.
+fn expected_units_under(project: &Path, tree: &str) -> BTreeSet<Unit> {
     let mut units = BTreeSet::new();
-    let mut stack = vec![project.join("assets/derived")];
+    let mut stack = vec![project.join(tree)];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
@@ -705,5 +768,211 @@ fn a_mask_meshs_base_colour_cooks_under_the_cutoff_key_and_the_rest_do_not() {
     assert_eq!(
         names(&store_files(&dir, "desktop")),
         expected_names(&units, CookTarget::Desktop, None)
+    );
+}
+
+#[test]
+fn a_root_without_import_cooks_every_map_then_reuses_them() {
+    let dir = roots_project("roots-first", &["a", "b"]);
+    let first = sync(&dir);
+    assert_clean(&first);
+    let units = expected_units_under(&dir, "scenes/assets");
+    assert!(units.len() >= 10, "{} units", units.len());
+    assert_eq!(field(&first.1, "cooked") as usize, units.len());
+    let files = store_files(&dir, "desktop");
+    assert_eq!(
+        names(&files),
+        expected_names(&units, CookTarget::Desktop, None)
+    );
+
+    let second = sync(&dir);
+    assert_clean(&second);
+    assert_eq!(field(&second.1, "cooked"), 0);
+    assert_eq!(field(&second.1, "cook_reused") as usize, units.len());
+    assert_eq!(store_files(&dir, "desktop"), files);
+}
+
+#[test]
+fn a_root_map_is_swept_when_no_mesh_references_it() {
+    let dir = roots_project("roots-sweep", &["a", "b"]);
+    assert_clean(&sync(&dir));
+    let both = expected_units_under(&dir, "scenes/assets");
+    std::fs::remove_dir_all(dir.join("scenes/assets/group/b")).unwrap();
+    let only_a = expected_units_under(&dir, "scenes/assets");
+    assert!(only_a.len() < both.len());
+    assert_clean(&sync(&dir));
+    assert_eq!(
+        names(&store_files(&dir, "desktop")),
+        expected_names(&only_a, CookTarget::Desktop, None)
+    );
+}
+
+#[test]
+fn an_absent_root_is_l1324_and_sweeps_nothing() {
+    let dir = roots_project("roots-absent", &["a"]);
+    assert_clean(&sync(&dir));
+    let before = store_files(&dir, "desktop");
+    std::fs::rename(dir.join("scenes/assets"), dir.join("scenes/moved")).unwrap();
+    let (ok, json, stderr) = sync(&dir);
+    assert!(!ok, "{json}");
+    assert!(stderr.contains("L1324"), "{stderr}");
+    assert_eq!(diagnostic_codes(&json), ["L1324"]);
+    assert_eq!(store_files(&dir, "desktop"), before);
+}
+
+#[test]
+fn a_link_under_a_root_is_l1324_and_sweeps_nothing() {
+    let dir = roots_project("roots-link", &["a"]);
+    assert_clean(&sync(&dir));
+    let before = store_files(&dir, "desktop");
+    link_dir(&dir.join("scenes/assets/group/loop"), &dir.join("kits"));
+    let (ok, json, stderr) = sync(&dir);
+    assert!(!ok, "{json}");
+    assert!(stderr.contains("L1324"), "{stderr}");
+    assert!(diagnostic_codes(&json).contains(&"L1324".to_string()));
+    assert_eq!(store_files(&dir, "desktop"), before);
+}
+
+#[test]
+fn a_map_leaving_its_root_warns_l1325_and_stays_uncooked() {
+    let dir = roots_project("roots-leave", &["a"]);
+    let mesh = textured_mesh(&dir.join("scenes/assets/group/a"));
+    let text = std::fs::read_to_string(&mesh).unwrap();
+    let line = text
+        .lines()
+        .find(|line| line.trim().starts_with("path: "))
+        .expect("a texture path")
+        .to_string();
+    let indent = &line[..line.len() - line.trim_start().len()];
+    std::fs::write(
+        &mesh,
+        text.replacen(&line, &format!("{indent}path: ../../../../outside.png"), 1),
+    )
+    .unwrap();
+
+    let (ok, json, stderr) = sync(&dir);
+    assert!(ok, "{json}\n{stderr}");
+    assert_eq!(json["cook_failed"], serde_json::json!([]), "{json}");
+    assert_eq!(diagnostic_codes(&json), ["L1325"], "{json}");
+    assert!(stderr.contains("L1325"), "{stderr}");
+    assert!(stderr.contains("outside.png"), "{stderr}");
+}
+
+/// The first `*.mesh.yaml` below `dir`.
+fn textured_mesh(dir: &Path) -> PathBuf {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(next) = stack.pop() {
+        for entry in std::fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.to_string_lossy().ends_with(".mesh.yaml")
+                && std::fs::read_to_string(&path).unwrap().contains("path: ")
+            {
+                return path;
+            }
+        }
+    }
+    panic!("no textured mesh under {dir:?}");
+}
+
+#[test]
+fn an_import_only_project_keeps_its_keys_store_and_record() {
+    for (name, tail) in [
+        ("import-only", ""),
+        ("import-only-cook", "[cook]\ntargets = [\"desktop\"]\n"),
+    ] {
+        let dir = scratch(name);
+        write_manifest(&dir, "", tail);
+        write_kit(&dir, "a", 64);
+        assert_clean(&sync(&dir));
+        let units = expected_units(&dir);
+        assert_eq!(
+            names(&store_files(&dir, "desktop")),
+            expected_names(&units, CookTarget::Desktop, None)
+        );
+        assert!(!dir.join(".ludion/.ludion-sync.lock").exists());
+        let record = std::fs::read(dir.join("assets/derived/.ludion-sync.json")).unwrap();
+
+        let second = sync(&dir);
+        assert_clean(&second);
+        assert_eq!(
+            second.1["skipped"],
+            serde_json::json!(["a"]),
+            "{}",
+            second.1
+        );
+        assert_eq!(field(&second.1, "cooked"), 0);
+        assert_eq!(
+            std::fs::read(dir.join("assets/derived/.ludion-sync.json")).unwrap(),
+            record
+        );
+        assert!(!dir.join(".ludion/.ludion-sync.lock").exists());
+    }
+}
+
+/// A `[cook] roots` project under a `scenes/` content root: the engine's lookup folds the scene's
+/// `assets/...` spelling against that depth to find the root's maps.
+#[test]
+fn needs_gpu_a_root_project_loads_cooked_with_no_fallback() {
+    use ludion_engine::{Engine, TextureSource, profile_engine};
+
+    match ludion_renderer::Renderer::new() {
+        Ok(renderer) if renderer.cook_target().is_some() => {}
+        Ok(_) => return eprintln!("SKIPPED: no BC7 or ASTC support"),
+        Err(diagnostic)
+            if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&diagnostic)) =>
+        {
+            return eprintln!("SKIPPED: no GPU adapter");
+        }
+        Err(diagnostic) => panic!("renderer init failed: {diagnostic:?}"),
+    }
+    let dir = roots_project("roots-then-load", &["a"]);
+    assert_clean(&sync(&dir));
+
+    let content = dir.join("scenes");
+    let mut meshes = Vec::new();
+    let mut stack = vec![content.join("assets")];
+    while let Some(next) = stack.pop() {
+        for entry in std::fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.to_string_lossy().ends_with(".mesh.yaml") {
+                let rel = path.strip_prefix(&content).unwrap();
+                meshes.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    meshes.sort();
+    assert!(!meshes.is_empty(), "the import wrote no mesh");
+    let mut scene = String::from("format: 1\nentities:\n");
+    for mesh in &meshes {
+        scene +=
+            &format!("  - components:\n      Mesh:\n        shape:\n          asset: {mesh}\n");
+    }
+
+    let mut engine = Engine::builder()
+        .project_root(&content)
+        .build()
+        .expect("builds");
+    engine.set_textures(TextureSource::Cooked);
+    engine.observe_load();
+    engine.load_inline_scene(&scene).expect("the scene loads");
+    let report = profile_engine(&mut engine, "roots".into(), 1, 0).expect("profiles");
+    let texture = report
+        .load
+        .expect("observed")
+        .assets
+        .into_iter()
+        .find(|counters| counters.kind == "texture")
+        .expect("a texture row");
+    assert!(
+        texture.cooked > 0,
+        "no map was read from the store: {texture:?}"
+    );
+    assert_eq!(
+        texture.decoded, 0,
+        "a map fell back to its PNG: {texture:?}"
     );
 }

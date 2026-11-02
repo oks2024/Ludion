@@ -1,6 +1,6 @@
 //! The project manifest, `ludion.toml`: a game's name, its default scene, its per-platform
-//! identity, its derived-import tables and its `[audio]` voice caps. `ludion export`, `ludion sync`
-//! and every game host read it.
+//! identity, its derived-import tables, its `[cook]` table and its `[audio]` voice caps.
+//! `ludion export`, `ludion sync` and every game host read it.
 
 use std::path::{Path, PathBuf};
 
@@ -40,12 +40,16 @@ pub struct CookSection {
     /// The GPU families to cook for, `desktop` (BC7) and `ios` (ASTC); absent is `["desktop"]`.
     #[serde(default = "default_cook_targets")]
     pub targets: Vec<String>,
-    /// Cook the imported texture maps; `false` skips the stage like `ludion sync --no-cook`.
+    /// Cook the texture maps of the import trees and roots; `false` skips the stage like `ludion sync --no-cook`.
     #[serde(default = "default_true")]
     pub textures: bool,
     /// Binary mesh cooking. Not implemented: `true` is refused.
     #[serde(default)]
     pub meshes: bool,
+    /// Project-relative directories whose `*.mesh.yaml` files `ludion sync` cooks the maps of,
+    /// beside the `[[import]]` trees. Each is outside every `[[import]] to`, uncapped.
+    #[serde(default)]
+    pub roots: Vec<PathBuf>,
 }
 
 fn default_cook_targets() -> Vec<String> {
@@ -105,7 +109,7 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
             format!("`{}` is not a valid manifest: {err}", path.display()),
             "the keys are `name`, `default_scene`, the `[ios]` table's `bundle_id` and `quality`, and \
              each `[[import]]` table's `from`, `to` and `max_texture_size`, the `[cook]` table's \
-             `targets`, `textures` and `meshes`, and the `[audio]` table's `voices_per_sound` and \
+             `targets`, `textures`, `meshes` and `roots`, and the `[audio]` table's `voices_per_sound` and \
              `voices_total`",
         )
     })?;
@@ -149,7 +153,8 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
     validate_cook(&manifest).map_err(|message| {
         invalid(
             message,
-            "`[cook]` is `targets = [\"desktop\", \"ios\"]` and `textures = true`; \
+            "`[cook]` is `targets = [\"desktop\", \"ios\"]`, `textures = true` and \
+             `roots = [\"scenes/assets\"]` (project-relative, none overlapping an `[[import]] to`); \
              `[[import]] max_texture_size` is a positive texel count",
         )
     })?;
@@ -183,6 +188,39 @@ fn validate_cook(manifest: &Manifest) -> Result<(), String> {
             "`[cook] meshes = true`: binary mesh cooking does not exist; set `meshes = false` or drop the key"
                 .to_string(),
         );
+    }
+    validate_roots(&cook.roots, &manifest.imports)
+}
+
+/// A path has one owner: a root is in its one spelling, repeats or nests no other root, and
+/// neither holds nor sits inside an `[[import]] to`.
+fn validate_roots(roots: &[PathBuf], imports: &[ImportSection]) -> Result<(), String> {
+    for (index, root) in roots.iter().enumerate() {
+        let text = root.to_string_lossy();
+        if let Some(reason) = path_refusal(&text) {
+            return Err(format!("`[cook] roots` #{} = `{text}` {reason}", index + 1));
+        }
+        for (other_index, other) in roots.iter().enumerate().take(index) {
+            if starts_with_ignore_case(root, other) || starts_with_ignore_case(other, root) {
+                return Err(format!(
+                    "`[cook] roots` #{} = `{text}` repeats or nests #{} = `{}`: a map would be cooked twice",
+                    index + 1,
+                    other_index + 1,
+                    other.display()
+                ));
+            }
+        }
+        for (table_index, table) in imports.iter().enumerate() {
+            if starts_with_ignore_case(root, &table.to) || starts_with_ignore_case(&table.to, root)
+            {
+                return Err(format!(
+                    "`[cook] roots` #{} = `{text}` overlaps `[[import]]` #{}'s `to` = `{}`: the table already cooks that tree",
+                    index + 1,
+                    table_index + 1,
+                    table.to.display()
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -316,6 +354,11 @@ impl Manifest {
             }
         }
         targets
+    }
+
+    /// The `[cook] roots`, project-relative; empty without a `[cook]` table.
+    pub fn cook_roots(&self) -> &[PathBuf] {
+        self.cook.as_ref().map_or(&[], |cook| &cook.roots)
     }
 
     /// The `[audio]` voice caps, the engine defaults where a key is absent.
@@ -496,6 +539,49 @@ mod tests {
         assert_eq!(err.code, MANIFEST_INVALID);
         assert!(err.message.contains("meshes"), "{}", err.message);
         assert!(parse(&format!("{base}[cook]\nmeshes = false\ntextures = false\n")).is_ok());
+    }
+
+    #[test]
+    fn cook_roots_load_and_one_owner_per_path_is_enforced() {
+        let base = "name = \"a\"\ndefault_scene = \"s/a.yaml\"\n";
+        assert!(parse(base).unwrap().cook_roots().is_empty());
+        assert!(
+            parse(&format!("{base}[cook]\n"))
+                .unwrap()
+                .cook_roots()
+                .is_empty()
+        );
+        let good = parse(&format!(
+            "{base}[cook]\nroots = [\"scenes/assets\", \"extra\"]\n"
+        ))
+        .unwrap();
+        assert_eq!(
+            good.cook_roots(),
+            [PathBuf::from("scenes/assets"), PathBuf::from("extra")]
+        );
+        for root in ["../x", "/x", "a/", ".", "a/./b", "a\\\\b"] {
+            let err = parse(&format!("{base}[cook]\nroots = [\"{root}\"]\n")).unwrap_err();
+            assert_eq!(err.code, MANIFEST_INVALID, "{root}");
+        }
+        for roots in [
+            "\"a\", \"a\"",
+            "\"a\", \"A\"",
+            "\"a\", \"a/b\"",
+            "\"a/b\", \"a\"",
+        ] {
+            let err = parse(&format!("{base}[cook]\nroots = [{roots}]\n")).unwrap_err();
+            assert!(err.message.contains("nests"), "{roots}: {}", err.message);
+        }
+        let with_table = |to: &str| {
+            format!(
+                "{base}[[import]]\nfrom = \"k/*.gltf\"\nto = \"{to}\"\n[cook]\nroots = [\"assets/derived\"]\n"
+            )
+        };
+        for to in ["assets/derived", "assets/derived/sub", "assets"] {
+            let err = parse(&with_table(to)).unwrap_err();
+            assert!(err.message.contains("overlaps"), "{to}: {}", err.message);
+        }
+        assert!(parse(&with_table("assets/other")).is_ok());
     }
 
     #[test]

@@ -3,6 +3,12 @@
 > **Status:** Waves 0–2 shipped 2026-10-14 (2b done: vigil synced, budgets cut at `cooked`); Waves 3–4
 > open. Instrument: `Plan/scene-load-speed.md`'s `load` report.
 >
+> **`[cook] roots` (Clockout 0039).** A project lists project-relative directories under `[cook] roots`;
+> `ludion sync` cooks every map their `*.mesh.yaml` files reference into the same store, uncapped, with
+> no `[[import]]` table. A root never overlaps an import `to` (`L0023`); an absent root or a link under
+> one is `L1324`; a map leaving its root is not cooked and warns once (`L1325`). The runtime covers a
+> map by its project-relative path below a root. `ludion export` ships a root's tree and cooked maps.
+>
 > **Wave 3 (Windows side, 2026-10-14).** `ludion export` cooks `ios` in its sync and ships the referenced
 > `ios` store entries under `content/.ludion/cooked/ios/`; the PNGs still ship, a map with no entry is
 > counted in the export's summary line and falls back on the device. Vigil's bundle content, dot-files
@@ -275,5 +281,5 @@ Everything in the section above, for `desktop`.
 - Compressing sprites, atlases, fonts or UI textures (decision 7).
 - Source-less bundles (Wave 3 note).
 - Streaming or async loading.
-- A cook for non-import mesh maps (hand-authored or `mesh apply` trees). The content-addressed
-  store makes that a scope change, not a redesign — take it when a project needs it.
+- A cook for non-import mesh maps outside a `[cook] roots` directory (see the Status note); a
+  hand-authored tree is cooked by naming it as a root.

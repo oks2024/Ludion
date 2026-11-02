@@ -1363,6 +1363,12 @@ pub mod code {
     /// `L1270` — `ludion sync`'s cook stage could not encode a texture map into BC7 or ASTC; the
     /// import tree is unaffected and the map stays usable from its source PNG.
     pub const COOK_ENCODE_FAILED: DiagnosticCode = DiagnosticCode::new("L1270");
+    /// `L1324` — a `[cook] roots` directory is absent, not a directory, behind a symbolic link or
+    /// junction, or holds a link; the sync refuses rather than read it as empty and sweep the store.
+    pub const COOK_ROOT_INVALID: DiagnosticCode = DiagnosticCode::new("L1324");
+    /// `L1325` — a mesh under a `[cook] roots` directory references a map outside that root; the
+    /// map is not cooked and loads from its PNG. A warning, one per sync.
+    pub const COOK_MAP_LEAVES_ROOT: DiagnosticCode = DiagnosticCode::new("L1325");
     /// `L1271` — a scene load under `textures: cooked` read some mesh maps from their PNG sources
     /// because the cooked file was missing, corrupt or unusable on this GPU; one warning per load.
     pub const TEXTURE_NOT_COOKED: DiagnosticCode = DiagnosticCode::new("L1271");
@@ -2669,7 +2675,8 @@ outside `A-Z a-z 0-9 _ -`, `default_scene` is absolute, holds a `.` or `..` comp
 parent directory, an `[[import]]` table's `from` or `to` is absolute, empty, holds a `.` or `..`
 component, or two tables share a `to`, or one table's `to` lies inside another's, or a `to` lies
 inside (or holds) a `from` directory, the part of the glob before its first `*` (each sync would
-rewrite files the next one hashes, so the tree is never fresh), or the bundle
+rewrite files the next one hashes, so the tree is never fresh), or a `[cook] roots` entry is spelled
+like those paths, repeats or nests another root, or overlaps a table's `to` (a path has one owner), or the bundle
 identifier holds a character outside `A-Z a-z 0-9 . -`. The diagnostic's help names the key.
 
 Fix: edit `ludion.toml`. A bundle identifier is reverse-DNS (`com.example.mygame`); a project name
@@ -7136,8 +7143,8 @@ the path.",
         severity: Severity::Error,
         title: "a texture map could not be cooked",
         explanation: "\
-`ludion sync`'s cook stage compresses every PNG map an imported `*.mesh.yaml` references into a
-block-compressed KTX2 file (BC7 for desktop, ASTC 4x4 for iOS) under `.ludion/cooked/<target>/`, and
+`ludion sync`'s cook stage compresses every PNG map an imported `*.mesh.yaml` (or one under a
+`[cook] roots` directory) references into a block-compressed KTX2 file (BC7 for desktop, ASTC 4x4 for iOS) under `.ludion/cooked/<target>/`, and
 the encoder refused one: the image is empty or malformed, or the encoder rejected a mip level.
 
 The import tree is already written and the map keeps loading from its source PNG, so the project still
@@ -7146,6 +7153,35 @@ diagnostic, and a store that cannot be written is `L1203`.
 
 Fix: re-export the PNG from its source (a truncated or zero-sized file is the usual cause), then run
 `ludion sync` again. If the PNG is sound, report the encoder error the diagnostic quotes.",
+    },
+    CodeEntry {
+        code: code::COOK_ROOT_INVALID,
+        severity: Severity::Error,
+        title: "a [cook] root cannot be cooked from",
+        explanation: "\
+A `[cook] roots` entry in `ludion.toml` names a directory whose `*.mesh.yaml` files `ludion sync`
+cooks. The root is absent, is not a directory, passes through a symbolic link or junction below the
+project, or holds a link somewhere in its tree.
+
+An absent root is never read as an empty one: the sync would sweep the cooked maps it should keep.
+A bad root aborts the sync before anything is written; a link found while walking leaves the store
+unswept.
+
+Fix: run the import that writes the root, or drop it from `[cook] roots`; replace a link with the real
+directory.",
+    },
+    CodeEntry {
+        code: code::COOK_MAP_LEAVES_ROOT,
+        severity: Severity::Warning,
+        title: "a mesh under a [cook] root references a map outside it",
+        explanation: "\
+A `*.mesh.yaml` under a `[cook] roots` directory names a texture map by an absolute path, by `../`
+out of the root, or through a dot segment below the root. `ludion sync` does not cook that map, and
+the runtime keeps loading it from its PNG. The run still succeeds; one warning lists the first meshes
+and references. A reference from one root into another counts as leaving.
+
+Fix: move the map inside the root (or the mesh next to its maps), or add the map's directory as a
+root of its own.",
     },
     CodeEntry {
         code: code::TEXTURE_NOT_COOKED,
@@ -10652,6 +10688,8 @@ mod tests {
         code::VOXEL_VIEW_OUT_OF_RANGE,
         code::PATH_FOLLOWER_INVALID,
         code::COOK_ENCODE_FAILED,
+        code::COOK_ROOT_INVALID,
+        code::COOK_MAP_LEAVES_ROOT,
         code::TEXTURE_NOT_COOKED,
         code::SPOT_LIGHT_INVALID_CONE,
         code::POST_PROCESS_INVALID_SSR,
@@ -10954,6 +10992,7 @@ mod tests {
             code::HIERARCHY_KINEMATIC_SHEAR,
             code::PATTERN_AUTHORING_LINT,
             code::GENERATION_IDENTICAL_CANDIDATES,
+            code::COOK_MAP_LEAVES_ROOT,
             code::TEXTURE_NOT_COOKED,
             code::REFLECTION_PROBE_EQUAL_RANK,
             code::REFLECTION_PROBE_SHADOWED,

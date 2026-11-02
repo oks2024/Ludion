@@ -20,6 +20,9 @@ ludion render --model scenes/meshes/<asset>/meshes/<part>.mesh.yaml    # six-vie
 ludion render --scene scenes/meshes/<asset>/scene-lit.yaml --out target/tmp/<asset>-stage.png
 ```
 
+To cook the imported tree's maps, name its directory in `[cook] roots` (`ludion sync` does the cook;
+see Derived imports).
+
 When the props are placed in a scene, `ludion check-scene <scene> --placement` flags the floating,
 sunk and collider-overlapping ones (`ludion docs scene-format`, "Placement lint").
 
@@ -45,6 +48,7 @@ After the import, `ludion sync` also cooks every PNG map the imported meshes ref
 KTX2 files in `.ludion/cooked/<target>/` (BC7 for `desktop`; `--target ios` or `[cook] targets` adds ASTC), keyed by content so only a changed map re-cooks and
 an unreferenced file is swept. `[[import]] max_texture_size` caps a kit's map size; `--no-cook` skips the stage. A map that cannot be cooked fails
 the sync (`L1270`) but never the import.
+Trees the sync does not derive (a `ludion import` tree, a hand-placed or `mesh apply` one) cook with `[cook] roots = ["scenes/assets"]`: every `*.mesh.yaml` below a root (dot entries skipped) is read and its maps cook uncapped, beside the import trees, with no `[[import]]` table. A root overlapping an `[[import]] to` is refused (`L0023`), an absent root or a link under it is `L1324`, and a map leaving its root is not cooked (`L1325`).
 A second sync of the same root waits for the first, saying so on stderr, and a sync killed midway recovers on the next run.
 
 ## The script skeleton

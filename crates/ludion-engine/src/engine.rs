@@ -1043,9 +1043,9 @@ impl Engine {
     }
 
     /// Chooses where imported mesh maps come from: [`TextureSource::Source`] (the default) decodes
-    /// every PNG, [`TextureSource::Cooked`] reads each `[[import]]` map's BC7/ASTC copy from
-    /// `<project>/.ludion/cooked/` and falls back to the PNG, with one `L1271` warning per load,
-    /// where there is none.
+    /// every PNG, [`TextureSource::Cooked`] reads each `[[import]]` or `[cook] roots` map's BC7/ASTC
+    /// copy from `<project>/.ludion/cooked/` and falls back to the PNG, with one `L1271` warning per
+    /// load, where there is none.
     ///
     /// A host switch, not a protocol command, and render-only exactly as
     /// [`set_quality`](Engine::set_quality) is: never sim state, never hashed, never snapshotted,

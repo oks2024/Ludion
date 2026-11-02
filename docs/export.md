@@ -48,7 +48,7 @@ attaches): `xcrun simctl io <udid> screenshot m.png` writes the portrait framebu
 | `name` | The Xcode project and app name: letters, digits, `_`, `-`. |
 | `default_scene` | The hosted scene, a relative path with a directory and no `.` or `..` (`scenes/main.yaml`). |
 | `[[import]] max_texture_size` | Optional: cap on the side of every texture map the table cooks (halved until it fits; absent keeps the source size). |
-| `[cook] targets`, `textures`, `meshes` | Optional: `targets` is the GPU families `ludion sync` cooks maps for (`desktop` BC7, `ios` ASTC; default `["desktop"]`), `textures = false` skips the cook, `meshes = true` is refused (no binary mesh cook). |
+| `[cook] targets`, `textures`, `meshes`, `roots` | Optional: `targets` is the GPU families `ludion sync` cooks maps for (`desktop` BC7, `ios` ASTC; default `["desktop"]`), `textures = false` skips the cook, `meshes = true` is refused (no binary mesh cook). `roots` lists project-relative directories whose `*.mesh.yaml` maps cook too, uncapped, with no `[[import]]` table (none may overlap an `[[import]] to`; `L0023`). |
 | `[audio] voices_per_sound`, `voices_total` | Optional voice caps (defaults 4 and 64; `ludion docs audio`). The manifest ships in the app's content, so the app honours them. |
 | `[ios] bundle_id` | The app's identifier, `A-Z a-z 0-9 . -` only (`_` is refused). |
 | `[ios] quality` | Optional: the render quality preset the app ships with (`low`, `medium`, `high`, `full`; absent is `full`). A preset name only — no override file. |
@@ -61,7 +61,7 @@ and never inside the project):
 | `<name>.xcodeproj/` | The project, one target, deployment target 16.0, iPhone and iPad. |
 | `Host/` | The Objective-C host and its `ludion.h`: a `CAMetalLayer` view that starts the game. |
 | `Ludion/libgame.a` | The game's library, built `--release --no-default-features`. |
-| `content/` | A copy of the default scene's directory plus every `[[import]]` tree, at its project-relative path, bundled as the content root. |
+| `content/` | A copy of the default scene's directory plus every `[[import]]` tree and `[cook]` root, at its project-relative path, bundled as the content root. |
 
 ## Rules
 
@@ -73,7 +73,7 @@ and never inside the project):
   running beside the export finishes first, and the export says on stderr that it is waiting), so assets sit beside the scenes or under a tree's
   own path; a project's `src/`, `goldens/` and `target/` never enter the bundle.
 - **The bundle ships cooked maps.** The export cooks the `ios` target (ASTC,
-  KTX2) and copies the entries the import trees reference into `content/.ludion/cooked/ios/`, beside
+  KTX2) and copies the entries the import trees and `[cook]` roots reference into `content/.ludion/cooked/ios/`, beside
   the PNGs. The app runs `cooked`, so those maps upload compressed; a map with no entry falls back to
   its PNG with `L1271`. `[cook] textures = false` ships none.
 - **The shipped quality is a default, not a lock.** `LUDION_QUALITY` in the Xcode scheme or a

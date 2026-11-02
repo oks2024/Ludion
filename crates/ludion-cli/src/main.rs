@@ -869,7 +869,8 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Re-import a project's derived glTF trees: every `[[import]]` table in `ludion.toml` (`from`
+    /// Re-import a project's derived glTF trees and cook their maps, and those of any `[cook] roots`
+    /// directory (which needs no `[[import]]` table). Every `[[import]]` table in `ludion.toml` (`from`
     /// a glob of `.gltf` files, `to` the derived root) compiles each match `<dir>/<stem>.gltf` into
     /// `<to>/<stem>/` as `ludion import` would, skipping the ones whose sources and the importer
     /// are unchanged. The `to` tree is derived: ignored by version control, never hand-edited, and
@@ -880,9 +881,10 @@ enum Command {
     /// diagnostics) and `diagnostics` (everything printed, a refusal as `L1245`); exit 1 if the sync
     /// was refused or any entry failed.
     ///
-    /// After the imports a cook stage compresses every PNG map the imported meshes reference into
-    /// KTX2 files under `<project>/.ludion/cooked/<target>/<key>.ktx2` (BC7 for `desktop`, ASTC 4x4
-    /// for `ios`; `[cook] targets` in `ludion.toml`, `--target` adds one, `[[import]]
+    /// After the imports a cook stage compresses every PNG map the imported meshes reference, and
+    /// those of every `*.mesh.yaml` under a `[cook] roots` directory (uncapped; a map leaving its
+    /// root is `L1325`, a bad root `L1324`), into KTX2 files under
+    /// `<project>/.ludion/cooked/<target>/<key>.ktx2` (BC7 for `desktop`, ASTC 4x4 for `ios`; `[cook] targets` in `ludion.toml`, `--target` adds one, `[[import]]
     /// max_texture_size` caps a table's maps). The store is keyed by content: a map already there
     /// is reused, an entry no mesh references is deleted, and a source map that fails to cook is
     /// reported (`L1270`) and exits 1 without undoing the import. `--no-cook` (or `[cook] textures =
@@ -924,8 +926,9 @@ enum Command {
         refresh_guide: bool,
     },
     /// Export the game as an Xcode project folder for iOS: the embedded host template, the game built
-    /// as a static library, and the default scene's directory plus every `[[import]]` tree (synced
-    /// first, at its project-relative path) as bundle content. Reads the
+    /// as a static library, and the default scene's directory plus every `[[import]]` tree and
+    /// `[cook] roots` directory (synced first, at its project-relative path) as bundle content.
+    /// Reads the
     /// project's `ludion.toml` (`name`, `default_scene`, and `[ios] bundle_id`); needs Xcode and the
     /// matching rustup target (`L0022` otherwise). A scene with reflection probes is baked into the
     /// bundle through the game binary's `--bake-probes` (`L1281` if an entry is missing). Prints the
