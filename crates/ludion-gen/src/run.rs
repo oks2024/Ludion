@@ -114,12 +114,16 @@ pub struct RunFailure {
 pub const REASON_ERROR: &str = "error";
 
 /// `reason: "lost"` — the server has no history entry and no queue place for the job. ComfyUI keeps
-/// both in memory, so a restart forgets every job it held; lost is terminal.
+/// both in memory, so a restart forgets every job it held; lost is terminal for that job. A `fetch`
+/// or `status` that finds *every* job lost refuses with [`code::GENERATION_JOBS_UNKNOWN`] and
+/// leaves the run `submitted` (a wrong `--url` looks the same); one lost among found jobs is
+/// recorded here.
 pub const REASON_LOST: &str = "lost";
 
 /// `reason: "empty"` — the server ran the job, reported success, and it wrote no file.
 pub const REASON_EMPTY: &str = "empty";
 
+/// What a lost job's absence means; see [`REASON_LOST`] for when it is recorded.
 const LOST_MESSAGE: &str = "the server has neither a history entry nor a queue place for it";
 
 impl RunFailure {
@@ -294,7 +298,7 @@ pub struct RunReport {
     pub finished: String,
     /// Wall time from submit to finish.
     pub duration_ms: u64,
-    /// `submitted` while the jobs are on the server; once every job has a verdict, `ok` (no
+    /// `submitted` while the jobs are on the server or still being submitted; once every job has a verdict, `ok` (no
     /// failure), `partial` (some candidates, some failures) or `failed` (no candidates).
     pub status: String,
     /// The folder this report was read from or written to. Not a field of the file: the folder's
@@ -303,7 +307,8 @@ pub struct RunReport {
     pub dir: PathBuf,
 }
 
-/// `status: "submitted"` — the jobs are on the server and nothing has been downloaded.
+/// `status: "submitted"` — the jobs are on the server (or still being submitted) and nothing has
+/// been downloaded.
 pub const STATUS_SUBMITTED: &str = "submitted";
 
 /// `status: "ok"` — every output is downloaded and the report is complete.
@@ -388,14 +393,17 @@ pub struct RunStatus {
 /// Runs a resolved recipe: upload, submit `count` graphs at `seed`, `seed + 1`, …, follow them,
 /// download every output, and write `run.json`.
 ///
-/// `run.json` is written twice — once with `status: "submitted"` the moment the jobs are on the
-/// server, once complete at the end — so a run that times out or is interrupted still leaves a
-/// folder [`status`] and [`fetch`] can pick up. A job that fails or is lost is an outcome, not an
-/// error: the report is `partial` or `failed` and names it in [`RunReport::failed`].
+/// `run.json` is written as `status: "submitted"` before the first job is posted, again after every
+/// accepted job, and complete at the end — so a run that times out or is interrupted still leaves a
+/// folder [`status`] and [`fetch`] can pick up. A kill between an accepted POST and its write loses
+/// that one job. A job that fails or is lost is an outcome, not an error: the report is `partial` or
+/// `failed` and names it in [`RunReport::failed`].
 ///
 /// # Errors
 /// Everything the live validation pass reports (`L1164`, `L1165`, `L1166`), the graph's output-kind
-/// verdict (`L1171`), and the client's failure taxonomy (`L1167`, `L1168`, `L1170`).
+/// verdict (`L1171`), and the client's failure taxonomy (`L1167`, `L1168`, `L1170`). A failure
+/// before the first job is accepted removes the folder; any later one keeps it, and names
+/// `gen fetch <dir>`.
 pub fn run(resolved: &Resolved, opts: &RunOptions) -> Result<RunReport, RunError> {
     let count = candidate_count(opts, &resolved.doc).map_err(one)?;
     let unbound = crate::workflow::unbound_images(&resolved.doc);
@@ -428,8 +436,9 @@ pub fn run(resolved: &Resolved, opts: &RunOptions) -> Result<RunReport, RunError
         kept.push((upload, bytes));
     }
 
+    let seed_base = opts.seed.unwrap_or(resolved.doc.seed);
     let base_graph = apply(&resolved.graph, &resolved.doc, &uploaded)?;
-    let hash = graph_hash(&base_graph);
+    let hash = graph_hash(&with_seed(&base_graph, seed_base).0);
     let workflow = relative_to(&root, &resolved.workflow_path)
         .ok_or_else(|| vec![workflow_outside_root(&resolved.doc.workflow)])?;
     let stamp = Stamp::now();
@@ -437,48 +446,28 @@ pub fn run(resolved: &Resolved, opts: &RunOptions) -> Result<RunReport, RunError
         &root.join(RUNS_DIR).join(sanitize(&resolved.name())),
         &format!("{}-{}", stamp.compact, &hash[..8]),
     )?;
+    // Until the first job is accepted nothing is on the server, so a folder this call created has
+    // nothing to recover and every failure in between removes it.
+    let discard = |diagnostics: Vec<Diagnostic>| {
+        let _ = std::fs::remove_dir_all(&dir);
+        RunError::from(diagnostics)
+    };
 
     // Each source under the name it was uploaded as, so two with one file name stay two files.
     let inputs_dir = dir.join("inputs");
     if !kept.is_empty() {
-        create_dir(&inputs_dir)?;
+        create_dir(&inputs_dir).map_err(discard)?;
         for (name, bytes) in &kept {
             write_atomic(&inputs_dir.join(name), bytes)
-                .map_err(|e| vec![write_failed(&inputs_dir, e)])?;
+                .map_err(|e| discard(vec![write_failed(&inputs_dir, e)]))?;
         }
     }
 
-    let seed_base = opts.seed.unwrap_or(resolved.doc.seed);
     let client_id = run_id.clone();
     // ComfyUI never replays frames to a late socket, and a cached job finishes before one opens.
     let subscription = opts.wait.then(|| client.subscribe(&client_id));
 
     let started = Instant::now();
-    let mut prompt_ids = Vec::with_capacity(count as usize);
-    let mut seeds = Vec::with_capacity(count as usize);
-    let mut refused = None;
-    for index in 0..count {
-        let (graph, used) = with_seed(&base_graph, seed_base.wrapping_add(u64::from(index)));
-        match client.submit(&graph.to_value(), &client_id) {
-            Ok(prompt_id) => {
-                seeds.push(used.seed());
-                prompt_ids.push(prompt_id);
-            }
-            Err(diagnostic) => {
-                refused = Some(diagnostic);
-                break;
-            }
-        }
-    }
-    if let Some(diagnostic) = &refused
-        && prompt_ids.is_empty()
-    {
-        // Nothing is on the server, so the folder this call created has nothing to recover.
-        let _ = std::fs::remove_dir_all(&dir);
-        return Err(one(diagnostic.clone()).into());
-    }
-    let count = prompt_ids.len() as u32;
-
     let mut report = RunReport {
         run_id,
         recipe: project_relative(&root, &resolved.recipe_path),
@@ -487,15 +476,15 @@ pub fn run(resolved: &Resolved, opts: &RunOptions) -> Result<RunReport, RunError
         workflow_hash: resolved.workflow_hash.clone(),
         graph_hash: hash,
         seed_base,
-        count,
+        count: 0,
         kind: kind.as_str().to_string(),
         comfy_version: stats.comfy_version,
         checkpoints: checkpoints(&base_graph),
         images: image_records,
         prompt: Some(prompt_text(&base_graph)),
         inputs: Some(inputs_to_json(&resolved.doc.inputs)),
-        prompt_ids,
-        seeds,
+        prompt_ids: Vec::with_capacity(count as usize),
+        seeds: Vec::with_capacity(count as usize),
         outputs: Vec::new(),
         failed: Vec::new(),
         started: stamp.iso.clone(),
@@ -504,9 +493,46 @@ pub fn run(resolved: &Resolved, opts: &RunOptions) -> Result<RunReport, RunError
         status: STATUS_SUBMITTED.to_string(),
         dir: dir.clone(),
     };
-    write_report(&report)?;
+    write_report(&report).map_err(discard)?;
+
+    // The report is rewritten after every accepted job, so a run killed part-way still lists the
+    // jobs the server holds. A kill between an accepted POST and its write loses that one job.
+    let mut refused = None;
+    for index in 0..count {
+        let (graph, used) = with_seed(&base_graph, seed_base.wrapping_add(u64::from(index)));
+        match client.submit(&graph.to_value(), &client_id) {
+            Ok(prompt_id) => {
+                report.seeds.push(used.seed());
+                report.prompt_ids.push(prompt_id.clone());
+                report.count = report.prompt_ids.len() as u32;
+                if let Err(mut diagnostics) = write_report(&report) {
+                    let help = format!(
+                        "job `{prompt_id}` was accepted by the server but is not recorded in \
+                         `{REPORT_FILE}`; it is still queued there"
+                    );
+                    if let Some(first) = diagnostics.first_mut() {
+                        *first = first.clone().with_help(match &first.help {
+                            Some(existing) => format!("{existing}; {help}"),
+                            None => help,
+                        });
+                    }
+                    return Err(RunError {
+                        diagnostics,
+                        dir: Some(dir.clone()),
+                    });
+                }
+            }
+            Err(diagnostic) => {
+                refused = Some(diagnostic);
+                break;
+            }
+        }
+    }
 
     if let Some(diagnostic) = refused {
+        if report.prompt_ids.is_empty() {
+            return Err(discard(one(diagnostic)));
+        }
         let help = format!(
             "{} job(s) submitted before it are recorded in `{}`; `ludion gen fetch {}` collects \
              them",
@@ -528,14 +554,22 @@ pub fn run(resolved: &Resolved, opts: &RunOptions) -> Result<RunReport, RunError
         return Ok(report);
     };
 
-    let with_dir = |diagnostics| RunError {
-        diagnostics,
+    let phase_error = |diagnostics: Vec<Diagnostic>| RunError {
+        diagnostics: diagnostics
+            .into_iter()
+            .map(|diagnostic| follow_phase_error(diagnostic, &dir))
+            .collect(),
         dir: Some(dir.clone()),
     };
     client
         .follow(subscription, &report.prompt_ids, opts.timeout)
-        .map_err(|diagnostic| with_dir(vec![name_run_dir(diagnostic, &report.dir)]))?;
-    complete(&client, &mut report, started).map_err(with_dir)?;
+        .map_err(|diagnostic| phase_error(vec![diagnostic]))?;
+    // A waited run follows on the URL it just submitted to, so an all-lost verdict here is
+    // finalized `failed`, never the wrong-server refusal `fetch` makes.
+    let (states, _) = client
+        .job_states(&report.prompt_ids)
+        .map_err(|diagnostic| phase_error(vec![diagnostic]))?;
+    complete(&client, &mut report, &states, started).map_err(phase_error)?;
     Ok(report)
 }
 
@@ -544,7 +578,7 @@ pub fn run(resolved: &Resolved, opts: &RunOptions) -> Result<RunReport, RunError
 pub struct RunError {
     /// Everything the run reported.
     pub diagnostics: Vec<Diagnostic>,
-    /// The run folder, once its `run.json` was written.
+    /// The run folder, once the server holds a job of the run.
     pub dir: Option<PathBuf>,
 }
 
@@ -562,8 +596,9 @@ impl From<Vec<Diagnostic>> for RunError {
 /// lost.
 ///
 /// # Errors
-/// [`code::GENERATION_ACCEPT_REFUSED`] when the folder has no readable report, plus the client's
-/// failure taxonomy.
+/// [`code::GENERATION_ACCEPT_REFUSED`] when the folder has no readable report,
+/// [`code::GENERATION_JOBS_UNKNOWN`] when the server knows none of the run's jobs (or it has none),
+/// plus the client's failure taxonomy.
 pub fn status(run_dir: &Path, url: &str) -> Result<RunStatus, Vec<Diagnostic>> {
     let report = read_report(run_dir)?;
     if report.status != STATUS_SUBMITTED {
@@ -575,8 +610,14 @@ pub fn status(run_dir: &Path, url: &str) -> Result<RunStatus, Vec<Diagnostic>> {
             report,
         });
     }
+    if report.prompt_ids.is_empty() {
+        return Err(one(no_jobs_accepted(&report)));
+    }
     let client = Client::new(url);
     let (states, queue) = client.job_states(&report.prompt_ids).map_err(one)?;
+    if let Some(diagnostic) = server_knows_none(&report, &states) {
+        return Err(one(diagnostic));
+    }
     let mut pending = Vec::new();
     let mut failed = Vec::new();
     for (job, (id, state)) in report.prompt_ids.iter().zip(&states).enumerate() {
@@ -599,14 +640,23 @@ pub fn status(run_dir: &Path, url: &str) -> Result<RunStatus, Vec<Diagnostic>> {
 ///
 /// # Errors
 /// [`code::GENERATION_ACCEPT_REFUSED`] when the folder has no readable report,
-/// [`code::GENERATION_RUN_TIMED_OUT`] when a job is still queued, plus the client's failure
-/// taxonomy.
+/// [`code::GENERATION_RUN_TIMED_OUT`] when a job is still queued,
+/// [`code::GENERATION_JOBS_UNKNOWN`] when the server knows none of the run's jobs (or it has none;
+/// the run stays `submitted`), plus the client's failure taxonomy.
 pub fn fetch(run_dir: &Path, url: &str) -> Result<RunReport, Vec<Diagnostic>> {
     let mut report = read_report(run_dir)?;
     if report.status != STATUS_SUBMITTED {
         return Ok(report);
     }
-    complete(&Client::new(url), &mut report, Instant::now())?;
+    if report.prompt_ids.is_empty() {
+        return Err(one(no_jobs_accepted(&report)));
+    }
+    let client = Client::new(url);
+    let (states, _) = client.job_states(&report.prompt_ids).map_err(one)?;
+    if let Some(diagnostic) = server_knows_none(&report, &states) {
+        return Err(one(diagnostic));
+    }
+    complete(&client, &mut report, &states, Instant::now())?;
     Ok(report)
 }
 
@@ -625,7 +675,7 @@ pub fn read_report(run_dir: &Path) -> Result<RunReport, Vec<Diagnostic>> {
             )
             .with_help(
                 "a run folder is `generation/runs/<recipe>/<run-id>/`, and `run.json` is written \
-                 the moment its jobs are submitted",
+                 before its first job is submitted",
             ),
         ]
     })?;
@@ -823,18 +873,61 @@ pub fn inputs_from_json(value: &serde_json::Value) -> Result<InputTable, String>
     Ok(out)
 }
 
+/// The refusal for a `submitted` run that lists no job: its submit was interrupted before the
+/// server accepted one, so there is nothing to collect.
+fn no_jobs_accepted(report: &RunReport) -> Diagnostic {
+    Diagnostic::new(
+        code::GENERATION_JOBS_UNKNOWN,
+        format!(
+            "run `{}` lists no jobs: its submit was interrupted before the server accepted one",
+            report.run_id
+        ),
+    )
+    .with_help(format!(
+        "there is nothing to collect; delete `{}` and run `ludion gen run {}` again",
+        display_path(&report.dir),
+        report.recipe
+    ))
+}
+
+/// The refusal for a `submitted` run whose jobs the server all reads as lost (a wrong `--url`
+/// reads the same as a restart). The run stays `submitted`, so the right server still collects it.
+/// `None` when at least one job is known.
+fn server_knows_none(report: &RunReport, states: &[JobState]) -> Option<Diagnostic> {
+    if !states.iter().all(|state| *state == JobState::Lost) {
+        return None;
+    }
+    Some(
+        Diagnostic::new(
+            code::GENERATION_JOBS_UNKNOWN,
+            format!(
+                "this server knows none of run `{}`'s {} jobs",
+                report.run_id,
+                report.prompt_ids.len()
+            ),
+        )
+        .with_help(format!(
+            "is `--url` / `LUDION_COMFY_URL` the server that took the run? `{REPORT_FILE}` keeps the \
+             run `submitted`, so a fetch against the right server still collects it; if the server \
+             restarted or its history was cleared, `ludion gen run {}` submits it again",
+            report.recipe
+        )),
+    )
+}
+
 /// Gives every job its verdict: downloads a finished job's outputs into the run folder, records a
-/// failed or lost one, and finalizes the report.
+/// failed or lost one, and finalizes the report. `states` is the server's answer for the report's
+/// jobs, in order.
 fn complete(
     client: &Client,
     report: &mut RunReport,
+    states: &[JobState],
     started: Instant,
 ) -> Result<(), Vec<Diagnostic>> {
-    let (states, _) = client.job_states(&report.prompt_ids).map_err(one)?;
     let queued: Vec<&str> = report
         .prompt_ids
         .iter()
-        .zip(&states)
+        .zip(states)
         .filter(|(_, state)| **state == JobState::Queued)
         .map(|(id, _)| id.as_str())
         .collect();
@@ -860,7 +953,7 @@ fn complete(
     let mut outputs = Vec::new();
     let mut failed = Vec::new();
     let mut index = 0u32;
-    for (job, (prompt_id, state)) in report.prompt_ids.iter().zip(&states).enumerate() {
+    for (job, (prompt_id, state)) in report.prompt_ids.iter().zip(states).enumerate() {
         let entry = match state {
             JobState::Finished(entry) if entry.error.is_none() && !entry.outputs.is_empty() => {
                 entry
@@ -948,21 +1041,27 @@ pub fn display_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
 }
 
-/// A follow's `L1170` with a help that names the run folder `gen status` and `gen fetch` take, which
-/// the client, knowing only job ids, cannot.
-fn name_run_dir(diagnostic: Diagnostic, dir: &Path) -> Diagnostic {
-    if diagnostic.code != code::GENERATION_RUN_TIMED_OUT {
-        return diagnostic;
-    }
+/// A follow-phase error with a help that names the run folder `gen status` and `gen fetch` take,
+/// which the client, knowing only job ids, cannot. [`code::GENERATION_RUN_TIMED_OUT`] already says
+/// so and gets its `<run-dir>` filled in; any other code gains the pointer, its own help kept.
+fn follow_phase_error(diagnostic: Diagnostic, dir: &Path) -> Diagnostic {
     let dir = display_path(dir);
-    match diagnostic
-        .help
-        .as_deref()
-        .map(|help| help.replace("<run-dir>", &dir))
-    {
-        Some(help) => diagnostic.with_help(help),
-        None => diagnostic,
+    if diagnostic.code == code::GENERATION_RUN_TIMED_OUT {
+        return match diagnostic
+            .help
+            .as_deref()
+            .map(|help| help.replace("<run-dir>", &dir))
+        {
+            Some(help) => diagnostic.with_help(help),
+            None => diagnostic,
+        };
     }
+    let pointer = format!("the run is recorded; `ludion gen fetch {dir}` collects it");
+    let help = match &diagnostic.help {
+        Some(existing) => format!("{existing}; {pointer}"),
+        None => pointer,
+    };
+    diagnostic.with_help(help)
 }
 
 fn unreadable_image(path: &Path, error: &std::io::Error) -> Diagnostic {
@@ -1021,11 +1120,16 @@ fn image_sources(
     Ok(images)
 }
 
-/// The extension a downloaded output keeps: the server's own, or the output family's default.
+/// The extension a downloaded output keeps: the server's own when it is 1 to 8 ASCII alphanumeric
+/// characters — the name came from the server and becomes a local file name — else the output
+/// family's default.
 fn extension(file: &OutputFile) -> String {
     Path::new(&file.filename)
         .extension()
         .map(|ext| ext.to_string_lossy().to_string())
+        .filter(|ext| {
+            (1..=8).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        })
         .unwrap_or_else(|| {
             match file.kind {
                 OutputKind::Image => "png",
@@ -1397,5 +1501,29 @@ mod tests {
         expected[0].1.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(inputs_from_json(&parsed).expect("reads back"), expected);
         assert!(inputs_from_json(&serde_json::json!({"N": {"x": [1]}})).is_err());
+    }
+
+    #[test]
+    fn a_server_extension_is_kept_only_when_plain() {
+        let file = |name: &str, kind| OutputFile {
+            node: "9".into(),
+            filename: name.into(),
+            subfolder: String::new(),
+            folder_type: "output".into(),
+            batch_index: 0,
+            kind,
+        };
+        for (name, kind, expected) in [
+            ("a.png", OutputKind::Image, "png"),
+            ("a.PNG", OutputKind::Image, "PNG"),
+            ("mesh.glb", OutputKind::Mesh, "glb"),
+            ("a.png:zone", OutputKind::Image, "png"),
+            ("a.abcdefghi", OutputKind::Image, "png"),
+            ("a.p g", OutputKind::Image, "png"),
+            ("a.pé", OutputKind::Mesh, "glb"),
+            ("noext", OutputKind::Mesh, "glb"),
+        ] {
+            assert_eq!(extension(&file(name, kind)), expected, "{name:?}");
+        }
     }
 }

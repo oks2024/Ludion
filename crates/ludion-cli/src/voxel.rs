@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use ludion_core::atomic::write_atomic;
+use ludion_core::atomic::{create_new_atomic, write_atomic};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_scene::{PaletteEntry, VoxelComments, VoxelDocument};
@@ -41,19 +41,6 @@ pub fn run_new(
         Ok(size) => size,
         Err(message) => return diagnostic::usage_error(message),
     };
-    if out.exists() {
-        diagnostic::print(
-            &Diagnostic::new(
-                code::CREATE_TARGET_EXISTS,
-                format!(
-                    "`{}` already exists; `voxel new` never overwrites",
-                    out.display()
-                ),
-            )
-            .with_help("edit it with `voxel apply`, or choose another path"),
-        );
-        return ExitCode::FAILURE;
-    }
     if let Some(value) = scale
         && !(value.is_finite() && value > 0.0)
     {
@@ -85,7 +72,12 @@ pub fn run_new(
     };
     let comments = scaffold_comments(name.as_deref(), size, scale);
     let text = ludion_scene::emit_voxel_with_comments(&doc, &comments);
-    if let Err(exit) = write_validated(out, &text) {
+    if let Err(exit) = create_validated(
+        out,
+        &text,
+        "voxel new",
+        "edit it with `voxel apply`, or choose another path",
+    ) {
         return exit;
     }
     println!(
@@ -269,20 +261,6 @@ pub fn run_upscale(model_path: &Path, factor: u32, out: Option<&Path>) -> ExitCo
             }
         },
     };
-    if out_path.exists() {
-        diagnostic::print(
-            &Diagnostic::new(
-                code::CREATE_TARGET_EXISTS,
-                format!(
-                    "`{}` already exists; `voxel upscale` never overwrites",
-                    out_path.display()
-                ),
-            )
-            .with_help("delete it first, or pass a different `--out`"),
-        );
-        return ExitCode::FAILURE;
-    }
-
     for stray in &upscale.dropped_comments {
         diagnostic::print(
             &Diagnostic::new(
@@ -299,7 +277,12 @@ pub fn run_upscale(model_path: &Path, factor: u32, out: Option<&Path>) -> ExitCo
     }
     print_voxel_warnings(&upscale.doc);
 
-    if let Err(exit) = write_validated(&out_path, &upscale.text) {
+    if let Err(exit) = create_validated(
+        &out_path,
+        &upscale.text,
+        "voxel upscale",
+        "delete it first, or pass a different `--out`",
+    ) {
         return exit;
     }
 
@@ -736,25 +719,65 @@ fn print_exposure_note(doc: &VoxelDocument) {
 /// Validates `text` and, only if it checks clean, writes it to `path` atomically
 /// — so the file on disk is never observed half-written or invalid.
 fn write_validated(path: &Path, text: &str) -> Result<(), ExitCode> {
+    validate_model(path, text)?;
+    if let Err(error) = write_atomic(path, text) {
+        return Err(report_write_failure(path, &error));
+    }
+    Ok(())
+}
+
+/// [`write_validated`] for a verb that never overwrites: the write itself is the existence check,
+/// so a file that appears between a pre-check and the write cannot be replaced.
+fn create_validated(path: &Path, text: &str, verb: &str, help: &str) -> Result<(), ExitCode> {
+    validate_model(path, text)?;
+    create_text(path, text, verb, help)
+}
+
+/// Creates `path` with `text`, refusing with `L0030` when it exists. `verb` and `help` word the
+/// refusal.
+pub(crate) fn create_text(path: &Path, text: &str, verb: &str, help: &str) -> Result<(), ExitCode> {
+    match create_new_atomic(path, text) {
+        Ok(()) => Ok(()),
+        // A regular file standing where a parent folder belongs reports the same kind, from the
+        // folder create; the target itself is then absent.
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.exists() => {
+            diagnostic::print(
+                &Diagnostic::new(
+                    code::CREATE_TARGET_EXISTS,
+                    format!(
+                        "`{}` already exists; `{verb}` never overwrites",
+                        path.display()
+                    ),
+                )
+                .with_help(help.to_string()),
+            );
+            Err(ExitCode::FAILURE)
+        }
+        Err(error) => Err(report_write_failure(path, &error)),
+    }
+}
+
+fn validate_model(path: &Path, text: &str) -> Result<(), ExitCode> {
     if let Err(diagnostics) = ludion_scene::check_voxel(text) {
         eprintln!("the edited model would not validate; nothing was written:");
         return Err(diagnostic::report(path, &diagnostics));
     }
-    if let Err(error) = write_atomic(path, text) {
-        eprintln!(
-            "{}",
-            Diagnostic::new(
-                code::OUTPUT_IO,
-                format!("could not write `{}`: {error}", path.display()),
-            )
-            .with_help(
-                "check that the destination directory is writable and the file is not open in \
-                 another process"
-            )
-        );
-        return Err(ExitCode::FAILURE);
-    }
     Ok(())
+}
+
+fn report_write_failure(path: &Path, error: &std::io::Error) -> ExitCode {
+    eprintln!(
+        "{}",
+        Diagnostic::new(
+            code::OUTPUT_IO,
+            format!("could not write `{}`: {error}", path.display()),
+        )
+        .with_help(
+            "check that the destination directory is writable and the file is not open in \
+             another process"
+        )
+    );
+    ExitCode::FAILURE
 }
 
 fn read_file(path: &Path) -> Result<String, ExitCode> {

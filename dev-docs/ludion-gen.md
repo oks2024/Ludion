@@ -15,7 +15,7 @@ the accept step. The document layer (parse/validate/emit, `GenerationDocument`, 
 - `crates/ludion-gen/src/recipe.rs` — `resolve`: every path a recipe names, taken relative to the recipe document's own directory (the `shape: voxel` rule), so a recipe folder moves as a unit. `GENERATION_DIR` fixes the project-relative root.
 - `crates/ludion-gen/src/workflow.rs` — the API-format graph: parse, the `_meta.title` index, `apply` (leaf writes only), `with_seed` (returns the graph and a `SeedUse`: `Written`, `Pinned` or `Unknown`, which decides the seed a candidate is labelled with), `graph_hash`, `OutputKind`, and the offline + `/object_info` passes.
 - `crates/ludion-gen/src/client.rs` — `ureq` over the HTTP endpoints plus a synchronous `tungstenite` progress stream. `resolve_url`, `COMFY_URL_ENV`, `DEFAULT_COMFY_URL`.
-- `crates/ludion-gen/src/run.rs` — the pipeline and `RunReport`/`RunOutput`/`RunImage`/`RunStatus`; `run` (failing with a `RunError`: its diagnostics plus the run folder once `run.json` is on disk), `status`, `fetch`, `read_report`, `run_order` (run folders oldest to newest: base, then the `-2`, `-3` attempt numerically).
+- `crates/ludion-gen/src/run.rs` — the pipeline and `RunReport`/`RunOutput`/`RunImage`/`RunStatus`; `run` (failing with a `RunError`: its diagnostics plus the run folder once the server holds a job of the run), `status`, `fetch`, `read_report`, `run_order` (run folders oldest to newest: base, then the `-2`, `-3` attempt numerically).
 - `crates/ludion-gen/src/sheet.rs` — `layout` (pure geometry), `fitted_label` (the label and glyph scale that fit a cell: full, then `#<index>`, then none) and `compose` (the IO half), plus the crate-private glyph table the labels are drawn with.
 - `crates/ludion-gen/src/accept.rs` — freezing one candidate: the PNG re-encode, the `Origin` fill and the `.origin.yaml` sidecar for an image; for a mesh, an in-process `ludion_import::import` call (`ExternalFiles::Refused`: only embedded sources) and the `origin:` splice into every produced mesh document.
 - `crates/ludion-gen/src/clock.rs` — `Stamp`, three spellings of one UTC instant from `SystemTime` alone. The workspace carries no date crate and one stamp per run does not justify acquiring one.
@@ -27,13 +27,13 @@ One run, end to end: `recipe::resolve` (document → resolved paths) → `workfl
 (overrides by title) → `Client::upload_image` for each `images:` entry, under `upload_name` →
 `run::create_run_dir` (the folder is the run id) → `workflow::with_seed` per candidate →
 `Client::subscribe` → `Client::submit` → `Client::follow` → `Client::job_states` →
-`Client::view` per output of each finished job → `run.json`. `run.json` is written **twice**:
-`status: "submitted"` the instant the jobs are on the server, then `ok` / `partial` / `failed` once
-every job has a verdict (`failed` lists the ones with no output). A run that times out or is
-killed therefore leaves a folder `status` and `fetch` can resume from — that second-write discipline
-is the whole reason `--no-wait` needs no extra state.
+`Client::view` per output of each finished job → `run.json`. `run.json` is written as
+`status: "submitted"` before the first job is posted and after each accepted one, then `ok` /
+`partial` / `failed` once every job has a verdict (`failed` lists the ones with no output). A run
+that times out or is killed therefore leaves a folder `status` and `fetch` can resume from — that
+write discipline is the whole reason `--no-wait` needs no extra state.
 
-The endpoint map, the second-write discipline of `run.json`, `RunReport::images` and the rules for follow, verdicts and the HTTP client (subscribe-before-submit, `/queue` before `/history`, no TLS, the download cap): `ludion devdocs gen-run-protocol`.
+The endpoint map, the write discipline of `run.json`, `RunReport::images` and the rules for follow, verdicts and the HTTP client (subscribe-before-submit, `/queue` before `/history`, no TLS, the download cap): `ludion devdocs gen-run-protocol`.
 
 Accept's dataflow is shorter and makes no server call and no recipe read: `run::read_report` → the
 candidate's source file → `accept::accept`. An image re-encodes through `ludion_assets`; a mesh calls
@@ -100,7 +100,7 @@ lands in `dropped` and is never replayed; `frames: false` leaves only `/history`
 jobs, and an `Explode` graph's (or a `fail_jobs` submit number's) history entry has ComfyUI's failed
 shape. `/queue` lists every job `/history` has not yet recorded (`stall`, or `history_after` polls
 not reached), `forget: true` accepts jobs that are never queued, run or recorded, and
-`Mock::restart()` clears them all, as a ComfyUI restart does. `/upload/image` parses the multipart
+`Mock::restart()` clears them all, as a ComfyUI restart does and `Mock::forget_job` does for one. `queue_failures` makes the first N `/queue` requests 500, `hold_submit` parks one `/prompt` until `Mock::release_submits()`, and `hang_upgrade` accepts `/ws` and never answers. `/upload/image` parses the multipart
 body byte-exactly into an input store (`files`) and models ComfyUI's naming: `overwrite` replaces,
 identical bytes reuse the name, different bytes take `stem (i).ext`; `/view` serves `truncated.png`
 as a body cut off mid-reply.

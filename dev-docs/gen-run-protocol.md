@@ -52,7 +52,16 @@ an empty `images` there is rebuilt from the run folder's `inputs/` copies (`lega
   order would call a job that finished between the reads lost. A failed or lost job never aborts the
   follow, `status`, `fetch` or the download: `complete` records each as `RunFailure` (reason
   `error`, `lost`, or `REASON_EMPTY` for a job that finished and wrote no file) and finalizes `ok` /
-  `partial` / `failed`.
+  `partial` / `failed`. The exception is `fetch` and `status` on a `submitted` run whose jobs are
+  *all* lost (or that lists none): `no_jobs_accepted` / `server_knows_none` refuse with `L1391` and `run.json` is left
+  as it was, because a wrong `--url` reads the same as a restart. A waited `run` never takes that
+  path: it follows on the URL it submitted to, so all-lost finalizes `failed`. A sweep fails on any
+  `/queue` or `/history` error: `follow` tolerates `MAX_FAILED_SWEEPS` (3) consecutive failed sweeps
+  and returns the third; `run` then appends the `gen fetch <dir>` pointer (`follow_phase_error`).
+- **`run.json` is written before the first `POST /prompt` and after every accepted one** (one
+  `write_atomic` each, at most 64). Until a job is accepted nothing is on the server, so any failure
+  removes the folder; a failed write after an accepted job keeps it and names the unrecorded
+  `prompt_id`. A kill between an accepted POST and its write loses that one job.
 - **A finalized run is final.** `status` and `fetch` on a run that is no longer `submitted` do not ask
   the server about its jobs (after a restart all would read lost, and `fetch` would overwrite a good
   `ok`).
@@ -67,7 +76,9 @@ an empty `images` there is rebuilt from the run folder's `inputs/` copies (`lega
   every 500 ms under the *same* deadline (capped at `MAX_TIMEOUT`, a week, so a huge `--timeout`
   cannot overflow), sharing `sweep_history` with the stream path, and `Progress::via` records which
   path ran. A mid-run hangup falls back too: `/history` still holds
-  the verdict.
+  the verdict. The upgrade is bounded: `subscribe_within` puts a 10 s budget on the connect and each
+  handshake read or write (name resolution is not bounded), and any failure, a timeout included,
+  is "no socket".
 - **`ureq` is built with `default-features = false`: no TLS, no gzip.** The consequence is real and
   intended — `resolve_url` refuses `https://` (`L1167`) before anything is tried, so only plain
   `http://` over a private network is reachable.

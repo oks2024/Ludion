@@ -33,7 +33,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ludion_core::atomic::write_atomic;
+use ludion_core::atomic::{create_new_atomic, temp_sibling};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::Registry;
@@ -146,12 +146,7 @@ fn accept_image(
     let sidecar = with_suffix(out, ORIGIN_SUFFIX);
     for existing in [out, sidecar.as_path()] {
         if existing.exists() {
-            return Err(vec![
-                refused(format!("`{}` already exists", existing.display())).with_help(
-                    "an accept never overwrites; delete the asset, or name a free path with \
-                     `--out`",
-                ),
-            ]);
+            return Err(vec![exists_refusal(existing)]);
         }
     }
 
@@ -193,19 +188,77 @@ fn accept_image(
     })
 }
 
-/// Writes the asset, then its sidecar; a failed sidecar removes the asset again, so a retry is not
-/// refused as "already exists".
+/// Writes the asset, then its sidecar, each created exclusively: a file that appeared since the
+/// pre-check is refused, never replaced. A failed sidecar removes the asset this call created, so a
+/// retry is not refused as "already exists".
 fn write_asset_and_sidecar(
     out: &Path,
     asset: &[u8],
     sidecar: &Path,
     text: &str,
 ) -> Result<(), Vec<Diagnostic>> {
-    write_atomic(out, asset).map_err(|error| vec![write_failed(out, error)])?;
-    write_atomic(sidecar, text).map_err(|error| {
+    create_new_atomic(out, asset).map_err(|error| vec![create_failed(out, error)])?;
+    create_new_atomic(sidecar, text).map_err(|error| {
         let _ = std::fs::remove_file(out);
-        vec![write_failed(sidecar, error)]
+        vec![create_failed(sidecar, error)]
     })
+}
+
+/// A failed exclusive create: the target itself existing is the same refusal the pre-check makes,
+/// anything else a write failure. (A regular file standing where a parent folder belongs also
+/// reports `AlreadyExists`, from the folder create; the target is then absent.)
+fn create_failed(path: &Path, error: std::io::Error) -> Diagnostic {
+    if error.kind() == std::io::ErrorKind::AlreadyExists && path.exists() {
+        return exists_refusal(path);
+    }
+    write_failed(path, error)
+}
+
+fn exists_refusal(path: &Path) -> Diagnostic {
+    refused(format!("`{}` already exists", path.display()))
+        .with_help("an accept never overwrites; delete the asset, or name a free path with `--out`")
+}
+
+/// Writes a directory tree so it appears whole or not at all: `write` fills a staging sibling of
+/// `out_dir`, which then takes `out_dir`'s place. A failed write removes the staging tree and leaves
+/// nothing behind to block a retry. An `out_dir` another process filled meanwhile is refused with its
+/// files intact.
+fn publish_tree(
+    out_dir: &Path,
+    write: impl FnOnce(&Path) -> Result<(), Diagnostic>,
+) -> Result<(), Vec<Diagnostic>> {
+    if let Some(parent) = out_dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| vec![write_failed(parent, error)])?;
+    }
+    let staging = temp_sibling(out_dir);
+    if let Err(error) = write(&staging) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(vec![error.with_help(
+            "an accept writes the whole import tree; check the parent is writable",
+        )]);
+    }
+    // Removes only an empty directory, so a rename can take its place on Windows.
+    let _ = std::fs::remove_dir(out_dir);
+    if let Err(error) = std::fs::rename(&staging, out_dir) {
+        let _ = std::fs::remove_dir_all(&staging);
+        // A racer filled the destination, or the rename failed for another reason.
+        return Err(vec![if is_free(out_dir) {
+            write_failed(out_dir, error)
+        } else {
+            occupied_refusal(out_dir)
+        }]);
+    }
+    Ok(())
+}
+
+fn occupied_refusal(out_dir: &Path) -> Diagnostic {
+    refused(format!("`{}` already holds files", out_dir.display())).with_help(
+        "an accept never overwrites, and an imported mesh tree is content from this moment on; \
+         name an empty or absent directory with `--out`",
+    )
 }
 
 /// Freezes a mesh candidate: the `.glb` through [`ludion_import`] in default (non-lossy) mode, its
@@ -224,12 +277,7 @@ fn accept_mesh(
     allow_lossy: bool,
 ) -> Result<Accepted, Vec<Diagnostic>> {
     if !is_free(out_dir) {
-        return Err(vec![
-            refused(format!("`{}` already holds files", out_dir.display())).with_help(
-                "an accept never overwrites, and an imported mesh tree is content from this moment \
-                 on; name an empty or absent directory with `--out`",
-            ),
-        ]);
+        return Err(vec![occupied_refusal(out_dir)]);
     }
     let origin = provenance(report, output)?;
 
@@ -263,11 +311,7 @@ fn accept_mesh(
             triangles: doc.triangle_count(),
         });
     }
-    import.write(out_dir, &prefab_yaml).map_err(|error| {
-        vec![
-            error.with_help("an accept writes the whole import tree; check the parent is writable"),
-        ]
-    })?;
+    publish_tree(out_dir, |staging| import.write(staging, &prefab_yaml))?;
 
     Ok(Accepted {
         source: source.to_path_buf(),
@@ -1335,5 +1379,128 @@ inputs:
             b"already here",
             "the refusal happens before anything is written"
         );
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ludion-gen-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch dir");
+        dir
+    }
+
+    #[test]
+    fn an_existing_sidecar_is_kept_and_the_asset_this_call_wrote_is_removed() {
+        let dir = scratch("sidecar-kept");
+        let out = dir.join("idol.png");
+        let sidecar = dir.join("idol.png.origin.yaml");
+        std::fs::write(&sidecar, b"mine").expect("the squatter");
+
+        let diagnostics = write_asset_and_sidecar(&out, b"png bytes", &sidecar, "origin")
+            .expect_err("a sidecar is never replaced");
+        let kept = std::fs::read(&sidecar).expect("the sidecar survives");
+        let asset_left = out.exists();
+        std::fs::remove_dir_all(&dir).expect("the scratch dir is removed");
+
+        assert_eq!(codes(&diagnostics), vec!["L1172"]);
+        assert_eq!(kept, b"mine");
+        assert!(!asset_left, "the asset this call created is rolled back");
+    }
+
+    #[test]
+    fn an_existing_asset_keeps_its_bytes() {
+        let dir = scratch("asset-kept");
+        let out = dir.join("idol.png");
+        std::fs::write(&out, b"mine").expect("the squatter");
+
+        let diagnostics =
+            write_asset_and_sidecar(&out, b"png bytes", &dir.join("idol.png.origin.yaml"), "o")
+                .expect_err("an asset is never replaced");
+        let kept = std::fs::read(&out).expect("the asset survives");
+        let sidecar_left = dir.join("idol.png.origin.yaml").exists();
+        std::fs::remove_dir_all(&dir).expect("the scratch dir is removed");
+
+        assert_eq!(codes(&diagnostics), vec!["L1172"]);
+        assert_eq!(kept, b"mine");
+        assert!(!sidecar_left);
+    }
+
+    #[test]
+    fn a_failed_tree_write_leaves_no_destination_and_a_retry_succeeds() {
+        let dir = scratch("tree-retry");
+        let out = dir.join("goblin");
+
+        let diagnostics = publish_tree(&out, |staging| {
+            std::fs::create_dir_all(staging).expect("staging");
+            std::fs::write(staging.join("half.yaml"), b"x").expect("a file");
+            Err(Diagnostic::new(code::OUTPUT_IO, "disk full"))
+        })
+        .expect_err("the write failed");
+        assert_eq!(codes(&diagnostics), vec!["L1038"]);
+        let names = |dir: &Path| -> Vec<String> {
+            std::fs::read_dir(dir)
+                .expect("readable")
+                .map(|entry| {
+                    entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect()
+        };
+        assert!(
+            names(&dir).is_empty(),
+            "no destination and no staging: {:?}",
+            names(&dir)
+        );
+
+        publish_tree(&out, |staging| {
+            std::fs::create_dir_all(staging).expect("staging");
+            std::fs::write(staging.join("a.yaml"), b"x").expect("a file");
+            Ok(())
+        })
+        .expect("a retry succeeds");
+        let written = out.join("a.yaml").exists();
+        std::fs::remove_dir_all(&dir).expect("the scratch dir is removed");
+        assert!(written);
+    }
+
+    #[test]
+    fn an_existing_empty_destination_is_published_into() {
+        let dir = scratch("tree-empty");
+        let out = dir.join("goblin");
+        std::fs::create_dir_all(&out).expect("an empty destination");
+
+        publish_tree(&out, |staging| {
+            std::fs::create_dir_all(staging).expect("staging");
+            std::fs::write(staging.join("a.yaml"), b"x").expect("a file");
+            Ok(())
+        })
+        .expect("an empty destination is free");
+        let written = out.join("a.yaml").exists();
+        std::fs::remove_dir_all(&dir).expect("the scratch dir is removed");
+        assert!(written);
+    }
+
+    #[test]
+    fn a_destination_filled_meanwhile_is_refused_with_its_files_intact() {
+        let dir = scratch("tree-racer");
+        let out = dir.join("goblin");
+
+        let diagnostics = publish_tree(&out, |staging| {
+            std::fs::create_dir_all(staging).expect("staging");
+            std::fs::write(staging.join("a.yaml"), b"x").expect("a file");
+            std::fs::create_dir_all(&out).expect("the racer's dir");
+            std::fs::write(out.join("theirs.yaml"), b"theirs").expect("the racer's file");
+            Ok(())
+        })
+        .expect_err("a racer filled the destination");
+        let theirs = std::fs::read(out.join("theirs.yaml")).expect("their file survives");
+        let leftovers = std::fs::read_dir(&dir).expect("readable").count();
+        std::fs::remove_dir_all(&dir).expect("the scratch dir is removed");
+
+        assert_eq!(codes(&diagnostics), vec!["L1172"]);
+        assert_eq!(theirs, b"theirs");
+        assert_eq!(leftovers, 1, "only the destination remains, no staging");
     }
 }

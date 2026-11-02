@@ -1342,7 +1342,7 @@ fn status_and_fetch_report_a_failed_job_of_a_no_wait_run() {
 }
 
 #[test]
-fn after_a_restart_status_and_fetch_call_the_jobs_lost() {
+fn after_a_restart_status_and_fetch_refuse_and_leave_the_run_submitted() {
     let mock = Mock::start(MockConfig {
         stall: true,
         ..Default::default()
@@ -1357,28 +1357,294 @@ fn after_a_restart_status_and_fetch_call_the_jobs_lost() {
     assert_eq!(before.pending, vec!["job-0", "job-1"]);
     assert!(before.failed.is_empty());
 
+    let report_before = std::fs::read(submitted.dir.join("run.json")).expect("run.json");
     mock.restart();
-    let after = ludion_gen::run::status(&submitted.dir, &mock.url).expect("the status reads");
-    assert!(after.ready, "pending after a restart: {:?}", after.pending);
-    assert_eq!(after.failed.len(), 2);
-    assert!(after.failed.iter().all(|failure| failure.reason == "lost"));
+    for _ in 0..2 {
+        let status = ludion_gen::run::status(&submitted.dir, &mock.url)
+            .expect_err("a server that knows no job is not a verdict");
+        assert_eq!(codes(&status), vec!["L1391"]);
+        let fetch = ludion_gen::run::fetch(&submitted.dir, &mock.url)
+            .expect_err("a server that knows no job is not a verdict");
+        assert_eq!(codes(&fetch), vec!["L1391"]);
+        let text = joined(&fetch);
+        assert!(text.contains("--url") && text.contains("gen run"), "{text}");
+        assert_eq!(
+            std::fs::read(submitted.dir.join("run.json")).expect("run.json"),
+            report_before,
+            "a refusal leaves the record byte-identical"
+        );
+    }
+    assert_eq!(
+        ludion_gen::run::read_report(&submitted.dir)
+            .expect("run.json")
+            .status,
+        "submitted"
+    );
+}
 
-    let fetched = ludion_gen::run::fetch(&submitted.dir, &mock.url).expect("lost is terminal");
-    assert_eq!(fetched.status, "failed");
-    assert!(fetched.outputs.is_empty());
+#[test]
+fn a_fetch_against_the_wrong_server_leaves_the_run_collectable() {
+    let a = Mock::start(MockConfig::default());
+    let b = Mock::start(MockConfig::default());
+    let project = project("wrong-server", "txt2img.json", TXT2IMG_RECIPE);
+    let mut opts = options(&a.url);
+    opts.wait = false;
+    let submitted = ludion_gen::run::run(&resolved(&project), &opts).expect("the submit lands");
+
+    let error = ludion_gen::run::fetch(&submitted.dir, &b.url).expect_err("B knows no job");
+    assert_eq!(codes(&error), vec!["L1391"]);
+    assert!(joined(&error).contains("--url"), "{}", joined(&error));
+
+    let fetched = ludion_gen::run::fetch(&submitted.dir, &a.url).expect("A still collects it");
+    assert_eq!(fetched.status, "ok");
+    assert_eq!(fetched.outputs.len(), 2);
+}
+
+#[test]
+fn a_fetch_with_one_job_lost_finalizes_partial() {
+    let mock = Mock::start(MockConfig::default());
+    let project = project("one-lost", "txt2img.json", TXT2IMG_RECIPE);
+    let mut opts = options(&mock.url);
+    opts.wait = false;
+    let submitted = ludion_gen::run::run(&resolved(&project), &opts).expect("the submit lands");
+    mock.forget_job("job-0");
+
+    let status = ludion_gen::run::status(&submitted.dir, &mock.url).expect("a job is known");
+    assert!(status.ready);
+    assert_eq!(status.failed.len(), 1);
+
+    let fetched = ludion_gen::run::fetch(&submitted.dir, &mock.url).expect("a job is known");
+    assert_eq!(fetched.status, "partial");
+    assert_eq!(fetched.outputs.len(), 1);
+    assert_eq!(fetched.failed[0].reason, "lost");
     let text = joined(&fetched.failure_diagnostics());
     assert!(text.contains("lost"), "{text}");
     assert!(
         text.contains("gen run generation/recipes/") && text.contains(".gen.yaml"),
         "a lost job names the recipe to run again: {text}"
     );
-    assert_eq!(
-        codes(&fetched.failure_diagnostics()),
-        vec!["L1169", "L1169"]
-    );
+    assert_eq!(codes(&fetched.failure_diagnostics()), vec!["L1169"]);
 
     let again = ludion_gen::run::fetch(&submitted.dir, &mock.url).expect("a finalized run");
     assert_eq!(again, fetched, "a finalized run is returned unchanged");
+}
+
+/// Waits until `run.json` under `runs` records `count` jobs, and returns the run folder.
+fn wait_for_recorded_jobs(runs: &Path, count: u32) -> PathBuf {
+    for _ in 0..400 {
+        let folders = std::fs::read_dir(runs).into_iter().flatten().flatten();
+        for folder in folders {
+            let Ok(text) = std::fs::read_to_string(folder.path().join("run.json")) else {
+                continue;
+            };
+            let Ok(report) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            if report["count"] == count && report["status"] == "submitted" {
+                return folder.path();
+            }
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("no run under {} recorded {count} job(s)", runs.display());
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("the copy");
+    for entry in std::fs::read_dir(from).expect("readable").flatten() {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).expect("a file");
+        }
+    }
+}
+
+#[test]
+fn an_interrupted_submit_leaves_a_folder_fetch_can_collect() {
+    let mock = Mock::start(MockConfig {
+        hold_submit: Some(1),
+        ..Default::default()
+    });
+    let project = project("interrupted", "txt2img.json", TXT2IMG_RECIPE);
+    let resolved = resolved(&project);
+    let mut opts = options(&mock.url);
+    opts.wait = false;
+    let runs = project.root.join("generation/runs/idol");
+
+    std::thread::scope(|scope| {
+        let run = scope.spawn(|| ludion_gen::run::run(&resolved, &opts));
+        let live = wait_for_recorded_jobs(&runs, 1);
+        let report = ludion_gen::run::read_report(&live).expect("run.json");
+        assert_eq!(report.prompt_ids, vec!["job-0"]);
+        assert_eq!(report.seeds.len(), 1);
+        // The "killed" state: the folder as it stood while the second submit was in flight.
+        let killed = project.root.join("killed");
+        copy_dir(&live, &killed);
+
+        let fetched = ludion_gen::run::fetch(&killed, &mock.url)
+            .unwrap_or_else(|d| panic!("the copy collects:\n{}", joined(&d)));
+        assert_eq!(fetched.status, "ok");
+        assert_eq!(fetched.outputs.len(), 1);
+
+        mock.release_submits();
+        run.join().expect("the run thread").expect("the run ends");
+    });
+}
+
+#[test]
+fn a_submit_interrupted_before_any_job_has_nothing_to_collect() {
+    let mock = Mock::start(MockConfig {
+        hold_submit: Some(0),
+        ..Default::default()
+    });
+    let project = project("interrupted-early", "txt2img.json", TXT2IMG_RECIPE);
+    let resolved = resolved(&project);
+    let mut opts = options(&mock.url);
+    opts.wait = false;
+    let runs = project.root.join("generation/runs/idol");
+
+    std::thread::scope(|scope| {
+        let run = scope.spawn(|| ludion_gen::run::run(&resolved, &opts));
+        let live = wait_for_recorded_jobs(&runs, 0);
+        let report = ludion_gen::run::read_report(&live).expect("run.json");
+        assert!(report.prompt_ids.is_empty());
+
+        let status = ludion_gen::run::status(&live, &mock.url).expect_err("nothing to report");
+        assert_eq!(codes(&status), vec!["L1391"]);
+        let fetch = ludion_gen::run::fetch(&live, &mock.url).expect_err("nothing to collect");
+        assert_eq!(codes(&fetch), vec!["L1391"]);
+        assert_eq!(
+            ludion_gen::run::read_report(&live)
+                .expect("run.json")
+                .status,
+            "submitted"
+        );
+
+        mock.release_submits();
+        run.join().expect("the run thread").expect("the run ends");
+    });
+}
+
+#[test]
+fn a_report_write_failing_mid_submit_keeps_the_dir() {
+    let mock = Mock::start(MockConfig {
+        hold_submit: Some(1),
+        ..Default::default()
+    });
+    let project = project("report-write", "txt2img.json", TXT2IMG_RECIPE);
+    let resolved = resolved(&project);
+    let mut opts = options(&mock.url);
+    opts.wait = false;
+    let runs = project.root.join("generation/runs/idol");
+
+    let error = std::thread::scope(|scope| {
+        let run = scope.spawn(|| ludion_gen::run::run(&resolved, &opts));
+        let live = wait_for_recorded_jobs(&runs, 1);
+        // The folder becomes a regular file, so the next report write cannot land.
+        std::fs::remove_dir_all(&live).expect("the folder goes");
+        std::fs::write(&live, b"not a folder").expect("a file in its place");
+        mock.release_submits();
+        run.join()
+            .expect("the run thread")
+            .expect_err("the write fails")
+    });
+
+    let dir = error.dir.clone().expect("the dir is kept");
+    assert_eq!(codes(&error.diagnostics), vec!["L1038"]);
+    assert!(
+        joined(&error.diagnostics).contains("job-1"),
+        "{}",
+        joined(&error.diagnostics)
+    );
+    assert!(dir.exists());
+}
+
+#[test]
+fn a_failed_sweep_does_not_abort_the_follow() {
+    let mock = Mock::start(MockConfig {
+        queue_failures: 2,
+        ..Default::default()
+    });
+    let project = project("sweep-blip", "txt2img.json", TXT2IMG_RECIPE);
+    let report =
+        ludion_gen::run::run(&resolved(&project), &options(&mock.url)).unwrap_or_else(|error| {
+            panic!(
+                "two failed sweeps are a blip:\n{}",
+                joined(&error.diagnostics)
+            )
+        });
+    assert_eq!(report.status, "ok");
+}
+
+#[test]
+fn repeated_failed_sweeps_end_with_the_fetch_hint() {
+    let mock = Mock::start(MockConfig {
+        websocket: false,
+        queue_failures: ludion_gen::client::MAX_FAILED_SWEEPS as usize,
+        ..Default::default()
+    });
+    let project = project("sweep-gone", "txt2img.json", TXT2IMG_RECIPE);
+    let error = ludion_gen::run::run(&resolved(&project), &options(&mock.url))
+        .expect_err("a server that keeps failing ends the follow");
+    let dir = error.dir.clone().expect("the run is kept");
+    let text = joined(&error.diagnostics);
+    assert!(
+        text.contains(&format!(
+            "gen fetch {}",
+            ludion_gen::run::display_path(&dir)
+        )),
+        "{text}"
+    );
+
+    let fetched = ludion_gen::run::fetch(&dir, &mock.url).expect("the run is collectable");
+    assert_eq!(fetched.status, "ok");
+}
+
+#[test]
+fn a_silent_websocket_upgrade_falls_back_to_polling() {
+    let mock = Mock::start(MockConfig {
+        hang_upgrade: true,
+        ..Default::default()
+    });
+    let client = Client::new(&mock.url);
+    let started = std::time::Instant::now();
+    let subscription = client.subscribe_within("probe", Duration::from_millis(200));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the upgrade is bounded"
+    );
+
+    let graph = serde_json::from_slice::<Value>(&read_fixture("txt2img.json")).expect("the graph");
+    let prompt_id = client.submit(&graph, "probe").expect("the submit lands");
+    let progress = client
+        .follow(
+            subscription,
+            std::slice::from_ref(&prompt_id),
+            Duration::from_secs(10),
+        )
+        .expect("the job finishes");
+    assert_eq!(progress.via, FollowVia::Polling);
+}
+
+#[test]
+fn the_graph_hash_follows_the_seed() {
+    let hash = |seed: Option<u64>| {
+        let mock = Mock::start(MockConfig::default());
+        let project = project("hash-seed", "txt2img.json", TXT2IMG_RECIPE);
+        let mut opts = options(&mock.url);
+        opts.seed = seed;
+        opts.count = Some(1);
+        ludion_gen::run::run(&resolved(&project), &opts)
+            .expect("the run ends")
+            .graph_hash
+    };
+    let default = resolved(&project("hash-doc", "txt2img.json", TXT2IMG_RECIPE))
+        .doc
+        .seed;
+    assert_ne!(hash(Some(1)), hash(Some(999)));
+    assert_eq!(hash(Some(default)), hash(None));
 }
 
 #[test]

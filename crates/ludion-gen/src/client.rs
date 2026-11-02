@@ -12,7 +12,7 @@
 //! the run pipeline turns each one into a [`code::GENERATION_RUN_FAILED`].
 
 use std::collections::BTreeSet;
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -62,6 +62,14 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How often the WebSocket follow also asks `/history` for the jobs still pending, so a job whose
 /// frames never reached the socket is still observed.
 const HISTORY_SWEEP_INTERVAL: Duration = Duration::from_secs(2);
+
+/// How many `/history` sweeps in a row may fail before a follow gives up. One dropped request is a
+/// blip; a server that keeps failing is gone, and the run is recorded for `gen fetch`.
+pub const MAX_FAILED_SWEEPS: u32 = 3;
+
+/// How long the WebSocket upgrade may take, connect and handshake. A server (or proxy) that accepts
+/// the socket and never answers the upgrade falls back to polling after this.
+const WS_UPGRADE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Resolves the server address: `--url` first, then `LUDION_COMFY_URL`, then ComfyUI's own default.
 ///
@@ -181,6 +189,24 @@ pub struct SystemStats {
     pub comfy_version: String,
     /// The whole reply, for the CLI's `--json` and for anything provenance does not name.
     pub raw: Value,
+}
+
+/// Opens the socket with timeouts on the connect and the handshake. Every failure is "no socket":
+/// `tungstenite` reports a handshake read timeout as `Interrupted` on Unix and `Failure` on Windows.
+fn open_socket(url: &str, budget: Duration) -> Option<WebSocket<MaybeTlsStream<TcpStream>>> {
+    let uri: tungstenite::http::Uri = url.parse().ok()?;
+    let host = uri.host()?.trim_matches(['[', ']']);
+    let stream = (host, uri.port_u16().unwrap_or(80))
+        .to_socket_addrs()
+        .ok()?
+        .find_map(|addr| TcpStream::connect_timeout(&addr, budget).ok())?;
+    stream.set_read_timeout(Some(budget)).ok()?;
+    stream.set_write_timeout(Some(budget)).ok()?;
+    let (socket, _) = tungstenite::client(url, MaybeTlsStream::Plain(stream)).ok()?;
+    if let MaybeTlsStream::Plain(stream) = socket.get_ref() {
+        stream.set_write_timeout(None).ok()?;
+    }
+    Some(socket)
 }
 
 /// A `/ws` socket registered under one client id, or none when the upgrade failed (the follow then
@@ -404,13 +430,19 @@ impl Client {
     /// error: the subscription is empty and the follow polls `/history`, which reaches the same
     /// answer.
     pub fn subscribe(&self, client_id: &str) -> Subscription {
+        self.subscribe_within(client_id, WS_UPGRADE_TIMEOUT)
+    }
+
+    /// [`Client::subscribe`] with an explicit budget for the connect and for each read or write of
+    /// the upgrade handshake. Name resolution is not bounded by it.
+    pub fn subscribe_within(&self, client_id: &str, budget: Duration) -> Subscription {
         let ws_base = self
             .base
             .strip_prefix("http://")
             .map(|rest| format!("ws://{rest}"));
         let socket = ws_base.and_then(|ws_base| {
             let url = format!("{ws_base}/ws?clientId={}", percent_encode(client_id));
-            tungstenite::connect(url).ok().map(|(socket, _)| socket)
+            open_socket(&url, budget)
         });
         Subscription { socket }
     }
@@ -424,7 +456,8 @@ impl Client {
     ///
     /// # Errors
     /// [`code::GENERATION_RUN_TIMED_OUT`] when `timeout` elapses first, naming the job ids and the
-    /// `gen status` / `gen fetch` recovery.
+    /// `gen status` / `gen fetch` recovery. [`code::COMFY_UNREACHABLE`] or [`code::COMFY_REJECTED`]
+    /// when [`MAX_FAILED_SWEEPS`] `/history` sweeps in a row fail.
     pub fn follow(
         &self,
         subscription: Subscription,
@@ -447,9 +480,10 @@ impl Client {
         let mut pending: BTreeSet<&str> = prompt_ids.iter().map(String::as_str).collect();
         let mut finished = Vec::new();
         let mut next_sweep = Instant::now();
+        let mut failed_sweeps = 0;
         loop {
             if Instant::now() >= next_sweep {
-                self.sweep_history(prompt_ids, &mut pending, &mut finished)?;
+                self.sweep_counted(prompt_ids, &mut pending, &mut finished, &mut failed_sweeps)?;
                 next_sweep = Instant::now() + HISTORY_SWEEP_INTERVAL;
             }
             if pending.is_empty() {
@@ -511,8 +545,10 @@ impl Client {
     ) -> Result<Progress, Diagnostic> {
         let mut pending: BTreeSet<&str> = prompt_ids.iter().map(String::as_str).collect();
         let mut finished = Vec::new();
+        let mut failed_sweeps = 0;
         loop {
-            self.sweep_history(prompt_ids, &mut pending, &mut finished)?;
+            let swept =
+                self.sweep_counted(prompt_ids, &mut pending, &mut finished, &mut failed_sweeps)?;
             if pending.is_empty() {
                 return Ok(Progress {
                     finished,
@@ -523,7 +559,38 @@ impl Client {
             if remaining.is_zero() {
                 return Err(timed_out(&pending));
             }
-            std::thread::sleep(POLL_INTERVAL.min(remaining));
+            let pause = if swept {
+                POLL_INTERVAL
+            } else {
+                HISTORY_SWEEP_INTERVAL
+            };
+            std::thread::sleep(pause.min(remaining));
+        }
+    }
+
+    /// [`Client::sweep_history`] that tolerates failure: `failed` counts consecutive failed sweeps,
+    /// resets on success, and the error is returned at [`MAX_FAILED_SWEEPS`]. Returns whether this
+    /// sweep succeeded.
+    fn sweep_counted<'a>(
+        &self,
+        prompt_ids: &'a [String],
+        pending: &mut BTreeSet<&'a str>,
+        finished: &mut Vec<String>,
+        failed: &mut u32,
+    ) -> Result<bool, Diagnostic> {
+        match self.sweep_history(prompt_ids, pending, finished) {
+            Ok(()) => {
+                *failed = 0;
+                Ok(true)
+            }
+            Err(error) => {
+                *failed += 1;
+                if *failed >= MAX_FAILED_SWEEPS {
+                    Err(error)
+                } else {
+                    Ok(false)
+                }
+            }
         }
     }
 

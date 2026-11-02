@@ -5,9 +5,9 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -42,6 +42,13 @@ pub struct MockConfig {
     pub refuse_jobs: &'static [u32],
     /// Submit numbers (`job-N`) that stay queued forever, as `stall` does for every job.
     pub stall_jobs: &'static [u32],
+    /// How many of the first `/queue` requests answer 500, as a server hiccup mid-follow does.
+    pub queue_failures: usize,
+    /// The submit number whose `/prompt` waits, before taking its number, until
+    /// [`Mock::release_submits`] — a run caught mid-submit.
+    pub hold_submit: Option<u32>,
+    /// `true` accepts the `/ws` socket and never answers the upgrade — a proxy that swallows it.
+    pub hang_upgrade: bool,
 }
 
 impl Default for MockConfig {
@@ -57,6 +64,9 @@ impl Default for MockConfig {
             preview: false,
             refuse_jobs: &[],
             stall_jobs: &[],
+            queue_failures: 0,
+            hold_submit: None,
+            hang_upgrade: false,
         }
     }
 }
@@ -99,6 +109,11 @@ pub struct State {
     /// The server's input directory: stored name to bytes.
     pub files: Mutex<BTreeMap<String, Vec<u8>>>,
     pub next_id: AtomicU32,
+    /// How many `/queue` requests have arrived, for `queue_failures`.
+    pub queue_calls: AtomicUsize,
+    /// Set by [`Mock::release_submits`]; a held `/prompt` waits on it.
+    pub released: Mutex<bool>,
+    pub release_signal: Condvar,
 }
 
 impl State {
@@ -130,6 +145,9 @@ impl Mock {
             uploads: Mutex::new(Vec::new()),
             files: Mutex::new(BTreeMap::new()),
             next_id: AtomicU32::new(0),
+            queue_calls: AtomicUsize::new(0),
+            released: Mutex::new(false),
+            release_signal: Condvar::new(),
         });
         let served = Arc::clone(&state);
         // Detached: the test binary exits when its main thread does, whatever this one is waiting on.
@@ -143,6 +161,21 @@ impl Mock {
             url: format!("http://{addr}"),
             state,
         }
+    }
+
+    /// Lets a `/prompt` held by `hold_submit` proceed, and any later one skip the hold.
+    pub fn release_submits(&self) {
+        *self.state.released.lock().unwrap() = true;
+        self.state.release_signal.notify_all();
+    }
+
+    /// Drops one job from the server's memory, as a restart would for that job alone.
+    pub fn forget_job(&self, prompt_id: &str) {
+        self.state
+            .prompts
+            .lock()
+            .unwrap()
+            .retain(|(id, _)| id != prompt_id);
     }
 
     /// A ComfyUI restart: the queue and the history are in memory, so every job is forgotten.
@@ -306,6 +339,16 @@ fn serve_prompt(stream: &TcpStream, state: &State, body: &[u8]) {
         return;
     }
 
+    if state.config.hold_submit == Some(state.next_id.load(Ordering::SeqCst)) {
+        let released = state.released.lock().unwrap();
+        // Bounded, so a test that never releases cannot hang the process.
+        let _ = state.release_signal.wait_timeout_while(
+            released,
+            Duration::from_secs(30),
+            |released| !*released,
+        );
+    }
+
     if state
         .config
         .refuse_jobs
@@ -357,6 +400,10 @@ fn serve_prompt(stream: &TcpStream, state: &State, body: &[u8]) {
 /// Every job `/history` has not yet recorded, as ComfyUI lists them: the first running, the rest
 /// pending, each `[number, prompt_id, prompt, extra_data, outputs]`.
 fn serve_queue(stream: &TcpStream, state: &State) {
+    if state.queue_calls.fetch_add(1, Ordering::SeqCst) < state.config.queue_failures {
+        respond(stream, 500, "text/plain", b"queue unavailable");
+        return;
+    }
     let mut unfinished = Vec::new();
     if !state.config.forget {
         let polls = state.polls.lock().unwrap();
@@ -492,6 +539,11 @@ pub const MESH_BODY: &[u8] = b"not a mesh: the run pipeline downloads bytes and 
 fn serve_websocket(stream: TcpStream, state: &State, request_line: &str) {
     if !state.config.websocket {
         respond(&stream, 404, "text/plain", b"no websocket here");
+        return;
+    }
+    if state.config.hang_upgrade {
+        // Bounded, so the detached thread ends with the test process at the latest.
+        std::thread::sleep(Duration::from_secs(30));
         return;
     }
     let target = request_line.split_whitespace().nth(1).unwrap_or("/ws");
@@ -686,6 +738,7 @@ fn respond(stream: &TcpStream, status: u16, content_type: &str, body: &[u8]) {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        500 => "Internal Server Error",
         _ => "Not Found",
     };
     let mut out = stream;

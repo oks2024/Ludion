@@ -1611,6 +1611,11 @@ pub mod code {
     /// `L1390` — a prefab document's `entities` list is empty, so an instance would spawn nothing.
     pub const PREFAB_EMPTY: DiagnosticCode = DiagnosticCode::new("L1390");
 
+    /// `L1391` — `gen fetch` or `gen status` found a `submitted` run whose jobs the server does not
+    /// know at all (every one lost, usually a wrong `--url` or a restarted server), or a run whose
+    /// submit was interrupted before any job was accepted. Raised by `ludion-gen`.
+    pub const GENERATION_JOBS_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1391");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7965,6 +7970,24 @@ Fix: keep `Camera.fov_y_deg + fov_delta` within 1 to 179, for instance by clampi
 Fix: add a named part (`- name: root` with `components: {}`), or delete the file.",
     },
     CodeEntry {
+        code: code::GENERATION_JOBS_UNKNOWN,
+        severity: Severity::Error,
+        title: "a generation run has no jobs the server knows",
+        explanation: "\
+`gen fetch` or `gen status` read a `submitted` run folder and found nothing to collect: the server
+knows none of the run's jobs (every one is lost), or the report lists no job at all because the
+submit was interrupted before the server accepted the first one.
+
+The usual cause of the first is a wrong `--url` or `LUDION_COMFY_URL`, so the verb refuses and
+leaves `run.json` as it was: the run stays `submitted`, and a fetch against the right server still
+collects it. A server restart or a cleared history forgets its jobs for good; then the folder holds
+nothing to recover. A run whose jobs are only partly lost is not this code: it finalizes `partial`
+and names each lost job with `L1169`.
+
+Fix: point `--url` at the server that took the run; otherwise delete the run folder and submit the
+recipe again with `ludion gen run <recipe>`.",
+    },
+    CodeEntry {
         code: code::CAMERA_OFFSET_DUPLICATE,
         severity: Severity::Error,
         title: "more than one camera offset",
@@ -10851,6 +10874,7 @@ mod tests {
         code::CAMERA_OFFSET_DUPLICATE,
         code::CAMERA_OFFSET_FOV_CLAMPED,
         code::PREFAB_EMPTY,
+        code::GENERATION_JOBS_UNKNOWN,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

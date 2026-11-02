@@ -283,11 +283,15 @@ fn vendor_writes_the_embedded_recipe_and_refuses_a_second_run() {
         std::fs::read_to_string(&dest).unwrap(),
         ludion_texgen::stdlib::get("cobbles").unwrap()
     );
+    std::fs::write(&dest, "mine\n").unwrap();
+    let again = run_ludion(&["texture", "vendor", "cobbles", text(&dest)]);
+    assert!(!again.status.success());
     assert!(
-        !run_ludion(&["texture", "vendor", "cobbles", text(&dest)])
-            .status
-            .success()
+        stderr(&again).contains("already exists"),
+        "{}",
+        stderr(&again)
     );
+    assert_eq!(std::fs::read_to_string(&dest).unwrap(), "mine\n");
 
     let output = run_ludion(&["texture", "vendor", "std:cobles", text(&dir.join("x.yaml"))]);
     assert!(!output.status.success());

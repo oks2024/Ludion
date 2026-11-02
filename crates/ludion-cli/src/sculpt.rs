@@ -14,30 +14,13 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use ludion_core::atomic::write_atomic;
-use ludion_core::codes::code;
-use ludion_core::diagnostics::Diagnostic;
 use ludion_scene::{SculptBone, SculptDocument};
 
 use crate::diagnostic;
-use crate::voxel::{default_palette_entry, read_palette_from};
+use crate::voxel::{create_text, default_palette_entry, read_palette_from};
 
 /// Runs `ludion sculpt new <out> [--name] [--palette-from]`.
 pub fn run_new(out: &Path, name: Option<&str>, palette_from: Option<&Path>) -> ExitCode {
-    if out.exists() {
-        diagnostic::print(
-            &Diagnostic::new(
-                code::CREATE_TARGET_EXISTS,
-                format!(
-                    "`{}` already exists; `sculpt new` never overwrites",
-                    out.display()
-                ),
-            )
-            .with_help("edit its `parts:` by hand, or choose another path"),
-        );
-        return ExitCode::FAILURE;
-    }
-
     let palette = match palette_from {
         Some(path) => match read_palette_from(path) {
             Ok(palette) => palette,
@@ -101,27 +84,18 @@ fn model_stem(path: &Path) -> Option<&str> {
     (!stem.is_empty()).then_some(stem)
 }
 
-/// Validates `text` as a sculpt document, then writes it atomically over `path` — the
-/// [`voxel::write_validated`](crate::voxel) shape, specialized to `check_sculpt` since `new` is the
-/// crate's only sculpt-writing verb so far.
+/// Validates `text` as a sculpt document, then creates `path` with it, refusing when it exists —
+/// the [`voxel::create_validated`](crate::voxel) shape, specialized to `check_sculpt` since `new`
+/// is the crate's only sculpt-writing verb so far.
 fn write_new(path: &Path, text: &str) -> Result<(), ExitCode> {
     if let Err(diagnostics) = ludion_scene::check_sculpt(text) {
         eprintln!("the scaffolded model would not validate; nothing was written:");
         return Err(diagnostic::report(path, &diagnostics));
     }
-    if let Err(error) = write_atomic(path, text) {
-        eprintln!(
-            "{}",
-            Diagnostic::new(
-                code::OUTPUT_IO,
-                format!("could not write `{}`: {error}", path.display()),
-            )
-            .with_help(
-                "check that the destination directory is writable and the file is not open in \
-                 another process"
-            )
-        );
-        return Err(ExitCode::FAILURE);
-    }
-    Ok(())
+    create_text(
+        path,
+        text,
+        "sculpt new",
+        "edit its `parts:` by hand, or choose another path",
+    )
 }

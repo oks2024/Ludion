@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use ludion_core::atomic::write_atomic;
+use ludion_core::atomic::{create_new_atomic, write_atomic};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, Severity};
 use ludion_texgen::validate::{self, Level, Rule};
@@ -1026,23 +1026,20 @@ pub fn run_vendor(name: &str, dest: Option<&Path>, json: bool) -> ExitCode {
         || PathBuf::from(format!("{bare}{RECIPE_SUFFIX}")),
         Path::to_path_buf,
     );
-    if dest.exists() {
-        let exists = io_error(format!(
-            "`{}` already exists; vendor never overwrites",
-            dest.display()
-        ))
-        .with_help("pick another destination or remove the file first");
-        return fail(source, &[exists], json);
-    }
-    if let Err(error) = write_atomic(&dest, text) {
-        return fail(
-            source,
-            &[io_error(format!(
-                "could not write `{}`: {error}",
+    if let Err(error) = create_new_atomic(&dest, text) {
+        // A regular file where a parent folder belongs reports `AlreadyExists` too; the target is
+        // then absent and the failure is an ordinary write error.
+        let exists = error.kind() == std::io::ErrorKind::AlreadyExists && dest.exists();
+        let failure = if exists {
+            io_error(format!(
+                "`{}` already exists; vendor never overwrites",
                 dest.display()
-            ))],
-            json,
-        );
+            ))
+            .with_help("pick another destination or remove the file first")
+        } else {
+            io_error(format!("could not write `{}`: {error}", dest.display()))
+        };
+        return fail(source, &[failure], json);
     }
     if json {
         let fields = json!({ "name": format!("std:{bare}"), "dest": path_text(&dest) });

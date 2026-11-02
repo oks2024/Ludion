@@ -25,8 +25,8 @@ argument clap cannot parse exits 2 with clap's text and no object.
 | `gen nodes [filter] [--class C]` | Typed node listing. `filter` is a case-insensitive substring over class name and category; `--class` prints one class's full input table. | `{nodes: [{class, category, required, optional, outputs}]}` |
 | `gen check <recipe>` | The offline passes, then the live pass. The **offline** result decides the exit code, so this runs in CI with no server; an unreachable server degrades to an `L1167` warning. | `{recipe, workflow, kind, overrides, offline, live}` |
 | `gen run <recipe> [--count N] [--seed S] [--image P] [--timeout S] [--no-wait]` | Check, upload `images:`, submit `count` graphs, follow, download, write `run.json`. A job that fails or is lost does not abort the rest: it is recorded in `failed`, one `L1169` per job on stderr, the report still prints, and the exit code is 1 unless the run is `ok` (or a `--no-wait` submit). `--image` replaces the *first* declared `images:` entry with a scratch path — how a candidate chains into the next run without being accepted. `--timeout` defaults to 600 s, at most a week. | the `run.json` object plus `dir` |
-| `gen status [<run-dir>]` | With a run folder, its record plus the server's verdict on every job (queued, finished, failed or lost); a finalized run is reported as written, never re-asked (`queue` is `null`). Failures are listed and exit 0. Bare, the queue plus the most recent run of every recipe. | `{dir, report, ready, pending, failed, queue}` (`report` is `null` when `run.json` is unreadable) or `{queue, runs}` |
-| `gen fetch <run-dir>` | Completes a `--no-wait` run: downloads every finished job's output, records the failed and lost jobs, finalizes `run.json`. `L1170` if a job is still queued. A run that is no longer `submitted` is returned untouched. Exits as `gen run` does. | the `run.json` object plus `dir` |
+| `gen status [<run-dir>]` | With a run folder, its record plus the server's verdict on every job (queued, finished, failed or lost); a finalized run is reported as written, never re-asked (`queue` is `null`). Failures are listed and exit 0. `L1391` when the server knows none of a `submitted` run's jobs (usually a wrong `--url`), or the run lists none. Bare, the queue plus the most recent run of every recipe. | `{dir, report, ready, pending, failed, queue}` (`report` is `null` when `run.json` is unreadable) or `{queue, runs}` |
+| `gen fetch <run-dir>` | Completes a `--no-wait` run: downloads every finished job's output, records the failed and lost jobs, finalizes `run.json`. `L1170` if a job is still queued. `L1391` if the server knows none of the jobs (a wrong `--url` or a restarted server) or the run lists none; `run.json` stays `submitted`, so a fetch against the right server still collects it. A run that is no longer `submitted` is returned untouched. Exits as `gen run` does. | the `run.json` object plus `dir` |
 | `gen sheet <run-dir> [--cols N] [--out P]` | Composes the candidate grid, one cell per output labelled `#<index> seed <n>`, cells letterboxed to a common size. A label wider than its cell shrinks, then drops to `#<index>`, then is omitted; an unknown seed shows `?`. Defaults to `sheet.png` in the run folder. A mesh run has nothing to compose: `L1171`, pointed at the model stage. | `{run_id, sheet, cells}`, where `cells` is a count |
 | `gen accept <run-dir> <index> --out <path> [--allow-lossy]` | Freezes one candidate with its provenance: a re-encoded `.png` for an image, an `ludion import` tree for a mesh (`--out` names the import **directory**, which must be absent or empty). `--allow-lossy` is the import mode, as on `ludion import`. Never overwrites (`L1172`). | `source`, `destination`, `sidecar`, `origin`, plus `meshes`/`textures` for a mesh |
 
@@ -62,16 +62,21 @@ resolved overrides), `prompt_ids`, `seeds` (the seed each job ran at, `null` whe
 known), `outputs` (each `{index, seed, file, node, batch_index, prompt_id}`; `seed` is `null` when
 unknown, and files from one job share its seed), `failed` (each
 `{job, prompt_id, reason, node, class, message}`; `reason` is `error`, `lost` or `empty`, the seed
-is the job's `seeds` entry), `started`, `finished`, `duration_ms`, `status`. It is written **twice** —
-`status: "submitted"` once the jobs are on the server, then once every job has a verdict: `ok` (no
-failure), `partial` (some candidates, some failures) or `failed` (no candidate) — so a run that times
-out or is interrupted still leaves a folder `gen status` and `gen fetch` can pick up. A submit
-refused part-way records only the jobs already submitted; a refused first submit leaves no folder.
+is the job's `seeds` entry), `started`, `finished`, `duration_ms`, `status`. It is written as
+`status: "submitted"` before the first job is posted and again after each job the server accepts, then
+once every job has a verdict: `ok` (no failure), `partial` (some candidates, some failures) or
+`failed` (no candidate) — so a run that times out or is interrupted still leaves a folder `gen status`
+and `gen fetch` can pick up. A run killed between an accepted job and its write loses that one job. A
+submit refused part-way records only the jobs already submitted; a refused first submit leaves no
+folder. A follow that fails after the jobs are recorded keeps the folder and names `gen fetch <dir>`.
 
 A failed job is one outcome among the rest, never an abort. **Lost** means the server has neither a
 history entry nor a queue place for the job: ComfyUI keeps both in memory, so a restart forgets every
 job it held. Lost is terminal, recorded like an error with `reason: "lost"`; the queue is never
-deleted from. `gen sheet` and `gen accept` take an `ok` or `partial` run and refuse a `failed` one.
+deleted from. If *every* job of a `submitted` run reads lost, `gen fetch` and `gen status` refuse with
+`L1391` instead and leave the run `submitted`: a wrong `--url` looks the same as a restart, and the
+right server can still collect it. A waited `gen run` follows the server it just submitted to, so
+there it finalizes `failed`. `gen sheet` and `gen accept` take an `ok` or `partial` run and refuse a `failed` one.
 
 ## Accepting a candidate
 
@@ -103,6 +108,7 @@ the `origin` block and its fields: `ludion docs generation-accept`.
 | `L1170` | The follow outlived `--timeout`, or a fetch found a job queued; names the job ids and the `gen status`/`gen fetch` recovery. |
 | `L1171` | No output node (or only a preview), both kinds in one graph, or a contact sheet asked of a mesh run or a run with no candidate. |
 | `L1172` | Accept refused: a failed or unfinalized run, an index outside it, a missing candidate, a destination that already exists — a file for an image, a directory already holding anything for a mesh — or an older run that cannot be re-read faithfully: recipe or workflow changed (both hashes named), or its image copy is missing or not the declared file. |
+| `L1391` | `gen fetch` / `gen status` found a `submitted` run whose jobs the server does not know at all (every one lost, usually a wrong `--url`), or whose submit was interrupted before any job was accepted. The run stays `submitted`. |
 | `L1266` | A warning: `count` is above 1 but no seed input takes the run's seed (every seed input is pinned by the recipe, or fed by a link), so every job submits the same graph. Drop the pin, expose a literal `seed`, or use `--count 1`. |
 
 ## Gotchas
