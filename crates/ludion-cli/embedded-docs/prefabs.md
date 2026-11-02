@@ -78,6 +78,7 @@ Block style only, as in a scene: a non-empty `[1, 2]` or `{x: 1}` is `L1005`; on
 | Rule | Code |
 |---|---|
 | empty file, bad `format`/`kind`, unknown key, or a scene-only key (`seed`, `physics`) | `L1226` |
+| `entities: []`: a prefab with no parts | `L1390` |
 | a part with no `name`, an empty one, or one containing `/` | `L1227` |
 | two parts with the same `name` | `L1228` |
 | a part carrying a scene singleton: `Camera`, `DirectionalLight`, `Environment`, `PostProcess`, `GiVolume` | `L1229` |

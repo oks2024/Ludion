@@ -267,7 +267,8 @@ pub struct SceneEntity {
     /// reorders them into registry registration order on write.
     pub components: Vec<(String, Value)>,
     /// `Some` when the entry is a prefab instance (`prefab:` key): `components` is then empty and
-    /// `presentation` false (the emitter asserts it); the instance's changes live in the entry.
+    /// `presentation` false; the instance's changes live in the entry. The emitter still writes
+    /// any components, so the parser refuses the text (`L1231`) instead of the data vanishing.
     pub instance: Option<Box<InstanceEntry>>,
 }
 
@@ -2415,7 +2416,7 @@ pub fn validate_prefab(doc: &PrefabDocument, registry: &Registry) -> Vec<Diagnos
 /// # Example
 /// ```
 /// let registry = ludion_ecs::Registry::new();
-/// let source = "format: 1\nkind: prefab\nentities: []\n";
+/// let source = "format: 1\nkind: prefab\nentities:\n  - name: root\n    components: {}\n";
 /// assert!(ludion_scene::check_prefab(source, &registry).is_ok());
 /// let seeded = "format: 1\nkind: prefab\nseed: 3\nentities: []\n";
 /// assert!(ludion_scene::check_prefab(seeded, &registry).is_err());

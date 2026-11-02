@@ -756,14 +756,6 @@ fn resolve_entry(
         .iter()
         .map(|part| part.name.clone().unwrap_or_default())
         .collect();
-    if names.is_empty() {
-        diagnostics.push(part_diagnostic(
-            format!("/entities/{index}/prefab"),
-            format!("`{source}` has no parts, so an instance of it spawns nothing"),
-            "add a part to the prefab, or drop this entry".to_owned(),
-        ));
-        return None;
-    }
     let mut keep = vec![true; names.len()];
     let before_removed = diagnostics.len();
     for (k, path) in instance.removed.iter().enumerate() {

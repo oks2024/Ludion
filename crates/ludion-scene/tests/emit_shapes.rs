@@ -626,3 +626,28 @@ fn presentation_entities_emit_the_flag_after_name_and_only_when_true() {
     assert_eq!(canonicalize(&registry, source), canonical);
     assert_eq!(canonicalize(&registry, canonical), canonical);
 }
+
+#[test]
+fn components_on_an_instance_entry_are_written_and_refused_on_read() {
+    let scene = Scene {
+        entities: vec![SceneEntity {
+            instance: Some(Box::new(ludion_scene::InstanceEntry {
+                prefab: "a.prefab.yaml".into(),
+                ..Default::default()
+            })),
+            components: vec![("Tag".to_string(), serde_json::json!({}))],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let text = emit(&scene, &Registry::new());
+    assert!(text.contains("components:"), "{text}");
+    let errors = ludion_scene::parse(&text).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.code.as_str() == "L1231"
+                && d.path.as_deref() == Some("/entities/0/components")),
+        "{errors:?}"
+    );
+}

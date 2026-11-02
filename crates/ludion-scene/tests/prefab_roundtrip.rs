@@ -71,10 +71,9 @@ fn component_order_is_normalized_and_stable() {
 }
 
 #[test]
-fn an_empty_prefab_emits_an_empty_list() {
-    let registry = registry();
-    let doc = check_prefab(&prefab("entities: []\n"), &registry).unwrap();
-    assert_eq!(emit_prefab(&doc, &registry), prefab("entities: []\n"));
+fn an_empty_prefab_is_refused() {
+    let errors = parse_prefab(&prefab("entities: []\n")).unwrap_err();
+    assert!(has(&errors, "L1390", "/entities"), "{errors:?}");
 }
 
 #[test]
@@ -88,8 +87,7 @@ fn scene_only_keys_are_l1226() {
 #[test]
 fn generated_from_round_trips_after_name() {
     let registry = registry();
-    let text =
-        "format: 1\nkind: prefab\nname: model\ngenerated_from: \"../scene.gltf\"\nentities: []\n";
+    let text = "format: 1\nkind: prefab\nname: model\ngenerated_from: \"../scene.gltf\"\nentities:\n  - name: root\n    components: {}\n";
     let doc = check_prefab(text, &registry).unwrap();
     assert_eq!(doc.generated_from.as_deref(), Some("../scene.gltf"));
     assert_eq!(emit_prefab(&doc, &registry), text);

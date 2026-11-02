@@ -1608,6 +1608,9 @@ pub mod code {
     /// 1 to 179 degrees; the result is clamped.
     pub const CAMERA_OFFSET_FOV_CLAMPED: DiagnosticCode = DiagnosticCode::new("L1335");
 
+    /// `L1390` — a prefab document's `entities` list is empty, so an instance would spawn nothing.
+    pub const PREFAB_EMPTY: DiagnosticCode = DiagnosticCode::new("L1390");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7954,6 +7957,14 @@ degrees, so the drawn field of view is clamped to that range. Reported once; the
 Fix: keep `Camera.fov_y_deg + fov_delta` within 1 to 179, for instance by clamping the tween.",
     },
     CodeEntry {
+        code: code::PREFAB_EMPTY,
+        severity: Severity::Error,
+        title: "a prefab has no parts",
+        explanation: "A prefab document's `entities` list is empty, so an instance of it would spawn nothing.
+
+Fix: add a named part (`- name: root` with `components: {}`), or delete the file.",
+    },
+    CodeEntry {
         code: code::CAMERA_OFFSET_DUPLICATE,
         severity: Severity::Error,
         title: "more than one camera offset",
@@ -10839,6 +10850,7 @@ mod tests {
         code::CAMERA_OFFSET_ON_SIM_ENTITY,
         code::CAMERA_OFFSET_DUPLICATE,
         code::CAMERA_OFFSET_FOV_CLAMPED,
+        code::PREFAB_EMPTY,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

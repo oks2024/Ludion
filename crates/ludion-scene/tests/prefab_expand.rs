@@ -686,15 +686,12 @@ entities:
 }
 
 #[test]
-fn an_instance_of_an_empty_prefab_is_one_diagnostic_at_the_prefab() {
+fn an_instance_of_an_empty_prefab_reports_the_prefabs_own_error() {
     const EMPTY: &str = "format: 1\nkind: prefab\nentities: []\n";
     let source = "format: 1\nentities:\n  - name: i\n    prefab: empty.prefab.yaml\n";
     let files = Files::new(&[("empty.prefab.yaml", EMPTY)]);
     let diagnostics = files.expand(source).unwrap_err();
-    assert!(
-        has(&diagnostics, "L1233", "/entities/0/prefab"),
-        "{diagnostics:?}"
-    );
+    assert!(has(&diagnostics, "L1390", "/entities"), "{diagnostics:?}");
     assert!(
         diagnostics.iter().all(|d| !d.message.contains("removed")),
         "{diagnostics:?}"

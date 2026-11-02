@@ -253,38 +253,53 @@ pub(crate) fn hierarchy_cycles(scene: &Scene, registry: &Registry) -> Vec<Hierar
                         .then_some(parent)
                 })
                 .collect();
-            for start in 0..parents.len() {
-                let Some(mut members) = cycle_from(start, &parents) else {
-                    continue;
-                };
-                // Reporting only from the cycle's lowest member names each cycle exactly once.
-                if members.iter().min() == Some(&start) {
-                    let at = members.iter().position(|&m| m == start).unwrap_or(0);
-                    members.rotate_left(at);
-                    cycles.push(HierarchyCycle {
-                        component: info.name().to_string(),
-                        suffix: field.suffix.clone(),
-                        members,
-                    });
-                }
+            for members in cycles_in(&parents) {
+                cycles.push(HierarchyCycle {
+                    component: info.name().to_string(),
+                    suffix: field.suffix.clone(),
+                    members,
+                });
             }
         }
     }
     cycles
 }
 
-/// The cycle reachable by following `parents` from `start`, in walk order beginning at the first
-/// repeated node, or `None` when the chain ends at a root.
-fn cycle_from(start: usize, parents: &[Option<usize>]) -> Option<Vec<usize>> {
-    let mut path: Vec<usize> = Vec::new();
-    let mut current = start;
-    loop {
-        if let Some(position) = path.iter().position(|&node| node == current) {
-            return Some(path[position..].to_vec());
+/// Every cycle in `parents` once, each starting at its lowest member in walk order, ascending by
+/// lowest member. One linear walk: each node is visited by at most one start.
+fn cycles_in(parents: &[Option<usize>]) -> Vec<Vec<usize>> {
+    let mut cycles = Vec::new();
+    let mut walk_of = vec![usize::MAX; parents.len()]; // the start whose walk first reached a node
+    let mut position = vec![0; parents.len()]; // its index on that walk's path
+    let mut path = Vec::new();
+    for start in 0..parents.len() {
+        path.clear();
+        let mut current = start;
+        loop {
+            if walk_of[current] == start {
+                let mut members: Vec<usize> = path[position[current]..].to_vec();
+                let at = members
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|&(_, &m)| m)
+                    .map_or(0, |(i, _)| i);
+                members.rotate_left(at);
+                cycles.push(members);
+                break;
+            }
+            if walk_of[current] != usize::MAX {
+                break; // joined an earlier walk: already resolved
+            }
+            walk_of[current] = start;
+            position[current] = path.len();
+            path.push(current);
+            let Some(next) = parents[current] else { break };
+            current = next;
         }
-        path.push(current);
-        current = parents[current]?;
     }
+    // Discovery order is not lowest-member order.
+    cycles.sort_by_key(|members| members[0]);
+    cycles
 }
 
 pub(crate) fn cycle_diagnostic(scene: &Scene, cycle: &HierarchyCycle) -> Diagnostic {
@@ -1094,6 +1109,69 @@ mod tests {
             .iter()
             .filter(|d| d.code.as_str() == "L1035")
             .collect()
+    }
+
+    /// The quadratic walk `cycles_in` replaced, kept as the oracle.
+    fn naive_cycles(parents: &[Option<usize>]) -> Vec<Vec<usize>> {
+        let cycle_from = |start: usize| -> Option<Vec<usize>> {
+            let mut path: Vec<usize> = Vec::new();
+            let mut current = start;
+            loop {
+                if let Some(position) = path.iter().position(|&node| node == current) {
+                    return Some(path[position..].to_vec());
+                }
+                path.push(current);
+                current = parents[current]?;
+            }
+        };
+        let mut cycles = Vec::new();
+        for start in 0..parents.len() {
+            let Some(mut members) = cycle_from(start) else {
+                continue;
+            };
+            if members.iter().min() == Some(&start) {
+                let at = members.iter().position(|&m| m == start).unwrap_or(0);
+                members.rotate_left(at);
+                cycles.push(members);
+            }
+        }
+        cycles
+    }
+
+    #[test]
+    fn the_linear_walk_matches_the_naive_one_on_every_six_node_table() {
+        const N: usize = 6;
+        let mut parents = [None; N];
+        for table in 0..(N as u32).pow(N as u32) {
+            let mut rest = table;
+            for (i, slot) in parents.iter_mut().enumerate() {
+                let choice = (rest % N as u32) as usize;
+                rest /= N as u32;
+                // 0..N-1 picks a node other than `i`; the last choice is no link.
+                *slot = (choice < N - 1).then(|| if choice >= i { choice + 1 } else { choice });
+            }
+            assert_eq!(cycles_in(&parents), naive_cycles(&parents), "{parents:?}");
+        }
+    }
+
+    #[test]
+    fn a_very_long_chain_validates_without_a_cycle() {
+        let n = 20_000;
+        let parents: Vec<Option<usize>> = (0..n).map(|i| (i + 1 < n).then_some(i + 1)).collect();
+        let diagnostics = validate(&parent_scene(&parents), &hierarchy_registry());
+        assert!(cycle_errors(&diagnostics).is_empty());
+    }
+
+    #[test]
+    fn a_very_long_pure_cycle_reports_once() {
+        let n = 20_000;
+        let parents: Vec<Option<usize>> = (0..n).map(|i| Some((i + 1) % n)).collect();
+        let scene = parent_scene(&parents);
+        let cycles = hierarchy_cycles(&scene, &hierarchy_registry());
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].members, (0..n).collect::<Vec<_>>());
+        let diagnostics = validate(&scene, &hierarchy_registry());
+        assert_eq!(cycle_errors(&diagnostics).len(), 1);
     }
 
     #[test]

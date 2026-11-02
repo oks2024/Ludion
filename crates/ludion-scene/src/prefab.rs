@@ -357,6 +357,19 @@ pub(crate) fn parse(source: &str) -> Result<PrefabDocument, Vec<Diagnostic>> {
             "entities" => {
                 entities_seen = true;
                 match &entry.node.value {
+                    NodeValue::Sequence(items) if items.is_empty() => diagnostics.push(
+                        Diagnostic::new(
+                            code::PREFAB_EMPTY,
+                            format!(
+                                "the prefab has no parts: `entities` is empty (line {})",
+                                entry.node.line
+                            ),
+                        )
+                        .with_path("/entities")
+                        .with_help(
+                            "name at least one part:\n  entities:\n    - name: root\n      components: {}",
+                        ),
+                    ),
                     NodeValue::Sequence(items) => {
                         for (index, item) in items.iter().enumerate() {
                             if let Some(entity) =

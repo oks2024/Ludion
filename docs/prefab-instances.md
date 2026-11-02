@@ -9,7 +9,7 @@ description: Prefab instances in scenes — `prefab:` entries, overrides, nestin
 ## The loop
 
 1. Author an entry in a scene's `entities:` (below), the prefab file beside it.
-2. Check it: `ludion check-scene scenes/main.yaml` — expansion errors are `L1231`–`L1233`; the prefab file's own errors are `L1226`–`L1229`.
+2. Check it: `ludion check-scene scenes/main.yaml` — expansion errors are `L1231`–`L1233`; the prefab file's own errors are `L1226`–`L1229` and `L1390`.
 3. Load or render it: `ludion render --scene scenes/main.yaml --out shot.png`, or host it with `ludion serve`; the instance is ordinary entities in the world.
 4. Edit live (a system, `component.set`, `entity.reparent`), then `scene.save` writes the instance back as its entry.
 

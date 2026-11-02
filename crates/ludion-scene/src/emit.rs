@@ -133,10 +133,6 @@ pub(crate) fn emit_entity(out: &mut String, entity: &SceneEntity, registry: &Reg
         out.push_str(&scalar_string(name));
         out.push('\n');
     }
-    debug_assert!(
-        entity.instance.is_none() || (entity.components.is_empty() && !entity.presentation),
-        "an instance entry carries no components and is never presentation"
-    );
     if entity.presentation {
         out.push_str(lead);
         lead = "    ";
@@ -144,7 +140,12 @@ pub(crate) fn emit_entity(out: &mut String, entity: &SceneEntity, registry: &Reg
     }
     if let Some(instance) = &entity.instance {
         crate::instance::emit_fields(out, lead, instance, registry);
-        return;
+        if entity.components.is_empty() {
+            return;
+        }
+        // Components on an entry are written so the parser refuses the text (`L1231`) rather
+        // than the data vanishing.
+        lead = "    ";
     }
     out.push_str(lead);
     if entity.components.is_empty() {
