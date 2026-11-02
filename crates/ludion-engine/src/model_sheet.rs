@@ -197,7 +197,7 @@ use ludion_core::math::{
     self,
     glam::{EulerRot, Mat3, Mat4, Vec3},
 };
-use ludion_core::time::{SimTime, TickRate};
+use ludion_core::time::{FrameIndex, SimTime, TickRate};
 use ludion_ecs::Schedule;
 use ludion_renderer::{FrameSize, MeshData, QualityParams, RenderScene, RenderedImage, Renderer};
 use ludion_scene::{
@@ -214,6 +214,10 @@ use crate::character::CharacterData;
 use crate::extract::{ClipPose, CrossfadePose, extract_at, part_placements, part_placements_faded};
 use crate::prefab_clips::PrefabClipData;
 use crate::sweep::MAX_SWEEP_CELLS;
+use crate::{
+    Anchor, Animation, Camera, Environment, Mesh, MeshSource, PointLight, PostProcess, Projection,
+    Transform, UiText,
+};
 
 /// A turntable view. [`ALL`](ModelView::ALL) is the canonical sheet order;
 /// [`DEFAULT`](ModelView::DEFAULT) is the set an empty request expands to.
@@ -1947,10 +1951,14 @@ fn prefab_aabb(
         [0.5, 0.5, 0.5],
     ];
     let registry = builtin_registry();
-    let probe = format!(
-        "format: 1\nentities:\n  - name: subject\n    prefab: {}\n",
-        quote_yaml(rel)
-    );
+    let probe = emit_entities(vec![ludion_scene::SceneEntity {
+        name: Some("subject".to_string()),
+        instance: Some(Box::new(ludion_scene::InstanceEntry {
+            prefab: rel.to_string(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }]);
     let scene = ludion_scene::check(&probe, &registry)?;
     let (_, world) = crate::render::expanded_world(root.dir(), &registry, &scene)?;
     let rendered = extract_at(
@@ -3061,9 +3069,8 @@ const RIG_COMPONENTS: [&str; 5] = [
 /// The lighting and grade lifted out of a `--rig` scene.
 #[derive(Debug)]
 struct RigLift {
-    /// The kept entities, already re-emitted through the canonical writer with the
-    /// `format:`/`entities:` envelope stripped — ready to append to the synthesized scene verbatim.
-    entities_yaml: String,
+    /// The kept entities, ready to append to the synthesized scene as they are.
+    entities: Vec<ludion_scene::SceneEntity>,
     /// Whether any kept entity carries a light. The synthesized key + fill are then skipped
     /// entirely: mixing a borrowed rig with the neutral one reads as neither.
     has_light: bool,
@@ -3071,10 +3078,6 @@ struct RigLift {
     /// sheet ground plane's gallery gray (the plane keeps the sheet's own transform).
     ground_color: Option<[f32; 4]>,
 }
-
-/// The exact envelope [`ludion_scene::emit`] writes above the entity blocks for an unnamed,
-/// unseeded, non-empty scene — the prefix [`load_rig`] strips to get appendable blocks.
-const EMIT_ENVELOPE: &str = "format: 1\nentities:\n";
 
 /// Reads and validates the scene at `path`, then lifts its lighting/grade entities.
 ///
@@ -3134,18 +3137,8 @@ fn lift(scene: &ludion_scene::Scene, path: &Path) -> Result<RigLift, Vec<Diagnos
         ]);
     }
 
-    let lifted = ludion_scene::Scene {
-        entities: kept,
-        ..Default::default()
-    };
-    let yaml = ludion_scene::emit(&lifted, &builtin_registry());
-    let entities_yaml = yaml
-        .strip_prefix(EMIT_ENVELOPE)
-        .expect("the canonical writer opens an unnamed, non-empty scene with `format:`/`entities:`")
-        .to_string();
-
     Ok(RigLift {
-        entities_yaml,
+        entities: kept,
         has_light,
         ground_color,
     })
@@ -3607,8 +3600,9 @@ pub fn fit_distance_for_aspect(aspect: f32) -> f32 {
     FIT_MARGIN / math::sin(limiting)
 }
 
-/// Builds the strict-YAML scene for one cell: every normalized model, a ground plane, the camera, and
-/// the key + fill lights. A pure function of the inputs (floats are shortest-round-trip `{:?}`).
+/// Builds the scene for one cell: every normalized model, a ground plane, the camera, and the key +
+/// fill lights, as typed components written by [`ludion_scene::emit`]. A pure function of the
+/// inputs.
 ///
 /// `label` is the text burned into the cell's top-left corner — the view's orientation on an
 /// ordinary sheet, the swept value on a sweep sheet, where the orientation is the same in every cell
@@ -3616,7 +3610,7 @@ pub fn fit_distance_for_aspect(aspect: f32) -> f32 {
 /// and is empty otherwise, which is what keeps a one-model sheet byte-identical.
 ///
 /// A `lift` borrows the ground color, replaces the key + fill when it carries a light, and appends
-/// its own entity blocks (already canonically written) after the labels.
+/// its own entities after the labels.
 ///
 /// `animations` is one entry per model, `Some` only for a posed sheet or a strip: the model entity
 /// then carries an `Animation` and the caller extracts at the matching `now`.
@@ -3639,7 +3633,7 @@ fn synthesize_scene(
 ) -> String {
     let view_rig = ViewRig::compute(view, subject, cell_w, cell_h);
 
-    let mut yaml = String::from("format: 1\nentities:\n");
+    let mut entities: Vec<ludion_scene::SceneEntity> = Vec::new();
 
     // The normalized models, in the order they were given — a row's own order.
     for (index, ((bounds, name), placement)) in models
@@ -3648,166 +3642,241 @@ fn synthesize_scene(
         .zip(&subject.placements)
         .enumerate()
     {
-        let shape_key = match &bounds.kind {
-            ModelKind::Voxel => "voxel",
-            ModelKind::Mesh => "asset",
-            ModelKind::Assembly => "assembly",
-            ModelKind::Sculpt => "sculpt",
-            ModelKind::Character => "character",
+        let shape = match &bounds.kind {
+            ModelKind::Voxel => MeshSource::Voxel(name.clone()),
+            ModelKind::Mesh => MeshSource::Asset(name.clone()),
+            ModelKind::Assembly => MeshSource::Assembly(name.clone()),
+            ModelKind::Sculpt => MeshSource::Sculpt(name.clone()),
+            ModelKind::Character => MeshSource::Character(name.clone()),
             ModelKind::Prefab(root_part) => {
-                push_prefab_instance(
-                    &mut yaml,
+                entities.push(prefab_instance_entity(
                     index,
                     name,
                     root_part,
                     placement,
                     animations.get(index).copied().flatten(),
-                );
+                ));
                 continue;
             }
         };
         let scale = placement.scale;
-        yaml.push_str("  - components:\n");
-        yaml.push_str("      Transform:\n");
-        push_seq(&mut yaml, TF, "translation", &placement.translation);
-        push_seq(&mut yaml, TF, "scale", &[scale, scale, scale]);
-        yaml.push_str("      Mesh:\n");
-        yaml.push_str("        shape:\n");
-        yaml.push_str(&format!("          {shape_key}: {}\n", quote_yaml(name)));
         // The emissive term is `base × Mesh.emissive × map`, so a mesh document's map emits nothing
         // until something authors the intensity lane — and a standalone document has no scene to
         // author it in. Every sheet supplies a unit intensity, and only where there is a map to
         // show: a model with none is untouched, and stays black under the emissive channel.
-        if bounds.emissive_texture {
-            yaml.push_str("        emissive: 1.0\n");
-        }
+        let mesh = Mesh {
+            shape,
+            emissive: if bounds.emissive_texture { 1.0 } else { 0.0 },
+            ..Mesh::default()
+        };
+        let mut components = vec![
+            typed(
+                "Transform",
+                &Transform {
+                    translation: placement.translation,
+                    scale: [scale; 3],
+                    ..Transform::default()
+                },
+            ),
+            typed("Mesh", &mesh),
+        ];
         // `speed` stays at its default 1.0: the phase is chosen with `started`, not by playing the
         // clip faster, so a sheet never depends on a rate the file did not author.
         if let Some(Some(animation)) = animations.get(index) {
-            yaml.push_str("      Animation:\n");
-            yaml.push_str(&format!("        clip: {}\n", quote_yaml(animation.clip)));
-            yaml.push_str(&format!("        started: {}\n", animation.started));
-            if let Some(fade) = animation.fade {
-                yaml.push_str(&format!("        from: {}\n", quote_yaml(fade.from)));
-                yaml.push_str(&format!("        from_started: {}\n", fade.from_started));
-                yaml.push_str(&format!("        fade_started: {}\n", fade.fade_started));
-                yaml.push_str(&format!("        fade: {:?}\n", fade.seconds));
-            }
+            components.push(typed("Animation", &animation_of(*animation)));
         }
+        entities.push(entity(components));
     }
 
     // The ground plane (gallery gray, or a rig's own floor color).
     let ground_color = lift
         .and_then(|lift| lift.ground_color)
         .unwrap_or([0.5, 0.55, 0.6, 1.0]);
-    yaml.push_str("  - components:\n");
-    yaml.push_str("      Transform:\n");
-    push_seq(&mut yaml, TF, "scale", &[8.0, 1.0, 8.0]);
-    yaml.push_str("      Mesh:\n");
-    yaml.push_str("        shape: plane\n");
-    push_seq(&mut yaml, TF, "color", &ground_color);
+    entities.push(entity(vec![
+        typed(
+            "Transform",
+            &Transform {
+                scale: [8.0, 1.0, 8.0],
+                ..Transform::default()
+            },
+        ),
+        typed(
+            "Mesh",
+            &Mesh {
+                shape: MeshSource::Plane,
+                color: ground_color,
+                ..Mesh::default()
+            },
+        ),
+    ]));
 
     // The camera.
-    yaml.push_str("  - components:\n");
-    yaml.push_str("      Transform:\n");
-    push_seq(&mut yaml, TF, "translation", &vec3_array(view_rig.position));
-    push_seq(&mut yaml, TF, "rotation", &view_rig.rotation_deg);
-    yaml.push_str("      Camera:\n");
-    yaml.push_str("        projection:\n");
-    yaml.push_str("          type: perspective\n");
-    yaml.push_str(&format!("          fov_y_deg: {:?}\n", FOV_Y_DEG));
-    yaml.push_str(&format!("        near: {:?}\n", NEAR));
-    yaml.push_str(&format!("        far: {:?}\n", FAR));
+    entities.push(entity(vec![
+        typed(
+            "Transform",
+            &Transform {
+                translation: vec3_array(view_rig.position),
+                rotation: view_rig.rotation_deg,
+                ..Transform::default()
+            },
+        ),
+        typed(
+            "Camera",
+            &Camera {
+                projection: Projection::Perspective {
+                    fov_y_deg: FOV_Y_DEG,
+                },
+                near: NEAR,
+                far: FAR,
+            },
+        ),
+    ]));
 
     if channel == Some(ModelChannel::Emissive) {
-        push_emissive_channel(&mut yaml);
-        return yaml;
+        entities.push(emissive_channel_entity());
+        return emit_entities(entities);
     }
 
     // Key light (neutral-warm) and fill light (dimmer, cool) — skipped whole when a rig brought its
     // own lighting.
     if !lift.is_some_and(|lift| lift.has_light) {
-        push_light(
-            &mut yaml,
+        entities.push(light_entity(
             view_rig.key_position,
             [1.0, 0.97, 0.9],
             KEY_INTENSITY,
             view_rig.range,
-        );
-        push_light(
-            &mut yaml,
+        ));
+        entities.push(light_entity(
             view_rig.fill_position,
             [0.7, 0.78, 0.95],
             FILL_INTENSITY,
             view_rig.range,
-        );
+        ));
     }
 
     // The burned-in label — a screen-space `UiText` in the cell's top-left corner, so an author
     // never again mistakes which face a cell shows. Warm yellow reads over both the gallery-gray
     // ground and a light model; the top-left corner keeps it clear of the centered model.
-    yaml.push_str("  - components:\n");
-    yaml.push_str("      UiText:\n");
-    yaml.push_str("        anchor: top_left\n");
-    push_seq(&mut yaml, TF, "offset", &[LABEL_OFFSET, LABEL_OFFSET]);
-    yaml.push_str(&format!("        text: {}\n", quote_yaml(label)));
-    yaml.push_str(&format!("        size: {LABEL_SIZE:?}\n"));
-    push_seq(&mut yaml, TF, "color", &[1.0, 0.9, 0.25, 1.0]);
+    entities.push(entity(vec![typed(
+        "UiText",
+        &UiText {
+            anchor: Anchor::TopLeft,
+            offset: [LABEL_OFFSET, LABEL_OFFSET],
+            text: label.to_string(),
+            size: LABEL_SIZE,
+            color: [1.0, 0.9, 0.25, 1.0],
+            ..UiText::default()
+        },
+    )]));
 
     // A lineup's per-model captions, each centered under the model it names.
     for caption in captions {
-        yaml.push_str("  - components:\n");
-        yaml.push_str("      UiText:\n");
-        yaml.push_str("        anchor: top_center\n");
-        push_seq(&mut yaml, TF, "offset", &caption.offset);
-        yaml.push_str(&format!("        text: {}\n", quote_yaml(&caption.text)));
-        yaml.push_str(&format!("        size: {:?}\n", caption.size));
-        push_seq(&mut yaml, TF, "color", &[1.0, 0.9, 0.25, 1.0]);
+        entities.push(entity(vec![typed(
+            "UiText",
+            &UiText {
+                anchor: Anchor::TopCenter,
+                offset: caption.offset,
+                text: caption.text.clone(),
+                size: caption.size,
+                color: [1.0, 0.9, 0.25, 1.0],
+                ..UiText::default()
+            },
+        )]));
     }
 
     if let Some(lift) = lift {
-        yaml.push_str(&lift.entities_yaml);
+        entities.extend(lift.entities.iter().cloned());
     }
 
-    yaml
+    emit_entities(entities)
 }
 
-/// Appends one prefab instance entry: the normalizing placement on the entry, and a posed sheet's
+/// The canonical text of a scene holding exactly these entities.
+fn emit_entities(entities: Vec<ludion_scene::SceneEntity>) -> String {
+    let scene = ludion_scene::Scene {
+        entities,
+        ..Default::default()
+    };
+    ludion_scene::emit(&scene, &builtin_registry())
+}
+
+/// One component as its `(name, value)` pair — the only place a typed component is serialized.
+fn typed<T: serde::Serialize>(name: &str, value: &T) -> (String, Value) {
+    let value = serde_json::to_value(value).expect("a component serializes to JSON");
+    (name.to_string(), value)
+}
+
+/// An unnamed entity carrying these components.
+fn entity(components: Vec<(String, Value)>) -> ludion_scene::SceneEntity {
+    ludion_scene::SceneEntity {
+        components,
+        ..Default::default()
+    }
+}
+
+/// The `Animation` one model entity of a posed sheet carries.
+fn animation_of(spec: AnimationSpec) -> Animation {
+    let mut animation = Animation {
+        clip: spec.clip.to_string(),
+        started: FrameIndex::new(spec.started),
+        ..Animation::default()
+    };
+    if let Some(fade) = spec.fade {
+        animation.from = fade.from.to_string();
+        animation.from_started = FrameIndex::new(fade.from_started);
+        animation.fade_started = FrameIndex::new(fade.fade_started);
+        animation.fade = fade.seconds;
+    }
+    animation
+}
+
+/// One prefab instance entry: the normalizing placement on the entry, and a posed sheet's
 /// `Animation` as an override of the root part, where playback reads it.
-fn push_prefab_instance(
-    yaml: &mut String,
+fn prefab_instance_entity(
     index: usize,
     file: &str,
     root_part: &str,
     placement: &Placement,
     animation: Option<AnimationSpec>,
-) {
-    let scale = placement.scale;
-    yaml.push_str(&format!(
-        "  - name: phase-{index}\n    prefab: {}\n",
-        quote_yaml(file)
-    ));
-    yaml.push_str("    transform:\n");
-    push_seq(yaml, "      ", "translation", &placement.translation);
-    push_seq(yaml, "      ", "scale", &[scale, scale, scale]);
-    let Some(animation) = animation else {
-        return;
+) -> ludion_scene::SceneEntity {
+    let translation = placement.translation.map(f64::from);
+    let scale = f64::from(placement.scale);
+    let mut instance = ludion_scene::InstanceEntry {
+        prefab: file.to_string(),
+        transform: ludion_scene::InstanceTransform {
+            translation,
+            scale: [scale; 3],
+            ..Default::default()
+        },
+        ..Default::default()
     };
-    yaml.push_str("    overrides:\n");
-    yaml.push_str(&format!("      {}:\n", quote_yaml(root_part)));
-    yaml.push_str("        Animation:\n");
-    yaml.push_str(&format!("          clip: {}\n", quote_yaml(animation.clip)));
-    yaml.push_str(&format!("          started: {}\n", animation.started));
-    if let Some(fade) = animation.fade {
-        yaml.push_str(&format!("          from: {}\n", quote_yaml(fade.from)));
-        yaml.push_str(&format!("          from_started: {}\n", fade.from_started));
-        yaml.push_str(&format!("          fade_started: {}\n", fade.fade_started));
-        yaml.push_str(&format!("          fade: {:?}\n", fade.seconds));
+    if let Some(animation) = animation {
+        // A partial value, not a typed `Animation`: the override merges over the root part's own
+        // component, and a typed one would write `speed: 1.0` over an authored speed.
+        let mut value = serde_json::json!({
+            "clip": animation.clip,
+            "started": animation.started,
+        });
+        if let Some(fade) = animation.fade {
+            value["from"] = fade.from.into();
+            value["from_started"] = fade.from_started.into();
+            value["fade_started"] = fade.fade_started.into();
+            value["fade"] = fade.seconds.into();
+        }
+        instance.overrides.insert(
+            root_part.to_string(),
+            vec![("Animation".to_string(), value)],
+        );
+    }
+    ludion_scene::SceneEntity {
+        name: Some(format!("phase-{index}")),
+        instance: Some(Box::new(instance)),
+        ..Default::default()
     }
 }
 
-/// Appends [`ModelChannel::Emissive`]'s carrier entity: an `Environment` with no sky, no ambient and
-/// no image-based lighting, and a `PostProcess` flattened to a pass-through.
+/// [`ModelChannel::Emissive`]'s carrier entity: an `Environment` with no sky, no ambient and no
+/// image-based lighting, and a `PostProcess` flattened to a pass-through.
 ///
 /// Every term that could put light on a surface is zeroed here rather than in the renderer, so the
 /// channel is a scene an author can read, `--dump-graph` and every other instrument still see the
@@ -3818,54 +3887,62 @@ fn push_prefab_instance(
 /// about the curve. `none` + `1.0` + no dither leaves the scene pass's own linear value, clamped —
 /// the mask, not a picture of it. (The other post steps are already neutral at their defaults:
 /// vignette, SSAO, shafts and fog all ship at `0.0`.)
-fn push_emissive_channel(yaml: &mut String) {
-    yaml.push_str("  - components:\n");
-    yaml.push_str("      Environment:\n");
-    push_seq(yaml, TF, "sky_zenith", &[0.0, 0.0, 0.0]);
-    push_seq(yaml, TF, "sky_horizon", &[0.0, 0.0, 0.0]);
-    push_seq(yaml, TF, "sky_ground", &[0.0, 0.0, 0.0]);
-    push_seq(yaml, TF, "ambient", &[0.0, 0.0, 0.0]);
-    yaml.push_str("        ibl_intensity: 0.0\n");
-    yaml.push_str("      PostProcess:\n");
-    yaml.push_str("        bloom_strength: 0.0\n");
-    yaml.push_str("        exposure: 1.0\n");
-    yaml.push_str("        tonemap: none\n");
-    yaml.push_str("        dither: false\n");
+fn emissive_channel_entity() -> ludion_scene::SceneEntity {
+    entity(vec![
+        typed(
+            "Environment",
+            &Environment {
+                sky_zenith: [0.0; 3],
+                sky_horizon: [0.0; 3],
+                sky_ground: [0.0; 3],
+                ambient: [0.0; 3],
+                ibl_intensity: 0.0,
+                ..Environment::default()
+            },
+        ),
+        typed(
+            "PostProcess",
+            &PostProcess {
+                bloom_strength: 0.0,
+                exposure: 1.0,
+                tonemap: crate::components::TonemapOperator::None,
+                dither: false,
+                ..PostProcess::default()
+            },
+        ),
+    ])
 }
 
-/// Appends one point-light entity (a `Transform` at `position` plus a `PointLight`).
-fn push_light(yaml: &mut String, position: Vec3, color: [f32; 3], intensity: f32, range: f32) {
-    yaml.push_str("  - components:\n");
-    yaml.push_str("      Transform:\n");
-    push_seq(yaml, TF, "translation", &vec3_array(position));
-    yaml.push_str("      PointLight:\n");
-    push_seq(yaml, TF, "color", &color);
-    yaml.push_str(&format!("        intensity: {intensity:?}\n"));
-    yaml.push_str(&format!("        range: {range:?}\n"));
+/// One point-light entity (a `Transform` at `position` plus a `PointLight`).
+fn light_entity(
+    position: Vec3,
+    color: [f32; 3],
+    intensity: f32,
+    range: f32,
+) -> ludion_scene::SceneEntity {
+    entity(vec![
+        typed(
+            "Transform",
+            &Transform {
+                translation: vec3_array(position),
+                ..Transform::default()
+            },
+        ),
+        typed(
+            "PointLight",
+            &PointLight {
+                color,
+                intensity,
+                range,
+                ..PointLight::default()
+            },
+        ),
+    ])
 }
-
-/// The indent of a component field's block sequence (`Transform:` etc. are at 6 spaces; their
-/// fields at 8).
-const TF: &str = "        ";
 
 /// A `Vec3` as a plain `[x, y, z]` array (glam `Vec3` has no `Into<[f32; 3]>` in this context).
 fn vec3_array(v: Vec3) -> [f32; 3] {
     [v.x, v.y, v.z]
-}
-
-/// Appends `indent + key:` followed by one `- value` line per element (shortest-round-trip floats).
-fn push_seq(yaml: &mut String, indent: &str, key: &str, values: &[f32]) {
-    yaml.push_str(&format!("{indent}{key}:\n"));
-    for value in values {
-        yaml.push_str(&format!("{indent}  - {value:?}\n"));
-    }
-}
-
-/// Wraps a file name as a strict-YAML double-quoted scalar, escaping `\` and `"` (defensive — model
-/// file names are single names, not paths, so this is normally a no-op).
-fn quote_yaml(name: &str) -> String {
-    let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 #[cfg(test)]
@@ -4234,11 +4311,136 @@ entities:
         )
     }
 
-    /// **The no-rig path is untouched.** With `--rig` absent the synthesized scene is byte-identical
-    /// to what it was before the flag existed.
+    /// The `WorldHash` of the world a scene text instantiates to.
+    fn world_hash_of(yaml: &str) -> ludion_sim::WorldHash {
+        let registry = builtin_registry();
+        let scene = ludion_scene::check(yaml, &registry).expect("a valid scene");
+        let world = ludion_scene::instantiate(&scene, &registry).expect("it instantiates");
+        let driver = SimDriver::new(world, Schedule::new(), SimConfig::default());
+        ludion_sim::WorldHash::compute(driver.world(), &registry).expect("the world hashes")
+    }
+
+    /// **The no-rig path is untouched.** With `--rig` absent the synthesized scene is the same world
+    /// the hand-written text of [`BASELINE_FRONT`] spelled before the writer was typed: the text may
+    /// spell a default or a float differently, the world may not differ.
     #[test]
     fn no_rig_synthesizes_the_pinned_scene() {
-        assert_eq!(front(None), BASELINE_FRONT);
+        assert_eq!(world_hash_of(&front(None)), world_hash_of(BASELINE_FRONT));
+    }
+
+    /// **A prefab override stays partial.** It merges over the root part's own `Animation`, so a
+    /// typed one would write `speed: 1.0` over an authored speed and move the render.
+    #[test]
+    fn a_prefab_override_stays_partial() {
+        let bounds = ModelBounds {
+            kind: ModelKind::Prefab("base".to_string()),
+            ..baseline_bounds()
+        };
+        let subject = Subject::single(&bounds);
+        let names = [bounds.file_name.clone()];
+        let keys = |animation: AnimationSpec| -> Vec<String> {
+            let yaml = synthesize_scene(
+                &[&bounds],
+                &names,
+                &subject,
+                None,
+                ModelView::Front,
+                "front",
+                &[],
+                &[Some(animation)],
+                200,
+                200,
+                None,
+            );
+            let scene = ludion_scene::parse(&yaml).expect("the sheet parses");
+            let instance = scene.entities[0].instance.as_ref().expect("a prefab entry");
+            let (_, components) = instance.overrides.iter().next().expect("one override");
+            let (name, value) = &components[0];
+            assert_eq!(name, "Animation");
+            let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        let posed = AnimationSpec {
+            clip: "open",
+            started: 12,
+            fade: None,
+        };
+        assert_eq!(keys(posed), ["clip", "started"]);
+        let fading = AnimationSpec {
+            fade: Some(FadeSpec {
+                from: "snap",
+                from_started: 3,
+                fade_started: 9,
+                seconds: 0.25,
+            }),
+            ..posed
+        };
+        assert_eq!(
+            keys(fading),
+            [
+                "clip",
+                "fade",
+                "fade_started",
+                "from",
+                "from_started",
+                "started"
+            ]
+        );
+    }
+
+    /// **A non-finite placement names its field.** A typed `f32` NaN serializes to `null`, which the
+    /// scene check refuses at the component's own pointer instead of writing text that parses wrong.
+    #[test]
+    fn a_non_finite_placement_names_its_field() {
+        let bounds = baseline_bounds();
+        let mut subject = Subject::single(&bounds);
+        subject.placements[0].translation[0] = f32::NAN;
+        let names = [bounds.file_name.clone()];
+        let yaml = synthesize_scene(
+            &[&bounds],
+            &names,
+            &subject,
+            None,
+            ModelView::Front,
+            "front",
+            &[],
+            &[None],
+            200,
+            200,
+            None,
+        );
+        let diagnostics = ludion_scene::check(&yaml, &builtin_registry()).unwrap_err();
+        assert!(
+            diagnostics.iter().any(|d| d
+                .path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("/Transform/translation/0"))),
+            "{diagnostics:#?}"
+        );
+    }
+
+    /// **The loader and the kind table agree.** `KINDS.model_sheet` is what the testkit routes golden
+    /// scenes on; `load_model`'s own match is the other half. A row the table calls drawable must not
+    /// be refused as an unsupported kind, and one it does not must be.
+    #[test]
+    fn the_loader_agrees_with_the_kind_table() {
+        let dir = stage_scratch("kind-table");
+        for entry in ludion_scene::KINDS {
+            let path = dir.join(format!("stub.{}.yaml", entry.name));
+            std::fs::write(&path, format!("format: 1\nkind: {}\n", entry.name)).unwrap();
+            let refused = match load_model(&path) {
+                Ok(_) => false,
+                Err(diagnostics) => diagnostics
+                    .iter()
+                    .any(|d| d.message.contains(&format!("has kind `{}`", entry.name))),
+            };
+            assert_eq!(
+                refused, !entry.model_sheet,
+                "kind `{}`: model_sheet = {}, loader refused as unsupported = {refused}",
+                entry.name, entry.model_sheet
+            );
+        }
     }
 
     /// A mesh model's bounds, with or without an emissive map.
@@ -4286,7 +4488,7 @@ entities:
                 "{channel:?}: {mapped}"
             );
             let bare = front_of(&mesh_bounds(false), None, channel);
-            assert!(!bare.contains("emissive"), "{channel:?}: {bare}");
+            assert!(!bare.contains("emissive: 1.0"), "{channel:?}: {bare}");
         }
     }
 
